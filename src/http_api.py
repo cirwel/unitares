@@ -2869,6 +2869,45 @@ async def http_runtime_observe(request):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
+async def http_runtime_activity(request):
+    """GET /v1/runtime/activity — operational and reflective clocks, separated.
+
+    The operational side is derived only from identity-bound runtime
+    observations.  The reflective side includes only ``agent_report`` state
+    rows; substrate interpretations and legacy unclassified rows remain
+    separately labeled in the response.
+    """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not _check_http_auth(request, http_api_token=http_api_token):
+        return _http_unauthorized()
+    try:
+        try:
+            window_hours = float(request.query_params.get("window_hours", "24"))
+        except (TypeError, ValueError):
+            return JSONResponse(
+                {"success": False, "error": "'window_hours' must be numeric"},
+                status_code=400,
+            )
+        try:
+            limit = int(request.query_params.get("limit", "1000"))
+        except (TypeError, ValueError):
+            return JSONResponse(
+                {"success": False, "error": "'limit' must be an integer"},
+                status_code=400,
+            )
+        window_hours = max(0.1, min(window_hours, 24 * 90))
+        limit = max(1, min(limit, 5000))
+
+        from src.runtime_observations import read_runtime_activity
+
+        return JSONResponse(
+            await read_runtime_activity(window_hours=window_hours, limit=limit)
+        )
+    except Exception as e:
+        logger.error(f"Error reading runtime activity: {e}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
 async def http_substrate_dark_sessions(request):
     """GET /v1/substrate/dark_sessions?window_hours=24 — the coverage-gap dial.
 
@@ -4369,6 +4408,7 @@ def register_http_routes(
     app.routes.append(Route("/v1/bridge/summary", http_bridge_summary, methods=["GET"]))
     app.routes.append(Route("/v1/substrate/observe", http_substrate_observe, methods=["POST"]))
     app.routes.append(Route("/v1/runtime/observe", http_runtime_observe, methods=["POST"]))
+    app.routes.append(Route("/v1/runtime/activity", http_runtime_activity, methods=["GET"]))
     app.routes.append(Route("/v1/substrate/dark_sessions", http_substrate_dark_sessions, methods=["GET"]))
     app.routes.append(Route("/v1/sentinel/backlog", http_sentinel_backlog, methods=["GET"]))
     app.routes.append(Route("/v1/sentinel/adjudication-queue", http_sentinel_adjudication_queue, methods=["GET"]))
