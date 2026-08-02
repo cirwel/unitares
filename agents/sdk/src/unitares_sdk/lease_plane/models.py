@@ -21,6 +21,12 @@ ReleaseReason: TypeAlias = Literal[
     "reaped_remote_ttl",
     "handoff",
     "forced",
+    # A holder releasing its OWN lease stranded by a lost acquire/release
+    # response (migration 056 + router; #1459/#1460 own-orphan reclaim).
+    # Distinct from "normal" so `release_reason='normal'` stays honest as
+    # "a live holder released its own in-hand lease" — the property the 90d
+    # legitimate-long-hold analysis rests on.
+    "reclaimed_lost_acquire",
 ]
 
 
