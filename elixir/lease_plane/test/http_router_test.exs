@@ -665,6 +665,24 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       resp = post_json("/v1/lease/release", %{lease_id: random_uuid(), release_reason: "bogus"})
       assert resp.status == 422
     end
+
+    # 2026-08-01 double-lost-response incident: a client that recognizes an
+    # active lease as its own stranded acquire (held_by_uuid matches a holder
+    # uuid it minted) releases it with this reason so span-based analyses of
+    # release_reason='normal' don't absorb orphan spans as legitimate holds.
+    test "release_reason='reclaimed_lost_acquire' is accepted", ctx do
+      acquire = post_json("/v1/lease/acquire", acquire_body(ctx.surface))
+      lease_id = parsed(acquire)["lease"]["lease_id"]
+
+      resp =
+        post_json("/v1/lease/release", %{
+          lease_id: lease_id,
+          release_reason: "reclaimed_lost_acquire"
+        })
+
+      assert resp.status == 200
+      assert parsed(resp)["ok"] == true
+    end
   end
 
   describe "POST /v1/lease/handoff/{offer,accept}" do
