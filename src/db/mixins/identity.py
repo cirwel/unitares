@@ -606,23 +606,43 @@ class IdentityMixin:
         reset makes the sweeper's filter naturally exclude the row
         (``provisional_lineage=FALSE AND confirmed_at IS NULL``).
 
+        The lineage edge is written to BOTH ``core.identities`` and
+        ``core.agents`` (separate base tables, both populated at
+        onboard). ``update_agent_fields`` COALESCEs, so NULL can never
+        clear ``core.agents`` through it — this helper is the one
+        place the edge can be fully retracted, so it clears both
+        tables in one transaction. Clearing identities alone leaves a
+        rejected edge visible to every ``core.agents`` reader
+        (verified live 2026-08-01).
+
         Returns True if a row was updated, False otherwise.
         """
         async with self.acquire() as conn:
-            result = await conn.execute(
-                """
-                UPDATE core.identities
-                SET parent_agent_id = NULL,
-                    spawn_reason = NULL,
-                    provisional_lineage = FALSE,
-                    provisional_score_id = NULL,
-                    confirmed_at = NULL,
-                    lineage_declared_at = NULL,
-                    updated_at = now()
-                WHERE agent_id = $1
-                """,
-                agent_id,
-            )
+            async with conn.transaction():
+                result = await conn.execute(
+                    """
+                    UPDATE core.identities
+                    SET parent_agent_id = NULL,
+                        spawn_reason = NULL,
+                        provisional_lineage = FALSE,
+                        provisional_score_id = NULL,
+                        confirmed_at = NULL,
+                        lineage_declared_at = NULL,
+                        updated_at = now()
+                    WHERE agent_id = $1
+                    """,
+                    agent_id,
+                )
+                await conn.execute(
+                    """
+                    UPDATE core.agents
+                    SET parent_agent_id = NULL,
+                        spawn_reason = NULL,
+                        updated_at = now()
+                    WHERE id = $1
+                    """,
+                    agent_id,
+                )
             try:
                 rows = int((result or "UPDATE 0").split()[-1])
             except Exception:
