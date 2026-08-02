@@ -910,11 +910,42 @@ def test_resident_checkin_stale_skips_fresh_install(doctor, monkeypatch):
 
 def test_immortal_lease_warns_on_renewed_orphan(doctor, monkeypatch):
     _mock_psql(doctor, monkeypatch,
-               "2|resident:/sentinel_fleet_emit, resident:/steward\n")
+               "2|resident:/sentinel_fleet_emit, resident:/ship_sh_claude/adjudication-evidence\n")
     result = doctor.check_immortal_lease("postgresql://x/y")
     assert result.status == doctor.Status.WARN
     assert "sentinel_fleet_emit" in result.message
     assert "force-release" in result.detail
+    # The remedy must lead with the liveness check, not the release: on
+    # 2026-08-01 the unconditional "force-release each id" text walked
+    # operators into killing steward's live presence lease four times.
+    assert "LIVE client" in result.detail
+    assert result.detail.index("really gone") < result.detail.index("force-release")
+
+
+def test_immortal_lease_excludes_leases_with_fresh_client_contact(doctor, monkeypatch):
+    """The 2026-08-01 false-positive class: resident:/ presence leases.
+
+    The router puts every resident:/ acquire on the local_beam auto-renew
+    path, so a healthy resident presence lease grows span >> TTL by design.
+    Client renews refresh substrate_state_observed_at (the plane-side
+    auto-renew never does), so the query MUST exclude leases with a fresh
+    observation timestamp — otherwise a live steward is flagged ~35min after
+    every acquire, forever.
+    """
+    captured = {}
+
+    def capture_psql_row(db_url, sql):
+        captured["sql"] = sql
+        return ("0", "")
+
+    monkeypatch.setattr(doctor, "_psql_row", capture_psql_row)
+    result = doctor.check_immortal_lease("postgresql://x/y")
+    assert result.status == doctor.Status.PASS
+    sql = captured["sql"]
+    assert "substrate_state_observed_at IS NULL" in sql
+    assert "substrate_state_observed_at < now() - interval '35 minutes'" in sql
+    # Span predicate retained — the exclusion narrows, never widens.
+    assert "(expires_at - acquired_at) > interval '35 minutes'" in sql
 
 
 def test_immortal_lease_passes_when_clean(doctor, monkeypatch):

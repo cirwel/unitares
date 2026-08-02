@@ -1015,13 +1015,35 @@ def check_immortal_lease(db_url: str) -> CheckResult:
     was granted with, while a healthy lease's span stays at its TTL. The
     35-minute threshold sits above the longest legitimate TTL in use (the
     30-minute dispatch surface) so a normal long-lived lease does not trip it.
+
+    Span alone is NOT sufficient: the router routes every ``resident:/``
+    acquire onto the local_beam auto-renew path regardless of the client's
+    requested holder_kind (``http_router.ex acquire_for_surface`` — residents
+    rely on server-side auto-renew for continuity), so a HEALTHY resident
+    presence lease also grows span >> TTL for the gov-mcp process's lifetime.
+    On 2026-08-01 ``resident:/steward`` — actively client-renewed every sync
+    cycle — was flagged by this check and force-released four times in one
+    day, each release followed by a next-cycle re-acquire and a re-flag ~35
+    minutes later (the false-positive kill loop this exclusion closes).
+
+    The discriminator is client contact: resident client renews carry a
+    substrate observation, so they refresh ``substrate_state_observed_at``;
+    the plane-side auto-renew never touches it. A lease whose observation
+    timestamp is fresh has a live renewer and is excluded. True orphans
+    (never any substrate payload, or the client died) have it NULL or stale
+    and still warn — verified against the 2026-08-01 incident set: the
+    genuinely stranded ``resident:/ship_sh_claude/adjudication-evidence`` and
+    ``resident:/sentinel_cycle`` leases carry NULL, live steward carried a
+    seconds-old timestamp.
     """
     name, mode = "immortal_lease", "operator"
     row = _psql_row(db_url, (
         "SELECT count(*), coalesce(string_agg(DISTINCT surface_id, ', '), '') "
         "FROM lease_plane.surface_leases "
         "WHERE released_at IS NULL AND expires_at > now() "
-        "AND (expires_at - acquired_at) > interval '35 minutes'"
+        "AND (expires_at - acquired_at) > interval '35 minutes' "
+        "AND (substrate_state_observed_at IS NULL "
+        "     OR substrate_state_observed_at < now() - interval '35 minutes')"
     ))
     if row is None:
         return CheckResult(name, mode, Status.SKIP,
@@ -1031,10 +1053,13 @@ def check_immortal_lease(db_url: str) -> CheckResult:
     if count:
         return CheckResult(
             name, mode, Status.WARN,
-            f"{count} lease(s) renewed past any sane TTL — verify each is "
-            f"intentional: {surfaces}",
-            detail="force-release each id via POST /v1/lease/force-release on "
-                   "the lease plane (LEASE_FORCE_RELEASE_TOKEN, a separate "
+            f"{count} lease(s) renewed past any sane TTL with no recent "
+            f"client contact: {surfaces}",
+            detail="confirm the holder is really gone before acting — a fresh "
+                   "substrate_state_observed_at or renew events off the TTL/3 "
+                   "grid mean a LIVE client (do NOT release); only then "
+                   "force-release via POST /v1/lease/force-release on the "
+                   "lease plane (LEASE_FORCE_RELEASE_TOKEN, a separate "
                    "per-path token) — releasing kills the renew timer and the "
                    "next tick acquires cleanly",
         )
