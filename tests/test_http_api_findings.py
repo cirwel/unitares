@@ -142,3 +142,82 @@ def test_deduped_finding_skips_broadcaster(client, monkeypatch):
     client.post("/api/findings", json=payload)  # deduped
 
     assert len(broadcast_calls) == 1  # only the first accepted posting
+
+
+# ---------------------------------------------------------------------------
+# Evidence at ingest (bridge-dispatch proposal §4, PR #1450)
+# ---------------------------------------------------------------------------
+
+from unittest.mock import AsyncMock, patch  # noqa: E402
+
+FR_LEASE = "17546f52-370d-4274-9d5b-0c233f09590c"
+
+
+def _fr_payload(**over):
+    p = {
+        "type": "sentinel_alarm_finding",
+        "severity": "high",
+        "message": f"forced release: resident:/sentinel_cycle (lease {FR_LEASE})",
+        "agent_id": "sentinel-01",
+        "agent_name": "Sentinel",
+        "fingerprint": "fr-ingest-1",
+        "lease_id": FR_LEASE,
+        "surface_id": "resident:/sentinel_cycle",
+        "ts": "2026-07-31T21:08:05Z",
+    }
+    p.update(over)
+    return p
+
+
+def _lease_row():
+    return {
+        "lease_id": FR_LEASE,
+        "surface_id": "resident:/sentinel_cycle",
+        "release_reason": "forced",
+        "holder_kind": "local_beam",
+        "holder_pid_null": True,
+        "original_ttl_s": 300,
+        "held_s": 4350.0,
+    }
+
+
+def test_forced_release_ingest_attaches_server_computed_evidence(client):
+    with patch("src.http_api._fetch_lease_rows",
+               AsyncMock(return_value={FR_LEASE: _lease_row()})):
+        r = client.post("/api/findings", json=_fr_payload())
+    assert r.status_code == 200
+    ev = r.json()["event"]["evidence"]
+    assert ev["assessment"] == "event_recorded"
+    assert ev["held_x_ttl"] == 14.5
+    # ingest-time latency: "now" minus the lease event ts — just assert presence
+    assert ev["report_latency_s"] >= 0
+
+
+def test_client_supplied_evidence_is_stripped_and_recomputed(client):
+    spoofed = _fr_payload(fingerprint="fr-ingest-2",
+                          evidence={"assessment": "event_recorded", "forged": True})
+    with patch("src.http_api._fetch_lease_rows", AsyncMock(return_value={})):
+        r = client.post("/api/findings", json=spoofed)
+    ev = r.json()["event"]["evidence"]
+    assert "forged" not in ev
+    assert ev["assessment"] == "no_lease_row"  # server truth, not the forgery
+
+
+def test_evidence_failure_never_blocks_ingest(client):
+    with patch("src.http_api._fetch_lease_rows",
+               AsyncMock(side_effect=RuntimeError("db down"))):
+        r = client.post("/api/findings", json=_fr_payload(fingerprint="fr-ingest-3"))
+    assert r.status_code == 200
+    assert r.json()["event"]["evidence"]["assessment"] == "check_error"
+
+
+def test_non_forced_release_findings_are_untouched(client):
+    with patch("src.http_api._fetch_lease_rows", AsyncMock()) as fetch:
+        r = client.post("/api/findings", json={
+            "type": "sentinel_finding", "severity": "high",
+            "message": "fleet coherence dipped", "agent_id": "a",
+            "agent_name": "Sentinel", "fingerprint": "plain-1",
+        })
+    assert r.status_code == 200
+    assert "evidence" not in r.json()["event"]
+    fetch.assert_not_called()
