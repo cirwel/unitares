@@ -93,7 +93,6 @@ from .dialectic.handlers import (
     handle_submit_synthesis,
     handle_reassign_reviewer,
 )
-from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 # Pi orchestration (``pi`` action router + handlers) moved to the
 # ``unitares-pi-plugin`` package — registered via the
 # ``governance_mcp.plugins`` entry point at server startup.

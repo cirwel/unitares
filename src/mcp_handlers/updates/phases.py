@@ -1546,8 +1546,7 @@ async def _r2_post_update_hook(ctx: UpdateContext) -> None:
         )
 
 
-async def execute_post_update_effects(ctx: UpdateContext) -> None:
-    """Health check, CIRS emissions, PG record, outcome events. All fail-safe."""
+async def _post_update_health_and_baselines(ctx: UpdateContext) -> None:
     mcp_server = ctx.mcp_server
     agent_id = ctx.agent_id
 
@@ -1645,6 +1644,10 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
     if ctx.meta:
         ctx.meta.health_status = _hs
 
+
+async def _post_update_cirs_and_drift(ctx: UpdateContext) -> None:
+    agent_id = ctx.agent_id
+    void_active = ctx.metrics_dict.get("void_active", False)
     # CIRS: Void alert
     ctx.cirs_alert = None
     try:
@@ -1750,6 +1753,11 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
     except Exception as e:
         logger.debug(f"Drift dialectic trigger skipped: {e}")
 
+
+async def _post_update_record_state(ctx: UpdateContext) -> bool:
+    agent_id = ctx.agent_id
+    mcp_server = ctx.mcp_server
+    monitor = ctx.monitor
     # Snapshot the behavioral baseline so the DB row carries it (survives a
     # JSON-snapshot loss + DB-hydrate restart). Fail-open: a serialization
     # error must never break the state record. (Fleet starvation fix 2026-06-03.)
@@ -1799,7 +1807,7 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
                 "update will not be recorded.",
                 (agent_id or "")[:12],
             )
-            return
+            return False
         logger.debug(f"Agent {agent_id} not found, creating...")
         try:
             await agent_storage.create_agent(
@@ -1869,7 +1877,11 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
             logger.warning(f"PostgreSQL create+record failed: {create_error}", exc_info=True)
     except Exception as e:
         logger.warning(f"PostgreSQL record_agent_state failed: {e}", exc_info=True)
+    return True
 
+
+async def _post_update_save_baseline(ctx: UpdateContext) -> None:
+    agent_id = ctx.agent_id
     # PostgreSQL: Save agent baseline (fire-and-forget, matches record_agent_state pattern)
     try:
         from governance_core import get_baseline_or_none
@@ -1883,6 +1895,9 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
     except Exception as e:
         logger.debug(f"Baseline save skipped: {e}")
 
+
+async def _post_update_auto_outcome(ctx: UpdateContext) -> None:
+    agent_id = ctx.agent_id
     # Auto-emit outcome event
     # Use behavioral coherence (real per-agent signal) when available,
     # fall back to ODE coherence (thermostat attractor ~0.48)
@@ -2024,6 +2039,9 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
     except Exception as e:
         logger.debug(f"Outcome event auto-emit skipped: {e}")
 
+
+async def _post_update_trajectory(ctx: UpdateContext) -> None:
+    agent_id = ctx.agent_id
     # Auto-record trajectory self-validation outcome
     try:
         tv = ctx.result.get('trajectory_validation') if ctx.result else None
@@ -2059,6 +2077,8 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
     except Exception as e:
         logger.debug(f"Trajectory validation record skipped: {e}")
 
+
+async def _post_update_phase5_evidence(ctx: UpdateContext) -> None:
     # Phase-5: iterate self-reported tool evidence. Spec §2 + §8.
     # ctx.recent_tool_results was populated in transform_inputs (sync phase).
     # Evidence arrives as plain dicts (model_dump() flattens Pydantic models).
@@ -2119,7 +2139,15 @@ async def execute_post_update_effects(ctx: UpdateContext) -> None:
         if warning not in ctx.warnings:
             ctx.warnings.append(warning)
 
-    # R2 PR 5: lineage hooks — chain_obs_count increment + evaluate_lineage_for
-    # dispatch. Fail-soft inside the helper. Placed at the end so trajectory
-    # row has been written and any preceding outcome events are flushed.
+
+async def execute_post_update_effects(ctx: UpdateContext) -> None:
+    """Run post-update effects in their established fail-soft order."""
+    await _post_update_health_and_baselines(ctx)
+    await _post_update_cirs_and_drift(ctx)
+    if not await _post_update_record_state(ctx):
+        return
+    await _post_update_save_baseline(ctx)
+    await _post_update_auto_outcome(ctx)
+    await _post_update_trajectory(ctx)
+    await _post_update_phase5_evidence(ctx)
     await _r2_post_update_hook(ctx)
