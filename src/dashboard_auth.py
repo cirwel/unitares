@@ -171,10 +171,10 @@ def _normalize_enroll_code(value: str | None) -> str:
 
 
 def _enroll_code_from_request(request) -> str:
-    value = request.headers.get(ENROLL_CODE_HEADER)
-    if not value:
-        value = request.query_params.get("code")
-    return _normalize_enroll_code(value)
+    # D3: enrollment secrets must never enter URLs (history sync, access logs,
+    # referrers, and screenshots).  The dashboard collects a typed code and
+    # presents it only in this request header.
+    return _normalize_enroll_code(request.headers.get(ENROLL_CODE_HEADER))
 
 
 async def _enroll_code_valid(code: str) -> bool:
@@ -392,9 +392,11 @@ def _auth_page(name: str) -> Response:
 
 async def http_auth_signin(request):
     """GET /auth/signin — public, but inert until a credential is enrolled."""
-    if dashboard_session_authenticated(request):
+    enrollment_start = request.query_params.get("enroll") == "1"
+    step_up = request.query_params.get("stepup") == "1"
+    if dashboard_session_authenticated(request) and not step_up and not enrollment_start:
         return RedirectResponse("/", status_code=303)
-    if await _active_credential_count() == 0:
+    if await _active_credential_count() == 0 and not enrollment_start:
         return RedirectResponse("/", status_code=303)
     return _auth_page("signin.html")
 

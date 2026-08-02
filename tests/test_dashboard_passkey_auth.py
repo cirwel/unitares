@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from starlette.responses import JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse
 
 from src import dashboard_auth, http_api
 
@@ -86,6 +86,15 @@ def test_session_lifetimes_pin_sliding_and_hard_caps():
     assert dashboard_auth.SESSION_HARD_SECONDS == 90 * 24 * 60 * 60
 
 
+def test_enrollment_code_is_header_only_and_never_read_from_query():
+    assert dashboard_auth._enroll_code_from_request(
+        _Request(query={"code": "URL-LEAK"})
+    ) == ""
+    assert dashboard_auth._enroll_code_from_request(
+        _Request(headers={dashboard_auth.ENROLL_CODE_HEADER: "abcde-fghij"})
+    ) == "ABCDEFGHIJ"
+
+
 @pytest.mark.asyncio
 async def test_authentication_options_are_usernameless_uv_required_and_secure(monkeypatch):
     monkeypatch.setattr(dashboard_auth, "_active_credential_count", AsyncMock(return_value=1))
@@ -130,6 +139,28 @@ async def test_zero_credential_deploy_is_inert(monkeypatch):
     assert signin.status_code == 303
     assert signin.headers["location"] == "/"
     assert options.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_nonsecret_enrollment_marker_can_open_bootstrap_ui(monkeypatch):
+    monkeypatch.setattr(dashboard_auth, "_active_credential_count", AsyncMock(return_value=0))
+    page = HTMLResponse("enroll-start")
+    monkeypatch.setattr(dashboard_auth, "_auth_page", lambda _name: page)
+    response = await dashboard_auth.http_auth_signin(
+        _Request(method="GET", query={"enroll": "1"})
+    )
+    assert response is page
+
+
+@pytest.mark.asyncio
+async def test_stepup_marker_bypasses_authenticated_signin_redirect(monkeypatch):
+    monkeypatch.setattr(dashboard_auth, "_active_credential_count", AsyncMock(return_value=1))
+    page = HTMLResponse("step-up")
+    monkeypatch.setattr(dashboard_auth, "_auth_page", lambda _name: page)
+    response = await dashboard_auth.http_auth_signin(
+        _Request(method="GET", query={"stepup": "1"}, session=_live_session())
+    )
+    assert response is page
 
 
 @pytest.mark.asyncio
