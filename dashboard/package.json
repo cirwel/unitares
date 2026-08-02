@@ -5,7 +5,8 @@
   "description": "UNITARES governance dashboard (buildless). ESLint over the redesign + phase.js.",
   "scripts": {
     "lint": "eslint .",
-    "lint:fix": "eslint . --fix"
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
