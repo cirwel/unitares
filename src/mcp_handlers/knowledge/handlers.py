@@ -12,6 +12,7 @@ Performance:
 Claude Desktop compatible: All operations are async and non-blocking.
 """
 
+from dataclasses import dataclass, field
 from typing import Dict, Any, Sequence, Optional
 from mcp.types import TextContent
 from datetime import datetime, timezone, timedelta
@@ -737,1299 +738,1415 @@ def _resolve_low_friction_writer(arguments: Dict[str, Any]) -> tuple[str, Option
     arguments["agent_id"] = agent_id
     return agent_id, None, True
 
-@mcp_tool("store_knowledge_graph", timeout=20.0, register=False)
-async def handle_store_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """Store knowledge discovery/discoveries in graph - fast, non-blocking, transparent
 
-    Accepts either:
-    - Single discovery: discovery_type, summary, details, tags, etc.
-    - Batch discoveries: discoveries array (max 10 per batch)
-    """
-    # MAGNET PATTERN: Accept fuzzy inputs (discovery, insight, finding → summary)
-    arguments = apply_param_aliases("store_knowledge_graph", arguments)
+class _StoreResponseError(Exception):
+    """Abort a store operation with an already-structured MCP error."""
 
-    # REDUCE FRICTION (Dec 2025): Allow unregistered agents to write low/medium notes
-    # Only enforce strict registration and display name for high/critical severity (security)
-    # UX FIX (Feb 2026): Auto-generate display_name instead of blocking
+    def __init__(self, response: TextContent):
+        super().__init__()
+        self.response = response
+
+
+@dataclass(frozen=True)
+class _KnowledgeStoreRequest:
+    arguments: Dict[str, Any]
+    agent_id: str
+    discovery_type: Any
+    summary: Any
+    supersedes_id: Optional[str]
+    display_name_warning: Optional[str]
+    is_anonymous_writer: bool
+
+
+@dataclass
+class _KnowledgeStoreState:
+    request: _KnowledgeStoreRequest
+    graph: Any
+    summary: Any
+    details: Any = ""
+    truncation_info: dict[str, str] = field(default_factory=dict)
+    response_to: Optional[ResponseTo] = None
+    severity: Optional[str] = None
+    provenance: Optional[dict[str, Any]] = None
+    provenance_chain: Any = None
+    discovery: Optional[DiscoveryNode] = None
+    supersedes_target: Any = None
+    supersedes_warning: Optional[str] = None
+    similar: list[Any] = field(default_factory=list)
+    similar_discoveries: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _resolve_store_writer(
+    arguments: Dict[str, Any],
+) -> tuple[str, Optional[TextContent], Optional[str], bool]:
+    """Resolve the writer using the severity-dependent identity policy."""
     raw_severity = str(arguments.get("severity", "low")).lower()
-    display_name_warning = None  # Track if we auto-generated a name
-    is_anonymous_writer = False
+    if raw_severity not in {"high", "critical"}:
+        agent_id, error, is_anonymous = _resolve_low_friction_writer(arguments)
+        return agent_id, error, None, is_anonymous
 
-    if raw_severity in ["high", "critical"]:
-        agent_id, error = require_registered_agent(arguments)
-        if not error:
-            # Check display_name (auto-generates if missing, returns warning)
-            display_name_error, display_name_warning = _check_display_name_required(agent_id, arguments)
-            if display_name_error:
-                return [display_name_error]
-    else:
-        agent_id, error, is_anonymous_writer = _resolve_low_friction_writer(arguments)
-
+    agent_id, error = require_registered_agent(arguments)
     if error:
-        return [error]
+        return agent_id, error, None, False
+    display_name_error, display_name_warning = _check_display_name_required(agent_id, arguments)
+    return agent_id, display_name_error, display_name_warning, False
 
-    # CIRCUIT BREAKER: Paused agents cannot store knowledge
-    from ..utils import check_agent_can_operate
-    blocked = check_agent_can_operate(agent_id)
-    if blocked:
-        return [blocked]
 
-    # Check if batch mode (discoveries array provided)
-    if "discoveries" in arguments and arguments["discoveries"] is not None:
-        # Batch mode - delegate to batch handler logic
-        return await _handle_store_knowledge_graph_batch(arguments, agent_id)
-    
-    # Set tool name in context for better error messages
-    arguments["_tool_name"] = "store_knowledge_graph"
-    
-    # Single discovery mode (original behavior)
-    # LITE-FIRST: discovery_type defaults to "note" (simplest form)
-    discovery_type = arguments.get("discovery_type", "note")
-    discovery_type = _normalize_discovery_type(discovery_type)
-    
-    # Validate discovery_type enum
+def _parse_single_store_request(
+    arguments: Dict[str, Any],
+    agent_id: str,
+    display_name_warning: Optional[str],
+    is_anonymous_writer: bool,
+) -> _KnowledgeStoreRequest:
+    """Validate the fields needed before opening the graph backend."""
+    discovery_type = _normalize_discovery_type(arguments.get("discovery_type", "note"))
     if discovery_type not in VALID_DISCOVERY_TYPES:
-        return _invalid_enum_response(
-            "discovery_type",
-            discovery_type,
-            VALID_DISCOVERY_TYPES,
-            tip="Tip: use 'bug_found' (or shorthand 'bug').",
+        raise _StoreResponseError(
+            _invalid_enum_response(
+                "discovery_type",
+                discovery_type,
+                VALID_DISCOVERY_TYPES,
+                tip="Tip: use 'bug_found' (or shorthand 'bug').",
+            )
         )
 
-    summary, error = require_argument(arguments, "summary",
-                                    "summary is required - what did you discover/learn?")
+    summary, error = require_argument(
+        arguments,
+        "summary",
+        "summary is required - what did you discover/learn?",
+    )
     if error:
-        return [error]
+        raise _StoreResponseError(error)
 
-    # KG hygiene v1: supersedes parameter — early validation only.
-    # Pre-flight predecessor lookup + permanent-policy veto happens inside
-    # the try block once we have a graph instance.
     supersedes_id = arguments.get("supersedes")
     if supersedes_id is not None:
         supersedes_id = str(supersedes_id).strip()
         if not supersedes_id:
-            return [error_response("supersedes parameter cannot be empty string")]
+            raise _StoreResponseError(error_response("supersedes parameter cannot be empty string"))
 
+    return _KnowledgeStoreRequest(
+        arguments=arguments,
+        agent_id=agent_id,
+        discovery_type=discovery_type,
+        summary=summary,
+        supersedes_id=supersedes_id,
+        display_name_warning=display_name_warning,
+        is_anonymous_writer=is_anonymous_writer,
+    )
+
+
+def _truncate_store_content(state: _KnowledgeStoreState) -> None:
+    """Normalize text inputs and retain caller-visible truncation metadata."""
+    arguments = state.request.arguments
+    raw_summary = state.summary
+    raw_details = arguments.get("details") or arguments.get("content") or ""
+    leaked_marker = _detect_toolcall_markup_leak(raw_summary, raw_details)
+    if leaked_marker:
+        field = "summary" if isinstance(raw_summary, str) and leaked_marker in raw_summary else "content"
+        raise _StoreResponseError(_degenerate_write_response(leaked_marker, field))
+
+    if len(raw_summary) > MAX_SUMMARY_LEN:
+        state.truncation_info["summary"] = f"Truncated from {len(raw_summary)} to {MAX_SUMMARY_LEN} chars"
+        truncated = raw_summary[:MAX_SUMMARY_LEN]
+        for end_char in [". ", "! ", "? "]:
+            last_end = truncated.rfind(end_char, MAX_SUMMARY_LEN - 100)
+            if last_end > 0:
+                truncated = truncated[: last_end + 1]
+                break
+        else:
+            last_space = truncated.rfind(" ")
+            if last_space > MAX_SUMMARY_LEN - 50:
+                truncated = truncated[:last_space]
+        state.summary = truncated.rstrip() + "..."
+
+    if len(raw_details) > MAX_DETAILS_LEN:
+        state.truncation_info["details"] = f"Truncated from {len(raw_details)} to {MAX_DETAILS_LEN} chars"
+        raw_details = raw_details[:MAX_DETAILS_LEN] + "... [truncated]"
+    state.details = raw_details
+
+
+def _parse_store_response_to(arguments: Dict[str, Any]) -> Optional[ResponseTo]:
+    """Parse the optional typed link to a parent discovery."""
+    response_data = arguments.get("response_to")
+    if not response_data:
+        return None
+    if not (isinstance(response_data, dict) and "discovery_id" in response_data and "response_type" in response_data):
+        return None
+
+    parent_id = str(response_data["discovery_id"]).strip()
+    if not parent_id:
+        raise _StoreResponseError(error_response("Invalid response_to.discovery_id (empty)"))
+    response_type = response_data["response_type"]
+    if response_type not in VALID_RESPONSE_TYPES:
+        raise _StoreResponseError(
+            error_response(f"Invalid response_type '{response_type}'. Valid: {sorted(VALID_RESPONSE_TYPES)}")
+        )
+    return ResponseTo(discovery_id=parent_id, response_type=response_type)
+
+
+def _parse_store_severity(arguments: Dict[str, Any]) -> Optional[str]:
+    severity = arguments.get("severity")
+    if severity is None:
+        return None
+    severity = str(severity).lower()
+    if severity not in VALID_SEVERITIES:
+        raise _StoreResponseError(_invalid_enum_response("severity", severity, VALID_SEVERITIES))
+    return severity
+
+
+def _parse_store_confidence(arguments: Dict[str, Any]) -> Optional[float]:
+    raw_confidence = arguments.get("confidence")
+    if raw_confidence is None:
+        return None
     try:
-        # SECURITY: Rate limiting is handled by the knowledge graph backend
-        # Backend handles rate limiting internally (O(1) per store)
-        # No need for inefficient O(n) query here - let graph handle it
-        graph = await get_knowledge_graph()
-        
-        # Truncate fields to prevent context overflow. Limits are imported
-        # from limits.py; see that module for how they relate to the BGE-M3
-        # embed budget.
-        raw_summary = summary
-        # Accept both 'details' and 'content' as parameter names
-        raw_details = arguments.get("details") or arguments.get("content") or ""
+        return max(0.0, min(1.0, float(raw_confidence)))
+    except (ValueError, TypeError):
+        return None
 
-        # Foolproofing (KG 2026-06-13 footgun): reject a write whose text fields
-        # absorbed tool-call markup — the harness folded a later argument
-        # (commonly `tags`) into summary/content and the structured arg arrived
-        # empty. Silently storing it persists a corrupt, unsearchable row.
-        leaked_marker = _detect_toolcall_markup_leak(raw_summary, raw_details)
-        if leaked_marker:
-            field = (
-                "summary"
-                if isinstance(raw_summary, str) and leaked_marker in raw_summary
-                else "content"
-            )
-            return [_degenerate_write_response(leaked_marker, field)]
 
-        # Track truncation for visibility (v2.5.0+)
-        truncation_info = {}
+async def _capture_store_provenance(arguments: Dict[str, Any], agent_id: str) -> tuple[dict[str, Any], Any]:
+    """Capture best-effort identity, lineage, and S22 write context."""
+    system_version = getattr(mcp_server, "SERVER_VERSION", "unknown")
+    provenance = None
+    provenance_chain = None
+    try:
+        from src.provenance_context import attach_s22_context, build_s22_write_context
+        from ..identity.shared import _get_lineage
 
-        if len(raw_summary) > MAX_SUMMARY_LEN:
-            truncation_info["summary"] = f"Truncated from {len(raw_summary)} to {MAX_SUMMARY_LEN} chars"
-            # Try to cut at sentence boundary, else word boundary
-            truncated = raw_summary[:MAX_SUMMARY_LEN]
-            # Look for last sentence end in final 100 chars
-            for end_char in ['. ', '! ', '? ']:
-                last_end = truncated.rfind(end_char, MAX_SUMMARY_LEN - 100)
-                if last_end > 0:
-                    truncated = truncated[:last_end + 1]
-                    break
-            else:
-                # No sentence boundary, cut at word
-                last_space = truncated.rfind(' ')
-                if last_space > MAX_SUMMARY_LEN - 50:
-                    truncated = truncated[:last_space]
-            summary = truncated.rstrip() + "..."
-
-        if len(raw_details) > MAX_DETAILS_LEN:
-            truncation_info["details"] = f"Truncated from {len(raw_details)} to {MAX_DETAILS_LEN} chars"
-            raw_details = raw_details[:MAX_DETAILS_LEN] + "... [truncated]"
-        
-        # Create discovery node
-        discovery_id = _new_discovery_id()
-
-        # Parse response_to if provided (typed response to parent discovery)
-        response_to = None
-        if "response_to" in arguments and arguments["response_to"]:
-            resp_data = arguments["response_to"]
-            if isinstance(resp_data, dict) and "discovery_id" in resp_data and "response_type" in resp_data:
-                # Validate discovery_id format
-                parent_id = str(resp_data["discovery_id"]).strip()
-                if not parent_id:
-                    return error_response("Invalid response_to.discovery_id (empty)")
-
-                # Validate response_type enum
-                response_type = resp_data["response_type"]
-                if response_type not in VALID_RESPONSE_TYPES:
-                    return error_response(f"Invalid response_type '{response_type}'. Valid: {sorted(VALID_RESPONSE_TYPES)}")
-
-                response_to = ResponseTo(
-                    discovery_id=parent_id,
-                    response_type=response_type
-                )
-
-        # Validate severity if provided
-        severity = arguments.get("severity")
-        if severity is not None:
-            severity = str(severity).lower()
-            if severity not in VALID_SEVERITIES:
-                return _invalid_enum_response("severity", severity, VALID_SEVERITIES)
-
-        # Auto-populate system_version at write time (Task 1: KG version coupling)
-        system_version = getattr(mcp_server, "SERVER_VERSION", "unknown")
-
-        # ENHANCED PROVENANCE: Capture agent state at creation time
-        # Answers: "What was the agent's context when they made this discovery?"
-        provenance = None
-        provenance_chain = None
-        try:
-            from src.provenance_context import (
-                attach_s22_context,
-                build_s22_write_context,
-            )
-            from ..identity.shared import _get_lineage  # Import lineage function
-
-            meta = None
-            if agent_id in mcp_server.agent_metadata:
-                meta = mcp_server.agent_metadata[agent_id]
-
-                # Get monitor state if available
-                monitor_state = {}
-                if agent_id in mcp_server.monitors:
-                    monitor = mcp_server.monitors[agent_id]
-                    state = monitor.state
-                    monitor_state = {
-                        "regime": state.regime,
-                        "coherence": round(state.coherence, 6),
-                        "energy": round(state.E, 6),  # E, I, S, V are uppercase
-                        "entropy": round(state.S, 6),
-                        "void_active": state.void_active,
-                    }
-
-                # CAPTURE BASIC PROVENANCE
-                provenance = {
-                    "system_version": system_version,
-                    "agent_state": {
-                        "status": meta.status,
-                        "health": meta.health_status,
-                        "total_updates": meta.total_updates,
-                        **monitor_state
-                    },
-                    "captured_at": _utc_now_iso(),
+        meta = None
+        if agent_id in mcp_server.agent_metadata:
+            meta = mcp_server.agent_metadata[agent_id]
+            monitor_state = {}
+            if agent_id in mcp_server.monitors:
+                state = mcp_server.monitors[agent_id].state
+                monitor_state = {
+                    "regime": state.regime,
+                    "coherence": round(state.coherence, 6),
+                    "energy": round(state.E, 6),
+                    "entropy": round(state.S, 6),
+                    "void_active": state.void_active,
                 }
-
-                # Bug A fix 2026-04-25: pin writer attribution at write time.
-                # `agent_id` (UUID) is stable across resumed sessions; the
-                # display_name and active session_id are not. Without this,
-                # search/get rebuilds `by:` from current metadata and erases
-                # which session/label actually authored each row.
-                writer_label = (
-                    getattr(meta, "display_name", None)
-                    or getattr(meta, "label", None)
-                    or getattr(meta, "structured_id", None)
-                    or agent_id
-                )
-                provenance["writer_label_at_write"] = writer_label
-                writer_session = arguments.get("client_session_id")
-                if not writer_session:
-                    try:
-                        from ..context import get_context_client_session_id
-                        writer_session = get_context_client_session_id()
-                    except Exception:
-                        writer_session = None
-                if writer_session:
-                    provenance["writer_session_id_at_write"] = writer_session
-
-            provenance_chain = await _build_s7_provenance_chain_with_fallback(
-                agent_id,
-                meta,
-                _get_lineage,
+            provenance = {
+                "system_version": system_version,
+                "agent_state": {
+                    "status": meta.status,
+                    "health": meta.health_status,
+                    "total_updates": meta.total_updates,
+                    **monitor_state,
+                },
+                "captured_at": _utc_now_iso(),
+            }
+            provenance["writer_label_at_write"] = (
+                getattr(meta, "display_name", None)
+                or getattr(meta, "label", None)
+                or getattr(meta, "structured_id", None)
+                or agent_id
             )
-            from src.provenance_context import classify_fork_for_s22_context
-            episode_fork_kind, identity_lineage_fork = classify_fork_for_s22_context(
-                meta, agent_id
+            writer_session = arguments.get("client_session_id")
+            if not writer_session:
+                try:
+                    from ..context import get_context_client_session_id
+
+                    writer_session = get_context_client_session_id()
+                except Exception:
+                    writer_session = None
+            if writer_session:
+                provenance["writer_session_id_at_write"] = writer_session
+
+        provenance_chain = await _build_s7_provenance_chain_with_fallback(agent_id, meta, _get_lineage)
+        from src.provenance_context import classify_fork_for_s22_context
+
+        episode_fork_kind, identity_lineage_fork = classify_fork_for_s22_context(meta, agent_id)
+        s22_context = build_s22_write_context(
+            arguments,
+            meta=meta,
+            context_source="knowledge.store",
+            default_governance_mode="explicit",
+            episode_fork_kind=episode_fork_kind,
+            identity_lineage_fork=identity_lineage_fork,
+        )
+        provenance = attach_s22_context(provenance, s22_context)
+    except Exception as exc:
+        logger.debug(f"Could not capture provenance: {exc}")
+
+    if provenance is None:
+        provenance = {
+            "system_version": system_version,
+            "captured_at": _utc_now_iso(),
+        }
+    elif "system_version" not in provenance:
+        provenance["system_version"] = system_version
+
+    from src.knowledge_graph import tag_provenance_source as _tag_src
+
+    return _tag_src(provenance, "explicit_store"), provenance_chain
+
+
+async def _build_store_discovery(state: _KnowledgeStoreState) -> None:
+    request = state.request
+    arguments = request.arguments
+    state.response_to = _parse_store_response_to(arguments)
+    state.severity = _parse_store_severity(arguments)
+    state.provenance, state.provenance_chain = await _capture_store_provenance(arguments, request.agent_id)
+    state.discovery = DiscoveryNode(
+        id=_new_discovery_id(),
+        agent_id=request.agent_id,
+        type=request.discovery_type,
+        summary=state.summary,
+        details=state.details,
+        tags=normalize_tags(arguments.get("tags", [])),
+        severity=state.severity,
+        status=arguments.get("status") or "open",
+        response_to=state.response_to,
+        references_files=arguments.get("related_files", []),
+        provenance=state.provenance,
+        provenance_chain=state.provenance_chain,
+        confidence=_parse_store_confidence(arguments),
+    )
+
+
+async def _prepare_store_supersession(state: _KnowledgeStoreState) -> None:
+    supersedes_id = state.request.supersedes_id
+    if not supersedes_id:
+        return
+    state.supersedes_target = await state.graph.get_discovery(supersedes_id)
+    if state.supersedes_target is None:
+        state.supersedes_warning = (
+            f"supersedes target '{supersedes_id}' not found; new discovery will be stored without flip"
+        )
+        return
+
+    from src.knowledge_graph_lifecycle import KnowledgeGraphLifecycle
+
+    lifecycle = KnowledgeGraphLifecycle()
+    if lifecycle.get_lifecycle_policy(state.supersedes_target) == "permanent":
+        target = state.supersedes_target
+        raise _StoreResponseError(
+            error_response(
+                f"Cannot supersede permanent discovery '{supersedes_id}' "
+                f"(type={target.type}, tags={target.tags}). "
+                "Use knowledge(action='update') with explicit operator action "
+                "to override."
             )
-            s22_context = build_s22_write_context(
-                arguments,
-                meta=meta,
-                context_source="knowledge.store",
-                default_governance_mode="explicit",
-                episode_fork_kind=episode_fork_kind,
-                identity_lineage_fork=identity_lineage_fork,
-            )
-            provenance = attach_s22_context(provenance, s22_context)
-        except Exception as e:
-            logger.debug(f"Could not capture provenance: {e}")  # Non-critical
-
-        # Ensure system_version is always in provenance, even if agent metadata was unavailable
-        if provenance is None:
-            provenance = {"system_version": system_version, "captured_at": _utc_now_iso()}
-        elif "system_version" not in provenance:
-            provenance["system_version"] = system_version
-        # Tag write origin so list/stats can split caller-intentional writes
-        # from automation traffic (#165). Single-discovery store path is the
-        # canonical "explicit" write surface.
-        from src.knowledge_graph import tag_provenance_source as _tag_src
-        provenance = _tag_src(provenance, "explicit_store")
-
-        # Parse confidence if provided
-        raw_confidence = arguments.get("confidence")
-        parsed_confidence = None
-        if raw_confidence is not None:
-            try:
-                parsed_confidence = float(raw_confidence)
-                parsed_confidence = max(0.0, min(1.0, parsed_confidence))
-            except (ValueError, TypeError):
-                pass
-
-        discovery = DiscoveryNode(
-            id=discovery_id,
-            agent_id=agent_id,
-            type=discovery_type,
-            summary=summary,
-            details=raw_details,
-            tags=normalize_tags(arguments.get("tags", [])),
-            severity=severity,
-            # Default status-less writes to "open" at the source. The unified
-            # knowledge(action="store") path arrives via params_step.model_dump(),
-            # which injects status=None into arguments — so .get("status", "open")
-            # would yield None, not the default. `or "open"` also folds an explicit
-            # null/empty back to "open" so the in-memory node, the response, and the
-            # broadcast all agree with the storage-layer `or "open"` coercion instead
-            # of surfacing a null the DB silently rewrites.
-            status=arguments.get("status") or "open",
-            response_to=response_to,
-            references_files=arguments.get("related_files", []),
-            provenance=provenance,
-            provenance_chain=provenance_chain,
-            confidence=parsed_confidence
         )
 
-        # KG hygiene v1: supersedes pre-flight.
-        # Look up predecessor; veto if permanent (would silently downgrade an
-        # ADR/learning/etc.); warn if missing (new entry still stored, but no
-        # supersession applied). Veto must run BEFORE add_discovery so a
-        # rejected supersession does not orphan the new entry.
-        supersedes_target = None
-        supersedes_warning = None
-        if supersedes_id:
-            supersedes_target = await graph.get_discovery(supersedes_id)
-            if supersedes_target is None:
-                supersedes_warning = (
-                    f"supersedes target '{supersedes_id}' not found; "
-                    f"new discovery will be stored without flip"
-                )
-            else:
-                from src.knowledge_graph_lifecycle import KnowledgeGraphLifecycle
-                lifecycle = KnowledgeGraphLifecycle()
-                if lifecycle.get_lifecycle_policy(supersedes_target) == "permanent":
-                    return [error_response(
-                        f"Cannot supersede permanent discovery '{supersedes_id}' "
-                        f"(type={supersedes_target.type}, tags={supersedes_target.tags}). "
-                        "Use knowledge(action='update') with explicit operator action to override."
-                    )]
 
-        # CONFIDENCE CROSS-CHECK: Clamp to agent coherence + 0.3
-        await _clamp_confidence_to_coherence(discovery, agent_id)
+async def _link_similar_store_discoveries(state: _KnowledgeStoreState) -> None:
+    if not state.request.arguments.get("auto_link_related", True):
+        return
+    from .synthesis import is_rollup
 
-        # Find similar discoveries (fast with tag index) - DEFAULT: true for better linking
-        similar_discoveries = []
-        if arguments.get("auto_link_related", True):  # Default to true - new graph uses indexes (fast)
-            # Drop system-generated rollup rows from auto-linking. A topic_rollup
-            # is a summary OF discoveries, not a peer discovery; linking a fresh
-            # write to one would pollute related_to edges and let rollups accrete
-            # inbound peer edges, then feed back into other rollups' member sets
-            # (#44 synthesis follow-up). The storage find_similar layer has no
-            # rollup awareness, so filter here. Fetch a wider pool first so the
-            # exclusion does not shrink the suggestion set below the cap.
-            from .synthesis import is_rollup
-            similar = [s for s in await graph.find_similar(discovery, limit=8) if not is_rollup(s)][:5]
-            discovery.related_to = [s.id for s in similar]
-            similar_discoveries = [s.to_dict(include_details=False) for s in similar]
-        
-        # SECURITY: Require session ownership for high-severity discoveries (UUID-based auth, Dec 2025)
-        # This prevents unauthorized agents from storing critical security issues
-        if discovery.severity in ["high", "critical"]:
-            from ..utils import verify_agent_ownership
-            if not verify_agent_ownership(agent_id, arguments):
-                return [error_response(
-                    "Authentication required for high-severity discoveries.",
-                    error_code="AUTH_REQUIRED",
-                    error_category="auth_error",
-                    recovery={
-                        "action": "Ensure your session is bound to this agent",
-                        "related_tools": ["identity"],
-                        "workflow": "Identity auto-binds on first tool call. Use identity() to check binding."
-                    }
-                )]
-        
-        # Add to graph (fast, non-blocking)
-        await graph.add_discovery(discovery)
-        await _broadcast_knowledge_write(discovery, agent_id)
+    candidates = await state.graph.find_similar(state.discovery, limit=8)
+    state.similar = [item for item in candidates if not is_rollup(item)][:5]
+    state.discovery.related_to = [item.id for item in state.similar]
+    state.similar_discoveries = [item.to_dict(include_details=False) for item in state.similar]
 
-        # KG hygiene v1: flip predecessor status now that the new entry exists.
-        # Pre-flight already verified the predecessor exists and is non-permanent.
-        if supersedes_id and supersedes_target is not None:
-            await graph.update_discovery(supersedes_id, {
-                "status": "superseded",
-                "superseded_by": discovery_id,
-                "updated_at": _utc_now_iso(),
-            })
-            # update_discovery can't persist the successor pointer (no relational
-            # column); record the directed link as a SUPERSEDES edge so it isn't
-            # lost (this new discovery supersedes the predecessor).
-            await _record_supersession_edge(graph, new_id=discovery_id, old_id=supersedes_id)
 
-        # v2.5.3: Resolve UUID to display name for human-readable output
-        agent_display = _agent_display_for_response(agent_id, arguments)
-        display_name = agent_display.get("display_name", agent_id)
+def _authorize_store_discovery(state: _KnowledgeStoreState) -> None:
+    if state.discovery.severity not in {"high", "critical"}:
+        return
+    from ..utils import verify_agent_ownership
 
-        response = {
-            "message": f"Discovery stored for agent '{display_name}'",
-            "discovery_id": discovery_id,
-            "agent": agent_display,  # Include full display info
-            "discovery": discovery.to_dict(include_details=False)  # Summary only in response
-        }
-
-        if is_anonymous_writer:
-            response["agent_mode"] = "anonymous"
-            response["_identity_hint"] = (
-                "Stored under a lightweight anonymous writer ID. "
-                "Bind an identity first if you want authorship continuity."
-            )
-
-        # KG loop closure: remind agents to resolve when addressed
-        response["_resolve_when_done"] = f"When this is addressed, close the loop: knowledge(action='update', discovery_id='{discovery_id}', status='resolved')"
-
-        # KG hygiene v1: surface supersession outcome
-        if supersedes_id:
-            if supersedes_target is not None:
-                response["superseded"] = supersedes_id
-            elif supersedes_warning:
-                response["_supersedes_warning"] = supersedes_warning
-
-        # UX FIX (Feb 2026): Include warning if display_name was auto-generated
-        if display_name_warning:
-            response["_name_hint"] = display_name_warning
-
-        # Add truncation warning if content was truncated (v2.5.0+)
-        if truncation_info:
-            response["_truncated"] = truncation_info
-            response["_tip"] = "Content was truncated. For longer content, split into multiple discoveries or use details field (5000 char limit)."
-
-        # No human_review_required flag on high/critical stores — removed 2026-08-02.
-        # It decorated only this response (nothing persisted or queued it, no
-        # reviewer workflow existed), so it claimed a verification process that
-        # wasn't happening. Don't re-add a review gate without building the
-        # review path that executes it.
-        if similar_discoveries:
-            response["related_discoveries"] = similar_discoveries
-            # Consolidation hint: flag when the same issue keeps being rediscovered
-            open_similar = [s for s in similar if s.status == "open"]
-            if len(open_similar) >= 3:
-                unique_agents = {s.agent_id for s in open_similar}
-                response["consolidation_hint"] = (
-                    f"This issue has been found {len(open_similar)} times by {len(unique_agents)} agent(s), "
-                    f"all still open. Consider superseding older entries or resolving them."
-                )
-
-        return success_response(response, arguments=arguments)
-        
-    except ValueError as e:
-        # Handle rate limiting errors from graph backend (efficient O(1) check)
-        error_msg = str(e)
-        if "rate limit" in error_msg.lower() or "Rate limit" in error_msg:
-            return [error_response(
-                error_msg,
-                recovery={
-                    "action": "Wait before storing more discoveries, or reduce batch size",
-                    "related_tools": [KNOWLEDGE_SEARCH_TOOL]
-                }
-            )]
-        # Other ValueError (validation errors, etc.)
-        return [error_response(error_msg)]
-    except Exception as e:
-        return [error_response(f"Failed to store knowledge: {str(e)}")]
-
-@mcp_tool("search_knowledge_graph", timeout=15.0, requires_identity="pre_onboard")
-async def handle_search_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """Search knowledge graph (indexed filters; optional FTS query).
-
-    Use include_provenance=True to get provenance and lineage chain for each discovery.
-    """
-    # MAGNET PATTERN: Accept fuzzy inputs (search, term, find → query)
-    arguments = apply_param_aliases("search_knowledge_graph", arguments)
-
-    try:
-        graph = await get_knowledge_graph()
-
-        limit = arguments.get("limit") or config.KNOWLEDGE_QUERY_DEFAULT_LIMIT
-        include_details = arguments.get("include_details", False)
-        include_provenance = arguments.get("include_provenance", False)  # Merged from query_provenance
-
-        # LLM delegation: synthesize results via local model
-        # When enabled, uses Ollama to summarize key patterns from multiple discoveries
-        synthesize = arguments.get("synthesize", False)
-
-        # Optional full-text query (PostgreSQL FTS or AGE)
-        # Accept both "query" and "text" as parameter names for better UX
-        query_text = arguments.get("query") or arguments.get("text")
-        agent_id = arguments.get("agent_id")
-        # Force a specific retrieval mode. 'auto' (default) preserves the
-        # historical heuristic; explicit values fail honestly instead of silently
-        # routing to FTS — the whole point of this surface is making the routing
-        # decision visible (issue #165).
-        search_mode_param = (arguments.get("search_mode") or "auto").lower()
-        if search_mode_param not in {"auto", "fts", "semantic", "hybrid"}:
-            return [error_response(
-                f"Invalid search_mode {search_mode_param!r}; "
-                "expected one of: auto, fts, semantic, hybrid"
-            )]
-        # FTS boolean operator: None = handler picks AND with OR-on-zero
-        # fallback. "AND" or "OR" force that operator with no fallback.
-        operator_param_raw = arguments.get("operator")
-        if operator_param_raw is None:
-            operator_forced: Optional[str] = None
-        else:
-            op_upper = str(operator_param_raw).upper()
-            if op_upper not in {"AND", "OR"}:
-                return [error_response(
-                    f"Invalid operator {operator_param_raw!r}; expected 'AND' or 'OR'"
-                )]
-            operator_forced = op_upper
-        # Labels to exclude (e.g. ["Vigil"]) — lets the dashboard hide
-        # janitorial residents from the default Discoveries feed. Resolved to
-        # agent_ids below, applied as a post-query filter over `results`.
-        exclude_labels_raw = arguments.get("exclude_agent_labels") or []
-        exclude_labels_lc: set[str] = {
-            str(lbl).strip().lower()
-            for lbl in exclude_labels_raw
-            if str(lbl).strip()
-        } if isinstance(exclude_labels_raw, (list, tuple)) else set()
-        tags = normalize_tags(arguments.get("tags", [])) or None
-        dtype = arguments.get("discovery_type")
-        severity = arguments.get("severity")
-        status = arguments.get("status")
-        # Back-compat alias: older schemas/docs used "active".
-        if isinstance(status, str) and status.lower() == "active":
-            status = "open"
-        # Default: exclude archived entries unless explicitly requested
-        include_archived = arguments.get("include_archived", False)
-        # Cold storage is long-term memory, queryable only with include_cold=true
-        # (mirrors the lifecycle contract). Default search excludes it.
-        include_cold = arguments.get("include_cold", False)
-
-        # Track semantic scores if semantic search is used
-        semantic_scores_dict = {}
-        rerank_scores_dict = {}
-        rrf_scores_dict = {}
-        # IDs the lexical (FTS) lane returned. None when no lexical lane ran
-        # (pure-semantic / substring scan), so the abstention signal below can
-        # tell "no keyword match" apart from "lexical judgement unavailable".
-        fts_anchor_ids = None
-        search_degraded_warning = None
-        hybrid_skipped_reason = None
-        fts_fallback_skipped_reason = None
-        query_terms = str(query_text).split() if query_text else []
-        query_term_count = len(query_terms)
-        # Two DIFFERENT cost concerns, two limits (dogfood 2026-06-13 P2.8):
-        #
-        # - complex_query_term_limit gates the automatic AND→OR *recall*
-        #   fallback. OR across many terms widens the FTS candidate set, but the
-        #   SQL `LIMIT` already bounds returned rows and the GIN index keeps the
-        #   scan cheap at this corpus size (~1k discoveries). The cap exists only
-        #   to stop a pathological term-dump (a pasted paragraph) from OR-ing
-        #   against everything. The old value of 4 was far too tight: it skipped
-        #   OR recall on ordinary 10-20 word natural-language questions, which is
-        #   exactly when the AND pass returns nothing and OR is the last resort
-        #   before a bare 0 result (dogfood 2026-06-20: a 14-term question whose
-        #   answer existed returned 0 because OR was skipped here). Raised to 24
-        #   to cover real questions while still bounding term-dumps.
-        #
-        # - complex_hybrid_term_limit gates auto RRF fusion. Hybrid runs
-        #   semantic_search + an AND FTS query in parallel and fuses; the AND
-        #   FTS gets MORE restrictive (cheaper) with more terms and the
-        #   semantic side ignores term count entirely, so hybrid is NOT
-        #   per-term expensive. The old shared cap of 4 skipped fusion exactly
-        #   when normal multi-term conceptual queries (10 terms is normal for
-        #   agents) would benefit most. A generous cap restores fusion while
-        #   still bounding pathological term dumps.
-        complex_query_term_limit = 24
-        complex_hybrid_term_limit = 12
-
-        # Phase 3: cross-encoder reranker. When enabled, first-stage retrieval
-        # fetches a wider pool (up to rerank_pool_size) so the reranker has
-        # something to work with before we truncate to the caller's `limit`.
-        from src.reranker import reranker_enabled as _reranker_enabled
-        rerank_on = _reranker_enabled()
-        rerank_pool_size = 50 if rerank_on else 0
-        first_stage_limit = max(limit * 2, rerank_pool_size) if rerank_on else limit * 2
-
-        # Phase 4: hybrid RRF fusion. When enabled, fetch semantic + FTS in
-        # parallel and fuse via Reciprocal Rank Fusion (k=60). Tags, if passed,
-        # act as a small boost in the fused space rather than a hard post-filter.
-        from src.retrieval import (
-            hybrid_enabled as _hybrid_enabled,
-            graph_expansion_enabled as _graph_expansion_enabled,
-            rrf_fuse,
-            apply_tag_boost,
-            expand_with_neighbors,
-        )
-        hybrid_on = _hybrid_enabled()
-        graph_expand_on = _graph_expansion_enabled()
-
-        t0 = time.perf_counter()
-        # Track why the chosen mode is what it is — surfaced in the response so
-        # callers can tell a configured-FTS run from a silent-degrade-to-FTS run
-        # (issue #165).
-        semantic_skipped_reason: Optional[str] = None
-        # FTS operator observability (#165 part 2). None when no FTS ran;
-        # "AND"/"OR" otherwise. fallback_used flips true when AND returned zero
-        # and we retried with OR.
-        fts_operator_used: Optional[str] = None
-        fts_fallback_used = False
-        if query_text:
-            has_semantic = hasattr(graph, "semantic_search")
-            has_fts = hasattr(graph, "full_text_search")
-            backend_label = graph.__class__.__name__
-            explicit_semantic = arguments.get("semantic")
-
-            # Forced modes: error honestly when the backend can't deliver.
-            # 'auto' falls back to FTS but records the reason. 'fts' is always
-            # OK as long as the backend exposes full_text_search.
-            if search_mode_param == "semantic" and not has_semantic:
-                return [error_response(
-                    f"search_mode=semantic requires a backend with semantic_search; "
-                    f"active backend {backend_label} has none. "
-                    f"Use search_mode=fts, or set UNITARES_KNOWLEDGE_BACKEND=age."
-                )]
-            if search_mode_param == "hybrid" and not (has_semantic and has_fts):
-                missing = []
-                if not has_semantic:
-                    missing.append("semantic_search")
-                if not has_fts:
-                    missing.append("full_text_search")
-                return [error_response(
-                    f"search_mode=hybrid requires both semantic and FTS; "
-                    f"active backend {backend_label} is missing {', '.join(missing)}."
-                )]
-            if search_mode_param == "fts" and not has_fts:
-                return [error_response(
-                    f"search_mode=fts requires full_text_search; "
-                    f"active backend {backend_label} has none."
-                )]
-
-            # Decide whether semantic should run.
-            if search_mode_param in ("semantic", "hybrid"):
-                use_semantic = True
-            elif search_mode_param == "fts":
-                use_semantic = False
-                if has_semantic:
-                    semantic_skipped_reason = "caller forced search_mode=fts"
-            elif explicit_semantic is False:
-                use_semantic = False
-                semantic_skipped_reason = "caller passed semantic=false"
-            elif explicit_semantic is True:
-                if not has_semantic:
-                    return [error_response(
-                        f"semantic=true requires a backend with semantic_search; "
-                        f"active backend {backend_label} has none."
-                    )]
-                use_semantic = True
-            else:
-                # auto: prefer semantic when the backend supports it
-                use_semantic = has_semantic
-                if not has_semantic:
-                    semantic_skipped_reason = (
-                        f"backend {backend_label} has no semantic_search "
-                        "(set UNITARES_KNOWLEDGE_BACKEND=age to enable)"
-                    )
-
-            # Phase 4 hybrid path: only when caller forces hybrid, OR (auto + flag on + capable).
-            if search_mode_param == "hybrid":
-                hybrid_path = True  # already validated has_semantic and has_fts above
-            else:
-                hybrid_path = (
-                    search_mode_param == "auto" and hybrid_on and use_semantic and has_fts
-                )
-            if (
-                hybrid_path
-                and search_mode_param == "auto"
-                and query_term_count > complex_hybrid_term_limit
-            ):
-                hybrid_path = False
-                hybrid_skipped_reason = (
-                    f"auto hybrid skipped for {query_term_count}-term query "
-                    f"(limit {complex_hybrid_term_limit}); use search_mode='hybrid' "
-                    "to force RRF fusion"
-                )
-            if hybrid_path:
-                import asyncio as _asyncio
-                _ms = arguments.get("min_similarity")
-                min_similarity = 0.3 if _ms is None else _ms
-                hybrid_fetch_limit = max(first_stage_limit, 50)
-                sem_task = graph.semantic_search(
-                    str(query_text), limit=hybrid_fetch_limit, min_similarity=min_similarity
-                )
-                # Hybrid uses the caller's operator if forced, else AND. We
-                # don't AND→OR fallback inside hybrid because semantic+FTS
-                # already cover the recall/precision tradeoff via RRF.
-                hybrid_fts_op = operator_forced or "AND"
-                fts_task = graph.full_text_search(
-                    str(query_text), limit=hybrid_fetch_limit, operator=hybrid_fts_op,
-                )
-                fts_operator_used = hybrid_fts_op
-                sem_raw, fts_raw = await _asyncio.gather(sem_task, fts_task)
-                sem_res = []
-                if isinstance(sem_raw, tuple) and len(sem_raw) == 2 and isinstance(sem_raw[1], dict):
-                    search_degraded_warning = (
-                        f"Semantic search unavailable: {sem_raw[1].get('message', 'unknown error')}. "
-                        f"Falling back to FTS-only in fusion."
-                    )
-                    logger.warning(f"[KG_SEARCH] {search_degraded_warning}")
-                else:
-                    sem_res = list(sem_raw)
-                fts_res = list(fts_raw)
-
-                sem_ids = [d.id for d, _ in sem_res]
-                fts_ids = [d.id for d in fts_res]
-                fts_anchor_ids = set(fts_ids)
-                fused = rrf_fuse([sem_ids, fts_ids], k=60)
-
-                pool: Dict[str, Any] = {d.id: d for d, _ in sem_res}
-                for d in fts_res:
-                    pool.setdefault(d.id, d)
-
-                if tags:
-                    doc_tags_map = {doc_id: (doc.tags or []) for doc_id, doc in pool.items()}
-                    fused = apply_tag_boost(fused, doc_tags_map, tags)
-
-                # Phase 5: 1-hop graph expansion. Top seeds pull their typed-edge
-                # neighbors (related_to / responses_from / response_to) into the
-                # pool at a discounted score.
-                if graph_expand_on:
-                    seed_neighbors: Dict[str, set] = {}
-                    for seed_id, _ in fused[:10]:
-                        seed_doc = pool.get(seed_id)
-                        if seed_doc is None:
-                            continue
-                        nbrs: set = set()
-                        nbrs.update(seed_doc.related_to or [])
-                        nbrs.update(getattr(seed_doc, "responses_from", None) or [])
-                        if seed_doc.response_to:
-                            nbrs.add(seed_doc.response_to.discovery_id)
-                        nbrs.discard(seed_id)
-                        seed_neighbors[seed_id] = nbrs
-
-                    fused = expand_with_neighbors(
-                        fused, seed_neighbors, edge_weight=0.5, max_seeds=10,
-                    )
-                    missing_ids = [did for did, _ in fused if did not in pool]
-                    if missing_ids:
-                        # Parallel fetch of neighbor docs not already in the
-                        # semantic+FTS pool. Sequential `await` here was the
-                        # in-handler floor on the 60× KG-call amplification
-                        # measured 2026-05-04 (per-call 21–71ms, in-handler
-                        # ~4,464ms). Each get_discovery does 2 PG round-trips
-                        # (row + backlinks); 30 × 2 = 60 sequential awaits is
-                        # what asyncio.gather collapses to ~pool-size waves.
-                        # Same shape as PR #350/#360 — Python-fixable.
-                        capped = missing_ids[:30]
-                        results = await _asyncio.gather(
-                            *(graph.get_discovery(nid) for nid in capped),
-                            return_exceptions=True,
-                        )
-                        for nid, doc in zip(capped, results):
-                            if isinstance(doc, Exception):
-                                logger.debug(
-                                    f"[KG_SEARCH] neighbor fetch failed for "
-                                    f"{nid[:8]}...: {doc}"
-                                )
-                                continue
-                            if doc is not None:
-                                pool[nid] = doc
-
-                candidates = [pool[did] for did, _ in fused if did in pool]
-                semantic_scores_dict = {d.id: score for d, score in sem_res}
-                rrf_scores_dict = {did: score for did, score in fused}
-                search_mode = "hybrid_rrf_graph" if graph_expand_on else "hybrid_rrf"
-            elif use_semantic:
-                # Semantic search using vector embeddings
-                # Default 0.3 for precision; auto-fallback to 0.2 catches edge cases
-                _ms = arguments.get("min_similarity")
-                min_similarity = 0.3 if _ms is None else _ms
-                semantic_results = await graph.semantic_search(
-                    str(query_text),
-                    limit=first_stage_limit,  # wider pool when reranker is on
-                    min_similarity=min_similarity
-                )
-                # Check for degraded response: ([], error_info_dict)
-                if (isinstance(semantic_results, tuple) and len(semantic_results) == 2
-                        and isinstance(semantic_results[1], dict)):
-                    _results, error_info = semantic_results
-                    search_degraded_warning = (
-                        f"Semantic search unavailable: {error_info.get('message', 'unknown error')}. "
-                        f"Falling back to text search."
-                    )
-                    logger.warning(f"[KG_SEARCH] {search_degraded_warning}")
-                    # Fall through to FTS/substring fallback below
-                    use_semantic = False
-                else:
-                    candidates = [d for d, _ in semantic_results]
-                    semantic_scores_dict = {d.id: score for d, score in semantic_results}
-                    search_mode = "semantic"
-            if not hybrid_path and not use_semantic and hasattr(graph, "full_text_search"):
-                # Prefer DB-native FTS when available (fallback from degraded semantic or no semantic)
-                # When reranker is on, use a wider pool so the cross-encoder has candidates.
-                base_fts_limit = int(min(max(limit * 5, limit), 500))
-                candidate_limit = max(base_fts_limit, rerank_pool_size) if rerank_on else base_fts_limit
-                primary_op = operator_forced or "AND"
-                candidates = await graph.full_text_search(
-                    str(query_text), limit=candidate_limit, operator=primary_op,
-                )
-                fts_operator_used = primary_op
-                # AND→OR fallback (#165): when caller didn't force an operator
-                # and AND returned nothing, retry with OR. Marks fts_fallback_used
-                # so the caller can tell broad-recall results apart from
-                # precision-first results.
-                if (
-                    not candidates
-                    and operator_forced is None
-                    and primary_op == "AND"
-                    and query_term_count > 1
-                ):
-                    if query_term_count <= complex_query_term_limit:
-                        candidates = await graph.full_text_search(
-                            str(query_text), limit=candidate_limit, operator="OR",
-                        )
-                        if candidates:
-                            fts_operator_used = "OR"
-                            fts_fallback_used = True
-                    else:
-                        fts_fallback_skipped_reason = (
-                            f"automatic OR fallback skipped for {query_term_count}-term "
-                            f"query (limit {complex_query_term_limit}); pass operator='OR' "
-                            "to request broad recall"
-                        )
-                # All FTS candidates are lexical matches by construction.
-                fts_anchor_ids = {d.id for d in candidates}
-                search_mode = "fts"
-            elif not hybrid_path and not use_semantic:
-                # JSON backend fallback: bounded scan of most recent entries.
-                # 200 balances coverage vs context size (post-hoc substring filter
-                # reduces this to at most `limit` results).
-                candidates = await graph.query(limit=200)
-                search_mode = "substring_scan"
-
-            # For FTS/semantic: trust the search engine's ranking, only apply metadata filters
-            # For substring_scan: also require query term matches (OR-default)
-            filtered = []
-            q_terms = str(query_text).lower().split() if search_mode == "substring_scan" else None
-
-            # When reranker OR hybrid is on, keep up to rerank_pool_size candidates
-            # so the cross-encoder / hybrid fuse sees more than the first-stage top-limit.
-            filter_cap = rerank_pool_size if rerank_on else (50 if hybrid_on else limit)
-
-            for d in candidates:
-                # Substring filter only for non-FTS backends (OR-default)
-                if q_terms:
-                    tags_str = " ".join(d.tags or [])
-                    hay = ((d.summary or "") + "\n" + (d.details or "") + "\n" + tags_str).lower()
-                    if not any(term in hay for term in q_terms):
-                        continue
-                # Metadata filters apply to all modes
-                if agent_id and d.agent_id != agent_id:
-                    continue
-                if dtype and d.type != dtype:
-                    continue
-                if severity and d.severity != severity:
-                    continue
-                if status and d.status != status:
-                    continue
-                # Exclude archived entries by default (unless status filter or include_archived)
-                if not status and not include_archived and d.status == "archived":
-                    continue
-                # Exclude cold-storage entries by default (unless status filter or include_cold)
-                if not status and not include_cold and d.status == "cold":
-                    continue
-                if tags and not search_mode.startswith("hybrid_rrf"):
-                    # In hybrid mode, tags are a score boost in RRF space (handled
-                    # upstream via apply_tag_boost). Everywhere else, they remain a
-                    # hard post-filter — preserves pre-Phase-4 behavior.
-                    d_tags = set(d.tags or [])
-                    if not any(t in d_tags for t in tags):
-                        continue
-                filtered.append(d)
-                if len(filtered) >= filter_cap:
-                    break
-
-            # Phase 3: cross-encoder rerank. Score (query, doc) pairs jointly
-            # and reorder. Reranker input text mirrors what the embedder sees.
-            if rerank_on and filtered:
-                try:
-                    from src.reranker import rerank as _rerank
-                    pairs = [
-                        (d.id, f"{d.summary}\n{(d.details or '')[:2000]}")
-                        for d in filtered
-                    ]
-                    reranked = await _rerank(str(query_text), pairs, top_k=limit,
-                                             max_rerank_size=rerank_pool_size)
-                    rerank_scores_dict = {doc_id: score for doc_id, score in reranked}
-                    id_to_doc = {d.id: d for d in filtered}
-                    filtered = [id_to_doc[doc_id] for doc_id, _ in reranked if doc_id in id_to_doc]
-                    search_mode = search_mode + "_reranked" if search_mode else "reranked"
-                except Exception as exc:
-                    logger.warning(f"[KG_SEARCH] reranker failed; keeping first-stage order: {exc}")
-                    filtered = filtered[:limit]
-            else:
-                filtered = filtered[:limit]
-
-            results = filtered
-            # search_mode already set above
-            # operator_used reports what the FTS layer actually ran. For
-            # non-FTS modes (semantic, hybrid, substring) this stays "N/A" —
-            # boolean operators only apply to the FTS query string. (#165)
-            if fts_operator_used and len(query_terms) > 1:
-                operator_used = fts_operator_used
-            elif len(query_terms) > 1:
-                operator_used = "N/A"  # semantic / hybrid / substring
-            else:
-                operator_used = "N/A"  # single-term query
-            fields_searched = ["summary", "details", "tags"]
-        else:
-            # Indexed filter query (fast)
-            # Push exclude_archived into the query so LIMIT applies after filtering.
-            # Without this, LIMIT grabs N most recent (mostly archived junk), then
-            # post-hoc filtering removes them, returning far fewer than N results.
-            should_exclude_archived = not status and not include_archived
-            should_exclude_cold = not status and not include_cold
-            results = await graph.query(
-                agent_id=agent_id,
-                tags=tags,
-                type=dtype,
-                severity=severity,
-                status=status,
-                limit=limit,
-                exclude_archived=should_exclude_archived,
-                exclude_cold=should_exclude_cold,
-            )
-            search_mode = "indexed_filters"
-            operator_used = "N/A"  # No text search, just filters
-            fields_searched = []
-            if agent_id:
-                fields_searched.append("agent_id")
-            if tags:
-                fields_searched.append("tags")
-            if dtype:
-                fields_searched.append("type")
-            if severity:
-                fields_searched.append("severity")
-            if status:
-                fields_searched.append("status")
-        
-        # UX FIX: Auto-retry with fallback if 0 results and query provided
-        # Make fallback behavior explicit upfront
-        fallback_used = False
-        fallback_explanation = None
-        if len(results) == 0 and query_text and search_mode in ["fts", "semantic"]:
-            # Strategy 1: If semantic search returned 0, try FTS (more permissive)
-            if search_mode == "semantic" and hasattr(graph, "full_text_search"):
-                try:
-                    logger.debug(f"Semantic search returned 0 results, falling back to FTS for '{query_text}'")
-                    primary_op = operator_forced or "AND"
-                    fts_candidates = await graph.full_text_search(
-                        str(query_text), limit=limit * 2, operator=primary_op,
-                    )
-                    semantic_fallback_op = primary_op
-                    semantic_fallback_or_retry = False
-                    if (
-                        not fts_candidates
-                        and operator_forced is None
-                        and primary_op == "AND"
-                        and query_term_count > 1
-                    ):
-                        if query_term_count <= complex_query_term_limit:
-                            fts_candidates = await graph.full_text_search(
-                                str(query_text), limit=limit * 2, operator="OR",
-                            )
-                            if fts_candidates:
-                                semantic_fallback_op = "OR"
-                                semantic_fallback_or_retry = True
-                        else:
-                            fts_fallback_skipped_reason = (
-                                f"automatic OR fallback skipped for {query_term_count}-term "
-                                f"query (limit {complex_query_term_limit}); pass operator='OR' "
-                                "to request broad recall"
-                            )
-                    # Apply same filters
-                    for d in fts_candidates:
-                        if agent_id and d.agent_id != agent_id:
-                            continue
-                        if dtype and d.type != dtype:
-                            continue
-                        if severity and d.severity != severity:
-                            continue
-                        if status and d.status != status:
-                            continue
-                        if not status and not include_archived and d.status == "archived":
-                            continue
-                        if tags:
-                            d_tags = set(d.tags or [])
-                            if not any(t in d_tags for t in tags):
-                                continue
-                        results.append(d)
-                        if len(results) >= limit:
-                            break
-                    if len(results) > 0:
-                        fallback_used = True
-                        search_mode = "semantic_fallback_fts"
-                        fts_operator_used = semantic_fallback_op
-                        fts_fallback_used = semantic_fallback_or_retry
-                        fallback_explanation = (
-                            f"Semantic search found no concepts similar to '{query_text}' "
-                            f"(similarity threshold: {min_similarity}). "
-                            f"Falling back to keyword search (FTS, operator={semantic_fallback_op}) "
-                            f"for exact term matching."
-                        )
-                except Exception as e:
-                    logger.debug(f"Semantic→FTS fallback failed: {e}")
-
-            # Strategy 2 (removed): Individual-term FTS fallback is no longer
-            # needed. As of #165, the FTS path runs AND first and automatically
-            # retries with OR on zero hits (see fts_fallback_used in response),
-            # which subsumes the per-term retry strategy.
-
-            # Strategy 3 (removed 2026-04-20): Previously retried semantic search at
-            # threshold 0.2, which is near cosine noise floor for our embedder. This
-            # confidently returned random-looking results on genuine misses, which is
-            # worse than returning nothing — callers couldn't tell a real hit from a
-            # noise hit. If semantic + FTS both return zero, an honest empty result
-            # is the correct answer. Tracked in docs/plans/2026-04-20-kg-retrieval-rebuild.md.
-        
-        dt_ms = (time.perf_counter() - t0) * 1000.0
-        record_ms(f"knowledge.search.{search_mode}", dt_ms)
-
-        # Post-query exclude-by-label filter. Kept here (not in the DB query)
-        # so it composes with all retrieval modes — FTS, semantic, hybrid RRF,
-        # graph expansion — without each branch needing to know the filter.
-        if exclude_labels_lc:
-            filtered = []
-            for d in results:
-                agent_display = _resolve_agent_display(d.agent_id)
-                display_name = agent_display.get("display_name", d.agent_id) or ""
-                if str(display_name).strip().lower() in exclude_labels_lc:
-                    continue
-                filtered.append(d)
-            results = filtered
-
-        # Auto-include details when result set is small (saves a round-trip)
-        auto_details = not include_details and 0 < len(results) <= 3
-        if auto_details:
-            include_details = True
-
-        # Build discovery list with optional provenance
-        # UX FIX (Dec 2025): Display name FIRST for human readability
-        # Format: {"by": "DisplayName", "summary": "...", ...}
-        current_server_version = getattr(mcp_server, "SERVER_VERSION", "unknown")
-        discovery_list = []
-        for d in results:
-            # Bug A fix 2026-04-25: prefer write-time writer label from
-            # provenance over live resolve. Multiple sessions may resume
-            # the same agent UUID; live resolve would rewrite past `by:`
-            # values to the current session's display_name.
-            prov = d.provenance if isinstance(d.provenance, dict) else None
-            display_name = (prov or {}).get("writer_label_at_write")
-            if not display_name:
-                agent_display = _resolve_agent_display(d.agent_id)
-                display_name = agent_display.get("display_name", d.agent_id)
-
-            # Build dict with display_name first for prominence
-            d_dict = {
-                "by": display_name,  # WHO - first for attribution
-                "summary": d.summary,  # WHAT - second for context
-            }
-
-            # Surface write-time session id when present (audit trail)
-            session_at_write = (prov or {}).get("writer_session_id_at_write")
-            if session_at_write:
-                d_dict["session_id_at_write"] = session_at_write
-
-            # Add remaining fields from discovery
-            full_dict = d.to_dict(include_details=include_details)
-            d_dict["id"] = full_dict.get("id")
-            d_dict["type"] = full_dict.get("type")
-            d_dict["status"] = full_dict.get("status")
-            d_dict["tags"] = full_dict.get("tags", [])
-            d_dict["created_at"] = full_dict.get("created_at")
-
-            # Include details if requested
-            if include_details and full_dict.get("details"):
-                d_dict["details"] = full_dict.get("details")
-
-            # Keep agent_id for internal reference (de-emphasized)
-            d_dict["_agent_id"] = d.agent_id
-
-            # Surface system_version from provenance (Task 1: KG version coupling)
-            if prov:
-                d_dict["system_version"] = prov.get("system_version")
-            else:
-                d_dict["system_version"] = None  # Pre-v2.8.0 discovery
-
-            # Staleness warning (Task 3: stale entry detection)
-            if d.status == "open":
-                _staleness = _compute_staleness_warning(d, current_server_version)
-                if _staleness:
-                    d_dict["staleness_warning"] = _staleness
-
-            if include_provenance:
-                d_dict["provenance"] = d.provenance
-                if d.provenance_chain:
-                    d_dict["provenance_chain"] = d.provenance_chain
-            discovery_list.append(d_dict)
-
-        # Agent-facing trust flag: mark superseded results so they aren't cited
-        # as current (superseded rows are down-ranked but still returned).
-        await _annotate_supersession(discovery_list, graph)
-
-        # Include similarity scores for semantic search
-        response_data = {
-            "search_mode_used": search_mode,
-            "search_mode_requested": search_mode_param,
-            "operator_used": operator_used,
-            "fields_searched": fields_searched,
-            "query": query_text,
-            "discoveries": discovery_list,
-            "count": len(results),
-            "message": f"Found {len(results)} discovery(ies)" + (" (details auto-included for small result set)" if auto_details else "" if include_details else " (summaries only)")
-        }
-        if semantic_skipped_reason:
-            response_data["semantic_skipped_reason"] = semantic_skipped_reason
-        # FTS operator visibility (#165 part 2). Only populate when FTS actually
-        # ran — for semantic/hybrid/substring runs these stay absent so callers
-        # know the boolean operator was not the controlling factor.
-        if fts_operator_used:
-            response_data["fts_operator_used"] = fts_operator_used
-            response_data["fts_fallback_used"] = fts_fallback_used
-
-        # Surface semantic search degradation to caller
-        if search_degraded_warning:
-            response_data["search_degraded"] = True
-            response_data["search_degraded_message"] = search_degraded_warning
-        if hybrid_skipped_reason:
-            response_data["hybrid_skipped_reason"] = hybrid_skipped_reason
-        if fts_fallback_skipped_reason:
-            response_data["fts_fallback_skipped_reason"] = fts_fallback_skipped_reason
-
-        # UX FIX: Make fallback behavior explicit and transparent
-        if fallback_used:
-            response_data["fallback_used"] = True
-            response_data["fallback_message"] = fallback_explanation or "No exact matches found. Retried with individual terms (OR operator)."
-            response_data["fallback_terms"] = str(query_text).split()[:3] if query_text else []
-        
-        # UX FIX: Add contextual helpful hints for empty results
-        if len(results) == 0:
-            # Instrument-first (2026-06-20): record the miss so query-expansion
-            # demand becomes measurable before we build it. Fail-open. Only
-            # text searches count; a filter-only query is not a recall miss.
-            if query_text:
-                record_recall_event(
-                    ZERO_RESULT,
-                    query_text,
-                    query_terms=query_term_count,
-                    search_mode=search_mode,
-                    detail={
-                        "hybrid_skipped": bool(hybrid_skipped_reason),
-                        "fts_or_fallback_skipped": bool(fts_fallback_skipped_reason),
-                    },
-                )
-            hints = []
-            # Count words properly (split on spaces, also handle underscores as word separators)
-            if query_text:
-                query_str = str(query_text)
-                # Replace underscores with spaces for word counting
-                query_normalized = query_str.replace("_", " ").replace("-", " ")
-                query_words = len([w for w in query_normalized.split() if w.strip()])
-            else:
-                query_words = 0
-            
-            if query_text:
-                # Contextual suggestions based on query characteristics
-                if query_words >= 5:
-                    # Long, specific query - suggest semantic search prominently
-                    hints.append(f"Long query ({query_words} words) - try semantic search: knowledge(action='search', query='{query_text}', semantic=true)")
-                    hints.append(f"Or broaden to key concepts: knowledge(action='search', query='{', '.join(str(query_text).split()[:3])}')")
-                elif query_words >= 2:
-                    # Multi-word query - suggest semantic or broader terms
-                    hints.append(f"Multi-word query - try semantic search (semantic=true) for conceptual matching")
-                    hints.append(f"Or search individual terms: {', '.join(str(query_text).split()[:3])}")
-                else:
-                    # Single word - suggest broadening or tags
-                    hints.append(f"Single term '{query_text}' - try broader search or use tags")
-                    hints.append(f"Try: knowledge(action='search', tags=['{query_text}']) or broaden query")
-                
-                # Always suggest tag search as alternative
-                hints.append("Alternative: Search by tags instead (knowledge(action='search', tags=['tag1', 'tag2']))")
-            
-            # Filter-specific suggestions
-            if agent_id:
-                hints.append(f"Filter active: agent_id='{agent_id[:20]}...' - remove to search across all agents")
-            if tags:
-                hints.append(f"Filter active: {len(tags)} tag(s) - remove or use fewer tags for broader results")
-            if dtype:
-                hints.append(f"Filter active: type='{dtype}' - remove to search all discovery types")
-            if severity:
-                hints.append(f"Filter active: severity='{severity}' - remove to search all severities")
-            
-            if hints:
-                response_data["empty_results_hints"] = hints
-                # Prioritize most actionable hint first
-                primary_hint = hints[0] if hints else "Try adjusting your search parameters"
-                response_data["tip"] = f"No results found. {primary_hint}"
-                response_data["all_suggestions"] = hints  # Keep all hints available
-        
-        # UX FIX: Document operator behavior upfront for multi-term queries
-        if query_text and len(str(query_text).split()) > 1:
-            if search_mode == "fts" and not fallback_used:
-                response_data["operator_note"] = (
-                    f"Multi-term FTS ran with operator={fts_operator_used or operator_used}. "
-                    "Use operator='OR' for broader recall, or tags/filters for tighter scope."
-                )
-            elif search_mode == "semantic":
-                response_data["operator_note"] = "Semantic search considers all terms together (conceptual similarity, not keyword matching)."
-
-        # Visibility hints about options (v2.5.0+)
-        if not include_details:
-            response_data["_tip"] = "Add include_details=true to expand all results inline (knowledge(action='search', include_details=true))"
-        if len(results) == limit:
-            response_data["_more_available"] = f"Results may be limited to {limit}. Use limit=N (max 100) to get more."
-        
-        # Surface similarity scores whenever we have them, regardless of search
-        # mode — helps agents calibrate "is this a real match or noise?"
-        if semantic_scores_dict and query_text:
-            similarity_scores = {
-                d.id: round(semantic_scores_dict[d.id], 3)
-                for d in results
-                if d.id in semantic_scores_dict
-            }
-            if similarity_scores:
-                response_data["similarity_scores"] = similarity_scores
-
-        # Surface rerank scores when the cross-encoder ran, so agents can see
-        # the ordering came from joint (query, doc) scoring rather than cosine.
-        if rerank_scores_dict and query_text:
-            rerank_scores = {
-                d.id: round(rerank_scores_dict[d.id], 3)
-                for d in results
-                if d.id in rerank_scores_dict
-            }
-            if rerank_scores:
-                response_data["rerank_scores"] = rerank_scores
-
-        # Surface RRF scores when hybrid fusion ran. These are on a different
-        # scale than cosine similarity (typically 0.01-0.05 per rank-1 hit),
-        # but comparable across queries and usefully diagnostic.
-        if rrf_scores_dict and query_text:
-            rrf_scores = {
-                d.id: round(rrf_scores_dict[d.id], 4)
-                for d in results
-                if d.id in rrf_scores_dict
-            }
-            if rrf_scores:
-                response_data["rrf_scores"] = rrf_scores
-
-        # Low-confidence / abstention signal — an honest "no strong match".
-        # Absolute cosine is unreliable on this corpus: embeddings are
-        # anisotropic, so a nonsense query can post a HIGHER top cosine than a
-        # genuine conceptual one (measured 2026-06-20: an off-domain query
-        # topped ~0.355 vs a real conceptual query's 0.311). So confidence keys
-        # on LEXICAL corroboration, not a cosine threshold: in a mode where an
-        # FTS lane ran, if NONE of the returned results actually matched the
-        # query terms, the hits are semantic-only and — given the weak score
-        # calibration — likely tangential. Surface that instead of presenting
-        # noise as confident signal. Pure-semantic / substring modes leave
-        # fts_anchor_ids None and are not flagged (no lexical lane to judge).
-        if query_text and results and fts_anchor_ids is not None:
-            lexical_hits = sum(1 for d in results if d.id in fts_anchor_ids)
-            if lexical_hits == 0:
-                response_data["low_confidence"] = True
-                # A semantic-only hit with no lexical anchor is exactly the
-                # vocab-gap class query expansion would target.
-                record_recall_event(
-                    LOW_CONFIDENCE,
-                    query_text,
-                    query_terms=query_term_count,
-                    search_mode=search_mode,
-                )
-                response_data["confidence_note"] = (
-                    "No result matched your query terms lexically — these are "
-                    "semantic-only matches and may be tangential (semantic "
-                    "relevance is weakly calibrated on this corpus). Rephrase "
-                    "with distinctive key terms, or treat these as exploratory "
-                    "rather than authoritative."
-                )
-
-        # UX FIX (Dec 2025): Add helpful hint when substring scan returns no results
-        if search_mode == "substring_scan" and len(results) == 0 and query_text:
-            response_data["search_hint"] = (
-                "No results with substring matching. Try: "
-                "1) Use specific tags: tags=['identity', 'philosophy'] "
-                "2) Search by discovery_type: discovery_type='insight' "
-                "3) Use single keywords instead of phrases"
-            )
-
-        # LLM DELEGATION: Synthesize results via local model when requested
-        # Threshold: Only synthesize when there are enough results to make it worthwhile
-        SYNTHESIS_THRESHOLD = 3  # Minimum discoveries to trigger synthesis
-        if synthesize and len(discovery_list) >= SYNTHESIS_THRESHOLD:
-            try:
-                synthesis_result = await synthesize_results(
-                    discoveries=discovery_list,
-                    query=query_text,
-                    max_discoveries=10,  # Cap at 10 for prompt size
-                    max_tokens=400
-                )
-                if synthesis_result:
-                    response_data["synthesis"] = synthesis_result
-                    logger.debug(f"Knowledge synthesis generated for {len(discovery_list)} discoveries")
-            except Exception as e:
-                # Non-blocking: If synthesis fails, still return results
-                logger.debug(f"Synthesis skipped: {e}")
-                response_data["_synthesis_note"] = "Synthesis unavailable (local LLM not responding)"
-        elif synthesize and len(discovery_list) < SYNTHESIS_THRESHOLD:
-            response_data["_synthesis_note"] = f"Synthesis skipped: fewer than {SYNTHESIS_THRESHOLD} results"
-
-        writer_sample = list({d.agent_id for d in results if d.agent_id})[:10]
-        await _broadcast_knowledge_read(
-            "search",
-            _resolve_reader_agent_id(arguments),
-            payload={
-                "result_count": len(results),
-                "query_present": bool(query_text),
-                "query_term_count": query_term_count,
-                "search_mode": locals().get("search_mode") or search_mode_param,
-                "writer_agent_ids": writer_sample,
-                "filter_agent_id": arguments.get("agent_id"),
+    if verify_agent_ownership(state.request.agent_id, state.request.arguments):
+        return
+    raise _StoreResponseError(
+        error_response(
+            "Authentication required for high-severity discoveries.",
+            error_code="AUTH_REQUIRED",
+            error_category="auth_error",
+            recovery={
+                "action": "Ensure your session is bound to this agent",
+                "related_tools": ["identity"],
+                "workflow": "Identity auto-binds on first tool call. Use identity() to check binding.",
             },
         )
-        return success_response(response_data, arguments=arguments)
+    )
 
-    except Exception as e:
-        return [error_response(f"Failed to search knowledge: {str(e)}")]
+
+async def _persist_store_discovery(state: _KnowledgeStoreState) -> None:
+    request = state.request
+    discovery = state.discovery
+    await state.graph.add_discovery(discovery)
+    await _broadcast_knowledge_write(discovery, request.agent_id)
+    if request.supersedes_id and state.supersedes_target is not None:
+        await state.graph.update_discovery(
+            request.supersedes_id,
+            {
+                "status": "superseded",
+                "superseded_by": discovery.id,
+                "updated_at": _utc_now_iso(),
+            },
+        )
+        await _record_supersession_edge(
+            state.graph,
+            new_id=discovery.id,
+            old_id=request.supersedes_id,
+        )
+
+
+def _attach_store_response_hints(response: dict[str, Any], state: _KnowledgeStoreState) -> None:
+    request = state.request
+    if request.is_anonymous_writer:
+        response["agent_mode"] = "anonymous"
+        response["_identity_hint"] = (
+            "Stored under a lightweight anonymous writer ID. Bind an identity first if you want authorship continuity."
+        )
+    response["_resolve_when_done"] = (
+        "When this is addressed, close the loop: "
+        f"knowledge(action='update', discovery_id='{state.discovery.id}', "
+        "status='resolved')"
+    )
+    if request.supersedes_id:
+        if state.supersedes_target is not None:
+            response["superseded"] = request.supersedes_id
+        elif state.supersedes_warning:
+            response["_supersedes_warning"] = state.supersedes_warning
+    if request.display_name_warning:
+        response["_name_hint"] = request.display_name_warning
+    if state.truncation_info:
+        response["_truncated"] = state.truncation_info
+        response["_tip"] = (
+            "Content was truncated. For longer content, split into multiple "
+            "discoveries or use details field (5000 char limit)."
+        )
+
+
+def _attach_store_related_discoveries(response: dict[str, Any], state: _KnowledgeStoreState) -> None:
+    if not state.similar_discoveries:
+        return
+    response["related_discoveries"] = state.similar_discoveries
+    open_similar = [item for item in state.similar if item.status == "open"]
+    if len(open_similar) < 3:
+        return
+    unique_agents = {item.agent_id for item in open_similar}
+    response["consolidation_hint"] = (
+        f"This issue has been found {len(open_similar)} times by "
+        f"{len(unique_agents)} agent(s), all still open. Consider superseding "
+        "older entries or resolving them."
+    )
+
+
+def _build_store_response(state: _KnowledgeStoreState) -> Sequence[TextContent]:
+    request = state.request
+    agent_display = _agent_display_for_response(request.agent_id, request.arguments)
+    display_name = agent_display.get("display_name", request.agent_id)
+    response = {
+        "message": f"Discovery stored for agent '{display_name}'",
+        "discovery_id": state.discovery.id,
+        "agent": agent_display,
+        "discovery": state.discovery.to_dict(include_details=False),
+    }
+    _attach_store_response_hints(response, state)
+    _attach_store_related_discoveries(response, state)
+    return success_response(response, arguments=request.arguments)
+
+
+async def _execute_single_store(request: _KnowledgeStoreRequest, graph: Any) -> Sequence[TextContent]:
+    state = _KnowledgeStoreState(
+        request=request,
+        graph=graph,
+        summary=request.summary,
+    )
+    _truncate_store_content(state)
+    await _build_store_discovery(state)
+    await _prepare_store_supersession(state)
+    await _clamp_confidence_to_coherence(state.discovery, request.agent_id)
+    await _link_similar_store_discoveries(state)
+    _authorize_store_discovery(state)
+    await _persist_store_discovery(state)
+    return _build_store_response(state)
+
+
+@mcp_tool("store_knowledge_graph", timeout=20.0, register=False)
+async def handle_store_knowledge_graph(
+    arguments: Dict[str, Any],
+) -> Sequence[TextContent]:
+    """Store one discovery or delegate a discovery batch."""
+    arguments = apply_param_aliases("store_knowledge_graph", arguments)
+    agent_id, error, display_name_warning, is_anonymous_writer = _resolve_store_writer(arguments)
+    if error:
+        return [error]
+
+    from ..utils import check_agent_can_operate
+
+    blocked = check_agent_can_operate(agent_id)
+    if blocked:
+        return [blocked]
+    if arguments.get("discoveries") is not None:
+        return await _handle_store_knowledge_graph_batch(arguments, agent_id)
+
+    arguments["_tool_name"] = "store_knowledge_graph"
+    try:
+        request = _parse_single_store_request(
+            arguments,
+            agent_id,
+            display_name_warning,
+            is_anonymous_writer,
+        )
+        graph = await get_knowledge_graph()
+        return await _execute_single_store(request, graph)
+    except _StoreResponseError as exc:
+        return [exc.response]
+    except ValueError as exc:
+        error_message = str(exc)
+        if "rate limit" in error_message.lower():
+            return [
+                error_response(
+                    error_message,
+                    recovery={
+                        "action": "Wait before storing more discoveries, or reduce batch size",
+                        "related_tools": [KNOWLEDGE_SEARCH_TOOL],
+                    },
+                )
+            ]
+        return [error_response(error_message)]
+    except Exception as exc:
+        return [error_response(f"Failed to store knowledge: {str(exc)}")]
+
+
+class _SearchParameterError(ValueError):
+    """Caller-visible validation error raised while parsing a KG search."""
+
+
+@dataclass(frozen=True)
+class _KnowledgeSearchRequest:
+    arguments: Dict[str, Any]
+    limit: int
+    include_details: bool
+    include_provenance: bool
+    synthesize: bool
+    query_text: Any
+    agent_id: Optional[str]
+    search_mode_requested: str
+    operator_forced: Optional[str]
+    exclude_labels: set[str]
+    tags: Optional[list[str]]
+    discovery_type: Any
+    severity: Any
+    status: Any
+    include_archived: bool
+    include_cold: bool
+
+    @property
+    def query_terms(self) -> list[str]:
+        return str(self.query_text).split() if self.query_text else []
+
+    @property
+    def query_term_count(self) -> int:
+        return len(self.query_terms)
+
+
+@dataclass
+class _KnowledgeSearchState:
+    request: _KnowledgeSearchRequest
+    graph: Any
+    results: list[Any] = field(default_factory=list)
+    candidates: list[Any] = field(default_factory=list)
+    search_mode: str = ""
+    operator_used: str = "N/A"
+    fields_searched: list[str] = field(default_factory=list)
+    semantic_scores: dict[str, float] = field(default_factory=dict)
+    rerank_scores: dict[str, float] = field(default_factory=dict)
+    rrf_scores: dict[str, float] = field(default_factory=dict)
+    fts_anchor_ids: Optional[set[str]] = None
+    search_degraded_warning: Optional[str] = None
+    semantic_skipped_reason: Optional[str] = None
+    hybrid_skipped_reason: Optional[str] = None
+    fts_fallback_skipped_reason: Optional[str] = None
+    fts_operator_used: Optional[str] = None
+    fts_fallback_used: bool = False
+    fallback_used: bool = False
+    fallback_explanation: Optional[str] = None
+    min_similarity: Any = 0.3
+    rerank_on: bool = False
+    rerank_pool_size: int = 0
+    first_stage_limit: int = 0
+    hybrid_on: bool = False
+    graph_expand_on: bool = False
+    use_semantic: bool = False
+    hybrid_path: bool = False
+
+
+def _parse_knowledge_search_request(
+    arguments: Dict[str, Any],
+) -> _KnowledgeSearchRequest:
+    search_mode = str(arguments.get("search_mode") or "auto").lower()
+    if search_mode not in {"auto", "fts", "semantic", "hybrid"}:
+        raise _SearchParameterError(
+            f"Invalid search_mode {search_mode!r}; expected one of: auto, fts, semantic, hybrid"
+        )
+
+    operator_raw = arguments.get("operator")
+    operator_forced = None
+    if operator_raw is not None:
+        operator_forced = str(operator_raw).upper()
+        if operator_forced not in {"AND", "OR"}:
+            raise _SearchParameterError(f"Invalid operator {operator_raw!r}; expected 'AND' or 'OR'")
+
+    exclude_labels_raw = arguments.get("exclude_agent_labels") or []
+    exclude_labels = (
+        {str(label).strip().lower() for label in exclude_labels_raw if str(label).strip()}
+        if isinstance(exclude_labels_raw, (list, tuple))
+        else set()
+    )
+    status = arguments.get("status")
+    if isinstance(status, str) and status.lower() == "active":
+        status = "open"
+
+    return _KnowledgeSearchRequest(
+        arguments=arguments,
+        limit=arguments.get("limit") or config.KNOWLEDGE_QUERY_DEFAULT_LIMIT,
+        include_details=arguments.get("include_details", False),
+        include_provenance=arguments.get("include_provenance", False),
+        synthesize=arguments.get("synthesize", False),
+        query_text=arguments.get("query") or arguments.get("text"),
+        agent_id=arguments.get("agent_id"),
+        search_mode_requested=search_mode,
+        operator_forced=operator_forced,
+        exclude_labels=exclude_labels,
+        tags=normalize_tags(arguments.get("tags", [])) or None,
+        discovery_type=arguments.get("discovery_type"),
+        severity=arguments.get("severity"),
+        status=status,
+        include_archived=arguments.get("include_archived", False),
+        include_cold=arguments.get("include_cold", False),
+    )
+
+
+def _validate_search_backend(state: _KnowledgeSearchState) -> tuple[bool, bool]:
+    """Validate a forced mode and return semantic/FTS capability flags."""
+    request = state.request
+    graph = state.graph
+    has_semantic = hasattr(graph, "semantic_search")
+    has_fts = hasattr(graph, "full_text_search")
+    backend_label = graph.__class__.__name__
+
+    if request.search_mode_requested == "semantic" and not has_semantic:
+        raise _SearchParameterError(
+            "search_mode=semantic requires a backend with semantic_search; "
+            f"active backend {backend_label} has none. "
+            "Use search_mode=fts, or set UNITARES_KNOWLEDGE_BACKEND=age."
+        )
+    if request.search_mode_requested == "hybrid" and not (has_semantic and has_fts):
+        missing = []
+        if not has_semantic:
+            missing.append("semantic_search")
+        if not has_fts:
+            missing.append("full_text_search")
+        raise _SearchParameterError(
+            "search_mode=hybrid requires both semantic and FTS; "
+            f"active backend {backend_label} is missing {', '.join(missing)}."
+        )
+    if request.search_mode_requested == "fts" and not has_fts:
+        raise _SearchParameterError(
+            f"search_mode=fts requires full_text_search; active backend {backend_label} has none."
+        )
+    return has_semantic, has_fts
+
+
+def _select_search_modes(
+    state: _KnowledgeSearchState,
+    *,
+    has_semantic: bool,
+    has_fts: bool,
+) -> None:
+    request = state.request
+    explicit_semantic = request.arguments.get("semantic")
+    backend_label = state.graph.__class__.__name__
+
+    if request.search_mode_requested in ("semantic", "hybrid"):
+        state.use_semantic = True
+    elif request.search_mode_requested == "fts":
+        state.use_semantic = False
+        if has_semantic:
+            state.semantic_skipped_reason = "caller forced search_mode=fts"
+    elif explicit_semantic is False:
+        state.use_semantic = False
+        state.semantic_skipped_reason = "caller passed semantic=false"
+    elif explicit_semantic is True:
+        if not has_semantic:
+            raise _SearchParameterError(
+                f"semantic=true requires a backend with semantic_search; active backend {backend_label} has none."
+            )
+        state.use_semantic = True
+    else:
+        state.use_semantic = has_semantic
+        if not has_semantic:
+            state.semantic_skipped_reason = (
+                f"backend {backend_label} has no semantic_search (set UNITARES_KNOWLEDGE_BACKEND=age to enable)"
+            )
+
+    state.hybrid_path = request.search_mode_requested == "hybrid" or (
+        request.search_mode_requested == "auto" and state.hybrid_on and state.use_semantic and has_fts
+    )
+    if state.hybrid_path and request.search_mode_requested == "auto" and request.query_term_count > 12:
+        state.hybrid_path = False
+        state.hybrid_skipped_reason = (
+            f"auto hybrid skipped for {request.query_term_count}-term query "
+            "(limit 12); use search_mode='hybrid' to force RRF fusion"
+        )
+
+
+async def _expand_hybrid_neighbors(
+    state: _KnowledgeSearchState,
+    fused: list[tuple[str, float]],
+    pool: dict[str, Any],
+    expand_with_neighbors: Any,
+) -> list[tuple[str, float]]:
+    if not state.graph_expand_on:
+        return fused
+
+    seed_neighbors: Dict[str, set] = {}
+    for seed_id, _ in fused[:10]:
+        seed_doc = pool.get(seed_id)
+        if seed_doc is None:
+            continue
+        neighbors = set(seed_doc.related_to or [])
+        neighbors.update(getattr(seed_doc, "responses_from", None) or [])
+        if seed_doc.response_to:
+            neighbors.add(seed_doc.response_to.discovery_id)
+        neighbors.discard(seed_id)
+        seed_neighbors[seed_id] = neighbors
+
+    fused = expand_with_neighbors(
+        fused,
+        seed_neighbors,
+        edge_weight=0.5,
+        max_seeds=10,
+    )
+    missing_ids = [did for did, _ in fused if did not in pool]
+    if not missing_ids:
+        return fused
+
+    import asyncio as _asyncio
+
+    capped = missing_ids[:30]
+    fetched = await _asyncio.gather(
+        *(state.graph.get_discovery(discovery_id) for discovery_id in capped),
+        return_exceptions=True,
+    )
+    for discovery_id, document in zip(capped, fetched):
+        if isinstance(document, Exception):
+            logger.debug(
+                "[KG_SEARCH] neighbor fetch failed for %s...: %s",
+                discovery_id[:8],
+                document,
+            )
+        elif document is not None:
+            pool[discovery_id] = document
+    return fused
+
+
+async def _retrieve_hybrid_candidates(
+    state: _KnowledgeSearchState,
+    *,
+    rrf_fuse: Any,
+    apply_tag_boost: Any,
+    expand_with_neighbors: Any,
+) -> None:
+    import asyncio as _asyncio
+
+    request = state.request
+    min_similarity = request.arguments.get("min_similarity")
+    state.min_similarity = 0.3 if min_similarity is None else min_similarity
+    fetch_limit = max(state.first_stage_limit, 50)
+    fts_operator = request.operator_forced or "AND"
+    semantic_raw, fts_raw = await _asyncio.gather(
+        state.graph.semantic_search(
+            str(request.query_text),
+            limit=fetch_limit,
+            min_similarity=state.min_similarity,
+        ),
+        state.graph.full_text_search(
+            str(request.query_text),
+            limit=fetch_limit,
+            operator=fts_operator,
+        ),
+    )
+    state.fts_operator_used = fts_operator
+
+    semantic_results = []
+    if isinstance(semantic_raw, tuple) and len(semantic_raw) == 2 and isinstance(semantic_raw[1], dict):
+        state.search_degraded_warning = (
+            "Semantic search unavailable: "
+            f"{semantic_raw[1].get('message', 'unknown error')}. "
+            "Falling back to FTS-only in fusion."
+        )
+        logger.warning("[KG_SEARCH] %s", state.search_degraded_warning)
+    else:
+        semantic_results = list(semantic_raw)
+    fts_results = list(fts_raw)
+
+    semantic_ids = [document.id for document, _ in semantic_results]
+    fts_ids = [document.id for document in fts_results]
+    state.fts_anchor_ids = set(fts_ids)
+    fused = rrf_fuse([semantic_ids, fts_ids], k=60)
+    pool = {document.id: document for document, _ in semantic_results}
+    for document in fts_results:
+        pool.setdefault(document.id, document)
+
+    if request.tags:
+        tags_by_id = {discovery_id: (document.tags or []) for discovery_id, document in pool.items()}
+        fused = apply_tag_boost(fused, tags_by_id, request.tags)
+
+    fused = await _expand_hybrid_neighbors(
+        state,
+        fused,
+        pool,
+        expand_with_neighbors,
+    )
+    state.candidates = [pool[discovery_id] for discovery_id, _ in fused if discovery_id in pool]
+    state.semantic_scores = {document.id: score for document, score in semantic_results}
+    state.rrf_scores = dict(fused)
+    state.search_mode = "hybrid_rrf_graph" if state.graph_expand_on else "hybrid_rrf"
+
+
+async def _retrieve_semantic_candidates(state: _KnowledgeSearchState) -> None:
+    request = state.request
+    min_similarity = request.arguments.get("min_similarity")
+    state.min_similarity = 0.3 if min_similarity is None else min_similarity
+    semantic_results = await state.graph.semantic_search(
+        str(request.query_text),
+        limit=state.first_stage_limit,
+        min_similarity=state.min_similarity,
+    )
+    if isinstance(semantic_results, tuple) and len(semantic_results) == 2 and isinstance(semantic_results[1], dict):
+        state.search_degraded_warning = (
+            "Semantic search unavailable: "
+            f"{semantic_results[1].get('message', 'unknown error')}. "
+            "Falling back to text search."
+        )
+        logger.warning("[KG_SEARCH] %s", state.search_degraded_warning)
+        state.use_semantic = False
+        return
+
+    state.candidates = [document for document, _ in semantic_results]
+    state.semantic_scores = {document.id: score for document, score in semantic_results}
+    state.search_mode = "semantic"
+
+
+async def _retrieve_fts_candidates(state: _KnowledgeSearchState) -> None:
+    request = state.request
+    base_limit = int(min(max(request.limit * 5, request.limit), 500))
+    candidate_limit = max(base_limit, state.rerank_pool_size) if state.rerank_on else base_limit
+    primary_operator = request.operator_forced or "AND"
+    state.candidates = await state.graph.full_text_search(
+        str(request.query_text),
+        limit=candidate_limit,
+        operator=primary_operator,
+    )
+    state.fts_operator_used = primary_operator
+
+    if (
+        not state.candidates
+        and request.operator_forced is None
+        and primary_operator == "AND"
+        and request.query_term_count > 1
+    ):
+        if request.query_term_count <= 24:
+            state.candidates = await state.graph.full_text_search(
+                str(request.query_text),
+                limit=candidate_limit,
+                operator="OR",
+            )
+            if state.candidates:
+                state.fts_operator_used = "OR"
+                state.fts_fallback_used = True
+        else:
+            state.fts_fallback_skipped_reason = (
+                f"automatic OR fallback skipped for {request.query_term_count}-term "
+                "query (limit 24); pass operator='OR' to request broad recall"
+            )
+    state.fts_anchor_ids = {document.id for document in state.candidates}
+    state.search_mode = "fts"
+
+
+async def _retrieve_substring_candidates(state: _KnowledgeSearchState) -> None:
+    state.candidates = await state.graph.query(limit=200)
+    state.search_mode = "substring_scan"
+
+
+def _candidate_matches_search(
+    document: Any,
+    state: _KnowledgeSearchState,
+    substring_terms: Optional[list[str]],
+) -> bool:
+    request = state.request
+    if substring_terms:
+        tags_text = " ".join(document.tags or [])
+        haystack = ((document.summary or "") + "\n" + (document.details or "") + "\n" + tags_text).lower()
+        if not any(term in haystack for term in substring_terms):
+            return False
+    if request.agent_id and document.agent_id != request.agent_id:
+        return False
+    if request.discovery_type and document.type != request.discovery_type:
+        return False
+    if request.severity and document.severity != request.severity:
+        return False
+    if not _candidate_status_visible(document, request):
+        return False
+    if request.tags and not state.search_mode.startswith("hybrid_rrf"):
+        if not any(tag in set(document.tags or []) for tag in request.tags):
+            return False
+    return True
+
+
+def _candidate_status_visible(
+    document: Any, request: _KnowledgeSearchRequest
+) -> bool:
+    if request.status:
+        return document.status == request.status
+    if not request.include_archived and document.status == "archived":
+        return False
+    return request.include_cold or document.status != "cold"
+
+
+async def _filter_and_rerank_candidates(state: _KnowledgeSearchState) -> None:
+    request = state.request
+    substring_terms = str(request.query_text).lower().split() if state.search_mode == "substring_scan" else None
+    filter_cap = state.rerank_pool_size if state.rerank_on else (50 if state.hybrid_on else request.limit)
+    filtered = []
+    for document in state.candidates:
+        if _candidate_matches_search(document, state, substring_terms):
+            filtered.append(document)
+            if len(filtered) >= filter_cap:
+                break
+
+    if not (state.rerank_on and filtered):
+        state.results = filtered[: request.limit]
+        return
+
+    try:
+        from src.reranker import rerank as _rerank
+
+        pairs = [(document.id, f"{document.summary}\n{(document.details or '')[:2000]}") for document in filtered]
+        reranked = await _rerank(
+            str(request.query_text),
+            pairs,
+            top_k=request.limit,
+            max_rerank_size=state.rerank_pool_size,
+        )
+        state.rerank_scores = dict(reranked)
+        by_id = {document.id: document for document in filtered}
+        state.results = [by_id[discovery_id] for discovery_id, _ in reranked if discovery_id in by_id]
+        state.search_mode = f"{state.search_mode}_reranked" if state.search_mode else "reranked"
+    except Exception as exc:
+        logger.warning(
+            "[KG_SEARCH] reranker failed; keeping first-stage order: %s",
+            exc,
+        )
+        state.results = filtered[: request.limit]
+
+
+async def _run_text_search(state: _KnowledgeSearchState) -> None:
+    from src.reranker import reranker_enabled
+    from src.retrieval import (
+        apply_tag_boost,
+        expand_with_neighbors,
+        graph_expansion_enabled,
+        hybrid_enabled,
+        rrf_fuse,
+    )
+
+    request = state.request
+    state.rerank_on = reranker_enabled()
+    state.rerank_pool_size = 50 if state.rerank_on else 0
+    state.first_stage_limit = max(request.limit * 2, state.rerank_pool_size) if state.rerank_on else request.limit * 2
+    state.hybrid_on = hybrid_enabled()
+    state.graph_expand_on = graph_expansion_enabled()
+
+    has_semantic, has_fts = _validate_search_backend(state)
+    _select_search_modes(state, has_semantic=has_semantic, has_fts=has_fts)
+    if state.hybrid_path:
+        await _retrieve_hybrid_candidates(
+            state,
+            rrf_fuse=rrf_fuse,
+            apply_tag_boost=apply_tag_boost,
+            expand_with_neighbors=expand_with_neighbors,
+        )
+    elif state.use_semantic:
+        await _retrieve_semantic_candidates(state)
+
+    if not state.hybrid_path and not state.use_semantic:
+        if has_fts:
+            await _retrieve_fts_candidates(state)
+        else:
+            await _retrieve_substring_candidates(state)
+    await _filter_and_rerank_candidates(state)
+    state.operator_used = state.fts_operator_used or "N/A"
+    state.fields_searched = ["summary", "details", "tags"]
+
+
+async def _run_indexed_filter_search(state: _KnowledgeSearchState) -> None:
+    request = state.request
+    state.results = await state.graph.query(
+        agent_id=request.agent_id,
+        tags=request.tags,
+        type=request.discovery_type,
+        severity=request.severity,
+        status=request.status,
+        limit=request.limit,
+        exclude_archived=not request.status and not request.include_archived,
+        exclude_cold=not request.status and not request.include_cold,
+    )
+    state.search_mode = "indexed_filters"
+    state.fields_searched = [
+        name
+        for name, value in (
+            ("agent_id", request.agent_id),
+            ("tags", request.tags),
+            ("type", request.discovery_type),
+            ("severity", request.severity),
+            ("status", request.status),
+        )
+        if value
+    ]
+
+
+async def _apply_semantic_fts_fallback(state: _KnowledgeSearchState) -> None:
+    request = state.request
+    if (
+        state.results
+        or not request.query_text
+        or state.search_mode not in {"fts", "semantic"}
+        or state.search_mode != "semantic"
+        or not hasattr(state.graph, "full_text_search")
+    ):
+        return
+
+    try:
+        logger.debug(
+            "Semantic search returned 0 results, falling back to FTS for %r",
+            request.query_text,
+        )
+        primary_operator = request.operator_forced or "AND"
+        candidates = await state.graph.full_text_search(
+            str(request.query_text),
+            limit=request.limit * 2,
+            operator=primary_operator,
+        )
+        fallback_operator = primary_operator
+        used_or_retry = False
+        if (
+            not candidates
+            and request.operator_forced is None
+            and primary_operator == "AND"
+            and request.query_term_count > 1
+        ):
+            if request.query_term_count <= 24:
+                candidates = await state.graph.full_text_search(
+                    str(request.query_text),
+                    limit=request.limit * 2,
+                    operator="OR",
+                )
+                if candidates:
+                    fallback_operator = "OR"
+                    used_or_retry = True
+            else:
+                state.fts_fallback_skipped_reason = (
+                    f"automatic OR fallback skipped for {request.query_term_count}-term "
+                    "query (limit 24); pass operator='OR' to request broad recall"
+                )
+
+        for document in candidates:
+            if not _candidate_matches_semantic_fallback(document, request):
+                continue
+            state.results.append(document)
+            if len(state.results) >= request.limit:
+                break
+        if not state.results:
+            return
+
+        state.fallback_used = True
+        state.search_mode = "semantic_fallback_fts"
+        state.fts_operator_used = fallback_operator
+        state.fts_fallback_used = used_or_retry
+        state.fallback_explanation = (
+            f"Semantic search found no concepts similar to '{request.query_text}' "
+            f"(similarity threshold: {state.min_similarity}). "
+            f"Falling back to keyword search (FTS, operator={fallback_operator}) "
+            "for exact term matching."
+        )
+    except Exception as exc:
+        logger.debug("Semantic→FTS fallback failed: %s", exc)
+
+
+def _candidate_matches_semantic_fallback(
+    document: Any,
+    request: _KnowledgeSearchRequest,
+) -> bool:
+    if request.agent_id and document.agent_id != request.agent_id:
+        return False
+    if request.discovery_type and document.type != request.discovery_type:
+        return False
+    if request.severity and document.severity != request.severity:
+        return False
+    if request.status and document.status != request.status:
+        return False
+    if not request.status and not request.include_archived and document.status == "archived":
+        return False
+    if request.tags:
+        return any(tag in set(document.tags or []) for tag in request.tags)
+    return True
+
+
+def _exclude_search_labels(state: _KnowledgeSearchState) -> None:
+    if not state.request.exclude_labels:
+        return
+    filtered = []
+    for document in state.results:
+        display = _resolve_agent_display(document.agent_id)
+        display_name = display.get("display_name", document.agent_id) or ""
+        if str(display_name).strip().lower() not in state.request.exclude_labels:
+            filtered.append(document)
+    state.results = filtered
+
+
+def _serialize_search_discoveries(
+    state: _KnowledgeSearchState,
+    *,
+    include_details: bool,
+) -> list[dict[str, Any]]:
+    current_server_version = getattr(mcp_server, "SERVER_VERSION", "unknown")
+    discoveries = []
+    for document in state.results:
+        provenance = document.provenance if isinstance(document.provenance, dict) else None
+        display_name = (provenance or {}).get("writer_label_at_write")
+        if not display_name:
+            display = _resolve_agent_display(document.agent_id)
+            display_name = display.get("display_name", document.agent_id)
+
+        item = {"by": display_name, "summary": document.summary}
+        session_at_write = (provenance or {}).get("writer_session_id_at_write")
+        if session_at_write:
+            item["session_id_at_write"] = session_at_write
+
+        serialized = document.to_dict(include_details=include_details)
+        item.update(
+            {
+                "id": serialized.get("id"),
+                "type": serialized.get("type"),
+                "status": serialized.get("status"),
+                "tags": serialized.get("tags", []),
+                "created_at": serialized.get("created_at"),
+            }
+        )
+        if include_details and serialized.get("details"):
+            item["details"] = serialized.get("details")
+        item["_agent_id"] = document.agent_id
+        item["system_version"] = provenance.get("system_version") if provenance else None
+        if document.status == "open":
+            warning = _compute_staleness_warning(document, current_server_version)
+            if warning:
+                item["staleness_warning"] = warning
+        if state.request.include_provenance:
+            item["provenance"] = document.provenance
+            if document.provenance_chain:
+                item["provenance_chain"] = document.provenance_chain
+        discoveries.append(item)
+    return discoveries
+
+
+def _base_search_response(
+    state: _KnowledgeSearchState,
+    discoveries: list[dict[str, Any]],
+    *,
+    auto_details: bool,
+    include_details: bool,
+) -> dict[str, Any]:
+    request = state.request
+    detail_suffix = (
+        " (details auto-included for small result set)"
+        if auto_details
+        else ""
+        if include_details
+        else " (summaries only)"
+    )
+    return {
+        "search_mode_used": state.search_mode,
+        "search_mode_requested": request.search_mode_requested,
+        "operator_used": state.operator_used,
+        "fields_searched": state.fields_searched,
+        "query": request.query_text,
+        "discoveries": discoveries,
+        "count": len(state.results),
+        "message": f"Found {len(state.results)} discovery(ies){detail_suffix}",
+    }
+
+
+def _attach_search_diagnostics(
+    response: dict[str, Any],
+    state: _KnowledgeSearchState,
+) -> None:
+    if state.semantic_skipped_reason:
+        response["semantic_skipped_reason"] = state.semantic_skipped_reason
+    if state.fts_operator_used:
+        response["fts_operator_used"] = state.fts_operator_used
+        response["fts_fallback_used"] = state.fts_fallback_used
+    if state.search_degraded_warning:
+        response["search_degraded"] = True
+        response["search_degraded_message"] = state.search_degraded_warning
+    if state.hybrid_skipped_reason:
+        response["hybrid_skipped_reason"] = state.hybrid_skipped_reason
+    if state.fts_fallback_skipped_reason:
+        response["fts_fallback_skipped_reason"] = state.fts_fallback_skipped_reason
+    if state.fallback_used:
+        response["fallback_used"] = True
+        response["fallback_message"] = state.fallback_explanation or (
+            "No exact matches found. Retried with individual terms (OR operator)."
+        )
+        response["fallback_terms"] = str(state.request.query_text).split()[:3] if state.request.query_text else []
+
+
+def _empty_search_hints(request: _KnowledgeSearchRequest) -> list[str]:
+    hints = []
+    query_words = 0
+    if request.query_text:
+        query_text = str(request.query_text)
+        normalized = query_text.replace("_", " ").replace("-", " ")
+        query_words = len([word for word in normalized.split() if word.strip()])
+        if query_words >= 5:
+            hints.append(
+                f"Long query ({query_words} words) - try semantic search: "
+                f"knowledge(action='search', query='{request.query_text}', semantic=true)"
+            )
+            hints.append(
+                "Or broaden to key concepts: knowledge(action='search', query='"
+                + ", ".join(query_text.split()[:3])
+                + "')"
+            )
+        elif query_words >= 2:
+            hints.append("Multi-word query - try semantic search (semantic=true) for conceptual matching")
+            hints.append("Or search individual terms: " + ", ".join(query_text.split()[:3]))
+        else:
+            hints.append(f"Single term '{request.query_text}' - try broader search or use tags")
+            hints.append(f"Try: knowledge(action='search', tags=['{request.query_text}']) or broaden query")
+        hints.append("Alternative: Search by tags instead (knowledge(action='search', tags=['tag1', 'tag2']))")
+
+    if request.agent_id:
+        hints.append(f"Filter active: agent_id='{request.agent_id[:20]}...' - remove to search across all agents")
+    if request.tags:
+        hints.append(f"Filter active: {len(request.tags)} tag(s) - remove or use fewer tags for broader results")
+    if request.discovery_type:
+        hints.append(f"Filter active: type='{request.discovery_type}' - remove to search all discovery types")
+    if request.severity:
+        hints.append(f"Filter active: severity='{request.severity}' - remove to search all severities")
+    return hints
+
+
+def _attach_empty_search_guidance(
+    response: dict[str, Any],
+    state: _KnowledgeSearchState,
+) -> None:
+    if state.results:
+        return
+    request = state.request
+    if request.query_text:
+        record_recall_event(
+            ZERO_RESULT,
+            request.query_text,
+            query_terms=request.query_term_count,
+            search_mode=state.search_mode,
+            detail={
+                "hybrid_skipped": bool(state.hybrid_skipped_reason),
+                "fts_or_fallback_skipped": bool(state.fts_fallback_skipped_reason),
+            },
+        )
+    hints = _empty_search_hints(request)
+    if hints:
+        response["empty_results_hints"] = hints
+        response["tip"] = f"No results found. {hints[0]}"
+        response["all_suggestions"] = hints
+
+
+def _attach_score_map(
+    response: dict[str, Any],
+    state: _KnowledgeSearchState,
+    *,
+    key: str,
+    scores: dict[str, float],
+    digits: int,
+) -> None:
+    if not scores or not state.request.query_text:
+        return
+    visible = {document.id: round(scores[document.id], digits) for document in state.results if document.id in scores}
+    if visible:
+        response[key] = visible
+
+
+def _attach_search_scores_and_confidence(
+    response: dict[str, Any],
+    state: _KnowledgeSearchState,
+) -> None:
+    _attach_score_map(
+        response,
+        state,
+        key="similarity_scores",
+        scores=state.semantic_scores,
+        digits=3,
+    )
+    _attach_score_map(
+        response,
+        state,
+        key="rerank_scores",
+        scores=state.rerank_scores,
+        digits=3,
+    )
+    _attach_score_map(
+        response,
+        state,
+        key="rrf_scores",
+        scores=state.rrf_scores,
+        digits=4,
+    )
+
+    request = state.request
+    if not (request.query_text and state.results and state.fts_anchor_ids is not None):
+        return
+    lexical_hits = sum(1 for document in state.results if document.id in state.fts_anchor_ids)
+    if lexical_hits:
+        return
+    response["low_confidence"] = True
+    record_recall_event(
+        LOW_CONFIDENCE,
+        request.query_text,
+        query_terms=request.query_term_count,
+        search_mode=state.search_mode,
+    )
+    response["confidence_note"] = (
+        "No result matched your query terms lexically — these are semantic-only "
+        "matches and may be tangential (semantic relevance is weakly calibrated "
+        "on this corpus). Rephrase with distinctive key terms, or treat these as "
+        "exploratory rather than authoritative."
+    )
+
+
+def _attach_search_usage_hints(
+    response: dict[str, Any],
+    state: _KnowledgeSearchState,
+    *,
+    include_details: bool,
+) -> None:
+    request = state.request
+    if request.query_text and request.query_term_count > 1:
+        if state.search_mode == "fts" and not state.fallback_used:
+            response["operator_note"] = (
+                "Multi-term FTS ran with "
+                f"operator={state.fts_operator_used or state.operator_used}. "
+                "Use operator='OR' for broader recall, or tags/filters for tighter scope."
+            )
+        elif state.search_mode == "semantic":
+            response["operator_note"] = (
+                "Semantic search considers all terms together (conceptual similarity, not keyword matching)."
+            )
+    if not include_details:
+        response["_tip"] = (
+            "Add include_details=true to expand all results inline (knowledge(action='search', include_details=true))"
+        )
+    if len(state.results) == request.limit:
+        response["_more_available"] = f"Results may be limited to {request.limit}. Use limit=N (max 100) to get more."
+    if state.search_mode == "substring_scan" and not state.results and request.query_text:
+        response["search_hint"] = (
+            "No results with substring matching. Try: "
+            "1) Use specific tags: tags=['identity', 'philosophy'] "
+            "2) Search by discovery_type: discovery_type='insight' "
+            "3) Use single keywords instead of phrases"
+        )
+
+
+async def _attach_search_synthesis(
+    response: dict[str, Any],
+    state: _KnowledgeSearchState,
+    discoveries: list[dict[str, Any]],
+) -> None:
+    if not state.request.synthesize:
+        return
+    if len(discoveries) < 3:
+        response["_synthesis_note"] = "Synthesis skipped: fewer than 3 results"
+        return
+    try:
+        synthesis = await synthesize_results(
+            discoveries=discoveries,
+            query=state.request.query_text,
+            max_discoveries=10,
+            max_tokens=400,
+        )
+        if synthesis:
+            response["synthesis"] = synthesis
+            logger.debug(
+                "Knowledge synthesis generated for %d discoveries",
+                len(discoveries),
+            )
+    except Exception as exc:
+        logger.debug("Synthesis skipped: %s", exc)
+        response["_synthesis_note"] = "Synthesis unavailable (local LLM not responding)"
+
+
+async def _execute_knowledge_search(state: _KnowledgeSearchState) -> dict[str, Any]:
+    started_at = time.perf_counter()
+    if state.request.query_text:
+        await _run_text_search(state)
+    else:
+        await _run_indexed_filter_search(state)
+    await _apply_semantic_fts_fallback(state)
+    record_ms(
+        f"knowledge.search.{state.search_mode}",
+        (time.perf_counter() - started_at) * 1000.0,
+    )
+
+    _exclude_search_labels(state)
+    auto_details = not state.request.include_details and 0 < len(state.results) <= 3
+    include_details = state.request.include_details or auto_details
+    discoveries = _serialize_search_discoveries(
+        state,
+        include_details=include_details,
+    )
+    await _annotate_supersession(discoveries, state.graph)
+
+    response = _base_search_response(
+        state,
+        discoveries,
+        auto_details=auto_details,
+        include_details=include_details,
+    )
+    _attach_search_diagnostics(response, state)
+    _attach_empty_search_guidance(response, state)
+    _attach_search_usage_hints(response, state, include_details=include_details)
+    _attach_search_scores_and_confidence(response, state)
+    await _attach_search_synthesis(response, state, discoveries)
+
+    writers = list({document.agent_id for document in state.results if document.agent_id})[:10]
+    await _broadcast_knowledge_read(
+        "search",
+        _resolve_reader_agent_id(state.request.arguments),
+        payload={
+            "result_count": len(state.results),
+            "query_present": bool(state.request.query_text),
+            "query_term_count": state.request.query_term_count,
+            "search_mode": state.search_mode or state.request.search_mode_requested,
+            "writer_agent_ids": writers,
+            "filter_agent_id": state.request.arguments.get("agent_id"),
+        },
+    )
+    return response
+
+
+@mcp_tool("search_knowledge_graph", timeout=15.0, requires_identity="pre_onboard")
+async def handle_search_knowledge_graph(
+    arguments: Dict[str, Any],
+) -> Sequence[TextContent]:
+    """Search the KG through the explicit retrieval and response pipeline."""
+    arguments = apply_param_aliases("search_knowledge_graph", arguments)
+    try:
+        graph = await get_knowledge_graph()
+        request = _parse_knowledge_search_request(arguments)
+        response = await _execute_knowledge_search(_KnowledgeSearchState(request=request, graph=graph))
+        return success_response(response, arguments=arguments)
+    except _SearchParameterError as exc:
+        return [error_response(str(exc))]
+    except Exception as exc:
+        return [error_response(f"Failed to search knowledge: {str(exc)}")]
+
 
 @mcp_tool("get_knowledge_graph", timeout=15.0, register=False)
 async def handle_get_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
