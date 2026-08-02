@@ -8,15 +8,20 @@ cache key behavior agents rely on before commits.
 from __future__ import annotations
 
 import os
+import signal
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 
+from scripts.dev.test_cache_runner import atomic_publish
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = PROJECT_ROOT / "scripts" / "dev" / "test-cache.sh"
+RUNNER = PROJECT_ROOT / "scripts" / "dev" / "test_cache_runner.py"
 
 
 @pytest.fixture
@@ -28,6 +33,8 @@ def cache_repo(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     script_target.parent.mkdir(parents=True)
     shutil.copy2(SCRIPT, script_target)
     script_target.chmod(0o755)
+    runner_target = repo / "scripts" / "dev" / "test_cache_runner.py"
+    shutil.copy2(RUNNER, runner_target)
 
     (repo / "src").mkdir()
     (repo / "tests").mkdir()
@@ -69,6 +76,14 @@ if [[ "${1:-}" == "-m" && "${2:-}" == "pytest" ]]; then
     fi
     count=$((count + 1))
     printf "%s\\n" "$count" > "$count_file"
+    if [[ "${FAKE_PYTEST_BLOCK:-}" == "1" ]]; then
+        if [[ -n "${FAKE_DETACHED_MARKER:-}" ]]; then
+            python3 -c 'import os, pathlib, signal, sys, time; os.setsid(); signal.signal(signal.SIGTERM, signal.SIG_IGN); pathlib.Path(sys.argv[1]).write_text(str(os.getpid()), encoding="utf-8"); time.sleep(5); pathlib.Path(sys.argv[2]).write_text("escaped", encoding="utf-8")' "${FAKE_DETACHED_READY:?}" "${FAKE_DETACHED_MARKER}" &
+        fi
+        printf "%s\\n" "$$" > "${FAKE_PYTEST_PID:?}"
+        trap 'exit 143' TERM
+        while true; do sleep 1; done
+    fi
     echo "1 passed in 0.01s"
     exit 0
 fi
@@ -108,6 +123,18 @@ def _pytest_count(repo: Path) -> int:
 
 def _pytest_args(repo: Path) -> str:
     return (repo / "pytest-args.txt").read_text(encoding="utf-8")
+
+
+def _process_is_running(pid: int) -> bool:
+    """Treat a reparented zombie as terminated while waiting for OS reaping."""
+    result = subprocess.run(
+        ["ps", "-o", "stat=", "-p", str(pid)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    state = result.stdout.strip()
+    return bool(state) and not state.startswith("Z")
 
 
 def test_tracked_sql_change_invalidates_worktree_cache(cache_repo):
@@ -191,3 +218,90 @@ def test_staged_mode_refuses_unstaged_tracked_non_python_input(cache_repo):
     assert "unstaged or untracked files would affect pytest" in result.stderr
     assert "README.md" in result.stderr
     assert _pytest_count(repo) == 0
+
+
+def test_sigterm_stops_pytest_and_never_populates_cache(cache_repo):
+    repo, env = cache_repo
+    pytest_pid = repo / "pytest.pid"
+    detached_ready = repo / "detached.ready"
+    detached_marker = repo / "detached-completed"
+    env["FAKE_PYTEST_BLOCK"] = "1"
+    env["FAKE_PYTEST_PID"] = str(pytest_pid)
+    env["FAKE_DETACHED_READY"] = str(detached_ready)
+    env["FAKE_DETACHED_MARKER"] = str(detached_marker)
+
+    process = subprocess.Popen(
+        ["bash", "scripts/dev/test-cache.sh", "--fresh", "--quick"],
+        cwd=repo,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    deadline = time.monotonic() + 5
+    while (
+        (not pytest_pid.exists() or not detached_ready.exists())
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.05)
+    assert pytest_pid.exists(), "fake pytest did not start"
+    assert detached_ready.exists(), "detached fake pytest descendant did not call setsid"
+
+    process.terminate()
+    try:
+        stdout, stderr = process.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.communicate(timeout=3)
+        pytest.fail("test-cache ignored SIGTERM while pytest kept running")
+
+    assert process.returncode == 143, stdout + stderr
+    assert "[test-cache] CACHED" not in stdout
+    assert not any((repo / ".test-cache").iterdir())
+    assert not Path(env["UNITARES_TEST_CACHE_LOCK_DIR"]).exists()
+    escaped_pid = int(detached_ready.read_text(encoding="utf-8"))
+    process_deadline = time.monotonic() + 5
+    while time.monotonic() < process_deadline:
+        if not _process_is_running(escaped_pid):
+            break
+        time.sleep(0.05)
+    else:
+        os.kill(escaped_pid, signal.SIGKILL)
+        pytest.fail("detached pytest descendant survived wrapper termination")
+    assert not detached_marker.exists()
+
+
+def test_interrupted_atomic_publication_leaves_no_cache_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    output_path = tmp_path / "pytest-output"
+    output_path.write_text("1 passed in 0.01s\n", encoding="utf-8")
+    cache_file = tmp_path / ".test-cache" / "cache-key"
+
+    def interrupt_replace(_source: os.PathLike[str], _target: os.PathLike[str]) -> None:
+        raise InterruptedError("simulated signal before atomic rename")
+
+    monkeypatch.setattr(os, "replace", interrupt_replace)
+
+    with pytest.raises(InterruptedError):
+        atomic_publish(output_path, cache_file, "test-cache-result-v1")
+
+    assert not cache_file.exists()
+    assert not any(cache_file.parent.iterdir())
+
+
+def test_incomplete_cache_entry_is_never_treated_as_a_hit(cache_repo):
+    repo, env = cache_repo
+    first = _run_cache(repo, env, "--quick")
+    assert first.returncode == 0, first.stdout + first.stderr
+    [cache_file] = list((repo / ".test-cache").iterdir())
+    cache_file.write_text("partial cache output\n", encoding="utf-8")
+
+    second = _run_cache(repo, env, "--quick")
+
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "[test-cache] MISS" in second.stdout
+    assert "[test-cache] HIT" not in second.stdout
+    assert _pytest_count(repo) == 2
