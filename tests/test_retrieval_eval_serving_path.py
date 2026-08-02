@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 
 import pytest
 from mcp.types import TextContent
@@ -87,3 +88,28 @@ async def test_run_query_restores_existing_env(monkeypatch):
     await retrieval_eval.run_query("retrieval eval", top_k=1, hybrid=True)
 
     assert os.environ["UNITARES_ENABLE_HYBRID"] == "operator-value"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_reports_flat_miss_count_and_rate(monkeypatch, tmp_path: Path):
+    labels = tmp_path / "labels.json"
+    labels.write_text(json.dumps({
+        "schema_version": 1,
+        "pairs": [
+            {"query": "hit", "relevant_ids": ["target-a"]},
+            {"query": "miss", "relevant_ids": ["target-b"]},
+        ],
+    }))
+
+    async def fake_run_query(query, *_args, **_kwargs):
+        if query == "hit":
+            return ["noise", "target-a"], [1.0, 0.5], 4.0
+        return ["noise"], [1.0], 6.0
+
+    monkeypatch.setattr(retrieval_eval, "run_query", fake_run_query)
+
+    result = await retrieval_eval.evaluate(labels)
+
+    assert [item["flat_miss"] for item in result["per_query"]] == [False, True]
+    assert result["aggregate"]["flat_miss_count"] == 1
+    assert result["aggregate"]["flat_miss_rate"] == 0.5

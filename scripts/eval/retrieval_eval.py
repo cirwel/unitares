@@ -183,6 +183,7 @@ async def evaluate(
             f"recall@{recall_k}": round(rec, 3),
             "mrr": round(m, 3),
             "first_hit_rank": first_hit_rank,
+            "flat_miss": first_hit_rank is None,
             "top_score": round(top_score, 3),
             "latency_ms": round(dt_ms, 1),
         })
@@ -222,6 +223,8 @@ async def evaluate(
     except ValueError:
         corpus_rel_path = str(labels_path)
 
+    flat_miss_count = sum(1 for item in per_query if item["flat_miss"])
+
     return {
         "corpus": {
             "path": corpus_rel_path,
@@ -242,6 +245,8 @@ async def evaluate(
             f"recall@{recall_k}": agg(recalls),
             "mrr": agg(mrrs),
             "latency_ms": percentiles(latencies),
+            "flat_miss_count": flat_miss_count,
+            "flat_miss_rate": round(flat_miss_count / len(per_query), 3) if per_query else 0.0,
         },
         "per_query": per_query,
     }
@@ -261,6 +266,10 @@ def print_human(result: Dict[str, Any]) -> None:
     print(f"  {ndcg_key:<10} mean {ndcg['mean']:.3f}  median {ndcg['median']:.3f}")
     print(f"  {recall_key:<10} mean {rec['mean']:.3f}  median {rec['median']:.3f}")
     print(f"  MRR        mean {mrr_agg['mean']:.3f}  median {mrr_agg['median']:.3f}")
+    print(
+        f"  Flat miss  {agg['flat_miss_count']}/{result['corpus']['pair_count']} "
+        f"({agg['flat_miss_rate']:.1%})"
+    )
     print(f"  Latency    p50 {lat['p50']}ms  p95 {lat['p95']}ms  max {lat['max']}ms\n")
 
     print("Per-query detail:")
