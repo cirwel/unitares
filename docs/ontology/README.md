@@ -33,6 +33,7 @@ So `r1-verify-lineage-claim.md` resolves row R1 in `plan.md`; `s1-continuity-tok
 - [`harness-substrate-plurality.md`](harness-substrate-plurality.md) — R6, identity across variable harness/model/transport
 - [`beam-coordination-kernel.md`](beam-coordination-kernel.md) — R7, lease-plane coordination primitive
 - [`v7-fhat-spec.md`](v7-fhat-spec.md) — paper v7 generative-model spike
+- [`v7-related-work-draft.md`](v7-related-work-draft.md) — staging draft for the paper v7 related-work section; synthesizes the ontology's prior-art boundaries for transfer to the paper repo
 
 **Research RFCs** (R-rows, *inventive* primitives):
 - [`r1-verify-lineage-claim.md`](r1-verify-lineage-claim.md) — behavioral-continuity verification (shipped)
