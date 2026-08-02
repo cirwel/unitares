@@ -66,6 +66,19 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+try:  # pragma: no cover - exercised by the very failure it guards against
+    from agents.common.findings import (
+        DEDUPED, DELIVERED, FAILED, REACHED_GOVERNANCE,
+    )
+except Exception:
+    # The escalation module is exactly what goes missing when this doctor is
+    # run by an interpreter without the project's deps — which is how it stayed
+    # silent for its whole life. Import defensively and keep the literals in
+    # sync with agents/common/findings.py, so a missing escalation path still
+    # reports FAILED loudly instead of exploding at import time.
+    DELIVERED, DEDUPED, FAILED = "delivered", "deduped", "failed"
+    REACHED_GOVERNANCE = frozenset({DELIVERED, DEDUPED})
+
 STATE_FILE = os.path.expanduser(
     os.environ.get("DEPLOY_DRIFT_DOCTOR_STATE", "~/.unitares/deploy-drift-doctor.state.json")
 )
@@ -167,12 +180,23 @@ def _parse_etime(etime: str) -> float:
     return days * 86400 + h * 3600 + m * 60 + s
 
 
-def io_post_finding(payload: Dict[str, Any]) -> None:
+def io_post_finding(payload: Dict[str, Any]) -> str:
+    """Escalate, returning DELIVERED / DEDUPED / FAILED.
+
+    Formerly this swallowed every exception with a bare ``pass`` and the
+    comment "escalation is best-effort; the log line always lands." The log
+    line does land — in a file nobody reads — so an import error here was
+    indistinguishable from a healthy hourly run for this doctor's entire
+    life. Best-effort is fine; silent best-effort is not. The caller needs the
+    outcome to decide whether it may record having alerted.
+    """
     try:
-        from agents.common.findings import post_finding
-        post_finding(**payload)
-    except Exception:
-        pass  # escalation is best-effort; the log line always lands
+        from agents.common.findings import post_finding_result
+        return post_finding_result(**payload)
+    except Exception as exc:
+        log(f"  post_finding unavailable ({type(exc).__name__}: {exc}) — "
+            f"escalation is DOWN, not quiet")
+        return FAILED
 
 
 def io_post_outcome(args: Dict[str, Any]) -> None:
@@ -350,7 +374,7 @@ class Doctor:
         # Severity reflects consequence, not novelty: a live-from-checkout
         # surface behind origin means a merged fix is not actually running.
         severity = "warning" if d.condition == "restart_pending" else "critical"
-        self.io["post_finding"]({
+        outcome = self.io["post_finding"]({
             "event_type": FINDING_KIND,
             "severity": severity,
             "message": (f"{d.surface}: {d.detail}. Deploy is a human action — "
@@ -359,6 +383,17 @@ class Doctor:
             "agent_id": "deploy-drift-doctor",
             "agent_name": "deploy-drift-doctor",
         })
+        # Record the alert ONLY if governance actually holds the finding.
+        # Writing last_alert after a failed post manufactures a delivery that
+        # never happened, and the cooldown above then suppresses the retry that
+        # would have fixed it — the finding is buried by its own bookkeeping.
+        # This doctor spent its entire life in exactly that state: escalation
+        # raised ModuleNotFoundError every cycle, the exception was swallowed,
+        # and last_alert was written anyway (verified 2026-08-01, zero
+        # deploy_drift rows in audit.events, ever).
+        if outcome not in REACHED_GOVERNANCE:
+            log(f"  ESCALATION FAILED for {fp} — finding NOT recorded, will retry next cycle")
+            return
         open_findings[fp] = {
             "surface": d.surface, "condition": d.condition,
             "first_seen": (prev or {}).get("first_seen", now), "last_alert": now,
