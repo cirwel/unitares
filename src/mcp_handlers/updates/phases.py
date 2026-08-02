@@ -2079,6 +2079,7 @@ async def _post_update_trajectory(ctx: UpdateContext) -> None:
 
 
 async def _post_update_phase5_evidence(ctx: UpdateContext) -> None:
+    """Record recent tool results when Phase-5 evidence writes are enabled."""
     # Phase-5: iterate self-reported tool evidence. Spec §2 + §8.
     # ctx.recent_tool_results was populated in transform_inputs (sync phase).
     # Evidence arrives as plain dicts (model_dump() flattens Pydantic models).

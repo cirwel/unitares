@@ -99,7 +99,7 @@ index; that one is the curated decision record.
 | `UNITARES_PARAMS_PROFILE` | `'default'` | Returns the active parameters profile name | governance_core/parameters.py |
 | `UNITARES_PARENT_AGENT_ID` | `(required)` | read by main() | agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_PAUSE_AUTO_EXPIRE_SECONDS` | `str(72 * 3600)` | — | config/governance_config.py |
-| `UNITARES_PHASE5_EVIDENCE_WRITE` | `''` | read by _post_update_phase5_evidence() | src/mcp_handlers/updates/phases.py |
+| `UNITARES_PHASE5_EVIDENCE_WRITE` | `''` | Record recent tool results when Phase-5 evidence writes are enabled. | src/mcp_handlers/updates/phases.py |
 | `UNITARES_PHI_TELEMETRY_ONLY` | `'1'` | Whether Φ is demoted to telemetry (UNITARES_PHI_TELEMETRY_ONLY) | config/governance_config.py |
 | `UNITARES_PREFIX_BIND_FINGERPRINT` | `'off'` | Runtime accessor — respects env changes set after module load | config/governance_config.py |
 | `UNITARES_PROCESS_UPDATE_RESPONSE_MODE` | `'auto'` | Apply response mode filtering to fully-built response_data | src/mcp_handlers/response_formatter.py, src/mcp_handlers/updates/pipeline.py |
