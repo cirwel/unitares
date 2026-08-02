@@ -209,8 +209,9 @@ async def reviewer_crashed_fast(
     - exited 0 / still running (504) / any error → False (the reviewer owns the
       review; leave it on the async path — DO NOT also run in-process)
 
-    The short window keeps the whole submit_thesis call inside the dialectic
-    router's 90s budget even when a fast crash triggers the in-process fallback.
+    The short window keeps the whole submit_thesis call inside its handler
+    timeout (derived from the synthetic-review budget in handlers.py, #1442)
+    even when a fast crash triggers the in-process fallback.
     A reviewer that crashes AFTER this window (mid-model, rare) still relies on
     the slower reap — acceptable; this closes the common case.
     """

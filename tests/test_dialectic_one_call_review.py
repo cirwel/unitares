@@ -377,3 +377,43 @@ class TestWhoseMove:
             })
         assert out["allowed_agent_ids"] == []
         assert out["required_agent_id"] is None
+
+
+class TestTimeoutInvariants:
+    """#1442: every layer that runs the inline synthetic review must clear the
+    budget of the work sharing its call. 55 < 60 was arithmetically fine and
+    violated in practice — lock the ORDERING, not the constants, so retuning
+    UNITARES_DIALECTIC_REVIEW_BUDGET can never silently reintroduce the drift.
+    """
+
+    def test_submit_thesis_clears_review_budget_plus_dispatch(self):
+        from src.mcp_handlers.dialectic import handlers as H
+
+        # Budget + orchestrated dispatch (≤10s) + fast-crash watch (≤20s):
+        # the thesis call runs all three before the wrapper's wait_for fires.
+        assert H.handle_submit_thesis._mcp_timeout >= (
+            H._synthetic_review_budget() + 30.0
+        )
+
+    def test_one_call_request_clears_nested_submit_thesis(self):
+        from src.mcp_handlers.dialectic import handlers as H
+
+        # The one-call form invokes the DECORATED handle_submit_thesis (its own
+        # wait_for included) after session creation, so the outer ceiling must
+        # exceed the nested one — otherwise the outer kills the call while the
+        # inner is still legitimately working (the #1442 failure).
+        assert H.handle_request_dialectic_review._mcp_timeout >= (
+            H.handle_submit_thesis._mcp_timeout + 10.0
+        )
+
+    def test_router_ceiling_clears_every_dialectic_action(self):
+        from src.mcp_handlers.consolidated import handle_dialectic
+        from src.mcp_handlers.dialectic import handlers as H
+
+        # The consolidated `dialectic` router wraps each action handler in its
+        # own wait_for; `request` is the slowest by construction (it embeds
+        # submit_thesis). The router previously "cleared" submit_thesis's 90s
+        # with timeout=90.0 — zero headroom, same drift shape.
+        assert handle_dialectic._mcp_timeout > (
+            H.handle_request_dialectic_review._mcp_timeout
+        )

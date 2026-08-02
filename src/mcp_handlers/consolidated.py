@@ -83,6 +83,7 @@ from .observability.handlers import (
     handle_bridge_summary,
 )
 from .dialectic.handlers import (
+    REQUEST_REVIEW_TIMEOUT,
     handle_get_dialectic_session,
     handle_list_dialectic_sessions,
     handle_quick_dialectic,
@@ -397,11 +398,13 @@ handle_dialectic = action_router(
         "synthesis": handle_submit_synthesis,
         "reassign": handle_reassign_reviewer,
     },
-    # 90s: the thesis action can drive a full synthetic antithesis+synthesis
-    # inline (~30-45s on the local model). This router wait_for is the outer
-    # ceiling, so it must clear the submit_thesis handler timeout (90s) and the
-    # synthetic-review budget (~55s) with headroom. Other actions return fast.
-    timeout=90.0,
+    # This router wait_for is the outer ceiling, so it must clear the slowest
+    # action with headroom. That is action='request' in its one-call form,
+    # which runs submit_thesis's full inline synthetic review plus session
+    # creation. Derived (#1442) — the previous hand-set 90s "cleared" the
+    # submit_thesis timeout (90s) with zero actual headroom, the same drift
+    # shape that broke the one-call path. Other actions return fast.
+    timeout=REQUEST_REVIEW_TIMEOUT + 10.0,
     description="Dialectic operations",
     default_action="list",
     # #425 action-level identity: session browsing (get/list) serves

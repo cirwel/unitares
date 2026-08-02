@@ -84,6 +84,42 @@ try:
 except ImportError:
     AIOFILES_AVAILABLE = False
 
+
+def _synthetic_review_budget(default: float = 55.0) -> float:
+    """Wall-clock cap for the inline synthetic review (antithesis + synthesis).
+    The handler timeouts below are DERIVED from this budget, so an overrun
+    degrades to awaiting_facilitation (thesis already persisted) rather than
+    killing the call. Measured typical: ~27s on gemma4. Tunable via
+    UNITARES_DIALECTIC_REVIEW_BUDGET (read at import for the derived timeouts,
+    so a change requires the usual server restart)."""
+    raw = os.environ.get("UNITARES_DIALECTIC_REVIEW_BUDGET")
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return default
+
+
+# --- Handler timeout derivation (#1442) -------------------------------------
+# Every handler that can run the inline synthetic review must have a decorator
+# timeout that clears _synthetic_review_budget() PLUS the other work sharing
+# the same call. #825 satisfied this for submit_thesis by hand (90s); #1385's
+# one-call request_review then did submit_thesis's work under its own original
+# 60s timeout — arithmetically "budget < timeout" held (55 < 60) while the
+# call died at 60s with nothing persisted (#1442). Deriving the ceilings from
+# the budget makes that drift unrepresentable; the ordering is locked by
+# tests/test_dialectic_one_call_review.py.
+#
+# Dispatch margin: orchestrated reviewer dispatch (httpx ≤10s) + fast-crash
+# watch (await_seconds 15s + 5s client slack) + pg/BEAM persistence writes.
+REVIEW_DISPATCH_MARGIN = 35.0
+SUBMIT_THESIS_TIMEOUT = _synthetic_review_budget() + REVIEW_DISPATCH_MARGIN  # 90.0 at the 55s default
+# One-call request_review = session creation (auth, reviewer selection,
+# BEAM/pg insert) + the full nested submit_thesis work above.
+ONE_CALL_CREATION_MARGIN = 15.0
+REQUEST_REVIEW_TIMEOUT = SUBMIT_THESIS_TIMEOUT + ONE_CALL_CREATION_MARGIN  # 105.0 at the default
+
 # NOTE: save_session, load_session, and load_all_sessions are now imported from dialectic_session.py
 # NOTE: Calibration functions are now imported from dialectic_calibration.py
 # NOTE: Resolution execution is now imported from dialectic_resolution.py
@@ -647,7 +683,7 @@ async def _apply_reviewer_reassignment(
         "reasoning": reasoning,
     }
 
-@mcp_tool("request_dialectic_review", timeout=60.0, register=True)
+@mcp_tool("request_dialectic_review", timeout=REQUEST_REVIEW_TIMEOUT, register=True)
 async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Create a dialectic recovery session.
@@ -1357,20 +1393,6 @@ def _synthetic_reviewer_enabled() -> bool:
     ).lower() in ("1", "true", "yes", "on")
 
 
-def _synthetic_review_budget(default: float = 55.0) -> float:
-    """Wall-clock cap for the inline synthetic review (antithesis + synthesis).
-    Kept under the submit_thesis handler timeout so an overrun degrades to
-    awaiting_facilitation (thesis already persisted) rather than killing the call.
-    Measured typical: ~27s on gemma4. Tunable via UNITARES_DIALECTIC_REVIEW_BUDGET."""
-    raw = os.environ.get("UNITARES_DIALECTIC_REVIEW_BUDGET")
-    if raw:
-        try:
-            return float(raw)
-        except ValueError:
-            pass
-    return default
-
-
 def _snapshot_agent_state(agent_uuid: str) -> Optional[Dict[str, Any]]:
     """EISV/risk snapshot for an agent, for grounding the synthetic antithesis.
     Returns None when no live monitor exists (the reviewer then critiques on the
@@ -1526,7 +1548,7 @@ async def _run_synthetic_review(
     }
 
 
-@mcp_tool("submit_thesis", timeout=90.0, register=True)
+@mcp_tool("submit_thesis", timeout=SUBMIT_THESIS_TIMEOUT, register=True)
 async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Paused agent submits thesis: "What I did, what I think happened"
