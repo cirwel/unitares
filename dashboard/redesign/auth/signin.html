@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en" data-theme="ink">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sign in · UNITARES</title>
+<link rel="stylesheet" href="/dashboard/redesign/tokens.css" />
+<link rel="stylesheet" href="/dashboard/redesign/kit.css" />
+<link rel="stylesheet" href="/dashboard/redesign/auth/auth.css" />
+</head>
+<body class="auth-body">
+<main class="auth-shell">
+  <div class="auth-brand">
+    <span class="brand">UNITARES<span class="dot">.</span></span>
+    <span class="brand-sub">Governance</span>
+  </div>
+  <section class="auth-card">
+    <div id="signinBlock">
+      <h1 id="signinTitle">Sign in with a passkey</h1>
+      <p>Use Face ID, Touch ID, or your device passkey. No dashboard token is sent in the URL.</p>
+      <button class="auth-primary" id="signinBtn" type="button">Continue with passkey</button>
+    </div>
+
+    <div class="auth-divider">or</div>
+    <button class="auth-link" id="showEnrollBtn" type="button">Enroll a passkey with a one-time code</button>
+    <form id="enrollStart" hidden>
+      <div class="auth-field">
+        <label for="enrollCode">One-time enrollment code</label>
+        <input class="code" id="enrollCode" name="code" inputmode="text"
+          autocomplete="one-time-code" autocapitalize="characters" maxlength="11"
+          placeholder="ABCDE-FGHIJ" required />
+      </div>
+      <button class="auth-primary" id="enrollContinue" type="submit">Continue to enrollment</button>
+    </form>
+    <div class="auth-status" id="status" role="status" aria-live="polite"></div>
+  </section>
+  <p class="auth-foot"><a href="/">Return to dashboard</a></p>
+</main>
+<script src="/dashboard/redesign/auth/passkey.js"></script>
+<script>
+(function () {
+  "use strict";
+  const status = document.getElementById("status");
+  const signinBtn = document.getElementById("signinBtn");
+  const signinBlock = document.getElementById("signinBlock");
+  const showEnrollBtn = document.getElementById("showEnrollBtn");
+  const enrollStart = document.getElementById("enrollStart");
+  const stepup = new URLSearchParams(location.search).get("stepup") === "1";
+  const enrollmentOnly = new URLSearchParams(location.search).get("enroll") === "1";
+
+  function message(text, kind) {
+    status.textContent = text || "";
+    status.className = "auth-status" + (kind ? " " + kind : "");
+  }
+  function showEnrollment() {
+    enrollStart.hidden = false;
+    showEnrollBtn.hidden = true;
+    if (enrollmentOnly) signinBlock.hidden = true;
+    document.getElementById("enrollCode").focus();
+  }
+
+  if (stepup) document.getElementById("signinTitle").textContent = "Verify your passkey";
+  if (enrollmentOnly) showEnrollment();
+  if (!window.PasskeyUI.supported()) {
+    signinBtn.disabled = true;
+    message("This browser does not support passkeys. Use a current Safari, Chrome, or Firefox.", "error");
+  }
+
+  signinBtn.addEventListener("click", async () => {
+    signinBtn.disabled = true;
+    message("Waiting for your passkey…");
+    try {
+      const result = await window.PasskeyUI.authenticate();
+      location.assign(stepup ? "/#security" : (result.redirect || "/"));
+    } catch (error) {
+      message(window.PasskeyUI.friendlyError(error), "error");
+      signinBtn.disabled = false;
+    }
+  });
+  showEnrollBtn.addEventListener("click", showEnrollment);
+  enrollStart.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = document.getElementById("enrollContinue");
+    button.disabled = true;
+    message("Checking the one-time code…");
+    try {
+      await window.PasskeyUI.openEnrollment(document.getElementById("enrollCode").value);
+    } catch (error) {
+      message(window.PasskeyUI.friendlyError(error), "error");
+      button.disabled = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>

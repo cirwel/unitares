@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en" data-theme="ink">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Enroll a passkey · UNITARES</title>
+<link rel="stylesheet" href="/dashboard/redesign/tokens.css" />
+<link rel="stylesheet" href="/dashboard/redesign/kit.css" />
+<link rel="stylesheet" href="/dashboard/redesign/auth/auth.css" />
+</head>
+<body class="auth-body">
+<main class="auth-shell">
+  <div class="auth-brand">
+    <span class="brand">UNITARES<span class="dot">.</span></span>
+    <span class="brand-sub">Governance</span>
+  </div>
+  <section class="auth-card">
+    <h1>Enroll this passkey</h1>
+    <p>The credential is bound to <strong>gov.cirwel.org</strong>. User verification and a discoverable passkey are required.</p>
+    <form id="enrollForm">
+      <div class="auth-field">
+        <label for="nickname">Device nickname <span aria-hidden="true">·</span> optional</label>
+        <input id="nickname" name="nickname" autocomplete="off" maxlength="120"
+          placeholder="Kenny’s iPhone" />
+      </div>
+      <button class="auth-primary" id="enrollBtn" type="submit">Create passkey</button>
+    </form>
+    <div class="auth-status" id="status" role="status" aria-live="polite"></div>
+    <div id="complete" hidden>
+      <button class="auth-primary" id="signinBtn" type="button">Sign in with the new passkey</button>
+    </div>
+  </section>
+  <p class="auth-foot"><a href="/">Return to dashboard</a></p>
+</main>
+<script src="/dashboard/redesign/auth/passkey.js"></script>
+<script>
+(function () {
+  "use strict";
+  const form = document.getElementById("enrollForm");
+  const button = document.getElementById("enrollBtn");
+  const status = document.getElementById("status");
+  const complete = document.getElementById("complete");
+
+  function message(text, kind) {
+    status.textContent = text || "";
+    status.className = "auth-status" + (kind ? " " + kind : "");
+  }
+  if (!window.PasskeyUI.enrollmentCode() && !window.PasskeyUI.operatorToken()) {
+    form.hidden = true;
+    message("Enrollment authorization is missing. Start again with a fresh one-time code.", "error");
+  } else if (!window.PasskeyUI.supported()) {
+    button.disabled = true;
+    message("This browser does not support passkey enrollment.", "error");
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    button.disabled = true;
+    message("Waiting for your device…");
+    try {
+      await window.PasskeyUI.register(document.getElementById("nickname").value);
+      form.hidden = true;
+      complete.hidden = false;
+      message("Passkey enrolled. A security notification has been emitted.", "ok");
+    } catch (error) {
+      message(window.PasskeyUI.friendlyError(error), "error");
+      button.disabled = false;
+    }
+  });
+  document.getElementById("signinBtn").addEventListener("click", () => {
+    location.assign("/auth/signin");
+  });
+})();
+</script>
+</body>
+</html>
