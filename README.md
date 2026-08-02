@@ -5,23 +5,21 @@
 ### Runtime health checks for autonomous-agent fleets.
 
 **UNITARES is a check-in server for agents while they are working: an agent reports what it did, attaches evidence when it has any, and gets back one action: `proceed`, `guide`, `pause`, or `reject`.**<br/>
-Most controls inspect one action against one rule. UNITARES keeps history for each agent process, compares the current run with that agent's own baseline, and makes drift visible to the agent and the human operator while the output may still look fine.
+Most controls inspect one action against one rule. UNITARES keeps history for each agent process, compares the current run against that agent's own baseline, and makes drift visible to the agent and the human operator while the output may still look fine.
 
 [![Tests](https://github.com/cirwel/unitares/actions/workflows/tests.yml/badge.svg)](https://github.com/cirwel/unitares/actions/workflows/tests.yml)
 [![Python](https://img.shields.io/badge/python-3.12+-2f7d72?style=flat-square&labelColor=0f171f)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-Apache_2.0-2f7d72?style=flat-square&labelColor=0f171f)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19647159.svg)](https://doi.org/10.5281/zenodo.19647159)
 
-*Status: live since November 2025 — 4.2M+ governance events (public snapshot frozen 2026-07-02).*
+*Running continuously since November 2025 — 4.4M+ governance events. The agents that build UNITARES run under it.*
 
 [![Quickstart](https://img.shields.io/badge/▶-quickstart-5eead4?style=for-the-badge&labelColor=0f171f)](#try-the-demo-locally)
+[![Verify it yourself](https://img.shields.io/badge/verify-it_yourself-f5a623?style=for-the-badge&labelColor=0f171f)](#verify-every-claim-yourself)
 [![Docs](https://img.shields.io/badge/docs-read-7d8f97?style=for-the-badge&labelColor=0f171f)](docs/README.md)
 [![Paper v6](https://img.shields.io/badge/paper-v6-8957e5?style=for-the-badge&labelColor=0f171f)](https://github.com/cirwel/unitares-paper-v6)
-[![Verify it yourself](https://img.shields.io/badge/verify-it_yourself-f5a623?style=for-the-badge&labelColor=0f171f)](docs/REVIEWER_GUIDE.md)
 
-One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety infrastructure for autonomous agents, *after* deployment. UNITARES is the governed fleet; [Anima](https://github.com/cirwel/anima-mcp) is its physical edge testbed. [Full index ↗](https://cirwel.github.io)
-
-**Client-neutral by design:** Claude Code, Codex, Hermes, Goose, Cursor, Discord/dispatch agents, local models, and frontier providers such as Mistral can all use the same governance server through MCP, REST, the SDK, or a host adapter. Claude is one client family, not a server-side assumption.
+One layer of the **[CIRWEL stack](#the-cirwel-stack)** — runtime safety infrastructure for autonomous agents, *after* deployment. UNITARES is the governed fleet; [Anima](https://github.com/cirwel/anima-mcp) is its physical edge testbed.
 
 </div>
 
@@ -29,7 +27,7 @@ One layer of the **[CIRWEL stack](https://cirwel.github.io)** — runtime safety
 
 ## The loop, and the organs around it
 
-Everything in UNITARES hangs off one per-agent loop: an agent checks in after meaningful work and gets back one action — `proceed` / `guide` / `pause` / `reject`. The other subsystems are answers to questions that loop raises about the agent doing the work:
+Everything hangs off one per-agent loop: an agent checks in after meaningful work and gets back one action — `proceed` / `guide` / `pause` / `reject`. The other subsystems answer questions that loop raises about the agent doing the work:
 
 | Question about the running agent | Answered by |
 |---|---|
@@ -40,31 +38,9 @@ Everything in UNITARES hangs off one per-agent loop: an agent checks in after me
 | Is a disputed action defensible? | **dialectic** peer review → durable constraints |
 | When another model produced the output, what evidence is that? | **`call_model`** provenance |
 
-Around that per-agent loop sits fleet infrastructure you reach for only when work is multi-agent or side-effectful — surface **leases**, **resident monitors** (scheduled agents that run the loop themselves), **BEAM/Elixir coordination**, and **governed effects** (agents propose; only governed effects commit). The [CIRWEL stack](#the-cirwel-stack) table maps these and their maturity.
+Around that loop sits fleet infrastructure you reach for only when work is multi-agent or side-effectful — surface **leases**, **resident monitors** (scheduled agents that run the loop themselves), **BEAM/Elixir coordination**, and **governed effects** (agents propose; only governed effects commit).
 
-The transports are MCP on `/mcp/`, REST on `/v1/tools/call`, an optional dashboard on `/dashboard`, and an SDK for resident or scheduled agents. Pick up only the loop for a quick start; the organs are there when you want to act on *why*, and the infrastructure when persistent or side-effectful work needs it.
-
-## Use UNITARES if
-
-- you run autonomous or semi-autonomous coding, research, operations, resident, Discord, or local-model agents;
-- you want mid-run health signals, not only pre-deploy evals or post-hoc logs;
-- you need agents to check their own state before continuing; and
-- you want an audit trail of confidence, evidence, drift, and recovery.
-
-UNITARES is **not** an output validator, sandbox, hosted agent platform, or grand jury. Its state reading is **not an outcome oracle** or bad-result detector; it is runtime telemetry for the running agent. External evidence calibrates the signal, and policy/review layers own labels such as task-negative, contract violation, or authority/harm.
-
-## Try the demo locally
-
-```bash
-git clone https://github.com/cirwel/unitares.git && cd unitares
-docker compose up -d --wait && make demo
-```
-
-`make demo` drives a synthetic agent through seven check-ins — clean work, then confidence drifting from results, then confusion — and prints the policy action at each step. First run can spend a few minutes building Docker images; later runs are the fast path. Then point any MCP client at `http://localhost:8767/mcp/`.
-
-For a human operator view, open the optional dashboard at `http://localhost:8767/dashboard`. Dashboard implementation details live in [`dashboard/README.md`](dashboard/README.md); public deployment screenshots live in [`docs/PRODUCTION_SNAPSHOT.md`](docs/PRODUCTION_SNAPSHOT.md).
-
-> **Running continuously since November 2025 · 4.2M+ governance events** — the agents building UNITARES run under it. ([Production snapshot →](docs/PRODUCTION_SNAPSHOT.md) · [verify the numbers →](docs/REVIEWER_GUIDE.md))
+Transports are MCP on `/mcp/`, REST on `/v1/tools/call`, an optional dashboard on `/dashboard`, and an SDK for resident or scheduled agents. Take just the loop for a quick start; the organs are there when you want to act on *why*.
 
 ## Where it fits
 
@@ -76,13 +52,22 @@ UNITARES runs **alongside** your evals and guardrails — it doesn't replace eit
 | **Guardrails** | Is this *action* allowed right now? | per action |
 | **UNITARES** | Is this agent *still healthy* as it works? | continuously, mid-run |
 
-### How it relates to agent clients
+**Use it if** you run autonomous or semi-autonomous coding, research, operations, resident, Discord, or local-model agents; you want mid-run health signals rather than only pre-deploy evals or post-hoc logs; you need agents to check their own state before continuing; and you want an audit trail of confidence, evidence, drift, and recovery.
 
-UNITARES is not an agent framework or chat interface. Hermes, Claude Code, Codex, Goose, Discord dispatchers, SDK residents, and local-model hosts provide the hands: prompts, tools, files, terminals, browsers, scheduled work, and operator UX. UNITARES provides the governed continuity underneath — the loop and organs above. For one-off chat or local coding, skip the governance loop; for persistent, multi-agent, high-side-effect, or resident work, mount the client through MCP/REST/SDK or a lifecycle adapter.
+**It is not** an output validator, sandbox, hosted agent platform, or grand jury — and not an agent framework or chat interface. Your client provides the hands: prompts, tools, files, terminals, scheduled work, operator UX. UNITARES provides the governed continuity underneath. Its state reading is **not an outcome oracle** or bad-result detector; it is runtime telemetry for the running agent. External evidence calibrates the signal, and policy/review layers own labels such as task-negative, contract violation, or authority/harm.
 
-### Where it's going: accountability without a trusted center
+**Client-neutral by design.** Claude Code, Codex, Hermes, Goose, Cursor, Discord/dispatch agents, local models, and frontier providers such as Mistral all use the same server through MCP, REST, the SDK, or a host adapter. Claude is one client family, not a server-side assumption.
 
-Everything above describes the deployed system: **one governor, one operator**. The identity layer already enforces the posture a multi-party world needs — identity is per-process, credentials structurally refuse cross-principal resume, and declared lineage is recorded as *provisional* rather than trusted on assertion. The active research direction extends this to genuinely **multi-principal** deployments: mutually-distrusting principals each running their own governor, with cross-principal delegation and shared-infrastructure effects mediated by verifiable attestation between governors rather than authorized by any central party. No multi-host, multi-party deployment exists yet — that is the research, not a shipped claim. A testbed-and-benchmark paper is in preparation (arXiv, expected August 2026).
+## Try the demo locally
+
+```bash
+git clone https://github.com/cirwel/unitares.git && cd unitares
+docker compose up -d --wait && make demo
+```
+
+`make demo` drives a synthetic agent through seven check-ins — clean work, then confidence drifting from results, then confusion — and prints the policy action at each step. First run can spend a few minutes building images; later runs are the fast path. Then point any MCP client at `http://localhost:8767/mcp/`.
+
+For a human operator view, open the optional dashboard at `http://localhost:8767/dashboard`. Implementation details live in [`dashboard/README.md`](dashboard/README.md); public deployment screenshots in [`docs/PRODUCTION_SNAPSHOT.md`](docs/PRODUCTION_SNAPSHOT.md).
 
 ## How it works
 
@@ -98,14 +83,14 @@ After each unit of work, the agent checks in with `sync_state()` — passing sel
 
 </div>
 
-That's the whole contract: the agent reads the policy action and course-corrects using its own state estimate, without waiting for an external guardrail to catch it. Once a baseline exists, the central signal is a residual — current state minus this agent's own operating reference — so deviation is treated first as information, not as guilt or punishment. No special vocabulary is required to use the loop.
+That's the whole contract: the agent reads the action and course-corrects using its own state estimate, without waiting for an external guardrail to catch it. Once a baseline exists, the central signal is a residual — current state minus that agent's own operating reference — so deviation is treated first as information, not as guilt or punishment. No special vocabulary is required to use the loop.
 
 <details>
 <summary><strong>The four scores behind the policy action</strong></summary>
 
 <br/>
 
-Want to act on *why*, not just the policy action? Each check-in also returns four scores per agent, each graded against that agent's *own* ~30-check-in baseline, so slow drift can surface while output still looks fine. The research docs and payloads call this vector **EISV**: Energy, Integrity, Entropy, Valence.
+Want to act on *why*, not just the policy action? Each check-in also returns four scores, each graded against that agent's own expanding baseline, so slow drift can surface while output still looks fine. The research docs and payloads call this vector **EISV**: Energy, Integrity, Entropy, Valence.
 
 | | | Goes wrong when… |
 |---|---|---|
@@ -114,7 +99,7 @@ Want to act on *why*, not just the policy action? Each check-in also returns fou
 | **S** · Entropy / drift | drifting from its own normal? | erratic, divergent behavior |
 | **V** · Valence | derived: energy vs integrity | motion without coherence (or vice-versa) |
 
-The baseline takes ~30 check-ins to establish. Until then the policy action falls back to a cold-start prior computed mostly from server-derived signals (complexity divergence, coherence, calibration — self-reported drift is a capped ≤30% blend), so it is *not yet* discriminative of absolute drift magnitude — a worsening drift vector will not, on its own, move the action during warmup. After baselining, the per-agent behavioral assessment is combined into the action and can escalate it. A pause is enforced (the runtime boundary marks the agent `paused` and blocks further writes until recovery), not merely advisory.
+The baseline takes ~30 check-ins to establish. Until then the policy action falls back to a cold-start prior computed mostly from server-derived signals (complexity divergence, coherence, calibration — self-reported drift is a capped ≤30% blend), so it is *not yet* discriminative of absolute drift magnitude: a worsening drift vector will not, on its own, move the action during warmup. After baselining, the per-agent behavioral assessment is combined into the action and can escalate it. A pause is enforced — the runtime boundary marks the agent `paused` and blocks further writes until recovery — not merely advisory.
 
 </details>
 
@@ -126,7 +111,7 @@ The baseline takes ~30 check-ins to establish. Until then the policy action fall
 
 ## Integrate in two calls
 
-For AI clients, the stable contract is: start a session, pass the returned `client_session_id` into each check-in, obey the returned action, and treat the four-score state as optional context for finer control.
+The stable contract: start a session, pass the returned `client_session_id` into each check-in, obey the returned action, and treat the four-score state as optional context for finer control.
 
 ```python
 # 1. Start a governance session for this process.
@@ -150,9 +135,9 @@ if action in ("pause", "reject"):
     agent.require_human_review(result.get("next_action", "Governance requested review"))
 ```
 
-The agent reads the action and acts — that's the whole loop. Self-reported `confidence` is strongest when paired with verifiable evidence, so include tool results or call `record_result(...)` when your client has evidence such as test status, exit codes, or deployment checks. UNITARES is not an output validator or sandbox; it is an agent-facing state-estimation layer while external controls remain separate.
+The agent reads the action and acts — that's the whole loop. Self-reported `confidence` is strongest when paired with verifiable evidence, so include tool results or call `record_result(...)` when your client has test status, exit codes, or deployment checks.
 
-The same primary tool surface also gives agents a few optional moves:
+The same primary tool surface gives agents a few optional moves:
 
 | Need | Tool |
 |---|---|
@@ -182,15 +167,34 @@ elif eisv.get("E", 1) < 0.2:
 
 </details>
 
-For long-running or scheduled agents, the [SDK](agents/sdk/README.md) handles connection, identity, check-ins, and heartbeats. Any MCP client that accepts Streamable HTTP can connect to `/mcp/`; REST is available for non-MCP clients, Discord/dispatch bridges, local-model hosts, and adapters. ([Getting started](docs/guides/START_HERE.md) · [MCP client config](docs/integration/MCP_CLIENTS.md))
+For long-running or scheduled agents, the [SDK](agents/sdk/README.md) handles connection, identity, check-ins, and heartbeats. Any MCP client that accepts Streamable HTTP can connect to `/mcp/`; REST is available for non-MCP clients, bridges, local-model hosts, and adapters. ([Getting started](docs/guides/START_HERE.md) · [MCP client config](docs/integration/MCP_CLIENTS.md))
 
 ## Verify every claim yourself
 
-**Evaluating with an agent?** On a fresh clone, the [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) grades whether the four-score state telemetry beats deliberately dumb baselines (AUC, Brier) on externally labeled task/result evidence, reporting each slice honestly rather than asserting it. Most projects don't ship the means to disprove them; this one does. ([Reviewer Guide →](docs/REVIEWER_GUIDE.md))
+Most projects ship the pitch. This one ships the harness that grades it — and publishes what the harness returned.
 
-**Auditable, not a black box.** Once a baseline exists, policy actions come from an inspectable behavioral model ([`behavioral_assessment.py`](src/behavioral_assessment.py)); before that, from a mostly server-derived cold-start prior. The information-theoretic formulation in [Paper v6](https://github.com/cirwel/unitares-paper-v6) is the research roadmap, not a claim about the post-warmup decision path ([how the four scores are computed](docs/EISV_COMPUTATION.md)).
+**"Does the telemetry work?" is two questions with two different answers.** Conflating them is how a governance project talks itself into believing its own instruments:
+
+| Axis | The question | Where it stands |
+|---|---|---|
+| **Outcome prediction** | Does prior-state telemetry predict a bad result better than a dumb baseline? | **It does not.** On externally labeled evidence, no EISV/prior-state feature beats a plain previous-outcome baseline. The decision path is moving toward the simpler signal accordingly. |
+| **Self-predictability** | Does an agent's state estimate track *that agent*, label-free? | **Open, and under-powered.** Agents are distinguishable and non-stationary, but a pre-registered test did not clear its own bar against a persistence/AR(1) null. Untested as deployed — not refuted — on roughly four effective agents. |
+
+The binding constraint on the first row is external bad-label supply, not the model: sparse labels are a data-quality limit, not a philosophical failure of proprioception. The second row's test was pre-registered and frozen before its data cutoff, and its kill criterion was honored when it fired.
+
+The ledger of every tested claim — what was measured, what it showed, and the wording this project holds itself to — is in the [agent-state contract](docs/ontology/eisv-proprioception-contract.md). The catalog of evaluations is [`docs/EVALUATION_INDEX.md`](docs/EVALUATION_INDEX.md).
+
+**Run it against a fresh clone.** The [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) grades the four-score telemetry against deliberately dumb baselines on externally labeled task evidence, reporting each slice as it finds it rather than asserting a result. It is wired to be able to disagree with this README.
+
+**Auditable, not a black box.** Once a baseline exists, policy actions come from an inspectable behavioral model ([`behavioral_assessment.py`](src/behavioral_assessment.py)); before that, from a mostly server-derived cold-start prior. The information-theoretic formulation in [Paper v6](https://github.com/cirwel/unitares-paper-v6) is the research roadmap, not a claim about the post-warmup decision path.
 
 Human evaluators start with the [Reviewer Guide](docs/REVIEWER_GUIDE.md).
+
+## Where it's going: accountability without a trusted center
+
+Everything above describes the deployed system: **one governor, one operator**. The identity layer already enforces the posture a multi-party world needs — identity is per-process, credentials structurally refuse cross-principal resume, and declared lineage is recorded as *provisional* rather than trusted on assertion.
+
+The active research direction extends this to genuinely **multi-principal** deployments: mutually-distrusting principals each running their own governor, with cross-principal delegation and shared-infrastructure effects mediated by verifiable attestation between governors rather than authorized by any central party. No multi-host, multi-party deployment exists yet — that is the research, not a shipped claim. A testbed-and-benchmark paper is in preparation.
 
 ---
 
@@ -219,7 +223,7 @@ export UNITARES_KNOWLEDGE_BACKEND=age
 python src/mcp_server.py --port 8767
 ```
 
-`requirements-full.txt` is the default (server, tests, handler dev); `requirements-core.txt` is a minimal runtime subset (see the file) for thin stdio/proxy clients. DB bring-up: [db/postgres/README.md](db/postgres/README.md). Run signal-only without the math model: `export UNITARES_DISABLE_ODE=1`. Full port map: [`docs/operations/DEFINITIVE_PORTS.md`](docs/operations/DEFINITIVE_PORTS.md).
+`requirements-full.txt` is the default (server, tests, handler dev); `requirements-core.txt` is a minimal runtime subset for thin stdio/proxy clients. DB bring-up: [db/postgres/README.md](db/postgres/README.md). Run signal-only without the math model: `export UNITARES_DISABLE_ODE=1`. Full port map: [`docs/operations/DEFINITIVE_PORTS.md`](docs/operations/DEFINITIVE_PORTS.md).
 
 </details>
 
@@ -230,6 +234,8 @@ python src/mcp_server.py --port 8767
 | [Getting Started](docs/guides/START_HERE.md) | Setup, workflows, tool modes |
 | [How the four scores are computed](docs/EISV_COMPUTATION.md) | Deployed formulas vs. target semantics |
 | [Reviewer Guide](docs/REVIEWER_GUIDE.md) | Cold-evaluator path + falsifiability harness |
+| [Agent-state contract](docs/ontology/eisv-proprioception-contract.md) | Tested-claim ledger, validation rule, preferred wording |
+| [Evaluation index](docs/EVALUATION_INDEX.md) | Catalog of evaluations and what each one covers |
 | [Scope & threat model](docs/SCOPE_AND_THREAT_MODEL.md) | Who it's for, why agents can't game it, what's unproven |
 | [Architecture](docs/UNIFIED_ARCHITECTURE.md) | Pipeline, policy actions, recovery, storage |
 | [Glossary](docs/ontology/glossary.md) | Terms keyed by the question they answer — published at [cirwel.github.io/unitares](https://cirwel.github.io/unitares/) |
@@ -242,7 +248,7 @@ python src/mcp_server.py --port 8767
 
 ## The CIRWEL stack
 
-UNITARES is the governance runtime at the center of a larger body of work. The full index — papers, systems, datasets, and decks — lives at **[cirwel.github.io](https://cirwel.github.io)**.
+UNITARES is the governance runtime at the center of a larger body of work. Full index — papers, systems, datasets, decks — at **[cirwel.github.io](https://cirwel.github.io)**.
 
 | | What it is |
 |---|---|
@@ -251,7 +257,7 @@ UNITARES is the governance runtime at the center of a larger body of work. The f
 | [**anima-mcp**](https://github.com/cirwel/anima-mcp) | Physical longitudinal testbed — the same four-score state model mapped from Raspberry Pi sensor/system telemetry; the source cited in the papers |
 | [**fermata**](https://github.com/cirwel/fermata) | Governed-effect runtime seed — agents *propose* effects; only governed effects *commit* |
 | [**unitares-discord-bridge**](https://github.com/cirwel/unitares-discord-bridge) | Governance events, dispatch/presence, and system health as a live Discord surface |
-| [**BEAM coordination kernel**](docs/ontology/beam-coordination-kernel.md) | In-tree Elixir/OTP coordination work for live surface leases, handoffs, dispatch, and supervision beside the Python governance server |
+| [**BEAM coordination kernel**](docs/ontology/beam-coordination-kernel.md) | In-tree Elixir/OTP coordination for live surface leases, handoffs, dispatch, and supervision beside the Python governance server |
 | [**eisv-lumen**](https://github.com/cirwel/eisv-lumen) | Governance benchmark dataset — [32,181 labeled EISV trajectories](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories) (20,655 real) |
 | [**unitares-paper-v6**](https://github.com/cirwel/unitares-paper-v6) | Companion paper — *Information-Theoretic Governance of Heterogeneous Agent Fleets* (Wang, 2026); concept DOI [10.5281/zenodo.19647159](https://doi.org/10.5281/zenodo.19647159) |
 
