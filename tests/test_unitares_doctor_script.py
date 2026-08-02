@@ -934,3 +934,72 @@ def test_liveness_gap_checks_are_registered_as_operator(doctor):
     for name in ("resident_checkin_stale", "immortal_lease"):
         assert name in checks
         assert checks[name].mode == "operator"
+
+
+# --- producer_never_reported -----------------------------------------------
+# Companion to finding_producer_live: that one is self-relative and so detects
+# DIED; a producer with zero rows has no cadence and is absent from its result
+# set entirely. This one catches NEVER-BORN.
+
+def _write_producer(tmp_path, rel: str, body: str):
+    p = tmp_path / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(body)
+    return p
+
+
+def test_declared_producers_are_read_from_source(doctor, tmp_path):
+    _write_producer(tmp_path, "scripts/ops/a.py", 'FINDING_KIND = "alpha_finding"\n')
+    _write_producer(tmp_path, "agents/b/agent.py", 'post(event_type="beta_finding")\n')
+    assert doctor.declared_finding_producers(tmp_path) == {"alpha_finding", "beta_finding"}
+
+
+def test_declared_producers_ignore_test_fixtures(doctor, tmp_path):
+    """Fixtures name event types they never post; counting them would mint
+    permanent false positives that train the operator to ignore this check."""
+    _write_producer(tmp_path, "agents/b/agent.py", 'post(event_type="real_finding")\n')
+    _write_producer(tmp_path, "agents/b/tests/test_x.py", 'post(event_type="fake_finding")\n')
+    _write_producer(tmp_path, "scripts/ops/test_y.py", 'FINDING_KIND = "alsofake_finding"\n')
+    assert doctor.declared_finding_producers(tmp_path) == {"real_finding"}
+
+
+def test_producer_never_reported_warns_on_the_drift_doctor_case(
+        doctor, monkeypatch, tmp_path):
+    """The 2026-08-01 case: declared, scheduled hourly, never posted once.
+
+    deploy_drift_doctor's interpreter could not import the escalation module;
+    the failure was swallowed and it had no cadence for finding_producer_live
+    to judge it against. A human found it by asking whether it had ever fired.
+    """
+    _write_producer(tmp_path, "scripts/ops/deploy_drift_doctor.py",
+                    'FINDING_KIND = "deploy_drift_finding"\n')
+    _write_producer(tmp_path, "agents/sentinel/agent.py",
+                    'post(event_type="sentinel_finding")\n')
+    _mock_psql(doctor, monkeypatch, "sentinel_finding\n")
+    result = doctor.check_producer_never_reported("postgresql://x/y", tmp_path)
+    assert result.status == doctor.Status.WARN
+    assert "deploy_drift_finding" in result.message
+    assert "sentinel_finding" not in result.message
+
+
+def test_producer_never_reported_passes_when_all_have_fired(
+        doctor, monkeypatch, tmp_path):
+    _write_producer(tmp_path, "agents/sentinel/agent.py",
+                    'post(event_type="sentinel_finding")\n')
+    _mock_psql(doctor, monkeypatch, "sentinel_finding\nvigil_finding\n")
+    result = doctor.check_producer_never_reported("postgresql://x/y", tmp_path)
+    assert result.status == doctor.Status.PASS
+
+
+def test_producer_never_reported_skips_without_db(doctor, monkeypatch, tmp_path):
+    _write_producer(tmp_path, "agents/sentinel/agent.py",
+                    'post(event_type="sentinel_finding")\n')
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: None)
+    result = doctor.check_producer_never_reported("postgresql://x/y", tmp_path)
+    assert result.status == doctor.Status.SKIP
+
+
+def test_producer_never_reported_skips_with_no_declarations(
+        doctor, monkeypatch, tmp_path):
+    result = doctor.check_producer_never_reported("postgresql://x/y", tmp_path)
+    assert result.status == doctor.Status.SKIP

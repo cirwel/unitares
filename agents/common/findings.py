@@ -99,7 +99,21 @@ def _retry_after_from_503(resp: Any) -> float:
         return MAX_503_RETRY_SLEEP_SECONDS
 
 
-def post_finding(
+#: Outcomes of an escalation attempt. ``post_finding`` collapses the first two
+#: into True and the rest into False, which is fine for callers that only want
+#: to know "did I add something new" — but NOT for a caller deciding whether it
+#: has escalated at all. DEDUPED means governance already holds this finding;
+#: FAILED means nobody was told. Conflating them is how a detector convinces
+#: itself it reported. See ``post_finding_result``.
+DELIVERED = "delivered"
+DEDUPED = "deduped"
+FAILED = "failed"
+
+#: Outcomes where governance demonstrably holds the finding.
+REACHED_GOVERNANCE = frozenset({DELIVERED, DEDUPED})
+
+
+def post_finding_result(
     *,
     event_type: str,
     severity: str,
@@ -111,13 +125,23 @@ def post_finding(
     extra: Optional[dict] = None,
     url: str = DEFAULT_URL,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
-) -> bool:
-    """POST a finding to the governance event stream.
+) -> str:
+    """POST a finding and report which of DELIVERED / DEDUPED / FAILED happened.
 
-    Returns True on HTTP 200 with a new (non-deduped) event accepted.
-    Returns False on: dedup, network error, non-200 status, or malformed response.
+    ``post_finding`` returns a bool that maps dedup and hard failure onto the
+    same False, so a caller cannot tell "governance already knows" from "nobody
+    was told." That distinction is load-bearing for any caller that records
+    having alerted: on DEDUPED the finding is held and recording is correct, on
+    FAILED recording it manufactures a delivery that never happened and the
+    cooldown then suppresses the retry that would have fixed it.
 
-    This function MUST NOT raise. It's called from hot paths in agent cycles.
+    This is not hypothetical. ``deploy_drift_doctor`` ran hourly for its entire
+    life posting zero findings — its interpreter could not import this module —
+    while recording ``last_alert`` on every cycle and logging success-shaped
+    lines to a file nobody reads (verified 2026-08-01: no deploy_drift row in
+    audit.events, ever).
+
+    MUST NOT raise. Called from hot paths in agent cycles.
     """
     explicit_extra_change_token = None
     if extra and extra.get("change_token") is not None:
@@ -168,15 +192,32 @@ def post_finding(
             time.sleep(_retry_after_from_503(resp))
             resp = _httpx_post(url, json=body, headers=headers, timeout=timeout)
     except Exception as exc:
-        log.debug("post_finding failed: %s", exc)
-        return False
+        log.warning("post_finding failed (%s): %s — finding NOT escalated",
+                    type(exc).__name__, exc)
+        return FAILED
 
     if getattr(resp, "status_code", 0) != 200:
-        log.debug("post_finding non-200: %s", getattr(resp, "status_code", "?"))
-        return False
+        log.warning("post_finding non-200: %s — finding NOT escalated",
+                    getattr(resp, "status_code", "?"))
+        return FAILED
 
     try:
         data = resp.json()
     except Exception:
-        return False
-    return bool(data.get("success")) and not data.get("deduped", False)
+        log.warning("post_finding: malformed response — finding NOT escalated")
+        return FAILED
+    if not data.get("success"):
+        log.warning("post_finding: server rejected — finding NOT escalated")
+        return FAILED
+    return DEDUPED if data.get("deduped", False) else DELIVERED
+
+
+def post_finding(**kwargs) -> bool:
+    """Back-compatible wrapper: True only for a newly accepted finding.
+
+    Kept byte-for-byte in behaviour for the agent-cycle callers (sentinel,
+    vigil, watcher, dogfood) that only care whether they added something new.
+    Callers deciding whether they have escalated at all want
+    ``post_finding_result`` instead — see its docstring for why.
+    """
+    return post_finding_result(**kwargs) == DELIVERED
