@@ -25,6 +25,9 @@ Requires live Postgres + embeddings backend. Not part of the default `pytest` ru
 - **nDCG@10** — primary. Captures both "is the right thing retrieved" and "is it ranked high." Ideal-DCG uses binary relevance from the labels.
 - **Recall@20** — secondary. "When a relevant doc exists, does the top-20 at least contain it?" Useful ceiling for what a reranker can work with.
 - **MRR** — reciprocal rank of the first hit. Cheap to compute, complements nDCG.
+- **Flat-miss rate** — fraction of queries with no labeled hit anywhere in the
+  fetched result set. This makes complete retrieval failures visible instead of
+  hiding them inside a mean score.
 - **Latency p50/p95** — per-query wallclock of the retrieval call only (not embedding the query or handler overhead).
 
 ## Label format
