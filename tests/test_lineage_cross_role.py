@@ -503,7 +503,11 @@ async def test_clear_lineage_declaration_clears_both_parent_and_spawn_reason(
     live_postgres_backend,
 ):
     """Cross-role rejection helper clears `parent_agent_id` AND
-    `spawn_reason` symmetrically (per S8c convention)."""
+    `spawn_reason` symmetrically (per S8c convention) — from BOTH
+    `core.identities` and `core.agents`. The edge is written to both
+    base tables at onboard, and `update_agent_fields` COALESCEs (NULL
+    can't clear through it), so a clear that touches identities only
+    leaves the rejected edge visible to every core.agents reader."""
     from tests.db.conftest import _cleanup, _uuid_suffix
 
     suffix = _uuid_suffix()
@@ -512,9 +516,15 @@ async def test_clear_lineage_declaration_clears_both_parent_and_spawn_reason(
     try:
         async with live_postgres_backend.acquire() as conn:
             await conn.execute(
-                "INSERT INTO core.agents (id, api_key) VALUES ($1, 'test-key'), "
-                "($2, 'test-key') ON CONFLICT (id) DO NOTHING",
-                pid, sid,
+                "INSERT INTO core.agents (id, api_key) VALUES ($1, 'test-key') "
+                "ON CONFLICT (id) DO NOTHING",
+                pid,
+            )
+            await conn.execute(
+                "INSERT INTO core.agents (id, api_key, parent_agent_id, "
+                "spawn_reason) VALUES ($1, 'test-key', $2, 'subagent') "
+                "ON CONFLICT (id) DO NOTHING",
+                sid, pid,
             )
             await conn.execute(
                 "INSERT INTO core.identities (agent_id, api_key_hash, status) "
@@ -535,8 +545,15 @@ async def test_clear_lineage_declaration_clears_both_parent_and_spawn_reason(
                 "WHERE agent_id = $1",
                 sid,
             )
+            agents_row = await conn.fetchrow(
+                "SELECT parent_agent_id, spawn_reason FROM core.agents "
+                "WHERE id = $1",
+                sid,
+            )
         assert row["parent_agent_id"] is None
         assert row["spawn_reason"] is None
+        assert agents_row["parent_agent_id"] is None
+        assert agents_row["spawn_reason"] is None
     finally:
         await _cleanup(live_postgres_backend, [pid, sid])
 
