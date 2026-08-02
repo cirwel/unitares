@@ -44,6 +44,11 @@
   .adj-head .type { color: var(--muted); }
   .adj-head .when { color: var(--faint); margin-left: auto; }
   .adj-msg { font-size: var(--text-sm); margin-bottom: var(--space-3); word-break: break-word; }
+  .adj-evidence { font-family: var(--font-mono); font-size: var(--text-xs);
+    border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3);
+    margin-bottom: var(--space-3); line-height: 1.5; }
+  .adj-evidence.ev-bad { color: var(--bad, #d33); background: color-mix(in srgb, var(--bad, #d33) 10%, transparent); }
+  .adj-evidence.ev-none { color: var(--muted); background: color-mix(in srgb, var(--muted) 8%, transparent); }
   .adj-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
   .adj-actions .btn { font: inherit; font-size: var(--text-xs); padding: 4px 10px;
     border: 1px solid var(--line-2); border-radius: var(--radius-sm); background: var(--surface);
