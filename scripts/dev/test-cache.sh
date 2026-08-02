@@ -20,7 +20,8 @@ _cache_mtime() {
 }
 
 CACHE_DIR=".test-cache"
-CACHE_VERSION="v3"
+CACHE_VERSION="v4"
+CACHE_FORMAT="test-cache-result-v1"
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
@@ -243,12 +244,23 @@ if [[ ${#PYTEST_EXTRA[@]} -gt 0 ]]; then
     CACHE_LABEL="$CACHE_LABEL args $PYTEST_ARGS_HASH"
 fi
 
+_valid_cache_file() {
+    [[ -f "$1" ]] || return 1
+    local first_line=""
+    IFS= read -r first_line < "$1" || true
+    [[ "$first_line" == "$CACHE_FORMAT" ]]
+}
+
+_print_cache_file() {
+    { IFS= read -r _format_line || true; cat; } < "$1"
+}
+
 # --- cache hit (fast path, no lock) ---
-if [[ "$FRESH" == false && -f "$CACHE_FILE" ]]; then
+if [[ "$FRESH" == false ]] && _valid_cache_file "$CACHE_FILE"; then
     AGE_SECS=$(( $(date +%s) - $(_cache_mtime "$CACHE_FILE") ))
     AGE_MIN=$(( AGE_SECS / 60 ))
     echo "[test-cache] HIT — $CACHE_LABEL (cached ${AGE_MIN}m ago)"
-    cat "$CACHE_FILE"
+    _print_cache_file "$CACHE_FILE"
     exit 0
 fi
 
@@ -283,16 +295,44 @@ while ! mkdir "$LOCK_DIR" 2>/dev/null; do
     fi
 done
 echo "$$" > "$LOCK_HOLDER"
-trap 'rm -rf "$LOCK_DIR"' EXIT INT TERM
+TMPOUT=""
+PYTEST_PID=""
+CACHE_TMP=""
+
+_cleanup_test_cache() {
+    if [[ -n "${TMPOUT:-}" ]]; then
+        rm -f "$TMPOUT"
+    fi
+    if [[ -n "${CACHE_TMP:-}" ]]; then
+        rm -f "$CACHE_TMP"
+    fi
+    rm -rf "$LOCK_DIR"
+}
+
+_interrupt_test_cache() {
+    local signal_name="$1"
+    local exit_code="$2"
+    trap - INT TERM
+    if [[ -n "${PYTEST_PID:-}" ]] && kill -0 "$PYTEST_PID" 2>/dev/null; then
+        kill -s "$signal_name" "$PYTEST_PID" 2>/dev/null || true
+        wait "$PYTEST_PID" 2>/dev/null || true
+    fi
+    echo "[test-cache] INTERRUPTED ($signal_name) — not cached" >&2
+    exit "$exit_code"
+}
+
+trap '_cleanup_test_cache' EXIT
+trap '_interrupt_test_cache INT 130' INT
+trap '_interrupt_test_cache TERM 143' TERM
 
 # --- double-check cache now that we hold the lock ---
 # The holder ahead of us may have just populated the cache for this
 # tree hash; skip pytest if so.
-if [[ "$FRESH" == false && -f "$CACHE_FILE" ]]; then
+if [[ "$FRESH" == false ]] && _valid_cache_file "$CACHE_FILE"; then
     AGE_SECS=$(( $(date +%s) - $(_cache_mtime "$CACHE_FILE") ))
     AGE_MIN=$(( AGE_SECS / 60 ))
     echo "[test-cache] HIT (post-lock) — $CACHE_LABEL (cached ${AGE_MIN}m ago)"
-    cat "$CACHE_FILE"
+    _print_cache_file "$CACHE_FILE"
     exit 0
 fi
 
@@ -311,19 +351,159 @@ else
 fi
 TMPOUT=$(mktemp)
 set +e
-"${PYTEST_CMD[@]}" 2>&1 | tee "$TMPOUT"
-EXIT_CODE=${PIPESTATUS[0]}
+python3 - "$TMPOUT" "${PYTEST_CMD[@]}" <<'PY' &
+import os
+import signal
+import subprocess
+import sys
+import time
+
+output_path, *command = sys.argv[1:]
+pytest_process = None
+pending_signal = None
+
+
+def descendant_pids(root_pid: int) -> set[int]:
+    """Snapshot recursive descendants, including new-session children."""
+    result = subprocess.run(
+        ["ps", "-axo", "pid=,ppid="],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    children: dict[int, set[int]] = {}
+    for line in result.stdout.splitlines():
+        try:
+            pid_text, parent_text = line.split()
+            pid, parent = int(pid_text), int(parent_text)
+        except (ValueError, TypeError):
+            continue
+        children.setdefault(parent, set()).add(pid)
+
+    found: set[int] = set()
+    pending = [root_pid]
+    while pending:
+        parent = pending.pop()
+        for child in children.get(parent, ()):
+            if child not in found:
+                found.add(child)
+                pending.append(child)
+    return found
+
+
+def safe_descendant_pids(root_pid: int) -> set[int]:
+    """Return an empty snapshot when platform process inspection fails."""
+    try:
+        return descendant_pids(root_pid)
+    except (OSError, subprocess.SubprocessError):
+        return set()
+
+
+def process_exists(pid: int) -> bool:
+    """Return whether a captured process still exists or is inaccessible."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def signal_processes(signum: int, pids: set[int]) -> None:
+    """Signal the pytest process group plus detached descendants."""
+    assert pytest_process is not None
+    try:
+        os.killpg(pytest_process.pid, signum)
+    except (PermissionError, ProcessLookupError):
+        pass
+    for pid in pids:
+        try:
+            os.kill(pid, signum)
+        except (PermissionError, ProcessLookupError):
+            pass
+
+
+def interrupt(signum: int, _frame: object) -> None:
+    """Bound teardown before reporting the signal exit to the shell wrapper."""
+    global pending_signal
+    if pytest_process is None:
+        pending_signal = signum
+        return
+
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    descendants = safe_descendant_pids(pytest_process.pid)
+    signal_processes(signum, descendants)
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        if pytest_process.poll() is None:
+            current_descendants = safe_descendant_pids(pytest_process.pid)
+            new_descendants = current_descendants - descendants
+            if new_descendants:
+                descendants.update(new_descendants)
+                signal_processes(signum, new_descendants)
+        survivors = {pid for pid in descendants if process_exists(pid)}
+        if pytest_process.poll() is not None and not survivors:
+            break
+        time.sleep(0.05)
+
+    survivors = {pid for pid in descendants if process_exists(pid)}
+    if pytest_process.poll() is None or survivors:
+        signal_processes(signal.SIGKILL, survivors)
+    try:
+        pytest_process.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        late_descendants = safe_descendant_pids(pytest_process.pid)
+        signal_processes(signal.SIGKILL, descendants | late_descendants)
+        pytest_process.wait()
+    raise SystemExit(128 + signum)
+
+
+# Install handlers before spawning pytest. A signal delivered during Popen is
+# recorded and handled as soon as the child PID is available.
+signal.signal(signal.SIGINT, interrupt)
+signal.signal(signal.SIGTERM, interrupt)
+pytest_process = subprocess.Popen(
+    command,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    start_new_session=True,
+)
+if pending_signal is not None:
+    interrupt(pending_signal, None)
+
+assert pytest_process.stdout is not None
+read_chunk = getattr(pytest_process.stdout, "read1", pytest_process.stdout.read)
+with open(output_path, "wb") as output:
+    while chunk := read_chunk(65536):
+        sys.stdout.buffer.write(chunk)
+        sys.stdout.buffer.flush()
+        output.write(chunk)
+        output.flush()
+
+raise SystemExit(pytest_process.wait())
+PY
+PYTEST_PID=$!
+wait "$PYTEST_PID"
+EXIT_CODE=$?
+PYTEST_PID=""
 set -e
 
 if [[ $EXIT_CODE -eq 0 ]]; then
-    # cache only passing results — tail gives the summary line
-    tail -5 "$TMPOUT" > "$CACHE_FILE"
+    # Publish only a complete, versioned passing result. A signal during `tail`
+    # removes CACHE_TMP in the EXIT trap; readers never see a partial entry.
+    CACHE_TMP=$(mktemp "$CACHE_DIR/.${CACHE_KEY}.tmp.XXXXXX")
+    {
+        printf '%s\n' "$CACHE_FORMAT"
+        tail -5 "$TMPOUT"
+    } > "$CACHE_TMP"
+    mv -f "$CACHE_TMP" "$CACHE_FILE"
+    CACHE_TMP=""
     echo "[test-cache] CACHED — $CACHE_LABEL"
 else
     echo "[test-cache] FAILED (exit $EXIT_CODE) — not cached"
 fi
-
-rm -f "$TMPOUT"
 
 # prune old entries (keep last 20)
 ENTRIES=$(ls -t "$CACHE_DIR"/ 2>/dev/null | tail -n +21)
