@@ -6,6 +6,7 @@ Extracted from handlers.py for maintainability.
 
 import hashlib
 import uuid
+from dataclasses import dataclass
 from typing import Any, Optional, Sequence
 from mcp.types import TextContent
 from datetime import datetime, timedelta, timezone
@@ -361,568 +362,553 @@ def _principal_rollup(agents_list: Sequence[dict], meta_lookup=None) -> dict:
     }
 
 
-@mcp_tool("list_agents", timeout=15.0, register=False)
-async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextContent]:
-    """List all agents currently being monitored with lifecycle metadata and health status
+_KNOWN_LIFECYCLE_STATUSES = {
+    "active", "waiting_input", "paused", "archived", "deleted",
+}
 
-    LITE MODE: Use lite=true for minimal response (~1KB vs ~15KB)
-    """
+
+@dataclass(frozen=True)
+class AgentListFilters:
+    status: str = "active"
+    include_test_agents: bool = False
+    min_updates: int = 0
+    recent_days: Optional[int] = None
+    loaded_only: bool = False
+    named_only: Optional[bool] = False
+
+    @property
+    def cutoff(self) -> Optional[datetime]:
+        if not self.recent_days or self.recent_days <= 0:
+            return None
+        return datetime.now(timezone.utc) - timedelta(days=self.recent_days)
+
+    def matches(self, agent_id: str, meta: Any, *, server: Any, auto_hide_ghosts: bool) -> bool:
+        if self.status != "all" and meta.status != self.status:
+            return False
+        if self.min_updates and meta.total_updates < self.min_updates:
+            return False
+        if not self.include_test_agents and _is_test_agent(agent_id, getattr(meta, "label", None)):
+            return False
+        if self.named_only is True and not getattr(meta, "label", None):
+            return False
+        if auto_hide_ghosts and self.named_only is None and _is_ghost_agent(meta):
+            return False
+        if self.loaded_only and agent_id not in server.monitors:
+            return False
+        return _is_recent_enough(meta.last_update, self.cutoff)
+
+
+def _is_ghost_agent(meta: Any) -> bool:
+    return (
+        meta.total_updates < 1
+        and not getattr(meta, "label", None)
+        and not getattr(meta, "purpose", None)
+    )
+
+
+def _parse_last_update(last_update: Optional[str]) -> Optional[datetime]:
+    if not last_update:
+        return None
     try:
-        # In-memory metadata is kept current by process_agent_update/onboard.
-        # A forced full DB reload here caused 14s+ timeouts and ClosedResourceError crashes.
-        # Use what's in memory — it's already fresh enough for listing.
+        parsed = datetime.fromisoformat(last_update.replace("Z", "+00:00"))
+        return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+    except (TypeError, ValueError):
+        return None
 
-        # LITE MODE: Minimal response for local/smaller models (DEFAULT)
-        lite_explicit = "lite" in arguments
-        lite_mode = arguments.get("lite", True)
-        # If caller is asking for non-lite behavior (metrics/pagination/filters), honor it
-        # even if they didn't explicitly set lite=false.
-        if not lite_explicit:
-            if arguments.get("include_metrics") is True:
-                lite_mode = False
-            elif arguments.get("limit") is not None or arguments.get("offset") is not None:
-                lite_mode = False
-            elif arguments.get("status_filter") not in (None, "active"):
-                lite_mode = False
-            elif arguments.get("include_test_agents") is True:
-                lite_mode = False
-            elif arguments.get("summary_only") is True or arguments.get("grouped") is False:
-                lite_mode = False
-        caller_uuid = _context_agent_id()
-        operator_caller = _is_operator_request()
-        if lite_mode:
-            # Ultra-compact response - only real agents
-            limit = arguments.get("limit", 20)
-            status_filter = arguments.get("status_filter", "active")
-            include_test_agents = arguments.get("include_test_agents", False)
-            # Default: include zero-update agents so newly created agents are discoverable.
-            # Callers can still pass min_updates=1 to hide ghost agents.
-            min_updates = arguments.get("min_updates", 0)
-            # Smart default: show labeled agents first; if none, show active unlabeled ones
-            named_only = arguments.get("named_only")  # None = auto, True/False = explicit
-            # NEW: Filter by recency - default 7 days to reduce noise from stale agents
-            recent_days = arguments.get("recent_days", 7)
 
-            # Calculate cutoff time for recency filter
-            cutoff_time = None
-            if recent_days and recent_days > 0:
-                cutoff_time = datetime.now(timezone.utc) - timedelta(days=recent_days)
+def _is_recent_enough(last_update: Optional[str], cutoff: Optional[datetime]) -> bool:
+    if cutoff is None or not last_update:
+        return True
+    parsed = _parse_last_update(last_update)
+    return parsed is None or parsed >= cutoff
 
-            agents = []
-            total_all = 0  # Count all agents before filtering
-            ghost_count = 0
-            ephemeral_count = 0
-            test_count = 0
-            for agent_id, meta in list(mcp_server.agent_metadata.items()):
-                total_all += 1
-                # Ghost: no label, no purpose, zero check-ins — session-binding artifact
-                has_label = bool(getattr(meta, 'label', None))
-                has_purpose = bool(getattr(meta, 'purpose', None))
-                is_ghost = (
-                    meta.total_updates < 1
-                    and not has_label
-                    and not has_purpose
-                )
-                if is_ghost:
-                    ghost_count += 1
-                elif _is_test_agent(agent_id, getattr(meta, 'label', None)):
-                    # Test agents (pytest/itest suites) get their own health
-                    # bucket — they carry labels, so without this they'd
-                    # inflate "real". Buckets are mutually exclusive; ghost
-                    # classification wins for unlabeled test-pattern ids.
-                    test_count += 1
-                elif meta.total_updates <= 2 and not has_label:
-                    # Short-lived but did some work — legitimate ephemeral
-                    ephemeral_count += 1
 
-                if status_filter != "all" and meta.status != status_filter:
-                    continue
-                if min_updates and meta.total_updates < min_updates:
-                    continue
-                if not include_test_agents and _is_test_agent(agent_id, getattr(meta, 'label', None)):
-                    continue
-                if named_only is True and not getattr(meta, 'label', None):
-                    continue
-                if named_only is None:
-                    # Auto mode: skip ghost agents (lazy_creation + no updates + no label)
-                    if is_ghost:
-                        continue
+def _infer_lifecycle_status(meta: Any) -> str:
+    if meta.status in _KNOWN_LIFECYCLE_STATUSES:
+        return meta.status
+    last_update = _parse_last_update(meta.last_update)
+    if meta.total_updates <= 0 or last_update is None:
+        return "archived"
+    return "active" if datetime.now(timezone.utc) - last_update < timedelta(days=7) else "archived"
 
-                # Apply recency filter
-                if cutoff_time and meta.last_update:
-                    try:
-                        last_dt = datetime.fromisoformat(meta.last_update.replace('Z', '+00:00'))
-                        if last_dt.tzinfo is None:
-                            last_dt = last_dt.replace(tzinfo=timezone.utc)
-                        if last_dt < cutoff_time:
-                            continue  # Skip stale agents
-                    except Exception:
-                        pass  # Keep agents with unparseable dates
 
-                label = getattr(meta, 'label', None)
-                public_id = disambiguate_public_handle(
-                    getattr(meta, 'public_agent_id', None),
-                    getattr(meta, 'structured_id', None),
-                    getattr(meta, 'agent_uuid', None) or agent_id,
-                )
-                from src.resident_progress.registry import is_event_driven_label
-                visible_id, uuid_redacted = _visible_agent_identifier(
-                    agent_id,
-                    meta,
-                    caller_uuid=caller_uuid,
-                    operator_caller=operator_caller,
-                )
-                parent_id, parent_redacted = _visible_related_agent_identifier(
-                    getattr(meta, 'parent_agent_id', None),
-                    caller_uuid=caller_uuid,
-                    operator_caller=operator_caller,
-                )
-                agent_entry = {
-                    "id": visible_id,
-                    # display_name (user-chosen) takes precedence; agent_id is fallback
-                    "label": label or public_id,
-                    "status": meta.status,
-                    "purpose": getattr(meta, 'purpose', None),
-                    "updates": meta.total_updates,
-                    "last": meta.last_update[:10] if meta.last_update else None,
-                    "last_update": meta.last_update,
-                    "trust_tier": getattr(meta, 'trust_tier', None),
-                    "parent_agent_id": parent_id,
-                    "spawn_reason": getattr(meta, 'spawn_reason', None),
-                    "event_driven": is_event_driven_label(label),
-                }
-                agent_entry.update(_compact_lifecycle_fields(meta))
-                if uuid_redacted:
-                    agent_entry["uuid_redacted"] = True
-                if parent_redacted:
-                    agent_entry["parent_agent_id_redacted"] = True
-                agents.append(agent_entry)
-            # Sort: labeled first, then by most recent activity
-            agents.sort(key=lambda x: (0 if x.get("label") else 1, -(x.get("updates") or 0), x.get("last_update", "") or ""), reverse=False)
+def _should_use_lite_mode(arguments: ToolArgumentsDict) -> bool:
+    if "lite" in arguments:
+        return arguments.get("lite", True)
+    return not (
+        arguments.get("include_metrics") is True
+        or arguments.get("limit") is not None
+        or arguments.get("offset") is not None
+        or arguments.get("status_filter") not in (None, "active")
+        or arguments.get("include_test_agents") is True
+        or arguments.get("summary_only") is True
+        or arguments.get("grouped") is False
+    )
 
-            # Always include the requesting agent even if filtered out
-            caller_in_list = caller_uuid and any(a["id"] == caller_uuid for a in agents)
-            if caller_uuid and not caller_in_list:
-                caller_meta = mcp_server.agent_metadata.get(caller_uuid)
-                if caller_meta:
-                    caller_label = getattr(caller_meta, 'label', None)
-                    caller_public = disambiguate_public_handle(
-                        getattr(caller_meta, 'public_agent_id', None),
-                        getattr(caller_meta, 'structured_id', None),
-                        getattr(caller_meta, 'agent_uuid', None) or caller_uuid,
-                    )
-                    parent_id, parent_redacted = _visible_related_agent_identifier(
-                        getattr(caller_meta, 'parent_agent_id', None),
-                        caller_uuid=caller_uuid,
-                        operator_caller=operator_caller,
-                    )
-                    caller_entry = {
-                        "id": caller_uuid,
-                        "label": caller_label or caller_public,
-                        "status": caller_meta.status,
-                        "purpose": getattr(caller_meta, 'purpose', None),
-                        "updates": caller_meta.total_updates,
-                        "last": caller_meta.last_update[:10] if caller_meta.last_update else None,
-                        "last_update": caller_meta.last_update,
-                        "trust_tier": getattr(caller_meta, 'trust_tier', None),
-                        "parent_agent_id": parent_id,
-                        "spawn_reason": getattr(caller_meta, 'spawn_reason', None),
-                        "you": True,
-                    }
-                    caller_entry.update(_compact_lifecycle_fields(caller_meta))
-                    agents.append(caller_entry)
-                    if parent_redacted:
-                        agents[-1]["parent_agent_id_redacted"] = True
 
-            for a in agents:
-                # Mark the requesting agent
-                if caller_uuid and a["id"] == caller_uuid and "you" not in a:
-                    a["you"] = True
-                a.pop("last_update", None)
+def _monitor_metrics(agent_id: str, meta: Any) -> tuple[str, Optional[dict]]:
+    if agent_id not in mcp_server.monitors:
+        return getattr(meta, "health_status", None) or "unknown", None
+    try:
+        monitor = mcp_server.monitors[agent_id]
+        metrics = monitor.get_metrics()
+        risk_score = metrics.get("risk_score") or metrics.get("current_risk")
+        coherence = float(monitor.state.coherence) if monitor.state else None
+        void_active = bool(monitor.state.void_active) if monitor.state else False
+        health_status, _ = mcp_server.health_checker.get_health_status(
+            risk_score=risk_score, coherence=coherence, void_active=void_active
+        )
+        state = monitor.state
+        E, I, S, V = map(safe_float, (state.E, state.I, state.S, state.V))
+        coherence_value = safe_float(state.coherence)
+        risk = safe_float(metrics.get("risk_score") or metrics.get("current_risk") or metrics.get("mean_risk", 0.5))
+        try:
+            from config.governance_config import classify_basin
+            basin = classify_basin(E=E, I=I, S=S, V=V, coherence=coherence_value, risk_score=risk)
+        except Exception:
+            basin = None
+        return health_status.value, {
+            "E": E, "I": I, "S": S, "V": V,
+            "coherence": coherence_value,
+            "current_risk": metrics.get("current_risk"),
+            "risk_score": risk,
+            "phi": metrics.get("phi"),
+            "verdict": metrics.get("verdict"),
+            "basin": basin,
+            "mean_risk": safe_float(metrics.get("mean_risk", 0.5)),
+            "lambda1": safe_float(state.lambda1),
+            "void_active": bool(state.void_active) if state.void_active is not None else False,
+        }
+    except Exception as exc:
+        logger.warning("Error getting metrics for %s: %s", agent_id, exc)
+        return "error", None
 
-            result = {
-                "agents": agents[: max(0, int(limit))] if limit is not None else agents,
-                "shown": min(len(agents), int(limit)) if limit else len(agents),
-                "matching": len(agents),  # How many matched filters
-                "total_all": total_all,  # Total agents in system
-                "identity_health": {
-                    "ghosts": ghost_count,
-                    "ephemeral": ephemeral_count,
-                    "test": test_count,
-                    "real": total_all - ghost_count - test_count,
-                },
-            }
 
-            # Add helpful hints. `limit` is None when the caller omits it and the
-            # Pydantic layer injects the null default (the lite-path default of 20
-            # only applies when the key is absent, not when it arrives as None), so
-            # guard int(limit) like the slices above (:470/:471) or the whole list
-            # call crashes with int(NoneType) — the dashboard's read sweep hit this.
-            if limit and len(agents) > int(limit):
-                result["more"] = f"Showing {limit} of {len(agents)} recent. Use limit=50 or recent_days=30 to see more."
-            if recent_days:
-                result["filter"] = f"Active in last {recent_days} days. Use recent_days=0 for all."
+async def _list_agents_lite(
+    arguments: ToolArgumentsDict,
+    *,
+    caller_uuid: Optional[str],
+    operator_caller: bool,
+) -> Sequence[TextContent]:
+    # Ultra-compact response - only real agents
+    limit = arguments.get("limit", 20)
+    status_filter = arguments.get("status_filter", "active")
+    include_test_agents = arguments.get("include_test_agents", False)
+    # Default: include zero-update agents so newly created agents are discoverable.
+    # Callers can still pass min_updates=1 to hide ghost agents.
+    min_updates = arguments.get("min_updates", 0)
+    # Smart default: show labeled agents first; if none, show active unlabeled ones
+    named_only = arguments.get("named_only")  # None = auto, True/False = explicit
+    # NEW: Filter by recency - default 7 days to reduce noise from stale agents
+    recent_days = arguments.get("recent_days", 7)
+    filters = AgentListFilters(
+        status=status_filter,
+        include_test_agents=include_test_agents,
+        min_updates=min_updates,
+        recent_days=recent_days,
+        named_only=named_only,
+    )
 
-            return success_response(result)
+    agents = []
+    total_all = 0  # Count all agents before filtering
+    ghost_count = 0
+    ephemeral_count = 0
+    test_count = 0
+    for agent_id, meta in list(mcp_server.agent_metadata.items()):
+        total_all += 1
+        # Ghost: no label, no purpose, zero check-ins — session-binding artifact
+        has_label = bool(getattr(meta, 'label', None))
+        is_ghost = _is_ghost_agent(meta)
+        if is_ghost:
+            ghost_count += 1
+        elif _is_test_agent(agent_id, getattr(meta, 'label', None)):
+            # Test agents (pytest/itest suites) get their own health
+            # bucket — they carry labels, so without this they'd
+            # inflate "real". Buckets are mutually exclusive; ghost
+            # classification wins for unlabeled test-pattern ids.
+            test_count += 1
+        elif meta.total_updates <= 2 and not has_label:
+            # Short-lived but did some work — legitimate ephemeral
+            ephemeral_count += 1
 
-        grouped = arguments.get("grouped", True)
-        include_metrics = arguments.get("include_metrics", True)
-        status_filter = arguments.get("status_filter", "active")  # Changed: default to active only
-        loaded_only = arguments.get("loaded_only", False)
-        summary_only = arguments.get("summary_only", False)
-        standardized = arguments.get("standardized", True)
-        include_test_agents = arguments.get("include_test_agents", False)  # Default: filter out test agents
-        # Default: include zero-update agents so newly created agents are discoverable.
-        # Callers can still pass min_updates=2 to hide one-shot / placeholder agents.
-        min_updates = arguments.get("min_updates", 0)
-        recent_days = arguments.get("recent_days")  # Optional recency filter
+        if not filters.matches(
+            agent_id, meta, server=mcp_server, auto_hide_ghosts=True
+        ):
+            continue
 
-        # Pagination support (optimization)
-        offset = arguments.get("offset", 0)
-        limit = arguments.get("limit")  # None = no limit (backward compatible)
+        label = getattr(meta, 'label', None)
+        public_id = disambiguate_public_handle(
+            getattr(meta, 'public_agent_id', None),
+            getattr(meta, 'structured_id', None),
+            getattr(meta, 'agent_uuid', None) or agent_id,
+        )
+        from src.resident_progress.registry import is_event_driven_label
+        visible_id, uuid_redacted = _visible_agent_identifier(
+            agent_id,
+            meta,
+            caller_uuid=caller_uuid,
+            operator_caller=operator_caller,
+        )
+        parent_id, parent_redacted = _visible_related_agent_identifier(
+            getattr(meta, 'parent_agent_id', None),
+            caller_uuid=caller_uuid,
+            operator_caller=operator_caller,
+        )
+        agent_entry = {
+            "id": visible_id,
+            # display_name (user-chosen) takes precedence; agent_id is fallback
+            "label": label or public_id,
+            "status": meta.status,
+            "purpose": getattr(meta, 'purpose', None),
+            "updates": meta.total_updates,
+            "last": meta.last_update[:10] if meta.last_update else None,
+            "last_update": meta.last_update,
+            "trust_tier": getattr(meta, 'trust_tier', None),
+            "parent_agent_id": parent_id,
+            "spawn_reason": getattr(meta, 'spawn_reason', None),
+            "event_driven": is_event_driven_label(label),
+        }
+        agent_entry.update(_compact_lifecycle_fields(meta))
+        if uuid_redacted:
+            agent_entry["uuid_redacted"] = True
+        if parent_redacted:
+            agent_entry["parent_agent_id_redacted"] = True
+        agents.append(agent_entry)
+    # Sort: labeled first, then by most recent activity
+    agents.sort(key=lambda x: (0 if x.get("label") else 1, -(x.get("updates") or 0), x.get("last_update", "") or ""), reverse=False)
 
-        # Calculate cutoff time for recency filter
-        cutoff_time = None
-        if recent_days and recent_days > 0:
-            cutoff_time = datetime.now(timezone.utc) - timedelta(days=recent_days)
-
-        agents_list = []
-
-        # First pass: collect all matching agents (without loading monitors)
-        for agent_id, meta in list(mcp_server.agent_metadata.items()):
-            # Filter by status if requested
-            if status_filter != "all" and meta.status != status_filter:
-                continue
-
-            # Filter out test agents by default (unless explicitly requested)
-            if not include_test_agents and _is_test_agent(agent_id, getattr(meta, 'label', None)):
-                continue
-
-            # Filter out low-activity agents (one-shot fragmentation cleanup)
-            if min_updates and meta.total_updates < min_updates:
-                continue
-
-            # Apply recency filter
-            if cutoff_time and meta.last_update:
-                try:
-                    last_dt = datetime.fromisoformat(meta.last_update.replace('Z', '+00:00'))
-                    if last_dt.tzinfo is None:
-                        last_dt = last_dt.replace(tzinfo=timezone.utc)
-                    if last_dt < cutoff_time:
-                        continue
-                except Exception:
-                    pass
-
-            # Filter by loaded status if requested
-            if loaded_only:
-                if agent_id not in mcp_server.monitors:
-                    continue
-
-            # Infer status for agents with None/unrecognized status
-            inferred_status = meta.status
-            if inferred_status not in ["active", "waiting_input", "paused", "archived", "deleted"]:
-                # Infer status based on activity patterns
-                now = datetime.now(timezone.utc)
-
-                # Check if agent has any activity
-                has_updates = meta.total_updates > 0
-                is_recent = False
-                days_since_update = None
-
-                if meta.last_update:
-                    try:
-                        last_dt = datetime.fromisoformat(meta.last_update.replace('Z', '+00:00'))
-                        if last_dt.tzinfo is None:
-                            last_dt = last_dt.replace(tzinfo=timezone.utc)
-                        days_since_update = (now - last_dt).total_seconds() / 86400
-                        is_recent = days_since_update < 7  # Active within last week
-                    except Exception:
-                        pass
-
-                # Infer status:
-                # - No updates or no last_update = archived (inactive)
-                # - Recent activity (<7 days) = active
-                # - Old activity (>7 days) = archived
-                if not has_updates or meta.last_update is None:
-                    inferred_status = "archived"  # No activity = archived
-                elif is_recent:
-                    inferred_status = "active"  # Recent activity = active
-                else:
-                    inferred_status = "archived"  # Old activity = archived
-
-            from src.resident_progress.registry import is_event_driven_label
-            visible_agent_id, uuid_redacted = _visible_agent_identifier(
-                agent_id,
-                meta,
-                caller_uuid=caller_uuid,
-                operator_caller=operator_caller,
+    # Always include the requesting agent even if filtered out
+    caller_in_list = caller_uuid and any(a["id"] == caller_uuid for a in agents)
+    if caller_uuid and not caller_in_list:
+        caller_meta = mcp_server.agent_metadata.get(caller_uuid)
+        if caller_meta:
+            caller_label = getattr(caller_meta, 'label', None)
+            caller_public = disambiguate_public_handle(
+                getattr(caller_meta, 'public_agent_id', None),
+                getattr(caller_meta, 'structured_id', None),
+                getattr(caller_meta, 'agent_uuid', None) or caller_uuid,
             )
             parent_id, parent_redacted = _visible_related_agent_identifier(
-                getattr(meta, 'parent_agent_id', None),
+                getattr(caller_meta, 'parent_agent_id', None),
                 caller_uuid=caller_uuid,
                 operator_caller=operator_caller,
             )
-            agent_info = {
-                "agent_id": visible_agent_id,
-                "label": getattr(meta, 'label', None),
-                "purpose": getattr(meta, 'purpose', None),
-                "lifecycle_status": inferred_status,
-                "created": meta.created_at,
-                "last_update": meta.last_update,
-                "total_updates": meta.total_updates,
-                "tags": meta.tags.copy() if meta.tags else [],
-                "notes": meta.notes if meta.notes else "",
+            caller_entry = {
+                "id": caller_uuid,
+                "label": caller_label or caller_public,
+                "status": caller_meta.status,
+                "purpose": getattr(caller_meta, 'purpose', None),
+                "updates": caller_meta.total_updates,
+                "last": caller_meta.last_update[:10] if caller_meta.last_update else None,
+                "last_update": caller_meta.last_update,
+                "trust_tier": getattr(caller_meta, 'trust_tier', None),
                 "parent_agent_id": parent_id,
-                "spawn_reason": getattr(meta, 'spawn_reason', None),
-                "event_driven": is_event_driven_label(getattr(meta, 'label', None)),
+                "spawn_reason": getattr(caller_meta, 'spawn_reason', None),
+                "you": True,
             }
-            agent_info.update(_compact_lifecycle_fields(meta))
-            if uuid_redacted:
-                agent_info["agent_id_redacted"] = True
+            caller_entry.update(_compact_lifecycle_fields(caller_meta))
+            agents.append(caller_entry)
             if parent_redacted:
-                agent_info["parent_agent_id_redacted"] = True
+                agents[-1]["parent_agent_id_redacted"] = True
 
-            # Lazy load metrics only if requested (optimization)
-            if include_metrics:
-                # Only load monitor if already in memory (fast path)
-                if agent_id in mcp_server.monitors:
-                    try:
-                        monitor = mcp_server.monitors[agent_id]
-                        metrics = monitor.get_metrics()
+    for a in agents:
+        # Mark the requesting agent
+        if caller_uuid and a["id"] == caller_uuid and "you" not in a:
+            a["you"] = True
+        a.pop("last_update", None)
 
-                        # Calculate health_status consistently with process_agent_update
-                        # Use health_checker.get_health_status() instead of metrics.get("status")
-                        # to ensure consistency across all tools
-                        risk_score = metrics.get("risk_score") or metrics.get("current_risk")
-                        coherence = float(monitor.state.coherence) if monitor.state else None
-                        void_active = bool(monitor.state.void_active) if monitor.state else False
+    result = {
+        "agents": agents[: max(0, int(limit))] if limit is not None else agents,
+        "shown": min(len(agents), int(limit)) if limit else len(agents),
+        "matching": len(agents),  # How many matched filters
+        "total_all": total_all,  # Total agents in system
+        "identity_health": {
+            "ghosts": ghost_count,
+            "ephemeral": ephemeral_count,
+            "test": test_count,
+            "real": total_all - ghost_count - test_count,
+        },
+    }
 
-                        health_status_obj, _ = mcp_server.health_checker.get_health_status(
-                            risk_score=risk_score,
-                            coherence=coherence,
-                            void_active=void_active
-                        )
-                        agent_info["health_status"] = health_status_obj.value
-                        _m_E = safe_float(monitor.state.E)
-                        _m_I = safe_float(monitor.state.I)
-                        _m_S = safe_float(monitor.state.S)
-                        _m_V = safe_float(monitor.state.V)
-                        _m_coh = safe_float(monitor.state.coherence)
-                        _m_risk = safe_float(metrics.get("risk_score") or metrics.get("current_risk") or metrics.get("mean_risk", 0.5))
-                        # Authoritative basin: run the engine's classify_basin on the same
-                        # state we surface (monitor.get_metrics() does not carry basin).
-                        try:
-                            from config.governance_config import classify_basin
-                            _m_basin = classify_basin(E=_m_E, I=_m_I, S=_m_S, V=_m_V,
-                                                      coherence=_m_coh, risk_score=_m_risk)
-                        except Exception:
-                            _m_basin = None
-                        agent_info["metrics"] = {
-                            "E": _m_E,
-                            "I": _m_I,
-                            "S": _m_S,
-                            "V": _m_V,
-                            "coherence": _m_coh,
-                            "current_risk": metrics.get("current_risk"),  # Recent trend (last 10) - USED FOR HEALTH STATUS
-                            "risk_score": _m_risk,  # Governance/operational risk
-                            "phi": metrics.get("phi"),  # Primary physics signal: Phi objective function
-                            "verdict": metrics.get("verdict"),  # Primary governance signal: safe/caution/high-risk
-                            "basin": _m_basin,  # Authoritative classify_basin label (high/boundary/low) — used by /phase ring
-                            "mean_risk": safe_float(metrics.get("mean_risk", 0.5)),  # Overall mean (all-time average) - for historical context
-                            "lambda1": safe_float(monitor.state.lambda1),
-                            "void_active": bool(monitor.state.void_active) if monitor.state.void_active is not None else False
-                        }
-                    except Exception as e:
-                        agent_info["health_status"] = "error"
-                        agent_info["metrics"] = None
-                        logger.warning(f"Error getting metrics for {agent_id}: {e}")
-                else:
-                    # Monitor not resident — do NOT hydrate it from the DB here.
-                    # Loading every un-loaded monitor turned this list into N
-                    # synchronous DB round-trips (the anyio/asyncpg amplification
-                    # in CLAUDE.md's Substrate Tax), blowing the 15s budget on a
-                    # large fleet. The dashboard's include_metrics=true call then
-                    # timed out and froze its cached counts — surfacing as a
-                    # phantom "N critical" with no live, clickable row. Use the
-                    # health_status that process_agent_update persists on
-                    # agent_metadata on every check-in (phases.py); metrics are
-                    # None for non-resident agents (the dashboard renders null
-                    # metrics as "-").
-                    agent_info["health_status"] = getattr(meta, 'health_status', None) or "unknown"
-                    agent_info["metrics"] = None
-            else:
-                # No metrics requested — use the cached health_status only; never
-                # hydrate a monitor from the DB in the list path (same reason as
-                # the include_metrics branch above).
-                agent_info["health_status"] = getattr(meta, 'health_status', None) or "unknown"
-                agent_info["metrics"] = None
+    # Add helpful hints. `limit` is None when the caller omits it and the
+    # Pydantic layer injects the null default (the lite-path default of 20
+    # only applies when the key is absent, not when it arrives as None), so
+    # guard int(limit) like the slices above (:470/:471) or the whole list
+    # call crashes with int(NoneType) — the dashboard's read sweep hit this.
+    if limit and len(agents) > int(limit):
+        result["more"] = f"Showing {limit} of {len(agents)} recent. Use limit=50 or recent_days=30 to see more."
+    if recent_days:
+        result["filter"] = f"Active in last {recent_days} days. Use recent_days=0 for all."
 
-            # Add standardized fields if requested
-            if standardized:
-                agent_info.setdefault("health_status", "unknown")
-                agent_info.setdefault("metrics", None)
+    return success_response(result)
 
-            # Trust tier from cached trajectory data (DB fallback done in batch below)
-            cached_tier = getattr(meta, 'trust_tier', None)
-            agent_info["trust_tier"] = cached_tier
-            agent_info["_agent_uuid"] = agent_id
 
-            agents_list.append(agent_info)
+async def _list_agents_full(
+    arguments: ToolArgumentsDict,
+    *,
+    caller_uuid: Optional[str],
+    operator_caller: bool,
+) -> Sequence[TextContent]:
+    grouped = arguments.get("grouped", True)
+    include_metrics = arguments.get("include_metrics", True)
+    status_filter = arguments.get("status_filter", "active")  # Changed: default to active only
+    loaded_only = arguments.get("loaded_only", False)
+    summary_only = arguments.get("summary_only", False)
+    standardized = arguments.get("standardized", True)
+    include_test_agents = arguments.get("include_test_agents", False)  # Default: filter out test agents
+    # Default: include zero-update agents so newly created agents are discoverable.
+    # Callers can still pass min_updates=2 to hide one-shot / placeholder agents.
+    min_updates = arguments.get("min_updates", 0)
+    recent_days = arguments.get("recent_days")  # Optional recency filter
 
-        # Batch-load trust tiers for agents missing cached values (avoids N+1 queries)
-        # (S6 Option B: substrate-earned routing)
-        agents_needing_tiers = [a for a in agents_list if a["trust_tier"] is None]
-        if agents_needing_tiers:
-            try:
-                from src.identity.trust_tier_routing import resolve_trust_tier
-                from src.db import get_db as _get_db
-                db = _get_db()
-                ids_to_fetch = [a["_agent_uuid"] for a in agents_needing_tiers]
-                identities = await db.get_identities_batch(ids_to_fetch)
-                for agent_info in agents_needing_tiers:
-                    aid = agent_info["_agent_uuid"]
-                    identity = identities.get(aid)
-                    if identity and identity.metadata:
-                        meta_obj = mcp_server.agent_metadata.get(aid)
-                        tier_info = await resolve_trust_tier(
-                            aid,
-                            identity.metadata,
-                            prefetched_tags=getattr(meta_obj, "tags", None) if meta_obj else None,
-                            prefetched_label=getattr(meta_obj, "label", None) if meta_obj else None,
-                        )
-                        agent_info["trust_tier"] = tier_info.get("name", "unknown")
-                        # Cache for next time
-                        if meta_obj:
-                            meta_obj.trust_tier = agent_info["trust_tier"]
-                            meta_obj.trust_tier_num = tier_info.get("tier", 0)
-            except Exception as e:
-                logger.debug(f"Batch trust tier lookup failed: {e}")
+    # Pagination support (optimization)
+    offset = arguments.get("offset", 0)
+    limit = arguments.get("limit")  # None = no limit (backward compatible)
+    filters = AgentListFilters(
+        status=status_filter,
+        include_test_agents=include_test_agents,
+        min_updates=min_updates,
+        recent_days=recent_days,
+        loaded_only=loaded_only,
+    )
 
-        # Sort participated agents (>=1 check-in) ahead of never-checked-in
-        # ghosts, then by recency (most recent first) within each group.
-        # Never-checked-in agents carry last_update == created (onboard time),
-        # so a burst of freshly-onboarded ghost sessions — the dashboard's own
-        # read sweep, anima/connector traffic minting fresh identities — would
-        # otherwise outrank genuinely-participated agents on a pure recency sort
-        # and crowd them out of the paginated `limit` window. That left only the
-        # always-on residents (which check in continuously) visible, with every
-        # other real participant pushed below the cutoff. #826 folds the ghosts
-        # client-side, but they must not starve real participants out of the
-        # limit first. The lite path already orders participated-first (line ~427
-        # via the -updates key); this brings the full path in line.
-        agents_list.sort(
-            key=lambda x: (
-                1 if (x.get("total_updates") or 0) >= 1 else 0,
-                x.get("last_update", "") or "",
-            ),
-            reverse=True,
+    agents_list = []
+
+    # First pass: collect all matching agents (without loading monitors)
+    for agent_id, meta in list(mcp_server.agent_metadata.items()):
+        if not filters.matches(
+            agent_id, meta, server=mcp_server, auto_hide_ghosts=False
+        ):
+            continue
+
+        inferred_status = _infer_lifecycle_status(meta)
+
+        from src.resident_progress.registry import is_event_driven_label
+        visible_agent_id, uuid_redacted = _visible_agent_identifier(
+            agent_id,
+            meta,
+            caller_uuid=caller_uuid,
+            operator_caller=operator_caller,
         )
-
-        # Calculate status counts BEFORE pagination (for accurate totals)
-        total_count = len(agents_list)
-        status_counts = {
-            "active": sum(1 for a in agents_list if a.get("lifecycle_status") == "active"),
-            "waiting_input": sum(1 for a in agents_list if a.get("lifecycle_status") == "waiting_input"),
-            "paused": sum(1 for a in agents_list if a.get("lifecycle_status") == "paused"),
-            "archived": sum(1 for a in agents_list if a.get("lifecycle_status") == "archived"),
-            "deleted": sum(1 for a in agents_list if a.get("lifecycle_status") == "deleted"),
-            "unknown": sum(1 for a in agents_list if a.get("lifecycle_status") not in ["active", "waiting_input", "paused", "archived", "deleted"])
+        parent_id, parent_redacted = _visible_related_agent_identifier(
+            getattr(meta, 'parent_agent_id', None),
+            caller_uuid=caller_uuid,
+            operator_caller=operator_caller,
+        )
+        agent_info = {
+            "agent_id": visible_agent_id,
+            "label": getattr(meta, 'label', None),
+            "purpose": getattr(meta, 'purpose', None),
+            "lifecycle_status": inferred_status,
+            "created": meta.created_at,
+            "last_update": meta.last_update,
+            "total_updates": meta.total_updates,
+            "tags": meta.tags.copy() if meta.tags else [],
+            "notes": meta.notes if meta.notes else "",
+            "parent_agent_id": parent_id,
+            "spawn_reason": getattr(meta, 'spawn_reason', None),
+            "event_driven": is_event_driven_label(getattr(meta, 'label', None)),
         }
-        # Participation split (before pagination): an agent has "participated"
-        # once it has recorded at least one check-in (total_updates >= 1). This
-        # is the same signal the lite-path ghost filter uses (total_updates < 1).
-        # Surfaced so count consumers can show working agents, not raw row count.
-        participated = sum(1 for a in agents_list if (a.get("total_updates") or 0) >= 1)
-        never_participated = total_count - participated
-        # Principal (octopus) rollup over the same pre-pagination population:
-        # how many LOGICAL workers these process-instances represent. Additive —
-        # `total`/`participated` are unchanged. See _principal_rollup.
-        principal_counts = _principal_rollup(agents_list)
+        agent_info.update(_compact_lifecycle_fields(meta))
+        if uuid_redacted:
+            agent_info["agent_id_redacted"] = True
+        if parent_redacted:
+            agent_info["parent_agent_id_redacted"] = True
 
-        # Apply pagination (optimization)
-        if limit is not None:
-            agents_list = agents_list[offset:offset + limit]
-        elif offset > 0:
-            agents_list = agents_list[offset:]
-        for agent_info in agents_list:
-            agent_info.pop("_agent_uuid", None)
-
-        # Group by status if requested (for returned agents only)
-        if grouped and not summary_only:
-            grouped_agents = {
-                "active": [a for a in agents_list if a.get("lifecycle_status") == "active"],
-                "waiting_input": [a for a in agents_list if a.get("lifecycle_status") == "waiting_input"],
-                "paused": [a for a in agents_list if a.get("lifecycle_status") == "paused"],
-                "archived": [a for a in agents_list if a.get("lifecycle_status") == "archived"],
-                "deleted": [a for a in agents_list if a.get("lifecycle_status") == "deleted"],
-                "unknown": [a for a in agents_list if a.get("lifecycle_status") not in ["active", "waiting_input", "paused", "archived", "deleted"]]
-            }
-
-            response_data = {
-                "success": True,
-                "agents": grouped_agents,
-                "summary": {
-                    "total": total_count,  # Use total_count (before pagination)
-                    "returned": len(agents_list),  # Number actually returned (after pagination)
-                    "offset": offset,
-                    "limit": limit,
-                    "by_status": status_counts,  # Use counts from BEFORE pagination
-                    "participated": participated,  # checked in >=1 time
-                    "never_participated": never_participated,  # onboarded but never checked in
-                    "principals": principal_counts["principals"],  # distinct logical workers (octopi)
-                    "participated_principals": principal_counts["participated_principals"],  # principals with >=1 checked-in instance
-                    "multi_instance_principals": principal_counts["multi_instance_principals"],  # principals spanning >1 process-instance
-                }
-            }
-
-            # Add health breakdown if include_metrics
-            if include_metrics:
-                response_data["summary"]["by_health"] = {
-                    "healthy": sum(1 for a in agents_list if a.get("health_status") == "healthy"),
-                    "moderate": sum(1 for a in agents_list if a.get("health_status") == "moderate"),
-                    "critical": sum(1 for a in agents_list if a.get("health_status") == "critical"),
-                    "unknown": sum(1 for a in agents_list if a.get("health_status") == "unknown"),
-                    "error": sum(1 for a in agents_list if a.get("health_status") == "error")
-                }
-        else:
-            response_data = {
-                "success": True,
-                "agents": agents_list,
-                "summary": {
-                    "total": total_count,  # Use total_count (before pagination)
-                    "returned": len(agents_list),  # Number actually returned (after pagination)
-                    "offset": offset,
-                    "limit": limit,
-                    "by_status": status_counts,  # Use counts from BEFORE pagination
-                    "participated": participated,  # checked in >=1 time
-                    "never_participated": never_participated,  # onboarded but never checked in
-                    "principals": principal_counts["principals"],  # distinct logical workers (octopi)
-                    "participated_principals": principal_counts["participated_principals"],  # principals with >=1 checked-in instance
-                    "multi_instance_principals": principal_counts["multi_instance_principals"],  # principals spanning >1 process-instance
-                }
-            }
-
-            if include_metrics:
-                health_statuses = {"healthy": 0, "moderate": 0, "critical": 0, "unknown": 0, "error": 0}
-                for agent in agents_list:
-                    status = agent.get("health_status", "unknown")
-                    health_statuses[status] = health_statuses.get(status, 0) + 1
-                response_data["summary"]["by_health"] = health_statuses
-
-        if summary_only:
-            return success_response(response_data["summary"])
-
-        # Add EISV labels for API documentation (only if metrics are included)
+        # Lazy load metrics only if requested (optimization)
         if include_metrics:
-            response_data["eisv_labels"] = __import__('src.governance_monitor', fromlist=['UNITARESMonitor']).UNITARESMonitor.get_eisv_labels()
+            health_status, metrics = _monitor_metrics(agent_id, meta)
+            agent_info["health_status"] = health_status
+            agent_info["metrics"] = metrics
+        else:
+            # No metrics requested — use the cached health_status only; never
+            # hydrate a monitor from the DB in the list path (same reason as
+            # the include_metrics branch above).
+            agent_info["health_status"] = getattr(meta, 'health_status', None) or "unknown"
+            agent_info["metrics"] = None
 
-        return success_response(response_data)
+        # Add standardized fields if requested
+        if standardized:
+            agent_info.setdefault("health_status", "unknown")
+            agent_info.setdefault("metrics", None)
 
-    except Exception as e:
-        return system_error_helper(
-            "list_agents",
-            e
+        # Trust tier from cached trajectory data (DB fallback done in batch below)
+        cached_tier = getattr(meta, 'trust_tier', None)
+        agent_info["trust_tier"] = cached_tier
+        agent_info["_agent_uuid"] = agent_id
+
+        agents_list.append(agent_info)
+
+    # Batch-load trust tiers for agents missing cached values (avoids N+1 queries)
+    # (S6 Option B: substrate-earned routing)
+    agents_needing_tiers = [a for a in agents_list if a["trust_tier"] is None]
+    if agents_needing_tiers:
+        try:
+            from src.identity.trust_tier_routing import resolve_trust_tier
+            from src.db import get_db as _get_db
+            db = _get_db()
+            ids_to_fetch = [a["_agent_uuid"] for a in agents_needing_tiers]
+            identities = await db.get_identities_batch(ids_to_fetch)
+            for agent_info in agents_needing_tiers:
+                aid = agent_info["_agent_uuid"]
+                identity = identities.get(aid)
+                if identity and identity.metadata:
+                    meta_obj = mcp_server.agent_metadata.get(aid)
+                    tier_info = await resolve_trust_tier(
+                        aid,
+                        identity.metadata,
+                        prefetched_tags=getattr(meta_obj, "tags", None) if meta_obj else None,
+                        prefetched_label=getattr(meta_obj, "label", None) if meta_obj else None,
+                    )
+                    agent_info["trust_tier"] = tier_info.get("name", "unknown")
+                    # Cache for next time
+                    if meta_obj:
+                        meta_obj.trust_tier = agent_info["trust_tier"]
+                        meta_obj.trust_tier_num = tier_info.get("tier", 0)
+        except Exception as e:
+            logger.debug(f"Batch trust tier lookup failed: {e}")
+
+    # Sort participated agents (>=1 check-in) ahead of never-checked-in
+    # ghosts, then by recency (most recent first) within each group.
+    # Never-checked-in agents carry last_update == created (onboard time),
+    # so a burst of freshly-onboarded ghost sessions — the dashboard's own
+    # read sweep, anima/connector traffic minting fresh identities — would
+    # otherwise outrank genuinely-participated agents on a pure recency sort
+    # and crowd them out of the paginated `limit` window. That left only the
+    # always-on residents (which check in continuously) visible, with every
+    # other real participant pushed below the cutoff. #826 folds the ghosts
+    # client-side, but they must not starve real participants out of the
+    # limit first. The lite path already orders participated-first (line ~427
+    # via the -updates key); this brings the full path in line.
+    agents_list.sort(
+        key=lambda x: (
+            1 if (x.get("total_updates") or 0) >= 1 else 0,
+            x.get("last_update", "") or "",
+        ),
+        reverse=True,
+    )
+
+    # Calculate status counts BEFORE pagination (for accurate totals)
+    total_count = len(agents_list)
+    status_counts = {
+        "active": sum(1 for a in agents_list if a.get("lifecycle_status") == "active"),
+        "waiting_input": sum(1 for a in agents_list if a.get("lifecycle_status") == "waiting_input"),
+        "paused": sum(1 for a in agents_list if a.get("lifecycle_status") == "paused"),
+        "archived": sum(1 for a in agents_list if a.get("lifecycle_status") == "archived"),
+        "deleted": sum(1 for a in agents_list if a.get("lifecycle_status") == "deleted"),
+        "unknown": sum(1 for a in agents_list if a.get("lifecycle_status") not in ["active", "waiting_input", "paused", "archived", "deleted"])
+    }
+    # Participation split (before pagination): an agent has "participated"
+    # once it has recorded at least one check-in (total_updates >= 1). This
+    # is the same signal the lite-path ghost filter uses (total_updates < 1).
+    # Surfaced so count consumers can show working agents, not raw row count.
+    participated = sum(1 for a in agents_list if (a.get("total_updates") or 0) >= 1)
+    never_participated = total_count - participated
+    # Principal (octopus) rollup over the same pre-pagination population:
+    # how many LOGICAL workers these process-instances represent. Additive —
+    # `total`/`participated` are unchanged. See _principal_rollup.
+    principal_counts = _principal_rollup(agents_list)
+
+    # Apply pagination (optimization)
+    if limit is not None:
+        agents_list = agents_list[offset:offset + limit]
+    elif offset > 0:
+        agents_list = agents_list[offset:]
+    for agent_info in agents_list:
+        agent_info.pop("_agent_uuid", None)
+
+    # Group by status if requested (for returned agents only)
+    if grouped and not summary_only:
+        grouped_agents = {
+            "active": [a for a in agents_list if a.get("lifecycle_status") == "active"],
+            "waiting_input": [a for a in agents_list if a.get("lifecycle_status") == "waiting_input"],
+            "paused": [a for a in agents_list if a.get("lifecycle_status") == "paused"],
+            "archived": [a for a in agents_list if a.get("lifecycle_status") == "archived"],
+            "deleted": [a for a in agents_list if a.get("lifecycle_status") == "deleted"],
+            "unknown": [a for a in agents_list if a.get("lifecycle_status") not in ["active", "waiting_input", "paused", "archived", "deleted"]]
+        }
+
+        response_data = {
+            "success": True,
+            "agents": grouped_agents,
+            "summary": {
+                "total": total_count,  # Use total_count (before pagination)
+                "returned": len(agents_list),  # Number actually returned (after pagination)
+                "offset": offset,
+                "limit": limit,
+                "by_status": status_counts,  # Use counts from BEFORE pagination
+                "participated": participated,  # checked in >=1 time
+                "never_participated": never_participated,  # onboarded but never checked in
+                "principals": principal_counts["principals"],  # distinct logical workers (octopi)
+                "participated_principals": principal_counts["participated_principals"],  # principals with >=1 checked-in instance
+                "multi_instance_principals": principal_counts["multi_instance_principals"],  # principals spanning >1 process-instance
+            }
+        }
+
+        # Add health breakdown if include_metrics
+        if include_metrics:
+            response_data["summary"]["by_health"] = {
+                "healthy": sum(1 for a in agents_list if a.get("health_status") == "healthy"),
+                "moderate": sum(1 for a in agents_list if a.get("health_status") == "moderate"),
+                "critical": sum(1 for a in agents_list if a.get("health_status") == "critical"),
+                "unknown": sum(1 for a in agents_list if a.get("health_status") == "unknown"),
+                "error": sum(1 for a in agents_list if a.get("health_status") == "error")
+            }
+    else:
+        response_data = {
+            "success": True,
+            "agents": agents_list,
+            "summary": {
+                "total": total_count,  # Use total_count (before pagination)
+                "returned": len(agents_list),  # Number actually returned (after pagination)
+                "offset": offset,
+                "limit": limit,
+                "by_status": status_counts,  # Use counts from BEFORE pagination
+                "participated": participated,  # checked in >=1 time
+                "never_participated": never_participated,  # onboarded but never checked in
+                "principals": principal_counts["principals"],  # distinct logical workers (octopi)
+                "participated_principals": principal_counts["participated_principals"],  # principals with >=1 checked-in instance
+                "multi_instance_principals": principal_counts["multi_instance_principals"],  # principals spanning >1 process-instance
+            }
+        }
+
+        if include_metrics:
+            health_statuses = {"healthy": 0, "moderate": 0, "critical": 0, "unknown": 0, "error": 0}
+            for agent in agents_list:
+                status = agent.get("health_status", "unknown")
+                health_statuses[status] = health_statuses.get(status, 0) + 1
+            response_data["summary"]["by_health"] = health_statuses
+
+    if summary_only:
+        return success_response(response_data["summary"])
+
+    # Add EISV labels for API documentation (only if metrics are included)
+    if include_metrics:
+        response_data["eisv_labels"] = __import__('src.governance_monitor', fromlist=['UNITARESMonitor']).UNITARESMonitor.get_eisv_labels()
+
+    return success_response(response_data)
+
+
+@mcp_tool("list_agents", timeout=15.0, register=False)
+async def handle_list_agents(arguments: ToolArgumentsDict) -> Sequence[TextContent]:
+    """List monitored agents through the compact or detailed projection."""
+    try:
+        caller_uuid = _context_agent_id()
+        operator_caller = _is_operator_request()
+        if _should_use_lite_mode(arguments):
+            return await _list_agents_lite(
+                arguments,
+                caller_uuid=caller_uuid,
+                operator_caller=operator_caller,
+            )
+        return await _list_agents_full(
+            arguments,
+            caller_uuid=caller_uuid,
+            operator_caller=operator_caller,
         )
+    except Exception as exc:
+        return system_error_helper("list_agents", exc)
+
 
 @mcp_tool("get_agent_metadata", timeout=10.0, register=False)
 async def handle_get_agent_metadata(arguments: Sequence[TextContent]) -> list:
