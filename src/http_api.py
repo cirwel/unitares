@@ -19,7 +19,7 @@ import secrets
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 _startup_ts = time.time()
 
@@ -37,6 +37,14 @@ from src.metrics_registry import (
 )
 from src.broadcaster import broadcaster_instance
 from src.services.http_tool_service import execute_http_tool
+from src.services.http_request_parser import (
+    HttpToolRequestError,
+    deprecated_http_tool_payload,
+    enrich_http_client_context,
+    normalize_http_tool_name,
+    parse_http_tool_request,
+    validate_http_tool_content_length,
+)
 from src.mcp_listen_config import check_mcp_bearer, mcp_bearer_required
 from src.mcp_compat import get_tool_input_schema
 from src.dashboard_auth import (
@@ -57,8 +65,6 @@ from src.dashboard_auth import (
 
 if TYPE_CHECKING:
     from starlette.applications import Starlette
-    from starlette.requests import Request
-    from starlette.websockets import WebSocket
 
 logger = get_logger(__name__)
 
@@ -149,17 +155,8 @@ def _build_http_tool_response(tool_name: str, result) -> dict:
 
 
 def _normalize_http_tool_name(body: dict, mcp_server_name: str) -> str:
-    """Resolve HTTP tool aliases to the canonical dispatch name."""
-    tool_name = body.get("name") or body.get("tool_name") or "unknown"
-    if not tool_name or tool_name == "unknown":
-        return "unknown"
-
-    # Compatibility: Some MCP clients surface names as `mcp_<server>_<tool>`.
-    # The HTTP API always dispatches by the canonical tool name (e.g. `list_tools`).
-    mcp_prefix = f"mcp_{mcp_server_name}_"
-    if tool_name.startswith(mcp_prefix):
-        return tool_name[len(mcp_prefix):]
-    return tool_name
+    """Compatibility wrapper for callers importing the former local helper."""
+    return normalize_http_tool_name(body, mcp_server_name)
 
 # ---------------------------------------------------------------------------
 # Trusted networks: localhost, Tailscale CGNAT, private RFC1918 ranges
@@ -302,10 +299,9 @@ async def _extract_client_session_id(request) -> str:
     Uses SessionSignals + derive_session_key() for unified derivation.
     Falls back to legacy logic if signals unavailable.
     """
-    from src.mcp_handlers.identity.handlers import derive_session_key, ua_hash_from_header
+    from src.mcp_handlers.identity.handlers import derive_session_key
 
     signals = _build_http_session_signals(request)
-    ua = signals.user_agent or ""
     x_session_id = signals.x_session_id
     ip_ua_fp = signals.ip_ua_fingerprint
 
@@ -331,131 +327,149 @@ async def _extract_client_session_id(request) -> str:
     return result
 
 
-async def _resolve_http_bound_agent(tool_name: str, arguments: dict, signals) -> str | None:
-    """Resolve an existing identity for HTTP requests before direct tool calls.
+_HTTP_PREBIND_SKIP_TOOLS = {
+    "identity",
+    "onboard",
+    "bind_session",
+    "health_check",
+    "list_tools",
+    "get_server_info",
+    "describe_tool",
+    "debug_request_context",
+}
 
-    This keeps direct HTTP tools like process_agent_update aligned with the
-    fallback middleware path, which would otherwise inject session-bound identity.
-    """
-    if not isinstance(arguments, dict):
+
+def _bind_explicit_http_agent(arguments: dict) -> str | None:
+    explicit_agent_id = arguments.get("agent_id")
+    if not (
+        isinstance(explicit_agent_id, str)
+        and len(explicit_agent_id) == 36
+        and explicit_agent_id.count("-") == 4
+    ):
         return None
+    from src.mcp_handlers.context import update_context_agent_id
 
-    # These tools establish or inspect identity; they should not be pre-bound.
-    skip_tools = {
-        "identity",
-        "onboard",
-        "bind_session",
-        "health_check",
-        "list_tools",
-        "get_server_info",
-        "describe_tool",
-        "debug_request_context",
-    }
-    if tool_name in skip_tools:
-        return None
+    update_context_agent_id(explicit_agent_id)
+    return explicit_agent_id
 
+
+async def _resolve_http_operator(arguments: dict, signals) -> str | None:
     from src.mcp_handlers.context import (
-        set_session_resolution_source,
         set_session_proof_origin,
+        set_session_resolution_source,
         update_context_agent_id,
     )
-    from src.mcp_handlers.identity.handlers import derive_session_key, resolve_session_identity
-
-    # Respect an already explicit UUID.
-    explicit_agent_id = arguments.get("agent_id")
-    if isinstance(explicit_agent_id, str) and len(explicit_agent_id) == 36 and explicit_agent_id.count("-") == 4:
-        update_context_agent_id(explicit_agent_id)
-        return explicit_agent_id
-
-    # Operator credential (#425 dashboard-identity decision): a valid
-    # X-Unitares-Operator token resolves to a stable, persisted operator
-    # identity through the canonical resolver. The credential EARNS a
-    # resolved binding — the strict gate keys on the binding, never on
-    # header presence (council finding, PR #610). Checked ahead of the
-    # sticky consult, and the binding is deliberately NEVER written to the
-    # IP:UA transport cache: a same-host caller without the header must
-    # not inherit operator identity from a shared fingerprint.
     from src.mcp_handlers.identity.operator import resolve_operator_identity
+
     try:
         operator_identity = await resolve_operator_identity(signals)
-    except Exception as e:
-        # Valid-token-but-resolver-error degrades to unbound (writes refuse
-        # under strict) — a visible failure, never a silent bypass.
-        logger.warning("[OPERATOR] identity resolution failed: %s", e)
-        operator_identity = None
-    if operator_identity:
-        agent_uuid = operator_identity["agent_uuid"]
-        update_context_agent_id(agent_uuid)
-        arguments["agent_id"] = agent_uuid
-        set_session_resolution_source("operator_token")
-        # Operator token is a per-call credential the caller transmitted —
-        # caller-proven. Stamp explicitly so this early-return (which never
-        # reaches derive_session_key/_mark) isn't left at a stale proof_origin.
-        set_session_proof_origin("caller_asserted")
-        return agent_uuid
+    except Exception as exc:
+        logger.warning("[OPERATOR] identity resolution failed: %s", exc)
+        return None
+    if not operator_identity:
+        return None
+    agent_uuid = operator_identity["agent_uuid"]
+    update_context_agent_id(agent_uuid)
+    arguments["agent_id"] = agent_uuid
+    set_session_resolution_source("operator_token")
+    set_session_proof_origin("caller_asserted")
+    return agent_uuid
 
-    # Sticky transport cache: single-sourced consult shared with the MCP
-    # middleware (identity_step.consult_sticky_binding), which prevents
-    # identity fragmentation for repeat callers from the same IP:UA
-    # fingerprint. The REST path previously bypassed this cache entirely —
-    # every call went through PATH 3 creation, producing mcp_YYYYMMDD ghost
-    # identities at a rate of hundreds per day (see identity-ghost-
-    # proliferation investigation 2026-04-15). redis_recovery=False
-    # preserves this surface's historical in-memory-only consult: REST
-    # never recovered bindings from Redis after a restart.
-    from src.mcp_handlers.identity.session import extract_token_agent_uuid_safe
+
+async def _consult_http_sticky_binding(arguments: dict, signals):
+    from src.mcp_handlers.context import (
+        set_session_proof_origin,
+        set_session_resolution_source,
+        update_context_agent_id,
+    )
     from src.mcp_handlers.middleware.identity_step import (
         consult_sticky_binding,
         sticky_resolution_source,
-        update_transport_binding,
     )
 
-    consult = None
     try:
-        consult = await consult_sticky_binding(signals, arguments, redis_recovery=False)
-        if consult.binding is not None:
-            cached = consult.binding
-            update_context_agent_id(cached.agent_uuid)
-            arguments["agent_id"] = cached.agent_uuid
-            # S3: emit the cache-hit envelope `sticky_cache:<original>`
-            # so `_compute_identity_assurance` can apply decay-by-one
-            # against the original proof tier. Pre-S3 Redis entries
-            # (and bindings created before this field was threaded)
-            # carry original="unknown" and continue to map to weak.
-            set_session_resolution_source(sticky_resolution_source(cached))
-            # A sticky-cache hit resolves a binding by IP:UA fingerprint with NO
-            # per-call proof from the caller — it is the steady-state repeat of
-            # the same mis-attribution the gate exists to refuse (a concurrent
-            # same-host sibling can land on a cached binding). Stamp
-            # server_inferred so the strict gate refuses it unless the resolved
-            # agent is substrate-earned. Residents echo their CSID (→ explicit,
-            # caller_asserted) and never reach this path. This early-return runs
-            # before derive_session_key, so proof_origin must be set here.
-            set_session_proof_origin("server_inferred")
-            return cached.agent_uuid
-    except Exception as e:
-        logger.debug("[STICKY-REST] cache check failed: %s", e)
+        consult = await consult_sticky_binding(
+            signals, arguments, redis_recovery=False
+        )
+        if consult.binding is None:
+            return None, consult
+        cached = consult.binding
+        update_context_agent_id(cached.agent_uuid)
+        arguments["agent_id"] = cached.agent_uuid
+        set_session_resolution_source(sticky_resolution_source(cached))
+        set_session_proof_origin("server_inferred")
+        return cached.agent_uuid, consult
+    except Exception as exc:
+        logger.debug("[STICKY-REST] cache check failed: %s", exc)
+        return None, None
+
+
+def _cache_http_resolution(
+    consult,
+    resolved: dict,
+    agent_uuid: str,
+    session_key: str,
+) -> None:
+    writeback_key = (
+        consult.transport_key if (consult and consult.cacheable) else None
+    )
+    if not writeback_key:
+        return
+    try:
+        from src.mcp_handlers.middleware.identity_step import update_transport_binding
+
+        update_transport_binding(
+            writeback_key,
+            agent_uuid,
+            session_key,
+            source="rest",
+            original_session_source=resolved.get("source") or "rest_resolution",
+        )
+    except Exception as exc:
+        logger.debug("[STICKY-REST] cache update failed: %s", exc)
+
+
+async def _touch_http_session_activity(
+    session_key: str,
+    agent_uuid: str,
+) -> None:
+    for attempt in range(2):
+        try:
+            from src.db import get_db
+
+            await get_db().update_session_activity(session_key)
+            return
+        except Exception as exc:
+            if attempt == 0:
+                await asyncio.sleep(0.05)
+            else:
+                logger.warning(
+                    "[REST-SESSION] TTL update failed for agent %s...: %s",
+                    agent_uuid[:8],
+                    exc,
+                )
+
+
+async def _resolve_http_session_binding(
+    tool_name: str,
+    arguments: dict,
+    signals,
+    consult,
+) -> str | None:
+    from src.mcp_handlers.context import update_context_agent_id
+    from src.mcp_handlers.identity.handlers import (
+        derive_session_key,
+        resolve_session_identity,
+    )
+    from src.mcp_handlers.identity.session import extract_token_agent_uuid_safe
 
     session_key = await derive_session_key(signals, arguments)
-
-    # Extract agent UUID from continuity token so PATH 2.8 can rebind via
-    # cryptographic ownership proof — without this the resolver cannot
-    # distinguish \"Watcher owns agent-907e3195-c64\" from \"some prior REST
-    # caller claimed that session_key and got cached\", and PATH 1 happily
-    # returns whichever agent the cache holds (issue #110).
-    _token_agent_uuid = extract_token_agent_uuid_safe(arguments.get("continuity_token"))
-
-    # #945 §1 (REST parity): a pre_onboard READ with no remaining proof must not
-    # fingerprint-resolve. By this point the proof-carrying paths have already
-    # returned (explicit UUID, operator token, sticky-cache hit); the only proof
-    # left to honor is a continuity_token. Without one, resolving here would
-    # lazily bind an identity AND write it back into the sticky cache below — the
-    # exact read-tool side effect #945 targets. The stale `skip_tools` set above
-    # missed get_governance_metrics and the action-level reads (knowledge.search
-    # etc.); judging the canonical CALL via get_call_identity_requirement covers
-    # them without another hardcoded list.
-    if not _token_agent_uuid:
+    token_agent_uuid = extract_token_agent_uuid_safe(
+        arguments.get("continuity_token")
+    )
+    if not token_agent_uuid:
         from src.mcp_handlers.decorators import get_call_identity_requirement
+
         if get_call_identity_requirement(tool_name, arguments) == "pre_onboard":
             return None
 
@@ -465,64 +479,47 @@ async def _resolve_http_bound_agent(tool_name: str, arguments: dict, signals) ->
         model_type=arguments.get("model_type"),
         client_hint=arguments.get("client_hint"),
         resume=True,
-        token_agent_uuid=_token_agent_uuid,
+        token_agent_uuid=token_agent_uuid,
     )
-    if resolved and not resolved.get("created"):
-        agent_uuid = resolved.get("agent_uuid")
-        if agent_uuid:
-            update_context_agent_id(agent_uuid)
-            arguments["agent_id"] = agent_uuid
-            # Populate sticky cache so subsequent REST calls from the same
-            # fingerprint hit the cache path above and skip resolution entirely.
-            # Write back only when the consult guard passed (`cacheable`):
-            # proof-carrying requests (client_session_id / continuity_token /
-            # force_new) are never cached under the bare fingerprint on this
-            # surface.
-            writeback_key = (
-                consult.transport_key if (consult and consult.cacheable) else None
-            )
-            if writeback_key:
-                try:
-                    # `resolved.source` is the proof source from
-                    # resolve_session_identity — exactly what the tier mapper
-                    # consumes. Mirror it as the binding's original_session_source
-                    # so future cache hits decay against it.
-                    _original = resolved.get("source") or "rest_resolution"
-                    update_transport_binding(
-                        writeback_key,
-                        agent_uuid,
-                        session_key,
-                        source="rest",
-                        original_session_source=_original,
-                    )
-                except Exception as e:
-                    logger.debug("[STICKY-REST] cache update failed: %s", e)
-            # Transport parity with the dispatch middleware's post-resolution
-            # session-TTL update (identity_step): renew the durable
-            # core.sessions row on every successfully resolved call. REST is
-            # the only transport fleet residents use, and without this touch
-            # their PG binding never advances after provisioning — expires_at
-            # lapses after SESSION_TTL_HOURS and the Redis-loss self-heal path
-            # (PATH2, which reads the PG row) silently dies with it, while
-            # check-ins keep landing via the Redis binding. Row-scoped UPDATE:
-            # a session_key with no core.sessions row (e.g. transport-injected
-            # CSIDs) is a no-op, so this never creates or extends bindings
-            # that were not provisioned.
-            for attempt in range(2):
-                try:
-                    from src.db import get_db
-                    await get_db().update_session_activity(session_key)
-                    break
-                except Exception as e:
-                    if attempt == 0:
-                        await asyncio.sleep(0.05)
-                    else:
-                        logger.warning(
-                            "[REST-SESSION] TTL update failed for agent %s...: %s",
-                            agent_uuid[:8], e,
-                        )
-            return agent_uuid
-    return None
+    if not resolved or resolved.get("created"):
+        return None
+    agent_uuid = resolved.get("agent_uuid")
+    if not agent_uuid:
+        return None
+
+    update_context_agent_id(agent_uuid)
+    arguments["agent_id"] = agent_uuid
+    _cache_http_resolution(consult, resolved, agent_uuid, session_key)
+    await _touch_http_session_activity(session_key, agent_uuid)
+    return agent_uuid
+
+
+async def _resolve_http_bound_agent(
+    tool_name: str,
+    arguments: dict,
+    signals,
+) -> str | None:
+    """Resolve an existing identity before dispatching a direct HTTP tool."""
+    if not isinstance(arguments, dict) or tool_name in _HTTP_PREBIND_SKIP_TOOLS:
+        return None
+
+    explicit_agent_id = _bind_explicit_http_agent(arguments)
+    if explicit_agent_id:
+        return explicit_agent_id
+
+    operator_agent_id = await _resolve_http_operator(arguments, signals)
+    if operator_agent_id:
+        return operator_agent_id
+
+    cached_agent_id, consult = await _consult_http_sticky_binding(
+        arguments, signals
+    )
+    if cached_agent_id:
+        return cached_agent_id
+
+    return await _resolve_http_session_binding(
+        tool_name, arguments, signals, consult
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -578,222 +575,152 @@ async def http_list_tools(request):
         }, status_code=500)
 
 
-async def http_call_tool(request):
-    """Execute tool via HTTP - any model can call this"""
-    # CRITICAL FIX: Ensure all code paths return valid JSONResponse
-    # Empty or malformed responses cause Starlette ASGI protocol violations
-    # (AssertionError: Unexpected message: http.response.start vs http.response.body)
+async def _inject_http_client_session(request, arguments: dict) -> str | None:
+    from src.mcp_handlers.context import set_csid_transport_injected
 
-    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
-    mcp_server_name = request.state._http_api_mcp_server_name
+    set_csid_transport_injected(False)
+    if "client_session_id" in arguments:
+        return arguments.get("client_session_id")
 
-    # SECURITY: Limit request body size (prevent DoS via large payloads)
-    MAX_REQUEST_SIZE = 10 * 1024 * 1024  # 10MB limit
-    body = None
-    tool_name = "unknown"
+    client_session_id = await _extract_client_session_id(request)
+    arguments["client_session_id"] = client_session_id
+    set_csid_transport_injected(True)
+    return client_session_id
+
+
+async def _execute_http_tool_in_context(
+    request,
+    tool_name: str,
+    arguments: dict,
+    client_session_id: str | None,
+):
+    from src.mcp_handlers.context import (
+        reset_session_context,
+        reset_session_signals,
+        set_session_context,
+        set_session_signals,
+    )
+
+    signals = _build_http_session_signals(request)
+    signals_token = set_session_signals(signals)
+    x_agent_id = request.headers.get("x-agent-id") or request.headers.get(
+        "X-Agent-Id"
+    )
+    context_token = set_session_context(
+        session_key=client_session_id,
+        client_session_id=client_session_id,
+        agent_id=x_agent_id or arguments.get("agent_id"),
+    )
     try:
-        if not _check_http_auth(request, http_api_token=http_api_token):
-            return _http_unauthorized()
-        # Check content length before parsing
-        content_length = request.headers.get("content-length")
-        if content_length:
-            try:
-                size = int(content_length)
-                if size > MAX_REQUEST_SIZE:
-                    return JSONResponse({
-                        "success": False,
-                        "error": "Request body too large",
-                        "max_size_mb": MAX_REQUEST_SIZE // (1024 * 1024)
-                    }, status_code=413)
-            except ValueError:
-                pass  # Invalid content-length, let JSON parsing handle it
+        await _resolve_http_bound_agent(tool_name, arguments, signals)
+        return await execute_http_tool(tool_name, arguments)
+    finally:
+        reset_session_context(context_token)
+        reset_session_signals(signals_token)
 
-        body = await request.json()
 
-        # SECURITY: Validate request structure
-        if not isinstance(body, dict):
-            return JSONResponse({"success": False, "error": "Request body must be a JSON object"}, status_code=400)
-
-        # SECURITY: Limit arguments dictionary size (prevent DoS via large dicts)
-        arguments = body.get("arguments", {})
-        if isinstance(arguments, dict) and len(arguments) > 100:
-            return JSONResponse({
+def _http_tool_error_response(exc: Exception, body: Any) -> JSONResponse:
+    if isinstance(exc, HttpToolRequestError):
+        return JSONResponse(exc.payload, status_code=exc.status_code)
+    if isinstance(exc, json.JSONDecodeError):
+        logger.error("Invalid JSON in request: %s", exc, exc_info=True)
+        return JSONResponse(
+            {
                 "success": False,
-                "error": "Too many arguments",
-                "max_arguments": 100
-            }, status_code=400)
-
-        tool_name = _normalize_http_tool_name(body, mcp_server_name)
-        if not tool_name or tool_name == "unknown":
-            return JSONResponse({"success": False, "error": "Missing 'name' field — pass the tool name as 'name', e.g. {\"name\": \"onboard\", \"arguments\": {...}}"}, status_code=400)
-
-        # SECURITY: Validate tool name format (prevent injection)
-        if not isinstance(tool_name, str) or len(tool_name) > 100:
-            return JSONResponse({
+                "error": "Invalid JSON format",
+                "error_type": "JSONDecodeError",
+            },
+            status_code=400,
+        )
+    if isinstance(exc, ValueError):
+        logger.warning("Validation error: %s", exc)
+        return JSONResponse(
+            {
                 "success": False,
-                "error": "Invalid tool name format"
-            }, status_code=400)
-
-        # DEPRECATED: SSE-specific tools removed
-        # These tools are no longer registered but kept for backward compat
-        if tool_name == "get_connected_clients":
-            return JSONResponse({
-                "name": tool_name,
-                "result": {"error": "Tool deprecated. SSE transport deprecated by MCP. Use Streamable HTTP."},
-                "success": False
-            })
-
-        if tool_name == "get_connection_diagnostics":
-            # DEPRECATED: SSE-specific tool
-            return JSONResponse({
-                "name": tool_name,
-                "result": {"error": "Tool deprecated. SSE transport deprecated by MCP. Use Streamable HTTP."},
-                "success": False
-            })
-
-        # Inject stable client session for identity binding (avoid collision with dialectic session_id)
-        # DO NOT TRUST client_session_id FOR AUTH — TRANSPORT-INJECTED HERE, NOT CLIENT-ASSERTED.
-        # For auth signals, read SessionSignals (headers) or continuity_token (HMAC-signed).
-        # See PR #35 revert (gap #1) and PR #42 Part C rationale.
-        client_session_id = None
-        # Reset the injection flag per-request so it can never leak True from a
-        # prior request on a reused context and mislabel this caller's genuine
-        # CSID as server-inferred (false refusal). Self-healing: set on every
-        # path, like session_resolution_source.
-        from src.mcp_handlers.context import set_csid_transport_injected
-        set_csid_transport_injected(False)
-        if isinstance(arguments, dict) and "client_session_id" not in arguments:
-            client_session_id = await _extract_client_session_id(request)
-            arguments["client_session_id"] = client_session_id
-            # This CSID was synthesized by the transport, not sent by the caller —
-            # mark it so identity resolution does not treat it as caller-proven
-            # (otherwise a pin/fingerprint-derived injected CSID would satisfy
-            # strict for a write under a sibling's identity).
-            set_csid_transport_injected(True)
-        elif isinstance(arguments, dict):
-            client_session_id = arguments.get("client_session_id")
-
-        # NOTE: X-Agent-Id NOT injected as agent_id pre-dispatch.
-        # Session binding via X-Session-ID handles identity.
-        x_agent_id = request.headers.get("x-agent-id") or request.headers.get("X-Agent-Id")
-
-        # AUTO-DETECT CLIENT TYPE and MODEL TYPE from User-Agent for better auto-naming
-        # This ensures agent_id reflects actual runtime (e.g., Cursor + GPT/Codex)
-        if isinstance(arguments, dict):
-            ua = (request.headers.get("user-agent") or "").lower()
-
-            # Detect client type via the shared detector so HTTP and MCP paths
-            # agree on the claude_code / claude_desktop / claude disambiguation.
-            if "client_hint" not in arguments:
-                from src.mcp_handlers.context import detect_client_from_user_agent
-                detected_client = detect_client_from_user_agent(ua)
-                if detected_client:
-                    arguments["client_hint"] = detected_client
-                    logger.debug(f"[HTTP] Auto-detected client_hint={detected_client} from UA")
-
-            # Detect model type to prevent identity collision
-            if "model_type" not in arguments:
-                detected_model = None
-
-                # Prefer explicit model header if available.
-                model_header = request.headers.get("x-model") or request.headers.get("X-Model")
-                if model_header:
-                    detected_model = model_header.strip().lower()
-
-                # Then infer from User-Agent.
-                if not detected_model:
-                    if "gpt-5.3" in ua and "codex" in ua:
-                        detected_model = "gpt-5.3-codex"
-                    elif "gpt-5.4" in ua and "codex" in ua:
-                        detected_model = "gpt-5.4-codex"
-                    elif "gpt-5" in ua and "codex" in ua:
-                        detected_model = "gpt-5-codex"
-                    elif "composer" in ua:
-                        detected_model = "composer"
-                    elif "codex" in ua:
-                        detected_model = "codex"
-                    elif "chatgpt" in ua or "openai" in ua or "gpt-5" in ua or "gpt-4" in ua or "gpt-3" in ua:
-                        detected_model = "gpt"
-                    elif "claude" in ua and "codex" not in ua and "gpt" not in ua and "openai" not in ua:
-                        detected_model = "claude"
-                    elif "gemini" in ua:
-                        detected_model = "gemini"
-
-                if detected_model:
-                    arguments["model_type"] = detected_model
-                    logger.debug(f"[HTTP] Auto-detected model_type={detected_model} from headers")
-
-        from src.mcp_handlers.context import (
-            reset_session_context,
-            reset_session_signals,
-            set_session_context,
-            set_session_signals,
+                "error": str(exc),
+                "error_type": "ValidationError",
+            },
+            status_code=400,
+        )
+    if isinstance(exc, KeyError):
+        logger.warning("Missing required field: %s", exc)
+        return JSONResponse(
+            {
+                "success": False,
+                "error": f"Missing required field: {exc}",
+                "error_type": "KeyError",
+            },
+            status_code=400,
         )
 
-        signals = _build_http_session_signals(request)
-        signals_token = set_session_signals(signals)
-
-        # SET SESSION CONTEXT for contextvars-based identity lookup
-        # This allows success_response() and status() to find binding without arguments
-        context_token = set_session_context(
-            session_key=client_session_id,
-            client_session_id=client_session_id,
-            agent_id=x_agent_id or (arguments.get("agent_id") if isinstance(arguments, dict) else None),
-        )
-        try:
-            if isinstance(arguments, dict):
-                await _resolve_http_bound_agent(tool_name, arguments, signals)
-            result = await execute_http_tool(tool_name, arguments)
-        finally:
-            reset_session_context(context_token)
-            reset_session_signals(signals_token)
-        return JSONResponse(_build_http_tool_response(tool_name, result))
-    except json.JSONDecodeError as e:
-        # SECURITY: Sanitize JSON parsing errors
-        logger.error(f"Invalid JSON in request: {e}", exc_info=True)
-        return JSONResponse({
-            "success": False,
-            "error": "Invalid JSON format",
-            "error_type": "JSONDecodeError"
-        }, status_code=400)
-    except ValueError as e:
-        # SECURITY: Safe to expose validation errors
-        logger.warning(f"Validation error: {e}")
-        return JSONResponse({
-            "success": False,
-            "error": str(e),
-            "error_type": "ValidationError"
-        }, status_code=400)
-    except KeyError as e:
-        # SECURITY: Safe to expose missing key errors
-        logger.warning(f"Missing required field: {e}")
-        return JSONResponse({
-            "success": False,
-            "error": f"Missing required field: {str(e)}",
-            "error_type": "KeyError"
-        }, status_code=400)
-    except Exception as e:
-        # SECURITY: Sanitize internal errors (don't expose stack traces, file paths, etc.)
-        tool_name_safe = body.get("name", "unknown") if body else "unknown"
-        logger.error(f"Error calling tool '{tool_name_safe}': {e}", exc_info=True)
-
-        # Only expose safe error information
-        error_msg = "An error occurred processing your request"
-        error_type = type(e).__name__
-
-        # For known error types, provide more specific messages
-        if isinstance(e, (AttributeError, TypeError)):
-            error_msg = "Invalid request format"
-        elif isinstance(e, RuntimeError):
-            error_msg = "Service temporarily unavailable"
-
-        return JSONResponse({
-            "name": tool_name_safe if isinstance(tool_name_safe, str) else None,
+    tool_name = body.get("name", "unknown") if isinstance(body, dict) else "unknown"
+    logger.error("Error calling tool '%s': %s", tool_name, exc, exc_info=True)
+    error_message = "An error occurred processing your request"
+    if isinstance(exc, (AttributeError, TypeError)):
+        error_message = "Invalid request format"
+    elif isinstance(exc, RuntimeError):
+        error_message = "Service temporarily unavailable"
+    return JSONResponse(
+        {
+            "name": tool_name if isinstance(tool_name, str) else None,
             "result": None,
             "success": False,
-            "error": error_msg,
-            "error_type": error_type
-        }, status_code=500)
+            "error": error_message,
+            "error_type": type(exc).__name__,
+        },
+        status_code=500,
+    )
+
+
+async def http_call_tool(request):
+    """Execute one canonical MCP tool through the REST transport boundary."""
+    body = None
+    try:
+        if not _check_http_auth(
+            request,
+            http_api_token=os.getenv("UNITARES_HTTP_API_TOKEN"),
+        ):
+            return _http_unauthorized()
+
+        validate_http_tool_content_length(
+            request.headers.get("content-length")
+        )
+        body = await request.json()
+        parsed = parse_http_tool_request(
+            body,
+            mcp_server_name=request.state._http_api_mcp_server_name,
+        )
+        deprecated = deprecated_http_tool_payload(parsed.tool_name)
+        if deprecated:
+            return JSONResponse(deprecated)
+
+        detected_client, detected_model = enrich_http_client_context(
+            request.headers,
+            parsed.arguments,
+        )
+        if detected_client:
+            logger.debug(
+                "[HTTP] Auto-detected client_hint=%s from UA", detected_client
+            )
+        if detected_model:
+            logger.debug(
+                "[HTTP] Auto-detected model_type=%s from headers", detected_model
+            )
+
+        client_session_id = await _inject_http_client_session(
+            request, parsed.arguments
+        )
+        result = await _execute_http_tool_in_context(
+            request,
+            parsed.tool_name,
+            parsed.arguments,
+            client_session_id,
+        )
+        return JSONResponse(
+            _build_http_tool_response(parsed.tool_name, result)
+        )
+    except Exception as exc:
+        return _http_tool_error_response(exc, body)
 
 
 async def http_effect_grant(request):
@@ -4305,7 +4232,6 @@ def register_http_routes(
     ``request.state`` attributes before each handler runs.  This avoids
     module-level globals while keeping handler signatures clean.
     """
-    from starlette.middleware import Middleware
     from starlette.requests import HTTPConnection
     from starlette.types import ASGIApp, Receive, Scope, Send
 
