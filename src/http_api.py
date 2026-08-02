@@ -2832,6 +2832,43 @@ async def http_substrate_observe(request):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
+async def http_runtime_observe(request):
+    """POST /v1/runtime/observe — identity-bound host runtime evidence.
+
+    Unlike ``/v1/substrate/observe`` (the identity-free dark-session floor),
+    this route requires an active ``client_session_id`` whose durable binding
+    matches ``agent_uuid``.  Accepted rows live in ``audit.events`` and never
+    create an EISV/state update.
+    """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not _check_http_auth(request, http_api_token=http_api_token):
+        return _http_unauthorized()
+    try:
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse(
+                {"success": False, "error": "Invalid JSON"}, status_code=400
+            )
+
+        from src.runtime_observations import (
+            RuntimeObservationError,
+            record_runtime_observation,
+        )
+
+        try:
+            result = await record_runtime_observation(payload)
+        except RuntimeObservationError as exc:
+            return JSONResponse(
+                {"success": False, "error": str(exc), "code": exc.code},
+                status_code=exc.status_code,
+            )
+        return JSONResponse(result, status_code=201)
+    except Exception as e:
+        logger.error(f"Error recording runtime observation: {e}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
 async def http_substrate_dark_sessions(request):
     """GET /v1/substrate/dark_sessions?window_hours=24 — the coverage-gap dial.
 
@@ -4331,6 +4368,7 @@ def register_http_routes(
     app.routes.append(Route("/v1/bridge/events", http_record_bridge_event, methods=["POST"]))
     app.routes.append(Route("/v1/bridge/summary", http_bridge_summary, methods=["GET"]))
     app.routes.append(Route("/v1/substrate/observe", http_substrate_observe, methods=["POST"]))
+    app.routes.append(Route("/v1/runtime/observe", http_runtime_observe, methods=["POST"]))
     app.routes.append(Route("/v1/substrate/dark_sessions", http_substrate_dark_sessions, methods=["GET"]))
     app.routes.append(Route("/v1/sentinel/backlog", http_sentinel_backlog, methods=["GET"]))
     app.routes.append(Route("/v1/sentinel/adjudication-queue", http_sentinel_adjudication_queue, methods=["GET"]))
