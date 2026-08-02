@@ -105,6 +105,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         essential_only (bool): If true, return only Tier 1 (essential) tools (default: false)
         include_advanced (bool): If false, exclude Tier 3 (advanced) tools (default: true)
         tier (str): Filter by tier: "essential", "common", "advanced", or "all" (default: "all")
+        category (str): Filter by catalog category, for example "dialectic" or "knowledge" (default: "all")
         lite (bool): If true, return minimal response (names + descriptions only, ~500B vs ~4KB)
         progressive (bool): If true, order tools by usage frequency (most used first). Works with all filter modes. Default false.
     """
@@ -118,6 +119,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     essential_only = coerce_bool(arguments.get("essential_only"), False)
     include_advanced = coerce_bool(arguments.get("include_advanced"), True)
     tier_filter = arguments.get("tier", "all")
+    category_filter = str(arguments.get("category") or "all").strip().lower() or "all"
     # LITE-FIRST: Default to minimal response for local/smaller models
     lite_mode = coerce_bool(arguments.get("lite"), True)
     # Progressive disclosure: Order tools by usage frequency
@@ -182,6 +184,10 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             continue
         if tier_filter != "all" and tool_tier != tier_filter:
             continue
+        if category_filter != "all":
+            relationship = tool_relationships.get(tool_name) or {}
+            if relationship.get("category") != category_filter:
+                continue
         
         tool_info = {
             "name": tool_name,
@@ -457,6 +463,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             "essential_only": essential_only,
             "include_advanced": include_advanced,
             "tier_filter": tier_filter,
+            "category_filter": category_filter,
             "progressive": progressive,
         },
         "categories": {
