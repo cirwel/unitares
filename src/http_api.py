@@ -1397,6 +1397,10 @@ async def http_dashboard_redesign(request):
     rel = request.path_params.get("file", "") or "app.html"
     if ".." in rel or rel.startswith("/"):
         return JSONResponse({"error": "Invalid file path"}, status_code=400)
+    # Auth HTML is served only through the gated /auth handlers. Shared CSS/JS
+    # remains available here so those standalone pages stay buildless.
+    if rel in {"auth/signin.html", "auth/enroll.html"}:
+        return JSONResponse({"error": "File not found", "requested": rel}, status_code=404)
     if not rel.endswith((".html", ".css", ".js", ".md")):
         return JSONResponse({"error": "File type not allowed", "requested": rel}, status_code=403)
 
