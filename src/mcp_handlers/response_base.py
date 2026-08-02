@@ -84,6 +84,28 @@ def format_metrics_text(metrics: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _neutral_denial_signature(response: Dict[str, Any], signature: Any) -> Any:
+    """Keep ``identity_required`` denials identity-neutral.
+
+    The dispatch middleware injects the session-resolved agent_id into
+    arguments (params_step.inject_identity), which defeats
+    compute_agent_signature's server-inferred guard — so a no-proof denial
+    gets decorated with a resident identity resolved from a transport
+    fingerprint (dogfood 2026-08-02, fingerprint 90b801cb13669bac).
+    Suppress the signature unless the caller actually proved ownership;
+    hoist identity_assurance so the weak-binding explanation and recovery
+    guidance survive the suppression.
+    """
+    if not isinstance(signature, dict) or not signature.get("uuid"):
+        return signature
+    assurance = signature.get("identity_assurance") or {}
+    if assurance.get("caller_proven"):
+        return signature
+    if assurance and "identity_assurance" not in response:
+        response["identity_assurance"] = dict(assurance)
+    return {"uuid": None}
+
+
 def success_response(data: Dict[str, Any], agent_id: str = None, arguments: Dict[str, Any] = None) -> Sequence[TextContent]:
     """
     Create a success response with optional agent signature.
@@ -107,7 +129,10 @@ def success_response(data: Dict[str, Any], agent_id: str = None, arguments: Dict
     if lite_response:
         pass
     else:
-        response["agent_signature"] = _auth.compute_agent_signature(agent_id=agent_id, arguments=arguments)
+        signature = _auth.compute_agent_signature(agent_id=agent_id, arguments=arguments)
+        if response.get("status") == "identity_required":
+            signature = _neutral_denial_signature(response, signature)
+        response["agent_signature"] = signature
 
     param_coercions = (arguments or {}).get("_param_coercions")
     if param_coercions and not lite_response:
