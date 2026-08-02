@@ -80,10 +80,10 @@ async def test_startup_auto_calibration_supervises_ground_truth_collector(monkey
     assert [name for name, _ in created] == ["auto_ground_truth_collector"]
 
 
-def test_mcp_server_stops_background_tasks_before_closing_db():
-    import src.mcp_server as mcp_server
+def test_mcp_server_bootstrap_stops_background_tasks_before_closing_db():
+    from src.services.mcp_server_bootstrap import ServerBootstrap
 
-    source = inspect.getsource(mcp_server.main)
+    source = inspect.getsource(ServerBootstrap.shutdown)
     assert "await stop_all_background_tasks()" in source
     assert source.index("await stop_all_background_tasks()") < source.index("await close_db()")
 
