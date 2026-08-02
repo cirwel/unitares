@@ -625,4 +625,87 @@ defmodule UnitaresSentinel.FleetFindingEmitterTest do
 
     GenServer.stop(pid)
   end
+
+  # Mirror of the ForcedReleasePoller reclaim wiring test: the LeaseReclaim
+  # threading (init merge → acquire_opts → absorb) is hand-copied into this
+  # GenServer, which is exactly the drift class that left both residents with
+  # the same starvation blind spot in July. Keep both wired paths pinned.
+  test "GenServer reclaims its own stranded lease across two ticks" do
+    parent = self()
+    {:ok, calls} = Agent.start_link(fn -> [] end)
+    stranded_lease_id = "77777777-7777-7777-7777-777777777777"
+
+    lease_http_post = fn url, body, _headers, _timeout_ms ->
+      Agent.update(calls, &(&1 ++ [{url, body}]))
+      recorded = Agent.get(calls, & &1)
+
+      cond do
+        length(recorded) in [1, 2] ->
+          {:error, :timeout}
+
+        String.ends_with?(url, "/v1/lease/acquire") and length(recorded) == 3 ->
+          [{_, first_attempt} | _] = recorded
+
+          {:ok, 409,
+           Jason.encode!(%{
+             ok: false,
+             error: "held_by_other",
+             held_by_uuid: first_attempt["holder_agent_uuid"],
+             blocking_lease_id: stranded_lease_id
+           })}
+
+        String.ends_with?(url, "/v1/lease/release") ->
+          send(parent, {:released, body["lease_id"], body["release_reason"]})
+          {:ok, 200, ~s({"ok":true})}
+
+        true ->
+          send(parent, :reacquired)
+
+          {:ok, 200,
+           Jason.encode!(%{
+             ok: true,
+             idempotent: false,
+             lease: %{lease_id: "88888888-8888-8888-8888-888888888888"},
+             drift_warning: []
+           })}
+      end
+    end
+
+    {:ok, pid} =
+      FleetFindingEmitter.start_link(
+        name: :"test_emitter_reclaim_wiring_#{System.unique_integer([:positive])}",
+        initial_delay_ms: 60_000,
+        interval_ms: 60_000,
+        jitter_ms: 0,
+        emit_findings: false,
+        lease_advisory: true,
+        lease_blocked_state_path: false,
+        snapshot: %{agents: %{}, events: []},
+        self_agent_id: "sentinel-test",
+        lease_opts: [
+          bearer_token: "test-token",
+          surface_id: "resident:/sentinel_fleet_emit",
+          enforced_surface_kinds: MapSet.new(["resident"]),
+          http_post: lease_http_post
+        ]
+      )
+
+    send(pid, :tick)
+
+    state = :sys.get_state(pid)
+    [{_, first_attempt} | _] = Agent.get(calls, & &1)
+    stranded_uuid = first_attempt["holder_agent_uuid"]
+    assert Enum.map(state.lease_reclaim_candidates, &elem(&1, 0)) == [stranded_uuid]
+
+    send(pid, :tick)
+
+    assert_receive {:released, ^stranded_lease_id, "reclaimed_lost_acquire"}, 2_000
+    assert_receive :reacquired, 2_000
+    assert_receive {:released, "88888888-8888-8888-8888-888888888888", _reason}, 5_000
+
+    remembered = Enum.map(:sys.get_state(pid).lease_reclaim_candidates, &elem(&1, 0))
+    assert stranded_uuid in remembered
+
+    GenServer.stop(pid)
+  end
 end
