@@ -42,7 +42,13 @@ SKIP = FakeStatus("skip")
 
 def make(results, posted, *, state=None, dry_run=False):
     """A DoctorFindings whose checks are scripted and whose posts are captured."""
-    d = df.DoctorFindings(io={"post_finding": posted.append}, dry_run=dry_run)
+    def _post(payload):
+        # Capture AND report a realistic outcome. Returning None here would
+        # read as a failed escalation now that the caller checks the result.
+        posted.append(payload)
+        return df.DELIVERED
+
+    d = df.DoctorFindings(io={"post_finding": _post}, dry_run=dry_run)
     d.state = state if state is not None else {}
     d.collect = lambda: results  # type: ignore[method-assign]
     d._save_state = lambda: None  # type: ignore[method-assign]
@@ -164,3 +170,36 @@ def test_a_couple_of_skips_is_not_blindness():
     ]
     make(results, posted).run()
     assert posted == []
+
+
+def test_failed_escalation_is_not_recorded_as_alerted():
+    """A post that never reached governance must not be written to state.
+
+    This is the bug that let deploy_drift_doctor run hourly for its whole life
+    while posting nothing: escalation raised, the exception was swallowed, and
+    last_alert was recorded anyway. The cooldown then suppressed every retry,
+    so the bookkeeping buried the very finding it was tracking.
+    """
+    posted: list = []
+    results = [FakeResult("immortal_lease", WARN, "4 leases past TTL")] + [
+        FakeResult(f"p{i}", PASS, "fine") for i in range(8)
+    ]
+    d = make(results, posted)
+    d.io["post_finding"] = lambda payload: df.FAILED
+    d.run()
+    assert d.state.get("open", {}) == {}, "a failed escalation must leave state clean"
+
+
+def test_deduped_escalation_counts_as_reaching_governance():
+    """DEDUPED means the server already holds it — recording is correct.
+
+    Treating dedup like failure would retry forever and never settle.
+    """
+    posted: list = []
+    results = [FakeResult("immortal_lease", WARN, "4 leases past TTL")] + [
+        FakeResult(f"p{i}", PASS, "fine") for i in range(8)
+    ]
+    d = make(results, posted)
+    d.io["post_finding"] = lambda payload: df.DEDUPED
+    d.run()
+    assert d.state.get("open", {}) != {}, "dedup means governance holds it; record the alert"
