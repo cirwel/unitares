@@ -1078,9 +1078,6 @@ async def handle_store_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Te
                     }
                 )]
         
-        # HUMAN REVIEW FLAGGING: Flag high-severity discoveries for review
-        requires_review = discovery.severity in ["high", "critical"]
-        
         # Add to graph (fast, non-blocking)
         await graph.add_discovery(discovery)
         await _broadcast_knowledge_write(discovery, agent_id)
@@ -1135,11 +1132,11 @@ async def handle_store_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Te
             response["_truncated"] = truncation_info
             response["_tip"] = "Content was truncated. For longer content, split into multiple discoveries or use details field (5000 char limit)."
 
-        # Add human review flag if needed
-        if requires_review:
-            response["human_review_required"] = True
-            response["review_message"] = f"High-severity discovery ({discovery.severity}) - please review for accuracy and safety"
-        
+        # No human_review_required flag on high/critical stores — removed 2026-08-02.
+        # It decorated only this response (nothing persisted or queued it, no
+        # reviewer workflow existed), so it claimed a verification process that
+        # wasn't happening. Don't re-add a review gate without building the
+        # review path that executes it.
         if similar_discoveries:
             response["related_discoveries"] = similar_discoveries
             # Consolidation hint: flag when the same issue keeps being rediscovered

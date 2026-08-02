@@ -740,8 +740,14 @@ class TestStoreKnowledgeGraphAdditional:
             assert "auth" in data["error"].lower()
 
     @pytest.mark.asyncio
-    async def test_store_high_severity_human_review_flag(self, patch_common, registered_agent):
-        """High severity discoveries get human_review_required flag (lines 434-435)."""
+    async def test_store_high_severity_has_no_review_theater(self, patch_common, registered_agent):
+        """High severity stores cleanly with NO human_review_required flag.
+
+        The flag was removed 2026-08-02: it decorated only the store response
+        (nothing persisted or queued it, no reviewer workflow existed), so it
+        claimed a verification process that wasn't happening. This test guards
+        against re-adding a review gate without building the review path.
+        """
         mock_mcp_server, mock_graph = patch_common
         from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
 
@@ -754,7 +760,8 @@ class TestStoreKnowledgeGraphAdditional:
 
             data = parse_result(result)
             assert data["success"] is True
-            assert data["human_review_required"] is True
+            assert "human_review_required" not in data
+            assert "review_message" not in data
 
     @pytest.mark.asyncio
     async def test_store_value_error_non_rate_limit(self, patch_common, registered_agent):
