@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd manifest for the dialectic one-call canary (#1387 positive control).
+
+  Runs scripts/ops/dialectic_canary.py once a day: onboards a canary_ identity
+  over /mcp, exercises one-call request_review end-to-end, ground-truths the
+  session + thesis rows in Postgres, appends one JSONL line to
+  data/logs/dialectic_canary.jsonl. The #1387 kill-gate read is only valid when
+  this canary is green through the measurement window (organic zero + red
+  canary = instrument failure, clock restarts; it is not a kill signal).
+
+  Canary identities are excluded from adoption_kpi.py by the label prefix
+  `canary_` — the script asserts the prefix after onboard and fails loudly if
+  the server ever composes labels differently.
+
+  Install (render __VARS__ then bootstrap):
+    sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares-deploy|g" \
+        -e "s|__PYTHON_BIN__|<venv python with mcp+httpx+psycopg2>|g" \
+        -e "s|__HOME__|$HOME|g" \
+        scripts/ops/com.unitares.dialectic-canary.plist.template \
+        > ~/Library/LaunchAgents/com.unitares.dialectic-canary.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.unitares.dialectic-canary.plist
+
+  Verify:
+    launchctl list | grep dialectic-canary
+    tail -1 __UNITARES_ROOT__/data/logs/dialectic_canary.jsonl
+
+  Remove:
+    launchctl bootout gui/$(id -u)/com.unitares.dialectic-canary
+    rm ~/Library/LaunchAgents/com.unitares.dialectic-canary.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.unitares.dialectic-canary</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PYTHON_BIN__</string>
+        <string>__UNITARES_ROOT__/scripts/ops/dialectic_canary.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__UNITARES_ROOT__</string>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>8</integer>
+        <key>Minute</key>
+        <integer>40</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/unitares-dialectic-canary.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/unitares-dialectic-canary.log</string>
+</dict>
+</plist>
