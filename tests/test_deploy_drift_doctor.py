@@ -22,11 +22,19 @@ _spec.loader.exec_module(ddd)
 
 def make_io(*, behind: int = 0, head_epoch: float | None = None,
             started: float | None = None, log_subjects: str = "abc1234 fix: a thing",
-            changed_files: str = "src/thing.py"):
-    """IO seam returning a scripted git/process state."""
+            changed_files: str = "src/thing.py", ahead: int = 0,
+            branch: str | None = None):
+    """IO seam returning a scripted git/process state.
+
+    ``branch=None`` makes ``rev-parse --abbrev-ref HEAD`` return "", which the
+    branch check reads as no-information and skips — so tests written before
+    that check existed keep exercising exactly the paths they were written for.
+    """
     def git(path, *args):
+        if args[:3] == ("rev-parse", "--abbrev-ref", "HEAD"):
+            return branch or ""
         if args[:1] == ("rev-list",):
-            return f"0\t{behind}"
+            return f"{ahead}\t{behind}"
         if args[:2] == ("log", "-1"):
             return str(head_epoch) if head_epoch is not None else ""
         if any(a.startswith("--since=") for a in args):
@@ -96,6 +104,60 @@ def test_pinned_deploy_worktree_exempt_from_behind(tmp_path):
     s = ddd.Surface("pinned", str(tmp_path), "master", "com.example.svc", check_behind=False)
     d = ddd.diagnose(s, make_io(behind=5, head_epoch=now, started=now - 600))
     assert [x.condition for x in d] == ["restart_pending"]
+
+
+def test_branch_mismatch_is_detected(tmp_path):
+    """#1487: surface.branch was only a comparison target, never an assertion
+    that HEAD is on it — so a live checkout parked on a feature branch reported
+    nothing unusual. gov-plugin sat on codex/identity-liveness-bridge, 3 ahead,
+    while running live from that checkout."""
+    d = ddd.diagnose(ddd.Surface("live-thing", str(tmp_path), "main", None),
+                     make_io(branch="feature/x", ahead=3, behind=5))
+    assert [x.condition for x in d] == ["branch_mismatch"]
+    assert "feature/x" in d[0].detail and "'main'" in d[0].detail
+    assert "3 ahead" in d[0].detail and "5 behind" in d[0].detail
+
+
+def test_branch_mismatch_suppresses_pull_advice(tmp_path):
+    """With local commits a pull is a merge, not a fast-forward. Emitting
+    behind_origin alongside would restate the counts with the wrong remedy."""
+    d = ddd.diagnose(ddd.Surface("live-thing", str(tmp_path), "main", None),
+                     make_io(branch="feature/x", ahead=2, behind=4))
+    assert "behind_origin" not in {x.condition for x in d}
+    assert "Do NOT pull" in d[0].detail
+
+
+def test_matching_branch_raises_no_mismatch(tmp_path):
+    """The common case must stay silent, and behind_origin must still fire."""
+    d = ddd.diagnose(ddd.Surface("live-thing", str(tmp_path), "main", None),
+                     make_io(branch="main", behind=2))
+    assert [x.condition for x in d] == ["behind_origin"]
+
+
+def test_detached_head_named_as_such(tmp_path):
+    """rev-parse returns the literal 'HEAD' when detached; reporting that as a
+    branch called HEAD would read as a real branch name."""
+    d = ddd.diagnose(ddd.Surface("live-thing", str(tmp_path), "main", None),
+                     make_io(branch="HEAD", ahead=1))
+    assert d[0].condition == "branch_mismatch"
+    assert "detached HEAD" in d[0].detail
+
+
+def test_branch_mismatch_checked_even_when_behind_is_exempt(tmp_path):
+    """check_behind=False encodes 'lagging origin is deliberate' for the pinned
+    worktree. It does not license sitting on someone else's branch — the two
+    claims are orthogonal."""
+    s = ddd.Surface("pinned", str(tmp_path), "master", None, check_behind=False)
+    d = ddd.diagnose(s, make_io(branch="codex/wip", ahead=1, behind=9))
+    assert [x.condition for x in d] == ["branch_mismatch"]
+
+
+def test_branch_mismatch_fingerprints_separately(tmp_path):
+    """Distinct condition => distinct fingerprint, so it cannot dedupe behind
+    an already-open behind_origin finding for the same surface."""
+    a = ddd.Diagnosis("s", "branch_mismatch", "x").fingerprint_parts
+    b = ddd.Diagnosis("s", "behind_origin", "x").fingerprint_parts
+    assert a != b
 
 
 def test_in_sync_yields_nothing(tmp_path):
