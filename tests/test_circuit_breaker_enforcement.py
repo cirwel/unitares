@@ -117,7 +117,7 @@ class TestCircuitBreakerIntegration:
         from src.mcp_handlers.knowledge import handlers as knowledge_graph
         import inspect
 
-        source = inspect.getsource(knowledge_graph.handle_leave_note)
+        source = inspect.getsource(knowledge_graph.handle_knowledge_note)
         assert "check_agent_can_operate" in source
 
 
