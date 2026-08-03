@@ -5,6 +5,10 @@ machine-readable capture is
 [`accountable-testbed-federation-trace.json`](accountable-testbed-federation-trace.json),
 and the implementation is in
 [`scripts/demo/federation_tracer/`](../../scripts/demo/federation_tracer/).
+The companion
+[`accountable-testbed-metrics-preregistration-v1.md`](accountable-testbed-metrics-preregistration-v1.md)
+registers the broader baseline, scale, and replication evaluation before
+headline runs.
 All ten registered checks passed in the captured run.
 
 This trace replaces the 2026-06-30 single-deployment trace as evidence for the
