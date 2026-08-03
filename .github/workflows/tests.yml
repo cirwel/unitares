@@ -103,6 +103,10 @@ jobs:
         python3 scripts/dev/flag_catalog.py --check
         python3 scripts/dev/ports_catalog.py --check
 
+    - name: Deploy-script contract (shared lib, no re-inlined blocks)
+      run: |
+        bash scripts/dev/check-deploy-lib.sh
+
     - name: Run smoke tests
       run: |
         make test-smoke
