@@ -1100,7 +1100,10 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
                 session = ACTIVE_SESSIONS.get(session_id)
             
             if not session:
-                return [error_response(f"Session '{session_id}' not found")]
+                return [error_response(
+                    f"Session '{session_id}' not found",
+                    recovery=session_not_found_recovery(),
+                )]
             
             # Check for timeouts if requested
             if check_timeout:
