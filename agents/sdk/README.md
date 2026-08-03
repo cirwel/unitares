@@ -8,14 +8,27 @@ and Chronicler are reference implementations.
 ## Install
 
 ```bash
-pip install unitares-sdk
+pip install "unitares-sdk @ git+https://github.com/cirwel/unitares@master#subdirectory=agents/sdk"
 ```
+
+Pin a commit or tag instead of `master` for a reproducible build — replace
+`@master` with `@<sha>`.
 
 Or from a checkout of the [unitares repo](https://github.com/cirwel/unitares):
 
 ```bash
 pip install -e agents/sdk
 ```
+
+> **Not on PyPI yet.** This README used to open with `pip install unitares-sdk`,
+> which does not resolve — the package has never been published. The release
+> workflow (`.github/workflows/publish-sdk.yml`) is written and uses PyPI
+> Trusted Publishing, so no API token is involved; publishing needs only a
+> one-time publisher registration on pypi.org and an `sdk-v*` tag. That is
+> deliberately not done yet: a PyPI name claim and its first version number are
+> both permanent, and there is no third-party consumer to serve while the
+> governance contract this wraps is still moving. The git URL above is the
+> supported install path until then.
 
 The package is standalone — it talks to a UNITARES server over MCP/REST and
 never needs the server codebase importable. Fully typed (`py.typed`).
