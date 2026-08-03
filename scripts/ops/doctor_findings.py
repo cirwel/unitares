@@ -219,6 +219,17 @@ class DoctorFindings:
 
         # Close anything that has gone back to PASS. An open finding nobody
         # closes is how a detector decays into noise.
+        #
+        # Local state only, and deliberately so — the absence of an
+        # outcome_event here is not an omission to be "fixed". A check going
+        # back to PASS says the condition cleared; it does not say an operator
+        # judged this doctor's call correct. The resolution-outcome path stamps
+        # verification_source='external_signal', which outcome_anchors tiers as
+        # TRUSTED_EXTERNAL on the explicit basis that a human adjudicated it
+        # (roadmap Invariant 4: a signal derived from the loop cannot anchor the
+        # loop). Emitting from an unattended hourly sweep would anchor the loop
+        # on its own echo. See deploy_drift_doctor._resolve, where exactly that
+        # path was removed.
         for fp in list(open_findings):
             if fp in seen:
                 continue
