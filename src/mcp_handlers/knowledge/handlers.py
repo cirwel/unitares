@@ -3247,174 +3247,267 @@ async def handle_answer_question(arguments: Dict[str, Any]) -> Sequence[TextCont
     except Exception as e:
         return [error_response(f"Failed to answer question: {str(e)}")]
 
-@mcp_tool("leave_note", timeout=10.0, deprecated=True, superseded_by="knowledge")
-async def handle_leave_note(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """[DEPRECATED — use knowledge(action='note') instead] Leave a quick note in the knowledge graph.
 
-    Just agent_id + summary + optional tags. Auto-sets type='note', severity='low'.
-    Functionally identical to ``knowledge(action='note', summary=...)``; deprecation
-    is per dogfood-UX issue #429 (tool aliasing — pick one). Calls still work.
-    """
-    # Apply parameter aliases (e.g., "text" → "summary", "note" → "summary")
-    arguments = apply_param_aliases("leave_note", arguments)
-    
-    # Set tool name in context for better error messages
-    arguments["_tool_name"] = "leave_note"
+_NOTE_TOTAL_LEN = MAX_SUMMARY_LEN + MAX_DETAILS_LEN
+_NOTE_INFRASTRUCTURE_TAGS = frozenset(
+    {
+        "infrastructure",
+        "search",
+        "embedding",
+        "silent-failure",
+        "degraded",
+        "database",
+        "service",
+    }
+)
 
-    # Notes are always low-severity, so allow a stable anonymous writer when
-    # no explicit or bound identity exists.
-    agent_id, error, is_anonymous_writer = _resolve_low_friction_writer(arguments)
+
+class _NoteResponseError(Exception):
+    """Abort a note write with an already-structured MCP error."""
+
+    def __init__(self, response: TextContent):
+        super().__init__()
+        self.response = response
+
+
+@dataclass(frozen=True)
+class _KnowledgeNoteRequest:
+    arguments: Dict[str, Any]
+    agent_id: str
+    text: Any
+    is_anonymous_writer: bool
+
+
+def _truncate_note_text(text: Any) -> Any:
+    """Apply the legacy combined note limit before splitting fields."""
+    if len(text) <= _NOTE_TOTAL_LEN:
+        return text
+    return text[:_NOTE_TOTAL_LEN] + "... [truncated]"
+
+
+def _parse_note_response_to(
+    arguments: Dict[str, Any],
+) -> Optional[ResponseTo]:
+    """Parse an optional typed parent link for a note."""
+    response_data = arguments.get("response_to")
+    if not response_data:
+        return None
+    required_fields = {"discovery_id", "response_type"}
+    if not isinstance(response_data, dict) or not required_fields.issubset(
+        response_data
+    ):
+        return None
+
+    parent_id = str(response_data["discovery_id"]).strip()
+    if not parent_id:
+        raise _NoteResponseError(
+            error_response("Invalid response_to.discovery_id (empty)")
+        )
+
+    response_type = response_data["response_type"]
+    if response_type not in VALID_RESPONSE_TYPES:
+        raise _NoteResponseError(
+            error_response(
+                f"Invalid response_type '{response_type}'. "
+                f"Valid: {sorted(VALID_RESPONSE_TYPES)}"
+            )
+        )
+    return ResponseTo(
+        discovery_id=parent_id,
+        response_type=response_type,
+    )
+
+
+def _split_note_text(text: Any) -> tuple[Any, Any]:
+    """Split a note into summary and details at a nearby boundary."""
+    if len(text) <= MAX_SUMMARY_LEN:
+        return text, ""
+
+    shortened = text[:MAX_SUMMARY_LEN]
+    split_pos = MAX_SUMMARY_LEN
+    for end_char in [". ", "! ", "? ", "\n"]:
+        last_end = shortened.rfind(end_char, MAX_SUMMARY_LEN - 200)
+        if last_end > 0:
+            split_pos = last_end + len(end_char)
+            break
+    else:
+        last_space = shortened.rfind(" ")
+        if last_space > MAX_SUMMARY_LEN - 100:
+            split_pos = last_space
+    return text[:split_pos].rstrip(), text[split_pos:].strip()
+
+
+def _infer_note_severity(tags: list[str]) -> str:
+    """Preserve the legacy infrastructure-bug severity inference."""
+    tag_set = set(tags)
+    if "bug" in tag_set and tag_set & _NOTE_INFRASTRUCTURE_TAGS:
+        return "medium"
+    return "low"
+
+
+def _capture_note_provenance(
+    arguments: Dict[str, Any], agent_id: str
+) -> dict[str, Any]:
+    """Capture S22 note context without making provenance a write blocker."""
+    from src.knowledge_graph import tag_provenance_source as _tag_src
+
+    provenance = _tag_src(None, "explicit_leave_note")
+    try:
+        from src.provenance_context import (
+            attach_s22_context,
+            build_s22_write_context,
+            classify_fork_for_s22_context,
+        )
+
+        meta = mcp_server.agent_metadata.get(agent_id)
+        episode_fork_kind, identity_lineage_fork = (
+            classify_fork_for_s22_context(meta, agent_id)
+        )
+        s22_context = build_s22_write_context(
+            arguments,
+            meta=meta,
+            context_source="knowledge.note",
+            default_governance_mode="explicit",
+            episode_fork_kind=episode_fork_kind,
+            identity_lineage_fork=identity_lineage_fork,
+        )
+        return attach_s22_context(provenance, s22_context)
+    except Exception as exc:
+        logger.debug("Could not capture note S22 provenance: %s", exc)
+        return provenance
+
+
+def _build_note_discovery(
+    request: _KnowledgeNoteRequest,
+) -> DiscoveryNode:
+    """Normalize note fields and materialize the discovery node."""
+    text = _truncate_note_text(request.text)
+    response_to = _parse_note_response_to(request.arguments)
+    tags = normalize_tags(request.arguments.get("tags", []))
+    summary, details = _split_note_text(text)
+    return DiscoveryNode(
+        id=_utc_now_iso(),
+        agent_id=request.agent_id,
+        type="note",
+        summary=summary,
+        details=details,
+        tags=tags,
+        severity=_infer_note_severity(tags),
+        status="open",
+        response_to=response_to,
+        provenance=_capture_note_provenance(
+            request.arguments, request.agent_id
+        ),
+    )
+
+
+async def _persist_note_discovery(
+    graph: Any, note: DiscoveryNode, agent_id: str
+) -> None:
+    """Link, store, and broadcast one prepared note."""
+    if note.tags:
+        similar = await graph.find_similar(note, limit=3)
+        note.related_to = [item.id for item in similar]
+    await graph.add_discovery(note)
+    await _broadcast_knowledge_write(note, agent_id)
+
+
+def _build_note_response(
+    request: _KnowledgeNoteRequest, note: DiscoveryNode
+) -> Sequence[TextContent]:
+    """Render the stable legacy and consolidated note response."""
+    response = {
+        "message": "Note saved",
+        "note_id": note.id,
+        "agent": _agent_display_for_response(
+            request.agent_id, request.arguments
+        ),
+        "note": note.to_dict(include_details=False),
+        "visibility": "shared",
+        "discoverable": True,
+        "_visibility_note": (
+            "Notes are shared and searchable by other agents. "
+            "Use response_to to reply to discoveries."
+        ),
+        "_resolve_when_done": (
+            "When this is addressed, close the loop: "
+            f"knowledge(action='update', discovery_id='{note.id}', "
+            "status='resolved')"
+        ),
+    }
+    if request.is_anonymous_writer:
+        response["agent_mode"] = "anonymous"
+        response["_identity_hint"] = (
+            "Stored under a lightweight anonymous writer ID. "
+            "Bind an identity first if you want authorship continuity."
+        )
+    return success_response(response, arguments=request.arguments)
+
+
+async def _execute_note_write(
+    request: _KnowledgeNoteRequest, graph: Any
+) -> Sequence[TextContent]:
+    """Build and persist one note through the shared write path."""
+    note = _build_note_discovery(request)
+    await _persist_note_discovery(graph, note, request.agent_id)
+    return _build_note_response(request, note)
+
+
+async def handle_knowledge_note(
+    arguments: Dict[str, Any],
+) -> Sequence[TextContent]:
+    """Implement the preferred knowledge(action='note') write path."""
+    arguments.setdefault("_tool_name", "knowledge")
+    agent_id, error, is_anonymous_writer = _resolve_low_friction_writer(
+        arguments
+    )
     if error:
         return [error]
 
-    # CIRCUIT BREAKER: Paused agents cannot leave notes
     from ..utils import check_agent_can_operate
+
     blocked = check_agent_can_operate(agent_id)
     if blocked:
         return [blocked]
 
-    text, error = require_argument(arguments, "summary",
-                                  "Note content required. Use 'summary', 'note', 'text', or 'content' parameter.")
+    note_text, error = require_argument(
+        arguments,
+        "summary",
+        "Note content required. Use 'summary', 'note', 'text', "
+        "or 'content' parameter.",
+    )
     if error:
         return [error]
-    
+
+    request = _KnowledgeNoteRequest(
+        arguments=arguments,
+        agent_id=agent_id,
+        text=note_text,
+        is_anonymous_writer=is_anonymous_writer,
+    )
     try:
         graph = await get_knowledge_graph()
-        
-        # Notes use the same limits as store_knowledge_graph (imported at top).
-        MAX_NOTE_TOTAL = MAX_SUMMARY_LEN + MAX_DETAILS_LEN
-        if len(text) > MAX_NOTE_TOTAL:
-            text = text[:MAX_NOTE_TOTAL] + "... [truncated]"
-        
-        # Parse response_to if provided (for threading)
-        response_to = None
-        if "response_to" in arguments and arguments["response_to"]:
-            resp_data = arguments["response_to"]
-            if isinstance(resp_data, dict) and "discovery_id" in resp_data and "response_type" in resp_data:
-                # Validate discovery_id format
-                parent_id = str(resp_data["discovery_id"]).strip()
-                if not parent_id:
-                    return error_response("Invalid response_to.discovery_id (empty)")
+        return await _execute_note_write(request, graph)
+    except _NoteResponseError as exc:
+        return [exc.response]
+    except Exception as exc:
+        return [error_response(f"Failed to leave note: {str(exc)}")]
 
-                # Validate response_type enum
-                response_type = resp_data["response_type"]
-                if response_type not in VALID_RESPONSE_TYPES:
-                    return error_response(f"Invalid response_type '{response_type}'. Valid: {sorted(VALID_RESPONSE_TYPES)}")
 
-                response_to = ResponseTo(
-                    discovery_id=parent_id,
-                    response_type=response_type
-                )
+@mcp_tool(
+    "leave_note",
+    timeout=10.0,
+    deprecated=True,
+    superseded_by="knowledge",
+)
+async def handle_leave_note(
+    arguments: Dict[str, Any],
+) -> Sequence[TextContent]:
+    """Adapt the deprecated tool to knowledge(action='note')."""
+    adapted_arguments = apply_param_aliases("leave_note", arguments)
+    adapted_arguments["_tool_name"] = "leave_note"
+    return await handle_knowledge_note(adapted_arguments)
 
-        # Tags pass through verbatim. Callers opt in to the ephemeral lifecycle
-        # by tagging scratch/temp/ephemeral themselves; the handler does NOT
-        # inject ephemeral on their behalf. The prior auto-inject silently
-        # scheduled every non-permanent note for 7-day auto-archive, which
-        # swept real design-gap notes that agents had no idea were on a timer.
-        tags = normalize_tags(arguments.get("tags", []))
-
-        # Split long notes into summary + details
-        if len(text) <= MAX_SUMMARY_LEN:
-            note_summary = text
-            note_details = ""
-        else:
-            # Try to split at a sentence boundary within summary limit
-            truncated = text[:MAX_SUMMARY_LEN]
-            split_pos = MAX_SUMMARY_LEN
-            for end_char in ['. ', '! ', '? ', '\n']:
-                last_end = truncated.rfind(end_char, MAX_SUMMARY_LEN - 200)
-                if last_end > 0:
-                    split_pos = last_end + len(end_char)
-                    break
-            else:
-                last_space = truncated.rfind(' ')
-                if last_space > MAX_SUMMARY_LEN - 100:
-                    split_pos = last_space
-            note_summary = text[:split_pos].rstrip()
-            note_details = text[split_pos:].strip()
-
-        # Tag-based severity inference: auto-bump infrastructure bugs to medium
-        note_severity = "low"
-        tag_set = set(tags)
-        INFRA_TAGS = {"infrastructure", "search", "embedding", "silent-failure", "degraded", "database", "service"}
-        if "bug" in tag_set and (tag_set & INFRA_TAGS):
-            note_severity = "medium"
-
-        # Create note with minimal ceremony
-        from src.knowledge_graph import tag_provenance_source as _tag_src
-        provenance = _tag_src(None, "explicit_leave_note")
-        try:
-            from src.provenance_context import (
-                attach_s22_context,
-                build_s22_write_context,
-                classify_fork_for_s22_context,
-            )
-
-            meta = mcp_server.agent_metadata.get(agent_id)
-            episode_fork_kind, identity_lineage_fork = classify_fork_for_s22_context(
-                meta, agent_id
-            )
-            s22_context = build_s22_write_context(
-                arguments,
-                meta=meta,
-                context_source="knowledge.note",
-                default_governance_mode="explicit",
-                episode_fork_kind=episode_fork_kind,
-                identity_lineage_fork=identity_lineage_fork,
-            )
-            provenance = attach_s22_context(provenance, s22_context)
-        except Exception as exc:
-            logger.debug("Could not capture note S22 provenance: %s", exc)
-
-        note = DiscoveryNode(
-            id=_utc_now_iso(),
-            agent_id=agent_id,
-            type="note",
-            summary=note_summary,
-            details=note_details,
-            tags=tags,
-            severity=note_severity,
-            status="open",
-            response_to=response_to,
-            provenance=provenance,
-        )
-        
-        # Auto-link if tags provided (fast with indexes)
-        if note.tags:
-            similar = await graph.find_similar(note, limit=3)
-            note.related_to = [s.id for s in similar]
-        
-        await graph.add_discovery(note)
-        await _broadcast_knowledge_write(note, agent_id)
-
-        # v2.5.3: Include agent display info
-        agent_display = _agent_display_for_response(agent_id, arguments)
-
-        # UX FIX (Feb 2026): Clarify visibility - notes are shared and discoverable
-        # KG loop closure: remind agents to resolve when addressed
-        response = {
-            "message": f"Note saved",
-            "note_id": note.id,
-            "agent": agent_display,
-            "note": note.to_dict(include_details=False),
-            # Clarify visibility for agent understanding
-            "visibility": "shared",
-            "discoverable": True,
-            "_visibility_note": "Notes are shared and searchable by other agents. Use response_to to reply to discoveries.",
-            "_resolve_when_done": f"When this is addressed, close the loop: knowledge(action='update', discovery_id='{note.id}', status='resolved')",
-        }
-
-        if is_anonymous_writer:
-            response["agent_mode"] = "anonymous"
-            response["_identity_hint"] = (
-                "Stored under a lightweight anonymous writer ID. "
-                "Bind an identity first if you want authorship continuity."
-            )
-
-        return success_response(response, arguments=arguments)
-
-    except Exception as e:
-        return [error_response(f"Failed to leave note: {str(e)}")]
 
 @mcp_tool("cleanup_knowledge_graph", timeout=60.0, register=False)
 async def handle_cleanup_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:

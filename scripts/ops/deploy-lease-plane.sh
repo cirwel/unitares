@@ -16,47 +16,33 @@
 # Idempotent: creates the deploy worktree if missing, fast-forwards it to
 # origin/master (never a destructive reset), recompiles, restarts the
 # LaunchAgent, and verifies health.
+#
+# Shared blocks (lock, plist preflight, ff) live in deploy-lib.sh.
 set -euo pipefail
 
 REPO="${UNITARES_REPO:-$HOME/projects/unitares}"
 DEPLOY="${UNITARES_LEASE_PLANE_DEPLOY:-$HOME/projects/unitares-deploy}"
 LABEL="com.unitares.lease-plane"
+PLIST="${UNITARES_LEASE_PLANE_PLIST:-$HOME/Library/LaunchAgents/$LABEL.plist}"
 UID_NUM="$(id -u)"
+TAG="deploy"
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
-# ── Serialize deploys (shared worktree) ──────────────────────────────────────
-# This script and deploy-mcp.sh both fast-forward the SAME deploy worktree, so
-# concurrent runs race the git index (and deploy-mcp's rollback can revert this
-# deploy). macOS has no flock(1), so guard with an atomic mkdir lock keyed to the
-# worktree, reclaiming it only if the holder process is dead. The lock is shared
-# with deploy-mcp.sh because the name derives from the (shared) DEPLOY path.
-# Override via UNITARES_DEPLOY_LOCK.
-LOCK_DIR="${UNITARES_DEPLOY_LOCK:-${TMPDIR:-/tmp}/unitares-deploy$(printf '%s' "$DEPLOY" | tr -c 'A-Za-z0-9' '_').lock}"
-if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-  holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || echo '?')"
-  if [[ "$holder" != '?' ]] && ! kill -0 "$holder" 2>/dev/null; then
-    echo "[deploy] reclaiming stale deploy lock (holder PID $holder is dead): $LOCK_DIR" >&2
-    rm -rf "$LOCK_DIR"
-    mkdir "$LOCK_DIR" 2>/dev/null || { echo "[deploy] lost a lock race — another deploy just started; refusing" >&2; exit 1; }
-  else
-    echo "[deploy] another deploy is in progress (lock: $LOCK_DIR, holder PID $holder) — refusing to run concurrently" >&2
-    exit 1
-  fi
-fi
-printf '%s' "$$" > "$LOCK_DIR/pid"
-trap 'rm -rf "$LOCK_DIR"' EXIT
+# shellcheck source=deploy-lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/deploy-lib.sh"
 
-echo "[deploy] fetching origin/master"
-git -C "$REPO" fetch origin master --quiet
+deploy_lib_acquire_lock "$TAG" "$DEPLOY"
 
-if ! git -C "$REPO" worktree list --porcelain | grep -qx "worktree $DEPLOY"; then
-  echo "[deploy] creating dedicated deploy worktree at $DEPLOY (on master)"
-  git -C "$REPO" worktree add "$DEPLOY" master
-fi
+# Preflight parity with the sibling scripts: if the plist still loads from the
+# dev checkout, the kickstart below restarts the OLD location and the health
+# probe passes against it. (Historically this script had no preflight — the
+# exact false-success gap the preflight exists to close.)
+deploy_lib_require_plist_target "$TAG" "$PLIST" "$DEPLOY" \
+  --allow-env UNITARES_LEASE_PLANE_ALLOW_DEV \
+  --recipe "[deploy]   sed -i '' 's|$REPO|$DEPLOY|g' \"$PLIST\"   # or re-render the plist template against $DEPLOY"
 
-echo "[deploy] fast-forwarding $DEPLOY to origin/master (ff-only; refuses if it would lose work)"
-git -C "$DEPLOY" merge --ff-only origin/master
+deploy_lib_ff_worktree "$TAG" "$REPO" "$DEPLOY"
 
 echo "[deploy] compiling lease_plane (surfaces compile errors before the restart)"
 ( cd "$DEPLOY/elixir/lease_plane" && mix deps.get && mix compile )
@@ -77,16 +63,12 @@ for line in open(os.environ.get("UNITARES_SECRETS_ENV", f"{os.environ['HOME']}/.
         break
 PY
 )"
-ok=""
-for _ in 1 2 3 4 5 6 7 8; do
-  sleep 3
-  if curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8788/v1/health 2>/dev/null | grep -q '"ok":true'; then
-    ok=yes
-    break
-  fi
-done
 
-if [[ "$ok" == yes ]]; then
+check_lease_plane_health() {
+  curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8788/v1/health 2>/dev/null | grep -q '"ok":true'
+}
+
+if deploy_lib_poll 8 3 check_lease_plane_health; then
   echo "[deploy] OK — lease plane healthy, serving from $DEPLOY @ $(git -C "$DEPLOY" rev-parse --short HEAD)"
 else
   echo "[deploy] FAILED — lease plane did not return healthy. Check ~/Library/Logs/unitares-lease-plane.log" >&2
