@@ -834,6 +834,20 @@ class TestKnowledgeParamMaps:
             args_passed = mock_note.call_args[0][0]
             assert args_passed["summary"] == "remember this"
 
+    def test_note_routes_around_deprecated_legacy_adapter(self):
+        """Preferred note calls must not traverse the deprecated tool wrapper."""
+        from src.mcp_handlers.consolidated import handle_knowledge
+        from src.mcp_handlers.knowledge.handlers import (
+            handle_knowledge_note,
+            handle_leave_note,
+        )
+
+        note_handler = _get_router_actions(handle_knowledge)["note"]
+
+        assert note_handler is handle_knowledge_note
+        assert note_handler is not handle_leave_note
+        assert getattr(note_handler, "_mcp_deprecated", False) is False
+
     @pytest.mark.asyncio
     async def test_update_maps_content_to_details(self):
         from src.mcp_handlers.consolidated import handle_knowledge
