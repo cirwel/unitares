@@ -188,24 +188,54 @@ def test_resolution_closes_finding_when_drift_clears(tmp_path):
 
 
 def test_no_outcome_event_without_baselined_identity(tmp_path, monkeypatch):
-    """An outcome row carrying no EISV would add noise to the label-breadth
-    problem it is meant to help, so emit nothing until an identity is set."""
+    """No identity configured — nothing to attribute an outcome to."""
     monkeypatch.delenv("DEPLOY_DRIFT_DOCTOR_UUID", raising=False)
     ddd.Doctor(io=make_io(behind=1)).run()
     ddd.Doctor(io=make_io(behind=0)).run()
     assert outcomes == []
 
 
-def test_outcome_event_emitted_with_identity(tmp_path, monkeypatch):
+def test_no_outcome_event_even_with_identity_configured(tmp_path, monkeypatch):
+    """A cleared condition is NOT an adjudication of this doctor's judgment.
+
+    `build_resolution_outcome_args` stamps `verification_source='external_signal'`,
+    which `outcome_anchors.tier_for_source` treats as TRUSTED_EXTERNAL — a gold
+    anchor for the falsifiability test, justified on the finding having been
+    "adjudicated by an operator/human … not the loop validating its own
+    trajectory" (Invariant 4). Drift clearing on an unattended hourly re-check
+    is the loop grading itself.
+
+    Setting the env var must therefore NOT arm the emission. This is the
+    regression guard: the code path existed and was one `export` away from
+    writing self-graded rows into the anchor channel.
+    """
     monkeypatch.setenv("DEPLOY_DRIFT_DOCTOR_UUID", "1111-2222")
     ddd.Doctor(io=make_io(behind=1)).run()
     ddd.Doctor(io=make_io(behind=0)).run()
-    assert len(outcomes) == 1
-    o = outcomes[0]
-    assert o["verification_source"] == "external_signal"
-    assert o["outcome_type"] == f"{ddd.FINDING_KIND}_confirmed"
-    # Drift that was real and got deployed is a CORRECT call, not a false positive.
-    assert o["is_bad"] is False
+    assert outcomes == []
+
+
+def test_resolve_never_imports_the_adjudication_builder(tmp_path):
+    """Source-level guard against a well-meaning re-add.
+
+    A behavioural test alone would pass if someone reintroduced the emission
+    behind a new flag that happens to default off, so pin the import site too.
+    Uses AST rather than text matching: the docstrings here name the builder in
+    order to explain why it must not be called.
+    """
+    import ast
+
+    tree = ast.parse(MODULE_PATH.read_text())
+    imported: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imported.extend(f"{node.module}.{a.name}" for a in node.names)
+        elif isinstance(node, ast.Import):
+            imported.extend(a.name for a in node.names)
+
+    assert not any("resolution_outcome" in name for name in imported), (
+        f"deploy_drift_doctor must not import the adjudication builder: {imported}"
+    )
 
 
 def test_dry_run_posts_nothing(tmp_path):

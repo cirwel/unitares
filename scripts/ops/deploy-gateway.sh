@@ -12,6 +12,9 @@
 #
 # Idempotent: creates the worktree if missing, fast-forwards (never resets),
 # restarts the LaunchAgent, and verifies /health on :8768.
+#
+# Shared blocks (lock, plist preflight, ff + lease-plane nudge) live in
+# deploy-lib.sh.
 set -euo pipefail
 
 REPO="${UNITARES_REPO:-$HOME/projects/unitares}"
@@ -20,79 +23,35 @@ LABEL="com.unitares.gateway-mcp"
 PLIST="${UNITARES_GATEWAY_PLIST:-$HOME/Library/LaunchAgents/$LABEL.plist}"
 PORT="${UNITARES_GATEWAY_PORT:-8768}"
 UID_NUM="$(id -u)"
+TAG="deploy"
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
-# ── Serialize deploys (shared worktree) ──────────────────────────────────────
-LOCK_DIR="${UNITARES_DEPLOY_LOCK:-${TMPDIR:-/tmp}/unitares-deploy$(printf '%s' "$DEPLOY" | tr -c 'A-Za-z0-9' '_').lock}"
-if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-  holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || echo '?')"
-  if [[ "$holder" != '?' ]] && ! kill -0 "$holder" 2>/dev/null; then
-    echo "[deploy] reclaiming stale deploy lock (holder PID $holder is dead): $LOCK_DIR" >&2
-    rm -rf "$LOCK_DIR"
-    mkdir "$LOCK_DIR" 2>/dev/null || { echo "[deploy] lost a lock race — another deploy just started; refusing" >&2; exit 1; }
-  else
-    echo "[deploy] another deploy is in progress (lock: $LOCK_DIR, holder PID $holder) — refusing to run concurrently" >&2
-    exit 1
-  fi
-fi
-printf '%s' "$$" > "$LOCK_DIR/pid"
-trap 'rm -rf "$LOCK_DIR"' EXIT
+# shellcheck source=deploy-lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/deploy-lib.sh"
 
-# ── Pre-flight: the LaunchAgent must load from the deploy worktree ────────────
+deploy_lib_acquire_lock "$TAG" "$DEPLOY"
+
 # Match the exact program path so a kickstart can't silently restart the dev
 # checkout and then have /health pass against the OLD process.
-if [[ -f "$PLIST" ]] && ! grep -q "$DEPLOY/src/gateway_server.py" "$PLIST"; then
-  echo "[deploy] WARNING: $LABEL does not run $DEPLOY/src/gateway_server.py (still restart-DEV)." >&2
-  echo "[deploy] kickstart would restart the OLD location and /health would pass against it." >&2
-  echo "[deploy] One-time migration (interactive login shell — a RELOAD, kickstart won't re-read the plist):" >&2
-  echo "[deploy]   cp \"$PLIST\" \"$PLIST.bak\"" >&2
-  echo "[deploy]   sed -i '' 's|$REPO|$DEPLOY|g' \"$PLIST\"" >&2
-  echo "[deploy]   launchctl unload \"$PLIST\" && launchctl load \"$PLIST\"" >&2
-  echo "[deploy] Refusing (set UNITARES_GATEWAY_ALLOW_DEV=1 to restart the dev checkout anyway)." >&2
-  [[ "${UNITARES_GATEWAY_ALLOW_DEV:-0}" == "1" ]] || exit 2
-fi
+deploy_lib_require_plist_target "$TAG" "$PLIST" "$DEPLOY/src/gateway_server.py" \
+  --allow-env UNITARES_GATEWAY_ALLOW_DEV \
+  --recipe "[deploy]   cp \"$PLIST\" \"$PLIST.bak\"
+[deploy]   sed -i '' 's|$REPO|$DEPLOY|g' \"$PLIST\""
 
-echo "[deploy] fetching origin/master"
-git -C "$REPO" fetch origin master --quiet
-
-LEASE_FRESH=0
-if ! git -C "$REPO" worktree list --porcelain | grep -qx "worktree $DEPLOY"; then
-  echo "[deploy] creating dedicated deploy worktree at $DEPLOY (on master)"
-  git -C "$REPO" worktree add "$DEPLOY" master
-  # A fresh `worktree add` checks out TRACKED files only — the lease plane's
-  # gitignored deps/ + _build/ are GONE, while the running BEAM keeps serving
-  # in-RAM modules until an unloaded module needs disk (the 06-27 ~5.4h
-  # fail-open, #1277). Nudge the plane after the ff below.
-  LEASE_FRESH=1
-fi
-
-LEASE_PREV="$(git -C "$DEPLOY" rev-parse HEAD)"
-echo "[deploy] fast-forwarding $DEPLOY to origin/master (ff-only; refuses if it would lose work)"
-git -C "$DEPLOY" merge --ff-only origin/master
-# The shared worktree just moved under every co-resident service (#1277 fix 1).
-if [[ "$LEASE_FRESH" == 1 ]]; then
-  "$(dirname "$0")/nudge-lease-plane.sh" --reason "deploy-gateway.sh: deploy worktree re-created (deps/_build gone)" || true
-else
-  "$(dirname "$0")/nudge-lease-plane.sh" --reason "deploy-gateway.sh: shared-worktree ff" \
-    --if-changed "$LEASE_PREV" "$(git -C "$DEPLOY" rev-parse HEAD)" || true
-fi
+deploy_lib_ff_worktree "$TAG" "$REPO" "$DEPLOY"
+deploy_lib_nudge_lease_plane "$TAG" "deploy-gateway.sh" "$DEPLOY"
 mkdir -p "$DEPLOY/data/logs"
 
 echo "[deploy] restarting $LABEL"
 launchctl kickstart -k "gui/$UID_NUM/$LABEL"
 
-echo "[deploy] verifying /health on :$PORT"
-ok=""
-for _ in $(seq 1 12); do
-  sleep 3
-  if curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
-    ok=yes
-    break
-  fi
-done
+check_gateway_health() {
+  curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1
+}
 
-if [[ "$ok" == yes ]]; then
+echo "[deploy] verifying /health on :$PORT"
+if deploy_lib_poll 12 3 check_gateway_health; then
   echo "[deploy] OK — gateway-mcp healthy on :$PORT (serving from $DEPLOY @ $(git -C "$DEPLOY" rev-parse --short HEAD))"
 else
   echo "[deploy] FAILED — /health on :$PORT did not respond within timeout." >&2
