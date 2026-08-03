@@ -82,7 +82,7 @@ UNITARES runs **alongside** your evals and guardrails. It replaces neither.
 
 **Reach for it when** you run autonomous or semi-autonomous coding, research, operations, resident, or local-model agents; when you need an accountable record of who did what; when agents should read their own state before continuing; and when confidence, evidence, and recovery belong on one audit trail.
 
-**It is not** an output validator, sandbox, hosted agent platform, agent framework, or chat interface. Your client provides the hands — prompts, tools, files, terminals, scheduled work, operator UX. UNITARES provides the accountable continuity underneath. The state reading is **not an outcome oracle** or bad-result detector; it is runtime telemetry about the agent, and external evidence is what calibrates it. Policy and review layers own labels such as task-negative, contract violation, or authority/harm.
+**It is not** an output validator, sandbox, hosted agent platform, agent framework, or chat interface. Your client provides the hands — prompts, tools, files, terminals, scheduled work, operator UX. UNITARES provides the accountable continuity underneath. The state reading is **not an outcome oracle**, a bad-result detector, or a grand jury; it is runtime telemetry about the agent, and external evidence is what calibrates it. Policy and review layers own labels such as task-negative, contract violation, or authority/harm.
 
 **Client-neutral by design.** Claude Code, Codex, Hermes, Goose, Cursor, dispatch agents, local models, and frontier providers such as Mistral all use the same server over MCP, REST, the SDK, or a host adapter. Claude is one client family, not a server-side assumption.
 
@@ -108,7 +108,7 @@ For an operator view, open the dashboard at `http://localhost:8767/dashboard` ([
 
 ## Integrate in two calls
 
-Start a session, pass the returned `client_session_id` into each check-in, obey the returned action.
+For AI clients, the stable contract is: start a session, pass the returned `client_session_id` into each check-in, and obey the returned action. The four-score state is optional context for finer control.
 
 ```python
 # 1. Start a governance session for this process.
