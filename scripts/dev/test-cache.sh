@@ -20,7 +20,8 @@ _cache_mtime() {
 }
 
 CACHE_DIR=".test-cache"
-CACHE_VERSION="v3"
+CACHE_VERSION="v4"
+CACHE_FORMAT="test-cache-result-v1"
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
@@ -243,12 +244,23 @@ if [[ ${#PYTEST_EXTRA[@]} -gt 0 ]]; then
     CACHE_LABEL="$CACHE_LABEL args $PYTEST_ARGS_HASH"
 fi
 
+_valid_cache_file() {
+    [[ -f "$1" ]] || return 1
+    local first_line=""
+    IFS= read -r first_line < "$1" || true
+    [[ "$first_line" == "$CACHE_FORMAT" ]]
+}
+
+_print_cache_file() {
+    { IFS= read -r _format_line || true; cat; } < "$1"
+}
+
 # --- cache hit (fast path, no lock) ---
-if [[ "$FRESH" == false && -f "$CACHE_FILE" ]]; then
+if [[ "$FRESH" == false ]] && _valid_cache_file "$CACHE_FILE"; then
     AGE_SECS=$(( $(date +%s) - $(_cache_mtime "$CACHE_FILE") ))
     AGE_MIN=$(( AGE_SECS / 60 ))
     echo "[test-cache] HIT — $CACHE_LABEL (cached ${AGE_MIN}m ago)"
-    cat "$CACHE_FILE"
+    _print_cache_file "$CACHE_FILE"
     exit 0
 fi
 
@@ -283,16 +295,35 @@ while ! mkdir "$LOCK_DIR" 2>/dev/null; do
     fi
 done
 echo "$$" > "$LOCK_HOLDER"
-trap 'rm -rf "$LOCK_DIR"' EXIT INT TERM
+TMPOUT=""
+
+_cleanup_test_cache() {
+    if [[ -n "${TMPOUT:-}" ]]; then
+        rm -f "$TMPOUT"
+    fi
+    rm -rf "$LOCK_DIR"
+}
+
+_interrupt_test_cache() {
+    local signal_name="$1"
+    local exit_code="$2"
+    trap - INT TERM
+    echo "[test-cache] INTERRUPTED ($signal_name) — not cached" >&2
+    exit "$exit_code"
+}
+
+trap '_cleanup_test_cache' EXIT
+trap '_interrupt_test_cache INT 130' INT
+trap '_interrupt_test_cache TERM 143' TERM
 
 # --- double-check cache now that we hold the lock ---
 # The holder ahead of us may have just populated the cache for this
 # tree hash; skip pytest if so.
-if [[ "$FRESH" == false && -f "$CACHE_FILE" ]]; then
+if [[ "$FRESH" == false ]] && _valid_cache_file "$CACHE_FILE"; then
     AGE_SECS=$(( $(date +%s) - $(_cache_mtime "$CACHE_FILE") ))
     AGE_MIN=$(( AGE_SECS / 60 ))
     echo "[test-cache] HIT (post-lock) — $CACHE_LABEL (cached ${AGE_MIN}m ago)"
-    cat "$CACHE_FILE"
+    _print_cache_file "$CACHE_FILE"
     exit 0
 fi
 
@@ -310,25 +341,14 @@ else
         ${PYTEST_EXTRA[@]+"${PYTEST_EXTRA[@]}"})
 fi
 TMPOUT=$(mktemp)
-set +e
-"${PYTEST_CMD[@]}" 2>&1 | tee "$TMPOUT"
-EXIT_CODE=${PIPESTATUS[0]}
-set -e
 
-if [[ $EXIT_CODE -eq 0 ]]; then
-    # cache only passing results — tail gives the summary line
-    tail -5 "$TMPOUT" > "$CACHE_FILE"
-    echo "[test-cache] CACHED — $CACHE_LABEL"
-else
-    echo "[test-cache] FAILED (exit $EXIT_CODE) — not cached"
-fi
-
-rm -f "$TMPOUT"
-
-# prune old entries (keep last 20)
-ENTRIES=$(ls -t "$CACHE_DIR"/ 2>/dev/null | tail -n +21)
-if [[ -n "$ENTRIES" ]]; then
-    echo "$ENTRIES" | while read -r f; do rm -f "$CACHE_DIR/$f"; done
-fi
-
-exit "$EXIT_CODE"
+# Replace the shell with the supervisor so SIGINT/SIGTERM cannot land between
+# spawning the wrapper and recording its PID. The supervisor owns pytest,
+# descendants, atomic cache publication, temporary files, and lock cleanup.
+exec python3 "$PROJECT_ROOT/scripts/dev/test_cache_runner.py" \
+    --output "$TMPOUT" \
+    --cache-file "$CACHE_FILE" \
+    --cache-format "$CACHE_FORMAT" \
+    --cache-label "$CACHE_LABEL" \
+    --lock-dir "$LOCK_DIR" \
+    -- "${PYTEST_CMD[@]}"
