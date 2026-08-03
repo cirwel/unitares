@@ -168,19 +168,31 @@ For long-running or scheduled agents, the [SDK](agents/sdk/README.md) handles co
 
 ## More of the surface
 
-The four tools above cover the common path. The rest of the surface is there when you need it — `list_tools()` enumerates it live, and `describe_tool(name)` explains any one of them.
+The four tools above cover the common path. The rest is there when you need it — `list_tools()` enumerates the surface live, and `describe_tool(name)` explains any one of them.
 
-| Capability | What it's for | Entry points |
+**What a running agent can do for itself**
+
+| | | |
 |---|---|---|
-| **Recovery from a pause** | Reflect on why the pause happened, check whether resuming is safe, resume or get specific guidance. The way out of an enforced pause. | `self_recovery_review` · `check_recovery_options` · `direct_resume_if_safe` |
-| **Dialectic sessions** | Open a dispute, submit thesis / antithesis / synthesis, reassign a reviewer, read the transcript. Peer-to-peer or LLM-assisted. | `request_review` · `submit_thesis` · `submit_antithesis` · `submit_synthesis` · `list_dialectic_sessions` |
-| **Agent-to-agent signalling (CIRS)** | A multi-agent resonance layer: announce your state to the fleet, raise an alert, publish a coherence report, declare a boundary contract about what you will and won't trust. | `cirs_protocol` · `state_announce` · `coherence_report` · `boundary_contract` |
-| **Fleet health & anomalies** | Find stuck agents, detect anomalies across the fleet, aggregate metrics, read overall workspace health. | `detect_stuck_agents` · `detect_anomalies` · `aggregate_metrics` · `get_workspace_health` |
-| **Peer comparison** | Ask how you're doing relative to structurally similar agents rather than against an absolute threshold. | `compare_me_to_similar` · `compare_agents` |
-| **Dry run** | Simulate a check-in and see the action it would produce without writing anything. | `simulate_update` |
-| **Multi-model routing** | Call another model through governance so its output carries provenance, and enumerate the inference hosts available. | `call_model` · `list_inference_hosts` · `describe_inference_host` |
-| **Knowledge graph depth** | Beyond search: synthesize across entries, supersede a wrong one, audit the graph, follow a discovery's detail and relations. | `synthesize_knowledge_graph` · `supersede_discovery` · `audit_knowledge_graph` |
-| **Calibration** | Check your calibration, submit ground truth when an outcome lands, rebuild from history. | `check_calibration` · `update_calibration_ground_truth` · `record_result` |
+| **Recover from a pause** | Reflect on why it happened, check whether resuming is safe, then resume or get specific guidance. The way out of an enforced pause. | `self_recovery_review` · `check_recovery_options` · `direct_resume_if_safe` |
+| **Dry-run a check-in** | See the action a check-in would produce without writing anything. | `simulate_update` |
+| **Compare against peers** | Ask how it's doing relative to structurally similar agents rather than against an absolute threshold. | `compare_me_to_similar` · `compare_agents` |
+| **Manage its calibration** | Check calibration, submit ground truth when an outcome lands, rebuild from history. | `check_calibration` · `update_calibration_ground_truth` · `record_result` |
+| **Reach another model** | Call a different model through governance so its output carries provenance; enumerate available inference hosts. | `call_model` · `list_inference_hosts` · `describe_inference_host` |
+
+**What agents do with each other**
+
+| | | |
+|---|---|---|
+| **Argue to resolution** | Open a dispute, submit thesis / antithesis / synthesis, reassign a reviewer, read the transcript. Peer-to-peer or LLM-assisted. | `request_review` · `submit_thesis` · `submit_antithesis` · `submit_synthesis` · `list_dialectic_sessions` |
+| **Signal across the fleet (CIRS)** | A multi-agent resonance layer: announce state, raise an alert, publish a coherence report, declare a boundary contract about what you will and won't trust. | `cirs_protocol` · `state_announce` · `coherence_report` · `boundary_contract` |
+| **Build on shared memory** | Beyond search: synthesize across entries, supersede a wrong one, audit the graph, follow a discovery's relations. | `synthesize_knowledge_graph` · `supersede_discovery` · `audit_knowledge_graph` |
+
+**What you can see across the fleet**
+
+| | | |
+|---|---|---|
+| **Health & anomalies** | Find stuck agents, detect anomalies fleet-wide, aggregate metrics, read overall workspace health. | `detect_stuck_agents` · `detect_anomalies` · `aggregate_metrics` · `get_workspace_health` |
 | **Behavioral identity** | Verify that a process claiming continuity actually matches the trajectory it claims. | `verify_trajectory_identity` · `get_trajectory_status` |
 | **Audit & export** | Query the event log, correlate outcomes against prior state, pull system history, export to file. | `audit_events_query` · `outcome_correlation` · `get_system_history` · `export_to_file` |
 
