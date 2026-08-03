@@ -918,6 +918,70 @@ class TestResolveAgentDisplay:
 
         assert result["display_name"] == "Opus Agent"
 
+    @pytest.mark.parametrize(
+        "lookup_field",
+        ["public_agent_id", "structured_id", "label", "display_name"],
+    )
+    def test_resolve_by_supported_metadata_alias(
+        self, patch_common, mock_mcp_server, lookup_field
+    ):
+        """Every documented metadata alias can locate the registry UUID."""
+        meta = SimpleNamespace(
+            public_agent_id=None,
+            structured_id=None,
+            label=None,
+            display_name=None,
+        )
+        setattr(meta, lookup_field, "agent-alias")
+        mock_mcp_server.agent_metadata["uuid-alias"] = meta
+
+        from src.mcp_handlers.knowledge.handlers import _resolve_agent_display
+
+        result = _resolve_agent_display("agent-alias")
+
+        assert result["uuid"] == "uuid-alias"
+        assert result["agent_id"] == "agent-alias"
+
+    def test_resolve_builds_trimmed_claimed_display_payload(
+        self, patch_common, mock_mcp_server
+    ):
+        """Claimed display names stay cosmetic and metadata text is trimmed."""
+        mock_mcp_server.agent_metadata["uuid-claimed"] = SimpleNamespace(
+            public_agent_id="  Gpt_20260802  ",
+            structured_id="legacy-handle",
+            display_name="  Ada  ",
+            label="ignored-label",
+        )
+
+        from src.mcp_handlers.knowledge.handlers import _resolve_agent_display
+
+        result = _resolve_agent_display("uuid-claimed")
+
+        assert result == {
+            "uuid": "uuid-claimed",
+            "agent_id": "Gpt_20260802",
+            "structured_agent_id": "Gpt_20260802",
+            "display_name": "Ada",
+            "label_source": "claimed",
+        }
+
+    def test_resolve_marks_handle_display_as_auto(
+        self, patch_common, mock_mcp_server
+    ):
+        """A display copied from the public handle is not a claimed label."""
+        mock_mcp_server.agent_metadata["uuid-auto"] = SimpleNamespace(
+            public_agent_id="Gpt_20260802",
+            structured_id=None,
+            display_name="Gpt_20260802",
+            label=None,
+        )
+
+        from src.mcp_handlers.knowledge.handlers import _resolve_agent_display
+
+        result = _resolve_agent_display("uuid-auto")
+
+        assert result["label_source"] == "auto"
+
 
 # ============================================================================
 # Integration-level edge cases

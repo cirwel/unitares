@@ -590,70 +590,84 @@ def _check_display_name_required(agent_id: str, arguments: Dict[str, Any]) -> tu
         logger.debug(f"Could not check display_name: {e}")
         return None, None  # Don't block on check failures
 
+_AGENT_DISPLAY_LOOKUP_FIELDS = (
+    "public_agent_id",
+    "structured_id",
+    "label",
+    "display_name",
+)
+
+
+def _agent_metadata_text(meta: Any, field: str) -> Optional[str]:
+    """Return one normalized textual metadata field."""
+    value = getattr(meta, field, None)
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _build_agent_display_payload(
+    uuid_key: str, meta: Any, fallback_handle: str
+) -> Dict[str, Any]:
+    """Build the stable S22 display payload for one metadata record."""
+    public_agent_id = _agent_metadata_text(meta, "public_agent_id")
+    structured_id = _agent_metadata_text(meta, "structured_id")
+    public_handle = public_agent_id or structured_id or fallback_handle
+    display_name = (
+        _agent_metadata_text(meta, "display_name")
+        or _agent_metadata_text(meta, "label")
+        or public_handle
+    )
+
+    payload: Dict[str, Any] = {"uuid": uuid_key}
+    if public_handle:
+        payload["agent_id"] = public_handle
+        payload["structured_agent_id"] = public_handle
+    if display_name:
+        payload["display_name"] = display_name
+    if display_name and display_name not in (
+        public_agent_id,
+        structured_id,
+    ):
+        payload["label_source"] = "claimed"
+    elif display_name or public_handle:
+        payload["label_source"] = "auto"
+    else:
+        payload["label_source"] = "uuid"
+    return payload
+
+
+def _agent_metadata_matches(meta: Any, agent_id: str) -> bool:
+    """Return whether a metadata record exposes the requested alias."""
+    return any(
+        getattr(meta, field, None) == agent_id
+        for field in _AGENT_DISPLAY_LOOKUP_FIELDS
+    )
+
+
+def _find_agent_display_metadata(
+    agent_id: str,
+) -> Optional[tuple[str, Any]]:
+    """Locate agent metadata by registry UUID or a supported alias."""
+    metadata = mcp_server.agent_metadata
+    if agent_id in metadata:
+        return agent_id, metadata[agent_id]
+    for uuid_key, meta in metadata.items():
+        if _agent_metadata_matches(meta, agent_id):
+            return uuid_key, meta
+    return None
+
+
 def _resolve_agent_display(agent_id: str) -> Dict[str, Any]:
-    """
-    Resolve agent_id to display info (v2.5.4).
-
-    Returns S22-shaped display info for human-readable output: UUID is the
-    registry key, ``agent_id`` is the public structured handle, and
-    ``display_name`` is cosmetic.
-
-    Args:
-        agent_id: Either model+date format (new) or UUID (legacy lookups)
-    """
-    def _payload(uuid_key: str, meta, fallback_handle: str) -> Dict[str, Any]:
-        def _meta_text(name: str) -> Optional[str]:
-            value = getattr(meta, name, None)
-            if not isinstance(value, str):
-                return None
-            value = value.strip()
-            return value or None
-
-        public_handle = (
-            _meta_text('public_agent_id')
-            or _meta_text('structured_id')
-            or fallback_handle
-        )
-        display_name = (
-            _meta_text('display_name')
-            or _meta_text('label')
-            or public_handle
-        )
-        payload: Dict[str, Any] = {"uuid": uuid_key}
-        if public_handle:
-            payload["agent_id"] = public_handle
-            payload["structured_agent_id"] = public_handle
-        if display_name:
-            payload["display_name"] = display_name
-        if display_name and display_name not in (
-            _meta_text('public_agent_id'),
-            _meta_text('structured_id'),
-        ):
-            payload["label_source"] = "claimed"
-        elif display_name or public_handle:
-            payload["label_source"] = "auto"
-        else:
-            payload["label_source"] = "uuid"
-        return payload
-
+    """Resolve a registry UUID or alias to S22-shaped display info."""
     try:
-        # Try direct lookup (if agent_id is actually a UUID in legacy data)
-        if agent_id in mcp_server.agent_metadata:
-            meta = mcp_server.agent_metadata[agent_id]
-            return _payload(agent_id, meta, agent_id)
-
-        # Search by structured_id or label
-        for uuid_key, meta in mcp_server.agent_metadata.items():
-            if (
-                getattr(meta, 'public_agent_id', None) == agent_id
-                or getattr(meta, 'structured_id', None) == agent_id
-                or getattr(meta, 'label', None) == agent_id
-                or getattr(meta, 'display_name', None) == agent_id
-            ):
-                return _payload(uuid_key, meta, agent_id)
+        match = _find_agent_display_metadata(agent_id)
+        if match:
+            uuid_key, meta = match
+            return _build_agent_display_payload(uuid_key, meta, agent_id)
     except Exception:
         pass
-    # Fallback: use agent_id as-is
     return {"agent_id": agent_id, "display_name": agent_id}
 
 
