@@ -230,7 +230,7 @@ def log(msg: str) -> None:
 class Diagnosis:
     def __init__(self, surface: str, condition: str, detail: str, behind: int = 0):
         self.surface = surface
-        self.condition = condition  # "behind_origin" | "restart_pending"
+        self.condition = condition  # "branch_mismatch" | "behind_origin" | "restart_pending"
         self.detail = detail
         self.behind = behind
 
@@ -247,7 +247,53 @@ def diagnose(surface: Surface, io: Dict[str, Callable[..., Any]]) -> List[Diagno
 
     io["fetch"](surface.path)
 
-    if surface.check_behind:
+    # Which branch is checked out at all. surface.branch was only ever used as
+    # the comparison TARGET (origin/<branch>), never as an assertion that HEAD
+    # is on it — so a live checkout parked on a feature branch compared cleanly
+    # against master and reported nothing unusual. For a live-from-checkout
+    # surface that is the more serious condition of the two: commits ahead of
+    # the declared branch are unreviewed code already executing.
+    #
+    # Checked independently of check_behind. The two claims are orthogonal — a
+    # pinned deploy worktree lagging origin is deliberate (that is what
+    # check_behind=False encodes), but the same worktree sitting on someone
+    # else's branch is not.
+    on_branch = (io["git"](surface.path, "rev-parse", "--abbrev-ref", "HEAD") or "").strip()
+    # Detached HEAD reports the literal string "HEAD"; it is a distinct
+    # condition, not a branch whose name happens to differ from the expected one.
+    detached = on_branch == "HEAD"
+    mismatched = bool(on_branch) and on_branch != surface.branch
+
+    if mismatched:
+        ahead = behind = 0
+        counts = io["git"](surface.path, "rev-list", "--left-right", "--count",
+                           f"HEAD...origin/{surface.branch}")
+        if counts:
+            try:
+                ahead, behind = (int(x) for x in counts.split())
+            except ValueError:
+                ahead = behind = 0
+        where = "detached HEAD" if detached else f"branch '{on_branch}'"
+        lead = (f"live checkout is on {where}, not the expected "
+                f"'{surface.branch}' ({ahead} ahead, {behind} behind)")
+        if ahead:
+            subjects = io["git"](surface.path, "log", "--oneline",
+                                 f"origin/{surface.branch}..HEAD") or ""
+            first = subjects.splitlines()[:3]
+            lead += (" — those " + str(ahead) + " commit(s) are running but not on "
+                     f"'{surface.branch}': " + "; ".join(first))
+        found.append(Diagnosis(
+            surface.name, "branch_mismatch",
+            lead + ". Do NOT pull: with local commits this is a merge/rebase, "
+                   "not a fast-forward. Land them or switch back deliberately.",
+            behind=behind,
+        ))
+
+    # behind_origin assumes HEAD is on surface.branch, so its "not pulled — go
+    # pull" advice is only correct when that holds. Under a mismatch the
+    # branch_mismatch diagnosis above already carries both counts, and emitting
+    # this one too would restate them with the wrong remedy attached.
+    if surface.check_behind and not mismatched:
         counts = io["git"](surface.path, "rev-list", "--left-right", "--count",
                            f"HEAD...origin/{surface.branch}")
         if counts:
