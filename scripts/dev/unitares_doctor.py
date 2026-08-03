@@ -926,6 +926,10 @@ def check_checkin_stream_live(db_url: str) -> CheckResult:
     return CheckResult(name, mode, Status.PASS, f"{recent} check-ins in last 6h")
 
 
+RESIDENT_MIN_CHECKINS = 20    # below this there is no cadence to be silent against
+RESIDENT_MIN_ACTIVE_DAYS = 3  # a burst over one or two days is a task, not a resident
+
+
 def check_resident_checkin_stale(db_url: str) -> CheckResult:
     """WARN if an INDIVIDUAL agent has gone silent, against its OWN cadence.
 
@@ -949,6 +953,31 @@ def check_resident_checkin_stale(db_url: str) -> CheckResult:
     harness prefix, while residents are bare names. A finished session is
     *supposed* to stop, so scoring it here would generate exactly the
     permanent-warning noise that trains an operator to ignore the check.
+
+    That marker test is necessary but not sufficient, and the gap it left is
+    the reason for ``RESIDENT_MIN_ACTIVE_DAYS``: a **bare-named** task agent
+    passes all three markers, and ``RESIDENT_MIN_CHECKINS`` alone does not
+    exclude it because a short burst easily clears 20. Once scored it can never
+    recover — a finished agent's ``last_seen`` only recedes, so ``silent_s``
+    grows without bound and the test can never return to PASS. It ages out only
+    when the 7-day window drops it, and the next named task agent recreates it.
+    Measured 2026-08-02: ``SchmidtPacketAudit`` (32 check-ins, 1 active day) and
+    ``fable-lease-triage`` (33 check-ins, 2 active days) were both permanently
+    WARN while all five real residents read healthy — every warning the check
+    emitted was false.
+
+    Requiring activity on several distinct days is the same fix
+    ``finding_producer_live`` already applies via ``PRODUCER_MIN_ACTIVE_DAYS``,
+    for the same reason: a burst yields a tiny median gap, so the burst
+    masquerades as high cadence and its perfectly healthy silence reads as
+    death. Measured margin on the same day: task agents 1-2 active days, real
+    residents 5-8 — the threshold sits in an empty band with no overlap.
+
+    The cost is a stated warm-up: a genuinely new resident is unjudged for its
+    first ``RESIDENT_MIN_ACTIVE_DAYS`` days. That is a bounded blind spot at the
+    start of an agent's life, and it is preferable to an unbounded stream of
+    false positives on the one check that exists because a real resident outage
+    hid behind healthy peers.
     """
     name, mode = "resident_checkin_stale", "operator"
     row = _psql_row(db_url, (
@@ -968,7 +997,10 @@ def check_resident_checkin_stale(db_url: str) -> CheckResult:
         "         percentile_cont(0.5) WITHIN GROUP "
         "           (ORDER BY EXTRACT(epoch FROM gap)) AS med_gap"
         "  FROM gaps WHERE gap IS NOT NULL"
-        "  GROUP BY label HAVING count(*) >= 20), "
+        "  GROUP BY label"
+        f"  HAVING count(*) >= {RESIDENT_MIN_CHECKINS}"
+        "     AND count(DISTINCT (recorded_at AT TIME ZONE 'UTC')::date) "
+        f"         >= {RESIDENT_MIN_ACTIVE_DAYS}), "
         "stale AS ("
         "  SELECT label, med_gap,"
         "         EXTRACT(epoch FROM (now() - last_seen)) AS silent_s"
@@ -985,17 +1017,19 @@ def check_resident_checkin_stale(db_url: str) -> CheckResult:
         return CheckResult(name, mode, Status.SKIP, "core.agent_state not queryable")
     tracked, stale, detail = int(row[0]), int(row[1]), row[2]
     if tracked == 0:
-        return CheckResult(name, mode, Status.SKIP,
-                           "no agent has 20+ check-ins in 7d (fresh install?)")
+        return CheckResult(
+            name, mode, Status.SKIP,
+            f"no agent has {RESIDENT_MIN_CHECKINS}+ check-ins across "
+            f"{RESIDENT_MIN_ACTIVE_DAYS}+ distinct days in 7d (fresh install?)")
     if stale:
         return CheckResult(
             name, mode, Status.WARN,
-            f"{stale} of {tracked} agents silent past 6x their own cadence: {detail}",
+            f"{stale} of {tracked} residents silent past 6x their own cadence: {detail}",
             detail="a live PID proves nothing — check the agent's log for an "
                    "upstream gate (see immortal_lease) before assuming a crash",
         )
     return CheckResult(name, mode, Status.PASS,
-                       f"{tracked} agents all within 6x their own cadence")
+                       f"{tracked} residents all within 6x their own cadence")
 
 
 def check_immortal_lease(db_url: str) -> CheckResult:
