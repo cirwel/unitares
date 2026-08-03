@@ -72,10 +72,54 @@ UNITARES_RESIDENT_PROGRESS_MANIFEST=/path/to/unitares/config/resident_progress.e
 ```
 
 Set this on the **governance server** plist (the probe runs there). Each entry's
-`source` must match a source registered in `src/background_tasks.py`
+`source` must match either a first-party source built in `src/background_tasks.py`
 (`kg_writes`, `watcher_findings`, `eisv_sync_rows`, `metrics_series`,
-`sentinel_pulse`, `agent_checkins`). Labels are lowercase to match the anchor
-filenames under `~/.unitares/anchors/`.
+`sentinel_pulse`, `agent_checkins`) or a third-party source discovered via entry
+point (below). Labels are lowercase to match the anchor filenames under
+`~/.unitares/anchors/`.
+
+### Bringing your own progress source
+
+A deployment running an out-of-tree resident needs a metric that says whether
+that resident is making progress — and until it has one, it can name the
+resident in the manifest but every tick resolves to an error. Third-party
+sources are therefore discovered from the
+`unitares.resident_progress_sources` entry-point group. In your distribution:
+
+```toml
+[project.entry-points."unitares.resident_progress_sources"]
+my_source = "mypkg.sources:MySource"
+```
+
+The target is called with the server's db handle and must return an object
+satisfying `ResidentProgressSource` (`src/resident_progress/sources.py`) —
+a `name` attribute and `async def fetch(resident_uuids, window) -> dict[str, int]`.
+Issue **one batched query** covering all passed UUIDs; the probe groups
+`(source, window)` pairs and calls each group once, so per-resident fanout
+would multiply against the whole roster.
+
+Three rules, all enforced at load:
+
+- **The entry-point name, `source.name`, and the manifest's `source` field must
+  be the same string.** A mismatch is rejected rather than silently re-keyed —
+  that is how a source ends up installed but referenced by nothing.
+- **First-party names win.** A plugin claiming `kg_writes` is rejected; it could
+  otherwise redefine what "Vigil made progress" means with identical-looking
+  snapshot rows.
+- **A broken plugin is skipped, not fatal.** It is logged at WARNING as
+  `[PROGRESS_FLAT] source plugin rejected: …` and the probe starts without it.
+  Check the server log after installing one — a source that never registers
+  presents as a resident that never progresses.
+
+Install the distribution into the **governance server's** environment (the probe
+runs in-process there, issuing SQL against the governance DB). No plist edit is
+needed; installing is sufficient. Set
+`UNITARES_RESIDENT_PROGRESS_PLUGINS=0` to disable discovery entirely.
+
+This differs from `VIGIL_CHECK_PLUGINS` below, which uses colon-separated module
+paths and lets a bad plugin raise. Vigil runs `--once` on a timer so a crash
+retries next cycle; the progress probe is a long-lived task that is not
+restartable, so it contains failures and reports them instead.
 
 `UNITARES_RESIDENTS` (names/calibration) and this manifest (progress probing)
 are related but distinct: a deployment that runs residents typically sets both,
