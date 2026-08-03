@@ -196,3 +196,67 @@ jobs:
     - name: Lint
       working-directory: dashboard
       run: npm run lint
+
+  sdk-package:
+    # Be our own consumer.
+    #
+    # `pyproject.toml` sets `pythonpath = [".", "agents/sdk/src"]`, so every
+    # test and every in-tree resident resolves `unitares_sdk` from its raw
+    # SOURCE TREE. The SDK is also not a declared dependency anywhere. That
+    # means the packaging — packages.find, package-data, py.typed, the
+    # dependency pins — is exercised by nothing on a normal run, while
+    # agents/README.md calls the SDK "the public contract" and hands strangers
+    # an install command.
+    #
+    # This job installs it the way an outside consumer would (a real wheel,
+    # not editable, not on sys.path) and runs its suite against that install,
+    # so a packaging regression fails a PR instead of surfacing the first time
+    # someone outside this repo tries to depend on it.
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v7
+      with:
+        python-version: '3.12'
+
+    - name: Install the SDK as a built package
+      # Non-editable on purpose: an editable install would put the source tree
+      # back on the path and this job would prove nothing.
+      run: |
+        python -m pip install --upgrade pip
+        pip install ./agents/sdk
+        pip install pytest pytest-asyncio
+
+    - name: Import it with the repo off the path
+      run: |
+        cd /tmp
+        python -c "
+        import unitares_sdk
+        from unitares_sdk.agent import GovernanceAgent
+        from unitares_sdk.client import GovernanceClient
+        from unitares_sdk.lease_plane import PROTOCOL_VERSION
+        print('installed-package import OK, lease-plane protocol', PROTOCOL_VERSION)
+        "
+
+    - name: Assert the import resolves to site-packages, not the source tree
+      # Without this the job could silently start testing agents/sdk/src again
+      # — passing while proving nothing, which is the failure mode this repo
+      # keeps hitting: instrumentation that fails toward "healthy".
+      run: |
+        python - <<'PY'
+        import pathlib, sys, unitares_sdk
+        resolved = pathlib.Path(unitares_sdk.__file__).resolve()
+        if "site-packages" not in resolved.parts:
+            sys.exit(f"unitares_sdk resolved to {resolved}, not an installed package")
+        print(f"resolved to {resolved}")
+        PY
+
+    - name: Run the SDK suite against the installed package
+      # `-o pythonpath=` overrides the repo pyproject's injection. Tests run in
+      # place so their fixture paths still resolve; only the import source moves.
+      run: python -m pytest agents/sdk/tests -q -o pythonpath=
