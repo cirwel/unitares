@@ -11,7 +11,6 @@ Tests cover:
 - handle_leave_note
 - handle_cleanup_knowledge_graph
 - handle_get_lifecycle_stats
-- handle_answer_question
 - _discovery_not_found helper
 - _check_display_name_required helper
 - _resolve_agent_display helper
@@ -603,6 +602,35 @@ class TestStoreKnowledgeGraph:
 
         data = parse_result(result)
         assert data["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_store_linked_answer_replaces_dormant_handler(
+        self, patch_common, registered_agent
+    ):
+        """Linked answers remain supported by the consolidated store contract."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import (
+            handle_store_knowledge_graph,
+        )
+
+        result = await handle_store_knowledge_graph({
+            "agent_id": registered_agent,
+            "discovery_type": "answer",
+            "summary": "Use the shared cache key.",
+            "response_to": {
+                "discovery_id": "2026-01-01T00:00:00.000000",
+                "response_type": "answer",
+            },
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        discovery = mock_graph.add_discovery.await_args.args[0]
+        assert discovery.type == "answer"
+        assert discovery.response_to.discovery_id == (
+            "2026-01-01T00:00:00.000000"
+        )
+        assert discovery.response_to.response_type == "answer"
 
     @pytest.mark.asyncio
     async def test_store_batch_happy_path(self, patch_common, registered_agent):

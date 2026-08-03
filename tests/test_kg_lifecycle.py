@@ -11,7 +11,6 @@ Tests cover:
 - handle_leave_note
 - handle_cleanup_knowledge_graph
 - handle_get_lifecycle_stats
-- handle_answer_question
 - _discovery_not_found helper
 - _check_display_name_required helper
 - _resolve_agent_display helper
@@ -798,7 +797,7 @@ class TestGetLifecycleStats:
 
 
 # ============================================================================
-# handle_answer_question
+# Edge cases
 # ============================================================================
 
 class TestEdgeCases:
@@ -1068,7 +1067,7 @@ class TestGetDiscoveryDetailsAdditional:
 
 
 # ============================================================================
-# handle_answer_question - additional coverage
+# handle_leave_note - additional coverage
 # ============================================================================
 
 class TestLeaveNoteAdditional:
