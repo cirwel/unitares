@@ -78,10 +78,7 @@ from src.logging_utils import get_logger
 from src.perf_monitor import record_ms
 from src.recall_telemetry import LOW_CONFIDENCE, ZERO_RESULT, record_recall_event
 from ..support.llm_delegation import synthesize_results
-from ..support.tool_hints import (
-    KNOWLEDGE_SEARCH_TOOL,
-    KNOWLEDGE_OPEN_QUESTIONS_WORKFLOW,
-)
+from ..support.tool_hints import KNOWLEDGE_SEARCH_TOOL
 
 logger = get_logger(__name__)
 
@@ -3132,120 +3129,6 @@ async def _handle_store_knowledge_graph_batch(
                 f"Failed to store batch knowledge: {str(error)}"
             )
         ]
-
-
-@mcp_tool("answer_question", timeout=15.0, register=False)
-async def handle_answer_question(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """Answer a question in the knowledge graph - closes the Q&A loop.
-
-    Searches for matching questions and stores your answer linked to it.
-    No need to know the question's discovery_id - just provide the question text and your answer.
-
-    Parameters:
-    - question: Text to match against existing questions (fuzzy search)
-    - answer: Your answer to the question
-    - tags: Optional tags for the answer
-    """
-    # SECURITY FIX: Verify agent_id is registered
-    agent_id, error = require_registered_agent(arguments)
-    if error:
-        return [error]
-
-    question_text, error = require_argument(arguments, "question",
-                                           "question is required - what question are you answering?")
-    if error:
-        return [error]
-
-    answer_text, error = require_argument(arguments, "answer",
-                                         "answer is required - your response to the question")
-    if error:
-        return [error]
-
-    try:
-        graph = await get_knowledge_graph()
-
-        # Search for matching questions
-        candidates = await graph.query(type="question", limit=20)
-
-        # Find best match using substring matching
-        q_lower = question_text.lower()
-        matched_question = None
-        best_score = 0
-
-        for d in candidates:
-            summary_lower = (d.summary or "").lower()
-            # Simple scoring: longer common substring = better match
-            if q_lower in summary_lower or summary_lower in q_lower:
-                score = len(set(q_lower.split()) & set(summary_lower.split()))
-                if score > best_score:
-                    best_score = score
-                    matched_question = d
-
-        if not matched_question:
-            # No matching question found - list available questions
-            recent_questions = await graph.query(type="question", limit=5)
-            question_summaries = [
-                {"id": q.id, "summary": q.summary[:100] + "..." if len(q.summary) > 100 else q.summary}
-                for q in recent_questions
-            ]
-            return [error_response(
-                f"No matching question found for: '{question_text[:50]}...'",
-                details={"recent_questions": question_summaries},
-                recovery={
-                    "action": "Try a different search term or use store_knowledge_graph with response_to",
-                    "related_tools": [KNOWLEDGE_SEARCH_TOOL],
-                    "workflow": KNOWLEDGE_OPEN_QUESTIONS_WORKFLOW,
-                }
-            )]
-
-        # Truncate answer if too long
-        MAX_ANSWER_LEN = 2000
-        if len(answer_text) > MAX_ANSWER_LEN:
-            answer_text = answer_text[:MAX_ANSWER_LEN] + "... [truncated]"
-
-        # Create answer linked to the question
-        from src.knowledge_graph import tag_provenance_source as _tag_src
-        answer = DiscoveryNode(
-            id=_utc_now_iso(),
-            agent_id=agent_id,
-            type="answer",
-            summary=f"Answer: {answer_text[:200]}..." if len(answer_text) > 200 else f"Answer: {answer_text}",
-            details=answer_text,
-            tags=normalize_tags(arguments.get("tags", [])),
-            severity="low",
-            status="open",
-            response_to=ResponseTo(
-                discovery_id=matched_question.id,
-                response_type="answers"
-            ),
-            provenance=_tag_src(None, "explicit_answer"),
-        )
-
-        # Link answer to question
-        answer.related_to = [matched_question.id]
-
-        await graph.add_discovery(answer)
-
-        # Optionally mark question as resolved
-        if arguments.get("resolve_question", False):
-            await graph.update_discovery(matched_question.id, {
-                "status": "resolved",
-                "resolved_at": _utc_now_iso()
-            })
-
-        return success_response({
-            "message": "Answer stored and linked to question",
-            "answer_id": answer.id,
-            "question": {
-                "id": matched_question.id,
-                "summary": matched_question.summary,
-                "status": "resolved" if arguments.get("resolve_question") else matched_question.status
-            },
-            "answer": answer.to_dict(include_details=False)
-        }, arguments=arguments)
-
-    except Exception as e:
-        return [error_response(f"Failed to answer question: {str(e)}")]
 
 
 _NOTE_TOTAL_LEN = MAX_SUMMARY_LEN + MAX_DETAILS_LEN
