@@ -1564,6 +1564,14 @@ class TestHandleGetDialecticSession:
         data = parse_result(result)
         assert data["success"] is False
         assert "not found" in data["error"].lower()
+        assert data["recovery"] == {
+            "action": "Session may have expired or been resolved",
+            "related_tools": ["dialectic"],
+            "note": (
+                "Use dialectic(action='list') to browse sessions or "
+                "dialectic(action='request', ...) to open a new review."
+            ),
+        }
 
     @pytest.mark.asyncio
     async def test_fast_path_no_timeout_check(self, mock_context_agent):
