@@ -789,18 +789,18 @@ def test_signal_degeneracy_skips_on_short_row(doctor, monkeypatch):
 
 
 # --- finding_producer_live -------------------------------------------------
-# Row layout is (event_type, n, hours_silent, median_gap_hours, active_days),
-# one per producer. Fixtures use the real 2026-07 numbers so the calibration is
-# pinned to measured cadence rather than invented ones.
+# Row layout is (event_type, n, hours_silent, median_gap_hours, active_days,
+# last_severity), one per producer. Fixtures use the real 2026-07 numbers so
+# the calibration is pinned to measured cadence rather than invented ones.
 
 def _producer_rows(*rows):
     return "".join("|".join(str(v) for v in r) + "\n" for r in rows)
 
 
 _LIVE_PRODUCERS = (
-    ("sentinel_finding", 402, 29.3, 0.58, 48),
-    ("sentinel_alarm_finding", 598, 0.0, 0.09, 34),
-    ("bridge_liveness_finding", 136, 71.4, 1.73, 13),
+    ("sentinel_finding", 402, 29.3, 0.58, 48, "medium"),
+    ("sentinel_alarm_finding", 598, 0.0, 0.09, 34, "medium"),
+    ("bridge_liveness_finding", 136, 71.4, 1.73, 13, "critical"),
 )
 
 
@@ -811,7 +811,7 @@ def test_finding_producer_live_warns_on_the_watcher_outage(doctor, monkeypatch):
     404ing on every scan while every other liveness indicator stayed green.
     """
     _mock_psql(doctor, monkeypatch, _producer_rows(
-        ("watcher_finding", 98, 612.0, 0.32, 22), *_LIVE_PRODUCERS))
+        ("watcher_finding", 98, 612.0, 0.32, 22, "high"), *_LIVE_PRODUCERS))
     result = doctor.check_finding_producer_live("postgresql://x/y")
     assert result.status == doctor.Status.WARN
     assert "watcher_finding" in result.message
@@ -820,7 +820,7 @@ def test_finding_producer_live_warns_on_the_watcher_outage(doctor, monkeypatch):
 
 def test_finding_producer_live_passes_when_all_report(doctor, monkeypatch):
     _mock_psql(doctor, monkeypatch, _producer_rows(
-        ("watcher_finding", 99, 30.0, 0.33, 22), *_LIVE_PRODUCERS))
+        ("watcher_finding", 99, 30.0, 0.33, 22, "high"), *_LIVE_PRODUCERS))
     result = doctor.check_finding_producer_live("postgresql://x/y")
     assert result.status == doctor.Status.PASS
 
@@ -828,7 +828,7 @@ def test_finding_producer_live_passes_when_all_report(doctor, monkeypatch):
 def test_finding_producer_live_ignores_event_driven_producers(doctor, monkeypatch):
     """vigil fires 4x in 90d — quiet is its normal state, not a fault."""
     _mock_psql(doctor, monkeypatch, _producer_rows(
-        ("vigil_finding", 4, 172.7, 13.75, 3), *_LIVE_PRODUCERS))
+        ("vigil_finding", 4, 172.7, 13.75, 3, "medium"), *_LIVE_PRODUCERS))
     result = doctor.check_finding_producer_live("postgresql://x/y")
     assert result.status == doctor.Status.PASS
     assert "vigil" not in result.message
@@ -837,7 +837,7 @@ def test_finding_producer_live_ignores_event_driven_producers(doctor, monkeypatc
 def test_finding_producer_live_ignores_slow_cadence_producers(doctor, monkeypatch):
     """A producer that reports every ~16 days has no weekly cadence to miss."""
     _mock_psql(doctor, monkeypatch, _producer_rows(
-        ("sentinel_build_finding", 30, 800.0, 396.24, 12), *_LIVE_PRODUCERS))
+        ("sentinel_build_finding", 30, 800.0, 396.24, 12, "medium"), *_LIVE_PRODUCERS))
     result = doctor.check_finding_producer_live("postgresql://x/y")
     assert result.status == doctor.Status.PASS
 
@@ -845,14 +845,14 @@ def test_finding_producer_live_ignores_slow_cadence_producers(doctor, monkeypatc
 def test_finding_producer_live_holds_fire_below_the_week_floor(doctor, monkeypatch):
     """10x a 1.7h cadence is 17h — far too tight to page on. The floor wins."""
     _mock_psql(doctor, monkeypatch, _producer_rows(
-        ("bridge_liveness_finding", 136, 100.0, 1.73, 13),))
+        ("bridge_liveness_finding", 136, 100.0, 1.73, 13, "critical"),))
     result = doctor.check_finding_producer_live("postgresql://x/y")
     assert result.status == doctor.Status.PASS
 
 
 def test_finding_producer_live_skips_when_nothing_is_judgeable(doctor, monkeypatch):
     _mock_psql(doctor, monkeypatch, _producer_rows(
-        ("healthcheck_selftest_finding", 1, 995.0, "", 1),))
+        ("healthcheck_selftest_finding", 1, 995.0, "", 1, "info"),))
     result = doctor.check_finding_producer_live("postgresql://x/y")
     assert result.status == doctor.Status.SKIP
 
@@ -878,17 +878,39 @@ def test_finding_producer_live_ignores_single_incident_bursts(doctor, monkeypatc
     healthy silence is death — it warned on arrival for exactly that reason.
     """
     _mock_psql(doctor, monkeypatch, _producer_rows(
-        ("lease_plane_health_finding", 14, 799.2, 0.50, 1), *_LIVE_PRODUCERS))
+        ("lease_plane_health_finding", 14, 799.2, 0.50, 1, "info"), *_LIVE_PRODUCERS))
     result = doctor.check_finding_producer_live("postgresql://x/y")
     assert result.status == doctor.Status.PASS
     assert "lease_plane_health" not in result.message
+
+
+def test_finding_producer_live_trusts_a_recovered_all_clear(doctor, monkeypatch):
+    """The 2026-08-05 false positive: bridge_liveness silent 8.4d = health.
+
+    bridge_liveness_finding spans 13 active days (the July 11-24 wedge storms,
+    10-22 re-alerts/day), so the single-incident-burst gate does not exclude
+    it and its 1.7h "cadence" baseline is wedge-burst contamination. Its last
+    finding was the info-severity "RECOVERED: Discord bridge is alive again"
+    (07-28) — and while this check called it silent-dead, the watchdog was
+    logging OK every 120s and the bridge heartbeat file was seconds fresh. A
+    fire-on-failure producer whose last word was an all-clear is healthy BY
+    DESIGN when silent; only a producer whose last word was a problem still
+    owes us findings.
+    """
+    _mock_psql(doctor, monkeypatch, _producer_rows(
+        ("bridge_liveness_finding", 136, 201.6, 1.73, 13, "info"),
+        *_LIVE_PRODUCERS[:2]))
+    result = doctor.check_finding_producer_live("postgresql://x/y")
+    assert result.status == doctor.Status.PASS
+    assert "bridge_liveness" not in result.message
 
 
 def test_resident_checkin_stale_warns_on_single_dead_resident(doctor, monkeypatch):
     # The 2026-07-29 Sentinel case: one resident silent 24h while the fleet
     # aggregate stayed healthy. checkin_stream_live cannot see this.
     _mock_psql(doctor, monkeypatch,
-               "5|1|Sentinel silent 632min (own median 5min)\n")
+               "5|1|Sentinel silent 632min (attributable 632min, "
+               "own median 5min, p95 18min)\n")
     result = doctor.check_resident_checkin_stale("postgresql://x/y")
     assert result.status == doctor.Status.WARN
     assert "Sentinel" in result.message
@@ -942,6 +964,80 @@ def test_resident_day_gate_sits_in_the_measured_gap(doctor):
     5-8. A value outside that band would either re-admit the bursts or start
     dropping residents."""
     assert 2 < doctor.RESIDENT_MIN_ACTIVE_DAYS < 5
+
+
+def test_resident_stale_threshold_is_the_idle_envelope(doctor, monkeypatch):
+    """The predicate must carry the 2x-p95 term, not median alone.
+
+    Watcher is hook-fired, so its cadence tracks operator activity: measured
+    2026-08-05 over 7d, p50=3.4min but p95=80min and max=256min. A
+    median-only threshold (30min) sat at ~p87 of its NORMAL distribution and
+    warned five times over 08-03..08-05 (silent 50-115min) with zero errors in
+    Watcher's log — it was not failing, it was not being invoked. 2x p95
+    (~160min) clears all five from the agent's own history; the 2026-07-29
+    Sentinel outage (1440min) still fires with a 9x margin. Asserted at the
+    SQL level because the envelope IS the SQL.
+    """
+    captured = {}
+
+    def capture_psql_row(db_url, sql):
+        captured["sql"] = sql
+        return ("0", "0", "")
+
+    monkeypatch.setattr(doctor, "_psql_row", capture_psql_row)
+    doctor.check_resident_checkin_stale("postgresql://x/y")
+    sql = captured["sql"]
+    assert "percentile_cont(0.95)" in sql
+    assert "greatest(med_gap * 6, p95_gap * 2, 1800)" in sql
+
+
+def test_resident_stale_silence_is_clamped_to_host_awake_time(doctor, monkeypatch):
+    """Silence accrued while THIS host slept is not attributable to any agent.
+
+    Central Postgres lives here: during host sleep every resident's last_seen
+    recedes together, and the interval-coalesced doctor job fires minutes
+    after wake — sampling the post-wake worst case. Measured 2026-08-04/05:
+    two Watcher warnings were 107/115 and 38/50 minutes host-asleep, and the
+    same runs flagged Lumen and Steward 94-163min silent because the laptop
+    lid was closed. The clamp caps the judged silence at awake time; when the
+    wake time is unknowable it must fail OPEN to wall-clock silence.
+    """
+    captured = {}
+
+    def capture_psql_row(db_url, sql):
+        captured["sql"] = sql
+        return ("0", "0", "")
+
+    monkeypatch.setattr(doctor, "_psql_row", capture_psql_row)
+    local_db = "postgresql://postgres@localhost:5432/governance"
+
+    monkeypatch.setattr(doctor, "_host_awake_s", lambda: 120.0)
+    doctor.check_resident_checkin_stale(local_db)
+    assert "least(EXTRACT(epoch FROM (now() - last_seen)), 120)" in captured["sql"]
+
+    # A remote DB never slept with this laptop: the clamp must not apply even
+    # when the local wake time is known — else a just-woken doctor masks real
+    # outages on always-on infrastructure.
+    doctor.check_resident_checkin_stale("postgresql://postgres@db.example.com/gov")
+    assert "least(" not in captured["sql"]
+
+    monkeypatch.setattr(doctor, "_host_awake_s", lambda: None)
+    doctor.check_resident_checkin_stale(local_db)
+    assert "least(" not in captured["sql"]
+
+
+def test_host_awake_s_parses_waketime_and_fails_open(doctor, monkeypatch):
+    monkeypatch.setattr(doctor.time, "time", lambda: 1_785_942_000.0)
+    monkeypatch.setattr(
+        doctor, "_run_sysctl_waketime",
+        lambda: "{ sec = 1785941495, usec = 682499 } Tue Aug  5 11:31:35 2026\n")
+    assert doctor._host_awake_s() == pytest.approx(505.0)
+    # Parse miss and sec=0 (never slept / non-macOS) both mean "unknowable".
+    monkeypatch.setattr(doctor, "_run_sysctl_waketime", lambda: "")
+    assert doctor._host_awake_s() is None
+    monkeypatch.setattr(
+        doctor, "_run_sysctl_waketime", lambda: "{ sec = 0, usec = 0 }")
+    assert doctor._host_awake_s() is None
 
 
 def test_immortal_lease_warns_on_renewed_orphan(doctor, monkeypatch):

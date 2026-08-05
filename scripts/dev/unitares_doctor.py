@@ -30,6 +30,8 @@ import socket
 import stat
 import subprocess
 import sys
+import time
+import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
 from enum import Enum
@@ -930,6 +932,64 @@ RESIDENT_MIN_CHECKINS = 20    # below this there is no cadence to be silent agai
 RESIDENT_MIN_ACTIVE_DAYS = 3  # a burst over one or two days is a task, not a resident
 
 
+def _host_awake_s() -> float | None:
+    """Seconds since this host last woke from sleep, None when unknowable.
+
+    Central Postgres runs on this host, so while it sleeps NO agent can check
+    in — every resident's ``last_seen`` recedes together, and the doctor jobs
+    themselves coalesce and fire minutes after wake, sampling exactly the
+    post-wake worst case. Silence that accrued during host sleep is therefore
+    not attributable to any agent. macOS only (``kern.waketime``); any parse
+    failure returns None so the caller fails open toward judging real silence.
+    """
+    out = _run_sysctl_waketime()
+    m = re.search(r"sec\s*=\s*(\d+)", out)
+    if not m:
+        return None
+    wake = float(m.group(1))
+    if wake <= 0:
+        return None
+    return max(0.0, time.time() - wake)
+
+
+def _run_sysctl_waketime() -> str:
+    """Isolated for tests; returns raw ``sysctl -n kern.waketime`` output.
+
+    Caveat measured 2026-08-05: DarkWakes bump ``kern.waketime`` too, so on a
+    lid-closed TCPKeepAlive-churn night the derived awake time UNDER-counts.
+    The error direction is safe for the clamp below (extra suppression while
+    the host is not meaningfully serving), but it means the clamp re-arms
+    from the most recent wake of any kind, not the last full wake.
+    """
+    if shutil.which("sysctl") is None:
+        return ""
+    try:
+        proc = subprocess.run(
+            ["sysctl", "-n", "kern.waketime"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return ""
+    return proc.stdout if proc.returncode == 0 else ""
+
+
+def _db_is_local(db_url: str) -> bool:
+    """True only when the DB host is demonstrably this machine.
+
+    The awake-time clamp's whole premise is "the DB slept when this host
+    slept". A doctor run from a just-woken laptop against a remote always-on
+    Postgres would cap every resident's silence at the laptop's awake seconds
+    — masking real outages on infrastructure that never slept — so the clamp
+    must apply ONLY to a co-located DB and fail toward wall-clock silence
+    everywhere else.
+    """
+    try:
+        host = urllib.parse.urlsplit(db_url).hostname
+    except ValueError:
+        return False
+    return host in (None, "", "localhost", "127.0.0.1", "::1")
+
+
 def check_resident_checkin_stale(db_url: str) -> CheckResult:
     """WARN if an INDIVIDUAL agent has gone silent, against its OWN cadence.
 
@@ -978,8 +1038,51 @@ def check_resident_checkin_stale(db_url: str) -> CheckResult:
     start of an agent's life, and it is preferable to an unbounded stream of
     false positives on the one check that exists because a real resident outage
     hid behind healthy peers.
+
+    The threshold is the agent's own IDLE ENVELOPE, not just a multiple of its
+    median: ``greatest(6 x median, 2 x p95, 30min)``. A hook-fired resident's
+    cadence tracks operator activity, so its gap distribution is bimodal —
+    measured on Watcher 2026-08-05 (635 check-ins/7d): p50=3.4min from editing
+    bursts but p90=40min, p95=80min, max=256min from routine idle evenings. A
+    median-only threshold (30min here) sits at ~p87 of that agent's NORMAL
+    distribution, so every quiet evening warned: five times over 08-03..08-05,
+    silent 50-115min, while Watcher's log showed clean check-ins and zero
+    errors — it was not failing, it was not being invoked. 2 x p95 (~160min)
+    suppresses all five from the agent's own history, no roster; for timer
+    residents p95 ~ median so nothing changes, and the motivating incident
+    (Sentinel silent 24h on 2026-07-29) still fires with a 9x margin even
+    against Watcher's wide envelope — against Sentinel's OWN envelope
+    (~36min) the margin is ~40x.
+
+    Silence is also clamped to time since the HOST last woke — applied only
+    when the DB is co-located (``_db_is_local``): central Postgres lives on
+    this machine, so during host sleep no resident can check in and the
+    interval-coalesced doctor fires minutes after wake — sampling the
+    post-wake worst case. Two of the five Watcher warnings were mostly
+    host-sleep (107 of 115 and 38 of 50 silent minutes asleep), and the same
+    runs flagged Lumen and Steward as 94-163min silent for the sole reason
+    that the laptop lid was closed. On hosts without ``kern.waketime`` (or
+    with a remote DB) the clamp fails open to judging wall-clock silence.
+
+    Stated mechanism, so nobody re-derives it optimistically: the clamp
+    RE-ARMS FROM ZERO at each wake (including DarkWakes) — it does not
+    accumulate awake time across sleep cycles. A dead resident is therefore
+    caught on the first awake stretch longer than its envelope (30-160min
+    across today's fleet — any normal working session), and until such a
+    stretch occurs detection is deferred, not lost. The p95 term and the
+    clamp are COMPLEMENTARY, both needed: the five 50-115min warnings fall
+    inside 2 x p95 alone, but Watcher's raw 7d envelope also contains
+    168-256min gaps which are all sleep-attributable — on a fully-awake day
+    a genuine >160min Watcher idle would still warn until its own p95
+    adapts, and the clamp is what absorbs the sleep-era tail meanwhile.
     """
     name, mode = "resident_checkin_stale", "operator"
+    awake_s = _host_awake_s() if _db_is_local(db_url) else None
+    attributable_silence = (
+        f"least(EXTRACT(epoch FROM (now() - last_seen)), {awake_s:.0f})"
+        if awake_s is not None
+        else "EXTRACT(epoch FROM (now() - last_seen))"
+    )
     row = _psql_row(db_url, (
         "WITH gaps AS ("
         "  SELECT a.label, s.recorded_at,"
@@ -995,22 +1098,27 @@ def check_resident_checkin_stale(db_url: str) -> CheckResult:
         "stats AS ("
         "  SELECT label, count(*) AS n, max(recorded_at) AS last_seen,"
         "         percentile_cont(0.5) WITHIN GROUP "
-        "           (ORDER BY EXTRACT(epoch FROM gap)) AS med_gap"
+        "           (ORDER BY EXTRACT(epoch FROM gap)) AS med_gap,"
+        "         percentile_cont(0.95) WITHIN GROUP "
+        "           (ORDER BY EXTRACT(epoch FROM gap)) AS p95_gap"
         "  FROM gaps WHERE gap IS NOT NULL"
         "  GROUP BY label"
         f"  HAVING count(*) >= {RESIDENT_MIN_CHECKINS}"
         "     AND count(DISTINCT (recorded_at AT TIME ZONE 'UTC')::date) "
         f"         >= {RESIDENT_MIN_ACTIVE_DAYS}), "
         "stale AS ("
-        "  SELECT label, med_gap,"
-        "         EXTRACT(epoch FROM (now() - last_seen)) AS silent_s"
+        "  SELECT label, med_gap, p95_gap,"
+        "         EXTRACT(epoch FROM (now() - last_seen)) AS silent_s,"
+        f"         {attributable_silence} AS attr_s"
         "  FROM stats"
-        "  WHERE EXTRACT(epoch FROM (now() - last_seen)) "
-        "        > greatest(med_gap * 6, 1800)) "
+        f"  WHERE {attributable_silence} "
+        "        > greatest(med_gap * 6, p95_gap * 2, 1800)) "
         "SELECT (SELECT count(*) FROM stats), (SELECT count(*) FROM stale), "
         "       coalesce((SELECT string_agg("
         "         label || ' silent ' || round(silent_s/60.0) || 'min "
-        "(own median ' || round(med_gap/60.0) || 'min)', '; ' "
+        "(attributable ' || round(attr_s/60.0) || 'min, own median ' "
+        "|| round(med_gap/60.0) || 'min, p95 ' "
+        "|| round(p95_gap/60.0) || 'min)', '; ' "
         "         ORDER BY silent_s DESC) FROM stale), '')"
     ))
     if row is None:
@@ -1024,12 +1132,12 @@ def check_resident_checkin_stale(db_url: str) -> CheckResult:
     if stale:
         return CheckResult(
             name, mode, Status.WARN,
-            f"{stale} of {tracked} residents silent past 6x their own cadence: {detail}",
+            f"{stale} of {tracked} residents silent past their own idle envelope: {detail}",
             detail="a live PID proves nothing — check the agent's log for an "
                    "upstream gate (see immortal_lease) before assuming a crash",
         )
     return CheckResult(name, mode, Status.PASS,
-                       f"{tracked} residents all within 6x their own cadence")
+                       f"{tracked} residents all within their own idle envelope")
 
 
 def check_immortal_lease(db_url: str) -> CheckResult:
@@ -1315,12 +1423,39 @@ def check_finding_producer_live(db_url: str) -> CheckResult:
         13-48 distinct days; every excluded one spans <= 3.
       * only those whose own median inter-finding gap is <= PRODUCER_REGULAR_GAP_H
         (i.e. they demonstrably reported on a regular cadence)
+      * only those whose LAST word was not an all-clear. A fire-on-failure
+        producer that recovers posts an info-severity RECOVERED notice and then
+        goes correctly silent — silence after an all-clear is its designed
+        healthy state. The active-days gate cannot catch the multi-incident
+        version: bridge_liveness_finding spans 13 active days (the July 11-24
+        wedge storms), so it passed every gate, and on 2026-08-05 this check
+        called it "silent 8.4d (usually every 1.7h)" while the watchdog was
+        running green every 120s and the bridge heartbeat was seconds fresh.
+        Its cadence baseline was wedge-burst re-alerts, not a heartbeat; its
+        last finding was "RECOVERED: Discord bridge is alive again". Judged by
+        last severity, not by name, so no producer roster is introduced.
       * warn when silence exceeds both PRODUCER_FLOOR_H and
         PRODUCER_GAP_MULTIPLE x that producer's own median gap
 
     WARN, not FAIL — a dead detector degrades evidence, it doesn't break the
     install. A retired producer will also warn; the fix there is to stop
     counting it, which is a decision, not a defect.
+
+    Stated blind spot, wider than the fire-on-failure case: ANY producer whose
+    most recent row is an info all-clear becomes unjudged, including a
+    continuous-cadence producer that dies immediately after posting one — and
+    info all-clears are incident-correlated, so that coincidence is less rare
+    than it sounds (sentinel_finding posted 'lease starvation CLEARED' on
+    2026-08-01; had its emitter wedged right then, this check would not have
+    said so). Accepted deliberately: for the live fleet the flagship producer
+    has a twin on the SAME emit path with zero info rows ever
+    (sentinel_alarm_finding, 0.09h median) — a dead findings path silences the
+    twin too and the twin still trips this check within the week floor. The
+    residual (a producer with no non-info twin dying exactly inside its
+    info-last window) cannot be separated from designed health by finding
+    cadence at all; its liveness signal is host-level (the watchdog's own log
+    mtime / launchd state), not the finding stream — wiring that is the
+    follow-up, not another cadence knob here.
     """
     name, mode = "finding_producer_live", "operator"
     rows = _psql_rows(db_url, (
@@ -1328,8 +1463,9 @@ def check_finding_producer_live(db_url: str) -> CheckResult:
         "  round(extract(epoch FROM (now() - max(ts))) / 3600.0, 1), "
         "  round(extract(epoch FROM percentile_cont(0.5) WITHIN GROUP (ORDER BY gap))"
         "        / 3600.0, 2), "
-        "  count(DISTINCT ts::date) "
-        "FROM (SELECT event_type, ts, "
+        "  count(DISTINCT ts::date), "
+        "  coalesce((array_agg(severity ORDER BY ts DESC))[1], '') "
+        "FROM (SELECT event_type, ts, payload->>'severity' AS severity, "
         "             ts - lag(ts) OVER (PARTITION BY event_type ORDER BY ts) AS gap "
         "      FROM audit.events "
         "      WHERE ts > now() - interval '90 days' AND event_type LIKE '%\\_finding') s "
@@ -1345,6 +1481,7 @@ def check_finding_producer_live(db_url: str) -> CheckResult:
         if len(row) < 5:
             continue
         producer, n_raw, silent_raw, median_raw, days_raw = row[:5]
+        last_severity = row[5] if len(row) > 5 else ""
         try:
             n, silent_h = int(n_raw), float(silent_raw)
             median_h, active_days = float(median_raw), int(days_raw)
@@ -1352,7 +1489,8 @@ def check_finding_producer_live(db_url: str) -> CheckResult:
             unjudged += 1
             continue
         if (n < PRODUCER_MIN_N or active_days < PRODUCER_MIN_ACTIVE_DAYS
-                or median_h > PRODUCER_REGULAR_GAP_H):
+                or median_h > PRODUCER_REGULAR_GAP_H
+                or last_severity == "info"):
             unjudged += 1
             continue
         threshold = max(PRODUCER_FLOOR_H, PRODUCER_GAP_MULTIPLE * median_h)
