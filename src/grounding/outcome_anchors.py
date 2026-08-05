@@ -158,6 +158,18 @@ EXCLUDED_OUTCOMES_SQL = (
     "OR verification_source NOT IN ('external_signal', 'agent_reported_tool_result'))"
 )
 
+#: Provenance-only pass: NOT self-referential, snapshot NOT required.
+#:
+#: Use this — not ANCHORED_OUTCOMES_SQL — for consumers that read outcomes as
+#: *behavioural evidence* rather than as residual anchors. The joinable-snapshot
+#: requirement (§6.3) exists so a residual has state to compute against; a
+#: consumer that only asks "did this agent's outcomes go well" needs the
+#: Invariant-4 provenance exclusion but has no residual to join, and applying
+#: the snapshot clause there would silently discard genuine outcomes.
+#:
+#: Exact complement of EXCLUDED_OUTCOMES_SQL, by construction.
+NON_SELF_REFERENTIAL_OUTCOMES_SQL = f"({_TRUSTED_OR_SOFT_SOURCE_SQL})"
+
 
 def anchored_outcomes_predicate(
     *, include_soft: bool = False, table_alias: Optional[str] = None

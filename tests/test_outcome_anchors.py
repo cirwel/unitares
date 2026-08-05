@@ -110,3 +110,48 @@ def test_is_anchorable_requires_provenance_and_snapshot():
     assert is_anchorable("agent_reported_tool_result", eisv_present=True) is False
     assert is_anchorable("agent_reported_tool_result", eisv_present=True, include_soft=True) is True
     assert is_anchorable("agent_reported_tool_result", eisv_present=False, include_soft=True) is False
+
+
+def test_non_self_referential_predicate_is_provenance_only():
+    """The behavioural-read predicate must exclude self-referential provenance
+    (Invariant 4) WITHOUT requiring a joinable snapshot.
+
+    Consumers that read outcomes as evidence -- behavioral_sensor's _compute_E /
+    _compute_I via get_recent_outcomes -- have no residual to join against, so
+    AND-ing the §6.3 snapshot clause there would silently discard genuine
+    outcomes rather than self-referential ones.
+    """
+    from src.grounding.outcome_anchors import NON_SELF_REFERENTIAL_OUTCOMES_SQL
+
+    # Provenance exclusion IS applied.
+    assert "external_signal" in NON_SELF_REFERENTIAL_OUTCOMES_SQL
+    assert "agent_reported_tool_result" in NON_SELF_REFERENTIAL_OUTCOMES_SQL
+    assert "server_observation" not in NON_SELF_REFERENTIAL_OUTCOMES_SQL
+
+    # Snapshot requirement is NOT applied -- this is the whole point.
+    assert "eisv_e" not in NON_SELF_REFERENTIAL_OUTCOMES_SQL
+    assert "snapshot_missing" not in NON_SELF_REFERENTIAL_OUTCOMES_SQL
+
+
+def test_non_self_referential_is_exact_complement_of_excluded():
+    """It must admit exactly the sources EXCLUDED_OUTCOMES_SQL rejects, so the
+    two constants cannot drift into a gap that lets an unknown source through.
+    """
+    from src.grounding.outcome_anchors import (
+        EXCLUDED_OUTCOMES_SQL,
+        NON_SELF_REFERENTIAL_OUTCOMES_SQL,
+        AnchorTier,
+        tier_for_source,
+    )
+
+    for source in ("external_signal", "agent_reported_tool_result"):
+        assert source in NON_SELF_REFERENTIAL_OUTCOMES_SQL
+        assert tier_for_source(source) is not AnchorTier.EXCLUDED
+
+    # Every EXCLUDED-tier source must be absent from the admitting predicate.
+    for source in ("server_observation", "made_up_source"):
+        assert tier_for_source(source) is AnchorTier.EXCLUDED
+        assert source not in NON_SELF_REFERENTIAL_OUTCOMES_SQL
+
+    # NULL is handled by the SQL IN (...) semantics in both directions.
+    assert "IS NULL" in EXCLUDED_OUTCOMES_SQL

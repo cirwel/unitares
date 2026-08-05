@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 
@@ -198,15 +199,39 @@ class ToolUsageMixin:
         limit: int = 20,
         since_hours: float = 24.0,
     ) -> List[Dict[str, Any]]:
-        """Fetch recent outcome events for an agent."""
+        """Fetch recent outcome events for an agent.
+
+        Provenance-filtered (Invariant 4: "a signal derived from the loop cannot
+        anchor the loop", see grounding/outcome_anchors.py). This feeds
+        behavioral_sensor._compute_E / _compute_I at 20% weight each via
+        mcp_handlers/updates/phases.py, which is the live verdict path -- so
+        without the filter the loop's own ``server_observation`` rows (its
+        trajectory self-validations) were scoring the agent they were derived
+        from. Provenance-only: no joinable-snapshot clause, because this is a
+        behavioural read, not a residual anchor.
+
+        Set ``UNITARES_OUTCOME_PROVENANCE_FILTER=off`` to restore the previous
+        unfiltered behaviour (rollback lever; expect self-referential rows to
+        re-enter E/I).
+        """
+        from src.grounding.outcome_anchors import NON_SELF_REFERENTIAL_OUTCOMES_SQL
+
+        provenance_filter = (
+            os.environ.get("UNITARES_OUTCOME_PROVENANCE_FILTER", "on")
+            .strip().lower() not in {"off", "0", "false", "no"}
+        )
+        predicate = (
+            f"AND {NON_SELF_REFERENTIAL_OUTCOMES_SQL}" if provenance_filter else ""
+        )
         async with self.acquire() as conn:
             try:
                 rows = await conn.fetch(
-                    """
+                    f"""
                     SELECT outcome_type, is_bad, outcome_score, ts
                     FROM audit.outcome_events
                     WHERE agent_id = $1
                       AND ts >= now() - make_interval(hours => $2)
+                      {predicate}
                     ORDER BY ts DESC
                     LIMIT $3
                     """,
