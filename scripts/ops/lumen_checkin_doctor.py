@@ -37,6 +37,11 @@ Classes (fingerprints from the 2026-06/07 incidents):
   C4 binding-loss     PATH2_RESUME_MISS in the server error log + no live
                       core.sessions row + Redis restarted since the freeze
                       -> escalate naming scripts/ops/rebind-resident-session.sh.
+  host_sleep_gap      freeze predates this host's last wake and the host has
+                      been awake < WAKE_GRACE_S -> info, wait. Central
+                      Postgres sleeps with the laptop lid, so the frozen span
+                      says nothing about Lumen (2026-08-03..05: 7/7 "unknown"
+                      criticals were exactly this).
 
 Post-Elixir-cutover note: the Pi's `unitares_stale` / `unitares_last_success_age_s`
 diagnostics are fed by the Python-era client and are unreliable now that the
@@ -86,6 +91,15 @@ RESTART_PROXIMITY_S = int(os.environ.get("LUMEN_DOCTOR_RESTART_PROXIMITY_S", "90
 # A fresh anima restart produces an EXPECTED ~6-10 min central gap (Elixir
 # client skips on stale/missing envelope while the Python broker reboots).
 RESTART_GAP_S = int(os.environ.get("LUMEN_DOCTOR_RESTART_GAP_S", "1200"))
+# Central (this Mac) sleeping is the one freeze cause that is not about Lumen
+# at all: no check-in can land while the host Postgres is suspended, and this
+# doctor sleeps with it. Measured 2026-08-03..05 (first battery/clamshell use):
+# all 7 frozen windows were 90-100% host-asleep and Lumen recovered within
+# <=10.6 min of every full wake — yet each post-wake tick escalated a CRITICAL
+# "unknown". Freeze evidence only starts counting once the host has been awake
+# this long; the longest observed wake->first-check-in lag is 10.6 min, so 15
+# min keeps honest escalation for a freeze that survives the wake.
+WAKE_GRACE_S = int(os.environ.get("LUMEN_DOCTOR_WAKE_GRACE_S", "900"))
 ELEVATED_S = int(os.environ.get("LUMEN_DOCTOR_ELEVATED_S", "300"))
 VERIFY_TIMEOUT_S = int(os.environ.get("LUMEN_DOCTOR_VERIFY_TIMEOUT_S", "420"))
 VERIFY_POLL_S = int(os.environ.get("LUMEN_DOCTOR_VERIFY_POLL_S", "60"))
@@ -98,6 +112,7 @@ C1_FALSE_PAUSE = "false_pause"
 PAUSED_REAL = "paused_unexplained"
 C2_DNS_FREEZE = "dns_freeze"
 RESTART_GAP = "restart_gap"
+HOST_SLEEP_GAP = "host_sleep_gap"
 C3_UNKNOWN_TOOL = "unknown_tool"
 C4_BINDING_LOSS = "binding_loss"
 UNKNOWN = "unknown"
@@ -216,6 +231,21 @@ def io_redis_uptime_s() -> int | None:
     return int(m.group(1)) if m else None
 
 
+def io_host_wake_epoch() -> float | None:
+    """Epoch of this host's last wake from sleep (macOS), None if unknowable.
+
+    ``kern.waketime`` prints ``{ sec = 1785941495, usec = ... } ...``; a parse
+    miss or sec=0 returns None so classification fails open toward the real
+    freeze classes rather than silently swallowing evidence.
+    """
+    out = _run(["sysctl", "-n", "kern.waketime"], timeout=5)
+    m = re.search(r"sec\s*=\s*(\d+)", out)
+    if not m:
+        return None
+    wake = float(m.group(1))
+    return wake if wake > 0 else None
+
+
 def io_path2_miss_recent() -> bool:
     try:
         with open(SERVER_ERROR_LOG, "rb") as fh:
@@ -272,6 +302,7 @@ DEFAULT_IO: dict[str, Callable[..., Any]] = {
     "pi_anima_uptime_s": io_pi_anima_uptime_s,
     "live_session_row_count": io_live_session_row_count,
     "redis_uptime_s": io_redis_uptime_s,
+    "host_wake_epoch": io_host_wake_epoch,
     "path2_miss_recent": io_path2_miss_recent,
     "resume": io_resume,
     "pi_restart_services": io_pi_restart_services,
@@ -303,6 +334,7 @@ class Signals:
     anima_uptime_s: float | None = None
     session_rows: int | None = None
     redis_uptime_s: int | None = None
+    host_wake_epoch: float | None = None
     path2_miss: bool = False
 
 
@@ -339,12 +371,38 @@ def classify(s: Signals) -> tuple[str, str]:
             "treating the pause as a real governance verdict; not auto-resuming"
         )
 
+    # The host-sleep gate wins over EVERY frozen class AND the unparseable-
+    # record case: while this Mac slept, central Postgres was suspended — no
+    # check-in could land, this doctor was suspended too, the 45-min journal
+    # window is sleep-era noise, and a just-woken governance server can answer
+    # with an error body (central={}) during warmup. Anything observed before
+    # the host has been continuously awake past the grace is unattributable
+    # to Lumen; whatever survives the grace falls through to the real classes
+    # on the next tick.
+    awake_s = (s.now - s.host_wake_epoch) if s.host_wake_epoch is not None else None
+    recently_woke = awake_s is not None and 0 <= awake_s < WAKE_GRACE_S
+
     if age is None:
+        if recently_woke:
+            return HOST_SLEEP_GAP, (
+                f"central record unparseable but this host woke from sleep "
+                f"only {int(awake_s)}s ago — likely server warmup; "
+                f"reclassifies normally once awake {WAKE_GRACE_S}s"
+            )
         return UNKNOWN, "central record has no parseable last_update"
     if age <= STALE_S:
         return HEALTHY, f"central last_update {int(age)}s ago"
 
-    # Active but frozen. A fresh anima restart wins over the journal classes:
+    # Active but frozen.
+    if recently_woke and age > awake_s:
+        return HOST_SLEEP_GAP, (
+            f"central frozen {int(age)}s but this host woke from sleep "
+            f"only {int(awake_s)}s ago and the freeze predates the wake — "
+            "silence accrued while central was asleep is not evidence "
+            f"about Lumen; reclassifies normally once awake {WAKE_GRACE_S}s"
+        )
+
+    # A fresh anima restart wins over the journal classes:
     # boot noise in the 45-min journal window can match the C2 fingerprint,
     # and C2's heal is another restart — classifying it C2 here would loop.
     if s.anima_uptime_s is not None and s.anima_uptime_s < RESTART_GAP_S:
@@ -438,6 +496,7 @@ class Doctor:
             return s
         s.pi_diag = self.io["pi_diagnostics"]()
         s.gov_start_epoch = self.io["gov_process_start_epoch"]()
+        s.host_wake_epoch = self.io["host_wake_epoch"]()
         if deep:
             s.journal = self.io["pi_journal_tail"]()
             s.anima_uptime_s = self.io["pi_anima_uptime_s"]()
@@ -509,7 +568,10 @@ class Doctor:
             return cls
 
         # Re-gather with the expensive probes before acting on a freeze.
-        if cls not in (C1_FALSE_PAUSE, PAUSED_REAL):
+        # host_sleep_gap needs none of them: the classification is local and
+        # the SSH probes it would trigger are exactly what a just-woken
+        # network can't answer yet.
+        if cls not in (C1_FALSE_PAUSE, PAUSED_REAL, HOST_SLEEP_GAP):
             signals = self.gather(deep=True)
             cls, evidence = classify(signals)
             if cls == HEALTHY:
@@ -549,7 +611,7 @@ class Doctor:
             return cls
 
         severity = (
-            "info" if cls == RESTART_GAP
+            "info" if cls in (RESTART_GAP, HOST_SLEEP_GAP)
             else "high" if cls in (C3_UNKNOWN_TOOL, C4_BINDING_LOSS)
             else "critical"
         )
@@ -560,6 +622,9 @@ class Doctor:
             RESTART_GAP: "expected deploy/restart gap running long — wait; the "
                          "doctor heals/escalates normally once service uptime "
                          "clears the gap window",
+            HOST_SLEEP_GAP: "this host was asleep for the frozen window — no action; "
+                            "the real classes take over if the freeze survives "
+                            "the wake grace",
             PAUSED_REAL: "review the pause verdict (dashboard/dialectic); resume only "
                          "after judging it — this doctor never overrules a real pause",
             UNKNOWN: "no known fingerprint — investigate broker (unitares_ex) and Pi",
