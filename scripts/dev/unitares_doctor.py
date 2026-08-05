@@ -30,6 +30,7 @@ import socket
 import stat
 import subprocess
 import sys
+import time
 import urllib.request
 from dataclasses import asdict, dataclass
 from enum import Enum
@@ -930,6 +931,40 @@ RESIDENT_MIN_CHECKINS = 20    # below this there is no cadence to be silent agai
 RESIDENT_MIN_ACTIVE_DAYS = 3  # a burst over one or two days is a task, not a resident
 
 
+def _host_awake_s() -> float | None:
+    """Seconds since this host last woke from sleep, None when unknowable.
+
+    Central Postgres runs on this host, so while it sleeps NO agent can check
+    in — every resident's ``last_seen`` recedes together, and the doctor jobs
+    themselves coalesce and fire minutes after wake, sampling exactly the
+    post-wake worst case. Silence that accrued during host sleep is therefore
+    not attributable to any agent. macOS only (``kern.waketime``); any parse
+    failure returns None so the caller fails open toward judging real silence.
+    """
+    out = _run_sysctl_waketime()
+    m = re.search(r"sec\s*=\s*(\d+)", out)
+    if not m:
+        return None
+    wake = float(m.group(1))
+    if wake <= 0:
+        return None
+    return max(0.0, time.time() - wake)
+
+
+def _run_sysctl_waketime() -> str:
+    """Isolated for tests; returns raw ``sysctl -n kern.waketime`` output."""
+    if shutil.which("sysctl") is None:
+        return ""
+    try:
+        proc = subprocess.run(
+            ["sysctl", "-n", "kern.waketime"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return ""
+    return proc.stdout if proc.returncode == 0 else ""
+
+
 def check_resident_checkin_stale(db_url: str) -> CheckResult:
     """WARN if an INDIVIDUAL agent has gone silent, against its OWN cadence.
 
@@ -978,8 +1013,37 @@ def check_resident_checkin_stale(db_url: str) -> CheckResult:
     start of an agent's life, and it is preferable to an unbounded stream of
     false positives on the one check that exists because a real resident outage
     hid behind healthy peers.
+
+    The threshold is the agent's own IDLE ENVELOPE, not just a multiple of its
+    median: ``greatest(6 x median, 2 x p95, 30min)``. A hook-fired resident's
+    cadence tracks operator activity, so its gap distribution is bimodal —
+    measured on Watcher 2026-08-05 (635 check-ins/7d): p50=3.4min from editing
+    bursts but p90=40min, p95=80min, max=256min from routine idle evenings. A
+    median-only threshold (30min here) sits at ~p87 of that agent's NORMAL
+    distribution, so every quiet evening warned: five times over 08-03..08-05,
+    silent 50-115min, while Watcher's log showed clean check-ins and zero
+    errors — it was not failing, it was not being invoked. 2 x p95 (~160min)
+    suppresses all five from the agent's own history, no roster; for timer
+    residents p95 ~ median so nothing changes, and the motivating incident
+    (Sentinel silent 24h on 2026-07-29) still fires with a 9x margin.
+
+    Silence is also clamped to time since the HOST last woke: central Postgres
+    lives on this machine, so during host sleep no resident can check in and
+    the interval-coalesced doctor fires minutes after wake — sampling the
+    post-wake worst case. Two of the five Watcher warnings were mostly
+    host-sleep (107 of 115 and 38 of 50 silent minutes asleep), and the same
+    runs flagged Lumen and Steward as 94-163min silent for the sole reason
+    that the laptop lid was closed. Unattributable silence is capped, real
+    silence keeps accruing once the host is actually awake; on hosts without
+    ``kern.waketime`` the clamp fails open to judging wall-clock silence.
     """
     name, mode = "resident_checkin_stale", "operator"
+    awake_s = _host_awake_s()
+    attributable_silence = (
+        f"least(EXTRACT(epoch FROM (now() - last_seen)), {awake_s:.0f})"
+        if awake_s is not None
+        else "EXTRACT(epoch FROM (now() - last_seen))"
+    )
     row = _psql_row(db_url, (
         "WITH gaps AS ("
         "  SELECT a.label, s.recorded_at,"
@@ -995,22 +1059,25 @@ def check_resident_checkin_stale(db_url: str) -> CheckResult:
         "stats AS ("
         "  SELECT label, count(*) AS n, max(recorded_at) AS last_seen,"
         "         percentile_cont(0.5) WITHIN GROUP "
-        "           (ORDER BY EXTRACT(epoch FROM gap)) AS med_gap"
+        "           (ORDER BY EXTRACT(epoch FROM gap)) AS med_gap,"
+        "         percentile_cont(0.95) WITHIN GROUP "
+        "           (ORDER BY EXTRACT(epoch FROM gap)) AS p95_gap"
         "  FROM gaps WHERE gap IS NOT NULL"
         "  GROUP BY label"
         f"  HAVING count(*) >= {RESIDENT_MIN_CHECKINS}"
         "     AND count(DISTINCT (recorded_at AT TIME ZONE 'UTC')::date) "
         f"         >= {RESIDENT_MIN_ACTIVE_DAYS}), "
         "stale AS ("
-        "  SELECT label, med_gap,"
+        "  SELECT label, med_gap, p95_gap,"
         "         EXTRACT(epoch FROM (now() - last_seen)) AS silent_s"
         "  FROM stats"
-        "  WHERE EXTRACT(epoch FROM (now() - last_seen)) "
-        "        > greatest(med_gap * 6, 1800)) "
+        f"  WHERE {attributable_silence} "
+        "        > greatest(med_gap * 6, p95_gap * 2, 1800)) "
         "SELECT (SELECT count(*) FROM stats), (SELECT count(*) FROM stale), "
         "       coalesce((SELECT string_agg("
         "         label || ' silent ' || round(silent_s/60.0) || 'min "
-        "(own median ' || round(med_gap/60.0) || 'min)', '; ' "
+        "(own median ' || round(med_gap/60.0) || 'min, p95 ' "
+        "|| round(p95_gap/60.0) || 'min)', '; ' "
         "         ORDER BY silent_s DESC) FROM stale), '')"
     ))
     if row is None:
@@ -1024,12 +1091,12 @@ def check_resident_checkin_stale(db_url: str) -> CheckResult:
     if stale:
         return CheckResult(
             name, mode, Status.WARN,
-            f"{stale} of {tracked} residents silent past 6x their own cadence: {detail}",
+            f"{stale} of {tracked} residents silent past their own idle envelope: {detail}",
             detail="a live PID proves nothing — check the agent's log for an "
                    "upstream gate (see immortal_lease) before assuming a crash",
         )
     return CheckResult(name, mode, Status.PASS,
-                       f"{tracked} residents all within 6x their own cadence")
+                       f"{tracked} residents all within their own idle envelope")
 
 
 def check_immortal_lease(db_url: str) -> CheckResult:
