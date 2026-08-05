@@ -27,30 +27,6 @@ from .helpers import _invalidate_agent_cache
 
 logger = get_logger(__name__)
 
-# Tags that grant capability rather than describe the agent. Server-granted
-# only: the onboard classifier (grounding/onboard_classifier.py) and operator
-# paths set these by calling agent_storage directly, bypassing this handler.
-#
-# A caller may KEEP the privileged tags it already carries -- `tags` is a
-# whole-list replace, so rejecting them outright would de-privilege a resident
-# that merely updated its notes -- but it may not add one it does not have.
-#
-# Each entry is load-bearing somewhere: 'admin' gates fleet-global
-# set_thresholds (mcp_handlers/admin/config.py); 'embodied' alone satisfies R4
-# dedicated_substrate (identity/substrate.py) and routes to tier 3;
-# 'embodied'/'autonomous' short-circuit loop detection (agent_loop_detection.py)
-# and the stuck sweep (lifecycle/stuck.py); 'persistent'/'protected'/'pioneer'
-# confer auto-archival immunity (agent_lifecycle.py).
-PRIVILEGED_TAGS = frozenset({
-    "admin",
-    "embodied",
-    "persistent",
-    "autonomous",
-    "protected",
-    "pioneer",
-    "anima",
-})
-
 
 @mcp_tool("update_agent_metadata", timeout=10.0, register=False)
 async def handle_update_agent_metadata(arguments: Dict[str, Any]) -> Sequence[TextContent]:
@@ -120,31 +96,7 @@ async def handle_update_agent_metadata(arguments: Dict[str, Any]) -> Sequence[Te
 
     # Update tags if provided
     if "tags" in arguments:
-        requested_tags = arguments["tags"] or []
-        held_tags = {str(t) for t in (getattr(meta, "tags", None) or [])}
-        escalated = {
-            str(t) for t in requested_tags
-        } & PRIVILEGED_TAGS - held_tags
-        if escalated:
-            return [error_response(
-                "Cannot self-assign privileged tags: "
-                f"{', '.join(sorted(escalated))}.",
-                recovery={
-                    "action": (
-                        "Privileged tags are server-granted. Resident tags are "
-                        "assigned by the onboarding classifier; operator tags "
-                        "require an operator path. Re-send tags without them "
-                        "(tags you already hold are preserved)."
-                    ),
-                    "related_tools": ["agent", "identity"],
-                    "note": (
-                        "These tags gate capability (archival immunity, "
-                        "loop-detection exemption, substrate trust tier, "
-                        "threshold modification), not description."
-                    ),
-                },
-            )]
-        meta.tags = requested_tags
+        meta.tags = arguments["tags"]
 
     # Update notes if provided
     if "notes" in arguments:
