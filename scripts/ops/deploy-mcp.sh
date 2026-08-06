@@ -28,6 +28,9 @@
 #   launchctl unload "$PLIST" && launchctl load "$PLIST"   # RELOAD (kickstart won't)
 #   curl -s http://127.0.0.1:8767/health/ready             # expect {"status":"ready"}
 #   # rollback: cp "$PLIST.bak" "$PLIST"; launchctl unload "$PLIST"; launchctl load "$PLIST"
+#
+# Shared blocks (lock, plist preflight, ff + lease-plane nudge) live in
+# deploy-lib.sh.
 set -euo pipefail
 
 # ── Flags ────────────────────────────────────────────────────────────────────
@@ -48,63 +51,27 @@ LABEL="com.unitares.governance-mcp"
 PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
 UID_NUM="$(id -u)"
 PORT="${UNITARES_MCP_PORT:-8767}"
+TAG="deploy-mcp"
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
-# ── Serialize deploys (shared worktree) ──────────────────────────────────────
-# deploy-mcp.sh and deploy-lease-plane.sh both fast-forward the SAME deploy
-# worktree, and this script's failure path runs `git reset --hard $PREV`. Two
-# deploys at once race the git index and — worse — the rollback can revert a
-# parallel deploy to a stale commit (silent regression + a false "OK"). macOS
-# has no flock(1), so guard with an atomic mkdir lock keyed to the worktree,
-# reclaiming it only if the holder process is dead. Override via
-# UNITARES_DEPLOY_LOCK; the lock is shared with deploy-lease-plane.sh because the
-# name derives from the (shared) DEPLOY path.
-LOCK_DIR="${UNITARES_DEPLOY_LOCK:-${TMPDIR:-/tmp}/unitares-deploy$(printf '%s' "$DEPLOY" | tr -c 'A-Za-z0-9' '_').lock}"
-if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-  holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || echo '?')"
-  if [[ "$holder" != '?' ]] && ! kill -0 "$holder" 2>/dev/null; then
-    echo "[deploy-mcp] reclaiming stale deploy lock (holder PID $holder is dead): $LOCK_DIR" >&2
-    rm -rf "$LOCK_DIR"
-    mkdir "$LOCK_DIR" 2>/dev/null || { echo "[deploy-mcp] lost a lock race — another deploy just started; refusing" >&2; exit 1; }
-  else
-    echo "[deploy-mcp] another deploy is in progress (lock: $LOCK_DIR, holder PID $holder) — refusing to run concurrently" >&2
-    exit 1
-  fi
-fi
-printf '%s' "$$" > "$LOCK_DIR/pid"
-trap 'rm -rf "$LOCK_DIR"' EXIT
+# shellcheck source=deploy-lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/deploy-lib.sh"
 
-if [[ ! -f "$PLIST" ]]; then
-  echo "[deploy-mcp] $PLIST not installed — install the LaunchAgent first (see CLAUDE.md setup)" >&2
-  exit 1
-fi
+deploy_lib_acquire_lock "$TAG" "$DEPLOY"
 
 # Precondition: the plist must already point at the deploy worktree. We do NOT
 # change the plist here (that needs an operator-interactive reload). Refuse
-# loudly with the one-time setup recipe rather than silently no-op.
-if ! grep -q "$DEPLOY/src/mcp_server.py" "$PLIST"; then
-  cat >&2 <<EOF
-[deploy-mcp] REFUSING: the LaunchAgent plist does not point at the deploy
-worktree, so kickstart would restart the OLD code and this script would lie
-about success. Do the one-time setup interactively (login shell) first:
+# loudly with the one-time setup recipe rather than silently no-op. No dev
+# escape hatch for the MCP: kickstarting the dev checkout while claiming a
+# deploy happened is exactly the false-success this script exists to prevent.
+deploy_lib_require_plist_target "$TAG" "$PLIST" "$DEPLOY/src/mcp_server.py" \
+  --require-exists \
+  --recipe "[deploy-mcp]   cp \"$PLIST\" \"$PLIST.bak\"
+[deploy-mcp]   sed -i '' 's|$REPO|$DEPLOY|g' \"$PLIST\""
 
-  cp "$PLIST" "$PLIST.bak"
-  sed -i '' 's|$REPO|$DEPLOY|g' "$PLIST"
-  launchctl unload "$PLIST" && launchctl load "$PLIST"   # RELOAD — kickstart won't
-  curl -s http://127.0.0.1:$PORT/health/ready            # expect {"status":"ready"}
-
-Then re-run this script for ongoing deploys.
-EOF
-  exit 1
-fi
-
-echo "[deploy-mcp] fetching origin/master"
-git -C "$REPO" fetch origin master --quiet
-
-PREV="$(git -C "$DEPLOY" rev-parse HEAD)"
-echo "[deploy-mcp] fast-forwarding $DEPLOY to origin/master (ff-only; was ${PREV:0:8})"
-git -C "$DEPLOY" merge --ff-only origin/master
+deploy_lib_ff_worktree "$TAG" "$REPO" "$DEPLOY"
+PREV="$DEPLOY_LIB_PREV"
 mkdir -p "$DEPLOY/data/logs"
 
 # ── Migration preflight (gate, not silent) ───────────────────────────────────
@@ -156,27 +123,22 @@ fi
 echo "[deploy-mcp] restarting $LABEL (plist is static + already points at the worktree, so kickstart suffices)"
 launchctl kickstart -k "gui/$UID_NUM/$LABEL"
 
-echo "[deploy-mcp] verifying the RUNNING process is the deploy-worktree code (bge-m3 load can take ~30-90s)"
-ok=""
-for _ in $(seq 1 40); do
-  sleep 3
+check_mcp_running_deploy_code() {
+  local pid
   pid="$(launchctl print "gui/$UID_NUM/$LABEL" 2>/dev/null | awk -F'= ' '/^[[:space:]]*pid =/{print $2; exit}')"
-  if curl -fsS -m4 "http://127.0.0.1:${PORT}/health/ready" 2>/dev/null | grep -q '"status":"ready"' \
-     && [[ -n "$pid" ]] && ps -o command= -p "$pid" 2>/dev/null | grep -q "$DEPLOY/src/mcp_server.py"; then
-    ok=yes
-    break
-  fi
-done
+  curl -fsS -m4 "http://127.0.0.1:${PORT}/health/ready" 2>/dev/null | grep -q '"status":"ready"' \
+    && [[ -n "$pid" ]] && ps -o command= -p "$pid" 2>/dev/null | grep -q "$DEPLOY/src/mcp_server.py"
+}
 
-if [[ "$ok" == yes ]]; then
+echo "[deploy-mcp] verifying the RUNNING process is the deploy-worktree code (bge-m3 load can take ~30-90s)"
+if deploy_lib_poll 40 3 check_mcp_running_deploy_code; then
   echo "[deploy-mcp] OK — governance MCP healthy on deploy-worktree code @ $(git -C "$DEPLOY" rev-parse --short HEAD)"
   # The ff above moved the SHARED worktree; if it touched elixir/lease_plane,
   # the running BEAM's disk just shifted under it — the RAM-vs-disk drift class
   # behind the 06-27 fail-open (#1277 fix 1). Restart the plane at disturbance
   # time, not at first failure. The rollback paths above need no nudge: they
   # return the worktree to $PREV, net-zero for the plane's on-disk sources.
-  "$(dirname "$0")/nudge-lease-plane.sh" --reason "deploy-mcp ff moved the shared worktree" \
-    --if-changed "$PREV" "$(git -C "$DEPLOY" rev-parse HEAD)" || true
+  deploy_lib_nudge_lease_plane "$TAG" "deploy-mcp.sh" "$DEPLOY"
 else
   echo "[deploy-mcp] FAILED — new code did not come up healthy. Rolling the worktree back to ${PREV:0:8} and restarting." >&2
   git -C "$DEPLOY" reset --hard "$PREV"

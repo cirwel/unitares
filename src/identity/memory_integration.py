@@ -33,7 +33,7 @@ STRONG_CONSTRUCTIVE_RESPONSE_TYPES = frozenset(
         "correction",
         "supersedes",
         "answer",
-        "answers",  # legacy handle_answer_question spelling
+        "answers",  # legacy response-type spelling
     }
 )
 WEAK_CONSTRUCTIVE_RESPONSE_TYPES = frozenset({"support", "follow_up"})

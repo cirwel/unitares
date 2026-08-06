@@ -11,7 +11,6 @@ Tests cover:
 - handle_leave_note
 - handle_cleanup_knowledge_graph
 - handle_get_lifecycle_stats
-- handle_answer_question
 - _discovery_not_found helper
 - _check_display_name_required helper
 - _resolve_agent_display helper
@@ -798,7 +797,7 @@ class TestGetLifecycleStats:
 
 
 # ============================================================================
-# handle_answer_question
+# Edge cases
 # ============================================================================
 
 class TestEdgeCases:
@@ -864,6 +863,44 @@ class TestEdgeCases:
         call_args = mock_graph.add_discovery.call_args
         discovery = call_args[0][0]
         assert discovery.type == "note"
+        assert discovery.severity == "low"
+
+    @pytest.mark.asyncio
+    async def test_leave_note_infers_medium_for_infrastructure_bug(
+        self, patch_common, registered_agent
+    ):
+        """Preserve the legacy tag-based severity bump behind the adapter."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_leave_note
+
+        result = await handle_leave_note({
+            "agent_id": registered_agent,
+            "summary": "Embedding service silently drops writes",
+            "tags": ["bug", "embedding", "silent-failure"],
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        discovery = mock_graph.add_discovery.await_args.args[0]
+        assert discovery.severity == "medium"
+
+    @pytest.mark.asyncio
+    async def test_leave_note_keeps_non_bug_infrastructure_note_low(
+        self, patch_common, registered_agent
+    ):
+        """Infrastructure tags alone must not fabricate bug severity."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_leave_note
+
+        result = await handle_leave_note({
+            "agent_id": registered_agent,
+            "summary": "Embedding service deployment observation",
+            "tags": ["embedding", "service"],
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        discovery = mock_graph.add_discovery.await_args.args[0]
         assert discovery.severity == "low"
 
     @pytest.mark.asyncio
@@ -1030,7 +1067,7 @@ class TestGetDiscoveryDetailsAdditional:
 
 
 # ============================================================================
-# handle_answer_question - additional coverage
+# handle_leave_note - additional coverage
 # ============================================================================
 
 class TestLeaveNoteAdditional:

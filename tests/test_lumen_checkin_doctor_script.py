@@ -171,6 +171,66 @@ def test_frozen_with_old_service_still_classifies_dns(doc_mod):
     assert doc_mod.classify(s)[0] == doc_mod.C2_DNS_FREEZE
 
 
+def test_frozen_right_after_host_wake_is_sleep_gap_even_over_dns_and_restart(doc_mod):
+    """The 2026-08-03..05 class: every 'unknown' CRITICAL was the closed lid.
+
+    Central Postgres sleeps with this host, so a freeze that predates the last
+    wake says nothing about Lumen — and it must win over the journal classes
+    too, because the 45-min journal window is sleep-era noise right after wake
+    (a boot-time connect error would otherwise classify C2 and restart the Pi
+    services for a freeze the Mac caused).
+    """
+    s = signals(
+        doc_mod,
+        central={"status": "active", "last_update": iso(NOW - 4000)},
+        journal="anima: Cannot connect to host x [Name or service not known]",
+        anima_uptime_s=400.0,
+        host_wake_epoch=NOW - 300,  # awake 5 min, freeze is 66 min old
+    )
+    cls, evidence = doc_mod.classify(s)
+    assert cls == doc_mod.HOST_SLEEP_GAP
+    assert cls not in doc_mod.AUTO_HEALABLE
+    assert "asleep" in evidence
+
+
+def test_frozen_past_wake_grace_classifies_normally(doc_mod):
+    # Awake longer than the grace: the freeze survived the wake, so it is
+    # real evidence again and the ordinary classes take over.
+    s = signals(
+        doc_mod,
+        central={"status": "active", "last_update": iso(NOW - 4000)},
+        journal="anima: Cannot connect to host x [Name or service not known]",
+        host_wake_epoch=NOW - 2000,  # awake 33 min > WAKE_GRACE_S
+    )
+    assert doc_mod.classify(s)[0] == doc_mod.C2_DNS_FREEZE
+
+
+def test_unknown_wake_time_fails_open_to_real_classes(doc_mod):
+    # host_wake_epoch=None (non-macOS, sysctl parse miss) must never swallow
+    # a freeze — same fail-open posture as every other missing signal.
+    s = signals(
+        doc_mod,
+        central={"status": "active", "last_update": iso(NOW - 4000)},
+        host_wake_epoch=None,
+    )
+    assert doc_mod.classify(s)[0] == doc_mod.UNKNOWN
+
+
+def test_unparseable_central_right_after_wake_is_sleep_gap(doc_mod):
+    # A just-woken governance server can answer with an error body during
+    # warmup (central={} -> no last_update). Same incident class as the
+    # frozen-age variant; escalating critical 'unknown' from that tick would
+    # reintroduce the closed-lid alarm through the side door. Once the host
+    # has been awake past the grace, an unparseable record is a real anomaly
+    # again.
+    warmup = signals(doc_mod, central={"status": "active"},
+                     host_wake_epoch=NOW - 300)
+    assert doc_mod.classify(warmup)[0] == doc_mod.HOST_SLEEP_GAP
+    long_awake = signals(doc_mod, central={"status": "active"},
+                         host_wake_epoch=NOW - 2000)
+    assert doc_mod.classify(long_awake)[0] == doc_mod.UNKNOWN
+
+
 def test_frozen_no_fingerprint_is_unknown_and_mentions_broker(doc_mod):
     s = signals(doc_mod, central={"status": "active", "last_update": iso(NOW - 4000)})
     cls, evidence = doc_mod.classify(s)
@@ -195,6 +255,9 @@ def make_doctor(doc_mod, io_overrides, dry_run=False):
         "pi_anima_uptime_s": lambda: 999999.0,
         "live_session_row_count": lambda: 1,
         "redis_uptime_s": lambda: 999999,
+        # None = wake time unknowable; rails tests exercise the real classes,
+        # and the REAL sysctl on a recently-woken dev Mac must never leak in.
+        "host_wake_epoch": lambda: None,
         "path2_miss_recent": lambda: False,
         "resume": lambda token: calls.__setitem__("resume", calls["resume"] + 1)
                    or {"success": True},
@@ -303,6 +366,29 @@ def test_restart_gap_escalates_info_and_never_heals(doc_mod):
     assert doctor.run_once() == doc_mod.RESTART_GAP
     assert calls["restart"] == 0 and calls["resume"] == 0
     assert [sev for sev, _, _ in calls["findings"]] == ["info"]
+
+
+def test_host_sleep_gap_escalates_info_heals_nothing_and_skips_pi_probes(doc_mod):
+    """Post-wake tick on a sleep-spanning freeze: info finding, no heal, and
+    NO deep probes — SSH to the Pi is exactly what a just-woken network can't
+    answer, and the classification needs nothing from it."""
+    frozen = {"status": "active", "last_update": iso(NOW - 4000)}
+    probes = {"journal": 0}
+
+    def counting_journal():
+        probes["journal"] += 1
+        return ""
+
+    doctor, calls = make_doctor(doc_mod, {
+        "central_agent": lambda: frozen,
+        "host_wake_epoch": lambda: NOW - 300,
+        "pi_journal_tail": counting_journal,
+    })
+    assert doctor.run_once() == doc_mod.HOST_SLEEP_GAP
+    assert calls["restart"] == 0 and calls["resume"] == 0
+    assert [sev for sev, _, _ in calls["findings"]] == ["info"]
+    assert "host_sleep_gap" in calls["findings"][0][1]
+    assert probes["journal"] == 0
 
 
 def test_dry_run_diagnoses_but_never_acts(doc_mod):
