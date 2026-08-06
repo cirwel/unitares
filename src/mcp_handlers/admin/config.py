@@ -64,49 +64,38 @@ async def handle_set_thresholds(arguments: Dict[str, Any]) -> Sequence[TextConte
 
     meta = mcp_server.agent_metadata[agent_id]
     
-    # SECURITY: Admin-only threshold modification
-    # Only allow threshold changes from admin agents or high-reputation agents
+    # SECURITY: Admin-only threshold modification.
+    #
+    # The `total_updates >= 100` "high reputation" route was removed 2026-08-05:
+    # total_updates is a raw check-in counter incremented unconditionally on
+    # every update (governance_monitor.py, agent_loop_detection.py), so it
+    # measured persistence, not standing. Any agent could reach it in ~100
+    # check-ins -- roughly two minutes under the 60/min limiter -- and buy
+    # write access to fleet-global governance parameters. The two health
+    # checks that guarded that route (status != critical, risk <= 0.60) do not
+    # constrain it in practice: the basin gate zeroes EISV risk components
+    # inside the basin, so 99.85% of fleet check-ins score below 0.3 risk.
+    #
+    # No threshold change has ever been recorded (audit.events, 0 rows), so
+    # this removes an unused escalation path, not a working workflow.
     is_admin = "admin" in meta.tags
-    is_high_reputation = meta.total_updates >= 100  # Established agents
-    
-    if not (is_admin or is_high_reputation):
+
+    if not is_admin:
         return [error_response(
-            "Threshold modification is admin-only. Only agents with 'admin' tag or 100+ updates can modify thresholds.",
+            "Threshold modification is admin-only. Only agents with the 'admin' tag can modify thresholds.",
             recovery={
-                "action": "Threshold modification requires admin privileges. Contact system administrator or build reputation (100+ updates).",
+                "action": "Threshold modification requires an operator-granted 'admin' tag. Contact the system administrator.",
                 "related_tools": ["get_thresholds", "get_agent_metadata"],
                 "note": "This restriction prevents agents from modifying critical governance parameters"
             }
         )]
     
-    # Additional health checks for non-admin high-reputation agents
-    if not is_admin and is_high_reputation:
-        monitor = mcp_server.monitors.get(agent_id)
-        if monitor:
-            metrics = monitor.get_metrics()
-            risk_score = metrics.get("risk_score")
-            status = metrics.get("status", "unknown")
-            
-            # Block threshold changes from critical/moderate agents
-            if status == "critical":
-                return [error_response(
-                    "Threshold modification blocked: Agent status is critical. Fix agent health before modifying thresholds.",
-                    recovery={
-                        "action": "Improve agent health metrics before attempting threshold changes",
-                        "related_tools": ["get_governance_metrics", "process_agent_update"]
-                    }
-                )]
-            
-            # Block threshold changes from high-risk agents
-            if risk_score and risk_score > 0.60:
-                return [error_response(
-                    f"Threshold modification blocked: Agent risk score ({risk_score:.2f}) is too high. Reduce risk before modifying thresholds.",
-                    recovery={
-                        "action": "Reduce agent risk score before attempting threshold changes",
-                        "related_tools": ["get_governance_metrics"]
-                    }
-                )]
-    
+    # The status/risk health checks that used to sit here only ever guarded the
+    # removed high-reputation route (`if not is_admin and is_high_reputation`),
+    # so they were unreachable for admins and are now unreachable for everyone.
+    # Gating an operator-granted capability on the agent's own self-reported
+    # EISV would reintroduce the same farmable-input problem this change closes.
+
     thresholds = arguments.get("thresholds", {})
     validate = arguments.get("validate", True)
     

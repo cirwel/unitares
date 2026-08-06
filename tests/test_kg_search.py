@@ -11,7 +11,6 @@ Tests cover:
 - handle_leave_note
 - handle_cleanup_knowledge_graph
 - handle_get_lifecycle_stats
-- handle_answer_question
 - _discovery_not_found helper
 - _check_display_name_required helper
 - _resolve_agent_display helper
@@ -775,171 +774,6 @@ class TestListKnowledgeGraph:
 
 
 # ============================================================================
-# handle_update_discovery_status_graph
-# ============================================================================
-
-class TestAnswerQuestion:
-
-    @pytest.mark.asyncio
-    async def test_answer_question_happy_path(self, patch_common, registered_agent):
-        """Answer a matching question successfully."""
-        mock_mcp_server, mock_graph = patch_common
-        from src.mcp_handlers.knowledge.handlers import handle_answer_question
-
-        question_disc = make_discovery(
-            id="q-1",
-            type="question",
-            summary="What is the meaning of life?",
-            agent_id="other-agent",
-        )
-        mock_graph.query = AsyncMock(return_value=[question_disc])
-
-        result = await handle_answer_question({
-            "agent_id": registered_agent,
-            "question": "What is the meaning of life?",
-            "answer": "42",
-        })
-
-        data = parse_result(result)
-        assert data["success"] is True
-        assert "answer_id" in data
-        assert data["question"]["id"] == "q-1"
-        mock_graph.add_discovery.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_answer_question_missing_question(self, patch_common, registered_agent):
-        """Answer fails without question text."""
-        mock_mcp_server, mock_graph = patch_common
-        from src.mcp_handlers.knowledge.handlers import handle_answer_question
-
-        result = await handle_answer_question({
-            "agent_id": registered_agent,
-            "answer": "42",
-        })
-
-        data = parse_result(result)
-        assert data["success"] is False
-
-    @pytest.mark.asyncio
-    async def test_answer_question_missing_answer(self, patch_common, registered_agent):
-        """Answer fails without answer text."""
-        mock_mcp_server, mock_graph = patch_common
-        from src.mcp_handlers.knowledge.handlers import handle_answer_question
-
-        result = await handle_answer_question({
-            "agent_id": registered_agent,
-            "question": "What is the meaning?",
-        })
-
-        data = parse_result(result)
-        assert data["success"] is False
-
-    @pytest.mark.asyncio
-    async def test_answer_question_no_match(self, patch_common, registered_agent):
-        """Answer fails when no matching question found."""
-        mock_mcp_server, mock_graph = patch_common
-        from src.mcp_handlers.knowledge.handlers import handle_answer_question
-
-        mock_graph.query = AsyncMock(return_value=[])
-
-        result = await handle_answer_question({
-            "agent_id": registered_agent,
-            "question": "Something completely unrelated",
-            "answer": "My answer",
-        })
-
-        data = parse_result(result)
-        assert data["success"] is False
-        assert "no matching question" in data["error"].lower()
-
-    @pytest.mark.asyncio
-    async def test_answer_question_with_resolve(self, patch_common, registered_agent):
-        """Answer resolves question when resolve_question=True."""
-        mock_mcp_server, mock_graph = patch_common
-        from src.mcp_handlers.knowledge.handlers import handle_answer_question
-
-        question_disc = make_discovery(
-            id="q-1",
-            type="question",
-            summary="How does caching work?",
-        )
-        mock_graph.query = AsyncMock(return_value=[question_disc])
-
-        result = await handle_answer_question({
-            "agent_id": registered_agent,
-            "question": "How does caching work?",
-            "answer": "It uses LRU eviction policy",
-            "resolve_question": True,
-        })
-
-        data = parse_result(result)
-        assert data["success"] is True
-        assert data["question"]["status"] == "resolved"
-        # update_discovery should have been called to resolve the question
-        mock_graph.update_discovery.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_answer_question_unregistered_agent(self, patch_common):
-        """Answer fails for unregistered agent."""
-        mock_mcp_server, mock_graph = patch_common
-        from src.mcp_handlers.knowledge.handlers import handle_answer_question
-
-        result = await handle_answer_question({
-            "agent_id": "nonexistent-agent",
-            "question": "What?",
-            "answer": "Nothing",
-        })
-
-        data = parse_result(result)
-        assert data["success"] is False
-
-    @pytest.mark.asyncio
-    async def test_answer_question_exception_handling(self, patch_common, registered_agent):
-        """Exception from graph backend returns error."""
-        mock_mcp_server, mock_graph = patch_common
-        from src.mcp_handlers.knowledge.handlers import handle_answer_question
-
-        mock_graph.query = AsyncMock(side_effect=Exception("Query error"))
-
-        result = await handle_answer_question({
-            "agent_id": registered_agent,
-            "question": "What?",
-            "answer": "Something",
-        })
-
-        data = parse_result(result)
-        assert data["success"] is False
-        assert "failed to answer" in data["error"].lower()
-
-    @pytest.mark.asyncio
-    async def test_answer_question_truncates_long_answer(self, patch_common, registered_agent):
-        """Long answers are truncated to 2000 chars."""
-        mock_mcp_server, mock_graph = patch_common
-        from src.mcp_handlers.knowledge.handlers import handle_answer_question
-
-        question_disc = make_discovery(
-            id="q-1",
-            type="question",
-            summary="Tell me everything",
-        )
-        mock_graph.query = AsyncMock(return_value=[question_disc])
-
-        long_answer = "Z" * 3000
-        result = await handle_answer_question({
-            "agent_id": registered_agent,
-            "question": "Tell me everything",
-            "answer": long_answer,
-        })
-
-        data = parse_result(result)
-        assert data["success"] is True
-        # Verify the stored answer's details were truncated
-        call_args = mock_graph.add_discovery.call_args
-        answer_disc = call_args[0][0]
-        assert len(answer_disc.details) <= 2020  # 2000 + "... [truncated]"
-
-
-# ============================================================================
 # _discovery_not_found helper
 # ============================================================================
 
@@ -1083,6 +917,70 @@ class TestResolveAgentDisplay:
         result = _resolve_agent_display("opus_agent_20260101")
 
         assert result["display_name"] == "Opus Agent"
+
+    @pytest.mark.parametrize(
+        "lookup_field",
+        ["public_agent_id", "structured_id", "label", "display_name"],
+    )
+    def test_resolve_by_supported_metadata_alias(
+        self, patch_common, mock_mcp_server, lookup_field
+    ):
+        """Every documented metadata alias can locate the registry UUID."""
+        meta = SimpleNamespace(
+            public_agent_id=None,
+            structured_id=None,
+            label=None,
+            display_name=None,
+        )
+        setattr(meta, lookup_field, "agent-alias")
+        mock_mcp_server.agent_metadata["uuid-alias"] = meta
+
+        from src.mcp_handlers.knowledge.handlers import _resolve_agent_display
+
+        result = _resolve_agent_display("agent-alias")
+
+        assert result["uuid"] == "uuid-alias"
+        assert result["agent_id"] == "agent-alias"
+
+    def test_resolve_builds_trimmed_claimed_display_payload(
+        self, patch_common, mock_mcp_server
+    ):
+        """Claimed display names stay cosmetic and metadata text is trimmed."""
+        mock_mcp_server.agent_metadata["uuid-claimed"] = SimpleNamespace(
+            public_agent_id="  Gpt_20260802  ",
+            structured_id="legacy-handle",
+            display_name="  Ada  ",
+            label="ignored-label",
+        )
+
+        from src.mcp_handlers.knowledge.handlers import _resolve_agent_display
+
+        result = _resolve_agent_display("uuid-claimed")
+
+        assert result == {
+            "uuid": "uuid-claimed",
+            "agent_id": "Gpt_20260802",
+            "structured_agent_id": "Gpt_20260802",
+            "display_name": "Ada",
+            "label_source": "claimed",
+        }
+
+    def test_resolve_marks_handle_display_as_auto(
+        self, patch_common, mock_mcp_server
+    ):
+        """A display copied from the public handle is not a claimed label."""
+        mock_mcp_server.agent_metadata["uuid-auto"] = SimpleNamespace(
+            public_agent_id="Gpt_20260802",
+            structured_id=None,
+            display_name="Gpt_20260802",
+            label=None,
+        )
+
+        from src.mcp_handlers.knowledge.handlers import _resolve_agent_display
+
+        result = _resolve_agent_display("uuid-auto")
+
+        assert result["label_source"] == "auto"
 
 
 # ============================================================================
@@ -1582,59 +1480,6 @@ class TestGetKnowledgeGraphAdditional:
         data = parse_result(result)
         assert data["success"] is True
         assert "_more_available" in data
-
-
-# ============================================================================
-# handle_update_discovery_status_graph - additional coverage
-# ============================================================================
-
-class TestAnswerQuestionAdditional:
-
-    @pytest.mark.asyncio
-    async def test_answer_question_no_match_with_recent_questions(self, patch_common, registered_agent):
-        """No matching question lists recent questions (lines 1366-1370)."""
-        mock_mcp_server, mock_graph = patch_common
-        from src.mcp_handlers.knowledge.handlers import handle_answer_question
-
-        # First call (question search): returns non-matching questions
-        question1 = make_discovery(id="q-1", type="question", summary="Unrelated question about X")
-        question2 = make_discovery(id="q-2", type="question", summary="Another question about Y")
-        # Second call (recent questions): returns same
-        mock_graph.query = AsyncMock(side_effect=[
-            [question1, question2],  # Search results (no match for our query)
-            [question1, question2],  # Recent questions for error message
-        ])
-
-        result = await handle_answer_question({
-            "agent_id": registered_agent,
-            "question": "Completely different topic ZZZZZ",
-            "answer": "My answer",
-        })
-
-        data = parse_result(result)
-        assert data["success"] is False
-        assert "recent_questions" in data.get("details", {}) or "no matching" in data["error"].lower()
-
-    @pytest.mark.asyncio
-    async def test_answer_question_truncates_long_answer(self, patch_common, registered_agent):
-        """Long answers are truncated (lines 1382-1383)."""
-        mock_mcp_server, mock_graph = patch_common
-        from src.mcp_handlers.knowledge.handlers import handle_answer_question
-
-        question_disc = make_discovery(
-            id="q-1", type="question", summary="Tell me everything about this"
-        )
-        mock_graph.query = AsyncMock(return_value=[question_disc])
-
-        long_answer = "A" * 3000
-        result = await handle_answer_question({
-            "agent_id": registered_agent,
-            "question": "Tell me everything about this",
-            "answer": long_answer,
-        })
-
-        data = parse_result(result)
-        assert data["success"] is True
 
 
 # ============================================================================

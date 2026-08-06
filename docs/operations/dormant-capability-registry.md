@@ -120,7 +120,7 @@ they are not re-flagged.
 | `query_response_chain` builder | `src/db/age_queries.py:309` | Dead duplicate; `get_response_chain` uses its own inline Cypher. **Cut** |
 | `log_auto_attest` typed helper | `audit_log.py:206` | 0 callers; real rows written by a different `log_event` path. **Cut** |
 | Quorum `ESCALATE` resolution branch | `dialectic_protocol.py:196`; handler `:1526` | Retired by design ("0 of 47 sessions ever escalated"). **Cut the enum/dead branch** |
-| `answer_question` handler | `mcp_handlers/knowledge/handlers.py:2342` | `register=False` AND unrouted in `consolidated.py` — unreachable. **Cut or route** |
+| ~~`answer_question` handler~~ | Removed | **CUT** — it was `register=False` and unrouted; linked answers remain available through `knowledge(action="store", discovery_type="note", response_to={..., "response_type": "answer"})` |
 | `check_reviewer_stuck` | `mcp_handlers/dialectic/handlers.py:115` | 0 callers; auto-resolve handles reassignment. **Cut or fold** |
 | CIRS announce tools (void_alert / state_announce / coherence_report / …) | 7 `register=False` handlers | **Verify before cut** — the CIRS *monitor* path is live (26 `cirs_resonance` events/14d); only these agent-facing announce tools are dark |
 

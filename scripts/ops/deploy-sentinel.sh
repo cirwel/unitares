@@ -20,6 +20,9 @@
 # Idempotent: creates the worktree if missing, fast-forwards to origin/master
 # (never a destructive reset), recompiles, restarts the LaunchAgent, and confirms
 # the booted sha.
+#
+# Shared blocks (lock, plist preflight, ff + lease-plane nudge) live in
+# deploy-lib.sh.
 set -euo pipefail
 
 REPO="${UNITARES_REPO:-$HOME/projects/unitares}"
@@ -28,71 +31,23 @@ LABEL="com.unitares.sentinel-beam"
 LOG="${UNITARES_SENTINEL_LOG:-$HOME/Library/Logs/unitares-sentinel-beam.log}"
 PLIST="${UNITARES_SENTINEL_PLIST:-$HOME/Library/LaunchAgents/$LABEL.plist}"
 UID_NUM="$(id -u)"
+TAG="deploy"
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
-# ── Serialize deploys (shared worktree) ──────────────────────────────────────
-# deploy-lease-plane.sh / deploy-mcp.sh / this script all fast-forward the SAME
-# deploy worktree, so concurrent runs race the git index. macOS has no flock(1);
-# guard with an atomic mkdir lock keyed to the worktree path (shared key on
-# purpose), reclaiming it only if the holder is dead. Override via
-# UNITARES_DEPLOY_LOCK.
-LOCK_DIR="${UNITARES_DEPLOY_LOCK:-${TMPDIR:-/tmp}/unitares-deploy$(printf '%s' "$DEPLOY" | tr -c 'A-Za-z0-9' '_').lock}"
-if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-  holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || echo '?')"
-  if [[ "$holder" != '?' ]] && ! kill -0 "$holder" 2>/dev/null; then
-    echo "[deploy] reclaiming stale deploy lock (holder PID $holder is dead): $LOCK_DIR" >&2
-    rm -rf "$LOCK_DIR"
-    mkdir "$LOCK_DIR" 2>/dev/null || { echo "[deploy] lost a lock race — another deploy just started; refusing" >&2; exit 1; }
-  else
-    echo "[deploy] another deploy is in progress (lock: $LOCK_DIR, holder PID $holder) — refusing to run concurrently" >&2
-    exit 1
-  fi
-fi
-printf '%s' "$$" > "$LOCK_DIR/pid"
-trap 'rm -rf "$LOCK_DIR"' EXIT
+# shellcheck source=deploy-lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/deploy-lib.sh"
 
-# ── Pre-flight: the LaunchAgent must load from the deploy worktree ────────────
-# If the rendered plist still points at the dev checkout, a kickstart restarts
-# the OLD location and this deploy is a no-op. This is the one-time migration off
-# restart-DEV; warn loudly with the exact fix rather than silently doing nothing.
-if [[ -f "$PLIST" ]] && ! grep -q "$DEPLOY" "$PLIST"; then
-  echo "[deploy] WARNING: $LABEL does not appear to load from $DEPLOY." >&2
-  echo "[deploy] It is still on the shared dev checkout (restart-DEV). Until you migrate it," >&2
-  echo "[deploy] kickstart restarts the OLD location and this deploy will not take effect." >&2
-  echo "[deploy] One-time migration (render the plist against the deploy worktree, then reload):" >&2
-  echo "[deploy]   sed -e \"s|__UNITARES_ROOT__|$DEPLOY|g\" -e \"s|__HOME__|\$HOME|g\" \\\\" >&2
-  echo "[deploy]       (… plus the other placeholders in the template header …) \\\\" >&2
-  echo "[deploy]       \"$DEPLOY/scripts/ops/com.unitares.sentinel-beam.plist.template\" > \"$PLIST\"" >&2
-  echo "[deploy]   launchctl unload \"$PLIST\" && launchctl load \"$PLIST\"" >&2
-  echo "[deploy] Refusing to continue (set UNITARES_SENTINEL_ALLOW_DEV=1 to restart the dev checkout anyway)." >&2
-  [[ "${UNITARES_SENTINEL_ALLOW_DEV:-0}" == "1" ]] || exit 2
-fi
+deploy_lib_acquire_lock "$TAG" "$DEPLOY"
 
-echo "[deploy] fetching origin/master"
-git -C "$REPO" fetch origin master --quiet
+deploy_lib_require_plist_target "$TAG" "$PLIST" "$DEPLOY" \
+  --allow-env UNITARES_SENTINEL_ALLOW_DEV \
+  --recipe "[deploy]   sed -e \"s|__UNITARES_ROOT__|$DEPLOY|g\" -e \"s|__HOME__|\$HOME|g\" \\
+[deploy]       (… plus the other placeholders in the template header …) \\
+[deploy]       \"$DEPLOY/scripts/ops/com.unitares.sentinel-beam.plist.template\" > \"$PLIST\""
 
-LEASE_FRESH=0
-if ! git -C "$REPO" worktree list --porcelain | grep -qx "worktree $DEPLOY"; then
-  echo "[deploy] creating dedicated deploy worktree at $DEPLOY (on master)"
-  git -C "$REPO" worktree add "$DEPLOY" master
-  # A fresh `worktree add` checks out TRACKED files only — the lease plane's
-  # gitignored deps/ + _build/ are GONE, while the running BEAM keeps serving
-  # in-RAM modules until an unloaded module needs disk (the 06-27 ~5.4h
-  # fail-open, #1277). Nudge the plane after the ff below.
-  LEASE_FRESH=1
-fi
-
-LEASE_PREV="$(git -C "$DEPLOY" rev-parse HEAD)"
-echo "[deploy] fast-forwarding $DEPLOY to origin/master (ff-only; refuses if it would lose work)"
-git -C "$DEPLOY" merge --ff-only origin/master
-# The shared worktree just moved under every co-resident service (#1277 fix 1).
-if [[ "$LEASE_FRESH" == 1 ]]; then
-  "$(dirname "$0")/nudge-lease-plane.sh" --reason "deploy-sentinel.sh: deploy worktree re-created (deps/_build gone)" || true
-else
-  "$(dirname "$0")/nudge-lease-plane.sh" --reason "deploy-sentinel.sh: shared-worktree ff" \
-    --if-changed "$LEASE_PREV" "$(git -C "$DEPLOY" rev-parse HEAD)" || true
-fi
+deploy_lib_ff_worktree "$TAG" "$REPO" "$DEPLOY"
+deploy_lib_nudge_lease_plane "$TAG" "deploy-sentinel.sh" "$DEPLOY"
 
 echo "[deploy] compiling sentinel (surfaces compile errors before the restart)"
 ( cd "$DEPLOY/elixir/sentinel" && mix deps.get && mix compile )
@@ -108,18 +63,13 @@ prev_lines=0
 echo "[deploy] restarting $LABEL (gui domain — it is a LaunchAgent, not a system daemon)"
 launchctl kickstart -k "gui/$UID_NUM/$LABEL"
 
-echo "[deploy] verifying booted sha == $EXPECT_SHA via build-stamp (PR #1126) in $LOG"
-ok=""
-for _ in $(seq 1 12); do
-  sleep 3
-  if [[ -f "$LOG" ]] && \
-     tail -n "+$((prev_lines + 1))" "$LOG" 2>/dev/null | grep -q "BEAM Sentinel booted:.*@$EXPECT_SHA"; then
-    ok=yes
-    break
-  fi
-done
+check_sentinel_boot_stamp() {
+  [[ -f "$LOG" ]] && \
+    tail -n "+$((prev_lines + 1))" "$LOG" 2>/dev/null | grep -q "BEAM Sentinel booted:.*@$EXPECT_SHA"
+}
 
-if [[ "$ok" == yes ]]; then
+echo "[deploy] verifying booted sha == $EXPECT_SHA via build-stamp (PR #1126) in $LOG"
+if deploy_lib_poll 12 3 check_sentinel_boot_stamp; then
   echo "[deploy] OK — sentinel-beam booted on $EXPECT_SHA (serving from $DEPLOY)"
 else
   echo "[deploy] FAILED — did not observe a fresh boot stamp @$EXPECT_SHA in $LOG within timeout." >&2
