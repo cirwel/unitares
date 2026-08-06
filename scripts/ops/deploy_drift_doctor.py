@@ -446,35 +446,41 @@ class Doctor:
         }
 
     def _resolve(self, fp: str, rec: Dict[str, Any]) -> None:
-        """Close a finding whose drift has cleared.
+        """Close a finding whose drift has cleared. Local state only.
 
-        The finding was real (the surface WAS behind) and got actioned, so it
-        resolves as ``confirmed`` — a correct call, not a false positive.
+        This deliberately emits NO ``outcome_event``. It used to emit one with
+        ``status="confirmed"``, gated on ``DEPLOY_DRIFT_DOCTOR_UUID`` — which
+        would have written a self-graded row into the exogenous-anchor channel.
 
-        IDENTITY CAVEAT: outcome_event snapshots EISV by ``agent_id``, so this
-        only becomes a usable exogenous label once this doctor onboards a
-        baselined governance identity. Until DEPLOY_DRIFT_DOCTOR_UUID is set,
-        the resolution is logged and the finding closed locally, but no
-        outcome_event is emitted — an outcome row with no EISV would add noise
-        to the label-breadth problem rather than helping it.
+        ``build_resolution_outcome_args`` stamps
+        ``verification_source='external_signal'``, which
+        ``src/grounding/outcome_anchors.py`` tiers as ``TRUSTED_EXTERNAL`` — a
+        gold anchor for the EISV falsifiability test. Its justification is
+        explicit that the outcome is ground truth because a finding was
+        "adjudicated by an operator/human … not the loop validating its own
+        trajectory" (roadmap Invariant 4). Nothing of the sort happens here:
+        this fires on an unattended hourly tick when the doctor's own re-check
+        no longer sees drift. The judge and the judged are the same process.
+
+        It was also structurally incapable of being wrong. There is no path in
+        this doctor that emits a dismissal, so every row it could ever write is
+        ``_confirmed`` / ``is_bad=False`` — and an ``fp`` dismissal is the sole
+        true-negative in the precision math. An all-positive label generator
+        inflates the outcome and day counts that the falsifier-progress readout
+        tracks while contributing nothing to the bad-rate it is measuring.
+
+        Two accidents kept that inert: the env var is unset on every live plist,
+        and ``_adjudication_progress`` currently filters to
+        ``sentinel_finding_%``/``watcher_finding_%``. Neither is a safeguard —
+        one ``export`` armed it — so the path is removed rather than re-gated.
+
+        A cleared condition is a state fact, not a verdict on this doctor's
+        judgment. It is logged and closed locally; if that transition is worth
+        keeping centrally it belongs in a metric or an audit event, not in the
+        channel whose only value is that it comes from outside the loop.
         """
-        uuid = os.environ.get("DEPLOY_DRIFT_DOCTOR_UUID", "").strip()
-        if not uuid:
-            log("  (no DEPLOY_DRIFT_DOCTOR_UUID — closed locally, no outcome_event)")
-            return
-        if self.dry_run:
-            log(f"  dry-run: would emit resolution outcome for {fp}")
-            return
-        try:
-            from agents.common.resolution_outcome import build_resolution_outcome_args
-            args = build_resolution_outcome_args(
-                finding_kind=FINDING_KIND, status="confirmed",
-                fingerprint=fp, agent_uuid=uuid,
-                reason=f"drift cleared on {rec.get('surface')}",
-            )
-        except Exception:
-            return
-        self.io["post_outcome"](args)
+        log(f"  closed locally (condition cleared on {rec.get('surface')}; "
+            f"no outcome_event — see _resolve docstring)")
 
 
 def main() -> int:
