@@ -618,7 +618,10 @@ async def record_agent_state(
         identity_id=identity.identity_id,
         entropy=S,
         integrity=I,
-        stability_index=0.0,  # Dead field — no longer computed
+        # RETIRED 2026-03-26 (20684dd1); was 1.0 - S. None, not 0.0: a dead
+        # field written as a number is indistinguishable from a flat real
+        # signal at the query layer. See migration 058.
+        stability_index=None,
         void=V,
         regime=db_regime,
         coherence=coherence,

@@ -63,7 +63,8 @@ class AgentStateRecord:
     energy: float = 0.5
     entropy: float = 0.5
     integrity: float = 0.5
-    stability_index: float = 0.5
+    # RETIRED 2026-03-26 (20684dd1). None = not computed; see migration 058.
+    stability_index: Optional[float] = None
     void: float = 0.1
     regime: str = "nominal"
     coherence: float = 1.0
@@ -312,7 +313,7 @@ class DatabaseBackend(ABC):
         identity_id: int,
         entropy: float,
         integrity: float,
-        stability_index: float,
+        stability_index: Optional[float],
         void: float,
         regime: str,
         coherence: float,

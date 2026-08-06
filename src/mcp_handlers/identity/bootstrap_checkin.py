@@ -145,7 +145,8 @@ async def write_bootstrap(
         "identity_id": identity_id,
         "entropy": 0.5,
         "integrity": 0.5,
-        "stability_index": 0.5,
+        # RETIRED 2026-03-26 (20684dd1); None = not computed (migration 058).
+        "stability_index": None,
         "void": 0.0,
         "regime": "nominal",
         "coherence": 1.0,
