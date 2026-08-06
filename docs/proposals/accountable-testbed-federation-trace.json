@@ -1,0 +1,121 @@
+{
+  "captured_at": "2026-08-03T09:25:24.133179+00:00",
+  "cases": {
+    "authentic_but_false_evidence": {
+      "accepted": false,
+      "evidence_consistent": false,
+      "origin_authentic": true,
+      "reason": "evidence_mismatch"
+    },
+    "expired_voucher": {
+      "accepted": false,
+      "evidence_consistent": null,
+      "origin_authentic": true,
+      "reason": "expired"
+    },
+    "forged_signature": {
+      "accepted": false,
+      "evidence_consistent": null,
+      "origin_authentic": false,
+      "reason": "invalid_signature"
+    },
+    "holder_bound_request": {
+      "accepted": true,
+      "origin_authentic": true,
+      "reason": "accepted",
+      "subject": "agent-alpha-7"
+    },
+    "proof_replay": {
+      "accepted": false,
+      "origin_authentic": true,
+      "reason": "replay"
+    },
+    "stolen_token_without_holder_key": {
+      "accepted": false,
+      "origin_authentic": true,
+      "reason": "holder_key_mismatch"
+    },
+    "valid_cross_governor_voucher": {
+      "accepted": true,
+      "evidence_consistent": true,
+      "issuer": "principal-alpha.example",
+      "origin_authentic": true,
+      "reason": "accepted",
+      "subject": "agent-alpha-7"
+    },
+    "voucher_replay": {
+      "accepted": false,
+      "evidence_consistent": null,
+      "origin_authentic": true,
+      "reason": "replay"
+    },
+    "wrong_audience": {
+      "accepted": false,
+      "evidence_consistent": null,
+      "origin_authentic": true,
+      "reason": "wrong_audience"
+    }
+  },
+  "checks": {
+    "authentic_but_false_evidence": true,
+    "distinct_governor_processes_and_keys": true,
+    "expired_voucher": true,
+    "forged_signature": true,
+    "holder_bound_request": true,
+    "proof_replay": true,
+    "stolen_token_without_holder_key": true,
+    "valid_cross_governor_voucher": true,
+    "voucher_replay": true,
+    "wrong_audience": true
+  },
+  "limitations": [
+    "This is a two-process protocol tracer, not a full multi-host deployment.",
+    "Public-key pinning is an explicit trust bootstrap; there is no shared private signing root.",
+    "A valid signature proves issuer origin, not claim truth. The false-voucher case is rejected only because recipient-observed evidence disagrees.",
+    "Proof-of-possession shows that a copied authorization token alone is insufficient; it does not protect a stolen token plus its holder private key."
+  ],
+  "protocol": {
+    "authorization": "compact JWS / Ed25519 with cnf JWK thumbprint plus request proof",
+    "trust_bootstrap": "bilateral public-key pinning",
+    "voucher": "compact JWS / Ed25519"
+  },
+  "schema": "unitares.federation-trace.v1",
+  "summary": {
+    "all_expected_controls_pass": true,
+    "case_count": 9,
+    "passed_checks": 10,
+    "total_checks": 10
+  },
+  "topology": {
+    "governors": [
+      {
+        "domain": "principal-alpha.example",
+        "kid": "7729a663f56f9410",
+        "pid": 42182,
+        "public_jwk": {
+          "alg": "EdDSA",
+          "crv": "Ed25519",
+          "kid": "7729a663f56f9410",
+          "kty": "OKP",
+          "use": "sig",
+          "x": "rQnJnirtEDfoiDb39mF28_-n_DH0-Cuq41P58enJvYA"
+        }
+      },
+      {
+        "domain": "principal-beta.example",
+        "kid": "9878e90d6656914f",
+        "pid": 42183,
+        "public_jwk": {
+          "alg": "EdDSA",
+          "crv": "Ed25519",
+          "kid": "9878e90d6656914f",
+          "kty": "OKP",
+          "use": "sig",
+          "x": "xPCev2ADXyWJrcth6bMI1_xcLfNEYzKm47zEDhUNcH8"
+        }
+      }
+    ],
+    "private_key_visibility": "each private key remains inside its governor process",
+    "shared_private_signing_key": false
+  }
+}

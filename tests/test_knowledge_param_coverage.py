@@ -60,9 +60,6 @@ INTERNAL_KEYS = {
 # knowledge() schema. These are not a backlog: each entry needs a concrete
 # reason why exposing it would be misleading or noisy.
 INTENTIONALLY_UNEXPOSED = {
-    # Legacy answer_question-only flag. knowledge() has no answer action, so
-    # exposing this on KnowledgeParams would advertise an inert control.
-    "resolve_question",
     # Legacy search-result LLM summary toggle. It is not the same operation as
     # knowledge(action="synthesize"), and a bool named "synthesize" next to the
     # action literal is too ambiguous for the unified surface.

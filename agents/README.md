@@ -15,7 +15,9 @@ Reference implementations of Unitares governance agents. These are **not** part 
 
 ## Running your own
 
-To deploy your own residents, depend on `unitares-sdk` and follow the `run_cycle` pattern shown in `vigil/agent.py` or `sentinel/agent.py`. Lumen (the embodied agent) lives in a separate repo (`anima-mcp`) and is another example of an SDK consumer.
+To deploy your own residents, depend on `unitares-sdk` and follow the `run_cycle` pattern shown in `vigil/agent.py` or `sentinel/agent.py`.
+
+Lumen (the embodied agent) lives in a separate repo (`anima-mcp`) and shows that a resident can run **out-of-tree** — it is declared through `UNITARES_RESIDENTS` like any other. It is *not* an SDK consumer, though: it talks to governance directly and imports nothing from `unitares_sdk`. As of 2026-08, every SDK consumer is in this repo, so the `sdk-package` CI job is what stands in for an outside consumer.
 
 The SDK is **not on PyPI** — install it from git (or `-e agents/sdk` from a checkout):
 
