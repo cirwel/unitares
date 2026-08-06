@@ -207,27 +207,40 @@ class ToolUsageMixin:
         mcp_handlers/updates/phases.py, which is the live verdict path -- so
         without the filter the loop's own ``server_observation`` rows (its
         trajectory self-validations) were scoring the agent they were derived
-        from. Provenance-only: no joinable-snapshot clause, because this is a
-        behavioural read, not a residual anchor.
+        from.
 
-        Set ``UNITARES_OUTCOME_PROVENANCE_FILTER=off`` to restore the previous
-        unfiltered behaviour (rollback lever; expect self-referential rows to
-        re-enter E/I).
+        **Exogenous only.** The filter admits ``external_signal`` and excludes
+        ``agent_reported_tool_result``, matching ``is_exogenous_anchor``'s
+        default. Admitting the soft tier here would not close the loop, only
+        move it: this consumer ignores ``evidence_weight`` and the sensor counts
+        every qualifying row equally, so three self-reported successes would
+        still move live E/I at 20% weight. Self-attestation must not be an
+        input to the verdict that judges the attester.
+
+        Provenance-only: no joinable-snapshot clause. That clause is a
+        residual-anchor precondition (roadmap §6.3) -- a behavioural read has no
+        residual to join, so requiring it would discard genuine outcomes.
+
+        ``verification_source`` is returned so a future weighted implementation
+        (contribution scaled by corroboration grade rather than filtered) can be
+        built without another schema archaeology pass.
+
+        Default OFF. Set ``UNITARES_OUTCOME_PROVENANCE_FILTER=on`` to enable;
+        the rollout plan is merge-disabled-then-flip, so the default must not
+        change behaviour at deploy.
         """
-        from src.grounding.outcome_anchors import NON_SELF_REFERENTIAL_OUTCOMES_SQL
+        from src.grounding.outcome_anchors import EXOGENOUS_OUTCOMES_SQL
 
         provenance_filter = (
-            os.environ.get("UNITARES_OUTCOME_PROVENANCE_FILTER", "on")
-            .strip().lower() not in {"off", "0", "false", "no"}
+            os.environ.get("UNITARES_OUTCOME_PROVENANCE_FILTER", "off")
+            .strip().lower() in {"on", "1", "true", "yes"}
         )
-        predicate = (
-            f"AND {NON_SELF_REFERENTIAL_OUTCOMES_SQL}" if provenance_filter else ""
-        )
+        predicate = f"AND {EXOGENOUS_OUTCOMES_SQL}" if provenance_filter else ""
         async with self.acquire() as conn:
             try:
                 rows = await conn.fetch(
                     f"""
-                    SELECT outcome_type, is_bad, outcome_score, ts
+                    SELECT outcome_type, is_bad, outcome_score, ts, verification_source
                     FROM audit.outcome_events
                     WHERE agent_id = $1
                       AND ts >= now() - make_interval(hours => $2)

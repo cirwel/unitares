@@ -112,7 +112,7 @@ def test_is_anchorable_requires_provenance_and_snapshot():
     assert is_anchorable("agent_reported_tool_result", eisv_present=False, include_soft=True) is False
 
 
-def test_non_self_referential_predicate_is_provenance_only():
+def test_exogenous_predicate_is_provenance_only():
     """The behavioural-read predicate must exclude self-referential provenance
     (Invariant 4) WITHOUT requiring a joinable snapshot.
 
@@ -121,37 +121,37 @@ def test_non_self_referential_predicate_is_provenance_only():
     AND-ing the §6.3 snapshot clause there would silently discard genuine
     outcomes rather than self-referential ones.
     """
-    from src.grounding.outcome_anchors import NON_SELF_REFERENTIAL_OUTCOMES_SQL
+    from src.grounding.outcome_anchors import EXOGENOUS_OUTCOMES_SQL
 
-    # Provenance exclusion IS applied.
-    assert "external_signal" in NON_SELF_REFERENTIAL_OUTCOMES_SQL
-    assert "agent_reported_tool_result" in NON_SELF_REFERENTIAL_OUTCOMES_SQL
-    assert "server_observation" not in NON_SELF_REFERENTIAL_OUTCOMES_SQL
+    # Provenance exclusion IS applied, exogenous tier only.
+    assert "external_signal" in EXOGENOUS_OUTCOMES_SQL
+    assert "agent_reported_tool_result" not in EXOGENOUS_OUTCOMES_SQL
+    assert "server_observation" not in EXOGENOUS_OUTCOMES_SQL
 
     # Snapshot requirement is NOT applied -- this is the whole point.
-    assert "eisv_e" not in NON_SELF_REFERENTIAL_OUTCOMES_SQL
-    assert "snapshot_missing" not in NON_SELF_REFERENTIAL_OUTCOMES_SQL
+    assert "eisv_e" not in EXOGENOUS_OUTCOMES_SQL
+    assert "snapshot_missing" not in EXOGENOUS_OUTCOMES_SQL
 
 
-def test_non_self_referential_is_exact_complement_of_excluded():
-    """It must admit exactly the sources EXCLUDED_OUTCOMES_SQL rejects, so the
-    two constants cannot drift into a gap that lets an unknown source through.
+def test_exogenous_predicate_excludes_soft_and_self_referential():
+    """It admits ONLY the trusted-external tier.
+
+    Deliberately not the complement of EXCLUDED_OUTCOMES_SQL: the soft
+    self-attested tier is neither an anchor nor admissible into a verdict
+    input, because the live consumer ignores evidence_weight and would count a
+    self-report as heavily as a CI result.
     """
     from src.grounding.outcome_anchors import (
-        EXCLUDED_OUTCOMES_SQL,
-        NON_SELF_REFERENTIAL_OUTCOMES_SQL,
+        EXOGENOUS_OUTCOMES_SQL,
         AnchorTier,
         tier_for_source,
     )
 
-    for source in ("external_signal", "agent_reported_tool_result"):
-        assert source in NON_SELF_REFERENTIAL_OUTCOMES_SQL
-        assert tier_for_source(source) is not AnchorTier.EXCLUDED
+    assert "external_signal" in EXOGENOUS_OUTCOMES_SQL
+    assert "agent_reported_tool_result" not in EXOGENOUS_OUTCOMES_SQL
+    assert "server_observation" not in EXOGENOUS_OUTCOMES_SQL
 
-    # Every EXCLUDED-tier source must be absent from the admitting predicate.
-    for source in ("server_observation", "made_up_source"):
-        assert tier_for_source(source) is AnchorTier.EXCLUDED
-        assert source not in NON_SELF_REFERENTIAL_OUTCOMES_SQL
-
-    # NULL is handled by the SQL IN (...) semantics in both directions.
-    assert "IS NULL" in EXCLUDED_OUTCOMES_SQL
+    assert tier_for_source("external_signal") is AnchorTier.TRUSTED_EXTERNAL
+    assert tier_for_source("agent_reported_tool_result") is AnchorTier.SOFT_SELF_ATTESTED
+    for excluded in ("server_observation", "made_up_source", None):
+        assert tier_for_source(excluded) is AnchorTier.EXCLUDED

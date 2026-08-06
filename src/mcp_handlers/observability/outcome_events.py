@@ -617,6 +617,39 @@ async def handle_outcome_event(arguments: Dict[str, Any]) -> Sequence[TextConten
     # asyncio.wait_for wrapping (anyio-asyncio deadlock risk — see CLAUDE.md).
     # agent_id resolved above is injected so the helper can skip context lookup.
     _gate_args = {**arguments, "agent_id": agent_id}
+
+    # PROVENANCE IS SERVER-DERIVED ON THE PUBLIC PATH.
+    #
+    # `verification_source` decides an outcome's corroboration grade
+    # (outcome_corroboration._has_external_evidence short-circuits on the
+    # string), so accepting it from the caller let any agent label its own
+    # claim `external_signal` and receive EXTERNALLY_VERIFIED / weight 1.00.
+    # A caller reaching this decorated MCP tool is, by definition, an agent
+    # attesting its own result -- so that is what we record, regardless of
+    # what it asked for.
+    #
+    # `external_signal` and `server_observation` remain available to
+    # server-controlled ingestion, which calls _record_outcome_event_inline
+    # directly and never passes through here: the operator-gated REST harness
+    # endpoint (http_api.http_harness_outcome) and in-process emitters such as
+    # dialectic resolution. Those paths are unchanged.
+    #
+    # detail.phase5_emitter is stripped for the same reason: it is a
+    # caller-controlled key that _has_tool_observation trusts unconditionally
+    # for TOOL_OBSERVED (weight 0.65, which exactly meets the calibration
+    # gate's `<` comparison).
+    _claimed_source = _gate_args.get("verification_source")
+    _gate_args["verification_source"] = "agent_reported_tool_result"
+    if _gate_args.get("detail") and "phase5_emitter" in (_gate_args.get("detail") or {}):
+        _stripped = dict(_gate_args["detail"])
+        _stripped.pop("phase5_emitter", None)
+        _gate_args["detail"] = _stripped
+    if _claimed_source and _claimed_source != "agent_reported_tool_result":
+        logger.info(
+            "outcome_event: downgraded caller-claimed verification_source=%r to "
+            "agent_reported_tool_result (agent=%s)", _claimed_source, agent_id,
+        )
+
     if ephemeral_stamp:
         _detail = dict(_gate_args.get("detail") or {})
         _detail["ephemeral_writer"] = True

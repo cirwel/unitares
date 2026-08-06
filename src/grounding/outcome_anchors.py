@@ -158,7 +158,7 @@ EXCLUDED_OUTCOMES_SQL = (
     "OR verification_source NOT IN ('external_signal', 'agent_reported_tool_result'))"
 )
 
-#: Provenance-only pass: NOT self-referential, snapshot NOT required.
+#: Exogenous provenance only, snapshot NOT required.
 #:
 #: Use this — not ANCHORED_OUTCOMES_SQL — for consumers that read outcomes as
 #: *behavioural evidence* rather than as residual anchors. The joinable-snapshot
@@ -167,8 +167,14 @@ EXCLUDED_OUTCOMES_SQL = (
 #: Invariant-4 provenance exclusion but has no residual to join, and applying
 #: the snapshot clause there would silently discard genuine outcomes.
 #:
-#: Exact complement of EXCLUDED_OUTCOMES_SQL, by construction.
-NON_SELF_REFERENTIAL_OUTCOMES_SQL = f"({_TRUSTED_OR_SOFT_SOURCE_SQL})"
+#: Deliberately excludes SOFT_SELF_ATTESTED, matching ``is_exogenous_anchor``'s
+#: default. Admitting the soft tier into a *verdict* input would relocate the
+#: loop rather than close it: the live consumer (db/mixins/tool_usage.py
+#: get_recent_outcomes) ignores ``evidence_weight`` and the sensor counts rows
+#: equally, so self-attested rows would carry the same force as CI results.
+#: A consumer that genuinely wants soft evidence must weight by corroboration
+#: grade, not merely admit it — hence no ``include_soft`` switch here.
+EXOGENOUS_OUTCOMES_SQL = f"({_TRUSTED_SOURCE_SQL})"
 
 
 def anchored_outcomes_predicate(
