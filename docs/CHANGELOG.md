@@ -13,6 +13,63 @@ _No unreleased changes yet. New entries accumulate here until the next release b
 
 ---
 
+## [2.15.0] - 2026-08-05
+
+_Notable changes merged between 2.14.0 (2026-06-28) and this release. `pyproject.toml`/`VERSION` bumped to 2.15.0. Note: since #1248, the live `build_sha` (`/health`, metrics) is the authoritative signal for what code is actually running — this bump is a changelog/traceability milestone, not the deploy identity mechanism._
+
+### Added
+
+- **effects:** governed-effect primitives — grant mint/verify (#1237), propose-time mint endpoint (#1240), producer wiring (canonical hash, SDK mint, per-type flags) (#1352), veto-time verification (#1249) — Phase 1 slices, currently INERT; governed file-write SDK consumer (#1236) and watcher demotion floor routed through it (#1242)
+- **dialectic:** one-call `request_review` + `whose_move` guidance (#1385); governed reviewer spawn as a standing `agent_spawn` producer (#1381); opt-in Codex backend for the orchestrated reviewer (#1353); Phoenix LiveView beachhead for the live dialectic surface (#1250); `dialectic_*` lifecycle events via broadcaster (#1251, #1256); one-call canary as a positive control for the kill-gate (#1466)
+- **doctor/ops:** telemetry-liveness checks for silent sensor death (#1380); restart-gap awareness (#1382); `signal_degeneracy` detector (#1409); dead-but-producing-nothing resident detector (#1416, #1418); deploy-drift doctor (#1396) with a governed runner for drift resolutions (#1397) and an `issue_surface` route (#1398); `pr-babysitter` to un-strand armed PRs under strict branch protection (#1476); census session-lifecycle hooks (#1454); event-check evidence at the point of verdict (#1453)
+- **identity:** ephemeral-write gate + token-invalid warning on successful calls (#1360); operator-attested genesis re-baseline, drift alerts on change only (#1371); record identity-bound runtime observations, separated from reflections (#1480, #1482)
+- **eisv:** raw-series persistence / AR(1) null on raw observations — the individuality gate (#1324, #1355, #1358); label-free self-predictability eval (#1289); label-free policy stress-test without outcome labels (#1293); latent bad-label supply instrumentation (#1296); label power/MDE analysis (#1295)
+- **dashboard:** passkey (WebAuthn) sign-in (#1472); per-agent EISV trajectory drill-down (#1283); per-resident EISV fleet heatmap (#1274); adjudication section — daily one-click Sentinel verdicts feeding the EISV falsifier (#1343); historized governance health (#1272); System Health per-check detail (#1254)
+- **sdk:** support `mcp` SDK 2.x alongside 1.x (#1405); lost-response lease recovery + own-orphan reclaim (#1467); pluggable resident-progress sources + a working SDK install path (#1493)
+- **cohort-prior:** shadow read-only warm-start for agent baselines (#1334); per-class aggregation source (#1344); live-apply mode behind an explicit second opt-in (#1346)
+- **gateway:** serve `/health` so deploy tooling has something to gate on (#1477)
+- **inference:** inference-host registry (#1304)
+
+### Changed
+
+- **refactor:** agent display resolution, deprecated note adapter, KG batch/update handlers, knowledge search/store handlers, MCP server bootstrap/transport, governance request/lifecycle hotspots, shared canonical call resolver (#1497, #1496, #1483, #1481, #1478, #1474, #1307)
+- **deploy:** extract shared deploy blocks into `deploy-lib.sh` (#1495)
+- **ci:** required checks now run on `merge_group` (#1469); PR-queue auto-update workflow (#1503); consume our own SDK as an installed package, not a source tree (#1498)
+- **watcher:** default detector → `qwen3.6:27b-coding-nvfp4` (#1276)
+- routine dependency maintenance across Python, actions, and dashboard npm groups (#1368, #1384, #1389, #1390, #1391, #1392, #1376, #1377, #1230, #1231)
+
+### Fixed
+
+- **security:** stop self-granted privilege via caller-settable `tags` (`admin`/`embodied`/`persistent`/`autonomous`) and the `total_updates >= 100` route into fleet-global `set_thresholds` (#1512)
+- **identity:** liveness-gate lineage declarations on the `agent:/` presence lease (#1461); make the trust-tier fallthrough visible and non-demoting (#1411); fail safe inside `resolve_trust_tier`, not just at its call site (#1407, #1423); recover the session before minting a phantom UUID (#1388); fail closed when a hijack guard rejects a resume (#1319, #1325); resolve the dialectic caller by uuid, not the public handle (#1414, #1420); keep `identity_required` denials identity-neutral (#1488); enforce Host/Origin validation on the `/mcp` transport (#1413)
+- **sentinel:** reclaim own leases stranded by lost acquire/release responses (#1443, #1459); report own starvation when an immortal lease blocks every tick (#1444)
+- **calibration:** stop training on confidences the server scraped, not the caller's (#1321, #1354, #1445); single-flight PG writer + tactical channel purity (#1378)
+- **kg:** close knowledge param-exposure backlog (#1357); route `KnowledgeGraphPostgres` mutations/stats through `db.acquire()` (#1282, #1350); default null details pagination (#1361, #1379); drop `human_review_required` — a review gate no one can execute is false assurance (#1470)
+- **dialectic:** derive one-call review timeouts from the synthetic budget (#1442, #1464); cap applied conditions at `MAX_DIALECTIC_CONDITIONS=20` (#1336); restore `awaiting_facilitation` on reconstruction and on main-path resolution (#1259, #1253, #1262)
+- **doctor:** stop `immortal_lease` flagging live client-renewed resident leases (#1465); stop `resident_checkin_stale` false positives and flag wrong-branch live checkouts (#1492); stop observer-artifact false alarms from host sleep and recovered producers (#1510); stop a self-graded row entering the exogenous-anchor channel (#1494); don't read a fire-on-failure producer's healthy silence as death (#1417)
+- **watcher:** serialize model calls so queued scans stop burning their budget (#1441); atomic writes for dedup/findings files (#1335); never scan Claude Code session scratchpads (#1463); default back to a locally-pulled model tag (#1403)
+- **dashboard:** absorb `?operator_token=` on load, not only when the adjudication pane asks (#1449); durable EISV fallback (#1266); make `/v1/sentinel/summary` durable across restarts (#1261); AA-safe `--warn` text variant (#1439); stuck-card/liveness-signal/tier rendering (#1435)
+- **http/db:** gate `/ws/eisv` — the one route with no auth check (#1447); normalize audit partition bounds to UTC, closing the month-first hole (#1448)
+- **telemetry:** make `audit.tool_usage` able to answer "who requested a review" (#1387, #1424); read tool-usage stats from `audit.tool_usage`, not the stale JSONL (#1286)
+- **mcp:** advertise config and export schemas (#1436); call advertised aliases, not dropped raw twins, over the wire (#1318)
+- **trajectory:** stop `identity_drift`/`resolved` feed flood — tombstone the emit marker, add resolve hysteresis (#1421)
+- **eisv-integrity:** stop the ablation probe reporting noise as lift (#1422); bound dogfood ablation-guard runtime (#1427); select reviewed dogfood findings, label negative controls honestly, use a trusted prospective denominator (#1428, #1429, #1430)
+- **inference:** stop the blocking Ollama probe from stalling the event loop (#1311); map checkin/get_metrics to live tool names on the ollama-bridge (#1316)
+- **api:** `/api/events` must not silently ignore a filter key (#1399)
+
+### Documentation
+
+- **eisv:** pre-registered individuality-test v2 final read — FAIL, kill criterion honored; outcome-grounding stop rule pre-registered (#1400, #1402, #1406, #1408, #1412, #1419, #1425)
+- **readme:** publish the falsifiability result, not just the harness (#1491); federation research-direction section (#1347); competitive analysis vs MI9 and Auton (#1287)
+- **proposals:** bridge→dispatch v0 — operator on-the-loop, not in-the-loop (#1450); uuid-keyed-identity-migration council synthesis (#1310); redis-retirement Phase 1 plan (#1328)
+- **docs-consolidation:** Phase 0 — contested-claims registry + lint, stale-copy sweep (#1348)
+
+### Tests
+
+- privileged-tag escalation regression suite, 14 new tests verified failing pre-fix (#1512); real-DB contract tests for `effects.payloads` (#1245); hermetic findings-emit tests on the right channel (#1410); KG lease-retrieval regressions (#1473)
+
+---
+
 ## [2.14.0] - 2026-06-28
 
 _Backfill of notable changes merged between 2.13.0 (2026-05-04) and this release. `pyproject.toml`/`VERSION` bumped to 2.14.0._
