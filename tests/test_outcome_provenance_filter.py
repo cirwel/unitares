@@ -163,3 +163,39 @@ class TestServerDerivedProvenance:
         assert '= "agent_reported_tool_result"' not in inline.replace(
             'or "agent_reported_tool_result"', ""
         )
+
+
+class TestCallerControlledEvidenceVocabulary:
+    """Documents a caller-controlled path this PR does NOT close.
+
+    _has_tool_observation matches trusted-tool vocabulary against the TEXT of
+    caller-supplied detail, so {"tool": "pytest", "kind": "test",
+    "exit_code": 0} earns TOOL_OBSERVED (0.65 -- exactly meeting the
+    calibration gate's `<`) with no flag at all. Stripping phase5_emitter
+    alone does not close it.
+
+    NOT closed here on purpose: it affects what trains *tactical calibration*,
+    not the E/I verdict path this PR is scoped to. E/I is already closed --
+    get_recent_outcomes admits external_signal only, and public callers can no
+    longer claim that value. Capping the grade would change which outcomes
+    train calibration, which is a product decision rather than a bug fix.
+    """
+
+    def test_detail_vocabulary_alone_reaches_tool_observed(self):
+        from src.outcome_corroboration import enrich_detail_with_corroboration
+
+        out = enrich_detail_with_corroboration(
+            {"tool": "pytest", "kind": "test", "exit_code": 0},
+            outcome_type="test_passed",
+            verification_source="agent_reported_tool_result",
+        )
+        assert out["corroboration_grade"] == "tool_observed"
+        assert out["evidence_weight"] == 0.65
+
+    def test_ei_path_is_closed_regardless(self):
+        """The verdict path does not consult corroboration grade at all -- it
+        filters on verification_source, which is now server-derived."""
+        from src.grounding.outcome_anchors import EXOGENOUS_OUTCOMES_SQL
+
+        assert "external_signal" in EXOGENOUS_OUTCOMES_SQL
+        assert "agent_reported_tool_result" not in EXOGENOUS_OUTCOMES_SQL

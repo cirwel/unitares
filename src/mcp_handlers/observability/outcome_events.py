@@ -379,6 +379,7 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
         outcome_type=outcome_type,
         verification_source=verification_source,
     )
+
     evidence_weight = float(detail.get("evidence_weight") or 0.0)
     # A row that declares itself a synthetic fixture (e.g. the calibration
     # harness) is PERSISTED for the author's own per-agent analysis but must
