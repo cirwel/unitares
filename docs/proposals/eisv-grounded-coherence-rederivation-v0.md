@@ -194,3 +194,26 @@ that framing and not the oracle one.
 
 **This document is a candidate for review. It does not change any deployed
 behaviour, flag, or threshold, and it is not evidence that EISV predicts outcomes.**
+
+## 7. Decision record — V-reintroduction (2026-08-07)
+
+The §4 question "reintroduce V as a policy-layer debt EMA?" was resolved by
+governed dialectic review (session `3e003d82fb2d251e`, converged): **DEFERRED
+with a wired wake condition.** Binding conditions (full record and the deployed-V
+consumer inventory live in `docs/ontology/eisv-proprioception-contract.md`,
+"Decision record — V-reintroduction deferred"):
+
+1. V stays out of the certified core and off governed/verdict surfaces; the
+   2026-12-01 #1425 stop-rule read is the calendar trigger only (necessary, not
+   sufficient), and the frozen #1425 pre-registration is not amended for V.
+2. Any build first requires a V-specific pre-registration: evidence-quality
+   minima (per-agent / per-independent-cluster effective samples, cadence,
+   external corroboration, settlement examples, missingness audit), the full EMA
+   maths including **settlement**, and an incremental-information test vs
+   E, I, S and naive baselines. Exogenous input alone does not establish
+   independence.
+3. If built: soak clears both ≥30 days and the evidence minimum, advisory-tagged
+   at zero verdict weight, with rollback criteria and demonstrated settlement;
+   any gate/weight use is a separate review.
+4. At implementation of the 3-state core: CI proof of V-absence from verdict,
+   pause, risk, coherence, gating, and hysteresis paths.

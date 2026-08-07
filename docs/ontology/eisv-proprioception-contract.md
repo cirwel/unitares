@@ -49,6 +49,50 @@ The advisory instrument is real and useful — proprioceptive telemetry, guidanc
 and a complete, honest audit record. What it does not currently do is halt an
 agent, and no surface should imply otherwise.
 
+## Decision record — V-reintroduction deferred (2026-08-07)
+
+The grounded-coherence re-derivation proposal
+(`docs/proposals/eisv-grounded-coherence-rederivation-v0.md`) drops V from the
+certified core and leaves reintroduction — as a policy-layer leaky EMA of the
+outcome-channel residual — as an open design decision. That decision was taken
+through a governed dialectic review (session `3e003d82fb2d251e`, resolved
+converged 2026-08-07): **defer, with a wired wake condition — neither build now
+nor retire permanently.** Conditions, binding on any future V work:
+
+1. V stays out of the certified core and off all governed/verdict surfaces. The
+   2026-12-01 outcome-label stop-rule read (#1425) is the calendar **trigger
+   only** — necessary, not sufficient; the frozen #1425 pre-registration is not
+   amended to carry V-specific criteria.
+2. Any V-EMA build requires its own prior pre-registration defining (a) evidence
+   minima — per-agent and per-independent-cluster effective samples, temporal
+   cadence, externally corroborated labels, settlement examples, and a
+   missingness/selection-bias audit (label *quality*, not raw volume); (b) the
+   EMA maths — residual definition, prior, decay/half-life, accrual **and
+   settlement** equations; (c) an incremental-information test against E, I, S
+   and naive baselines that V must pass to count as an independent axis.
+   Exogenous input is not, by itself, proof of independence.
+3. If built: the soak must clear **both** ≥30 days **and** the pre-registered
+   evidence minimum, tagged advisory with zero verdict weight, with explicit
+   rollback criteria and demonstrated settlement (recovery) behaviour. Any later
+   gate/hysteresis/verdict-weight use is a separate review.
+4. At implementation of the 3-state certified core, CI tests must prove
+   V-absence from verdict, pause, risk, coherence, gating, and hysteresis paths.
+
+**Consumer inventory — where V feeds the deployed system today** (the surfaces
+condition 4's tests must cover; dev tree `4bc9d4af`):
+
+| Surface | Mechanism |
+|---|---|
+| `governance_core/coherence.py:79` | deployed coherence **is** `C(V) = Cmax·0.5·(1+tanh(C₁·V))` — pinned ≈0.49 by near-zero live V |
+| `governance_core/dynamics.py` | V feeds back into the ODE through the coherence term |
+| `governance_core/stability.py:141` | `dC/dV` enters the contraction certificate (the deployed α_c = 0.019 is certified over the 4-coordinate system) |
+| `src/grounding/coherence.py` | grounded path preserves the same `C(V)` form |
+| `src/behavioral_sensor.py:203` | behavioral V = E−I slope difference (the ~0.99-corr estimator; ledger row 1) |
+| `dashboard/redesign/{data,snapshot}.js` | display surfaces render V as a first-class axis |
+
+The 4-axis ontology remains at the paper/vocabulary level throughout the
+deferral; this record exists so no future session re-derives the question.
+
 ## Core mathematical posture
 
 The public math should lead with proprioceptive residuals, not bad-outcome
