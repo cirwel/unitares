@@ -45,6 +45,8 @@ def load_plugins() -> None:
     register(ResidentTagHygiene())
     from .plugin_hook_liveness import PluginHookLiveness
     register(PluginHookLiveness())
+    from .stalled_draft_pr import StalledDraftPR
+    register(StalledDraftPR())
 
     raw = os.getenv("VIGIL_CHECK_PLUGINS", "") or ""
     for mod_path in raw.split(":"):
