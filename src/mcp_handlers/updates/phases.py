@@ -1766,6 +1766,16 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
             monitor._behavioral_state.to_dict_for_persistence()
             if monitor is not None else None
         )
+        # Tag the snapshot with the source its observations came from. The
+        # row-level `sensor_eisv_source` records what was SUBMITTED; this
+        # records what the verdict-authoritative estimator actually CONSUMED.
+        # For an embodied agent under UNITARES_SENSOR_COUPLING=behavioral_only
+        # those differ in implication: the physical sensor is cut from the ODE
+        # spring but still feeds behavioral state, and nothing said so.
+        if behavioral_snapshot is not None and monitor is not None:
+            obs_source = getattr(monitor, "_behavioral_obs_source", None)
+            if obs_source:
+                behavioral_snapshot["obs_source"] = obs_source
     except Exception:
         behavioral_snapshot = None
 

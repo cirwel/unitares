@@ -104,7 +104,11 @@ class Collector(ast.NodeVisitor):
 def collect() -> dict[str, Flag]:
     flags: dict[str, Flag] = {}
     for d in SCAN_DIRS:
-        for py in (REPO / d).rglob("*.py"):
+        # sorted(): readdir order is filesystem-dependent (ext4 per-fs hash seed),
+        # and the first-file-wins merge below made the rendered purpose/default a
+        # per-machine lottery for flags read at multiple sites. Canonical order =
+        # lexicographic path, so the catalog is reproducible everywhere.
+        for py in sorted((REPO / d).rglob("*.py")):
             if "/tests/" in str(py) or py.name.startswith("test_"):
                 continue
             try:
