@@ -49,9 +49,15 @@ def phi_objective(
         - Φ penalizes high ‖Δη‖ (ethical drift)
 
     Notes:
-        - This function is used primarily in research/optimization
-        - Production UNITARES uses coherence-based decision making
-        - Could be integrated into production for multi-objective control
+        - DEPLOYED REALITY (2026-08-06): this function is NOT research-only. It is
+          the live cold-start / pre-warmup verdict authority — `src/monitor_phi.py`
+          calls it every check-in, and it owns the verdict for updates 1-2 and every
+          cold start (it produced the one live high-risk verdict, 2026-08-02). The
+          older "production uses coherence-based decision making" note is stale:
+          coherence sits in ~[0.455, 0.499] as deployed and its gates cannot fire
+          (see docs/ontology/eisv-proprioception-contract.md, rows 16, 25, 39).
+        - The verdict this produces is ADVISORY as deployed, not enforcement — a
+          produced `high-risk` is usually gap-suppressed, not delivered.
     """
     d_eta = drift_norm(delta_eta)
 
@@ -86,9 +92,15 @@ def verdict_from_phi(phi: float, safe_threshold: float = 0.08, caution_threshold
     Notes:
         - These thresholds are heuristic and tunable
         - "safe" suggests proceeding normally
-        - "caution" suggests proceeding with safeguards
-        - "high-risk" suggests human review or rejection
-        - Steady-state equilibrium (E≈0.7, I≈0.75, S≈0.18) gives phi≈0.11 → "safe"
+        - "caution" suggests proceeding with safeguards (returns a guide, not a pause)
+        - "high-risk" produces a pause VERDICT — advisory as deployed, usually
+          gap-suppressed and not delivered (see docs/ontology/eisv-proprioception-
+          contract.md, "Deployed posture"); not an enforced halt or human review by
+          itself
+        - Steady-state margin: the legacy note "phi≈0.11" is for the setpoint-free
+          equilibrium; with UNITARES_S_SETPOINT on (the live default since #1133),
+          deployed Φ rests ≈0.26, so the margin to the "caution" edge is ~2× wider
+          than this note implies
     """
     if phi >= safe_threshold:
         return "safe"
