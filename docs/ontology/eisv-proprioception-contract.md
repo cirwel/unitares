@@ -19,6 +19,36 @@ user was wronged, or whether an agent is "guilty." Those judgments require
 external outcome evidence, policy, and review surfaces that are separate from
 the measurement vector.
 
+## Deployed posture — ratified 2026-08-06
+
+**As deployed, UNITARES is an advisory instrument, not an enforcement layer.**
+Operator-ratified 2026-08-06 on the two-wave core-math audit (ledger rows 13–44).
+This is a deliberate posture, consistent with the program's "measure before
+enforce" stance — not a defect to be silently corrected.
+
+Concretely, and verified live:
+
+- **Pause / high-risk verdicts are produced but not delivered.** `gap_suppress`
+  downgrades any pause to `proceed` at any inter-check-in gap > 150s, which is
+  ordinary resident cadence — 195 of 218 recorded pauses in the trailing 90 days
+  (89.4%). It is **retained by decision**, not a bug queued for re-arming. Whether
+  to re-arm delivery is a future operator decision, gated on a shadow/canary; it is
+  not the default.
+- **The last pause delivered to any agent, fleet-wide, was 2026-06-28.** Every
+  "delivered" pause after the 2026-06-27 `#1133` flip is a synthetic
+  integration-test fixture, not a governed agent.
+- **A produced verdict is not an enforced action.** `lifecycle_paused` events are
+  delivered enforcement; `auto_attest` rows with `decision='pause'` /
+  `gap_suppressed='true'` are produced verdicts that did **not** enforce. Never read
+  a pause / high-risk verdict *count* as an enforcement count. Operator-facing
+  surfaces that label a produced verdict `critical`, `paused`, `halted`, or
+  `enforced` are mislabeled against this posture and are being corrected to advisory
+  vocabulary (`guide` / `advisory` / `would-pause`).
+
+The advisory instrument is real and useful — proprioceptive telemetry, guidance,
+and a complete, honest audit record. What it does not currently do is halt an
+agent, and no surface should imply otherwise.
+
 ## Core mathematical posture
 
 The public math should lead with proprioceptive residuals, not bad-outcome
@@ -768,6 +798,12 @@ Avoid:
 
 - "EISV decided this was bad"
 - "EISV prevented harm" unless an enforcement path actually did
+- "UNITARES paused / halted / enforced / blocked the agent" for a *produced*
+  verdict — as deployed the verdict is advisory and usually not delivered (see
+  "Deployed posture"); say "produced a pause verdict (advisory; not delivered)" or
+  "would-pause" unless a `lifecycle_paused` event exists for that agent
+- a pause / high-risk verdict *count* presented as an enforcement or
+  harm-prevention count
 - "bad outcome" without naming the label source/class
 - "validated EISV" from synthetic fixtures, single-class strict scope, or
   retrospective self-labels
