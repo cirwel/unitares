@@ -409,6 +409,16 @@ class GovernanceConfig:
     # layer and is council-gated (docs/proposals/verification-weighted-verdict-v0.md).
     VERIFICATION_FLOOR_ENABLED = os.environ.get('GOVERNANCE_VERIFICATION_FLOOR', 'false').lower() == 'true'
 
+    # Shadow of the verification floor: compute and surface the SAME deterministic
+    # signal with ZERO verdict/risk effect, so live traffic accumulates the
+    # false-positive/recall record the proposal's own acceptance gate requires
+    # before any enable decision (verification-weighted-verdict-v0.md — "a real
+    # false-positive-regression pass on a larger benign corpus"). Default ON:
+    # pure regex on response_text, telemetry-only, surfaced only when it would
+    # fire. Kill switch: GOVERNANCE_VERIFICATION_FLOOR_SHADOW=false. Inert while
+    # the real floor is enabled (the applied signal is already surfaced).
+    VERIFICATION_FLOOR_SHADOW = os.environ.get('GOVERNANCE_VERIFICATION_FLOOR_SHADOW', 'true').lower() == 'true'
+
     # =================================================================
     # Error Handling Constants
     # =================================================================
