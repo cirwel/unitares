@@ -27,7 +27,7 @@ index; that one is the curated decision record.
 | `GOVERNANCE_VERIFICATION_FLOOR` | `'false'` | — | config/governance_config.py |
 | `GOVERNANCE_WARMUP_STRUCTURAL_GRACE` | `'true'` | — | config/governance_config.py |
 | `STRICT_IDENTITY_REQUIRED` | `''` | True iff STRICT_IDENTITY_REQUIRED env var is set to a truthy value | src/mcp_handlers/identity_bootstrap.py |
-| `UNITARES_AGENT_LOCK_BACKEND` | `'advisory'` | Async exclusive lock for agent state updates | src/state_locking.py, src/services/update_workflow_service.py |
+| `UNITARES_AGENT_LOCK_BACKEND` | `'advisory'` | Execute the extracted process_agent_update workflow for a prepared UpdateContext. | src/services/update_workflow_service.py, src/state_locking.py |
 | `UNITARES_ANCHORS_DIR` | `(required)` | Return the anchors directory path | src/identity/substrate.py |
 | `UNITARES_API_TOKEN` | `(required)` | Return continuity token support details for diagnostics. | src/mcp_handlers/identity/session.py |
 | `UNITARES_AUDIT_WRITE_JSONL` | `'1'` | read by __init__() | src/audit_log.py |
@@ -62,7 +62,7 @@ index; that one is the curated decision record.
 | `UNITARES_ENABLE_HYBRID` | `''` | Derive a config tag matching baseline filename suffix from env vars | agents/vigil/agent.py |
 | `UNITARES_ENABLE_RERANKER` | `''` | Derive a config tag matching baseline filename suffix from env vars | agents/vigil/agent.py |
 | `UNITARES_FINDINGS_URL` | `'http://localhost:8767/api/fi…` | — | agents/common/findings.py |
-| `UNITARES_FIRST_RUN` | `(required)` | Resolve Watcher identity via proof-owned UUID-direct → fresh onboard | agents/watcher/agent.py, agents/sdk/src/unitares_sdk/agent.py |
+| `UNITARES_FIRST_RUN` | `(required)` | Identity resolution: UUID lookup | agents/sdk/src/unitares_sdk/agent.py, agents/watcher/agent.py |
 | `UNITARES_GOVERNANCE_URL` | `(required)` | read by _governance_url() | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py, agents/sdk/src/unitares_sdk/lease_plane/client.py |
 | `UNITARES_GROUNDING_APPLY` | `''` | Whether grounded E/I/S/coherence actually replace the ODE/heuristic values in the canonical metrics (UNITARES_GROUNDING_APPLY) | config/governance_config.py |
 | `UNITARES_GROUNDING_SHADOW` | `''` | Whether to shadow-compare grounded vs ungrounded canonical metrics each check-in (UNITARES_GROUNDING_SHADOW) | config/governance_config.py |
@@ -82,7 +82,7 @@ index; that one is the curated decision record.
 | `UNITARES_KNOWLEDGE_BACKEND` | `'auto'` | Get global knowledge graph instance (singleton) | src/knowledge_graph.py |
 | `UNITARES_LEASE_PLANE_URL` | `'http://127.0.0.1:8788'` | read by _lease_plane_url() | src/mcp_handlers/dialectic/governed_spawn.py |
 | `UNITARES_LINEAGE_TRANSITIVE_ARCHIVAL` | `(required)` | Whether transitive succession-reachability DRIVES archival (vs shadow) | src/mcp_handlers/lifecycle/stuck.py |
-| `UNITARES_LLM_MODEL` | `'gemma4:latest'` | read by _base_hosts() | src/mcp_handlers/support/inference_registry.py, src/mcp_handlers/support/model_inference.py (+2 more) |
+| `UNITARES_LLM_MODEL` | `'gemma4:latest'` | read by _base_hosts() | src/mcp_handlers/support/inference_registry.py, src/mcp_handlers/support/llm_delegation.py (+2 more) |
 | `UNITARES_MCP_DNS_REBIND_PROTECTION` | `''` | Whether Host/Origin validation is enforced on the MCP transports | src/mcp_listen_config.py |
 | `UNITARES_MCP_HOST` | `''` | Return the default socket bind address | src/mcp_listen_config.py |
 | `UNITARES_METADATA_BACKEND` | `'postgres'` | — | src/agent_metadata_persistence.py |
@@ -125,5 +125,5 @@ index; that one is the curated decision record.
 | `UNITARES_TOOL_USAGE_LOG` | `(required)` | read by __init__() | src/tool_usage_tracker.py |
 | `UNITARES_TRACEMALLOC` | `''` | — | src/mcp_server.py |
 | `UNITARES_TRACEMALLOC_FRAMES` | `'5'` | — | src/mcp_server.py |
-| `UNITARES_UDS_SOCKET` | `(required)` | Start the optional kernel-attested resident listener. | src/services/mcp_transport_service.py, agents/watcher/agent.py (+2 more) |
+| `UNITARES_UDS_SOCKET` | `(required)` | Start the optional kernel-attested resident listener. | src/services/mcp_transport_service.py, agents/sdk/src/unitares_sdk/agent.py (+2 more) |
 | `UNITARES_WATCHER_DATA_DIR` | `(required)` | Checkout-independent home for Watcher's local state (reader's view) | src/watcher_state_reader.py, agents/watcher/_util.py |
