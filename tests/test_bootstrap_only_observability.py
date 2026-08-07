@@ -122,8 +122,7 @@ async def test_list_bootstrap_only_excludes_agents_with_real_checkin(db):
     await _backdate_state(db, block["state_id"], hours=25.0)
     await db.record_agent_state(
         identity_id=identity_id,
-        entropy=0.4, integrity=0.6, stability_index=0.5,
-        void=0.0, regime="nominal", coherence=1.0, state_json={},
+        entropy=0.4, integrity=0.6, void=0.0, regime="nominal", coherence=1.0, state_json={},
     )
 
     rows = await db.list_bootstrap_only_agents(min_age_hours=24)
@@ -189,8 +188,7 @@ async def test_count_zero_when_no_silent_agents(db):
     _, identity_id = await _seed_identity(db)
     await db.record_agent_state(
         identity_id=identity_id,
-        entropy=0.4, integrity=0.6, stability_index=0.5,
-        void=0.0, regime="nominal", coherence=1.0, state_json={},
+        entropy=0.4, integrity=0.6, void=0.0, regime="nominal", coherence=1.0, state_json={},
     )
     count = await db.count_bootstrap_only_agents(min_age_hours=24)
     assert count == 0
