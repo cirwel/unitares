@@ -561,14 +561,26 @@ class GovernanceConfig:
                      void_value: float = 0.0,
                      coherence_history: Optional[List[float]] = None) -> Dict[str, any]:
         """
-        Makes autonomous governance decision using two-tier system: proceed/pause.
+        Computes a two-tier governance verdict: proceed/pause.
 
-        Decision logic (fully autonomous, no human-in-the-loop):
-        1. If void_active: PAUSE (system unstable - agent should halt)
-        2. If coherence < critical: PAUSE (incoherent output - agent should halt)
-        3. If risk_score < 0.35: PROCEED (no guidance needed)
-        4. If risk_score < 0.60: PROCEED (with optional guidance for medium risk)
-        5. Else: PAUSE (agent halts or escalates to another AI layer)
+        Verdict logic (the value this function returns):
+        1. If void_active: pause (system unstable - agent should halt)
+        2. If coherence < critical: pause (incoherent output - agent should halt)
+        3. If risk_score < 0.35: proceed (no guidance needed)
+        4. If risk_score < 0.60: proceed (with optional guidance for medium risk)
+        5. Else: pause (agent halts or escalates to another AI layer)
+
+        DEPLOYED REALITY (2026-08-06): as deployed this is ADVISORY, not enforcement
+        (operator-ratified — see docs/ontology/eisv-proprioception-contract.md,
+        "Deployed posture"). The `pause` this returns is a PRODUCED verdict, not a
+        delivered action: `gap_suppress` downgrades it to `proceed` at any
+        inter-check-in gap > 150s (89.4% of recorded pauses in the trailing 90d), and
+        the last pause delivered fleet-wide was 2026-06-28. Two further caveats: the
+        tier boundaries above are the documented risk edges, but in the phi-owned
+        cold-start window (updates 1-2) the live pause edge is `sign(phi)`, not
+        `risk >= 0.60`; and clauses 1-2 sit outside the reachable coherence range
+        (C(V) image is ~[0.455, 0.499]), so void/coherence pauses effectively do not
+        fire post-warmup. Do not describe a returned `pause` as an enforced halt.
 
         Note: risk_score measures governance/operational risk (likelihood of issues), not ethical risk.
               attention_score is deprecated but kept for backward compatibility.
