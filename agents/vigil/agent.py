@@ -65,6 +65,13 @@ TEST_TIMEOUT = 180  # 3 minutes per suite
 # Wall-clock cap for a single heartbeat cycle.
 CYCLE_TIMEOUT = int(os.getenv("HEARTBEAT_CYCLE_TIMEOUT", "120"))
 
+# Service keys whose `{svc}_healthy` flag encodes a *condition* rather than a
+# reachable service. detect_changes must not turn these into "X is down" /
+# "X recovered" / "X unreachable for N cycles" notes: `github` going unhealthy
+# means "a stalled draft PR exists", not "GitHub is unreachable", and those
+# notes land in the shared KG tagged `outage` where other residents read them.
+CONDITION_SERVICE_KEYS = {"github"}
+
 # KG hygiene v1: retrieval-eval step configuration
 RETRIEVAL_EVAL_DIR = project_root / "tests" / "retrieval_eval"
 RETRIEVAL_EVAL_SCRIPT = project_root / "scripts" / "eval" / "retrieval_eval.py"
@@ -138,8 +145,15 @@ def detect_changes(prev: Dict[str, Any], current: Dict[str, Any]) -> List[Dict[s
     # `{svc}_healthy` keys that _collect_health_state emits for each
     # registered check, so a deployment's own health-check plugins get
     # outage/recovery notes automatically.
+    #
+    # CONDITION_SERVICE_KEYS are excluded: their flag encodes a condition, not
+    # a reachable service, so "down" would be a false outage claim written to
+    # the shared KG. They still get the per-service bookkeeping that
+    # transition-emit dedups on — only the outage/recovery prose is suppressed.
     services = sorted(
-        k[: -len("_healthy")] for k in current if k.endswith("_healthy")
+        svc
+        for svc in (k[: -len("_healthy")] for k in current if k.endswith("_healthy"))
+        if svc not in CONDITION_SERVICE_KEYS
     )
     for service in services:
         prev_ok = prev.get(f"{service}_healthy")
