@@ -1743,6 +1743,86 @@ _LIFECYCLE_EVENT_TYPES = (
 )
 
 
+async def http_enforcement_divergence(request):
+    """GET /v1/enforcement/divergence?days=90 — produced-vs-delivered honesty meter.
+
+    A produced pause VERDICT is not a delivered enforcement ACTION: under the
+    deployed advisory posture (ratified 2026-08-06, proprioception contract
+    "Deployed posture"), gap-suppression downgrades pauses to proceed at any
+    >150s inter-check-in gap. Operator surfaces that read verdict counts as
+    enforcement counts are mislabeled against that posture. This endpoint
+    reports both meters side by side — produced pauses (auto_attest
+    decision='pause'), how many gap-suppressed, delivered pauses
+    (lifecycle_paused), and the last delivered timestamp — so the divergence
+    is visible by query, not memory. Read-only.
+    """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not _check_http_auth(request, http_api_token=http_api_token):
+        return _http_unauthorized()
+    try:
+        try:
+            days = int(request.query_params.get("days", "90"))
+        except (TypeError, ValueError):
+            days = 90
+        days = max(1, min(days, 365))
+        from src.db import get_db
+        db = get_db()
+        async with db.acquire() as conn:
+            totals = await conn.fetchrow(
+                """
+                SELECT
+                  count(*) FILTER (WHERE event_type = 'auto_attest'
+                                     AND payload->>'decision' = 'pause') AS produced,
+                  count(*) FILTER (WHERE event_type = 'auto_attest'
+                                     AND payload->>'decision' = 'pause'
+                                     AND payload->>'gap_suppressed' = 'true') AS gap_suppressed,
+                  count(*) FILTER (WHERE event_type = 'lifecycle_paused') AS delivered
+                FROM audit.events
+                WHERE ts > now() - make_interval(days => $1)
+                  AND event_type IN ('auto_attest', 'lifecycle_paused')
+                """,
+                days,
+            )
+            last_row = await conn.fetchrow(
+                "SELECT max(ts) AS last_delivered FROM audit.events "
+                "WHERE event_type = 'lifecycle_paused'"
+            )
+            weekly = await conn.fetch(
+                """
+                SELECT to_char(date_trunc('week', ts), 'MM-DD') AS week,
+                       count(*) FILTER (WHERE event_type = 'auto_attest'
+                                          AND payload->>'decision' = 'pause') AS produced,
+                       count(*) FILTER (WHERE event_type = 'lifecycle_paused') AS delivered
+                FROM audit.events
+                WHERE ts > now() - make_interval(days => $1)
+                  AND event_type IN ('auto_attest', 'lifecycle_paused')
+                GROUP BY date_trunc('week', ts)
+                ORDER BY date_trunc('week', ts)
+                """,
+                days,
+            )
+        last_delivered = last_row["last_delivered"] if last_row else None
+        return JSONResponse({
+            "window_days": days,
+            "posture": "advisory",
+            "produced_pauses": int(totals["produced"]),
+            "gap_suppressed": int(totals["gap_suppressed"]),
+            "delivered_pauses": int(totals["delivered"]),
+            "last_delivered_at": last_delivered.isoformat() if last_delivered else None,
+            "weekly": [
+                {"week": r["week"], "produced": int(r["produced"]),
+                 "delivered": int(r["delivered"])}
+                for r in weekly
+            ],
+            "note": ("A produced pause verdict is not a delivered enforcement "
+                     "action; delivered counts may include synthetic test "
+                     "fixtures (see the proprioception contract)."),
+        })
+    except Exception as e:
+        logger.error(f"enforcement divergence query failed: {e}")
+        return JSONResponse({"error": "query failed"}, status_code=500)
+
+
 async def http_lifecycle_recent(request):
     """GET /v1/lifecycle/recent — recent lifecycle / circuit-breaker events
     from audit.events with the full payload (reason, EISV, drift) and
@@ -4402,6 +4482,7 @@ def register_http_routes(
     app.routes.append(Route("/v1/eisv/latest", http_eisv_latest, methods=["GET"]))
     app.routes.append(Route("/v1/eisv/recent", http_eisv_recent, methods=["GET"]))
     app.routes.append(Route("/v1/lifecycle/recent", http_lifecycle_recent, methods=["GET"]))
+    app.routes.append(Route("/v1/enforcement/divergence", http_enforcement_divergence, methods=["GET"]))
     app.routes.append(Route("/api/events", http_events, methods=["GET"]))
     app.routes.append(Route("/api/findings", http_record_finding, methods=["POST"]))
     app.routes.append(Route("/v1/bridge/events", http_record_bridge_event, methods=["POST"]))

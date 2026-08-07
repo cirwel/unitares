@@ -563,6 +563,14 @@
         return out;
       }, () => S().residentPanels);
     },
+
+    async enforcementDivergence(days) {
+      const d = Number.isFinite(days) ? days : 90;
+      return withFallback(async () => {
+        const j = await authFetch(`/v1/enforcement/divergence?days=${d}`);
+        return j && typeof j.produced_pauses === "number" ? j : null;
+      }, () => S().enforcementDivergence);
+    },
   };
 
   window.DATA = DATA;
