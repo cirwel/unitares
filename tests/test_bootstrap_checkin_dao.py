@@ -77,7 +77,7 @@ async def test_record_bootstrap_state_writes_synthetic_row(db):
     _, identity_id = await _seed_identity(db)
     state_id, was_written = await db.record_bootstrap_state(
         identity_id=identity_id,
-        entropy=0.5, integrity=0.5, stability_index=0.5, void=0.0,
+        entropy=0.5, integrity=0.5, void=0.0,
         regime="nominal", coherence=1.0,
         state_json={"source": "bootstrap", "bootstrap_digest": "abc"},
     )
@@ -97,13 +97,13 @@ async def test_record_bootstrap_state_idempotent_returns_existing(db):
     _, identity_id = await _seed_identity(db)
     state_id_1, written_1 = await db.record_bootstrap_state(
         identity_id=identity_id,
-        entropy=0.5, integrity=0.5, stability_index=0.5, void=0.0,
+        entropy=0.5, integrity=0.5, void=0.0,
         regime="nominal", coherence=1.0,
         state_json={"source": "bootstrap", "bootstrap_digest": "first"},
     )
     state_id_2, written_2 = await db.record_bootstrap_state(
         identity_id=identity_id,
-        entropy=0.7, integrity=0.3, stability_index=0.6, void=0.1,
+        entropy=0.7, integrity=0.3, void=0.1,
         regime="warning", coherence=0.5,
         state_json={"source": "bootstrap", "bootstrap_digest": "second"},
     )
@@ -125,7 +125,7 @@ async def test_get_bootstrap_state_round_trips(db):
     _, identity_id = await _seed_identity(db)
     state_id, _ = await db.record_bootstrap_state(
         identity_id=identity_id,
-        entropy=0.5, integrity=0.5, stability_index=0.5, void=0.0,
+        entropy=0.5, integrity=0.5, void=0.0,
         regime="nominal", coherence=1.0,
         state_json={"source": "bootstrap", "bootstrap_digest": "abc123"},
     )
