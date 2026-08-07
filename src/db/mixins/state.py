@@ -20,7 +20,6 @@ class StateMixin:
         identity_id: int,
         entropy: float,
         integrity: float,
-        stability_index: float,
         void: float,
         regime: str,
         coherence: float,
@@ -33,15 +32,18 @@ class StateMixin:
         if epistemic_class is not None:
             payload.setdefault("epistemic_class", epistemic_class)
         async with self.acquire() as conn:
+            # stability_index is omitted deliberately — retired in 20684dd1,
+            # made nullable by migration 058, so the column lands as NULL
+            # ("not measured") instead of a hardcoded float that reads as one.
             state_id = await conn.fetchval(
                 """
                 INSERT INTO core.agent_state
-                    (identity_id, entropy, integrity, stability_index, volatility, regime,
+                    (identity_id, entropy, integrity, volatility, regime,
                      coherence, state_json, epoch, risk_score, epistemic_class)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 RETURNING state_id
                 """,
-                identity_id, entropy, integrity, stability_index, void,  # void maps to volatility column
+                identity_id, entropy, integrity, void,  # void maps to volatility column
                 regime, coherence, json.dumps(payload),
                 GovernanceConfig.CURRENT_EPOCH,
                 risk_score,
@@ -55,7 +57,6 @@ class StateMixin:
         identity_id: int,
         entropy: float,
         integrity: float,
-        stability_index: float,
         void: float,
         regime: str,
         coherence: float,
@@ -77,12 +78,12 @@ class StateMixin:
                 state_id = await conn.fetchval(
                     """
                     INSERT INTO core.agent_state
-                        (identity_id, entropy, integrity, stability_index, volatility,
+                        (identity_id, entropy, integrity, volatility,
                          regime, coherence, state_json, epoch, synthetic, epistemic_class)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, 'synthetic')
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, 'synthetic')
                     RETURNING state_id
                     """,
-                    identity_id, entropy, integrity, stability_index, void,
+                    identity_id, entropy, integrity, void,
                     regime, coherence, json.dumps(payload),
                     GovernanceConfig.CURRENT_EPOCH,
                 )
@@ -226,7 +227,7 @@ class StateMixin:
             row = await conn.fetchrow(
                 """
                 SELECT s.state_id, s.identity_id, i.agent_id, s.recorded_at,
-                       s.entropy, s.integrity, s.stability_index, s.volatility,
+                       s.entropy, s.integrity, s.volatility,
                        s.regime, s.coherence, s.state_json, s.epistemic_class
                 FROM core.agent_state s
                 JOIN core.identities i ON i.identity_id = s.identity_id
@@ -268,7 +269,7 @@ class StateMixin:
         async with self.acquire() as conn:
             base_sql = """
                 SELECT s.state_id, s.identity_id, i.agent_id, s.recorded_at,
-                       s.entropy, s.integrity, s.stability_index, s.volatility,
+                       s.entropy, s.integrity, s.volatility,
                        s.regime, s.coherence, s.state_json, s.epistemic_class
                 FROM core.agent_state s
                 JOIN core.identities i ON i.identity_id = s.identity_id
@@ -298,7 +299,7 @@ class StateMixin:
                 rows = await conn.fetch(
                     """
                     SELECT state_id, identity_id, agent_id, recorded_at,
-                           entropy, integrity, stability_index, volatility,
+                           entropy, integrity, volatility,
                            regime, coherence, state_json, epistemic_class
                     FROM core.mv_latest_agent_states
                     """,
@@ -315,7 +316,7 @@ class StateMixin:
                     """
                     SELECT DISTINCT ON (s.identity_id)
                            s.state_id, s.identity_id, i.agent_id, s.recorded_at,
-                           s.entropy, s.integrity, s.stability_index, s.volatility,
+                           s.entropy, s.integrity, s.volatility,
                            s.regime, s.coherence, s.state_json, s.epistemic_class
                     FROM core.agent_state s
                     JOIN core.identities i ON i.identity_id = s.identity_id
@@ -380,10 +381,10 @@ class StateMixin:
                 agent_id, epoch, window,
             )
 
-        # Column → EISV mapping per db/base.py:50-57: state_json.E → E,
+        # Column → EISV mapping per db/base.py: state_json.E → E,
         # integrity → I, entropy → S, volatility → V. The stability_index
-        # column was retired in commit 20684dd1 (2026-03-26) and is no
-        # longer read; the writer hardcodes 0.0.
+        # column was retired in commit 20684dd1 (2026-03-26); migration 058
+        # made it nullable and nothing writes or reads it any more.
         series: Dict[str, List[float]] = {"E": [], "I": [], "S": [], "V": []}
         for row in rows:
             sj_raw = row["state_json"]
@@ -444,7 +445,6 @@ class StateMixin:
             energy=sj.get("E", 0.5),
             entropy=row["entropy"],
             integrity=row["integrity"],
-            stability_index=row["stability_index"],
             void=row["volatility"],  # Map database column 'volatility' to 'void' field
             regime=row["regime"],
             coherence=row["coherence"],

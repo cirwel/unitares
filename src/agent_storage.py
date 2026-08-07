@@ -618,7 +618,6 @@ async def record_agent_state(
         identity_id=identity.identity_id,
         entropy=S,
         integrity=I,
-        stability_index=0.0,  # Dead field — no longer computed
         void=V,
         regime=db_regime,
         coherence=coherence,
