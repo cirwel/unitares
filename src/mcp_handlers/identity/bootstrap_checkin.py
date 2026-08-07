@@ -139,13 +139,13 @@ async def write_bootstrap(
     state_json = build_state_json(filled)
 
     # EISV column values — bootstrap defaults map cleanly to nominal regime,
-    # midpoint stability, low volatility. These seed the trajectory ODE; the
-    # synthetic flag keeps them out of measured-state aggregations.
+    # low volatility. These seed the trajectory ODE; the synthetic flag keeps
+    # them out of measured-state aggregations. stability_index is not written:
+    # retired in 20684dd1, nullable since migration 058.
     insert_kwargs = {
         "identity_id": identity_id,
         "entropy": 0.5,
         "integrity": 0.5,
-        "stability_index": 0.5,
         "void": 0.0,
         "regime": "nominal",
         "coherence": 1.0,

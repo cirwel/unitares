@@ -1283,7 +1283,7 @@ def check_label_join_overlap(db_url: str) -> CheckResult:
 # Metric columns on core.agent_state that are supposed to vary across the fleet.
 # All are bounded in [0, 1] (or [-1, 1]), so a single absolute dispersion floor
 # is meaningful across them without per-metric scaling.
-DEGENERACY_METRICS = ("coherence", "stability_index", "entropy", "integrity", "risk_score")
+DEGENERACY_METRICS = ("coherence", "entropy", "integrity", "risk_score")
 DEGENERACY_MIN_N = 500      # below this, flatness is small-sample, not a defect
 DEGENERACY_SD = 0.01        # measured margin: nearest healthy metric is 4x above
 
@@ -1299,8 +1299,7 @@ def check_signal_degeneracy(db_url: str) -> CheckResult:
     while telling you nothing.
 
     Two degeneracy modes, both seen in production:
-      * constant  — exactly one distinct value (stability_index: dead field
-        still written by the resident check-in INSERT path)
+      * constant  — exactly one distinct value
       * collapsed — many distinct values but dispersion near zero (coherence,
         which moves only in the 4th decimal)
 
@@ -1310,6 +1309,14 @@ def check_signal_degeneracy(db_url: str) -> CheckResult:
         integrity        sd 0.043202               <- healthy, 4x the floor
         risk_score       sd 0.061173               <- healthy
         entropy          sd 0.080398               <- healthy
+
+    `stability_index` was the original `constant` exemplar and is no longer
+    checked: it was a dead field (retired 20684dd1) that the INSERT path kept
+    writing as a hardcoded 0.0. Migration 058 finished that retirement — the
+    column is nullable, the sentinels are NULL, and the writer omits it — so
+    there is no longer a signal there to be degenerate. Dropping it from this
+    tuple is the point of the fix, not a weakening of the check: a permanent
+    expected-WARN trains operators to ignore the check that carries it.
 
     KNOWN GAP, stated so nobody over-trusts this: population dispersion does not
     catch every degenerate metric. `lineage_similarity` is saturated — pinned
@@ -1321,8 +1328,8 @@ def check_signal_degeneracy(db_url: str) -> CheckResult:
     is deliberately out of scope here.
 
     WARN, not FAIL — a degenerate metric degrades evidence, it doesn't break the
-    install. It is also expected to fire on arrival: coherence and
-    stability_index are both degenerate as of 2026-07-30.
+    install. It is still expected to fire on arrival: coherence is degenerate
+    as of 2026-07-30 and remains so.
     """
     name, mode = "signal_degeneracy", "operator"
     cols = ", ".join(
