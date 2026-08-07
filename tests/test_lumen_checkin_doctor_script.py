@@ -238,6 +238,85 @@ def test_frozen_no_fingerprint_is_unknown_and_mentions_broker(doc_mod):
     assert "unitares_ex" in evidence
 
 
+def test_dark_pi_probes_report_blindness_not_unknown(doc_mod):
+    """Both Pi SSH reads empty => probe_unreachable, not a Lumen verdict.
+
+    Every fingerprint above the fall-through is keyed off the journal, so an
+    empty journal makes UNKNOWN structurally guaranteed regardless of Lumen's
+    real state. Reporting that as "no known fingerprint matches" attributes the
+    doctor's own blindness to Lumen. This was the standing state from
+    2026-08-03 (7/7 criticals, journal_lines=0) while PI_SSH_HOST defaulted to
+    the LAN-only `pi-anima` and the operator was mobile.
+    """
+    s = signals(
+        doc_mod,
+        central={"status": "active", "last_update": iso(NOW - 4000)},
+        deep=True,
+        journal="",
+        anima_uptime_s=None,
+    )
+    cls, evidence = doc_mod.classify(s)
+    assert cls == doc_mod.PROBE_UNREACHABLE
+    assert "blind" in evidence.lower()
+
+
+def test_dark_probes_do_not_swallow_a_genuine_unknown(doc_mod):
+    """A journal we actually read, with no fingerprint in it, stays UNKNOWN."""
+    s = signals(
+        doc_mod,
+        central={"status": "active", "last_update": iso(NOW - 4000)},
+        deep=True,
+        journal="some unrelated broker line\n",
+        anima_uptime_s=99999.0,
+    )
+    cls, evidence = doc_mod.classify(s)
+    assert cls == doc_mod.UNKNOWN
+    assert "unitares_ex" in evidence
+
+
+def test_shallow_pass_never_claims_probe_unreachable(doc_mod):
+    """Before the deep probes run, empty journal is absence of data, not proof.
+
+    Signals defaults look identical to dark probes; only `deep` separates them.
+    """
+    s = signals(
+        doc_mod,
+        central={"status": "active", "last_update": iso(NOW - 4000)},
+        journal="",
+        anima_uptime_s=None,
+    )
+    assert doc_mod.classify(s)[0] == doc_mod.UNKNOWN
+
+
+def test_pi_ssh_host_defaults_to_the_tailscale_alias(tmp_path, monkeypatch):
+    """The default must reach the Pi from anywhere, not just the home LAN.
+
+    `pi-anima` resolves through the `Host lumen-local pi-anima` block and times
+    out whenever the operator is mobile, which silently blinds every probe here.
+    """
+    monkeypatch.delenv("LUMEN_SSH_HOST", raising=False)
+    monkeypatch.setenv("LUMEN_DOCTOR_STATE", str(tmp_path / "state.json"))
+    monkeypatch.setenv("UNITARES_SECRETS_ENV", str(tmp_path / "nosecrets.env"))
+    module_path = (
+        Path(__file__).resolve().parent.parent
+        / "scripts" / "ops" / "lumen_checkin_doctor.py"
+    )
+    spec = importlib.util.spec_from_file_location("lumen_doctor_defaults", module_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    # dataclasses resolves annotations through sys.modules[cls.__module__];
+    # register before exec, as the doc_mod fixture does.
+    sys.modules["lumen_doctor_defaults"] = module
+    try:
+        spec.loader.exec_module(module)
+        assert module.PI_SSH_HOST == "lumen", (
+            f"PI_SSH_HOST defaults to {module.PI_SSH_HOST!r}; a LAN-only alias "
+            "makes every Pi probe fail while the operator is away"
+        )
+    finally:
+        sys.modules.pop("lumen_doctor_defaults", None)
+
+
 # ------------------------------------------------------------------ rails
 
 def make_doctor(doc_mod, io_overrides, dry_run=False):
