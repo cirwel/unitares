@@ -1,7 +1,7 @@
 # EISV Proprioception Contract
 
 **Created:** June 26, 2026
-**Last Updated:** July 29, 2026
+**Last Updated:** August 6, 2026
 **Status:** Active
 
 ---
@@ -250,10 +250,11 @@ way. Population counts below are from `core.identities`: **427** identities carr
 the two figures differ — they are not inconsistent).
 
 Audited bytes are live bytes: `src/trajectory_identity.py` is md5
-`ab5bf17101955153dfdde1644b0435c6` in both this repo and the deploy checkout.
-A third checkout, `unitares-orchestrator`, holds a stale 960-line copy
-(`817d665a…`, pre-`_DRIFT_EMIT_DELTA`) that serves no traffic — do not cite line
-numbers from it.
+`279fa9c46623343df78b7efa4e703811` in both this repo and the deploy checkout
+(verified 2026-08-06; the earlier `ab5bf17…` anchor matched the 07-24 bytes — the
+delta is **#1411 + #1421**, not #1421 alone). A third checkout,
+`unitares-orchestrator`, holds a stale 960-line copy (`817d665a…`,
+pre-`_DRIFT_EMIT_DELTA`) that serves no traffic — do not cite line numbers from it.
 
 **6. The six-component model measures six things** → **REFUTED BY CONSTRUCTION.**
 `src/behavioral_trajectory.py:40-44` assigns `homeostatic.set_point =
@@ -281,9 +282,9 @@ similar — identical in 237/364 — so call δ degenerate, not constant.
 
 **9. α (attractor) discriminates** → **REFUTED BY CONSTRUCTION** for the
 covariance-bearing population. The covariance is eps-regularized **twice**: the
-producer adds `1e-6` to the diagonal (`src/behavioral_trajectory.py:175`) and
+producer adds `1e-6` to the diagonal (`src/behavioral_trajectory.py:176`) and
 `bhattacharyya_similarity` adds `eps=1e-6` again
-(`src/trajectory_identity.py:63-69`). That puts the σ floor at 1e-3 while real
+(`src/trajectory_identity.py:67-73`). That puts the σ floor at 1e-3 while real
 genesis↔current centre drift is 0.0065–0.023. Sweep: similarity 0.785 at euclid
 2e-3, 3e-11 at 2e-2, exactly 0 at ≥0.1. So α is 0.25 of always-zero, and with ρ+δ
 free credit the composite collapses to a constant:
@@ -357,6 +358,15 @@ not by the drift resolving**, and the documented rebaseline-on-cutover step ran
 requires `metadata['trajectory_drift_emit']`, which only the later throttle code
 writes, and the throttle landed after this drift had already cleared.
 
+*Amendment (2026-08-06): the anchors moved; the REFUTED verdict stands.*
+`audit.events` now holds **204** `trajectory_drift_resolved` events — a
+2026-07-30/31 tombstone-bug flood stopped by #1421, not discrimination — and the
+drift did not end on 07-24: **16** further `trajectory_drift` events span
+2026-07-30→08-05, all Lumen (trust_tier 3), at lineage 0.089–0.414, each flipping
+Lumen's risk adjustment −0.05 → +0.15 via the elif chain at
+`enrichments.py:879-887` (telemetry/advice only). The resolve-branch sentence
+above describes pre-#1421 code.
+
 **12. Lumen's Pi-side lineage is a six-component signature** → **REFUTED BY
 CONSTRUCTION.** `anima-mcp` runs the same maths (same six weights, same
 eps-regularized Bhattacharyya, same `exp(-dist*2)` fallback) but its genesis,
@@ -396,6 +406,16 @@ safe. This is an automatic Σ₀ overwrite, which is what the standing "do not e
 Σ₀ or tier by hand" rule exists to prevent; it wants an operator decision, not a
 quiet patch.
 
+*Amendment (2026-08-06): the operator decision was answered, one day after this
+entry.* #1423 (2026-07-31) rewrote exactly the cited `except` block: it now
+preserves the stored tier ("Fail SAFE, not down…") and falls through to
+`compute_trust_tier` only when no stored tier dict exists — verified in-tree at
+`src/identity/trust_tier_routing.py:199-231`. #1411 applied the same fail-up
+pattern at the call site in `update_current_signature`. Together they close the
+exception-path Σ₀ overwrite for every identity carrying a stored tier dict,
+including Chronicler (which carries `{tier 3, substrate_earned}`). Residual scope:
+identities with no stored tier dict at all.
+
 **Cross-repo reconciliation.** The trajectory-identity paper's Appendix A states
 that the cited reference implementation "uses the five informationally-independent
 weights (0.18, 0.18, 0.30, 0.22, 0.12) … and η is exposed as a derived view rather
@@ -430,6 +450,205 @@ the one live data confirms is present.
 - **Do not cite trajectory identity as validated or discriminating** on any
   surface, and do not describe governance-side and Pi-side as sharing a failure
   mode.
+
+### Core governance math — 2026-08-06 wave
+
+Added 2026-08-06 from a 13-agent adversarial audit (6 surface auditors + 6
+adversarial verifiers + synthesis), pinned to `origin/master` e1743d49; 44
+findings entered verification, 39 CONFIRMED / 5 WEAKENED-to-corrected-scope / 0
+refuted. This wave covers the surfaces rows 1–12 did not: the behavioural
+sensor→verdict circle, the phi/ODE dynamics, the calibration stack, AdaptiveGovernor/
+CIRS, and ΔEta/ethical-drift. Full working notes with every query and output live at
+`~/.unitares/analysis/eisv-core-math-audit-2026-08-06.md`. Same discipline as above:
+each row cites mechanism to line, and live counts were reproduced by an independent
+verifier agent. WEAKENED findings appear at the verifier's corrected scope, never
+the original overclaim.
+
+**13. "Behavioral EISV is observation-first — no ODE"** → **REFUTED BY
+CONSTRUCTION.** The banner at `src/governance_monitor.py:1157` says so; the
+observations passed under it are substantially the ODE's own state: 25–30% of E is
+mean C(V_ODE) (`src/behavioral_sensor.py:117,120`), 30–40% of I is the C(V) trend
+(`:147,149`), 35% of S is regime instability (`:187`, one indirection via
+`src/monitor_regime.py:33-44`), and V is 100% ODE E/I history slopes (`:205-223`);
+the source histories are properties of `unitaires_state`
+(`governance_state.py:77-91`, `governance_monitor.py:703-713`). These observations
+drive the per-agent Welford z-scores whose verdict/risk is returned outright at
+confidence ≥ 0.3 (`governance_monitor.py:1194,1306-1317`), and the same ODE-derived
+dict is injected back into the ODE as a default-ON spring (`phases.py:961-982`;
+`parameters.py:182-185`; `dynamics.py:173-180`; live plist:
+`UNITARES_SENSOR_COUPLING=behavioral_only`). The contaminant is the agent's own
+time-varying trajectory — it does **not** wash out of per-agent z-scores the way
+row 2's fleet-common additive term washes out of a rank statistic. While the spring
+is ON, `eisv_divergence` telemetry measures a sprung pair, so "the divergence is
+small" is not evidence the split is honest. Direction B alone is disclosed in
+`parameters.py`'s docstring; the composite circle is what this row records.
+
+**14. "Post-warmup enforcement can escalate on check-in content"** → **REFUTED BY
+CONSTRUCTION.** For a baselined agent under default flags, the only risk components
+content can move sum to 0.45 (high_S 0.20 + adversarial_rho 0.15 + high_CE 0.10,
+`src/behavioral_assessment.py:313-364`), below the 0.60 high-risk cut (`:46,203-208`);
+low_E/low_I (0.60 of weight) are basin-gated to 0 and pinned by inputs the agent
+cannot degrade in-session, and `resolve_verdict_risk` (`governance_monitor.py:63-64`)
+discards phi risk from the 3rd update on. CIRS beta_high=0.7 is equally unreachable.
+Live 30d **verdicts**: safe 17,788 / caution 10 / high-risk 1 — the lone high-risk
+was phase `bootstrapping`, the fixed-threshold path. This is the code reason an
+earlier severe synthetic injection topped out at caution. The trade is partly
+deliberate (#1133 removed phi over-flagging); the unrecorded consequence is that the
+replacement composite cannot see self-attested severity at all. Existing disabled
+mitigation: `VERIFICATION_FLOOR_ENABLED` (`governance_config.py:410`).
+
+**15. "Calibration error is consumed agent-scoped, or at worst as row 2's
+rank-immune additive term"** → **REFUTED BY CONSTRUCTION.** The row-2 agent-blind
+singleton has two further live consumers, both on threshold (not rank) surfaces,
+so row 2's attenuation does not transfer. (a) `noise_S`: max-over-bins
+`0.2·overconfidence·sample_weight` (`governance_monitor.py:643-657`) enters every
+agent's dS/dt (`:676`; `dynamics.py:156-162`) — max rest-shift 0.2/μ = 0.4,
+exceeding every per-class setpoint sigma (0.0988–0.2626), invalidating the 0.091
+offset measured at noise=0, using the strategic channel that `calibration.py:570-583`
+demotes to advisory and `monitor_drift.py:36-39` refuses. (b) ΔEta: the worst
+overconfident tactical bin becomes every agent's `calibration_deviation`
+(`monitor_drift.py:40-45,70`; `ethical_drift.py:~351`), entering drift norm,
+behavioral S (0.40 weight ×1.5), d_eta_sq, and the ‖ΔEta‖ > 0.7 ×3 auto-dialectic
+trigger. Live at audit time: bin 0.9–1.0 count=72, conf 0.9914, accuracy 0.75 →
+noise_S penalty 0.0483 and calibration_deviation 0.2414, fleet-wide, per tick.
+Scope honestly: the live cal_I source remains `get_mean_calibration_error` as row 2
+records (the drift-deviation cal_I branch is fallback-only), and the ΔEta path
+carries warmup dampening and exploration ×0.3 attenuation.
+
+**16. "The coherence gates can fire on the deployed signal"** → **REFUTED BY
+CONSTRUCTION** for the deployed V range (roadmap §4d/§9 asserted deadness; this row
+supplies the arithmetic and the live-population proof). Every enforcement gate
+(`monitor_decision.py:97,139`; `cirs.py:311` tau_low 0.3; basin bounds
+`governance_config.py:70,78`; `health_thresholds.py:59`;
+`governance_state.py:419-421`) reads legacy C(V)=0.5(1+tanh(V)), C1 pinned 1.0 at
+all five Theta sites; firing requires V ≤ −0.203 / ≤ −0.424 / ≥ +0.203, while live
+ODE V spans [−0.0894, −0.0030] (n=227) — C(V) affine, image ≈ [0.455, 0.499]. Live:
+0 of 68,374 recorded states in [0.6, 1.0); zero coherence-triggered pauses or CIRS
+coherence-floor blocks in `audit.events` ever. Consequence: risk_score and
+void_active carry the entire decision; the manifold swap runs after gating and is
+APPLY-off.
+
+**17. "`metrics['stability']` is per-agent Lyapunov verification of the deployed
+dynamics"** → **REFUTED BY CONSTRUCTION**, on both counts.
+`approximate_stability_check` (`research.py:22,39-40`) evaluates DEFAULT_PARAMS
+(γ_I 0.25) at a drift-free equilibrium where its only per-agent input (eta1)
+multiplies ‖Δη‖²=0; with live C1=1.0 the output is the constant `{stable: true,
+alpha_estimate: 0.101128}` for every agent, while the deployed system
+(`get_active_params()`, γ_I 0.169; s_setpoint ON but absent from
+`compute_equilibrium`) has contraction 0.042941 — reported rate 2.355× the deployed
+one. Each cache miss re-runs a 4000-step relaxation per agent per 5 min to cache a
+constant. Telemetry-only; `runtime_queries.py:274` masks only the
+pre-first-check-in case.
+
+**18. "AdaptiveGovernor owns threshold management"** → **REFUTED BY CONSTRUCTION**
+as enforcement. hard_block reads only the static tau_floor=0.25/beta_ceiling=0.80
+(`adaptive_governor.py:411-414`), never crossed live (0 of 17,800 30d rows with
+risk > 0.80; min coherence 0.4801); `soft_dampen` is not in the v2 vocabulary so
+`monitor_decision.py:152` is unreachable with the flag hardcoded
+(`governance_config.py:396`); the governor's verdict labels are dropped for the
+phi/behavioral verdict. The "per-agent" adaptation saturates fleet-identically —
+445/445 live snapshots at tau=0.2519/beta=0.799 — and the OI resonance channel is
+arithmetically dead (|oi| ≤ 1.4 < 2.5, `:452-483`; all 241 live resonance events
+fired on 'flips', max |oi| exactly 0.7000). CIRS v2 also silently removed
+oscillation's ability to block (legacy resonant→hard_block dead behind the flag).
+
+**19. "The I residual is scored against the agent's own sigma"** → **REFUTED as
+deployed.** `z_score` takes max(std, 0.05) (`agent_behavioral_baseline.py:52-66`;
+floor passed at `behavioral_state.py:316-326`); with alpha_I=0.08 uniform across
+all 72 baselined agents, the I-series variance collapses below the floor for **69
+of 72** (S 33/72, E 8/72, V 9/72). The module's own comment calls the floor
+"SECONDARY … defense-in-depth"; empirically it is the primary I denominator — a
+fixed absolute threshold shared by 96% of the fleet, masked today only by the basin
+gate. This completes row 2 on the residual side: I's level is majority fleet-common
+*and* its residual scale is fleet-common.
+
+**20. Row-2 open question (a): "are E and S also fleet-common?"** → answered; **E
+REFUTED as deployed** (majority-degenerate by measurement, a different mechanism
+than row 2), **S clean.** No agent-blind API feeds E or S — every input is
+agent-keyed — but E's live terms are pinned: decision_e saturated ~1.0 (96.1%
+approve of the governor's own verdicts), coh_e 0.578±0.006 (56 agents' coherence
+means span 0.4829–0.4983), outcome_e near-constant and 85% self-referential;
+cross-agent contrast survives only in the minority cal_e/tool/continuity terms
+(weights `behavioral_sensor.py:116-120`). S's inputs genuinely vary (regime
+distribution 9,831/5,752/1,823; weights `:187`). Consequence worth recording with
+row 14: individuality and escalation share one bottleneck — an agent can move
+neither its own E nor its own risk much.
+
+**21. "ΔEta's Consistency pillar is measured"** → **REFUTED BY CONSTRUCTION.**
+`stability_deviation = 1.0 − decision_consistency` (`ethical_drift.py:369`), but the
+only runtime caller passes `decision=None` (`monitor_drift.py:90`) so the 0.8
+dataclass default is permanent: live, 1,037/1,037 `core.agent_baselines` rows at
+exactly 0.8 with empty `recent_decisions` (407 post-warmup). Every agent's
+ethical_drift block reports 0.2 as if measured — a uniform +0.04 in ‖ΔEta‖², a
+constant −0.02 Phi offset (telemetry-only post-warmup, verdict-driving pre-warmup),
+and a 0.2 head start toward the 0.7 auto-dialectic threshold. Exact for the
+governance-computed component; agents self-reporting drift blend 30% over it
+(`phases.py:792`; `monitor_drift.py:111-113`).
+
+**22. "auto_ground_truth grades against exogenous signals"** → **REFUTED BY
+CONSTRUCTION.** The gate (`auto_ground_truth.py:207-240`) checks only that
+exogenous signals exist; `evaluate_decision_outcome` (`:243-325`) never reads them —
+outcome_quality derives from governance lifecycle status (paused/loop_detected →
+0.2, archived → 0.95, active → 0.7+bonus) and substitutes governance-computed
+coherence for missing confidence (`:268`), while the docstring claims the gate
+"prevents self-referential feedback loops." Runs every 6h in the live server
+(`background_tasks.py:1773→:38-52`); dedup is broken by construction (`:400` dead
+assignment; newest-first `entries[:50]` recount). Footprint today ~5 of 282
+strategic-bin rows — live-wired, near-silent, unbounded, and the labels are
+semantically inverted (confidence-appropriateness recorded as correctness). The
+unfiltered sensor-side twin: `get_recent_outcomes` (`tool_usage.py:195-217`) applies
+no `verification_source` filter, so 85% self-referential labels (15,170/17,766 30d
+rows) already carry 20% of E and 20% of I on the authoritative verdict path — the
+shipped tier map (`outcome_anchors.py`) is imported only by analysis scripts. This
+is the groundedness axiom violated on the measurement itself, not just prospectively
+on the anchor registry.
+
+**23. "Named residents run on measured per-class S setpoints"** → **REFUTED as
+deployed.** Residents classify as their own label (`class_indicator.py:102-104`);
+labels absent from the 5-generic-class dict fall back to the corner tuple
+(0.6, 0.7, **0.0**) — not the measured `default` tuple — so `get_s_setpoint`
+returns max(0, 0−0.091) = **0.0** (`governance_config.py:976-985,1187-1188`); the
+deployment-overlay loader is a silent no-op on any failure (`:1036-1044`). The live
+plist declares six residents and `UNITARES_S_SETPOINT=1` but no
+`UNITARES_CLASS_CALIBRATION`, and the deploy tree carries identical fallback code —
+as-declared, all six residents run at σ=0 now; their observed S rest (7-day means
+0.207–0.286, not the σ=0 equilibrium ~0.091) is the behavioral spring + noise_S
+(row 15), not the setpoint. Phi detrend degrades atomically, so verdicts are
+invariant; the recentring the feature exists for is silently absent for exactly the
+agents the individuality design most values.
+
+**Amendment to rows 9–10** (from the same wave): the `coherence_sim` in
+`min(coherence_sim, lineage_sim)` is the same `similarity()` instrument against the
+hot-path-refreshed `trajectory_current` (`trajectory_identity.py:1010-1016,577,600`),
+quasi-binary across the row-9 eps cliff — so for any genesis-drifted identity the
+min() is pinned by lineage_sim ≈ 0.633 < 0.7 permanently, and the weak→medium
+assurance upgrade (and its confidence-clamp exemption) is reachable essentially only
+while genesis≈current, i.e. granted preferentially to the youngest identities and
+permanently denied to established ones. This "coherence" is unrelated to the metrics
+coherence in row 16 (a naming collision worth flagging). Do not lower the 0.7 bar —
+it would calibrate against the row-9 eps artifact.
+
+**Do not (core-math wave), each verified unsafe or laundering.**
+
+- **Do not cite `governance_monitor.py:1167-1183` as the live sensor wiring** — it
+  is a divergent fallback twin (passes agent-local `calibration_deviation` where the
+  live path passes the fleet-common row-2 scalar, and reads current-cycle values
+  where the live path reads the prior check-in's drift/continuity vectors).
+- **Do not silently "fix" the pause-scores-0.5 bug** (`behavioral_sensor.py:65-70`;
+  the five pause sub_actions miss `_DECISION_SCORES` and score 0.5, same as
+  'revise'). Scoring pauses at 0.0 would *strengthen* a pause→low_E→pause
+  self-referential spiral — this wants a deliberate decision, not a patch.
+- **Do not loosen the Phase-5 auto-emit calibration gate** (`phases.py:~1962-1966`,
+  evidence_weight ≥ 0.65). Its unreachability is accidentally protective: it is the
+  only path that would train calibration from keyword self-reports, and it is dead.
+- **Do not treat `metrics['stability']`, `drift_forecast.eisv_projection`, or
+  `approximate_stability_check` as describing the deployed dynamics** — all three
+  integrate the pre-#1133 setpoint-free equilibrium (row 17) and forecast S decaying
+  toward ~0.091 against a live fleet S mean 0.277.
+- **Do not read the roadmap §6 status table as current** — it is stale on 4 of 5
+  rows against master defaults (the setpoint/Φ moves are the live default since
+  #1133, not dormant); the same stale posture is echoed in comments at
+  `governance_config.py:1094-1108` and `dynamics.py:123-124`.
 
 ## Preferred wording
 
