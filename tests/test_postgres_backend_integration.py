@@ -624,8 +624,7 @@ class TestAgentStateOperations:
         _, identity_id = await _create_identity_with_agent(backend)
         state_id = await backend.record_agent_state(
             identity_id,
-            entropy=0.7, integrity=0.8,
-            stability_index=0.3, void=0.2,
+            entropy=0.7, integrity=0.8,void=0.2,
             regime="nominal", coherence=0.52,
         )
         assert isinstance(state_id, int)
@@ -636,8 +635,7 @@ class TestAgentStateOperations:
         _, identity_id = await _create_identity_with_agent(backend)
         await backend.record_agent_state(
             identity_id,
-            entropy=0.5, integrity=0.5,
-            stability_index=0.5, void=0.1,
+            entropy=0.5, integrity=0.5,void=0.1,
             regime="nominal", coherence=1.0,
             state_json={"decision": "proceed", "phi": 0.85},
         )
@@ -648,8 +646,7 @@ class TestAgentStateOperations:
     async def test_get_latest_agent_state(self, backend):
         agent_id, identity_id = await _create_identity_with_agent(backend)
         await backend.record_agent_state(
-            identity_id, entropy=0.3, integrity=0.9,
-            stability_index=0.5, void=0.1,
+            identity_id, entropy=0.3, integrity=0.9,void=0.1,
             regime="nominal", coherence=0.55,
         )
         state = await backend.get_latest_agent_state(identity_id)
@@ -663,13 +660,11 @@ class TestAgentStateOperations:
     async def test_get_latest_agent_state_returns_most_recent(self, backend):
         _, identity_id = await _create_identity_with_agent(backend)
         await backend.record_agent_state(
-            identity_id, entropy=0.1, integrity=0.1,
-            stability_index=0.1, void=0.1,
+            identity_id, entropy=0.1, integrity=0.1,void=0.1,
             regime="nominal", coherence=0.5,
         )
         await backend.record_agent_state(
-            identity_id, entropy=0.9, integrity=0.9,
-            stability_index=0.9, void=0.9,
+            identity_id, entropy=0.9, integrity=0.9,void=0.9,
             regime="critical", coherence=0.9,
         )
         state = await backend.get_latest_agent_state(identity_id)
@@ -686,8 +681,7 @@ class TestAgentStateOperations:
         _, identity_id = await _create_identity_with_agent(backend)
         for i in range(5):
             await backend.record_agent_state(
-                identity_id, entropy=i * 0.1, integrity=0.5,
-                stability_index=0.5, void=0.1,
+                identity_id, entropy=i * 0.1, integrity=0.5,void=0.1,
                 regime="nominal", coherence=0.5,
             )
         history = await backend.get_agent_state_history(identity_id, limit=3)
