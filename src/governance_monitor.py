@@ -1351,6 +1351,7 @@ class UNITARESMonitor:
         # Only the fast regex floor runs inline; the local-model backend is
         # out-of-band by design (40–70s/call must never sit on the request path).
         self._last_verification_signal = None
+        self._last_verification_shadow = None
         if GovConfig.VERIFICATION_FLOOR_ENABLED:
             from governance_core.verification import score_harm_confession
             _vsig = score_harm_confession(agent_state.get('response_text', '') or '')
@@ -1358,6 +1359,19 @@ class UNITARESMonitor:
                 unitares_verdict, risk_score, _vsig.verdict, _vsig.score,
             )
             self._last_verification_signal = _vsig
+        elif GovConfig.VERIFICATION_FLOOR_SHADOW:
+            # Shadow mode: same signal, zero verdict/risk effect. Recorded only
+            # when it WOULD fire, so stored check-ins accumulate the live
+            # false-positive/recall record the enable decision requires
+            # (verification-weighted-verdict-v0.md acceptance gate).
+            from governance_core.verification import score_harm_confession
+            _vshadow = score_harm_confession(agent_state.get('response_text', '') or '')
+            if _vshadow.score > 0.0:
+                self._last_verification_shadow = _vshadow
+                logger.info(
+                    f"verification floor SHADOW for {self.agent_id}: would raise "
+                    f"to {_vshadow.verdict} (score {_vshadow.score:.2f}); not applied"
+                )
 
         oscillation_state, response_tier, cirs_result, damping_result = self._run_cirs(
             risk_score=risk_score,
@@ -1531,6 +1545,11 @@ class UNITARESMonitor:
         _vsig = getattr(self, '_last_verification_signal', None)
         if _vsig is not None:
             result['verification_floor'] = _vsig.to_dict()
+        # Shadow firing (floor off): surfaced with applied=False so downstream
+        # readers can never mistake a would-fire record for an enforcement.
+        _vshadow = getattr(self, '_last_verification_shadow', None)
+        if _vshadow is not None:
+            result['verification_floor_shadow'] = {**_vshadow.to_dict(), 'applied': False}
         return result
     
     def _compute_drift_vector(self, grounded_agent_state, agent_state, confidence, task_type, continuity_metrics):
