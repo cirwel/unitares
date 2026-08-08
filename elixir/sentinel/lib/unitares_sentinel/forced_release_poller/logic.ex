@@ -64,6 +64,8 @@ defmodule UnitaresSentinel.ForcedReleasePoller.Logic do
           severity: String.t(),
           summary: String.t(),
           fingerprint: String.t(),
+          record_kind: String.t(),
+          requires_adjudication: boolean(),
           extra: map()
         }
 
@@ -96,6 +98,8 @@ defmodule UnitaresSentinel.ForcedReleasePoller.Logic do
       severity: "high",
       summary: "forced release: #{surface_id} (lease #{lease_label})",
       fingerprint: "forced_release:ad_hoc:#{event_id}",
+      record_kind: "action_receipt",
+      requires_adjudication: false,
       extra: %{
         event_id: event_id,
         ts: DateTime.to_iso8601(row.ts),
@@ -127,12 +131,16 @@ defmodule UnitaresSentinel.ForcedReleasePoller.Logic do
     {alarms, new_cursor}
   end
 
-  defp row_to_deprecation_alarm(%{deprecation_id: depr_id, surface_kind: kind, event_count: count} = row) do
+  defp row_to_deprecation_alarm(
+         %{deprecation_id: depr_id, surface_kind: kind, event_count: count} = row
+       ) do
     %{
       kind: "deprecation_batch",
       severity: "medium",
       summary: "deprecation sweep complete: kind=#{kind} count=#{count}",
       fingerprint: "forced_release:deprecation_batch:#{depr_id}",
+      record_kind: "action_receipt",
+      requires_adjudication: false,
       extra: %{
         deprecation_id: depr_id,
         kind: kind,
@@ -165,7 +173,9 @@ defmodule UnitaresSentinel.ForcedReleasePoller.Logic do
     {alarms, new_cursor}
   end
 
-  defp row_to_conflict_alarm(%{surface_id: surface_id, event_count: count, last_ts: last_ts} = row) do
+  defp row_to_conflict_alarm(
+         %{surface_id: surface_id, event_count: count, last_ts: last_ts} = row
+       ) do
     %{
       kind: "conflict_batch",
       severity: "medium",
@@ -178,6 +188,8 @@ defmodule UnitaresSentinel.ForcedReleasePoller.Logic do
       # the direct-flip cutover gap (RFC v0.1.1 §B2/§C3; parity audit
       # 2026-06-14 GAP 1). ad_hoc/deprecation_batch are ID-only and unaffected.
       fingerprint: "forced_release:conflict_batch:#{surface_id}:#{iso8601_python(last_ts)}",
+      record_kind: "finding",
+      requires_adjudication: true,
       extra: %{
         surface_id: surface_id,
         surface_kind: row.surface_kind,

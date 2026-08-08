@@ -56,6 +56,8 @@ defmodule UnitaresSentinel.ForcedReleasePoller.LogicTest do
     assert [alarm] = alarms
     assert alarm.kind == "ad_hoc"
     assert alarm.severity == "high"
+    assert alarm.record_kind == "action_receipt"
+    assert alarm.requires_adjudication == false
     assert alarm.summary == "forced release: dialectic:/test_surface_1 (lease lease-abc)"
     assert alarm.fingerprint == "forced_release:ad_hoc:evt-001"
     assert alarm.extra.event_id == "evt-001"
