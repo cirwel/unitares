@@ -13,6 +13,35 @@ _No unreleased changes yet. New entries accumulate here until the next release b
 
 ---
 
+## [2.16.0] - 2026-08-08
+
+_Notable changes merged between 2.15.0 (2026-08-05) and this release — the core-math-audit decision stack. `pyproject.toml`/`VERSION` bumped to 2.16.0; the live `build_sha` remains the deploy-identity signal._
+
+### Added
+
+- **governance:** shadow mode for the verification floor — computes and surfaces the harm-confession signal with zero verdict effect, firings-only, `applied:false`, so live traffic accumulates the false-positive/recall record the enable decision requires (#1527)
+- **observability:** `GET /v1/enforcement/divergence` + dashboard "Enforcement" section — produced pauses vs gap-suppressed vs delivered, side by side under the ratified advisory posture, so verdict counts are never read as enforcement counts (#1528)
+- **governance:** label which source (physical sensor vs behavioral) fed the verdict-authoritative EISV vector, persisted per row (#1519)
+- **vigil:** surface draft PRs that are stale and red (#1514); stalled-draft-PR check hardened after review (#1520)
+
+### Fixed
+
+- **security:** outcome reads honour Invariant 4 — `get_recent_outcomes` gains a provenance filter (default off, `UNITARES_OUTCOME_PROVENANCE_FILTER`); the public `outcome_event` tool server-derives `verification_source` and strips claimable provenance keys from nested detail; Watcher resolution outcomes ride the operator-gated harness endpoint so the exogenous ground-truth channel keeps its tier (#1511)
+- **state:** finish the `stability_index` retirement — write NULL, not a plausible 0.0; migration 058 nulls the post-retirement hardcoded sentinels (date+value double-bounded, real measurements untouched) (#1525)
+- **watcher:** run `main()` on the package module so resolutions actually post (#1523)
+- **lumen-doctor:** reach the Pi over Tailscale and name blindness as blindness (#1524)
+- **ci:** deterministic `flag_catalog` traversal order — the FLAGS.md freshness gate was a per-runner filesystem-order lottery (#1522)
+
+### Documentation
+
+- **eisv:** core-math audit ledger rows 13–44, waves 1 & 2 (#1515); governance self-description relabeled advisory-as-deployed (#1516); grounded-coherence re-derivation proposal v0 + grounding position (#1518); V-reintroduction deferral decision record + deployed-V consumer inventory (#1526)
+
+### Changed
+
+- routine dependency maintenance: websockets (#1501), dashboard dev group (#1500)
+
+---
+
 ## [2.15.0] - 2026-08-05
 
 _Notable changes merged between 2.14.0 (2026-06-28) and this release. `pyproject.toml`/`VERSION` bumped to 2.15.0. Note: since #1248, the live `build_sha` (`/health`, metrics) is the authoritative signal for what code is actually running — this bump is a changelog/traceability milestone, not the deploy identity mechanism._
