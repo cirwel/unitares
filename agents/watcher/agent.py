@@ -1339,6 +1339,11 @@ def _post_resolution_event(
     """Post a watcher_resolution event to the governance event stream."""
     identity = get_watcher_identity()
     if identity is None:
+        # Never return silently here. This is the only signal that a resolution
+        # went unrecorded, and a silent skip is how `watcher_resolution_finding`
+        # stayed at zero rows for its entire life while `--dismiss` reported ok.
+        # `_emit_resolution_outcome` logs the same condition; match it.
+        log("resolution event skipped: no resolved Watcher identity", "warning")
         return
 
     base_msg = f"[{action}] {finding.get('pattern', '?')} {finding.get('file', '?')}:{finding.get('line', '?')} — {finding.get('hint', '')}"
@@ -2748,4 +2753,18 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Run through the *package* module, not this `__main__` copy of it.
+    #
+    # Executing this file as a script (`python3 agents/watcher/agent.py …`, the
+    # form printed in the SessionStart banner) binds it as `__main__`. The lazy
+    # `from agents.watcher.agent import _post_resolution_event` in findings.py
+    # then imports a SECOND, distinct module object. Module-level state that
+    # main() sets — notably `_watcher_identity` — lands on `__main__` and is
+    # invisible to that copy, so every operator `--resolve`/`--dismiss` skipped
+    # its governance post. Zero `watcher_resolution_finding` rows had ever been
+    # written; the unit tests import the module normally and so never take this
+    # path. The sys.path insert near the top already makes `agents` importable
+    # here, so delegating collapses the two copies back into one.
+    from agents.watcher.agent import main as _package_main
+
+    sys.exit(_package_main())

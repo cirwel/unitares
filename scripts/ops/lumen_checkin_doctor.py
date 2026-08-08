@@ -42,6 +42,14 @@ Classes (fingerprints from the 2026-06/07 incidents):
                       Postgres sleeps with the laptop lid, so the frozen span
                       says nothing about Lumen (2026-08-03..05: 7/7 "unknown"
                       criticals were exactly this).
+  probe_unreachable   deep probes ran but BOTH Pi SSH reads came back empty
+                      -> say the doctor is blind. Every fingerprint above is
+                      keyed off the journal, so an empty journal forces the
+                      "unknown" fall-through no matter what Lumen is doing;
+                      reporting that as "no known fingerprint" blames Lumen
+                      for our own reachability. (2026-08-07: PI_SSH_HOST had
+                      defaulted to the LAN-only `pi-anima`, so this was the
+                      standing state whenever the operator was mobile.)
 
 Post-Elixir-cutover note: the Pi's `unitares_stale` / `unitares_last_success_age_s`
 diagnostics are fed by the Python-era client and are unreliable now that the
@@ -84,7 +92,13 @@ SERVER_ERROR_LOG = os.path.expanduser(
         "~/projects/unitares-deploy/data/logs/mcp_server_error.log",
     )
 )
-PI_SSH_HOST = os.environ.get("LUMEN_SSH_HOST", "pi-anima")
+# Default to the TAILSCALE alias, not the LAN one. `~/.ssh/config` carries both:
+# `Host lumen lumen-tailscale …` reaches the Pi from anywhere, while
+# `Host lumen-local pi-anima` is the home-LAN address and times out whenever the
+# operator is mobile. This defaulted to `pi-anima`, so from 2026-08-03 (first
+# battery/clamshell use) every Pi probe here came back empty and all 7 freeze
+# alerts classified as `unknown` with journal_lines=0 — see PROBE_UNREACHABLE.
+PI_SSH_HOST = os.environ.get("LUMEN_SSH_HOST", "lumen")
 
 STALE_S = int(os.environ.get("LUMEN_DOCTOR_STALE_S", "900"))  # 3 missed 5-min beats
 RESTART_PROXIMITY_S = int(os.environ.get("LUMEN_DOCTOR_RESTART_PROXIMITY_S", "900"))
@@ -117,6 +131,10 @@ C3_UNKNOWN_TOOL = "unknown_tool"
 C4_BINDING_LOSS = "binding_loss"
 UNKNOWN = "unknown"
 UNREACHABLE = "central_unreachable"
+# Distinct from UNKNOWN: the fingerprints below are keyed off the Pi journal, so
+# an empty journal cannot fail to match — it makes matching impossible. Reporting
+# that as "no known fingerprint" blames Lumen for the doctor's own blindness.
+PROBE_UNREACHABLE = "probe_unreachable"
 
 AUTO_HEALABLE = {C1_FALSE_PAUSE, C2_DNS_FREEZE}
 
@@ -336,6 +354,10 @@ class Signals:
     redis_uptime_s: int | None = None
     host_wake_epoch: float | None = None
     path2_miss: bool = False
+    # True once the deep probes have actually run. Without it, the shallow
+    # Signals defaults (empty journal, uptime None) are indistinguishable from
+    # deep probes that came back dark.
+    deep: bool = False
 
 
 def classify(s: Signals) -> tuple[str, str]:
@@ -438,6 +460,19 @@ def classify(s: Signals) -> tuple[str, str]:
             f"identity_id={LUMEN_IDENTITY_ID}, Redis uptime {s.redis_uptime_s}s < "
             f"freeze age {int(age)}s — both-store binding loss"
         )
+    # Before blaming Lumen: did we actually see anything? Both Pi probes coming
+    # back empty together means the SSH path is dark, not that the Pi is quiet.
+    # Every fingerprint above this line needs the journal, so with no journal the
+    # fall-through to UNKNOWN is guaranteed regardless of Lumen's real state —
+    # the alert would describe the doctor's blindness as Lumen's condition.
+    if s.deep and not s.journal and s.anima_uptime_s is None:
+        return PROBE_UNREACHABLE, (
+            f"central frozen {int(age)}s AND both Pi SSH probes returned empty "
+            f"(host {PI_SSH_HOST!r}) — journal-keyed fingerprints cannot match "
+            f"without a journal, so no diagnosis is possible from here. The "
+            f"freeze may still be real; this says the doctor is blind, not that "
+            f"Lumen is fine"
+        )
     return UNKNOWN, (
         f"central frozen {int(age)}s but no known fingerprint matches "
         f"(journal_lines={len(s.journal.splitlines())}, "
@@ -503,6 +538,7 @@ class Doctor:
             s.session_rows = self.io["live_session_row_count"]()
             s.redis_uptime_s = self.io["redis_uptime_s"]()
             s.path2_miss = self.io["path2_miss_recent"]()
+            s.deep = True
         return s
 
     # -- heal + verify
@@ -628,6 +664,12 @@ class Doctor:
             PAUSED_REAL: "review the pause verdict (dashboard/dialectic); resume only "
                          "after judging it — this doctor never overrules a real pause",
             UNKNOWN: "no known fingerprint — investigate broker (unitares_ex) and Pi",
+            PROBE_UNREACHABLE: (
+                f"fix the doctor's own reachability first: `ssh {PI_SSH_HOST}` "
+                "from this host (LUMEN_SSH_HOST overrides). Tailscale partitions "
+                "recur while the operator is mobile — check `tailscale status` "
+                "and the pi-watchdog before reading anything into the freeze"
+            ),
         }.get(cls, "investigate")
         self.escalate(severity, cls, f"Lumen not checking in — {cls}. {evidence}. Next: {remedy}")
         return cls

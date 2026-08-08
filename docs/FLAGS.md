@@ -14,7 +14,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**109 flags.**
+**110 flags.**
 
 | Flag | Default | Purpose | Read at |
 |---|---|---|---|
@@ -25,6 +25,7 @@ index; that one is the curated decision record.
 | `GOVERNANCE_TOOL_MODE` | `'lite'` | — | src/tool_modes.py |
 | `GOVERNANCE_URL` | `'http://localhost:8767/mcp/'` | read by _governance_url() | src/gateway/constants.py, src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
 | `GOVERNANCE_VERIFICATION_FLOOR` | `'false'` | — | config/governance_config.py |
+| `GOVERNANCE_VERIFICATION_FLOOR_SHADOW` | `'true'` | — | config/governance_config.py |
 | `GOVERNANCE_WARMUP_STRUCTURAL_GRACE` | `'true'` | — | config/governance_config.py |
 | `STRICT_IDENTITY_REQUIRED` | `''` | True iff STRICT_IDENTITY_REQUIRED env var is set to a truthy value | src/mcp_handlers/identity_bootstrap.py |
 | `UNITARES_AGENT_LOCK_BACKEND` | `'advisory'` | Execute the extracted process_agent_update workflow for a prepared UpdateContext. | src/services/update_workflow_service.py, src/state_locking.py |

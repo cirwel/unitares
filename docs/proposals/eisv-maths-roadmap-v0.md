@@ -181,12 +181,16 @@ level:
 Layers: **[L1]** measured (*verify*) · **[L2]** resolvable-by-stress (*red-team +
 harness*) · **[L3]** ontology (*operator's call*).
 
+> **Status column refreshed 2026-08-06** (was stale on 4 of 5 rows; see
+> `docs/ontology/eisv-proprioception-contract.md` core-math wave). Provenance PRs
+> in parentheses record when code landed, not the current flag default.
+
 | step | what | status | layer | gate |
 |---|---|---|---|---|
-| **0** | exogenous anchor registry (§7) — prerequisite | not started | L1 | registry + trust tiers defined; labels flowing |
-| A.1 | per-class S setpoint | shipped, flagged-off (#1048) | L1 | setpoint lands on measured-healthy |
-| A.2 | Φ recentred on setpoint (population-relative) | shipped, flagged-off (#1058) | L1 | verdict invariant at new attractor |
-| B | decision statistic on per-agent residual (hierarchical, §4a–c) | next, flagged | L2 | statistical gate, §6-gate below |
+| **0** | exogenous anchor registry (§7) — prerequisite | tier filter shipped (`src/grounding/outcome_anchors.py`); labels sparse | L1 | registry + trust tiers defined; labels flowing |
+| A.1 | per-class S setpoint | shipped (#1048), **default-ON since #1133 (2026-06-27)** | L1 | setpoint lands on measured-healthy |
+| A.2 | Φ recentred on setpoint (population-relative) | shipped (#1058), **default-ON — same `UNITARES_S_SETPOINT` flag as A.1** | L1 | verdict invariant at new attractor |
+| B | decision statistic on per-agent residual | non-hierarchical residual **already verdict-authoritative by default**; the hierarchical §4a–c blend remains unshipped | L2 | statistical gate, §6-gate below |
 | C | estimator/predictor split — ODE → prior, residual is the signal | research | L2/L3 | cold-start intact; §0 anchor live |
 
 **Stage 0 is a prerequisite, not a safeguard.** §4b (outcome-gated updates) and
