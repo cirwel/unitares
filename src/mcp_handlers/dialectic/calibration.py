@@ -43,6 +43,36 @@ async def update_calibration_from_dialectic(session: DialecticSession, resolutio
     if session.dispute_type != "verification":
         logger.debug(f"Session {session.session_id} is not verification-type - skipping calibration update")
         return False
+
+    # A self-review is not peer agreement.
+    #
+    # This function writes straight into the process-wide `calibration_checker`,
+    # whose bins are FLEET-GLOBAL (src/calibration.py carries no agent dimension
+    # at all) and feed `cal_I` at 50-60% of every agent's I via
+    # updates/context.py -> behavioral_sensor._compute_I. It is also the one
+    # writer on that path with no evidence-weight gate -- the `outcome_event`
+    # route is guarded at 0.65, this one is not.
+    #
+    # `dialectic(action='request', reviewer_mode='self')` sets
+    # reviewer_agent_id = the requesting agent (dialectic/handlers.py), so
+    # without this check an agent could resolve a review of itself and move a
+    # term in every other agent's state vector. The 0.7 weight above is
+    # explicitly justified as *peer* agreement correcting for self-overconfidence;
+    # applied to a self-review it corrects self-report with self-report, which is
+    # the Invariant-4 loop ("a signal derived from the loop cannot anchor the
+    # loop", src/grounding/outcome_anchors.py).
+    #
+    # Live at the time of writing: 5 verification sessions had resolved, all 5
+    # self-reviewed. Peer sessions are unaffected.
+    reviewer_id = getattr(session, "reviewer_agent_id", None)
+    paused_id = getattr(session, "paused_agent_id", None)
+    if reviewer_id is not None and reviewer_id == paused_id:
+        logger.info(
+            "Session %s was self-reviewed (reviewer == paused agent) — skipping "
+            "fleet-global calibration update; self-attestation is not peer agreement",
+            session.session_id,
+        )
+        return False
     
     # Get confidence from audit log (from when agent was paused)
     try:

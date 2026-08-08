@@ -104,10 +104,16 @@ class Collector(ast.NodeVisitor):
 def collect() -> dict[str, Flag]:
     flags: dict[str, Flag] = {}
     for d in SCAN_DIRS:
-        # sorted(): readdir order is filesystem-dependent (ext4 per-fs hash seed),
-        # and the first-file-wins merge below made the rendered purpose/default a
-        # per-machine lottery for flags read at multiple sites. Canonical order =
-        # lexicographic path, so the catalog is reproducible everywhere.
+        # sorted(): rglob yields in filesystem order, which differs between
+        # APFS and ext4. Two fields below are order-dependent — `purpose` takes
+        # the first non-empty docstring found, and `sites` preserves insertion
+        # order — so an unsorted walk makes this generated file platform-
+        # specific. It then passes `--check` only on whichever OS last ran the
+        # generator: regenerating on macOS reliably reddens CI on Linux, and
+        # vice versa, with a diff that points at flags the author never touched.
+        # Measured 2026-08-06: 4 flags (UNITARES_AGENT_LOCK_BACKEND,
+        # UNITARES_FIRST_RUN, UNITARES_LLM_MODEL, UNITARES_UDS_SOCKET) rendered
+        # differently under the two walk orders.
         for py in sorted((REPO / d).rglob("*.py")):
             if "/tests/" in str(py) or py.name.startswith("test_"):
                 continue
