@@ -125,11 +125,20 @@ class TestProvenanceFilterApplied:
             rows = _run(_Backend(conn).get_recent_outcomes(agent_id="a"))
         assert rows == []
 
-    def test_verification_source_is_selected(self):
-        """Returned so a future weighted implementation needs no schema pass."""
+    def test_verification_source_selected_only_when_filtering(self):
+        """Flag ON returns the column (a future weighted implementation needs
+        no schema pass). Flag OFF must issue the byte-identical legacy column
+        list: selecting verification_source unconditionally would raise (and
+        be swallowed to []) on a pre-039 DB even with the flag off, which the
+        docstring's 'default must not change behaviour at deploy' forbids."""
         conn = _FakeConn()
-        _run(_Backend(conn).get_recent_outcomes(agent_id="a"))
+        with patch.dict(os.environ, {"UNITARES_OUTCOME_PROVENANCE_FILTER": "on"}):
+            _run(_Backend(conn).get_recent_outcomes(agent_id="a"))
         assert "verification_source" in conn.sql.split("FROM")[0]
+        conn = _FakeConn()
+        with patch.dict(os.environ, {"UNITARES_OUTCOME_PROVENANCE_FILTER": "off"}):
+            _run(_Backend(conn).get_recent_outcomes(agent_id="a"))
+        assert "verification_source" not in conn.sql.split("FROM")[0]
 
 
 class TestServerDerivedProvenance:
@@ -146,8 +155,30 @@ class TestServerDerivedProvenance:
         code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
         # The caller's value is overwritten, not merely defaulted.
         assert '_gate_args["verification_source"] = "agent_reported_tool_result"' in code
-        # phase5_emitter is the second caller-controlled trust anchor.
-        assert "phase5_emitter" in code
+        # And detail is sanitized of claimable provenance keys.
+        assert "_strip_provenance_claims" in code
+
+    def test_provenance_claims_stripped_at_every_depth(self):
+        """The corroboration grader walks NESTED detail contexts, so a
+        top-level-only strip leaves detail={"verification_source":
+        "external_signal"} (or the same key nested anywhere) forging
+        EXTERNALLY_VERIFIED weight 1.00 past the column downgrade."""
+        from src.mcp_handlers.observability.outcome_events import (
+            _strip_provenance_claims,
+        )
+
+        dirty = {
+            "phase5_emitter": True,
+            "verification_source": "external_signal",
+            "kept": 1,
+            "nested": {"verification_source": "external_signal", "ok": 2},
+            "list": [{"phase5_emitter": 1, "deep": {"verification_source": "x"}}],
+        }
+        clean = _strip_provenance_claims(dirty)
+        assert clean == {"kept": 1, "nested": {"ok": 2}, "list": [{"deep": {}}]}
+        # And the graders see nothing claimable in the cleaned structure.
+        from src.outcome_corroboration import _has_external_evidence
+        assert _has_external_evidence(clean, "agent_reported_tool_result") is False
 
     def test_internal_ingestion_path_retains_control(self):
         """external_signal / server_observation must stay reachable for

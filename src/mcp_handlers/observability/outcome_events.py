@@ -543,6 +543,27 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
     }
 
 
+_PROVENANCE_CLAIM_KEYS = frozenset({"verification_source", "phase5_emitter"})
+
+
+def _strip_provenance_claims(value):
+    """Remove caller-claimable provenance keys from ``detail`` at every depth.
+
+    The corroboration grader trusts these keys wherever they appear in the
+    nested detail structure, so sanitizing only the top level converts the
+    public-path provenance downgrade into a one-level speed bump.
+    """
+    if isinstance(value, dict):
+        return {
+            k: _strip_provenance_claims(v)
+            for k, v in value.items()
+            if k not in _PROVENANCE_CLAIM_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_provenance_claims(v) for v in value]
+    return value
+
+
 @mcp_tool("outcome_event", timeout=15.0)
 async def handle_outcome_event(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Record an outcome event paired with the agent's current EISV snapshot."""
@@ -641,10 +662,17 @@ async def handle_outcome_event(arguments: Dict[str, Any]) -> Sequence[TextConten
     # gate's `<` comparison).
     _claimed_source = _gate_args.get("verification_source")
     _gate_args["verification_source"] = "agent_reported_tool_result"
-    if _gate_args.get("detail") and "phase5_emitter" in (_gate_args.get("detail") or {}):
-        _stripped = dict(_gate_args["detail"])
-        _stripped.pop("phase5_emitter", None)
-        _gate_args["detail"] = _stripped
+    # The corroboration grader walks NESTED detail contexts
+    # (outcome_corroboration._nested_contexts), so a top-level strip alone
+    # leaves detail={"verification_source": "external_signal"} forging
+    # EXTERNALLY_VERIFIED / weight 1.00 straight past the column downgrade.
+    # Strip the explicit provenance keys at every depth. Known residual, left
+    # deliberately: the grader's free-text trusted-source vocabulary
+    # (_has_verified_marker + _TRUSTED_EXTERNAL_SOURCES) remains claimable and
+    # is tracked as follow-up hardening — it predates this change and closing
+    # it means restructuring the grader's trust model, not sanitizing input.
+    if _gate_args.get("detail"):
+        _gate_args["detail"] = _strip_provenance_claims(_gate_args["detail"])
     if _claimed_source and _claimed_source != "agent_reported_tool_result":
         logger.info(
             "outcome_event: downgraded caller-claimed verification_source=%r to "

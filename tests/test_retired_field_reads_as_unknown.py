@@ -72,14 +72,22 @@ def test_fresh_installs_match_migrated_databases():
 
 
 def test_writers_no_longer_reference_the_retired_column():
-    """Phase 2 landed with #1525: the DAO omits the column entirely, so new
-    rows land as NULL. A writer reintroducing the name is reviving a retired
-    metric and must justify itself against the column's own comment."""
-    import inspect
-    import src.agent_storage as agent_storage
-
-    src = inspect.getsource(agent_storage)
-    assert "stability_index" not in src, (
-        "src.agent_storage references stability_index again — the column is "
-        "retired (migration 058); read S from entropy instead"
-    )
+    """Phase 2 landed with #1525: the writers omit the column entirely, so new
+    rows land as NULL. The actual core.agent_state INSERT column lists live in
+    db/mixins/state.py and identity/bootstrap_checkin.py (agent_storage only
+    wraps them) — scan all three, ignoring comment lines, which legitimately
+    document the deliberate omission."""
+    writer_files = [
+        _ROOT / "src/agent_storage.py",
+        _ROOT / "src/db/mixins/state.py",
+        _ROOT / "src/mcp_handlers/identity/bootstrap_checkin.py",
+    ]
+    for f in writer_files:
+        code = "\n".join(
+            l for l in f.read_text().splitlines()
+            if not l.strip().startswith("#")
+        )
+        assert "stability_index" not in code, (
+            f"{f.name} references stability_index in non-comment code — the "
+            "column is retired (migration 058); read S from entropy instead"
+        )

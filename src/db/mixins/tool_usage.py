@@ -235,12 +235,20 @@ class ToolUsageMixin:
             os.environ.get("UNITARES_OUTCOME_PROVENANCE_FILTER", "off")
             .strip().lower() in {"on", "1", "true", "yes"}
         )
+        # Flag OFF must be byte-identical to the legacy query — including the
+        # column list: selecting verification_source unconditionally would make
+        # every call raise (and the except below silently return []) on a DB
+        # where migration 039 has not run, which the write path in this same
+        # file explicitly supports as a live state.
         predicate = f"AND {EXOGENOUS_OUTCOMES_SQL}" if provenance_filter else ""
+        columns = "outcome_type, is_bad, outcome_score, ts"
+        if provenance_filter:
+            columns += ", verification_source"
         async with self.acquire() as conn:
             try:
                 rows = await conn.fetch(
                     f"""
-                    SELECT outcome_type, is_bad, outcome_score, ts, verification_source
+                    SELECT {columns}
                     FROM audit.outcome_events
                     WHERE agent_id = $1
                       AND ts >= now() - make_interval(hours => $2)
@@ -252,6 +260,11 @@ class ToolUsageMixin:
                 )
                 return [dict(r) for r in rows]
             except Exception:
+                logger.warning(
+                    "get_recent_outcomes query failed for %s — returning [] "
+                    "(outcome term drops out of E/I silently)",
+                    agent_id, exc_info=True,
+                )
                 return []
 
     async def get_latest_eisv_by_agent_id(self, agent_id: str) -> Optional[Dict[str, Any]]:
