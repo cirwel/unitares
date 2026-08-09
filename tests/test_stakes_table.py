@@ -15,7 +15,7 @@ import pytest
 # single-purpose tools register before we read _TOOL_DEFINITIONS.
 import src.mcp_handlers.core  # noqa: F401
 import src.mcp_handlers.consolidated  # noqa: F401
-import src.mcp_handlers.research_registry  # noqa: F401
+from src.mcp_handlers.research_registry import RESEARCH_REGISTRY_ACTIONS
 
 from src.mcp_handlers import stakes_table
 from src.mcp_handlers.stakes_table import (
@@ -32,27 +32,6 @@ from src.mcp_handlers.decorators import (
     mcp_tool,
 )
 
-# Known action inventory for the action_router tools, extracted from the live
-# router definitions (consolidated.py + research_registry.py). This doubles as
-# a drift guard: add a router action without classifying it and the coverage
-# test below fails.
-ROUTER_ACTIONS = {
-    "knowledge": ["store", "search", "get", "list", "update", "details",
-                  "note", "cleanup", "synthesize", "stats", "supersede", "audit"],
-    "agent": ["list", "get", "update", "archive", "resume", "delete"],
-    "calibration": ["check", "update", "backfill", "rebuild"],
-    "config": ["get", "set"],
-    "export": ["history", "file"],
-    "observe": ["agent", "compare", "similar", "anomalies", "aggregate",
-                "telemetry", "audit_events", "outcome_evidence"],
-    "dialectic": ["get", "list", "quick", "request", "thesis", "antithesis",
-                  "synthesis", "reassign"],
-    "research_registry": ["list", "query", "get", "stats", "export", "record"],
-    "admin": ["server_info", "connections", "workspace_health", "tool_usage",
-              "telemetry", "debug_context", "validate_path", "reset_monitor",
-              "cleanup_locks"],
-}
-
 # External-plugin surfaces this server does not own. They register only when an
 # external package (e.g. unitares_pi_plugin) is importable, so they are NOT
 # enumerated in the core stakes table — they intentionally fall to the
@@ -63,6 +42,23 @@ ROUTER_ACTIONS = {
 # action_router wrapper's module is ``src.mcp_handlers.decorators`` regardless
 # of where its action handlers live.
 _EXTERNAL_PLUGIN_TOOLS = {"pi", "pi_restart_service"}
+
+# Derive bounded action vocabularies from the registered tools. ``action_router``
+# populates ``known_actions`` directly from its live routing map; hand-rolled
+# bounded tools such as research_registry declare the same metadata explicitly.
+# A new route therefore enters this coverage check without anyone remembering to
+# update a second list here.
+CORE_ACTION_VOCABULARIES = {
+    name: td.known_actions
+    for name, td in _TOOL_DEFINITIONS.items()
+    if td.known_actions
+    and name not in _EXTERNAL_PLUGIN_TOOLS
+    and (getattr(td.handler, "__module__", "") or "").startswith("src.")
+}
+# research_registry is a hand-rolled router rather than ``action_router``.
+# Its source-level declaration also keeps this test stable when another test's
+# registry fixture changes collection order.
+CORE_ACTION_VOCABULARIES["research_registry"] = RESEARCH_REGISTRY_ACTIONS
 
 
 # ---------------------------------------------------------------------------
@@ -132,11 +128,30 @@ def test_destructive_and_fleet_ops_are_high():
 # Coverage drift guard — every registered surface is deliberately classified
 # ---------------------------------------------------------------------------
 
-def test_every_router_action_is_classified():
-    """No router action falls to the fail-closed default by accident."""
-    for tool, actions in ROUTER_ACTIONS.items():
-        for action in actions:
-            assert (tool, action) in stakes_table._STAKES, f"{tool}:{action} unclassified"
+def test_registered_action_vocabularies_match_stakes_table():
+    """Registered actions and exact stakes classifications cannot drift."""
+    classified_actions = {}
+    for tool, action in stakes_table._STAKES:
+        if action is not None:
+            classified_actions.setdefault(tool, set()).add(action)
+
+    for tool, actions in CORE_ACTION_VOCABULARIES.items():
+        if (tool, None) in stakes_table._STAKES:
+            # A deliberate tool-level classification covers every bounded
+            # action (for example, all self_recovery actions are baseline).
+            assert classified_actions.get(tool, set()) <= set(actions), (
+                f"{tool} has exact stakes entries for unregistered actions"
+            )
+            continue
+        assert classified_actions.get(tool, set()) == set(actions), (
+            f"{tool} action vocabulary differs from stakes classifications"
+        )
+
+    unknown_tools = set(classified_actions) - set(CORE_ACTION_VOCABULARIES)
+    assert not unknown_tools, (
+        "stakes table classifies actions for tools without a registered "
+        f"action vocabulary: {sorted(unknown_tools)}"
+    )
 
 
 def test_every_core_tool_is_known_to_the_table():
@@ -149,7 +164,7 @@ def test_every_core_tool_is_known_to_the_table():
     to the fail-closed ``high`` default until an operator classifies them when
     the gate is built. Filtering by handler module keeps this test deterministic
     regardless of which plugins another test in the same process imported."""
-    routers = set(ROUTER_ACTIONS)
+    action_tools = set(CORE_ACTION_VOCABULARIES)
     unknown = []
     for name, td in _TOOL_DEFINITIONS.items():
         if name in _EXTERNAL_PLUGIN_TOOLS:
@@ -157,8 +172,8 @@ def test_every_core_tool_is_known_to_the_table():
         module = getattr(td.handler, "__module__", "") or ""
         if not module.startswith("src."):
             continue  # external single-purpose tool — fail-closed-high by design
-        if name in routers:
-            continue  # covered per-action by the test above
+        if name in action_tools:
+            continue  # covered per-action or tool-level by the test above
         if (name, None) not in stakes_table._STAKES:
             unknown.append(name)
     assert not unknown, (
