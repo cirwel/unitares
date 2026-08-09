@@ -2,7 +2,23 @@
 import json
 from pathlib import Path
 
+from src.governance_glossary import EISV_INLINE_SUMMARY, render_eisv_glossary
+
 _DESCRIPTIONS_FILE = Path(__file__).parent / "tool_descriptions.json"
+
+_EISV_CLIENT_TOOLS = frozenset({
+    "process_agent_update",
+    "get_governance_metrics",
+    "simulate_update",
+    "get_system_history",
+    "outcome_event",
+    "observe",
+    "observe_agent",
+    "compare_agents",
+    "compare_me_to_similar",
+    "detect_anomalies",
+    "aggregate_metrics",
+})
 
 _IDENTITY_DESCRIPTION_OVERRIDES = {
     "onboard": (
@@ -130,6 +146,16 @@ _DESCRIPTION_APPENDICES = {
 }
 
 
+def _with_eisv_contract(description: str) -> str:
+    """Put the field contract in both short and full MCP descriptions."""
+    if EISV_INLINE_SUMMARY in description:
+        return description
+    first_line, separator, remainder = description.partition("\n")
+    first_line = f"{first_line.rstrip()} {EISV_INLINE_SUMMARY}"
+    description = f"{first_line}{separator}{remainder}" if separator else first_line
+    return f"{description}\n\n{render_eisv_glossary()}"
+
+
 def _load_descriptions() -> dict:
     with open(_DESCRIPTIONS_FILE, encoding="utf-8") as f:
         descriptions = json.load(f)
@@ -139,6 +165,18 @@ def _load_descriptions() -> dict:
     for tool_name, appendix in _DESCRIPTION_APPENDICES.items():
         if tool_name in descriptions:
             descriptions[tool_name] = f"{descriptions[tool_name]}{appendix}"
+    # The legacy JSON is intentionally kept stable, but it previously taught
+    # clients that V meant "Void". Normalize that stale example before adding
+    # the canonical contract to every EISV-bearing client surface.
+    if "process_agent_update" in descriptions:
+        descriptions["process_agent_update"] = (
+            descriptions["process_agent_update"]
+            .replace("Void (V)", "Valence (V)")
+            .replace('"V": "Void"', '"V": "Valence"')
+        )
+    for tool_name in _EISV_CLIENT_TOOLS:
+        if tool_name in descriptions:
+            descriptions[tool_name] = _with_eisv_contract(descriptions[tool_name])
     return descriptions
 
 

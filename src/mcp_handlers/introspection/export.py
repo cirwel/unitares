@@ -9,6 +9,7 @@ import json
 from datetime import datetime
 from ..utils import success_response, error_response, require_registered_agent
 from ..decorators import mcp_tool
+from src.governance_glossary import get_eisv_glossary
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 
@@ -45,6 +46,7 @@ async def handle_get_system_history(arguments: Dict[str, Any]) -> Sequence[TextC
             "format": format_type,
             "history": [],
             "agent_id": agent_id,
+            "eisv_labels": get_eisv_glossary(),
             "empty": True,
             "message": "No history available yet for this agent",
             "next_step": "Call process_agent_update() to generate history",
@@ -69,6 +71,7 @@ async def handle_get_system_history(arguments: Dict[str, Any]) -> Sequence[TextC
         "format": format_type,
         "history": history_data,
         "agent_id": agent_id,
+        "eisv_labels": get_eisv_glossary(),
     })
 
 @mcp_tool("export_to_file", timeout=45.0, register=False)

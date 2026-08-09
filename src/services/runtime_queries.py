@@ -8,6 +8,7 @@ from numbers import Real
 from typing import Any, Dict
 
 from config.governance_config import GovernanceConfig
+from src.governance_glossary import describe_eisv_value, get_eisv_glossary
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from src.mcp_handlers.support.naming_helpers import disambiguate_public_handle
@@ -128,6 +129,7 @@ def _build_eisv_semantics(metrics: Dict[str, Any], monitor: Any) -> Dict[str, An
     return {
         "eisv": primary_eisv,
         "primary_eisv": primary_eisv,
+        "eisv_labels": get_eisv_glossary(),
         "primary_eisv_source": primary_source,
         "primary_eisv_source_meta": primary_source_meta,
         "behavioral_eisv": behavioral_eisv,
@@ -136,6 +138,7 @@ def _build_eisv_semantics(metrics: Dict[str, Any], monitor: Any) -> Dict[str, An
         "sensor_divergence": sensor_divergence,
         "sensor_divergence_recent": sensor_divergence_recent,
         "state_semantics": {
+            "dimensions": get_eisv_glossary(),
             "flat_fields_mean": "primary_eisv",
             "primary_eisv_role": (
                 "Live state to read first. Source is behavioral when confidence >= 0.3, "
@@ -478,11 +481,18 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
                 "⚪ unknown"
             )
 
-        void_raw = metrics.get("V")
-        if void_raw is not None and void_raw != 0:
-            void_display = round(void_raw, 6)
+        valence_raw = metrics.get("V")
+        if valence_raw is not None and valence_raw != 0:
+            valence_display = round(valence_raw, 6)
         else:
-            void_display = 0.0 if void_raw == 0 else void_raw
+            valence_display = 0.0 if valence_raw == 0 else valence_raw
+
+        def _lite_eisv_value(dimension: str, value: Any) -> Dict[str, Any]:
+            wrapped = describe_eisv_value(dimension, value)
+            # Preserve the existing `note` convenience field while sourcing it
+            # from the same contract as label/range/sign semantics.
+            wrapped["note"] = wrapped["description"]
+            return wrapped
 
         lite_metrics = {
             "agent_id": public_agent_id,
@@ -496,10 +506,10 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
             "purpose": getattr(meta, "purpose", None),
             "summary": standardized_metrics.get("summary", "unknown"),
             "primary_eisv_source": standardized_metrics.get("primary_eisv_source"),
-            "E": {"value": metrics.get("E"), "range": "[0, 1]", "note": "Energy capacity"},
-            "I": {"value": metrics.get("I"), "range": "[0, 1]", "note": "Information integrity"},
-            "S": {"value": metrics.get("S"), "range": "[0, 1]", "ideal": "<0.2", "note": "Entropy (lower=better)"},
-            "V": {"value": void_display, "range": "[-1, 1]", "ideal": "near 0", "note": "Void (E-I imbalance, settles toward 0)"},
+            "E": _lite_eisv_value("E", metrics.get("E")),
+            "I": _lite_eisv_value("I", metrics.get("I")),
+            "S": _lite_eisv_value("S", metrics.get("S")),
+            "V": _lite_eisv_value("V", valence_display),
             "coherence": {"value": coherence, "range": "[0, 1]", "status": coherence_status},
             "risk_score": {"value": risk_score, "threshold": 0.5, "status": risk_status},
         })

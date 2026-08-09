@@ -30,7 +30,7 @@ class GovernanceMetricsDict(TypedDict, total=False):
     E: float  # Energy
     I: float  # Information Integrity
     S: float  # Entropy
-    V: float  # Void (signed E-I imbalance readout)
+    V: float  # Valence (EMA-smoothed signed E-I imbalance)
     coherence: float
     risk_score: float
     attention_score: float
@@ -94,4 +94,3 @@ class CalibrationUpdateDict(TypedDict, total=False):
     complexity_discrepancy: Optional[float]
     source: str  # "ground_truth", "dialectic_peer_review", etc.
     timestamp: str
-

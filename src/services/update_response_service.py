@@ -8,6 +8,7 @@ from typing import Any, Dict, Sequence
 
 from mcp.types import TextContent
 
+from src.governance_glossary import get_eisv_glossary
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -35,6 +36,7 @@ def build_process_update_response_data(
     response_data = result.copy()
     response_data["agent_id"] = agent_id
     response_data["identity_assurance"] = identity_assurance
+    response_data["eisv_labels"] = get_eisv_glossary()
     if monitor is not None:
         last_prediction_id = getattr(monitor, "_last_prediction_id", None)
         if last_prediction_id:
