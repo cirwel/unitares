@@ -97,8 +97,9 @@ async def _execute_http_get_governance_metrics(arguments: Dict[str, Any]) -> Any
     # ignorance payload, guard carried per-transport.
     if not arguments.get("agent_id"):
         try:
-            from src.mcp_handlers.context import get_context_agent_id
-            bound_agent_id = get_context_agent_id()
+            from src.mcp_handlers.context import get_context_resolved_agent_id
+
+            bound_agent_id = get_context_resolved_agent_id()
         except Exception:
             bound_agent_id = None
         if not bound_agent_id:
@@ -178,8 +179,9 @@ def _strict_identity_refusal_or_none(
     if get_call_identity_requirement(tool_name, arguments) == "pre_onboard":
         return None
     try:
-        from src.mcp_handlers.context import get_context_agent_id
-        if get_context_agent_id():
+        from src.mcp_handlers.context import get_context_resolved_agent_id
+
+        if get_context_resolved_agent_id():
             return None
     except Exception:
         pass
