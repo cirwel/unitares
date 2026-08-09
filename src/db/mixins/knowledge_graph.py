@@ -220,15 +220,42 @@ class KnowledgeGraphMixin:
 
             source_tags = source_row['tags']
 
+        return await self.kg_find_similar_by_tags(
+            source_tags,
+            exclude_id=discovery_id,
+            limit=limit,
+        )
+
+    async def kg_find_similar_by_tags(
+        self,
+        tags: List[str],
+        *,
+        exclude_id: Optional[str] = None,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Find canonical SQL rows ranked by overlap with an arbitrary tag set.
+
+        Unlike ``kg_find_similar()``, this accepts tags for a discovery that
+        has not been stored yet. The AGE backend uses it while preparing new
+        discoveries, so similarity cannot inherit drift from derived TAGGED
+        relationships.
+        """
+        from src.knowledge_graph import normalize_tags
+
+        normalized = normalize_tags(tags)
+        if not normalized:
+            return []
+
+        async with self.acquire() as conn:
             rows = await conn.fetch("""
                 SELECT d.*,
                        cardinality(ARRAY(SELECT unnest(d.tags) INTERSECT SELECT unnest($1::text[]))) as overlap
                 FROM knowledge.discoveries d
-                WHERE d.id != $2
+                WHERE ($2::text IS NULL OR d.id != $2)
                   AND d.tags && $1::text[]
                 ORDER BY overlap DESC, created_at DESC
                 LIMIT $3
-            """, source_tags, discovery_id, limit)
+            """, normalized, exclude_id, limit)
 
             return [self._row_to_discovery_dict(row) for row in rows]
 
@@ -415,6 +442,31 @@ class KnowledgeGraphMixin:
         async with self.acquire() as conn:
             rows = await conn.fetch(query, *params)
         return [r["id"] for r in rows]
+
+    async def kg_all_discovery_tags(
+        self,
+        limit: Optional[int] = None,
+    ) -> Dict[str, List[str]]:
+        """Return canonical tags keyed by discovery id, most recent first.
+
+        The AGE projection repair needs the empty-tag rows too: an empty list
+        is what proves that every existing TAGGED edge for that discovery is
+        stale and must be removed.
+        """
+        query = (
+            "SELECT id, tags FROM knowledge.discoveries "
+            "ORDER BY created_at DESC"
+        )
+        params: list[Any] = []
+        if limit is not None:
+            params.append(limit)
+            query += f" LIMIT ${len(params)}"
+        async with self.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+        return {
+            str(row["id"]): list(row["tags"] or [])
+            for row in rows
+        }
 
     async def kg_update_status(
         self,

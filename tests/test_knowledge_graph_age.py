@@ -91,6 +91,34 @@ def make_discovery(
     )
 
 
+def make_sql_row(
+    discovery_id: str = "disc-001",
+    *,
+    agent_id: str = "agent-1",
+    tags: Optional[List[str]] = None,
+    created_at: str = "2026-02-05T12:00:00+00:00",
+) -> Dict[str, Any]:
+    """Build a canonical knowledge.discoveries row for SQL-backed reads."""
+    return {
+        "id": discovery_id,
+        "agent_id": agent_id,
+        "type": "insight",
+        "summary": f"Discovery {discovery_id}",
+        "details": "Some details",
+        "tags": tags or [],
+        "severity": "low",
+        "status": "open",
+        "created_at": created_at,
+        "updated_at": None,
+        "resolved_at": None,
+        "references_files": [],
+        "related_to": [],
+        "response_to_id": None,
+        "response_type": None,
+        "provenance": None,
+    }
+
+
 def make_mock_db(graph_available: bool = True) -> AsyncMock:
     """Create a mock database backend."""
     db = AsyncMock()
@@ -102,6 +130,8 @@ def make_mock_db(graph_available: bool = True) -> AsyncMock:
         "total_tags": 0,
         "total_tag_assignments": 0,
     })
+    db.kg_query = AsyncMock(return_value=[])
+    db.kg_find_similar_by_tags = AsyncMock(return_value=[])
     db._pool = AsyncMock()
 
     # Pool.acquire() context manager
@@ -813,7 +843,7 @@ class TestQuery:
             {"properties": {"id": "d2", "agent_id": "a2", "summary": "two"}},
         ]
 
-        result = await kg.query(tags=["python", "bug"])
+        result = await kg.query()
 
         assert [d.id for d in result] == ["d1", "d2"]
 
@@ -867,63 +897,61 @@ class TestQuery:
 
     @pytest.mark.asyncio
     async def test_query_with_tags_filter(self):
-        """Should use TAGGED relationship pattern when tags are provided."""
+        """Tag filters read canonical SQL even when the AGE projection drifts."""
         kg, mock_db = make_kg_with_mock_db()
-        mock_db.graph_query.return_value = []
+        mock_db.graph_query.return_value = [
+            {"properties": {"id": "stale", "agent_id": "a1", "summary": "stale"}},
+        ]
+        mock_db.kg_query.return_value = [
+            make_sql_row("canonical", tags=["python", "bug"]),
+        ]
 
-        await kg.query(tags=["python", "bug"])
+        result = await kg.query(tags=["Python", "bug"])
 
-        call_args = mock_db.graph_query.await_args
-        cypher = call_args.args[0]
-        params = call_args.args[1]
-        assert "TAGGED" in cypher
-        assert "Tag" in cypher
-        # AGE cannot emit `RETURN DISTINCT d ORDER BY d.timestamp` — Postgres
-        # rejects it ("for SELECT DISTINCT, ORDER BY expressions must appear in
-        # select list"). Dedupe with `WITH DISTINCT d` and order in Python.
-        assert "WITH DISTINCT d" in cypher
-        assert "ORDER BY" not in cypher
-        assert params["tags"] == ["python", "bug"]
+        assert [d.id for d in result] == ["canonical"]
+        mock_db.graph_query.assert_not_awaited()
+        kwargs = mock_db.kg_query.await_args.kwargs
+        assert kwargs["tags"] == ["Python", "bug"]
 
     @pytest.mark.asyncio
     async def test_query_with_tags_and_other_filters(self):
-        """Should combine tag filter with other conditions."""
+        """Tag filters forward all other constraints to canonical SQL."""
         kg, mock_db = make_kg_with_mock_db()
-        mock_db.graph_query.return_value = []
 
-        await kg.query(agent_id="agent-1", tags=["python"])
+        await kg.query(
+            agent_id="agent-1",
+            type="bug",
+            status="open",
+            severity="high",
+            tags=["python"],
+            limit=7,
+        )
 
-        call_args = mock_db.graph_query.await_args
-        cypher = call_args.args[0]
-        params = call_args.args[1]
-        assert "TAGGED" in cypher
-        assert params["agent_id"] == "agent-1"
-        assert params["tags"] == ["python"]
+        mock_db.graph_query.assert_not_awaited()
+        kwargs = mock_db.kg_query.await_args.kwargs
+        assert kwargs == {
+            "agent_id": "agent-1",
+            "tags": ["python"],
+            "type": "bug",
+            "severity": "high",
+            "status": "open",
+            "limit": 7,
+        }
 
     @pytest.mark.asyncio
-    async def test_query_with_tags_sorts_recent_first_and_limits_in_python(self):
-        """Tag queries order by timestamp DESC and apply the limit in Python.
-
-        Regression for the Tag Search SQL crash: AGE cannot run
-        `RETURN DISTINCT d ORDER BY d.timestamp` (Postgres rejects "for SELECT
-        DISTINCT, ORDER BY expressions must appear in select list"), so the
-        Cypher drops ORDER BY/LIMIT and ordering + cap happen in Python.
-        """
+    async def test_query_with_tags_preserves_canonical_sql_order_and_limit(self):
+        """Canonical SQL owns recent-first ordering and the result cap."""
         kg, mock_db = make_kg_with_mock_db()
-        # Deliberately out of chronological order to prove Python sorts them.
-        mock_db.graph_query.return_value = [
-            {"properties": {"id": "old", "agent_id": "a1", "summary": "old",
-                            "timestamp": "2026-01-01T00:00:00+00:00"}},
-            {"properties": {"id": "new", "agent_id": "a1", "summary": "new",
-                            "timestamp": "2026-06-01T00:00:00+00:00"}},
-            {"properties": {"id": "mid", "agent_id": "a1", "summary": "mid",
-                            "timestamp": "2026-03-01T00:00:00+00:00"}},
+        mock_db.kg_query.return_value = [
+            make_sql_row("new", tags=["python"], created_at="2026-06-01T00:00:00+00:00"),
+            make_sql_row("mid", tags=["python"], created_at="2026-03-01T00:00:00+00:00"),
         ]
 
         result = await kg.query(tags=["python"], limit=2)
 
-        # Most-recent-first, capped at the limit.
         assert [d.id for d in result] == ["new", "mid"]
+        assert mock_db.kg_query.await_args.kwargs["limit"] == 2
+        mock_db.graph_query.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_query_with_limit(self):
@@ -1047,7 +1075,7 @@ class TestUpdateDiscovery:
 
     @pytest.mark.asyncio
     async def test_updates_tags_as_json(self):
-        """Should serialize tags as JSON when updating."""
+        """Tag updates replace TAGGED edges inside the update transaction."""
         kg, mock_db = make_kg_with_mock_db()
         mock_db.graph_query.return_value = [{"id": "disc-001"}]
 
@@ -1056,9 +1084,24 @@ class TestUpdateDiscovery:
         })
         assert result is True
 
-        call_args = mock_db.graph_query.await_args
-        params = call_args.args[1]
-        assert params["val_tags"] == json.dumps(["new-tag", "updated"])
+        calls = mock_db.graph_query.await_args_list
+        update_call = calls[0]
+        assert update_call.args[1]["val_tags"] == json.dumps(["new-tag", "updated"])
+
+        delete_calls = [call for call in calls if "DELETE r" in call.args[0]]
+        assert len(delete_calls) == 1
+        assert delete_calls[0].args[1] == {"discovery_id": "disc-001"}
+
+        tagged_calls = [call for call in calls if "MERGE (d)-[r:TAGGED]" in call.args[0]]
+        assert {call.args[1]["tag_name"] for call in tagged_calls} == {
+            "new-tag",
+            "updated",
+        }
+        orphan_prunes = [
+            call for call in calls if "WHERE inbound = 0" in call.args[0]
+        ]
+        assert len(orphan_prunes) == 1
+        assert all(call.kwargs["conn"] is mock_db._mock_conn for call in calls)
 
     @pytest.mark.asyncio
     async def test_returns_true_for_empty_updates(self):
@@ -1217,18 +1260,51 @@ class TestHealthCheck:
 
     @pytest.mark.asyncio
     async def test_returns_counts_only(self):
-        """Should return aggregate counts without breakdowns."""
+        """Should source tag totals from SQL and expose projection-count drift."""
         kg, mock_db = make_kg_with_mock_db()
         mock_db.graph_query = AsyncMock(side_effect=[
             [42],   # total discoveries
-            [100],  # total tags
+            [95],   # AGE TAGGED assignments
             [200],  # total edges
         ])
+        mock_db.kg_tag_stats.return_value = {
+            "by_tag": {"python": 100, "bug": 23},
+            "total_tags": 2,
+            "total_tag_assignments": 123,
+        }
 
         result = await kg.health_check()
-        assert result == {"total_discoveries": 42, "total_tags": 100, "total_edges": 200}
+        assert result["total_discoveries"] == 42
+        assert result["total_tags"] == 2
+        assert result["total_tag_assignments"] == 123
+        assert result["total_edges"] == 200
+        assert result["tag_projection"] == {
+            "status": "drifted",
+            "comparison": "assignment_counts_only",
+            "age_tag_assignments": 95,
+            "canonical_tag_assignments": 123,
+            "assignment_delta": 28,
+        }
         assert "by_agent" not in result
         assert "by_tag" not in result
+
+    @pytest.mark.asyncio
+    async def test_equal_tag_counts_are_count_aligned_not_exactly_audited(self):
+        """Equal totals do not prove that every discovery/tag pair matches."""
+        kg, mock_db = make_kg_with_mock_db()
+        mock_db.graph_query = AsyncMock(side_effect=[[4], [7], [12]])
+        mock_db.kg_tag_stats.return_value = {
+            "by_tag": {"tag": 7},
+            "total_tags": 1,
+            "total_tag_assignments": 7,
+        }
+
+        result = await kg.health_check()
+
+        assert result["tag_projection"]["status"] == "count_aligned"
+        assert result["tag_projection"]["comparison"] == (
+            "assignment_counts_only"
+        )
 
     @pytest.mark.asyncio
     async def test_returns_degraded_on_error(self):
@@ -1343,10 +1419,10 @@ class TestFindSimilar:
 
     @pytest.mark.asyncio
     async def test_returns_similar_discoveries(self):
-        """Should return discoveries with overlapping tags."""
+        """Should find overlap from canonical SQL tags, not TAGGED edges."""
         kg, mock_db = make_kg_with_mock_db()
-        mock_db.graph_query.return_value = [
-            {"properties": {"id": "similar-1", "agent_id": "a1", "summary": "similar"}},
+        mock_db.kg_find_similar_by_tags.return_value = [
+            make_sql_row("similar-1", tags=["python", "bug"]),
         ]
 
         discovery = make_discovery(tags=["python", "bug"])
@@ -1355,18 +1431,17 @@ class TestFindSimilar:
         assert len(result) == 1
         assert result[0].id == "similar-1"
 
-        # Verify params (limit applied in Python, not Cypher)
-        call_args = mock_db.graph_query.await_args
-        params = call_args.args[1]
-        assert params["tags"] == ["python", "bug"]
-        assert params["exclude_id"] == "disc-001"
+        mock_db.kg_find_similar_by_tags.assert_awaited_once_with(
+            ["python", "bug"], exclude_id="disc-001", limit=5
+        )
+        mock_db.graph_query.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_handles_dict_d_key_result(self):
-        """Should handle results wrapped in 'd' key."""
+    async def test_converts_canonical_sql_rows(self):
+        """Should convert relational rows to DiscoveryNode values."""
         kg, mock_db = make_kg_with_mock_db()
-        mock_db.graph_query.return_value = [
-            {"d": {"properties": {"id": "sim-2", "agent_id": "a1", "summary": "wrapped"}}},
+        mock_db.kg_find_similar_by_tags.return_value = [
+            make_sql_row("sim-2", tags=["test"]),
         ]
 
         discovery = make_discovery(tags=["test"])
@@ -1391,44 +1466,41 @@ class TestFindSimilarByTags:
 
     @pytest.mark.asyncio
     async def test_returns_similar_by_tags(self):
-        """Should return discoveries matching given tags."""
+        """Should return discoveries matching canonical SQL tags."""
         kg, mock_db = make_kg_with_mock_db()
-        mock_db.graph_query.return_value = [
-            {"properties": {"id": "tag-match", "agent_id": "a1", "summary": "match"}},
+        mock_db.kg_find_similar_by_tags.return_value = [
+            make_sql_row("tag-match", tags=["python", "testing"]),
         ]
 
         result = await kg.find_similar_by_tags(["python", "testing"], limit=10)
         assert len(result) == 1
 
-        call_args = mock_db.graph_query.await_args
-        params = call_args.args[1]
-        assert params["tags"] == ["python", "testing"]
+        mock_db.kg_find_similar_by_tags.assert_awaited_once_with(
+            ["python", "testing"], exclude_id=None, limit=10
+        )
+        mock_db.graph_query.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_includes_exclude_clause_when_provided(self):
-        """Should add exclude clause when exclude_id is provided."""
+        """Should forward an excluded discovery to canonical SQL."""
         kg, mock_db = make_kg_with_mock_db()
-        mock_db.graph_query.return_value = []
 
         await kg.find_similar_by_tags(["tag"], exclude_id="exc-001")
 
-        call_args = mock_db.graph_query.await_args
-        cypher = call_args.args[0]
-        params = call_args.args[1]
-        assert "exclude_id" in cypher
-        assert params["exclude_id"] == "exc-001"
+        mock_db.kg_find_similar_by_tags.assert_awaited_once_with(
+            ["tag"], exclude_id="exc-001", limit=5
+        )
 
     @pytest.mark.asyncio
     async def test_no_exclude_clause_without_exclude_id(self):
-        """Should not add exclude clause when exclude_id is None."""
+        """Should explicitly forward the no-exclusion case."""
         kg, mock_db = make_kg_with_mock_db()
-        mock_db.graph_query.return_value = []
 
         await kg.find_similar_by_tags(["tag"])
 
-        call_args = mock_db.graph_query.await_args
-        params = call_args.args[1]
-        assert "exclude_id" not in params
+        mock_db.kg_find_similar_by_tags.assert_awaited_once_with(
+            ["tag"], exclude_id=None, limit=5
+        )
 
 
 # ============================================================================
@@ -2687,9 +2759,8 @@ class TestEdgeCases:
 
     @pytest.mark.asyncio
     async def test_query_combines_all_filters(self):
-        """Should combine all filter types in a single query."""
+        """Should combine all filters in the canonical SQL query."""
         kg, mock_db = make_kg_with_mock_db()
-        mock_db.graph_query.return_value = []
 
         await kg.query(
             agent_id="agent-1",
@@ -2700,14 +2771,15 @@ class TestEdgeCases:
             limit=10,
         )
 
-        call_args = mock_db.graph_query.await_args
-        params = call_args.args[1]
-        assert params["agent_id"] == "agent-1"
-        assert params["type"] == "bug"
-        assert params["status"] == "open"
-        assert params["severity"] == "high"
-        assert params["tags"] == ["python"]
-        assert params["limit"] == 10
+        assert mock_db.kg_query.await_args.kwargs == {
+            "agent_id": "agent-1",
+            "tags": ["python"],
+            "type": "bug",
+            "severity": "high",
+            "status": "open",
+            "limit": 10,
+        }
+        mock_db.graph_query.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_connectivity_score_with_zero_edges(self):
@@ -2743,9 +2815,14 @@ class TestEdgeCases:
         result = await kg.update_discovery("disc-001", {"tags": "single-tag"})
         assert result is True
 
-        call_args = mock_db.graph_query.await_args
-        params = call_args.args[1]
-        assert params["val_tags"] == json.dumps(["single-tag"])
+        calls = mock_db.graph_query.await_args_list
+        assert calls[0].args[1]["val_tags"] == json.dumps(["single-tag"])
+        tagged_calls = [
+            call for call in calls if "MERGE (d)-[r:TAGGED]" in call.args[0]
+        ]
+        assert [call.args[1]["tag_name"] for call in tagged_calls] == [
+            "single-tag"
+        ]
 
     @pytest.mark.asyncio
     async def test_link_discoveries_with_strength(self):
