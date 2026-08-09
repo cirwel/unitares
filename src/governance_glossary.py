@@ -33,6 +33,59 @@ from typing import Any, Dict, Optional
 
 
 # -----------------------------------------------------------------------------
+# EISV DIMENSIONS — the client-visible state-vector contract
+# -----------------------------------------------------------------------------
+
+EISV_DIMENSIONS: Dict[str, Dict[str, str]] = {
+    "E": {
+        "label": "Energy",
+        "range": "[0, 1]",
+        "description": "Productive capacity.",
+        "user_friendly": "How much capacity is available for useful work.",
+    },
+    "I": {
+        "label": "Information Integrity",
+        "range": "[0, 1]",
+        "description": "How well claims and confidence match results.",
+        "user_friendly": "How closely the work's claims match what verification shows.",
+    },
+    "S": {
+        "label": "Entropy",
+        "range": "[0, 1]",
+        "description": (
+            "Drift or instability relative to this agent's own normal; "
+            "lower usually means steadier."
+        ),
+        "user_friendly": "How far the work is drifting from this agent's usual pattern.",
+    },
+    "V": {
+        "label": "Valence",
+        "range": "[-1, 1]",
+        "description": (
+            "EMA-smoothed Energy minus Information Integrity imbalance. "
+            "Positive means running hot (motion outruns integrity); negative means "
+            "running careful (integrity outruns motion)."
+        ),
+        "sign_convention": (
+            "positive = motion outruns integrity; negative = integrity outruns motion"
+        ),
+        "user_friendly": (
+            "Which side of the energy-integrity imbalance is leading: positive is "
+            "running hot, negative is running careful."
+        ),
+    },
+}
+
+EISV_INLINE_SUMMARY = (
+    "EISV fields: E=Energy [0,1] (productive capacity); "
+    "I=Information Integrity [0,1] (claims matching results); "
+    "S=Entropy [0,1] (drift from the agent's own normal); "
+    "V=Valence [-1,1] (EMA-smoothed E-I imbalance; positive=motion outruns "
+    "integrity, negative=integrity outruns motion)."
+)
+
+
+# -----------------------------------------------------------------------------
 # VERDICTS — issued by governance after each check-in
 # -----------------------------------------------------------------------------
 
@@ -89,7 +142,10 @@ VERDICTS: Dict[str, Dict[str, str]] = {
 
 BASINS: Dict[str, Dict[str, Any]] = {
     "high": {
-        "meaning": "Healthy. E and I are high; S and V are low. Normal operating range.",
+        "meaning": (
+            "Healthy basin: E and I are high, S is low, and |V| is within the "
+            "basin threshold. No single dimension establishes fleet health."
+        ),
         "thresholds": {
             "type": "all",
             "E_min": 0.6,
@@ -289,6 +345,29 @@ TRAJECTORY_SIGNATURE_TERMS: Dict[str, Dict[str, Any]] = {
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
+
+def get_eisv_glossary() -> Dict[str, Dict[str, str]]:
+    """Return a defensive copy of the client-visible EISV field contract."""
+    return {dimension: dict(info) for dimension, info in EISV_DIMENSIONS.items()}
+
+
+def describe_eisv_value(dimension: str, value: Any) -> Dict[str, Any]:
+    """Wrap one EISV value with its canonical label, range, and semantics."""
+    info = EISV_DIMENSIONS.get(str(dimension).upper())
+    if info is None:
+        return {"value": value}
+    return {"value": value, **info}
+
+
+def render_eisv_glossary() -> str:
+    """Render the canonical field contract for in-band tool descriptions."""
+    lines = ["EISV FIELD CONTRACT:"]
+    for dimension, info in EISV_DIMENSIONS.items():
+        lines.append(
+            f"- {dimension} — {info['label']} {info['range']}: {info['description']}"
+        )
+    return "\n".join(lines)
+
 
 def _wrap(value: Any, table: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     """Wrap a value with its glossary entry, or fall back to {value, meaning: 'unknown'}."""

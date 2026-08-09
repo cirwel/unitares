@@ -8,6 +8,7 @@ from typing import Dict, Any, Sequence
 from mcp.types import TextContent
 from ..utils import success_response, error_response, require_registered_agent
 from ..decorators import mcp_tool
+from src.governance_glossary import get_eisv_glossary
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from src.agent_monitor_state import ensure_hydrated
@@ -232,7 +233,7 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
     response_data = {
         "agent_id": agent_id,
         "observation": observation,
-        # eisv_labels omitted by default — use get_governance_metrics(lite=false) for labels
+        "eisv_labels": get_eisv_glossary(),
     }
     if profile_data:
         response_data["profile"] = profile_data
@@ -378,7 +379,7 @@ async def handle_compare_agents(arguments: Dict[str, Any]) -> Sequence[TextConte
             "differences": differences,
             "outliers": outliers
         },
-        # eisv_labels omitted by default — use get_governance_metrics(lite=false) for labels
+        "eisv_labels": get_eisv_glossary(),
     }
     
     return success_response(response_data)
@@ -409,6 +410,7 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
     my_E = _coerce_float_metric(my_metrics.get('E'), 0.7)
     my_I = _coerce_float_metric(my_metrics.get('I'), 0.8)
     my_S = _coerce_float_metric(my_metrics.get('S'), 0.2)
+    my_V = _coerce_float_metric(my_metrics.get('V'), 0.0)
     my_coherence = _coerce_float_metric(my_metrics.get('coherence'), 0.5)
     my_phi = _coerce_float_metric(my_metrics.get('phi'), 0.0)
     my_verdict = my_metrics.get('verdict', 'caution')
@@ -431,6 +433,7 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
             other_E = _coerce_float_metric(other_metrics.get('E'), 0.7)
             other_I = _coerce_float_metric(other_metrics.get('I'), 0.8)
             other_S = _coerce_float_metric(other_metrics.get('S'), 0.2)
+            other_V = _coerce_float_metric(other_metrics.get('V'), 0.0)
             other_coherence = _coerce_float_metric(other_metrics.get('coherence'), 0.5)
             other_phi = _coerce_float_metric(other_metrics.get('phi'), 0.0)
             other_risk = _coerce_float_metric(other_metrics.get('risk_score'), 0.4)
@@ -454,6 +457,7 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
                         "E": other_E,
                         "I": other_I,
                         "S": other_S,
+                        "V": other_V,
                         "coherence": other_coherence,
                         "phi": other_phi,
                         "verdict": other_metrics.get('verdict', 'caution'),
@@ -463,6 +467,7 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
                         "E": other_E - my_E,
                         "I": other_I - my_I,
                         "S": other_S - my_S,
+                        "V": other_V - my_V,
                         "coherence": other_coherence - my_coherence
                     },
                     "total_updates": other_meta.total_updates,
@@ -486,20 +491,24 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
                 "E": my_E,
                 "I": my_I,
                 "S": my_S,
+                "V": my_V,
                 "coherence": my_coherence,
                 "phi": my_phi,
                 "verdict": my_verdict
             },
+            "eisv_labels": get_eisv_glossary(),
             "suggestion": "Try adjusting similarity_threshold parameter or use compare_agents with specific agent_ids"
         })
     
     # Build comparison response
     comparison_data = {
         "agent_id": agent_id,
+        "eisv_labels": get_eisv_glossary(),
         "my_metrics": {
             "E": my_E,
             "I": my_I,
             "S": my_S,
+            "V": my_V,
             "coherence": my_coherence,
             "phi": my_phi,
             "verdict": my_verdict,
@@ -813,6 +822,7 @@ async def handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCon
     # Add EISV labels for API documentation
     return success_response({
         "anomalies": all_anomalies,
+        "eisv_labels": get_eisv_glossary(),
         "summary": {
             "total_anomalies": len(all_anomalies),
             # stale = recomputed from a frozen (idle) history window; already
@@ -822,7 +832,6 @@ async def handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCon
             "by_severity": by_severity,
             "by_type": by_type
         },
-        # eisv_labels omitted by default — use get_governance_metrics(lite=false) for labels
     })
 
 @mcp_tool("aggregate_metrics", timeout=15.0, register=False)
