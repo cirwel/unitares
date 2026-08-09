@@ -2435,11 +2435,53 @@ def _parse_knowledge_update_request(
     return request
 
 
+_SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+_GATED_SEVERITIES = ("high", "critical")
+
+
+def _effective_update_severity(
+    request: _KnowledgeUpdateRequest, discovery: DiscoveryNode
+) -> Optional[str]:
+    """The severity an update's gates must answer to: the higher of the two.
+
+    Gating on the STORED severity alone leaves escalation ungated: `store()`
+    demands ``require_registered_agent`` + ``verify_agent_ownership`` for
+    high/critical (see ``_resolve_store_writer`` / ``_authorize_store_discovery``),
+    but an update that *raises* low -> critical would be judged against the
+    stored ``low`` and take the anonymous low-friction path — landing a
+    critical row that ``store()`` would have refused. Same mint-vs-gate
+    coupling class as #598/#1056: a gate that guards one write path is not a
+    gate.
+
+    Taking the max also keeps de-escalation gated, which matters at least as
+    much: silently downgrading someone else's critical finding hides a real
+    problem rather than inventing a fake one.
+    """
+    stored = discovery.severity
+    requested = request.severity
+    if requested is None:
+        return stored
+    requested = str(requested).lower()
+    if requested not in _SEVERITY_RANK:
+        # Invalid values are rejected later by _apply_update_metadata_fields
+        # with a proper enum error. Gate on the stored value meanwhile rather
+        # than letting an unparseable severity waive the check.
+        return stored
+    if stored is None:
+        return requested
+    stored_key = str(stored).lower()
+    if stored_key not in _SEVERITY_RANK:
+        return requested
+    return max(
+        (stored_key, requested), key=lambda value: _SEVERITY_RANK[value]
+    )
+
+
 def _resolve_update_writer(
     request: _KnowledgeUpdateRequest, discovery: DiscoveryNode
 ) -> str:
-    """Apply the existing-severity identity gate for discovery updates."""
-    if discovery.severity in ["high", "critical"]:
+    """Apply the effective-severity identity gate for discovery updates."""
+    if _effective_update_severity(request, discovery) in _GATED_SEVERITIES:
         agent_id, error = require_registered_agent(request.arguments)
     else:
         agent_id, error, _ = _resolve_low_friction_writer(request.arguments)
@@ -2477,7 +2519,9 @@ def _authorize_high_severity_update(
     agent_id: str,
 ) -> None:
     """Enforce authentication and ownership rules for sensitive updates."""
-    if discovery.severity not in ["high", "critical"]:
+    # Effective, not stored — an update that raises severity into the gated
+    # band must clear the same bar store() sets for creating it there.
+    if _effective_update_severity(request, discovery) not in _GATED_SEVERITIES:
         return
 
     from ..utils import verify_agent_ownership
