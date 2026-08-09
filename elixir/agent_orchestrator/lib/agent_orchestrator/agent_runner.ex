@@ -140,9 +140,15 @@ defmodule AgentOrchestrator.AgentRunner do
 
   alias AgentOrchestrator.LeasePlaneClient
   alias AgentOrchestrator.ResultStore
+  alias AgentOrchestrator.Telemetry
 
   @default_max_lines 1000
   @line_max_bytes 65_536
+
+  # Child stdin disposition. Default `close` — see wire_stdin/3 for why an open
+  # stdin is both unusable here and a hang risk for the CLIs we spawn.
+  @default_stdin "close"
+  @sh "/bin/sh"
 
   # Default ceiling on a single agent's wall-clock lifetime (30 min). Generous —
   # well past the slowest known consumer (orchestrated reviewer ~70s, council
@@ -181,6 +187,11 @@ defmodule AgentOrchestrator.AgentRunner do
     :lineage,
     :exit_status,
     :release_status,
+    # Monotonic timestamp of a successful spawn, for the telemetry stop span.
+    # Monotonic (not system) time so a clock adjustment cannot produce a
+    # negative or wildly wrong duration.
+    :started_mono,
+    :cmd,
     output: [],
     output_count: 0,
     max_output_lines: @default_max_lines,
@@ -336,9 +347,20 @@ defmodule AgentOrchestrator.AgentRunner do
 
         case open_port(spec, candidates) do
           {:ok, port, os_pid} ->
+            cmd = Map.get(spec, :cmd)
+
             Logger.info(
-              "agent #{state.agent_id} started os_pid=#{os_pid} lease=#{lease_id || "none"} cmd=#{Map.get(spec, :cmd)}"
+              "agent #{state.agent_id} started os_pid=#{os_pid} lease=#{lease_id || "none"} cmd=#{cmd}"
             )
+
+            Telemetry.agent_start(%{
+              agent_id: state.agent_id,
+              cmd: cmd,
+              os_pid: os_pid,
+              lease_id: lease_id,
+              presence: presence,
+              lineage: state.lineage
+            })
 
             # Arm the max-runtime backstop. No caller is obligated to DELETE a
             # wedged agent (the live dialectic reviewer explicitly "leaves it
@@ -347,7 +369,14 @@ defmodule AgentOrchestrator.AgentRunner do
             # The timer fires :max_runtime into our own mailbox; we self-reap.
             maybe_arm_max_runtime(spec)
 
-            {:ok, %{state | port: port, os_pid: os_pid}}
+            {:ok,
+             %{
+               state
+               | port: port,
+                 os_pid: os_pid,
+                 cmd: cmd,
+                 started_mono: System.monotonic_time()
+             }}
 
           {:error, reason} ->
             # Port failed to open after a lease was taken — release so we don't
@@ -445,6 +474,7 @@ defmodule AgentOrchestrator.AgentRunner do
   defp finalize(state, status) do
     state = if state.partial != "", do: push_line(%{state | partial: ""}, state.partial), else: state
     Logger.info("agent #{state.agent_id} exited status=#{inspect(status)}")
+    emit_stop(state, status, stop_reason(status))
     release_status = maybe_release_lease(state, @release_reason)
     state = %{state | exit_status: status, port: nil, release_status: release_status}
     state = reply_waiters(state)
@@ -457,8 +487,38 @@ defmodule AgentOrchestrator.AgentRunner do
     end
   end
 
+  defp stop_reason({:killed, :max_runtime}), do: :max_runtime
+  defp stop_reason(_), do: :exited
+
+  # One emit point for both endings. `started_mono` is nil when the port never
+  # opened, in which case there is no span to report.
+  defp emit_stop(%{started_mono: nil}, _status, _reason), do: :ok
+
+  defp emit_stop(state, status, reason) do
+    Telemetry.agent_stop(
+      %{
+        duration: System.monotonic_time() - state.started_mono,
+        output_lines: state.output_count
+      },
+      %{
+        agent_id: state.agent_id,
+        cmd: state.cmd,
+        os_pid: state.os_pid,
+        exit_status: status,
+        reason: reason,
+        lease_id: state.lease_id
+      }
+    )
+  end
+
   @impl true
   def terminate(_reason, state) do
+    # An agent reaped while still running (operator DELETE, app shutdown) never
+    # reaches finalize/2, so before this it produced a `started` line and
+    # nothing else — the one ending with no record at all. Emit its span here,
+    # guarded on not-yet-finalized so a clean exit is never double-counted.
+    if is_nil(state.exit_status), do: emit_stop(state, nil, :stopped)
+
     # Reap the whole process TREE when the child is still running at teardown
     # (operator stop / app shutdown — exit_status still nil). `claude`/SDK
     # children spawn their own subprocesses (MCP servers); closing the Port alone
@@ -582,19 +642,22 @@ defmodule AgentOrchestrator.AgentRunner do
         # escapes open_port's rescue and orphans the just-acquired lease.
         env = Map.get(spec, :env, []) || []
 
+        {exec, exec_args} =
+          wire_stdin(Map.get(spec, :stdin) || @default_stdin, path, Map.get(spec, :args, []))
+
         opts =
           [
             :binary,
             :exit_status,
             :stderr_to_stdout,
             {:line, @line_max_bytes},
-            {:args, Map.get(spec, :args, [])}
+            {:args, exec_args}
           ]
           |> maybe_opt(:env, encode_env(env ++ provisioned_env(candidates, env)))
           |> maybe_opt(:cd, Map.get(spec, :cd))
 
         try do
-          port = Port.open({:spawn_executable, path}, opts)
+          port = Port.open({:spawn_executable, exec}, opts)
           os_pid = port |> Port.info(:os_pid) |> elem(1)
           {:ok, port, os_pid}
         rescue
@@ -606,6 +669,23 @@ defmodule AgentOrchestrator.AgentRunner do
   defp resolve_executable(cmd) do
     if String.contains?(cmd, "/"), do: cmd, else: System.find_executable(cmd)
   end
+
+  # Close the child's stdin by re-exec'ing it through /bin/sh with stdin
+  # redirected from /dev/null. Two properties matter and neither survives if the
+  # caller does this wrapping itself:
+  #
+  #   * the ALLOWLIST and `executable_not_found` still see the real command,
+  #     because resolve_executable/1 runs on `spec.cmd` before this. A caller
+  #     that passes `/bin/sh` itself defeats both — a missing binary becomes an
+  #     opaque exit 127 from the shell instead of a spawn error, so the caller's
+  #     fail-open path never fires.
+  #   * `"$0"` / `"$@"` keep the command and its arguments as separate argv
+  #     words, so an argument containing quotes, `$(...)`, or backticks is never
+  #     interpreted by the shell.
+  defp wire_stdin("pipe", path, args), do: {path, args}
+
+  defp wire_stdin(_close, path, args),
+    do: {@sh, ["-c", ~s(exec "$0" "$@" </dev/null), path | args]}
 
   # Lineage PROVISIONING (see moduledoc): candidate declarations only — the
   # child makes its own onboard call. Validated up front because a malformed

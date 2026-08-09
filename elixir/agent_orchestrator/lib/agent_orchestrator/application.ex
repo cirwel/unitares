@@ -49,6 +49,7 @@ defmodule AgentOrchestrator.Application do
       [
         {Registry, keys: :unique, name: AgentOrchestrator.Registry},
         AgentOrchestrator.ResultStore,
+        AgentOrchestrator.Metrics,
         AgentOrchestrator.AgentSupervisor
       ] ++ http_children()
 
