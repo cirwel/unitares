@@ -89,6 +89,18 @@ fi
 # date, not a filesystem timestamp — it survives checkout, rsync and worktree
 # creation, all of which destroy mtime (see the --checksum note below for how
 # badly mtime behaves here).
+#
+# The comparison is `>=`, not `>`, and that is the whole point. An EQUAL date
+# with DIFFERENT content is the more common hazard, and the first version of
+# this guard let it through: 2026-08-09, plugin #112 merged the mirror's content
+# ahead of canonical while both sides still read last_verified 2026-07-28,
+# because the content PR and the freshness PR were split. A `>` test sees equal
+# dates and waves it past — straight into the revert it exists to prevent.
+#
+# Equal date + differing content means somebody edited one side without bumping,
+# and the script cannot tell which side is right. Refusing is correct: the cost
+# of a false refusal is one forward-port command, the cost of a false pass is
+# silently deleting merged work.
 REGRESSIONS=$(python3 - "$SRC" "$DST" <<'PY'
 import pathlib, re, sys
 src, dst = (pathlib.Path(p) for p in sys.argv[1:3])
@@ -107,8 +119,9 @@ for mirror in sorted(dst.glob("*/SKILL.md")):
     if canon.read_bytes() == mirror.read_bytes():
         continue
     cv, mv = verified(canon), verified(mirror)
-    if cv and mv and mv > cv:
-        block.append(f"{mirror.parent.name}: mirror verified {mv} > canonical {cv}")
+    if cv and mv and mv >= cv:
+        rel = "newer than" if mv > cv else "same date as, but differs from"
+        block.append(f"{mirror.parent.name}: mirror ({mv}) is {rel} canonical ({cv})")
 print("\n".join(block))
 PY
 )
