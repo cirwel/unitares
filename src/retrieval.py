@@ -30,7 +30,39 @@ def hybrid_enabled() -> bool:
 
 
 def graph_expansion_enabled() -> bool:
-    """True when 1-hop typed-edge expansion should run. UNITARES_ENABLE_GRAPH_EXPANSION."""
+    """True when 1-hop typed-edge expansion should run. UNITARES_ENABLE_GRAPH_EXPANSION.
+
+    Read this before flipping it on — it is not only a retrieval-quality knob.
+
+    Ranking today has no usage feedback: `ts_rank_cd` + recency + embedding
+    similarity, and nothing in `src/` reads a retrieval count. A discovery does
+    not become easier to retrieve by having been retrieved. That property is
+    incidental — nobody chose it — but it is what keeps the KG from selecting
+    on its own past output.
+
+    Expansion closes that loop. It pulls 1-hop neighbors of the top seeds, so a
+    discovery's retrievability rises with its inbound edge count; and the store
+    path writes `related_to` on every new discovery from a tag-overlap
+    `find_similar` (`src/mcp_handlers/knowledge/handlers.py`, in
+    `_link_similar_store_discoveries`). Retrieve A -> work the topic -> store B
+    linked to A -> A's degree grows -> A surfaces more often. Authority then
+    accrues by citation count rather than by re-derivation, and a wrong entry
+    gets harder to displace the longer it sits.
+
+    The same caution applies to a reranker trained on `knowledge_read` logs
+    (`src/reranker.py`) — same loop, more steps.
+
+    Not an argument against enabling it. It is an argument that enabling it is
+    a decision about propagation rights, not a tuning change, and wants a
+    corresponding write-side constraint rather than a contamination detector
+    bolted on afterward. See `src/storage/kg_write_budget.py` for the
+    write-side half.
+
+    Separately open: `docs/operations/dormant-capability-registry.md` flags
+    that this path reads the `related_to` SQL field, not the RELATED_TO Cypher
+    edges, so it is not currently graph expansion in the sense the name
+    implies.
+    """
     return _flag_enabled("UNITARES_ENABLE_GRAPH_EXPANSION", default=False)
 
 
