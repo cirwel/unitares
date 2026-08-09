@@ -603,13 +603,13 @@ async def _execute_http_tool_in_context(
 
     signals = _build_http_session_signals(request)
     signals_token = set_session_signals(signals)
-    x_agent_id = request.headers.get("x-agent-id") or request.headers.get(
-        "X-Agent-Id"
-    )
+    # Start the identity context unbound. ``X-Agent-Id`` remains available in
+    # SessionSignals as a compatibility/recovery hint, but it is caller input —
+    # never a binding. Only _resolve_http_bound_agent may stamp the context via
+    # update_context_agent_id after it verifies a supported proof path (#1431).
     context_token = set_session_context(
         session_key=client_session_id,
         client_session_id=client_session_id,
-        agent_id=x_agent_id or arguments.get("agent_id"),
     )
     try:
         await _resolve_http_bound_agent(tool_name, arguments, signals)
@@ -1141,7 +1141,10 @@ async def http_health(request):
         },
         "identity": {
             "header": "X-Agent-Id",
-            "description": "CLI/GPT identity - pass your agent name to maintain identity across REST requests"
+            "description": (
+                "Compatibility hint only; never trusted as a REST identity binding. "
+                "Use X-Session-ID or the client_session_id returned by onboard."
+            )
         },
         "note": "Use /mcp for MCP clients (Streamable HTTP)."
     })
@@ -2913,12 +2916,13 @@ async def http_substrate_observe(request):
 
 
 async def http_runtime_observe(request):
-    """POST /v1/runtime/observe — identity-bound host runtime evidence.
+    """POST /v1/runtime/observe — identity-bound host evidence.
 
     Unlike ``/v1/substrate/observe`` (the identity-free dark-session floor),
     this route requires an active ``client_session_id`` whose durable binding
-    matches ``agent_uuid``.  Accepted rows live in ``audit.events`` and never
-    create an EISV/state update.
+    matches ``agent_uuid``. The ``runtime`` path is retained for compatibility;
+    accepted rows live in ``audit.events`` and never prove continuous agent
+    runtime or create an EISV/state update.
     """
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
     if not _check_http_auth(request, http_api_token=http_api_token):
@@ -2950,12 +2954,12 @@ async def http_runtime_observe(request):
 
 
 async def http_runtime_activity(request):
-    """GET /v1/runtime/activity — operational and reflective clocks, separated.
+    """GET /v1/runtime/activity — host and state-update clocks, separated.
 
-    The operational side is derived only from identity-bound runtime
-    observations.  The reflective side includes only ``agent_report`` state
-    rows; substrate interpretations and legacy unclassified rows remain
-    separately labeled in the response.
+    The host side is derived only from identity-bound hook observations. The
+    state side distinguishes ``agent_report`` rows from automatic substrate
+    interpretations, synthetic initialization, and legacy unclassified rows.
+    A hook-parent heartbeat never marks an agent or slot as active.
     """
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
     if not _check_http_auth(request, http_api_token=http_api_token):

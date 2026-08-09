@@ -38,7 +38,7 @@ def strict_off(monkeypatch):
 @pytest.fixture
 def unbound_context():
     with patch(
-        "src.mcp_handlers.context.get_context_agent_id", return_value=None
+        "src.mcp_handlers.context.get_context_resolved_agent_id", return_value=None
     ):
         yield
 
@@ -142,7 +142,7 @@ def test_gate_passes_context_bound_callers(strict_on):
     valid tokens, and explicit UUIDs all land here via
     _resolve_http_bound_agent before the gate runs."""
     with patch(
-        "src.mcp_handlers.context.get_context_agent_id",
+        "src.mcp_handlers.context.get_context_resolved_agent_id",
         return_value="bound-agent",
     ):
         assert _strict_identity_refusal_or_none(

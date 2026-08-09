@@ -400,6 +400,9 @@ class TestGetGovernanceMetrics:
             assert data["ode_eisv"]["E"] == 0.65
             assert "state_semantics" in data
             semantics = data["state_semantics"]
+            assert semantics["dimensions"]["V"]["label"] == "Valence"
+            assert semantics["dimensions"]["V"]["range"] == "[-1, 1]"
+            assert data["eisv_labels"]["V"]["label"] == "Valence"
             assert semantics["measurement_policy_contract"] == (
                 "EISV measurements feed governance policy; policy evaluation chooses guidance/action; "
                 "enforcement is a separate runtime boundary."

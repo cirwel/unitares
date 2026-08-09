@@ -613,13 +613,11 @@ def test_attribution_falls_back_to_the_resolved_binding():
 
 
 def test_unverified_x_agent_id_header_is_never_attribution():
-    """SECURITY: ``http_api`` seeds the session context with the raw
-    ``X-Agent-Id`` header BEFORE any resolution runs, and for the two tools
-    #1387 targets nothing overwrites it — ``identity`` is in
-    ``_resolve_http_bound_agent``'s ``skip_tools`` and every ``pre_onboard``
-    read returns at the #945 guard. A UUID clamp does not save this: it only
-    makes the forged value JOINABLE, which is worse than NULL. Attribution
-    must require that a resolver actually wrote the binding.
+    """SECURITY: even if request scaffolding carries an asserted identity,
+    attribution requires that a resolver actually wrote the binding. REST no
+    longer seeds this slot from ``X-Agent-Id`` (#1431); this remains the
+    defense-in-depth contract for every other context producer. A UUID clamp
+    does not save an unverified value — it only makes it JOINABLE.
     """
     from src.mcp_handlers.context import reset_session_context, set_session_context
 

@@ -272,6 +272,12 @@ def format_response(
     elif response_mode == "compact":
         response_data = _format_compact(response_data, using_default_mode, saved_trust_tier)
 
+    # Filtered check-in responses still expose bare E/I/S/V values. Keep one
+    # compact in-band contract so schema-only clients can interpret every
+    # dimension without paying for the full eisv_labels object.
+    from src.governance_glossary import EISV_INLINE_SUMMARY
+    response_data["eisv_contract"] = EISV_INLINE_SUMMARY
+
     # Strip optional context for minimal/compact/mirror (reduce noise for established agents)
     if response_mode in ("minimal", "compact", "mirror"):
         _strip_context(response_data, is_new_agent, key_was_generated, api_key_auto_retrieved)

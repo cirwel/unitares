@@ -108,25 +108,26 @@ def _coerce_bool_flag(value: Any) -> bool:
 
 # Lite eisv_snapshot keys returned by default on outcome acks (#604 dogfood
 # 2026-06-24). The actual state numbers and the active source are kept (the
-# small primary/behavioral/ode views); the heavy self-description (state_semantics
-# role table, source-meta blocks, the sensor-divergence history list) is dropped
-# unless include_semantics=true.
+# small primary/behavioral/ode views) plus the compact field glossary; the heavy
+# self-description (state_semantics role table, source-meta blocks, the
+# sensor-divergence history list) is dropped unless include_semantics=true.
 _LITE_SNAPSHOT_KEYS = (
     "primary_eisv",
     "primary_eisv_source",
     "behavioral_eisv",
     "ode_eisv",
     "ode_diagnostics",
+    "eisv_labels",
 )
 
 
 def _lite_eisv_snapshot(snapshot: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Return a small confirmation-sized view of the EISV snapshot.
 
-    Drops `state_semantics` (7 role descriptions + hierarchy), the
-    `*_source_meta` glossary blocks, and `sensor_divergence_recent` (a list of
-    up to 20 records). Returns ``None`` unchanged so a missing snapshot still
-    reads as missing. Gated behind include_semantics / response_mode="full".
+    Keeps the field glossary while dropping `state_semantics` (role descriptions
+    + hierarchy), the `*_source_meta` blocks, and `sensor_divergence_recent` (a
+    list of up to 20 records). Returns ``None`` unchanged so a missing snapshot
+    still reads as missing. Gated behind include_semantics / response_mode="full".
     """
     if not snapshot:
         return snapshot
