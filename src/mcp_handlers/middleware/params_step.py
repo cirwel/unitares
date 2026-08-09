@@ -114,8 +114,15 @@ async def resolve_alias(name: str, arguments: Dict[str, Any], ctx) -> Any:
 async def inject_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
     """Auto-inject agent_id from session, prevent impersonation."""
     try:
-        from ..context import get_context_agent_id
-        bound_id = get_context_agent_id()
+        # Full MCP dispatch carries the identity step's verified result on ctx.
+        # REST fallback deliberately skips that step, so it may use only the
+        # context value stamped by update_context_agent_id. Reading the generic
+        # context slot here let a raw X-Agent-Id header impersonate a binding.
+        bound_id = getattr(ctx, "bound_agent_id", None)
+        if not bound_id:
+            from ..context import get_context_resolved_agent_id
+
+            bound_id = get_context_resolved_agent_id()
         provided_id = arguments.get("agent_id")
 
         if bound_id:
@@ -192,7 +199,9 @@ async def inject_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                         }
                     )]
         elif provided_id:
-            # REST client with X-Agent-Id but no session binding
+            # Explicit agent_id argument with no session binding. This remains a
+            # target/reference value; the REST transport header is never copied
+            # into arguments (#1431).
             logger.warning(f"[IDENTITY] No session binding but agent_id provided: {provided_id}. V2 may have failed.")
             arguments["agent_id"] = provided_id
         else:
