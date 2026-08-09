@@ -1392,86 +1392,18 @@ class KnowledgeGraphAGE:
             agent_id: Agent to check.
             conn: Optional DB connection to reuse (e.g. from a transaction).
 
-        Uses Redis for fast rate limiting, falls back to PostgreSQL.
+        Delegates to the backend-independent budget in
+        ``src.storage.kg_write_budget`` so every backend enforces the same
+        limit; see that module for why the check does not live here.
         """
-        # Try Redis first (fast path)
-        try:
-            from src.cache import get_rate_limiter
-            limiter = get_rate_limiter()
-            window_seconds = 3600  # 1 hour
-            
-            # Check rate limit
-            if not await limiter.check(
-                agent_id,
-                limit=self.rate_limit_stores_per_hour,
-                window=window_seconds,
-                operation="kg_store",
-            ):
-                # Get current count for error message
-                count = await limiter.get_count(agent_id, window_seconds, operation="kg_store")
-                raise ValueError(
-                    f"Rate limit exceeded: Agent '{agent_id}' has stored {count} "
-                    f"discoveries in the last hour (limit: {self.rate_limit_stores_per_hour}/hour). "
-                    f"This prevents knowledge graph poisoning flood attacks. "
-                    f"Please wait before storing more discoveries."
-                )
-            
-            # Record this operation
-            await limiter.record(agent_id, window_seconds, operation="kg_store")
-            return  # Success - Redis handled it
-        except ValueError:
-            # Rate limit exceeded - re-raise
-            raise
-        except Exception as e:
-            # Redis failed - fall back to PostgreSQL
-            logger.debug(f"Redis rate limiting failed, falling back to PostgreSQL: {e}")
-        
-        # Fallback: Use PostgreSQL for persistent rate limit tracking
-        # Uses atomic check-and-insert to prevent race conditions
-        db = await self._get_db()
+        from src.storage.kg_write_budget import check_store_budget
 
-        async def _do_rate_limit_check(c):
-            from datetime import datetime, timedelta
-            one_hour_ago = datetime.now() - timedelta(hours=1)
-
-            inserted = await c.fetchval(
-                """
-                INSERT INTO audit.rate_limits (agent_id, timestamp)
-                SELECT $1, $2
-                WHERE (
-                    SELECT COUNT(*) FROM audit.rate_limits
-                    WHERE agent_id = $1 AND timestamp > $3
-                ) < $4
-                RETURNING agent_id
-                """,
-                agent_id,
-                datetime.now(),
-                one_hour_ago,
-                self.rate_limit_stores_per_hour,
-            )
-
-            if inserted is None:
-                count = await c.fetchval(
-                    "SELECT COUNT(*) FROM audit.rate_limits WHERE agent_id = $1 AND timestamp > $2",
-                    agent_id, one_hour_ago,
-                )
-                raise ValueError(
-                    f"Rate limit exceeded: Agent '{agent_id}' has stored {count or 0} "
-                    f"discoveries in the last hour (limit: {self.rate_limit_stores_per_hour}/hour). "
-                    f"This prevents knowledge graph poisoning flood attacks. "
-                    f"Please wait before storing more discoveries."
-                )
-
-            await c.execute(
-                "DELETE FROM audit.rate_limits WHERE timestamp < $1",
-                one_hour_ago,
-            )
-
-        if conn is not None:
-            await _do_rate_limit_check(conn)
-        else:
-            async with db.acquire() as pooled_conn:
-                await _do_rate_limit_check(pooled_conn)
+        await check_store_budget(
+            agent_id,
+            db=await self._get_db(),
+            limit=self.rate_limit_stores_per_hour,
+            conn=conn,
+        )
 
     async def load(self) -> None:
         """
