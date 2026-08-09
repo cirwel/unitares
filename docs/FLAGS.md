@@ -14,7 +14,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**109 flags.**
+**112 flags.**
 
 | Flag | Default | Purpose | Read at |
 |---|---|---|---|
@@ -64,6 +64,7 @@ index; that one is the curated decision record.
 | `UNITARES_ENABLE_RERANKER` | `''` | Derive a config tag matching baseline filename suffix from env vars | agents/vigil/agent.py |
 | `UNITARES_FINDINGS_URL` | `'http://localhost:8767/api/fi…` | — | agents/common/findings.py |
 | `UNITARES_FIRST_RUN` | `(required)` | Identity resolution: UUID lookup | agents/sdk/src/unitares_sdk/agent.py, agents/watcher/agent.py |
+| `UNITARES_GOVERNANCE_HTTP` | `'http://localhost:8767'` | POST a resolution outcome to the operator-gated harness endpoint | agents/watcher/agent.py |
 | `UNITARES_GOVERNANCE_URL` | `(required)` | read by _governance_url() | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py, agents/sdk/src/unitares_sdk/lease_plane/client.py |
 | `UNITARES_GROUNDING_APPLY` | `''` | Whether grounded E/I/S/coherence actually replace the ODE/heuristic values in the canonical metrics (UNITARES_GROUNDING_APPLY) | config/governance_config.py |
 | `UNITARES_GROUNDING_SHADOW` | `''` | Whether to shadow-compare grounded vs ungrounded canonical metrics each check-in (UNITARES_GROUNDING_SHADOW) | config/governance_config.py |
@@ -97,6 +98,8 @@ index; that one is the curated decision record.
 | `UNITARES_OAUTH_SECRET` | `(required)` | — | src/mcp_server.py |
 | `UNITARES_OLLAMA_BASE` | `'http://localhost:11434'` | Native Ollama /api/chat endpoint (supports JSON-schema-constrained output via the `format` field) | src/mcp_handlers/support/llm_delegation.py |
 | `UNITARES_OLLAMA_BASE_URL` | `'http://localhost:11434/v1'` | — | agents/dialectic_reviewer/reviewer.py |
+| `UNITARES_OPERATOR_TOKEN` | `''` | POST a resolution outcome to the operator-gated harness endpoint | agents/watcher/agent.py |
+| `UNITARES_OUTCOME_PROVENANCE_FILTER` | `'off'` | Fetch recent outcome events for an agent | src/db/mixins/tool_usage.py |
 | `UNITARES_PARAMS_JSON` | `(required)` | Returns the active dynamics parameters | governance_core/parameters.py |
 | `UNITARES_PARAMS_PROFILE` | `'default'` | Returns the active parameters profile name | governance_core/parameters.py |
 | `UNITARES_PARENT_AGENT_ID` | `(required)` | read by main() | agents/dialectic_reviewer/reviewer.py |

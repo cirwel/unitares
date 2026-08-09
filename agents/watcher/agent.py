@@ -391,6 +391,44 @@ def build_resolution_outcome_args(
     }
 
 
+
+def _post_resolution_via_harness(args: dict) -> bool:
+    """POST a resolution outcome to the operator-gated harness endpoint.
+
+    Returns True on success. False (with a debug log) on any failure so the
+    caller can fall back to the public tool — a demoted record beats none.
+    """
+    token = os.environ.get("UNITARES_OPERATOR_TOKEN", "").strip()
+    if not token:
+        return False
+    base = os.environ.get("UNITARES_GOVERNANCE_HTTP", "http://localhost:8767").rstrip("/")
+    body = {
+        "agent_uuid": args.get("agent_id"),
+        "outcome_type": args.get("outcome_type"),
+        "is_bad": args.get("is_bad"),
+        "outcome_score": args.get("outcome_score"),
+        "verification_source": args.get("verification_source"),
+        "detail": args.get("detail"),
+    }
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(
+            f"{base}/v1/harness/outcome",
+            data=json.dumps(body).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "X-Unitares-Operator": token,
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return 200 <= resp.status < 300
+    except Exception as e:  # noqa: BLE001 — caller falls back to the public tool
+        log(f"harness outcome POST failed, falling back to public tool: {e}", "debug")
+        return False
+
+
 def _emit_resolution_outcome(
     client, status: str, fingerprint: str, reason: str | None = None
 ) -> None:
@@ -406,10 +444,25 @@ def _emit_resolution_outcome(
             log("resolution outcome skipped: no resolved Watcher identity", "warning")
             return
         args = build_resolution_outcome_args(status, fingerprint, uuid, reason)
-        # record_result: advertised alias of outcome_event (raw twin dropped
-        # from the lite MCP wire by #1292).
-        client.call_tool("record_result", args, timeout=15)
-        log(f"recorded external-truth outcome ({status}) for finding {fingerprint}")
+        # Provenance: the public outcome_event tool now server-derives
+        # verification_source to agent_reported_tool_result (Invariant 4), so
+        # riding it would silently demote this — the exogenous ground-truth
+        # channel — to a self-report tier. The sanctioned path for
+        # harness-side/operator-adjacent observers is the operator-gated
+        # /v1/harness/outcome endpoint (#1345), which preserves
+        # external_signal. Requires UNITARES_OPERATOR_TOKEN in the
+        # environment; without it, fall back to the public tool and log the
+        # demotion instead of dropping the record.
+        if _post_resolution_via_harness(args):
+            log(f"recorded external-truth outcome ({status}) for finding {fingerprint}")
+        else:
+            client.call_tool("record_result", args, timeout=15)
+            log(
+                f"recorded resolution outcome ({status}) for {fingerprint} via the "
+                "public tool — DEMOTED to agent_reported_tool_result (set "
+                "UNITARES_OPERATOR_TOKEN to preserve external_signal)",
+                "warning",
+            )
     except Exception as e:  # noqa: BLE001 — best-effort, never break resolution
         log(f"resolution outcome emit skipped: {e}", "warning")
 
