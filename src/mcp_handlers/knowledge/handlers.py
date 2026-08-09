@@ -3605,9 +3605,13 @@ async def handle_audit_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Te
 
     Returns audit report with bucket counts and top stale entries.
     """
-    scope = arguments.get("scope", "open")
-    top_n = int(arguments.get("top_n", 10))
-    use_model = arguments.get("use_model", False)
+    # The consolidated KnowledgeParams model includes omitted optional fields
+    # as explicit ``None`` values.  ``dict.get(key, default)`` only applies the
+    # default when the key is absent, so use None-aware fallbacks here.
+    scope = arguments.get("scope") or "open"
+    top_n_argument = arguments.get("top_n")
+    top_n = int(10 if top_n_argument is None else top_n_argument)
+    use_model = arguments.get("use_model") or False
     if isinstance(use_model, str):
         use_model = use_model.lower() in ("true", "1", "yes")
 

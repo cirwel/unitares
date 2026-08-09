@@ -1300,11 +1300,15 @@ class KnowledgeGraphAGE:
             else:
                 logger.debug(f"Unexpected tag count result format: {type(first_result)}, value: {first_result}")
 
-        # Collect tag names for by_tag breakdown
-        cypher = "MATCH (t:Tag) RETURN collect(t.name)"
+        # Count tag assignments, not unique Tag vertices. ``MERGE (t:Tag)``
+        # makes one vertex per tag name, so collecting vertices alone turns
+        # by_tag into a misleading presence map whose values are all 1.
+        cypher = "MATCH (:Discovery)-[:TAGGED]->(t:Tag) RETURN collect(t.name)"
         result = await db.graph_query(cypher, {})
         tag_names = result[0] if result and isinstance(result[0], list) else []
-        by_tag = dict(Counter(t for t in tag_names if t))
+        # JSON responses cap dictionaries at 100 keys, so put the most-used
+        # tags first instead of exposing an arbitrary graph traversal prefix.
+        by_tag = dict(Counter(t for t in tag_names if t).most_common())
 
         return {
             "total_discoveries": total_count,

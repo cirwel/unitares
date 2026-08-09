@@ -1124,7 +1124,7 @@ class TestGetStats:
             [["open", "resolved", "open"]],   # collect(statuses)
             [3],                              # count edges
             [10],                             # count tags
-            [["python", "bug", "python"]],    # collect(tag names)
+            [["bug", "python", "python"]],    # collect(tag assignments)
         ]
 
         result = await kg.get_stats()
@@ -1137,6 +1137,10 @@ class TestGetStats:
         assert result["total_agents"] == 2
         assert result["total_tags"] == 10
         assert result["by_tag"] == {"python": 2, "bug": 1}
+        assert list(result["by_tag"]) == ["python", "bug"]
+
+        tag_usage_query = mock_db.graph_query.await_args_list[6].args[0]
+        assert "(:Discovery)-[:TAGGED]->(t:Tag)" in tag_usage_query
 
     @pytest.mark.asyncio
     async def test_status_less_rows_reconcile_under_none_bucket(self):
