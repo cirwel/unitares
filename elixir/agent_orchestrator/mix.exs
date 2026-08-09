@@ -33,7 +33,10 @@ defmodule AgentOrchestrator.MixProject do
       # the Plug.Parsers.ParseError shape the router's error handler matches;
       # Bandit is the localhost listener. Same stack as the lease plane.
       {:plug, "~> 1.18"},
-      {:bandit, "~> 1.6"}
+      {:bandit, "~> 1.6"},
+      # Already present transitively (bandit, plug) — declared because we are now
+      # a direct emitter, not because it adds anything to the dependency tree.
+      {:telemetry, "~> 1.0"}
     ]
   end
 end

@@ -79,6 +79,85 @@ defmodule AgentOrchestratorTest do
     end
   end
 
+  describe "telemetry" do
+    setup do
+      parent = self()
+      ref = make_ref()
+
+      :telemetry.attach_many(
+        "test-#{inspect(ref)}",
+        AgentOrchestrator.Telemetry.events(),
+        fn event, measurements, meta, _ ->
+          send(parent, {:telemetry, event, measurements, meta})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("test-#{inspect(ref)}") end)
+      :ok
+    end
+
+    test "emits a start and a stop span around a normal agent" do
+      {:ok, id, _} = AgentOrchestrator.run(%{cmd: "echo", args: ["hi"]})
+      assert {:ok, _} = AgentOrchestrator.await(id, 5_000)
+
+      assert_receive {:telemetry, [:agent_orchestrator, :agent, :start], _m, start_meta}
+      assert start_meta.agent_id == id
+      assert start_meta.cmd == "echo"
+      assert is_integer(start_meta.os_pid)
+
+      assert_receive {:telemetry, [:agent_orchestrator, :agent, :stop], measurements, meta}
+      assert meta.agent_id == id
+      assert meta.exit_status == 0
+      assert meta.reason == :exited
+      assert measurements.output_lines == 1
+      assert measurements.duration > 0
+    end
+
+    test "a max-runtime kill is reported as its own reason" do
+      {:ok, id, _} = AgentOrchestrator.run(%{cmd: "sleep", args: ["30"], max_runtime_ms: 400})
+      assert {:ok, _} = AgentOrchestrator.await(id, 5_000)
+
+      assert_receive {:telemetry, [:agent_orchestrator, :agent, :stop], _m, meta}
+      assert meta.reason == :max_runtime
+      assert meta.exit_status == {:killed, :max_runtime}
+    end
+
+    test "an agent reaped while running still reports a stop — the previously silent ending" do
+      # Before this, an operator DELETE produced a `started` log line and nothing
+      # else: the log's started/exited counts diverged and looked like a leak.
+      {:ok, id, _} = AgentOrchestrator.run(%{cmd: "sleep", args: ["30"]})
+      assert_receive {:telemetry, [:agent_orchestrator, :agent, :start], _m, _meta}
+
+      :ok = AgentOrchestrator.stop(id, :test_reap)
+
+      assert_receive {:telemetry, [:agent_orchestrator, :agent, :stop], _measurements, meta},
+                     2_000
+
+      assert meta.agent_id == id
+      assert meta.reason == :stopped
+      assert meta.exit_status == nil
+    end
+
+    test "a clean exit emits exactly one stop, not one per teardown path" do
+      {:ok, id, _} = AgentOrchestrator.run(%{cmd: "true"})
+      assert {:ok, _} = AgentOrchestrator.await(id, 5_000)
+
+      assert_receive {:telemetry, [:agent_orchestrator, :agent, :stop], _m, meta}
+      assert meta.reason == :exited
+      refute_receive {:telemetry, [:agent_orchestrator, :agent, :stop], _, _}, 300
+    end
+
+    test "the runtime logger attaches and detaches idempotently" do
+      alias AgentOrchestrator.Telemetry
+
+      assert :ok = Telemetry.attach_logger()
+      assert :ok = Telemetry.attach_logger(:debug)
+      assert :ok = Telemetry.detach_logger()
+      assert :ok = Telemetry.detach_logger()
+    end
+  end
+
   describe "child stdin" do
     test "is closed by default, so a child that reads stdin exits instead of hanging" do
       # `cat` with no argument reads stdin forever. With stdin at EOF it exits 0
