@@ -354,13 +354,11 @@ def resolve_audit_agent_id(agent_id: Optional[str]) -> Optional[str]:
     all with ``agent_id IS NULL``.
 
     Request-side ALWAYS wins (unchanged). The fallback reads
-    ``get_context_resolved_agent_id``, NOT ``get_context_agent_id``: the
-    latter also returns transport-asserted values, because ``http_api``
-    seeds the session context with the raw, unverified ``X-Agent-Id`` header
-    before any resolution runs — and for exactly the two tools above nothing
-    ever overwrites it. A UUID clamp does not fix that; it only guarantees
-    the forged value is JOINABLE, which is worse than NULL, not better.
-    Gating on "a resolver actually wrote this" is the correctness condition.
+    ``get_context_resolved_agent_id``, NOT ``get_context_agent_id``. The
+    generic slot can carry asserted values from request scaffolding or tests;
+    REST now starts it empty (#1431), but the resolver-written marker remains
+    the durable correctness condition and defense in depth. A UUID clamp alone
+    would only make a forged value JOINABLE, which is worse than NULL.
     The UUID clamp is kept as a second belt so the fallback can still only
     ever contribute a joinable key. Never raises.
     """

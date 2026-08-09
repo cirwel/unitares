@@ -18,6 +18,8 @@ def test_build_process_update_response_data_sets_agent_fields():
     assert payload["status"] == "ok"
     assert payload["agent_id"] == "agent-123"
     assert payload["identity_assurance"] == {"tier": "strong"}
+    assert payload["eisv_labels"]["V"]["label"] == "Valence"
+    assert "positive" in payload["eisv_labels"]["V"]["description"].lower()
 
 
 def test_serialize_process_update_response_falls_back_on_serialization_error():

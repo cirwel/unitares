@@ -316,6 +316,51 @@ class KnowledgeGraphMixin:
             )
         return {row["id"]: self._row_to_discovery_dict(row) for row in rows}
 
+    async def kg_tag_stats(
+        self,
+        including_cold: bool = False,
+        epoch: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Count unique tags and tag assignments from canonical SQL rows.
+
+        AGE Tag vertices and TAGGED edges are a projection that can lag behind
+        ``knowledge.discoveries.tags``. Stats surfaces use this query so a
+        missing graph backfill cannot silently under-report tag usage.
+        """
+        clauses = [
+            "expanded.tag IS NOT NULL",
+            "expanded.tag != ''",
+        ]
+        params: list[Any] = []
+        if epoch is not None:
+            params.append(epoch)
+            clauses.append(f"d.epoch = ${len(params)}")
+        if not including_cold:
+            clauses.append("d.status != 'cold'")
+        where_sql = " WHERE " + " AND ".join(clauses)
+
+        async with self.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT expanded.tag AS tag, COUNT(*) AS count
+                FROM knowledge.discoveries AS d
+                CROSS JOIN LATERAL unnest(
+                    COALESCE(d.tags, ARRAY[]::text[])
+                ) AS expanded(tag)
+                {where_sql}
+                GROUP BY expanded.tag
+                ORDER BY count DESC, tag ASC
+                """,
+                *params,
+            )
+
+        by_tag = {str(row["tag"]): int(row["count"]) for row in rows}
+        return {
+            "by_tag": by_tag,
+            "total_tags": len(by_tag),
+            "total_tag_assignments": sum(by_tag.values()),
+        }
+
     async def kg_stats(self, including_cold: bool = False) -> Dict[str, Any]:
         """Discovery-level aggregates straight from knowledge.discoveries.
 
@@ -342,15 +387,17 @@ class KnowledgeGraphMixin:
                 f"SELECT status, COUNT(*) AS count "
                 f"FROM knowledge.discoveries{cold_clause} GROUP BY status"
             )
+        tag_stats = await self.kg_tag_stats(including_cold=including_cold)
         by_agent = {r["agent_id"]: r["count"] for r in by_agent_rows}
         return {
             "total_discoveries": int(total),
             "by_agent": by_agent,
             "by_type": {r["type"]: r["count"] for r in by_type_rows},
             "by_status": {r["status"]: r["count"] for r in by_status_rows},
-            "by_tag": {},
+            "by_tag": tag_stats["by_tag"],
             "total_edges": 0,
-            "total_tags": 0,
+            "total_tags": tag_stats["total_tags"],
+            "total_tag_assignments": tag_stats["total_tag_assignments"],
             "total_agents": len(by_agent),
         }
 
