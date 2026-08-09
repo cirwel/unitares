@@ -617,6 +617,33 @@ class DialecticSession:
         # superseding its own earlier rejection.
         objection_stands = self._reviewer_objection_stands()
 
+        # Repeat self-clear attempts are refused WITHOUT being recorded.
+        #
+        # Every persisted message refreshes core.dialectic_sessions.updated_at, and
+        # the auto-resolve sweeper selects on `updated_at < now() - 2h`. So an agent
+        # retrying more often than the threshold held a blocked session `active`
+        # forever: never resolved, never failed, never facilitated. Recording the
+        # FIRST attempt preserves the audit signal; refusing the rest without a
+        # write lets the session reach a terminal state.
+        if (
+            message.agrees
+            and message.agent_id == self.paused_agent_id
+            and objection_stands
+            and self._paused_agent_already_tried_to_clear()
+        ):
+            return {
+                "success": False,
+                "converged": False,
+                "blocked": "reviewer_objection_stands",
+                "error": (
+                    "Already refused: the reviewer's standing verdict on this session "
+                    "is a rejection and this attempt was not recorded. Retrying cannot "
+                    "change the outcome."
+                ),
+                "phase": self.phase.value,
+                "awaiting_facilitation": True,
+            }
+
         # Store message
         self.transcript.append(message)
 
@@ -634,10 +661,16 @@ class DialecticSession:
         # immediately after posting its verdict, so a "both participants must agree"
         # rule would strand the session forever — the never-resolve regression the
         # synthetic-reviewer path was built to kill.
+        # NOTE: no reviewer_mode='self' exemption. An earlier revision exempted
+        # paused==reviewer on the grounds that there is no independent check to
+        # override. The record refutes the premise: 17 self-review verdicts across 10
+        # sessions, ALL agrees=True, not one self-rejection ever, and none since
+        # 2026-06-28. The exemption was inert on the entire history and its only live
+        # effect was to let a self-reviewer overturn its own rejection — the
+        # self-certification hole under a new name.
         if (
             message.agrees
             and message.agent_id == self.paused_agent_id
-            and self.reviewer_agent_id != self.paused_agent_id
             and objection_stands
         ):
             self.synthesis_round += 1
@@ -703,6 +736,13 @@ class DialecticSession:
         round still resolves the session normally. Returns False when there is no
         reviewer, or the reviewer has not yet returned a verdict.
 
+        Keyed on "the last synthesis NOT from the paused agent" rather than "from the
+        current reviewer_agent_id". That distinction is load-bearing: reassignment
+        repoints `reviewer_agent_id` (and clears awaiting_facilitation) in
+        `_apply_reviewer_reassignment`, so an id-keyed scan orphans the previous
+        reviewer's rejection and the paused agent self-clears on its very next call.
+        Reassignment must not be able to erase a recorded objection.
+
         Call this BEFORE appending the message under evaluation; see submit_synthesis.
 
         KNOWN GAP (2026-08-09): this only recognises reviewer *synthesis* verdicts.
@@ -712,17 +752,33 @@ class DialecticSession:
         Whether a disputing antithesis alone should block is a governance decision,
         not a bug fix — it would stop nearly every paused agent from ever resolving
         its own session, which may well be correct.
+
+        In reviewer_mode='self' the paused agent holds BOTH roles, so its own recorded
+        rejection is the only verdict in existence — excluding paused-agent messages
+        there would make the guard permanently blind to exactly the self-certification
+        case it exists to stop.
         """
-        if not self.reviewer_agent_id:
-            return False
+        self_review = self.reviewer_agent_id == self.paused_agent_id
         for msg in reversed(self.transcript):
-            if (
-                getattr(msg, "phase", None) == "synthesis"
-                and msg.agent_id == self.reviewer_agent_id
-                and msg.agrees is not None
-            ):
-                return msg.agrees is False
+            if getattr(msg, "phase", None) != "synthesis" or msg.agrees is None:
+                continue
+            if not self_review and msg.agent_id == self.paused_agent_id:
+                continue
+            return msg.agrees is False
         return False
+
+    def _paused_agent_already_tried_to_clear(self) -> bool:
+        """True when the paused agent has already filed an agreeing synthesis.
+
+        Used to refuse repeat self-clear attempts without persisting them; see the
+        sweeper-starvation note in submit_synthesis.
+        """
+        return any(
+            getattr(msg, "phase", None) == "synthesis"
+            and msg.agent_id == self.paused_agent_id
+            and msg.agrees is True
+            for msg in self.transcript
+        )
 
     @staticmethod
     def _normalize_condition_terms(cond: str) -> set:

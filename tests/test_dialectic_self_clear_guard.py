@@ -92,14 +92,47 @@ class TestSelfClearBlocked:
         assert result["awaiting_facilitation"] is True
         assert s.awaiting_facilitation is True
 
-    def test_repeated_self_clear_attempts_do_not_resolve(self):
+    def test_repeat_attempts_are_refused_without_being_recorded(self):
+        """Sweeper-starvation guard: only the FIRST attempt is persisted.
+
+        Every persisted message refreshes `dialectic_sessions.updated_at`, and the
+        auto-resolve sweeper selects on `updated_at < now() - threshold`. Recording
+        every retry let an agent hold a blocked session `active` indefinitely — no
+        resolution, no failure, no facilitation. So retries must not reach the
+        transcript.
+        """
         s = _session_at_synthesis()
         s.submit_synthesis(_synthesis(REVIEWER, agrees=False))
+
+        first = s.submit_synthesis(_synthesis(PAUSED, agrees=True, ts="2026-08-09T00:04:00Z"))
+        assert first["success"] is True, "the first attempt IS recorded (audit signal)"
+        assert first["blocked"] == "reviewer_objection_stands"
+        recorded = len(s.transcript)
+
         for i in range(3):
             r = s.submit_synthesis(
-                _synthesis(PAUSED, agrees=True, ts=f"2026-08-09T00:0{4 + i}:00Z")
+                _synthesis(PAUSED, agrees=True, ts=f"2026-08-09T00:0{5 + i}:00Z")
             )
-            assert r["converged"] is False
+            assert r["success"] is False, "retries are refused outright"
+            assert r["blocked"] == "reviewer_objection_stands"
+        assert len(s.transcript) == recorded, "no retry may be persisted"
+        assert s.phase != DialecticPhase.RESOLVED
+
+    def test_reassigning_the_reviewer_cannot_erase_a_standing_objection(self):
+        """`_apply_reviewer_reassignment` repoints reviewer_agent_id and clears the
+        facilitation flag. A guard keyed on the CURRENT reviewer id would orphan the
+        previous reviewer's rejection and self-clear on the next call.
+        """
+        s = _session_at_synthesis()
+        s.submit_synthesis(_synthesis(REVIEWER, agrees=False))
+        assert s._reviewer_objection_stands() is True
+
+        s.reviewer_agent_id = "reviewer-2"      # what reassignment does
+        s.awaiting_facilitation = False
+        assert s._reviewer_objection_stands() is True, "reassignment must not disarm the guard"
+
+        result = s.submit_synthesis(_synthesis(PAUSED, agrees=True, ts="2026-08-09T00:05:00Z"))
+        assert result["blocked"] == "reviewer_objection_stands"
         assert s.phase != DialecticPhase.RESOLVED
 
 
@@ -168,17 +201,18 @@ class TestLegitimateResolutionStillWorks:
         assert result.get("blocked") is None
 
 
-class TestSelfReviewExemptionIsExplicit:
+class TestSelfReviewIsNotExempt:
     """reviewer_mode='self' sets reviewer_agent_id == paused_agent_id.
 
-    The guard's premise is "the interested party may not override the check". In
-    self-review there IS no independent check, so the premise does not hold and the
-    guard is exempted — deliberately, and pinned here. Blocking instead would strand
-    every self-review session that opened with a rejection, since no independent
-    party exists to unblock it.
+    An earlier revision EXEMPTED self-review, reasoning that with no independent check
+    there is nothing to override, and that blocking would strand self-review sessions
+    that opened with a rejection. The record refutes the premise: 17 self-review
+    verdicts across 10 sessions, ALL agrees=True, not one self-rejection in the entire
+    history, and none at all since 2026-06-28. The exemption never fired, and its only
+    live effect was to let a self-reviewer overturn its own rejection.
 
-    Self-attestation is already excluded from fleet-global calibration
-    (mcp_handlers/dialectic/calibration.py), which is where the damage would be.
+    So there is no exemption. A self-reviewer that records a rejection cannot then
+    clear itself.
     """
 
     def _self_review_session(self) -> DialecticSession:
@@ -203,12 +237,19 @@ class TestSelfReviewExemptionIsExplicit:
         )
         return s
 
-    def test_self_review_reject_then_approve_still_resolves(self):
+    def test_self_reviewer_cannot_overturn_its_own_rejection(self):
         s = self._self_review_session()
         s.submit_synthesis(_synthesis(PAUSED, agrees=False))
         result = s.submit_synthesis(_synthesis(PAUSED, agrees=True, ts="2026-08-09T00:03:00Z"))
+        assert result["blocked"] == "reviewer_objection_stands"
+        assert result["converged"] is False
+        assert s.phase != DialecticPhase.RESOLVED
+
+    def test_self_review_with_no_prior_rejection_still_resolves(self):
+        """The guard fires on a recorded rejection, not on self-review per se."""
+        s = self._self_review_session()
+        result = s.submit_synthesis(_synthesis(PAUSED, agrees=True))
         assert result["converged"] is True
-        assert result.get("blocked") is None
         assert s.phase == DialecticPhase.RESOLVED
 
     def test_the_scan_is_not_fooled_by_the_message_under_evaluation(self):
