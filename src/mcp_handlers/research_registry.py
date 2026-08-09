@@ -21,6 +21,7 @@ from src.research_registry import (
 
 
 _READ_ACTIONS = {"list", "query", "get", "stats", "export"}
+RESEARCH_REGISTRY_ACTIONS = frozenset({*_READ_ACTIONS, "record"})
 _RECORD_FIELDS = {
     "run_id",
     "title",
@@ -72,9 +73,9 @@ def _record_payload(arguments: Dict[str, Any]) -> dict[str, Any]:
     pre_onboard_actions=_READ_ACTIONS,
     default_action="list",
     # Hand-rolled router (not action_router), so the vocabulary is declared
-    # rather than derived. Same set the unknown-action recovery hint lists,
-    # so a new action cannot be added without updating both.
-    known_actions={*_READ_ACTIONS, "record"},
+    # rather than derived. The same declaration feeds the unknown-action
+    # recovery hint and registry metadata.
+    known_actions=RESEARCH_REGISTRY_ACTIONS,
 )
 async def handle_research_registry(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Register and query agent-network research runs."""
@@ -130,7 +131,7 @@ async def handle_research_registry(arguments: Dict[str, Any]) -> Sequence[TextCo
         return [error_response(
             f"Unknown action: {action}",
             recovery={
-                "valid_actions": sorted([*_READ_ACTIONS, "record"]),
+                "valid_actions": sorted(RESEARCH_REGISTRY_ACTIONS),
                 "examples": [
                     "research_registry(action='query', research_area='science-of-agent-networks')",
                     "research_registry(action='record', run={...})",

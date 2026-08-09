@@ -4,10 +4,12 @@ description: >
   Use when setting up or operating the UNITARES Discord bridge — a standalone bot that
   surfaces governance events, agent presence, Lumen's state, and autonomous governance
   actions as a living Discord server.
-last_verified: "2026-07-28"
+last_verified: "2026-08-02"
 freshness_days: 14
 source_files:
   - unitares-discord-bridge/src/bridge/bot.py
+  - unitares-discord-bridge/src/bridge/acks.py
+  - unitares-discord-bridge/src/bridge/config.py
 ---
 
 # Discord Bridge
@@ -29,6 +31,7 @@ The bridge operates across several visible layers:
 7. **Class routing / violations**: WebSocket governance events routed to class-specific channels when enabled
 8. **Phase-B lease transitions**: Optional operator-managed channel for lease-plane transition events
 9. **Lumen digest**: Optional weekly Q&A / connection-signal digest
+10. **Acknowledgements**: Configured Discord reactions emit `bridge.ack` receipts so governance can distinguish handled critical deliveries from unacknowledged ones
 
 ## Autonomous Governance
 
@@ -65,6 +68,13 @@ Required environment variables:
 | `GOVERNANCE_MCP_URL` | Governance MCP endpoint (default: `http://localhost:8767/mcp/`) |
 | `ANIMA_MCP_URL` | Anima MCP endpoint (default: `http://<pi-tailscale-ip>:8766/mcp/` — get IP from `tailscale status`) |
 
+Optional acknowledgement configuration:
+
+| Variable | Description |
+|----------|-------------|
+| `BRIDGE_ACK_EMOJI` | Comma-separated reactions that count as acknowledgement (default: `✅`) |
+| `BRIDGE_ACK_HASH_SALT` | Optional salt for pseudonymous operator hashes; recommended because Discord user IDs are enumerable |
+
 ## Running
 
 ```bash
@@ -82,9 +92,10 @@ The bot will create missing channels on first startup and begin polling both MCP
 Key design decisions:
 
 - **Polling plus event subscription**: The bridge polls MCP/REST surfaces for state and also subscribes to the governance WebSocket for typed events not present in `/api/events`.
-- **Read-heavy, write-light**: The bridge reads governance state frequently but writes back rarely (only autonomous actions).
+- **Read-heavy, write-light**: The bridge reads governance state frequently and writes back only for governed identity, autonomous actions, and human-triggered acknowledgement receipts.
 - **SQLite cursor-based delivery**: Tracks what has been sent to Discord to avoid duplicate messages. Uses cursors per channel per event type.
 - **Rate-limited message queue**: Messages are queued and sent with 150ms spacing to respect Discord rate limits.
 - **Stateless restarts**: The bridge can restart cleanly — cursor tracking means it picks up where it left off without replaying history. On a failed event fetch (`fetch_events` returns `None` on error), the poller never resets its cursor — it waits for the next poll, so governance stalls cannot trigger a feed replay to Discord.
 - **Liveness heartbeat + external watchdog**: The event loop rewrites a heartbeat file (`BRIDGE_HEARTBEAT_PATH`, default `~/.unitares/discord-bridge.heartbeat`) each poll iteration. The `com.unitares.bridge-liveness-watchdog` LaunchAgent (unitares repo, `scripts/ops/`) uses it to detect a wedged loop — process alive but loop hung — and restarts the bridge, which launchd `KeepAlive` alone cannot catch.
+- **Reaction acknowledgements**: A raw reaction listener accepts only configured acknowledgement emoji, ignores the bot's own reactions, joins receipts to deliveries by `discord_message_id`, and sends a hashed operator ID. Receipt delivery is best-effort and never takes down the Discord event loop.
 - **Governed identity**: On startup the bridge best-effort mints its own UNITARES identity so polling traffic can be attributed when governance is available.

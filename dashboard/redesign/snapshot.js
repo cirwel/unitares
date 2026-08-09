@@ -267,4 +267,30 @@ window.SNAPSHOT = {
         message: "lease-plane p95 breach sustained over two windows" },
     ],
   },
+
+  // /v1/enforcement/divergence — produced-vs-delivered honesty meter
+  // (real 90d values captured 2026-08-07; advisory posture ratified 2026-08-06).
+  enforcementDivergence: {
+    window_days: 90,
+    posture: "advisory",
+    produced_pauses: 217,
+    gap_suppressed: 195,
+    delivered_pauses: 20,
+    last_delivered_at: "2026-06-28T23:25:49Z",
+    weekly: [
+      { week: "05-11", produced: 12, delivered: 3 },
+      { week: "05-18", produced: 18, delivered: 4 },
+      { week: "05-25", produced: 21, delivered: 5 },
+      { week: "06-01", produced: 16, delivered: 2 },
+      { week: "06-08", produced: 19, delivered: 3 },
+      { week: "06-15", produced: 24, delivered: 2 },
+      { week: "06-22", produced: 28, delivered: 1 },
+      { week: "06-29", produced: 26, delivered: 0 },
+      { week: "07-06", produced: 22, delivered: 0 },
+      { week: "07-13", produced: 14, delivered: 0 },
+      { week: "07-20", produced: 9, delivered: 0 },
+      { week: "07-27", produced: 8, delivered: 0 },
+    ],
+    note: "A produced pause verdict is not a delivered enforcement action.",
+  },
 };

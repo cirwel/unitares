@@ -52,7 +52,20 @@ def _flag_enabled(name: str, default: bool = False) -> bool:
 
 
 def reranker_enabled() -> bool:
-    """True when the reranker should run. Controlled by UNITARES_ENABLE_RERANKER."""
+    """True when the reranker should run. Controlled by UNITARES_ENABLE_RERANKER.
+
+    The cross-encoder itself is content-scoring and carries no usage feedback,
+    so enabling it as shipped does not change the KG's selection dynamics.
+
+    Training or tuning one on `knowledge_read` logs would. Retrieval ranking
+    today has no usage term at all, which is what stops the KG from selecting
+    on its own past output; a read-log-trained reranker makes a discovery
+    easier to retrieve because it was retrieved before. Treat that as a
+    decision about propagation rights rather than a retrieval improvement — see
+    `graph_expansion_enabled()` in `src/retrieval.py` for the same loop by a
+    shorter route, and `src/storage/kg_write_budget.py` for the write-side
+    constraint.
+    """
     return _flag_enabled("UNITARES_ENABLE_RERANKER", default=False)
 
 

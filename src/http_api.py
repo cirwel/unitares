@@ -603,13 +603,13 @@ async def _execute_http_tool_in_context(
 
     signals = _build_http_session_signals(request)
     signals_token = set_session_signals(signals)
-    x_agent_id = request.headers.get("x-agent-id") or request.headers.get(
-        "X-Agent-Id"
-    )
+    # Start the identity context unbound. ``X-Agent-Id`` remains available in
+    # SessionSignals as a compatibility/recovery hint, but it is caller input —
+    # never a binding. Only _resolve_http_bound_agent may stamp the context via
+    # update_context_agent_id after it verifies a supported proof path (#1431).
     context_token = set_session_context(
         session_key=client_session_id,
         client_session_id=client_session_id,
-        agent_id=x_agent_id or arguments.get("agent_id"),
     )
     try:
         await _resolve_http_bound_agent(tool_name, arguments, signals)
@@ -1141,7 +1141,10 @@ async def http_health(request):
         },
         "identity": {
             "header": "X-Agent-Id",
-            "description": "CLI/GPT identity - pass your agent name to maintain identity across REST requests"
+            "description": (
+                "Compatibility hint only; never trusted as a REST identity binding. "
+                "Use X-Session-ID or the client_session_id returned by onboard."
+            )
         },
         "note": "Use /mcp for MCP clients (Streamable HTTP)."
     })
@@ -1741,6 +1744,86 @@ _LIFECYCLE_EVENT_TYPES = (
     "circuit_breaker_trip",
     "circuit_breaker_reset",
 )
+
+
+async def http_enforcement_divergence(request):
+    """GET /v1/enforcement/divergence?days=90 — produced-vs-delivered honesty meter.
+
+    A produced pause VERDICT is not a delivered enforcement ACTION: under the
+    deployed advisory posture (ratified 2026-08-06, proprioception contract
+    "Deployed posture"), gap-suppression downgrades pauses to proceed at any
+    >150s inter-check-in gap. Operator surfaces that read verdict counts as
+    enforcement counts are mislabeled against that posture. This endpoint
+    reports both meters side by side — produced pauses (auto_attest
+    decision='pause'), how many gap-suppressed, delivered pauses
+    (lifecycle_paused), and the last delivered timestamp — so the divergence
+    is visible by query, not memory. Read-only.
+    """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not _check_http_auth(request, http_api_token=http_api_token):
+        return _http_unauthorized()
+    try:
+        try:
+            days = int(request.query_params.get("days", "90"))
+        except (TypeError, ValueError):
+            days = 90
+        days = max(1, min(days, 365))
+        from src.db import get_db
+        db = get_db()
+        async with db.acquire() as conn:
+            totals = await conn.fetchrow(
+                """
+                SELECT
+                  count(*) FILTER (WHERE event_type = 'auto_attest'
+                                     AND payload->>'decision' = 'pause') AS produced,
+                  count(*) FILTER (WHERE event_type = 'auto_attest'
+                                     AND payload->>'decision' = 'pause'
+                                     AND payload->>'gap_suppressed' = 'true') AS gap_suppressed,
+                  count(*) FILTER (WHERE event_type = 'lifecycle_paused') AS delivered
+                FROM audit.events
+                WHERE ts > now() - make_interval(days => $1)
+                  AND event_type IN ('auto_attest', 'lifecycle_paused')
+                """,
+                days,
+            )
+            last_row = await conn.fetchrow(
+                "SELECT max(ts) AS last_delivered FROM audit.events "
+                "WHERE event_type = 'lifecycle_paused'"
+            )
+            weekly = await conn.fetch(
+                """
+                SELECT to_char(date_trunc('week', ts), 'MM-DD') AS week,
+                       count(*) FILTER (WHERE event_type = 'auto_attest'
+                                          AND payload->>'decision' = 'pause') AS produced,
+                       count(*) FILTER (WHERE event_type = 'lifecycle_paused') AS delivered
+                FROM audit.events
+                WHERE ts > now() - make_interval(days => $1)
+                  AND event_type IN ('auto_attest', 'lifecycle_paused')
+                GROUP BY date_trunc('week', ts)
+                ORDER BY date_trunc('week', ts)
+                """,
+                days,
+            )
+        last_delivered = last_row["last_delivered"] if last_row else None
+        return JSONResponse({
+            "window_days": days,
+            "posture": "advisory",
+            "produced_pauses": int(totals["produced"]),
+            "gap_suppressed": int(totals["gap_suppressed"]),
+            "delivered_pauses": int(totals["delivered"]),
+            "last_delivered_at": last_delivered.isoformat() if last_delivered else None,
+            "weekly": [
+                {"week": r["week"], "produced": int(r["produced"]),
+                 "delivered": int(r["delivered"])}
+                for r in weekly
+            ],
+            "note": ("A produced pause verdict is not a delivered enforcement "
+                     "action; delivered counts may include synthetic test "
+                     "fixtures (see the proprioception contract)."),
+        })
+    except Exception as e:
+        logger.error(f"enforcement divergence query failed: {e}")
+        return JSONResponse({"error": "query failed"}, status_code=500)
 
 
 async def http_lifecycle_recent(request):
@@ -2833,12 +2916,13 @@ async def http_substrate_observe(request):
 
 
 async def http_runtime_observe(request):
-    """POST /v1/runtime/observe — identity-bound host runtime evidence.
+    """POST /v1/runtime/observe — identity-bound host evidence.
 
     Unlike ``/v1/substrate/observe`` (the identity-free dark-session floor),
     this route requires an active ``client_session_id`` whose durable binding
-    matches ``agent_uuid``.  Accepted rows live in ``audit.events`` and never
-    create an EISV/state update.
+    matches ``agent_uuid``. The ``runtime`` path is retained for compatibility;
+    accepted rows live in ``audit.events`` and never prove continuous agent
+    runtime or create an EISV/state update.
     """
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
     if not _check_http_auth(request, http_api_token=http_api_token):
@@ -2870,12 +2954,12 @@ async def http_runtime_observe(request):
 
 
 async def http_runtime_activity(request):
-    """GET /v1/runtime/activity — operational and reflective clocks, separated.
+    """GET /v1/runtime/activity — host and state-update clocks, separated.
 
-    The operational side is derived only from identity-bound runtime
-    observations.  The reflective side includes only ``agent_report`` state
-    rows; substrate interpretations and legacy unclassified rows remain
-    separately labeled in the response.
+    The host side is derived only from identity-bound hook observations. The
+    state side distinguishes ``agent_report`` rows from automatic substrate
+    interpretations, synthetic initialization, and legacy unclassified rows.
+    A hook-parent heartbeat never marks an agent or slot as active.
     """
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
     if not _check_http_auth(request, http_api_token=http_api_token):
@@ -4402,6 +4486,7 @@ def register_http_routes(
     app.routes.append(Route("/v1/eisv/latest", http_eisv_latest, methods=["GET"]))
     app.routes.append(Route("/v1/eisv/recent", http_eisv_recent, methods=["GET"]))
     app.routes.append(Route("/v1/lifecycle/recent", http_lifecycle_recent, methods=["GET"]))
+    app.routes.append(Route("/v1/enforcement/divergence", http_enforcement_divergence, methods=["GET"]))
     app.routes.append(Route("/api/events", http_events, methods=["GET"]))
     app.routes.append(Route("/api/findings", http_record_finding, methods=["POST"]))
     app.routes.append(Route("/v1/bridge/events", http_record_bridge_event, methods=["POST"]))

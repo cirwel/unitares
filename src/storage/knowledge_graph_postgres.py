@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from src.knowledge_graph import DiscoveryNode, ResponseTo
 from src.logging_utils import get_logger
+from src.storage.kg_write_budget import DEFAULT_STORES_PER_HOUR, check_store_budget
 
 logger = get_logger(__name__)
 
@@ -37,6 +38,7 @@ class KnowledgeGraphPostgres:
     def __init__(self):
         self._db = None
         self._initialized = False
+        self.rate_limit_stores_per_hour = DEFAULT_STORES_PER_HOUR  # Max stores per agent per hour
 
     async def _get_db(self):
         """Get or initialize the postgres backend."""
@@ -54,8 +56,20 @@ class KnowledgeGraphPostgres:
         logger.info("PostgreSQL knowledge graph backend initialized")
 
     async def add_discovery(self, discovery: DiscoveryNode) -> None:
-        """Add a discovery to the knowledge graph."""
+        """Add a discovery to the knowledge graph.
+
+        Charges the agent's hourly store budget first. Unlike the AGE backend,
+        the write here is not wrapped in a transaction, so a failure between
+        the check and ``kg_add_discovery`` leaks one budget unit rather than
+        rolling it back. Erring toward over-counting is the safe direction for
+        an anti-poisoning limit.
+        """
         db = await self._get_db()
+        await check_store_budget(
+            discovery.agent_id,
+            db=db,
+            limit=self.rate_limit_stores_per_hour,
+        )
         await db.kg_add_discovery(discovery)
 
     async def query(
@@ -261,6 +275,10 @@ class KnowledgeGraphPostgres:
         by_type = {row['type']: row['count'] for row in by_type_rows}
         by_status = {row['status']: row['count'] for row in by_status_rows}
         by_provenance_source = {row['source']: row['count'] for row in prov_rows}
+        tag_stats = await db.kg_tag_stats(
+            including_cold=including_cold,
+            epoch=epoch if epoch_scope == "current" else None,
+        )
         explicit_sources = {
             "explicit_store", "explicit_answer", "explicit_leave_note",
         }
@@ -315,9 +333,12 @@ class KnowledgeGraphPostgres:
             "by_agent_implicit": by_agent_implicit,
             "by_type": by_type,
             "by_status": by_status,
+            "by_tag": tag_stats["by_tag"],
             "by_provenance_source": by_provenance_source,
             "embedding_coverage": embedding_coverage,
             "total_agents": len(by_agent),
+            "total_tags": tag_stats["total_tags"],
+            "total_tag_assignments": tag_stats["total_tag_assignments"],
             "epoch": epoch,
             "scope": {
                 "kind": "raw_status_aggregate",

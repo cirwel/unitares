@@ -1193,7 +1193,9 @@ class KnowledgeGraphAGE:
         """Get graph statistics.
 
         Note: AGE doesn't support GROUP BY or multi-column returns well,
-        so we use single-column collect() queries and aggregate in Python.
+        so discovery buckets use single-column collect() queries and aggregate
+        in Python. Tag aggregates come from canonical PostgreSQL rows because
+        AGE Tag/TAGGED projections can lag until a graph backfill runs.
 
         AGE vertices have no epoch property — epoch_scope is accepted for
         signature parity with the postgres backend but always behaves as
@@ -1278,51 +1280,36 @@ class KnowledgeGraphAGE:
         edges_result = await db.graph_query(cypher, {})
         total_edges = int(edges_result[0]) if edges_result and isinstance(edges_result[0], (int, float)) else 0
 
-        # Count tags (from Tag vertices)
-        cypher = "MATCH (t:Tag) RETURN count(t) as tag_count"
-        tags_result = await db.graph_query(cypher, {})
-        # Handle different result formats: direct int, dict with count, or list
-        total_tags = 0
-        if tags_result:
-            first_result = tags_result[0]
-            # Check for error dict first
-            if isinstance(first_result, dict) and "error" in first_result:
-                logger.warning(f"Tag count query failed: {first_result.get('error')}")
-                total_tags = 0
-            elif isinstance(first_result, (int, float)):
-                total_tags = int(first_result)
-            elif isinstance(first_result, dict):
-                # AGE might return {"tag_count": 1130} or {"count": 1130}
-                total_tags = int(first_result.get("tag_count") or first_result.get("count") or 0)
-            elif isinstance(first_result, list) and len(first_result) > 0:
-                # Nested list case
-                total_tags = int(first_result[0]) if isinstance(first_result[0], (int, float)) else 0
-            else:
-                logger.debug(f"Unexpected tag count result format: {type(first_result)}, value: {first_result}")
-
-        # Collect tag names for by_tag breakdown
-        cypher = "MATCH (t:Tag) RETURN collect(t.name)"
-        result = await db.graph_query(cypher, {})
-        tag_names = result[0] if result and isinstance(result[0], list) else []
-        by_tag = dict(Counter(t for t in tag_names if t))
+        # Tags are stored canonically on the SQL discovery row. AGE's Tag and
+        # TAGGED projection can be missing otherwise-retrievable rows, so it is
+        # not an authoritative counting source. The helper orders by frequency
+        # before building the dict, preserving the most-used tags when response
+        # serialization caps large dictionaries.
+        tag_stats = await db.kg_tag_stats(
+            including_cold=including_cold,
+            epoch=None,
+        )
 
         return {
             "total_discoveries": total_count,
             "by_agent": by_agent,
             "by_type": by_type,
             "by_status": by_status,
-            "by_tag": by_tag,
+            "by_tag": tag_stats["by_tag"],
             "total_edges": total_edges,
             "total_agents": len(by_agent),
-            "total_tags": total_tags,
+            "total_tags": tag_stats["total_tags"],
+            "total_tag_assignments": tag_stats["total_tag_assignments"],
             "scope": {
                 "kind": "raw_status_aggregate",
                 "epoch_scope": effective_epoch_scope,  # AGE: always "all"
                 "including_cold": including_cold,
                 "note": (
-                    "AGE backend has no epoch property — counts span all "
-                    "epochs. Compare with knowledge action=stats which uses "
-                    "lifecycle buckets."
+                    "AGE backend has no epoch property — discovery and edge "
+                    "counts span all epochs. Tag aggregates use the SQL "
+                    "source-of-truth with the same all-epoch scope because "
+                    "the AGE projection may lag. Compare with knowledge "
+                    "action=stats which uses lifecycle buckets."
                 ),
             },
         }
@@ -1392,86 +1379,18 @@ class KnowledgeGraphAGE:
             agent_id: Agent to check.
             conn: Optional DB connection to reuse (e.g. from a transaction).
 
-        Uses Redis for fast rate limiting, falls back to PostgreSQL.
+        Delegates to the backend-independent budget in
+        ``src.storage.kg_write_budget`` so every backend enforces the same
+        limit; see that module for why the check does not live here.
         """
-        # Try Redis first (fast path)
-        try:
-            from src.cache import get_rate_limiter
-            limiter = get_rate_limiter()
-            window_seconds = 3600  # 1 hour
-            
-            # Check rate limit
-            if not await limiter.check(
-                agent_id,
-                limit=self.rate_limit_stores_per_hour,
-                window=window_seconds,
-                operation="kg_store",
-            ):
-                # Get current count for error message
-                count = await limiter.get_count(agent_id, window_seconds, operation="kg_store")
-                raise ValueError(
-                    f"Rate limit exceeded: Agent '{agent_id}' has stored {count} "
-                    f"discoveries in the last hour (limit: {self.rate_limit_stores_per_hour}/hour). "
-                    f"This prevents knowledge graph poisoning flood attacks. "
-                    f"Please wait before storing more discoveries."
-                )
-            
-            # Record this operation
-            await limiter.record(agent_id, window_seconds, operation="kg_store")
-            return  # Success - Redis handled it
-        except ValueError:
-            # Rate limit exceeded - re-raise
-            raise
-        except Exception as e:
-            # Redis failed - fall back to PostgreSQL
-            logger.debug(f"Redis rate limiting failed, falling back to PostgreSQL: {e}")
-        
-        # Fallback: Use PostgreSQL for persistent rate limit tracking
-        # Uses atomic check-and-insert to prevent race conditions
-        db = await self._get_db()
+        from src.storage.kg_write_budget import check_store_budget
 
-        async def _do_rate_limit_check(c):
-            from datetime import datetime, timedelta
-            one_hour_ago = datetime.now() - timedelta(hours=1)
-
-            inserted = await c.fetchval(
-                """
-                INSERT INTO audit.rate_limits (agent_id, timestamp)
-                SELECT $1, $2
-                WHERE (
-                    SELECT COUNT(*) FROM audit.rate_limits
-                    WHERE agent_id = $1 AND timestamp > $3
-                ) < $4
-                RETURNING agent_id
-                """,
-                agent_id,
-                datetime.now(),
-                one_hour_ago,
-                self.rate_limit_stores_per_hour,
-            )
-
-            if inserted is None:
-                count = await c.fetchval(
-                    "SELECT COUNT(*) FROM audit.rate_limits WHERE agent_id = $1 AND timestamp > $2",
-                    agent_id, one_hour_ago,
-                )
-                raise ValueError(
-                    f"Rate limit exceeded: Agent '{agent_id}' has stored {count or 0} "
-                    f"discoveries in the last hour (limit: {self.rate_limit_stores_per_hour}/hour). "
-                    f"This prevents knowledge graph poisoning flood attacks. "
-                    f"Please wait before storing more discoveries."
-                )
-
-            await c.execute(
-                "DELETE FROM audit.rate_limits WHERE timestamp < $1",
-                one_hour_ago,
-            )
-
-        if conn is not None:
-            await _do_rate_limit_check(conn)
-        else:
-            async with db.acquire() as pooled_conn:
-                await _do_rate_limit_check(pooled_conn)
+        await check_store_budget(
+            agent_id,
+            db=await self._get_db(),
+            limit=self.rate_limit_stores_per_hour,
+            conn=conn,
+        )
 
     async def load(self) -> None:
         """

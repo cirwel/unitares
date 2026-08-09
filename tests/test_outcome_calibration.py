@@ -1095,8 +1095,19 @@ class TestVerificationSourceRoundTrip:
         assert kwargs.get('verification_source') == 'agent_reported_tool_result'
 
     @pytest.mark.asyncio
-    async def test_server_observation_passed_as_column_arg(self):
-        """Explicit verification_source='server_observation' is passed as column arg."""
+    async def test_public_caller_cannot_claim_server_observation(self):
+        """A caller-claimed privileged provenance is downgraded on the public tool.
+
+        Changed 2026-08-05: this previously asserted that
+        verification_source='server_observation' from a public `outcome_event`
+        call round-tripped to the column. That was the vulnerability -- the
+        value decides corroboration grade (outcome_corroboration short-circuits
+        on the string), so any agent could self-certify. Server-controlled
+        emitters are unaffected: Phase-5 writes via db.record_outcome_event
+        directly (updates/phases.py) and the operator-gated REST harness and
+        dialectic resolution use _record_outcome_event_inline -- none of them
+        pass through this decorated entry point.
+        """
         mock_db = self._make_mock_db("oe-vs-server")
 
         with patch('src.db.get_db', return_value=mock_db), \
@@ -1117,4 +1128,4 @@ class TestVerificationSourceRoundTrip:
         assert parsed.get('outcome_id') == 'oe-vs-server'
 
         _, kwargs = mock_db.record_outcome_event.call_args
-        assert kwargs.get('verification_source') == 'server_observation'
+        assert kwargs.get('verification_source') == 'agent_reported_tool_result'

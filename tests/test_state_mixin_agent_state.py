@@ -16,7 +16,6 @@ def _state_row(**overrides):
         "recorded_at": datetime.now(timezone.utc),
         "entropy": 0.2,
         "integrity": 0.8,
-        "stability_index": 0.0,
         "volatility": 0.1,
         "regime": "nominal",
         "coherence": 0.7,
@@ -91,8 +90,7 @@ async def test_reconstruct_eisv_series_column_to_dimension_mapping():
                 return [
                     _state_row(
                         entropy=0.2, integrity=0.8, volatility=0.1,
-                        state_json={"E": 0.6}, stability_index=0.0,
-                    ),
+                        state_json={"E": 0.6}, ),
                 ]
 
             conn.fetch = _fetch

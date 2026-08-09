@@ -7,6 +7,41 @@ contract drifting from actual behavior because nothing tests the description.
 import pytest
 
 
+def _assert_eisv_contract(text: str) -> None:
+    assert "E=Energy [0,1]" in text
+    assert "I=Information Integrity [0,1]" in text
+    assert "S=Entropy [0,1]" in text
+    assert "V=Valence [-1,1]" in text
+    assert "positive=motion outruns integrity" in text
+    assert "negative=integrity outruns motion" in text
+
+
+def test_short_mcp_descriptions_teach_eisv_to_schema_only_clients():
+    from src.tool_schemas import get_tool_definitions
+
+    descriptions = {
+        tool.name: tool.description for tool in get_tool_definitions(verbosity="short")
+    }
+    for tool_name in (
+        "process_agent_update",
+        "get_governance_metrics",
+        "simulate_update",
+        "outcome_event",
+        "observe",
+    ):
+        _assert_eisv_contract(descriptions[tool_name])
+
+
+def test_loaded_process_update_description_never_teaches_v_as_void():
+    from src.tool_descriptions import TOOL_DESCRIPTIONS
+
+    description = TOOL_DESCRIPTIONS["process_agent_update"]
+    _assert_eisv_contract(description)
+    assert "Void (V)" not in description
+    assert '"V": "Void"' not in description
+    assert '"V": "Valence"' in description
+
+
 def test_get_server_info_schema_tool_is_dispatch_registered():
     """A tool advertised by MCP schemas must also resolve at dispatch time."""
     from src.mcp_handlers import TOOL_HANDLERS
@@ -98,6 +133,27 @@ async def test_workflow_alias_describe_resolves_to_canonical_schema():
     assert "complexity" in params
     assert "confidence" in params
     assert "sync_state(" in json.dumps(data["common_patterns"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_name",
+    ["sync_state", "check_working_state", "record_result"],
+)
+async def test_workflow_alias_descriptions_carry_eisv_contract(tool_name):
+    from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
+
+    result = await handle_describe_tool({"tool_name": tool_name, "lite": False})
+    _assert_eisv_contract(result[0].text)
+
+
+def test_registered_workflow_alias_notes_carry_eisv_contract():
+    from src.mcp_handlers.tool_stability import resolve_tool_alias
+
+    for tool_name in ("sync_state", "check_working_state", "record_result"):
+        _, alias = resolve_tool_alias(tool_name)
+        assert alias is not None
+        _assert_eisv_contract(alias.migration_note or "")
 
 
 @pytest.mark.asyncio
