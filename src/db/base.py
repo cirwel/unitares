@@ -54,7 +54,12 @@ class AgentStateRecord:
         integrity        integrity       I  (Information Integrity)
         entropy          entropy         S  (Entropy)
         volatility       void            V  (Void)
-        stability_index  stability_index DEAD — was 1.0 − S, retired in 20684dd1
+
+    The `stability_index` column was retired in 20684dd1 (2026-03-26) and is
+    deliberately absent from this record. Migration 058 made it nullable and
+    nulled the post-retirement sentinels; nothing writes or reads it. Do not
+    reintroduce the field — a float here reads as a measurement, and there
+    has not been one since March.
     """
     state_id: int
     identity_id: int
@@ -63,7 +68,6 @@ class AgentStateRecord:
     energy: float = 0.5
     entropy: float = 0.5
     integrity: float = 0.5
-    stability_index: float = 0.5
     void: float = 0.1
     regime: str = "nominal"
     coherence: float = 1.0
@@ -312,7 +316,6 @@ class DatabaseBackend(ABC):
         identity_id: int,
         entropy: float,
         integrity: float,
-        stability_index: float,
         void: float,
         regime: str,
         coherence: float,

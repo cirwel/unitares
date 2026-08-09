@@ -59,9 +59,7 @@ def _make_state(
         agent_id=agent_id,
         recorded_at=datetime.now(timezone.utc),
         entropy=0.15,
-        integrity=0.8,
-        stability_index=0.85,
-        void=-0.01,
+        integrity=0.8,void=-0.01,
         regime="nominal",
         coherence=0.5,
         state_json=state_json if state_json is not None else {},
@@ -769,7 +767,9 @@ class TestRecordAgentState:
         assert call_kwargs["identity_id"] == 42
         assert call_kwargs["entropy"] == 0.15
         assert call_kwargs["integrity"] == 0.8
-        assert call_kwargs["stability_index"] == 0.0  # Dead field, no longer computed
+        # Retired column is not written at all (migration 058) — a hardcoded
+        # float here would land in the DB looking like a measurement.
+        assert "stability_index" not in call_kwargs
         assert call_kwargs["void"] == -0.01
         assert call_kwargs["regime"] == "EXPLORATION"
         assert call_kwargs["coherence"] == 0.5
@@ -850,7 +850,7 @@ class TestRecordAgentState:
             )
             tagged = dict(db.record_agent_state.call_args.kwargs)
 
-        for field in ("entropy", "integrity", "stability_index", "void",
+        for field in ("entropy", "integrity", "void",
                       "regime", "coherence", "risk_score", "epistemic_class"):
             assert base[field] == tagged[field], f"{field} perturbed by tagging"
         base_sj = dict(base["state_json"])
@@ -980,8 +980,17 @@ class TestRecordAgentState:
         assert "verdict" not in state_json
 
     @pytest.mark.asyncio
-    async def test_stability_index_always_zero(self):
-        """stability_index is a dead field — always 0.0 regardless of S."""
+    async def test_stability_index_never_written(self):
+        """The retired stability_index column is never written.
+
+        Regression guard for migration 058. The column was retired in
+        20684dd1 but the writer kept sending a hardcoded 0.0, so every row
+        since April carried a float that reads as a measurement and was
+        never one — `SELECT avg(stability_index)` answered 0.0 with sd 0.0
+        instead of admitting it had no data. Omitting the column lets it
+        land as NULL. Reintroducing any value here, including 0.0,
+        re-creates the defect.
+        """
         identity = _make_identity()
         db = _mock_db(get_identity=identity, record_agent_state=1)
         with patch("src.agent_storage.get_db", return_value=db):
@@ -992,8 +1001,7 @@ class TestRecordAgentState:
                 regime="nominal", coherence=1.0,
             )
 
-        call_kwargs = db.record_agent_state.call_args.kwargs
-        assert call_kwargs["stability_index"] == 0.0
+        assert "stability_index" not in db.record_agent_state.call_args.kwargs
 
 
 # ---------------------------------------------------------------------------

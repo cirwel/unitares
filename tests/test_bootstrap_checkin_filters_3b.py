@@ -62,8 +62,7 @@ async def _seed_identity(db) -> tuple[str, int]:
 async def _record_measured(db, identity_id, *, entropy=0.4, integrity=0.6):
     return await db.record_agent_state(
         identity_id=identity_id,
-        entropy=entropy, integrity=integrity, stability_index=0.5,
-        void=0.0, regime="nominal", coherence=1.0, state_json={},
+        entropy=entropy, integrity=integrity, void=0.0, regime="nominal", coherence=1.0, state_json={},
     )
 
 

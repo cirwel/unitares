@@ -151,7 +151,14 @@ CREATE TABLE IF NOT EXISTS core.agent_state (
     -- EISV metrics (denormalized for fast queries)
     entropy             REAL NOT NULL DEFAULT 0.5,
     integrity           REAL NOT NULL DEFAULT 0.5,
-    stability_index     REAL NOT NULL DEFAULT 0.5,
+    -- RETIRED 2026-03-26 (commit 20684dd1); was 1.0 - S. Nullable so a
+    -- dead field can read as UNKNOWN rather than as a measured value.
+    -- See migration 058. Writers already OMIT the column entirely (#1525) —
+    -- omission is order-safe in both directions: pre-058 the old DEFAULT 0.5
+    -- absorbs the insert, post-058 omitted lands as NULL. Do NOT "finish"
+    -- this by writing explicit NULLs — that breaks inserts wherever the
+    -- manual migration lags the code deploy.
+    stability_index     REAL,
     volatility          REAL NOT NULL DEFAULT 0.1,
 
     -- Derived

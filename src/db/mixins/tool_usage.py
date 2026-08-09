@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 
@@ -198,15 +199,60 @@ class ToolUsageMixin:
         limit: int = 20,
         since_hours: float = 24.0,
     ) -> List[Dict[str, Any]]:
-        """Fetch recent outcome events for an agent."""
+        """Fetch recent outcome events for an agent.
+
+        Provenance-filtered (Invariant 4: "a signal derived from the loop cannot
+        anchor the loop", see grounding/outcome_anchors.py). This feeds
+        behavioral_sensor._compute_E / _compute_I at 20% weight each via
+        mcp_handlers/updates/phases.py, which is the live verdict path -- so
+        without the filter the loop's own ``server_observation`` rows (its
+        trajectory self-validations) were scoring the agent they were derived
+        from.
+
+        **Exogenous only.** The filter admits ``external_signal`` and excludes
+        ``agent_reported_tool_result``, matching ``is_exogenous_anchor``'s
+        default. Admitting the soft tier here would not close the loop, only
+        move it: this consumer ignores ``evidence_weight`` and the sensor counts
+        every qualifying row equally, so three self-reported successes would
+        still move live E/I at 20% weight. Self-attestation must not be an
+        input to the verdict that judges the attester.
+
+        Provenance-only: no joinable-snapshot clause. That clause is a
+        residual-anchor precondition (roadmap §6.3) -- a behavioural read has no
+        residual to join, so requiring it would discard genuine outcomes.
+
+        ``verification_source`` is returned so a future weighted implementation
+        (contribution scaled by corroboration grade rather than filtered) can be
+        built without another schema archaeology pass.
+
+        Default OFF. Set ``UNITARES_OUTCOME_PROVENANCE_FILTER=on`` to enable;
+        the rollout plan is merge-disabled-then-flip, so the default must not
+        change behaviour at deploy.
+        """
+        from src.grounding.outcome_anchors import EXOGENOUS_OUTCOMES_SQL
+
+        provenance_filter = (
+            os.environ.get("UNITARES_OUTCOME_PROVENANCE_FILTER", "off")
+            .strip().lower() in {"on", "1", "true", "yes"}
+        )
+        # Flag OFF must be byte-identical to the legacy query — including the
+        # column list: selecting verification_source unconditionally would make
+        # every call raise (and the except below silently return []) on a DB
+        # where migration 039 has not run, which the write path in this same
+        # file explicitly supports as a live state.
+        predicate = f"AND {EXOGENOUS_OUTCOMES_SQL}" if provenance_filter else ""
+        columns = "outcome_type, is_bad, outcome_score, ts"
+        if provenance_filter:
+            columns += ", verification_source"
         async with self.acquire() as conn:
             try:
                 rows = await conn.fetch(
-                    """
-                    SELECT outcome_type, is_bad, outcome_score, ts
+                    f"""
+                    SELECT {columns}
                     FROM audit.outcome_events
                     WHERE agent_id = $1
                       AND ts >= now() - make_interval(hours => $2)
+                      {predicate}
                     ORDER BY ts DESC
                     LIMIT $3
                     """,
@@ -214,6 +260,11 @@ class ToolUsageMixin:
                 )
                 return [dict(r) for r in rows]
             except Exception:
+                logger.warning(
+                    "get_recent_outcomes query failed for %s — returning [] "
+                    "(outcome term drops out of E/I silently)",
+                    agent_id, exc_info=True,
+                )
                 return []
 
     async def get_latest_eisv_by_agent_id(self, agent_id: str) -> Optional[Dict[str, Any]]:

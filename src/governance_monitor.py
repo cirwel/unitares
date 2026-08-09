@@ -425,6 +425,12 @@ class UNITARESMonitor:
             state_data = self.state.to_dict_with_history()
             # Include behavioral EISV state for persistence
             state_data['behavioral_eisv'] = self._behavioral_state.to_dict_with_history()
+            # Which source fed the last behavioral observation (see the intake
+            # block in assess_agent_state). Persisted so a restored snapshot
+            # still says where the authoritative vector's inputs came from.
+            _obs_source = getattr(self, '_behavioral_obs_source', None)
+            if _obs_source:
+                state_data['behavioral_eisv']['obs_source'] = _obs_source
             # Persist the most recent model<->body divergence snapshot (transient
             # signal; recomputed each check-in, kept for observability/debugging).
             last_div = getattr(self, '_last_sensor_divergence', None)
@@ -1155,13 +1161,25 @@ class UNITARESMonitor:
         )
 
         # === BEHAVIORAL EISV (observation-first, no ODE) ===
-        # Extract observations from existing signals for behavioral state
+        # Extract observations from existing signals for behavioral state.
+        #
+        # NOTE ON COUPLING POLICY: `sensor_coupling_allows()` gates the ODE
+        # spring only (see the `coupling_sensor` block earlier in this file).
+        # This intake is deliberately NOT gated — an embodied agent's submitted
+        # sensor IS its behavioral observation. But the behavioral estimator is
+        # the verdict-authoritative path (BEHAVIORAL_VERDICT_ENABLED), so under
+        # UNITARES_SENSOR_COUPLING=behavioral_only a physical sensor is cut from
+        # the diagnostic ODE while still driving verdicts through here. That is
+        # easy to misread as "the physical sensor is cut", so record which
+        # source actually fed these observations rather than leaving it to be
+        # inferred from raw_obs magnitudes.
         sensor_eisv = agent_state.get('sensor_eisv')
         if sensor_eisv:
             # Use externally supplied sensor EISV directly when available
             beh_E_obs = float(sensor_eisv.get('E', 0.5))
             beh_I_obs = float(sensor_eisv.get('I', 0.5))
             beh_S_obs = float(sensor_eisv.get('S', 0.2))
+            beh_obs_source = agent_state.get('sensor_eisv_source') or 'sensor'
         else:
             # Non-embodied agents: compute from behavioral_sensor
             beh_sensor = compute_behavioral_sensor_eisv(
@@ -1185,11 +1203,18 @@ class UNITARESMonitor:
                 beh_E_obs = beh_sensor['E']
                 beh_I_obs = beh_sensor['I']
                 beh_S_obs = beh_sensor['S']
+                beh_obs_source = 'behavioral_sensor'
             else:
                 # Insufficient history — use continuity layer inputs as fallback
                 beh_E_obs = continuity_metrics.E_input if continuity_metrics.E_input is not None else 0.5
                 beh_I_obs = continuity_metrics.I_input if continuity_metrics.I_input is not None else 0.5
                 beh_S_obs = continuity_metrics.S_input if continuity_metrics.S_input is not None else 0.2
+                beh_obs_source = 'continuity_fallback'
+
+        # Provenance for the authoritative vector: which source produced the
+        # observations this check-in's behavioral state was updated from.
+        # Consumed by _save_state / the state_json writer; nothing computes on it.
+        self._behavioral_obs_source = beh_obs_source
 
         self._behavioral_state.update(beh_E_obs, beh_I_obs, beh_S_obs)
 
@@ -1326,6 +1351,7 @@ class UNITARESMonitor:
         # Only the fast regex floor runs inline; the local-model backend is
         # out-of-band by design (40–70s/call must never sit on the request path).
         self._last_verification_signal = None
+        self._last_verification_shadow = None
         if GovConfig.VERIFICATION_FLOOR_ENABLED:
             from governance_core.verification import score_harm_confession
             _vsig = score_harm_confession(agent_state.get('response_text', '') or '')
@@ -1333,6 +1359,19 @@ class UNITARESMonitor:
                 unitares_verdict, risk_score, _vsig.verdict, _vsig.score,
             )
             self._last_verification_signal = _vsig
+        elif GovConfig.VERIFICATION_FLOOR_SHADOW:
+            # Shadow mode: same signal, zero verdict/risk effect. Recorded only
+            # when it WOULD fire, so stored check-ins accumulate the live
+            # false-positive/recall record the enable decision requires
+            # (verification-weighted-verdict-v0.md acceptance gate).
+            from governance_core.verification import score_harm_confession
+            _vshadow = score_harm_confession(agent_state.get('response_text', '') or '')
+            if _vshadow.score > 0.0:
+                self._last_verification_shadow = _vshadow
+                logger.info(
+                    f"verification floor SHADOW for {self.agent_id}: would raise "
+                    f"to {_vshadow.verdict} (score {_vshadow.score:.2f}); not applied"
+                )
 
         oscillation_state, response_tier, cirs_result, damping_result = self._run_cirs(
             risk_score=risk_score,
@@ -1506,6 +1545,11 @@ class UNITARESMonitor:
         _vsig = getattr(self, '_last_verification_signal', None)
         if _vsig is not None:
             result['verification_floor'] = _vsig.to_dict()
+        # Shadow firing (floor off): surfaced with applied=False so downstream
+        # readers can never mistake a would-fire record for an enforcement.
+        _vshadow = getattr(self, '_last_verification_shadow', None)
+        if _vshadow is not None:
+            result['verification_floor_shadow'] = {**_vshadow.to_dict(), 'applied': False}
         return result
     
     def _compute_drift_vector(self, grounded_agent_state, agent_state, confidence, task_type, continuity_metrics):

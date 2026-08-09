@@ -117,6 +117,7 @@
     <a href="#residents" data-section="residents">Residents</a>
     <a href="#automations" data-section="automations">Automations</a>
     <a href="#adjudication" data-section="adjudication">Adjudication</a>
+    <a href="#enforcement" data-section="enforcement">Enforcement</a>
     <a href="#security" data-section="security">Security</a>
   </nav>
 
@@ -199,6 +200,10 @@
       <div id="adj-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
     </section>
 
+    <section class="section" data-pane="enforcement" hidden>
+      <div id="enforcement-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div></div></div>
+    </section>
+
     <section class="section" data-pane="security" hidden>
       <h2 class="section-title">Passkeys & sessions</h2>
       <div id="security-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
@@ -222,6 +227,7 @@
 <script src="./sections/residents.js"></script>
 <script src="./sections/automations.js"></script>
 <script src="./sections/adjudication.js"></script>
+<script src="./sections/enforcement.js"></script>
 <script src="./sections/security.js"></script>
 <script>
 // theme toggle
@@ -277,6 +283,7 @@ function lazyLoad(id) {
   if (id === "residents" && window.Residents) { loaded[id] = true; window.Residents.load(); }
   if (id === "automations" && window.Automations) { loaded[id] = true; window.Automations.load(); }
   if (id === "adjudication" && window.Adjudication) { loaded[id] = true; window.Adjudication.load(); }
+  if (id === "enforcement" && window.Enforcement) { loaded[id] = true; window.Enforcement.load(); }
   if (id === "security" && window.Security) { loaded[id] = true; window.Security.load(); }
 }
 
