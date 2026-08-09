@@ -532,8 +532,8 @@ class TestGetGovernanceMetrics:
             assert data.get("purpose") is None
 
     @pytest.mark.asyncio
-    async def test_void_display_precision(self, mock_server):
-        """Small non-zero void values show with precision."""
+    async def test_valence_display_precision_and_semantics(self, mock_server):
+        """Small non-zero Valence values retain precision and signed semantics."""
         monitor = _make_monitor()
         monitor.get_metrics.return_value = {
             "E": 0.7, "I": 0.6, "S": 0.2, "V": 0.000123,
@@ -559,6 +559,12 @@ class TestGetGovernanceMetrics:
             v_value = data["V"]["value"]
             assert v_value != 0
             assert v_value == round(0.000123, 6)
+            assert data["V"]["label"] == "Valence"
+            assert data["V"]["range"] == "[-1, 1]"
+            assert "positive" in data["V"]["description"].lower()
+            assert "negative" in data["V"]["description"].lower()
+            assert "ideal" not in data["V"]
+            assert "Void" not in data["V"]["note"]
 
     @pytest.mark.asyncio
     async def test_interpret_state_failure_handled_gracefully(self, mock_server):
@@ -786,6 +792,7 @@ class TestGetSystemHistory:
             assert data.get("format") == "json"
             assert "history" in data
             assert data["agent_id"] == "agent-1"
+            assert data["eisv_labels"]["V"]["label"] == "Valence"
 
     @pytest.mark.asyncio
     async def test_no_history_returns_empty_success(self, mock_server):
@@ -805,6 +812,7 @@ class TestGetSystemHistory:
             assert data["empty"] is True
             assert data["history"] == []
             assert data["agent_id"] == "agent-1"
+            assert data["eisv_labels"]["V"]["label"] == "Valence"
 
     @pytest.mark.asyncio
     async def test_requires_agent_registration(self, mock_server):

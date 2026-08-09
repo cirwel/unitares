@@ -399,6 +399,15 @@ class TestGetEisvLabels:
             assert 'user_friendly' in labels[key]
             assert isinstance(labels[key]['user_friendly'], str)
 
+    def test_v_is_valence_with_signed_semantics(self):
+        valence = UNITARESMonitor.get_eisv_labels()['V']
+        assert valence['label'] == 'Valence'
+        assert valence['range'] == '[-1, 1]'
+        assert 'EMA-smoothed' in valence['description']
+        assert 'positive' in valence['description'].lower()
+        assert 'negative' in valence['description'].lower()
+        assert 'Void' not in valence['description']
+
 
 # ============================================================================
 # compute_ethical_drift (instance but pure)
