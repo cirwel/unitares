@@ -1,9 +1,10 @@
-"""Identity-bound host runtime observations.
+"""Identity-bound host observations (legacy ``runtime`` API namespace).
 
 This module stores factual host evidence such as a completed-tool rollup or a
-process-alive heartbeat.  Runtime observations are deliberately written to the
-audit plane, never ``core.agent_state``: process liveness is not agent-authored
-proprioception and must not synthesize EISV, progress, or intent.
+hook-parent-process heartbeat.  These observations are deliberately written to
+the audit plane, never ``core.agent_state``: neither a hook receipt nor a live
+shared host PID proves that a Codex agent is continuously running.  They must
+not synthesize EISV, progress, intent, or an agent-authored check-in.
 """
 
 from __future__ import annotations
@@ -118,7 +119,8 @@ def _restoration_capsule(
     process: dict[str, Any],
     reflection: dict[str, Any],
     *,
-    last_operational: datetime,
+    last_host_observation: datetime,
+    last_tool_activity: datetime | None,
     last_heartbeat: datetime | None,
 ) -> dict[str, Any]:
     """Cross-link bounded facts without collapsing their provenance."""
@@ -128,23 +130,25 @@ def _restoration_capsule(
     )
     missing: list[str] = []
     if last_reflection is None:
-        missing.append("authored_reflection")
+        missing.append("agent_authored_checkin")
     if not reflection_context:
         missing.append("authored_task_context")
     if not process.get("latest_event_id"):
-        missing.append("operational_event_reference")
+        missing.append("host_observation_reference")
 
     if last_reflection is None:
-        relationship = "operational_only"
-    elif last_operational > last_reflection:
-        relationship = "operations_after_reflection"
+        relationship = "host_observation_only"
+    elif last_tool_activity and last_tool_activity > last_reflection:
+        relationship = "tool_events_after_agent_report"
+    elif last_host_observation > last_reflection:
+        relationship = "host_observation_after_agent_report"
     else:
-        relationship = "reflection_current"
+        relationship = "agent_report_current"
 
     return {
-        "schema": "unitares.restoration_capsule.v1",
+        "schema": "unitares.restoration_capsule.v2",
         "process_id": f"{process['agent_id']}:{process['slot_hash']}",
-        "generated_from": "bounded_operational_and_reflective_evidence",
+        "generated_from": "bounded_host_observation_and_state_update_evidence",
         "execution": {
             "mode": process["execution_mode"],
             "mode_source": process["execution_mode_source"],
@@ -153,15 +157,19 @@ def _restoration_capsule(
             "slot_hash": process["slot_hash"],
             "plugin_version": process["plugin_version"],
         },
-        "operational": {
-            "last_observed_at": _iso(last_operational),
+        "host_observation": {
+            "last_observed_at": _iso(last_host_observation),
+            "last_tool_activity_at": _iso(last_tool_activity),
             "last_heartbeat_at": _iso(last_heartbeat),
             "latest_kind": process["latest_kind"],
             "event_id": process["latest_event_id"],
             "observation_count": process["observation_count"],
             "tool_count": process["tool_count"],
             "tools_in_window": process["tools_in_window"],
-            "host_process_alive": process["host_process_alive"],
+            "hook_parent_process_observed_alive": process[
+                "hook_parent_process_observed_alive"
+            ],
+            "host_process_scope": "hook_parent",
         },
         "reflection": {
             "last_authored_at": _iso(last_reflection),
@@ -170,15 +178,21 @@ def _restoration_capsule(
         },
         "interpretation": {
             "last_at": _iso(reflection.get("last_interpretation")),
+            "count": reflection.get("interpretation_count", 0),
+            "agent_authored": False,
+        },
+        "initialization": {
+            "last_at": _iso(reflection.get("last_bootstrap")),
+            "count": reflection.get("bootstrap_count", 0),
             "agent_authored": False,
         },
         "continuity": {
             "relationship": relationship,
             "missing": missing,
             "restore_basis": (
-                "operational_and_authored_context"
+                "host_observation_and_authored_context"
                 if last_reflection and reflection_context
-                else "operational_evidence_only"
+                else "host_observation_only"
             ),
         },
     }
@@ -191,12 +205,14 @@ def summarize_runtime_activity(
     now: datetime | None = None,
     window_hours: float = 24.0,
 ) -> dict[str, Any]:
-    """Build the dashboard's dual-log read model without merging semantics.
+    """Build the dashboard's host-evidence/check-in read model honestly.
 
-    Runtime observations remain operational evidence.  ``agent_report`` rows
-    are the only rows named as agent reflections; substrate interpretations and
-    historical unclassified check-ins are exposed separately so the dashboard
-    never upgrades them into authored speech.
+    Host observations remain audit evidence.  ``agent_report`` rows are the
+    only agent-authored check-ins; substrate interpretations, initialization
+    rows, and historical unclassified check-ins remain separately exposed.
+    In particular, a heartbeat can prove only that the hook's parent PID was
+    alive.  Codex desktop may share that PID across chats, so it never promotes
+    a slot into "active agent" state.
     """
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     reflections: dict[str, dict[str, Any]] = {}
@@ -209,6 +225,11 @@ def summarize_runtime_activity(
             "last_reflection": _as_utc(_row_value(row, "last_reflection_at")),
             "reflection_count": int(_row_value(row, "reflection_count", 0) or 0),
             "last_interpretation": _as_utc(_row_value(row, "last_interpretation_at")),
+            "interpretation_count": int(
+                _row_value(row, "interpretation_count", 0) or 0
+            ),
+            "last_bootstrap": _as_utc(_row_value(row, "last_bootstrap_at")),
+            "bootstrap_count": int(_row_value(row, "bootstrap_count", 0) or 0),
             "last_unclassified": _as_utc(_row_value(row, "last_unclassified_at")),
             "last_reflection_state": _row_value(row, "last_reflection_state"),
         }
@@ -237,11 +258,12 @@ def summarize_runtime_activity(
                 "observation_count": 0,
                 "tool_count": 0,
                 "tools_in_window": 0,
-                "last_operational": None,
+                "last_host_observation": None,
+                "last_tool_activity": None,
                 "last_heartbeat": None,
                 "latest_kind": None,
                 "latest_event_id": None,
-                "host_process_alive": False,
+                "hook_parent_process_observed_alive": False,
                 "seconds_since_last_tool": None,
             },
         )
@@ -255,11 +277,16 @@ def summarize_runtime_activity(
             process["tools_in_window"] += _bounded_int(
                 details.get("tool_delta"), maximum=1_000_000
             )
+            if (
+                process["last_tool_activity"] is None
+                or observed > process["last_tool_activity"]
+            ):
+                process["last_tool_activity"] = observed
         if (
-            process["last_operational"] is None
-            or observed > process["last_operational"]
+            process["last_host_observation"] is None
+            or observed > process["last_host_observation"]
         ):
-            process["last_operational"] = observed
+            process["last_host_observation"] = observed
             process["latest_kind"] = kind or None
             process["host_family"] = str(details.get("host_family") or "unknown")
             process["plugin_version"] = str(details.get("plugin_version") or "")
@@ -284,15 +311,30 @@ def summarize_runtime_activity(
             process["last_heartbeat"] is None or observed > process["last_heartbeat"]
         ):
             process["last_heartbeat"] = observed
-            process["host_process_alive"] = details.get("host_process_alive") is True
+            process["hook_parent_process_observed_alive"] = (
+                details.get("host_process_alive") is True
+            )
 
     rows: list[dict[str, Any]] = []
     for process in processes.values():
         reflection = reflections.get(process["agent_id"], {})
-        last_operational = process.pop("last_operational")
+        last_host_observation = process.pop("last_host_observation")
+        last_tool_activity = process.pop("last_tool_activity")
         last_heartbeat = process.pop("last_heartbeat")
         last_reflection = reflection.get("last_reflection")
-        operational_age = max(0.0, (current - last_operational).total_seconds())
+        host_observation_age = max(
+            0.0, (current - last_host_observation).total_seconds()
+        )
+        tool_activity_age = (
+            max(0.0, (current - last_tool_activity).total_seconds())
+            if last_tool_activity
+            else None
+        )
+        heartbeat_age = (
+            max(0.0, (current - last_heartbeat).total_seconds())
+            if last_heartbeat
+            else None
+        )
         reflection_age = (
             max(0.0, (current - last_reflection).total_seconds())
             if last_reflection
@@ -301,34 +343,91 @@ def summarize_runtime_activity(
         capsule = _restoration_capsule(
             process,
             reflection,
-            last_operational=last_operational,
+            last_host_observation=last_host_observation,
+            last_tool_activity=last_tool_activity,
             last_heartbeat=last_heartbeat,
+        )
+        reflection_count = int(reflection.get("reflection_count", 0) or 0)
+        interpretation_count = int(reflection.get("interpretation_count", 0) or 0)
+        bootstrap_count = int(reflection.get("bootstrap_count", 0) or 0)
+        if reflection_count:
+            state_update_profile = "agent_report_present"
+        elif interpretation_count:
+            state_update_profile = "substrate_only"
+        elif bootstrap_count:
+            state_update_profile = "initialization_only"
+        else:
+            state_update_profile = "no_state_updates"
+        tool_activity_after_report = bool(
+            last_tool_activity
+            and last_reflection
+            and last_tool_activity > last_reflection
+        )
+        host_observation_after_report = bool(
+            last_reflection and last_host_observation > last_reflection
+        )
+        heartbeat_recent = bool(
+            heartbeat_age is not None and heartbeat_age <= RUNTIME_RECENT_SECONDS
         )
         rows.append(
             {
                 **process,
                 "process_id": f"{process['agent_id']}:{process['slot_hash']}",
                 "agent_label": reflection.get("label"),
-                "last_operational_at": _iso(last_operational),
+                "last_host_observation_at": _iso(last_host_observation),
+                "last_tool_activity_at": _iso(last_tool_activity),
                 "last_heartbeat_at": _iso(last_heartbeat),
-                "operational_age_seconds": operational_age,
-                "operational_recent": operational_age <= RUNTIME_RECENT_SECONDS,
+                "host_observation_age_seconds": host_observation_age,
+                "tool_activity_age_seconds": tool_activity_age,
+                "heartbeat_age_seconds": heartbeat_age,
+                "tool_activity_recent": bool(
+                    tool_activity_age is not None
+                    and tool_activity_age <= RUNTIME_RECENT_SECONDS
+                ),
+                "host_heartbeat_recent": heartbeat_recent,
+                "host_process_scope": "hook_parent" if last_heartbeat else None,
+                # Backward-compatible keys now use the conservative meaning:
+                # only completed-tool evidence can mark a slot operational.
+                "last_operational_at": _iso(last_tool_activity),
+                "operational_age_seconds": tool_activity_age,
+                "operational_recent": bool(
+                    tool_activity_age is not None
+                    and tool_activity_age <= RUNTIME_RECENT_SECONDS
+                ),
+                # Deprecated, intentionally conservative: the observer only
+                # knows about a hook-parent PID, never a per-agent process.
+                "host_process_alive": False,
                 "last_reflection_at": _iso(last_reflection),
+                "last_agent_report_at": _iso(last_reflection),
                 "reflection_age_seconds": reflection_age,
-                "reflection_count": reflection.get("reflection_count", 0),
+                "reflection_count": reflection_count,
+                "agent_report_count": reflection_count,
                 "last_interpretation_at": _iso(reflection.get("last_interpretation")),
+                "substrate_interpretation_count": interpretation_count,
+                "last_bootstrap_at": _iso(reflection.get("last_bootstrap")),
+                "bootstrap_count": bootstrap_count,
+                "state_update_profile": state_update_profile,
                 "last_unclassified_at": _iso(reflection.get("last_unclassified")),
                 "restoration_capsule": capsule,
-                "operational_after_reflection": (
-                    last_reflection is None or last_operational > last_reflection
-                ),
+                "tool_activity_after_agent_report": tool_activity_after_report,
+                "host_observation_after_agent_report": host_observation_after_report,
+                "operational_after_reflection": tool_activity_after_report,
             }
         )
 
-    rows.sort(key=lambda row: row["last_operational_at"] or "", reverse=True)
-    last_operational = max(
-        (_as_utc(row["last_operational_at"]) for row in rows), default=None
-    )
+    rows.sort(key=lambda row: row["last_host_observation_at"] or "", reverse=True)
+    host_observation_times = [
+        parsed
+        for row in rows
+        if (parsed := _as_utc(row["last_host_observation_at"])) is not None
+    ]
+    tool_activity_times = [
+        parsed
+        for row in rows
+        if (parsed := _as_utc(row["last_tool_activity_at"])) is not None
+    ]
+    last_host_observation = max(host_observation_times, default=None)
+    last_tool_activity = max(tool_activity_times, default=None)
     last_reflection = max(
         (r["last_reflection"] for r in reflections.values() if r["last_reflection"]),
         default=None,
@@ -339,14 +438,29 @@ def summarize_runtime_activity(
         "generated_at": current.isoformat(),
         "summary": {
             "processes": len(rows),
+            "observed_slots": len(rows),
             "agents": len({row["agent_id"] for row in rows}),
             "recent_processes": sum(1 for row in rows if row["operational_recent"]),
+            "recent_tool_activity_slots": sum(
+                1 for row in rows if row["tool_activity_recent"]
+            ),
+            "recent_host_heartbeat_slots": sum(
+                1 for row in rows if row["host_heartbeat_recent"]
+            ),
             "observations": sum(row["observation_count"] for row in rows),
             "processes_after_reflection": sum(
                 1 for row in rows if row["operational_after_reflection"]
             ),
-            "last_operational_at": _iso(last_operational),
+            "host_observations_after_agent_report": sum(
+                1 for row in rows if row["host_observation_after_agent_report"]
+            ),
+            "slots_without_agent_report": sum(
+                1 for row in rows if row["agent_report_count"] == 0
+            ),
+            "last_operational_at": _iso(last_tool_activity),
+            "last_host_observation_at": _iso(last_host_observation),
             "last_reflection_at": _iso(last_reflection),
+            "last_agent_report_at": _iso(last_reflection),
             "execution_modes": {
                 mode: sum(1 for row in rows if row["execution_mode"] == mode)
                 for mode in sorted(EXECUTION_MODES)
@@ -355,9 +469,21 @@ def summarize_runtime_activity(
         },
         "processes": rows,
         "semantics": {
-            "operational": "identity-bound substrate observations; never EISV",
-            "reflection": "agent_state rows explicitly labeled agent_report",
-            "interpretation": "substrate_interpretation rows remain separately labeled",
+            "host_observation": (
+                "identity-bound hook receipts or hook-parent PID heartbeats; "
+                "never proof of continuous agent runtime and never EISV"
+            ),
+            "agent_checkin": "agent_state rows explicitly labeled agent_report",
+            "turn_summary": (
+                "substrate_interpretation rows, commonly Codex Stop summaries, "
+                "remain non-agent-authored"
+            ),
+            "initialization": "synthetic bootstrap rows are not real check-ins",
+            "compatibility": (
+                "the /v1/runtime namespace and process/operational keys are legacy; "
+                "host_process_alive is deliberately false; prefer scoped "
+                "hook-parent-observed and tool-activity fields"
+            ),
         },
     }
 
@@ -401,6 +527,16 @@ async def read_runtime_activity(
                            WHERE s.synthetic = false
                              AND s.epistemic_class = 'substrate_interpretation'
                        ) AS last_interpretation_at,
+                       count(s.state_id) FILTER (
+                           WHERE s.synthetic = false
+                             AND s.epistemic_class = 'substrate_interpretation'
+                       ) AS interpretation_count,
+                       max(s.recorded_at) FILTER (
+                           WHERE s.synthetic = true
+                       ) AS last_bootstrap_at,
+                       count(s.state_id) FILTER (
+                           WHERE s.synthetic = true
+                       ) AS bootstrap_count,
                        max(s.recorded_at) FILTER (
                            WHERE s.synthetic = false
                              AND s.epistemic_class IS NULL
@@ -538,8 +674,13 @@ def _normalize(
         "plugin_version": str(payload.get("plugin_version") or "")[:64],
         "epistemic_class": "substrate_observation",
         "measurement_scope": (
-            "host_process_liveness" if kind == "heartbeat" else "host_event_receipt"
+            "hook_parent_process_liveness"
+            if kind == "heartbeat"
+            else "completed_tool_event_receipts"
         ),
+        "host_process_scope": "hook_parent" if kind == "heartbeat" else None,
+        "session_activity_evidence": False,
+        "agent_runtime_evidence": False,
         "agent_authored": False,
         "eisv_written": False,
     }
@@ -549,6 +690,8 @@ def _normalize(
                 "heartbeat requires 'host_process_alive': true"
             )
         normalized["host_process_alive"] = True
+    else:
+        normalized["session_activity_evidence"] = normalized["tool_delta"] > 0
 
     raw_event_id = str(payload.get("event_id") or "").strip()
     if raw_event_id:
@@ -571,7 +714,7 @@ def _normalize(
 
 
 async def record_runtime_observation(payload: dict[str, Any]) -> dict[str, Any]:
-    """Validate, identity-bind, and persist one host runtime observation."""
+    """Validate, identity-bind, and persist one host observation."""
     if not isinstance(payload, dict):
         raise RuntimeObservationError("body must be a JSON object")
 
@@ -634,12 +777,17 @@ async def record_runtime_observation(payload: dict[str, Any]) -> dict[str, Any]:
             code="persistence_failed",
         )
 
-    # A verified host heartbeat is legitimate session activity. Keep the
-    # identity binding alive without creating an EISV state row.
-    try:
-        await db.update_session_activity(session_id)
-    except Exception:
-        pass
+    # Only a non-empty completed-tool rollup is evidence that this Codex slot
+    # did work. A heartbeat may observe a shared app-server parent long after a
+    # chat/worktree ended, so it must never prolong the identity session.
+    session_activity_refreshed = False
+    if normalized["session_activity_evidence"]:
+        try:
+            session_activity_refreshed = bool(
+                await db.update_session_activity(session_id)
+            )
+        except Exception:
+            pass
 
     return {
         "success": True,
@@ -648,5 +796,8 @@ async def record_runtime_observation(payload: dict[str, Any]) -> dict[str, Any]:
         "agent_uuid": agent_uuid,
         "client_session_id": session_id,
         "epistemic_class": "substrate_observation",
+        "measurement_scope": normalized["measurement_scope"],
+        "session_activity_refreshed": session_activity_refreshed,
+        "agent_runtime_evidence": False,
         "eisv_written": False,
     }

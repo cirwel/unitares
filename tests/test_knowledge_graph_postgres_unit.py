@@ -132,6 +132,93 @@ async def test_kg_get_discoveries_by_ids_batches_in_one_query():
 
 
 @pytest.mark.asyncio
+async def test_kg_tag_stats_counts_canonical_sql_assignments_with_scope():
+    conn = MagicMock()
+    conn.fetch = AsyncMock(return_value=[
+        {"tag": "bug", "count": 3},
+        {"tag": "python", "count": 2},
+    ])
+    backend = _FakeKgBackend(conn)
+
+    result = await backend.kg_tag_stats(
+        including_cold=False,
+        epoch=3,
+    )
+
+    query, *args = conn.fetch.await_args.args
+    assert "CROSS JOIN LATERAL unnest(" in query
+    assert "COALESCE(d.tags" in query
+    assert "d.epoch = $1" in query
+    assert "d.status != 'cold'" in query
+    assert "ORDER BY count DESC, tag ASC" in query
+    assert args == [3]
+    assert result == {
+        "by_tag": {"bug": 3, "python": 2},
+        "total_tags": 2,
+        "total_tag_assignments": 5,
+    }
+
+
+@pytest.mark.asyncio
+async def test_kg_tag_stats_all_scope_including_cold_has_no_filters():
+    conn = MagicMock()
+    conn.fetch = AsyncMock(return_value=[])
+    backend = _FakeKgBackend(conn)
+
+    result = await backend.kg_tag_stats(including_cold=True, epoch=None)
+
+    query = conn.fetch.await_args.args[0]
+    assert "d.epoch =" not in query
+    assert "d.status != 'cold'" not in query
+    assert result == {
+        "by_tag": {},
+        "total_tags": 0,
+        "total_tag_assignments": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_postgres_stats_use_sql_tag_counts_with_current_epoch_scope():
+    from config.governance_config import GovernanceConfig
+
+    conn = MagicMock()
+    conn.fetchval = AsyncMock(side_effect=[3, 3])
+    conn.fetch = AsyncMock(side_effect=[
+        [{"agent_id": "agent-1", "count": 3}],
+        [{"type": "note", "count": 3}],
+        [{"status": "open", "count": 3}],
+        [{"source": "explicit_store", "count": 3}],
+        [{"agent_id": "agent-1", "source": "explicit_store", "count": 3}],
+    ])
+    db = MagicMock()
+    db.acquire = lambda: _AcquireContext(conn)
+    db.kg_tag_stats = AsyncMock(return_value={
+        "by_tag": {"memory": 3, "kg": 2},
+        "total_tags": 2,
+        "total_tag_assignments": 5,
+    })
+    backend = KnowledgeGraphPostgres()
+
+    async def _get_db():
+        return db
+
+    backend._get_db = _get_db  # type: ignore[assignment]
+
+    result = await backend.get_stats(
+        epoch_scope="current",
+        including_cold=False,
+    )
+
+    db.kg_tag_stats.assert_awaited_once_with(
+        including_cold=False,
+        epoch=GovernanceConfig.CURRENT_EPOCH,
+    )
+    assert result["by_tag"] == {"memory": 3, "kg": 2}
+    assert result["total_tags"] == 2
+    assert result["total_tag_assignments"] == 5
+
+
+@pytest.mark.asyncio
 class TestUpdateDiscoveryTimestampCoercion:
     async def _make_backend(self, captured: list):
         """KnowledgeGraphPostgres with a mocked acquire() that records fetchval args."""
