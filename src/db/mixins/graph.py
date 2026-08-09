@@ -251,8 +251,11 @@ class GraphMixin:
             logger.error(f"Cypher query failed: {e}")
             raise
 
-    # Maximum byte length for a single string parameter (10 KB)
-    _MAX_PARAM_LENGTH = 10_240
+    # Maximum character length for a single string parameter. Keep this above
+    # the KG handler's largest persisted details value (20,000 characters plus
+    # its explicit truncation marker) while retaining a bounded interpolation
+    # surface for callers that construct arbitrary Cypher parameters.
+    _MAX_PARAM_LENGTH = 32_768
     # Maximum recursion depth for nested list/dict params
     _MAX_PARAM_DEPTH = 8
 
