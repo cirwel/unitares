@@ -102,6 +102,34 @@ primary workflow responses preserve it under `raw_governance`.
 
 A verdict plus current EISV metrics. Read the verdict and act on it.
 
+### Your check-in is one evidence class among several
+
+Rows in your state history are not all authored by you. Every row carries an
+`epistemic_class`, and the distinction is load-bearing — it is what keeps the
+substrate's observations about you separate from your own speech.
+
+| class | who wrote it | means |
+|---|---|---|
+| `agent_report` | **you**, deliberately | you are stating something about your own work |
+| `substrate_interpretation` | a hook, from turn/tool shape | the substrate describing what it observed you do |
+| `substrate_observation` | host evidence (tool receipts, liveness) | a process fact; never EISV, progress, or intent |
+| `prediction` | a forward-looking estimate | not an observation of the present |
+| `synthetic` | lazy onboarding bootstrap | initialization, not a check-in |
+
+Two rules follow, and both matter more than they look:
+
+1. **Do not echo a hook's row as if it were yours.** If your harness writes a
+   `substrate_interpretation` after each turn, that is the substrate's account,
+   not a check-in you owe or should restate. Manufacturing an `agent_report` to
+   match it is the failure this taxonomy exists to prevent.
+2. **Only `agent_report` may speak in your voice.** When you *do* have something
+   to say — a belief, an uncertainty, a judgment about your own state — that is
+   the row only you can write, and it is the reason check-ins exist at all.
+
+Hosts differ in what they automate: some write a per-turn interpretation for you,
+some write almost nothing. Do not infer from a quiet history that you are being
+watched less, or from a busy one that you have already reported.
+
 ## Reading Verdicts
 
 | Verdict | What to Do |
@@ -146,7 +174,7 @@ Recovery is not a shortcut — `self_recovery()` examines your EISV state and de
 ### Essential (use in every session)
 
 - `start_session(force_new=true, parent_agent_id=...)` — Create a fresh process identity once, optionally declaring lineage
-- `sync_state()` — Check in with work summary, complexity, confidence
+- `sync_state()` — Check in with work summary and complexity. Pass `confidence` **only when you are actually stating a belief about your own work**: the server mints a tactical prediction from any value supplied and scores it into the fleet calibration curve, so a habitual or placeholder number becomes a forecast nobody made. Omitting it mints nothing and costs nothing.
 - `check_working_state()` — Read your current EISV state
 - `identity()` — Confirm who the runtime thinks you are and how continuity was resolved; include `continuity_token` for proof-owned UUID rebinds
 - `health_check()` — Check operator-facing server health when behavior seems odd
