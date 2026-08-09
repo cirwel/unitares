@@ -247,12 +247,17 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
     public_agent_id, unique_handle, display_name = _resolve_agent_identity_view(
         agent_id, meta
     )
-    # display_name (user-chosen) takes precedence over agent_id (auto-generated)
-    standardized_metrics["agent_id"] = display_name or public_agent_id
+    # `agent_id` carries the public structured handle, never the claimed label.
+    # A label is caller-asserted and has no uniqueness constraint, so feeding it
+    # back as a target selector resolves through find_agent_by_label(), which
+    # returns the most recently updated of any agents sharing it. The cosmetic
+    # label is still reported, under `display_name`.
+    standardized_metrics["agent_id"] = public_agent_id
     if public_agent_id != agent_id:
         standardized_metrics["agent_uuid"] = agent_id
-    if display_name and public_agent_id != display_name:
-        standardized_metrics["structured_agent_id"] = public_agent_id
+    # Compatibility alias for pre-S22 clients; mirrors `agent_id` exactly, the
+    # same contract identity_payloads.py states for the agent_signature block.
+    standardized_metrics["structured_agent_id"] = public_agent_id
     if unique_handle != public_agent_id:
         standardized_metrics["public_handle"] = unique_handle
     if display_name:
@@ -399,11 +404,10 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         state_present = "state" in standardized_metrics
         state = standardized_metrics.get("state", {})
         standard_metrics = {
-            "agent_id": display_name or public_agent_id,
+            "agent_id": public_agent_id,
             "display_name": display_name,
         }
-        if display_name and public_agent_id != display_name:
-            standard_metrics["structured_agent_id"] = public_agent_id
+        standard_metrics["structured_agent_id"] = public_agent_id
         if unique_handle != public_agent_id:
             standard_metrics["public_handle"] = unique_handle
         standard_metrics.update({
@@ -481,11 +485,10 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
             void_display = 0.0 if void_raw == 0 else void_raw
 
         lite_metrics = {
-            "agent_id": display_name or public_agent_id,
+            "agent_id": public_agent_id,
             "display_name": display_name,
         }
-        if display_name and public_agent_id != display_name:
-            lite_metrics["structured_agent_id"] = public_agent_id
+        lite_metrics["structured_agent_id"] = public_agent_id
         if unique_handle != public_agent_id:
             lite_metrics["public_handle"] = unique_handle
         lite_metrics.update({

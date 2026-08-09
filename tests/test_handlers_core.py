@@ -351,8 +351,9 @@ class TestGetGovernanceMetrics:
             result = await handle_get_governance_metrics({"lite": True})
 
             data = json.loads(result[0].text)
-            # display_name (label) takes precedence over public_agent_id
-            assert data["agent_id"] == "Dogfood Agent"
+            # `agent_id` is the public handle; the claimed label stays in
+            # `display_name` (a label is caller-asserted and not unique).
+            assert data["agent_id"] == "Gpt_5_Codex_20260404"
             assert data["agent_uuid"] == "agent-1"
             assert data["structured_agent_id"] == "Gpt_5_Codex_20260404"
             assert data["display_name"] == "Dogfood Agent"
@@ -389,8 +390,8 @@ class TestGetGovernanceMetrics:
             data = json.loads(result[0].text)
             # Full mode should have summary; reflection is now conditional
             assert "summary" in data
-            # display_name (label) takes precedence over public_agent_id
-            assert data["agent_id"] == "Dogfood Agent"
+            # `agent_id` is the public handle, not the claimed label
+            assert data["agent_id"] == "Gpt_5_Codex_20260404"
             assert data["agent_uuid"] == "agent-1"
             assert data["structured_agent_id"] == "Gpt_5_Codex_20260404"
             assert data["display_name"] == "Dogfood Agent"
@@ -453,7 +454,8 @@ class TestGetGovernanceMetrics:
         assert data["public_handle"] == "Claude_20260808_c8f703d8"
         assert data["agent_uuid"] == agent_uuid
         assert data["display_name"] == "kg-sweep-triage"
-        assert data["agent_id"] == "kg-sweep-triage"
+        # The claimed label lives in display_name only — never in agent_id.
+        assert data["agent_id"] == "Claude_20260808"
 
     @pytest.mark.asyncio
     async def test_get_metrics_standard_mode_wraps_basin_mode_verdict(self, mock_mcp_server):
