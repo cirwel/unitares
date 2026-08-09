@@ -252,10 +252,10 @@ class GraphMixin:
             raise
 
     # Maximum character length for a single string parameter. Keep this above
-    # the KG handler's largest persisted details value (20,000 characters plus
-    # its explicit truncation marker) while retaining a bounded interpolation
+    # the KG handler's largest persisted details value (64 KiB plus its
+    # explicit truncation marker) while retaining a bounded interpolation
     # surface for callers that construct arbitrary Cypher parameters.
-    _MAX_PARAM_LENGTH = 32_768
+    _MAX_PARAM_LENGTH = 128 * 1024
     # Maximum recursion depth for nested list/dict params
     _MAX_PARAM_DEPTH = 8
 
