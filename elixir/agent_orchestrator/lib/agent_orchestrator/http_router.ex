@@ -76,6 +76,13 @@ defmodule AgentOrchestrator.HTTPRouter do
     json(conn, 200, %{ok: true, status: "ok", active_agents: AgentOrchestrator.count()})
   end
 
+  # Aggregate of the lifecycle telemetry since boot. Behind the same bearer as
+  # everything else: spawn counts and command names are operational detail about
+  # what the fleet is running, not public information.
+  get "/v1/metrics" do
+    json(conn, 200, %{ok: true, metrics: AgentOrchestrator.Metrics.snapshot()})
+  end
+
   post "/v1/agents" do
     with {:ok, spec} <- build_spec(conn.body_params),
          :ok <- check_allowed(spec.cmd) do

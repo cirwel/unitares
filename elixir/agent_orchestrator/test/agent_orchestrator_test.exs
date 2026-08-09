@@ -148,6 +148,36 @@ defmodule AgentOrchestratorTest do
       refute_receive {:telemetry, [:agent_orchestrator, :agent, :stop], _, _}, 300
     end
 
+    test "metrics aggregate the lifecycle, including the reaped ending" do
+      alias AgentOrchestrator.Metrics
+
+      :ok = Metrics.reset()
+
+      {:ok, ok_id, _} = AgentOrchestrator.run(%{cmd: "echo", args: ["one"]})
+      assert {:ok, _} = AgentOrchestrator.await(ok_id, 5_000)
+
+      {:ok, fail_id, _} = AgentOrchestrator.run(%{cmd: "sh", args: ["-c", "exit 3"]})
+      assert {:ok, _} = AgentOrchestrator.await(fail_id, 5_000)
+
+      {:ok, reap_id, _} = AgentOrchestrator.run(%{cmd: "sleep", args: ["30"]})
+      assert_receive {:telemetry, [:agent_orchestrator, :agent, :start], _, %{agent_id: ^reap_id}}
+      :ok = AgentOrchestrator.stop(reap_id, :test_reap)
+      assert_receive {:telemetry, [:agent_orchestrator, :agent, :stop], _, %{reason: :stopped}}, 2_000
+
+      snap = Metrics.snapshot()
+
+      assert snap.started == 3
+      assert snap.stopped[:exited] == 2
+      assert snap.stopped[:stopped] == 1
+      assert snap.exits[:ok] == 1
+      assert snap.exits[:nonzero] == 1
+      # The reaped agent has no exit status at all — its own class, not a zero.
+      assert snap.exits[:none] == 1
+      assert snap.duration_ms.count == 3
+      assert snap.output_lines == 1
+      assert snap.running == 0
+    end
+
     test "the runtime logger attaches and detaches idempotently" do
       alias AgentOrchestrator.Telemetry
 

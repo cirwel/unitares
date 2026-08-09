@@ -74,6 +74,20 @@ defmodule AgentOrchestrator.HTTPRouterTest do
     end
   end
 
+  describe "GET /v1/metrics" do
+    test "reports the lifecycle aggregate, behind the same bearer" do
+      conn = call(authed(:get, "/v1/metrics"))
+      assert conn.status == 200
+      metrics = body_json(conn)["metrics"]
+      assert is_integer(metrics["started"])
+      assert is_integer(metrics["running"])
+    end
+
+    test "401 without the bearer — spawn counts are operational detail" do
+      assert call(conn(:get, "/v1/metrics")).status == 401
+    end
+  end
+
   describe "POST /v1/agents" do
     test "spawns an agent and the result is awaitable" do
       conn = call(authed(:post, "/v1/agents", %{cmd: "echo", args: ["hi there"]}))
