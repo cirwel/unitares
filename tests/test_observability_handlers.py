@@ -208,6 +208,7 @@ class TestHandleObserveAgent:
         assert data["success"] is True
         assert data["agent_id"] == uuid
         assert "observation" in data
+        assert data["eisv_labels"]["V"]["label"] == "Valence"
         server.load_metadata_async.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -510,6 +511,7 @@ class TestHandleCompareAgents:
         assert len(comparison["agents"]) == 2
         assert "similarities" in comparison
         assert "outliers" in comparison
+        assert data["eisv_labels"]["V"]["label"] == "Valence"
 
     @pytest.mark.asyncio
     async def test_fewer_than_two_agent_ids(self):
@@ -730,6 +732,9 @@ class TestHandleCompareMeToSimilar:
         assert data["success"] is True
         assert "similar_agents" in data
         assert len(data["similar_agents"]) >= 1
+        assert data["eisv_labels"]["V"]["label"] == "Valence"
+        assert "V" in data["my_metrics"]
+        assert "V" in data["similar_agents"][0]["metrics"]
 
     @pytest.mark.asyncio
     async def test_no_similar_agents(self):
@@ -980,6 +985,7 @@ class TestHandleDetectAnomalies:
         data = parse_result(result)
         assert data["success"] is True
         assert data["summary"]["total_anomalies"] == 0
+        assert data["eisv_labels"]["V"]["label"] == "Valence"
 
     @pytest.mark.asyncio
     async def test_happy_path_with_anomalies(self):

@@ -14,6 +14,7 @@ from enum import Enum
 from datetime import datetime
 from .support.tool_hints import KNOWLEDGE_SEARCH_SIMILARITY_MIGRATION_NOTE
 from .support.param_normalization import ParamNormalizer, normalize_unit_interval
+from src.governance_glossary import EISV_INLINE_SUMMARY
 class ToolStability(Enum):
     """Tool stability tier - helps users know what to expect"""
     STABLE = "stable"  # Production-ready, won't change
@@ -257,13 +258,13 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
 
     # Observe tools → observe(action='...')
     "observe_agent": ToolAlias(old_name="observe_agent", new_name="observe", reason="consolidated",
-        migration_note="Use observe(action='agent', agent_id='...')", inject_action="agent"),
+        migration_note=f"Use observe(action='agent', agent_id='...'). {EISV_INLINE_SUMMARY}", inject_action="agent"),
     "compare_agents": ToolAlias(old_name="compare_agents", new_name="observe", reason="consolidated",
-        migration_note="Use observe(action='compare', agent_ids=[...])", inject_action="compare"),
+        migration_note=f"Use observe(action='compare', agent_ids=[...]). {EISV_INLINE_SUMMARY}", inject_action="compare"),
     "compare_me_to_similar": ToolAlias(old_name="compare_me_to_similar", new_name="observe", reason="consolidated",
-        migration_note="Use observe(action='similar')", inject_action="similar"),
+        migration_note=f"Use observe(action='similar'). {EISV_INLINE_SUMMARY}", inject_action="similar"),
     "detect_anomalies": ToolAlias(old_name="detect_anomalies", new_name="observe", reason="consolidated",
-        migration_note="Use observe(action='anomalies')", inject_action="anomalies"),
+        migration_note=f"Use observe(action='anomalies'). {EISV_INLINE_SUMMARY}", inject_action="anomalies"),
     "aggregate_metrics": ToolAlias(old_name="aggregate_metrics", new_name="observe", reason="consolidated",
         migration_note="Use observe(action='aggregate')", inject_action="aggregate"),
 
@@ -355,12 +356,18 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
         experience=True),
     "sync_state": ToolAlias(
         old_name="sync_state", new_name="process_agent_update", reason="intuitive_alias",
-        migration_note="Primary workflow name for checking in state; implemented by process_agent_update().",
+        migration_note=(
+            "Primary workflow name for checking in state; implemented by "
+            f"process_agent_update(). {EISV_INLINE_SUMMARY}"
+        ),
         param_normalizer=_CHECKIN_COMPLEXITY_NORMALIZER,
         experience=True),
     "check_working_state": ToolAlias(
         old_name="check_working_state", new_name="get_governance_metrics", reason="intuitive_alias",
-        migration_note="Primary workflow name for reading current EISV state; implemented by get_governance_metrics().",
+        migration_note=(
+            "Primary workflow name for reading current EISV state; implemented by "
+            f"get_governance_metrics(). {EISV_INLINE_SUMMARY}"
+        ),
         experience=True),
     "search_shared_memory": ToolAlias(
         old_name="search_shared_memory", new_name="knowledge", reason="intuitive_alias",
@@ -368,7 +375,10 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
         inject_action="search", experience=True),
     "record_result": ToolAlias(
         old_name="record_result", new_name="outcome_event", reason="intuitive_alias",
-        migration_note="Primary workflow name for recording outcomes; implemented by outcome_event().",
+        migration_note=(
+            "Primary workflow name for recording outcomes; implemented by "
+            f"outcome_event(). {EISV_INLINE_SUMMARY}"
+        ),
         experience=True),
     "request_review": ToolAlias(
         old_name="request_review", new_name="dialectic", reason="intuitive_alias",

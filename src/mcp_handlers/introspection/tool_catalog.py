@@ -2,6 +2,8 @@
 
 from typing import Any, Dict, List, Optional
 
+from src.governance_glossary import EISV_INLINE_SUMMARY
+
 
 # Deprecation registry surfaced by both list_tools (via TOOL_RELATIONSHIPS)
 # and describe_tool (via describe_tool_deprecation_block). Keeping the
@@ -594,22 +596,53 @@ WORKFLOWS: Dict[str, List[str]] = {
 
 TOOL_DESCRIPTION_OVERRIDES: Dict[str, str] = {
     "start_session": "Start a UNITARES session; primary workflow name for onboarding",
-    "sync_state": "Check in after meaningful work; primary workflow name for state updates",
-    "check_working_state": "Read current EISV state without mutating history",
+    "sync_state": (
+        "Check in after meaningful work; primary workflow name for state updates. "
+        f"{EISV_INLINE_SUMMARY}"
+    ),
+    "check_working_state": (
+        "Read current EISV state without mutating history. "
+        f"{EISV_INLINE_SUMMARY}"
+    ),
     "search_shared_memory": "Search shared memory before writing duplicate discoveries",
-    "record_result": "Record real task/tool/test outcome for calibration",
+    "record_result": (
+        "Record real task/tool/test outcome for calibration. "
+        f"{EISV_INLINE_SUMMARY}"
+    ),
     "request_review": "Ask for structured review/recovery",
     "onboard": "Register a fresh process identity. Prefer start_session(force_new=true); use parent_agent_id only for real handoffs.",
     "identity": "🪞 Check current binding or set your display name. Not the normal start/resume path; use start_session first.",
-    "process_agent_update": "Raw implementation for sync_state(); updates agent governance state",
-    "get_governance_metrics": "📊 Get current state and metrics without updating",
-    "simulate_update": "🧪 Test decisions without persisting state",
+    "process_agent_update": (
+        "Raw implementation for sync_state(); updates agent governance state. "
+        f"{EISV_INLINE_SUMMARY}"
+    ),
+    "get_governance_metrics": (
+        "📊 Get current state and metrics without updating. "
+        f"{EISV_INLINE_SUMMARY}"
+    ),
+    "simulate_update": (
+        "🧪 Test decisions without persisting state. "
+        f"{EISV_INLINE_SUMMARY}"
+    ),
     "get_thresholds": "⚙️ View current threshold configuration",
     "set_thresholds": "⚙️ Set runtime threshold overrides",
-    "observe_agent": "👁️ View agent state and patterns (collaborative awareness)",
-    "compare_agents": "🔍 Compare state patterns across agents",
-    "detect_anomalies": "🚨 Scan for unusual patterns across fleet",
-    "aggregate_metrics": "📈 Fleet-level health overview",
+    "observe": f"👁️ Unified governance observability. {EISV_INLINE_SUMMARY}",
+    "observe_agent": (
+        "👁️ View agent state and patterns (collaborative awareness). "
+        f"{EISV_INLINE_SUMMARY}"
+    ),
+    "compare_agents": (
+        f"🔍 Compare state patterns across agents. {EISV_INLINE_SUMMARY}"
+    ),
+    "compare_me_to_similar": (
+        f"🔍 Compare your state with similar agents. {EISV_INLINE_SUMMARY}"
+    ),
+    "detect_anomalies": (
+        f"🚨 Scan for unusual patterns across fleet. {EISV_INLINE_SUMMARY}"
+    ),
+    "aggregate_metrics": (
+        f"📈 Fleet-level health overview. {EISV_INLINE_SUMMARY}"
+    ),
     "list_agents": "👥 List all agents with lifecycle metadata",
     "get_agent_metadata": "📋 Full metadata for single agent (accepts UUID or label)",
     "update_agent_metadata": "✏️ Update tags and notes",
@@ -618,7 +651,12 @@ TOOL_DESCRIPTION_OVERRIDES: Dict[str, str] = {
     "archive_old_test_agents": "🧹 Preview stale agent archival candidates",
     "mark_response_complete": "✅ Mark agent as having completed response, waiting for input",
     "self_recovery": "▶️ Self-recovery: use action='quick' for safe states, action='review' for full recovery with reflection",
-    "get_system_history": "📜 Export time-series history (inline)",
+    "get_system_history": (
+        f"📜 Export time-series history (inline). {EISV_INLINE_SUMMARY}"
+    ),
+    "outcome_event": (
+        f"Record an outcome with its EISV snapshot. {EISV_INLINE_SUMMARY}"
+    ),
     "export_to_file": "💾 Export history to JSON/CSV file",
     "reset_monitor": "🔄 Reset agent state",
     "get_server_info": "ℹ️ Server version, PID, uptime, health",

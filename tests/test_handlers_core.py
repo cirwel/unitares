@@ -351,8 +351,9 @@ class TestGetGovernanceMetrics:
             result = await handle_get_governance_metrics({"lite": True})
 
             data = json.loads(result[0].text)
-            # display_name (label) takes precedence over public_agent_id
-            assert data["agent_id"] == "Dogfood Agent"
+            # `agent_id` is the public handle; the claimed label stays in
+            # `display_name` (a label is caller-asserted and not unique).
+            assert data["agent_id"] == "Gpt_5_Codex_20260404"
             assert data["agent_uuid"] == "agent-1"
             assert data["structured_agent_id"] == "Gpt_5_Codex_20260404"
             assert data["display_name"] == "Dogfood Agent"
@@ -389,8 +390,8 @@ class TestGetGovernanceMetrics:
             data = json.loads(result[0].text)
             # Full mode should have summary; reflection is now conditional
             assert "summary" in data
-            # display_name (label) takes precedence over public_agent_id
-            assert data["agent_id"] == "Dogfood Agent"
+            # `agent_id` is the public handle, not the claimed label
+            assert data["agent_id"] == "Gpt_5_Codex_20260404"
             assert data["agent_uuid"] == "agent-1"
             assert data["structured_agent_id"] == "Gpt_5_Codex_20260404"
             assert data["display_name"] == "Dogfood Agent"
@@ -399,12 +400,65 @@ class TestGetGovernanceMetrics:
             assert data["ode_eisv"]["E"] == 0.65
             assert "state_semantics" in data
             semantics = data["state_semantics"]
+            assert semantics["dimensions"]["V"]["label"] == "Valence"
+            assert semantics["dimensions"]["V"]["range"] == "[-1, 1]"
+            assert data["eisv_labels"]["V"]["label"] == "Valence"
             assert semantics["measurement_policy_contract"] == (
                 "EISV measurements feed governance policy; policy evaluation chooses guidance/action; "
                 "enforcement is a separate runtime boundary."
             )
             assert "feeds governance policy" in semantics["behavioral_eisv_role"]
             assert "Determines proceed/guide/pause/reject" not in semantics["behavioral_eisv_role"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("lite", [True, False])
+    async def test_get_metrics_handle_fields_agree_for_uuid_bound_agent(
+        self, mock_mcp_server, mock_monitor, lite
+    ):
+        """`structured_agent_id` stays canonical; the uuid8 variant gets its own key.
+
+        Regression for KG 2026-06-29T10:49:21.855202+00:00 — read-state returned
+        the structured handle uuid8-suffixed at top level while the nested
+        `agent_signature` block returned it unsuffixed: same field name, two
+        values in one authenticated response.
+
+        The sibling `test_get_metrics_*_mode` cases pin the same contract but
+        never reach the disambiguating branch, because their `"agent-1"` uuid is
+        not UUID-like so `disambiguate_public_handle` appends nothing. This case
+        uses a real UUID, which is the only shape that reproduces the bug.
+        """
+        agent_uuid = "c8f703d8-ce60-4978-a8dc-623be4e3fa39"
+        meta = MagicMock()
+        meta.purpose = None
+        meta.public_agent_id = "Claude_20260808"
+        meta.structured_id = None
+        meta.label = "kg-sweep-triage"
+        mock_mcp_server.agent_metadata = {agent_uuid: meta}
+        mock_mcp_server.get_or_create_monitor.return_value = mock_monitor
+
+        with patch("src.mcp_handlers.core.mcp_server", mock_mcp_server), \
+             patch("src.mcp_handlers.core.require_agent_id",
+                   return_value=(agent_uuid, None)), \
+             patch("src.governance_monitor.UNITARESMonitor") as MockMonitorClass:
+
+            MockMonitorClass.get_eisv_labels.return_value = {
+                "E": "Energy", "I": "Information", "S": "Entropy", "V": "Void"
+            }
+
+            from src.mcp_handlers.core import handle_get_governance_metrics
+            result = await handle_get_governance_metrics({"lite": lite})
+
+            data = json.loads(result[0].text)
+
+        # The canonical handle — identical to what identity()/onboard() and the
+        # agent_signature envelope report. Never uuid8-suffixed.
+        assert data["structured_agent_id"] == "Claude_20260808"
+        # The unique-per-agent view keeps the disambiguation, under its own name.
+        assert data["public_handle"] == "Claude_20260808_c8f703d8"
+        assert data["agent_uuid"] == agent_uuid
+        assert data["display_name"] == "kg-sweep-triage"
+        # The claimed label lives in display_name only — never in agent_id.
+        assert data["agent_id"] == "Claude_20260808"
 
     @pytest.mark.asyncio
     async def test_get_metrics_standard_mode_wraps_basin_mode_verdict(self, mock_mcp_server):

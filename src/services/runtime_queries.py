@@ -8,6 +8,7 @@ from numbers import Real
 from typing import Any, Dict
 
 from config.governance_config import GovernanceConfig
+from src.governance_glossary import describe_eisv_value, get_eisv_glossary
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from src.mcp_handlers.support.naming_helpers import disambiguate_public_handle
@@ -16,11 +17,33 @@ from src.services.identity_continuity import get_identity_continuity_status
 logger = get_logger(__name__)
 
 
-def _resolve_agent_identity_view(agent_uuid: str, meta: Any) -> tuple[str, str | None]:
-    """Resolve the public-facing handle and display name for a UUID-bound agent."""
-    # Disambiguate the {Model}_{date} bucket handle with the agent's uuid8 so
-    # same-model/same-day mints don't surface as identical "duplicate" handles.
-    public_agent_id = (
+def _resolve_agent_identity_view(
+    agent_uuid: str, meta: Any
+) -> tuple[str, str, str | None]:
+    """Resolve the canonical handle, unique handle, and display name for an agent.
+
+    Two handle values, deliberately kept apart:
+
+    * ``canonical_handle`` — the ``{Model}_{date}`` bucket form exactly as
+      ``identity()``/``onboard()`` and the ``agent_signature`` envelope report
+      it. Anything this module emits under ``agent_id`` /
+      ``structured_agent_id`` must be this value, so a single response never
+      carries two values for one field name.
+    * ``unique_handle`` — the same handle disambiguated with the agent's uuid8
+      so same-model/same-day mints don't render as identical "duplicate"
+      handles in registry/dashboard views. Emitted under its own
+      ``public_handle`` key (the name ``lifecycle/query.py`` already uses),
+      never under ``structured_agent_id``.
+
+    Conflating the two is what produced the 2026-06-29 read-state report of
+    "same field name, disagreeing values" (KG 2026-06-29T10:49:21.855202+00:00).
+    """
+    canonical_handle = (
+        getattr(meta, "public_agent_id", None)
+        or getattr(meta, "structured_id", None)
+        or agent_uuid
+    ) if meta else agent_uuid
+    unique_handle = (
         disambiguate_public_handle(
             getattr(meta, "public_agent_id", None),
             getattr(meta, "structured_id", None),
@@ -32,7 +55,7 @@ def _resolve_agent_identity_view(agent_uuid: str, meta: Any) -> tuple[str, str |
         getattr(meta, "label", None)
         or getattr(meta, "display_name", None)
     ) if meta else None
-    return public_agent_id, display_name
+    return canonical_handle, unique_handle, display_name
 
 
 def _build_eisv_semantics(metrics: Dict[str, Any], monitor: Any) -> Dict[str, Any]:
@@ -106,6 +129,7 @@ def _build_eisv_semantics(metrics: Dict[str, Any], monitor: Any) -> Dict[str, An
     return {
         "eisv": primary_eisv,
         "primary_eisv": primary_eisv,
+        "eisv_labels": get_eisv_glossary(),
         "primary_eisv_source": primary_source,
         "primary_eisv_source_meta": primary_source_meta,
         "behavioral_eisv": behavioral_eisv,
@@ -114,6 +138,7 @@ def _build_eisv_semantics(metrics: Dict[str, Any], monitor: Any) -> Dict[str, An
         "sensor_divergence": sensor_divergence,
         "sensor_divergence_recent": sensor_divergence_recent,
         "state_semantics": {
+            "dimensions": get_eisv_glossary(),
             "flat_fields_mean": "primary_eisv",
             "primary_eisv_role": (
                 "Live state to read first. Source is behavioral when confidence >= 0.3, "
@@ -222,13 +247,22 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         pass
 
     meta = server.agent_metadata.get(agent_id)
-    public_agent_id, display_name = _resolve_agent_identity_view(agent_id, meta)
-    # display_name (user-chosen) takes precedence over agent_id (auto-generated)
-    standardized_metrics["agent_id"] = display_name or public_agent_id
+    public_agent_id, unique_handle, display_name = _resolve_agent_identity_view(
+        agent_id, meta
+    )
+    # `agent_id` carries the public structured handle, never the claimed label.
+    # A label is caller-asserted and has no uniqueness constraint, so feeding it
+    # back as a target selector resolves through find_agent_by_label(), which
+    # returns the most recently updated of any agents sharing it. The cosmetic
+    # label is still reported, under `display_name`.
+    standardized_metrics["agent_id"] = public_agent_id
     if public_agent_id != agent_id:
         standardized_metrics["agent_uuid"] = agent_id
-    if display_name and public_agent_id != display_name:
-        standardized_metrics["structured_agent_id"] = public_agent_id
+    # Compatibility alias for pre-S22 clients; mirrors `agent_id` exactly, the
+    # same contract identity_payloads.py states for the agent_signature block.
+    standardized_metrics["structured_agent_id"] = public_agent_id
+    if unique_handle != public_agent_id:
+        standardized_metrics["public_handle"] = unique_handle
     if display_name:
         standardized_metrics["display_name"] = display_name
     standardized_metrics.update(_build_eisv_semantics(metrics, monitor))
@@ -373,11 +407,12 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         state_present = "state" in standardized_metrics
         state = standardized_metrics.get("state", {})
         standard_metrics = {
-            "agent_id": display_name or public_agent_id,
+            "agent_id": public_agent_id,
             "display_name": display_name,
         }
-        if display_name and public_agent_id != display_name:
-            standard_metrics["structured_agent_id"] = public_agent_id
+        standard_metrics["structured_agent_id"] = public_agent_id
+        if unique_handle != public_agent_id:
+            standard_metrics["public_handle"] = unique_handle
         standard_metrics.update({
             "E": metrics.get("E"),
             "I": metrics.get("I"),
@@ -446,27 +481,35 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
                 "⚪ unknown"
             )
 
-        void_raw = metrics.get("V")
-        if void_raw is not None and void_raw != 0:
-            void_display = round(void_raw, 6)
+        valence_raw = metrics.get("V")
+        if valence_raw is not None and valence_raw != 0:
+            valence_display = round(valence_raw, 6)
         else:
-            void_display = 0.0 if void_raw == 0 else void_raw
+            valence_display = 0.0 if valence_raw == 0 else valence_raw
+
+        def _lite_eisv_value(dimension: str, value: Any) -> Dict[str, Any]:
+            wrapped = describe_eisv_value(dimension, value)
+            # Preserve the existing `note` convenience field while sourcing it
+            # from the same contract as label/range/sign semantics.
+            wrapped["note"] = wrapped["description"]
+            return wrapped
 
         lite_metrics = {
-            "agent_id": display_name or public_agent_id,
+            "agent_id": public_agent_id,
             "display_name": display_name,
         }
-        if display_name and public_agent_id != display_name:
-            lite_metrics["structured_agent_id"] = public_agent_id
+        lite_metrics["structured_agent_id"] = public_agent_id
+        if unique_handle != public_agent_id:
+            lite_metrics["public_handle"] = unique_handle
         lite_metrics.update({
             "status": status_display,
             "purpose": getattr(meta, "purpose", None),
             "summary": standardized_metrics.get("summary", "unknown"),
             "primary_eisv_source": standardized_metrics.get("primary_eisv_source"),
-            "E": {"value": metrics.get("E"), "range": "[0, 1]", "note": "Energy capacity"},
-            "I": {"value": metrics.get("I"), "range": "[0, 1]", "note": "Information integrity"},
-            "S": {"value": metrics.get("S"), "range": "[0, 1]", "ideal": "<0.2", "note": "Entropy (lower=better)"},
-            "V": {"value": void_display, "range": "[-1, 1]", "ideal": "near 0", "note": "Void (E-I imbalance, settles toward 0)"},
+            "E": _lite_eisv_value("E", metrics.get("E")),
+            "I": _lite_eisv_value("I", metrics.get("I")),
+            "S": _lite_eisv_value("S", metrics.get("S")),
+            "V": _lite_eisv_value("V", valence_display),
             "coherence": {"value": coherence, "range": "[0, 1]", "status": coherence_status},
             "risk_score": {"value": risk_score, "threshold": 0.5, "status": risk_status},
         })

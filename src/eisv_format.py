@@ -16,6 +16,8 @@ state's E, I, S, V (which are EMA-smoothed observations).
 from typing import Dict, NamedTuple
 from dataclasses import dataclass
 
+from src.governance_glossary import get_eisv_glossary
+
 
 class EISVMetrics(NamedTuple):
     """
@@ -30,7 +32,7 @@ class EISVMetrics(NamedTuple):
     E: float  # Energy or presence
     I: float  # Information integrity
     S: float  # Entropy (disorder/uncertainty)
-    V: float  # Accumulated E-I imbalance (positive: E>I, negative: I>E)
+    V: float  # Valence: EMA-smoothed E-I imbalance (positive: E>I, negative: I>E)
 
     def validate(self) -> None:
         """Validate metric ranges."""
@@ -97,7 +99,7 @@ def format_eisv_detailed(
         E (Energy): 0.80
         I (Integrity): 1.00
         S (Entropy): 0.03
-        V (Void): -0.07
+        V (Valence): -0.07
 
     Args:
         metrics: Complete EISV metrics
@@ -107,19 +109,9 @@ def format_eisv_detailed(
     Returns:
         Multi-line formatted string with all four metrics
     """
-    labels = {
-        'E': 'Energy',
-        'I': 'Integrity',
-        'S': 'Entropy',
-        'V': 'Void'
-    }
-
-    user_friendly = {
-        'E': 'Productive capacity; couples toward I, dragged down by entropy',
-        'I': 'Signal fidelity; boosted by coherence, reduced by entropy',
-        'S': 'Semantic uncertainty; rises with complexity and drift, decays naturally',
-        'V': 'Accumulated E-I imbalance; positive=running hot, negative=running careful'
-    }
+    glossary = get_eisv_glossary()
+    labels = {key: info['label'] for key, info in glossary.items()}
+    user_friendly = {key: info['user_friendly'] for key, info in glossary.items()}
 
     lines = []
     for key in ['E', 'I', 'S', 'V']:  # Always this order, always all four
@@ -144,9 +136,9 @@ def format_eisv_trajectory(trajectory: EISVTrajectory) -> str:
 
     Example:
         E (Energy): 0.71 → 0.80 (+12.5%)
-        I (Integrity): 0.84 → 1.00 (+19.3%)
+        I (Information Integrity): 0.84 → 1.00 (+19.3%)
         S (Entropy): 0.14 → 0.03 (-80.6%)
-        V (Void): -0.01 → -0.07 (↓5.3x)
+        V (Valence): -0.01 → -0.07 (↓5.3x)
 
     Args:
         trajectory: Start and end EISV metrics
@@ -157,7 +149,9 @@ def format_eisv_trajectory(trajectory: EISVTrajectory) -> str:
     deltas = trajectory.deltas()
     percent = trajectory.percent_changes()
 
-    labels = {'E': 'Energy', 'I': 'Integrity', 'S': 'Entropy', 'V': 'Void'}
+    labels = {
+        key: info['label'] for key, info in get_eisv_glossary().items()
+    }
 
     lines = []
     for key in ['E', 'I', 'S', 'V']:  # Always all four
