@@ -182,7 +182,8 @@ class TestFormatEISVDetailed:
         assert "Energy" in result
         assert "Integrity" in result
         assert "Entropy" in result
-        assert "Void" in result
+        assert "Valence" in result
+        assert "Void" not in result
         assert "0.800000" in result
 
     def test_without_labels(self):
@@ -194,10 +195,10 @@ class TestFormatEISVDetailed:
     def test_user_friendly(self):
         m = EISVMetrics(E=0.80, I=1.00, S=0.03, V=-0.07)
         result = format_eisv_detailed(m, include_user_friendly=True)
-        # Each dimension has a user-friendly description matching the ODE behavior
+        # Each dimension uses the canonical client-visible field contract.
         assert "capacity" in result.lower()  # E: productive capacity
-        assert "fidelity" in result.lower()  # I: signal fidelity
-        assert "uncertainty" in result.lower()  # S: semantic uncertainty
+        assert "claims" in result.lower()  # I: claims matching results
+        assert "drifting" in result.lower()  # S: drift from the agent's normal
         assert "imbalance" in result.lower()  # V: E-I imbalance
 
     def test_multiline(self):
@@ -219,7 +220,8 @@ class TestFormatEISVTrajectory:
         traj = EISVTrajectory(start=start, end=end)
         result = format_eisv_trajectory(traj)
         assert "Energy" in result
-        assert "Void" in result
+        assert "Valence" in result
+        assert "Void" not in result
 
     def test_no_change(self):
         m = EISVMetrics(E=0.5, I=0.5, S=0.5, V=0.0)

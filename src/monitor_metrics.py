@@ -23,6 +23,7 @@ from config.governance_config import config
 from governance_core.parameters import get_params_profile_name, DEFAULT_WEIGHTS
 from governance_core.scoring import phi_objective, verdict_from_phi
 from governance_core import approximate_stability_check
+from src.governance_glossary import get_eisv_glossary
 from src.health_thresholds import HealthThresholds
 
 # Module-level stability cache (shared across all monitors, keyed by agent_id)
@@ -256,40 +257,8 @@ def get_monitor_metrics(monitor: Any, include_state: bool = True) -> Dict:
 
 
 def get_eisv_labels() -> Dict:
-    """Returns EISV metric labels and descriptions for API documentation.
-
-    EISV = the four core UNITARES state variables:
-    - E: Energy or presence
-    - I: Information integrity
-    - S: Entropy
-    - V: Void (signed E-I balance)
-    """
-    return {
-        'E': {
-            'label': 'Energy',
-            'description': 'Energy or presence',
-            'user_friendly': 'How engaged and energized your work feels',
-            'range': '[0.0, 1.0]'
-        },
-        'I': {
-            'label': 'Information Integrity',
-            'description': 'Information integrity',
-            'user_friendly': 'Consistency and coherence of your approach',
-            'range': '[0.0, 1.0]'
-        },
-        'S': {
-            'label': 'Entropy',
-            'description': 'Entropy (disorder/uncertainty)',
-            'user_friendly': 'How scattered or fragmented things are',
-            'range': '[0.0, 1.0]'
-        },
-        'V': {
-            'label': 'Void',
-            'description': 'Void (E-I imbalance readout); sign is actionable',
-            'user_friendly': 'How far energy and integrity are out of balance — positive = running hot, negative = running careful',
-            'range': '[-1.0, 1.0]'
-        }
-    }
+    """Return the canonical client-visible EISV field contract."""
+    return get_eisv_glossary()
 
 
 def export_monitor_history(monitor: Any, format: str = 'json') -> str:

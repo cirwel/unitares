@@ -19,6 +19,12 @@ def _full_snapshot():
         "behavioral_eisv": {"E": 0.1, "I": 0.2, "S": 0.3, "V": 0.0, "confidence": 0.9},
         "ode_eisv": {"E": 0.1, "I": 0.2, "S": 0.3, "V": 0.0},
         "ode_diagnostics": {"phi": 0.5, "verdict": "proceed", "regime": "STABLE"},
+        "eisv_labels": {
+            "E": {"label": "Energy"},
+            "I": {"label": "Information Integrity"},
+            "S": {"label": "Entropy"},
+            "V": {"label": "Valence", "range": "[-1, 1]"},
+        },
         "sensor_divergence": None,
         "sensor_divergence_recent": [{"E": 0.01}] * 20,
         "state_semantics": {
@@ -56,6 +62,7 @@ class TestLiteSnapshot:
         # The actual state numbers and active source survive.
         assert lite["primary_eisv"] == {"E": 0.1, "I": 0.2, "S": 0.3, "V": 0.0}
         assert lite["primary_eisv_source"] == "behavioral"
+        assert lite["eisv_labels"]["V"]["label"] == "Valence"
         assert lite["semantics_omitted"] is True
         assert "include_semantics" in lite["hint"]
 

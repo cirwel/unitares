@@ -327,7 +327,8 @@ async def handle_simulate_update(arguments: ToolArgumentsDict) -> Sequence[TextC
     if dialectic_warnings:
         response["dialectic_condition_warnings"] = dialectic_warnings
 
-    from src.governance_glossary import explain_ethical_drift_vector
+    from src.governance_glossary import explain_ethical_drift_vector, get_eisv_glossary
+    response["eisv_labels"] = get_eisv_glossary()
     response["input_glossary"] = {
         "ethical_drift": explain_ethical_drift_vector(ethical_drift),
     }

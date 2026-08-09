@@ -7,6 +7,8 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.governance_glossary import (
+    EISV_DIMENSIONS,
+    EISV_INLINE_SUMMARY,
     VERDICTS,
     BASINS,
     MODES,
@@ -15,6 +17,9 @@ from src.governance_glossary import (
     EISV_SOURCES,
     ETHICAL_DRIFT_VECTOR_COMPONENTS,
     TRAJECTORY_SIGNATURE_TERMS,
+    describe_eisv_value,
+    get_eisv_glossary,
+    render_eisv_glossary,
     explain_verdict,
     explain_basin,
     explain_eisv_source,
@@ -29,6 +34,43 @@ from src.governance_glossary import (
 # -----------------------------------------------------------------------------
 # Glossary integrity — every shipped value must have a meaning
 # -----------------------------------------------------------------------------
+
+class TestEisvDimensionContract:
+    def test_all_dimensions_have_client_visible_semantics(self):
+        assert list(EISV_DIMENSIONS) == ["E", "I", "S", "V"]
+        for dimension, info in EISV_DIMENSIONS.items():
+            assert info["label"], dimension
+            assert info["range"], dimension
+            assert info["description"], dimension
+            assert info["user_friendly"], dimension
+
+    def test_valence_name_range_and_sign_convention_are_explicit(self):
+        valence = EISV_DIMENSIONS["V"]
+        assert valence["label"] == "Valence"
+        assert valence["range"] == "[-1, 1]"
+        assert "EMA-smoothed" in valence["description"]
+        assert "positive" in valence["description"].lower()
+        assert "motion outruns integrity" in valence["description"]
+        assert "negative" in valence["description"].lower()
+        assert "integrity outruns motion" in valence["description"]
+        assert "void" not in valence["label"].lower()
+
+    def test_helpers_return_copies_and_preserve_value(self):
+        glossary = get_eisv_glossary()
+        glossary["V"]["label"] = "mutated"
+        assert get_eisv_glossary()["V"]["label"] == "Valence"
+        wrapped = describe_eisv_value("V", -0.2)
+        assert wrapped["value"] == -0.2
+        assert wrapped["label"] == "Valence"
+        assert "sign_convention" in wrapped
+
+    def test_in_band_renderings_carry_the_full_contract(self):
+        for text in (EISV_INLINE_SUMMARY, render_eisv_glossary()):
+            assert "E=Energy" in text or "E — Energy" in text
+            assert "V=Valence" in text or "V — Valence" in text
+            assert "positive" in text.lower()
+            assert "negative" in text.lower()
+
 
 class TestGlossaryIntegrity:
     """Every entry in every glossary table must have at minimum a `meaning`."""

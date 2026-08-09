@@ -433,6 +433,15 @@ class TestFormatResponse:
         assert result["_mode"] == "compact"
         assert "summary" in result
 
+    @pytest.mark.parametrize("mode", ["minimal", "compact", "mirror", "standard"])
+    def test_filtered_eisv_responses_keep_compact_field_contract(self, mode):
+        data = _sample_response()
+        result = format_response(data, {"response_mode": mode})
+        contract = result["eisv_contract"]
+        assert "V=Valence [-1,1]" in contract
+        assert "positive=motion outruns integrity" in contract
+        assert "negative=integrity outruns motion" in contract
+
     def test_lite_alias_for_compact(self):
         data = _sample_response()
         result = format_response(data, {"response_mode": "lite"})
