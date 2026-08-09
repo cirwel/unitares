@@ -16,11 +16,33 @@ from src.services.identity_continuity import get_identity_continuity_status
 logger = get_logger(__name__)
 
 
-def _resolve_agent_identity_view(agent_uuid: str, meta: Any) -> tuple[str, str | None]:
-    """Resolve the public-facing handle and display name for a UUID-bound agent."""
-    # Disambiguate the {Model}_{date} bucket handle with the agent's uuid8 so
-    # same-model/same-day mints don't surface as identical "duplicate" handles.
-    public_agent_id = (
+def _resolve_agent_identity_view(
+    agent_uuid: str, meta: Any
+) -> tuple[str, str, str | None]:
+    """Resolve the canonical handle, unique handle, and display name for an agent.
+
+    Two handle values, deliberately kept apart:
+
+    * ``canonical_handle`` — the ``{Model}_{date}`` bucket form exactly as
+      ``identity()``/``onboard()`` and the ``agent_signature`` envelope report
+      it. Anything this module emits under ``agent_id`` /
+      ``structured_agent_id`` must be this value, so a single response never
+      carries two values for one field name.
+    * ``unique_handle`` — the same handle disambiguated with the agent's uuid8
+      so same-model/same-day mints don't render as identical "duplicate"
+      handles in registry/dashboard views. Emitted under its own
+      ``public_handle`` key (the name ``lifecycle/query.py`` already uses),
+      never under ``structured_agent_id``.
+
+    Conflating the two is what produced the 2026-06-29 read-state report of
+    "same field name, disagreeing values" (KG 2026-06-29T10:49:21.855202+00:00).
+    """
+    canonical_handle = (
+        getattr(meta, "public_agent_id", None)
+        or getattr(meta, "structured_id", None)
+        or agent_uuid
+    ) if meta else agent_uuid
+    unique_handle = (
         disambiguate_public_handle(
             getattr(meta, "public_agent_id", None),
             getattr(meta, "structured_id", None),
@@ -32,7 +54,7 @@ def _resolve_agent_identity_view(agent_uuid: str, meta: Any) -> tuple[str, str |
         getattr(meta, "label", None)
         or getattr(meta, "display_name", None)
     ) if meta else None
-    return public_agent_id, display_name
+    return canonical_handle, unique_handle, display_name
 
 
 def _build_eisv_semantics(metrics: Dict[str, Any], monitor: Any) -> Dict[str, Any]:
@@ -222,13 +244,17 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         pass
 
     meta = server.agent_metadata.get(agent_id)
-    public_agent_id, display_name = _resolve_agent_identity_view(agent_id, meta)
+    public_agent_id, unique_handle, display_name = _resolve_agent_identity_view(
+        agent_id, meta
+    )
     # display_name (user-chosen) takes precedence over agent_id (auto-generated)
     standardized_metrics["agent_id"] = display_name or public_agent_id
     if public_agent_id != agent_id:
         standardized_metrics["agent_uuid"] = agent_id
     if display_name and public_agent_id != display_name:
         standardized_metrics["structured_agent_id"] = public_agent_id
+    if unique_handle != public_agent_id:
+        standardized_metrics["public_handle"] = unique_handle
     if display_name:
         standardized_metrics["display_name"] = display_name
     standardized_metrics.update(_build_eisv_semantics(metrics, monitor))
@@ -378,6 +404,8 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         }
         if display_name and public_agent_id != display_name:
             standard_metrics["structured_agent_id"] = public_agent_id
+        if unique_handle != public_agent_id:
+            standard_metrics["public_handle"] = unique_handle
         standard_metrics.update({
             "E": metrics.get("E"),
             "I": metrics.get("I"),
@@ -458,6 +486,8 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         }
         if display_name and public_agent_id != display_name:
             lite_metrics["structured_agent_id"] = public_agent_id
+        if unique_handle != public_agent_id:
+            lite_metrics["public_handle"] = unique_handle
         lite_metrics.update({
             "status": status_display,
             "purpose": getattr(meta, "purpose", None),
