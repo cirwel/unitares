@@ -77,6 +77,11 @@ remains `ode_fallback` so the displayed ODE values are not mislabeled.
 - `export_monitor_history(..., "json")` now exposes separate ODE and behavioral
   in-memory streams. It explicitly states that per-row source, policy, and
   enforcement history belongs to the append-only envelopes.
+- `eisv_skeptic_report.py` reports envelope coverage and marginal
+  source/warmup/enforcement/missingness strata. `eisv_ablation_matrix.py`
+  exposes the same strata with `--telemetry-strata` and reproducible cohort
+  cutoffs with `--as-of`; enforcement remains an audit stratum, never a
+  predictor or causal-prevention claim.
 
 ## What this does not claim
 
