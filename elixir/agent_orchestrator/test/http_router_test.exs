@@ -74,6 +74,20 @@ defmodule AgentOrchestrator.HTTPRouterTest do
     end
   end
 
+  describe "GET /v1/metrics" do
+    test "reports the lifecycle aggregate, behind the same bearer" do
+      conn = call(authed(:get, "/v1/metrics"))
+      assert conn.status == 200
+      metrics = body_json(conn)["metrics"]
+      assert is_integer(metrics["started"])
+      assert is_integer(metrics["running"])
+    end
+
+    test "401 without the bearer — spawn counts are operational detail" do
+      assert call(conn(:get, "/v1/metrics")).status == 401
+    end
+  end
+
   describe "POST /v1/agents" do
     test "spawns an agent and the result is awaitable" do
       conn = call(authed(:post, "/v1/agents", %{cmd: "echo", args: ["hi there"]}))
@@ -98,6 +112,19 @@ defmodule AgentOrchestrator.HTTPRouterTest do
     test "422 when args is not a list of strings" do
       conn = call(authed(:post, "/v1/agents", %{cmd: "echo", args: [1, 2]}))
       assert conn.status == 422
+    end
+
+    test "422 when stdin is not a recognised disposition" do
+      conn = call(authed(:post, "/v1/agents", %{cmd: "echo", stdin: "inherit"}))
+      assert conn.status == 422
+      assert body_json(conn)["error"] == "schema_invalid"
+    end
+
+    test "accepts both stdin dispositions" do
+      for disposition <- ["close", "pipe"] do
+        conn = call(authed(:post, "/v1/agents", %{cmd: "true", stdin: disposition}))
+        assert conn.status == 201
+      end
     end
 
     test "422 on a malformed JSON body" do

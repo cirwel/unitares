@@ -12,7 +12,9 @@ The installable Codex/Claude adapter bundle is canonical in the companion `unita
 
 Claude Code runs through a plugin-style harness. The hook lifecycle is owned by the **`unitares-governance-plugin`** repo (canonical for the adapter bundle). This repo does not vendor or wire its own hook chain. The plugin's `hooks/session-start` and `hooks/post-edit` are what fire on Claude lifecycle events — when CLAUDE.md or AGENTS.md describes hook behavior, the source of truth is the plugin.
 
-User-level `~/.claude/hooks/` adds a third layer (auto-test, watcher-hook, watcher-chime, stop-checkin, etc.) wired directly in `~/.claude/settings.json`. Watcher findings that appear at session start or as a chime block originate from that user-level chain, not from the plugin's `post-edit`.
+User-level `~/.claude/hooks/` adds a third layer (auto-test, watcher-hook, watcher-chime, stop-milestone-audit, etc.) wired directly in `~/.claude/settings.json`. Watcher findings that appear at session start or as a chime block originate from that user-level chain, not from the plugin's `post-edit`.
+
+**The per-turn check-in is the plugin's, not the user chain's.** A `stop-checkin.sh` exists under `~/.claude/hooks/` but is no longer wired in `settings.json` (verified 2026-08-09; its log stops 2026-08-02). The live per-turn `process_agent_update` for **both** Claude and Codex comes from the plugin's `hooks/post-stop`, which submits `epistemic_class="substrate_interpretation"` — a substrate reading of turn shape, not an agent-authored report. Check `settings.json` before assuming a user-level hook is live; a file on disk under `hooks/` is not evidence that it runs.
 
 To close a Watcher finding (the agent itself lives in this repo):
 
