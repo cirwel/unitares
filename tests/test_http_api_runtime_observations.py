@@ -1,4 +1,4 @@
-"""Contract tests for identity-bound runtime observations."""
+"""Contract tests for identity-bound host observations."""
 
 from __future__ import annotations
 
@@ -94,28 +94,37 @@ def test_heartbeat_is_identity_bound_and_audit_only(client, recorder):
     assert response.status_code == 201
     assert response.json()["eisv_written"] is False
     assert response.json()["epistemic_class"] == "substrate_observation"
-    assert db.touched == [SESSION_ID]
+    assert response.json()["session_activity_refreshed"] is False
+    assert response.json()["agent_runtime_evidence"] is False
+    assert db.touched == []
     assert len(rows) == 1
     entry, raw_hash = rows[0]
     assert entry["agent_id"] == AGENT_UUID
     assert entry["session_id"] == SESSION_ID
     assert entry["event_type"] == "runtime_observation.heartbeat"
     assert entry["confidence"] == 0.0
-    assert entry["details"]["measurement_scope"] == "host_process_liveness"
+    assert entry["details"]["measurement_scope"] == "hook_parent_process_liveness"
+    assert entry["details"]["host_process_scope"] == "hook_parent"
+    assert entry["details"]["session_activity_evidence"] is False
+    assert entry["details"]["agent_runtime_evidence"] is False
     assert entry["details"]["seconds_since_last_tool"] == 7200.0
     assert entry["details"]["agent_authored"] is False
     assert len(raw_hash) == 64
 
 
-def test_activity_rollup_has_host_event_scope(client, recorder):
-    rows, _db = recorder
+def test_activity_rollup_has_completed_tool_scope(client, recorder):
+    rows, db = recorder
     payload = _payload("activity_rollup")
     payload.pop("host_process_alive")
     response = client.post("/v1/runtime/observe", json=payload)
 
     assert response.status_code == 201
+    assert response.json()["session_activity_refreshed"] is True
+    assert db.touched == [SESSION_ID]
     assert rows[0][0]["event_type"] == "runtime_observation.activity_rollup"
-    assert rows[0][0]["details"]["measurement_scope"] == "host_event_receipt"
+    assert rows[0][0]["details"]["measurement_scope"] == "completed_tool_event_receipts"
+    assert rows[0][0]["details"]["session_activity_evidence"] is True
+    assert rows[0][0]["details"]["agent_runtime_evidence"] is False
 
 
 def test_session_identity_mismatch_fails_closed(client, recorder):
@@ -193,6 +202,9 @@ def test_activity_summary_keeps_operational_and_reflective_provenance_separate()
             "last_reflection_at": datetime(2026, 8, 2, 10, 0, tzinfo=timezone.utc),
             "reflection_count": 2,
             "last_interpretation_at": datetime(2026, 8, 2, 11, 0, tzinfo=timezone.utc),
+            "interpretation_count": 1,
+            "last_bootstrap_at": datetime(2026, 8, 1, 8, 0, tzinfo=timezone.utc),
+            "bootstrap_count": 1,
             "last_unclassified_at": datetime(2026, 8, 1, 9, 0, tzinfo=timezone.utc),
             "last_reflection_state": {
                 "action": "proceed",
@@ -210,29 +222,40 @@ def test_activity_summary_keeps_operational_and_reflective_provenance_separate()
 
     assert result["summary"] == {
         "processes": 1,
+        "observed_slots": 1,
         "agents": 1,
         "recent_processes": 1,
+        "recent_tool_activity_slots": 1,
+        "recent_host_heartbeat_slots": 1,
         "observations": 2,
         "processes_after_reflection": 1,
+        "host_observations_after_agent_report": 1,
+        "slots_without_agent_report": 0,
         "last_operational_at": "2026-08-02T11:50:00+00:00",
+        "last_host_observation_at": "2026-08-02T11:50:00+00:00",
         "last_reflection_at": "2026-08-02T10:00:00+00:00",
+        "last_agent_report_at": "2026-08-02T10:00:00+00:00",
         "execution_modes": {"automation": 1},
     }
     process = result["processes"][0]
     assert process["agent_label"] == "Codex runtime"
     assert process["last_reflection_at"] == "2026-08-02T10:00:00+00:00"
     assert process["last_interpretation_at"] == "2026-08-02T11:00:00+00:00"
+    assert process["substrate_interpretation_count"] == 1
+    assert process["bootstrap_count"] == 1
+    assert process["state_update_profile"] == "agent_report_present"
     assert process["reflection_count"] == 2
     assert process["tool_count"] == 42
     assert process["tools_in_window"] == 7
-    assert process["host_process_alive"] is True
+    assert process["host_process_alive"] is False
+    assert process["hook_parent_process_observed_alive"] is True
     assert process["operational_after_reflection"] is True
     assert process["execution_mode"] == "automation"
     assert process["execution_mode_source"] == "explicit_env"
     assert process["model"] == "gpt-5.4"
     capsule = process["restoration_capsule"]
-    assert capsule["schema"] == "unitares.restoration_capsule.v1"
-    assert capsule["operational"]["event_id"] == (
+    assert capsule["schema"] == "unitares.restoration_capsule.v2"
+    assert capsule["host_observation"]["event_id"] == (
         "8f4bb851-dfed-4e12-b5b9-33820df47274"
     )
     assert capsule["execution"] == {
@@ -250,10 +273,102 @@ def test_activity_summary_keeps_operational_and_reflective_provenance_separate()
         "governance_action": "proceed",
     }
     assert capsule["continuity"] == {
-        "relationship": "operations_after_reflection",
+        "relationship": "tool_events_after_agent_report",
         "missing": [],
-        "restore_basis": "operational_and_authored_context",
+        "restore_basis": "host_observation_and_authored_context",
     }
+
+
+def test_heartbeat_only_never_marks_slot_as_active_agent_runtime():
+    now = datetime(2026, 8, 2, 12, 0, tzinfo=timezone.utc)
+    events = [
+        {
+            "agent_id": AGENT_UUID,
+            "event_id": "8f4bb851-dfed-4e12-b5b9-33820df47275",
+            "timestamp": "2026-08-02T11:55:00+00:00",
+            "details": {
+                "observation_kind": "heartbeat",
+                "host_family": "codex",
+                "slot_hash": "cd" * 16,
+                "observed_at": "2026-08-02T11:55:00+00:00",
+                "host_process_alive": True,
+                "tool_count": 0,
+            },
+        }
+    ]
+    state_rows = [
+        {
+            "agent_id": AGENT_UUID,
+            "label": "Codex host evidence",
+            "last_reflection_at": None,
+            "reflection_count": 0,
+            "last_interpretation_at": datetime(2026, 8, 2, 11, 50, tzinfo=timezone.utc),
+            "interpretation_count": 1,
+            "last_bootstrap_at": None,
+            "bootstrap_count": 0,
+        }
+    ]
+
+    result = summarize_runtime_activity(events, state_rows, now=now)
+
+    assert result["summary"]["recent_processes"] == 0
+    assert result["summary"]["recent_tool_activity_slots"] == 0
+    assert result["summary"]["recent_host_heartbeat_slots"] == 1
+    assert result["summary"]["slots_without_agent_report"] == 1
+    assert result["summary"]["host_observations_after_agent_report"] == 0
+    assert result["summary"]["last_operational_at"] is None
+    process = result["processes"][0]
+    assert process["tool_activity_recent"] is False
+    assert process["host_heartbeat_recent"] is True
+    assert process["operational_recent"] is False
+    assert process["state_update_profile"] == "substrate_only"
+    assert process["agent_report_count"] == 0
+    assert process["host_process_scope"] == "hook_parent"
+    assert process["host_process_alive"] is False
+    assert process["hook_parent_process_observed_alive"] is True
+    assert (
+        "never proof of continuous agent runtime"
+        in result["semantics"]["host_observation"]
+    )
+
+
+def test_initialization_only_is_not_promoted_to_agent_checkin():
+    now = datetime(2026, 8, 2, 12, 0, tzinfo=timezone.utc)
+    events = [
+        {
+            "agent_id": AGENT_UUID,
+            "timestamp": "2026-08-02T11:55:00+00:00",
+            "details": {
+                "observation_kind": "activity_rollup",
+                "host_family": "codex",
+                "slot_hash": "ef" * 16,
+                "observed_at": "2026-08-02T11:55:00+00:00",
+                "tool_count": 1,
+                "tool_delta": 1,
+            },
+        }
+    ]
+    state_rows = [
+        {
+            "agent_id": AGENT_UUID,
+            "label": "Codex initialization",
+            "last_reflection_at": None,
+            "reflection_count": 0,
+            "last_interpretation_at": None,
+            "interpretation_count": 0,
+            "last_bootstrap_at": datetime(2026, 8, 2, 11, 0, tzinfo=timezone.utc),
+            "bootstrap_count": 1,
+        }
+    ]
+
+    result = summarize_runtime_activity(events, state_rows, now=now)
+    process = result["processes"][0]
+
+    assert process["tool_activity_recent"] is True
+    assert process["agent_report_count"] == 0
+    assert process["bootstrap_count"] == 1
+    assert process["state_update_profile"] == "initialization_only"
+    assert result["summary"]["slots_without_agent_report"] == 1
 
 
 def test_runtime_observation_rejects_unproven_execution_mode(client):

@@ -358,6 +358,46 @@ class TestHandleAuditKnowledgeGraph:
         )
 
     @pytest.mark.asyncio
+    async def test_handler_uses_defaults_for_schema_none_values(self):
+        """Unified-tool optional ``None`` values must not erase defaults.
+
+        ``KnowledgeParams.model_dump()`` includes every optional field with a
+        value of ``None``.  The MCP path therefore passes ``top_n=None`` even
+        when the caller omits it; ``dict.get("top_n", 10)`` does not apply its
+        fallback in that case and used to crash at ``int(None)``.
+        """
+        from src.mcp_handlers.schemas.knowledge import KnowledgeParams
+
+        arguments = KnowledgeParams(action="audit").model_dump()
+        mock_audit_result = {
+            "timestamp": "",
+            "scope": "open",
+            "total_audited": 0,
+            "buckets": {},
+            "top_stale": [],
+            "model_assessment": None,
+            "thresholds": {},
+        }
+        with patch(
+            "src.knowledge_graph_lifecycle.run_kg_audit",
+            new_callable=AsyncMock,
+            return_value=mock_audit_result,
+        ) as mock_audit:
+            from src.mcp_handlers.knowledge.handlers import handle_audit_knowledge_graph
+
+            result = await handle_audit_knowledge_graph(arguments)
+
+        text = result[0].text if hasattr(result[0], "text") else result[0]
+        parsed = json.loads(text)
+        assert parsed["success"] is True
+        mock_audit.assert_called_once_with(
+            scope="open",
+            top_n=10,
+            use_model=False,
+            agent_id=None,
+        )
+
+    @pytest.mark.asyncio
     async def test_handler_returns_error_on_failure(self):
         """Handler should return error response on exception."""
         with patch("src.knowledge_graph_lifecycle.run_kg_audit",
