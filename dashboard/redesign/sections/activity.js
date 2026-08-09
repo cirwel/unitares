@@ -1,5 +1,5 @@
 /*
- * Activity section — operational continuity + governance updates + event stream.
+ * Activity section — host evidence + governance updates + event stream.
  * Built from old timeline.js oracle: a proceed/guide/pause activity
  * histogram over the window, plus a filterable event timeline (icon by
  * type, severity/verdict colour, violation-class badge, agent, time,
@@ -38,18 +38,18 @@
     if (!capsule) return "";
     const context = capsule.reflection && capsule.reflection.context || {};
     const continuity = capsule.continuity || {};
-    const operational = capsule.operational || {};
-    const task = context.task_label || context.comparison_key || "no authored task label";
+    const hostObservation = capsule.host_observation || capsule.operational || {};
+    const task = context.task_label || context.comparison_key || "no agent-authored task label";
     const outcome = context.task_outcome ? ` · ${esc(context.task_outcome)}` : "";
     const missing = Array.isArray(continuity.missing) && continuity.missing.length
       ? continuity.missing.map((x) => String(x).replace(/_/g, " ")).join(", ")
       : "none";
-    const eventRef = operational.event_id ? shortId(operational.event_id) : "unavailable";
+    const eventRef = hostObservation.event_id ? shortId(hostObservation.event_id) : "unavailable";
     return `<details style="padding:0 0 var(--space-3) var(--space-2)">
       <summary class="fresh" style="cursor:pointer;user-select:none">Restoration capsule · ${esc(String(continuity.restore_basis || "evidence only").replace(/_/g, " "))}</summary>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:var(--space-3);padding:var(--space-3);margin-top:var(--space-2);background:var(--surface-2);border:var(--hairline) solid var(--line);border-radius:var(--radius-sm)">
-        <div><div class="fresh">Authored context</div><div>${esc(task)}${outcome}</div></div>
-        <div><div class="fresh">Continuity relation</div><div>${esc(String(continuity.relationship || "unknown").replace(/_/g, " "))}</div></div>
+        <div><div class="fresh">Agent-authored context</div><div>${esc(task)}${outcome}</div></div>
+        <div><div class="fresh">Evidence relation</div><div>${esc(String(continuity.relationship || "unknown").replace(/_/g, " "))}</div></div>
         <div><div class="fresh">Evidence reference</div><div class="mono">audit ${esc(eventRef)}</div></div>
         <div><div class="fresh">Missing evidence</div><div>${esc(missing)}</div></div>
       </div>
@@ -58,18 +58,32 @@
 
   function processRow(p) {
     const name = p.agent_label || shortId(p.agent_id);
-    const liveRecent = MODEL.operational && MODEL.operational.source === "live" && p.operational_recent;
-    const opState = liveRecent ? (p.host_process_alive ? "alive" : "active") : "observed";
-    const opColor = liveRecent ? "var(--ok)" : "var(--muted)";
-    const reflection = p.last_reflection_at
-      ? `<span title="${esc(p.last_reflection_at)}">reflection ${relTime(p.last_reflection_at)}</span>`
-      : `<span style="color:var(--faint)">no authored reflection</span>`;
+    const liveSource = MODEL.operational && MODEL.operational.source === "live";
+    const toolRecent = liveSource && p.tool_activity_recent === true;
+    const heartbeatRecent = liveSource && p.host_heartbeat_recent;
+    const evidenceAt = p.last_tool_activity_at || p.last_host_observation_at || p.last_operational_at;
+    const evidenceState = toolRecent
+      ? "tool activity observed"
+      : heartbeatRecent
+        ? "hook parent observed"
+        : "host evidence recorded";
+    const evidenceColor = toolRecent ? "var(--eisv-c)" : "var(--muted)";
+    const reportAt = p.last_agent_report_at || p.last_reflection_at;
+    const report = reportAt
+      ? `<span title="${esc(reportAt)}">agent check-in ${relTime(reportAt)}</span>`
+      : `<span style="color:var(--faint)">no agent-authored check-in</span>`;
+    const interpretationCount = p.substrate_interpretation_count || 0;
     const interpretation = p.last_interpretation_at
-      ? `<div class="fresh" title="Substrate interpretation — not agent-authored">interpretation ${relTime(p.last_interpretation_at)}</div>`
+      ? `<div class="fresh" title="Automatic substrate interpretation — not agent-authored">${nfmt(interpretationCount || 1)} automatic turn ${interpretationCount === 1 ? "summary" : "summaries"} · latest ${relTime(p.last_interpretation_at)}</div>`
       : "";
-    const relation = p.operational_after_reflection
-      ? `<span class="tag" style="color:var(--warn);border-color:color-mix(in srgb,var(--warn) 35%,var(--line-2))">ops since reflection</span>`
-      : `<span class="tag">reflection current</span>`;
+    const initialization = p.bootstrap_count
+      ? `<div class="fresh" title="Synthetic initialization — not a real check-in">${nfmt(p.bootstrap_count)} initialization ${p.bootstrap_count === 1 ? "row" : "rows"}</div>`
+      : "";
+    let relation;
+    if (!reportAt) relation = `<span class="tag">${esc(String(p.state_update_profile || "no agent check-in").replace(/_/g, " "))}</span>`;
+    else if (p.tool_activity_after_agent_report || p.operational_after_reflection) relation = `<span class="tag" style="color:var(--warn);border-color:color-mix(in srgb,var(--warn) 35%,var(--line-2))">tools since check-in</span>`;
+    else if (p.host_observation_after_agent_report) relation = `<span class="tag">host evidence since check-in</span>`;
+    else relation = `<span class="tag">agent check-in current</span>`;
     const mode = p.execution_mode || "unknown";
     const modeSource = p.execution_mode_source || "unspecified";
     const model = p.model ? ` · ${esc(p.model)}` : "";
@@ -81,14 +95,14 @@
         <div class="fresh">slot ${esc(shortId(p.slot_hash))}</div>
       </div>
       <div style="min-width:150px;flex:1">
-        <div><span class="dot-pip" style="display:inline-block;background:${opColor};margin-right:6px"></span>${opState} · <span title="${esc(p.last_operational_at)}">${relTime(p.last_operational_at)}</span></div>
-        <div class="fresh">${esc((p.latest_kind || "observation").replace(/_/g, " "))}</div>
+        <div><span class="dot-pip" style="display:inline-block;background:${evidenceColor};margin-right:6px"></span>${evidenceState} · <span title="${esc(evidenceAt)}">${relTime(evidenceAt)}</span></div>
+        <div class="fresh">${esc((p.latest_kind || "observation").replace(/_/g, " "))}${heartbeatRecent ? " · hook-parent scope" : ""}</div>
       </div>
       <div style="min-width:155px;flex:1">
-        <div>${reflection}</div>${interpretation}
+        <div>${report}</div>${interpretation}${initialization}
       </div>
       <div style="min-width:130px;flex:.8" class="mono">
-        <div>${nfmt(p.tool_count)} tools</div><div class="fresh">+${nfmt(p.tools_in_window)} in window</div>
+        <div>${nfmt(p.tool_count)} tool receipts</div><div class="fresh">+${nfmt(p.tools_in_window)} in window</div>
       </div>
       <div style="min-width:145px;flex:none">${relation}</div>
     </div>${restorationDetails(p)}</div>`;
@@ -97,7 +111,7 @@
   function continuity() {
     const op = MODEL.operational;
     if (!op || !op.available) {
-      return `<div class="attn-band calm"><span class="glyph">○</span><span>Operational runtime stream unavailable. Governance state activity below remains independently sourced.</span></div>`;
+      return `<div class="attn-band calm"><span class="glyph">○</span><span>Host-observation stream unavailable. Governance state activity below remains independently sourced.</span></div>`;
     }
     const s = op.summary || {};
     const stat = (label, value, sub) => `<div class="card"><h3>${label}</h3><div class="num">${nfmt(value)}</div><div class="sub">${sub}</div></div>`;
@@ -105,20 +119,20 @@
     return `<div style="margin-bottom:var(--space-6)">
       <div class="panel" style="padding:var(--space-5);margin-bottom:var(--space-4)">
         <div style="display:flex;align-items:baseline;gap:var(--space-3);margin-bottom:var(--space-3)">
-          <span class="eyebrow" style="margin:0">Operational continuity</span>
-          <span class="fresh">substrate facts · last ${nfmt(op.windowHours)}h · never EISV</span>
+          <span class="eyebrow" style="margin:0">Host evidence and check-ins</span>
+          <span class="fresh">separate evidence clocks · last ${nfmt(op.windowHours)}h · never agent runtime or EISV</span>
           <span class="spring"></span><span class="src-badge ${esc(op.source)}">${esc(op.source)}</span>
         </div>
-        <p style="font-size:var(--text-sm);color:var(--ink-2)">Runtime observations answer whether a process is active. Agent-authored reflections remain a separate clock; substrate interpretations are labeled rather than promoted into speech.</p>
+        <p style="font-size:var(--text-sm);color:var(--ink-2)">Codex usually produces zero or one agent-authored <span class="mono">sync_state</span> check-in during a turn. Stop can add one automatic, non-agent-authored turn summary, while onboarding can add synthetic initialization. Completed-tool receipts are activity evidence. A heartbeat says only that the hook parent PID was observed; that PID may be shared across chats and never marks an agent as running.</p>
       </div>
       <div class="grid" style="margin-bottom:var(--space-4)">
-        ${stat("Observed processes", s.processes, `${nfmt(s.agents)} identities`)}
-        ${stat("Recent processes", s.recent_processes, op.source === "live" ? "activity within 1 hour" : "at snapshot capture")}
-        ${stat("Runtime observations", s.observations, `last ${nfmt(op.windowHours)} hours`)}
-        ${stat("Ops after reflection", s.processes_after_reflection, "neutral continuity signal")}
+        ${stat("Observed slots", s.observed_slots == null ? s.processes : s.observed_slots, `${nfmt(s.agents)} identities`)}
+        ${stat("Recent tool activity", s.recent_tool_activity_slots == null ? s.recent_processes : s.recent_tool_activity_slots, op.source === "live" ? "completed-tool receipts within 1 hour" : "at snapshot capture")}
+        ${stat("Host heartbeats", s.recent_host_heartbeat_slots, "hook-parent evidence; not agent runtime")}
+        ${stat("No agent check-in", s.slots_without_agent_report, "agent_report count is zero")}
       </div>
       <div class="panel" style="padding:var(--space-2) var(--space-5)">
-        ${rows.length ? rows.map(processRow).join("") : `<p class="empty" style="padding:var(--space-4) 0">No identity-bound runtime observations in this window.</p>`}
+        ${rows.length ? rows.map(processRow).join("") : `<p class="empty" style="padding:var(--space-4) 0">No identity-bound host observations in this window.</p>`}
       </div>
     </div>`;
   }
@@ -136,7 +150,7 @@
     return `<div class="panel" style="padding:var(--space-5);margin-bottom:var(--space-5)">
       <div style="display:flex;align-items:baseline;gap:var(--space-3);margin-bottom:var(--space-3)">
         <span class="eyebrow" style="margin:0">Governance state updates</span>
-        <span class="fresh">state-writing check-ins · provenance varies · runtime excluded · last ${MODEL.windowMin}m · ${MODEL.bucketMin}m buckets · ${total} updates</span>
+        <span class="fresh">state-writing updates · provenance varies · host observations excluded · last ${MODEL.windowMin}m · ${MODEL.bucketMin}m buckets · ${total} updates</span>
         <span class="spring"></span>
         <span class="legend" style="font-size:var(--text-xs)"><span><i style="background:var(--ok)"></i>proceed</span><span><i style="background:var(--warn)"></i>guide</span><span><i style="background:var(--danger)"></i>pause</span></span>
       </div>

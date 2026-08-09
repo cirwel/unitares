@@ -275,6 +275,10 @@ class KnowledgeGraphPostgres:
         by_type = {row['type']: row['count'] for row in by_type_rows}
         by_status = {row['status']: row['count'] for row in by_status_rows}
         by_provenance_source = {row['source']: row['count'] for row in prov_rows}
+        tag_stats = await db.kg_tag_stats(
+            including_cold=including_cold,
+            epoch=epoch if epoch_scope == "current" else None,
+        )
         explicit_sources = {
             "explicit_store", "explicit_answer", "explicit_leave_note",
         }
@@ -329,9 +333,12 @@ class KnowledgeGraphPostgres:
             "by_agent_implicit": by_agent_implicit,
             "by_type": by_type,
             "by_status": by_status,
+            "by_tag": tag_stats["by_tag"],
             "by_provenance_source": by_provenance_source,
             "embedding_coverage": embedding_coverage,
             "total_agents": len(by_agent),
+            "total_tags": tag_stats["total_tags"],
+            "total_tag_assignments": tag_stats["total_tag_assignments"],
             "epoch": epoch,
             "scope": {
                 "kind": "raw_status_aggregate",
