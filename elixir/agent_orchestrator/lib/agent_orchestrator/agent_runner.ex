@@ -144,6 +144,11 @@ defmodule AgentOrchestrator.AgentRunner do
   @default_max_lines 1000
   @line_max_bytes 65_536
 
+  # Child stdin disposition. Default `close` — see wire_stdin/3 for why an open
+  # stdin is both unusable here and a hang risk for the CLIs we spawn.
+  @default_stdin "close"
+  @sh "/bin/sh"
+
   # Default ceiling on a single agent's wall-clock lifetime (30 min). Generous —
   # well past the slowest known consumer (orchestrated reviewer ~70s, council
   # lanes ~120s) — so it only ever fires on a genuinely wedged agent. Per-spawn
@@ -582,19 +587,22 @@ defmodule AgentOrchestrator.AgentRunner do
         # escapes open_port's rescue and orphans the just-acquired lease.
         env = Map.get(spec, :env, []) || []
 
+        {exec, exec_args} =
+          wire_stdin(Map.get(spec, :stdin) || @default_stdin, path, Map.get(spec, :args, []))
+
         opts =
           [
             :binary,
             :exit_status,
             :stderr_to_stdout,
             {:line, @line_max_bytes},
-            {:args, Map.get(spec, :args, [])}
+            {:args, exec_args}
           ]
           |> maybe_opt(:env, encode_env(env ++ provisioned_env(candidates, env)))
           |> maybe_opt(:cd, Map.get(spec, :cd))
 
         try do
-          port = Port.open({:spawn_executable, path}, opts)
+          port = Port.open({:spawn_executable, exec}, opts)
           os_pid = port |> Port.info(:os_pid) |> elem(1)
           {:ok, port, os_pid}
         rescue
@@ -606,6 +614,23 @@ defmodule AgentOrchestrator.AgentRunner do
   defp resolve_executable(cmd) do
     if String.contains?(cmd, "/"), do: cmd, else: System.find_executable(cmd)
   end
+
+  # Close the child's stdin by re-exec'ing it through /bin/sh with stdin
+  # redirected from /dev/null. Two properties matter and neither survives if the
+  # caller does this wrapping itself:
+  #
+  #   * the ALLOWLIST and `executable_not_found` still see the real command,
+  #     because resolve_executable/1 runs on `spec.cmd` before this. A caller
+  #     that passes `/bin/sh` itself defeats both — a missing binary becomes an
+  #     opaque exit 127 from the shell instead of a spawn error, so the caller's
+  #     fail-open path never fires.
+  #   * `"$0"` / `"$@"` keep the command and its arguments as separate argv
+  #     words, so an argument containing quotes, `$(...)`, or backticks is never
+  #     interpreted by the shell.
+  defp wire_stdin("pipe", path, args), do: {path, args}
+
+  defp wire_stdin(_close, path, args),
+    do: {@sh, ["-c", ~s(exec "$0" "$@" </dev/null), path | args]}
 
   # Lineage PROVISIONING (see moduledoc): candidate declarations only — the
   # child makes its own onboard call. Validated up front because a malformed

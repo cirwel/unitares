@@ -70,6 +70,47 @@ defmodule AgentOrchestratorTest do
                AgentOrchestrator.run(%{cmd: "definitely-not-a-real-binary-xyz"})
     end
 
+    test "the executable is still resolved by name when stdin is closed" do
+      # The stdin wrapper must not swallow a missing binary into an exit 127
+      # from /bin/sh: callers rely on this being a spawn ERROR so they can fall
+      # back. Resolution happens on spec.cmd, before any wrapping.
+      assert {:error, {:executable_not_found, "definitely-not-a-real-binary-xyz"}} =
+               AgentOrchestrator.run(%{cmd: "definitely-not-a-real-binary-xyz", stdin: "close"})
+    end
+  end
+
+  describe "child stdin" do
+    test "is closed by default, so a child that reads stdin exits instead of hanging" do
+      # `cat` with no argument reads stdin forever. With stdin at EOF it exits 0
+      # immediately; with an open pipe it would sit until the max-runtime kill.
+      {:ok, id, _} = AgentOrchestrator.run(%{cmd: "cat"})
+      assert {:ok, %{exit_status: 0, running: false}} = AgentOrchestrator.await(id, 5_000)
+    end
+
+    test "still captures output through the wrapper" do
+      {:ok, id, _} = AgentOrchestrator.run(%{cmd: "sh", args: ["-c", "printf 'a\\nb\\n'"]})
+      assert {:ok, %{output: ["a", "b"], exit_status: 0}} = AgentOrchestrator.await(id)
+    end
+
+    test "passes arguments as separate argv words, never through the shell" do
+      # If the wrapper interpolated args into the -c string, the substitution
+      # would run and the literal would not survive.
+      hostile = "$(echo pwned) `echo pwned` \"quoted\""
+
+      {:ok, id, _} = AgentOrchestrator.run(%{cmd: "printf", args: ["%s\n", hostile]})
+
+      assert {:ok, %{output: [^hostile], exit_status: 0}} = AgentOrchestrator.await(id)
+    end
+
+    test "stdin: pipe restores the raw Port behaviour" do
+      # Explicit opt-in to the old shape: an open pipe, so `cat` never returns
+      # and the max-runtime backstop is what ends it.
+      {:ok, id, _} = AgentOrchestrator.run(%{cmd: "cat", stdin: "pipe", max_runtime_ms: 800})
+
+      assert {:ok, %{exit_status: {:killed, :max_runtime}, running: false}} =
+               AgentOrchestrator.await(id, 5_000)
+    end
+
     test "bounds an over-long unterminated line but still captures all of it" do
       big = String.duplicate("x", 70_000)
 

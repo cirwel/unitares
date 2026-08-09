@@ -100,6 +100,19 @@ defmodule AgentOrchestrator.HTTPRouterTest do
       assert conn.status == 422
     end
 
+    test "422 when stdin is not a recognised disposition" do
+      conn = call(authed(:post, "/v1/agents", %{cmd: "echo", stdin: "inherit"}))
+      assert conn.status == 422
+      assert body_json(conn)["error"] == "schema_invalid"
+    end
+
+    test "accepts both stdin dispositions" do
+      for disposition <- ["close", "pipe"] do
+        conn = call(authed(:post, "/v1/agents", %{cmd: "true", stdin: disposition}))
+        assert conn.status == 201
+      end
+    end
+
     test "422 on a malformed JSON body" do
       conn =
         conn(:post, "/v1/agents", "{not json")
