@@ -76,6 +76,13 @@ defmodule AgentOrchestrator.HTTPRouter do
     json(conn, 200, %{ok: true, status: "ok", active_agents: AgentOrchestrator.count()})
   end
 
+  # Aggregate of the lifecycle telemetry since boot. Behind the same bearer as
+  # everything else: spawn counts and command names are operational detail about
+  # what the fleet is running, not public information.
+  get "/v1/metrics" do
+    json(conn, 200, %{ok: true, metrics: AgentOrchestrator.Metrics.snapshot()})
+  end
+
   post "/v1/agents" do
     with {:ok, spec} <- build_spec(conn.body_params),
          :ok <- check_allowed(spec.cmd) do
@@ -148,9 +155,11 @@ defmodule AgentOrchestrator.HTTPRouter do
          {:ok, lease} <- fetch_lease(body),
          {:ok, lineage} <- fetch_lineage(body),
          {:ok, server_url} <- fetch_string(body, "server_url"),
-         {:ok, client_session_id} <- fetch_string(body, "client_session_id") do
+         {:ok, client_session_id} <- fetch_string(body, "client_session_id"),
+         {:ok, stdin} <- fetch_stdin(body) do
       spec =
         %{cmd: cmd, args: args, env: env}
+        |> put_opt(:stdin, stdin)
         |> put_opt(:cd, cd)
         |> put_opt(:max_output_lines, max_lines)
         |> put_opt(:max_runtime_ms, max_runtime)
@@ -164,6 +173,21 @@ defmodule AgentOrchestrator.HTTPRouter do
   end
 
   defp build_spec(_), do: {:error, "body must be a JSON object"}
+
+  # How the child's stdin is wired. Ports always give a spawned child an open
+  # stdin pipe, and this server has no way to write to it — there is no
+  # `Port.command` call and no route that feeds a child input — so an open stdin
+  # is unusable by construction. It is also actively harmful: CLIs that read
+  # stdin when it is not a TTY (`claude -p`, `codex exec`) block on it forever
+  # and only die to the max-runtime backstop. Hence `close` is the default.
+  # `pipe` restores the raw Port behaviour for a caller that wants it.
+  defp fetch_stdin(body) do
+    case Map.get(body, "stdin") do
+      nil -> {:ok, nil}
+      s when s in ["close", "pipe"] -> {:ok, s}
+      _ -> {:error, ~s(stdin must be "close" or "pipe")}
+    end
+  end
 
   defp fetch_cmd(body) do
     case Map.get(body, "cmd") do
