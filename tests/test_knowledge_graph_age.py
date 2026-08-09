@@ -97,6 +97,11 @@ def make_mock_db(graph_available: bool = True) -> AsyncMock:
     db.init = AsyncMock()
     db.graph_available = AsyncMock(return_value=graph_available)
     db.graph_query = AsyncMock(return_value=[])
+    db.kg_tag_stats = AsyncMock(return_value={
+        "by_tag": {},
+        "total_tags": 0,
+        "total_tag_assignments": 0,
+    })
     db._pool = AsyncMock()
 
     # Pool.acquire() context manager
@@ -1116,6 +1121,12 @@ class TestGetStats:
         """Should return dict with all expected stat fields."""
         kg, mock_db = make_kg_with_mock_db()
 
+        mock_db.kg_tag_stats.return_value = {
+            "by_tag": {"python": 2, "bug": 1},
+            "total_tags": 2,
+            "total_tag_assignments": 3,
+        }
+
         # Set up sequential return values for the various queries
         mock_db.graph_query.side_effect = [
             [5],                              # total discoveries
@@ -1123,8 +1134,6 @@ class TestGetStats:
             [["insight", "bug", "insight"]],  # collect(types)
             [["open", "resolved", "open"]],   # collect(statuses)
             [3],                              # count edges
-            [10],                             # count tags
-            [["bug", "python", "python"]],    # collect(tag assignments)
         ]
 
         result = await kg.get_stats()
@@ -1135,12 +1144,17 @@ class TestGetStats:
         assert result["by_status"] == {"open": 2, "resolved": 1}
         assert result["total_edges"] == 3
         assert result["total_agents"] == 2
-        assert result["total_tags"] == 10
+        assert result["total_tags"] == 2
+        assert result["total_tag_assignments"] == 3
         assert result["by_tag"] == {"python": 2, "bug": 1}
         assert list(result["by_tag"]) == ["python", "bug"]
 
-        tag_usage_query = mock_db.graph_query.await_args_list[6].args[0]
-        assert "(:Discovery)-[:TAGGED]->(t:Tag)" in tag_usage_query
+        mock_db.kg_tag_stats.assert_awaited_once_with(
+            including_cold=False,
+            epoch=None,
+        )
+        graph_queries = [call.args[0] for call in mock_db.graph_query.await_args_list]
+        assert all(":Tag" not in query and "TAGGED" not in query for query in graph_queries)
 
     @pytest.mark.asyncio
     async def test_status_less_rows_reconcile_under_none_bucket(self):
@@ -1160,8 +1174,6 @@ class TestGetStats:
             [["insight", "bug", "note", "note", "note"]], # collect(types)
             [["open", "resolved", None, "", "open"]],     # collect(statuses): 2 status-less
             [3],                                          # count edges
-            [10],                                         # count tags
-            [["python"]],                                 # collect(tag names)
         ]
 
         result = await kg.get_stats(including_cold=True)
@@ -1170,6 +1182,10 @@ class TestGetStats:
         assert result["by_status"] == {"open": 2, "resolved": 1, None: 2}
         # The invariant the live gap violated: buckets reconcile with the total.
         assert sum(result["by_status"].values()) == result["total_discoveries"]
+        mock_db.kg_tag_stats.assert_awaited_once_with(
+            including_cold=True,
+            epoch=None,
+        )
 
     @pytest.mark.asyncio
     async def test_handles_empty_graph(self):
@@ -1182,8 +1198,6 @@ class TestGetStats:
             [[]],   # collect(types) - empty
             [[]],   # collect(statuses) - empty
             [0],    # count edges
-            [0],    # count tags
-            [[]],   # collect(tag names) - empty
         ]
 
         result = await kg.get_stats()
@@ -1192,60 +1206,6 @@ class TestGetStats:
         assert result["by_agent"] == {}
         assert result["total_edges"] == 0
         assert result["total_tags"] == 0
-
-    @pytest.mark.asyncio
-    async def test_handles_dict_tag_count_result(self):
-        """Should handle tag count as dict format."""
-        kg, mock_db = make_kg_with_mock_db()
-
-        mock_db.graph_query.side_effect = [
-            [0],
-            [[]],
-            [[]],
-            [[]],
-            [0],
-            [{"tag_count": 42}],  # Dict format for tag count
-            [[]],
-        ]
-
-        result = await kg.get_stats()
-        assert result["total_tags"] == 42
-
-    @pytest.mark.asyncio
-    async def test_handles_error_tag_count_result(self):
-        """Should handle error dict in tag count result."""
-        kg, mock_db = make_kg_with_mock_db()
-
-        mock_db.graph_query.side_effect = [
-            [0],
-            [[]],
-            [[]],
-            [[]],
-            [0],
-            [{"error": "tag query failed"}],
-            [[]],
-        ]
-
-        result = await kg.get_stats()
-        assert result["total_tags"] == 0
-
-    @pytest.mark.asyncio
-    async def test_handles_nested_list_tag_count(self):
-        """Should handle nested list format for tag count."""
-        kg, mock_db = make_kg_with_mock_db()
-
-        mock_db.graph_query.side_effect = [
-            [0],
-            [[]],
-            [[]],
-            [[]],
-            [0],
-            [[15]],  # Nested list
-            [[]],
-        ]
-
-        result = await kg.get_stats()
-        assert result["total_tags"] == 15
 
 
 # ============================================================================

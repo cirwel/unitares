@@ -1193,7 +1193,9 @@ class KnowledgeGraphAGE:
         """Get graph statistics.
 
         Note: AGE doesn't support GROUP BY or multi-column returns well,
-        so we use single-column collect() queries and aggregate in Python.
+        so discovery buckets use single-column collect() queries and aggregate
+        in Python. Tag aggregates come from canonical PostgreSQL rows because
+        AGE Tag/TAGGED projections can lag until a graph backfill runs.
 
         AGE vertices have no epoch property — epoch_scope is accepted for
         signature parity with the postgres backend but always behaves as
@@ -1278,55 +1280,36 @@ class KnowledgeGraphAGE:
         edges_result = await db.graph_query(cypher, {})
         total_edges = int(edges_result[0]) if edges_result and isinstance(edges_result[0], (int, float)) else 0
 
-        # Count tags (from Tag vertices)
-        cypher = "MATCH (t:Tag) RETURN count(t) as tag_count"
-        tags_result = await db.graph_query(cypher, {})
-        # Handle different result formats: direct int, dict with count, or list
-        total_tags = 0
-        if tags_result:
-            first_result = tags_result[0]
-            # Check for error dict first
-            if isinstance(first_result, dict) and "error" in first_result:
-                logger.warning(f"Tag count query failed: {first_result.get('error')}")
-                total_tags = 0
-            elif isinstance(first_result, (int, float)):
-                total_tags = int(first_result)
-            elif isinstance(first_result, dict):
-                # AGE might return {"tag_count": 1130} or {"count": 1130}
-                total_tags = int(first_result.get("tag_count") or first_result.get("count") or 0)
-            elif isinstance(first_result, list) and len(first_result) > 0:
-                # Nested list case
-                total_tags = int(first_result[0]) if isinstance(first_result[0], (int, float)) else 0
-            else:
-                logger.debug(f"Unexpected tag count result format: {type(first_result)}, value: {first_result}")
-
-        # Count tag assignments, not unique Tag vertices. ``MERGE (t:Tag)``
-        # makes one vertex per tag name, so collecting vertices alone turns
-        # by_tag into a misleading presence map whose values are all 1.
-        cypher = "MATCH (:Discovery)-[:TAGGED]->(t:Tag) RETURN collect(t.name)"
-        result = await db.graph_query(cypher, {})
-        tag_names = result[0] if result and isinstance(result[0], list) else []
-        # JSON responses cap dictionaries at 100 keys, so put the most-used
-        # tags first instead of exposing an arbitrary graph traversal prefix.
-        by_tag = dict(Counter(t for t in tag_names if t).most_common())
+        # Tags are stored canonically on the SQL discovery row. AGE's Tag and
+        # TAGGED projection can be missing otherwise-retrievable rows, so it is
+        # not an authoritative counting source. The helper orders by frequency
+        # before building the dict, preserving the most-used tags when response
+        # serialization caps large dictionaries.
+        tag_stats = await db.kg_tag_stats(
+            including_cold=including_cold,
+            epoch=None,
+        )
 
         return {
             "total_discoveries": total_count,
             "by_agent": by_agent,
             "by_type": by_type,
             "by_status": by_status,
-            "by_tag": by_tag,
+            "by_tag": tag_stats["by_tag"],
             "total_edges": total_edges,
             "total_agents": len(by_agent),
-            "total_tags": total_tags,
+            "total_tags": tag_stats["total_tags"],
+            "total_tag_assignments": tag_stats["total_tag_assignments"],
             "scope": {
                 "kind": "raw_status_aggregate",
                 "epoch_scope": effective_epoch_scope,  # AGE: always "all"
                 "including_cold": including_cold,
                 "note": (
-                    "AGE backend has no epoch property — counts span all "
-                    "epochs. Compare with knowledge action=stats which uses "
-                    "lifecycle buckets."
+                    "AGE backend has no epoch property — discovery and edge "
+                    "counts span all epochs. Tag aggregates use the SQL "
+                    "source-of-truth with the same all-epoch scope because "
+                    "the AGE projection may lag. Compare with knowledge "
+                    "action=stats which uses lifecycle buckets."
                 ),
             },
         }
