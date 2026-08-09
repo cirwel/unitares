@@ -178,7 +178,7 @@ async def test_unbound_read_returns_unbound_shape_and_mints_nothing():
 
     args = {}
     with patch(
-        "src.mcp_handlers.context.get_context_agent_id", return_value=None
+        "src.mcp_handlers.context.get_context_resolved_agent_id", return_value=None
     ):
         result = await handle_get_governance_metrics(args)
 
@@ -284,7 +284,7 @@ async def test_bound_rest_direct_handler_proceeds():
 
     data_mock = AsyncMock(return_value={"ok": True})
     with patch(
-        "src.mcp_handlers.context.get_context_agent_id",
+        "src.mcp_handlers.context.get_context_resolved_agent_id",
         return_value="agent-rest-bound",
     ), patch(
         "src.services.http_tool_service.require_agent_id",
