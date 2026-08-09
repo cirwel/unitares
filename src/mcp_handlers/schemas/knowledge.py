@@ -340,7 +340,7 @@ class KnowledgeParams(AgentIdentityMixin):
     discovery_type: Optional[str] = Field(None, description="Required for action=store. One of: " + ", ".join(get_args(DiscoveryType)) + ".")
     response_to: Optional[dict] = Field(None, description="Typed response link {discovery_id, response_type} for threaded store/note writes")
     tags: Optional[List[str]] = Field(None, description="Tags for discovery (for action=store, search, note)")
-    severity: Optional[str] = Field(None, description="Severity: low, medium, high, critical (for action=store)")
+    severity: Optional[str] = Field(None, description="Severity: low, medium, high, critical (for action=store or action=update)")
     related_files: Optional[List[str]] = Field(None, description="File paths referenced by this discovery (for action=store)")
     auto_link_related: Union[bool, str, None] = Field(None, description="If false, skip automatic similar-discovery linking for action=store")
     confidence: Union[float, str, None] = Field(
