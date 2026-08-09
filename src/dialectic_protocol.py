@@ -610,6 +610,13 @@ class DialecticSession:
                 "rounds": self.synthesis_round - 1
             }
 
+        # Read the reviewer's standing verdict BEFORE recording this message.
+        # Scanning after the append is a live bug in reviewer_mode='self', where the
+        # paused agent IS the reviewer: the scan would find this very message and
+        # read the agent's own approval as "the reviewer's latest verdict",
+        # superseding its own earlier rejection.
+        objection_stands = self._reviewer_objection_stands()
+
         # Store message
         self.transcript.append(message)
 
@@ -630,7 +637,8 @@ class DialecticSession:
         if (
             message.agrees
             and message.agent_id == self.paused_agent_id
-            and self._reviewer_objection_stands()
+            and self.reviewer_agent_id != self.paused_agent_id
+            and objection_stands
         ):
             self.synthesis_round += 1
             self.awaiting_facilitation = True
@@ -645,8 +653,22 @@ class DialecticSession:
                 "reason": (
                     "The reviewer's standing verdict on this session is a rejection. "
                     "The paused agent cannot resolve its own session over that "
-                    "objection; a reviewer or third party must agree, or an operator "
-                    "must facilitate."
+                    "objection."
+                ),
+                # Deliberately NOT advertising remediation routes here: as of
+                # 2026-08-09 none of the obvious ones works from SYNTHESIS. The
+                # handler's non-participant allow-list blocks a third-party
+                # synthesizer, reassign_reviewer refuses any phase but
+                # THESIS/ANTITHESIS, and the auto-resolve sweeper's facilitation
+                # branch is ANTITHESIS-only so this session will be marked FAILED
+                # after STUCK_SESSION_THRESHOLD rather than reaching a human.
+                # Failing closed beats resuming over a rejection, but it is not
+                # facilitation and must not be described as such until one of those
+                # three paths is opened.
+                "operator_note": (
+                    "No in-protocol remediation path currently exists from this "
+                    "state; the session will be swept to FAILED rather than "
+                    "facilitated. Tracked as follow-up work."
                 ),
             }
 
@@ -680,6 +702,16 @@ class DialecticSession:
         reviewer supersedes an earlier rejection, so a reviewer that is talked
         round still resolves the session normally. Returns False when there is no
         reviewer, or the reviewer has not yet returned a verdict.
+
+        Call this BEFORE appending the message under evaluation; see submit_synthesis.
+
+        KNOWN GAP (2026-08-09): this only recognises reviewer *synthesis* verdicts.
+        A reviewer that has filed a disputing antithesis but not yet posted its
+        synthesis does not count as a standing objection, so a paused agent that
+        wins the race between the reviewer's two calls can still self-clear.
+        Whether a disputing antithesis alone should block is a governance decision,
+        not a bug fix — it would stop nearly every paused agent from ever resolving
+        its own session, which may well be correct.
         """
         if not self.reviewer_agent_id:
             return False

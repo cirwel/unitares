@@ -110,23 +110,49 @@ class TestLegitimateResolutionStillWorks:
         assert result["converged"] is True
         assert s.phase == DialecticPhase.RESOLVED
 
-    def test_paused_agent_agrees_with_no_reviewer_verdict_yet_resolves(self):
-        """Unchanged behaviour: nothing to override when the reviewer is silent."""
+    def test_paused_agent_resolves_before_reviewer_posts_its_verdict(self):
+        """KNOWN GAP, pinned deliberately rather than asserted as correct.
+
+        The reviewer here has ALREADY filed a disputing antithesis ("the claimed
+        cause is unproven") — it is not silent. It just has not posted its synthesis
+        verdict yet, and the guard only recognises synthesis verdicts. The live
+        reviewer submits antithesis and synthesis as two separate awaited calls, so
+        a paused agent can win the gap between them.
+
+        Whether a disputing antithesis alone should block self-clearing is a
+        governance decision (it would stop nearly every paused agent from resolving
+        its own session). This test records today's behaviour so that a change to it
+        is deliberate and visible in the diff.
+        """
         s = _session_at_synthesis()
         result = s.submit_synthesis(_synthesis(PAUSED, agrees=True))
         assert result["converged"] is True
         assert s.phase == DialecticPhase.RESOLVED
 
-    def test_reviewer_may_change_its_mind_and_then_paused_agent_may_agree(self):
-        """A later reviewer verdict supersedes the earlier rejection."""
+    def test_reviewer_may_change_its_mind(self):
+        """A later reviewer verdict supersedes the earlier rejection.
+
+        No phase reset here: a rejecting synthesis leaves the session in SYNTHESIS,
+        which the assertion below pins. An earlier version of this test reset
+        `s.phase` by hand, which would have silently masked a regression that moved
+        the phase off SYNTHESIS after a rejection.
+        """
         s = _session_at_synthesis()
         s.submit_synthesis(_synthesis(REVIEWER, agrees=False))
-        s.phase = DialecticPhase.SYNTHESIS  # reviewer re-engages
+        assert s.phase == DialecticPhase.SYNTHESIS
         result = s.submit_synthesis(_synthesis(REVIEWER, agrees=True, ts="2026-08-09T00:04:00Z"))
         assert result["converged"] is True
 
-    def test_third_party_mediator_can_resolve_over_a_rejection(self):
-        """Option-B mediator path: a non-participant is not the interested party."""
+    def test_third_party_mediator_resolves_at_the_PROTOCOL_layer_only(self):
+        """Pins protocol behaviour for a path that is NOT reachable in production.
+
+        `handle_submit_synthesis` gates submission behind an allow-list of
+        {paused_agent_id, reviewer_agent_id}, so a non-participant cannot reach
+        `submit_synthesis` through the `dialectic` tool at all. This test therefore
+        proves only that the protocol layer would accept a mediator if the handler
+        ever let one through — it must NOT be read as evidence that third-party
+        mediation is an available escape hatch for a blocked session.
+        """
         s = _session_at_synthesis()
         s.submit_synthesis(_synthesis(REVIEWER, agrees=False))
         result = s.submit_synthesis(_synthesis(MEDIATOR, agrees=True, ts="2026-08-09T00:04:00Z"))
@@ -140,6 +166,65 @@ class TestLegitimateResolutionStillWorks:
         result = s.submit_synthesis(_synthesis(PAUSED, agrees=False, ts="2026-08-09T00:04:00Z"))
         assert result["converged"] is False
         assert result.get("blocked") is None
+
+
+class TestSelfReviewExemptionIsExplicit:
+    """reviewer_mode='self' sets reviewer_agent_id == paused_agent_id.
+
+    The guard's premise is "the interested party may not override the check". In
+    self-review there IS no independent check, so the premise does not hold and the
+    guard is exempted — deliberately, and pinned here. Blocking instead would strand
+    every self-review session that opened with a rejection, since no independent
+    party exists to unblock it.
+
+    Self-attestation is already excluded from fleet-global calibration
+    (mcp_handlers/dialectic/calibration.py), which is where the damage would be.
+    """
+
+    def _self_review_session(self) -> DialecticSession:
+        s = DialecticSession(paused_agent_id=PAUSED, reviewer_agent_id=PAUSED)
+        s.submit_thesis(
+            DialecticMessage(
+                phase="thesis",
+                agent_id=PAUSED,
+                timestamp="2026-08-09T00:00:00Z",
+                root_cause="cause",
+                reasoning="reasoning",
+                proposed_conditions=["c1"],
+            )
+        )
+        s.submit_antithesis(
+            DialecticMessage(
+                phase="antithesis",
+                agent_id=PAUSED,
+                timestamp="2026-08-09T00:01:00Z",
+                reasoning="self-objection",
+            )
+        )
+        return s
+
+    def test_self_review_reject_then_approve_still_resolves(self):
+        s = self._self_review_session()
+        s.submit_synthesis(_synthesis(PAUSED, agrees=False))
+        result = s.submit_synthesis(_synthesis(PAUSED, agrees=True, ts="2026-08-09T00:03:00Z"))
+        assert result["converged"] is True
+        assert result.get("blocked") is None
+        assert s.phase == DialecticPhase.RESOLVED
+
+    def test_the_scan_is_not_fooled_by_the_message_under_evaluation(self):
+        """Regression pin: the helper must be read BEFORE the append.
+
+        With a post-append scan, this agent's own agrees=True would be found as the
+        'reviewer's latest verdict' and supersede its own earlier rejection — which
+        is exactly how a two-party session would have been silently unblocked too.
+        """
+        s = _session_at_synthesis()
+        s.submit_synthesis(_synthesis(REVIEWER, agrees=False))
+        assert s._reviewer_objection_stands() is True
+        s.transcript.append(_synthesis(PAUSED, agrees=True, ts="2026-08-09T00:03:00Z"))
+        assert s._reviewer_objection_stands() is True, (
+            "a paused-agent message must never satisfy the reviewer-verdict scan"
+        )
 
 
 class TestObjectionStandsHelper:
