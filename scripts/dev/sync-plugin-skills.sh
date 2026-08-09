@@ -75,6 +75,47 @@ else
     exit 3
 fi
 
+# Direction guard — the uncommitted-changes check above only catches a DIRTY
+# mirror. A mirror that was edited and COMMITTED is indistinguishable from a
+# stale one: rsync overwrites it, the script prints "done", and a later run
+# reports "in sync — nothing to do". The revert leaves no signal anywhere.
+#
+# Observed 2026-08-09: plugin/skills/discord-bridge carried last_verified
+# 2026-08-02 with two extra source_files; canonical was still at 2026-07-28.
+# A plain sync would have silently rolled that back. Caught by eye, which is
+# not a control.
+#
+# `last_verified` is the right signal because it is a DECLARED verification
+# date, not a filesystem timestamp — it survives checkout, rsync and worktree
+# creation, all of which destroy mtime (see the --checksum note below for how
+# badly mtime behaves here).
+#
+# The rule and its two corrected bugs (`>` vs `>=`, and failing open on a
+# missing date) live in scripts/dev/skills_direction_guard.py, which is a
+# module rather than a heredoc precisely so the rule can be tested — see
+# tests/test_skills_direction_guard.py. A guard that has already shipped one
+# off-by-one is not one to leave uncovered.
+# `set -e` would abort on the guard's non-zero refusal exit before the status
+# could be read, so the capture is deliberately unguarded and re-armed after.
+set +e
+REGRESSIONS=$(python3 "${UNITARES_ROOT}/scripts/dev/skills_direction_guard.py" "$SRC" "$DST")
+GUARD_STATUS=$?
+set -e
+if [[ "$GUARD_STATUS" != 0 && "$GUARD_STATUS" != 4 ]]; then
+    echo "[sync-plugin-skills] direction guard failed to run (exit $GUARD_STATUS) — refusing" >&2
+    exit "$GUARD_STATUS"
+fi
+if [[ "$GUARD_STATUS" == 4 ]]; then
+    echo "[sync-plugin-skills] REFUSING — cannot show canonical is newer for:" >&2
+    echo "$REGRESSIONS" | sed 's/^/  /' >&2
+    echo >&2
+    echo "[sync-plugin-skills] Syncing would revert a verification that already happened." >&2
+    echo "[sync-plugin-skills] Forward-port into canonical first, then re-run:" >&2
+    echo "[sync-plugin-skills]   cp $DST/<skill>/SKILL.md $SRC/<skill>/SKILL.md" >&2
+    echo "[sync-plugin-skills]   python3 scripts/dev/skills_manifest.py" >&2
+    exit 4
+fi
+
 echo "[sync-plugin-skills] mirroring $SRC → $DST"
 # rsync: --delete to drop plugin-only skills (canonical is authoritative);
 # preserve only file content, not perms/owners (cross-repo is a portability concern).
