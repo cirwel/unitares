@@ -92,14 +92,47 @@ class TestSelfClearBlocked:
         assert result["awaiting_facilitation"] is True
         assert s.awaiting_facilitation is True
 
-    def test_repeated_self_clear_attempts_do_not_resolve(self):
+    def test_repeat_attempts_are_refused_without_being_recorded(self):
+        """Sweeper-starvation guard: only the FIRST attempt is persisted.
+
+        Every persisted message refreshes `dialectic_sessions.updated_at`, and the
+        auto-resolve sweeper selects on `updated_at < now() - threshold`. Recording
+        every retry let an agent hold a blocked session `active` indefinitely — no
+        resolution, no failure, no facilitation. So retries must not reach the
+        transcript.
+        """
         s = _session_at_synthesis()
         s.submit_synthesis(_synthesis(REVIEWER, agrees=False))
+
+        first = s.submit_synthesis(_synthesis(PAUSED, agrees=True, ts="2026-08-09T00:04:00Z"))
+        assert first["success"] is True, "the first attempt IS recorded (audit signal)"
+        assert first["blocked"] == "reviewer_objection_stands"
+        recorded = len(s.transcript)
+
         for i in range(3):
             r = s.submit_synthesis(
-                _synthesis(PAUSED, agrees=True, ts=f"2026-08-09T00:0{4 + i}:00Z")
+                _synthesis(PAUSED, agrees=True, ts=f"2026-08-09T00:0{5 + i}:00Z")
             )
-            assert r["converged"] is False
+            assert r["success"] is False, "retries are refused outright"
+            assert r["blocked"] == "reviewer_objection_stands"
+        assert len(s.transcript) == recorded, "no retry may be persisted"
+        assert s.phase != DialecticPhase.RESOLVED
+
+    def test_reassigning_the_reviewer_cannot_erase_a_standing_objection(self):
+        """`_apply_reviewer_reassignment` repoints reviewer_agent_id and clears the
+        facilitation flag. A guard keyed on the CURRENT reviewer id would orphan the
+        previous reviewer's rejection and self-clear on the next call.
+        """
+        s = _session_at_synthesis()
+        s.submit_synthesis(_synthesis(REVIEWER, agrees=False))
+        assert s._reviewer_objection_stands() is True
+
+        s.reviewer_agent_id = "reviewer-2"      # what reassignment does
+        s.awaiting_facilitation = False
+        assert s._reviewer_objection_stands() is True, "reassignment must not disarm the guard"
+
+        result = s.submit_synthesis(_synthesis(PAUSED, agrees=True, ts="2026-08-09T00:05:00Z"))
+        assert result["blocked"] == "reviewer_objection_stands"
         assert s.phase != DialecticPhase.RESOLVED
 
 
