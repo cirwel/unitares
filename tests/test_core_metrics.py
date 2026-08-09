@@ -409,8 +409,12 @@ class TestGetGovernanceMetrics:
             result = await handle_get_governance_metrics({})  # lite=True by default
 
             data = _parse(result)
-            # display_name takes precedence over auto-generated agent_id
-            assert data["agent_id"] == "TestAgent"
+            # `agent_id` is the public handle, never the claimed label. This
+            # metadata has no public_agent_id/structured_id, so the handle
+            # falls back to the uuid — same shape the no-label cases below
+            # assert. The label is reported under `display_name`.
+            assert data["agent_id"] == "agent-1"
+            assert data["display_name"] == "TestAgent"
             assert "status" in data
             assert "E" in data
             assert "I" in data
