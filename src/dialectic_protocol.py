@@ -613,6 +613,43 @@ class DialecticSession:
         # Store message
         self.transcript.append(message)
 
+        # An interested party may not clear a standing objection.
+        #
+        # The paused agent wants to resume; the reviewer is the only check on that.
+        # `agrees=True` from the paused agent, over a reviewer synthesis that said
+        # agrees=False, is self-clearing rather than convergence. Measured on live
+        # data 2026-08-09: 13 of 15 resolved non-probe sessions since 2026-06-28
+        # resolved this way, median 2.2 minutes after the rejection — the reviewer's
+        # verdict had never once blocked a resumption.
+        #
+        # This routes to facilitation rather than resolving. It deliberately does NOT
+        # wait for the reviewer to ratify: the orchestrated reviewer subprocess exits
+        # immediately after posting its verdict, so a "both participants must agree"
+        # rule would strand the session forever — the never-resolve regression the
+        # synthetic-reviewer path was built to kill.
+        if (
+            message.agrees
+            and message.agent_id == self.paused_agent_id
+            and self._reviewer_objection_stands()
+        ):
+            self.synthesis_round += 1
+            self.awaiting_facilitation = True
+            return {
+                "success": True,
+                "converged": False,
+                "blocked": "reviewer_objection_stands",
+                "phase": self.phase.value,
+                "round": self.synthesis_round,
+                "max_rounds": self.max_synthesis_rounds,
+                "awaiting_facilitation": True,
+                "reason": (
+                    "The reviewer's standing verdict on this session is a rejection. "
+                    "The paused agent cannot resolve its own session over that "
+                    "objection; a reviewer or third party must agree, or an operator "
+                    "must facilitate."
+                ),
+            }
+
         # Convergence: agrees=True resolves immediately.
         # Thesis → Antithesis → Synthesis is three phases, not four.
         if message.agrees:
@@ -635,6 +672,25 @@ class DialecticSession:
             "round": self.synthesis_round,
             "max_rounds": self.max_synthesis_rounds,
         }
+
+    def _reviewer_objection_stands(self) -> bool:
+        """True when the reviewer's most recent synthesis verdict was a rejection.
+
+        Only the reviewer's LAST verdict counts — a later `agrees=True` from the
+        reviewer supersedes an earlier rejection, so a reviewer that is talked
+        round still resolves the session normally. Returns False when there is no
+        reviewer, or the reviewer has not yet returned a verdict.
+        """
+        if not self.reviewer_agent_id:
+            return False
+        for msg in reversed(self.transcript):
+            if (
+                getattr(msg, "phase", None) == "synthesis"
+                and msg.agent_id == self.reviewer_agent_id
+                and msg.agrees is not None
+            ):
+                return msg.agrees is False
+        return False
 
     @staticmethod
     def _normalize_condition_terms(cond: str) -> set:

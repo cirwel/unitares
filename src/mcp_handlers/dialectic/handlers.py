@@ -2071,6 +2071,11 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                         _beam_ph = await beam_update_phase(session_id, session.phase.value)
                         if _beam_ph is None:
                             await pg_update_phase(session_id, session.phase.value)
+                    # A self-clear attempt over a standing reviewer rejection must
+                    # leave a durable facilitation flag, not just an in-memory one —
+                    # otherwise the next process to load the session resolves it.
+                    if result.get("blocked") == "reviewer_objection_stands":
+                        await pg_update_awaiting_facilitation(session_id, True)
                 except Exception as e:
                     logger.warning(f"Could not update PostgreSQL after synthesis: {e}")
     

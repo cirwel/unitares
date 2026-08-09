@@ -290,6 +290,14 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
             {"action": "antithesis", "session_id": thesis.session_id, "reasoning": verdict.reasoning},
         )
         # Submit the model-derived verdict — agrees may be False (the whole point).
+        #
+        # `reasoning` deliberately does NOT repeat verdict.reasoning here. One model
+        # call produces one Verdict; posting its prose as both the antithesis and the
+        # synthesis made every session look like it contained a merge step it never
+        # had (byte-identical antithesis/synthesis reasoning in 100% of pairs from
+        # 2026-06-28). The verdict fields below are real and must keep being posted —
+        # this message, not the antithesis, is what carries `agrees`, `root_cause`
+        # and `proposed_conditions` into the record.
         await client.call_tool(
             "dialectic",
             {
@@ -298,7 +306,10 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
                 "agrees": verdict.agrees,
                 "proposed_conditions": verdict.proposed_conditions,
                 "root_cause": verdict.root_cause,
-                "reasoning": verdict.reasoning,
+                "reasoning": (
+                    "Verdict only — this reviewer produces a single judgment; "
+                    "its reasoning is recorded on the antithesis message."
+                ),
             },
         )
         # A real check-in before exit (subagent-onboarding discipline).
