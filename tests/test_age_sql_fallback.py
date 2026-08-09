@@ -130,6 +130,11 @@ def _make_db(
     db.graph_available = AsyncMock(return_value=graph_available)
     db.graph_query = AsyncMock(return_value=graph_query_returns if graph_query_returns is not None else [])
     db.kg_get_discovery = AsyncMock(return_value=kg_get_discovery_returns)
+    db.kg_tag_stats = AsyncMock(return_value={
+        "by_tag": {},
+        "total_tags": 0,
+        "total_tag_assignments": 0,
+    })
 
     pool = MagicMock()
     pool.fetchval = AsyncMock(return_value=None)
@@ -713,6 +718,7 @@ class TestGetStatsSQLFallback:
             "by_tag": {},
             "total_edges": 0,
             "total_tags": 0,
+            "total_tag_assignments": 0,
             "total_agents": 2,
         })
         kg = await _make_kg(db)
@@ -734,6 +740,10 @@ class TestGetStatsSQLFallback:
         stats = await kg.get_stats()
 
         db.kg_stats.assert_not_awaited()
+        db.kg_tag_stats.assert_awaited_once_with(
+            including_cold=False,
+            epoch=None,
+        )
         assert stats["total_discoveries"] == 3
 
     async def test_age_empty_and_sql_empty_returns_age_response(self):
