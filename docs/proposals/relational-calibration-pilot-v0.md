@@ -1,8 +1,15 @@
-# Relational calibration pilot v0: protocol and threat model
+# Relational calibration pilot v0.1: protocol and threat model
 
 Status: specification only; runtime implementation prohibited
 
 Date: 2026-08-10
+
+Version: 0.1
+
+Amendment: v0.1 replaces the insufficient five-envelope eligibility rule with
+the deployed behavioral-maturity contract, repairs the distinct-role minimum
+implied by the contribution bounds, and adds a frozen, aggregate-only capacity
+prerequisite. It does not relax any privacy or implementation gate.
 
 Scope: whether one participant's forecast of another participant's future EISV
 telemetry contains repeatable information beyond preregistered non-relational
@@ -18,7 +25,8 @@ A future implementation remains blocked until all of these gates are recorded:
 
 | Gate | Required evidence | Current state |
 |---|---|---|
-| Protocol | This preregistration is merged without runtime capability | pending |
+| Protocol | This preregistration is merged without runtime capability | v0 merged in PR #1574; v0.1 remains documentation-only |
+| Maturity capacity | The one-time aggregate read in [`relational-calibration-maturity-capacity-v0.md`](relational-calibration-maturity-capacity-v0.md) returns `capacity_ready` | preregistered; reconnaissance is below the gate |
 | Privacy architecture | Independent review demonstrates resistance to reconstruction, linkage, differencing, collusion, and deletion side channels | blocked |
 | Adversarial test | A prototype outside production passes the attacks in this document | blocked |
 | Operator authorization | A human operator explicitly approves a fixed cohort, duration, access policy, privacy budget, retention schedule, incident plan, and shutdown procedure **after** reviewing the privacy evidence | blocked |
@@ -133,9 +141,16 @@ No confirmatory statistic may be released unless the completed cohort has all
 of:
 
 - at least 200 eligible matched dyads;
-- at least 50 distinct established observers;
-- at least 50 distinct established subjects; and
+- at least 100 distinct established observers;
+- at least 100 distinct established subjects; and
 - no identity exceeding the contribution bounds above.
+
+The v0 values of 50 observers and 50 subjects were arithmetically inconsistent
+with 200 dyads: at no more than two contributions in either role, 50 observers
+can supply at most 100 dyads, and the same limit applies to 50 subjects. The
+correct lower bound is 100 distinct identities in each role. The role sets may
+overlap, so 100 total identities is possible only if every identity serves in
+both roles at both contribution limits; disjoint role sets require 200.
 
 The 200-dyad gate targets roughly 80% power for a `0.05` paired improvement when
 the participant-clustered standard deviation is no greater than `0.25`, before
@@ -147,24 +162,87 @@ outcomes are inspected.
 If any threshold is missed, the only publishable result is
 `insufficient_private_cohort`. Exact near-threshold counts are not disclosed.
 
+Before implementation review, the separate
+[maturity-capacity preregistration](relational-calibration-maturity-capacity-v0.md)
+must return `capacity_ready`. That read is only an upper bound on possible
+participants. It does not establish consent, current strong identity, role
+availability, privacy readiness, or permission to enroll anyone.
+
 ## Eligibility
 
 Eligibility is evaluated before prediction and must fail closed.
 
-Both participants must have:
+At the latest eligible pre-enrollment state, both participants must have:
 
 - caller-proven strong identity at each consent or contribution step;
-- at least five complete, non-synthetic EISV telemetry envelopes spanning at
-  least 24 hours;
+- server-persisted `behavioral_eisv.warmup.is_baselined = true`;
+- `behavioral_eisv.warmup.baseline_confidence >= 0.8` and Welford
+  `baseline_stats` counts of at least 25 for each of `E`, `I`, `S`, and `V`,
+  all read from the same state row;
+- the v0.1 maturity-version tuple: `baseline_target = 30`, behavioral
+  `v_formula_version = 2`, and the server-reported `is_baselined` flag above;
+- a complete, non-synthetic `eisv.telemetry.v1` envelope carrying the
+  preregistered measurement and derivation provenance;
 - no bootstrap or synthetic row used for eligibility, baseline, or reference;
 - enrollment in the fixed cohort before its consent window closes; and
 - no active block, withdrawal, or conflicting role constraint.
+
+The v0 five-envelope/24-hour rule is withdrawn. In the deployed behavioral
+implementation, five updates only end the zero-data portion of baseline
+confidence; they do not establish the self-relative measurement regime.
+`is_baselined` becomes true at confidence `0.8` (currently about update 25),
+while confidence reaches `1.0` at update 30. The protocol keys on the persisted
+server flag and freezes the accompanying numeric/version checks so a later code
+change cannot silently reinterpret this cohort.
+
+The descriptive `warmup.phase` string is not an eligibility predicate. It
+remains `warming_up` until update 30 even though self-relative scoring becomes
+eligible at `is_baselined = true` around update 25. Substituting the phase label
+would silently change the maturity contract.
+
+Subject maturity is semantically load-bearing because the subject supplies the
+future reference measurement. Observer maturity is a conservative
+established-participant and anti-Sybil condition that keeps both cohort roles
+under one auditable contract. Neither is evidence of empathy, experience,
+moral status, reliability, or worth.
 
 Self-prediction is forbidden. Eligibility identity is used only by a dedicated
 access service. The analysis plane receives a random, epoch-scoped pseudonym;
 stable UUIDs, display names, session IDs, and lineage are not analysis fields.
 Strong identity limits duplicate participation but is not treated as proof
 against Sybils.
+
+## Measurement-phase and provenance lock
+
+The last eligible subject measurement available before prediction commitment
+and the future target must both satisfy the maturity contract above and carry
+the same preregistered provenance tuple:
+
+```text
+(envelope schema,
+ primary EISV source,
+ behavioral observation source,
+ derivation kind,
+ derivation formula version,
+ behavioral V formula version)
+```
+
+For the v0.1 pilot and capacity gate, the only compatible tuple is frozen to
+`(eisv.telemetry.v1, behavioral, behavioral, behavioral_sensor,
+behavioral_sensor.v1, 2)`, with an empty `derivation.missing_inputs` array. A
+future protocol may preregister another source stratum, but may not pool unlike
+instruments after seeing results.
+
+Any cold-start-to-baselined transition, schema change, source change, missing
+provenance field, formula-version change, or incomplete derivation between the
+persistence reference and target yields `source_gap` and no score. The isolated
+analysis may retain only the epoch-scoped tuple needed to enforce this rule; it
+must not expose stable participant identities or provenance histories.
+
+v0.1 retains the future normalized raw EISV reference as its target and tests
+incremental skill against subject persistence. A within-subject residual or
+change-score target is a different estimand and requires a new protocol,
+cohort, and privacy budget; it cannot be substituted after outcomes are seen.
 
 ## Target selection
 
@@ -178,7 +256,9 @@ first row that satisfies all of:
 
 - `synthetic IS NOT TRUE`;
 - the EISV telemetry envelope is complete and on the preregistered schema;
-- the source is on the preregistered eligible-source list; and
+- the subject remains mature under the frozen v0.1 contract;
+- the source and complete provenance tuple match the pre-commitment persistence
+  reference; and
 - `recorded_at` lies inside the fixed capture window.
 
 No caller-supplied vector is accepted. No later or earlier row may be selected
