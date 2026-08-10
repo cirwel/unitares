@@ -821,9 +821,8 @@ class TestListAgentsNoHydration:
 
     Hydrating every un-loaded monitor turned the include_metrics list into N
     synchronous DB round-trips (anyio/asyncpg amplification), blowing the 15s
-    timeout on a large fleet — which froze the dashboard's cached health counts
-    (a phantom "N critical" with no live row). Non-resident agents must instead
-    use the health_status cached on agent_metadata.
+    timeout on a large fleet. Non-resident agents may use one batch read of the
+    latest durable states, but must never create/hydrate monitors individually.
     """
 
     @pytest.fixture
@@ -858,6 +857,67 @@ class TestListAgentsNoHydration:
             assert data["summary"]["by_health"]["critical"] == 1
             # The hot path: NO monitor was created/hydrated for any agent.
             mock_mcp_server.get_or_create_monitor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_batch_persisted_state_fills_unloaded_monitor_metrics(
+        self, mock_mcp_server
+    ):
+        from src.db.base import AgentStateRecord
+
+        recorded_at = datetime.now(timezone.utc) - timedelta(hours=2)
+        mock_mcp_server.monitors = {}
+        mock_mcp_server.agent_metadata = {
+            "agent-1": make_agent_meta(
+                label="Persisted",
+                total_updates=42,
+                health_status=None,
+                trust_tier="emerging",
+            ),
+        }
+        state = AgentStateRecord(
+            state_id=1,
+            identity_id=10,
+            agent_id="agent-1",
+            recorded_at=recorded_at,
+            energy=0.70,
+            integrity=0.74,
+            entropy=0.28,
+            void=-0.04,
+            coherence=0.48,
+            regime="EXPLORATION",
+            epistemic_class="substrate_interpretation",
+            state_json={
+                "E": 0.70,
+                "risk_score": 0.0,
+                "phi": 0.2,
+                "verdict": "safe",
+                "health_status": "healthy",
+            },
+        )
+        mock_db = MagicMock()
+        mock_db.get_all_latest_agent_states = AsyncMock(return_value=[state])
+
+        with patch_lifecycle_server(mock_mcp_server), \
+             patch("src.db.get_db", return_value=mock_db):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            result = await handle_list_agents({
+                "include_metrics": True,
+                "grouped": True,
+                "status_filter": "all",
+            })
+
+        data = json.loads(result[0].text)
+        agent = [a for bucket in data["agents"].values() for a in bucket][0]
+        assert agent["health_status"] == "healthy"
+        assert agent["metrics"]["E"] == pytest.approx(0.70)
+        assert agent["metrics"]["I"] == pytest.approx(0.74)
+        assert agent["metrics"]["S"] == pytest.approx(0.28)
+        assert agent["metrics"]["V"] == pytest.approx(-0.04)
+        assert agent["metrics"]["risk_score"] == pytest.approx(0.0)
+        assert agent["metrics"]["source"] == "persisted_state"
+        assert agent["metrics"]["recorded_at"] == recorded_at.isoformat()
+        mock_db.get_all_latest_agent_states.assert_awaited_once()
+        mock_mcp_server.get_or_create_monitor.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_missing_cached_health_falls_back_to_unknown(self, mock_mcp_server):

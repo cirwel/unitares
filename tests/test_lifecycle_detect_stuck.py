@@ -8,7 +8,7 @@ import pytest
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 from types import SimpleNamespace
 
 project_root = Path(__file__).parent.parent
@@ -60,6 +60,14 @@ def _make_monitor(
     monitor.state = state
     monitor.get_metrics.return_value = {"mean_risk": risk}
     return monitor
+
+
+def _cadence_profile(now, *, first_min_ago, last_min_ago, report_count):
+    return {
+        "report_count": report_count,
+        "first_report_at": now - timedelta(minutes=first_min_ago),
+        "last_report_at": now - timedelta(minutes=last_min_ago),
+    }
 
 
 def _margin_info(margin="comfortable", nearest_edge=None, distance=0.5):
@@ -624,7 +632,11 @@ class TestDetectStuckAgentsCadenceSilence:
         mock_server.monitors = {}
         mock_server.load_monitor_state.return_value = None
         from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
-        result = _detect_stuck_agents()
+        result = _detect_stuck_agents(cadence_profiles={
+            "a1": _cadence_profile(
+                now, first_min_ago=60, last_min_ago=50, report_count=13
+            ),
+        })
         cadence = [r for r in result if r["reason"] == "cadence_silence"]
         assert len(cadence) == 1
         assert cadence[0]["soft"] is True
@@ -640,7 +652,11 @@ class TestDetectStuckAgentsCadenceSilence:
         mock_server.monitors = {}
         mock_server.load_monitor_state.return_value = None
         from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
-        result = _detect_stuck_agents()
+        result = _detect_stuck_agents(cadence_profiles={
+            "a1": _cadence_profile(
+                now, first_min_ago=60, last_min_ago=50, report_count=3
+            ),
+        })
         assert [r for r in result if r["reason"] == "cadence_silence"] == []
 
     @patch(_PATCHES["mcp_server"])
@@ -653,7 +669,11 @@ class TestDetectStuckAgentsCadenceSilence:
         mock_server.monitors = {}
         mock_server.load_monitor_state.return_value = None
         from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
-        result = _detect_stuck_agents()
+        result = _detect_stuck_agents(cadence_profiles={
+            "a1": _cadence_profile(
+                now, first_min_ago=24 * 60, last_min_ago=90, report_count=6
+            ),
+        })
         assert [r for r in result if r["reason"] == "cadence_silence"] == []
 
     @patch(_PATCHES["mcp_server"])
@@ -666,7 +686,11 @@ class TestDetectStuckAgentsCadenceSilence:
         mock_server.monitors = {}
         mock_server.load_monitor_state.return_value = None
         from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
-        result = _detect_stuck_agents()
+        result = _detect_stuck_agents(cadence_profiles={
+            "a1": _cadence_profile(
+                now, first_min_ago=60, last_min_ago=10, report_count=13
+            ),
+        })
         assert [r for r in result if r["reason"] == "cadence_silence"] == []
 
     @patch(_PATCHES["mcp_server"])
@@ -680,7 +704,35 @@ class TestDetectStuckAgentsCadenceSilence:
         mock_server.monitors = {}
         mock_server.load_monitor_state.return_value = None
         from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
-        result = _detect_stuck_agents()
+        result = _detect_stuck_agents(cadence_profiles={
+            "a1": _cadence_profile(
+                now,
+                first_min_ago=26 * 60,
+                last_min_ago=25 * 60,
+                report_count=13,
+            ),
+        })
+        assert [r for r in result if r["reason"] == "cadence_silence"] == []
+
+    @patch(_PATCHES["mcp_server"])
+    def test_substrate_only_updates_do_not_establish_authored_cadence(
+        self, mock_server
+    ):
+        """42 automatic hook rows are observations, not authored check-ins."""
+        now = datetime.now(timezone.utc)
+        mock_server.agent_metadata = {
+            "a1": self._silent_meta(
+                now,
+                created_min_ago=12 * 60,
+                last_update_min_ago=8 * 60,
+                total_updates=42,
+            ),
+        }
+        mock_server.monitors = {}
+        mock_server.load_monitor_state.return_value = None
+        from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
+
+        result = _detect_stuck_agents(cadence_profiles={})
         assert [r for r in result if r["reason"] == "cadence_silence"] == []
 
     @patch(_PATCHES["gov_config"])
@@ -698,9 +750,57 @@ class TestDetectStuckAgentsCadenceSilence:
             "critical", nearest_edge="risk", distance=0.02
         )
         from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
-        result = [r for r in _detect_stuck_agents(critical_margin_timeout_minutes=5) if r["agent_id"] == "a1"]
+        result = [r for r in _detect_stuck_agents(
+            critical_margin_timeout_minutes=5,
+            cadence_profiles={
+                "a1": _cadence_profile(
+                    now, first_min_ago=60, last_min_ago=50, report_count=13
+                ),
+            },
+        ) if r["agent_id"] == "a1"]
         assert len(result) == 1
         assert result[0]["reason"] == "cadence_silence"
+
+
+class TestLoadAgentReportCadences:
+
+    @pytest.mark.asyncio
+    async def test_loads_only_authored_report_profile(self):
+        first = datetime(2026, 8, 9, 18, 0, tzinfo=timezone.utc)
+        last = datetime(2026, 8, 9, 18, 10, tzinfo=timezone.utc)
+        conn = MagicMock()
+        conn.fetch = AsyncMock(return_value=[{
+            "agent_id": "agent-1",
+            "report_count": 13,
+            "first_report_at": first,
+            "last_report_at": last,
+        }])
+
+        class Acquire:
+            async def __aenter__(self):
+                return conn
+
+            async def __aexit__(self, *_args):
+                return False
+
+        db = MagicMock()
+        db.acquire.return_value = Acquire()
+        with patch("src.db.get_db", return_value=db):
+            from src.mcp_handlers.lifecycle.stuck import (
+                _load_agent_report_cadences,
+            )
+            profiles = await _load_agent_report_cadences()
+
+        assert profiles == {
+            "agent-1": {
+                "report_count": 13,
+                "first_report_at": first,
+                "last_report_at": last,
+            },
+        }
+        sql = conn.fetch.await_args.args[0]
+        assert "= 'agent_report'" in sql
+        assert "s.synthetic = false" in sql
 
 
 class TestMarginStaleCap:
@@ -789,14 +889,15 @@ class TestStuckAuditDedupe:
     async def test_unchanged_set_writes_audit_once(self):
         stuck_set = self._stuck_set(("a1", "critical_margin_timeout"))
         with patch(_PATCHES["mcp_server"]) as mock_server, \
+             patch("src.mcp_handlers.lifecycle.stuck._load_agent_report_cadences", new=AsyncMock(return_value={})), \
              patch("src.mcp_handlers.lifecycle.stuck._detect_stuck_agents", return_value=stuck_set) as mock_detect, \
              patch("src.audit_log.audit_logger._write_entry") as mock_write:
             mock_server.load_metadata_async = MagicMock(return_value=_async_none())
             from src.mcp_handlers.lifecycle.stuck import handle_detect_stuck_agents
             await handle_detect_stuck_agents({})
             # Pin the executor argument order: (max_age, critical_timeout,
-            # tight_timeout, include_patterns, min_updates)
-            mock_detect.assert_called_once_with(30.0, 5.0, 15.0, True, 1)
+            # tight_timeout, include_patterns, min_updates, authored cadences)
+            mock_detect.assert_called_once_with(30.0, 5.0, 15.0, True, 1, {})
             mock_server.load_metadata_async = MagicMock(return_value=_async_none())
             await handle_detect_stuck_agents({})
             assert mock_write.call_count == 1
@@ -806,6 +907,7 @@ class TestStuckAuditDedupe:
         first = self._stuck_set(("a1", "critical_margin_timeout"))
         second = self._stuck_set(("a1", "critical_margin_timeout"), ("a2", "cadence_silence"))
         with patch(_PATCHES["mcp_server"]) as mock_server, \
+             patch("src.mcp_handlers.lifecycle.stuck._load_agent_report_cadences", new=AsyncMock(return_value={})), \
              patch("src.mcp_handlers.lifecycle.stuck._detect_stuck_agents", side_effect=[first, second]), \
              patch("src.audit_log.audit_logger._write_entry") as mock_write:
             mock_server.load_metadata_async = MagicMock(side_effect=lambda: _async_none())
@@ -819,6 +921,7 @@ class TestStuckAuditDedupe:
         """non-empty → empty → same non-empty set again must log twice."""
         stuck_set = self._stuck_set(("a1", "critical_margin_timeout"))
         with patch(_PATCHES["mcp_server"]) as mock_server, \
+             patch("src.mcp_handlers.lifecycle.stuck._load_agent_report_cadences", new=AsyncMock(return_value={})), \
              patch("src.mcp_handlers.lifecycle.stuck._detect_stuck_agents", side_effect=[stuck_set, [], stuck_set]), \
              patch("src.audit_log.audit_logger._write_entry") as mock_write:
             mock_server.load_metadata_async = MagicMock(side_effect=lambda: _async_none())
@@ -1269,7 +1372,11 @@ class TestStuckEntryIdentifierEnrichment:
         mock_server.monitors = {}
         mock_server.load_monitor_state.return_value = None
         from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
-        entry = _detect_stuck_agents()[0]
+        entry = _detect_stuck_agents(cadence_profiles={
+            uid: _cadence_profile(
+                now, first_min_ago=60, last_min_ago=50, report_count=13
+            ),
+        })[0]
         assert entry["agent_id"] == uid           # UUID preserved for recovery
         assert entry["agent_name"] == "Sentinel"  # was never set → empty audit rows
         assert entry["public_agent_id"]           # joinable by a redacted client
@@ -1288,7 +1395,11 @@ class TestStuckEntryIdentifierEnrichment:
         mock_server.load_monitor_state.return_value = None
         from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
         from src.mcp_handlers.lifecycle.query import _public_agent_identifier
-        entry = _detect_stuck_agents()[0]
+        entry = _detect_stuck_agents(cadence_profiles={
+            uid: _cadence_profile(
+                now, first_min_ago=60, last_min_ago=50, report_count=13
+            ),
+        })[0]
         assert entry["public_agent_id"] == _public_agent_identifier(uid, meta)
 
     @patch(_PATCHES["mcp_server"])
@@ -1301,7 +1412,11 @@ class TestStuckEntryIdentifierEnrichment:
         mock_server.monitors = {}
         mock_server.load_monitor_state.return_value = None
         from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents, stuck_change_token
-        entry = _detect_stuck_agents()[0]
+        entry = _detect_stuck_agents(cadence_profiles={
+            "a1": _cadence_profile(
+                now, first_min_ago=60, last_min_ago=50, report_count=13
+            ),
+        })[0]
         legacy = {"agent_id": entry["agent_id"], "reason": entry["reason"]}
         assert stuck_change_token([entry]) == stuck_change_token([legacy])
 
@@ -1335,7 +1450,11 @@ class TestStuckEntryIdentifierEnrichment:
         mock_server.monitors = {}
         mock_server.load_monitor_state.return_value = None
         from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
-        result = _detect_stuck_agents()
+        result = _detect_stuck_agents(cadence_profiles={
+            "a1": _cadence_profile(
+                now, first_min_ago=60, last_min_ago=50, report_count=13
+            ),
+        })
         assert len(result) == 1
         assert result[0]["reason"] == "cadence_silence"
         assert result[0]["agent_id"] == "a1"
