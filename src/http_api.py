@@ -339,6 +339,30 @@ _HTTP_PREBIND_SKIP_TOOLS = {
 }
 
 
+def _explicit_bind_corroboration(arguments: dict) -> str:
+    """Classify what *else* a caller offered alongside a declared ``agent_id``.
+
+    Pure and side-effect free. Exists so the canary below can answer one
+    question with data instead of estimation: if the explicit-``agent_id``
+    path required corroborating proof, which live callers would still bind?
+
+      * ``csid``  — echoed ``client_session_id``; the server issued it, so the
+        caller demonstrably completed an onboard.
+      * ``token`` — ``continuity_token``; same-live-process rebind proof.
+      * ``none``  — the uuid and nothing else.
+
+    ``none`` is the population that a corroboration requirement would turn
+    away, and therefore the whole cost of tightening this path.
+    """
+    if not isinstance(arguments, dict):
+        return "none"
+    if isinstance(arguments.get("client_session_id"), str) and arguments["client_session_id"]:
+        return "csid"
+    if isinstance(arguments.get("continuity_token"), str) and arguments["continuity_token"]:
+        return "token"
+    return "none"
+
+
 def _bind_explicit_http_agent(arguments: dict) -> str | None:
     explicit_agent_id = arguments.get("agent_id")
     if not (
@@ -348,6 +372,29 @@ def _bind_explicit_http_agent(arguments: dict) -> str | None:
     ):
         return None
     from src.mcp_handlers.context import update_context_agent_id
+
+    # CANARY — observation only, no behaviour change.
+    #
+    # This branch accepts an identity on the caller's word: the test above is
+    # a *shape* check (36 chars, 4 hyphens), not a lookup, and it runs first in
+    # `_resolve_http_prebind`, ahead of the operator token and the sticky
+    # binding. A resolution that succeeds here means the strict-identity gate
+    # downstream never sees a miss, so it never emits its typed refusal.
+    #
+    # That is the surface the trust-anchor audit is scoped to. Closing it is a
+    # behaviour change with real blast radius — some live callers declare a
+    # uuid and nothing else — and per the fleet rule that a gate needs a wired
+    # canary before it is armed, this measures the population first. The log
+    # line is the measurement; nothing here changes what binds.
+    #
+    # Deliberately NOT logged: the uuid itself, at any length. A prefix is
+    # still an identity fragment, and this line is meant to be safe to leave
+    # on in a live server and safe to read in a shared log.
+    logger.info(
+        "[ATTEST] explicit_agent_id bind corroboration=%s tool_arg_keys=%d",
+        _explicit_bind_corroboration(arguments),
+        len(arguments) if isinstance(arguments, dict) else 0,
+    )
 
     update_context_agent_id(explicit_agent_id)
     return explicit_agent_id
