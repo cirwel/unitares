@@ -1644,6 +1644,54 @@ async def http_eisv_recent(request):
     return JSONResponse({"type": "eisv_recent", "count": len(events), "events": events})
 
 
+_EISV_TELEMETRY_HEALTH_CACHE_TTL_SECONDS = 30.0
+_eisv_telemetry_health_cache: dict[int, tuple[float, dict[str, Any]]] = {}
+
+
+async def http_eisv_telemetry_health(request):
+    """GET /v1/eisv/telemetry-health?days=30 — fleet instrumentation health.
+
+    Aggregates the append-only EISV telemetry envelope without feeding any
+    result back into measurement, policy, or enforcement.  The outcome slice is
+    strict-external and lead-separated; its calibration bins are descriptive,
+    clustered audit evidence rather than a claim of predictive lift.
+
+    The redesign refreshes monitor views every ten seconds, while this endpoint
+    scans a durable multi-day cohort.  Cache each supported window briefly so a
+    dashboard tab does not turn observability into database load.
+    """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not _check_http_auth(request, http_api_token=http_api_token):
+        return _http_unauthorized()
+
+    try:
+        days = int(request.query_params.get("days", "30"))
+    except (TypeError, ValueError):
+        days = 30
+    days = max(1, min(days, 90))
+
+    now = time.monotonic()
+    cached = _eisv_telemetry_health_cache.get(days)
+    if cached and now - cached[0] < _EISV_TELEMETRY_HEALTH_CACHE_TTL_SECONDS:
+        return JSONResponse(cached[1], headers={"Cache-Control": "private, max-age=30"})
+
+    try:
+        from src.db import get_db
+        from src.eisv_telemetry_health import query_eisv_telemetry_health
+
+        db = get_db()
+        async with db.acquire() as conn:
+            report = await query_eisv_telemetry_health(conn, window_days=days)
+        _eisv_telemetry_health_cache[days] = (now, report)
+        return JSONResponse(report, headers={"Cache-Control": "private, max-age=30"})
+    except Exception as exc:  # noqa: BLE001 — read-only operator surface
+        logger.error("EISV telemetry health query failed: %s", exc)
+        return JSONResponse(
+            {"success": False, "error": "telemetry health query failed"},
+            status_code=500,
+        )
+
+
 # Events API endpoint for dashboard
 async def http_events(request):
     """Return recent governance events for dashboard."""
@@ -4496,6 +4544,7 @@ def register_http_routes(
     app.routes.append(Route("/metrics", http_metrics, methods=["GET"]))
     app.routes.append(Route("/v1/eisv/latest", http_eisv_latest, methods=["GET"]))
     app.routes.append(Route("/v1/eisv/recent", http_eisv_recent, methods=["GET"]))
+    app.routes.append(Route("/v1/eisv/telemetry-health", http_eisv_telemetry_health, methods=["GET"]))
     app.routes.append(Route("/v1/lifecycle/recent", http_lifecycle_recent, methods=["GET"]))
     app.routes.append(Route("/v1/enforcement/divergence", http_enforcement_divergence, methods=["GET"]))
     app.routes.append(Route("/api/events", http_events, methods=["GET"]))

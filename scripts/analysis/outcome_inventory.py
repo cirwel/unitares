@@ -135,8 +135,6 @@ _CONTROLLED_FIXTURE_FLAGS = frozenset(
         "calibration_excluded",
     }
 )
-_CONTROLLED_FIXTURE_BINDINGS = frozenset({"synthetic_negative_control"})
-_CONTROLLED_FIXTURE_TEST_NAMES = frozenset({"clean_control", "overconfidence_probe"})
 _IDENTITY_METADATA_DETAIL_KEY = "_identity_metadata"
 _CONTROLLED_IDENTITY_LABEL_PREFIXES = (
     "quick-demo-agent",
@@ -192,13 +190,9 @@ def is_controlled_validation_fixture(
     apply either way.
     """
     normalized = _normalized_detail(detail)
-    if any(_truthy(normalized.get(flag)) for flag in _CONTROLLED_FIXTURE_FLAGS):
-        return True
-    binding = normalized.get("prediction_binding")
-    if binding in _CONTROLLED_FIXTURE_BINDINGS:
-        return True
-    test_name = normalized.get("test_name")
-    if test_name in _CONTROLLED_FIXTURE_TEST_NAMES:
+    from src.grounding.outcome_anchors import is_structurally_controlled_fixture
+
+    if is_structurally_controlled_fixture(normalized):
         return True
 
     identity_metadata = _identity_metadata_from_detail(normalized)

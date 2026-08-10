@@ -112,6 +112,7 @@
     <a href="#dialectic" data-section="dialectic">Dialectic</a>
     <a href="#activity" data-section="activity">Activity</a>
     <a href="#eisv" data-section="eisv">EISV</a>
+    <a href="#telemetry-health" data-section="telemetry-health">Telemetry</a>
     <a href="#research" data-section="research">Research</a>
     <a href="#metrics" data-section="metrics">Metrics</a>
     <a href="#residents" data-section="residents">Residents</a>
@@ -178,6 +179,9 @@
       <h2 class="section-title">EISV</h2>
       <div id="eisv-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
     </section>
+    <section class="section" data-pane="telemetry-health" hidden>
+      <div id="telemetry-health-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
+    </section>
     <section class="section" data-pane="research" hidden>
       <h2 class="section-title">Research</h2>
       <div id="research-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
@@ -222,6 +226,7 @@
 <script src="./sections/dialectic.js"></script>
 <script src="./sections/activity.js"></script>
 <script src="./sections/eisv.js"></script>
+<script src="./sections/telemetry-health.js"></script>
 <script src="./sections/research.js"></script>
 <script src="./sections/metrics.js"></script>
 <script src="./sections/residents.js"></script>
@@ -243,6 +248,7 @@ themeBtn.onclick = () => {
   document.documentElement.setAttribute("data-theme", ink ? "paper" : "ink");
   syncThemeLabel();
   if (window.EISV && window.EISV.retheme) window.EISV.retheme();
+  if (window.TelemetryHealth && window.TelemetryHealth.retheme) window.TelemetryHealth.retheme();
   if (window.Metrics && window.Metrics.retheme) window.Metrics.retheme();
 };
 
@@ -278,6 +284,7 @@ function lazyLoad(id) {
   if (id === "dialectic" && window.Dialectic) { loaded[id] = true; window.Dialectic.load(); }
   if (id === "activity" && window.Activity) { loaded[id] = true; window.Activity.load(); }
   if (id === "eisv" && window.EISV) { loaded[id] = true; window.EISV.load(); }
+  if (id === "telemetry-health" && window.TelemetryHealth) { loaded[id] = true; window.TelemetryHealth.load(); }
   if (id === "research" && window.Research) { loaded[id] = true; window.Research.load(); }
   if (id === "metrics" && window.Metrics) { loaded[id] = true; window.Metrics.load(); }
   if (id === "residents" && window.Residents) { loaded[id] = true; window.Residents.load(); }
@@ -300,6 +307,7 @@ const RELOAD = {
   activity: () => window.Activity && window.Activity.load(),
   residents: () => window.Residents && window.Residents.load(),
   eisv: () => window.EISV && window.EISV.load(),
+  "telemetry-health": () => window.TelemetryHealth && window.TelemetryHealth.load(),
   // Automations and Metrics are NOT auto-refreshed: Automations is a filter/
   // search registry whose census snapshot changes rarely, and Metrics is
   // Chronicler's DAILY scrape — a 10s tick is pointless and would rebuild the
