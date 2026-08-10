@@ -27,6 +27,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from src.identity.lineage_semantics import LineageSpawnReason
+
 # gemma4 hides its answer behind a <think> block under thinking mode; strip it
 # before JSON extraction (mirrors llm_delegation._wants_reasoning_effort_none).
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
@@ -35,7 +37,7 @@ _JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
 
 DEFAULT_MODEL = os.getenv("UNITARES_LLM_MODEL", "gemma4:latest")
 OLLAMA_BASE_URL = os.getenv("UNITARES_OLLAMA_BASE_URL", "http://localhost:11434/v1")
-SPAWN_REASON = "dialectic_reviewer"
+SPAWN_REASON = LineageSpawnReason.DIALECTIC_REVIEWER.value
 REVIEWER_NAME = "DialecticReviewer"
 
 

@@ -109,7 +109,7 @@ Do **not** override `_ensure_identity`, `_handle_cycle_result`, or
 | `state_dir` | `Path \| None` | `<repo>/data/<name_lower>` | Default directory for state persistence. Used when `state_file` is not set. |
 | `state_file` | `Path \| None` | `None` | Explicit cross-cycle state path. Takes precedence over `state_dir / "state.json"` when set. |
 | `parent_agent_id` | `str \| None` | `None` | Forked-from UUID. Forwards to server on fresh onboard. |
-| `spawn_reason` | `str \| None` | `None` | One of `compaction`, `subagent`, `new_session`, `explicit`. |
+| `spawn_reason` | `str \| None` | `None` | Registered values: `subagent`, `dialectic_reviewer`, `dispatch`, `compaction`, `explicit`, `new_session`. Unknown values are accepted but receive no live-parent exemption. |
 
 ## Lifecycle shapes
 

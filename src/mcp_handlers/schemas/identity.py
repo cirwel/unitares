@@ -118,7 +118,11 @@ class OnboardParams(AgentIdentityMixin):
     )
     spawn_reason: Optional[str] = Field(
         default=None,
-        description="Why this fork was created: compaction, subagent, new_session, explicit"
+        description=(
+            "Why this fork was created. Registered lineage reasons: subagent, "
+            "dialectic_reviewer, dispatch, compaction, explicit, new_session. "
+            "Unknown values remain compatible but receive no live-parent exemption."
+        )
     )
     thread_id: Optional[str] = Field(
         default=None,

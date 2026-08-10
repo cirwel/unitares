@@ -168,8 +168,9 @@ class TestManualArchiveGuard:
         return result, mock_arch
 
     @pytest.mark.asyncio
-    async def test_refuses_archive_of_lineage_declared_agent(self):
-        meta = _make_meta(parent_agent_id="parent", spawn_reason="subagent")
+    @pytest.mark.parametrize("spawn_reason", ["subagent", "dialectic_reviewer"])
+    async def test_refuses_archive_of_lineage_declared_agent(self, spawn_reason):
+        meta = _make_meta(parent_agent_id="parent", spawn_reason=spawn_reason)
         meta._live_bindings = []
         result, mock_arch = await self._run_archive(meta, {"agent_id": "agent-uuid"})
         body = _payload(result)
