@@ -74,7 +74,7 @@
       };
       socket.onmessage = (ev) => {
         if (attempt !== generation) return;
-        let msg = null;
+        let msg;
         try { msg = JSON.parse(ev.data); } catch { return; }
         if (msg && msg.type) { try { onEvent(msg); } catch { /* ignore */ } }
       };
