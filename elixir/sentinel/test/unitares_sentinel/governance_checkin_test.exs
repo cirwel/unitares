@@ -83,6 +83,103 @@ defmodule UnitaresSentinel.GovernanceCheckinTest do
     assert timeout_ms == 123
   end
 
+  test "build_request routes through the configured Unix socket" do
+    request =
+      GovernanceCheckin.build_request(
+        "http://localhost:8767/v1/tools/call",
+        %{"name" => "process_agent_update", "arguments" => %{}},
+        [{"Content-Type", "application/json"}],
+        uds_socket: "/tmp/governance.sock"
+      )
+
+    assert request.unix_socket == "/tmp/governance.sock"
+    assert request.path == "/v1/tools/call"
+    assert request.host == "localhost"
+  end
+
+  test "build_request preserves TCP transport when no Unix socket is configured" do
+    request =
+      GovernanceCheckin.build_request(
+        "http://localhost:8767/v1/tools/call",
+        %{"name" => "process_agent_update", "arguments" => %{}},
+        [],
+        uds_socket: nil
+      )
+
+    assert request.unix_socket == nil
+  end
+
+  test "build_request rejects a relative Unix socket path instead of falling back to HTTP" do
+    assert_raise ArgumentError, ~r/must be an absolute path/, fn ->
+      GovernanceCheckin.build_request(
+        "http://localhost:8767/v1/tools/call",
+        %{"name" => "process_agent_update", "arguments" => %{}},
+        [],
+        uds_socket: "relative/governance.sock"
+      )
+    end
+  end
+
+  test "UDS checkin attests the enrolled process before writing" do
+    parent = self()
+
+    http_post = fn _url, body, _headers, _timeout_ms ->
+      send(parent, {:posted, body})
+
+      result =
+        case body["name"] do
+          "identity" -> %{"success" => true, "uuid" => @agent_uuid}
+          "process_agent_update" -> %{"success" => true, "action" => "proceed"}
+        end
+
+      {:ok, 200, Jason.encode!(%{"success" => true, "result" => result})}
+    end
+
+    assert {:ok, %{"action" => "proceed"}} =
+             GovernanceCheckin.checkin(summary(),
+               anchor: %{
+                 "agent_uuid" => @agent_uuid,
+                 "client_session_id" => @client_session_id
+               },
+               uds_socket: "/tmp/governance.sock",
+               http_post: http_post
+             )
+
+    assert_receive {:posted, attestation}
+    assert attestation["name"] == "identity"
+    assert attestation["arguments"]["agent_uuid"] == @agent_uuid
+    assert attestation["arguments"]["client_session_id"] == @client_session_id
+    assert attestation["arguments"]["resume"] == true
+
+    assert_receive {:posted, checkin}
+    assert checkin["name"] == "process_agent_update"
+    refute Map.has_key?(checkin["arguments"], "agent_id")
+  end
+
+  test "UDS checkin refuses to write when attestation resolves a different UUID" do
+    parent = self()
+
+    http_post = fn _url, body, _headers, _timeout_ms ->
+      send(parent, {:posted, body})
+
+      {:ok, 200,
+       Jason.encode!(%{
+         "success" => true,
+         "result" => %{"success" => true, "uuid" => "22222222-2222-2222-2222-222222222222"}
+       })}
+    end
+
+    assert {:error, {:attestation_identity_mismatch, "22222222-2222-2222-2222-222222222222"}} =
+             GovernanceCheckin.checkin(summary(),
+               anchor: %{"agent_uuid" => @agent_uuid},
+               uds_socket: "/tmp/governance.sock",
+               http_post: http_post
+             )
+
+    assert_receive {:posted, %{"name" => "identity"}}
+    refute_receive {:posted, %{"name" => "process_agent_update"}}
+  end
+
   test "checkin returns error for tool-level failure envelopes" do
     http_post = fn _url, _body, _headers, _timeout_ms ->
       {:ok, 200, ~s({"success":true,"result":{"success":false,"error":"paused"}})}
@@ -135,6 +232,24 @@ defmodule UnitaresSentinel.GovernanceCheckinTest do
          "status" => "identity_required",
          "error_code" => "SESSION_ERROR",
          "error_category" => "auth_error"
+       })}
+    end
+
+    assert {:error, {:refused, :identity_required}} =
+             GovernanceCheckin.checkin(summary(), http_post: http_post)
+  end
+
+  test "a typed identity refusal nested in the HTTP bridge result is named" do
+    http_post = fn _url, _body, _headers, _timeout_ms ->
+      {:ok, 200,
+       Jason.encode!(%{
+         "success" => true,
+         "result" => %{
+           "success" => true,
+           "status" => "identity_required",
+           "error_code" => "SESSION_ERROR",
+           "error_category" => "auth_error"
+         }
        })}
     end
 
