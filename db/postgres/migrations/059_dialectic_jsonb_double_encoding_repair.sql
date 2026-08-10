@@ -69,6 +69,11 @@ UPDATE coordination.session_resolution_sagas
 SET resolution_payload_json = pg_temp.jsonb_unwrap_double_encoded(resolution_payload_json)
 WHERE jsonb_typeof(resolution_payload_json) = 'string';
 
+-- Register migration
+INSERT INTO core.schema_migrations (version, name, applied_at)
+VALUES (59, 'dialectic_jsonb_double_encoding_repair', NOW())
+ON CONFLICT (version) DO NOTHING;
+
 COMMIT;
 
 -- Verification — every one of these must return 0 rows after the migration:
