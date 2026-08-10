@@ -1,11 +1,25 @@
-"""Coherence — spec §3.1 Coherence (CANONICAL runtime form).
+"""Coherence — spec §3.1 Coherence (INTENDED runtime form; NOT canonical yet).
 
-This is the form populated into `metrics["coherence"]` by
-`src/mcp_handlers/updates/enrichments.py` and exposed in MCP responses
-(`process_agent_update`, governance metrics, dashboards) since EISV
-grounding Phase 1+2 (PR #26, merged 2026-04-19). The legacy thermodynamic
-`C(V, Θ) = 0.5 · (1 + tanh(Θ.C₁ · V))` is preserved as
-`metrics["coherence_legacy"]` and lives in `governance_core/coherence.py`.
+Corrected 2026-08-10. This header used to call itself "CANONICAL runtime
+form" and claim it has been populated into `metrics["coherence"]` since
+PR #26. **Neither is true as deployed.** `run_grounding_stage` only keeps
+this value when `UNITARES_GROUNDING_APPLY` is set; that flag is off by
+default and off in production, so the stage reverts to the legacy value and
+drops `coherence_legacy`/`coherence_source`. What ships in MCP responses and
+lands in `core.agent_state.coherence` is the legacy thermodynamic
+`C(V, Θ) = 0.5 · (1 + tanh(Θ.C₁ · V))` from `governance_core/coherence.py`.
+
+This form does run on every check-in under `UNITARES_GROUNDING_SHADOW` (on
+in production), which is how the two are compared: the `grounding_shadow`
+audit event carries {grounded, ungrounded, delta} per dimension.
+
+⚠️ Enabling APPLY is a coherence-only change in practice but NOT a safe
+flip. Measured 2026-08-10 over 7d of shadow events (n=5330): E, I and S move
+in 0 of 5330 rows (no caller supplies logprobs, so those stay heuristic),
+while coherence moves in 5330 of 5330 — from sd 0.0077 to sd 0.285. 18.09%
+of the grounded values fall below `AdaptiveGovernor`'s `tau_floor` of 0.25,
+which the legacy form has never once reached. Derive the threshold against
+this distribution before enabling APPLY, not after.
 
 Two grounded forms:
   - manifold:  C = 1 - ||Δ||_2 / ||Δ||_max, Δ = (E,I,S) - (E,I,S)_healthy

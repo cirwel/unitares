@@ -1,14 +1,24 @@
 """
 UNITARES Governance Core - Coherence Functions (LEGACY THERMODYNAMIC FORM)
 
-NOTE — terminology drift. The `coherence` field exposed in MCP responses
-(`process_agent_update`, governance metrics, dashboards) is NO LONGER this
-`C(V, Θ)`. As of EISV grounding Phase 1+2 (PR #26, merged 2026-04-19), the
-canonical `coherence` slot in the runtime metrics dict is computed by
-`src/grounding/coherence.py::compute_coherence` — a manifold-distance form
-over (E, I, S) from a class-conditional healthy operating point. V is not
-in that formula. The thermodynamic value computed here lives in metrics as
-`coherence_legacy`.
+NOTE — terminology drift, and a correction. An earlier version of this note
+claimed the `coherence` field exposed in MCP responses is "NO LONGER this
+C(V, Θ)" as of EISV grounding Phase 1+2 (PR #26). **That is not true as
+deployed, and was not true when it was written.** The swap it describes is
+gated behind `UNITARES_GROUNDING_APPLY`, which is OFF by default and off in
+production: `run_grounding_stage` computes the grounded value, audits the
+delta as a `grounding_shadow` event, then RESTORES the ungrounded one and
+drops `coherence_legacy`/`coherence_source` entirely
+(`src/mcp_handlers/updates/enrichments.py`). So the value in MCP responses
+and in `core.agent_state.coherence` is THIS function.
+
+Read the row's `state_json.coherence_form` to know which form produced a
+stored value ("legacy_tanh_v" here, "manifold" under APPLY); rows written
+before that tag shipped, or with both grounding flags off, carry no tag.
+
+The manifold-distance form over (E, I, S) lives in
+`src/grounding/coherence.py::compute_coherence` and becomes canonical only
+when APPLY is enabled. It is not a drop-in: see the degeneracy note below.
 
 Use this module when you specifically want the V-driven thermodynamic
 coherence (e.g. ODE integration, drift telemetry baselines). For "is this
@@ -75,6 +85,92 @@ def coherence(V: float, theta: Theta, params: DynamicsParams) -> float:
         - Accept ≈0.49 coherence as honest thermodynamic signal
         - Coherence function designed for V ∈ [-2, 2] but dynamics keep V ∈ [-0.1, 0.1]
         - This is correct: system genuinely operates conservatively (I > E)
+
+    ⛔ THE 2025-11 RATIONALE ABOVE IS OBSOLETE — it was overtaken by 69ee5a79
+    (2026-04-01) and is kept only to show what the reasoning was:
+
+        "Promote behavioral EISV to primary metrics, demote ODE to diagnostic.
+         The ODE attractor convergence made all agents look identical
+         regardless of actual behavior."
+
+        That commit swapped E, I, S and V in the surfaced metrics dict to the
+        behavioral (EMA + Welford) values and moved the ODE values to a
+        `metrics['ode']` diagnostic sub-field. **Coherence was not part of the
+        swap** — verified: the commit changes zero lines mentioning coherence.
+        `governance_monitor.py` still computes it as
+        `coherence(self.state.V, ...)`, i.e. from the ODE V that the same
+        commit demoted.
+
+        So this function is the last surfaced field still reporting the ODE
+        attractor, and "all agents look identical" is still true of it alone.
+        Accepting ≈0.49 as an "honest thermodynamic signal" was defensible in
+        2025-11, when the ODE V *was* the signal. After April it is a defense
+        of a number nobody decided to keep.
+
+    Measured consequence (2026-08-10, live `core.agent_state` over 7d, n=6553):
+        coherence range [0.4696, 0.5039], sd 0.0077 — the doctor's
+        `signal_degeneracy` check flags it, correctly. Compare the
+        between-agent spread (16 agents, >=20 check-ins): V 0.128, S 0.046,
+        I 0.035, coherence **0.0032**. Coherence collapses the coordinate with
+        the widest genuine spread of the four.
+
+        The persisted V is NOT confined to [-0.1, 0.1] as claimed above: live
+        range [-0.619, +0.045], sd 0.218. That band describes the ODE V, which
+        is what this function reads — not the V we store. The two are visibly
+        different variables: corr(coherence, stored V) is ~0.99 for agents
+        whose behavioral V sits near the ODE attractor and falls to 0.15 for
+        those that drift away from it. At V=-0.48 this function cannot return
+        the observed 0.482 for ANY legal C1 in [0.5, 1.5] (the range is
+        [0.192, 0.382]) — proof they are not the same input.
+
+        This matters because a live gate is placed on it:
+        `AdaptiveGovernor.make_verdict` hard-blocks on
+        `coherence < tau_floor` (0.25). Nothing in the range above can reach
+        0.25, so that branch has never fired — 0 hard-blocks in 5330 sampled
+        check-ins. `AdaptiveGovernor.update` also drives its tau PID off
+        `e_tau = tau_ref - coherence` (tau_ref 0.38/0.44), which against a
+        value pinned at ~0.484 is a near-constant error term.
+
+        Do NOT respond by lowering tau_floor to make the gate fire; that fits
+        a threshold to a signal with no information in it.
+
+        FOUR separate gates were calibrated against this frozen signal, not
+        one. Any repair has to re-derive all of them, so they are inventoried
+        here with their all-time crossing counts (n=69,395 non-synthetic rows,
+        observed range [0.288, 0.561]):
+
+          tau_floor = 0.25        AdaptiveGovernor.make_verdict hard block
+                                  -> crossed 0 times, ever. The all-time
+                                     minimum sits above it, so this one is
+                                     genuinely unreachable rather than rare.
+          tau_low = 0.30          CIRS hard block (cirs.py, monitor_decision)
+                                  -> crossed 1 time.
+          COHERENCE_CRITICAL      pause/coherence_pause (monitor_decision),
+            _THRESHOLD = 0.40     is_critical, and the 'critical' health status
+                                  (governance_monitor)
+                                  -> crossed 9 times (0.013%).
+          TARGET_COHERENCE = 0.50 coherence_deficit term
+                                  -> reachable, but fed a near-constant, so
+                                     the deficit is ~0.016 +/- 0.008.
+
+        The whole coherence safety stack has produced 2 `coherence_pause`
+        actions in 69,395 check-ins. These thresholds are not obviously wrong
+        numbers; they are reasonable numbers pointed at a variable that stopped
+        moving in April. Re-deriving only tau_floor would leave three others
+        still calibrated against the frozen signal.
+
+        There are two candidate repairs, and BOTH hit the same wall:
+          * finish 69ee5a79 — feed this function the primary (behavioral) V
+            instead of the demoted ODE V. Recomputing C from the stored V at
+            C1=1 gives sd 0.101 (13x today) and puts 7.1% below tau_floor.
+          * enable UNITARES_GROUNDING_APPLY — the manifold form, sd 0.285
+            (37x today), puts 18.09% below tau_floor.
+
+        Either way a gate that has never fired starts firing, because
+        tau_floor was calibrated while coherence was frozen by an incomplete
+        migration. The threshold has to be re-derived against whichever
+        distribution is adopted BEFORE that repair lands, and that derivation
+        needs outcome evidence rather than a chosen alarm rate.
     """
     return params.Cmax * 0.5 * (1.0 + math.tanh(theta.C1 * V))
 
