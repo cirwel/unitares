@@ -41,7 +41,7 @@
     // reviewer was ever assigned. Still a failure — reassign is refused past
     // ANTITHESIS, so nothing can be done with it now — but "unfacilitated" is
     // the diagnosis and plain "failed" hides it.
-    const unfac = s.awaiting && ["failed", "escalated"].includes(s.phase);
+    const unfac = s.awaiting && !s.probe && ["failed", "escalated"].includes(s.phase);
     const p = unfac
       ? { color: "var(--warn)", label: "Unfacilitated" }
       : PHASE[s.phase] || { color: "var(--muted)", label: s.phase || "—" };
@@ -55,6 +55,7 @@
       <div style="display:flex;gap:var(--space-3);align-items:center;flex-wrap:wrap;margin-bottom:var(--space-2)">
         <span class="tag" style="color:${p.color};border-color:color-mix(in srgb, ${p.color} 40%, var(--line-2))">${p.label}</span>
         ${unfac ? `<span class="fresh" title="asked for a human reviewer; none was assigned before the stuck-session timer swept it to ${esc(s.phase)}">no reviewer assigned</span>` : ""}
+        ${s.probe ? `<span class="fresh" title="scheduled probe — always ends failed by design; its real verdict is in dialectic_canary.jsonl, not this row">probe</span>` : ""}
         <span class="tag">${esc(s.type)}</span>
         <span class="fresh" title="${esc(s.id)}">${esc((s.id || "").slice(0, 12))}…</span>
         <span class="spring"></span>

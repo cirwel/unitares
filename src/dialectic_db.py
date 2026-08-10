@@ -201,6 +201,34 @@ class DialecticDB:
             """, phase, session_id)
             return "UPDATE 1" in result
 
+    async def reopen_session(self, session_id: str, phase: str) -> bool:
+        """Return a swept session to `active` at a workable phase.
+
+        The ONLY path that un-terminalises a session, and deliberately narrow:
+        it fires solely when a reviewer is assigned to a session whose
+        facilitation request was still standing when the sweeper marked it
+        failed. `update_session_phase` sets phase but not status, so without
+        this the revived row keeps `status='failed'` and the sweeper
+        re-terminates it on the next cycle.
+
+        Guarded on `awaiting_facilitation` in SQL as well as at the call site —
+        a resolved session, or a failed one that never asked for a human, is
+        never reopened. `resolution_json` is left untouched: reopening does not
+        rewrite history.
+        """
+        if phase in ("resolved", "failed"):
+            return False
+        await self._ensure_pool()
+        async with self._pool.acquire() as conn:
+            result = await conn.execute("""
+                UPDATE core.dialectic_sessions
+                SET phase = $1, status = 'active', updated_at = now()
+                WHERE session_id = $2
+                  AND status = 'failed'
+                  AND awaiting_facilitation = true
+            """, phase, session_id)
+            return "UPDATE 1" in result
+
     async def update_session_reviewer(self, session_id: str, reviewer_agent_id: str) -> bool:
         """Assign reviewer to session."""
         await self._ensure_pool()
@@ -535,6 +563,11 @@ async def add_message_async(**kwargs) -> int:
 async def update_session_phase_async(session_id: str, phase: str) -> bool:
     db = await get_dialectic_db()
     return await db.update_session_phase(session_id, phase)
+
+
+async def reopen_session_async(session_id: str, phase: str) -> bool:
+    db = await get_dialectic_db()
+    return await db.reopen_session(session_id, phase)
 
 
 async def update_session_reviewer_async(session_id: str, reviewer_agent_id: str) -> bool:
