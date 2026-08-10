@@ -70,11 +70,24 @@ logger = get_logger(__name__)
 
 
 def _build_http_session_signals(request):
-    """Build SessionSignals from an HTTP request."""
+    """Build SessionSignals from an HTTP request.
+
+    The optional ``unitares_peer_pid`` scope key is server-injected by the
+    owner-only UDS listener after a kernel ``LOCAL_PEERPID`` lookup.  Preserve
+    that signal for the direct REST tool bridge: substrate-attested residents
+    use ``POST /v1/tools/call``, not the streamable ``/mcp`` route, so dropping
+    it here silently turns an authenticated UDS request back into plain HTTP.
+
+    Only a positive, non-bool integer is accepted.  Request headers never
+    participate in this decision; ordinary TCP HTTP remains ``rest``.
+    """
     from src.mcp_handlers.context import SessionSignals
 
     ua = request.headers.get("user-agent", "")
     x_session_id = request.headers.get("X-Session-ID") or request.headers.get("x-session-id")
+    peer_pid = getattr(request, "scope", {}).get("unitares_peer_pid")
+    if isinstance(peer_pid, bool) or not isinstance(peer_pid, int) or peer_pid <= 0:
+        peer_pid = None
 
     ip_ua_fp = None
     try:
@@ -94,7 +107,8 @@ def _build_http_session_signals(request):
         user_agent=ua,
         x_agent_name=request.headers.get("x-agent-name"),
         x_agent_id=request.headers.get("x-agent-id"),
-        transport="rest",
+        transport="uds" if peer_pid is not None else "rest",
+        peer_pid=peer_pid,
         unitares_operator_token=request.headers.get("x-unitares-operator"),
     )
 
