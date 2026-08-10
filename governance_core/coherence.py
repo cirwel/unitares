@@ -1,14 +1,24 @@
 """
 UNITARES Governance Core - Coherence Functions (LEGACY THERMODYNAMIC FORM)
 
-NOTE — terminology drift. The `coherence` field exposed in MCP responses
-(`process_agent_update`, governance metrics, dashboards) is NO LONGER this
-`C(V, Θ)`. As of EISV grounding Phase 1+2 (PR #26, merged 2026-04-19), the
-canonical `coherence` slot in the runtime metrics dict is computed by
-`src/grounding/coherence.py::compute_coherence` — a manifold-distance form
-over (E, I, S) from a class-conditional healthy operating point. V is not
-in that formula. The thermodynamic value computed here lives in metrics as
-`coherence_legacy`.
+NOTE — terminology drift, and a correction. An earlier version of this note
+claimed the `coherence` field exposed in MCP responses is "NO LONGER this
+C(V, Θ)" as of EISV grounding Phase 1+2 (PR #26). **That is not true as
+deployed, and was not true when it was written.** The swap it describes is
+gated behind `UNITARES_GROUNDING_APPLY`, which is OFF by default and off in
+production: `run_grounding_stage` computes the grounded value, audits the
+delta as a `grounding_shadow` event, then RESTORES the ungrounded one and
+drops `coherence_legacy`/`coherence_source` entirely
+(`src/mcp_handlers/updates/enrichments.py`). So the value in MCP responses
+and in `core.agent_state.coherence` is THIS function.
+
+Read the row's `state_json.coherence_form` to know which form produced a
+stored value ("legacy_tanh_v" here, "manifold" under APPLY); rows written
+before that tag shipped, or with both grounding flags off, carry no tag.
+
+The manifold-distance form over (E, I, S) lives in
+`src/grounding/coherence.py::compute_coherence` and becomes canonical only
+when APPLY is enabled. It is not a drop-in: see the degeneracy note below.
 
 Use this module when you specifically want the V-driven thermodynamic
 coherence (e.g. ODE integration, drift telemetry baselines). For "is this
@@ -75,6 +85,29 @@ def coherence(V: float, theta: Theta, params: DynamicsParams) -> float:
         - Accept ≈0.49 coherence as honest thermodynamic signal
         - Coherence function designed for V ∈ [-2, 2] but dynamics keep V ∈ [-0.1, 0.1]
         - This is correct: system genuinely operates conservatively (I > E)
+
+    Measured consequence (2026-08-10, live `core.agent_state` over 7d, n=6553):
+        range [0.4696, 0.5039], sd 0.0077. The doctor's `signal_degeneracy`
+        check flags this (floor: sd < 0.01), and the flag is correct — the
+        narrowness is structural, not a data accident. Squeezing a ±0.1 input
+        through tanh and centering at 0.5 cannot produce a wider output, so
+        this value cannot support a threshold no matter how long it runs.
+
+        This matters because a live gate is placed on it:
+        `AdaptiveGovernor.make_verdict` hard-blocks on
+        `coherence < tau_floor` (0.25). Nothing in the range above can reach
+        0.25, so that branch has never fired — 0 hard-blocks in 5330 sampled
+        check-ins. `AdaptiveGovernor.update` also drives its tau PID off
+        `e_tau = tau_ref - coherence` (tau_ref 0.38/0.44), which against a
+        value pinned at ~0.484 is a near-constant error term.
+
+        Do NOT respond by lowering tau_floor to make the gate fire; that fits
+        a threshold to a signal with no information in it. The grounded
+        manifold form is the intended replacement (sd 0.285 over the same
+        window, 37x this), but it is not a drop-in: 18.09% of its values fall
+        below the current tau_floor, so enabling APPLY without first deriving
+        the threshold against the grounded distribution converts a gate that
+        never fires into one that fires on roughly a fifth of all check-ins.
     """
     return params.Cmax * 0.5 * (1.0 + math.tanh(theta.C1 * V))
 
