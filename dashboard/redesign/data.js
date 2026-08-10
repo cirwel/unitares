@@ -397,6 +397,15 @@
       }, () => { const e = S().eisv; return { series: e.series, raw: e.raw || [], sourceLanes: e.sourceLanes || [], coherenceEq: e.coherenceEq }; });
     },
 
+    async eisvTelemetryHealth(days) {
+      const d = Number.isFinite(days) ? Math.max(1, Math.min(90, Math.round(days))) : 30;
+      return withFallback(async () => {
+        const report = await authFetch(`/v1/eisv/telemetry-health?days=${d}`);
+        return report && report.success && report.schema === "eisv.telemetry-health.v1"
+          ? report : null;
+      }, () => S().eisvTelemetryHealth);
+    },
+
     async automations() {
       // Automation census snapshot (launchd/hermes/codex/claude/github-actions).
       return withFallback(

@@ -91,7 +91,7 @@
   async function requestJSON(path, options) {
     const response = await fetch(path, Object.assign({ credentials: "same-origin" }, options || {}));
     const text = await response.text();
-    let body = {};
+    let body;
     try { body = text ? JSON.parse(text) : {}; } catch { body = {}; }
     if (!response.ok) {
       const error = new Error(body.error || `${path} returned ${response.status}`);
