@@ -189,11 +189,23 @@ async def test_nonexistent_resources():
     """Test handlers handle non-existent resources gracefully (identity_v2)
 
     #945 §1: pre_onboard READ tools (get_governance_metrics) no longer resolve,
-    mint, or bind an identity as a side effect. An unbound read of a
-    non-existent agent is served gracefully as the uninitialized shape — it does
-    NOT auto-create a ghost identity, and it does NOT raise a session mismatch
+    mint, or bind an identity as a side effect. An unbound read does NOT
+    auto-create a ghost identity, and it does NOT raise a session mismatch
     (cross-agent READS are not blocked; the impersonation guard only fires for a
     BOUND writer — see test_authentication_failures).
+
+    AMENDED 2026-08-10: this test used to assert that a read of a *non-existent*
+    agent_id returned success with the uninitialized shape. It does not any
+    more — it returns `error_type: unknown_agent`. "Served gracefully" was
+    reading the seed vector back as though it were state: `get_or_create_monitor`
+    builds a monitor on the default seed for any string, so E/I/S/V, basin and
+    verdict all came back as functions of that seed under a success envelope.
+    The Discord governance HUD consumed exactly this and displayed 50 agents at
+    a constant E=0.70 I=0.80 S=0.20 V=0.00 for weeks.
+
+    The §1 invariants this test exists to protect are unchanged and still
+    asserted below: no ghost identity is minted, and a cross-agent read is
+    refused for *not existing*, never for being cross-agent.
     """
     print("\n=== Testing Non-Existent Resources ===")
 
@@ -213,19 +225,25 @@ async def test_nonexistent_resources():
     response_data = json.loads(result[0].text)
     print(f"✅ Agent metadata retrieval: success={response_data.get('success')}")
 
-    # Reading a non-existent agent_id from an UNBOUND caller is served as the
-    # uninitialized shape — cross-agent reads are not blocked, and no ghost is
-    # minted (the foreign agent_id is a target selector, not caller proof).
+    # Reading a non-existent agent_id is REFUSED, not seeded. No ghost is
+    # minted (the foreign agent_id is a target selector, not caller proof),
+    # and the refusal names the reason: the id resolves to no agent.
     result = await dispatch_tool("get_governance_metrics", {
         "agent_id": "nonexistent_agent_12345"
     })
     assert result is not None, "Should return result"
     response_data = json.loads(result[0].text)
-    assert response_data.get("success") == True, \
-        "Unbound read of a non-existent agent should be served gracefully"
+    assert response_data.get("success") is False, \
+        "A read of an id that names no agent must refuse, not return seed metrics"
+    assert response_data.get("error_type") == "unknown_agent", \
+        f"Expected unknown_agent refusal, got {response_data.get('error_type')!r}"
+    # The refusal must not smuggle a measurement out alongside it.
+    for dim in ("E", "I", "S", "V"):
+        assert dim not in response_data, \
+            f"Refusal leaked a {dim} value: {response_data.get(dim)!r}"
     assert response_data.get("agent_signature", {}).get("uuid") is None, \
         "Reading a foreign agent_id must not mint/bind an identity"
-    print("✅ Non-existent agent read handled gracefully without minting identity")
+    print("✅ Non-existent agent read refused without minting identity")
 
 
 @pytest.mark.asyncio
