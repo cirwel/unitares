@@ -292,6 +292,20 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
             {"action": "antithesis", "session_id": thesis.session_id, "reasoning": verdict.reasoning},
         )
         # Submit the model-derived verdict — agrees may be False (the whole point).
+        #
+        # No `reasoning` here, deliberately. The argument was made once, in the
+        # antithesis above; this message is the VERDICT (agrees + conditions +
+        # root_cause), which is what the synthesis row is actually for —
+        # antithesis rows carry those fields in 1 of 98 rows, synthesis rows in
+        # ~134 of 149. Passing verdict.reasoning to both calls is what made the
+        # synthesis a byte-identical replay of the antithesis in 60 of 60
+        # orchestrated sessions since 2026-06-23, so every transcript showed
+        # the same paragraph twice under two different headings.
+        #
+        # Safe to omit only because finalize_resolution now falls back to this
+        # same agent's antithesis reasoning (dialectic_protocol.reasoning_of);
+        # without that fallback this would blank the rationale on every
+        # approved resolution, which is why the naive version was reverted.
         await client.call_tool(
             "dialectic",
             {
@@ -300,7 +314,6 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
                 "agrees": verdict.agrees,
                 "proposed_conditions": verdict.proposed_conditions,
                 "root_cause": verdict.root_cause,
-                "reasoning": verdict.reasoning,
             },
         )
         # A real check-in before exit (subagent-onboarding discipline).
