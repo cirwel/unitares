@@ -32,10 +32,22 @@ defmodule UnitaresSentinel.GovernanceCheckinTest do
     assert args["complexity"] == 0.35
     assert args["confidence"] == 0.85
     assert args["response_mode"] == "compact"
-    assert args["agent_id"] == @agent_uuid
     assert args["continuity_token"] == @continuity_token
     assert args["client_session_id"] == @client_session_id
+
+    # ⛔ The uuid is NOT declared. The REST prebind accepts an explicit
+    # agent_id on a shape check alone and consults it BEFORE the CSID, so
+    # declaring it short-circuits resolution: no typed refusal, no PG session
+    # renewal, binding loss unobservable. Measured live 2026-08-10 — a valid
+    # CSID and a live sessions row were both inert while this key was sent.
+    refute Map.has_key?(args, "agent_id")
   end
+
+  # The asymmetry this change rests on — agent_id is legitimate as a payload
+  # field (who this is about) and illegitimate as a credential (who is asking)
+  # — is already pinned below by "recover posts self_recovery (quick) carrying
+  # the session anchor identity", which asserts recover/1 DOES send agent_id.
+  # Read the two together: check-in must not, recovery must.
 
   test "checkin posts to the HTTP tool-call endpoint and returns result" do
     parent = self()
