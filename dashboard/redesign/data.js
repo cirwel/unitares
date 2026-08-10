@@ -361,16 +361,20 @@
           awaiting: !!s.awaiting_facilitation,
           resolution: resolutionOf(s.resolution),
         }));
-        // A session that parked for human facilitation and was then swept to
-        // `failed` by the stuck-session sweeper did not fail — it is waiting on
-        // the operator. Count it as its own thing, or the pane reads as a
-        // mostly-broken system when it is mostly a queue. (37 of 38 `failed`
-        // sessions since 2026-06-28 were of this kind.)
-        const c = { total: sessions.length, resolved: 0, active: 0, failed: 0, awaiting: 0 };
+        // `awaiting_facilitation` means the session asked for a human. It does
+        // NOT mean one can still be assigned: reassign is refused in any phase
+        // but THESIS/ANTITHESIS, and every such session on record has already
+        // been swept to `failed` by the stuck-session timer (38 of 38 as of
+        // 2026-08-10). So these are unfacilitated failures, not a work queue —
+        // they stay in the failed count, and get their own label because "why
+        // it failed" is the useful part. Do not relabel them as pending work:
+        // there is no action available, and prior work already established
+        // that a badge alone changes nothing (36 flagged, 35 failed, 2 reassign
+        // messages in the entire DB).
+        const c = { total: sessions.length, resolved: 0, active: 0, failed: 0, unfacilitated: 0 };
         sessions.forEach((s) => {
-          if (s.awaiting) c.awaiting++;
-          else if (["resolved"].includes(s.phase)) c.resolved++;
-          else if (["failed", "escalated"].includes(s.phase)) c.failed++;
+          if (["resolved"].includes(s.phase)) c.resolved++;
+          else if (["failed", "escalated"].includes(s.phase)) { c.failed++; if (s.awaiting) c.unfacilitated++; }
           else c.active++;
         });
         return { sessions, counts: c };

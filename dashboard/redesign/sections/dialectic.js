@@ -37,12 +37,13 @@
   }
 
   function card(s) {
-    // `awaiting_facilitation` outranks the stored phase. The stuck-session
-    // sweeper rewrites a parked session to `failed` after its threshold, so the
-    // phase column says "failed" for sessions that are actually queued on the
-    // operator. Show what it is waiting for, not what the sweeper called it.
-    const p = s.awaiting
-      ? { color: "var(--warn)", label: "Awaiting you" }
+    // A failed session that had asked for facilitation says WHY it failed: no
+    // reviewer was ever assigned. Still a failure — reassign is refused past
+    // ANTITHESIS, so nothing can be done with it now — but "unfacilitated" is
+    // the diagnosis and plain "failed" hides it.
+    const unfac = s.awaiting && ["failed", "escalated"].includes(s.phase);
+    const p = unfac
+      ? { color: "var(--warn)", label: "Unfacilitated" }
       : PHASE[s.phase] || { color: "var(--muted)", label: s.phase || "—" };
     const res = s.resolution;
     const pills = [
@@ -53,7 +54,7 @@
     return `<div class="panel" style="padding:var(--space-5)">
       <div style="display:flex;gap:var(--space-3);align-items:center;flex-wrap:wrap;margin-bottom:var(--space-2)">
         <span class="tag" style="color:${p.color};border-color:color-mix(in srgb, ${p.color} 40%, var(--line-2))">${p.label}</span>
-        ${s.awaiting && s.phase ? `<span class="fresh" title="stored phase — the sweeper's label, not the session's state">swept to ${esc(s.phase)}</span>` : ""}
+        ${unfac ? `<span class="fresh" title="asked for a human reviewer; none was assigned before the stuck-session timer swept it to ${esc(s.phase)}">no reviewer assigned</span>` : ""}
         <span class="tag">${esc(s.type)}</span>
         <span class="fresh" title="${esc(s.id)}">${esc((s.id || "").slice(0, 12))}…</span>
         <span class="spring"></span>
@@ -92,14 +93,15 @@
   function render() {
     const c = MODEL.counts || {};
     let rows = MODEL.sessions.slice();
-    if (phaseFilter === "awaiting") rows = rows.filter((s) => s.awaiting);
-    else if (phaseFilter === "active") rows = rows.filter((s) => !s.awaiting && !["resolved", "failed"].includes(s.phase));
-    else if (phaseFilter !== "all") rows = rows.filter((s) => !s.awaiting && s.phase === phaseFilter);
-    // Sessions queued on the operator sort first — they are the only ones with
-    // a pending human action.
-    rows.sort((a, b) => (b.awaiting ? 1 : 0) - (a.awaiting ? 1 : 0) || Date.parse(b.created || 0) - Date.parse(a.created || 0));
+    const isUnfac = (s) => s.awaiting && ["failed", "escalated"].includes(s.phase);
+    if (phaseFilter === "unfacilitated") rows = rows.filter(isUnfac);
+    else if (phaseFilter === "active") rows = rows.filter((s) => !["resolved", "failed"].includes(s.phase));
+    else if (phaseFilter !== "all") rows = rows.filter((s) => s.phase === phaseFilter);
+    rows.sort((a, b) => Date.parse(b.created || 0) - Date.parse(a.created || 0));
 
-    const chips = [["all", "all " + (c.total ?? "")], ["awaiting", "awaiting you " + (c.awaiting ?? 0)], ["active", "active " + (c.active ?? 0)], ["resolved", "resolved " + (c.resolved ?? 0)], ["failed", "failed " + (c.failed ?? 0)]]
+    // "unfacilitated" is a subset of failed, not a sibling — the count reads as
+    // "of N failed, M never got a reviewer", which is the actual finding.
+    const chips = [["all", "all " + (c.total ?? "")], ["active", "active " + (c.active ?? 0)], ["resolved", "resolved " + (c.resolved ?? 0)], ["failed", "failed " + (c.failed ?? 0)], ["unfacilitated", "⌁ no reviewer " + (c.unfacilitated ?? 0)]]
       .map(([v, t]) => `<button class="theme-toggle dlc-f" data-f="${v}" style="${v === phaseFilter ? "border-color:var(--accent);color:var(--accent)" : ""}">${t}</button>`).join("");
 
     $("#dlc-mount").innerHTML =
