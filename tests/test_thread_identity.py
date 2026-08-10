@@ -88,6 +88,7 @@ class TestClassifyEpisodeFork:
             (1, "child", "parent", "new_session", ("identity_lineage", True)),
             (1, "child", "parent", "subagent", ("identity_lineage", True)),
             (1, "child", "parent", "compaction", ("identity_lineage", True)),
+            (1, "reviewer", None, "dialectic_reviewer", ("identity_lineage", True)),
             (1, "child", "parent", "resident_observer", ("identity_lineage", True)),
             (1, "agent-1", None, "dispatch_auto_mint", ("none", False)),
             (2, "lumen", "lumen", "explicit", ("sibling_locus", False)),

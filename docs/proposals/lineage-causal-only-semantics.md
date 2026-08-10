@@ -13,7 +13,7 @@ Related: PR #720 (archival liveness gate — the safety net under this change)
 > | Piece | Location |
 > |---|---|
 > | Declaration-time liveness gate | `src/mcp_handlers/identity/handlers.py` — `_r2_pre_check_and_declare` (runs before the cross-role check) |
-> | `subagent` / `compaction` exemption | same function — `if spawn_reason not in ("subagent", "compaction")` |
+> | Parent-relationship semantics | `src/identity/lineage_semantics.py` — dispatched children / context continuations permit a live parent; succession and unknown reasons do not |
 > | Reject mechanism (clear + `lineage_coincidental_rejected` audit) | mirrors the `lineage_cross_role_rejected` path; fail-open on DB error (`get_live_bindings` → `[]` → allow), symmetric with #720 |
 > | Tests | `tests/test_lineage_liveness_guard.py` (live→reject, dead→provisional, exempt→skip) |
 > | Agent-facing nudge (stop steering to new_session lineage) | `src/tool_descriptions.py` |
@@ -21,6 +21,14 @@ Related: PR #720 (archival liveness gate — the safety net under this change)
 >
 > The open questions below were resolved by what shipped — answers inline in
 > that section.
+
+> **#1485 amendment (2026-08-10).** The original two-value exemption tuple
+> erased every observed orchestrated dialectic-reviewer edge because
+> `dialectic_reviewer` is a dispatched-child relationship with a live parent.
+> The tuple is replaced by a canonical semantic registry, shared by the
+> declaration-time guard and the single-hop/transitive succession consumers.
+> `dialectic_reviewer` and `dispatch` now have the same parent relationship as
+> `subagent`; unknown strings remain conservative (`unknown`, no exemption).
 
 ## Decision (REFINED post-council, operator-confirmed 2026-06-14)
 
@@ -35,10 +43,11 @@ ones) and gate only on liveness:
 
 | spawn_reason | live parent | dead parent |
 |---|---|---|
-| `subagent`   | **allow** (dispatcher alive by design) | allow |
+| `subagent` / `dialectic_reviewer` / `dispatch` | **allow** (dispatcher alive by design) | allow |
 | `compaction` | **allow** (same live session continuing past a context boundary) | allow |
 | `explicit`   | reject (concurrent sibling) | allow |
 | `new_session`| **reject** (concurrent sibling — the archival cause) | allow as provisional → R1 |
+| unknown / unset | reject when parent live (fail closed) | allow as provisional → R1 |
 
 **Liveness guard** uses the same `get_live_bindings()` signal as #720
 (symmetric: #720 is the archival-time guard, this is the declaration-time one).
@@ -111,12 +120,22 @@ not confirmed data.
   `lineage_cross_role_rejected`); the row's `parent_agent_id`/`spawn_reason`
   columns are cleared in sync so the downstream FSM never reads back a rejected
   edge.
-- **Liveness guard exemption for `subagent` (and `compaction`)?** Confirmed and
-  shipped: both are exempt because their parent is legitimately still running
-  (dispatcher alive / same live session past a context boundary). All other
-  spawn reasons — `explicit`, `new_session`, and unset/unknown — are
-  liveness-checked (conservative default).
+- **Liveness guard exemption for dispatched children and continuations?**
+  Confirmed and shipped through the semantic registry: dispatched children
+  (`subagent`, `dialectic_reviewer`, `dispatch`) and `compaction` are exempt
+  because their parent is legitimately still running. Succession reasons
+  (`explicit`, `new_session`) and unset/unknown values are liveness-checked.
 - **Overlap with PR 3 consumer gating?** No collision observed; the guard sits
   at the declaration site (`_r2_pre_check_and_declare`) ahead of the existing
   cross-role pre-check, and the two rejection paths are independent
   (`rejected_coincidental` short-circuits before `rejected_cross_role`).
+
+## Historical reviewer-edge recovery (#1485)
+
+The policy fix is forward-only. The five observed reject events retain
+`claimed_parent_id` in `audit.events`, but restoring an edge is not a one-column
+update: `core.identities`, `core.agents`, thread metadata, R2 declaration state,
+and the AGE `SPAWNED` edge must agree. No existing repair primitive performs
+that reconciliation atomically. Treat those audit rows as recovery candidates
+for a separately reviewed, dry-run-first data operation; do not replay them
+blindly from this runtime patch.

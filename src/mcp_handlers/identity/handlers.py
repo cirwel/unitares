@@ -1811,7 +1811,10 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 
     # Thread identity parameters (honest forking)
     _parent_agent_id = arguments.get("parent_agent_id")  # UUID of predecessor
-    _spawn_reason = arguments.get("spawn_reason")  # compaction|subagent|new_session|explicit
+    # Canonical values and parent-relationship semantics live in
+    # src.identity.lineage_semantics; external strings remain accepted but
+    # receive no liveness exemption.
+    _spawn_reason = arguments.get("spawn_reason")
     _thread_id_hint = arguments.get("thread_id")  # Explicit thread to join
 
     # Auto-detect client_hint from transport if not provided
@@ -2326,10 +2329,11 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # use this pin to inject the correct session ID based on transport fingerprint.
     # This prevents knowledge graph attribution from scattering across random UUIDs.
     #
-    # Subagent onboards write the pin only-if-absent: a spawned helper
+    # Dispatched-child onboards write the pin only-if-absent: a spawned helper
     # shares the driver's exact fingerprint, and an unconditional write
     # here CAPTURES the driver's argument-less resolution for the rest of
-    # the session (incident 2026-06-10 — see SUBAGENT_PIN_NX_SPAWN_REASONS
+    # the session (incident 2026-06-10 — see
+    # DISPATCHED_CHILD_PIN_NX_SPAWN_REASONS
     # in identity/session.py for the full mechanism).
     #
     # EXPLICITLY-DECLARED spawn_reason only — never the inferred
@@ -2339,7 +2343,7 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # arguments, which would NX-block a legitimate fresh DRIVER behind
     # its dead predecessor's still-live pin — the same wrong-resolution
     # bug in the opposite direction (council block, PR #604). The cost:
-    # a subagent that omits spawn_reason keeps today's displacing write;
+    # a dispatched child that omits spawn_reason keeps today's displacing write;
     # that boundary is documented on the constant and in
     # docs/ontology/identity.md.
     try:
@@ -2347,7 +2351,7 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         _bsk = f"{base_session_key[:8]}...(len={len(base_session_key)})" if base_session_key else repr(base_session_key)
         logger.debug(f"[ONBOARD_PIN] base_session_key={_bsk}")
         base_fp = _extract_base_fingerprint(base_session_key)
-        from .session import SUBAGENT_PIN_NX_SPAWN_REASONS
+        from .session import DISPATCHED_CHILD_PIN_NX_SPAWN_REASONS
         await set_onboard_pin(
             base_fp,
             agent_uuid,
@@ -2355,7 +2359,10 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             client_hint=client_hint,
             model_type=model_type,
             user_agent=signals.user_agent if signals else None,
-            if_absent=arguments.get("spawn_reason") in SUBAGENT_PIN_NX_SPAWN_REASONS,
+            if_absent=(
+                arguments.get("spawn_reason")
+                in DISPATCHED_CHILD_PIN_NX_SPAWN_REASONS
+            ),
         )
         # Longer-lived recovery anchor alongside the pin. The pin's 30-minute
         # TTL is a routing hint scoped to a recent onboard; when it lapses,
@@ -2363,7 +2370,10 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         # UUID. The anchor is read ONLY at that pre-mint moment. A subagent
         # that must not displace the driver's pin must not displace its anchor
         # either, so the NX decision is shared.
-        if arguments.get("spawn_reason") not in SUBAGENT_PIN_NX_SPAWN_REASONS:
+        if (
+            arguments.get("spawn_reason")
+            not in DISPATCHED_CHILD_PIN_NX_SPAWN_REASONS
+        ):
             from .session import set_identity_anchor
             await set_identity_anchor(
                 base_fp,
@@ -2889,6 +2899,7 @@ async def _r2_pre_check_and_declare(
         pre_check_cross_role,
         _emit_audit,
     )
+    from src.identity.lineage_semantics import classify_parent_relationship
     from src.grounding.onboard_classifier import default_tags_for_onboard
     from src.db import get_db
 
@@ -2901,12 +2912,15 @@ async def _r2_pre_check_and_declare(
     # the 2026-06-14 false-archival chain (1b4172bb -> ad111882 -> d8c219dd).
     # Reject (clear + audit), mirroring the cross-role path. Symmetric with
     # PR #720's archival-time liveness guard.
-    #   - subagent: exempt — the dispatcher is alive by design.
-    #   - compaction: exempt — the same live session continuing past a context
-    #     boundary legitimately has a live "parent".
+    #   - dispatched child: exempt — the dispatcher is alive by design.
+    #   - context continuation: exempt — the same live session continuing past
+    #     a context boundary legitimately has a live "parent".
     #   - explicit / new_session: a live parent means concurrent sibling → reject.
     #     A dead parent stays provisional and R1 adjudicates (preserves the
     #     genuine serial-handoff signal).
+    # The relationship classifier is the canonical registry for in-tree spawn
+    # reasons. Unknown values fail closed into the liveness check instead of
+    # silently acquiring a live-parent exemption (#1485).
     # Liveness = process binding OR agent:/ presence lease. Bindings only
     # exist for callers that sent process_fingerprint at onboard — ephemeral
     # agents never do, so the binding table is structurally blind to them
@@ -2917,7 +2931,8 @@ async def _r2_pre_check_and_declare(
     # Best-effort: get_live_bindings returns [] and has_live_agent_lease
     # returns False on DB error → treated as not-live → allow, same
     # fail-open posture as #720.
-    if spawn_reason not in ("subagent", "compaction"):
+    parent_relationship = classify_parent_relationship(spawn_reason)
+    if not parent_relationship.allows_live_parent:
         from src.mcp_handlers.identity.process_binding import (
             get_live_bindings,
             has_live_agent_lease,
@@ -2968,6 +2983,7 @@ async def _r2_pre_check_and_declare(
                         "claimed_parent_id": parent_id,
                         "reason": "parent_live_at_declaration",
                         "spawn_reason": spawn_reason,
+                        "parent_relationship": parent_relationship.value,
                         "live_binding_count": len(live_bindings),
                         "live_lease": live_lease,
                     },

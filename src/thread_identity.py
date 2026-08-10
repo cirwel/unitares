@@ -14,7 +14,9 @@ from __future__ import annotations
 import hashlib
 from typing import Optional
 
-LINEAGE_SPAWN_REASONS = frozenset({"subagent", "compaction"})
+from src.identity.lineage_semantics import NON_SUCCESSION_SPAWN_REASONS
+
+LINEAGE_SPAWN_REASONS = frozenset(NON_SUCCESSION_SPAWN_REASONS)
 
 
 def generate_thread_id(session_key: str) -> str:

@@ -3,17 +3,18 @@ AGE-canonical knowledge-graph move, wired in SHADOW mode over the archival
 decision.
 
 Single-hop ``_live_lineage_parent_ids`` marks a parent "superseded" when it has
-an active, recent child whose ``spawn_reason`` is a SUCCESSION — anything except
-``subagent``/``compaction``, which keep the parent live by design (#779). The
-flat one-hop pass misses a chain ``P -> M -> C`` where the intermediate ``M``
-has exited but a deeper descendant ``C`` is live: ``P``'s lineage continued, but
-one hop can't see past the stale ``M``.
+an active, recent child whose ``spawn_reason`` is a SUCCESSION. Registered
+dispatched-child and context-continuation reasons keep the parent live by
+design (#779, #1485). The flat one-hop pass misses a chain ``P -> M -> C`` where
+the intermediate ``M`` has exited but a deeper descendant ``C`` is live: ``P``'s
+lineage continued, but one hop can't see past the stale ``M``.
 
 This module computes the TRANSITIVE succession-ancestor set:
 
   * Authoritative source = a recursive CTE over ``core.identities``, applying the
-    SAME succession filter as the single-hop pass (``spawn_reason NOT IN
-    {subagent, compaction}``). Relational truth, deterministic, no AGE dependency.
+    SAME succession filter as the single-hop pass (``spawn_reason`` not in the
+    canonical non-succession registry). Relational truth, deterministic, no AGE
+    dependency.
   * AGE cross-check = a single-round-trip ``SPAWNED*1..N`` Cypher walk. AGE 1.7.0
     cannot causal-filter a variable-length path (no ``ALL()`` predicate, no
     ``relationships()`` property access — both raise), so the walk is UNFILTERED
@@ -48,6 +49,7 @@ from __future__ import annotations
 from typing import Iterable
 
 from src.db import get_db
+from src.identity.lineage_semantics import NON_SUCCESSION_SPAWN_REASONS
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -55,11 +57,11 @@ logger = get_logger(__name__)
 # Spawn reasons that keep the parent LIVE by design — a child declaring one is
 # NOT a successor (its parent is its still-running dispatcher / same session).
 # Mirrors the single-hop exclusion in stuck.py::_live_lineage_parent_ids (#779).
-# Every other reason (explicit, dispatch, new_session, fleet_dispatch, ...) — and
-# a NULL reason — is treated as a succession edge, exactly as the single-hop pass
-# does, so the transitive set is a superset of the single-hop set, not a
-# differently-scoped one.
-_NON_SUCCESSION_SPAWN_REASONS = ("subagent", "compaction")
+# Every other reason (explicit, new_session, fleet_dispatch, ...) — and a NULL
+# reason — is treated as a succession edge, exactly as the single-hop pass does,
+# so the transitive set is a superset of the single-hop set, not a
+# differently-scoped one. Unknown values therefore fail closed.
+_NON_SUCCESSION_SPAWN_REASONS = NON_SUCCESSION_SPAWN_REASONS
 
 # Hard cap on transitive depth; succession chains are shallow in practice
 # (the live probe found depth-5 added only 2 nodes beyond depth-1).
@@ -107,7 +109,8 @@ async def _cte_ancestors(db, child_ids: set[str], depth_limit: int) -> set[str]:
     """Recursive CTE over core.identities — succession-filtered transitive ancestors.
 
     Succession filter mirrors the single-hop pass: an edge counts unless its
-    spawn_reason is subagent/compaction (NULL counts as succession-eligible).
+    registered relationship permits a live parent (NULL counts as
+    succession-eligible).
     """
     depth = max(1, min(int(depth_limit), _MAX_DEPTH))
     sql = """
