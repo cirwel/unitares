@@ -345,10 +345,49 @@ async def handle_self_recovery_review(arguments: Dict[str, Any]) -> Sequence[Tex
                 error_code="UNSAFE_CONDITIONS"
             )]
 
+    # A legacy cold-start trap can freeze the very risk value reviewed recovery
+    # normally waits to improve: paused identities cannot author another state
+    # row, so the fallback-owned reading never changes.  Discount that risk check
+    # only when the latest persisted row proves the exact non-authored,
+    # first-observation Phi circuit-breaker path.  DB failures, legacy rows, and
+    # any missing/contradictory provenance fail closed.  Quick recovery remains
+    # unchanged and strict.
+    baseline_risk_ok = risk_score < 0.65
+    cold_start_recovery = None
+    recovery_basis = "standard_metrics"
+    if (
+        not baseline_risk_ok
+        and GovernanceConfig.NON_AUTHORED_COLD_START_GUARD_ENABLED
+    ):
+        from src.cold_start_risk_confirmation import (
+            evaluate_non_authored_cold_start_trap,
+        )
+
+        latest_state = None
+        try:
+            latest_state = await agent_storage.get_latest_agent_state(agent_uuid)
+        except Exception as e:
+            logger.warning(
+                "Could not load persisted cold-start recovery evidence for %s: %s",
+                agent_uuid,
+                e,
+            )
+        cold_start_recovery = evaluate_non_authored_cold_start_trap(
+            latest_state,
+            enabled=GovernanceConfig.NON_AUTHORED_COLD_START_GUARD_ENABLED,
+        )
+        if cold_start_recovery["eligible"]:
+            recovery_basis = cold_start_recovery["recovery_basis"]
+
     # 7. Determine if safe to resume
     safety_checks = {
         "coherence_ok": coherence > 0.35,  # Slightly more lenient than direct_resume
-        "risk_ok": risk_score < 0.65,      # Slightly more lenient since reflecting
+        # Slightly more lenient since reflecting.  The only exception is the
+        # exact persisted cold-start trap evaluated above; no generic high-risk
+        # state is bypassed.
+        "risk_ok": baseline_risk_ok or bool(
+            cold_start_recovery and cold_start_recovery["eligible"]
+        ),
         "no_void": not void_active,
         "has_reflection": len(reflection) >= 20
     }
@@ -363,8 +402,19 @@ async def handle_self_recovery_review(arguments: Dict[str, Any]) -> Sequence[Tex
             agent_id=agent_uuid,
             summary=f"Self-recovery reflection: {reflection[:100]}{'...' if len(reflection) > 100 else ''}",
             discovery_type="recovery_reflection",
-            details=f"Reflection: {reflection}\n\nRoot cause: {root_cause}\n\nProposed conditions: {proposed_conditions}\n\nMetrics at reflection: coherence={coherence:.3f}, risk={risk_score:.3f}, void={void_value:.3f}",
-            tags=["recovery", "self-reflection", margin_info.get('margin', 'unknown')],
+            details=(
+                f"Reflection: {reflection}\n\nRoot cause: {root_cause}\n\n"
+                f"Proposed conditions: {proposed_conditions}\n\n"
+                f"Metrics at reflection: coherence={coherence:.3f}, "
+                f"risk={risk_score:.3f}, void={void_value:.3f}\n\n"
+                f"Recovery basis: {recovery_basis}"
+            ),
+            tags=[
+                "recovery",
+                "self-reflection",
+                margin_info.get('margin', 'unknown'),
+                recovery_basis,
+            ],
             severity="info" if all_safe else "warning",
             source="self_recovery_reflection",
         )
@@ -374,7 +424,10 @@ async def handle_self_recovery_review(arguments: Dict[str, Any]) -> Sequence[Tex
 
     # 9. Resume if safe, or provide guidance
     if all_safe:
-        resume_reason = f"Self-recovery: {reflection[:50]}... Conditions: {proposed_conditions}"
+        resume_reason = (
+            f"Self-recovery ({recovery_basis}): {reflection[:50]}... "
+            f"Conditions: {proposed_conditions}"
+        )
         event_entry = {
             "event": "resumed",
             "reason": resume_reason,
@@ -414,6 +467,8 @@ async def handle_self_recovery_review(arguments: Dict[str, Any]) -> Sequence[Tex
             "message": "Recovery successful. Agent resumed.",
             "reflection_logged": reflection_logged,
             "conditions": proposed_conditions,
+            "recovery_basis": recovery_basis,
+            "cold_start_recovery": cold_start_recovery,
             "metrics": {
                 "coherence": coherence,
                 "risk_score": risk_score,
@@ -440,6 +495,8 @@ async def handle_self_recovery_review(arguments: Dict[str, Any]) -> Sequence[Tex
             "message": "Reflection logged, but not yet safe to resume." if reflection_logged else "Not yet safe to resume (reflection failed to log).",
             "reflection_logged": reflection_logged,
             "failed_checks": failed,
+            "recovery_basis": recovery_basis,
+            "cold_start_recovery": cold_start_recovery,
             "metrics": {
                 "coherence": coherence,
                 "risk_score": risk_score,

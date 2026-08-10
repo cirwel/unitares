@@ -266,6 +266,8 @@ def summarize_eisv_telemetry(envelope: Mapping[str, Any] | None) -> dict[str, An
     enforcement = enforcement if isinstance(enforcement, Mapping) else {}
     maturity_gate = policy.get("maturity_gate")
     maturity_gate = maturity_gate if isinstance(maturity_gate, Mapping) else {}
+    epistemic_gate = policy.get("epistemic_gate")
+    epistemic_gate = epistemic_gate if isinstance(epistemic_gate, Mapping) else {}
 
     behavioral_source = behavioral.get("observation_source")
     submitted_source = submitted.get("source")
@@ -311,6 +313,11 @@ def summarize_eisv_telemetry(envelope: Mapping[str, Any] | None) -> dict[str, An
         "actuation_applied": maturity_gate.get("actuation_applied"),
         "actuation_blocker": maturity_gate.get("actuation_blocker"),
         "lineage_status": maturity_gate.get("lineage_status"),
+        "epistemic_guard_applied": epistemic_gate.get("applied"),
+        "epistemic_guard_class": epistemic_gate.get("epistemic_class"),
+        "epistemic_guard_ineligibility_reason": epistemic_gate.get(
+            "ineligibility_reason"
+        ),
         "enforcement_basis": enforcement.get("basis"),
         "enforcement_requested": bool(enforcement.get("requested", False)),
         "enforcement_applied": bool(enforcement.get("applied", False)),
@@ -363,6 +370,9 @@ def summarize_state_eisv_telemetry(state_json: Mapping[str, Any] | None) -> dict
         "actuation_applied": None,
         "actuation_blocker": None,
         "lineage_status": None,
+        "epistemic_guard_applied": None,
+        "epistemic_guard_class": None,
+        "epistemic_guard_ineligibility_reason": None,
         "enforcement_basis": None,
         "enforcement_requested": None,
         "enforcement_applied": None,

@@ -5,7 +5,7 @@ Tests for self_recovery_review tool per SELF_RECOVERY_SPEC.md
 import pytest
 import asyncio
 from typing import Dict, Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from mcp.types import TextContent
 
 from src.mcp_handlers.lifecycle.handlers import handle_self_recovery_review
@@ -161,7 +161,11 @@ async def test_high_risk_not_resumed(test_agent_setup):
         "reflection": "I got stuck and need to recover. I will try a different approach.",
     }
 
-    with _PATCH_AUTH, _PATCH_OWNERSHIP:
+    with _PATCH_AUTH, _PATCH_OWNERSHIP, patch(
+        "src.mcp_handlers.lifecycle.operations.agent_storage.get_latest_agent_state",
+        new_callable=AsyncMock,
+        return_value=None,
+    ):
         result = await handle_self_recovery_review(arguments)
 
     # Should not resume

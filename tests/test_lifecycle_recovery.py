@@ -217,6 +217,94 @@ class TestSelfRecoveryReview:
             assert meta.status == "active"
 
     @pytest.mark.asyncio
+    async def test_reviewed_recovery_untraps_exact_non_authored_phi_cold_start(
+        self, server
+    ):
+        meta = make_agent_meta(status="paused")
+        server.agent_metadata = {"agent-1": meta}
+        server.get_or_create_monitor.return_value = make_monitor(
+            coherence=0.8,
+            mean_risk=0.79,
+            I=0.3,
+            S=0.5,
+        )
+        maturity_gate = {
+            "schema": "eisv.cold-start-confirmation.v1",
+            "outcome": "shadow_would_defer",
+            "eligible": True,
+            "would_defer": True,
+            "confirmed": False,
+            "confirmation_count": 1,
+            "confirmations_required": 2,
+            "primary_driver": "phi_cold_start",
+            "measurement_ready": False,
+            "behavioral_confidence": 0.1,
+            "independent_override": None,
+            "lineage_status": "identity_genesis",
+        }
+        latest_state = SimpleNamespace(
+            epistemic_class="substrate_interpretation",
+            state_json={
+                "epistemic_class": "substrate_interpretation",
+                "eisv_telemetry": {
+                    "schema": "eisv.telemetry.v1",
+                    "policy_evaluation": {
+                        "action": "pause",
+                        "sub_action": "risk_pause",
+                        "inputs": {
+                            "verdict_source": "phi_cold_start",
+                            "primary_eisv_source": "ode_fallback",
+                        },
+                        "maturity_gate": maturity_gate,
+                    },
+                    "enforcement": {
+                        "requested": True,
+                        "applied": True,
+                        "mode": "circuit_breaker",
+                        "basis": "phi_cold_start_unconfirmed_shadow",
+                        "actor": "agent_loop_detection",
+                        "effect": "agent_metadata.status=paused",
+                    },
+                },
+            },
+        )
+
+        with patch_lifecycle_server(
+            server, require_registered=("agent-1", None)
+        ), patch_agent_storage() as mock_storage, patch(
+            "src.mcp_handlers.utils.verify_agent_ownership", return_value=True
+        ), patch(
+            "src.mcp_handlers.knowledge.handlers.store_discovery_internal",
+            new_callable=AsyncMock,
+        ):
+            mock_storage.get_latest_agent_state = AsyncMock(
+                return_value=latest_state
+            )
+            mock_storage.update_agent = AsyncMock()
+            mock_storage.persist_runtime_state = AsyncMock()
+
+            from src.mcp_handlers.lifecycle.handlers import handle_self_recovery_review
+
+            result = await handle_self_recovery_review({
+                "agent_id": "agent-1",
+                "reflection": (
+                    "The pause came from a pre-authored fallback row; I will "
+                    "submit authored state before interpreting agent intent."
+                ),
+            })
+
+        data = _parse(result)
+        assert data["success"] is True
+        assert data["action"] == "resumed"
+        assert data["recovery_basis"] == "non_authored_phi_cold_start_trap"
+        assert data["cold_start_recovery"]["eligible"] is True
+        assert data["metrics"]["risk_score"] == pytest.approx(0.79)
+        assert meta.status == "active"
+        mock_storage.update_agent.assert_awaited_once_with(
+            "agent-1", status="active"
+        )
+
+    @pytest.mark.asyncio
     async def test_recovery_requires_reflection(self, server):
         with patch_lifecycle_server(server, require_registered=("agent-1", None)), \
              patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True):
