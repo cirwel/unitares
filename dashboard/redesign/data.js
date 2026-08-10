@@ -21,6 +21,17 @@
     } catch { return null; }
   }
 
+  // Scheduled probe families, by paused-agent label. The daily canary ALWAYS
+  // ends `failed` by design — its real verdict lives in dialectic_canary.jsonl,
+  // not in the session row — so counting probes alongside organic sessions
+  // makes the failure count tick up ~1/day for a reason that is not a defect.
+  // canary_dialectic_* and RP*/AgreeRateProbe are different families testing
+  // different things; neither is organic traffic.
+  function isProbe(label) {
+    if (!label) return false;
+    return /^(canary_dialectic|RP\d|RateProbe|AgreeRateProbe)/i.test(label);
+  }
+
   // Normalise a dialectic `resolution` into something renderable, or null.
   // Two shapes have to be rejected rather than shown as an empty disclosure:
   // the literal string "{}" (sessions resolved between 2026-06-28 and
@@ -359,6 +370,7 @@
           paused: (s.paused_agent || s.paused_agent_id || "").slice(0, 8), reviewer: (s.reviewer || s.reviewer_agent_id || "") ? (s.reviewer || s.reviewer_agent_id).slice(0, 8) : null,
           synthesizer: s.synthesizer, topic: s.topic || s.reason || "", created: s.created || s.created_at, msgs: s.message_count || 0,
           awaiting: !!s.awaiting_facilitation,
+          probe: isProbe(s.paused_agent_label),
           resolution: resolutionOf(s.resolution),
         }));
         // `awaiting_facilitation` means the session asked for a human. It does
@@ -371,11 +383,17 @@
         // there is no action available, and prior work already established
         // that a badge alone changes nothing (36 flagged, 35 failed, 2 reassign
         // messages in the entire DB).
-        const c = { total: sessions.length, resolved: 0, active: 0, failed: 0, unfacilitated: 0 };
+        const c = { total: sessions.length, resolved: 0, active: 0, failed: 0, unfacilitated: 0, probes: 0 };
         sessions.forEach((s) => {
+          if (s.probe) c.probes++;
           if (["resolved"].includes(s.phase)) c.resolved++;
-          else if (["failed", "escalated"].includes(s.phase)) { c.failed++; if (s.awaiting) c.unfacilitated++; }
-          else c.active++;
+          else if (["failed", "escalated"].includes(s.phase)) {
+            c.failed++;
+            // Probes are excluded from the defect count only — they stay in
+            // `failed`, because they DID fail; they just were never going to
+            // do anything else.
+            if (s.awaiting && !s.probe) c.unfacilitated++;
+          } else c.active++;
         });
         return { sessions, counts: c };
       }, () => ({ sessions: S().dialectic.sessions, counts: S().dialectic.counts }));
