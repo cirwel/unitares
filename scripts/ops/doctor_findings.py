@@ -260,6 +260,9 @@ class DoctorFindings:
             "fingerprint": fp,
             "agent_id": PRODUCER,
             "agent_name": PRODUCER,
+            # post_finding_result flattens extra fields into the persisted
+            # event payload. Keep the check queryable without parsing message.
+            "extra": {"check": r.name},
         })
         # Only claim the alert if governance actually holds it. DEDUPED counts
         # (the finding is on file); FAILED does not. Recording a failed post
