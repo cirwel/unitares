@@ -182,3 +182,16 @@ async def test_run_submits_disagreement_through_protocol(monkeypatch):
     # synthesis carried agrees=False — the reviewer actually blocked
     assert synth and synth[0]["agrees"] is False
     assert synth[0]["session_id"] == "sess-9"
+
+    # THE REPLAY GUARD. Passing verdict.reasoning to both calls made the
+    # synthesis a byte-identical copy of the antithesis in 60 of 60 orchestrated
+    # sessions from 2026-06-23 onward, so every transcript printed the same
+    # paragraph under both headings. The argument belongs to the antithesis; the
+    # synthesis carries the verdict. finalize_resolution recovers the rationale
+    # from this agent's own antithesis, so nothing is lost downstream.
+    assert "reasoning" not in synth[0], (
+        "synthesis must not restate the antithesis — that is the replay bug"
+    )
+    assert anti[0].get("reasoning"), "the antithesis is where the argument goes"
+    assert synth[0]["root_cause"] == "shallow"
+    assert synth[0]["proposed_conditions"] == ["real fix"]
