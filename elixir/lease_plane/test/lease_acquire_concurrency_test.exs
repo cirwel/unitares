@@ -110,6 +110,79 @@ defmodule UnitaresLeasePlane.AcquireConcurrencyTest do
     end
   end
 
+  describe "concurrent acquire — expired remote lease" do
+    @tag :capture_log
+    test "exactly one racer replaces the expired row and the rest see its lease" do
+      surface = unique_surface_id("conc_expired")
+      on_exit(fn -> cleanup_surface(surface) end)
+
+      assert {:ok, expired, :new} =
+               UnitaresLeasePlane.acquire_remote_heartbeat(local_beam_params(surface))
+
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "UPDATE lease_plane.surface_leases " <>
+          "SET expires_at = now() - interval '1 second' " <>
+          "WHERE surface_id = $1 AND released_at IS NULL",
+        [surface]
+      )
+
+      results =
+        1..@racer_count
+        |> Task.async_stream(
+          fn _i ->
+            surface
+            |> local_beam_params(holder_agent_uuid: random_uuid())
+            |> UnitaresLeasePlane.acquire_remote_heartbeat()
+          end,
+          max_concurrency: System.schedulers_online() * 2,
+          timeout: 15_000
+        )
+        |> Enum.map(fn {:ok, result} -> result end)
+
+      winners = Enum.filter(results, &match?({:ok, _, :new}, &1))
+      held = Enum.filter(results, &match?({:error, :held_by_other, _}, &1))
+      other = results -- (winners ++ held)
+
+      assert length(winners) == 1,
+             "expected exactly one replacement acquire, got #{length(winners)}.\n  results: #{inspect(results)}"
+
+      assert length(held) == @racer_count - 1,
+             "expected #{@racer_count - 1} held_by_other responses, got #{length(held)}.\n  unaccounted: #{inspect(other)}"
+
+      assert other == [],
+             "all responses must classify as winner or held_by_other; unclassified: #{inspect(other)}"
+
+      %{rows: [[total_rows, active_rows, reap_events]]} =
+        Postgrex.query!(
+          UnitaresLeasePlane.DB,
+          """
+          SELECT
+            (SELECT count(*) FROM lease_plane.surface_leases WHERE surface_id = $1),
+            (SELECT count(*) FROM lease_plane.surface_leases
+             WHERE surface_id = $1 AND released_at IS NULL),
+            (SELECT count(*) FROM lease_plane.lease_plane_events
+             WHERE surface_id = $1 AND event_type = 'reaped_remote_ttl')
+          """,
+          [surface]
+        )
+
+      assert total_rows == 2
+      assert active_rows == 1
+      assert reap_events == 1
+
+      %{rows: [[release_reason]]} =
+        Postgrex.query!(
+          UnitaresLeasePlane.DB,
+          "SELECT release_reason FROM lease_plane.surface_leases " <>
+            "WHERE lease_id::text = $1",
+          [expired.lease_id]
+        )
+
+      assert release_reason == "reaped_remote_ttl"
+    end
+  end
+
   describe "concurrent handoff_accept (GenServer.call serialization)" do
     # Council NIT 1: HandoffServer is a single named GenServer; all accepts
     # serialize through its mailbox. This test verifies the contract (exactly

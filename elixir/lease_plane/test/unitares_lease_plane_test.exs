@@ -60,6 +60,56 @@ defmodule UnitaresLeasePlaneTest do
     end
   end
 
+  describe "acquire_remote_heartbeat/1" do
+    test "releases an expired row inline before acquiring its replacement", ctx do
+      params_a = local_beam_params(ctx.surface, holder_agent_uuid: random_uuid())
+      params_b = local_beam_params(ctx.surface, holder_agent_uuid: random_uuid())
+
+      assert {:ok, expired, :new} =
+               UnitaresLeasePlane.acquire_remote_heartbeat(params_a)
+
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "UPDATE lease_plane.surface_leases " <>
+          "SET expires_at = now() - interval '1 second' " <>
+          "WHERE surface_id = $1 AND released_at IS NULL",
+        [ctx.surface]
+      )
+
+      assert {:ok, replacement, :new} =
+               UnitaresLeasePlane.acquire_remote_heartbeat(params_b)
+
+      assert replacement.lease_id != expired.lease_id
+      assert replacement.holder_agent_uuid == params_b.holder_agent_uuid
+      assert {:ok, ^replacement} = UnitaresLeasePlane.status(ctx.surface)
+
+      %{rows: rows} =
+        Postgrex.query!(
+          UnitaresLeasePlane.DB,
+          "SELECT lease_id::text, released_at IS NULL, release_reason " <>
+            "FROM lease_plane.surface_leases WHERE surface_id = $1",
+          [ctx.surface]
+        )
+
+      leases = Map.new(rows, fn [lease_id, active, reason] -> {lease_id, {active, reason}} end)
+
+      assert leases == %{
+               expired.lease_id => {false, "reaped_remote_ttl"},
+               replacement.lease_id => {true, nil}
+             }
+
+      %{rows: [[reap_events]]} =
+        Postgrex.query!(
+          UnitaresLeasePlane.DB,
+          "SELECT count(*) FROM lease_plane.lease_plane_events " <>
+            "WHERE surface_id = $1 AND event_type = 'reaped_remote_ttl'",
+          [ctx.surface]
+        )
+
+      assert reap_events == 1
+    end
+  end
+
   describe "release/2" do
     test "release via the holder pid stops the GenServer and writes released_at", ctx do
       params = local_beam_params(ctx.surface)
