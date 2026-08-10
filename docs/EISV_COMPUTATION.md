@@ -105,6 +105,15 @@ Internally the assessment emits a `safe` / `caution` / `high-risk` label; that d
 
 The paper states this plainly: the deployed resource-rate form *"is **not** equivalent to −F and does not approximate it under stationarity in any formal sense."* The target forms become instrumentable only when the inference layer exposes the quantities they require (e.g. token-level logprobs for entropy). Until then, the heuristic is the claim and the information-theoretic form is the direction.
 
+## Inspecting the telemetry chain
+
+New check-ins persist a versioned `eisv.telemetry.v1` envelope alongside the
+append-only state row. It keeps measurement, bounded derivation inputs, policy
+evaluation, and enforcement result as separate objects; creating the envelope
+does not change any score or action. See
+[`ontology/eisv-telemetry-envelope-v1.md`](ontology/eisv-telemetry-envelope-v1.md)
+for the schema, privacy bounds, export surfaces, and legacy-row behavior.
+
 ## Don't take this document's word for it
 
 Whether these numbers add useful signal beyond dumb baselines is an **open, measured** question — not an assumption. The [Reviewer Guide's falsifiability harness](REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) scores EISV/prior-state features against deliberately boring baselines such as `previous_outcome_bad` on ranking (AUC) and calibration (Brier), then self-labels each slice (`INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING`). Treat that as a test of calibration and falsifiability for the proprioceptive signal, not as the headline purpose of UNITARES. The current read is a weak early signal on the task scope at short lead, no demonstrated prevention, and a caveat that the lift may be carried by a single `prior_risk` feature rather than the full decomposition. Run it yourself.

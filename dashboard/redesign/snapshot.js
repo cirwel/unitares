@@ -158,6 +158,9 @@ window.SNAPSHOT = {
   // Real fleet-average EISV series (1-min buckets) from /v1/eisv/recent 2026-06-19T20:38Z.
   eisv: {
     coherenceEq: 0.50,
+    sourceLanes: [
+      {source:"legacy_snapshot",events:16,E:0.665,I:0.704,S:0.306,V:-0.093,confidence:null,missingObservations:16,missingInputs:["eisv_telemetry"],enforcementRequested:0,enforcementApplied:0,latest:"2026-06-19T20:38:00Z"},
+    ],
     series: [
       {t:"20:22",E:0.292,I:0.826,S:0.171,V:-0.517,C:0.497,R:0.0},
       {t:"20:23",E:0.733,I:0.735,S:0.250,V:0.045,C:0.498,R:0.138},
