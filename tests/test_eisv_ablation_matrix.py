@@ -163,6 +163,74 @@ def test_parse_args_distinguishes_default_from_explicit_harness_exclusion():
     assert explicit_args.exclude_harness_lanes == ("beam",)
 
 
+def test_frozen_matrix_uses_marginal_envelope_strata_and_immutable_metadata(
+    monkeypatch,
+):
+    observed_kwargs = []
+    envelope_row = dataclasses.replace(
+        _row(0, bad=True, risk=0.9, agent="agent-envelope"),
+        prior_telemetry_schema="eisv.telemetry.v1",
+        prior_measurement_id="measurement-1",
+        prior_measurement_source="physical",
+        prior_warmup_phase="baselined",
+        prior_is_baselined=True,
+        prior_missing_inputs=(),
+        prior_enforcement_requested=True,
+        prior_enforcement_applied=False,
+    )
+
+    async def fake_fetch_rows(*_args, **kwargs):
+        observed_kwargs.append(kwargs)
+        return [envelope_row]
+
+    monkeypatch.setattr(matrix_module, "fetch_rows", fake_fetch_rows)
+    as_of = datetime(2026, 8, 9, 20, 0, tzinfo=timezone.utc)
+    rows = asyncio.run(
+        matrix_module.build_matrix_from_db(
+            "postgresql://unit-test",
+            scopes=["task"],
+            windows=[90],
+            leads=[30],
+            selective_null_resamples=0,
+            telemetry_strata=("source", "warmup", "enforcement", "missingness"),
+            as_of=as_of,
+        )
+    )
+
+    assert observed_kwargs[0]["as_of"] == as_of
+    assert observed_kwargs[0]["include_identity_metadata"] is False
+    assert [
+        (row.telemetry_dimension, row.telemetry_stratum, row.rows)
+        for row in rows
+    ] == [
+        (None, None, 1),
+        ("source", "physical", 1),
+        ("warmup", "baselined", 1),
+        ("enforcement", "requested_not_applied", 1),
+        ("missingness", "complete", 1),
+    ]
+    assert all(row.telemetry_envelope == 1 for row in rows)
+
+
+def test_parse_args_accepts_frozen_telemetry_strata():
+    args = matrix_module.parse_args(
+        [
+            "--as-of",
+            "2026-08-09T20:00:00Z",
+            "--telemetry-strata",
+            "source,warmup,enforcement,missingness",
+        ]
+    )
+
+    assert args.as_of == datetime(2026, 8, 9, 20, 0, tzinfo=timezone.utc)
+    assert args.telemetry_strata == (
+        "source",
+        "warmup",
+        "enforcement",
+        "missingness",
+    )
+
+
 def test_redact_sensitive_report_text_removes_credential_shapes():
     redacted = matrix_module._redact_sensitive_report_text(
         "db=postgresql://reporter:s3cr3t@example.test/governance "
@@ -323,6 +391,40 @@ def test_format_matrix_report_contains_skeptical_ablation_table():
     assert "KEEP TESTING" in report
 
 
+def test_format_matrix_report_labels_enforcement_as_intervention_conditioned():
+    row = AblationMatrixRow(
+        scope="task",
+        window_days=90,
+        lead_minutes=30,
+        rows=12,
+        bad=2,
+        bad_clusters=2,
+        bad_agents=2,
+        prior_state=12,
+        prior_risk=12,
+        baseline_auc=None,
+        baseline_brier=None,
+        best_candidate=None,
+        best_auc_delta=None,
+        best_brier_improvement=None,
+        beats_both=False,
+        conclusion="INCONCLUSIVE",
+        telemetry_envelope=12,
+        telemetry_dimension="enforcement",
+        telemetry_stratum="requested_not_applied",
+    )
+    as_of = datetime(2026, 8, 9, 20, 0, tzinfo=timezone.utc)
+
+    report = format_matrix_report([row], as_of=as_of)
+
+    assert "Telemetry strata mode: marginal" in report
+    assert "intervention-conditioned audit views" in report
+    assert "enforcement is never added as a predictor" in report
+    assert "| Telemetry dimension | Telemetry stratum | Scope |" in report
+    assert "| enforcement | requested_not_applied | task |" in report
+    assert "Data boundary: `2026-08-09T20:00:00+00:00` (frozen)" in report
+
+
 def test_format_matrix_report_labels_grouped_harness_lane_rows():
     rows = [
         AblationMatrixRow(
@@ -386,6 +488,8 @@ def test_cli_help_runs_when_invoked_as_a_file():
     assert result.returncode == 0, result.stderr
     assert "Run a compact EISV ablation matrix" in result.stdout
     assert "--group-by-harness-lane" in result.stdout
+    assert "--telemetry-strata" in result.stdout
+    assert "--as-of" in result.stdout
 
 
 def test_count_bad_clusters_collapses_a_retry_burst_sharing_one_snapshot():

@@ -552,6 +552,7 @@ async def record_agent_state(
     epistemic_class: Optional[str] = "agent_report",
     behavioral_eisv: Optional[Mapping[str, Any]] = None,
     sensor_eisv_source: Optional[str] = None,
+    eisv_telemetry: Optional[Mapping[str, Any]] = None,
 ) -> int:
     """
     Record agent EISV state to PostgreSQL.
@@ -613,6 +614,11 @@ async def record_agent_state(
     # Provenance only: nothing computed here reads this field.
     if sensor_eisv_source is not None:
         state_json["sensor_eisv_source"] = sensor_eisv_source
+    # Versioned measurement -> derivation -> policy -> enforcement provenance.
+    # Stored in append-only JSONB so rollout needs no migration and old rows
+    # remain explicitly identifiable by the key's absence.
+    if eisv_telemetry:
+        state_json["eisv_telemetry"] = dict(eisv_telemetry)
 
     state_id = await db.record_agent_state(
         identity_id=identity.identity_id,

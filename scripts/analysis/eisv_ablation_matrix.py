@@ -42,11 +42,15 @@ from scripts.analysis.eisv_skeptic_report import (
     TASK_OUTCOMES,
     ModelScore,
     OutcomeRow,
+    TELEMETRY_STRATA_DIMENSIONS,
     auc_score,
     brier_score,
     build_model_scores,
     fetch_rows,
+    parse_as_of,
+    prior_state_cluster_key,
     score_deltas_vs_baseline,
+    split_rows_by_telemetry_dimension,
     summarize_conclusion,
 )
 from scripts.analysis.outcome_inventory import (
@@ -98,6 +102,9 @@ class AblationMatrixRow:
     selective_p: float | None = None
     selective_null_clusters: int | None = None
     anchor_scope: str | None = None
+    telemetry_envelope: int | None = None
+    telemetry_dimension: str | None = None
+    telemetry_stratum: str | None = None
 
 
 def _fmt_float(value: float | None, digits: int = 3) -> str:
@@ -320,10 +327,9 @@ class SelectiveNull:
     selective_p: float | None
 
 
-def _cluster_key(row: OutcomeRow) -> tuple[str, int | None]:
+def _cluster_key(row: OutcomeRow) -> tuple[str, str | int | None]:
     """Return the (agent, prior-state snapshot) identity of a row."""
-    age = row.prior_state_age_seconds
-    return (row.agent_id, None if age is None else round(row.ts.timestamp() - age))
+    return prior_state_cluster_key(row)
 
 
 def _best_delta_value(
@@ -513,6 +519,8 @@ def build_matrix_row(
     harness_lane: str | None = None,
     selective_null_resamples: int = 0,
     anchor_scope: str | None = None,
+    telemetry_dimension: str | None = None,
+    telemetry_stratum: str | None = None,
 ) -> AblationMatrixRow:
     """Summarize one scope/window/lead ablation slice."""
     scores = build_model_scores(
@@ -586,6 +594,11 @@ def build_matrix_row(
         selective_p=selective_null.selective_p if selective_null else None,
         selective_null_clusters=selective_null.clusters if selective_null else None,
         anchor_scope=anchor_scope,
+        telemetry_envelope=sum(
+            1 for row in rows if row.prior_telemetry_schema is not None
+        ),
+        telemetry_dimension=telemetry_dimension,
+        telemetry_stratum=telemetry_stratum,
     )
 
 
@@ -595,6 +608,7 @@ def format_matrix_report(
     generated_at: datetime | None = None,
     excluded_harness_lanes: Sequence[str] = (),
     anchor_scope: str | None = None,
+    as_of: datetime | None = None,
 ) -> str:
     """Render a compact markdown table for skeptical multi-slice reporting."""
     generated_at = generated_at or datetime.now(timezone.utc)
@@ -626,11 +640,39 @@ def format_matrix_report(
                 "",
             ]
         )
+    if as_of is not None:
+        lines.extend(
+            [
+                f"Data boundary: `{as_of.astimezone(timezone.utc).isoformat()}` (frozen)",
+                "Frozen runs exclude mutable present-day identity metadata from fixture classification.",
+                "",
+            ]
+        )
     grouped_by_harness_lane = any(row.harness_lane is not None for row in rows)
     if grouped_by_harness_lane:
         lines.extend(["Harness lane mode: grouped", ""])
+    grouped_by_telemetry = any(row.telemetry_dimension is not None for row in rows)
+    if grouped_by_telemetry:
+        dimensions = [
+            dimension
+            for dimension in TELEMETRY_STRATA_DIMENSIONS
+            if any(row.telemetry_dimension == dimension for row in rows)
+        ]
+        lines.extend(
+            [
+                "Telemetry strata mode: marginal (overall plus "
+                + ", ".join(f"`{dimension}`" for dimension in dimensions)
+                + ")",
+                "Rows recur across dimensions. These exploratory strata are not "
+                "multiple-comparison corrected across strata.",
+                "Enforcement strata are intervention-conditioned audit views, not "
+                "causal estimates; enforcement is never added as a predictor.",
+                "",
+            ]
+        )
     columns = [
         *(["Lane"] if grouped_by_harness_lane else []),
+        *(["Telemetry dimension", "Telemetry stratum"] if grouped_by_telemetry else []),
         "Scope",
         "Window days",
         "Lead min",
@@ -640,6 +682,7 @@ def format_matrix_report(
         "Bad agents",
         "Prior state",
         "Prior risk",
+        "Envelope",
         "Baseline AUC",
         "Baseline Brier",
         "Best EISV/prior model",
@@ -684,6 +727,14 @@ def format_matrix_report(
         for row in rows:
             cells = [
                 *([row.harness_lane or "substrate"] if grouped_by_harness_lane else []),
+                *(
+                    [
+                        row.telemetry_dimension or "overall",
+                        row.telemetry_stratum or "all",
+                    ]
+                    if grouped_by_telemetry
+                    else []
+                ),
                 row.scope,
                 str(row.window_days),
                 _fmt_lead(row.lead_minutes),
@@ -693,6 +744,7 @@ def format_matrix_report(
                 str(row.bad_agents),
                 str(row.prior_state),
                 str(row.prior_risk),
+                "-" if row.telemetry_envelope is None else str(row.telemetry_envelope),
                 _fmt_float(row.baseline_auc, 3),
                 _fmt_float(row.baseline_brier, 4),
                 row.best_candidate or "-",
@@ -714,16 +766,7 @@ def format_matrix_report(
             ]
             lines.append("| " + " | ".join(cells) + " |")
     else:
-        empty_cells = [
-            *(["-"] if grouped_by_harness_lane else []),
-            "-",
-            "-",
-            "-",
-            *(["0"] * 6),
-            *(["-"] * 12),
-            "no",
-            "no rows",
-        ]
+        empty_cells = ["-"] * len(columns)
         lines.append("| " + " | ".join(empty_cells) + " |")
     lines.extend(
         [
@@ -755,6 +798,20 @@ def _parse_scope_list(raw: str) -> list[str]:
     return scopes
 
 
+def _parse_telemetry_strata(raw: str) -> tuple[str, ...]:
+    dimensions = _parse_string_list(raw)
+    invalid = [
+        dimension
+        for dimension in dimensions
+        if dimension not in TELEMETRY_STRATA_DIMENSIONS
+    ]
+    if invalid:
+        raise argparse.ArgumentTypeError(
+            f"invalid telemetry strata: {', '.join(invalid)}"
+        )
+    return dimensions
+
+
 async def build_matrix_from_db(
     db_url: str,
     *,
@@ -769,6 +826,8 @@ async def build_matrix_from_db(
     uncertainty_seed: int = 0,
     selective_null_resamples: int = 0,
     anchor_scope: str = "all",
+    telemetry_strata: Sequence[str] = (),
+    as_of: datetime | None = None,
 ) -> list[AblationMatrixRow]:
     matrix_rows: list[AblationMatrixRow] = []
     excluded = {str(lane) for lane in exclude_harness_lanes if str(lane)}
@@ -789,6 +848,8 @@ async def build_matrix_from_db(
                     lead_minutes=lead_minutes,
                     outcome_types=outcome_types,
                     anchor_predicate=anchor_predicate,
+                    as_of=as_of,
+                    include_identity_metadata=as_of is None,
                 )
                 if group_by_harness_lane:
                     lane_groups = {
@@ -806,21 +867,34 @@ async def build_matrix_from_db(
                         )
                     }
                 for harness_lane, outcome_rows in lane_groups.items():
-                    matrix_rows.append(
-                        build_matrix_row(
-                            outcome_rows,
-                            scope=scope,
-                            window_days=window_days,
-                            lead_minutes=lead_minutes,
-                            train_fraction=train_fraction,
-                            min_feature_rows=min_feature_rows,
-                            uncertainty_resamples=uncertainty_resamples,
-                            uncertainty_seed=uncertainty_seed,
-                            harness_lane=harness_lane,
-                            selective_null_resamples=selective_null_resamples,
-                            anchor_scope=anchor_scope,
+                    telemetry_groups: list[
+                        tuple[str | None, str | None, Sequence[OutcomeRow]]
+                    ] = [(None, None, outcome_rows)]
+                    for dimension in dict.fromkeys(telemetry_strata):
+                        telemetry_groups.extend(
+                            (dimension, stratum, stratum_rows)
+                            for stratum, stratum_rows in split_rows_by_telemetry_dimension(
+                                outcome_rows, dimension
+                            ).items()
                         )
-                    )
+                    for telemetry_dimension, telemetry_stratum, stratum_rows in telemetry_groups:
+                        matrix_rows.append(
+                            build_matrix_row(
+                                stratum_rows,
+                                scope=scope,
+                                window_days=window_days,
+                                lead_minutes=lead_minutes,
+                                train_fraction=train_fraction,
+                                min_feature_rows=min_feature_rows,
+                                uncertainty_resamples=uncertainty_resamples,
+                                uncertainty_seed=uncertainty_seed,
+                                harness_lane=harness_lane,
+                                selective_null_resamples=selective_null_resamples,
+                                anchor_scope=anchor_scope,
+                                telemetry_dimension=telemetry_dimension,
+                                telemetry_stratum=telemetry_stratum,
+                            )
+                        )
     return matrix_rows
 
 
@@ -832,6 +906,23 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--leads", type=_parse_float_list, default="0,5,30")
     parser.add_argument("--train-fraction", type=float, default=0.7)
     parser.add_argument("--min-feature-rows", type=int, default=30)
+    parser.add_argument(
+        "--as-of",
+        type=parse_as_of,
+        help=(
+            "Freeze every window at a timezone-aware ISO-8601 boundary. Frozen "
+            "runs exclude mutable present-day identity metadata."
+        ),
+    )
+    parser.add_argument(
+        "--telemetry-strata",
+        type=_parse_telemetry_strata,
+        default=(),
+        help=(
+            "Comma-separated marginal envelope strata: source,warmup,enforcement,missingness. "
+            "Overall rows remain in the report."
+        ),
+    )
     parser.add_argument(
         "--uncertainty-resamples",
         type=int,
@@ -904,12 +995,15 @@ async def main_async(args: argparse.Namespace) -> int:
         uncertainty_seed=args.uncertainty_seed,
         selective_null_resamples=args.selective_null_resamples,
         anchor_scope=args.anchor_scope,
+        telemetry_strata=args.telemetry_strata,
+        as_of=args.as_of,
     )
     report = _redact_sensitive_report_text(
         format_matrix_report(
             rows,
             excluded_harness_lanes=exclude_harness_lanes,
             anchor_scope=args.anchor_scope,
+            as_of=args.as_of,
         )
     )
     payload = (report + "\n").encode("utf-8")

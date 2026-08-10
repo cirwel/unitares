@@ -78,6 +78,13 @@ EISV_PRIOR_STATE_MODELS = (
     "previous_bad_plus_dispersion",
 )
 
+TELEMETRY_STRATA_DIMENSIONS = (
+    "source",
+    "warmup",
+    "enforcement",
+    "missingness",
+)
+
 
 @dataclass(frozen=True)
 class OutcomeRow:
@@ -106,6 +113,24 @@ class OutcomeRow:
     snapshot_v: float | None
     snapshot_phi: float | None
     snapshot_coherence: float | None
+    # Provenance attached to the exact prior state used by this outcome row.
+    # These remain None for pre-envelope rows; the evaluator must not infer
+    # source, warmup, or actuator state from legacy fields.
+    prior_telemetry_schema: str | None = None
+    prior_measurement_id: str | None = None
+    prior_measurement_source: str | None = None
+    prior_primary_source: str | None = None
+    prior_behavioral_source: str | None = None
+    prior_submitted_source: str | None = None
+    prior_behavioral_confidence: float | None = None
+    prior_warmup_phase: str | None = None
+    prior_is_baselined: bool | None = None
+    prior_missing_inputs: tuple[str, ...] | None = None
+    prior_formula_version: str | None = None
+    prior_policy_action: str | None = None
+    prior_policy_sub_action: str | None = None
+    prior_enforcement_requested: bool | None = None
+    prior_enforcement_applied: bool | None = None
     row_key: str | None = None
     previous_bad: bool | None = None
     # Probe A — dispersion over recent prior snapshots (None unless
@@ -117,6 +142,20 @@ class OutcomeRow:
     prior_i_disp: float | None = None
     prior_v_disp: float | None = None
     prior_risk_disp: float | None = None
+
+
+@dataclass(frozen=True)
+class TelemetryStratumSummary:
+    """Descriptive outcome counts for one provenance/intervention stratum."""
+
+    dimension: str
+    stratum: str
+    rows: int
+    bad: int
+    agents: int
+    clusters: int
+    bad_clusters: int
+    bad_agents: int
 
 
 @dataclass(frozen=True)
@@ -311,6 +350,47 @@ def _to_float(value: Any) -> float | None:
     if not math.isfinite(result):
         return None
     return result
+
+
+def _to_bool(value: Any) -> bool | None:
+    """Parse a nullable JSON/SQL boolean without truth-testing strings."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized == "true":
+            return True
+        if normalized == "false":
+            return False
+    return None
+
+
+def _to_string_tuple(value: Any) -> tuple[str, ...] | None:
+    """Decode a nullable JSON string list while preserving empty vs missing."""
+    if value is None:
+        return None
+    parsed = value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(parsed, (list, tuple)):
+        return None
+    return tuple(str(item) for item in parsed if isinstance(item, str))
+
+
+def parse_as_of(value: str) -> datetime:
+    """Parse an explicit timezone-aware freeze boundary for reproducible runs."""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid ISO-8601 timestamp: {value}") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise argparse.ArgumentTypeError(
+            "--as-of requires an explicit timezone (for example Z)"
+        )
+    return parsed.astimezone(timezone.utc)
 
 
 def _clamp_probability(value: float) -> float:
@@ -724,6 +804,145 @@ def bad_rate_by_key(rows: Sequence[OutcomeRow], key_fn) -> list[tuple[str, int, 
     )
 
 
+def prior_state_cluster_key(row: OutcomeRow) -> tuple[str, str | int | None]:
+    """Identify the prior-state snapshot shared by one or more outcomes."""
+    if row.prior_measurement_id:
+        return (row.agent_id, f"measurement:{row.prior_measurement_id}")
+    age = row.prior_state_age_seconds
+    return (row.agent_id, None if age is None else round(row.ts.timestamp() - age))
+
+
+def _unavailable_telemetry_stratum(row: OutcomeRow) -> str | None:
+    if row.prior_telemetry_schema is not None:
+        return None
+    if row.prior_state_age_seconds is None:
+        return "no_prior_state"
+    return "legacy/no-envelope"
+
+
+def telemetry_source_stratum(row: OutcomeRow) -> str:
+    unavailable = _unavailable_telemetry_stratum(row)
+    if unavailable is not None:
+        return unavailable
+    return row.prior_measurement_source or "unknown"
+
+
+def telemetry_warmup_stratum(row: OutcomeRow) -> str:
+    unavailable = _unavailable_telemetry_stratum(row)
+    if unavailable is not None:
+        return unavailable
+    if row.prior_warmup_phase:
+        return row.prior_warmup_phase
+    if row.prior_is_baselined is True:
+        return "baselined"
+    if row.prior_is_baselined is False:
+        return "not_baselined/phase_unknown"
+    return "unknown"
+
+
+def telemetry_enforcement_stratum(row: OutcomeRow) -> str:
+    unavailable = _unavailable_telemetry_stratum(row)
+    if unavailable is not None:
+        return unavailable
+    requested = row.prior_enforcement_requested
+    applied = row.prior_enforcement_applied
+    if applied is True and requested is False:
+        return "applied_without_request"
+    if applied is True:
+        return "applied"
+    if requested is True and applied is False:
+        return "requested_not_applied"
+    if requested is True:
+        return "requested/result_unknown"
+    if requested is False and applied is False:
+        return "not_requested"
+    if requested is False:
+        return "not_requested/result_unknown"
+    return "unknown"
+
+
+def telemetry_missingness_stratum(row: OutcomeRow) -> str:
+    unavailable = _unavailable_telemetry_stratum(row)
+    if unavailable is not None:
+        return unavailable
+    if row.prior_missing_inputs is None:
+        return "unknown"
+    count = len(row.prior_missing_inputs)
+    if count == 0:
+        return "complete"
+    if count == 1:
+        return "1_missing_input"
+    return f"{count}_missing_inputs"
+
+
+def telemetry_stratum(row: OutcomeRow, dimension: str) -> str:
+    stratifiers = {
+        "source": telemetry_source_stratum,
+        "warmup": telemetry_warmup_stratum,
+        "enforcement": telemetry_enforcement_stratum,
+        "missingness": telemetry_missingness_stratum,
+    }
+    try:
+        stratifier = stratifiers[dimension]
+    except KeyError as exc:
+        raise ValueError(f"unknown telemetry stratum dimension: {dimension}") from exc
+    return stratifier(row)
+
+
+def split_rows_by_telemetry_dimension(
+    rows: Sequence[OutcomeRow],
+    dimension: str,
+) -> dict[str, list[OutcomeRow]]:
+    """Return sorted marginal groups for one envelope dimension."""
+    if dimension not in TELEMETRY_STRATA_DIMENSIONS:
+        raise ValueError(f"unknown telemetry stratum dimension: {dimension}")
+    grouped: dict[str, list[OutcomeRow]] = {}
+    for row in rows:
+        grouped.setdefault(telemetry_stratum(row, dimension), []).append(row)
+    return dict(sorted(grouped.items()))
+
+
+def summarize_telemetry_strata(
+    rows: Sequence[OutcomeRow],
+    dimensions: Sequence[str] = TELEMETRY_STRATA_DIMENSIONS,
+) -> list[TelemetryStratumSummary]:
+    """Summarize marginal strata at both row and prior-state-cluster level."""
+    summaries: list[TelemetryStratumSummary] = []
+    for dimension in dimensions:
+        for stratum, stratum_rows in split_rows_by_telemetry_dimension(
+            rows, dimension
+        ).items():
+            cluster_rows = [
+                row
+                for row in stratum_rows
+                if row.prior_measurement_id is not None
+                or row.prior_state_age_seconds is not None
+            ]
+            clusters = {
+                prior_state_cluster_key(row)
+                for row in cluster_rows
+            }
+            bad_rows = [row for row in stratum_rows if row.is_bad]
+            bad_clusters = {
+                prior_state_cluster_key(row)
+                for row in cluster_rows
+                if row.is_bad
+            }
+            summaries.append(
+                TelemetryStratumSummary(
+                    dimension=dimension,
+                    stratum=stratum,
+                    rows=len(stratum_rows),
+                    bad=len(bad_rows),
+                    agents=len({row.agent_id for row in stratum_rows}),
+                    clusters=len(clusters),
+                    bad_clusters=len(bad_clusters),
+                    bad_agents=len({row.agent_id for row in bad_rows}),
+                )
+            )
+    return summaries
+
+
 def risk_bucket_rates(
     rows: Sequence[OutcomeRow],
     bucket_count: int = 4,
@@ -812,6 +1031,10 @@ def _coverage(rows: Sequence[OutcomeRow]) -> dict[str, Any]:
     confidence = [r for r in rows if r.reported_confidence is not None]
     complexity = [r for r in rows if r.reported_complexity is not None]
     dispersion = [r for r in rows if getattr(r, DISPERSION_FEATURE) is not None]
+    telemetry_envelope = [r for r in rows if r.prior_telemetry_schema is not None]
+    telemetry_complete = [
+        r for r in telemetry_envelope if r.prior_missing_inputs == ()
+    ]
     ages = [r.prior_state_age_seconds for r in prior_state if r.prior_state_age_seconds is not None]
     return {
         "total": total,
@@ -820,6 +1043,8 @@ def _coverage(rows: Sequence[OutcomeRow]) -> dict[str, Any]:
         "confidence": len(confidence),
         "complexity": len(complexity),
         "dispersion": len(dispersion),
+        "telemetry_envelope": len(telemetry_envelope),
+        "telemetry_complete": len(telemetry_complete),
         "median_prior_age_seconds": statistics.median(ages) if ages else None,
         "max_prior_age_seconds": max(ages) if ages else None,
     }
@@ -879,6 +1104,7 @@ def build_report(
     lead_minutes: float,
     train_fraction: float,
     generated_at: datetime | None = None,
+    as_of: datetime | None = None,
 ) -> str:
     generated_at = generated_at or datetime.now(timezone.utc)
     rows = sorted(rows, key=lambda r: r.ts)
@@ -912,6 +1138,8 @@ def build_report(
     a(f"Outcome scope: `{scope}`")
     a(f"Prior-state lead: {lead_minutes:g} minutes before outcome")
     a(f"Train/test split: chronological {train_fraction:.0%}/{1 - train_fraction:.0%}")
+    if as_of is not None:
+        a(f"Data boundary: `{as_of.astimezone(timezone.utc).isoformat()}` (frozen)")
     a("")
     a("## Coverage")
     a("")
@@ -941,6 +1169,14 @@ def build_report(
         f"| {coverage['dispersion']} "
         f"| {_fmt_pct(coverage['dispersion'] / total if total else None)} |"
     )
+    a(
+        f"| Rows with EISV telemetry envelope | {coverage['telemetry_envelope']} "
+        f"| {_fmt_pct(coverage['telemetry_envelope'] / total if total else None)} |"
+    )
+    a(
+        f"| Envelope rows with no declared derivation gaps | {coverage['telemetry_complete']} "
+        f"| {_fmt_pct(coverage['telemetry_complete'] / total if total else None)} |"
+    )
     a("")
     if coverage["median_prior_age_seconds"] is not None:
         a(
@@ -963,6 +1199,39 @@ def build_report(
             a(f"| `{key}` | {count} |")
     else:
         a("| (none) | 0 |")
+    a("")
+
+    a("## EISV Telemetry Strata")
+    a("")
+    a(
+        "These are marginal, descriptive slices of the prior-state envelope; "
+        "the same row appears once per dimension. Legacy rows stay explicit "
+        "rather than receiving inferred provenance."
+    )
+    a(
+        "Enforcement is downstream of policy and can change the later outcome. "
+        "Its strata are intervention-conditioned audit views, not causal "
+        "estimates of prevention or harm. Provenance fields are not predictive "
+        "candidate features."
+    )
+    a("")
+    a(
+        "| Dimension | Stratum | Rows | Bad rows | Row bad rate | Agents | "
+        "Prior-state clusters | Bad clusters | Cluster bad rate | Bad agents |"
+    )
+    a("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+    telemetry_summaries = summarize_telemetry_strata(rows)
+    if telemetry_summaries:
+        for summary in telemetry_summaries:
+            a(
+                f"| `{summary.dimension}` | `{summary.stratum}` | {summary.rows} "
+                f"| {summary.bad} | {_fmt_pct(summary.bad / summary.rows if summary.rows else None)} "
+                f"| {summary.agents} | {summary.clusters} | {summary.bad_clusters} "
+                f"| {_fmt_pct(summary.bad_clusters / summary.clusters if summary.clusters else None)} "
+                f"| {summary.bad_agents} |"
+            )
+    else:
+        a("| (none) | (no rows) | 0 | 0 | - | 0 | 0 | 0 | - | 0 |")
     a("")
 
     a("## Bad Rates")
@@ -1186,6 +1455,25 @@ def _row_from_record(
         prior_i=_to_float(record.get("prior_i")),
         prior_s=_to_float(record.get("prior_s")),
         prior_v=_to_float(record.get("prior_v")),
+        prior_telemetry_schema=record.get("prior_telemetry_schema"),
+        prior_measurement_id=record.get("prior_measurement_id"),
+        prior_measurement_source=record.get("prior_measurement_source"),
+        prior_primary_source=record.get("prior_primary_source"),
+        prior_behavioral_source=record.get("prior_behavioral_source"),
+        prior_submitted_source=record.get("prior_submitted_source"),
+        prior_behavioral_confidence=_to_float(
+            record.get("prior_behavioral_confidence")
+        ),
+        prior_warmup_phase=record.get("prior_warmup_phase"),
+        prior_is_baselined=_to_bool(record.get("prior_is_baselined")),
+        prior_missing_inputs=_to_string_tuple(record.get("prior_missing_inputs")),
+        prior_formula_version=record.get("prior_formula_version"),
+        prior_policy_action=record.get("prior_policy_action"),
+        prior_policy_sub_action=record.get("prior_policy_sub_action"),
+        prior_enforcement_requested=_to_bool(
+            record.get("prior_enforcement_requested")
+        ),
+        prior_enforcement_applied=_to_bool(record.get("prior_enforcement_applied")),
         snapshot_verdict=record.get("eisv_verdict"),
         snapshot_e=_to_float(record.get("eisv_e")),
         snapshot_i=_to_float(record.get("eisv_i")),
@@ -1288,6 +1576,36 @@ async def fetch_rows(
                     ps.state_json->'ode_eisv'->>'V',
                     ps.volatility::text
                 ) AS prior_v,
+                ps.state_json #>> '{eisv_telemetry,schema}' AS prior_telemetry_schema,
+                ps.state_json #>> '{eisv_telemetry,measurement_id}' AS prior_measurement_id,
+                CASE
+                    WHEN ps.state_json #>> '{eisv_telemetry,schema}' IS NULL THEN NULL
+                    WHEN ps.state_json #>> '{eisv_telemetry,measurement,primary,source}' = 'behavioral'
+                    THEN COALESCE(
+                        ps.state_json #>> '{eisv_telemetry,measurement,behavioral,observation_source}',
+                        ps.state_json #>> '{eisv_telemetry,measurement,submitted_sensor,source}',
+                        ps.state_json #>> '{eisv_telemetry,measurement,primary,source}',
+                        'unknown'
+                    )
+                    ELSE COALESCE(
+                        ps.state_json #>> '{eisv_telemetry,measurement,primary,source}',
+                        ps.state_json #>> '{eisv_telemetry,measurement,behavioral,observation_source}',
+                        ps.state_json #>> '{eisv_telemetry,measurement,submitted_sensor,source}',
+                        'unknown'
+                    )
+                END AS prior_measurement_source,
+                ps.state_json #>> '{eisv_telemetry,measurement,primary,source}' AS prior_primary_source,
+                ps.state_json #>> '{eisv_telemetry,measurement,behavioral,observation_source}' AS prior_behavioral_source,
+                ps.state_json #>> '{eisv_telemetry,measurement,submitted_sensor,source}' AS prior_submitted_source,
+                ps.state_json #>> '{eisv_telemetry,measurement,behavioral,confidence}' AS prior_behavioral_confidence,
+                ps.state_json #>> '{eisv_telemetry,measurement,behavioral,warmup,phase}' AS prior_warmup_phase,
+                ps.state_json #>> '{eisv_telemetry,measurement,behavioral,warmup,is_baselined}' AS prior_is_baselined,
+                ps.state_json #>  '{eisv_telemetry,derivation,missing_inputs}' AS prior_missing_inputs,
+                ps.state_json #>> '{eisv_telemetry,derivation,formula_version}' AS prior_formula_version,
+                ps.state_json #>> '{eisv_telemetry,policy_evaluation,action}' AS prior_policy_action,
+                ps.state_json #>> '{eisv_telemetry,policy_evaluation,sub_action}' AS prior_policy_sub_action,
+                ps.state_json #>> '{eisv_telemetry,enforcement,requested}' AS prior_enforcement_requested,
+                ps.state_json #>> '{eisv_telemetry,enforcement,applied}' AS prior_enforcement_applied,
                 disp.n_prior_snapshots,
                 disp.prior_s_disp,
                 disp.prior_e_disp,
@@ -1353,10 +1671,12 @@ async def fetch_rows(
               AND o.outcome_type = ANY($3::text[])
               AND {anchor_clause}
             ORDER BY o.ts ASC
-            """.format(
-                anchor_clause=(anchor_predicate or "TRUE"),
-                identity_metadata_projection=identity_metadata_projection,
-                identity_metadata_join=identity_metadata_join,
+            """.replace(
+                "{anchor_clause}", anchor_predicate or "TRUE"
+            ).replace(
+                "{identity_metadata_projection}", identity_metadata_projection
+            ).replace(
+                "{identity_metadata_join}", identity_metadata_join
             ),
             window_days,
             lead_minutes,
@@ -1396,6 +1716,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Window before the lead cutoff over which recent-state dispersion is measured (Probe A).",
     )
     parser.add_argument("--train-fraction", type=float, default=0.7)
+    parser.add_argument(
+        "--as-of",
+        type=parse_as_of,
+        help=(
+            "Freeze the cohort at a timezone-aware ISO-8601 boundary. Frozen "
+            "runs also exclude mutable present-day identity metadata."
+        ),
+    )
     parser.add_argument("--db-url", default=DEFAULT_DB_URL)
     parser.add_argument(
         "--scope",
@@ -1440,6 +1768,8 @@ async def main_async(args: argparse.Namespace) -> int:
         outcome_types=outcome_types,
         dispersion_window_minutes=args.dispersion_window_minutes,
         anchor_predicate=anchor_predicate,
+        as_of=args.as_of,
+        include_identity_metadata=args.as_of is None,
     )
     report = build_report(
         rows,
@@ -1447,6 +1777,7 @@ async def main_async(args: argparse.Namespace) -> int:
         window_days=args.window_days,
         lead_minutes=args.lead_minutes,
         train_fraction=args.train_fraction,
+        as_of=args.as_of,
     )
     if args.output:
         path = Path(args.output)

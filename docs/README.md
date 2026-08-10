@@ -30,6 +30,7 @@ A cohesive, multi-chapter front door for operators and integrators. Thin chapter
 - **[`PRODUCTION_SNAPSHOT.md`](PRODUCTION_SNAPSHOT.md)** — frozen live metrics and dashboard views.
 - **[`trust-contract.md`](trust-contract.md)** — what the system guarantees, what it does not, and what honest failure looks like.
 - **[`tonality-metaphor.md`](tonality-metaphor.md)** — a teaching lens: how key signatures and chromaticism map onto EISV, coherence, and drift. Intuition for [`EISV_COMPUTATION.md`](EISV_COMPUTATION.md), not a spec.
+- **[`ontology/eisv-telemetry-envelope-v1.md`](ontology/eisv-telemetry-envelope-v1.md)** — versioned measurement → derivation → policy → enforcement provenance stored with each new state row.
 - **[`CHANGELOG.md`](CHANGELOG.md)** — release history.
 
 ### Subsystem guides
