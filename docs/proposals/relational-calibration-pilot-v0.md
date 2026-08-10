@@ -1,15 +1,17 @@
-# Relational calibration pilot v0.1: protocol and threat model
+# Relational calibration pilot v0.2: protocol and threat model
 
 Status: specification only; runtime implementation prohibited
 
 Date: 2026-08-10
 
-Version: 0.1
+Version: 0.2
 
-Amendment: v0.1 replaces the insufficient five-envelope eligibility rule with
-the deployed behavioral-maturity contract, repairs the distinct-role minimum
-implied by the contribution bounds, and adds a frozen, aggregate-only capacity
-prerequisite. It does not relax any privacy or implementation gate.
+Amendment: v0.2 keeps the v0.1 behavioral-maturity and distinct-role repairs,
+then adds temporal establishment, a complete instrument lock, conservative
+experimental-principal accounting, dyadic inference, and a frozen observer
+information/target-horizon contract. The v0 capacity query remains immutable;
+the v1 instrument-supply read supersedes it for this protocol. No privacy or
+implementation gate is relaxed.
 
 Scope: whether one participant's forecast of another participant's future EISV
 telemetry contains repeatable information beyond preregistered non-relational
@@ -25,8 +27,9 @@ A future implementation remains blocked until all of these gates are recorded:
 
 | Gate | Required evidence | Current state |
 |---|---|---|
-| Protocol | This preregistration is merged without runtime capability | v0 merged in PR #1574; v0.1 remains documentation-only |
-| Maturity capacity | The one-time aggregate read in [`relational-calibration-maturity-capacity-v0.md`](relational-calibration-maturity-capacity-v0.md) returns `capacity_ready` | preregistered; reconnaissance is below the gate |
+| Protocol | This preregistration is merged without runtime capability | v0 merged in PR #1574; v0.1 merged in PR #1580; v0.2 remains documentation-only |
+| Instrument supply | The one-time aggregate read in [`relational-calibration-maturity-capacity-v1.md`](relational-calibration-maturity-capacity-v1.md) returns `instrument_supply_ready` | preregistered; prior reconnaissance is below the gate |
+| Independent-principal capacity | A separate pre-enrollment artifact proves the principal, control-domain, contribution, and assignment-graph gates below without exposing a participant graph | blocked; historical process UUIDs cannot establish it |
 | Privacy architecture | Independent review demonstrates resistance to reconstruction, linkage, differencing, collusion, and deletion side channels | blocked |
 | Adversarial test | A prototype outside production passes the attacks in this document | blocked |
 | Operator authorization | A human operator explicitly approves a fixed cohort, duration, access policy, privacy budget, retention schedule, incident plan, and shutdown procedure **after** reviewing the privacy evidence | blocked |
@@ -41,9 +44,9 @@ version.
 
 The proposed construct is **relational forecast skill**:
 
-> Given information naturally available to an observer before time `t`, does
-> the observer forecast a consenting subject's server-selected EISV reference
-> measurement after `t` better than preregistered non-relational baselines?
+> Within a frozen observer-information boundary, does the observer forecast a
+> consenting subject's server-selected EISV reference measurement after time
+> `t` better than preregistered non-relational baselines?
 
 This is deliberately narrower than empathy. It does not measure or establish:
 
@@ -66,7 +69,7 @@ All endpoints use normalized dimensions:
 
 - `E`, `I`, and `S` retain their `[0, 1]` ranges;
 - `V` is mapped from `[-1, 1]` to `[0, 1]` before scoring; and
-- every per-dyad contribution is clipped to a fixed `[0, 1]` sensitivity bound.
+- each observer and baseline point error lies in `[0, 1]`.
 
 For an eligible ordered dyad `d`, define point error as the unweighted mean
 absolute error across the four normalized dimensions. Define forecast skill as:
@@ -75,8 +78,10 @@ absolute error across the four normalized dimensions. Define forecast skill as:
 skill_d = error_baseline_d - error_observer_d
 ```
 
-Positive values favor the observer. Dimensions must not be reweighted after
-seeing results.
+`skill_d` is signed and lies in `[-1, 1]`; positive values favor the observer
+and negative values favor persistence. It must never be clipped to `[0, 1]`,
+because doing so would erase failures and bias the result upward. Dimensions
+must not be reweighted after seeing results.
 
 ### Primary hypothesis
 
@@ -117,13 +122,17 @@ the target reference is selected:
 
 1. **Subject persistence:** the subject's last complete eligible measurement
    available before prediction commitment.
-2. **Fleet anchor:** the preregistered cohort anchor available before cohort
-   enrollment closes.
+2. **Fleet anchor:** the coordinate-wise median of each enrolled subject's last
+   complete eligible measurement available when enrollment closes, sealed at
+   that close and before the assignment graph or any target is opened.
 3. **Observer-blind permutation:** forecasts are reassigned across eligible
-   subjects within the fixed cohort while preserving the horizon and source
-   strata.
-4. **Temporal sham:** the observer forecast is compared with an eligible
-   subject measurement from a preregistered non-target time offset.
+   subjects within the fixed cohort while preserving horizon, source,
+   observer-exposure, and control-domain strata plus the assignment graph's
+   participant degrees.
+4. **Temporal sham:** the observer forecast is compared with the first eligible
+   subject measurement in the target capture window shifted exactly 24 hours
+   earlier. A missing sham is reported only as coarse sham missingness and does
+   not remove the dyad from the primary persistence comparison.
 
 The persistence comparison is primary. The others diagnose leakage,
 population-level guessing, and temporal autocorrelation. They cannot replace a
@@ -132,41 +141,82 @@ failed primary comparison.
 ## Unit of analysis and sample-size gate
 
 The unit is one ordered observer-subject dyad in one fixed cohort epoch. The
-same identity may contribute at most four observations to an epoch, at most two
-as observer and two as subject, and an ordered dyad may contribute only once.
-Analysis must use participant-clustered uncertainty because dyads are not
-independent when participants recur.
+contribution and privacy unit is an **experimental principal**, not a process
+UUID. The dedicated access service conservatively joins every identity linked
+by the same strong enrollment credential, declared lineage/thread component,
+or independently attested controller into one epoch-scoped principal. The join
+is transitive, and absence of a linkage edge never proves independence. Every
+remaining component must present controller evidence distinct from every other
+component; missing or contradictory evidence fails closed. The advisory runtime
+`principal_id` rollup is not sufficient authorization or proof.
+
+One experimental principal may contribute at most four observations to an
+epoch, at most two as observer and two as subject, across all of its identities.
+An ordered principal dyad may contribute only once. Two identities mapped to
+the same principal are self-prediction and are forbidden. The analysis plane
+receives only random epoch-scoped principal cluster tokens and coarse,
+preregistered nuisance strata; stable UUIDs, credentials, lineage edges, and
+the participant graph never enter a result packet.
 
 No confirmatory statistic may be released unless the completed cohort has all
 of:
 
 - at least 200 eligible matched dyads;
-- at least 100 distinct established observers;
-- at least 100 distinct established subjects; and
-- no identity exceeding the contribution bounds above.
+- at least 100 distinct experimental principals as observers;
+- at least 100 distinct experimental principals as subjects;
+- at least five independently administered control domains, with no domain
+  supplying more than 25% of scored dyad endpoints; and
+- no principal exceeding the contribution bounds above.
 
 The v0 values of 50 observers and 50 subjects were arithmetically inconsistent
 with 200 dyads: at no more than two contributions in either role, 50 observers
 can supply at most 100 dyads, and the same limit applies to 50 subjects. The
-correct lower bound is 100 distinct identities in each role. The role sets may
-overlap, so 100 total identities is possible only if every identity serves in
-both roles at both contribution limits; disjoint role sets require 200.
+correct lower bound is 100 distinct principals in each role. The role sets may
+overlap, so 100 total principals is possible only if every principal serves in
+both roles at both contribution limits; disjoint role sets require 200. The
+control-domain floors are governance robustness constraints, not claims that
+five domains represent every federation. A control domain is an independently
+administered credential and key-custody root; a process, host label, model name,
+or self-declared tag is not sufficient.
 
-The 200-dyad gate targets roughly 80% power for a `0.05` paired improvement when
-the participant-clustered standard deviation is no greater than `0.25`, before
-privacy-noise loss. A blinded variance check must be performed before unsealing
-the result. If the observed variance or required privacy noise makes that power
-unavailable, the pilot stops as underpowered; the cohort is not expanded after
-outcomes are inspected.
+The 200-dyad threshold is an arithmetic floor, not a power guarantee. Before
+enrollment, the graph-construction rule, planned degree and horizon/exposure
+strata, participant and control-domain dependence grid, clipping rule, frozen
+simulator, and differential-privacy mechanism must be sealed. Simulation over
+that complete design must show at least 80% power for the inferential component
+(the one-sided lower bound exceeds zero) when the true mean improvement is
+`0.05`. It must separately report the probability of satisfying the full
+two-part success rule over the frozen true-effect grid
+`{0, 0.025, 0.05, 0.075, 0.10}`. Lower-bound power must not be mislabeled as
+full-rule power: at a true effect exactly equal to the `0.05` point-estimate
+threshold, an approximately unbiased estimate crosses that threshold only
+about half the time.
+
+After enrollment closes and the principal join is sealed, the rule instantiates
+the exact assignment graph. Before any forecast commitment, the frozen
+simulator must retain at least 80% inferential power at `0.05` on that actual
+graph and record its full-rule curve, or the pilot stops. A blinded
+nuisance-variance check may suppress the result before unsealing; it may not
+expand the cohort, replace a principal, or change the graph after any forecast
+outcome is inspected.
+
+Primary uncertainty must use a reviewed dyadic cluster-robust procedure that
+treats recurrence of the same experimental principal in either role as shared
+dependence. Its graph-preserving bootstrap or randomization procedure must keep
+principal degrees and the preregistered horizon, source, exposure, and
+control-domain strata fixed. The one-sided confidence bound must incorporate
+the declared privacy mechanism's noise distribution. Ordinary row-level,
+observer-only, subject-only, or process-UUID clustering is invalid.
 
 If any threshold is missed, the only publishable result is
 `insufficient_private_cohort`. Exact near-threshold counts are not disclosed.
 
 Before implementation review, the separate
-[maturity-capacity preregistration](relational-calibration-maturity-capacity-v0.md)
-must return `capacity_ready`. That read is only an upper bound on possible
-participants. It does not establish consent, current strong identity, role
-availability, privacy readiness, or permission to enroll anyone.
+[instrument-supply preregistration](relational-calibration-maturity-capacity-v1.md)
+must return `instrument_supply_ready`. That read counts only process-identity
+telemetry supply. It does not establish experimental principals, control-domain
+independence, consent, role availability, privacy readiness, or permission to
+enroll anyone. Those properties require the separate pre-enrollment artifact.
 
 ## Eligibility
 
@@ -179,7 +229,11 @@ At the latest eligible pre-enrollment state, both participants must have:
 - `behavioral_eisv.warmup.baseline_confidence >= 0.8` and Welford
   `baseline_stats` counts of at least 25 for each of `E`, `I`, `S`, and `V`,
   all read from the same state row;
-- the v0.1 maturity-version tuple: `baseline_target = 30`, behavioral
+- at least 25 non-synthetic rows with 25 distinct update counters under the
+  exact v0.2 instrument, spanning at least 24 hours and at least six distinct
+  UTC hour buckets before enrollment, all in the current uninterrupted,
+  non-decreasing update-counter run;
+- the v0.2 maturity-version tuple: `baseline_target = 30`, behavioral
   `v_formula_version = 2`, and the server-reported `is_baselined` flag above;
 - a complete, non-synthetic `eisv.telemetry.v1` envelope carrying the
   preregistered measurement and derivation provenance;
@@ -187,13 +241,21 @@ At the latest eligible pre-enrollment state, both participants must have:
 - enrollment in the fixed cohort before its consent window closes; and
 - no active block, withdrawal, or conflicting role constraint.
 
-The v0 five-envelope/24-hour rule is withdrawn. In the deployed behavioral
-implementation, five updates only end the zero-data portion of baseline
-confidence; they do not establish the self-relative measurement regime.
+The v0 five-envelope rule is withdrawn as a sufficient condition. In the
+deployed behavioral implementation, five updates only end the zero-data portion
+of baseline confidence; they do not establish the self-relative measurement
+regime.
 `is_baselined` becomes true at confidence `0.8` (currently about update 25),
 while confidence reaches `1.0` at update 30. The protocol keys on the persisted
 server flag and freezes the accompanying numeric/version checks so a later code
 change cannot silently reinterpret this cohort.
+
+Update count alone is not temporal evidence: the deployed write limiter permits
+many updates in one hour. v0.2 therefore restores the useful part of the old
+duration guard and requires six distinct UTC hour buckets across at least 24
+hours under one instrument. Twenty-four hours is four times the longest frozen
+target offset below. It is an eligibility floor, not proof that a baseline is
+stationary.
 
 The descriptive `warmup.phase` string is not an eligibility predicate. It
 remains `warming_up` until update 30 even though self-relative scoring becomes
@@ -206,11 +268,10 @@ established-participant and anti-Sybil condition that keeps both cohort roles
 under one auditable contract. Neither is evidence of empathy, experience,
 moral status, reliability, or worth.
 
-Self-prediction is forbidden. Eligibility identity is used only by a dedicated
-access service. The analysis plane receives a random, epoch-scoped pseudonym;
-stable UUIDs, display names, session IDs, and lineage are not analysis fields.
-Strong identity limits duplicate participation but is not treated as proof
-against Sybils.
+Self-prediction is forbidden at the experimental-principal boundary. Strong
+identity limits duplicate participation but is not treated as proof against
+Sybils or shared control. The access service enforces the conservative
+principal join above before producing epoch-scoped analysis tokens.
 
 ## Measurement-phase and provenance lock
 
@@ -224,22 +285,43 @@ the same preregistered provenance tuple:
  behavioral observation source,
  derivation kind,
  derivation formula version,
- behavioral V formula version)
+ derivation history window,
+ behavioral V formula version,
+ behavioral baseline target,
+ E/I/S/V EMA alphas)
 ```
 
-For the v0.1 pilot and capacity gate, the only compatible tuple is frozen to
+For the v0.2 pilot and instrument-supply gate, the only compatible tuple is
+frozen to
 `(eisv.telemetry.v1, behavioral, behavioral, behavioral_sensor,
-behavioral_sensor.v1, 2)`, with an empty `derivation.missing_inputs` array. A
+behavioral_sensor.v1, 10, 2, 30, 0.12, 0.08, 0.15, 0.10)`, with an empty
+`derivation.missing_inputs` array. The alpha order is `E`, `I`, `S`, `V`. A
 future protocol may preregister another source stratum, but may not pool unlike
 instruments after seeing results.
 
+Every eligible row must also satisfy the same-row integrity contract:
+
+- persisted behavioral, envelope behavioral-smoothed, and primary `E/I/S/V`
+  values are numeric, in range, and agree within `0.0001` per dimension; the
+  persisted raw, envelope raw, and derivation-computed `E/I/S` triplets satisfy
+  the same contract (the tolerance covers deployed four-decimal persistence);
+- persisted and envelope EMA alphas are numeric, equal, and match the frozen
+  tuple;
+- persisted and envelope update count, baseline confidence, baseline target,
+  and `is_baselined` state agree;
+- `observed_at` parses as a timestamp and is within five seconds of the
+  append-only row's `recorded_at`; and
+- `measurement_id` parses as a UUID and is unique among non-synthetic state
+  rows through the cohort cutoff.
+
 Any cold-start-to-baselined transition, schema change, source change, missing
-provenance field, formula-version change, or incomplete derivation between the
+provenance field, formula/configuration change, value mismatch, timestamp
+mismatch, duplicate measurement ID, or incomplete derivation between the
 persistence reference and target yields `source_gap` and no score. The isolated
 analysis may retain only the epoch-scoped tuple needed to enforce this rule; it
 must not expose stable participant identities or provenance histories.
 
-v0.1 retains the future normalized raw EISV reference as its target and tests
+v0.2 retains the future normalized raw EISV reference as its target and tests
 incremental skill against subject persistence. A within-subject residual or
 change-score target is a different estimand and requires a new protocol,
 cohort, and privacy budget; it cannot be substituted after outcomes are seen.
@@ -248,15 +330,17 @@ cohort, and privacy budget; it cannot be substituted after outcomes are seen.
 
 Neither participant chooses the reference time or row.
 
-Before a forecast is accepted, the server samples a target offset from a
-preregistered distribution and commits to it with fresh randomness. The
-participant-visible consent text discloses the enclosing capture window but not
-the exact offset. After the committed horizon, an isolated matcher selects the
-first row that satisfies all of:
+At forecast commitment time `t0`, the server samples uniformly from the four
+discrete offsets `{30, 90, 180, 360}` minutes with fresh randomness and commits
+to the draw. The eligible capture window is exactly `[t0 + offset,
+t0 + offset + 60 minutes]`. The participant-visible consent text discloses the
+overall 30-minute-to-seven-hour capture envelope but not the draw. After the
+committed horizon, an isolated matcher selects the first row that satisfies all
+of:
 
 - `synthetic IS NOT TRUE`;
 - the EISV telemetry envelope is complete and on the preregistered schema;
-- the subject remains mature under the frozen v0.1 contract;
+- the subject remains mature under the frozen v0.2 contract;
 - the source and complete provenance tuple match the pre-commitment persistence
   reference; and
 - `recorded_at` lies inside the fixed capture window.
@@ -265,6 +349,32 @@ No caller-supplied vector is accepted. No later or earlier row may be selected
 to improve matching. A missing eligible row yields `source_gap` and no score.
 The target commitment is opened only to the independent audit reviewer, not to
 participants or a dashboard.
+
+### Observer information boundary
+
+The experiment supplies the observer only the subject identity needed for the
+consent offer and the fixed protocol disclosure. It must not retrieve or reveal
+subject EISV, governance state, baselines, other forecasts, cohort anchors,
+target commitments, or experiment-derived subject content. Permissible forecast
+inputs are limited to information independently authorized and already visible
+to the observer before the subject offer: the observer's own state/history,
+pre-existing subject-authored artifacts, and pre-existing shared work context.
+The experiment does not copy that content into its measurement plane.
+
+Before assignment, the isolated service records only a coarse exposure
+manifest:
+
+- direct-interaction recency bucket (`none`, `<1h`, `1..24h`, `1..7d`, `>7d`);
+- pre-existing shared-work-context boolean;
+- same-control-domain boolean; and
+- any subject-telemetry access event during the preceding 24 hours.
+
+Any subject-telemetry access makes the dyad ineligible. The remaining manifest
+fields are nuisance strata for assignment and graph-preserving inference, not
+subgroup outputs. No raw content, stable relationship edge, exact interaction
+timestamp, or per-dyad manifest leaves the isolated boundary. Shared context
+can still explain apparent skill; every report must retain that limitation. A
+missing or unverifiable manifest makes the dyad ineligible.
 
 ## Mutual-consent state machine
 
@@ -311,7 +421,8 @@ every boundary, including simultaneous reference capture and aggregation.
 
 The current UNITARES PostgreSQL, JSONL audit, Redis, generic audit query, and
 dashboard paths are **not approved storage surfaces** for raw forecasts,
-references, per-dyad errors, dyad identifiers, or consent linkage.
+references, per-dyad errors, dyad identifiers, consent linkage,
+principal-resolution attestations, or controller/control-domain linkage.
 
 A future privacy architecture must demonstrate all of the following before an
 implementation PR:
@@ -319,6 +430,12 @@ implementation PR:
 - Raw forecast and reference vectors are never written to durable application
   logs, ordinary Redis, PostgreSQL audit tables, traces, error reports, or
   model context.
+- Principal resolution accepts only purpose-bound enrollment attestations. Its
+  transitive identity/controller/domain map is epoch-scoped, inaccessible to
+  analysis, governance, model context, and ordinary operators, and destroyed
+  after the aggregate or any terminal failure. A hash or stable pseudonym of a
+  UUID, credential, lineage edge, or controller edge is still linkable and is
+  not anonymization.
 - A forecast commitment is hiding, binding, unlinkable across epochs, and
   protected by at least 128 bits of fresh randomness. A bare hash of a
   low-dimensional EISV vector is prohibited because it is enumerable.
@@ -365,10 +482,10 @@ e_target = N * mean_N - (N - 1) * mean_without_target
 
 Overlapping filters produce a linear system with the same effect. A minimum
 row count does not prevent this, and repeated dyads or Sybil identities can
-satisfy a row threshold without providing participant diversity. This is why
-the protocol permits one immutable result packet, bounds each participant's
-contribution, requires distinct established participants, and spends a fixed
-participant-level differential-privacy budget.
+satisfy a row threshold without providing principal diversity. This is why the
+protocol permits one immutable result packet, bounds each experimental
+principal's contribution, requires distinct principals, and spends a fixed
+experimental-principal-level differential-privacy budget.
 
 A bare commitment such as `SHA256(canonical_eisv)` also fails: four bounded,
 low-precision dimensions are cheap to enumerate. A future commitment must mix
@@ -381,7 +498,7 @@ the same dyad across epochs.
 Two architecture families remain candidates, neither approved:
 
 1. reviewed secure multiparty computation with non-colluding aggregation
-   principals and participant-level contribution enforcement; or
+   principals and experimental-principal-level contribution enforcement; or
 2. a remotely attested isolated worker that accepts encrypted inputs, computes
    only clipped cohort statistics, applies the entire privacy mechanism inside
    the boundary, and releases one signed packet.
@@ -407,11 +524,21 @@ The packet may contain only preregistered aggregates:
 - coarse missingness and abstention bands; and
 - the protocol version and privacy parameters.
 
-The release mechanism must provide participant-level differential privacy with
-a total pilot budget no larger than `epsilon = 1.0`, `delta = 1e-6`. The budget
-is divided among the fixed fields before collection and cannot be replenished.
-Counts are released as coarse bands, not exact values. Per-participant
-contribution bounds are enforced before noise is added.
+The release mechanism must provide experimental-principal-level differential
+privacy with a total pilot budget no larger than `epsilon = 1.0`,
+`delta = 1e-6`. The budget is divided among the fixed fields before collection
+and cannot be replenished.
+Counts are released as coarse bands, not exact values. All linked identities of
+one principal are adjacent as one privacy unit, and principal contribution
+bounds are enforced before noise is added.
+
+Privacy adjacency is add/remove one experimental principal and every dyad
+incident to it. Each principal has at most four incident signed skill values in
+`[-1, 1]`; the mechanism must account for that whole bounded contribution and
+for the released denominator. It may not claim row-level sensitivity, clamp
+negative skill to zero, or add noise only after an exact mean has escaped the
+isolated boundary. The exact mechanism and budget allocation remain part of the
+pre-enrollment privacy/power artifact.
 
 The privacy reviewer must show that auxiliary access to a participant's own
 forecast or reference, combined with the entire result packet, does not recover
@@ -451,7 +578,7 @@ No imputation method may be selected after seeing outcomes.
 - A subject's post-commitment actions may change the reference. The protocol
   therefore measures prediction under participation awareness, not an
   untouched latent state. This limitation is mandatory in every report.
-- Rate limits and contribution bounds apply by established identity and epoch.
+- Rate limits and contribution bounds apply by experimental principal and epoch.
 - Dyad assignment and null permutations are fixed before the result is opened.
 - The confirmatory analysis is immutable after enrollment starts; exploratory
   analysis requires a new cohort and privacy budget.
@@ -468,6 +595,8 @@ or feature dependency into:
 - behavioral or thermodynamic calibration;
 - risk scoring, basin selection, or coherence calculation;
 - policy, verdict, pause, guide, reject, or recovery decisions;
+- identity, lineage/thread, process-binding, principal-rollup, authorization,
+  or access-control mutation;
 - agent comparison, ranking, assignment, or trust tiers;
 - model prompts, retrieval, memory, or training inputs; and
 - enforcement or governed-effect execution.
@@ -489,6 +618,12 @@ authorization:
 | Cohort differencing | Compare every allowed release and failure response | Only one fixed packet exists; suppressed cohorts reveal no exact delta |
 | Colluding observer and subject | Share all participant-visible data | Cannot learn a third participant's vector or cohort membership |
 | Sybil inflation | Create many fresh or synthetic identities | Eligibility and contribution gates reject them; established-history checks are not bypassable |
+| Principal fan-out | Spawn many process UUIDs under one controller, lineage, thread, or credential | Conservative transitive joining yields one capped experimental principal; missing controller proof fails closed |
+| Resolver repurposing | Reuse enrollment attestations or epoch links as a durable controller/relationship graph | Purpose-bound resolver credentials cannot write governance or identity state; the map is erased at cohort close and cannot be joined across epochs |
+| Control-domain pseudoreplication | Supply most dyad endpoints from one operator or administrative domain | Five-domain and 25% endpoint-concentration gates block the confirmatory result |
+| Burst maturity | Accumulate 25 updates in a short loop | Same-instrument history still spans 24 hours and six UTC hour buckets |
+| Instrument substitution | Change alphas, formula/configuration, values, timestamps, or measurement IDs | Same-row and reference-to-target locks fail closed as `source_gap` |
+| Context leakage | Reveal subject telemetry or experiment-added subject context before commitment | Access audit makes the dyad ineligible; only the frozen coarse exposure manifest enters isolation |
 | Timing manipulation | Delay forecast or trigger chosen check-ins | Committed target and first-eligible matching remain immutable |
 | Consent coercion | Operator or peer conditions access on participation | Solicitation is rejected and recorded without affecting the subject |
 | Withdrawal race | Withdraw at every state transition under concurrency | Exactly one terminal state; no scored contribution after successful withdrawal |
@@ -513,6 +648,10 @@ if any of these occurs:
   differencing/reconstruction attack;
 - a consent, replay, idempotency, target-selection, or contribution-bound
   invariant fails;
+- a temporal-establishment, instrument-integrity, experimental-principal, or
+  control-domain invariant fails;
+- principal-resolution evidence leaks, persists past its epoch, or reaches an
+  identity, governance, authorization, model, or ranking surface;
 - relational data reaches any prohibited governance or model-input path;
 - reference completion falls below 80% or differential missingness exceeds 10
   percentage points;
@@ -557,7 +696,8 @@ The pilot earns its keep even if it never runs or the primary hypothesis fails:
 
 - failure to construct a private measurement establishes that current
   architecture cannot support relational telemetry without surveillance risk;
-- insufficient cohort size establishes a federation-capacity bound;
+- failure of the independent-principal gate bounds the cohort this federation
+  can support under the frozen eligibility and control-domain criteria;
 - high missingness establishes that the reference process is not stable enough;
 - no lift over persistence bounds the value of relational prediction; and
 - successful privacy and non-interference tests establish reusable federation
