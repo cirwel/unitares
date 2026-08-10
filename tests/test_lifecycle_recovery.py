@@ -305,6 +305,52 @@ class TestSelfRecoveryReview:
         )
 
     @pytest.mark.asyncio
+    async def test_reviewed_recovery_storage_failure_fails_closed_without_leaking(
+        self, server, caplog
+    ):
+        agent_id = "agent-sensitive-identifier"
+        meta = make_agent_meta(status="paused")
+        server.agent_metadata = {agent_id: meta}
+        server.get_or_create_monitor.return_value = make_monitor(
+            coherence=0.8,
+            mean_risk=0.79,
+            I=0.3,
+            S=0.5,
+        )
+
+        with patch_lifecycle_server(
+            server, require_registered=(agent_id, None)
+        ), patch_agent_storage() as mock_storage, patch(
+            "src.mcp_handlers.utils.verify_agent_ownership", return_value=True
+        ), patch(
+            "src.mcp_handlers.knowledge.handlers.store_discovery_internal",
+            new_callable=AsyncMock,
+        ):
+            mock_storage.persist_runtime_state = AsyncMock()
+            mock_storage.get_latest_agent_state = AsyncMock(
+                side_effect=RuntimeError("password=sensitive-value")
+            )
+
+            from src.mcp_handlers.lifecycle.handlers import handle_self_recovery_review
+
+            result = await handle_self_recovery_review({
+                "agent_id": agent_id,
+                "reflection": (
+                    "I reviewed the pause and will wait for persisted evidence "
+                    "before requesting recovery."
+                ),
+            })
+
+        data = _parse(result)
+        assert data["success"] is False
+        assert "risk_ok" in data["failed_checks"]
+        assert data["cold_start_recovery"]["eligible"] is False
+        assert meta.status == "paused"
+        assert agent_id not in caplog.text
+        assert "sensitive-value" not in caplog.text
+        assert "failing closed" in caplog.text
+
+    @pytest.mark.asyncio
     async def test_recovery_requires_reflection(self, server):
         with patch_lifecycle_server(server, require_registered=("agent-1", None)), \
              patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True):

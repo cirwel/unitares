@@ -366,11 +366,10 @@ async def handle_self_recovery_review(arguments: Dict[str, Any]) -> Sequence[Tex
         latest_state = None
         try:
             latest_state = await agent_storage.get_latest_agent_state(agent_uuid)
-        except Exception as e:
+        except Exception:
             logger.warning(
-                "Could not load persisted cold-start recovery evidence for %s: %s",
-                agent_uuid,
-                e,
+                "Could not load persisted cold-start recovery evidence; "
+                "failing closed"
             )
         cold_start_recovery = evaluate_non_authored_cold_start_trap(
             latest_state,
