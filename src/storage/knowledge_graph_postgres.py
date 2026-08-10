@@ -96,6 +96,8 @@ class KnowledgeGraphPostgres:
             severity=severity,
             status=effective_status if effective_status != "!archived" else status,
             limit=limit,
+            exclude_archived=exclude_archived and not status,
+            exclude_cold=exclude_cold and not status,
         )
         # Post-hoc filter as fallback since kg_query may not support negated status.
         # Cold storage is opt-in (include_cold), mirroring archived exclusion.

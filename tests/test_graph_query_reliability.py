@@ -22,6 +22,7 @@ All strings below are the actual agtype text captured live from the
 import pytest
 
 from src.db.mixins.graph import GraphMixin
+from src.mcp_handlers.knowledge.limits import MAX_DETAILS_LEN
 
 
 class _Graph(GraphMixin):
@@ -143,6 +144,23 @@ def test_interpolate_escapes_quotes():
     g = _Graph()
     out = g._interpolate_params("RETURN ${v}", {"v": "O'Brien"})
     assert out == "RETURN 'O\\'Brien'"
+
+
+def test_sanitize_accepts_max_kg_details_with_truncation_marker():
+    """The AGE wrapper must accept every details value the KG handler emits."""
+    details = "D" * MAX_DETAILS_LEN + "... [truncated]"
+
+    sanitized = _Graph()._sanitize_cypher_param(details)
+
+    assert sanitized.startswith("'D")
+    assert sanitized.endswith("[truncated]'")
+
+
+def test_sanitize_still_rejects_strings_above_safety_cap():
+    g = _Graph()
+
+    with pytest.raises(ValueError, match="Cypher param too long"):
+        g._sanitize_cypher_param("D" * (g._MAX_PARAM_LENGTH + 1))
 
 
 # --------------------------------------------------------------------------
