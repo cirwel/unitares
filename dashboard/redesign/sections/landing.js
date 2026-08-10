@@ -135,6 +135,10 @@
     // link rather than a link that goes nowhere — a dead link is the bug being
     // fixed. Self-resolves once the server change deploys.
     const stuckList = stats.stuckList || [];
+    const stuckHard = typeof stats.stuckHard === "number"
+      ? stats.stuckHard : stuckList.filter((s) => !s.soft).length;
+    const stuckSoft = typeof stats.stuckSoft === "number"
+      ? stats.stuckSoft : stuckList.filter((s) => s.soft).length;
     const stuckBody = stuckList.map((s) => {
       const inner = `<span class="name">${esc(s.name || "agent not identified")}</span>`
         + `<span class="reason">${esc(s.reason)}${s.soft ? " · soft" : ""}</span>`;
@@ -148,7 +152,7 @@
     const cards = [
       { h: "Fleet Coherence", id: "fleetcoh", num: num(fleet.coh), sub: fleet.sub, cls: "up", rule: true, href: "#residents" },
       { h: "Agents", num: un(stats.agentsActive) ? "—" : stats.agentsActive, of: un(stats.agentsTotal) ? "" : "/ " + stats.agentsTotal, sub: un(stats.agentsActive) ? "unavailable" : "active / total", href: "#agents" },
-      { h: "Stuck", num: un(stats.stuck) ? "—" : stats.stuck, sub: un(stats.stuck) ? "unavailable" : (stats.stuck ? "needs attention" : "none flagged"), cls: un(stats.stuck) ? "" : (stats.stuck ? "down" : "up"),
+      { h: "Agent attention", num: un(stats.stuck) ? "—" : stats.stuck, sub: un(stats.stuck) ? "unavailable" : (stats.stuck ? `${stuckHard} stuck · ${stuckSoft} soft silence` : "none flagged"), cls: un(stats.stuck) ? "" : (stuckHard ? "down" : stats.stuck ? "" : "up"),
         body: stuckBody, href: stuckBody ? null : "#agents" },
       { h: "Automations", num: asum.total || 0, sub: autoSub, cls: aWarn ? "down" : "up", href: "#automations" },
       { h: "Discoveries", num: un(stats.discoveries) ? "—" : stats.discoveries.toLocaleString(), sub: un(stats.discoveries) ? "unavailable" : (typeof stats.discoveriesToday === "number" ? "+" + stats.discoveriesToday + " today" : "knowledge graph"), href: "#discoveries" },

@@ -1426,12 +1426,13 @@ async def http_dashboard_redesign(request):
 
 
 async def http_agent_history(request):
-    """GET /v1/agents/{agent_id}/history — an agent's EISV check-in trajectory.
+    """GET /v1/agents/{agent_id}/history — an agent's EISV state trajectory.
 
-    Reads core.agent_state (append-only per-check-in history, indexed by
+    Reads core.agent_state (append-only measured observations, indexed by
     identity_id/recorded_at). E lives in state_json, the rest are columns.
     Returns oldest→newest points so the chart reads left-to-right. Synthetic
-    bootstrap rows are excluded.
+    bootstrap rows are excluded, and agent-authored reports stay explicitly
+    separated from automatic substrate interpretations.
     """
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
     if not _check_http_auth(request, http_api_token=http_api_token):
@@ -1473,13 +1474,30 @@ async def http_agent_history(request):
                            (s.state_json->>'E')::real AS e,
                            s.integrity AS i, s.entropy AS s_entropy, s.volatility AS v,
                            s.coherence, s.risk_score, s.state_json,
+                           coalesce(s.epistemic_class,
+                                    s.state_json->>'epistemic_class') AS epistemic_class,
+                           (jsonb_typeof(s.state_json->'eisv_telemetry') = 'object')
+                               AS telemetry_available,
                            row_number() OVER (ORDER BY s.recorded_at) AS rn,
-                           count(*) OVER () AS total
+                           count(*) OVER () AS total,
+                           count(*) FILTER (
+                               WHERE coalesce(s.epistemic_class,
+                                              s.state_json->>'epistemic_class') = 'agent_report'
+                           ) OVER () AS agent_report_total,
+                           count(*) FILTER (
+                               WHERE coalesce(s.epistemic_class,
+                                              s.state_json->>'epistemic_class')
+                                     IN ('substrate_observation', 'substrate_interpretation')
+                           ) OVER () AS substrate_total,
+                           count(*) FILTER (
+                               WHERE jsonb_typeof(s.state_json->'eisv_telemetry') = 'object'
+                           ) OVER () AS telemetry_total
                     FROM core.agent_state s
                     WHERE s.identity_id IN (SELECT identity_id FROM ids) AND s.synthetic = false
                 )
                 SELECT recorded_at, e, i, s_entropy, v, coherence, risk_score,
-                       state_json, total
+                       state_json, epistemic_class, telemetry_available, total,
+                       agent_report_total, substrate_total, telemetry_total
                 FROM numbered
                 WHERE CASE WHEN $3 = 'all'
                            THEN (rn % GREATEST(1, (total / $2)::int) = 0 OR rn = 1 OR rn = total)
@@ -1490,6 +1508,9 @@ async def http_agent_history(request):
                 agent_id, limit, mode,
             )
         total = rows[0]["total"] if rows else 0
+        agent_report_total = rows[0]["agent_report_total"] if rows else 0
+        substrate_total = rows[0]["substrate_total"] if rows else 0
+        telemetry_total = rows[0]["telemetry_total"] if rows else 0
         from src.eisv_telemetry import summarize_state_eisv_telemetry
         points = []
         for r in rows:
@@ -1498,15 +1519,29 @@ async def http_agent_history(request):
                 "t": r["recorded_at"].isoformat(),
                 "E": r["e"], "I": r["i"], "S": r["s_entropy"], "V": r["v"],
                 "coherence": r["coherence"], "risk": r["risk_score"],
+                "epistemic_class": r["epistemic_class"],
+                "telemetry_available": bool(r["telemetry_available"]),
                 "telemetry": summarize_state_eisv_telemetry(state_json),
             }
             if include_telemetry and isinstance(state_json.get("eisv_telemetry"), dict):
                 point["telemetry_envelope"] = state_json["eisv_telemetry"]
             points.append(point)
-        return JSONResponse({"success": True, "agent_id": agent_id, "mode": mode,
-                             "count": len(points), "total": total,
-                             "telemetry_included": include_telemetry,
-                             "points": points})
+        return JSONResponse({
+            "success": True,
+            "agent_id": agent_id,
+            "mode": mode,
+            "count": len(points),
+            "total": total,
+            "observation_summary": {
+                "state_rows": total,
+                "agent_reports": agent_report_total,
+                "substrate_rows": substrate_total,
+                "other_rows": max(0, total - agent_report_total - substrate_total),
+                "telemetry_envelopes": telemetry_total,
+            },
+            "telemetry_included": include_telemetry,
+            "points": points,
+        })
     except Exception as exc:  # noqa: BLE001 — read-only panel endpoint, degrade gracefully
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
