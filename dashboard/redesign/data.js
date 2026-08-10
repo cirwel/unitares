@@ -281,6 +281,8 @@
           discoveriesToday: null, // no honest live "today" delta; show neutral subtitle
           dialectic: dlcSessions ? dlcSessions.filter((s) => !["resolved", "failed"].includes(s.phase || s.status)).length : null,
           stuck: stuckR ? (stuckR.stuck_agents || []).length : null,
+          stuckHard: stuckR ? (stuckR.stuck_agents || []).filter((s) => s.soft !== true).length : null,
+          stuckSoft: stuckR ? (stuckR.stuck_agents || []).filter((s) => s.soft === true).length : null,
           // Named entries so the Stuck card can say WHICH agents and go
           // somewhere. Capped here, not in the view: a real incident flagging
           // 40 agents must not grow the card without bound.
@@ -316,7 +318,8 @@
               event_driven: a.event_driven === true, health: a.health_status,
               redacted: a.agent_id_redacted === true, parent: a.parent_agent_id,
               superseded: a.superseded === true, lifecycleReason: a.last_lifecycle_reason,
-              metrics: { coherence: m.coherence, risk: m.risk_score, verdict: m.verdict, E: m.E, I: m.I, S: m.S, V: m.V, basin: m.basin, phi: m.phi },
+              metrics: { coherence: m.coherence, risk: m.risk_score, verdict: m.verdict, E: m.E, I: m.I, S: m.S, V: m.V, basin: m.basin, phi: m.phi,
+                source: m.source, recordedAt: m.recorded_at },
             });
           });
         });
@@ -502,8 +505,10 @@
     },
 
     async agentHistory(id, opts) {
-      // EISV check-in trajectory for one agent (no snapshot fallback — empty if offline).
-      // opts: { limit, mode: "recent"|"all" }. Returns { points, total, mode }.
+      // EISV state-observation trajectory for one agent (no snapshot fallback —
+      // empty if offline). Authored reports and automatic substrate rows remain
+      // separate in observationSummary; neither is inferred from the other.
+      // opts: { limit, mode: "recent"|"all" }.
       opts = opts || {};
       return withFallback(async () => {
         const q = "?limit=" + (opts.limit || 200) +
@@ -511,7 +516,8 @@
           (opts.includeTelemetry ? "&include_telemetry=true" : "");
         const r = await authFetch("/v1/agents/" + encodeURIComponent(id) + "/history" + q);
         return r && Array.isArray(r.points)
-          ? { points: r.points, total: r.total || r.points.length, mode: r.mode || "recent" }
+          ? { points: r.points, total: r.total || r.points.length, mode: r.mode || "recent",
+              observationSummary: r.observation_summary || null }
           : null;
       }, () => {
         // Offline: serve a bundled trajectory if the snapshot carries one for
