@@ -86,12 +86,42 @@ def coherence(V: float, theta: Theta, params: DynamicsParams) -> float:
         - Coherence function designed for V ∈ [-2, 2] but dynamics keep V ∈ [-0.1, 0.1]
         - This is correct: system genuinely operates conservatively (I > E)
 
+    ⛔ THE 2025-11 RATIONALE ABOVE IS OBSOLETE — it was overtaken by 69ee5a79
+    (2026-04-01) and is kept only to show what the reasoning was:
+
+        "Promote behavioral EISV to primary metrics, demote ODE to diagnostic.
+         The ODE attractor convergence made all agents look identical
+         regardless of actual behavior."
+
+        That commit swapped E, I, S and V in the surfaced metrics dict to the
+        behavioral (EMA + Welford) values and moved the ODE values to a
+        `metrics['ode']` diagnostic sub-field. **Coherence was not part of the
+        swap** — verified: the commit changes zero lines mentioning coherence.
+        `governance_monitor.py` still computes it as
+        `coherence(self.state.V, ...)`, i.e. from the ODE V that the same
+        commit demoted.
+
+        So this function is the last surfaced field still reporting the ODE
+        attractor, and "all agents look identical" is still true of it alone.
+        Accepting ≈0.49 as an "honest thermodynamic signal" was defensible in
+        2025-11, when the ODE V *was* the signal. After April it is a defense
+        of a number nobody decided to keep.
+
     Measured consequence (2026-08-10, live `core.agent_state` over 7d, n=6553):
-        range [0.4696, 0.5039], sd 0.0077. The doctor's `signal_degeneracy`
-        check flags this (floor: sd < 0.01), and the flag is correct — the
-        narrowness is structural, not a data accident. Squeezing a ±0.1 input
-        through tanh and centering at 0.5 cannot produce a wider output, so
-        this value cannot support a threshold no matter how long it runs.
+        coherence range [0.4696, 0.5039], sd 0.0077 — the doctor's
+        `signal_degeneracy` check flags it, correctly. Compare the
+        between-agent spread (16 agents, >=20 check-ins): V 0.128, S 0.046,
+        I 0.035, coherence **0.0032**. Coherence collapses the coordinate with
+        the widest genuine spread of the four.
+
+        The persisted V is NOT confined to [-0.1, 0.1] as claimed above: live
+        range [-0.619, +0.045], sd 0.218. That band describes the ODE V, which
+        is what this function reads — not the V we store. The two are visibly
+        different variables: corr(coherence, stored V) is ~0.99 for agents
+        whose behavioral V sits near the ODE attractor and falls to 0.15 for
+        those that drift away from it. At V=-0.48 this function cannot return
+        the observed 0.482 for ANY legal C1 in [0.5, 1.5] (the range is
+        [0.192, 0.382]) — proof they are not the same input.
 
         This matters because a live gate is placed on it:
         `AdaptiveGovernor.make_verdict` hard-blocks on
@@ -102,12 +132,20 @@ def coherence(V: float, theta: Theta, params: DynamicsParams) -> float:
         value pinned at ~0.484 is a near-constant error term.
 
         Do NOT respond by lowering tau_floor to make the gate fire; that fits
-        a threshold to a signal with no information in it. The grounded
-        manifold form is the intended replacement (sd 0.285 over the same
-        window, 37x this), but it is not a drop-in: 18.09% of its values fall
-        below the current tau_floor, so enabling APPLY without first deriving
-        the threshold against the grounded distribution converts a gate that
-        never fires into one that fires on roughly a fifth of all check-ins.
+        a threshold to a signal with no information in it.
+
+        There are two candidate repairs, and BOTH hit the same wall:
+          * finish 69ee5a79 — feed this function the primary (behavioral) V
+            instead of the demoted ODE V. Recomputing C from the stored V at
+            C1=1 gives sd 0.101 (13x today) and puts 7.1% below tau_floor.
+          * enable UNITARES_GROUNDING_APPLY — the manifold form, sd 0.285
+            (37x today), puts 18.09% below tau_floor.
+
+        Either way a gate that has never fired starts firing, because
+        tau_floor was calibrated while coherence was frozen by an incomplete
+        migration. The threshold has to be re-derived against whichever
+        distribution is adopted BEFORE that repair lands, and that derivation
+        needs outcome evidence rather than a chosen alarm rate.
     """
     return params.Cmax * 0.5 * (1.0 + math.tanh(theta.C1 * V))
 
