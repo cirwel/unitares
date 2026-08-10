@@ -99,7 +99,14 @@ defmodule UnitaresSentinel.FleetFindingEmitterTest do
     assert body["name"] == "process_agent_update"
 
     args = body["arguments"]
-    assert args["agent_id"] == "sentinel-test"
+
+    # A check-in must NOT declare agent_id. The REST prebind accepts an
+    # explicit uuid on a shape check alone and consults it before the CSID, so
+    # declaring it short-circuits resolution — no typed refusal, no PG session
+    # renewal, binding loss unobservable. This assertion used to require the
+    # opposite; it was pinning the bug.
+    refute Map.has_key?(args, "agent_id")
+
     assert args["response_mode"] == "compact"
     assert_in_delta args["complexity"], 0.45, 0.000_001
     assert_in_delta args["confidence"], 0.6, 0.000_001

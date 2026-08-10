@@ -13,8 +13,9 @@ do, so a binding-only check is structurally dead for them (verified live
 2026-08-01: `core.agent_process_bindings` empty server-wide, guard never
 fired). The lease is the liveness signal those agents DO produce.
 
-Exemptions: `subagent` (dispatcher alive by design) and `compaction` (same live
-session continuing past a context boundary) legitimately have a live parent.
+Exemptions come from the canonical parent-relationship registry. Dispatched
+children (including `dialectic_reviewer`) and context continuations legitimately
+have a live parent; succession and unknown reasons do not.
 
 Tests use a cross-role rejection as a short-circuit to assert the post-liveness
 path was reached without mocking the full declare path.
@@ -27,6 +28,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.mcp_handlers.identity.handlers import _r2_pre_check_and_declare
+from src.identity.lineage_semantics import NON_SUCCESSION_SPAWN_REASONS
 
 
 def _meta():
@@ -94,10 +96,9 @@ async def test_new_session_lease_live_parent_rejected_coincidental():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("exempt_reason", ["subagent", "compaction"])
+@pytest.mark.parametrize("exempt_reason", NON_SUCCESSION_SPAWN_REASONS)
 async def test_exempt_spawn_reasons_skip_liveness(exempt_reason):
-    """subagent/compaction never run the liveness check — a live parent is
-    legitimate for them (dispatcher alive / same live session continuing)."""
+    """Non-succession reasons never liveness-reject their expected live parent."""
     backend = AsyncMock()
     backend.get_identity = AsyncMock(return_value={"id": "parent-uuid"})
     backend.clear_lineage_declaration = AsyncMock()
@@ -117,6 +118,68 @@ async def test_exempt_spawn_reasons_skip_liveness(exempt_reason):
     # liveness never consulted; proceeded straight to the cross-role check
     mock_live.assert_not_awaited()
     assert state == "rejected_cross_role"
+
+
+@pytest.mark.asyncio
+async def test_dialectic_reviewer_live_parent_preserves_lineage():
+    """A reviewer is dispatched by the parent whose verdict it is producing.
+
+    The parent stays live while awaiting that verdict, so the reviewer must
+    reach the declaration path without consulting the concurrent-sibling guard.
+    Regression for #1485's five erased reviewer edges.
+    """
+    backend = AsyncMock()
+    backend.clear_lineage_declaration = AsyncMock()
+    backend.read_lineage_state = AsyncMock(return_value=None)
+    backend.declare_lineage = AsyncMock(return_value=True)
+    with patch("src.db.get_db", return_value=backend), \
+         patch("src.mcp_handlers.identity.process_binding.get_live_bindings",
+               new=AsyncMock(return_value=[{"pid": 123}])) as mock_live, \
+         patch("src.mcp_handlers.identity.process_binding.has_live_agent_lease",
+               new=AsyncMock(return_value=True)) as mock_lease, \
+         patch("src.identity.lineage_lifecycle._emit_audit", new=AsyncMock()) as mock_audit, \
+         patch("src.identity.lineage_lifecycle.pre_check_cross_role",
+               new=AsyncMock(return_value=None)):
+        state, rejection = await _r2_pre_check_and_declare(
+            "reviewer-uuid",
+            "parent-uuid",
+            "DialecticReviewer",
+            _meta(),
+            "dialectic_reviewer",
+        )
+
+    assert (state, rejection) == ("provisional", None)
+    mock_live.assert_not_awaited()
+    mock_lease.assert_not_awaited()
+    backend.clear_lineage_declaration.assert_not_awaited()
+    backend.declare_lineage.assert_awaited_once_with("reviewer-uuid")
+    assert mock_audit.await_args.args[0] == "lineage_declared"
+
+
+@pytest.mark.asyncio
+async def test_unknown_spawn_reason_live_parent_rejected_fail_closed():
+    """A typo or novel unregistered reason must not bypass the liveness guard."""
+    backend = AsyncMock()
+    backend.get_identity = AsyncMock(return_value={"id": "parent-uuid"})
+    backend.clear_lineage_declaration = AsyncMock()
+    with patch("src.db.get_db", return_value=backend), \
+         patch("src.mcp_handlers.identity.process_binding.get_live_bindings",
+               new=AsyncMock(return_value=[{"pid": 123}])), \
+         patch("src.identity.lineage_lifecycle._emit_audit", new=AsyncMock()) as mock_audit, \
+         patch("src.identity.lineage_lifecycle.pre_check_cross_role",
+               new=AsyncMock(return_value=None)) as mock_cross:
+        state, _ = await _r2_pre_check_and_declare(
+            "child-uuid",
+            "parent-uuid",
+            None,
+            _meta(),
+            "dialectic_revewer",
+        )
+
+    assert state == "rejected_coincidental"
+    assert mock_audit.await_args.kwargs["details"]["parent_relationship"] == "unknown"
+    backend.clear_lineage_declaration.assert_awaited_once_with("child-uuid")
+    mock_cross.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -978,6 +978,27 @@ class TestLineageSuccession:
         assert live == set()
 
     @patch(_PATCHES["mcp_server"])
+    def test_dialectic_reviewer_does_not_supersede_parent(self, mock_server):
+        """The live paused agent is the reviewer's dispatcher, not predecessor."""
+        recent = datetime.now(timezone.utc) - timedelta(minutes=2)
+        mock_server.agent_metadata = {
+            "reviewer": _make_agent_meta(
+                last_update=recent,
+                parent_agent_id="paused-agent",
+                spawn_reason="dialectic_reviewer",
+                agent_uuid="reviewer",
+            ),
+        }
+        from src.mcp_handlers.lifecycle.stuck import (
+            _live_child_uuids,
+            _live_lineage_parent_ids,
+        )
+
+        now = datetime.now(timezone.utc)
+        assert _live_lineage_parent_ids(now) == set()
+        assert _live_child_uuids(now) == set()
+
+    @patch(_PATCHES["mcp_server"])
     def test_explicit_handoff_child_still_supersedes_parent(self, mock_server):
         """A genuine serial handoff (spawn_reason='explicit', from an EXITED
         predecessor) is still a real succession — it must NOT be exempted, or

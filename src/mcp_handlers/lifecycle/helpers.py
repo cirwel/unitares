@@ -11,6 +11,7 @@ from typing import Optional, Sequence
 
 from mcp.types import TextContent
 from src import agent_storage
+from src.identity.lineage_semantics import is_intentional_lineage_reason
 from src.logging_utils import get_logger
 from src.cache import get_metadata_cache
 from src.agent_metadata_model import AgentMetadata
@@ -32,8 +33,9 @@ def clear_loop_detector_state(meta) -> None:
 # mints between unrelated same-workspace sessions. Mirrors the taxonomy in
 # docs/proposals/lineage-causal-only-semantics.md (PR #721): a child declaring
 # one of these attests a real dependency, so its parent is something an operator
-# probably does not mean to sweep in a bulk "archive everyone" pass.
-_CAUSAL_SPAWN_REASONS = frozenset({"subagent", "compaction", "explicit", "dispatch"})
+# probably does not mean to sweep in a bulk "archive everyone" pass. The
+# predicate is fail-closed for unknown values and shared with the other lineage
+# consumers.
 
 
 async def manual_archive_liveness_signals(
@@ -55,8 +57,9 @@ async def manual_archive_liveness_signals(
          minutes ago does not mean the process is still running, and gating on
          it would block the routine archive-the-agent-I-just-looked-at flow.)
       2. A declared *causal* lineage edge — the agent is a parent/successor in
-         an intentional chain (subagent/dispatch/explicit/compaction), not a
-         coincidental ``new_session`` co-location edge.
+         an intentional chain, not a coincidental ``new_session`` co-location
+         edge. The canonical reason semantics live in
+         ``src.identity.lineage_semantics``.
     """
     signals: list[str] = []
 
@@ -76,8 +79,8 @@ async def manual_archive_liveness_signals(
         logger.debug(f"manual_archive liveness binding check failed: {e}")
 
     parent = getattr(meta, "parent_agent_id", None)
-    spawn = (getattr(meta, "spawn_reason", None) or "").lower()
-    if parent and spawn in _CAUSAL_SPAWN_REASONS:
+    spawn = getattr(meta, "spawn_reason", None)
+    if parent and is_intentional_lineage_reason(spawn):
         signals.append(f"declared lineage (spawn_reason={spawn})")
 
     return signals
