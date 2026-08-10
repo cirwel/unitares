@@ -146,7 +146,7 @@ defmodule UnitaresLeasePlane.DialecticSaga do
       (session_id, paused_agent_id, reviewer_agent_id, phase, status,
        session_type, topic, reason, discovery_id, dispute_type,
        max_synthesis_rounds, synthesis_round, paused_agent_state_json, trigger_source)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,($13::text)::jsonb,$14)
     ON CONFLICT (session_id) DO NOTHING
     RETURNING session_id
     """
@@ -183,6 +183,15 @@ defmodule UnitaresLeasePlane.DialecticSaga do
 
   def create_session(_), do: {:error, :invalid_params}
 
+  # Pre-encode to a JSON binary. Every call site MUST bind the result through
+  # `($N::text)::jsonb`, never a bare `$N::jsonb`: Postgrex infers a bare jsonb
+  # param as jsonb and runs its own Jason encoder over the value, so an
+  # already-encoded binary lands as a jsonb *string* rather than an object.
+  # That double-encoding silently corrupted every jsonb this module wrote
+  # between 2026-06-28 and 2026-08-10 (`resolution_json`, `paused_agent_state_json`,
+  # `resolution_payload_json` — 90 rows; `->>` on them returned NULL). The
+  # `::text` hop forces the binary in as text so Postgres parses it. Same idiom
+  # as `UnitaresLeasePlane.Repo.insert_tool_usage/2`.
   defp encode_json(nil), do: nil
   defp encode_json(v), do: Jason.encode!(v)
 
@@ -287,7 +296,7 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   defp commit_session_row(session_id, payload, status) do
     sql = """
     UPDATE core.dialectic_sessions
-    SET status = $2, phase = $2, resolution_json = $3::jsonb, updated_at = now()
+    SET status = $2, phase = $2, resolution_json = ($3::text)::jsonb, updated_at = now()
     WHERE session_id = $1 AND status NOT IN ('resolved', 'failed')
     RETURNING session_id
     """
@@ -491,7 +500,7 @@ defmodule UnitaresLeasePlane.DialecticSaga do
     INSERT INTO coordination.session_resolution_sagas
       (saga_id, session_id, paused_agent_id, reviewer_agent_id, state,
        resolution_payload_json, resolution_payload_hash, last_attempt_at, attempt_count)
-    VALUES (gen_random_uuid(), $1, $2, $3, 'reserved', $4::jsonb, $5, now(), 1)
+    VALUES (gen_random_uuid(), $1, $2, $3, 'reserved', ($4::text)::jsonb, $5, now(), 1)
     ON CONFLICT DO NOTHING
     RETURNING saga_id::text
     """

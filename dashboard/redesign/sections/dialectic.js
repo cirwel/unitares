@@ -37,7 +37,13 @@
   }
 
   function card(s) {
-    const p = PHASE[s.phase] || { color: "var(--muted)", label: s.phase || "—" };
+    // `awaiting_facilitation` outranks the stored phase. The stuck-session
+    // sweeper rewrites a parked session to `failed` after its threshold, so the
+    // phase column says "failed" for sessions that are actually queued on the
+    // operator. Show what it is waiting for, not what the sweeper called it.
+    const p = s.awaiting
+      ? { color: "var(--warn)", label: "Awaiting you" }
+      : PHASE[s.phase] || { color: "var(--muted)", label: s.phase || "—" };
     const res = s.resolution;
     const pills = [
       agentPill("requestor", s.paused),
@@ -47,6 +53,7 @@
     return `<div class="panel" style="padding:var(--space-5)">
       <div style="display:flex;gap:var(--space-3);align-items:center;flex-wrap:wrap;margin-bottom:var(--space-2)">
         <span class="tag" style="color:${p.color};border-color:color-mix(in srgb, ${p.color} 40%, var(--line-2))">${p.label}</span>
+        ${s.awaiting && s.phase ? `<span class="fresh" title="stored phase — the sweeper's label, not the session's state">swept to ${esc(s.phase)}</span>` : ""}
         <span class="tag">${esc(s.type)}</span>
         <span class="fresh" title="${esc(s.id)}">${esc((s.id || "").slice(0, 12))}…</span>
         <span class="spring"></span>
@@ -85,11 +92,14 @@
   function render() {
     const c = MODEL.counts || {};
     let rows = MODEL.sessions.slice();
-    if (phaseFilter === "active") rows = rows.filter((s) => !["resolved", "failed"].includes(s.phase));
-    else if (phaseFilter !== "all") rows = rows.filter((s) => s.phase === phaseFilter);
-    rows.sort((a, b) => Date.parse(b.created || 0) - Date.parse(a.created || 0));
+    if (phaseFilter === "awaiting") rows = rows.filter((s) => s.awaiting);
+    else if (phaseFilter === "active") rows = rows.filter((s) => !s.awaiting && !["resolved", "failed"].includes(s.phase));
+    else if (phaseFilter !== "all") rows = rows.filter((s) => !s.awaiting && s.phase === phaseFilter);
+    // Sessions queued on the operator sort first — they are the only ones with
+    // a pending human action.
+    rows.sort((a, b) => (b.awaiting ? 1 : 0) - (a.awaiting ? 1 : 0) || Date.parse(b.created || 0) - Date.parse(a.created || 0));
 
-    const chips = [["all", "all " + (c.total ?? "")], ["active", "active " + (c.active ?? 0)], ["resolved", "resolved " + (c.resolved ?? 0)], ["failed", "failed " + (c.failed ?? 0)]]
+    const chips = [["all", "all " + (c.total ?? "")], ["awaiting", "awaiting you " + (c.awaiting ?? 0)], ["active", "active " + (c.active ?? 0)], ["resolved", "resolved " + (c.resolved ?? 0)], ["failed", "failed " + (c.failed ?? 0)]]
       .map(([v, t]) => `<button class="theme-toggle dlc-f" data-f="${v}" style="${v === phaseFilter ? "border-color:var(--accent);color:var(--accent)" : ""}">${t}</button>`).join("");
 
     $("#dlc-mount").innerHTML =
