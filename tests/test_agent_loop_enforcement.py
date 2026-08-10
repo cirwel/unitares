@@ -13,6 +13,11 @@ def test_mark_circuit_breaker_enforcement_applied_preserves_policy_request():
             "requested": True,
             "applied": False,
             "mode": "circuit_breaker_candidate",
+            "basis": "phi_cold_start_fail_closed",
+            "maturity_gate": {
+                "outcome": "ineligible",
+                "actuation_applied": False,
+            },
             "actor": None,
             "effect": None,
             "note": (
@@ -35,6 +40,11 @@ def test_mark_circuit_breaker_enforcement_applied_preserves_policy_request():
         "requested": True,
         "applied": True,
         "mode": "circuit_breaker",
+        "basis": "phi_cold_start_fail_closed",
+        "maturity_gate": {
+            "outcome": "ineligible",
+            "actuation_applied": False,
+        },
         "actor": "agent_loop_detection",
         "effect": "agent_metadata.status=paused",
         "note": "Circuit breaker applied at the runtime boundary after policy evaluation.",

@@ -29,6 +29,16 @@ function report(windowDays = 30, envelopes = 80) {
       behavioral_primary_rate: envelopes ? 0.625 : null,
       ode_fallback: envelopes ? 30 : 0,
       ode_fallback_rate: envelopes ? 0.375 : null,
+      measurement_ready: envelopes ? 50 : 0,
+      measurement_ready_rate: envelopes ? 0.625 : null,
+      maturity_eligible: envelopes ? 3 : 0,
+      maturity_eligible_rate: envelopes ? 0.0375 : null,
+      maturity_would_defer: envelopes ? 2 : 0,
+      maturity_would_defer_rate: envelopes ? 0.025 : null,
+      maturity_confirmed: envelopes ? 1 : 0,
+      maturity_actuation_enabled: 0,
+      maturity_actuation_ready: 0,
+      maturity_actuation_applied: 0,
       missing: envelopes ? 10 : 0, missing_rate: envelopes ? 0.125 : null,
       contract_violation_rows: envelopes ? 1 : 0,
       contract_checked_rows: envelopes, contract_violation_rate: envelopes ? 0.0125 : null,
@@ -64,11 +74,34 @@ function report(windowDays = 30, envelopes = 80) {
       by_type: envelopes ? [{ type: "policy_risk_mismatch", observations: 1 }] : [],
       note: "Same-row serialization invariants only.",
     },
+    maturity_gate: {
+      strata: envelopes ? [
+        { outcome: "ineligible", observations: 77 },
+        { outcome: "shadow_would_defer", observations: 2 },
+        { outcome: "shadow_confirmed", observations: 1 },
+      ] : [],
+      ineligibility_reasons: envelopes ? [
+        { reason: "policy_not_risk_pause", observations: 77 },
+        { reason: "none", observations: 3 },
+      ] : [],
+      reset_reasons: envelopes ? [
+        { reason: "policy_not_risk_pause", observations: 77 },
+        { reason: "first_identity_observation", observations: 2 },
+        { reason: "none", observations: 1 },
+      ] : [],
+      note: "Shadow-only confirmation maturity; no pause was suppressed.",
+    },
     enforcement: {
       strata: envelopes ? [
         { stratum: "not_requested", observations: 76 },
         { stratum: "requested_not_applied", observations: 3 },
         { stratum: "applied", observations: 1 },
+      ] : [],
+      bases: envelopes ? [
+        { basis: "advisory_policy", observations: 76 },
+        { basis: "phi_cold_start_unconfirmed_shadow", observations: 2 },
+        { basis: "phi_cold_start_confirmed", observations: 1 },
+        { basis: "non_cold_start_policy", observations: 1 },
       ] : [],
       note: "Intervention-conditioned delivery counts; not causal.",
     },
@@ -153,6 +186,10 @@ describe("EISV telemetry health dashboard", () => {
     expect(mount.textContent).toContain("policy_risk_mismatch");
     expect(mount.textContent).toContain("One risk number, three vocabularies");
     expect(mount.textContent).toContain("Strict external outcomes only");
+    expect(mount.textContent).toContain("Cold-start decision maturity");
+    expect(mount.textContent).toContain("shadow_would_defer");
+    expect(mount.textContent).toContain("phi_cold_start_unconfirmed_shadow");
+    expect(mount.textContent).toContain("no pause was suppressed");
     expect(mount.textContent).toContain("of requests applied; not causal effect");
     expect(mount.textContent).toContain("do not score agents or establish machine experience");
     expect(charts).toHaveLength(2);

@@ -109,6 +109,16 @@ class TestEndToEndWiring:
         vf = result["verification_floor"]
         assert vf["verdict"] == "high-risk"
         assert vf["escalate_only"] is True
+        gate = result["policy_evaluation"]["maturity_gate"]
+        assert gate["primary_driver"] == "independent_verification_floor"
+        assert gate["independent_override"] == "independent_verification_floor"
+        # The live priority stack maps this high score to a non-risk structural
+        # pause before the risk_pause branch.  Either way, the cold-start
+        # confirmation shadow is not eligible and cannot soften the decision.
+        assert gate["policy_candidate"] is False
+        assert gate["ineligibility_reason"] == "policy_not_risk_pause"
+        assert gate["would_defer"] is False
+        assert result["enforcement"]["basis"] == "non_cold_start_policy"
 
     def test_flag_on_benign_still_proceeds(self, monkeypatch):
         # The floor must not introduce a false pause on clean work.

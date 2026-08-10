@@ -109,6 +109,48 @@ class TestAuditEntry:
         assert restored["details"]["nested"]["x"] == [1, 2, 3]
 
 
+class TestColdStartRiskConfirmationAudit:
+    def test_records_shadow_outcome_without_claiming_actuation(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        logger.log_cold_start_risk_confirmation_evaluated(
+            agent_id="agent-cold-start",
+            risk_score=0.78,
+            evaluation={
+                "schema": "eisv.cold-start-confirmation.v1",
+                "behavioral_confidence": 0.1,
+                "primary_driver": "phi_cold_start",
+                "measurement_phase": "fallback_cold_start",
+                "measurement_ready": False,
+                "eligible": True,
+                "confirmation_count": 1,
+                "confirmations_required": 2,
+                "would_defer": True,
+                "confirmed": False,
+                "outcome": "shadow_would_defer",
+                "actuation_enabled": False,
+                "actuation_ready": False,
+                "actuation_applied": False,
+                "actuation_blocker": "operator_flag_disabled",
+                "enforcement_basis": "phi_cold_start_unconfirmed_shadow",
+                "monitor_lineage": "lineage-a",
+                "lineage_status": "identity_genesis",
+                "process_cycle": 1,
+                "original_decision": {
+                    "action": "pause",
+                    "sub_action": "risk_pause",
+                    "reason": "high-risk",
+                },
+            },
+        )
+
+        [entry] = _read_jsonl(logger.log_file)
+        assert entry["event_type"] == "cold_start_risk_confirmation_evaluated"
+        assert entry["confidence"] == 0.1
+        assert entry["details"]["outcome"] == "shadow_would_defer"
+        assert entry["details"]["actuation_applied"] is False
+        assert entry["details"]["original_decision"]["sub_action"] == "risk_pause"
+
+
 # ===========================================================================
 # log_identity_resolution_observed
 # ===========================================================================

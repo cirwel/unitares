@@ -419,6 +419,28 @@ class GovernanceConfig:
     # the real floor is enabled (the applied signal is already surfaced).
     VERIFICATION_FLOOR_SHADOW = os.environ.get('GOVERNANCE_VERIFICATION_FLOOR_SHADOW', 'true').lower() == 'true'
 
+    # Cold-start risk confirmation telemetry.  The shadow evaluator records
+    # whether a fallback-owned (phi_cold_start) risk_pause is the first or a
+    # repeated adjacent observation.  It never changes the decision.  Default
+    # ON because it is observational and is the evidence gate for any future
+    # policy proposal.  Roll back by setting the env flag false and restarting.
+    COLD_START_RISK_CONFIRMATION_SHADOW = (
+        os.environ.get(
+            'GOVERNANCE_COLD_START_RISK_CONFIRMATION_SHADOW', 'true'
+        ).lower() == 'true'
+    )
+
+    # Reserved operator promotion flag.  Default OFF.  Even when set, the
+    # current implementation remains fail-closed and will not suppress a pause
+    # until confirmation state is durably and atomically persisted.  This makes
+    # accidental configuration changes visible in telemetry without silently
+    # changing the policy-to-actuator boundary.
+    COLD_START_RISK_CONFIRMATION_ACTUATION_ENABLED = (
+        os.environ.get(
+            'GOVERNANCE_COLD_START_RISK_CONFIRMATION_ACTUATION', 'false'
+        ).lower() == 'true'
+    )
+
     # =================================================================
     # Error Handling Constants
     # =================================================================

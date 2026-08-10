@@ -358,8 +358,13 @@ async def hydrate_from_db_if_fresh(monitor: UNITARESMonitor, agent_id: str) -> b
             monitor.state.coherence,
             monitor.state.regime,
         )
+        # Confirmation counts never cross a restart/hydration boundary.  The
+        # shadow gate therefore treats this lineage as uncertain and leaves any
+        # pause intact, even though measurement state itself was restored.
+        monitor._cold_start_confirmation_lineage_status = "db_hydrated_restart"
         return True
     except Exception as e:
+        monitor._cold_start_confirmation_lineage_status = "hydration_uncertain"
         logger.warning("DB hydration failed: %s", type(e).__name__)
         return False
 

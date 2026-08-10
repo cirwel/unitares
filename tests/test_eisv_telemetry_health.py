@@ -107,6 +107,11 @@ def test_sql_contract_is_measured_only_and_externally_anchored():
     assert "contract_checked_rows" in EISV_TELEMETRY_STATE_HEALTH_SQL
     assert "enforcement_delivery_rate" in EISV_TELEMETRY_STATE_HEALTH_SQL
     assert "applied_without_request" in EISV_TELEMETRY_STATE_HEALTH_SQL
+    assert "maturity_gate_contract_missing" in EISV_TELEMETRY_STATE_HEALTH_SQL
+    assert "eisv.cold-start-confirmation.v1" in EISV_TELEMETRY_STATE_HEALTH_SQL
+    assert "maturity_would_defer" in EISV_TELEMETRY_STATE_HEALTH_SQL
+    assert "maturity_actuation_without_readiness" in EISV_TELEMETRY_STATE_HEALTH_SQL
+    assert "enforcement_basis_distribution" in EISV_TELEMETRY_STATE_HEALTH_SQL
     assert "o.verification_source = 'external_signal'" in EISV_TELEMETRY_CALIBRATION_SQL
     assert "o.eisv_e IS NOT NULL" in EISV_TELEMETRY_CALIBRATION_SQL
     assert "s.synthetic IS NOT TRUE" in EISV_TELEMETRY_CALIBRATION_SQL
@@ -120,7 +125,12 @@ async def test_query_combines_state_contracts_and_clustered_calibration():
         "summary": {"states": 10, "envelopes": 2},
         "timeline": [],
         "contract_checks": {"checked_rows": 2, "by_type": []},
-        "enforcement": {"strata": []},
+        "maturity_gate": {
+            "strata": [],
+            "ineligibility_reasons": [],
+            "reset_reasons": [],
+        },
+        "enforcement": {"strata": [], "bases": []},
     }
     conn.fetch.return_value = [_outcome(measurement="m-1", risk=0.4)]
 

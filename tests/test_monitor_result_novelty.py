@@ -156,6 +156,7 @@ def test_build_result_exposes_policy_and_unapplied_enforcement_layers():
             "risk_score": 0.72,
             "risk_score_latest": None,
             "verdict": "high-risk",
+            "verdict_source": None,
             "void_active": False,
         },
         "measurement_role": "EISV/risk/coherence are policy inputs, not the actuator itself.",
@@ -164,6 +165,7 @@ def test_build_result_exposes_policy_and_unapplied_enforcement_layers():
         "requested": True,
         "applied": False,
         "mode": "circuit_breaker_candidate",
+        "basis": "policy_request",
         "actor": None,
         "effect": None,
         "note": (
@@ -203,6 +205,43 @@ def test_risk_attribution_decomposes_by_provenance():
     assert attr["sources"]["behavioral"]["provenance"] == "measured"
     assert attr["sources"]["behavioral"]["risk"] == pytest.approx(0.006)
     assert attr["sources"]["behavioral"]["verdict"] == "safe"
+
+
+def test_policy_and_enforcement_preserve_cold_start_maturity_gate():
+    from src.monitor_result import _build_enforcement_stub, _build_policy_evaluation
+
+    gate = {
+        "outcome": "shadow_would_defer",
+        "would_defer": True,
+        "actuation_applied": False,
+        "enforcement_basis": "phi_cold_start_unconfirmed_shadow",
+    }
+    decision = {
+        "action": "pause",
+        "sub_action": "risk_pause",
+        "reason": "high-risk",
+        "cold_start_confirmation": gate,
+    }
+    metrics = {
+        "risk_score": 0.78,
+        "verdict": "high-risk",
+        "verdict_source": "phi_cold_start",
+        "primary_eisv_source": "ode_fallback",
+    }
+
+    policy = _build_policy_evaluation(decision, metrics)
+    enforcement = _build_enforcement_stub(decision)
+
+    assert policy["inputs"]["verdict_source"] == "phi_cold_start"
+    assert policy["maturity_gate"] == gate
+    assert enforcement["requested"] is True
+    assert enforcement["applied"] is False
+    assert enforcement["basis"] == "phi_cold_start_unconfirmed_shadow"
+    assert enforcement["maturity_gate"] == gate
+
+    decision["gap_suppressed"] = True
+    decision["action"] = "proceed"
+    assert _build_enforcement_stub(decision)["basis"] == "gap_suppressed"
 
 
 def test_risk_attribution_handles_missing_signals():

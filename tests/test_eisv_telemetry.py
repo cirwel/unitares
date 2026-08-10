@@ -101,14 +101,41 @@ def test_summary_prefers_consumed_observation_source_and_stays_compact():
         submitted_sensor={"E": 0.7, "I": 0.8, "S": 0.2, "V": -0.1},
         submitted_source="physical",
         derivation=_derivation(),
-        policy_evaluation={"action": "pause", "sub_action": "risk_pause"},
-        enforcement={"requested": True, "applied": True},
+        policy_evaluation={
+            "action": "pause",
+            "sub_action": "risk_pause",
+            "inputs": {"verdict_source": "behavioral_assessment"},
+            "maturity_gate": {
+                "measurement_phase": "behavioral_ready",
+                "measurement_ready": True,
+                "outcome": "ineligible",
+                "eligible": False,
+                "would_defer": False,
+                "confirmation_count": 0,
+                "confirmations_required": 2,
+                "actuation_enabled": False,
+                "actuation_ready": False,
+                "actuation_applied": False,
+            },
+        },
+        enforcement={
+            "requested": True,
+            "applied": True,
+            "basis": "risk_policy",
+        },
     )
 
     summary = summarize_eisv_telemetry(envelope)
     assert summary["measurement_source"] == "physical"
     assert summary["primary_source"] == "behavioral"
     assert summary["behavioral_confidence"] == 0.8
+    assert summary["verdict_source"] == "behavioral_assessment"
+    assert summary["maturity_gate_outcome"] == "ineligible"
+    assert summary["maturity_gate_would_defer"] is False
+    assert summary["confirmation_count"] == 0
+    assert summary["confirmations_required"] == 2
+    assert summary["actuation_applied"] is False
+    assert summary["enforcement_basis"] == "risk_policy"
     assert summary["enforcement_requested"] is True
     assert summary["enforcement_applied"] is True
     assert "inputs" not in summary

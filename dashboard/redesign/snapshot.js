@@ -191,6 +191,10 @@ window.SNAPSHOT = {
       first_envelope_at:"2026-07-18T09:12:00Z", last_envelope_at:"2026-08-09T22:28:00Z",
       behavioral_primary:3994, behavioral_primary_rate:0.640, ode_fallback:2246,
       ode_fallback_rate:0.360, warmup:1670, warmup_rate:0.268,
+      measurement_ready:3994,measurement_ready_rate:0.640,
+      maturity_eligible:0,maturity_eligible_rate:0,
+      maturity_would_defer:0,maturity_would_defer_rate:0,maturity_confirmed:0,
+      maturity_actuation_enabled:0,maturity_actuation_ready:0,maturity_actuation_applied:0,
       missing:920, missing_rate:0.147, contract_violation_rows:12,
       contract_violations:12, contract_checked_rows:6240, contract_violation_rate:0.0019,
       enforcement_requested:40, enforcement_applied:10, enforcement_delivered:10,
@@ -229,10 +233,19 @@ window.SNAPSHOT = {
         {type:"policy_risk_mismatch",observations:4},
       ],
       note:"Same-row serialization invariants only; differing risk vocabularies are shown separately, not counted as violations." },
+    maturity_gate:{ strata:[
+      {outcome:"unknown",observations:6240},
+    ], ineligibility_reasons:[
+      {reason:"not_recorded",observations:6240},
+    ], reset_reasons:[
+      {reason:"not_recorded",observations:6240},
+    ], note:"Snapshot predates the shadow maturity field. Live would_defer rows are counterfactual observations, never suppressed pauses." },
     enforcement:{ strata:[
       {stratum:"not_requested",observations:6200},
       {stratum:"requested_not_applied",observations:30},
       {stratum:"applied",observations:10},
+    ], bases:[
+      {basis:"unknown",observations:6240},
     ], note:"Intervention-conditioned delivery counts; not a causal estimate of prevention or harm." },
     risk_vocabularies:[
       {surface:"behavioral_verdict",bands:[
