@@ -18,6 +18,9 @@ These control three distinct concerns:
 """
 
 MAX_SUMMARY_LEN = 4000
-MAX_DETAILS_LEN = 20000
+# Store medium-sized source documents intact. Read-side pagination and the
+# independent embedding window below keep this larger persistence envelope
+# from expanding normal response or semantic-search context.
+MAX_DETAILS_LEN = 64 * 1024
 EMBED_DETAILS_WINDOW = 6000
 DETAILS_PREVIEW_CHARS = 500

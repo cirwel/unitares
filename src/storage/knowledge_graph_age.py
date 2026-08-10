@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections import Counter
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
@@ -308,6 +309,51 @@ class KnowledgeGraphAGE:
         if "tags" in updates:
             await self._sync_discovery_tags(conn, discovery_id, updates["tags"] or [])
 
+    async def _sync_age_tag_edges(
+        self,
+        db,
+        conn,
+        discovery_id: str,
+        tags: List[str],
+    ) -> None:
+        """Replace one discovery's derived TAGGED relationships.
+
+        ``knowledge.discoveries.tags`` is canonical. Replacing the projection
+        inside the caller's transaction handles both halves of an edit: newly
+        added tags become searchable and removed tags stop matching.
+        """
+        delete_cypher = """
+            MATCH (d:Discovery {id: ${discovery_id}})-[r:TAGGED]->(t:Tag)
+            DELETE r
+            RETURN count(r)
+        """
+        await db.graph_query(
+            delete_cypher,
+            {"discovery_id": discovery_id},
+            conn=conn,
+        )
+        for tag in tags:
+            tagged_cypher, tagged_params = create_tagged_edge(
+                discovery_id=discovery_id,
+                tag_name=tag,
+            )
+            await db.graph_query(tagged_cypher, tagged_params, conn=conn)
+
+    async def _delete_orphan_age_tags(self, db, conn) -> int:
+        """Delete Tag vertices left with no incoming TAGGED relationship."""
+        cypher = """
+            MATCH (t:Tag)
+            OPTIONAL MATCH (d:Discovery)-[:TAGGED]->(t)
+            WITH t, count(d) AS inbound
+            WHERE inbound = 0
+            DELETE t
+            RETURN count(t)
+        """
+        result = await db.graph_query(cypher, {}, conn=conn)
+        if result and isinstance(result[0], (int, float)):
+            return int(result[0])
+        return 0
+
     async def _get_db(self):
         """Get database backend (lazy initialization)."""
         if self._db is None:
@@ -597,7 +643,7 @@ class KnowledgeGraphAGE:
     async def backfill_missing_age_nodes(
         self, *, dry_run: bool = False, limit: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Rebuild AGE graph nodes for discoveries that exist only in SQL.
+        """Repair AGE discovery nodes and TAGGED edges from canonical SQL.
 
         knowledge.discoveries is the source of truth; the AGE graph is a derived
         index over it. Rows written while UNITARES_KNOWLEDGE_BACKEND was
@@ -607,7 +653,8 @@ class KnowledgeGraphAGE:
         makes those rows retrievable via query()/get()/search(), but only a
         backfill restores graph traversal over them.
 
-        Every builder uses MERGE, so this is idempotent and safe to re-run.
+        Every builder uses MERGE, and tag repair replaces each drifted
+        discovery's edge set, so this is idempotent and safe to re-run.
 
         Args:
             dry_run: When True, only count what would be created; no writes.
@@ -615,8 +662,8 @@ class KnowledgeGraphAGE:
                 the whole table.
 
         Returns:
-            {scanned, age_present, missing, created, failed, dry_run,
-             sample_missing}.
+            Existing node-backfill fields plus exact TAGGED projection drift
+            and repair counts.
         """
         db = await self._get_db()
         if not await db.graph_available():
@@ -628,8 +675,59 @@ class KnowledgeGraphAGE:
         age_rows = await db.graph_query("MATCH (d:Discovery) RETURN collect(d.id)", {})
         age_ids = set(age_rows[0]) if age_rows and isinstance(age_rows[0], list) else set()
 
-        sql_ids = await db.kg_all_discovery_ids(limit=limit)
+        from src.knowledge_graph import normalize_tags
+
+        canonical_tags = await db.kg_all_discovery_tags(limit=limit)
+        canonical_tags = {
+            discovery_id: normalize_tags(tags)
+            for discovery_id, tags in canonical_tags.items()
+        }
+        sql_ids = list(canonical_tags)
+        sql_id_set = set(sql_ids)
         missing = [sid for sid in sql_ids if sid not in age_ids]
+
+        tag_rows = await db.graph_query(
+            """
+            MATCH (d:Discovery)-[:TAGGED]->(t:Tag)
+            RETURN collect({discovery_id: d.id, tag: t.name})
+            """,
+            {},
+        )
+        raw_tag_pairs = (
+            tag_rows[0]
+            if tag_rows and isinstance(tag_rows[0], list)
+            else []
+        )
+        expected_assignments = {
+            (discovery_id, tag)
+            for discovery_id, tags in canonical_tags.items()
+            for tag in tags
+        }
+        present_assignment_rows = [
+            (str(row.get("discovery_id")), str(row.get("tag")))
+            for row in raw_tag_pairs
+            if isinstance(row, dict)
+            and row.get("discovery_id") in sql_id_set
+            and row.get("tag")
+        ]
+        present_counts = Counter(present_assignment_rows)
+        present_assignments = set(present_counts)
+        missing_tag_assignments = expected_assignments - present_assignments
+        stale_tag_assignments = present_assignments - expected_assignments
+        duplicate_tag_assignments = sum(
+            count - 1 for count in present_counts.values() if count > 1
+        )
+        duplicate_tag_ids = {
+            discovery_id
+            for (discovery_id, _tag), count in present_counts.items()
+            if count > 1
+        }
+        drifted_tag_ids = {
+            discovery_id
+            for discovery_id, _tag in (
+                missing_tag_assignments | stale_tag_assignments
+            )
+        } | duplicate_tag_ids
 
         summary: Dict[str, Any] = {
             "scanned": len(sql_ids),
@@ -639,8 +737,28 @@ class KnowledgeGraphAGE:
             "failed": 0,
             "dry_run": dry_run,
             "sample_missing": missing[:10],
+            "tag_assignments_expected": len(expected_assignments),
+            "tag_assignments_present": len(present_assignment_rows),
+            "tag_assignments_missing": len(missing_tag_assignments),
+            "tag_assignments_stale": len(stale_tag_assignments),
+            "tag_assignments_duplicate": duplicate_tag_assignments,
+            "tag_discoveries_drifted": len(drifted_tag_ids),
+            "tags_reconciled": 0,
+            "tag_repair_failed": 0,
+            "orphan_tags_removed": 0,
+            "sample_missing_tag_assignments": [
+                list(item) for item in sorted(missing_tag_assignments)[:10]
+            ],
+            "sample_stale_tag_assignments": [
+                list(item) for item in sorted(stale_tag_assignments)[:10]
+            ],
+            "sample_duplicate_tag_assignments": [
+                [discovery_id, tag, count]
+                for (discovery_id, tag), count in sorted(present_counts.items())
+                if count > 1
+            ][:10],
         }
-        if dry_run or not missing:
+        if dry_run:
             return summary
 
         for disc_id in missing:
@@ -657,9 +775,44 @@ class KnowledgeGraphAGE:
                 logger.warning(f"backfill: failed to create AGE node for {disc_id}: {exc}")
                 summary["failed"] += 1
 
+        # Missing nodes are created from their canonical SQL row above, which
+        # already MERGEs their full TAGGED set. Existing nodes need explicit
+        # replacement to remove stale edges as well as add missing ones.
+        for disc_id in sorted(drifted_tag_ids - set(missing)):
+            try:
+                async with db.transaction() as conn:
+                    await self._sync_age_tag_edges(
+                        db,
+                        conn,
+                        disc_id,
+                        canonical_tags[disc_id],
+                    )
+                summary["tags_reconciled"] += 1
+            except Exception as exc:
+                logger.warning(
+                    "backfill: failed to reconcile TAGGED edges for %s: %s",
+                    disc_id,
+                    exc,
+                )
+                summary["tag_repair_failed"] += 1
+
+        if stale_tag_assignments:
+            try:
+                async with db.transaction() as conn:
+                    summary["orphan_tags_removed"] = (
+                        await self._delete_orphan_age_tags(db, conn)
+                    )
+            except Exception as exc:
+                logger.warning("backfill: failed to prune orphan Tag nodes: %s", exc)
+                summary["tag_repair_failed"] += 1
+
         logger.info(
-            "AGE node backfill complete: created=%d failed=%d (of %d missing)",
-            summary["created"], summary["failed"], summary["missing"],
+            "AGE projection backfill complete: nodes created=%d failed=%d; "
+            "tag discoveries reconciled=%d failed=%d",
+            summary["created"],
+            summary["failed"],
+            summary["tags_reconciled"],
+            summary["tag_repair_failed"],
         )
         return summary
 
@@ -760,6 +913,22 @@ class KnowledgeGraphAGE:
         """
         db = await self._get_db()
 
+        # Tags live canonically on knowledge.discoveries. TAGGED relationships
+        # are a repairable graph projection and must not decide user-visible
+        # inclusion while they may lag an update or backfill.
+        if tags:
+            return await self._query_sql_fallback(
+                db,
+                agent_id=agent_id,
+                type=type,
+                status=status,
+                severity=severity,
+                tags=tags,
+                limit=limit,
+                exclude_archived=exclude_archived,
+                exclude_cold=exclude_cold,
+            )
+
         # Check if graph is available
         graph_ok = await db.graph_available()
         if not graph_ok:
@@ -777,6 +946,7 @@ class KnowledgeGraphAGE:
                 tags=tags,
                 limit=limit,
                 exclude_archived=exclude_archived,
+                exclude_cold=exclude_cold,
             )
 
         # Build query
@@ -813,43 +983,13 @@ class KnowledgeGraphAGE:
 
         where_clause = " AND ".join(conditions) if conditions else ""
         
-        # Handle tags - AGE doesn't support EXISTS subqueries or re-matching
-        # a variable with different labels. We need a single MATCH pattern.
-        if tags:
-            # Normalize search tags to match stored normalized form
-            from src.knowledge_graph import normalize_tags
-            params["tags"] = normalize_tags(tags)
-            # Combined MATCH: Discovery with tag relationship.
-            #
-            # AGE cannot emit `RETURN DISTINCT d ORDER BY d.timestamp` — it
-            # translates to `SELECT DISTINCT ... ORDER BY <prop>` where the
-            # ORDER BY expression is not in the DISTINCT select list, so
-            # Postgres rejects it: "for SELECT DISTINCT, ORDER BY expressions
-            # must appear in select list". Mirror find_similar_by_tags: dedupe
-            # with `WITH DISTINCT d`, drop the Cypher-level ORDER BY/LIMIT, and
-            # apply "most recent first" ordering + the limit in Python below.
-            base_match = "MATCH (d:Discovery)-[:TAGGED]->(t:Tag) WHERE t.name IN ${tags}"
-            if where_clause:
-                cypher = f"""
-                    {base_match} AND {where_clause}
-                    WITH DISTINCT d
-                    RETURN d
-                """
-            else:
-                cypher = f"""
-                    {base_match}
-                    WITH DISTINCT d
-                    RETURN d
-                """
-        else:
-            # No tag filter
-            cypher = f"""
-                MATCH (d:Discovery)
-                {"WHERE " + where_clause if where_clause else ""}
-                RETURN d
-                ORDER BY d.timestamp DESC
-                LIMIT ${{limit}}
-            """
+        cypher = f"""
+            MATCH (d:Discovery)
+            {"WHERE " + where_clause if where_clause else ""}
+            RETURN d
+            ORDER BY d.timestamp DESC
+            LIMIT ${{limit}}
+        """
         
         params["limit"] = limit
         
@@ -859,7 +999,6 @@ class KnowledgeGraphAGE:
 
         discoveries = []
         seen_ids = set()
-        tag_sort_keys: Dict[str, str] = {}
         for result in results:
             # graph_query returns parsed agtype directly, not {"d": node}
             # Handle both dict with "d" key and direct node data
@@ -874,21 +1013,6 @@ class KnowledgeGraphAGE:
             if discovery and discovery.id not in seen_ids:
                 seen_ids.add(discovery.id)
                 discoveries.append(discovery)
-                if tags:
-                    # Capture the RAW stored timestamp for sorting. _node_to_discovery
-                    # defaults a missing timestamp to now(), which would make ordering
-                    # nondeterministic; the raw value (empty when absent) keeps ties
-                    # in insertion order under the stable sort below.
-                    raw_ts = node_data.get("timestamp") or node_data.get("created_at") or ""
-                    tag_sort_keys[discovery.id] = str(raw_ts)
-
-        if tags:
-            # Tag queries skip the Cypher ORDER BY/LIMIT (AGE DISTINCT
-            # limitation above), so reproduce "most recent first" + LIMIT here.
-            # ISO-8601 timestamps sort lexicographically; rows without a stored
-            # timestamp keep their original order (stable sort, empty key).
-            discoveries.sort(key=lambda disc: tag_sort_keys.get(disc.id, ""), reverse=True)
-            discoveries = discoveries[:limit]
 
         if discoveries:
             return discoveries
@@ -907,6 +1031,7 @@ class KnowledgeGraphAGE:
             tags=tags,
             limit=limit,
             exclude_archived=exclude_archived,
+            exclude_cold=exclude_cold,
         )
 
     async def _query_sql_fallback(
@@ -920,6 +1045,7 @@ class KnowledgeGraphAGE:
         tags: Optional[List[str]] = None,
         limit: int = 100,
         exclude_archived: bool = False,
+        exclude_cold: bool = False,
     ) -> List[DiscoveryNode]:
         """Read discoveries straight from knowledge.discoveries (source of truth).
 
@@ -937,6 +1063,8 @@ class KnowledgeGraphAGE:
                 severity=severity,
                 status=status,
                 limit=limit,
+                exclude_archived=exclude_archived and not status,
+                exclude_cold=exclude_cold and not status,
             )
         except Exception as exc:
             logger.warning(f"SQL fallback query failed: {exc}")
@@ -948,6 +1076,8 @@ class KnowledgeGraphAGE:
             # (it means "any status except archived"); apply it post-hoc, the
             # same way the postgres storage backend does.
             if exclude_archived and not status and row.get("status") == "archived":
+                continue
+            if exclude_cold and not status and row.get("status") == "cold":
                 continue
             disc = self._dict_to_discovery(row)
             if disc:
@@ -1167,6 +1297,14 @@ class KnowledgeGraphAGE:
                         # No AGE node — fall back to SQL for SQL-only orphans.
                         return await self._sql_update_discovery(discovery_id, updates)
                     await self._sync_updated_discovery_row(conn, discovery_id, updates)
+                    if "tags" in updates:
+                        await self._sync_age_tag_edges(
+                            db,
+                            conn,
+                            discovery_id,
+                            updates["tags"],
+                        )
+                        await self._delete_orphan_age_tags(db, conn)
                 if "summary" in updates or "details" in updates:
                     await self._refresh_embedding(discovery_id)
                 return True
@@ -1343,24 +1481,46 @@ class KnowledgeGraphAGE:
             total = await db.graph_query(cypher, {})
             total_count = int(total[0]) if total and isinstance(total[0], (int, float)) else 0
 
-            cypher = "MATCH (t:Tag) RETURN count(t)"
+            cypher = (
+                "MATCH (d:Discovery)-[r:TAGGED]->(t:Tag) RETURN count(r)"
+            )
             tags_result = await db.graph_query(cypher, {})
-            total_tags = 0
-            if tags_result:
-                first_result = tags_result[0]
-                if isinstance(first_result, (int, float)):
-                    total_tags = int(first_result)
-                elif isinstance(first_result, dict) and "error" not in first_result:
-                    total_tags = int(first_result.get("tag_count") or first_result.get("count") or 0)
+            age_tag_assignments = (
+                int(tags_result[0])
+                if tags_result and isinstance(tags_result[0], (int, float))
+                else 0
+            )
 
             cypher = "MATCH ()-[r]->() RETURN count(r)"
             edges_result = await db.graph_query(cypher, {})
             total_edges = int(edges_result[0]) if edges_result and isinstance(edges_result[0], (int, float)) else 0
 
+            tag_stats = await db.kg_tag_stats(
+                including_cold=True,
+                epoch=None,
+            )
+            canonical_assignments = tag_stats["total_tag_assignments"]
+
             return {
                 "total_discoveries": total_count,
-                "total_tags": total_tags,
+                "total_tags": tag_stats["total_tags"],
+                "total_tag_assignments": canonical_assignments,
                 "total_edges": total_edges,
+                "tag_projection": {
+                    "status": (
+                        "count_aligned"
+                        if age_tag_assignments == canonical_assignments
+                        else "drifted"
+                    ),
+                    # Equal totals can still hide one missing + one stale pair.
+                    # The operator backfill performs the exact set comparison.
+                    "comparison": "assignment_counts_only",
+                    "age_tag_assignments": age_tag_assignments,
+                    "canonical_tag_assignments": canonical_assignments,
+                    "assignment_delta": (
+                        canonical_assignments - age_tag_assignments
+                    ),
+                },
             }
         except Exception as e:
             logger.warning(f"Health check failed, returning minimal info: {e}")
@@ -1651,40 +1811,17 @@ class KnowledgeGraphAGE:
         if not discovery.tags:
             return []
 
-        # AGE doesn't support ORDER BY on WITH-clause aliases,
-        # so we fetch all matches and rank by tag overlap in Python.
         db = await self._get_db()
-
-        cypher = """
-            MATCH (d:Discovery)-[:TAGGED]->(t:Tag)
-            WHERE t.name IN ${tags}
-              AND d.id <> ${exclude_id}
-            WITH DISTINCT d
-            RETURN d
-        """
-
-        params = {
-            "tags": discovery.tags,
-            "exclude_id": discovery.id,
-        }
-
-        results = await db.graph_query(cypher, params)
-
-        similar = []
-        for result in results:
-            # Handle both dict with "d" key and direct node data
-            if isinstance(result, dict) and "d" in result:
-                node_data = self._parse_agtype_node(result["d"])
-            else:
-                node_data = self._parse_agtype_node(result)
-            disc = self._node_to_discovery(node_data)
-            if disc:
-                similar.append(disc)
-
-        # Rank by tag overlap count (descending)
-        input_tags = set(discovery.tags)
-        similar.sort(key=lambda d: len(set(d.tags or []) & input_tags), reverse=True)
-        return similar[:limit]
+        rows = await db.kg_find_similar_by_tags(
+            discovery.tags,
+            exclude_id=discovery.id,
+            limit=limit,
+        )
+        return [
+            parsed
+            for row in rows
+            if (parsed := self._dict_to_discovery(row)) is not None
+        ]
 
     async def find_similar_by_tags(
         self,
@@ -1707,41 +1844,16 @@ class KnowledgeGraphAGE:
             return []
 
         db = await self._get_db()
-
-        exclude_clause = " AND d.id <> ${exclude_id}" if exclude_id else ""
-
-        # AGE doesn't support ORDER BY on WITH-clause aliases,
-        # so we fetch all matches and rank by tag overlap in Python.
-        cypher = f"""
-            MATCH (d:Discovery)-[:TAGGED]->(t:Tag)
-            WHERE t.name IN ${{tags}}{exclude_clause}
-            WITH DISTINCT d
-            RETURN d
-        """
-
-        params = {
-            "tags": tags,
-        }
-        if exclude_id:
-            params["exclude_id"] = exclude_id
-
-        results = await db.graph_query(cypher, params)
-
-        similar = []
-        for result in results:
-            # Handle both dict with "d" key and direct node data
-            if isinstance(result, dict) and "d" in result:
-                node_data = self._parse_agtype_node(result["d"])
-            else:
-                node_data = self._parse_agtype_node(result)
-            disc = self._node_to_discovery(node_data)
-            if disc:
-                similar.append(disc)
-
-        # Rank by tag overlap count (descending)
-        input_tags = set(tags)
-        similar.sort(key=lambda d: len(set(d.tags or []) & input_tags), reverse=True)
-        return similar[:limit]
+        rows = await db.kg_find_similar_by_tags(
+            tags,
+            exclude_id=exclude_id,
+            limit=limit,
+        )
+        return [
+            parsed
+            for row in rows
+            if (parsed := self._dict_to_discovery(row)) is not None
+        ]
 
     async def _pgvector_available(self) -> bool:
         """Check if pgvector extension and the active embeddings table exist."""
