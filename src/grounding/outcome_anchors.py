@@ -32,7 +32,9 @@ CI vs verified tool failure) is a later refinement — it likely lives in the
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import Enum
+import json
 from typing import Optional
 
 
@@ -51,6 +53,50 @@ _TIER_BY_SOURCE = {
     "agent_reported_tool_result": AnchorTier.SOFT_SELF_ATTESTED,
     "server_observation": AnchorTier.EXCLUDED,  # explicit: the loop observing itself
 }
+
+_CONTROLLED_FIXTURE_FLAGS = frozenset({
+    "synthetic_calibration_fixture",
+    "synthetic_negative_control",
+    "do_not_use_for_live_validation",
+    "do_not_persist",
+    "calibration_excluded",
+})
+_CONTROLLED_FIXTURE_BINDINGS = frozenset({"synthetic_negative_control"})
+_CONTROLLED_FIXTURE_TEST_NAMES = frozenset({"clean_control", "overconfidence_probe"})
+
+
+def _truthy_fixture_flag(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "t", "yes", "y"}
+    return False
+
+
+def is_structurally_controlled_fixture(
+    detail: Mapping[str, object] | str | None,
+) -> bool:
+    """Return whether immutable outcome detail marks a controlled fixture.
+
+    This deliberately ignores mutable identity metadata and free-form purpose.
+    It is safe for prospective/frozen evidence consumers that need fixture
+    attrition without letting the measured subject opt itself out later.
+    """
+    if isinstance(detail, str):
+        try:
+            parsed = json.loads(detail)
+        except json.JSONDecodeError:
+            return False
+        detail = parsed if isinstance(parsed, Mapping) else None
+    if not isinstance(detail, Mapping):
+        return False
+    if any(_truthy_fixture_flag(detail.get(flag)) for flag in _CONTROLLED_FIXTURE_FLAGS):
+        return True
+    if detail.get("prediction_binding") in _CONTROLLED_FIXTURE_BINDINGS:
+        return True
+    return detail.get("test_name") in _CONTROLLED_FIXTURE_TEST_NAMES
 
 
 def tier_for_source(verification_source: Optional[str]) -> AnchorTier:
