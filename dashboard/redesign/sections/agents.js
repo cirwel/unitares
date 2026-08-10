@@ -48,7 +48,7 @@
       + `<span class="val">${num(val)}</span></div>`;
   }
 
-  // E/I/S/V bars + coh/risk/φ. `note` (optional) flags fallback data ("last check-in").
+  // E/I/S/V bars + coh/risk/φ. `note` identifies the observation source.
   function stateBlock(m, note) {
     m = m || {};
     return `<div class="eyebrow" style="margin-bottom:var(--space-3)">State${note ? ` <span style="text-transform:none;letter-spacing:0;color:var(--faint);font-weight:400">${note}</span>` : ""}</div>
@@ -64,6 +64,9 @@
   function detailPanel(a) {
     const m = a.metrics || {};
     const st = staleness(a.last, MODEL.nowMs);
+    const stateNote = m.source === "persisted_state"
+      ? `· persisted ${staleness(m.recordedAt || a.last, MODEL.nowMs).label}`
+      : m.source === "live_monitor" ? "· in-memory monitor" : "";
     const basin = m.basin ? `<span class="tag" style="color:${BASIN_COLOR[m.basin] || "var(--muted)"};border-color:color-mix(in srgb, ${BASIN_COLOR[m.basin] || "var(--line-2)"} 40%, var(--line-2))">${m.basin} basin</span>` : "";
     const tags = (a.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join(" ");
     const idField = (label, val) => `<div style="display:flex;justify-content:space-between;gap:var(--space-4);padding:4px 0;border-bottom:var(--hairline) solid var(--line);font-size:var(--text-sm)"><span style="color:var(--muted)">${label}</span><span class="mono" style="color:var(--ink-2);text-align:right;word-break:break-all">${esc(val)}</span></div>`;
@@ -77,16 +80,16 @@
         <button class="theme-toggle" id="ag-detail-close">✕ close</button>
       </div>
       ${a.stuckReason ? `<div class="attn-band" style="margin-bottom:var(--space-4)"><span class="glyph">⚠</span><span>`
-        + `Flagged stuck — <b>${esc(a.stuckReason)}</b>${a.stuckDetails ? `. ${esc(a.stuckDetails)}` : ""}`
+        + `${a.stuckSoft ? "Possible cadence silence" : "Flagged stuck"} — <b>${esc(a.stuckReason)}</b>${a.stuckDetails ? `. ${esc(a.stuckDetails)}` : ""}`
         + `</span></div>` : ""}
       <div class="split-2" style="gap:var(--space-6)">
-        <div id="ag-state">${stateBlock(m, "")}</div>
+        <div id="ag-state">${stateBlock(m, stateNote)}</div>
         <div>
           <div class="eyebrow" style="margin-bottom:var(--space-3)">Identity</div>
           ${idField("id", a.agent_id || "—")}
           ${idField("status", a.status || "—")}
           ${idField("tier", a.tier || "—")}
-          ${idField("updates", (a.updates || 0).toLocaleString())}
+          ${idField("state rows", (a.updates || 0).toLocaleString())}
           ${idField("last seen", st.label)}
           ${a.parent ? idField("lineage parent", a.parent) : ""}
           ${a.superseded ? idField("superseded", a.lifecycleReason || "yes") : ""}
@@ -114,10 +117,11 @@
       const r = await DATA.agentHistory(id, { limit: 200, mode: histMode });
       if (selectedId !== id || !document.getElementById("ag-hist")) return; // selection changed mid-fetch
       const d = r.data || {};
-      entry = { pts: (d.points || []).filter(Boolean), total: d.total || 0 };
+      entry = { pts: (d.points || []).filter(Boolean), total: d.total || 0,
+        observationSummary: d.observationSummary || null };
       histCache[ck] = entry;
     }
-    const pts = entry.pts, total = entry.total;
+    const pts = entry.pts, total = entry.total, observationSummary = entry.observationSummary || {};
     if (!pts.length) { if (meta) meta.textContent = "· no recorded history yet"; return; }
     // Context-aware framing: how much of the agent's life is shown, and over what
     // span. The recent⇄full toggle only appears when there's more history than the
@@ -130,24 +134,33 @@
       const ofTotal = total > pts.length ? " of " + total.toLocaleString() : "";
       const deep = total > pts.length || histMode === "all"; // more history than recent holds
       const seg = (m, label) => `<button data-hmode="${m}" class="hmode${histMode === m ? " on" : ""}" style="font:inherit;cursor:pointer;background:none;border:none;padding:0 4px;color:${histMode === m ? "var(--ink-2)" : "var(--faint)"};text-decoration:${histMode === m ? "underline" : "none"}">${label}</button>`;
-      meta.innerHTML = "· " + pts.length + (histMode === "all" ? " sampled" : "") + " check-ins" + ofTotal + span
+      const reports = observationSummary.agent_reports;
+      const substrate = observationSummary.substrate_rows;
+      const envelopes = observationSummary.telemetry_envelopes;
+      const stateRows = observationSummary.state_rows ?? total;
+      const provenance = typeof reports === "number" && typeof substrate === "number"
+        ? ` · ${reports} authored · ${substrate} automatic` : "";
+      const telemetry = typeof envelopes !== "number" ? ""
+        : envelopes === 0 ? " · telemetry legacy/missing"
+          : ` · ${envelopes}/${stateRows} telemetry`;
+      meta.innerHTML = "· " + pts.length + (histMode === "all" ? " sampled" : "") + " state observations" + ofTotal + span + provenance + telemetry
         + (deep ? ` &nbsp; ${seg("recent", "recent")}${seg("all", "full lifespan")}` : "");
       meta.querySelectorAll(".hmode").forEach((b) => { b.onclick = () => { if (b.dataset.hmode !== histMode) { histMode = b.dataset.hmode; renderHistory(selectedId); } }; });
     }
-    // Fall back the State bars to the agent's most recent recorded check-in when
+    // Fall back the State bars to the agent's most recent state observation when
     // the live list-metrics are null — clearly labelled, so it never reads as
-    // current. pts is oldest→newest, so the last point is the latest check-in.
+    // current. pts is oldest→newest, so the last point is the latest observation.
     const liveAgent = MODEL.list.find((x) => x.agent_id === id);
     if (!liveAgent || !liveAgent.metrics || typeof liveAgent.metrics.E !== "number") {
       const lp = pts[pts.length - 1], sb = document.getElementById("ag-state");
       if (lp && sb) sb.innerHTML = stateBlock(
         { E: lp.E, I: lp.I, S: lp.S, V: lp.V, coherence: lp.coherence, risk: lp.risk },
-        "· last check-in " + staleness(lp.t, MODEL.nowMs).label);
+        "· last state observation " + staleness(lp.t, MODEL.nowMs).label);
     }
     const cv = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
     const labels = pts.map((p) => wideSpan ? (p.t || "").slice(5, 10) : (p.t || "").slice(11, 16));
-    // Event-based: each check-in is a discrete, hover-trackable point; straight
-    // segments (no tension) so the line reflects actual check-ins, not a smoothed
+    // Event-based: each state observation is a discrete, hover-trackable point;
+    // straight segments (no tension) reflect actual rows, not a smoothed
     // interpolation. Markers shrink as the series gets denser.
     const pr = pts.length > 140 ? 1.3 : pts.length > 70 ? 1.8 : 2.6;
     const ds = (label, key, color, dash) => ({
@@ -223,7 +236,7 @@
     // rather than sitting beside it. They are different concepts and stay
     // separate: `inactive` is a threshold on wall-clock age; `stuck` means the
     // agent was in a rhythm or state implying it should have spoken and didn't.
-    else if (a.stuckReason) out.push(`<span class="tag warn" title="${esc(a.stuckDetails || "")}">${esc(a.stuckReason)}</span>`);
+    else if (a.stuckReason) out.push(`<span class="tag warn" title="${esc(a.stuckDetails || "")}">${esc(a.stuckReason)}${a.stuckSoft ? " · soft" : ""}</span>`);
     else if (st.level === "stale" || st.level === "dead") out.push(`<span class="tag warn">inactive</span>`);
     if (a.superseded) out.push(`<span class="tag warn" title="${a.lifecycleReason || "superseded"}">superseded</span>`);
     if (a.parent) out.push(`<span class="tag" title="lineage parent ${a.parent}">↑ lineage</span>`);
@@ -248,7 +261,7 @@
          <input id="ag-search" placeholder="search name · id · purpose · tag" value="${q.replace(/"/g, "&quot;")}"
            style="flex:1;min-width:200px;padding:var(--space-2) var(--space-3);font-family:var(--font-sans);font-size:var(--text-sm);background:var(--surface);color:var(--ink);border:var(--hairline) solid var(--line-2);border-radius:var(--radius-sm)" />
          <select id="ag-status" class="theme-toggle">${["all", "active", "paused", "archived"].map((s) => `<option ${s === statusF ? "selected" : ""}>${s}</option>`).join("")}</select>
-         <select id="ag-sort" class="theme-toggle">${[["recent", "newest"], ["name", "name"], ["coherence", "coherence"], ["risk", "risk"], ["updates", "updates"]].map(([v, t]) => `<option value="${v}" ${v === sortF ? "selected" : ""}>${t}</option>`).join("")}</select>
+         <select id="ag-sort" class="theme-toggle">${[["recent", "newest"], ["name", "name"], ["coherence", "coherence"], ["risk", "risk"], ["updates", "state rows"]].map(([v, t]) => `<option value="${v}" ${v === sortF ? "selected" : ""}>${t}</option>`).join("")}</select>
          <label style="font-size:var(--text-xs);color:var(--muted);display:flex;gap:6px;align-items:center"><input type="checkbox" id="ag-prod" ${prodOnly ? "checked" : ""}/> prod only</label>
        </div>
        <div id="ag-results"></div>`;
@@ -325,14 +338,14 @@
       </tr>`;
     };
     const head = `<thead><tr>
-      <th></th><th>Agent</th><th>Verdict</th><th>Coh</th><th>Risk</th><th>Updates</th><th>Last seen</th>
+      <th></th><th>Agent</th><th>Verdict</th><th>Coh</th><th>Risk</th><th>State rows</th><th>Last seen</th>
     </tr></thead>`;
     const sm = MODEL.summary || {};
     const moreBtn = participated.length > pageSize
       ? `<div style="text-align:center;margin-top:var(--space-4)"><button class="theme-toggle" id="ag-more">Show ${Math.min(20, participated.length - pageSize)} more (${shown.length} of ${participated.length})</button></div>` : "";
     const neverGroup = never.length || sm.neverParticipated
       ? `<details style="margin-top:var(--space-5)"><summary style="cursor:pointer;color:var(--muted);font-size:var(--text-sm)">
-           Never checked in — ${sm.neverParticipated ?? never.length} <span style="color:var(--faint)">· onboarded, no observations yet</span></summary>
+           No state observations — ${sm.neverParticipated ?? never.length} <span style="color:var(--faint)">· onboarded, no measured rows yet</span></summary>
          ${never.length ? `<table class="tbl" style="margin-top:var(--space-3)">${head}<tbody>${never.slice(0, 30).map(tr).join("")}</tbody></table>`
             : `<p class="empty">Not in this snapshot subset — ${sm.neverParticipated} fleet-wide.</p>`}</details>` : "";
 
@@ -356,7 +369,7 @@
       `<div style="display:flex;gap:var(--space-5);margin-bottom:var(--space-3);font-size:var(--text-xs);color:var(--muted);align-items:center;flex-wrap:wrap">
          <span><b style="color:var(--ink)">${sm.total ?? rows.length}</b> total</span>
          <span><b style="color:var(--ink)">${sm.active ?? "—"}</b> active</span>
-         <span><b style="color:var(--ink)">${sm.participated ?? participated.length}</b> participated</span>
+         <span><b style="color:var(--ink)">${sm.participated ?? participated.length}</b> observed</span>
          <span><b style="color:var(--ink)">${sm.archived ?? 0}</b> archived</span>
          <span class="src-badge ${MODEL.source}">${MODEL.source}</span>
          <span style="color:var(--faint)" title="This view does not auto-refresh — it is a point-in-time read.">read ${asOf}</span>
@@ -469,7 +482,7 @@
         (sr.data || []).forEach((s) => { if (s.id) byId[s.id] = s; });
         MODEL.list.forEach((a) => {
           const s = byId[a.agent_id];
-          if (s) { a.stuckReason = s.reason; a.stuckDetails = s.details; }
+          if (s) { a.stuckReason = s.reason; a.stuckDetails = s.details; a.stuckSoft = s.soft === true; }
         });
       }
     } catch { MODEL.stuckOmitted = "stuck reasons unavailable — the detection call did not answer"; }

@@ -478,10 +478,101 @@ def _monitor_metrics(agent_id: str, meta: Any) -> tuple[str, Optional[dict]]:
             "mean_risk": safe_float(metrics.get("mean_risk", 0.5)),
             "lambda1": safe_float(state.lambda1),
             "void_active": bool(state.void_active) if state.void_active is not None else False,
+            "source": "live_monitor",
+            "recorded_at": getattr(meta, "last_update", None),
         }
     except Exception as exc:
         logger.warning("Error getting metrics for %s: %s", agent_id, exc)
         return "error", None
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    """Convert a persisted scalar without turning missing data into zero."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _persisted_state_metrics(state: Any) -> tuple[str, dict[str, Any]]:
+    """Project one durable state row into the list-agents metrics shape.
+
+    This is deliberately a read projection, not monitor hydration.  The agent
+    list used to return ``metrics=null`` for every process whose monitor was not
+    loaded in the current server process, even when PostgreSQL held a measured
+    state row.  A single batch read can expose that last observation honestly
+    while ``source``/``recorded_at`` keep it distinct from an in-memory monitor.
+    """
+    state_json = state.state_json if isinstance(state.state_json, dict) else {}
+    E = _optional_float(state.energy)
+    I = _optional_float(state.integrity)
+    S = _optional_float(state.entropy)
+    V = _optional_float(state.void)
+    coherence = _optional_float(state.coherence)
+    risk = _optional_float(state_json.get("risk_score"))
+
+    basin = None
+    if None not in (E, I, S, V, coherence):
+        try:
+            from config.governance_config import classify_basin
+            basin = classify_basin(
+                E=E, I=I, S=S, V=V, coherence=coherence, risk_score=risk,
+            )
+        except Exception:
+            basin = None
+
+    stored_health = state_json.get("health_status")
+    if stored_health in {"healthy", "moderate", "critical"}:
+        health_status = stored_health
+    else:
+        health, _ = mcp_server.health_checker.get_health_status(
+            risk_score=risk,
+            coherence=coherence,
+            void_active=bool(state_json.get("void_active", False)),
+        )
+        health_status = health.value
+
+    recorded_at = getattr(state, "recorded_at", None)
+    if hasattr(recorded_at, "isoformat"):
+        recorded_at = recorded_at.isoformat()
+
+    return health_status, {
+        "E": E,
+        "I": I,
+        "S": S,
+        "V": V,
+        "coherence": coherence,
+        "current_risk": risk,
+        "risk_score": risk,
+        "phi": _optional_float(state_json.get("phi")),
+        "verdict": state_json.get("verdict"),
+        "basin": basin,
+        "mean_risk": None,
+        "lambda1": _optional_float(state_json.get("lambda1")),
+        "void_active": bool(state_json.get("void_active", False)),
+        "source": "persisted_state",
+        "recorded_at": recorded_at,
+    }
+
+
+async def _load_persisted_metrics() -> dict[str, tuple[str, dict[str, Any]]]:
+    """Batch-load latest measured state projections, keyed by registry UUID."""
+    from src.db import get_db
+
+    states = await get_db().get_all_latest_agent_states()
+    projected: dict[str, tuple[str, dict[str, Any]]] = {}
+    for state in states:
+        try:
+            projected[state.agent_id] = _persisted_state_metrics(state)
+        except Exception as exc:
+            logger.debug(
+                "Could not project persisted metrics for %s: %s",
+                getattr(state, "agent_id", "unknown"),
+                exc,
+            )
+    return projected
 
 
 async def _list_agents_lite(
@@ -738,6 +829,32 @@ async def _list_agents_full(
         agent_info["_agent_uuid"] = agent_id
 
         agents_list.append(agent_info)
+
+    # The in-memory monitor map is process-local and intentionally sparse after
+    # a server restart.  Fill only those absent-monitor gaps from ONE durable
+    # batch read; never hydrate/create a monitor per agent (the old N+1 path
+    # exceeded the tool timeout on a large fleet).  A loaded-but-broken monitor
+    # keeps its error rather than being masked by an older persisted row.
+    if include_metrics and any(
+        a.get("metrics") is None and a["_agent_uuid"] not in mcp_server.monitors
+        for a in agents_list
+    ):
+        try:
+            persisted_metrics = await _load_persisted_metrics()
+        except Exception as exc:
+            logger.debug("Batch persisted-metrics lookup failed: %s", exc)
+            persisted_metrics = {}
+        for agent_info in agents_list:
+            aid = agent_info["_agent_uuid"]
+            fallback = persisted_metrics.get(aid)
+            if (
+                fallback is not None
+                and agent_info.get("metrics") is None
+                and aid not in mcp_server.monitors
+            ):
+                health_status, metrics = fallback
+                agent_info["health_status"] = health_status
+                agent_info["metrics"] = metrics
 
     # Batch-load trust tiers for agents missing cached values (avoids N+1 queries)
     # (S6 Option B: substrate-earned routing)

@@ -5,7 +5,7 @@ Extracted from lifecycle.py for maintainability.
 """
 
 import asyncio
-from typing import Dict, Any, Sequence
+from typing import Dict, Any, Mapping, Sequence
 from datetime import datetime, timezone
 
 from ..decorators import mcp_tool
@@ -155,6 +155,43 @@ MARGIN_STUCK_STALE_CAP_MINUTES = 1440.0      # 24h, matches the cadence cap
 # empirically the Discord-Dispatch turn chains). Matches CADENCE_ACTIVE_MAX_GAP:
 # the child counts as live only while it still has an active cadence.
 LINEAGE_SUCCESSION_FRESH_WINDOW_MINUTES = 30.0
+
+
+async def _load_agent_report_cadences() -> dict[str, dict[str, Any]]:
+    """Load authored-report cadence facts for all measured identities.
+
+    ``metadata.total_updates`` includes automatic Stop-hook interpretations,
+    substrate observations, and agent-authored reports.  Only the last category
+    can establish the self-reporting rhythm that ``cadence_silence`` claims to
+    detect.  Keep this as one fleet query and pass the immutable result into the
+    synchronous detector; a database failure disables only the soft cadence
+    signal and never blocks margin/pattern detection.
+    """
+    from src.db import get_db
+
+    async with get_db().acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT i.agent_id,
+                   count(*)::int AS report_count,
+                   min(s.recorded_at) AS first_report_at,
+                   max(s.recorded_at) AS last_report_at
+            FROM core.agent_state s
+            JOIN core.identities i ON i.identity_id = s.identity_id
+            WHERE s.synthetic = false
+              AND coalesce(s.epistemic_class,
+                           s.state_json->>'epistemic_class') = 'agent_report'
+            GROUP BY i.agent_id
+            """
+        )
+    return {
+        row["agent_id"]: {
+            "report_count": int(row["report_count"] or 0),
+            "first_report_at": row["first_report_at"],
+            "last_report_at": row["last_report_at"],
+        }
+        for row in rows
+    }
 
 
 def _agent_age_minutes(meta, current_time) -> float | None:
@@ -310,6 +347,7 @@ def _detect_stuck_agents(
     tight_margin_timeout_minutes: float = 15.0,
     include_pattern_detection: bool = True,
     min_updates: int = 3,
+    cadence_profiles: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list:
     """
     Detect stuck agents using proprioceptive margin + patterns.
@@ -404,20 +442,35 @@ def _detect_stuck_agents(
         # routes it past auto-recovery (the agent is gone, not in a recoverable
         # in-process state, and it may simply have finished and idled).
         try:
-            created_dt = last_update_dt
-            cstr = meta.created_at
-            if isinstance(cstr, str):
-                created_dt = datetime.fromisoformat(
-                    cstr.replace('Z', '+00:00') if 'Z' in cstr else cstr
+            cadence = (cadence_profiles or {}).get(agent_id)
+            report_count = int((cadence or {}).get("report_count") or 0)
+            first_report_at = (cadence or {}).get("first_report_at")
+            last_report_at = (cadence or {}).get("last_report_at")
+            if isinstance(first_report_at, str):
+                first_report_at = datetime.fromisoformat(
+                    first_report_at.replace("Z", "+00:00")
                 )
-                if created_dt.tzinfo is None:
-                    created_dt = created_dt.replace(tzinfo=timezone.utc)
-            elif cstr is not None:
-                created_dt = cstr
+            if isinstance(last_report_at, str):
+                last_report_at = datetime.fromisoformat(
+                    last_report_at.replace("Z", "+00:00")
+                )
+            if first_report_at is not None and first_report_at.tzinfo is None:
+                first_report_at = first_report_at.replace(tzinfo=timezone.utc)
+            if last_report_at is not None and last_report_at.tzinfo is None:
+                last_report_at = last_report_at.replace(tzinfo=timezone.utc)
 
-            span_minutes = (last_update_dt - created_dt).total_seconds() / 60
-            if total_updates >= CADENCE_MIN_UPDATES and span_minutes > 0:
-                avg_gap_minutes = span_minutes / (total_updates - 1)
+            if (
+                report_count >= CADENCE_MIN_UPDATES
+                and first_report_at is not None
+                and last_report_at is not None
+            ):
+                span_minutes = (
+                    last_report_at - first_report_at
+                ).total_seconds() / 60
+                avg_gap_minutes = span_minutes / (report_count - 1)
+                cadence_age_minutes = (
+                    current_time - last_report_at
+                ).total_seconds() / 60
                 if 0 < avg_gap_minutes <= CADENCE_ACTIVE_MAX_GAP_MINUTES:
                     silence_threshold = max(
                         CADENCE_SILENCE_FLOOR_MINUTES,
@@ -425,15 +478,19 @@ def _detect_stuck_agents(
                     )
                     # Window: recently went quiet, but not so long ago it's just
                     # abandoned/archive-pending (which would be noise).
-                    if silence_threshold < age_minutes <= CADENCE_SILENCE_STALE_CAP_MINUTES:
+                    if (
+                        silence_threshold
+                        < cadence_age_minutes
+                        <= CADENCE_SILENCE_STALE_CAP_MINUTES
+                    ):
                         stuck_agents.append(_stuck_entry(
                             agent_id, meta,
                             reason="cadence_silence",
-                            age_minutes=round(age_minutes, 1),
+                            age_minutes=round(cadence_age_minutes, 1),
                             soft=True,
                             details=(
-                                f"Active cadence ~{avg_gap_minutes:.1f} min over {total_updates} "
-                                f"updates, then silent {age_minutes:.0f} min "
+                                f"Authored cadence ~{avg_gap_minutes:.1f} min over {report_count} "
+                                f"agent reports, then silent {cadence_age_minutes:.0f} min "
                                 f"(> {silence_threshold:.0f} min threshold). Possibly hung/abandoned "
                                 f"mid-work — verify. Soft signal; not auto-recovered."
                             ),
@@ -875,6 +932,15 @@ async def handle_detect_stuck_agents(arguments: Dict[str, Any]) -> Sequence:
         auto_recover = arguments.get("auto_recover", False)
         note_cooldown_minutes = float(arguments.get("note_cooldown_minutes", 120.0))
 
+        try:
+            cadence_profiles = await _load_agent_report_cadences()
+        except Exception as exc:
+            logger.debug(
+                "Authored cadence facts unavailable; soft cadence-silence disabled: %s",
+                exc,
+            )
+            cadence_profiles = {}
+
         # Detect stuck agents (run in executor since _detect_stuck_agents is sync)
         loop = asyncio.get_running_loop()
         include_patterns = arguments.get("include_pattern_detection", True)
@@ -885,7 +951,8 @@ async def handle_detect_stuck_agents(arguments: Dict[str, Any]) -> Sequence:
             critical_timeout,
             tight_timeout,
             include_patterns,
-            min_updates
+            min_updates,
+            cadence_profiles,
         )
 
         # Auto-recover if requested
