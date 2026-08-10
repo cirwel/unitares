@@ -101,6 +101,7 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
             paused_agent_id = session.get("paused_agent_id")
             reviewer_agent_id = session.get("reviewer_agent_id")
             phase = session.get("phase")
+            awaiting_facilitation = bool(session.get("awaiting_facilitation"))
 
             if not session_id:
                 continue
@@ -193,6 +194,27 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
                             continue  # Don't fail yet — give human time
                         except Exception as e:
                             logger.warning(f"Could not add facilitation message for {session_id[:16]}: {e}")
+
+            # A session already awaiting human facilitation runs on the HUMAN's
+            # clock, not the stuck-process clock. STUCK_SESSION_THRESHOLD (2h)
+            # measures "this process is wedged"; an operator may simply be
+            # asleep. FACILITATION_TIMEOUT (4h) exists for exactly this and was
+            # only reachable inside the ANTITHESIS branch, so a session that
+            # asked for a human at THESIS — which is where all 50 facilitation
+            # events actually come from — fell straight through to FAILED at 2h.
+            #
+            # That is the whole dead-end: swept to `failed`, and `reassign` then
+            # refuses any phase but THESIS/ANTITHESIS, so the session became
+            # unfacilitatable before anyone could act. 32 of 38 such sessions
+            # are scheduled probes, but the other 6 were real requests that
+            # nothing could be done with by the time they were noticed.
+            if awaiting_facilitation and check_time and check_time > fail_time:
+                logger.info(
+                    f"Session {session_id[:16]} awaiting facilitation "
+                    f"({(now - check_time).total_seconds()/3600:.1f}h) — holding for the "
+                    f"operator until {FACILITATION_TIMEOUT.total_seconds()/3600:.0f}h"
+                )
+                continue
 
             # Fall through: mark as FAILED (session too old or non-reassignable phase)
             try:
