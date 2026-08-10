@@ -38,6 +38,7 @@ def get_or_create_monitor(agent_id: str) -> UNITARESMonitor:
         if persisted_state is not None:
             monitor.state = persisted_state
             monitor._needs_hydration = False
+            monitor._cold_start_confirmation_lineage_status = "restored_snapshot"
             logger.info(f"Loaded persisted state for {agent_id} ({len(persisted_state.V_history)} history entries)")
         else:
             # File snapshot missing. Mark for DB hydration only if metadata says
@@ -48,8 +49,10 @@ def get_or_create_monitor(agent_id: str) -> UNITARESMonitor:
             prior_activity = int(getattr(meta, "total_updates", 0) or 0) > 0
             monitor._needs_hydration = prior_activity
             if prior_activity:
+                monitor._cold_start_confirmation_lineage_status = "hydration_pending"
                 logger.info(f"Initialized monitor for {agent_id} (file missing, marked for DB hydration)")
             else:
+                monitor._cold_start_confirmation_lineage_status = "identity_genesis"
                 logger.info(f"Initialized new monitor for {agent_id}")
 
         monitors[agent_id] = monitor

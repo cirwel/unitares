@@ -264,6 +264,8 @@ def summarize_eisv_telemetry(envelope: Mapping[str, Any] | None) -> dict[str, An
     policy = policy if isinstance(policy, Mapping) else {}
     enforcement = envelope.get("enforcement")
     enforcement = enforcement if isinstance(enforcement, Mapping) else {}
+    maturity_gate = policy.get("maturity_gate")
+    maturity_gate = maturity_gate if isinstance(maturity_gate, Mapping) else {}
 
     behavioral_source = behavioral.get("observation_source")
     submitted_source = submitted.get("source")
@@ -289,6 +291,27 @@ def summarize_eisv_telemetry(envelope: Mapping[str, Any] | None) -> dict[str, An
         "missing_inputs": list(derivation.get("missing_inputs") or ()),
         "policy_action": policy.get("action"),
         "policy_sub_action": policy.get("sub_action"),
+        "verdict_source": (
+            (policy.get("inputs") or {}).get("verdict_source")
+            if isinstance(policy.get("inputs"), Mapping)
+            else maturity_gate.get("primary_driver")
+        ),
+        "measurement_phase": maturity_gate.get("measurement_phase"),
+        "measurement_ready": maturity_gate.get("measurement_ready"),
+        "maturity_gate_outcome": maturity_gate.get("outcome"),
+        "maturity_gate_eligible": maturity_gate.get("eligible"),
+        "maturity_gate_would_defer": maturity_gate.get("would_defer"),
+        "maturity_ineligibility_reason": maturity_gate.get("ineligibility_reason"),
+        "maturity_reset_reason": maturity_gate.get("reset_reason"),
+        "maturity_independent_override": maturity_gate.get("independent_override"),
+        "confirmation_count": maturity_gate.get("confirmation_count"),
+        "confirmations_required": maturity_gate.get("confirmations_required"),
+        "actuation_enabled": maturity_gate.get("actuation_enabled"),
+        "actuation_ready": maturity_gate.get("actuation_ready"),
+        "actuation_applied": maturity_gate.get("actuation_applied"),
+        "actuation_blocker": maturity_gate.get("actuation_blocker"),
+        "lineage_status": maturity_gate.get("lineage_status"),
+        "enforcement_basis": enforcement.get("basis"),
         "enforcement_requested": bool(enforcement.get("requested", False)),
         "enforcement_applied": bool(enforcement.get("applied", False)),
     }
@@ -324,6 +347,23 @@ def summarize_state_eisv_telemetry(state_json: Mapping[str, Any] | None) -> dict
         "missing_inputs": ["eisv_telemetry"],
         "policy_action": state.get("action"),
         "policy_sub_action": None,
+        "verdict_source": None,
+        "measurement_phase": None,
+        "measurement_ready": None,
+        "maturity_gate_outcome": None,
+        "maturity_gate_eligible": None,
+        "maturity_gate_would_defer": None,
+        "maturity_ineligibility_reason": None,
+        "maturity_reset_reason": None,
+        "maturity_independent_override": None,
+        "confirmation_count": None,
+        "confirmations_required": None,
+        "actuation_enabled": None,
+        "actuation_ready": None,
+        "actuation_applied": None,
+        "actuation_blocker": None,
+        "lineage_status": None,
+        "enforcement_basis": None,
         "enforcement_requested": None,
         "enforcement_applied": None,
     }

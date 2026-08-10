@@ -17,6 +17,7 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 import json
+from uuid import uuid4
 
 # How many model<->body divergence samples to retain per agent for trend reads.
 SENSOR_DIVERGENCE_HISTORY_MAX = 200
@@ -260,6 +261,17 @@ class UNITARESMonitor:
         # state.update_count (lifetime, restored) and from behavioral update_count.
         # While this is small, the ODE state is a cold-start transient.
         self._process_local_updates: int = 0
+
+        # Process-local lineage for the cold-start risk confirmation shadow.
+        # The evaluator only considers adjacent observations carrying this same
+        # identifier.  agent_lifecycle promotes lineage_status to
+        # ``identity_genesis`` only when metadata confirms there was no prior
+        # activity; restores, hydration, and direct construction remain
+        # fail-closed.  No value here can suppress a pause.
+        self._cold_start_confirmation_lineage: str = str(uuid4())
+        self._cold_start_confirmation_lineage_status: str = "unverified_monitor_origin"
+        self._cold_start_confirmation_previous: Optional[Dict[str, Any]] = None
+        self._simulation_active: bool = False
 
         # Tactical prediction registry: open (confidence, id) pairs awaiting an
         # outcome. Minted at check-in time, consumed when an outcome references
@@ -980,6 +992,9 @@ class UNITARESMonitor:
         saved_prev_verdict = self._prev_verdict_action
         saved_prev_norm = self._prev_drift_norm
         saved_prev_conf = self._prev_confidence
+        saved_process_local_updates = self._process_local_updates
+        saved_cold_start_previous = self._cold_start_confirmation_previous
+        saved_simulation_active = self._simulation_active
         # The novelty gate for the mirror's complexity line mutates during
         # result building (monitor_result._complexity_divergence_novel); a
         # simulation must not consume the agent's first real surfacing.
@@ -1011,6 +1026,7 @@ class UNITARESMonitor:
             # Swap to temporary state
             self.state = temp_state
             self.prev_parameters = temp_prev_params
+            self._simulation_active = True
             
             # Run full governance cycle (modifies temp_state) with confidence
             result = self.process_update(agent_state, confidence=confidence)
@@ -1028,6 +1044,9 @@ class UNITARESMonitor:
             self._prev_verdict_action = saved_prev_verdict
             self._prev_drift_norm = saved_prev_norm
             self._prev_confidence = saved_prev_conf
+            self._process_local_updates = saved_process_local_updates
+            self._cold_start_confirmation_previous = saved_cold_start_previous
+            self._simulation_active = saved_simulation_active
             self._last_surfaced_complexity_gap = saved_last_gap
     
     def process_update(self, agent_state: Dict, confidence: Optional[float] = None, task_type: str = "mixed") -> Dict:
@@ -1373,6 +1392,25 @@ class UNITARESMonitor:
                     f"to {_vshadow.verdict} (score {_vshadow.score:.2f}); not applied"
                 )
 
+        # Name the verdict's actual authority source separately from the EISV
+        # vector source.  These are not interchangeable during cold start: the
+        # primary vector is ODE fallback and the verdict is the Phi cold-start
+        # prior until behavioral confidence reaches 0.3.
+        from src.cold_start_risk_confirmation import classify_verdict_driver
+        verdict_source = classify_verdict_driver(
+            behavioral_confidence=self._behavioral_state.confidence,
+            behavioral_verdict=behavioral_assessment.verdict,
+            behavioral_enabled=GovConfig.BEHAVIORAL_VERDICT_ENABLED,
+            phi_telemetry=phi_telemetry_only(),
+        )
+        verification_override = None
+        if (
+            self._last_verification_signal is not None
+            and float(getattr(self._last_verification_signal, 'score', 0.0) or 0.0) > 0.0
+        ):
+            verification_override = "independent_verification_floor"
+            verdict_source = verification_override
+
         oscillation_state, response_tier, cirs_result, damping_result = self._run_cirs(
             risk_score=risk_score,
             unitares_verdict=unitares_verdict,
@@ -1457,6 +1495,48 @@ class UNITARESMonitor:
             if len(self.state.verdict_history) > config.HISTORY_WINDOW:
                 self.state.verdict_history = self.state.verdict_history[-config.HISTORY_WINDOW:]
 
+        # Source-aware maturity telemetry.  This is evaluated against the raw
+        # policy decision before either existing suppression layer mutates it.
+        # It is shadow-only and cannot change ``decision.action``.  Restarts,
+        # hydration uncertainty, gaps, missing provenance, and independent
+        # verification all fail closed (the pause remains intact).
+        from src.cold_start_risk_confirmation import (
+            evaluate_cold_start_risk_confirmation,
+        )
+        cold_start_confirmation = evaluate_cold_start_risk_confirmation(
+            decision,
+            behavioral_confidence=self._behavioral_state.confidence,
+            is_baselined=self._behavioral_state.is_baselined,
+            primary_driver=verdict_source,
+            process_cycle=self._process_local_updates,
+            monitor_lineage=self._cold_start_confirmation_lineage,
+            lineage_status=self._cold_start_confirmation_lineage_status,
+            previous_evaluation=self._cold_start_confirmation_previous,
+            history_gap=self._gap_recovery_cycles_remaining > 0,
+            independent_override=verification_override,
+            shadow_enabled=GovConfig.COLD_START_RISK_CONFIRMATION_SHADOW,
+            actuation_enabled=(
+                GovConfig.COLD_START_RISK_CONFIRMATION_ACTUATION_ENABLED
+            ),
+        )
+        decision['cold_start_confirmation'] = cold_start_confirmation
+        self._cold_start_confirmation_previous = cold_start_confirmation
+        if (
+            cold_start_confirmation['policy_candidate']
+            and not self._simulation_active
+        ):
+            try:
+                audit_logger.log_cold_start_risk_confirmation_evaluated(
+                    agent_id=self.agent_id,
+                    risk_score=risk_score,
+                    evaluation=cold_start_confirmation,
+                )
+            except Exception:
+                logger.debug(
+                    "cold_start_risk_confirmation audit log skipped",
+                    exc_info=True,
+                )
+
         # Gap-recovery suppression: applied last so recording paths above saw
         # the original 'pause'. This mutates decision['action'] to 'proceed'
         # for downstream enforcement (circuit breaker in agent_loop_detection),
@@ -1507,6 +1587,7 @@ class UNITARESMonitor:
             'risk_score': float(risk_score),  # Governance/operational risk (70% phi-based + 30% traditional)
             'phi': float(phi),  # Primary physics signal: Φ objective function
             'verdict': unitares_verdict,  # Primary governance signal: safe/caution/high-risk
+            'verdict_source': verdict_source,
             'void_active': bool(void_active),
             'regime': str(getattr(self.state, 'regime', 'divergence')),  # Operational regime: DIVERGENCE | TRANSITION | CONVERGENCE | STABLE (with fallback)
             'time': float(self.state.time),

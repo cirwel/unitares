@@ -47,7 +47,10 @@ def mark_circuit_breaker_enforcement_applied(
     an actual circuit breaker by mutating agent metadata. Keep the mutation
     explicit so measurement, policy, and actuator state remain inspectable.
     """
+    prior = result.get("enforcement")
+    prior = dict(prior) if isinstance(prior, dict) else {}
     result["enforcement"] = {
+        **prior,
         "requested": True,
         "applied": True,
         "mode": "circuit_breaker",

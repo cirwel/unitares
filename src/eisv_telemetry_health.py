@@ -123,10 +123,49 @@ extracted AS MATERIALIZED (
         envelope #>> '{policy_evaluation,action}' AS policy_action,
         envelope #>> '{policy_evaluation,inputs,verdict}' AS policy_verdict,
         envelope #>> '{policy_evaluation,inputs,primary_eisv_source}' AS policy_source,
+        envelope #>> '{policy_evaluation,inputs,verdict_source}' AS policy_verdict_source,
         CASE
             WHEN jsonb_typeof(envelope #> '{policy_evaluation,inputs,risk_score}') = 'number'
             THEN (envelope #>> '{policy_evaluation,inputs,risk_score}')::double precision
         END AS policy_risk,
+        envelope #>> '{policy_evaluation,maturity_gate,outcome}' AS maturity_outcome,
+        envelope #>> '{policy_evaluation,maturity_gate,schema}' AS maturity_schema,
+        envelope #>> '{policy_evaluation,maturity_gate,measurement_phase}' AS measurement_phase,
+        envelope #>> '{policy_evaluation,maturity_gate,ineligibility_reason}' AS maturity_ineligibility_reason,
+        envelope #>> '{policy_evaluation,maturity_gate,reset_reason}' AS maturity_reset_reason,
+        CASE
+            WHEN jsonb_typeof(envelope #> '{policy_evaluation,maturity_gate,measurement_ready}') = 'boolean'
+            THEN (envelope #>> '{policy_evaluation,maturity_gate,measurement_ready}')::boolean
+        END AS measurement_ready,
+        CASE
+            WHEN jsonb_typeof(envelope #> '{policy_evaluation,maturity_gate,eligible}') = 'boolean'
+            THEN (envelope #>> '{policy_evaluation,maturity_gate,eligible}')::boolean
+        END AS maturity_eligible,
+        CASE
+            WHEN jsonb_typeof(envelope #> '{policy_evaluation,maturity_gate,would_defer}') = 'boolean'
+            THEN (envelope #>> '{policy_evaluation,maturity_gate,would_defer}')::boolean
+        END AS maturity_would_defer,
+        CASE
+            WHEN jsonb_typeof(envelope #> '{policy_evaluation,maturity_gate,confirmation_count}') = 'number'
+            THEN (envelope #>> '{policy_evaluation,maturity_gate,confirmation_count}')::integer
+        END AS confirmation_count,
+        CASE
+            WHEN jsonb_typeof(envelope #> '{policy_evaluation,maturity_gate,confirmations_required}') = 'number'
+            THEN (envelope #>> '{policy_evaluation,maturity_gate,confirmations_required}')::integer
+        END AS confirmations_required,
+        CASE
+            WHEN jsonb_typeof(envelope #> '{policy_evaluation,maturity_gate,actuation_enabled}') = 'boolean'
+            THEN (envelope #>> '{policy_evaluation,maturity_gate,actuation_enabled}')::boolean
+        END AS maturity_actuation_enabled,
+        CASE
+            WHEN jsonb_typeof(envelope #> '{policy_evaluation,maturity_gate,actuation_ready}') = 'boolean'
+            THEN (envelope #>> '{policy_evaluation,maturity_gate,actuation_ready}')::boolean
+        END AS maturity_actuation_ready,
+        CASE
+            WHEN jsonb_typeof(envelope #> '{policy_evaluation,maturity_gate,actuation_applied}') = 'boolean'
+            THEN (envelope #>> '{policy_evaluation,maturity_gate,actuation_applied}')::boolean
+        END AS maturity_actuation_applied,
+        envelope #>> '{enforcement,basis}' AS enforcement_basis,
         CASE
             WHEN jsonb_typeof(envelope #> '{enforcement,requested}') = 'boolean'
             THEN (envelope #>> '{enforcement,requested}')::boolean
@@ -174,12 +213,30 @@ normalized AS MATERIALIZED (
                         OR nullif(policy_action, '') IS NULL
                         OR nullif(policy_verdict, '') IS NULL
                         OR nullif(policy_source, '') IS NULL
+                        OR nullif(policy_verdict_source, '') IS NULL
                         OR policy_risk IS NULL
                        )
                  THEN 'policy_contract_missing' END,
             CASE WHEN envelope_valid AND (
+                           jsonb_typeof(envelope #> '{policy_evaluation,maturity_gate}')
+                               IS DISTINCT FROM 'object'
+                        OR maturity_schema IS DISTINCT FROM 'eisv.cold-start-confirmation.v1'
+                        OR nullif(maturity_outcome, '') IS NULL
+                        OR nullif(measurement_phase, '') IS NULL
+                        OR measurement_ready IS NULL
+                        OR maturity_eligible IS NULL
+                        OR maturity_would_defer IS NULL
+                        OR confirmation_count IS NULL
+                        OR confirmations_required IS NULL
+                        OR maturity_actuation_enabled IS NULL
+                        OR maturity_actuation_ready IS NULL
+                        OR maturity_actuation_applied IS NULL
+                       )
+                 THEN 'maturity_gate_contract_missing' END,
+            CASE WHEN envelope_valid AND (
                            enforcement_requested IS NULL
                         OR enforcement_applied IS NULL
+                        OR nullif(enforcement_basis, '') IS NULL
                        )
                  THEN 'enforcement_contract_missing' END,
             CASE WHEN envelope_valid AND policy_risk IS NOT NULL AND state_risk IS NOT NULL
@@ -201,7 +258,24 @@ normalized AS MATERIALIZED (
                            (behavioral_confidence >= 0.30 AND primary_source <> 'behavioral')
                         OR (behavioral_confidence < 0.30 AND primary_source <> 'ode_fallback')
                        )
-                 THEN 'source_confidence_gate_mismatch' END
+                 THEN 'source_confidence_gate_mismatch' END,
+            CASE WHEN envelope_valid AND behavioral_confidence IS NOT NULL AND (
+                           (behavioral_confidence >= 0.30 AND measurement_ready IS NOT TRUE)
+                        OR (behavioral_confidence < 0.30 AND measurement_ready IS NOT FALSE)
+                       )
+                 THEN 'maturity_readiness_mismatch' END,
+            CASE WHEN envelope_valid AND maturity_would_defer IS TRUE
+                           AND maturity_eligible IS NOT TRUE
+                 THEN 'maturity_defer_without_eligibility' END,
+            CASE WHEN envelope_valid AND confirmation_count IS NOT NULL
+                           AND confirmations_required IS NOT NULL
+                           AND (confirmation_count < 0 OR confirmation_count > confirmations_required)
+                 THEN 'maturity_confirmation_count_invalid' END,
+            CASE WHEN envelope_valid AND maturity_actuation_applied IS TRUE AND (
+                           maturity_actuation_enabled IS NOT TRUE
+                        OR maturity_actuation_ready IS NOT TRUE
+                       )
+                 THEN 'maturity_actuation_without_readiness' END
         ]::text[], NULL) AS contract_violations,
         CASE
             WHEN is_baselined IS TRUE THEN 'baselined'
@@ -225,6 +299,13 @@ summary AS (
         count(*) FILTER (WHERE envelope_valid AND primary_source = 'ode_fallback') AS ode_fallback,
         count(*) FILTER (WHERE envelope_valid AND is_baselined IS FALSE) AS warmup,
         count(*) FILTER (WHERE envelope_valid AND jsonb_array_length(missing_inputs) > 0) AS missing,
+        count(*) FILTER (WHERE envelope_valid AND measurement_ready IS TRUE) AS measurement_ready,
+        count(*) FILTER (WHERE envelope_valid AND maturity_eligible IS TRUE) AS maturity_eligible,
+        count(*) FILTER (WHERE envelope_valid AND maturity_would_defer IS TRUE) AS maturity_would_defer,
+        count(*) FILTER (WHERE envelope_valid AND maturity_outcome = 'shadow_confirmed') AS maturity_confirmed,
+        count(*) FILTER (WHERE envelope_valid AND maturity_actuation_enabled IS TRUE) AS maturity_actuation_enabled,
+        count(*) FILTER (WHERE envelope_valid AND maturity_actuation_ready IS TRUE) AS maturity_actuation_ready,
+        count(*) FILTER (WHERE envelope_valid AND maturity_actuation_applied IS TRUE) AS maturity_actuation_applied,
         count(*) FILTER (WHERE cardinality(contract_violations) > 0) AS contract_violation_rows,
         coalesce(sum(cardinality(contract_violations)), 0) AS contract_violations,
         count(*) FILTER (WHERE envelope_valid AND enforcement_requested IS TRUE) AS enforcement_requested,
@@ -245,7 +326,9 @@ daily AS (
         count(*) FILTER (WHERE envelope_valid AND primary_source = 'behavioral') AS behavioral_primary,
         count(*) FILTER (WHERE envelope_valid AND primary_source = 'ode_fallback') AS ode_fallback,
         count(*) FILTER (WHERE envelope_valid AND is_baselined IS FALSE) AS warmup,
-        count(*) FILTER (WHERE envelope_valid AND jsonb_array_length(missing_inputs) > 0) AS missing
+        count(*) FILTER (WHERE envelope_valid AND jsonb_array_length(missing_inputs) > 0) AS missing,
+        count(*) FILTER (WHERE envelope_valid AND measurement_ready IS TRUE) AS measurement_ready,
+        count(*) FILTER (WHERE envelope_valid AND maturity_would_defer IS TRUE) AS maturity_would_defer
     FROM normalized
     GROUP BY day
 ),
@@ -279,6 +362,38 @@ contract_distribution AS (
     FROM normalized
     CROSS JOIN LATERAL unnest(contract_violations) AS violation
     GROUP BY violation
+),
+maturity_distribution AS (
+    SELECT
+        coalesce(maturity_outcome, 'unknown') AS outcome,
+        count(*) AS observations
+    FROM normalized
+    WHERE envelope_valid
+    GROUP BY coalesce(maturity_outcome, 'unknown')
+),
+maturity_ineligibility_distribution AS (
+    SELECT
+        coalesce(maturity_ineligibility_reason, 'none') AS reason,
+        count(*) AS observations
+    FROM normalized
+    WHERE envelope_valid
+    GROUP BY coalesce(maturity_ineligibility_reason, 'none')
+),
+maturity_reset_distribution AS (
+    SELECT
+        coalesce(maturity_reset_reason, 'none') AS reason,
+        count(*) AS observations
+    FROM normalized
+    WHERE envelope_valid
+    GROUP BY coalesce(maturity_reset_reason, 'none')
+),
+enforcement_basis_distribution AS (
+    SELECT
+        coalesce(enforcement_basis, 'unknown') AS basis,
+        count(*) AS observations
+    FROM normalized
+    WHERE envelope_valid
+    GROUP BY coalesce(enforcement_basis, 'unknown')
 ),
 enforcement_distribution AS (
     SELECT
@@ -317,6 +432,16 @@ SELECT jsonb_build_object(
         'warmup_rate', CASE WHEN summary.envelopes > 0 THEN summary.warmup::double precision / summary.envelopes END,
         'missing', summary.missing,
         'missing_rate', CASE WHEN summary.envelopes > 0 THEN summary.missing::double precision / summary.envelopes END,
+        'measurement_ready', summary.measurement_ready,
+        'measurement_ready_rate', CASE WHEN summary.envelopes > 0 THEN summary.measurement_ready::double precision / summary.envelopes END,
+        'maturity_eligible', summary.maturity_eligible,
+        'maturity_eligible_rate', CASE WHEN summary.envelopes > 0 THEN summary.maturity_eligible::double precision / summary.envelopes END,
+        'maturity_would_defer', summary.maturity_would_defer,
+        'maturity_would_defer_rate', CASE WHEN summary.envelopes > 0 THEN summary.maturity_would_defer::double precision / summary.envelopes END,
+        'maturity_confirmed', summary.maturity_confirmed,
+        'maturity_actuation_enabled', summary.maturity_actuation_enabled,
+        'maturity_actuation_ready', summary.maturity_actuation_ready,
+        'maturity_actuation_applied', summary.maturity_actuation_applied,
         'contract_violation_rows', summary.contract_violation_rows,
         'contract_violations', summary.contract_violations,
         'contract_checked_rows', summary.envelope_rows,
@@ -336,7 +461,9 @@ SELECT jsonb_build_object(
             'behavioral_primary', behavioral_primary,
             'ode_fallback', ode_fallback,
             'warmup', warmup,
-            'missing', missing
+            'missing', missing,
+            'measurement_ready', measurement_ready,
+            'maturity_would_defer', maturity_would_defer
         ) ORDER BY day) FROM daily
     ), '[]'::jsonb),
     'measurement_sources', coalesce((
@@ -378,11 +505,34 @@ SELECT jsonb_build_object(
         ), '[]'::jsonb),
         'note', 'Same-row serialization invariants only; differing risk vocabularies are shown separately, not counted as violations.'
     ),
+    'maturity_gate', jsonb_build_object(
+        'strata', coalesce((
+            SELECT jsonb_agg(jsonb_build_object('outcome', outcome, 'observations', observations)
+                             ORDER BY observations DESC, outcome)
+            FROM maturity_distribution
+        ), '[]'::jsonb),
+        'ineligibility_reasons', coalesce((
+            SELECT jsonb_agg(jsonb_build_object('reason', reason, 'observations', observations)
+                             ORDER BY observations DESC, reason)
+            FROM maturity_ineligibility_distribution
+        ), '[]'::jsonb),
+        'reset_reasons', coalesce((
+            SELECT jsonb_agg(jsonb_build_object('reason', reason, 'observations', observations)
+                             ORDER BY observations DESC, reason)
+            FROM maturity_reset_distribution
+        ), '[]'::jsonb),
+        'note', 'Shadow-only confirmation maturity. would_defer is a counterfactual policy observation, never a suppressed pause.'
+    ),
     'enforcement', jsonb_build_object(
         'strata', coalesce((
             SELECT jsonb_agg(jsonb_build_object('stratum', stratum, 'observations', observations)
                              ORDER BY observations DESC, stratum)
             FROM enforcement_distribution
+        ), '[]'::jsonb),
+        'bases', coalesce((
+            SELECT jsonb_agg(jsonb_build_object('basis', basis, 'observations', observations)
+                             ORDER BY observations DESC, basis)
+            FROM enforcement_basis_distribution
         ), '[]'::jsonb),
         'note', 'Intervention-conditioned delivery counts; not a causal estimate of prevention or harm.'
     )
@@ -611,6 +761,7 @@ async def query_eisv_telemetry_health(
         "semantics": {
             "measurement": "EISV is a proprioceptive estimate, not an outcome judgment.",
             "contract_checks": "Cross-field serialization invariants, not quality scores.",
+            "maturity_gate": "Counterfactual shadow evaluation; no pause is suppressed.",
             "enforcement": "Intervention-conditioned delivery accounting, not a causal estimate.",
         },
     }

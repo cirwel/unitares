@@ -1,7 +1,7 @@
 # EISV Proprioception Contract
 
 **Created:** June 26, 2026
-**Last Updated:** August 6, 2026
+**Last Updated:** August 10, 2026
 **Status:** Active
 
 ---
@@ -19,24 +19,25 @@ user was wronged, or whether an agent is "guilty." Those judgments require
 external outcome evidence, policy, and review surfaces that are separate from
 the measurement vector.
 
-## Deployed posture — ratified 2026-08-06
+## Deployed posture — corrected 2026-08-10
 
-**As deployed, UNITARES is an advisory instrument, not an enforcement layer.**
-Operator-ratified 2026-08-06 on the two-wave core-math audit (ledger rows 13–44).
-This is a deliberate posture, consistent with the program's "measure before
-enforce" stance — not a defect to be silently corrected.
+**As deployed, UNITARES is primarily advisory, but its authenticated circuit
+breaker is live.** The stronger 2026-08-06 claim that no governed pause was being
+delivered was falsified on 2026-08-09, when a fallback-owned ``risk_pause`` at
+behavioral confidence 0.1 reached ``lifecycle_paused``. Measurement, policy, and
+enforcement must therefore remain separate in every surface; neither "all pauses
+enforce" nor "no pauses enforce" is true.
 
 Concretely, and verified live:
 
-- **Pause / high-risk verdicts are produced but not delivered.** `gap_suppress`
-  downgrades any pause to `proceed` at any inter-check-in gap > 150s, which is
-  ordinary resident cadence — 195 of 218 recorded pauses in the trailing 90 days
-  (89.4%). It is **retained by decision**, not a bug queued for re-arming. Whether
-  to re-arm delivery is a future operator decision, gated on a shadow/canary; it is
-  not the default.
-- **The last pause delivered to any agent, fleet-wide, was 2026-06-28.** Every
-  "delivered" pause after the 2026-06-27 `#1133` flip is a synthetic
-  integration-test fixture, not a governed agent.
+- **Pause / high-risk verdicts are often, but not always, suppressed.** The
+  2026-08-06 audit snapshot found `gap_suppress` downgraded 195 of 218 recorded
+  pauses (89.4%) when inter-check-in gaps crossed 150s. A first check-in shortly
+  after monitor creation can bypass that cadence gate; the 2026-08-09 delivery did.
+- **The latest verified governed delivery is 2026-08-09, not 2026-06-28.** It was
+  a Phi cold-start decision, not a behavioral-authoritative verdict. Its next
+  persisted observation approved rather than repeating the pause. That is an
+  observed non-persistent sequence, not proof the pause was false.
 - **A produced verdict is not an enforced action.** `lifecycle_paused` events are
   delivered enforcement; `auto_attest` rows with `decision='pause'` /
   `gap_suppressed='true'` are produced verdicts that did **not** enforce. Never read
@@ -45,9 +46,40 @@ Concretely, and verified live:
   `enforced` are mislabeled against this posture and are being corrected to advisory
   vocabulary (`guide` / `advisory` / `would-pause`).
 
-The advisory instrument is real and useful — proprioceptive telemetry, guidance,
-and a complete, honest audit record. What it does not currently do is halt an
-agent, and no surface should imply otherwise.
+The proprioceptive instrument, guidance, audit record, and circuit breaker are all
+real. A surface may say an agent was halted only when the same observation records
+`enforcement.applied=true` (or a matching lifecycle event); a produced pause alone
+is insufficient.
+
+## Decision record — cold-start confirmation remains shadow-only (2026-08-10)
+
+Trailing-90-day inspection found 66,890 non-synthetic state rows, including 1,420
+rows below behavioral confidence 0.3. Five of those fallback rows produced
+`risk_pause`; none was followed by another fallback `risk_pause`, and four have a
+matching circuit-breaker audit event. These observations establish delivery and
+non-persistence in the sample. They do **not** establish false positives, avoided
+harm, or a safe suppression policy.
+
+Independent dialectic review (`8539c516649a08af`) rejected default-on actuation:
+the verification floor is itself default-off, and process-local confirmation could
+repeatedly reset across restart or hydration uncertainty. The accepted revision is
+therefore instrumentation-first:
+
+1. Evaluate only an original `risk_pause` whose verdict source is exactly
+   `phi_cold_start`, confidence is below 0.3, provenance is complete, monitor
+   lineage is identity genesis, and no independent override fired.
+2. Record first adjacent evidence as `shadow_would_defer` and the second as
+   `shadow_confirmed`; reset on intervening decisions, source/readiness changes,
+   history gaps, restart, hydration uncertainty, or lineage discontinuity.
+3. Preserve the original action/reason and expose readiness, source, confirmation
+   count, reset/ineligibility reason, counterfactual outcome, and enforcement basis
+   in policy, enforcement, persisted telemetry, audit, and fleet health.
+4. Keep actuation default-off and fail-closed even if its operator flag is set,
+   until confirmation state is durably and atomically persisted and prospective
+   evidence receives explicit operator review.
+
+This shadow record unveils the policy-to-actuator edge without changing a single
+pause. It is evidence for a later decision, not that decision itself.
 
 ## Decision record — V-reintroduction deferred (2026-08-07)
 
@@ -743,8 +775,9 @@ void/V-pause surface, died on a mid-response API error; its territory — whethe
 `void_pause` reaches delivery — was covered by the action-reconciliation surface,
 rows 40 and 24, and by wave-1 row 16.)
 
-**Headline: UNITARES has no live enforcement layer as deployed — it has a live
-*advisory* layer.** Three verified facts compose it. (1) The phi cold-start path
+**Historical headline (2026-08-06 snapshot; superseded 2026-08-10): UNITARES had
+shown no recent governed enforcement delivery and behaved predominantly as an
+*advisory* layer.** Three facts composed that snapshot. (1) The phi cold-start path
 is the *modal* regime, not a fallback: 86% of identities never reach update 3, and
 only ~12% of the recently-active fleet is governed by the self-relative behavioral
 machinery the public math leads with (row 26). (2) In that window the verdict
@@ -755,22 +788,23 @@ the one live firing, `|derived_cx − self_cx|` carried 99.2% of the norm (row 2
 (3) Even when a pause fires it is usually not delivered: a cadence gate built for
 laptop sleep-wake (`gap_suppress`) downgraded 195 of 218 recorded pauses (89.4%)
 to `proceed`, firing at any inter-check-in gap > 150s — median suppressed gap
-300.9s, i.e. ordinary 5-minute resident cadence (rows 24, 41). **The last pause
-delivered fleet-wide, ever, was 2026-06-28T23:25:49Z**; every post-#1133-flip
-"delivered" enforcement is two integration-test fixtures (row 27). This is a gap
+300.9s, i.e. ordinary 5-minute resident cadence (rows 24, 41). At that audit
+cutoff, the last verified delivery was 2026-06-28T23:25:49Z and the only
+post-#1133 deliveries were two integration-test fixtures (row 27). This is a gap
 between *produced verdicts* and *delivered actions*, and between the population the
 math targets and the one it reaches — not a claim the design is unsound or the math
 wrong. The audit record itself is complete and honest (`gap_suppressed=true` and
 paired suppression events are all present; this audit reconstructed everything from
-it).
+it). **Correction:** a governed fallback-owned `risk_pause` was delivered on
+2026-08-09; see the deployed-posture correction and decision record above.
 
-**24.** "A pause verdict is delivered to the agent it is issued against." — **REFUTED BY CONSTRUCTION.** `_maybe_gap_suppress` (`src/governance_monitor.py:1425`, impl `:1515-1548`) downgrades ANY pause, `risk_pause` included, whenever `GAP_RECOVERY_CYCLES=2` is armed; arming happens at `:1080-1081` in the *same* `process_update` whenever `elapsed·(0.1/15.0) > DT_MAX=1.0`, i.e. elapsed >150s (`config/governance_config.py:690-702`, no env override). The sibling `_maybe_warmup_structural_suppress` frozenset (`:1550-1556`) deliberately excludes `risk_pause` as "real signal" — internal inconsistency. Delivery requires the 2nd+ consecutive sub-150s check-in. Live: 195/218 recorded pauses in 90d suppressed (89.4%); suppression elapsed median 300.9s; 83/96 flag-era high-risk auto_attests suppressed. Escape: a first check-in <150s after monitor creation is unarmed (`last_update` init `:196`) — the path all 9 delivered bootstrapping `cirs_block`s took; returning agents always arm (`last_update_iso` DB-restored `:397-408`). Scope: 12 June high-risk pauses landed unsuppressed under pre-current code; July-onward, 1/1 suppressed.
+**24.** "A pause verdict is delivered to the agent it is issued against." — **REFUTED BY CONSTRUCTION.** `_maybe_gap_suppress` downgrades ANY pause, `risk_pause` included, whenever `GAP_RECOVERY_CYCLES=2` is armed; arming happens in the same `process_update` whenever `elapsed·(0.1/15.0) > DT_MAX=1.0`, i.e. elapsed >150s. The sibling `_maybe_warmup_structural_suppress` deliberately excludes `risk_pause` as "real signal" — internal inconsistency. The 2026-08-06 snapshot found 195/218 recorded pauses in 90d suppressed (89.4%), with median suppression gap 300.9s. Escape: a first check-in <150s after monitor creation is unarmed. **2026-08-10 correction:** that escape occurred for a governed agent on 2026-08-09, so July/August is no longer 1/1 suppressed; produced and delivered remain separate, but delivery is demonstrably live.
 
 **25.** "In updates 1-2, phi measures the agent's behavior." — **REFUTED BY CONSTRUCTION** for non-self-reporting callers. Warmup ramp `update_count/5` zeroes calibration/coherence/stability at update 1 and scales them ×0.2 at update 2, with `complexity` explicitly exempt (`governance_core/ethical_drift.py:375-381`, comment `:379`); `_last_state_velocity` is provably 0.0 through update 2 by two mechanisms — first-update branch (`src/governance_monitor.py:748,758-759`) and a one-update pipeline lag (drift at `:1149` precedes `update_dynamics` at `:1208`); velocity-risk needs ≥3 history rows (`src/monitor_risk.py:37,95`); behavioral assessment discarded at confidence <0.3 (`:1306`). Surviving verdict inputs are all caller MCP args (`src/mcp_handlers/updates/phases.py:733,753,792,795`): `complexity` (via `|derived−self|`), `ethical_drift` (blend fixed 0.3 post-dampening, `src/monitor_drift.py:102-113`, phi ceiling ≈0.053 = caution only), `task_type` (−0.08 risk, floor 0.45, `src/monitor_phi.py:63-73`), `sensor_eisv`. Live: 1 firing ever (2026-08-02, agent 3568f987) with divergence 0.6708 = **99.2% of norm²**, `self_cx=0.9` vs `derived_cx=0.2292`; simultaneous behavioral read `safe`/0.1733 discarded. Evasion: echo the derived value → divergence 0; omitting `complexity` yields |derived−0.5| ≤ 0.5 (phi penalty ≤0.125, cannot reach high-risk) because `phases.py:733-737` coerces None→0.5, making the `continuity.py:163` None-branch dead on the live MCP path.
 
 **26.** "The phi cold-start path is a fallback; the self-relative behavioral machinery governs the fleet." — **REFUTED** empirically. `core.agent_state` (synthetic=false), lifetime max `behavioral_eisv.updates` per identity over 2,793 identities-with-rows (of 6,230 identities): 387 (13.9%) ever reached update 3, 186 (6.7%) reached confidence 1.0, 73 (2.6%) `is_baselined`, 58 (2.1%) phase `baselined`; 2,327/2,793 (83.3%) have ≤2 rows ever, median 1. Recently-active (≥2026-07-01, N=277): 155-156 in-window, 89 fixed-threshold, 32 (11.6%) self-relative. Verdict concentration: updates ≤2 → 1,293 rows, 11 high-risk, mean risk 0.2649; ≥3 → ~44,946 rows, 66 high-risk (all June 2026), mean 0.0515; since 07-01, in-window share of high-risk = 1/1. Crosser latency: 466/median 8m13s/p90 1h45m (persisted-row proxy) or 387/9m10s/1h50m (behavioral-updates definition) — state the definition. Caveat: pre-#545 rows lack the blob, undercounting old-agent maturity; row-count proxy bounds it (83% vs 86%).
 
-**27.** "Enforcement is currently protecting the fleet." — **REFUTED** empirically for the last 39 days. 218 recorded pauses in 90d − 195 gap-suppressed − 2 warmup-structural = 21 delivered, exactly matching 21 `lifecycle_paused` rows (2026-05-08 → 2026-06-28). Max `lifecycle 'paused'` **ever** = 2026-06-28T23:25:49Z (`audit.events` and `core.identities` metadata agree). Post-#1133-flip (9e32e1d1, 2026-06-27 23:26 -0600) recorded pauses = 3: `itest-warm-find` (0.96) and `itest-warm-find2` (0.93), both purpose `testing`/`{ephemeral}`/`baselined=false`, plus the suppressed 08-02 codex event. Only delivered `baselined=true` pause in 90d: Sentinel `f92dcea8`, 2026-06-13, risk 0.80 (pre-flip legacy). Zero delivered pauses are both post-warmup and post-flip.
+**27.** "Enforcement is currently protecting the fleet." — **UNTESTED as a protection claim; delivery path EARNED.** The 2026-08-06 snapshot counted 21 delivered pauses through 2026-06-28 and no recent governed delivery. That recency conclusion was falsified by a governed `lifecycle_paused` event on 2026-08-09 at behavioral confidence 0.1. The event proves the circuit breaker can actuate; it does not show prevention, benefit, or correctness. The next observation did not repeat the pause, which motivates prospective shadow measurement rather than a retrospective false-positive label.
 
 **28.** "The 2026-08-02 high-risk verdict demonstrates the enforcement path working live." — **REFUTED.** `log_auto_attest` (`src/governance_monitor.py:1368`) runs before the suppression mutation (`:1425`), with `gap_suppression_pending` pre-flagged at `:1354-1357`, so the row truthfully records `pause` while the agent received `proceed`. Live: auto_attest 2026-08-02 00:46:44.964359-06, agent 3568f987 (`codex_3568f987`, purpose `implementation`, `{ephemeral}`, still `active`), `decision='pause'`, `gap_suppressed='true'`, risk 0.7939818286979232; paired `attest_gap_suppressed` at .964589, `original_reason='UNITARES high-risk verdict (risk_score=0.79)…'`, `elapsed_seconds=2894.5`, `cycles_remaining=1`; zero `lifecycle 'paused'` records for this agent. Amends row 14: the verdict fired, the enforcement did not.
 
@@ -796,7 +830,7 @@ it).
 
 **39.** "`governance_core/scoring.py` documents its own deployed role." — **REFUTED** (doc-inconsistency). `scoring.py:51-54` says phi is "used primarily in research/optimization … Production UNITARES uses coherence-based decision making … Could be integrated into production," and `:91` documents "Steady-state … gives phi≈0.11." Deployed: `src/monitor_phi.py:27-32` runs `phi_objective`/`verdict_from_phi` every check-in and the only override is gated at `src/governance_monitor.py:1306` plus a non-None behavioral verdict at `:63`; with `UNITARES_S_SETPOINT=1` live, `src/monitor_setpoint.py`'s docstring says "production Φ rests ≈0.26" and the empirical fresh-agent base is +0.19725 — so the documented margin-to-cut understates the deployed one ≈2×.
 
-**40.** "`void_pause`/`coherence_pause` counts measure governance activity." — **REFUTED** empirically. 90d: `void_pause` 112 recorded (51.4% of 218 pauses), delivered **0** — Steward's 110 = 108 gap-suppressed + 2 warmup-structural (2026-06-10 06:54:51, 06-14 07:20:52, the only two such events ever); Lumen's 2 gap-suppressed. `coherence_pause` 2 recorded (Lumen, 2026-06-03), delivered 0 — which refines row 16's "zero coherence-triggered pauses ever": cold-restart transients exist in the record, none delivered. `basin_pause`: 0 rows. All 21 delivered pauses are `cirs_block` (11) or `risk_pause` (10). The recorded-vs-delivered divergence is intentional and documented at `src/governance_monitor.py:1574-1583`.
+**40.** "`void_pause`/`coherence_pause` counts measure governance activity." — **REFUTED** empirically. At the 2026-08-06 cutoff: `void_pause` 112 recorded and delivered **0**; `coherence_pause` 2 recorded and delivered 0; `basin_pause` 0. The 21 deliveries at that cutoff were `cirs_block` (11) or `risk_pause` (10). The subsequent 2026-08-09 governed delivery was also `risk_pause`, so it changes the stale total but not the structural finding: recorded structural-pause counts are not delivered activity.
 
 **41.** "Gap-recovery suppression guards against sleep-wake artifacts." — **REFUTED** empirically (deployed-vs-target; doc companion to row 24). Rationale at `config/governance_config.py:694-701` and `src/governance_monitor.py:1076-1079,1520-1521` cites MacBook clamshell sleep-wake and the 2026-05-08→12 false high-risk incident. Live elapsed of 195 `attest_gap_suppressed` events: 4 <150s (carryover), 185 in [150,334s], 0 in (334,900], 2 in (900s,1h], 3 in (1h,12h], 1 at 43,905.9s; median 300.9s. Sleep-shaped (>1h) = 4/195 = **2.1%**. The deployed mechanism is a cadence gate on enforcement.
 
@@ -843,9 +877,9 @@ Avoid:
 - "EISV decided this was bad"
 - "EISV prevented harm" unless an enforcement path actually did
 - "UNITARES paused / halted / enforced / blocked the agent" for a *produced*
-  verdict — as deployed the verdict is advisory and usually not delivered (see
-  "Deployed posture"); say "produced a pause verdict (advisory; not delivered)" or
-  "would-pause" unless a `lifecycle_paused` event exists for that agent
+  verdict — policy is often advisory but the circuit breaker is live (see
+  "Deployed posture"); say "produced a pause verdict" or "would-pause" unless
+  `enforcement.applied=true` or a matching `lifecycle_paused` event exists
 - a pause / high-risk verdict *count* presented as an enforcement or
   harm-prevention count
 - "bad outcome" without naming the label source/class

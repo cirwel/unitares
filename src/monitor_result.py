@@ -24,6 +24,7 @@ _POLICY_INPUT_FIELDS = (
     "risk_score",
     "phi",
     "verdict",
+    "verdict_source",
     "void_active",
 )
 
@@ -88,6 +89,9 @@ def _build_policy_evaluation(decision: Dict, metrics: Dict,
     }
     if suppression:
         evaluation["suppression"] = suppression
+    maturity_gate = decision.get("cold_start_confirmation")
+    if isinstance(maturity_gate, dict):
+        evaluation["maturity_gate"] = maturity_gate
     if decision.get("latest_risk_fast_trip"):
         evaluation["latest_risk_fast_trip"] = decision["latest_risk_fast_trip"]
     return evaluation
@@ -96,10 +100,21 @@ def _build_policy_evaluation(decision: Dict, metrics: Dict,
 def _build_enforcement_stub(decision: Dict) -> Dict:
     """Describe actuator state before the runtime boundary applies it."""
     requested = decision.get("action") in {"pause", "reject"}
-    return {
+    maturity_gate = decision.get("cold_start_confirmation")
+    maturity_gate = maturity_gate if isinstance(maturity_gate, dict) else None
+    if decision.get("gap_suppressed"):
+        basis = "gap_suppressed"
+    elif decision.get("warmup_structural_suppressed"):
+        basis = "warmup_structural_suppressed"
+    elif maturity_gate is not None:
+        basis = maturity_gate.get("enforcement_basis")
+    else:
+        basis = "policy_request" if requested else "advisory_policy"
+    enforcement = {
         "requested": requested,
         "applied": False,
         "mode": "circuit_breaker_candidate" if requested else "advisory",
+        "basis": basis,
         "actor": None,
         "effect": None,
         "note": (
@@ -112,6 +127,9 @@ def _build_enforcement_stub(decision: Dict) -> Dict:
             "No enforcement requested by policy."
         ),
     }
+    if maturity_gate is not None:
+        enforcement["maturity_gate"] = maturity_gate
+    return enforcement
 
 
 def _build_risk_attribution(
@@ -146,19 +164,19 @@ def _build_risk_attribution(
         phi_telemetry_only as _phi_telemetry_only,
     )
 
-    _behavioral_verdict = getattr(behavioral_assessment, "verdict", None)
-    _behavioral_warm = (
-        _GovConfig.BEHAVIORAL_VERDICT_ENABLED
-        and _behavioral_verdict is not None
-        and behavioral_confidence is not None
-        and behavioral_confidence >= 0.3
+    from src.cold_start_risk_confirmation import classify_verdict_driver
+
+    primary_driver = classify_verdict_driver(
+        behavioral_confidence=behavioral_confidence,
+        behavioral_verdict=getattr(behavioral_assessment, "verdict", None),
+        behavioral_enabled=_GovConfig.BEHAVIORAL_VERDICT_ENABLED,
+        phi_telemetry=_phi_telemetry_only(),
     )
-    if _behavioral_warm and _phi_telemetry_only():
-        primary_driver = "behavioral_assessment"
-    elif _behavioral_warm:
-        primary_driver = "phi_floor"
-    else:
-        primary_driver = "phi_cold_start"
+    # An enabled verification floor is a separately surfaced independent
+    # override.  When it owns this row, report that effective source rather
+    # than silently retaining the base Phi/behavioral label.
+    if metrics.get("verdict_source") == "independent_verification_floor":
+        primary_driver = "independent_verification_floor"
 
     phi_drift: Dict = {
         "provenance": "computed",
@@ -216,7 +234,13 @@ def _build_risk_attribution(
         ),
     }
 
-    if primary_driver == "behavioral_assessment":
+    if primary_driver == "independent_verification_floor":
+        note = (
+            "An enabled self-report-independent verification floor raised this "
+            "verdict. The base Phi/behavioral source remains visible in the "
+            "verification and policy maturity records."
+        )
+    elif primary_driver == "behavioral_assessment":
         note = (
             "This verdict is the independent behavioral assessment (EMA residuals "
             "vs this agent's own baseline + absolute floors). Φ and your reported "
