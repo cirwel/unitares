@@ -35,6 +35,48 @@ defmodule UnitaresSdk.IdentityTest do
     end
   end
 
+  describe "check-in args must never declare agent_id" do
+    # The rule anima_broker learned live on 2026-07-03: declaring agent_id makes
+    # the REST strict gate skip its typed refusal, so binding loss becomes
+    # unobservable — check-ins resolve by uuid passthrough with no PG renewal
+    # and no Redis re-cache. Its Redis-wipe acceptance test passed WITHOUT
+    # exercising recovery until the key was dropped.
+    @identity %{agent_id: "uuid-1", client_session_id: "csid-1", continuity_token: "ctok-1"}
+
+    test "echoes client_session_id and does not declare agent_id" do
+      args = Identity.check_in_args(%{"response_text" => "x"}, @identity)
+
+      assert args["client_session_id"] == "csid-1"
+      refute Map.has_key?(args, "agent_id")
+    end
+
+    test "a caller cannot opt back into the bug by passing agent_id in fields" do
+      args = Identity.check_in_args(%{"response_text" => "x", "agent_id" => "uuid-1"}, @identity)
+
+      refute Map.has_key?(args, "agent_id")
+    end
+
+    test "the atom key is dropped too" do
+      args = Identity.check_in_args(%{agent_id: "uuid-1"}, @identity)
+
+      refute Map.has_key?(args, :agent_id)
+      refute Map.has_key?(args, "agent_id")
+    end
+
+    test "absent identity material is omitted, not sent as nil" do
+      args = Identity.check_in_args(%{"a" => 1}, %{client_session_id: nil, continuity_token: ""})
+
+      refute Map.has_key?(args, "client_session_id")
+      refute Map.has_key?(args, "continuity_token")
+    end
+
+    test "declares_agent_id?/1 lets a client assert the rule on its own builder" do
+      assert Identity.declares_agent_id?(%{"agent_id" => "u"})
+      assert Identity.declares_agent_id?(%{agent_id: "u"})
+      refute Identity.declares_agent_id?(%{"client_session_id" => "c"})
+    end
+  end
+
   describe "anchor file" do
     setup do
       path =
