@@ -1145,7 +1145,7 @@ def _attach_store_response_hints(response: dict[str, Any], state: _KnowledgeStor
         response["_truncated"] = state.truncation_info
         response["_tip"] = (
             "Content was truncated. For longer content, split into multiple "
-            "discoveries or use details field (5000 char limit)."
+            f"discoveries or use the details field ({MAX_DETAILS_LEN} char limit)."
         )
 
 
@@ -2810,7 +2810,11 @@ async def handle_get_discovery_details(arguments: Dict[str, Any]) -> Sequence[Te
         # Response chain traversal (Dec 2025 - restores get_response_chain_graph functionality)
         include_chain = arguments.get("include_response_chain", False)
         if include_chain:
-            max_depth = arguments.get("max_chain_depth", 10)
+            max_depth = _coerce_pagination_int(
+                arguments.get("max_chain_depth"),
+                default=10,
+                minimum=1,
+            )
 
             # Check if backend supports response chain traversal
             if hasattr(graph, 'get_response_chain'):
@@ -3140,7 +3144,7 @@ def _build_batch_store_response(
     if truncated_count > 0:
         response["_tip"] = (
             f"{truncated_count} discovery(ies) had content truncated. "
-            "Limits: summary=1000, details=5000 chars."
+            f"Limits: summary={MAX_SUMMARY_LEN}, details={MAX_DETAILS_LEN} chars."
         )
     return success_response(response, arguments=arguments)
 

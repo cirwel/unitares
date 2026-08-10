@@ -47,6 +47,19 @@ def test_outcomes_are_distinguished(monkeypatch, resp, expected):
     assert post_finding_result(**PAYLOAD) == expected
 
 
+def test_extra_fields_are_flattened_into_post_body(monkeypatch):
+    posted = {}
+
+    def capture(_url, *, json, **_kwargs):
+        posted.update(json)
+        return FakeResp()
+
+    monkeypatch.setattr("agents.common.findings._httpx_post", capture)
+    assert post_finding_result(**PAYLOAD, extra={"check": "immortal_lease"}) == DELIVERED
+    assert posted["check"] == "immortal_lease"
+    assert "extra" not in posted
+
+
 def test_network_error_is_failed_not_silent(monkeypatch):
     def boom(*a, **k):
         raise ConnectionError("governance down")

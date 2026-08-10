@@ -57,6 +57,25 @@ class _FakeKgBackend(KnowledgeGraphMixin):
 
 
 @pytest.mark.asyncio
+async def test_kg_query_applies_lifecycle_exclusions_before_limit():
+    """Archived/cold rows must not consume the SQL query's result limit."""
+    conn = MagicMock()
+    conn.fetch = AsyncMock(return_value=[])
+    backend = _FakeKgBackend(conn)
+
+    await backend.kg_query(
+        exclude_archived=True,
+        exclude_cold=True,
+        limit=7,
+    )
+
+    query, *args = conn.fetch.await_args.args
+    assert "status IS DISTINCT FROM 'archived'" in query
+    assert "status IS DISTINCT FROM 'cold'" in query
+    assert args == [7]
+
+
+@pytest.mark.asyncio
 async def test_kg_add_discovery_persists_provenance_chain():
     captured = {}
 

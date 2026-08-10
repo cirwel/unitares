@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """
-One-time backfill: rebuild AGE graph nodes for SQL-only knowledge discoveries.
+Repair AGE graph nodes and TAGGED edges from canonical knowledge rows.
 
 ``knowledge.discoveries`` (PostgreSQL) is the source of truth; the AGE graph is
 a derived index over it. Rows written while ``UNITARES_KNOWLEDGE_BACKEND`` was
 ``postgres`` — or whose AGE node write silently no-opped — exist in SQL but have
-no ``Discovery`` vertex. The #949 SQL fallback makes those rows retrievable via
-``knowledge(action='get'|'search'|'list')``, but graph traversal (response
-chains, related-edge expansion, tag rollups, hybrid graph search) can only see
-rows that have an AGE node. This pass recreates the missing vertices and their
-edges (AUTHORED / RESPONDS_TO / RELATED_TO / TAGGED) straight from SQL.
+no ``Discovery`` vertex. Tag edits could also update the node's ``tags``
+property and SQL rows without replacing derived ``TAGGED`` relationships. The
+#949 SQL fallback keeps canonical rows retrievable; this pass repairs missing
+vertices and reconciles both missing and stale tag assignments straight from
+SQL.
 
-Idempotent: every Cypher builder uses MERGE, so re-running only fills gaps.
+Idempotent: missing structures use MERGE, and each drifted tag set is replaced
+with the same canonical SQL projection on every run.
 
 DRY RUN BY DEFAULT. Nothing is written without ``--apply``. Run against the live
 governance DB; this script does not create or migrate schema. Requires the AGE
@@ -20,7 +21,7 @@ backend (``UNITARES_KNOWLEDGE_BACKEND=age``); it exits early on any other backen
 Usage:
     python3 scripts/ops/backfill_age_nodes.py                 # dry run, full scan
     python3 scripts/ops/backfill_age_nodes.py --limit 500     # dry run, recent 500
-    python3 scripts/ops/backfill_age_nodes.py --apply         # rebuild missing nodes
+    python3 scripts/ops/backfill_age_nodes.py --apply         # repair projection
     python3 scripts/ops/backfill_age_nodes.py --apply --limit 500
 """
 
@@ -59,12 +60,12 @@ async def _run(apply: bool, limit: int | None) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Rebuild AGE graph nodes for SQL-only knowledge discoveries.",
+        description="Repair AGE nodes and TAGGED edges from canonical SQL.",
     )
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="Write the missing AGE nodes. Without this, runs as a dry run.",
+        help="Repair missing nodes and tag edges. Without this, dry-run only.",
     )
     parser.add_argument(
         "--limit",
@@ -77,7 +78,7 @@ def main() -> None:
     summary = asyncio.run(_run(apply=args.apply, limit=args.limit))
 
     mode = "APPLIED" if not summary.get("dry_run") else "DRY RUN"
-    print(f"=== AGE node backfill ({mode}) ===")
+    print(f"=== AGE projection backfill ({mode}) ===")
     print(f"  scanned (SQL rows):     {summary['scanned']}")
     print(f"  present in AGE graph:   {summary['age_present']}")
     print(f"  missing from AGE graph: {summary['missing']}")
@@ -85,11 +86,44 @@ def main() -> None:
         print(f"  sample missing ids:     {summary['sample_missing']}")
     if not summary.get("dry_run"):
         print(f"  nodes created:          {summary['created']}")
-        print(f"  failed:                 {summary['failed']}")
-    elif summary["missing"]:
-        print("  (dry run — re-run with --apply to rebuild these nodes)")
+        print(f"  node failures:          {summary['failed']}")
+
+    print(f"  expected TAGGED edges:  {summary['tag_assignments_expected']}")
+    print(f"  present TAGGED edges:   {summary['tag_assignments_present']}")
+    print(f"  missing TAGGED edges:   {summary['tag_assignments_missing']}")
+    print(f"  stale TAGGED edges:     {summary['tag_assignments_stale']}")
+    print(f"  duplicate TAGGED edges: {summary['tag_assignments_duplicate']}")
+    print(f"  discoveries drifted:    {summary['tag_discoveries_drifted']}")
+    if summary.get("sample_missing_tag_assignments"):
+        print(
+            "  sample missing tags:    "
+            f"{summary['sample_missing_tag_assignments']}"
+        )
+    if summary.get("sample_stale_tag_assignments"):
+        print(
+            "  sample stale tags:      "
+            f"{summary['sample_stale_tag_assignments']}"
+        )
+    if summary.get("sample_duplicate_tag_assignments"):
+        print(
+            "  sample duplicate tags:  "
+            f"{summary['sample_duplicate_tag_assignments']}"
+        )
+
+    projection_drift = (
+        summary["missing"]
+        or summary["tag_assignments_missing"]
+        or summary["tag_assignments_stale"]
+        or summary["tag_assignments_duplicate"]
+    )
+    if not summary.get("dry_run"):
+        print(f"  tag sets reconciled:    {summary['tags_reconciled']}")
+        print(f"  tag repair failures:    {summary['tag_repair_failed']}")
+        print(f"  orphan tags removed:    {summary['orphan_tags_removed']}")
+    elif projection_drift:
+        print("  (dry run — re-run with --apply to repair the AGE projection)")
     else:
-        print("  AGE graph is in sync with the SQL source of truth.")
+        print("  AGE projection is in sync with the SQL source of truth.")
 
 
 if __name__ == "__main__":
