@@ -65,7 +65,11 @@ defmodule DialecticLive.MixProject do
       # mint_web_socket consumes the broadcaster firehose (/ws/eisv), same lib as the
       # Elixir Sentinel; req issues the /v1/tools/call POSTs (dialectic list/get).
       {:mint_web_socket, "~> 1.0"},
-      {:req, "~> 0.5"}
+      {:req, "~> 0.5"},
+      # The shared governance response contract. Transport stays Req — the SDK
+      # is consumed for `Envelope` only, because what four BEAM clients got
+      # wrong was never the HTTP call, it was reading the reply.
+      {:unitares_sdk, path: "../unitares_sdk"}
     ]
   end
 
