@@ -553,6 +553,7 @@ async def record_agent_state(
     behavioral_eisv: Optional[Mapping[str, Any]] = None,
     sensor_eisv_source: Optional[str] = None,
     eisv_telemetry: Optional[Mapping[str, Any]] = None,
+    coherence_form: Optional[str] = None,
 ) -> int:
     """
     Record agent EISV state to PostgreSQL.
@@ -614,6 +615,17 @@ async def record_agent_state(
     # Provenance only: nothing computed here reads this field.
     if sensor_eisv_source is not None:
         state_json["sensor_eisv_source"] = sensor_eisv_source
+    # Which coherence FORM produced the `coherence` column on this row:
+    # "legacy_tanh_v" (C(V)=0.5(1+tanh(C1*V)), the deployed default) or the
+    # grounded source ("manifold") when UNITARES_GROUNDING_APPLY is on. The two
+    # occupy different ranges — legacy is pinned near 0.49 by V's damping, the
+    # manifold form spans [0, ~0.91] — so an untagged history cannot tell them
+    # apart, and any threshold derived from mixed rows is derived from two
+    # different instruments. Provenance only: nothing computed here reads it.
+    # Absent on rows written before this shipped, and whenever the grounding
+    # stage did not run (both grounding flags off).
+    if coherence_form is not None:
+        state_json["coherence_form"] = coherence_form
     # Versioned measurement -> derivation -> policy -> enforcement provenance.
     # Stored in append-only JSONB so rollout needs no migration and old rows
     # remain explicitly identifiable by the key's absence.

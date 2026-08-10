@@ -1191,6 +1191,24 @@ def grounding_apply_enabled() -> bool:
     fix — enrich_grounding previously ran after both consumers and was a no-op).
     LIVE-AFFECTING: turning this on shifts coherence (manifold)/E/I/S fleet-wide,
     which moves basin/verdict/risk. Validate via grounding_shadow first.
+
+    ⛔ That validation has now been done once (2026-08-10, 7d of shadow events,
+    n=5330) and the headline is NOT what this docstring implied. Two corrections:
+
+    1. It is a coherence-only switch as deployed. E, I and S moved in 0 of 5330
+       rows — every row reports `s_source=heuristic`, because no caller supplies
+       logprobs. Only coherence moves, in 5330 of 5330.
+    2. The blocker is a threshold, not the metric. Grounded coherence is the
+       healthier signal (sd 0.285 vs the legacy 0.0077, range [0, 0.906] vs
+       [0.470, 0.504]) — but `AdaptiveGovernor.make_verdict` hard-blocks below
+       `tau_floor = 0.25`, which the legacy form reaches 0 times in 5330 and the
+       grounded form reaches 964 times (18.09%). Live verdicts today are 6544
+       safe / 8 caution / 4 high-risk / 0 hard-block.
+
+    So enabling this flag alone would introduce hard-blocks on roughly a fifth of
+    all check-ins. `tau_floor`/`tau_ref` were calibrated against a signal that
+    cannot reach them and must be re-derived against the grounded distribution
+    FIRST. Do not flip this to "fix" the coherence signal_degeneracy finding.
     """
     return os.getenv("UNITARES_GROUNDING_APPLY", "").strip().lower() in {"1", "true", "on", "yes"}
 

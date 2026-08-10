@@ -2131,6 +2131,17 @@ async def run_grounding_stage(ctx: UpdateContext) -> None:
         except Exception as exc:  # pragma: no cover
             logger.debug(f"grounding_shadow audit failed: {exc}")
 
+    # Which instrument actually produced the coherence that gets persisted and
+    # returned. Recorded on ctx (NOT injected into `metrics`) so the response
+    # stays byte-identical while the stored row becomes self-describing —
+    # the same provenance-only treatment `sensor_eisv_source` already gets in
+    # agent_storage. Without this, a stored coherence cannot be attributed to a
+    # form after the fact, so an APPLY flip is unverifiable in the history and
+    # legacy rows are indistinguishable from grounded ones.
+    ctx.coherence_form = (
+        (metrics.get("coherence_source") or "grounded") if apply else "legacy_tanh_v"
+    )
+
     if not apply:
         # Behavior-neutral: restore the ungrounded canonical values and drop the
         # grounding bookkeeping so persist + response are byte-identical to today.

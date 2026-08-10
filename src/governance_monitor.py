@@ -718,6 +718,21 @@ class UNITARESMonitor:
 
         # Update coherence from governance_core coherence function (pure thermodynamic)
         # Removed param_coherence blend - using pure C(V) signal for honest calibration
+        #
+        # ⛔ KNOWN GAP — this reads the ODE V, which 69ee5a79 (2026-04-01)
+        # DEMOTED to a diagnostic. That commit promoted behavioral EISV to
+        # primary "because the ODE attractor convergence made all agents look
+        # identical regardless of actual behavior", swapping E/I/S/V in the
+        # surfaced metrics dict — but it did not touch coherence, so coherence
+        # alone still reports the attractor it was written to escape. Measured
+        # 2026-08-10: between-agent sd is 0.128 for the primary V and 0.0032
+        # for coherence.
+        #
+        # Do NOT "fix" this by swapping in get_primary_eisv()'s V on its own.
+        # That is very likely the right destination, but it moves ~7.1% of
+        # check-ins below AdaptiveGovernor's tau_floor (0.25), which the frozen
+        # signal has never once reached — so the threshold must be re-derived
+        # first. See governance_core/coherence.py for the full measurement.
         C_V = coherence(self.state.V, self.state.unitaires_theta, active_params)
         self.state.coherence = C_V
         self.state.coherence = np.clip(self.state.coherence, 0.0, 1.0)
