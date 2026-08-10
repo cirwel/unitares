@@ -193,14 +193,26 @@ a future agent would search for this and not already find it: a correction to a
 prior conclusion, a non-obvious failure mode plus its fingerprint, or a closed
 mystery. Operational runbooks and step lists belong in `docs/`, not KG notes.
 
-Tag recurring point-in-time snapshots `ephemeral`. A weekly triage run, a
-scheduled audit, a per-cycle status note — anything whose content is a reading
-taken at a moment rather than a claim that stays true — must carry `ephemeral`
-(or `temp` / `scratch`) so `KnowledgeGraphLifecycle` archives it after seven
-days. Without the tag these land as ordinary open entries and never close: a
+Tag recurring point-in-time snapshots `ephemeral`. This is a claim about the
+content's shelf life, never about the writer's. A session that ends in an hour
+can still record something permanent, and must not tag it `ephemeral` on the
+grounds that the session was short-lived. The test is what the entry *is*: a
+reading taken at a moment (weekly triage run, scheduled audit, per-cycle status
+note) gets the tag; a claim meant to stay true (a diagnosis, a closed mystery, a
+correction to a prior conclusion) never does. Vigil's groundskeeper tags its own
+notes this way.
+
+Without the tag, snapshots land as ordinary open entries and never close: a
 snapshot has no resolution condition, only a timestamp, so every later sweep
-re-reads it as unfinished work. Vigil's groundskeeper already tags its own
-notes this way. Nothing is ever deleted to compensate — the lifecycle archives,
-it does not delete, by design.
+re-reads it as unfinished work. With it, `KnowledgeGraphLifecycle` archives
+after seven days — archived, still retrievable via `include_archived=true`,
+never deleted (`src/knowledge_graph_lifecycle.py:139`).
+
+Two traps. `EPHEMERAL_TAGS` also contains `test` and `demo`, so a durable
+finding *about* the test suite must not carry the `test` tag. And permanence
+wins on tie: a `learning` / `pattern` / `root_cause_analysis` / `migration`
+type, or a `permanent` / `foundational` / `architecture` / `decision` tag,
+overrides an ephemeral tag rather than losing to it — `get_lifecycle_policy`
+checks permanence first (`src/knowledge_graph_lifecycle.py:107`).
 
 <!-- END SHARED CONTRACT -->
