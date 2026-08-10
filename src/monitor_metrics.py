@@ -262,7 +262,12 @@ def get_eisv_labels() -> Dict:
 
 
 def export_monitor_history(monitor: Any, format: str = 'json') -> str:
-    """Exports complete history for analysis.
+    """Export the monitor's in-memory histories for analysis.
+
+    This is not the append-only audit export: historical policy/enforcement
+    envelopes live in ``core.agent_state.state_json.eisv_telemetry``.  Naming
+    that limit here prevents the former "complete history" wording from
+    implying evidence this in-memory structure never retained.
 
     Args:
         monitor: UNITARESMonitor instance (needs .agent_id, .state)
@@ -275,6 +280,7 @@ def export_monitor_history(monitor: Any, format: str = 'json') -> str:
     lambda1_history = getattr(state, 'lambda1_history', [])
 
     history = {
+        'schema': 'eisv.monitor_history.v2',
         'agent_id': monitor.agent_id,
         'timestamps': state.timestamp_history,
         'E_history': state.E_history,
@@ -290,6 +296,47 @@ def export_monitor_history(monitor: Any, format: str = 'json') -> str:
         'total_updates': state.update_count,
         'total_time': state.time
     }
+
+    # Source-separated behavioral stream.  The legacy top-level histories
+    # remain the ODE stream for backward compatibility.
+    behavioral_stream = None
+    try:
+        behavioral = getattr(monitor, '_behavioral_state', None)
+        if behavioral is not None:
+            behavioral_data = behavioral.to_dict_with_history()
+            behavioral_stream = {
+                'E_history': behavioral_data.get('E_history', []),
+                'I_history': behavioral_data.get('I_history', []),
+                'S_history': behavioral_data.get('S_history', []),
+                'V_history': behavioral_data.get('V_history', []),
+                'raw_observation_history': behavioral_data.get('obs_history', []),
+                'confidence': behavioral_data.get('confidence'),
+                'warmup': behavioral_data.get('warmup'),
+                'alphas': behavioral_data.get('alphas'),
+                'v_formula_version': behavioral_data.get('v_formula_version'),
+                # The monitor retains only the latest source label. Per-row
+                # source history is available from the append-only envelope.
+                'latest_observation_source': getattr(
+                    monitor, '_behavioral_obs_source', None
+                ),
+            }
+    except Exception:
+        behavioral_stream = None
+
+    history['streams'] = {
+        'ode': {
+            'E_history': state.E_history,
+            'I_history': state.I_history,
+            'S_history': state.S_history,
+            'V_history': state.V_history,
+        },
+        'behavioral': behavioral_stream,
+    }
+    history['audit_limitations'] = [
+        'Policy and enforcement history is not retained in the in-memory monitor export.',
+        'Behavioral observation source is latest-only here; use core.agent_state '
+        'eisv_telemetry envelopes for per-check-in provenance.',
+    ]
 
     if format == 'json':
         return json.dumps(history, indent=2)

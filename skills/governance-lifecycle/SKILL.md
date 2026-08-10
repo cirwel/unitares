@@ -4,7 +4,7 @@ description: >
   Use when an agent is interacting with UNITARES governance for the first time, needs to
   onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
   from session start through check-ins to recovery.
-last_verified: "2026-07-28"
+last_verified: "2026-08-09"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -12,11 +12,17 @@ source_files:
   - unitares/src/mcp_handlers/admin/handlers.py
   - unitares/src/mcp_handlers/tool_stability.py
   - unitares/src/mcp_handlers/middleware/envelope_step.py
+  # Added 2026-08-09: this skill documents check-in and dialectic semantics but
+  # was not verified against the code implementing either. That is why stale
+  # `confidence` guidance survived several freshness cycles — the field it was
+  # wrong about lives in phases.py, which nobody was checking.
+  - unitares/src/mcp_handlers/updates/phases.py
+  - unitares/src/mcp_handlers/dialectic/handlers.py
 ---
 
 # Agent Lifecycle
 
-**Last Updated:** 2026-07-28
+**Last Updated:** 2026-08-09
 
 ## Primary Workflow Names
 
@@ -84,7 +90,11 @@ Call `sync_state()` after meaningful work:
 sync_state(
   response_text: "Brief summary of what you did",
   complexity: 0.0-1.0,   # Task difficulty estimate
-  confidence: 0.0-1.0    # How confident you are (be honest)
+  confidence: 0.0-1.0    # OPTIONAL — omit unless you are genuinely stating a
+                         # belief about your own work. Any value you pass mints
+                         # a tactical prediction that is scored into the fleet
+                         # calibration curve, so a habitual number becomes a
+                         # forecast nobody made. Omitting it mints nothing.
 )
 ~~~
 
