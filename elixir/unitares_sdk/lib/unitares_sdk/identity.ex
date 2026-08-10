@@ -59,6 +59,56 @@ defmodule UnitaresSdk.Identity do
   def from_onboard(_), do: :error
 
   @doc """
+  Build check-in arguments, **structurally unable to carry `agent_id`**.
+
+  This is the one rule a BEAM governance client is most likely to get wrong,
+  and getting it wrong is silent.
+
+  A check-in must present identity by **echoing the `client_session_id` the
+  server handed back**, never by declaring `agent_id`. Declaring the uuid makes
+  the REST strict gate skip its typed refusal entirely: the check-in resolves
+  by uuid passthrough, with no PG session renewal and no Redis re-cache. The
+  binding can then be gone and every check-in still looks fine — the refusal
+  that would have told you never fires.
+
+  Found live 2026-07-03 while building `anima_broker`: the Redis-wipe
+  acceptance test *passed* without ever exercising the recovery path, purely
+  because `agent_id` was being sent. Dropping the key is what made the gate
+  falsifiable and the test meaningful.
+
+  `identity` is the map from `from_onboard/1`. Any `"agent_id"` in `fields` is
+  dropped rather than merged — a caller cannot opt back into the bug, and the
+  drop is visible in tests instead of being a comment someone deletes later.
+
+  ## Examples
+
+      iex> UnitaresSdk.Identity.check_in_args(%{"response_text" => "x"},
+      ...>   %{agent_id: "u", client_session_id: "c", continuity_token: nil})
+      %{"response_text" => "x", "client_session_id" => "c"}
+  """
+  @spec check_in_args(map(), map()) :: map()
+  def check_in_args(fields, identity) when is_map(fields) and is_map(identity) do
+    fields
+    |> Map.drop(["agent_id", :agent_id])
+    |> put_present("client_session_id", Map.get(identity, :client_session_id))
+    |> put_present("continuity_token", Map.get(identity, :continuity_token))
+  end
+
+  @doc """
+  Whether a check-in argument map violates the no-`agent_id` rule.
+
+  For clients that build their own arguments and want the invariant asserted in
+  their own suite rather than adopting `check_in_args/2` wholesale.
+  """
+  @spec declares_agent_id?(map()) :: boolean()
+  def declares_agent_id?(args) when is_map(args),
+    do: Map.has_key?(args, "agent_id") or Map.has_key?(args, :agent_id)
+
+  defp put_present(map, _key, nil), do: map
+  defp put_present(map, _key, ""), do: map
+  defp put_present(map, key, value), do: Map.put(map, key, value)
+
+  @doc """
   Read the prior uuid from the anchor file. Any failure — missing file, bad
   JSON, wrong shape — yields `nil`, which means "mint rootless". A corrupt
   anchor must never crash a boot.
