@@ -2810,7 +2810,11 @@ async def handle_get_discovery_details(arguments: Dict[str, Any]) -> Sequence[Te
         # Response chain traversal (Dec 2025 - restores get_response_chain_graph functionality)
         include_chain = arguments.get("include_response_chain", False)
         if include_chain:
-            max_depth = arguments.get("max_chain_depth", 10)
+            max_depth = _coerce_pagination_int(
+                arguments.get("max_chain_depth"),
+                default=10,
+                minimum=1,
+            )
 
             # Check if backend supports response chain traversal
             if hasattr(graph, 'get_response_chain'):
