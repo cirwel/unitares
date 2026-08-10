@@ -134,6 +134,45 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
                DialecticSaga.resolve(Map.put(claim_params("s"), :status, "bogus"))
     end
 
+    # Regression: every jsonb this module writes must land as a jsonb OBJECT,
+    # not a jsonb string. Binding a `Jason.encode!` binary to a bare `$N::jsonb`
+    # makes Postgrex encode it a second time, so the column holds an escaped
+    # string and `->>` returns NULL on every key. Asserting only on `status`
+    # (as the tests above do) cannot see that — it shipped on 2026-06-28 and
+    # silently emptied 90 rows across three columns before anyone read one back.
+    test "writes resolution_json as a queryable object, not a jsonb string" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      payload = %{"verdict" => "resume", "conditions" => ["monitor"]}
+      assert {:ok, %{status: "resolved", saga_id: saga_id}} =
+               DialecticSaga.resolve(claim_params(session_id, payload))
+
+      assert jsonb_typeof("core.dialectic_sessions", "resolution_json", "session_id", session_id) ==
+               "object"
+
+      assert jsonb_field("core.dialectic_sessions", "resolution_json", "verdict", "session_id", session_id) ==
+               "resume"
+
+      # Same invariant on the saga's own copy of the payload.
+      assert jsonb_typeof(
+               "coordination.session_resolution_sagas",
+               "resolution_payload_json",
+               "saga_id::text",
+               saga_id
+             ) == "object"
+    end
+
+    test "writes an empty resolution as an empty object, not the string \"{}\"" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      assert {:ok, %{status: "resolved"}} = DialecticSaga.resolve(claim_params(session_id, %{}))
+
+      assert jsonb_typeof("core.dialectic_sessions", "resolution_json", "session_id", session_id) ==
+               "object"
+    end
+
     test "rejects when a different live resolution is in flight" do
       session_id = insert_dialectic_session()
       on_exit(fn -> cleanup_dialectic_session(session_id) end)
@@ -303,6 +342,28 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
     test "rejects missing paused_agent_id" do
       assert {:error, :invalid_params} = DialecticSaga.create_session(%{session_id: "x"})
     end
+
+    # Same double-encoding regression as resolve/1, on the creation path. This
+    # column carries the paused agent's EISV snapshot; stored as a jsonb string
+    # it reads back as NULL for every key, which is how 56 rows of real state
+    # became unqueryable without a single error.
+    test "writes paused_agent_state_json as a queryable object" do
+      sid = "test_elixir_create_" <> Integer.to_string(System.unique_integer([:positive]))
+      on_exit(fn -> cleanup_dialectic_session(sid) end)
+
+      assert {:ok, :created} =
+               DialecticSaga.create_session(%{
+                 session_id: sid,
+                 paused_agent_id: "p",
+                 paused_agent_state: %{"E" => 0.7, "coherence" => 0.5}
+               })
+
+      assert jsonb_typeof("core.dialectic_sessions", "paused_agent_state_json", "session_id", sid) ==
+               "object"
+
+      assert jsonb_field("core.dialectic_sessions", "paused_agent_state_json", "E", "session_id", sid) ==
+               "0.7"
+    end
   end
 
   defp insert_stale_reserved(session_id) do
@@ -345,6 +406,30 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
       )
 
     rev
+  end
+
+  # `jsonb_typeof` is the whole point of these assertions: a double-encoded
+  # write still SELECTs fine as text, so only the type discriminates.
+  defp jsonb_typeof(table, column, key_expr, key) do
+    %{rows: [[typ]]} =
+      Postgrex.query!(
+        DB,
+        "SELECT jsonb_typeof(#{column}) FROM #{table} WHERE #{key_expr} = $1",
+        [key]
+      )
+
+    typ
+  end
+
+  defp jsonb_field(table, column, field, key_expr, key) do
+    %{rows: [[val]]} =
+      Postgrex.query!(
+        DB,
+        "SELECT #{column} ->> $1 FROM #{table} WHERE #{key_expr} = $2",
+        [field, key]
+      )
+
+    val
   end
 
   defp saga_state(saga_id) do

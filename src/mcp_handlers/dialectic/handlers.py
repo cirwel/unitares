@@ -2086,12 +2086,20 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                 except Exception as e:
                     logger.warning(f"Could not update PostgreSQL after synthesis: {e}")
     
-                # Persist to JSON
+                # Persist to JSON.
+                #
+                # On the converged path this must NOT commit the terminal row:
+                # submit_synthesis has already set phase=RESOLVED, but the
+                # resolution object is only built by finalize_resolution a few
+                # lines below. An eager terminal write here lands an empty
+                # `{}` resolution, and the guarded write (B-4 / the BEAM saga)
+                # then treats the real one as an already-terminal conflict and
+                # drops it. Same deferral the phase write above already uses.
                 try:
-                    await save_session(session)
+                    await save_session(session, defer_terminal=bool(result.get("converged")))
                 except Exception as e:
                     logger.warning(f"Could not save session after synthesis: {e}")
-    
+
             # If converged, finalize resolution
             if result.get("success") and result.get("converged"):
                 # Bilateral attestation (v2): finalize_resolution signs the

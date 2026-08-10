@@ -167,19 +167,34 @@ def _reconstruct_session_from_dict(session_id: str, session_data: Dict) -> Optio
         logger.error(f"Error reconstructing session {session_id}: {e}", exc_info=True)
         return None
 
-async def save_session(session: DialecticSession) -> None:
+async def save_session(session: DialecticSession, *, defer_terminal: bool = False) -> None:
     """
     Persist dialectic session to PostgreSQL (upsert) and JSON (snapshot).
 
     Uses pg_update_phase to sync phase/synthesis_round to PG (not INSERT).
     The JSON snapshot captures the full in-memory state for offline debugging.
+
+    ``defer_terminal`` suppresses the terminal PostgreSQL write (the JSON
+    snapshot still happens). Pass it when the caller has just converged but has
+    not yet run ``finalize_resolution`` — ``submit_synthesis`` sets
+    ``phase = RESOLVED`` before the resolution object exists, so an eager flush
+    here commits a terminal row with an empty resolution and the guarded write
+    then refuses the real one as an already-terminal conflict. That is what
+    emptied ``resolution_json`` on every session resolved between 2026-06-28 and
+    2026-08-10. Mirrors the same deferral already applied to the phase write in
+    ``handle_submit_synthesis``.
     """
     # Primary: update phase + resolution in PostgreSQL
     try:
         from src.dialectic_db import update_session_phase_async as pg_update_phase
         from src.dialectic_db import resolve_session_async as pg_resolve_session
         from .beam_resolve_client import beam_resolve, beam_update_phase
-        if session.phase in (DialecticPhase.RESOLVED, DialecticPhase.FAILED):
+        if session.phase in (DialecticPhase.RESOLVED, DialecticPhase.FAILED) and defer_terminal:
+            # Caller owns the terminal write once it has a resolution; skip the
+            # PG sync entirely (not even a phase write — the phase IS terminal
+            # here, and update_session_phase refuses terminal values).
+            pass
+        elif session.phase in (DialecticPhase.RESOLVED, DialecticPhase.FAILED):
             resolution_dict = session.resolution.to_dict() if session.resolution else None
             status = session.phase.value if session.phase == DialecticPhase.RESOLVED else "failed"
             # save_session is the catch-all flush that resolves the session in the
