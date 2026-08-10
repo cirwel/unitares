@@ -68,6 +68,7 @@ The ADR-001 thread: do not enable operator-vision delegation as first proposed; 
 | [`bridge-dispatch-v0.md`](bridge-dispatch-v0.md) | v0 draft (2026-08-01), pre-review and not an implementation gate — move the operator from transport bottleneck to evidence-backed exception handler |
 | [`docs-consolidation-v0.md`](docs-consolidation-v0.md) | Phase 0 shipped; Phase 1 planned after the 2026-08-08 reader-facing docs freeze — establish one canonical owner per load-bearing claim |
 | [`thread-trajectory-stitching-v0.md`](thread-trajectory-stitching-v0.md) | v0 proposal, demoted to a metrics-layer backstop — keep genuine cross-instance deaths legible without forging identity continuity |
+| [`relational-calibration-pilot-v0.md`](relational-calibration-pilot-v0.md) | Specification and adversarial threat model only — preregisters a consent-first future-reference experiment; runtime collection remains explicitly blocked pending independent privacy evidence and fresh operator approval |
 | [`accountable-testbed-metrics-preregistration-v0.md`](accountable-testbed-metrics-preregistration-v0.md) | Frozen evaluation pre-registration for the accountable multi-principal testbed |
 | [`accountable-testbed-preliminary-trace.md`](accountable-testbed-preliminary-trace.md) | Preliminary deployed-system trace exercising the federation primitives; explicitly not a multi-host or multi-organization result |
 
