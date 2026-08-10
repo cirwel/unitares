@@ -30,6 +30,7 @@ on:
     paths:
       - 'elixir/sentinel/**'
       - 'elixir/lease_plane/**'
+      - 'elixir/unitares_sdk/**'
       - 'db/postgres/**'
       - '.github/workflows/elixir-tests.yml'
   pull_request:
@@ -37,6 +38,7 @@ on:
     paths:
       - 'elixir/sentinel/**'
       - 'elixir/lease_plane/**'
+      - 'elixir/unitares_sdk/**'
       - 'db/postgres/**'
       - '.github/workflows/elixir-tests.yml'
 
@@ -45,6 +47,50 @@ permissions:
   contents: read
 
 jobs:
+  # The SDK is the shared BEAM governance contract, consumed across repos
+  # (dispatch_beam, anima-mcp) by git ref. A regression here breaks clients
+  # this repo's CI cannot see, so it gates on the loosest floor it claims to
+  # support (Elixir 1.15) as well as current — a dep that silently requires a
+  # newer Elixir than its mix.exs declares is a broken contract.
+  unitares_sdk:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Declared floor. OTP 27 is the real floor: the SDK uses Erlang's
+          # :json rather than Elixir's, precisely so 1.15 consumers can adopt it.
+          - elixir: '1.15'
+            otp: '27'
+          - elixir: '1.19'
+            otp: '27'
+
+    defaults:
+      run:
+        working-directory: elixir/unitares_sdk
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+
+    - name: Set up Elixir / OTP
+      uses: erlef/setup-beam@v1
+      with:
+        otp-version: ${{ matrix.otp }}
+        elixir-version: ${{ matrix.elixir }}
+
+    - name: Run tests
+      # No deps.get: the SDK has zero third-party runtime dependencies, and a
+      # deps step here would hide the day one of them appears.
+      run: mix test
+
+    - name: Check formatting
+      if: matrix.elixir == '1.19'
+      run: mix format --check-formatted
+
   sentinel:
     runs-on: ubuntu-latest
 
