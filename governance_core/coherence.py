@@ -134,6 +134,31 @@ def coherence(V: float, theta: Theta, params: DynamicsParams) -> float:
         Do NOT respond by lowering tau_floor to make the gate fire; that fits
         a threshold to a signal with no information in it.
 
+        FOUR separate gates were calibrated against this frozen signal, not
+        one. Any repair has to re-derive all of them, so they are inventoried
+        here with their all-time crossing counts (n=69,395 non-synthetic rows,
+        observed range [0.288, 0.561]):
+
+          tau_floor = 0.25        AdaptiveGovernor.make_verdict hard block
+                                  -> crossed 0 times, ever. The all-time
+                                     minimum sits above it, so this one is
+                                     genuinely unreachable rather than rare.
+          tau_low = 0.30          CIRS hard block (cirs.py, monitor_decision)
+                                  -> crossed 1 time.
+          COHERENCE_CRITICAL      pause/coherence_pause (monitor_decision),
+            _THRESHOLD = 0.40     is_critical, and the 'critical' health status
+                                  (governance_monitor)
+                                  -> crossed 9 times (0.013%).
+          TARGET_COHERENCE = 0.50 coherence_deficit term
+                                  -> reachable, but fed a near-constant, so
+                                     the deficit is ~0.016 +/- 0.008.
+
+        The whole coherence safety stack has produced 2 `coherence_pause`
+        actions in 69,395 check-ins. These thresholds are not obviously wrong
+        numbers; they are reasonable numbers pointed at a variable that stopped
+        moving in April. Re-deriving only tau_floor would leave three others
+        still calibrated against the frozen signal.
+
         There are two candidate repairs, and BOTH hit the same wall:
           * finish 69ee5a79 — feed this function the primary (behavioral) V
             instead of the demoted ODE V. Recomputing C from the stored V at
