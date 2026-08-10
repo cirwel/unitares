@@ -103,8 +103,7 @@ defmodule UnitaresSentinel.GovernanceCheckin do
   end
 
   defp finch_post(url, body, headers, timeout_ms) do
-    json = Jason.encode!(body)
-    request = Finch.build(:post, url, headers, json)
+    request = build_request(url, body, headers)
 
     case Finch.request(request, UnitaresSentinel.Finch, receive_timeout: timeout_ms) do
       {:ok, %Finch.Response{status: status, body: response_body}} ->
@@ -115,13 +114,25 @@ defmodule UnitaresSentinel.GovernanceCheckin do
     end
   end
 
+  @doc false
+  @spec build_request(String.t(), map(), [{String.t(), String.t()}], keyword()) ::
+          Finch.Request.t()
+  def build_request(url, body, headers, opts \\ []) do
+    json = Jason.encode!(body)
+
+    socket =
+      case Keyword.fetch(opts, :uds_socket) do
+        {:ok, value} -> value
+        :error -> governance_uds_socket()
+      end
+
+    Finch.build(:post, url, headers, json, unix_socket_opts(socket))
+  end
+
   defp decode_response(response_body) when is_binary(response_body) do
     case Jason.decode(response_body) do
       {:ok, %{"success" => true, "result" => %{} = result}} ->
-        case ensure_tool_success(result) do
-          :ok -> {:ok, result}
-          {:error, _reason} = error -> error
-        end
+        classify_tool_result(result)
 
       {:ok, %{"success" => false} = decoded} ->
         {:error, {:tool_error, Map.get(decoded, "error", "unknown")}}
@@ -157,6 +168,24 @@ defmodule UnitaresSentinel.GovernanceCheckin do
     do: {:error, {:tool_error, Map.get(result, "error", "unknown")}}
 
   defp ensure_tool_success(_result), do: :ok
+
+  # The HTTP bridge wraps handler output under `result`. A strict identity
+  # refusal is itself a success-shaped handler response, so checking only the
+  # outer envelope (or only result["success"]) silently turns the refusal into
+  # {:ok, result}. Classify the inner payload after preserving the more
+  # detailed paused/tool-error forms above.
+  defp classify_tool_result(result) do
+    case ensure_tool_success(result) do
+      :ok ->
+        case UnitaresSdk.Envelope.classify(result) do
+          {:ok, _classified} -> {:ok, result}
+          {:error, _reason} = error -> error
+        end
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
 
   defp pause_detail(result) do
     %{
@@ -216,6 +245,22 @@ defmodule UnitaresSentinel.GovernanceCheckin do
     Application.get_env(:unitares_sentinel, :governance_tools_url) ||
       System.get_env("UNITARES_GOVERNANCE_TOOLS_URL") ||
       @default_url
+  end
+
+  defp governance_uds_socket do
+    Application.get_env(:unitares_sentinel, :governance_uds_socket) ||
+      System.get_env("UNITARES_UDS_SOCKET")
+  end
+
+  defp unix_socket_opts(nil), do: []
+  defp unix_socket_opts(""), do: []
+
+  defp unix_socket_opts(path) when is_binary(path) do
+    if Path.type(path) == :absolute do
+      [unix_socket: path]
+    else
+      raise ArgumentError, "UNITARES_UDS_SOCKET must be an absolute path"
+    end
   end
 
   defp governance_timeout_ms do
