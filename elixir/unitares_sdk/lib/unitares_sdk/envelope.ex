@@ -119,10 +119,19 @@ defmodule UnitaresSdk.Envelope do
     end
   end
 
+  # ⚠️ `action: "pause"` is NOT checked here, deliberately.
+  #
+  # `process_agent_update` returns the governance verdict under "action", and
+  # "pause" is a perfectly ordinary verdict the caller is supposed to receive
+  # and act on. Treating it as a transport-level refusal would convert every
+  # legitimate pause verdict into an error and hide it from the code whose job
+  # is to handle it — the exact inversion of the bug this module exists to fix.
+  #
+  # What IS a refusal is `AGENT_PAUSED`: the substrate declining to process the
+  # update at all because the agent is already paused. That is the ~18h Sentinel
+  # case, and it arrives as an error_code, not as a verdict.
   defp paused?(%{} = m) do
-    Map.get(m, "error_code") == "AGENT_PAUSED" or
-      Map.get(m, "status") == "AGENT_PAUSED" or
-      match?(%{"action" => "pause"}, m)
+    Map.get(m, "error_code") == "AGENT_PAUSED" or Map.get(m, "status") == "AGENT_PAUSED"
   end
 
   defp paused?(_), do: false

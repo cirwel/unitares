@@ -66,8 +66,24 @@ defmodule UnitaresSdk.EnvelopeTest do
                Envelope.decode(~s({"error_code": "AGENT_PAUSED"}))
     end
 
-    test "a pause action is classified as a refusal too" do
-      assert {:error, {:refused, :agent_paused}} = Envelope.decode(~s({"action": "pause"}))
+    test "AGENT_PAUSED as a status is caught too" do
+      assert {:error, {:refused, :agent_paused}} =
+               Envelope.decode(~s({"status": "AGENT_PAUSED"}))
+    end
+
+    # Surfaced by the third consumer (elixir/sentinel), which posts
+    # process_agent_update and reads the verdict from "action". An earlier
+    # revision of this module treated action:"pause" as a refusal, which would
+    # have converted every legitimate pause verdict into an error and hidden it
+    # from the code whose entire job is to act on it.
+    test "a pause VERDICT is not a refusal — action is the answer, not an error" do
+      assert {:ok, %{"action" => "pause"}} =
+               Envelope.decode(~s({"result": {"action": "pause", "confidence": 0.4}}))
+    end
+
+    test "a pause verdict survives the success wrapper too" do
+      assert {:ok, %{"action" => "pause"}} =
+               Envelope.decode(~s({"success": true, "result": {"action": "pause"}}))
     end
   end
 
