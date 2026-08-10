@@ -1,0 +1,151 @@
+# Proprioceptive coherence thresholds — derivation (v0)
+
+> **Status:** proposal. Changes no deployed behaviour. The measurements are live-DB reads
+> (2026-08-10); the threshold *form* is argued, the constant `k` is a stated tolerance and
+> is flagged as such rather than dressed up as derived.
+>
+> **Prerequisite:** the coherence signal is currently frozen (see #1572 — it reads the ODE V
+> that `69ee5a79` demoted). Nothing here is actionable until that is repaired. This document
+> exists so the repair does not land against thresholds nobody re-derived.
+
+## 1. Why the existing thresholds cannot simply be scaled
+
+Four gates read `coherence`. All were calibrated while it was frozen. Crossing counts over
+all 69,395 non-synthetic `core.agent_state` rows (observed range [0.288, 0.561]):
+
+| gate | threshold | crossings | consumer |
+|---|---|---|---|
+| `tau_floor` | 0.25 | **0, ever** | `AdaptiveGovernor.make_verdict` hard block |
+| `tau_low` | 0.30 | 1 | CIRS hard block |
+| `COHERENCE_CRITICAL_THRESHOLD` | 0.40 | 9 (0.013%) | `coherence_pause`, `is_critical`, `critical` health status |
+| `TARGET_COHERENCE` | 0.50 | reachable | `coherence_deficit`, fed a near-constant |
+
+The whole stack produced **2 `coherence_pause` actions in 69,395 check-ins**. The obvious
+repair — unfreeze the signal, keep the numbers — is the thing this document argues against.
+
+## 2. The measurement that decides the form
+
+If coherence is computed from the **primary** (behavioral) V rather than the demoted ODE V,
+the per-agent structure over 30d (11 agents with >=50 check-ins) is:
+
+- per-agent means span **0.2848 to 0.5201**
+- **between-agent sd = 0.0798**
+- **within-agent sd = 0.0265** on average (range 0.0109 to 0.0411)
+
+**Between-agent dispersion is ~3x within-agent dispersion.** Agents differ from each other far
+more than they vary within themselves. That single ratio determines the correct gate form: on a
+between-agent-dominated signal, a fleet-constant threshold does not measure deviation. It
+measures identity.
+
+That is not an abstraction. Applying the current `COHERENCE_CRITICAL_THRESHOLD = 0.40` to the
+primary-V signal:
+
+| agent | n | own mean | own sd | below fleet 0.40 | below own mu-3sigma |
+|---|---|---|---|---|---|
+| 69a1a4f7 | 7527 | 0.2848 | 0.0242 | **100.00%** | 0.00% |
+| 9a6681ec | 2694 | 0.3190 | 0.0215 | **100.00%** | 0.00% |
+| e55caaf1 | 778 | 0.4664 | 0.0229 | 0.00% | 0.00% |
+| 94c0dd1c | 64 | 0.4822 | 0.0328 | 3.13% | 3.13% |
+| 09f2bfa5 | 55 | 0.4830 | 0.0280 | 1.82% | 1.82% |
+| df9bacc6 | 63 | 0.4883 | 0.0411 | 3.17% | 3.17% |
+| 3745aa33 | 62 | 0.4957 | 0.0291 | 1.61% | 1.61% |
+| 9fc1b1e0 | 79 | 0.5037 | 0.0297 | 2.53% | 2.53% |
+| 907e3195 | 1569 | 0.5063 | 0.0109 | 0.00% | 0.25% |
+| aa0497e8 | 72 | 0.5073 | 0.0292 | 1.39% | 2.78% |
+| f92dcea8 | 4728 | 0.5201 | 0.0224 | 0.00% | 0.13% |
+
+Two agents would sit in **permanent violation** — 10,221 consecutive pauses between them — and
+three could never trip the gate at all. Judged against their own baselines those two
+"violators" fire **0.00%** of the time: they are not deviating, they occupy a lower operating
+point. A fleet threshold would pause them for their identity.
+
+This is the north star stated arithmetically. Individuality: an agent is judged against its own
+normal. Growth-not-punish: a low-V operating point is a characteristic, not an offence.
+Groundedness: the threshold is derived from that agent's own measured dispersion rather than a
+constant chosen elsewhere.
+
+## 3. Proposed form
+
+For agent `a` with a matured baseline:
+
+```
+tau_a = mu_a - k * sigma_a
+```
+
+where `mu_a`, `sigma_a` are the agent's own running mean and dispersion of coherence (Welford /
+EMA over its own history — the same machinery `BehavioralEISV` already maintains for E/I/S).
+
+Each existing gate maps to a `k`, preserving the current ordering of severity:
+
+| gate | today | proposed |
+|---|---|---|
+| `COHERENCE_CRITICAL_THRESHOLD` (pause) | 0.40 fleet | `mu_a - k_pause * sigma_a` |
+| `tau_low` (CIRS hard block) | 0.30 fleet | `mu_a - k_block * sigma_a`, `k_block > k_pause` |
+| `tau_floor` (governor hard block) | 0.25 fleet | `mu_a - k_floor * sigma_a`, `k_floor >= k_block` |
+| `TARGET_COHERENCE` (deficit) | 0.50 fleet | `mu_a` — the agent's own normal IS the target |
+
+The last row is the cleanest win: a deficit measured against a fleet constant of 0.50 is
+partly just "distance from the fleet mean." Measured against `mu_a` it is what it claims to be.
+
+## 4. Honest treatment of `k`
+
+**`k` is a stated tolerance, not a derived constant.** It encodes how far outside its own normal
+an agent goes before the system speaks. Under approximate normality `k=3` implies ~0.13%.
+
+The data does not support quoting that number as an expectation. Observed rates at `mu-3sigma`
+are 0.13-0.25% for high-n agents but **1.4-3.2% for agents with 55-79 samples** — heavy tails
+plus dispersion estimated from too few points. Two consequences, both required:
+
+1. **A maturity gate.** Do not apply a proprioceptive threshold until the agent's baseline has
+   enough observations to estimate `sigma_a`. `BehavioralEISV` already gates on
+   `confidence >= 0.3`; reuse that rather than inventing a second maturity notion. Below it,
+   fall back to a fleet prior and say so in the response.
+2. **A robust dispersion estimate.** Plain sd over-reacts to tails. MAD or a trimmed estimator
+   is the standard fix. #1518 flags the same issue for its residual form ("heavy tails
+   over-react; a Student-t/trimmed surprise is a refinement, not derived").
+
+**What is genuinely derived here is the *form*, not the constant** — the 3:1 between-to-within
+ratio is a measurement, and it rules out a fleet constant regardless of which `k` is chosen.
+Choosing `k` is a policy call and should be recorded as one.
+
+## 5. What this does not claim
+
+- **Not outcome-validated.** No claim that low proprioceptive coherence predicts bad outcomes.
+  The label volume for that test is not available (83 bad-with-EISV rows across 26 independent
+  clusters against a stop rule of >=150) and is not buyable with plumbing.
+- **The oracle path stays open, deliberately.** Proprioception is the primary justification, not
+  a replacement that forecloses outcome validation. Per-agent thresholds *improve* the eventual
+  oracle test: they remove between-agent identity variance, which is confound rather than
+  signal for a within-agent deviation hypothesis. Nothing here should be read as retiring
+  outcome grounding — it retires it as a *prerequisite*, not as a goal.
+- **`C1` is assumed at its default 1.0** for the recomputation in section 2. It is nominally
+  adaptive within [0.5, 1.5]; no per-agent adaptation was observed in the live path, but the
+  numbers above should be regenerated if that changes.
+- **Nothing about the transfer function.** This proposes changing the *gates*, not
+  `C(V) = 0.5(1+tanh(C1*V))`. #1518 proposes replacing the form outright with a per-agent
+  residual; that is the larger question and this is compatible with it — a per-agent threshold
+  is the same instinct applied one layer out.
+
+## 6. Sequence
+
+1. Repair the signal (#1572 documents why; the repair itself is feeding coherence
+   `get_primary_eisv()`'s V, finishing `69ee5a79`).
+2. Land per-agent thresholds **in the same change**, never after. Unfreezing the signal against
+   the current fleet constants puts two live agents into permanent pause immediately.
+3. Ship behind the existing shadow pattern first: compute both, record the divergence, apply
+   nothing — the same discipline `grounding_shadow` already uses.
+4. Re-read the gate crossing counts after a soak. A proprioceptive gate that still never fires
+   is an unfair zero (the lever is untested, not disproven) and needs a positive control before
+   anyone concludes anything from its silence.
+
+## 7. Reproduce
+
+```sql
+-- per-agent structure of primary-V coherence
+WITH r AS (
+  SELECT identity_id, 0.5*(1+tanh(volatility)) AS c
+  FROM core.agent_state
+  WHERE synthetic IS NOT TRUE AND recorded_at > now() - interval '30 days'
+)
+SELECT identity_id, count(*), avg(c), stddev(c) FROM r GROUP BY 1 HAVING count(*) >= 50;
+```
