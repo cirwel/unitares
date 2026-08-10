@@ -2299,8 +2299,19 @@ async def handle_reassign_reviewer(arguments: Dict[str, Any]) -> Sequence[TextCo
             recovery=session_not_found_recovery(),
         )]
 
-    # Validate phase — only reassign during THESIS or ANTITHESIS
-    if session.phase not in (DialecticPhase.THESIS, DialecticPhase.ANTITHESIS):
+    # Validate phase — THESIS/ANTITHESIS, or any session explicitly waiting on a
+    # human.
+    #
+    # A session that raised its hand for facilitation and was then swept to
+    # `failed` used to become unreassignable at exactly the moment someone might
+    # act on it: the request is visible, and the one operation that answers it
+    # is refused. Honouring `awaiting_facilitation` here is what makes the
+    # request answerable at all — assigning a reviewer IS the facilitation.
+    #
+    # Deliberately NOT a blanket relaxation: an ordinary resolved/failed session
+    # stays closed. Only a standing, unanswered request reopens.
+    _awaiting = bool(getattr(session, "awaiting_facilitation", False))
+    if session.phase not in (DialecticPhase.THESIS, DialecticPhase.ANTITHESIS) and not _awaiting:
         return [error_response(
             f"Cannot reassign reviewer in phase '{session.phase.value}'. Only THESIS or ANTITHESIS phases allow reassignment.",
             error_code="INVALID_PHASE",
