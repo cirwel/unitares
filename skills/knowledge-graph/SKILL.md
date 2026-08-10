@@ -3,8 +3,8 @@ name: knowledge-graph
 description: >
   Use when an agent needs to search the shared knowledge graph, contribute a discovery,
   or update existing entries. Covers search, tagging, discovery types, and status lifecycle.
-last_verified: "2026-07-28"
-freshness_days: 14
+last_verified: "2026-08-09"
+freshness_days: 21
 source_files:
   - unitares/src/mcp_handlers/knowledge/handlers.py
   - unitares/src/knowledge_graph.py
