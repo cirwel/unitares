@@ -70,6 +70,156 @@ defmodule AgentOrchestratorTest do
                AgentOrchestrator.run(%{cmd: "definitely-not-a-real-binary-xyz"})
     end
 
+    test "the executable is still resolved by name when stdin is closed" do
+      # The stdin wrapper must not swallow a missing binary into an exit 127
+      # from /bin/sh: callers rely on this being a spawn ERROR so they can fall
+      # back. Resolution happens on spec.cmd, before any wrapping.
+      assert {:error, {:executable_not_found, "definitely-not-a-real-binary-xyz"}} =
+               AgentOrchestrator.run(%{cmd: "definitely-not-a-real-binary-xyz", stdin: "close"})
+    end
+  end
+
+  describe "telemetry" do
+    setup do
+      parent = self()
+      ref = make_ref()
+
+      :telemetry.attach_many(
+        "test-#{inspect(ref)}",
+        AgentOrchestrator.Telemetry.events(),
+        fn event, measurements, meta, _ ->
+          send(parent, {:telemetry, event, measurements, meta})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("test-#{inspect(ref)}") end)
+      :ok
+    end
+
+    test "emits a start and a stop span around a normal agent" do
+      {:ok, id, _} = AgentOrchestrator.run(%{cmd: "echo", args: ["hi"]})
+      assert {:ok, _} = AgentOrchestrator.await(id, 5_000)
+
+      assert_receive {:telemetry, [:agent_orchestrator, :agent, :start], _m, start_meta}
+      assert start_meta.agent_id == id
+      assert start_meta.cmd == "echo"
+      assert is_integer(start_meta.os_pid)
+
+      assert_receive {:telemetry, [:agent_orchestrator, :agent, :stop], measurements, meta}
+      assert meta.agent_id == id
+      assert meta.exit_status == 0
+      assert meta.reason == :exited
+      assert measurements.output_lines == 1
+      assert measurements.duration > 0
+    end
+
+    test "a max-runtime kill is reported as its own reason" do
+      {:ok, id, _} = AgentOrchestrator.run(%{cmd: "sleep", args: ["30"], max_runtime_ms: 400})
+      assert {:ok, _} = AgentOrchestrator.await(id, 5_000)
+
+      assert_receive {:telemetry, [:agent_orchestrator, :agent, :stop], _m, meta}
+      assert meta.reason == :max_runtime
+      assert meta.exit_status == {:killed, :max_runtime}
+    end
+
+    test "an agent reaped while running still reports a stop — the previously silent ending" do
+      # Before this, an operator DELETE produced a `started` log line and nothing
+      # else: the log's started/exited counts diverged and looked like a leak.
+      {:ok, id, _} = AgentOrchestrator.run(%{cmd: "sleep", args: ["30"]})
+      assert_receive {:telemetry, [:agent_orchestrator, :agent, :start], _m, _meta}
+
+      :ok = AgentOrchestrator.stop(id, :test_reap)
+
+      assert_receive {:telemetry, [:agent_orchestrator, :agent, :stop], _measurements, meta},
+                     2_000
+
+      assert meta.agent_id == id
+      assert meta.reason == :stopped
+      assert meta.exit_status == nil
+    end
+
+    test "a clean exit emits exactly one stop, not one per teardown path" do
+      {:ok, id, _} = AgentOrchestrator.run(%{cmd: "true"})
+      assert {:ok, _} = AgentOrchestrator.await(id, 5_000)
+
+      assert_receive {:telemetry, [:agent_orchestrator, :agent, :stop], _m, meta}
+      assert meta.reason == :exited
+      refute_receive {:telemetry, [:agent_orchestrator, :agent, :stop], _, _}, 300
+    end
+
+    test "metrics aggregate the lifecycle, including the reaped ending" do
+      alias AgentOrchestrator.Metrics
+
+      :ok = Metrics.reset()
+
+      {:ok, ok_id, _} = AgentOrchestrator.run(%{cmd: "echo", args: ["one"]})
+      assert {:ok, _} = AgentOrchestrator.await(ok_id, 5_000)
+
+      {:ok, fail_id, _} = AgentOrchestrator.run(%{cmd: "sh", args: ["-c", "exit 3"]})
+      assert {:ok, _} = AgentOrchestrator.await(fail_id, 5_000)
+
+      {:ok, reap_id, _} = AgentOrchestrator.run(%{cmd: "sleep", args: ["30"]})
+      assert_receive {:telemetry, [:agent_orchestrator, :agent, :start], _, %{agent_id: ^reap_id}}
+      :ok = AgentOrchestrator.stop(reap_id, :test_reap)
+      assert_receive {:telemetry, [:agent_orchestrator, :agent, :stop], _, %{reason: :stopped}}, 2_000
+
+      snap = Metrics.snapshot()
+
+      assert snap.started == 3
+      assert snap.stopped[:exited] == 2
+      assert snap.stopped[:stopped] == 1
+      assert snap.exits[:ok] == 1
+      assert snap.exits[:nonzero] == 1
+      # The reaped agent has no exit status at all — its own class, not a zero.
+      assert snap.exits[:none] == 1
+      assert snap.duration_ms.count == 3
+      assert snap.output_lines == 1
+      assert snap.running == 0
+    end
+
+    test "the runtime logger attaches and detaches idempotently" do
+      alias AgentOrchestrator.Telemetry
+
+      assert :ok = Telemetry.attach_logger()
+      assert :ok = Telemetry.attach_logger(:debug)
+      assert :ok = Telemetry.detach_logger()
+      assert :ok = Telemetry.detach_logger()
+    end
+  end
+
+  describe "child stdin" do
+    test "is closed by default, so a child that reads stdin exits instead of hanging" do
+      # `cat` with no argument reads stdin forever. With stdin at EOF it exits 0
+      # immediately; with an open pipe it would sit until the max-runtime kill.
+      {:ok, id, _} = AgentOrchestrator.run(%{cmd: "cat"})
+      assert {:ok, %{exit_status: 0, running: false}} = AgentOrchestrator.await(id, 5_000)
+    end
+
+    test "still captures output through the wrapper" do
+      {:ok, id, _} = AgentOrchestrator.run(%{cmd: "sh", args: ["-c", "printf 'a\\nb\\n'"]})
+      assert {:ok, %{output: ["a", "b"], exit_status: 0}} = AgentOrchestrator.await(id)
+    end
+
+    test "passes arguments as separate argv words, never through the shell" do
+      # If the wrapper interpolated args into the -c string, the substitution
+      # would run and the literal would not survive.
+      hostile = "$(echo pwned) `echo pwned` \"quoted\""
+
+      {:ok, id, _} = AgentOrchestrator.run(%{cmd: "printf", args: ["%s\n", hostile]})
+
+      assert {:ok, %{output: [^hostile], exit_status: 0}} = AgentOrchestrator.await(id)
+    end
+
+    test "stdin: pipe restores the raw Port behaviour" do
+      # Explicit opt-in to the old shape: an open pipe, so `cat` never returns
+      # and the max-runtime backstop is what ends it.
+      {:ok, id, _} = AgentOrchestrator.run(%{cmd: "cat", stdin: "pipe", max_runtime_ms: 800})
+
+      assert {:ok, %{exit_status: {:killed, :max_runtime}, running: false}} =
+               AgentOrchestrator.await(id, 5_000)
+    end
+
     test "bounds an over-long unterminated line but still captures all of it" do
       big = String.duplicate("x", 70_000)
 

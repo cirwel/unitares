@@ -62,11 +62,31 @@ def compute_behavioral_sensor_eisv(
 
 # --- E: Decision success rate, exponentially weighted ---
 
+# What actually lands in ``decision_history`` is the SUB-action when one exists:
+# ``governance_monitor.py`` appends ``decision.get('sub_action', decision['action'])``.
+# So the strings arriving here are the sub_action vocabulary from
+# ``monitor_decision.py``, not the coarse action names — and every pause/block
+# variant was missing from this table, falling through to the 0.5 default.
+#
+# That is the wrong direction for exactly the wrong event: a pause is the rare,
+# high-signal state, and scoring it 0.5 told _compute_E that nothing notable
+# happened. The bare "pause"/"reject" keys were unreachable through this path.
+#
+# Keep this table in sync with the ``'sub_action':`` literals in
+# monitor_decision.py — tests/test_behavioral_sensor_decision_coverage.py fails
+# if a new one is added without a score here.
 _DECISION_SCORES = {
+    # coarse actions (still used when a decision carries no sub_action)
     "proceed": 1.0, "approve": 1.0,
     "guide": 0.7,
     "revise": 0.5, "reflect": 0.5,
     "pause": 0.0, "reject": 0.0,
+    # sub_actions actually emitted by monitor_decision.py
+    "risk_pause": 0.0,
+    "basin_pause": 0.0,
+    "coherence_pause": 0.0,
+    "void_pause": 0.0,
+    "cirs_block": 0.0,
 }
 
 

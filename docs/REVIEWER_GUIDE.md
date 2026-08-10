@@ -1,7 +1,7 @@
 # UNITARES Reviewer Guide
 
 **Created:** May 23, 2026  
-**Last Updated:** June 26, 2026
+**Last Updated:** August 9, 2026
 **Status:** Active
 
 ---
@@ -141,6 +141,29 @@ python3 scripts/analysis/outcome_inventory.py   --window-days 90 --leads 0,5,30
 python3 scripts/analysis/eisv_ablation_matrix.py --scopes strict,task --windows 30,90 --leads 0,5,30
 python3 scripts/analysis/eisv_skeptic_report.py  --window-days 90 --scope task
 ```
+
+For a reproducible provenance-aware read, freeze one cutoff and request marginal
+source/warmup/enforcement/missingness slices. The matrix keeps its overall row,
+uses whole `(agent, prior-state snapshot)` clusters for its selective null, and
+does **not** add provenance or enforcement fields to the predictor set:
+
+```bash
+python3 scripts/analysis/eisv_ablation_matrix.py \
+  --scopes strict,task --windows 30,90 --leads 0,5,30 \
+  --anchor-scope trusted --as-of 2026-08-09T20:00:00Z \
+  --telemetry-strata source,warmup,enforcement,missingness
+python3 scripts/analysis/eisv_skeptic_report.py \
+  --window-days 90 --scope task --anchor-scope trusted \
+  --as-of 2026-08-09T20:00:00Z
+```
+
+Envelope telemetry is future-only: rows written before
+`eisv.telemetry.v1` appear as `legacy/no-envelope` and are never assigned an
+inferred source; outcomes with no joinable prior state appear separately as
+`no_prior_state`. Enforcement slices are intervention-conditioned because the
+actuator can alter the later outcome; use them to audit requested-vs-applied
+behavior, not as causal evidence that EISV prevented or caused an outcome. See
+[`eisv-telemetry-envelope-v1.md`](ontology/eisv-telemetry-envelope-v1.md).
 
 **Honest current read** — *snapshot generated 2026-06-16; regenerate to confirm and
 treat as stale if the harness output is newer than this date:*

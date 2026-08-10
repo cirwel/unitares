@@ -65,7 +65,35 @@ jobs:
             failures=1
           fi
 
+          bad_session=$(printf '%s' "$PR_BODY" | grep -niE 'claude\.ai/code/session|Claude-Session:' || true)
+          if [ -n "$bad_session" ]; then
+            echo "::error::PR body carries a Claude Code session-attribution link. It ties the public repo to a private session and signals AI authorship; the harness appends it by default, so strip it before opening the PR."
+            printf '%s\n' "$bad_session"
+            failures=1
+          fi
+
           if [ "$failures" -ne 0 ]; then
             exit 1
           fi
           echo "PR body register: clean"
+
+      # Commit messages are neither files nor the PR body, so they need their own
+      # pass — the Claude Code session-attribution trailer lands there by default
+      # and is the trailer's main vector into public history.
+      #
+      # Scoped to base..HEAD, so the commits already carrying it are not
+      # retro-flagged. That is deliberate: as of 2026-08-09 master's recent
+      # history holds ~160 of them, and rewriting shared history over a trailer
+      # is not worth it (same call made for the original ~10). This stops the
+      # next one; it does not relitigate the last hundred.
+      - name: Lint PR commit messages for session-attribution links
+        if: github.event_name == 'pull_request'
+        run: |
+          base="${{ steps.base.outputs.ref }}"
+          bad=$(git log "${base}..HEAD" --format='%H %s%n%b' | grep -niE 'claude\.ai/code/session|Claude-Session:' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::A PR commit message carries a Claude Code session link (claude.ai/code/session). Strip the Claude-Session trailer from commit messages."
+            printf '%s\n' "$bad"
+            exit 1
+          fi
+          echo "Commit messages: clean"

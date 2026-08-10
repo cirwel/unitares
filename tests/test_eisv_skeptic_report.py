@@ -1,8 +1,11 @@
+import argparse
 import asyncio
 import dataclasses
 import sys
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+
+import pytest
 
 from scripts.analysis import eisv_skeptic_report as skeptic_module
 from scripts.analysis.eisv_skeptic_report import (
@@ -13,10 +16,13 @@ from scripts.analysis.eisv_skeptic_report import (
     brier_score,
     build_model_scores,
     build_report,
+    parse_as_of,
     quantile_cuts,
     risk_bucket_rates,
     score_deltas_vs_baseline,
     smoothed_rate,
+    split_rows_by_telemetry_dimension,
+    summarize_telemetry_strata,
     summarize_conclusion,
 )
 from scripts.utils.date_utils import now_utc
@@ -217,6 +223,90 @@ def test_build_report_includes_ablation_delta_section():
     assert "Brier improvement" in report
 
 
+def test_envelope_strata_keep_legacy_source_warmup_and_enforcement_explicit():
+    legacy = _row(0, bad=False, risk=0.1)
+    no_prior_state = dataclasses.replace(
+        _row(4, bad=True, risk=None),
+        prior_state_age_seconds=None,
+    )
+    warming = dataclasses.replace(
+        _row(1, bad=False, risk=0.2),
+        prior_telemetry_schema="eisv.telemetry.v1",
+        prior_measurement_id="measurement-warming",
+        prior_measurement_source="ode_fallback",
+        prior_warmup_phase="bootstrapping",
+        prior_is_baselined=False,
+        prior_missing_inputs=("outcome_history",),
+        prior_enforcement_requested=False,
+        prior_enforcement_applied=False,
+    )
+    requested = dataclasses.replace(
+        _row(2, bad=True, risk=0.8),
+        prior_telemetry_schema="eisv.telemetry.v1",
+        prior_measurement_id="measurement-requested",
+        prior_measurement_source="physical",
+        prior_warmup_phase="baselined",
+        prior_is_baselined=True,
+        prior_missing_inputs=(),
+        prior_enforcement_requested=True,
+        prior_enforcement_applied=False,
+    )
+    applied = dataclasses.replace(
+        _row(3, bad=True, risk=0.9),
+        prior_telemetry_schema="eisv.telemetry.v1",
+        prior_measurement_id="measurement-applied",
+        prior_measurement_source="physical",
+        prior_warmup_phase="baselined",
+        prior_is_baselined=True,
+        prior_missing_inputs=(),
+        prior_enforcement_requested=True,
+        prior_enforcement_applied=True,
+    )
+    rows = [legacy, warming, requested, applied, no_prior_state]
+
+    assert split_rows_by_telemetry_dimension(rows, "source") == {
+        "legacy/no-envelope": [legacy],
+        "no_prior_state": [no_prior_state],
+        "ode_fallback": [warming],
+        "physical": [requested, applied],
+    }
+    summaries = {
+        (summary.dimension, summary.stratum): summary
+        for summary in summarize_telemetry_strata(rows)
+    }
+    assert summaries[("enforcement", "requested_not_applied")].bad == 1
+    assert summaries[("enforcement", "applied")].bad_clusters == 1
+    assert summaries[("missingness", "complete")].rows == 2
+    assert summaries[("warmup", "legacy/no-envelope")].rows == 1
+    assert summaries[("source", "no_prior_state")].clusters == 0
+    assert summaries[("source", "no_prior_state")].bad_clusters == 0
+
+    as_of = datetime(2026, 8, 9, 20, 0, tzinfo=timezone.utc)
+    report = build_report(
+        rows,
+        scope="task",
+        window_days=90,
+        lead_minutes=30,
+        train_fraction=0.7,
+        generated_at=as_of,
+        as_of=as_of,
+    )
+    assert "## EISV Telemetry Strata" in report
+    assert "`physical`" in report
+    assert "`requested_not_applied`" in report
+    assert "intervention-conditioned audit views" in report
+    assert "not causal estimates" in report
+    assert "Data boundary: `2026-08-09T20:00:00+00:00` (frozen)" in report
+
+
+def test_parse_as_of_requires_an_explicit_timezone():
+    assert parse_as_of("2026-08-09T20:00:00Z") == datetime(
+        2026, 8, 9, 20, 0, tzinfo=timezone.utc
+    )
+    with pytest.raises(argparse.ArgumentTypeError, match="explicit timezone"):
+        parse_as_of("2026-08-09T20:00:00")
+
+
 def test_skeptic_record_conversion_preserves_identity_metadata_for_fixture_filtering():
     record = {
             "ts": datetime(2026, 1, 1, tzinfo=timezone.utc),
@@ -237,6 +327,21 @@ def test_skeptic_record_conversion_preserves_identity_metadata_for_fixture_filte
             "prior_i": None,
             "prior_s": None,
             "prior_v": None,
+            "prior_telemetry_schema": "eisv.telemetry.v1",
+            "prior_measurement_id": "measurement-1",
+            "prior_measurement_source": "physical",
+            "prior_primary_source": "behavioral",
+            "prior_behavioral_source": "physical",
+            "prior_submitted_source": "physical",
+            "prior_behavioral_confidence": "0.8",
+            "prior_warmup_phase": "baselined",
+            "prior_is_baselined": "true",
+            "prior_missing_inputs": '["drift_norm"]',
+            "prior_formula_version": "behavioral_sensor.v1",
+            "prior_policy_action": "pause",
+            "prior_policy_sub_action": "risk_pause",
+            "prior_enforcement_requested": "true",
+            "prior_enforcement_applied": "false",
             "eisv_verdict": None,
             "eisv_e": None,
             "eisv_i": None,
@@ -254,6 +359,12 @@ def test_skeptic_record_conversion_preserves_identity_metadata_for_fixture_filte
     row = skeptic_module._row_from_record(record)
 
     assert row.detail["_identity_metadata"] == {"label": "perf-profile-checkin_be34425f"}
+    assert row.prior_measurement_source == "physical"
+    assert row.prior_behavioral_confidence == 0.8
+    assert row.prior_is_baselined is True
+    assert row.prior_missing_inputs == ("drift_norm",)
+    assert row.prior_enforcement_requested is True
+    assert row.prior_enforcement_applied is False
 
 
 def test_skeptic_record_conversion_can_exclude_mutable_identity_metadata():
@@ -335,6 +446,8 @@ def test_fetch_rows_omits_mutable_identity_metadata_join_when_disabled(
     assert "NULL::jsonb AS identity_metadata" in observed["query"]
     assert "ident_meta.metadata" not in observed["query"]
     assert "ORDER BY ident_meta.updated_at" not in observed["query"]
+    assert "eisv_telemetry,measurement,primary,source" in observed["query"]
+    assert "prior_enforcement_applied" in observed["query"]
 
 
 def test_zero_positive_training_split_yields_no_deltas():

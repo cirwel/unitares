@@ -1487,6 +1487,10 @@ class TestExportHistory:
         assert 'V_history' in data
         assert 'coherence_history' in data
         assert 'risk_history' in data
+        assert data['schema'] == 'eisv.monitor_history.v2'
+        assert data['streams']['ode']['E_history'] == data['E_history']
+        assert data['streams']['behavioral']['raw_observation_history']
+        assert data['audit_limitations']
 
     def test_invalid_format_raises(self, monitor):
         with pytest.raises(ValueError, match="Unsupported format"):

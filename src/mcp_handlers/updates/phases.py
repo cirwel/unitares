@@ -894,6 +894,10 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
             # Caller-published physical sensor (e.g. Lumen's Pi). Source tag lets
             # the monitor apply per-source coupling policy (sensor_coupling_allows).
             ctx.agent_state["sensor_eisv_source"] = "physical"
+            from src.eisv_telemetry import build_physical_sensor_derivation
+            ctx.agent_state["_eisv_derivation"] = build_physical_sensor_derivation(
+                sensor_eisv
+            )
 
     # Behavioral sensor: compute EISV from governance observables for non-embodied agents
     if "sensor_eisv" not in ctx.agent_state:
@@ -901,6 +905,7 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
             monitor = mcp_server.monitors.get(ctx.agent_id)
             if monitor and len(getattr(monitor.state, 'decision_history', [])) >= 3:
                 from src.behavioral_sensor import compute_behavioral_sensor_eisv
+                from src.eisv_telemetry import build_behavioral_derivation
                 from src.mcp_handlers.updates.context import get_mean_calibration_error
 
                 cal_error = get_mean_calibration_error(ctx)
@@ -958,14 +963,21 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                 if outcome_hist is not None:
                     monitor._cached_outcome_history = outcome_hist
 
+                decision_history = list(monitor.state.decision_history)
+                coherence_history = list(monitor.state.coherence_history)
+                regime_history = list(getattr(monitor.state, 'regime_history', []))
+                E_history = list(monitor.state.E_history)
+                I_history = list(monitor.state.I_history)
+                S_history = list(monitor.state.S_history)
+                V_history = list(monitor.state.V_history)
                 behavioral_eisv = compute_behavioral_sensor_eisv(
-                    decision_history=list(monitor.state.decision_history),
-                    coherence_history=list(monitor.state.coherence_history),
-                    regime_history=list(getattr(monitor.state, 'regime_history', [])),
-                    E_history=list(monitor.state.E_history),
-                    I_history=list(monitor.state.I_history),
-                    S_history=list(monitor.state.S_history),
-                    V_history=list(monitor.state.V_history),
+                    decision_history=decision_history,
+                    coherence_history=coherence_history,
+                    regime_history=regime_history,
+                    E_history=E_history,
+                    I_history=I_history,
+                    S_history=S_history,
+                    V_history=V_history,
                     calibration_error=cal_error,
                     drift_norm=drift_n,
                     complexity_divergence=comp_div,
@@ -976,6 +988,24 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                     tool_error_rate=tool_err,
                     tool_call_velocity=tool_vel,
                     unique_tools_ratio=tool_div,
+                )
+                ctx.agent_state["_eisv_derivation"] = build_behavioral_derivation(
+                    decision_history=decision_history,
+                    coherence_history=coherence_history,
+                    regime_history=regime_history,
+                    E_history=E_history,
+                    I_history=I_history,
+                    calibration_error=cal_error,
+                    drift_norm=drift_n,
+                    complexity_divergence=comp_div,
+                    continuity_E_input=cont_E,
+                    continuity_I_input=cont_I,
+                    continuity_S_input=cont_S,
+                    outcome_history=outcome_hist,
+                    tool_error_rate=tool_err,
+                    tool_call_velocity=tool_vel,
+                    unique_tools_ratio=tool_div,
+                    computed=behavioral_eisv,
                 )
                 if behavioral_eisv:
                     ctx.agent_state["sensor_eisv"] = behavioral_eisv
@@ -1779,6 +1809,32 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
     except Exception:
         behavioral_snapshot = None
 
+    # Assemble a versioned, append-only provenance envelope.  This is a pure
+    # serialization step: it reads values already computed by the monitor and
+    # never feeds back into measurement, policy, or enforcement.
+    eisv_telemetry = None
+    try:
+        from src.eisv_telemetry import build_eisv_telemetry_envelope
+        eisv_telemetry = build_eisv_telemetry_envelope(
+            metrics=ctx.metrics_dict,
+            behavioral_snapshot=behavioral_snapshot,
+            submitted_sensor=ctx.agent_state.get("sensor_eisv"),
+            submitted_source=ctx.agent_state.get("sensor_eisv_source"),
+            derivation=ctx.agent_state.get("_eisv_derivation"),
+            policy_evaluation=ctx.result.get("policy_evaluation"),
+            enforcement=ctx.result.get("enforcement"),
+            observed_at=ctx.result.get("timestamp"),
+        )
+        # Full response mode can expose the same record that was persisted;
+        # compact/mirror modes continue to omit it through response_formatter.
+        ctx.result["eisv_telemetry"] = eisv_telemetry
+    except Exception as exc:
+        logger.warning(
+            "EISV telemetry envelope skipped for %s...: %s",
+            (agent_id or "")[:8],
+            exc,
+        )
+
     # PostgreSQL: Record EISV state
     try:
         await agent_storage.record_agent_state(
@@ -1799,6 +1855,7 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
             epistemic_class=ctx.epistemic_class,
             behavioral_eisv=behavioral_snapshot,
             sensor_eisv_source=ctx.agent_state.get("sensor_eisv_source"),
+            eisv_telemetry=eisv_telemetry,
         )
         logger.debug(f"PostgreSQL: Recorded state for {agent_id}")
     except ValueError:
@@ -1881,6 +1938,8 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
                 provenance_context=ctx.agent_state.get("provenance_context"),
                 epistemic_class=ctx.epistemic_class,
                 behavioral_eisv=behavioral_snapshot,
+                sensor_eisv_source=ctx.agent_state.get("sensor_eisv_source"),
+                eisv_telemetry=eisv_telemetry,
             )
             logger.debug(f"PostgreSQL: Created agent and recorded state for {agent_id}")
         except Exception as create_error:
