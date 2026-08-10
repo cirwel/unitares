@@ -63,14 +63,47 @@ defmodule UnitaresLeasePlane.Repo do
   end
 
   defp maybe_existing_active(conn, surface_id) do
-    sql =
-      "SELECT #{@select_lease_columns} FROM lease_plane.surface_leases " <>
-        "WHERE surface_id = $1 AND released_at IS NULL"
+    with :ok <- release_expired_remote_for_acquire(conn, surface_id) do
+      sql =
+        "SELECT #{@select_lease_columns} FROM lease_plane.surface_leases " <>
+          "WHERE surface_id = $1 AND released_at IS NULL"
+
+      case Postgrex.query(conn, sql, [surface_id]) do
+        {:ok, %{rows: []}} -> {:ok, nil}
+        {:ok, %{rows: [row], columns: cols}} -> {:ok, row_to_map(cols, row)}
+        {:error, e} -> {:error, e}
+      end
+    end
+  end
+
+  # Remote-heartbeat leases have no local process that can still own the
+  # surface after their deadline. Close an already-expired row in the same
+  # transaction as the replacement acquire so callers do not wait for the
+  # periodic reaper. The conditional UPDATE also serializes acquire,
+  # heartbeat, and reaper races; whichever changes the row first determines
+  # what the following active-row read observes. Local-BEAM rows remain under
+  # LeaseHolder/Reaper lifecycle control even if their persisted TTL elapsed.
+  defp release_expired_remote_for_acquire(conn, surface_id) do
+    sql = """
+    UPDATE lease_plane.surface_leases
+    SET released_at = now(), release_reason = 'reaped_remote_ttl'
+    WHERE surface_id = $1
+      AND released_at IS NULL
+      AND holder_kind = 'remote_heartbeat'
+      AND expires_at < now()
+    RETURNING #{@select_lease_columns}
+    """
 
     case Postgrex.query(conn, sql, [surface_id]) do
-      {:ok, %{rows: []}} -> {:ok, nil}
-      {:ok, %{rows: [row], columns: cols}} -> {:ok, row_to_map(cols, row)}
-      {:error, e} -> {:error, e}
+      {:ok, %{rows: []}} ->
+        :ok
+
+      {:ok, %{rows: [row], columns: cols}} ->
+        lease = row_to_map(cols, row)
+        log_event(conn, "reaped_remote_ttl", lease)
+
+      {:error, e} ->
+        {:error, e}
     end
   end
 
