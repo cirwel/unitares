@@ -77,6 +77,7 @@ def test_warn_escalates_as_a_finding():
     assert posted[0]["event_type"] == df.FINDING_KIND
     assert posted[0]["severity"] == "warning"
     assert "immortal_lease" in posted[0]["message"]
+    assert posted[0]["extra"] == {"check": "immortal_lease"}
 
 
 def test_fail_is_critical():
