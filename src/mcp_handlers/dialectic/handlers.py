@@ -143,6 +143,7 @@ from src.dialectic_db import (
     update_session_phase_async as pg_update_phase,
     update_session_reviewer_async as pg_update_reviewer,
     update_session_awaiting_facilitation_async as pg_update_awaiting_facilitation,
+    reopen_session_async as pg_reopen_session,
     add_message_async as pg_add_message,
     resolve_session_async as pg_resolve_session,
     get_all_sessions_by_agent_async as pg_get_all_sessions_by_agent,
@@ -613,8 +614,24 @@ async def _apply_reviewer_reassignment(
 ) -> Dict[str, Any]:
     """Update the reviewer assignment in memory and persistence layers."""
     old_reviewer_id = session.reviewer_agent_id
+    was_awaiting = bool(getattr(session, "awaiting_facilitation", False))
+    was_terminal = session.phase in (DialecticPhase.RESOLVED, DialecticPhase.FAILED)
     session.reviewer_agent_id = new_reviewer_id
     session.awaiting_facilitation = False
+
+    # Revive a session that was swept while its facilitation request stood.
+    # Assigning a reviewer to a row still marked `failed` would answer the
+    # request on paper and leave it dead in fact: no phase the new reviewer can
+    # act in. Reopen to the phase the session was actually waiting in —
+    # ANTITHESIS if a thesis is already on the record, THESIS otherwise.
+    #
+    # Scoped to was_awaiting: an ordinary failed/resolved session is never
+    # resurrected by a reassign, only one carrying an unanswered request.
+    revived = False
+    if was_terminal and was_awaiting:
+        has_thesis = any(m.phase == "thesis" for m in session.transcript)
+        session.phase = DialecticPhase.ANTITHESIS if has_thesis else DialecticPhase.THESIS
+        revived = True
 
     reasoning = (
         f"Reviewer reassigned: {old_reviewer_id or 'unassigned'} -> {new_reviewer_id}. "
@@ -634,6 +651,11 @@ async def _apply_reviewer_reassignment(
             await pg_update_reviewer(session_id, new_reviewer_id)
         # A reassigned reviewer clears the stuck/facilitation state (#1167 Ask 2).
         await pg_update_awaiting_facilitation(session_id, False)
+        # Persist the revival. `update_session_phase` refuses terminal values
+        # but accepts non-terminal ones, and the row's status must come back to
+        # `active` or the sweeper immediately re-terminates it.
+        if revived:
+            await pg_reopen_session(session_id, session.phase.value)
         await pg_add_message(
             session_id=session_id,
             agent_id="system",
@@ -2299,8 +2321,19 @@ async def handle_reassign_reviewer(arguments: Dict[str, Any]) -> Sequence[TextCo
             recovery=session_not_found_recovery(),
         )]
 
-    # Validate phase — only reassign during THESIS or ANTITHESIS
-    if session.phase not in (DialecticPhase.THESIS, DialecticPhase.ANTITHESIS):
+    # Validate phase — THESIS/ANTITHESIS, or any session explicitly waiting on a
+    # human.
+    #
+    # A session that raised its hand for facilitation and was then swept to
+    # `failed` used to become unreassignable at exactly the moment someone might
+    # act on it: the request is visible, and the one operation that answers it
+    # is refused. Honouring `awaiting_facilitation` here is what makes the
+    # request answerable at all — assigning a reviewer IS the facilitation.
+    #
+    # Deliberately NOT a blanket relaxation: an ordinary resolved/failed session
+    # stays closed. Only a standing, unanswered request reopens.
+    _awaiting = bool(getattr(session, "awaiting_facilitation", False))
+    if session.phase not in (DialecticPhase.THESIS, DialecticPhase.ANTITHESIS) and not _awaiting:
         return [error_response(
             f"Cannot reassign reviewer in phase '{session.phase.value}'. Only THESIS or ANTITHESIS phases allow reassignment.",
             error_code="INVALID_PHASE",
