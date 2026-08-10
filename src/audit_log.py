@@ -228,6 +228,52 @@ class AuditLogger:
         )
         self._write_entry(entry)
 
+    def log_cold_start_risk_confirmation_evaluated(
+        self,
+        agent_id: str,
+        risk_score: float,
+        evaluation: Dict,
+    ):
+        """Log a shadow maturity evaluation for a cold-start risk pause.
+
+        This event is observational.  ``actuation_applied`` is expected to be
+        false until a separately reviewed durable confirmation transaction is
+        implemented; the original policy decision continues to the existing
+        enforcement boundary unchanged.
+        """
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_id,
+            event_type="cold_start_risk_confirmation_evaluated",
+            confidence=float(evaluation.get("behavioral_confidence") or 0.0),
+            details={
+                "schema": evaluation.get("schema"),
+                "risk_score": risk_score,
+                "primary_driver": evaluation.get("primary_driver"),
+                "measurement_phase": evaluation.get("measurement_phase"),
+                "measurement_ready": evaluation.get("measurement_ready"),
+                "eligible": evaluation.get("eligible"),
+                "ineligibility_reason": evaluation.get("ineligibility_reason"),
+                "reset_reason": evaluation.get("reset_reason"),
+                "confirmation_count": evaluation.get("confirmation_count"),
+                "confirmations_required": evaluation.get("confirmations_required"),
+                "would_defer": evaluation.get("would_defer"),
+                "confirmed": evaluation.get("confirmed"),
+                "outcome": evaluation.get("outcome"),
+                "independent_override": evaluation.get("independent_override"),
+                "actuation_enabled": evaluation.get("actuation_enabled"),
+                "actuation_ready": evaluation.get("actuation_ready"),
+                "actuation_applied": evaluation.get("actuation_applied"),
+                "actuation_blocker": evaluation.get("actuation_blocker"),
+                "enforcement_basis": evaluation.get("enforcement_basis"),
+                "monitor_lineage": evaluation.get("monitor_lineage"),
+                "lineage_status": evaluation.get("lineage_status"),
+                "process_cycle": evaluation.get("process_cycle"),
+                "original_decision": evaluation.get("original_decision"),
+            },
+        )
+        self._write_entry(entry)
+
     def log_auto_attest(self, agent_id: str, confidence: float, ci_passed: bool,
                        risk_score: float, decision: str, details: Dict = None):
         """Log an auto-attestation event"""

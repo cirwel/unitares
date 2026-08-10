@@ -135,6 +135,7 @@ def _make_db(
         "total_tags": 0,
         "total_tag_assignments": 0,
     })
+    db.kg_all_discovery_tags = AsyncMock(return_value={})
 
     pool = MagicMock()
     pool.fetchval = AsyncMock(return_value=None)
@@ -768,8 +769,8 @@ class TestGetStatsSQLFallback:
 # the AGE graph nodes/edges so traversal (response chains, related expansion,
 # tag rollups) sees them too.
 
-def _backfill_graph_query(age_ids):
-    """graph_query side_effect: report `age_ids` as existing Discovery vertices.
+def _backfill_graph_query(age_ids, tag_pairs=None):
+    """Report existing Discovery vertices and TAGGED assignment pairs.
 
     The collect(d.id) probe returns the known AGE ids; all other Cypher calls
     (node/edge MERGEs issued during creation) are no-op stubs returning [].
@@ -777,6 +778,8 @@ def _backfill_graph_query(age_ids):
     async def fake(cypher, params=None, conn=None):
         if "collect(d.id)" in cypher:
             return [list(age_ids)]
+        if "collect({discovery_id:" in cypher:
+            return [list(tag_pairs or [])]
         return []
     return fake
 
@@ -794,7 +797,11 @@ class TestBackfillMissingAgeNodes:
     async def test_dry_run_reports_missing_without_writing(self):
         db = _make_db(graph_available=True)
         db.graph_query = AsyncMock(side_effect=_backfill_graph_query({"disc-age-001"}))
-        db.kg_all_discovery_ids = AsyncMock(return_value=["disc-age-001", "disc-sql-001", "disc-sql-002"])
+        db.kg_all_discovery_tags = AsyncMock(return_value={
+            "disc-age-001": [],
+            "disc-sql-001": [],
+            "disc-sql-002": [],
+        })
         db.kg_get_discovery = AsyncMock(return_value=_sql_row())
         kg = await _make_kg(db)
 
@@ -811,7 +818,10 @@ class TestBackfillMissingAgeNodes:
     async def test_apply_creates_missing_nodes(self):
         db = _make_db(graph_available=True)
         db.graph_query = AsyncMock(side_effect=_backfill_graph_query({"disc-age-001"}))
-        db.kg_all_discovery_ids = AsyncMock(return_value=["disc-age-001", "disc-sql-001"])
+        db.kg_all_discovery_tags = AsyncMock(return_value={
+            "disc-age-001": [],
+            "disc-sql-001": ["k8s", "regression"],
+        })
         db.kg_get_discovery = AsyncMock(side_effect=lambda did: _sql_row(discovery_id=did))
         kg = await _make_kg(db)
 
@@ -834,7 +844,7 @@ class TestBackfillMissingAgeNodes:
     async def test_noop_when_graph_in_sync(self):
         db = _make_db(graph_available=True)
         db.graph_query = AsyncMock(side_effect=_backfill_graph_query({"disc-1", "disc-2"}))
-        db.kg_all_discovery_ids = AsyncMock(return_value=["disc-1", "disc-2"])
+        db.kg_all_discovery_tags = AsyncMock(return_value={"disc-1": [], "disc-2": []})
         kg = await _make_kg(db)
 
         summary = await kg.backfill_missing_age_nodes(dry_run=False)
@@ -845,7 +855,7 @@ class TestBackfillMissingAgeNodes:
     async def test_counts_failures_and_continues(self):
         db = _make_db(graph_available=True)
         db.graph_query = AsyncMock(side_effect=_backfill_graph_query(set()))
-        db.kg_all_discovery_ids = AsyncMock(return_value=["disc-a", "disc-b"])
+        db.kg_all_discovery_tags = AsyncMock(return_value={"disc-a": [], "disc-b": []})
         db.kg_get_discovery = AsyncMock(side_effect=lambda did: _sql_row(discovery_id=did))
         kg = await _make_kg(db)
 
@@ -860,6 +870,93 @@ class TestBackfillMissingAgeNodes:
         assert summary["missing"] == 2
         assert summary["created"] == 1
         assert summary["failed"] == 1
+
+    async def test_dry_run_reports_missing_and_stale_tag_assignments(self):
+        """A node-complete graph can still have a drifted TAGGED projection."""
+        db = _make_db(graph_available=True)
+        db.graph_query = AsyncMock(side_effect=_backfill_graph_query(
+            {"disc-1", "disc-2"},
+            tag_pairs=[
+                {"discovery_id": "disc-1", "tag": "keep"},
+                {"discovery_id": "disc-1", "tag": "stale"},
+                {"discovery_id": "disc-2", "tag": "stale-only"},
+            ],
+        ))
+        db.kg_all_discovery_tags = AsyncMock(return_value={
+            "disc-1": ["keep", "new"],
+            "disc-2": [],
+        })
+        kg = await _make_kg(db)
+        kg._sync_age_tag_edges = AsyncMock()  # type: ignore[method-assign]
+
+        summary = await kg.backfill_missing_age_nodes(dry_run=True)
+
+        assert summary["missing"] == 0
+        assert summary["tag_assignments_expected"] == 2
+        assert summary["tag_assignments_present"] == 3
+        assert summary["tag_assignments_missing"] == 1
+        assert summary["tag_assignments_stale"] == 2
+        assert summary["tag_assignments_duplicate"] == 0
+        assert summary["tag_discoveries_drifted"] == 2
+        assert summary["tags_reconciled"] == 0
+        kg._sync_age_tag_edges.assert_not_awaited()
+
+    async def test_apply_reconciles_duplicate_only_tag_assignments(self):
+        """Duplicate edges are projection drift even when the pair set matches."""
+        db = _make_db(graph_available=True)
+        db.graph_query = AsyncMock(side_effect=_backfill_graph_query(
+            {"disc-1"},
+            tag_pairs=[
+                {"discovery_id": "disc-1", "tag": "keep"},
+                {"discovery_id": "disc-1", "tag": "keep"},
+            ],
+        ))
+        db.kg_all_discovery_tags = AsyncMock(return_value={
+            "disc-1": ["keep"],
+        })
+        kg = await _make_kg(db)
+        kg._sync_age_tag_edges = AsyncMock()  # type: ignore[method-assign]
+
+        summary = await kg.backfill_missing_age_nodes(dry_run=False)
+
+        assert summary["tag_assignments_missing"] == 0
+        assert summary["tag_assignments_stale"] == 0
+        assert summary["tag_assignments_duplicate"] == 1
+        assert summary["tag_discoveries_drifted"] == 1
+        assert summary["tags_reconciled"] == 1
+        kg._sync_age_tag_edges.assert_awaited_once_with(
+            db, db._pool, "disc-1", ["keep"]
+        )
+
+    async def test_apply_reconciles_each_drifted_discovery_and_prunes_orphans(self):
+        db = _make_db(graph_available=True)
+        db.graph_query = AsyncMock(side_effect=_backfill_graph_query(
+            {"disc-1", "disc-2"},
+            tag_pairs=[
+                {"discovery_id": "disc-1", "tag": "old"},
+                {"discovery_id": "disc-2", "tag": "remove-me"},
+            ],
+        ))
+        db.kg_all_discovery_tags = AsyncMock(return_value={
+            "disc-1": ["new"],
+            "disc-2": [],
+        })
+        kg = await _make_kg(db)
+        kg._sync_age_tag_edges = AsyncMock()  # type: ignore[method-assign]
+        kg._delete_orphan_age_tags = AsyncMock(return_value=2)  # type: ignore[method-assign]
+
+        summary = await kg.backfill_missing_age_nodes(dry_run=False)
+
+        assert summary["tags_reconciled"] == 2
+        assert summary["tag_repair_failed"] == 0
+        assert summary["orphan_tags_removed"] == 2
+        kg._sync_age_tag_edges.assert_any_await(
+            db, db._pool, "disc-1", ["new"]
+        )
+        kg._sync_age_tag_edges.assert_any_await(
+            db, db._pool, "disc-2", []
+        )
+        kg._delete_orphan_age_tags.assert_awaited_once_with(db, db._pool)
 
     async def test_create_age_graph_issues_node_and_edges(self):
         """_create_age_graph_for_discovery MERGEs the node + AUTHORED + TAGGED."""

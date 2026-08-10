@@ -339,6 +339,30 @@ _HTTP_PREBIND_SKIP_TOOLS = {
 }
 
 
+def _explicit_bind_corroboration(arguments: dict) -> str:
+    """Classify what *else* a caller offered alongside a declared ``agent_id``.
+
+    Pure and side-effect free. Exists so the canary below can answer one
+    question with data instead of estimation: if the explicit-``agent_id``
+    path required corroborating proof, which live callers would still bind?
+
+      * ``csid``  — echoed ``client_session_id``; the server issued it, so the
+        caller demonstrably completed an onboard.
+      * ``token`` — ``continuity_token``; same-live-process rebind proof.
+      * ``none``  — the uuid and nothing else.
+
+    ``none`` is the population that a corroboration requirement would turn
+    away, and therefore the whole cost of tightening this path.
+    """
+    if not isinstance(arguments, dict):
+        return "none"
+    if isinstance(arguments.get("client_session_id"), str) and arguments["client_session_id"]:
+        return "csid"
+    if isinstance(arguments.get("continuity_token"), str) and arguments["continuity_token"]:
+        return "token"
+    return "none"
+
+
 def _bind_explicit_http_agent(arguments: dict) -> str | None:
     explicit_agent_id = arguments.get("agent_id")
     if not (
@@ -348,6 +372,29 @@ def _bind_explicit_http_agent(arguments: dict) -> str | None:
     ):
         return None
     from src.mcp_handlers.context import update_context_agent_id
+
+    # CANARY — observation only, no behaviour change.
+    #
+    # This branch accepts an identity on the caller's word: the test above is
+    # a *shape* check (36 chars, 4 hyphens), not a lookup, and it runs first in
+    # `_resolve_http_prebind`, ahead of the operator token and the sticky
+    # binding. A resolution that succeeds here means the strict-identity gate
+    # downstream never sees a miss, so it never emits its typed refusal.
+    #
+    # That is the surface the trust-anchor audit is scoped to. Closing it is a
+    # behaviour change with real blast radius — some live callers declare a
+    # uuid and nothing else — and per the fleet rule that a gate needs a wired
+    # canary before it is armed, this measures the population first. The log
+    # line is the measurement; nothing here changes what binds.
+    #
+    # Deliberately NOT logged: the uuid itself, at any length. A prefix is
+    # still an identity fragment, and this line is meant to be safe to leave
+    # on in a live server and safe to read in a shared log.
+    logger.info(
+        "[ATTEST] explicit_agent_id bind corroboration=%s tool_arg_keys=%d",
+        _explicit_bind_corroboration(arguments),
+        len(arguments) if isinstance(arguments, dict) else 0,
+    )
 
     update_context_agent_id(explicit_agent_id)
     return explicit_agent_id
@@ -1399,6 +1446,9 @@ async def http_agent_history(request):
     # 'all' = ~`limit` real check-ins sampled evenly across the agent's whole
     # lifespan (decimation, not averaging — every point is a real check-in).
     mode = "all" if request.query_params.get("mode") == "all" else "recent"
+    include_telemetry = str(
+        request.query_params.get("include_telemetry", "")
+    ).strip().lower() in ("1", "true", "yes")
     try:
         from src.db import get_db
         db = get_db()
@@ -1422,13 +1472,14 @@ async def http_agent_history(request):
                     SELECT s.recorded_at,
                            (s.state_json->>'E')::real AS e,
                            s.integrity AS i, s.entropy AS s_entropy, s.volatility AS v,
-                           s.coherence, s.risk_score,
+                           s.coherence, s.risk_score, s.state_json,
                            row_number() OVER (ORDER BY s.recorded_at) AS rn,
                            count(*) OVER () AS total
                     FROM core.agent_state s
                     WHERE s.identity_id IN (SELECT identity_id FROM ids) AND s.synthetic = false
                 )
-                SELECT recorded_at, e, i, s_entropy, v, coherence, risk_score, total
+                SELECT recorded_at, e, i, s_entropy, v, coherence, risk_score,
+                       state_json, total
                 FROM numbered
                 WHERE CASE WHEN $3 = 'all'
                            THEN (rn % GREATEST(1, (total / $2)::int) = 0 OR rn = 1 OR rn = total)
@@ -1439,16 +1490,23 @@ async def http_agent_history(request):
                 agent_id, limit, mode,
             )
         total = rows[0]["total"] if rows else 0
-        points = [
-            {
+        from src.eisv_telemetry import summarize_state_eisv_telemetry
+        points = []
+        for r in rows:
+            state_json = r["state_json"] if isinstance(r["state_json"], dict) else {}
+            point = {
                 "t": r["recorded_at"].isoformat(),
                 "E": r["e"], "I": r["i"], "S": r["s_entropy"], "V": r["v"],
                 "coherence": r["coherence"], "risk": r["risk_score"],
+                "telemetry": summarize_state_eisv_telemetry(state_json),
             }
-            for r in rows
-        ]
+            if include_telemetry and isinstance(state_json.get("eisv_telemetry"), dict):
+                point["telemetry_envelope"] = state_json["eisv_telemetry"]
+            points.append(point)
         return JSONResponse({"success": True, "agent_id": agent_id, "mode": mode,
-                             "count": len(points), "total": total, "points": points})
+                             "count": len(points), "total": total,
+                             "telemetry_included": include_telemetry,
+                             "points": points})
     except Exception as exc:  # noqa: BLE001 — read-only panel endpoint, degrade gracefully
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
@@ -1631,6 +1689,54 @@ async def http_eisv_recent(request):
             events.append(event)
     events = events[-limit:]
     return JSONResponse({"type": "eisv_recent", "count": len(events), "events": events})
+
+
+_EISV_TELEMETRY_HEALTH_CACHE_TTL_SECONDS = 30.0
+_eisv_telemetry_health_cache: dict[int, tuple[float, dict[str, Any]]] = {}
+
+
+async def http_eisv_telemetry_health(request):
+    """GET /v1/eisv/telemetry-health?days=30 — fleet instrumentation health.
+
+    Aggregates the append-only EISV telemetry envelope without feeding any
+    result back into measurement, policy, or enforcement.  The outcome slice is
+    strict-external and lead-separated; its calibration bins are descriptive,
+    clustered audit evidence rather than a claim of predictive lift.
+
+    The redesign refreshes monitor views every ten seconds, while this endpoint
+    scans a durable multi-day cohort.  Cache each supported window briefly so a
+    dashboard tab does not turn observability into database load.
+    """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not _check_http_auth(request, http_api_token=http_api_token):
+        return _http_unauthorized()
+
+    try:
+        days = int(request.query_params.get("days", "30"))
+    except (TypeError, ValueError):
+        days = 30
+    days = max(1, min(days, 90))
+
+    now = time.monotonic()
+    cached = _eisv_telemetry_health_cache.get(days)
+    if cached and now - cached[0] < _EISV_TELEMETRY_HEALTH_CACHE_TTL_SECONDS:
+        return JSONResponse(cached[1], headers={"Cache-Control": "private, max-age=30"})
+
+    try:
+        from src.db import get_db
+        from src.eisv_telemetry_health import query_eisv_telemetry_health
+
+        db = get_db()
+        async with db.acquire() as conn:
+            report = await query_eisv_telemetry_health(conn, window_days=days)
+        _eisv_telemetry_health_cache[days] = (now, report)
+        return JSONResponse(report, headers={"Cache-Control": "private, max-age=30"})
+    except Exception as exc:  # noqa: BLE001 — read-only operator surface
+        logger.error("EISV telemetry health query failed: %s", exc)
+        return JSONResponse(
+            {"success": False, "error": "telemetry health query failed"},
+            status_code=500,
+        )
 
 
 # Events API endpoint for dashboard
@@ -4485,6 +4591,7 @@ def register_http_routes(
     app.routes.append(Route("/metrics", http_metrics, methods=["GET"]))
     app.routes.append(Route("/v1/eisv/latest", http_eisv_latest, methods=["GET"]))
     app.routes.append(Route("/v1/eisv/recent", http_eisv_recent, methods=["GET"]))
+    app.routes.append(Route("/v1/eisv/telemetry-health", http_eisv_telemetry_health, methods=["GET"]))
     app.routes.append(Route("/v1/lifecycle/recent", http_lifecycle_recent, methods=["GET"]))
     app.routes.append(Route("/v1/enforcement/divergence", http_enforcement_divergence, methods=["GET"]))
     app.routes.append(Route("/api/events", http_events, methods=["GET"]))

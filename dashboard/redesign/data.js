@@ -76,17 +76,24 @@
 
   const S = () => window.SNAPSHOT;
 
-  // Fleet-average raw eisv_update events into 1-min buckets (last 20). Shared by
-  // the REST seed path (eisv() below) and the live push-apply path in the EISV
-  // section, so "the live point" and "the historical point" are computed the
-  // same way — a pushed event re-buckets the window exactly as a refetch would.
-  function bucketEisv(evs) {
+  function eisvMeasurementSource(event) {
+    const telemetry = (event && (event.eisv_telemetry || event.telemetry)) || {};
+    return telemetry.measurement_source || telemetry.behavioral_source ||
+      telemetry.submitted_source || telemetry.primary_source ||
+      (event && event.metrics && event.metrics.primary_eisv_source) || "unknown";
+  }
+
+  // Fleet-average raw eisv_update events into 1-min buckets (last 20), with an
+  // optional source filter. "all" remains available for continuity but is
+  // labeled mixed in the view; a named lane never averages across instruments.
+  function bucketEisv(evs, source) {
     const buckets = {};
     (evs || []).forEach((e) => {
+      if (source && source !== "all" && eisvMeasurementSource(e) !== source) return;
       const ts = e.timestamp || "";
       if (ts.length < 16) return;
       const k = ts.slice(11, 16);
-      const m = e.eisv || {};
+      const m = e.eisv || e || {};
       (buckets[k] || (buckets[k] = [])).push({ E: m.E, I: m.I, S: m.S, V: m.V, C: e.coherence, R: e.risk });
     });
     const avg = (xs, f) => { const v = xs.map((x) => x[f]).filter((n) => typeof n === "number"); return v.length ? v.reduce((a, n) => a + n, 0) / v.length : null; };
@@ -94,6 +101,47 @@
       const xs = buckets[t];
       return { t, E: avg(xs, "E"), I: avg(xs, "I"), S: avg(xs, "S"), V: avg(xs, "V"), C: avg(xs, "C"), R: avg(xs, "R") };
     });
+  }
+
+  // Event-weighted summaries grouped by the consumed measurement source. This
+  // table is intentionally source-separated: no value in one lane incorporates
+  // a physical/behavioral/fallback observation from another lane.
+  function summarizeEisvSources(evs) {
+    const lanes = {};
+    (evs || []).forEach((event) => {
+      const source = eisvMeasurementSource(event);
+      const telemetry = event.eisv_telemetry || event.telemetry || {};
+      const m = event.eisv || event || {};
+      const lane = lanes[source] || (lanes[source] = {
+        source, events: 0, values: { E: [], I: [], S: [], V: [] },
+        confidence: [], missingObservations: 0, missingInputs: new Set(),
+        enforcementRequested: 0, enforcementApplied: 0, latest: null,
+      });
+      lane.events += 1;
+      ["E", "I", "S", "V"].forEach((key) => {
+        if (typeof m[key] === "number") lane.values[key].push(m[key]);
+      });
+      if (typeof telemetry.behavioral_confidence === "number") lane.confidence.push(telemetry.behavioral_confidence);
+      const missing = Array.isArray(telemetry.missing_inputs) ? telemetry.missing_inputs : [];
+      if (missing.length) lane.missingObservations += 1;
+      missing.forEach((name) => lane.missingInputs.add(name));
+      if (telemetry.enforcement_requested === true) lane.enforcementRequested += 1;
+      if (telemetry.enforcement_applied === true) lane.enforcementApplied += 1;
+      lane.latest = event.timestamp || event.t || lane.latest;
+    });
+    const mean = (values) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+    return Object.values(lanes).map((lane) => ({
+      source: lane.source,
+      events: lane.events,
+      E: mean(lane.values.E), I: mean(lane.values.I),
+      S: mean(lane.values.S), V: mean(lane.values.V),
+      confidence: mean(lane.confidence),
+      missingObservations: lane.missingObservations,
+      missingInputs: Array.from(lane.missingInputs).sort(),
+      enforcementRequested: lane.enforcementRequested,
+      enforcementApplied: lane.enforcementApplied,
+      latest: lane.latest,
+    })).sort((a, b) => b.events - a.events || a.source.localeCompare(b.source));
   }
 
   // Normalise one detect_stuck_agents entry for the views. `public_agent_id` is
@@ -108,6 +156,8 @@
 
   const DATA = {
     bucketEisv,
+    eisvMeasurementSource,
+    summarizeEisvSources,
 
     // ── THE resident-liveness predicate ──────────────────────────────────────
     // One question, one answer. `status` is the server's authoritative rollup
@@ -343,8 +393,17 @@
         // `raw` carries the unaveraged events so the section can keep
         // accumulating live pushes (same shape arrives over /ws/eisv) and
         // re-bucket the window itself, no refetch.
-        return { series: bucketEisv(evs), raw: evs, coherenceEq: 0.5 };
-      }, () => { const e = S().eisv; return { series: e.series, raw: e.raw || [], coherenceEq: e.coherenceEq }; });
+        return { series: bucketEisv(evs), raw: evs, sourceLanes: summarizeEisvSources(evs), coherenceEq: 0.5 };
+      }, () => { const e = S().eisv; return { series: e.series, raw: e.raw || [], sourceLanes: e.sourceLanes || [], coherenceEq: e.coherenceEq }; });
+    },
+
+    async eisvTelemetryHealth(days) {
+      const d = Number.isFinite(days) ? Math.max(1, Math.min(90, Math.round(days))) : 30;
+      return withFallback(async () => {
+        const report = await authFetch(`/v1/eisv/telemetry-health?days=${d}`);
+        return report && report.success && report.schema === "eisv.telemetry-health.v1"
+          ? report : null;
+      }, () => S().eisvTelemetryHealth);
     },
 
     async automations() {
@@ -398,7 +457,9 @@
       // opts: { limit, mode: "recent"|"all" }. Returns { points, total, mode }.
       opts = opts || {};
       return withFallback(async () => {
-        const q = "?limit=" + (opts.limit || 200) + (opts.mode === "all" ? "&mode=all" : "");
+        const q = "?limit=" + (opts.limit || 200) +
+          (opts.mode === "all" ? "&mode=all" : "") +
+          (opts.includeTelemetry ? "&include_telemetry=true" : "");
         const r = await authFetch("/v1/agents/" + encodeURIComponent(id) + "/history" + q);
         return r && Array.isArray(r.points)
           ? { points: r.points, total: r.total || r.points.length, mode: r.mode || "recent" }

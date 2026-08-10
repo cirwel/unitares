@@ -32,10 +32,22 @@ defmodule UnitaresSentinel.GovernanceCheckinTest do
     assert args["complexity"] == 0.35
     assert args["confidence"] == 0.85
     assert args["response_mode"] == "compact"
-    assert args["agent_id"] == @agent_uuid
     assert args["continuity_token"] == @continuity_token
     assert args["client_session_id"] == @client_session_id
+
+    # ⛔ The uuid is NOT declared. The REST prebind accepts an explicit
+    # agent_id on a shape check alone and consults it BEFORE the CSID, so
+    # declaring it short-circuits resolution: no typed refusal, no PG session
+    # renewal, binding loss unobservable. Measured live 2026-08-10 — a valid
+    # CSID and a live sessions row were both inert while this key was sent.
+    refute Map.has_key?(args, "agent_id")
   end
+
+  # The asymmetry this change rests on — agent_id is legitimate as a payload
+  # field (who this is about) and illegitimate as a credential (who is asking)
+  # — is already pinned below by "recover posts self_recovery (quick) carrying
+  # the session anchor identity", which asserts recover/1 DOES send agent_id.
+  # Read the two together: check-in must not, recovery must.
 
   test "checkin posts to the HTTP tool-call endpoint and returns result" do
     parent = self()
@@ -109,6 +121,49 @@ defmodule UnitaresSentinel.GovernanceCheckinTest do
     assert detail["paused_at"] == "2026-06-13T23:40:11.993752+00:00"
     assert detail["status"] == "paused"
     assert detail["recovery"]["action"] =~ "self_recovery"
+  end
+
+  test "a typed identity refusal is named, not filed as an unparseable response" do
+    # A strict refusal carries neither success:false nor an action, so it does
+    # not match the {"success": true, "result": {}} shape this client requires
+    # and used to fall through to {:invalid_response, _} — logged at :debug,
+    # indistinguishable from server noise. UnitaresSdk.Envelope classifies it,
+    # so "we are not authenticated" reads as that rather than as "odd reply".
+    http_post = fn _url, _body, _headers, _timeout_ms ->
+      {:ok, 200,
+       Jason.encode!(%{
+         "status" => "identity_required",
+         "error_code" => "SESSION_ERROR",
+         "error_category" => "auth_error"
+       })}
+    end
+
+    assert {:error, {:refused, :identity_required}} =
+             GovernanceCheckin.checkin(summary(), http_post: http_post)
+  end
+
+  test "a genuinely malformed reply is still an invalid_response, not a refusal" do
+    # The negative control for the test above: adding refusal classification
+    # must not turn every unrecognised shape into an auth problem.
+    http_post = fn _url, _body, _headers, _timeout_ms ->
+      {:ok, 200, Jason.encode!(%{"totally" => "unexpected"})}
+    end
+
+    assert {:error, {:invalid_response, %{"totally" => "unexpected"}}} =
+             GovernanceCheckin.checkin(summary(), http_post: http_post)
+  end
+
+  test "a pause VERDICT still reaches the caller as a result, not an error" do
+    # process_agent_update returns the verdict under "action". Routing this
+    # response through the shared envelope must not convert a legitimate pause
+    # verdict into a refusal — the code that acts on verdicts would never see it.
+    http_post = fn _url, _body, _headers, _timeout_ms ->
+      {:ok, 200,
+       Jason.encode!(%{"success" => true, "result" => %{"action" => "pause", "coherence" => 0.4}})}
+    end
+
+    assert {:ok, %{"action" => "pause"}} =
+             GovernanceCheckin.checkin(summary(), http_post: http_post)
   end
 
   test "recover posts self_recovery (quick) carrying the session anchor identity" do

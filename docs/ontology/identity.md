@@ -239,11 +239,21 @@ design. Declare a parent only when a causal relationship actually exists:
   finished.
 
 Liveness gates the declaration: declaring a **currently-live** agent as parent
-is rejected at onboard (`lineage_coincidental_rejected`), because a live agent
-is a concurrent sibling, not a predecessor. `subagent` and `compaction` are
-exempt — their parent is legitimately still running. A genuine serial handoff
-to an exited predecessor is accepted and remains provisional until R1's
-behavioral-continuity check confirms it.
+is rejected at onboard (`lineage_coincidental_rejected`) for a succession
+claim, because a live agent is then a concurrent sibling, not a predecessor.
+The canonical relationship registry (`src/identity/lineage_semantics.py`)
+distinguishes three cases:
+
+- dispatched children (`subagent`, `dialectic_reviewer`, `dispatch`) permit a
+  live parent because the dispatcher is expected to remain running;
+- `compaction` is a context continuation and also permits a live parent;
+- succession (`explicit`, `new_session`) requires an exited parent. Unknown
+  reasons receive no exemption and are liveness-checked (fail closed).
+
+The reason is still a declaration, not dispatch proof. Orchestrator-vouched
+process evidence remains the stronger future primitive. A genuine serial
+handoff to an exited predecessor is accepted and remains provisional until
+R1's behavioral-continuity check confirms it.
 
 ### Cross-role lineage envelope (role families)
 

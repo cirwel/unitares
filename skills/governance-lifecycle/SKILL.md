@@ -4,7 +4,7 @@ description: >
   Use when an agent is interacting with UNITARES governance for the first time, needs to
   onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
   from session start through check-ins to recovery.
-last_verified: "2026-07-28"
+last_verified: "2026-08-09"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -12,11 +12,17 @@ source_files:
   - unitares/src/mcp_handlers/admin/handlers.py
   - unitares/src/mcp_handlers/tool_stability.py
   - unitares/src/mcp_handlers/middleware/envelope_step.py
+  # Added 2026-08-09: this skill documents check-in and dialectic semantics but
+  # was not verified against the code implementing either. That is why stale
+  # `confidence` guidance survived several freshness cycles — the field it was
+  # wrong about lives in phases.py, which nobody was checking.
+  - unitares/src/mcp_handlers/updates/phases.py
+  - unitares/src/mcp_handlers/dialectic/handlers.py
 ---
 
 # Agent Lifecycle
 
-**Last Updated:** 2026-07-28
+**Last Updated:** 2026-08-09
 
 ## Primary Workflow Names
 
@@ -46,7 +52,7 @@ start_session(force_new=true, parent_agent_id="<prior-uuid>",
 identity(agent_uuid="<uuid>", continuity_token="<token>", resume=true) # same live owner / proof-owned rebind
 ~~~
 
-Declaring a currently-live agent as parent is rejected (`lineage_coincidental_rejected`): a live agent is a concurrent sibling, not a predecessor. `subagent` and `compaction` are exempt — their parent is legitimately live. A genuine handoff to an exited predecessor stays provisional until R1 confirms it. Continuing the same still-running process means reusing the active binding or `client_session_id`, not minting another child.
+Declaring a currently-live agent as parent for a succession is rejected (`lineage_coincidental_rejected`): a live agent is then a concurrent sibling, not a predecessor. Registered dispatched-child reasons (`subagent`, internal `dialectic_reviewer`, and `dispatch`) plus the `compaction` continuation are exempt because their parent is legitimately live; unknown reasons receive no exemption. A genuine handoff to an exited predecessor stays provisional until R1 confirms it. Continuing the same still-running process means reusing the active binding or `client_session_id`, not minting another child.
 
 Use raw `onboard(...)` instead when targeting older servers or when you
 need the unwrapped raw response.
@@ -84,7 +90,11 @@ Call `sync_state()` after meaningful work:
 sync_state(
   response_text: "Brief summary of what you did",
   complexity: 0.0-1.0,   # Task difficulty estimate
-  confidence: 0.0-1.0    # How confident you are (be honest)
+  confidence: 0.0-1.0    # OPTIONAL — omit unless you are genuinely stating a
+                         # belief about your own work. Any value you pass mints
+                         # a tactical prediction that is scored into the fleet
+                         # calibration curve, so a habitual number becomes a
+                         # forecast nobody made. Omitting it mints nothing.
 )
 ~~~
 

@@ -1318,6 +1318,15 @@ async def enrich_websocket_broadcast(ctx: UpdateContext) -> None:
         except Exception:
             pass
 
+        # Keep the broadcaster/ring-buffer payload compact.  The full bounded
+        # derivation envelope is persisted in core.agent_state and available in
+        # full check-in responses; the dashboard needs only source, confidence,
+        # missingness, policy, and actuator status for its source lanes.
+        from src.eisv_telemetry import summarize_eisv_telemetry
+        eisv_telemetry = summarize_eisv_telemetry(
+            ctx.response_data.get("eisv_telemetry")
+        )
+
         await broadcaster_instance.broadcast({
             "type": "eisv_update",
             "agent_id": ctx.agent_uuid,
@@ -1338,7 +1347,8 @@ async def enrich_websocket_broadcast(ctx: UpdateContext) -> None:
             "risk_reason": risk_adj_reason,
             "events": governance_events,
             "drift_trends": drift_trends,
-            "sensor_data": broadcast_sensor_data
+            "sensor_data": broadcast_sensor_data,
+            "eisv_telemetry": eisv_telemetry,
         })
         logger.debug(f"Broadcast EISV update for agent {ctx.declared_agent_id}: eisv={eisv_data}, coherence={coherence_val}")
     except Exception as e:

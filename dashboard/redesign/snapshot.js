@@ -158,6 +158,9 @@ window.SNAPSHOT = {
   // Real fleet-average EISV series (1-min buckets) from /v1/eisv/recent 2026-06-19T20:38Z.
   eisv: {
     coherenceEq: 0.50,
+    sourceLanes: [
+      {source:"legacy_snapshot",events:16,E:0.665,I:0.704,S:0.306,V:-0.093,confidence:null,missingObservations:16,missingInputs:["eisv_telemetry"],enforcementRequested:0,enforcementApplied:0,latest:"2026-06-19T20:38:00Z"},
+    ],
     series: [
       {t:"20:22",E:0.292,I:0.826,S:0.171,V:-0.517,C:0.497,R:0.0},
       {t:"20:23",E:0.733,I:0.735,S:0.250,V:0.045,C:0.498,R:0.138},
@@ -176,6 +179,102 @@ window.SNAPSHOT = {
       {t:"20:37",E:0.732,I:0.640,S:0.431,V:0.030,C:0.504,R:0.05},
       {t:"20:38",E:0.521,I:0.749,S:0.247,V:-0.218,C:0.496,R:0.0},
     ],
+  },
+  // Portable example for /v1/eisv/telemetry-health. Values are illustrative
+  // and always carry the snapshot badge; live zero-envelope cohorts remain
+  // zero rather than borrowing these numbers.
+  eisvTelemetryHealth: {
+    success:true, schema:"eisv.telemetry-health.v1", window_days:30,
+    generated_at:"2026-08-09T22:30:00Z",
+    summary:{ states:8420, agents:201, envelope_rows:6240, envelopes:6240, envelope_agents:155,
+      invalid_envelopes:0, invalid_envelope_rate:0, coverage_rate:0.741, agent_coverage_rate:0.771,
+      first_envelope_at:"2026-07-18T09:12:00Z", last_envelope_at:"2026-08-09T22:28:00Z",
+      behavioral_primary:3994, behavioral_primary_rate:0.640, ode_fallback:2246,
+      ode_fallback_rate:0.360, warmup:1670, warmup_rate:0.268,
+      measurement_ready:3994,measurement_ready_rate:0.640,
+      maturity_eligible:0,maturity_eligible_rate:0,
+      maturity_would_defer:0,maturity_would_defer_rate:0,maturity_confirmed:0,
+      maturity_actuation_enabled:0,maturity_actuation_ready:0,maturity_actuation_applied:0,
+      missing:920, missing_rate:0.147, contract_violation_rows:12,
+      contract_violations:12, contract_checked_rows:6240, contract_violation_rate:0.0019,
+      enforcement_requested:40, enforcement_applied:10, enforcement_delivered:10,
+      enforcement_delivery_rate:0.25 },
+    timeline:[
+      {day:"2026-08-03",states:284,envelopes:152,coverage_rate:0.535,behavioral_primary:82,ode_fallback:70,warmup:61,missing:38},
+      {day:"2026-08-04",states:301,envelopes:187,coverage_rate:0.621,behavioral_primary:105,ode_fallback:82,warmup:68,missing:41},
+      {day:"2026-08-05",states:296,envelopes:211,coverage_rate:0.713,behavioral_primary:126,ode_fallback:85,warmup:63,missing:37},
+      {day:"2026-08-06",states:318,envelopes:248,coverage_rate:0.780,behavioral_primary:158,ode_fallback:90,warmup:66,missing:34},
+      {day:"2026-08-07",states:325,envelopes:278,coverage_rate:0.855,behavioral_primary:181,ode_fallback:97,warmup:64,missing:32},
+      {day:"2026-08-08",states:312,envelopes:286,coverage_rate:0.917,behavioral_primary:196,ode_fallback:90,warmup:59,missing:28},
+      {day:"2026-08-09",states:337,envelopes:323,coverage_rate:0.958,behavioral_primary:226,ode_fallback:97,warmup:58,missing:25},
+    ],
+    measurement_sources:[
+      {source:"behavioral_sensor",observations:2840,rate:0.455},
+      {source:"ode_fallback",observations:2246,rate:0.360},
+      {source:"physical",observations:1154,rate:0.185},
+    ],
+    primary_sources:[
+      {source:"behavioral",observations:3994,rate:0.640},
+      {source:"ode_fallback",observations:2246,rate:0.360},
+    ],
+    warmup:[
+      {phase:"baselined",observations:4570,rate:0.732},
+      {phase:"warming",observations:1490,rate:0.239},
+      {phase:"initial",observations:180,rate:0.029},
+    ],
+    missing_inputs:[
+      {input:"outcome_history",observations:618,rate:0.099},
+      {input:"drift_norm",observations:247,rate:0.040},
+      {input:"calibration_error",observations:55,rate:0.009},
+    ],
+    contract_checks:{ checked_rows:6240, violation_rows:12, violations:12,
+      by_type:[
+        {type:"source_confidence_gate_mismatch",observations:8},
+        {type:"policy_risk_mismatch",observations:4},
+      ],
+      note:"Same-row serialization invariants only; differing risk vocabularies are shown separately, not counted as violations." },
+    maturity_gate:{ strata:[
+      {outcome:"unknown",observations:6240},
+    ], ineligibility_reasons:[
+      {reason:"not_recorded",observations:6240},
+    ], reset_reasons:[
+      {reason:"not_recorded",observations:6240},
+    ], note:"Snapshot predates the shadow maturity field. Live would_defer rows are counterfactual observations, never suppressed pauses." },
+    enforcement:{ strata:[
+      {stratum:"not_requested",observations:6200},
+      {stratum:"requested_not_applied",observations:30},
+      {stratum:"applied",observations:10},
+    ], bases:[
+      {basis:"unknown",observations:6240},
+    ], note:"Intervention-conditioned delivery counts; not a causal estimate of prevention or harm." },
+    risk_vocabularies:[
+      {surface:"behavioral_verdict",bands:[
+        {label:"safe",minimum:0,maximum_exclusive:0.35},
+        {label:"caution",minimum:0.35,maximum_exclusive:0.60},
+        {label:"high-risk",minimum:0.60,maximum_exclusive:null},
+      ]},
+      {surface:"experience_summary",bands:[
+        {label:"low",minimum:0,maximum_exclusive:0.40},
+        {label:"elevated",minimum:0.40,maximum_exclusive:0.70},
+        {label:"high",minimum:0.70,maximum_exclusive:null},
+      ]},
+      {surface:"health_status",bands:[
+        {label:"healthy",minimum:0,maximum_exclusive:0.45},
+        {label:"moderate",minimum:0.45,maximum_exclusive:0.70},
+        {label:"critical",minimum:0.70,maximum_exclusive:null},
+      ],note:"Coherence and void gates can override the risk-only band."},
+    ],
+    calibration:{ status:"inconclusive", anchor_scope:"strict_external",lead_minutes:5,
+      strict_outcomes:156,fixtures_excluded:12,with_prior_state:148,with_envelope:108,
+      envelope_coverage_rate:0.692,clusters:95,bad_clusters:14,invalid_risk_rows:0,
+      minimum_bin_clusters:20,minimum_cohort_clusters:100,bins:[
+        {band:"0.0-0.2",minimum:0,maximum:0.2,outcomes:28,bad_outcomes:1,clusters:25,bad_clusters:1,bad_cluster_rate:0.040,evidence_status:"descriptive"},
+        {band:"0.2-0.4",minimum:0.2,maximum:0.4,outcomes:36,bad_outcomes:2,clusters:31,bad_clusters:2,bad_cluster_rate:0.065,evidence_status:"descriptive"},
+        {band:"0.4-0.6",minimum:0.4,maximum:0.6,outcomes:27,bad_outcomes:4,clusters:23,bad_clusters:4,bad_cluster_rate:0.174,evidence_status:"descriptive"},
+        {band:"0.6-0.8",minimum:0.6,maximum:0.8,outcomes:12,bad_outcomes:4,clusters:11,bad_clusters:4,bad_cluster_rate:0.364,evidence_status:"sparse"},
+        {band:"0.8-1.0",minimum:0.8,maximum:1,outcomes:5,bad_outcomes:3,clusters:5,bad_clusters:3,bad_cluster_rate:0.600,evidence_status:"sparse"},
+      ],note:"Strict external outcomes only. Rates are descriptive and clustered by the prior measurement; they do not establish predictive lift or causality." },
+    semantics:{measurement:"EISV is a proprioceptive estimate, not an outcome judgment.",contract_checks:"Cross-field serialization invariants, not quality scores.",enforcement:"Intervention-conditioned delivery accounting, not a causal estimate."},
   },
   // Real resident-panel data from /v1/{watcher,sentinel,vigil}/summary + /health/deep 2026-06-19T20:41Z.
   // `coherence` rides along so the Agents pane applies DATA.residentLiveness
