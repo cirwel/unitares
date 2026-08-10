@@ -127,7 +127,18 @@ defmodule UnitaresSentinel.GovernanceCheckin do
         {:error, {:tool_error, Map.get(decoded, "error", "unknown")}}
 
       {:ok, decoded} ->
-        {:error, {:invalid_response, decoded}}
+        # Not the {"success": true, "result": {}} shape this client requires.
+        # Before calling it merely "invalid", ask the shared envelope contract
+        # whether it is a *refusal*: a typed strict identity refusal carries
+        # neither success:false nor an action, so it lands in this branch
+        # looking like unparseable noise. Naming it is the difference between
+        # "the server said something odd" and "we are not authenticated" —
+        # which is what kept canonical Lumen governance-dark ~3 days after the
+        # 2026-06-30 Redis wipe.
+        case UnitaresSdk.Envelope.classify(decoded) do
+          {:error, {:refused, _} = refusal} -> {:error, refusal}
+          _ -> {:error, {:invalid_response, decoded}}
+        end
 
       {:error, reason} ->
         {:error, {:invalid_json, reason}}

@@ -123,6 +123,49 @@ defmodule UnitaresSentinel.GovernanceCheckinTest do
     assert detail["recovery"]["action"] =~ "self_recovery"
   end
 
+  test "a typed identity refusal is named, not filed as an unparseable response" do
+    # A strict refusal carries neither success:false nor an action, so it does
+    # not match the {"success": true, "result": {}} shape this client requires
+    # and used to fall through to {:invalid_response, _} — logged at :debug,
+    # indistinguishable from server noise. UnitaresSdk.Envelope classifies it,
+    # so "we are not authenticated" reads as that rather than as "odd reply".
+    http_post = fn _url, _body, _headers, _timeout_ms ->
+      {:ok, 200,
+       Jason.encode!(%{
+         "status" => "identity_required",
+         "error_code" => "SESSION_ERROR",
+         "error_category" => "auth_error"
+       })}
+    end
+
+    assert {:error, {:refused, :identity_required}} =
+             GovernanceCheckin.checkin(summary(), http_post: http_post)
+  end
+
+  test "a genuinely malformed reply is still an invalid_response, not a refusal" do
+    # The negative control for the test above: adding refusal classification
+    # must not turn every unrecognised shape into an auth problem.
+    http_post = fn _url, _body, _headers, _timeout_ms ->
+      {:ok, 200, Jason.encode!(%{"totally" => "unexpected"})}
+    end
+
+    assert {:error, {:invalid_response, %{"totally" => "unexpected"}}} =
+             GovernanceCheckin.checkin(summary(), http_post: http_post)
+  end
+
+  test "a pause VERDICT still reaches the caller as a result, not an error" do
+    # process_agent_update returns the verdict under "action". Routing this
+    # response through the shared envelope must not convert a legitimate pause
+    # verdict into a refusal — the code that acts on verdicts would never see it.
+    http_post = fn _url, _body, _headers, _timeout_ms ->
+      {:ok, 200,
+       Jason.encode!(%{"success" => true, "result" => %{"action" => "pause", "coherence" => 0.4}})}
+    end
+
+    assert {:ok, %{"action" => "pause"}} =
+             GovernanceCheckin.checkin(summary(), http_post: http_post)
+  end
+
   test "recover posts self_recovery (quick) carrying the session anchor identity" do
     parent = self()
 
