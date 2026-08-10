@@ -48,7 +48,8 @@ defmodule DialecticLive.Governance do
 
     case Req.post(url, json: body, headers: headers, receive_timeout: 8_000) do
       {:ok, %Req.Response{status: 200, body: resp}} ->
-        {:ok, unwrap(resp)}
+        # Req has already decoded the JSON, so classify the term directly.
+        UnitaresSdk.Envelope.classify(resp)
 
       {:ok, %Req.Response{status: status, body: resp}} ->
         Logger.warning("governance tool-call #{name} -> HTTP #{status}: #{inspect(resp)}")
@@ -60,13 +61,15 @@ defmodule DialecticLive.Governance do
     end
   end
 
-  # The /v1/tools/call envelope wraps tool output under "result"; fall back to the
-  # whole body if the server returned the result flat.
-  defp unwrap(%{"result" => result}), do: result
-  defp unwrap(other), do: other
-
   # The exact list shape is the engine's to settle; accept the common shapes so a
   # server-side rename doesn't silently blank the pane.
+  #
+  # NOTE: this tolerance is why unwrapping had to move to the SDK. A governance
+  # refusal is a map with none of these keys, so the old `unwrap/1` returned it
+  # as a successful result and `normalize_sessions/1` turned it into `[]` — the
+  # pane rendered "no sessions" for "governance refused you". `Envelope.classify/1`
+  # now returns `{:error, {:refused, _}}` before this function is ever reached,
+  # so the fallback below only ever sees genuinely unrecognised *success* shapes.
   defp normalize_sessions(result) when is_list(result), do: result
   defp normalize_sessions(%{"sessions" => s}) when is_list(s), do: s
   defp normalize_sessions(%{"items" => s}) when is_list(s), do: s
