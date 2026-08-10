@@ -366,6 +366,7 @@ class TestStoreKnowledgeGraph:
         assert data["success"] is True
         assert "_truncated" in data
         assert "details" in data["_truncated"]
+        assert f"{MAX_DETAILS_LEN} char limit" in data["_tip"]
 
     @pytest.mark.asyncio
     async def test_store_with_related_discoveries(self, patch_common, registered_agent):
@@ -1161,21 +1162,26 @@ class TestBatchStoreAdditional:
         """Batch store with truncation shows tip (line 1309)."""
         mock_mcp_server, mock_graph = patch_common
         from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+        from src.mcp_handlers.knowledge.limits import (
+            MAX_DETAILS_LEN,
+            MAX_SUMMARY_LEN,
+        )
 
         result = await handle_store_knowledge_graph({
             "agent_id": registered_agent,
             "discoveries": [
                 {
                     "discovery_type": "note",
-                    "summary": "C" * 500,
+                    "summary": "C" * (MAX_SUMMARY_LEN + 1),
                 },
             ],
         })
 
         data = parse_result(result)
         assert data["success"] is True
-        if any("_truncated" in s for s in data.get("stored", [])):
-            assert "_tip" in data
+        assert any("_truncated" in s for s in data["stored"])
+        assert f"summary={MAX_SUMMARY_LEN}" in data["_tip"]
+        assert f"details={MAX_DETAILS_LEN}" in data["_tip"]
 
     @pytest.mark.asyncio
     async def test_batch_store_missing_discovery_type(self, patch_common, registered_agent):
