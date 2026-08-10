@@ -74,6 +74,13 @@ remains `ode_fallback` so the displayed ODE values are not mislabeled.
   projection. Add `include_telemetry=true` to include each full envelope.
 - `/v1/eisv/recent` and WebSocket `eisv_update` events carry only the compact
   summary so the broadcaster ring buffer stays bounded.
+- `GET /v1/eisv/telemetry-health?days=30` returns a cached, read-only fleet
+  aggregate over measured state rows. The dashboard's **Telemetry** tab uses
+  this surface for rollout coverage, primary/consumed source rates, warmup,
+  missing inputs, same-row contract checks, strict outcome-linked calibration,
+  and policy-requested versus enforcement-applied counts. Windows are clamped
+  to 1–90 days and cached for 30 seconds so a monitor view does not turn into a
+  database load generator.
 - `export_monitor_history(..., "json")` now exposes separate ODE and behavioral
   in-memory streams. It explicitly states that per-row source, policy, and
   enforcement history belongs to the append-only envelopes.
@@ -82,6 +89,36 @@ remains `ode_fallback` so the displayed ODE values are not mislabeled.
   exposes the same strata with `--telemetry-strata` and reproducible cohort
   cutoffs with `--as-of`; enforcement remains an audit stratum, never a
   predictor or causal-prevention claim.
+
+## Telemetry-health semantics
+
+The health report calls a row *covered* only when it carries the recognized
+`eisv.telemetry.v1` schema. Pre-envelope rows stay in the state-row denominator
+but never receive an inferred envelope, source, warmup phase, policy decision,
+or actuator result. This makes rollout progress and the evidence gap visible at
+the same time.
+
+Contract violations are limited to invariants inside one persisted observation:
+recognized envelopes must carry their measurement, derivation, policy, and
+enforcement fields; the policy input must match the stored risk/verdict/source;
+applied enforcement must have been requested; request state must match the
+policy action; and the behavioral-confidence gate must agree with the primary
+source. Malformed and unsupported envelope values are included in the contract
+denominator but excluded from rollout coverage. Historical rows are not
+re-judged using current risk thresholds.
+
+The dashboard separately publishes the three current numeric vocabularies
+(`behavioral_verdict`, `experience_summary`, and `health_status`). Their bands
+overlap by design and health can also be overridden by coherence/void gates, so
+different words for the same risk value are visible but are **not** automatically
+counted as contradictions.
+
+Outcome bins use only strict external anchors, exclude structurally marked
+controlled fixtures, require a prior state at least five minutes before the
+outcome, and require that prior state to carry the envelope. Rates are clustered
+by prior `measurement_id` (falling back to agent + state timestamp), with sparse
+and single-class bins labeled. This is descriptive calibration plumbing, not the
+baseline-relative lift test performed by the skeptic/ablation reports.
 
 ## What this does not claim
 

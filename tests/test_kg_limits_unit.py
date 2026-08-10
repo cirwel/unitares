@@ -26,6 +26,9 @@ class TestLimitsSanity:
     def test_details_cap_larger_than_summary(self):
         assert MAX_DETAILS_LEN > MAX_SUMMARY_LEN
 
+    def test_details_cap_supports_medium_documents(self):
+        assert MAX_DETAILS_LEN == 64 * 1024
+
     def test_embed_window_within_details_cap(self):
         assert EMBED_DETAILS_WINDOW <= MAX_DETAILS_LEN
 

@@ -12,6 +12,7 @@ from src.grounding.outcome_anchors import (
     tier_for_source,
     is_exogenous_anchor,
     is_anchorable,
+    is_structurally_controlled_fixture,
     anchored_outcomes_predicate,
     ANCHORED_OUTCOMES_SQL,
     ANCHORED_OUTCOMES_WITH_SOFT_SQL,
@@ -39,6 +40,22 @@ def test_unknown_provenance_is_excluded_not_admitted():
     assert tier_for_source("future_source") is AnchorTier.EXCLUDED
     assert is_exogenous_anchor("future_source") is False
     assert is_exogenous_anchor("future_source", include_soft=True) is False
+
+
+@pytest.mark.parametrize("detail", [
+    {"synthetic_calibration_fixture": True},
+    {"synthetic_negative_control": "yes"},
+    {"prediction_binding": "synthetic_negative_control"},
+    {"test_name": "overconfidence_probe"},
+    '{"test_name":"clean_control"}',
+])
+def test_structural_fixture_markers_are_shared_by_evidence_consumers(detail):
+    assert is_structurally_controlled_fixture(detail) is True
+
+
+def test_structural_fixture_filter_ignores_mutable_identity_purpose():
+    assert is_structurally_controlled_fixture({"purpose": "testing"}) is False
+    assert is_structurally_controlled_fixture("not-json") is False
 
 
 def test_self_referential_never_anchors():

@@ -165,6 +165,30 @@ actuator can alter the later outcome; use them to audit requested-vs-applied
 behavior, not as causal evidence that EISV prevented or caused an outcome. See
 [`eisv-telemetry-envelope-v1.md`](ontology/eisv-telemetry-envelope-v1.md).
 
+**Operator rollout health** — open `/#telemetry-health` or query:
+
+```bash
+curl -H "Authorization: Bearer $UNITARES_HTTP_API_TOKEN" \
+  'http://127.0.0.1:8767/v1/eisv/telemetry-health?days=30'
+```
+
+This surface answers whether the instrumentation exists and is internally
+consistent before asking whether EISV is useful. It reports envelope and agent
+coverage, behavioral-vs-fallback source rates, warmup/missingness, same-row
+serialization violations (including malformed or incomplete envelopes), strict
+outcome-linked risk bins, and policy-requested versus enforcement-delivered
+counts. Legacy rows remain in the coverage
+denominator and are never backfilled. Calibration bins are five-minute
+lead-separated, strict-external, controlled-fixture-excluded, and clustered by
+the prior measurement; sparse bins remain labeled `sparse`/`inconclusive`.
+
+The view also makes the current verdict, experience-summary, and health-status
+risk bands visible side by side. Their labels answer different questions and
+their thresholds overlap, so differing words are not treated as a contract
+failure by themselves. Actual violation counts are confined to fields that
+disagree inside the same persisted observation. None of these rollout metrics
+establish predictive lift, prevention, or qualia.
+
 **Honest current read** — *snapshot generated 2026-06-16; regenerate to confirm and
 treat as stale if the harness output is newer than this date:*
 
