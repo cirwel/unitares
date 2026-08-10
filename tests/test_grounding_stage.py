@@ -102,3 +102,58 @@ async def test_no_logprobs_falls_to_heuristic_under_apply(monkeypatch):
     m = ctx.result["metrics"]
     assert m.get("s_source") == "heuristic"
     assert m["S"] == pytest.approx(0.1415)  # heuristic S == prior ODE S
+
+
+# ── coherence_form provenance ──────────────────────────────────────────────
+# The stored `coherence` column is written by two different instruments with
+# different ranges (legacy tanh(V) is pinned near 0.49; the manifold form spans
+# [0, ~0.91]). Untagged, a history of mixed rows cannot be split by instrument,
+# so any threshold derived from it is derived from two incommensurable signals.
+# These pin the tag to the flag that actually decides which value is persisted.
+
+
+@pytest.mark.asyncio
+async def test_no_flags_leaves_coherence_form_unset(monkeypatch):
+    monkeypatch.delenv("UNITARES_GROUNDING_SHADOW", raising=False)
+    monkeypatch.delenv("UNITARES_GROUNDING_APPLY", raising=False)
+
+    ctx = _ctx()
+    await run_grounding_stage(ctx)
+
+    # Stage no-ops, so it must not claim provenance it did not establish —
+    # absence is how pre-existing rows stay identifiable.
+    assert ctx.coherence_form is None
+
+
+@pytest.mark.asyncio
+async def test_shadow_tags_legacy_without_changing_response(monkeypatch):
+    monkeypatch.setenv("UNITARES_GROUNDING_SHADOW", "1")
+    monkeypatch.delenv("UNITARES_GROUNDING_APPLY", raising=False)
+    monkeypatch.setattr(audit_log.audit_logger, "log_grounding_shadow", MagicMock())
+
+    ctx = _ctx()
+    before = dict(ctx.result["metrics"])
+    await run_grounding_stage(ctx)
+
+    # Under SHADOW the reverted (legacy) value is what persists, so that is what
+    # the row must be tagged with — regardless of the grounded value computed.
+    assert ctx.coherence_form == "legacy_tanh_v"
+    # ...and the tag rides ctx, never the metrics dict: the response stays
+    # byte-identical, which is the whole point of shadow being behavior-neutral.
+    assert ctx.result["metrics"] == before
+    assert "coherence_form" not in ctx.result["metrics"]
+
+
+@pytest.mark.asyncio
+async def test_apply_tags_the_grounded_source(monkeypatch):
+    monkeypatch.setenv("UNITARES_GROUNDING_APPLY", "1")
+    monkeypatch.delenv("UNITARES_GROUNDING_SHADOW", raising=False)
+    monkeypatch.setattr(audit_log.audit_logger, "log_grounding_shadow", MagicMock())
+
+    ctx = _ctx()
+    await run_grounding_stage(ctx)
+
+    # Under APPLY the grounded value persists, so the tag names its instrument
+    # rather than the generic "grounded" fallback.
+    assert ctx.coherence_form == ctx.result["metrics"]["coherence_source"]
+    assert ctx.coherence_form == "manifold"

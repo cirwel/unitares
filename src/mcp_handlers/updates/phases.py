@@ -1856,6 +1856,7 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
             behavioral_eisv=behavioral_snapshot,
             sensor_eisv_source=ctx.agent_state.get("sensor_eisv_source"),
             eisv_telemetry=eisv_telemetry,
+            coherence_form=getattr(ctx, "coherence_form", None),
         )
         logger.debug(f"PostgreSQL: Recorded state for {agent_id}")
     except ValueError:
@@ -1940,6 +1941,7 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
                 behavioral_eisv=behavioral_snapshot,
                 sensor_eisv_source=ctx.agent_state.get("sensor_eisv_source"),
                 eisv_telemetry=eisv_telemetry,
+                coherence_form=getattr(ctx, "coherence_form", None),
             )
             logger.debug(f"PostgreSQL: Created agent and recorded state for {agent_id}")
         except Exception as create_error:
