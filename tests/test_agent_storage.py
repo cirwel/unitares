@@ -781,6 +781,7 @@ class TestRecordAgentState:
         assert "behavioral_eisv" not in call_kwargs["state_json"]
         # Same for sensor_eisv_source: absent unless explicitly supplied
         assert "sensor_eisv_source" not in call_kwargs["state_json"]
+        assert "eisv_telemetry" not in call_kwargs["state_json"]
 
     @pytest.mark.asyncio
     async def test_persists_behavioral_eisv_into_state_json(self):
@@ -825,6 +826,29 @@ class TestRecordAgentState:
             )
         call_kwargs = db.record_agent_state.call_args.kwargs
         assert call_kwargs["state_json"]["sensor_eisv_source"] == source
+
+    @pytest.mark.asyncio
+    async def test_persists_versioned_eisv_telemetry_into_state_json(self):
+        identity = _make_identity(identity_id=42)
+        db = _mock_db(get_identity=identity, record_agent_state=1)
+        envelope = {
+            "schema": "eisv.telemetry.v1",
+            "measurement_id": "measurement-1",
+            "measurement": {"primary": {"source": "behavioral"}},
+            "policy_evaluation": {"action": "proceed"},
+            "enforcement": {"requested": False, "applied": False},
+        }
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import record_agent_state
+            await record_agent_state(
+                "agent-1",
+                E=0.7, I=0.8, S=0.15, V=-0.01,
+                regime="EXPLORATION", coherence=0.5,
+                eisv_telemetry=envelope,
+            )
+
+        state_json = db.record_agent_state.call_args.kwargs["state_json"]
+        assert state_json["eisv_telemetry"] == envelope
 
     @pytest.mark.asyncio
     async def test_sensor_eisv_source_does_not_disturb_eisv_values(self):

@@ -96,6 +96,18 @@ def _build_eisv_semantics(metrics: Dict[str, Any], monitor: Any) -> Dict[str, An
                 "V": float(getattr(beh, "V")),
                 "confidence": behavioral_confidence,
                 "warmup": warmup,
+                "observation_source": getattr(
+                    monitor, "_behavioral_obs_source", None
+                ),
+                "raw_observation": (
+                    {
+                        "E": float(beh.obs_history[-1][0]),
+                        "I": float(beh.obs_history[-1][1]),
+                        "S": float(beh.obs_history[-1][2]),
+                    }
+                    if getattr(beh, "obs_history", None)
+                    else None
+                ),
             }
     except Exception:
         behavioral_eisv = None

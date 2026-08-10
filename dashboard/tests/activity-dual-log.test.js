@@ -72,7 +72,7 @@ describe("activity dual-log view", () => {
     expect(result.data.operational.source).toBe("unavailable");
   });
 
-  it("keeps runtime observations distinct from authored reflections", async () => {
+  it("keeps host observations distinct from agent-authored check-ins", async () => {
     const dom = new JSDOM('<div id="act-mount"></div>', {
       runScripts: "outside-only",
       url: "https://governance.test/#activity",
@@ -91,10 +91,13 @@ describe("activity dual-log view", () => {
             windowHours: 24,
             summary: {
               processes: 1,
+              observed_slots: 1,
               agents: 1,
               recent_processes: 1,
+              recent_tool_activity_slots: 1,
+              recent_host_heartbeat_slots: 1,
               observations: 5,
-              processes_after_reflection: 1,
+              slots_without_agent_report: 1,
             },
             processes: [{
               agent_id: "86ae619f-87e0-4040-8f29-eacece0c7904",
@@ -106,20 +109,30 @@ describe("activity dual-log view", () => {
               model: "gpt-5.4",
               latest_kind: "activity_rollup",
               operational_recent: true,
+              tool_activity_recent: true,
+              host_heartbeat_recent: true,
               host_process_alive: true,
               last_operational_at: new Date().toISOString(),
+              last_tool_activity_at: new Date().toISOString(),
+              last_host_observation_at: new Date().toISOString(),
               last_reflection_at: null,
+              last_agent_report_at: null,
               last_interpretation_at: new Date().toISOString(),
-              operational_after_reflection: true,
+              substrate_interpretation_count: 1,
+              bootstrap_count: 1,
+              state_update_profile: "substrate_only",
+              operational_after_reflection: false,
+              tool_activity_after_agent_report: false,
+              host_observation_after_agent_report: false,
               tool_count: 42,
               tools_in_window: 7,
               restoration_capsule: {
-                operational: { event_id: "8f4bb851-dfed-4e12-b5b9-33820df47274" },
+                host_observation: { event_id: "8f4bb851-dfed-4e12-b5b9-33820df47274" },
                 reflection: { context: { task_label: "weekly release notes", task_outcome: "drafted" } },
                 continuity: {
-                  relationship: "operations_after_reflection",
+                  relationship: "host_observation_only",
                   missing: [],
-                  restore_basis: "operational_and_authored_context",
+                  restore_basis: "host_observation_only",
                 },
               },
             }],
@@ -132,17 +145,20 @@ describe("activity dual-log view", () => {
     await dom.window.Activity.load();
 
     const text = dom.window.document.getElementById("act-mount").textContent;
-    expect(text).toContain("Operational continuity");
-    expect(text).toContain("never EISV");
-    expect(text).toContain("no authored reflection");
-    expect(text).toContain("interpretation");
-    expect(text).toContain("ops since reflection");
+    expect(text).toContain("Host evidence and check-ins");
+    expect(text).toContain("never agent runtime or EISV");
+    expect(text).toContain("no agent-authored check-in");
+    expect(text).toContain("1 automatic turn summary");
+    expect(text).toContain("1 initialization row");
+    expect(text).toContain("tool activity observed");
+    expect(text).toContain("substrate only");
     expect(text).toContain("automation · explicit_env · gpt-5.4");
     expect(text).toContain("Restoration capsule");
     expect(text).toContain("weekly release notes · drafted");
     expect(text).toContain("audit 8f4bb851");
     expect(text).toContain("Governance state updates");
     expect(text).toContain("provenance varies");
-    expect(text).toContain("runtime excluded");
+    expect(text).toContain("host observations excluded");
+    expect(text).not.toContain("process is active");
   });
 });

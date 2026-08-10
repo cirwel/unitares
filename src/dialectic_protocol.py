@@ -610,8 +610,100 @@ class DialecticSession:
                 "rounds": self.synthesis_round - 1
             }
 
+        # Read the reviewer's standing verdict BEFORE recording this message.
+        # Scanning after the append is a live bug in reviewer_mode='self', where the
+        # paused agent IS the reviewer: the scan would find this very message and
+        # read the agent's own approval as "the reviewer's latest verdict",
+        # superseding its own earlier rejection.
+        objection_stands = self._reviewer_objection_stands()
+
+        # Repeat self-clear attempts are refused WITHOUT being recorded.
+        #
+        # Every persisted message refreshes core.dialectic_sessions.updated_at, and
+        # the auto-resolve sweeper selects on `updated_at < now() - 2h`. So an agent
+        # retrying more often than the threshold held a blocked session `active`
+        # forever: never resolved, never failed, never facilitated. Recording the
+        # FIRST attempt preserves the audit signal; refusing the rest without a
+        # write lets the session reach a terminal state.
+        if (
+            message.agrees
+            and message.agent_id == self.paused_agent_id
+            and objection_stands
+            and self._paused_agent_already_tried_to_clear()
+        ):
+            return {
+                "success": False,
+                "converged": False,
+                "blocked": "reviewer_objection_stands",
+                "error": (
+                    "Already refused: the reviewer's standing verdict on this session "
+                    "is a rejection and this attempt was not recorded. Retrying cannot "
+                    "change the outcome."
+                ),
+                "phase": self.phase.value,
+                "awaiting_facilitation": True,
+            }
+
         # Store message
         self.transcript.append(message)
+
+        # An interested party may not clear a standing objection.
+        #
+        # The paused agent wants to resume; the reviewer is the only check on that.
+        # `agrees=True` from the paused agent, over a reviewer synthesis that said
+        # agrees=False, is self-clearing rather than convergence. Measured on live
+        # data 2026-08-09: 13 of 15 resolved non-probe sessions since 2026-06-28
+        # resolved this way, median 2.2 minutes after the rejection — the reviewer's
+        # verdict had never once blocked a resumption.
+        #
+        # This routes to facilitation rather than resolving. It deliberately does NOT
+        # wait for the reviewer to ratify: the orchestrated reviewer subprocess exits
+        # immediately after posting its verdict, so a "both participants must agree"
+        # rule would strand the session forever — the never-resolve regression the
+        # synthetic-reviewer path was built to kill.
+        # NOTE: no reviewer_mode='self' exemption. An earlier revision exempted
+        # paused==reviewer on the grounds that there is no independent check to
+        # override. The record refutes the premise: 17 self-review verdicts across 10
+        # sessions, ALL agrees=True, not one self-rejection ever, and none since
+        # 2026-06-28. The exemption was inert on the entire history and its only live
+        # effect was to let a self-reviewer overturn its own rejection — the
+        # self-certification hole under a new name.
+        if (
+            message.agrees
+            and message.agent_id == self.paused_agent_id
+            and objection_stands
+        ):
+            self.synthesis_round += 1
+            self.awaiting_facilitation = True
+            return {
+                "success": True,
+                "converged": False,
+                "blocked": "reviewer_objection_stands",
+                "phase": self.phase.value,
+                "round": self.synthesis_round,
+                "max_rounds": self.max_synthesis_rounds,
+                "awaiting_facilitation": True,
+                "reason": (
+                    "The reviewer's standing verdict on this session is a rejection. "
+                    "The paused agent cannot resolve its own session over that "
+                    "objection."
+                ),
+                # Deliberately NOT advertising remediation routes here: as of
+                # 2026-08-09 none of the obvious ones works from SYNTHESIS. The
+                # handler's non-participant allow-list blocks a third-party
+                # synthesizer, reassign_reviewer refuses any phase but
+                # THESIS/ANTITHESIS, and the auto-resolve sweeper's facilitation
+                # branch is ANTITHESIS-only so this session will be marked FAILED
+                # after STUCK_SESSION_THRESHOLD rather than reaching a human.
+                # Failing closed beats resuming over a rejection, but it is not
+                # facilitation and must not be described as such until one of those
+                # three paths is opened.
+                "operator_note": (
+                    "No in-protocol remediation path currently exists from this "
+                    "state; the session will be swept to FAILED rather than "
+                    "facilitated. Tracked as follow-up work."
+                ),
+            }
 
         # Convergence: agrees=True resolves immediately.
         # Thesis → Antithesis → Synthesis is three phases, not four.
@@ -635,6 +727,58 @@ class DialecticSession:
             "round": self.synthesis_round,
             "max_rounds": self.max_synthesis_rounds,
         }
+
+    def _reviewer_objection_stands(self) -> bool:
+        """True when the reviewer's most recent synthesis verdict was a rejection.
+
+        Only the reviewer's LAST verdict counts — a later `agrees=True` from the
+        reviewer supersedes an earlier rejection, so a reviewer that is talked
+        round still resolves the session normally. Returns False when there is no
+        reviewer, or the reviewer has not yet returned a verdict.
+
+        Keyed on "the last synthesis NOT from the paused agent" rather than "from the
+        current reviewer_agent_id". That distinction is load-bearing: reassignment
+        repoints `reviewer_agent_id` (and clears awaiting_facilitation) in
+        `_apply_reviewer_reassignment`, so an id-keyed scan orphans the previous
+        reviewer's rejection and the paused agent self-clears on its very next call.
+        Reassignment must not be able to erase a recorded objection.
+
+        Call this BEFORE appending the message under evaluation; see submit_synthesis.
+
+        KNOWN GAP (2026-08-09): this only recognises reviewer *synthesis* verdicts.
+        A reviewer that has filed a disputing antithesis but not yet posted its
+        synthesis does not count as a standing objection, so a paused agent that
+        wins the race between the reviewer's two calls can still self-clear.
+        Whether a disputing antithesis alone should block is a governance decision,
+        not a bug fix — it would stop nearly every paused agent from ever resolving
+        its own session, which may well be correct.
+
+        In reviewer_mode='self' the paused agent holds BOTH roles, so its own recorded
+        rejection is the only verdict in existence — excluding paused-agent messages
+        there would make the guard permanently blind to exactly the self-certification
+        case it exists to stop.
+        """
+        self_review = self.reviewer_agent_id == self.paused_agent_id
+        for msg in reversed(self.transcript):
+            if getattr(msg, "phase", None) != "synthesis" or msg.agrees is None:
+                continue
+            if not self_review and msg.agent_id == self.paused_agent_id:
+                continue
+            return msg.agrees is False
+        return False
+
+    def _paused_agent_already_tried_to_clear(self) -> bool:
+        """True when the paused agent has already filed an agreeing synthesis.
+
+        Used to refuse repeat self-clear attempts without persisting them; see the
+        sweeper-starvation note in submit_synthesis.
+        """
+        return any(
+            getattr(msg, "phase", None) == "synthesis"
+            and msg.agent_id == self.paused_agent_id
+            and msg.agrees is True
+            for msg in self.transcript
+        )
 
     @staticmethod
     def _normalize_condition_terms(cond: str) -> set:

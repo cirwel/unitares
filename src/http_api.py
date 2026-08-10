@@ -1399,6 +1399,9 @@ async def http_agent_history(request):
     # 'all' = ~`limit` real check-ins sampled evenly across the agent's whole
     # lifespan (decimation, not averaging — every point is a real check-in).
     mode = "all" if request.query_params.get("mode") == "all" else "recent"
+    include_telemetry = str(
+        request.query_params.get("include_telemetry", "")
+    ).strip().lower() in ("1", "true", "yes")
     try:
         from src.db import get_db
         db = get_db()
@@ -1422,13 +1425,14 @@ async def http_agent_history(request):
                     SELECT s.recorded_at,
                            (s.state_json->>'E')::real AS e,
                            s.integrity AS i, s.entropy AS s_entropy, s.volatility AS v,
-                           s.coherence, s.risk_score,
+                           s.coherence, s.risk_score, s.state_json,
                            row_number() OVER (ORDER BY s.recorded_at) AS rn,
                            count(*) OVER () AS total
                     FROM core.agent_state s
                     WHERE s.identity_id IN (SELECT identity_id FROM ids) AND s.synthetic = false
                 )
-                SELECT recorded_at, e, i, s_entropy, v, coherence, risk_score, total
+                SELECT recorded_at, e, i, s_entropy, v, coherence, risk_score,
+                       state_json, total
                 FROM numbered
                 WHERE CASE WHEN $3 = 'all'
                            THEN (rn % GREATEST(1, (total / $2)::int) = 0 OR rn = 1 OR rn = total)
@@ -1439,16 +1443,23 @@ async def http_agent_history(request):
                 agent_id, limit, mode,
             )
         total = rows[0]["total"] if rows else 0
-        points = [
-            {
+        from src.eisv_telemetry import summarize_state_eisv_telemetry
+        points = []
+        for r in rows:
+            state_json = r["state_json"] if isinstance(r["state_json"], dict) else {}
+            point = {
                 "t": r["recorded_at"].isoformat(),
                 "E": r["e"], "I": r["i"], "S": r["s_entropy"], "V": r["v"],
                 "coherence": r["coherence"], "risk": r["risk_score"],
+                "telemetry": summarize_state_eisv_telemetry(state_json),
             }
-            for r in rows
-        ]
+            if include_telemetry and isinstance(state_json.get("eisv_telemetry"), dict):
+                point["telemetry_envelope"] = state_json["eisv_telemetry"]
+            points.append(point)
         return JSONResponse({"success": True, "agent_id": agent_id, "mode": mode,
-                             "count": len(points), "total": total, "points": points})
+                             "count": len(points), "total": total,
+                             "telemetry_included": include_telemetry,
+                             "points": points})
     except Exception as exc:  # noqa: BLE001 — read-only panel endpoint, degrade gracefully
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
@@ -2916,12 +2927,13 @@ async def http_substrate_observe(request):
 
 
 async def http_runtime_observe(request):
-    """POST /v1/runtime/observe — identity-bound host runtime evidence.
+    """POST /v1/runtime/observe — identity-bound host evidence.
 
     Unlike ``/v1/substrate/observe`` (the identity-free dark-session floor),
     this route requires an active ``client_session_id`` whose durable binding
-    matches ``agent_uuid``.  Accepted rows live in ``audit.events`` and never
-    create an EISV/state update.
+    matches ``agent_uuid``. The ``runtime`` path is retained for compatibility;
+    accepted rows live in ``audit.events`` and never prove continuous agent
+    runtime or create an EISV/state update.
     """
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
     if not _check_http_auth(request, http_api_token=http_api_token):
@@ -2953,12 +2965,12 @@ async def http_runtime_observe(request):
 
 
 async def http_runtime_activity(request):
-    """GET /v1/runtime/activity — operational and reflective clocks, separated.
+    """GET /v1/runtime/activity — host and state-update clocks, separated.
 
-    The operational side is derived only from identity-bound runtime
-    observations.  The reflective side includes only ``agent_report`` state
-    rows; substrate interpretations and legacy unclassified rows remain
-    separately labeled in the response.
+    The host side is derived only from identity-bound hook observations. The
+    state side distinguishes ``agent_report`` rows from automatic substrate
+    interpretations, synthetic initialization, and legacy unclassified rows.
+    A hook-parent heartbeat never marks an agent or slot as active.
     """
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
     if not _check_http_auth(request, http_api_token=http_api_token):

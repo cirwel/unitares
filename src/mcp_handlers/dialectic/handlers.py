@@ -2067,10 +2067,22 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                         reasoning=arguments.get('reasoning'),
                         agrees=agrees,
                     )
-                    if not result.get("converged"):
+                    _blocked = result.get("blocked") == "reviewer_objection_stands"
+                    # Skip the phase write when blocked: the phase has not changed (it
+                    # stays SYNTHESIS) and `update_session_phase` sets
+                    # `updated_at = now()`, which pushes back the auto-resolve sweeper's
+                    # `updated_at < now() - threshold` window. Combined with unbounded
+                    # retries that starved the sweeper indefinitely, leaving the session
+                    # with no terminal state at all. Repeat attempts are now refused
+                    # before persistence, so the clock runs from the first attempt.
+                    if not result.get("converged") and not _blocked:
                         _beam_ph = await beam_update_phase(session_id, session.phase.value)
                         if _beam_ph is None:
                             await pg_update_phase(session_id, session.phase.value)
+                    # The facilitation flag must be durable, not in-memory only —
+                    # otherwise the next process to load the session resolves it.
+                    if _blocked:
+                        await pg_update_awaiting_facilitation(session_id, True)
                 except Exception as e:
                     logger.warning(f"Could not update PostgreSQL after synthesis: {e}")
     
@@ -2207,7 +2219,28 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                 result["resolution_type"] = "conservative_default"
                 result["next_step"] = next_step_no_consensus()
                 result["cooldown_until"] = (datetime.now() + timedelta(hours=1)).isoformat()
-    
+
+            # A refusal must not reach the caller inside a success envelope. The
+            # blocked path deliberately returns success=True from the protocol layer so
+            # the attempt still gets persisted above (it is the audit signal), but any
+            # caller keying on `success` would otherwise read a governance refusal as
+            # convergence.
+            if result.get("blocked") == "reviewer_objection_stands":
+                return [error_response(
+                    result.get("reason") or result.get("error")
+                    or "Refused: the reviewer's standing verdict is a rejection.",
+                    error_code="SELF_CLEAR_REFUSED",
+                    error_category="governance_refusal",
+                    recovery={
+                        "action": (
+                            "The paused agent cannot resolve its own session over the "
+                            "reviewer's standing rejection. Do not retry — repeat "
+                            "attempts are refused without being recorded."
+                        ),
+                        "related_tools": ["dialectic"],
+                    },
+                )]
+
             return success_response(result)
 
     except Exception as e:

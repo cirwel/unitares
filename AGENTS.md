@@ -8,7 +8,15 @@ The installable Codex/Claude adapter bundle is canonical in the companion `unita
 
 ## Codex-specific wiring
 
-Codex has no hook system analogous to Claude's. **Nothing is automatic.** You decide when to check in, diagnose, and surface Watcher findings. The expected Codex baseline is one real check-in per assistant turn, with extra check-ins around high-risk or long-running work. Do not confuse that with per-tool or per-edit check-ins; those are usually noise.
+Codex exposes synchronous lifecycle hooks, but they do not imply a continuously
+running agent. The expected state-writing profile is sparse: the agent usually
+makes zero or one meaningful `sync_state` call during a turn, and the plugin's
+Stop hook may add one automatic `substrate_interpretation` after the turn. Only
+the former is an agent-authored check-in. Lazy onboarding can also write a
+synthetic bootstrap row; initialization is not a real check-in. PostToolUse
+receipts and optional hook-parent heartbeats are audit evidence only — never
+agent runtime, progress, or EISV. Do not manufacture per-tool or per-edit
+check-ins.
 
 ### Slash commands (`commands/*.md`)
 
@@ -18,7 +26,7 @@ Codex has no hook system analogous to Claude's. **Nothing is automatic.** You de
 - `/dialectic` — structured review
 - `/closeout` — final workspace hygiene check; reports dirty files, Git delivery state (local vs pushed/merged), and repo-rooted processes; can stash/stop when cleanup is requested
 
-Raw tool flow when slash commands are unavailable: `start_session(force_new=true, parent_agent_id=<prior uuid if continuing>, spawn_reason="new_session")` → save `agent_uuid` + `client_session_id` → `sync_state(response_text, complexity, client_session_id=...)` once per assistant turn and at meaningful milestones → `check_working_state()` for read-only checks → `health_check()` only if system health is suspect. Canonical/raw equivalents are `onboard(...)`, `process_agent_update(...)`, and `get_governance_metrics(...)`.
+Raw tool flow when slash commands are unavailable: `start_session(force_new=true, parent_agent_id=<prior uuid if continuing>, spawn_reason="new_session")` → save `agent_uuid` + `client_session_id` → `sync_state(response_text, complexity, client_session_id=...)` only when there is meaningful agent state to report (typically at most once per assistant turn) → `check_working_state()` for read-only checks → `health_check()` only if system health is suspect. Canonical/raw equivalents are `onboard(...)`, `process_agent_update(...)`, and `get_governance_metrics(...)`.
 
 ### Local continuity cache
 
