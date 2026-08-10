@@ -21,6 +21,22 @@
     } catch { return null; }
   }
 
+  // Normalise a dialectic `resolution` into something renderable, or null.
+  // Two shapes have to be rejected rather than shown as an empty disclosure:
+  // the literal string "{}" (sessions resolved between 2026-06-28 and
+  // 2026-08-10 stored a double-encoded jsonb string, so the server unwraps one
+  // layer and hands back a string), and an object carrying no usable field.
+  function resolutionOf(res) {
+    if (!res || typeof res !== "object" || Array.isArray(res)) return null;
+    const out = {
+      action: res.action || res.type,
+      reasoning: res.reasoning || res.reason,
+      conditions: (res.conditions || []).length,
+      rootCause: res.root_cause,
+    };
+    return out.action || out.reasoning || out.rootCause || out.conditions ? out : null;
+  }
+
   // Operator write credential (X-Unitares-Operator). Provision once via
   // ?operator_token=… — persisted to localStorage and scrubbed from the URL
   // (same handoff pattern the classic dashboard used, #643).
@@ -342,10 +358,25 @@
           id: s.session_id, phase: s.phase || s.status, type: s.session_type || "review",
           paused: (s.paused_agent || s.paused_agent_id || "").slice(0, 8), reviewer: (s.reviewer || s.reviewer_agent_id || "") ? (s.reviewer || s.reviewer_agent_id).slice(0, 8) : null,
           synthesizer: s.synthesizer, topic: s.topic || s.reason || "", created: s.created || s.created_at, msgs: s.message_count || 0,
-          resolution: s.resolution ? { action: s.resolution.action || s.resolution.type, reasoning: s.resolution.reasoning || s.resolution.reason, conditions: (s.resolution.conditions || []).length, rootCause: s.resolution.root_cause } : null,
+          awaiting: !!s.awaiting_facilitation,
+          resolution: resolutionOf(s.resolution),
         }));
-        const c = { total: sessions.length, resolved: 0, active: 0, failed: 0 };
-        sessions.forEach((s) => { if (["resolved"].includes(s.phase)) c.resolved++; else if (["failed", "escalated"].includes(s.phase)) c.failed++; else c.active++; });
+        // `awaiting_facilitation` means the session asked for a human. It does
+        // NOT mean one can still be assigned: reassign is refused in any phase
+        // but THESIS/ANTITHESIS, and every such session on record has already
+        // been swept to `failed` by the stuck-session timer (38 of 38 as of
+        // 2026-08-10). So these are unfacilitated failures, not a work queue —
+        // they stay in the failed count, and get their own label because "why
+        // it failed" is the useful part. Do not relabel them as pending work:
+        // there is no action available, and prior work already established
+        // that a badge alone changes nothing (36 flagged, 35 failed, 2 reassign
+        // messages in the entire DB).
+        const c = { total: sessions.length, resolved: 0, active: 0, failed: 0, unfacilitated: 0 };
+        sessions.forEach((s) => {
+          if (["resolved"].includes(s.phase)) c.resolved++;
+          else if (["failed", "escalated"].includes(s.phase)) { c.failed++; if (s.awaiting) c.unfacilitated++; }
+          else c.active++;
+        });
         return { sessions, counts: c };
       }, () => ({ sessions: S().dialectic.sessions, counts: S().dialectic.counts }));
     },
