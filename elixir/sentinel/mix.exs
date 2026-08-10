@@ -41,7 +41,11 @@ defmodule UnitaresSentinel.MixProject do
       # HTTP client for `/api/findings` POSTs — Mint-based, hex.pm grade.
       {:finch, "~> 0.18"},
       # Property tests for fingerprint equivalence (Tier 2 contract).
-      {:stream_data, "~> 0.6", only: :test}
+      {:stream_data, "~> 0.6", only: :test},
+      # The shared governance response contract. Transport stays Finch — the
+      # SDK is consumed for `Envelope` only. What four BEAM clients got wrong
+      # was never the HTTP call, it was reading the reply.
+      {:unitares_sdk, path: "../unitares_sdk"}
     ]
   end
 end

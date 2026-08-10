@@ -31,6 +31,7 @@ on:
       - 'elixir/sentinel/**'
       - 'elixir/lease_plane/**'
       - 'elixir/unitares_sdk/**'
+      - 'elixir/dialectic_live/**'
       - 'db/postgres/**'
       - '.github/workflows/elixir-tests.yml'
   pull_request:
@@ -39,6 +40,7 @@ on:
       - 'elixir/sentinel/**'
       - 'elixir/lease_plane/**'
       - 'elixir/unitares_sdk/**'
+      - 'elixir/dialectic_live/**'
       - 'db/postgres/**'
       - '.github/workflows/elixir-tests.yml'
 
@@ -90,6 +92,48 @@ jobs:
     - name: Check formatting
       if: matrix.elixir == '1.19'
       run: mix format --check-formatted
+
+  # dialectic_live consumes unitares_sdk (Envelope only — its transport stays
+  # Req). It had no job before; it also had no governance tests before, so
+  # there was nothing for a job to protect. Both are true now: a change to the
+  # shared envelope can blank this app's session pane, and the path filter
+  # above fires this job on SDK changes as well as its own.
+  dialectic_live:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: elixir/dialectic_live
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+
+    - name: Set up Elixir / OTP
+      uses: erlef/setup-beam@v1
+      with:
+        otp-version: '27'
+        elixir-version: '1.19'
+
+    - name: Cache deps and build
+      uses: actions/cache@v6
+      with:
+        path: |
+          elixir/dialectic_live/deps
+          elixir/dialectic_live/_build
+        key: ${{ runner.os }}-mix-dialectic_live-${{ hashFiles('elixir/dialectic_live/mix.lock', 'elixir/dialectic_live/mix.exs') }}
+        restore-keys: |
+          ${{ runner.os }}-mix-dialectic_live-
+
+    - name: Install dependencies
+      run: mix deps.get
+
+    - name: Run tests
+      # DB-free: the suite covers the governance envelope contract and pure
+      # helpers, not the LiveView-over-Postgres path.
+      run: mix test
 
   sentinel:
     runs-on: ubuntu-latest
