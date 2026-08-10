@@ -17,10 +17,34 @@ used.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+
+
+@contextmanager
+def registered(*agent_ids: str):
+    """Put ``agent_ids`` in the shared registry for the duration.
+
+    The bound/explicit read tests below stipulate a real agent — that is the
+    premise of "the guard must not over-block". Since 2026-08-10 the metrics
+    read also refuses an agent_id that resolves to no identity
+    (`error_type: unknown_agent`, trust-contract §6 row 8), so a mock that
+    patches `require_agent_id` to a name the registry has never heard of is
+    no longer a self-consistent stand-in for a bound caller. Registering the
+    id keeps each test testing the guard it names instead of tripping the
+    other one.
+    """
+    import src.mcp_handlers.core as core_mod
+
+    with patch.object(
+        core_mod.mcp_server,
+        "agent_metadata",
+        {aid: SimpleNamespace(label=aid) for aid in agent_ids},
+    ):
+        yield
 
 # Settle the handler import chain BEFORE anything pulls
 # src.services.runtime_queries: importing it while governance_monitor's
@@ -214,7 +238,7 @@ async def test_bound_context_read_proceeds_to_data():
     from src.mcp_handlers import core as core_mod
 
     data_mock = AsyncMock(return_value={"ok": True, "agent_id": "agent-bound"})
-    with patch(
+    with registered("agent-bound"), patch(
         "src.mcp_handlers.context.get_context_agent_id",
         return_value="agent-bound",
     ), patch(
@@ -238,7 +262,7 @@ async def test_explicit_agent_id_bypasses_guard():
     from src.mcp_handlers import core as core_mod
 
     data_mock = AsyncMock(return_value={"ok": True})
-    with patch(
+    with registered("explicit-agent"), patch(
         "src.mcp_handlers.context.get_context_agent_id", return_value=None
     ), patch(
         "src.mcp_handlers.core.require_agent_id",
@@ -283,7 +307,7 @@ async def test_bound_rest_direct_handler_proceeds():
     )
 
     data_mock = AsyncMock(return_value={"ok": True})
-    with patch(
+    with registered("agent-rest-bound"), patch(
         "src.mcp_handlers.context.get_context_resolved_agent_id",
         return_value="agent-rest-bound",
     ), patch(
