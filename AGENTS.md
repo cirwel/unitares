@@ -220,4 +220,14 @@ a future agent would search for this and not already find it: a correction to a
 prior conclusion, a non-obvious failure mode plus its fingerprint, or a closed
 mystery. Operational runbooks and step lists belong in `docs/`, not KG notes.
 
+Tag recurring point-in-time snapshots `ephemeral`. A weekly triage run, a
+scheduled audit, a per-cycle status note — anything whose content is a reading
+taken at a moment rather than a claim that stays true — must carry `ephemeral`
+(or `temp` / `scratch`) so `KnowledgeGraphLifecycle` archives it after seven
+days. Without the tag these land as ordinary open entries and never close: a
+snapshot has no resolution condition, only a timestamp, so every later sweep
+re-reads it as unfinished work. Vigil's groundskeeper already tags its own
+notes this way. Nothing is ever deleted to compensate — the lifecycle archives,
+it does not delete, by design.
+
 <!-- END SHARED CONTRACT -->
