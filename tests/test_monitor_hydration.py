@@ -83,6 +83,7 @@ async def test_hydrate_from_db_if_fresh_populates_eisv_and_history():
     # Histories are chronological (oldest → newest)
     assert monitor.state.coherence_history == pytest.approx([0.5, 0.52, 0.55])
     assert monitor.state.regime_history == ["EXPLORATION", "CONVERGENCE", "DIVERGENCE"]
+    assert monitor._cold_start_confirmation_lineage_status == "db_hydrated_restart"
 
 
 @pytest.mark.asyncio
@@ -112,6 +113,7 @@ async def test_hydrate_from_db_if_fresh_returns_false_when_no_identity():
 
     assert applied is False
     assert monitor.state.update_count == 0
+    assert monitor._cold_start_confirmation_lineage_status == "unverified_monitor_origin"
 
 
 @pytest.mark.asyncio

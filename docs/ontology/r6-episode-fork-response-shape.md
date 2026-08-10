@@ -23,7 +23,7 @@ Three runtime conditions verified against the running system review pass 2026-05
 |---|---|---|
 | `process_agent_update` `thread_context` (thin: `{thread_id, position, is_fork}` plus R6 fields) | **Works.** Verified by focused tests in `tests/test_r6_episode_fork_enrichment.py`. Source: `enrich_thread_identity` uses shared helpers from `src/thread_identity.py`. | R6 v2 targets this surface; v2.1 keeps it shared with onboard. |
 | `onboard()` `thread_context` (rich: 10 keys per `build_fork_context`) | **Works.** Call-site signature mismatch fixed by PR #284 (`eedf5203`); `force_new` thread policy and persistence shipped 2026-05-05; v2.1 adds the R6 fields to the existing rich surface. | Rich shape is top-level and shape-compatible with the thin surface for the three shared keys: `episode_fork_kind`, `identity_lineage_fork`, `honest_message`. |
-| Runtime `spawn_reason` vocabulary | 6 observed values: `new_session` (1765), `resident_observer` (25), `explicit` (6), `dispatch_auto_mint` (4), `resident_sync` (2), `auto_onboard_no_session` (1). `compaction` and `subagent` not observed in production data. | R6 v2.1 handles observed values structurally. Parentless `new_session`/`explicit` are not lineage evidence by themselves; only parent/child UUID structure can make them lineage. Parentless fallback is narrowed to inherently parented fork reasons (`subagent`, `compaction`). |
+| Runtime `spawn_reason` vocabulary | The May 2026 sample observed `new_session` (1765), `resident_observer` (25), `explicit` (6), `dispatch_auto_mint` (4), `resident_sync` (2), and `auto_onboard_no_session` (1); `compaction` and `subagent` were absent from that sample. The canonical in-tree registry now also includes dispatched-child reasons `subagent`, `dialectic_reviewer`, and `dispatch`. | R6 v2.1 handles observed values structurally. Parentless `new_session`/`explicit` are not lineage evidence by themselves; only parent/child UUID structure can make them lineage. The sync-race fallback uses the canonical non-succession registry, and unknown reasons receive no fallback. |
 
 ---
 
@@ -96,7 +96,9 @@ Implementation surfaces:
 ## The classifier (v2)
 
 ```python
-_LINEAGE_SPAWN_REASONS = {"subagent", "compaction"}
+from src.identity.lineage_semantics import NON_SUCCESSION_SPAWN_REASONS
+
+_LINEAGE_SPAWN_REASONS = frozenset(NON_SUCCESSION_SPAWN_REASONS)
 # Note: "new_session", "explicit", "resident_observer",
 # "dispatch_auto_mint", "resident_sync", and "auto_onboard_no_session"
 # are intentionally NOT in this fallback set. They are not parentless
@@ -154,11 +156,17 @@ def _classify_fork(
 | `dispatch_auto_mint` — fresh UUID, no parent declared | UUID present, parent_uuid=None | `dispatch_auto_mint` | 1 | `none` (no fork; involuntary fresh mint, not a sibling and not lineage) |
 | parentless fresh session | UUID present, parent_uuid=None | `new_session` | 1 | `none` (`new_session` is descriptive, not parentless lineage evidence) |
 | Subagent fork via SDK | UUID differs from parent | `subagent` | 1 | `identity_lineage` (via has_child_uuid) ✓ |
+| Orchestrated dialectic reviewer | UUID differs from parent | `dialectic_reviewer` | 1 | `identity_lineage` (via has_child_uuid) ✓ |
 | Compaction fork | UUID differs from parent | `compaction` | 1 | `identity_lineage` (via has_child_uuid); spawn_reason field carries "this was compaction" semantically ✓ |
 | Sync race: handler dropped parent_agent_id but spawn_reason survived | parent_uuid=None | `subagent` | 1 | Fallback fires → `identity_lineage` + warning ✓ |
 | Resume + position=1 (truly fresh thread) | UUID present, parent_uuid=None | varies | 1 | `none` |
 
-The structural rule (`has_child_uuid and parent_uuid → identity_lineage`) handles all 6 observed runtime spawn_reasons correctly without enumerating them. The fallback allowlist appears only for sync-race handling and is intentionally narrow: `subagent` and `compaction` are the only current parentless spawn reasons that inherently imply a missing parent edge. `new_session` and `explicit` are not enough by themselves.
+The structural rule (`has_child_uuid and parent_uuid → identity_lineage`) handles
+observed runtime spawn reasons without enumerating them. The sync-race fallback
+uses the canonical non-succession registry: dispatched-child reasons
+(`subagent`, `dialectic_reviewer`, `dispatch`) and the `compaction` continuation
+inherently imply a missing parent edge. `new_session`, `explicit`, and unknown
+reasons are not enough by themselves.
 
 ## Substrate-earned restart (intentional collapse, addresses architect F2)
 
@@ -239,14 +247,15 @@ For `_classify_fork` unit tests:
 4. **Subagent fork.** agent_uuid != parent_uuid; spawn_reason="subagent". Expect `("identity_lineage", True)`.
 5. **Compaction fork.** agent_uuid != parent_uuid; spawn_reason="compaction". Expect `("identity_lineage", True)` (compaction is sub-kind, not separate enum).
 6. **Sync-race fallback.** parent_uuid=None; spawn_reason="subagent". Expect `("identity_lineage", True)` plus a `[R6_SYNC_RACE]` warning emitted.
-7. **dispatch_auto_mint with no parent.** parent_uuid=None; spawn_reason="dispatch_auto_mint"; position=1. Expect `("none", False)` (not in lineage spawn set; not a fork).
-8. **resident_observer.** agent_uuid != parent_uuid; spawn_reason="resident_observer". Expect `("identity_lineage", True)` (handled by has_child_uuid; resident_observer doesn't matter).
-9. **Substrate-earned restart (Lumen pattern).** agent_uuid == parent_uuid; spawn_reason="explicit"; position=2. Expect `("sibling_locus", False)` (intentional collapse).
+7. **Dialectic-reviewer sync-race fallback.** parent_uuid=None; spawn_reason="dialectic_reviewer". Expect `("identity_lineage", True)` plus a `[R6_SYNC_RACE]` warning emitted.
+8. **dispatch_auto_mint with no parent.** parent_uuid=None; spawn_reason="dispatch_auto_mint"; position=1. Expect `("none", False)` (not in lineage spawn set; not a fork).
+9. **resident_observer.** agent_uuid != parent_uuid; spawn_reason="resident_observer". Expect `("identity_lineage", True)` (handled by has_child_uuid; resident_observer doesn't matter).
+10. **Substrate-earned restart (Lumen pattern).** agent_uuid == parent_uuid; spawn_reason="explicit"; position=2. Expect `("sibling_locus", False)` (intentional collapse).
 
 For `enrich_thread_identity` integration:
 
-10. **Thin thread_context shape addition.** Call `process_agent_update` with a known fixture; assert response.thread_context contains `episode_fork_kind`, `identity_lineage_fork`, `honest_message`, plus preserved `thread_id`, `position`, `is_fork`.
-11. **`is_fork` compatibility.** For each of cases 1–9, assert `thread_context["is_fork"] == (position > 1)`. Separately assert identity-lineage-at-root sets `identity_lineage_fork=true` while leaving legacy `is_fork=false`.
+11. **Thin thread_context shape addition.** Call `process_agent_update` with a known fixture; assert response.thread_context contains `episode_fork_kind`, `identity_lineage_fork`, `honest_message`, plus preserved `thread_id`, `position`, `is_fork`.
+12. **`is_fork` compatibility.** For each of cases 1–10, assert `thread_context["is_fork"] == (position > 1)`. Separately assert identity-lineage-at-root sets `identity_lineage_fork=true` while leaving legacy `is_fork=false`.
 
 For `build_fork_context` / onboard rich-context integration (v2.1):
 

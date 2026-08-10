@@ -12,6 +12,7 @@ from ..decorators import mcp_tool
 from ..utils import success_response, error_response
 from src.logging_utils import get_logger
 from config.governance_config import GovernanceConfig
+from src.identity.lineage_semantics import is_non_succession_spawn_reason
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 # Same redacted-handle synthesis agent(action=list) uses, so a stuck entry and
 # a listed agent row carry the SAME identifier string (see _stuck_entry).
@@ -199,15 +200,15 @@ def _live_lineage_parent_ids(
         # A child pointing at its own id is not a successor — guard self-loops.
         if parent in (getattr(meta, "agent_uuid", None), getattr(meta, "agent_id", None)):
             continue
-        # Subagent/compaction children do NOT supersede their parent: their
-        # parent is concurrent-by-design (a dispatcher mid-dispatch, a
-        # compaction fork), not an exited predecessor. Treating their presence
+        # Dispatched/continuation children do NOT supersede their parent: their
+        # parent is concurrent-by-design (a dispatcher mid-dispatch, a context
+        # continuation), not an exited predecessor. Treating their presence
         # as succession archives the LIVE parent out from under itself — which
         # is exactly how a council of dispatched subagents archived the main
         # session 2026-06-16 (parent had ~12.9k updates, last check-in seconds
         # earlier). These spawn_reasons declare ancestry with a live parent by
         # definition; only an exited predecessor is a genuine succession.
-        if (getattr(meta, "spawn_reason", None) or "") in ("subagent", "compaction"):
+        if is_non_succession_spawn_reason(getattr(meta, "spawn_reason", None)):
             continue
         age = _agent_age_minutes(meta, current_time)
         if age is not None and age <= window_minutes:
@@ -220,8 +221,8 @@ def _live_child_uuids(
 ) -> set:
     """UUIDs of the active, recent SUCCESSION children feeding _live_lineage_parent_ids.
 
-    Same selection as _live_lineage_parent_ids (active + recent + non-subagent/
-    compaction spawn_reason), but returns the CHILD UUIDs rather than their
+    Same selection as _live_lineage_parent_ids (active + recent + succession
+    spawn_reason), but returns the CHILD UUIDs rather than their
     declared parents — the seed set for transitive succession-ancestor lookups.
     """
     children: set = set()
@@ -231,7 +232,7 @@ def _live_child_uuids(
             continue
         if getattr(meta, "status", None) != "active":
             continue
-        if (getattr(meta, "spawn_reason", None) or "") in ("subagent", "compaction"):
+        if is_non_succession_spawn_reason(getattr(meta, "spawn_reason", None)):
             continue
         age = _agent_age_minutes(meta, current_time)
         if age is not None and age <= window_minutes:

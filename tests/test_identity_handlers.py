@@ -574,15 +574,17 @@ class TestSubagentPinCapture:
     def test_spawn_reason_set_membership(self):
         """The NX set covers the Agent-tool dispatch convention."""
         from src.mcp_handlers.identity.session import (
-            SUBAGENT_PIN_NX_SPAWN_REASONS,
+            DISPATCHED_CHILD_PIN_NX_SPAWN_REASONS,
         )
 
-        assert "subagent" in SUBAGENT_PIN_NX_SPAWN_REASONS
+        assert "subagent" in DISPATCHED_CHILD_PIN_NX_SPAWN_REASONS
+        assert "dialectic_reviewer" in DISPATCHED_CHILD_PIN_NX_SPAWN_REASONS
+        assert "dispatch" in DISPATCHED_CHILD_PIN_NX_SPAWN_REASONS
         # Driver-shaped spawn reasons must NOT be in the set — a fresh
         # driver session declaring lineage uses new_session and must be
         # able to take over the host fingerprint.
-        assert "new_session" not in SUBAGENT_PIN_NX_SPAWN_REASONS
-        assert None not in SUBAGENT_PIN_NX_SPAWN_REASONS
+        assert "new_session" not in DISPATCHED_CHILD_PIN_NX_SPAWN_REASONS
+        assert None not in DISPATCHED_CHILD_PIN_NX_SPAWN_REASONS
 
 
 # ============================================================================
@@ -1957,10 +1959,18 @@ class TestHandleOnboardV2:
         assert "date_context" in data
 
     @pytest.mark.asyncio
-    async def test_subagent_onboard_passes_if_absent_to_pin(self, patch_onboard_deps, mock_db, mock_redis):
-        """spawn_reason='subagent' must reach set_onboard_pin as
-        if_absent=True (the NX write) — the wiring half of the
-        2026-06-10 pin-capture fix."""
+    @pytest.mark.parametrize(
+        "spawn_reason",
+        ["subagent", "dialectic_reviewer", "dispatch"],
+    )
+    async def test_dispatched_child_onboard_passes_if_absent_to_pin(
+        self,
+        patch_onboard_deps,
+        mock_db,
+        mock_redis,
+        spawn_reason,
+    ):
+        """Every dispatched-child reason must use the NX pin write."""
         from src.mcp_handlers.identity import handlers as h
 
         mock_redis.get.return_value = None
@@ -1973,9 +1983,9 @@ class TestHandleOnboardV2:
         pin_mock = AsyncMock(return_value=True)
         with patch.object(h, "set_onboard_pin", pin_mock):
             result = await h.handle_onboard_v2({
-                "client_session_id": "onboard-subagent-wiring",
+                "client_session_id": f"onboard-{spawn_reason}-wiring",
                 "force_new": True,
-                "spawn_reason": "subagent",
+                "spawn_reason": spawn_reason,
             })
         data = parse_result(result)
         assert data["success"] is True

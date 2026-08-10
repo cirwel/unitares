@@ -138,8 +138,9 @@
       <section class="panel"><div class="panel-head"><h2>Outcome-linked evidence</h2><span class="fresh">strict external · 5m lead · prior-measurement clusters</span></div><div id="telemetry-health-calibration-table"></div><p id="telemetry-health-calibration-note" class="sub"></p></section>
       <div class="split-wide th-split">
         <section class="panel"><div class="panel-head"><h2>Cross-field contract checks</h2><span class="fresh">same-row invariants only</span></div><div id="telemetry-health-contracts"></div><p id="telemetry-health-contract-note" class="sub"></p></section>
-        <section class="panel"><div class="panel-head"><h2>Policy → enforcement delivery</h2><span class="fresh">intervention-conditioned</span></div><div id="telemetry-health-enforcement"></div><p id="telemetry-health-enforcement-note" class="sub"></p></section>
+        <section class="panel"><div class="panel-head"><h2>Cold-start decision maturity</h2><span class="fresh">shadow only · no pause suppression</span></div><div id="telemetry-health-maturity"></div><div class="panel-head" style="margin-top:var(--space-4)"><h2>Why rows were ineligible</h2></div><div id="telemetry-health-maturity-ineligible"></div><div class="panel-head" style="margin-top:var(--space-4)"><h2>Confirmation reset reasons</h2></div><div id="telemetry-health-maturity-resets"></div><p id="telemetry-health-maturity-note" class="sub"></p></section>
       </div>
+      <section class="panel"><div class="panel-head"><h2>Policy → enforcement delivery</h2><span class="fresh">intervention-conditioned</span></div><div class="split-wide th-split"><div><div id="telemetry-health-enforcement"></div></div><div><div class="panel-head"><h2>Recorded enforcement basis</h2></div><div id="telemetry-health-enforcement-basis"></div></div></div><p id="telemetry-health-enforcement-note" class="sub"></p></section>
       <section class="panel"><div class="panel-head"><h2>One risk number, three vocabularies</h2><span class="fresh">visible threshold contracts</span></div><div id="telemetry-health-vocabularies"></div><p class="sub">Different labels are not counted as contradictions merely because their thresholds overlap. The contract checker above flags only fields that disagree inside the same persisted observation.</p></section>
       <style>
         .th-toolbar{display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-2)}
@@ -205,6 +206,7 @@
     const summary = MODEL.summary || {};
     const calibration = MODEL.calibration || {};
     const contracts = MODEL.contract_checks || {};
+    const maturity = MODEL.maturity_gate || {};
     const enforcement = MODEL.enforcement || {};
     const sourceBadge = $("telemetry-health-source");
     sourceBadge.className = `src-badge ${SOURCE}`;
@@ -225,6 +227,8 @@
       card("Envelope coverage", pct(summary.coverage_rate), `${num(summary.envelopes)} / ${num(summary.states)} state rows`),
       card("Behavioral primary", pct(summary.behavioral_primary_rate), `${num(summary.behavioral_primary)} covered observations`),
       card("ODE fallback", pct(summary.ode_fallback_rate), `${num(summary.ode_fallback)} covered observations`),
+      card("Measurement ready", pct(summary.measurement_ready_rate), `${num(summary.measurement_ready)} behavior-authoritative observations`),
+      card("Shadow would defer", num(summary.maturity_would_defer), `${pct(summary.maturity_would_defer_rate)} counterfactual only`),
       card("Missing inputs", pct(summary.missing_rate), `${num(summary.missing)} covered observations`),
       card("Invalid envelopes", num(summary.invalid_envelopes), `${pct(summary.invalid_envelope_rate)} of envelope-bearing rows`),
       card("Contract violations", num(summary.contract_violation_rows), `${pct(summary.contract_violation_rate)} of ${num(summary.contract_checked_rows)} checked rows`),
@@ -238,7 +242,12 @@
     $("telemetry-health-missing").innerHTML = rateRows(MODEL.missing_inputs, "input");
     $("telemetry-health-contracts").innerHTML = violationsHTML(contracts);
     $("telemetry-health-contract-note").textContent = contracts.note || "";
+    $("telemetry-health-maturity").innerHTML = rateRows(maturity.strata, "outcome");
+    $("telemetry-health-maturity-ineligible").innerHTML = rateRows(maturity.ineligibility_reasons, "reason");
+    $("telemetry-health-maturity-resets").innerHTML = rateRows(maturity.reset_reasons, "reason");
+    $("telemetry-health-maturity-note").textContent = maturity.note || "";
     $("telemetry-health-enforcement").innerHTML = rateRows(enforcement.strata, "stratum");
+    $("telemetry-health-enforcement-basis").innerHTML = rateRows(enforcement.bases, "basis");
     $("telemetry-health-enforcement-note").textContent = enforcement.note || "";
     $("telemetry-health-vocabularies").innerHTML = vocabularyHTML(MODEL.risk_vocabularies);
     $("telemetry-health-calibration-table").innerHTML = calibrationTable(calibration);

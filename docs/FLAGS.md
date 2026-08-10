@@ -14,12 +14,14 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**112 flags.**
+**114 flags.**
 
 | Flag | Default | Purpose | Read at |
 |---|---|---|---|
 | `GOVERNANCE_AGENT_PREFIX` | `(required)` | Detect interface and context information for name generation | src/mcp_handlers/support/naming_helpers.py |
 | `GOVERNANCE_BEHAVIORAL_VERDICT` | `'true'` | — | config/governance_config.py |
+| `GOVERNANCE_COLD_START_RISK_CONFIRMATION_ACTUATION` | `'false'` | — | config/governance_config.py |
+| `GOVERNANCE_COLD_START_RISK_CONFIRMATION_SHADOW` | `'true'` | — | config/governance_config.py |
 | `GOVERNANCE_DATABASE_URL` | `'postgresql://postgres:postgr…` | Poll lease_plane_events for forced-release alarms; emit findings | agents/sentinel/agent.py |
 | `GOVERNANCE_HEALTH_URL` | `'http://localhost:8767/health'` | — | agents/vigil/checks/governance_health.py |
 | `GOVERNANCE_TOOL_MODE` | `'lite'` | — | src/tool_modes.py |

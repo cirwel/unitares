@@ -39,7 +39,27 @@ defmodule UnitaresSentinel.GovernanceCheckin do
         "confidence" => map_fetch!(summary, :confidence),
         "response_mode" => map_get(summary, :response_mode, "compact")
       }
-      |> put_optional("agent_id", Keyword.get(opts, :agent_id) || Map.get(anchor, "agent_uuid"))
+      # ⛔ Deliberately NO "agent_id" on a check-in.
+      #
+      # Identity is presented by ECHOING the client_session_id the server
+      # issued, never by declaring the uuid. The REST prebind checks an
+      # explicit agent_id FIRST (`http_api._bind_explicit_http_agent`) and
+      # accepts it on a shape test alone — 36 chars, 4 hyphens, no lookup — so
+      # a declared uuid short-circuits resolution before the CSID is ever
+      # consulted. The strict gate then never sees a miss and never emits its
+      # typed refusal, and the PG session row never renews: binding loss
+      # becomes unobservable while every check-in still looks successful.
+      #
+      # Measured on this agent 2026-08-10: with a valid CSID in the anchor AND
+      # a live core.sessions row for identity 3701, a full fleet-emit cycle
+      # still left last_active unchanged. The row was inert purely because
+      # agent_id won the resolution. That is what this line changes.
+      #
+      # anima_broker drops the key for the same reason and proved it live on
+      # 2026-07-03 — its Redis-wipe acceptance test passed WITHOUT exercising
+      # recovery until the key was dropped. `recover/1` below keeps agent_id:
+      # self_recovery is not a check-in and legitimately names its subject.
+      # Bind by CSID, address by agent_id.
       |> put_optional(
         "client_session_id",
         Keyword.get(opts, :client_session_id) || Map.get(anchor, "client_session_id")
@@ -107,7 +127,18 @@ defmodule UnitaresSentinel.GovernanceCheckin do
         {:error, {:tool_error, Map.get(decoded, "error", "unknown")}}
 
       {:ok, decoded} ->
-        {:error, {:invalid_response, decoded}}
+        # Not the {"success": true, "result": {}} shape this client requires.
+        # Before calling it merely "invalid", ask the shared envelope contract
+        # whether it is a *refusal*: a typed strict identity refusal carries
+        # neither success:false nor an action, so it lands in this branch
+        # looking like unparseable noise. Naming it is the difference between
+        # "the server said something odd" and "we are not authenticated" —
+        # which is what kept canonical Lumen governance-dark ~3 days after the
+        # 2026-06-30 Redis wipe.
+        case UnitaresSdk.Envelope.classify(decoded) do
+          {:error, {:refused, _} = refusal} -> {:error, refusal}
+          _ -> {:error, {:invalid_response, decoded}}
+        end
 
       {:error, reason} ->
         {:error, {:invalid_json, reason}}

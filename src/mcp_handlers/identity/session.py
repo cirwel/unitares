@@ -1,7 +1,8 @@
 """
 Session key derivation, fingerprinting, and onboard pin operations.
 
-Leaf module — no imports from other identity_* sub-modules.
+Leaf module — no imports from stateful identity_* sub-modules. The pure
+``src.identity.lineage_semantics`` registry is safe here.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import re
 import time
 
 from src.logging_utils import get_logger
+from src.identity.lineage_semantics import DISPATCHED_CHILD_SPAWN_REASONS
 
 logger = get_logger(__name__)
 
@@ -1095,7 +1097,7 @@ async def _lookup_identity_anchor_inner(base_fingerprint: str) -> Optional[Dict[
 # driver's fallback resolution. Incident 2026-06-10: across one operator
 # session, each council dispatch's last-onboarded subagent took the pin —
 # ~50 of the driver's check-ins scattered over seven subagent identities
-# while the driver's own trajectory froze at its first hour. Subagents
+# while the driver's own trajectory froze at its first hour. Dispatched children
 # keep identity continuity the documented way (echoing the
 # client_session_id their onboard returned); the NX write below only
 # matters for the argument-less fallback they should not win.
@@ -1105,11 +1107,11 @@ async def _lookup_identity_anchor_inner(base_fingerprint: str) -> Optional[Dict[
 # driver's succession onboard "subagent" (parent declared, reason
 # omitted, client_hint not in arguments), and NX-gating on that would
 # lock the new driver behind its dead predecessor's still-live pin.
-# Honor-system boundary, accepted deliberately: a subagent that omits
+# Honor-system boundary, accepted deliberately: a dispatched child that omits
 # spawn_reason keeps the displacing write (today's behavior). The
 # authoritative continuity path was never the pin — it is echoing
 # client_session_id (resolution step 2, tier strong).
-SUBAGENT_PIN_NX_SPAWN_REASONS = frozenset({"subagent"})
+DISPATCHED_CHILD_PIN_NX_SPAWN_REASONS = DISPATCHED_CHILD_SPAWN_REASONS
 
 
 async def set_onboard_pin(
@@ -1131,8 +1133,8 @@ async def set_onboard_pin(
         agent_uuid: The newly onboarded agent's UUID
         client_session_id: The stable session ID to inject on subsequent calls
         if_absent: Write each candidate pin only when no pin exists for it
-            (Redis SET NX). Used for subagent onboards
-            (SUBAGENT_PIN_NX_SPAWN_REASONS) so a spawned helper never
+            (Redis SET NX). Used for dispatched-child onboards
+            (DISPATCHED_CHILD_PIN_NX_SPAWN_REASONS) so a spawned helper never
             displaces the live driver's pin; on a fingerprint with no
             standing pin the subagent may still claim it.
 

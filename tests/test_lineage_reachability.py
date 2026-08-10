@@ -88,6 +88,7 @@ async def test_cte_ancestors_parses_and_filters_nulls():
     # The non-succession exclusion list is passed to the query.
     passed = conn.fetch.await_args.args
     assert list(lr._NON_SUCCESSION_SPAWN_REASONS) == passed[2]
+    assert "dialectic_reviewer" in passed[2]
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,52 @@
+name: dependabot-triage
+
+# Weekly Dependabot triage across the CIRWEL fleet. REPORT ONLY — this never
+# merges. It replaces a claude.ai cloud routine whose merge policy lived in a
+# web form, unversioned and unreviewable; the policy now lives in
+# scripts/dev/dependabot_triage.py where it can be diffed and tested.
+#
+# Runs an hour before the cloud routine so a week of output can be compared
+# side by side before anything is granted merge rights.
+
+on:
+  schedule:
+    # Mondays 14:00 UTC == 08:00 America/Denver (MDT). The cloud routine it
+    # shadows runs at 09:00 MDT.
+    - cron: "0 14 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Triage open Dependabot PRs
+        id: triage
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          python3 scripts/dev/dependabot_triage.py > triage.md
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          cat triage.md >> "$GITHUB_STEP_SUMMARY"
+          cat triage.md
+
+      - name: Fail if fleet coverage was incomplete
+        if: steps.triage.outputs.exit_code != '0'
+        run: |
+          echo "::error::Dependabot triage could not read every target repo." \
+               "The report above is not fleet-wide. See the UNREACHABLE section."
+          echo "GITHUB_TOKEN is scoped to this repository. Private repos in the" \
+               "target list (currently CIRWEL/unitares-pi-plugin) need a token" \
+               "with access before coverage can be complete."
+          exit 1
