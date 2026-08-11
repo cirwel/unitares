@@ -271,6 +271,12 @@ class TestWhoseMove:
             "src.mcp_handlers.context.get_context_agent_id", return_value=agent
         )
 
+    def _operator(self, allowed=True):
+        return patch(
+            "src.mcp_handlers.identity.operator.is_operator_caller",
+            return_value=allowed,
+        )
+
     def test_synthesis_owed_by_caller_reads_yours(self):
         from src.mcp_handlers.dialectic.handlers import _build_dialectic_actionability
 
@@ -320,7 +326,7 @@ class TestWhoseMove:
         assert "must not retry" in out["recommended_action"]
         assert "reassign" in out["recommended_action"]
 
-    def test_standing_rejection_gives_observer_a_reassignment_call(self):
+    def test_standing_rejection_does_not_give_observer_an_operator_call(self):
         from src.mcp_handlers.dialectic.handlers import _build_dialectic_actionability
 
         with self._ctx("operator-agent"):
@@ -336,8 +342,63 @@ class TestWhoseMove:
                 }],
             })
         assert "operator" in out["whose_move"]
+        assert out["next_call"] is None
+
+    def test_standing_rejection_gives_credentialed_operator_a_reassignment_call(self):
+        from src.mcp_handlers.dialectic.handlers import _build_dialectic_actionability
+
+        with self._ctx("operator-agent"), self._operator():
+            out = _build_dialectic_actionability({
+                "session_id": "sess-rejected",
+                "paused_agent": "agent-paused",
+                "reviewer": "agent-reviewer",
+                "phase": "synthesis",
+                "transcript": [{
+                    "role": "synthesis",
+                    "agent_id": "agent-reviewer",
+                    "agrees": "false",
+                }],
+            })
+        assert out["whose_move"].startswith("YOURS")
         assert "action='reassign'" in out["next_call"]
         assert "sess-rejected" in out["next_call"]
+
+    def test_paused_agent_waits_while_reviewers_first_verdict_is_pending(self):
+        from src.mcp_handlers.dialectic.handlers import _build_dialectic_actionability
+
+        with self._ctx("agent-paused"):
+            out = _build_dialectic_actionability({
+                "session_id": "sess-pending",
+                "paused_agent_id": "agent-paused",
+                "reviewer_agent_id": "agent-reviewer",
+                "phase": "synthesis",
+                "transcript": [{
+                    "phase": "antithesis",
+                    "agent_id": "agent-reviewer",
+                }],
+            })
+        assert out["reviewer_verdict_pending"] is True
+        assert out["whose_move"].startswith("NOT YOURS")
+        assert out["next_call"] is None
+        assert out["current_agent_can_submit"] is False
+
+    def test_reviewer_is_prompted_for_first_pending_verdict(self):
+        from src.mcp_handlers.dialectic.handlers import _build_dialectic_actionability
+
+        with self._ctx("agent-reviewer"):
+            out = _build_dialectic_actionability({
+                "session_id": "sess-pending",
+                "paused_agent_id": "agent-paused",
+                "reviewer_agent_id": "agent-reviewer",
+                "phase": "synthesis",
+                "transcript": [{
+                    "phase": "antithesis",
+                    "agent_id": "agent-reviewer",
+                }],
+            })
+        assert out["whose_move"].startswith("YOURS")
+        assert "first synthesis verdict" in out["whose_move"]
+        assert "action='synthesis'" in out["next_call"]
 
     def test_reviewer_may_revise_a_standing_rejection(self):
         from src.mcp_handlers.dialectic.handlers import _build_dialectic_actionability
@@ -381,6 +442,36 @@ class TestWhoseMove:
                 "paused_agent_id": "a",
                 "reviewer_agent_id": "b",
                 "phase": "resolved",
+            })
+        assert "nobody" in out["whose_move"]
+        assert out["next_call"] is None
+
+    def test_failed_session_with_facilitation_request_is_actionable(self):
+        from src.mcp_handlers.dialectic.handlers import _build_dialectic_actionability
+
+        with self._ctx("operator-agent"), self._operator():
+            out = _build_dialectic_actionability({
+                "session_id": "sess-failed-awaiting",
+                "paused_agent_id": "agent-paused",
+                "reviewer_agent_id": "agent-reviewer",
+                "phase": "failed",
+                "awaiting_facilitation": True,
+            })
+        assert out["whose_move"].startswith("YOURS")
+        assert "action='reassign'" in out["next_call"]
+        assert out["required_role"] == "reviewer_or_operator"
+        assert out["current_agent_can_submit"] is True
+
+    def test_failed_session_without_facilitation_request_remains_terminal(self):
+        from src.mcp_handlers.dialectic.handlers import _build_dialectic_actionability
+
+        with self._ctx("operator-agent"), self._operator():
+            out = _build_dialectic_actionability({
+                "session_id": "sess-failed",
+                "paused_agent_id": "agent-paused",
+                "reviewer_agent_id": "agent-reviewer",
+                "phase": "failed",
+                "awaiting_facilitation": False,
             })
         assert "nobody" in out["whose_move"]
         assert out["next_call"] is None
