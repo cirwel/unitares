@@ -358,6 +358,55 @@ EXTRA_ARGUMENT_PASSTHROUGH_TOOLS = {
     "process_agent_update",
 }
 
+# An action-injecting alias inherits its router's WHOLE schema, so the alias
+# advertises capabilities its own name disclaims. `search_shared_memory` injects
+# action="search" but shipped all 47 `knowledge` parameters, `content`,
+# `summary`, `discovery_id` and `superseded_by` among them. A caller that wants
+# to *update* an entry reads the schema — where the real affordances are — sees
+# `discovery_id` on a tool called "search", and picks it. Measured 2026-08-11: a
+# local gemma4 handed the live tool list picked `search_shared_memory` for an
+# update task in 3 of 3 trials. It is also the shape of the largest live
+# validation-error bucket (`knowledge` action=update/store, 73 rows since 08-01).
+#
+# ⚠️ This narrowing does NOT fix that model's tool choice, and must not be sold
+# as if it does. Re-running the same probe against the narrowed surface: still
+# 3 of 3 for `search_shared_memory`. So were two follow-ups — spelling "UPDATE"
+# into the router's first description line, and renaming the alias to
+# `search_only_shared_memory`. What DID move it was removing the workflow
+# aliases entirely: 0/3 -> 3/3, the model reaching `knowledge` directly. The
+# aliases occupy the router's semantic space, so an action no alias names gets
+# absorbed by the nearest-sounding one. That is a surface-design question for
+# the operator, not something a schema edit settles.
+#
+# This change is kept on its own merit: a tool whose name says "search" should
+# not advertise how to store and supersede. Same class as the host-adapter fix —
+# stop misdescribing, independent of whether any given model notices.
+#
+# These are SUBTRACTED from the router's schema rather than replaced by the
+# narrow handler's, because the narrow handler's own schema is incomplete: the
+# search path reads `include_archived` and `include_cold`, which
+# `search_knowledge_graph` never declares. Replacing would have silently dropped
+# working parameters. Subtracting cannot.
+#
+# Membership rule: a parameter belongs here only if the action's code path never
+# reads it — verified against the handler source, and pinned by
+# tests/test_alias_schema_narrowing.py so the list cannot rot into a lie. Every
+# name below is write-side; no filter is removed. FastMCP validates alias
+# arguments before dispatch and these aliases have no extra-argument
+# passthrough, so a dropped name is rejected rather than silently ignored —
+# which is why the rule is "never read", not "rarely used".
+#
+# `request_review` is deliberately absent: its documented one-call form spans
+# `request` plus thesis fields, so no single action's parameter set describes it.
+ALIAS_SCHEMA_DROP = {
+    "search_shared_memory": frozenset({
+        "content", "summary", "details", "discovery_id",
+        "supersedes", "supersedes_id", "superseded_by", "resolution_notes",
+        "related_files", "response_to", "task_label", "task_outcome",
+        "auto_link_related", "comparison_key",
+    }),
+}
+
 
 def auto_register_all_tools(mcp):
     """
@@ -496,14 +545,22 @@ def _register_common_aliases(mcp):
                 break
 
         # If inject_action is set, remove "action" from the alias schema —
-        # the alias auto-injects it, so clients shouldn't need to provide it
+        # the alias auto-injects it, so clients shouldn't need to provide it.
+        # Drop the other actions' write-side parameters too, so the schema stops
+        # advertising work this alias's name says it does not do.
         if info.inject_action and actual_schema:
             import copy
             actual_schema = copy.deepcopy(actual_schema)
-            actual_schema.get("properties", {}).pop("action", None)
+            props = actual_schema.get("properties", {})
+            props.pop("action", None)
+            for param in ALIAS_SCHEMA_DROP.get(alias_name, ()):
+                props.pop(param, None)
+            dropped = ALIAS_SCHEMA_DROP.get(alias_name) or frozenset()
             req = actual_schema.get("required", [])
-            if "action" in req:
-                actual_schema["required"] = [r for r in req if r != "action"]
+            if "action" in req or dropped:
+                actual_schema["required"] = [
+                    r for r in req if r != "action" and r not in dropped
+                ]
 
         try:
             wrapper = create_typed_wrapper(
