@@ -197,7 +197,7 @@ class TestInferenceHostRegistry:
         assert parsed["host"]["host_id"] == "ollama:local"
         assert parsed["host"]["provider_kind"] == "ollama"
         assert parsed["host"]["available"] is True
-
+        assert parsed["host"]["accepts_host_id_from"] == ["call_model"]
     def test_ollama_available_caches_probe_within_ttl(self):
         """The blocking socket probe runs once within the TTL, not per call —
         the bound on event-loop pressure from repeated host-registry reads."""
@@ -211,6 +211,111 @@ class TestInferenceHostRegistry:
             assert inference_registry._ollama_available() is True
 
         assert probe.call_count == 1
+
+
+# =============================================================================
+# Tests: call_model reachability gate
+# =============================================================================
+
+class TestCallModelReachabilityGate:
+    """call_model refuses hosts the registry says it cannot route to.
+
+    Every test here patches OPENAI_AVAILABLE. The SDK check is the very first
+    thing handle_call_model does, so without the patch these pass locally (where
+    openai is installed) and fail in CI (where it is not) with
+    DEPENDENCY_MISSING — asserting the wrong branch entirely. See the module
+    docstring note about the CI environment.
+    """
+
+    @pytest.mark.asyncio
+    async def test_unreachable_host_refused_with_reachability_error(self):
+        """A built-but-unwired host fails as UNREACHABLE, not UNAVAILABLE.
+
+        The distinction is the point: 'unavailable' tells the caller to go
+        configure something, which cannot help when no code path routes to the
+        host at all.
+        """
+        from src.mcp_handlers.support.model_inference import handle_call_model
+
+        with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True):
+            result = await handle_call_model({
+                "prompt": "hi",
+                "host_id": "codex:host-adapter",
+            })
+
+        parsed = _parse_text_content(result)
+        assert parsed["success"] is False
+        assert parsed["error_code"] == "INFERENCE_HOST_UNREACHABLE"
+
+    @pytest.mark.asyncio
+    async def test_unreachable_check_precedes_availability_check(self):
+        """Even fully enabled, an unreachable host must not report as UNAVAILABLE."""
+        from src.mcp_handlers.support import host_adapter as ha
+        from src.mcp_handlers.support.model_inference import handle_call_model
+
+        with patch.dict(
+            os.environ,
+            {
+                "UNITARES_HOST_ADAPTER_ENABLED": "1",
+                "AGENT_ORCHESTRATOR_BEARER_TOKEN": "tok",
+            },
+            clear=False,
+        ), patch.object(ha.shutil, "which", lambda c: "/usr/bin/" + c), \
+             patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True):
+            result = await handle_call_model({
+                "prompt": "hi",
+                "host_id": "claude:host-adapter",
+            })
+
+        parsed = _parse_text_content(result)
+        assert parsed["success"] is False
+        assert parsed["error_code"] == "INFERENCE_HOST_UNREACHABLE"
+
+    @pytest.mark.asyncio
+    async def test_unknown_host_still_fails_closed_as_not_found(self):
+        from src.mcp_handlers.support.model_inference import handle_call_model
+
+        with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True):
+            result = await handle_call_model({"prompt": "hi", "host_id": "nope:host"})
+
+        parsed = _parse_text_content(result)
+        assert parsed["success"] is False
+        assert parsed["error_code"] == "INFERENCE_HOST_NOT_FOUND"
+
+    @pytest.mark.asyncio
+    async def test_registry_handler_drift_reports_as_unsupported(self):
+        """The drift branch is unreachable via any registered host — cover it anyway.
+
+        Once the registry gates on `accepts_host_id_from`, no host in
+        `_base_hosts()` can reach the `provider_kind` dispatch without a matching
+        branch, so `INFERENCE_HOST_UNSUPPORTED` becomes dead in production. It is
+        not dead code though: it is what fires when someone registers a host that
+        *claims* call_model validity and forgets the route — the exact drift the
+        two-source design admits. Simulating that host is the only way to prove
+        the detector still detects.
+        """
+        from src.mcp_handlers.support import model_inference as mi
+
+        drifted = {
+            "host_id": "future:thing",
+            "provider_kind": "some_new_kind",
+            "configured": True,
+            "available": True,
+            "accepts_host_id_from": ["call_model"],  # claims validity...
+        }                                            # ...with no route below.
+
+        with patch.object(mi, "get_inference_host", return_value=drifted), \
+             patch.object(mi, "OPENAI_AVAILABLE", True):
+            result = await mi.handle_call_model({
+                "prompt": "hi",
+                "host_id": "future:thing",
+            })
+
+        parsed = _parse_text_content(result)
+        assert parsed["success"] is False
+        assert parsed["error_code"] == "INFERENCE_HOST_UNSUPPORTED"
+        assert "drift" in json.dumps(parsed).lower()
+
 
 
 # =============================================================================
@@ -831,8 +936,14 @@ class TestResponseContent:
         assert "message" in parsed
 
     @pytest.mark.asyncio
-    async def test_unavailable_host_id_fails_before_model_call(self):
-        """Subscription-backed placeholders are visible but not callable."""
+    async def test_unreachable_host_id_fails_before_model_call(self):
+        """Subscription-backed placeholders are visible but not callable.
+
+        Was asserted as UNAVAILABLE, which named the wrong cause: these hosts do
+        not become callable when configured, because no code path routes to
+        them. UNREACHABLE is the honest code, and the check now runs first so
+        the caller is never told to go configure something that cannot help.
+        """
         mock_client_instance = MagicMock()
 
         with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True), \
@@ -845,7 +956,7 @@ class TestResponseContent:
 
         parsed = _parse_text_content(result)
         assert parsed["success"] is False
-        assert parsed["error_code"] == "INFERENCE_HOST_UNAVAILABLE"
+        assert parsed["error_code"] == "INFERENCE_HOST_UNREACHABLE"
         mock_client_instance.chat.completions.create.assert_not_called()
 
     # `test_energy_cost_free_tier_flash` removed: gemini-flash is no longer a
