@@ -147,6 +147,73 @@ def unbound_metrics_payload() -> dict:
     }
 
 
+async def metrics_agent_is_known(agent_id: str) -> bool:
+    """True when ``agent_id`` names an onboarded identity.
+
+    ``agent_metadata`` is the cold-start loader's complete view of every
+    onboarded identity — ``_load_metadata_from_postgres_async`` passes
+    ``include_unparticipated=True`` precisely so never-participated agents
+    stay visible — so absence from it means "no such agent", not "not
+    loaded yet". ``load_metadata_async`` fast-paths on a bool once the
+    registry is warm; it is here only so a cold-start read cannot refuse a
+    real agent.
+    """
+    from src.agent_state import load_metadata_async
+
+    if mcp_server.agent_metadata.get(agent_id) is not None:
+        return True
+    await load_metadata_async()
+    return mcp_server.agent_metadata.get(agent_id) is not None
+
+
+def unknown_agent_error(agent_id: str):
+    """Refusal for a metrics read whose ``agent_id`` resolves to nothing.
+
+    Read-purity has a second half. The handler below already refuses to
+    MINT an identity for an unbound caller; this refuses to ANSWER for an
+    id that names no agent. Without it ``get_governance_metrics_data``
+    reaches ``get_or_create_monitor``, which builds a fresh monitor on the
+    default seed vector, and every field computed downstream — EISV,
+    basin, verdict, guidance — becomes a function of that seed while the
+    envelope still says ``success``. It reads as a measurement and is not
+    one.
+
+    Live consequence (2026-08-10): the Discord governance HUD rendered 50
+    agents at a constant E=0.70 I=0.80 S=0.20 V=0.00. It was passing the
+    redacted *display* ids from ``list_agents``
+    (``Claude_Code_<date>_<uuid8>``) into this tool; none resolved, and
+    every one came back seeded rather than refused. A silent wrong number
+    outlived a loud error by weeks.
+
+    ONE definition shared by both transports, same split as
+    ``unbound_metrics_payload`` — PR #608 found the REST direct handler
+    bypassing a handler-only guard, so each transport carries the check
+    and both return this refusal.
+    """
+    return error_response(
+        f"Unknown agent_id '{agent_id}' — no such onboarded identity",
+        details={
+            "error_type": "unknown_agent",
+            "reason": (
+                "agent_id did not resolve to an onboarded identity. This is "
+                "a read, so no identity or state was created for it. Note "
+                "that list_agents redacts UUIDs for non-operator callers "
+                "and returns a display handle instead; a display handle is "
+                "not a valid agent_id here."
+            ),
+        },
+        recovery={
+            "action": (
+                "Pass the agent's UUID. If you read the id from "
+                "list_agents and it came back with uuid_redacted=true, "
+                "present an operator token (X-Unitares-Operator header) to "
+                "receive real UUIDs."
+            ),
+            "example": "get_governance_metrics(agent_id='<uuid>')",
+        },
+    )
+
+
 @mcp_tool("get_governance_metrics", timeout=10.0, requires_identity="pre_onboard")
 async def handle_get_governance_metrics(arguments: ToolArgumentsDict) -> Sequence[TextContent]:
     """Get current governance state and metrics for an agent without updating state.
@@ -184,6 +251,8 @@ async def handle_get_governance_metrics(arguments: ToolArgumentsDict) -> Sequenc
     agent_id, error = require_agent_id(arguments)
     if error:
         return [error]  # Wrap in list for Sequence[TextContent]
+    if not await metrics_agent_is_known(agent_id):
+        return [unknown_agent_error(agent_id)]
     from src.services.runtime_queries import get_governance_metrics_data
     response_data = await get_governance_metrics_data(agent_id, arguments, server=mcp_server)
     return success_response(response_data)

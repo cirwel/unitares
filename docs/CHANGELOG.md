@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_No unreleased changes yet. New entries accumulate here until the next release bump._
+### Fixed
+
+- **governance:** `get_governance_metrics` refuses an `agent_id` that resolves to no identity (`error_type: unknown_agent`) instead of answering with the default seed vector under a `success` envelope. Trust-contract §6 row 8 — the *unknown target* half of read purity, which the *unbound caller* guard (PR #608) runs past. Surfaced by the Discord HUD rendering 50 agents at a constant E=0.70 I=0.80 S=0.20 V=0.00
 
 ---
 
