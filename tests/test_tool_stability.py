@@ -173,6 +173,11 @@ class TestAgentExperienceAliases:
             "sync_state": "process_agent_update",
             "check_working_state": "get_governance_metrics",
             "search_shared_memory": "knowledge",
+            # The knowledge write actions got their own names 2026-08-11: the
+            # router is not reachable for a caller that matches on the domain
+            # noun, because search_shared_memory absorbs the intent first.
+            "store_finding": "knowledge",
+            "update_finding": "knowledge",
             "record_result": "outcome_event",
             "request_review": "dialectic",
         }
