@@ -168,12 +168,49 @@ def test_inference_hosts_result():
             "provider_kind": "ollama",
             "configured": True,
             "available": True,
+            "accepts_host_id_from": ["call_model"],
         }],
     })
     assert r.success is True
     assert r.schema_name == "unitares.inference_hosts.v0"
     assert r.count == 1
     assert r.hosts[0].host_id == "ollama:local"
+    assert r.hosts[0].accepts_host_id_from == ["call_model"]
+
+
+def test_inference_host_preserves_unreachability():
+    """The SDK must not drop the field that says a host is uncallable.
+
+    `_GovModel` is extra="ignore", so an undeclared field vanishes silently —
+    and it vanishes toward "looks usable", since a caller filtering on
+    `accepts_host_id_from` would see nothing to exclude. A host the server marks
+    unreachable has to survive the round trip as unreachable.
+    """
+    r = InferenceHostsResult.model_validate({
+        "success": True,
+        "schema": "unitares.inference_hosts.v0",
+        "count": 1,
+        "hosts": [{
+            "host_id": "codex:host-adapter",
+            "provider_kind": "codex_host_adapter",
+            "configured": True,
+            "available": True,
+            "implementation_status": "planned",
+            "accepts_host_id_from": [],
+        }],
+    })
+    host = r.hosts[0]
+    assert host.accepts_host_id_from == []
+    assert "call_model" not in host.accepts_host_id_from
+    # available=True must not read as callable.
+    assert host.available is True
+
+    # Absent field defaults to empty rather than raising AttributeError.
+    legacy = InferenceHostsResult.model_validate({
+        "success": True,
+        "hosts": [{"host_id": "old:server"}],
+    })
+    assert legacy.hosts[0].accepts_host_id_from == []
 
 
 def test_inference_host_result():
