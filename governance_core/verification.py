@@ -36,6 +36,18 @@ Design contract (see ``docs/proposals/verification-weighted-verdict-v0.md``):
   nature. It guards against negation/hypothetical/instructional context and
   abstains on empty/trivial input rather than guessing. It is explicitly a v0
   floor, not a verification *authority*.
+* **Self-report-independent, natural-language-dependent.** This channel ignores
+  what the agent *claims about itself* (``confidence``, ``complexity``,
+  ``ethical_drift``) — that is the independence it buys. It does not ignore how
+  the agent *speaks*: every pattern below is English prose in the first person
+  describing an action already taken. The floor is therefore structurally
+  incapable of firing for a caller whose ``response_text`` is not English
+  narration — a sensor bridge posting a templated status line, a process harness
+  posting a state digest, or any tool-call-only turn. Those agents are not
+  scored as safe by this channel; they are **unscored by it**, which reads the
+  same downstream. Do not describe this module as substrate-neutral, and do not
+  treat a clean record across a mixed fleet as fleet-wide coverage: the denominator
+  is "agents that write English", not "agents".
 """
 
 from __future__ import annotations
