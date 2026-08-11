@@ -2112,3 +2112,40 @@ class TestIssue165Provenance:
         mock_graph.add_discovery.assert_awaited()
         node = mock_graph.add_discovery.await_args.args[0]
         assert node.provenance["source"] == "self_recovery_quick_resume"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("provided", "canonical"),
+        [("info", "low"), ("warning", "medium")],
+    )
+    async def test_store_discovery_internal_normalizes_severity_aliases(
+        self, patch_common, provided, canonical,
+    ):
+        """Implicit writers cannot bypass the canonical KG severity contract."""
+        _mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import store_discovery_internal
+
+        await store_discovery_internal(
+            agent_id="a-1",
+            summary="recovery",
+            source="self_recovery_reflection",
+            severity=provided,
+        )
+
+        node = mock_graph.add_discovery.await_args.args[0]
+        assert node.severity == canonical
+
+    @pytest.mark.asyncio
+    async def test_store_discovery_internal_rejects_unknown_severity(self, patch_common):
+        _mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import store_discovery_internal
+
+        with pytest.raises(ValueError, match="Invalid internal discovery severity"):
+            await store_discovery_internal(
+                agent_id="a-1",
+                summary="recovery",
+                source="self_recovery_reflection",
+                severity="mystery",
+            )
+
+        mock_graph.add_discovery.assert_not_awaited()

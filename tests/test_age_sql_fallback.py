@@ -769,7 +769,7 @@ class TestGetStatsSQLFallback:
 # the AGE graph nodes/edges so traversal (response chains, related expansion,
 # tag rollups) sees them too.
 
-def _backfill_graph_query(age_ids, tag_pairs=None):
+def _backfill_graph_query(age_ids, tag_pairs=None, duplicate_tag_groups=None):
     """Report existing Discovery vertices and TAGGED assignment pairs.
 
     The collect(d.id) probe returns the known AGE ids; all other Cypher calls
@@ -778,6 +778,8 @@ def _backfill_graph_query(age_ids, tag_pairs=None):
     async def fake(cypher, params=None, conn=None):
         if "collect(d.id)" in cypher:
             return [list(age_ids)]
+        if "collect(id(t)) AS ids" in cypher:
+            return list(duplicate_tag_groups or [])
         if "collect({discovery_id:" in cypher:
             return [list(tag_pairs or [])]
         return []
@@ -927,6 +929,112 @@ class TestBackfillMissingAgeNodes:
         kg._sync_age_tag_edges.assert_awaited_once_with(
             db, db._pool, "disc-1", ["keep"]
         )
+
+    async def test_dry_run_reports_duplicate_tag_vertices_without_writing(self):
+        """Same-name Tag vertices are visible even without duplicate assignments."""
+        db = _make_db(graph_available=True)
+        db.graph_query = AsyncMock(side_effect=_backfill_graph_query(
+            {"disc-1"},
+            tag_pairs=[{"discovery_id": "disc-1", "tag": "keep"}],
+            duplicate_tag_groups=[{"name": "keep", "ids": [20, 10]}],
+        ))
+        db.kg_all_discovery_tags = AsyncMock(return_value={"disc-1": ["keep"]})
+        kg = await _make_kg(db)
+        kg._consolidate_duplicate_age_tags = AsyncMock()  # type: ignore[method-assign]
+
+        summary = await kg.backfill_missing_age_nodes(dry_run=True)
+
+        assert summary["duplicate_tag_groups"] == 1
+        assert summary["duplicate_tag_vertices"] == 1
+        assert summary["tag_vertices_consolidated"] == 0
+        assert summary["sample_duplicate_tag_vertices"] == [
+            {"name": "keep", "canonical_id": 10, "duplicate_ids": [20]}
+        ]
+        kg._consolidate_duplicate_age_tags.assert_not_awaited()
+
+    async def test_apply_consolidates_duplicate_tag_vertices_before_edge_merges(self):
+        """The lowest vertex id wins and duplicate nodes are removed first."""
+        db = _make_db(graph_available=True)
+        duplicate_probe_count = 0
+        issued: list[tuple[str, dict, object]] = []
+
+        async def fake_graph_query(cypher, params=None, conn=None):
+            nonlocal duplicate_probe_count
+            if "collect(d.id)" in cypher:
+                return [["disc-1"]]
+            if "collect(id(t)) AS ids" in cypher:
+                duplicate_probe_count += 1
+                if duplicate_probe_count == 1:
+                    return [{"name": "keep", "ids": [20, 10]}]
+                return []
+            if "collect({discovery_id:" in cypher:
+                return [[
+                    {"discovery_id": "disc-1", "tag": "keep"},
+                    {"discovery_id": "disc-1", "tag": "keep"},
+                ]]
+            issued.append((cypher, params or {}, conn))
+            return [1]
+
+        db.graph_query = AsyncMock(side_effect=fake_graph_query)
+        db.kg_all_discovery_tags = AsyncMock(return_value={"disc-1": ["keep"]})
+        kg = await _make_kg(db)
+
+        async def record_sync(db_, conn, discovery_id, tags):
+            issued.append(("SYNC_TAG_EDGES", {}, conn))
+
+        kg._sync_age_tag_edges = AsyncMock(  # type: ignore[method-assign]
+            side_effect=record_sync
+        )
+
+        summary = await kg.backfill_missing_age_nodes(dry_run=False)
+
+        assert summary["duplicate_tag_groups"] == 1
+        assert summary["duplicate_tag_vertices"] == 1
+        assert summary["tag_vertices_consolidated"] == 1
+        assert duplicate_probe_count == 2  # detect, then verify the transaction
+
+        rewire = next(call for call in issued if "MERGE (d)-[:TAGGED]->(canonical)" in call[0])
+        assert rewire[1] == {"canonical_id": 10, "duplicate_id": 20}
+        assert rewire[2] is db._pool
+
+        duplicate_delete_index = next(
+            i for i, call in enumerate(issued) if "DELETE duplicate" in call[0]
+        )
+        sync_index = next(
+            i for i, call in enumerate(issued) if call[0] == "SYNC_TAG_EDGES"
+        )
+        assert duplicate_delete_index < sync_index
+        assert all(call[2] is db._pool for call in issued[:duplicate_delete_index + 1])
+        kg._sync_age_tag_edges.assert_awaited_once_with(
+            db, db._pool, "disc-1", ["keep"]
+        )
+
+    async def test_apply_fails_closed_when_duplicate_tag_postcondition_fails(self):
+        """No later graph repair runs if a duplicate survives consolidation."""
+        db = _make_db(graph_available=True)
+
+        async def fake_graph_query(cypher, params=None, conn=None):
+            if "collect(d.id)" in cypher:
+                return [[]]
+            if "collect(id(t)) AS ids" in cypher:
+                return [{"name": "keep", "ids": [10, 20]}]
+            if "collect({discovery_id:" in cypher:
+                return [[]]
+            return [1]
+
+        db.graph_query = AsyncMock(side_effect=fake_graph_query)
+        db.kg_all_discovery_tags = AsyncMock(return_value={})
+        kg = await _make_kg(db)
+        kg._sync_age_tag_edges = AsyncMock()  # type: ignore[method-assign]
+
+        with pytest.raises(
+            RuntimeError,
+            match="duplicate Tag consolidation postcondition failed",
+        ):
+            await kg.backfill_missing_age_nodes(dry_run=False)
+
+        kg._sync_age_tag_edges.assert_not_awaited()
+        db.kg_get_discovery.assert_not_awaited()
 
     async def test_apply_reconciles_each_drifted_discovery_and_prunes_orphans(self):
         db = _make_db(graph_available=True)
