@@ -1,11 +1,26 @@
 [build-system]
-requires = ["setuptools>=68.0"]
+# >=77 for PEP 639 (SPDX `license` string + `license-files`).
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "governance-mcp"
-version = "2.16.0"
-description = "UNITARES Governance MCP server"
+version = "2.17.0"
+description = "UNITARES runtime telemetry and policy-feedback MCP server"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Kenny Wang" }]
+keywords = ["ai-agents", "governance", "mcp", "multi-agent-systems", "observability"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Topic :: System :: Monitoring",
+]
 requires-python = ">=3.12"
 dependencies = [
     "mcp>=1.26.0,<3.0.0",
@@ -56,6 +71,23 @@ analysis = [
     "matplotlib>=3.7.0,<4.0.0",
     "editdistance>=0.6.0,<1.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/cirwel/unitares"
+Documentation = "https://github.com/cirwel/unitares/blob/master/docs/README.md"
+Source = "https://github.com/cirwel/unitares"
+Issues = "https://github.com/cirwel/unitares/issues"
+Changelog = "https://github.com/cirwel/unitares/blob/master/docs/CHANGELOG.md"
+
+# The repository intentionally has a Python package literally named `src`.
+# Implicit src-layout discovery flattens that package and omits governance_core,
+# producing a wheel that cannot satisfy the imports used by the checkout.
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src", "src.*", "governance_core", "governance_core.*"]
+
+[tool.setuptools.package-data]
+src = ["*.json", "*.yaml"]
 
 [tool.pytest.ini_options]
 python_files = ["test_*.py", "*_test.py"]

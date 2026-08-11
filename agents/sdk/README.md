@@ -8,11 +8,12 @@ and Chronicler are reference implementations.
 ## Install
 
 ```bash
-pip install "unitares-sdk @ git+https://github.com/cirwel/unitares@master#subdirectory=agents/sdk"
+pip install "unitares-sdk @ git+https://github.com/cirwel/unitares@v2.17.0#subdirectory=agents/sdk"
 ```
 
-Pin a commit or tag instead of `master` for a reproducible build — replace
-`@master` with `@<sha>`.
+Replace `@v2.17.0` with another server release tag only after checking the
+[compatibility map](../../COMPATIBILITY.md). Pin a commit SHA when reproducing a
+specific development build.
 
 Or from a checkout of the [unitares repo](https://github.com/cirwel/unitares):
 
@@ -20,15 +21,12 @@ Or from a checkout of the [unitares repo](https://github.com/cirwel/unitares):
 pip install -e agents/sdk
 ```
 
-> **Not on PyPI yet.** This README used to open with `pip install unitares-sdk`,
-> which does not resolve — the package has never been published. The release
+> **Not on PyPI yet.** `pip install unitares-sdk` does not resolve today. The release
 > workflow (`.github/workflows/publish-sdk.yml`) is written and uses PyPI
-> Trusted Publishing, so no API token is involved; publishing needs only a
-> one-time publisher registration on pypi.org and an `sdk-v*` tag. That is
-> deliberately not done yet: a PyPI name claim and its first version number are
-> both permanent, and there is no third-party consumer to serve while the
-> governance contract this wraps is still moving. The git URL above is the
-> supported install path until then.
+> Trusted Publishing, so no API token is involved. Publication is gated on the
+> one-time publisher registration, a merged SDK release commit, and an
+> `sdk-v*` tag. The version-pinned Git URL above remains the supported install
+> path until the first package is verified on PyPI.
 
 The package is standalone — it talks to a UNITARES server over MCP/REST and
 never needs the server codebase importable. Fully typed (`py.typed`).

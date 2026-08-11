@@ -70,11 +70,24 @@ logger = get_logger(__name__)
 
 
 def _build_http_session_signals(request):
-    """Build SessionSignals from an HTTP request."""
+    """Build SessionSignals from an HTTP request.
+
+    The optional ``unitares_peer_pid`` scope key is server-injected by the
+    owner-only UDS listener after a kernel ``LOCAL_PEERPID`` lookup.  Preserve
+    that signal for the direct REST tool bridge: substrate-attested residents
+    use ``POST /v1/tools/call``, not the streamable ``/mcp`` route, so dropping
+    it here silently turns an authenticated UDS request back into plain HTTP.
+
+    Only a positive, non-bool integer is accepted.  Request headers never
+    participate in this decision; ordinary TCP HTTP remains ``rest``.
+    """
     from src.mcp_handlers.context import SessionSignals
 
     ua = request.headers.get("user-agent", "")
     x_session_id = request.headers.get("X-Session-ID") or request.headers.get("x-session-id")
+    peer_pid = getattr(request, "scope", {}).get("unitares_peer_pid")
+    if isinstance(peer_pid, bool) or not isinstance(peer_pid, int) or peer_pid <= 0:
+        peer_pid = None
 
     ip_ua_fp = None
     try:
@@ -94,7 +107,8 @@ def _build_http_session_signals(request):
         user_agent=ua,
         x_agent_name=request.headers.get("x-agent-name"),
         x_agent_id=request.headers.get("x-agent-id"),
-        transport="rest",
+        transport="uds" if peer_pid is not None else "rest",
+        peer_pid=peer_pid,
         unitares_operator_token=request.headers.get("x-unitares-operator"),
     )
 
@@ -400,6 +414,24 @@ def _bind_explicit_http_agent(arguments: dict) -> str | None:
     return explicit_agent_id
 
 
+def _preserve_explicit_target(arguments: dict, resolved_uuid: str) -> None:
+    """Stamp the resolved identity as the call target ONLY if none was asked for.
+
+    Every prebind path resolves two different things at once: WHO is calling
+    (the context binding, which authorizes) and WHAT the call is about (the
+    ``agent_id`` argument, which selects). They coincide for the common
+    self-read, so writing the resolved uuid into ``arguments`` was harmless
+    there and wrong whenever a caller named a target — the read came back for
+    the caller instead, under a `success` envelope, with the response's own
+    ``agent_id`` field quietly reading the substituted identity.
+
+    A caller that names no target still gets the resolved identity stamped, so
+    the self-read path is unchanged.
+    """
+    if not arguments.get("agent_id"):
+        arguments["agent_id"] = resolved_uuid
+
+
 async def _resolve_http_operator(arguments: dict, signals) -> str | None:
     from src.mcp_handlers.context import (
         set_session_proof_origin,
@@ -417,7 +449,17 @@ async def _resolve_http_operator(arguments: dict, signals) -> str | None:
         return None
     agent_uuid = operator_identity["agent_uuid"]
     update_context_agent_id(agent_uuid)
-    arguments["agent_id"] = agent_uuid
+    # Bind the CALLER, do not retarget the CALL. Overwriting a caller-supplied
+    # agent_id here answered a question about agent X with agent Y's state and
+    # said nothing about it — the silent-substitution shape invariant 1 exists
+    # to forbid. It only bit a NON-uuid-shaped agent_id, because
+    # _bind_explicit_http_agent returns early on the uuid shape and never
+    # reaches this branch; a structured handle
+    # (`Claude_Code_<date>_<uuid8>`) fell straight through. Since #1533 a
+    # read-state response reports `agent_id` AS that handle, so a caller
+    # round-tripping the field it was just handed was exactly the caller that
+    # got silently redirected to itself.
+    _preserve_explicit_target(arguments, agent_uuid)
     set_session_resolution_source("operator_token")
     set_session_proof_origin("caller_asserted")
     return agent_uuid
@@ -442,7 +484,12 @@ async def _consult_http_sticky_binding(arguments: dict, signals):
             return None, consult
         cached = consult.binding
         update_context_agent_id(cached.agent_uuid)
-        arguments["agent_id"] = cached.agent_uuid
+        # Same split as the operator path: a sticky binding says who the
+        # transport belongs to, never what the caller asked about. This one is
+        # strictly worse when it retargets — proof_origin is
+        # "server_inferred", so it silently substituted an identity the caller
+        # never asserted at all.
+        _preserve_explicit_target(arguments, cached.agent_uuid)
         set_session_resolution_source(sticky_resolution_source(cached))
         set_session_proof_origin("server_inferred")
         return cached.agent_uuid, consult
@@ -535,7 +582,9 @@ async def _resolve_http_session_binding(
         return None
 
     update_context_agent_id(agent_uuid)
-    arguments["agent_id"] = agent_uuid
+    # Third and last prebind path, same rule (see _preserve_explicit_target):
+    # a resumed session binding identifies the caller, not the target.
+    _preserve_explicit_target(arguments, agent_uuid)
     _cache_http_resolution(consult, resolved, agent_uuid, session_key)
     await _touch_http_session_activity(session_key, agent_uuid)
     return agent_uuid
@@ -1426,12 +1475,13 @@ async def http_dashboard_redesign(request):
 
 
 async def http_agent_history(request):
-    """GET /v1/agents/{agent_id}/history — an agent's EISV check-in trajectory.
+    """GET /v1/agents/{agent_id}/history — an agent's EISV state trajectory.
 
-    Reads core.agent_state (append-only per-check-in history, indexed by
+    Reads core.agent_state (append-only measured observations, indexed by
     identity_id/recorded_at). E lives in state_json, the rest are columns.
     Returns oldest→newest points so the chart reads left-to-right. Synthetic
-    bootstrap rows are excluded.
+    bootstrap rows are excluded, and agent-authored reports stay explicitly
+    separated from automatic substrate interpretations.
     """
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
     if not _check_http_auth(request, http_api_token=http_api_token):
@@ -1473,13 +1523,30 @@ async def http_agent_history(request):
                            (s.state_json->>'E')::real AS e,
                            s.integrity AS i, s.entropy AS s_entropy, s.volatility AS v,
                            s.coherence, s.risk_score, s.state_json,
+                           coalesce(s.epistemic_class,
+                                    s.state_json->>'epistemic_class') AS epistemic_class,
+                           (jsonb_typeof(s.state_json->'eisv_telemetry') = 'object')
+                               AS telemetry_available,
                            row_number() OVER (ORDER BY s.recorded_at) AS rn,
-                           count(*) OVER () AS total
+                           count(*) OVER () AS total,
+                           count(*) FILTER (
+                               WHERE coalesce(s.epistemic_class,
+                                              s.state_json->>'epistemic_class') = 'agent_report'
+                           ) OVER () AS agent_report_total,
+                           count(*) FILTER (
+                               WHERE coalesce(s.epistemic_class,
+                                              s.state_json->>'epistemic_class')
+                                     IN ('substrate_observation', 'substrate_interpretation')
+                           ) OVER () AS substrate_total,
+                           count(*) FILTER (
+                               WHERE jsonb_typeof(s.state_json->'eisv_telemetry') = 'object'
+                           ) OVER () AS telemetry_total
                     FROM core.agent_state s
                     WHERE s.identity_id IN (SELECT identity_id FROM ids) AND s.synthetic = false
                 )
                 SELECT recorded_at, e, i, s_entropy, v, coherence, risk_score,
-                       state_json, total
+                       state_json, epistemic_class, telemetry_available, total,
+                       agent_report_total, substrate_total, telemetry_total
                 FROM numbered
                 WHERE CASE WHEN $3 = 'all'
                            THEN (rn % GREATEST(1, (total / $2)::int) = 0 OR rn = 1 OR rn = total)
@@ -1490,6 +1557,9 @@ async def http_agent_history(request):
                 agent_id, limit, mode,
             )
         total = rows[0]["total"] if rows else 0
+        agent_report_total = rows[0]["agent_report_total"] if rows else 0
+        substrate_total = rows[0]["substrate_total"] if rows else 0
+        telemetry_total = rows[0]["telemetry_total"] if rows else 0
         from src.eisv_telemetry import summarize_state_eisv_telemetry
         points = []
         for r in rows:
@@ -1498,15 +1568,29 @@ async def http_agent_history(request):
                 "t": r["recorded_at"].isoformat(),
                 "E": r["e"], "I": r["i"], "S": r["s_entropy"], "V": r["v"],
                 "coherence": r["coherence"], "risk": r["risk_score"],
+                "epistemic_class": r["epistemic_class"],
+                "telemetry_available": bool(r["telemetry_available"]),
                 "telemetry": summarize_state_eisv_telemetry(state_json),
             }
             if include_telemetry and isinstance(state_json.get("eisv_telemetry"), dict):
                 point["telemetry_envelope"] = state_json["eisv_telemetry"]
             points.append(point)
-        return JSONResponse({"success": True, "agent_id": agent_id, "mode": mode,
-                             "count": len(points), "total": total,
-                             "telemetry_included": include_telemetry,
-                             "points": points})
+        return JSONResponse({
+            "success": True,
+            "agent_id": agent_id,
+            "mode": mode,
+            "count": len(points),
+            "total": total,
+            "observation_summary": {
+                "state_rows": total,
+                "agent_reports": agent_report_total,
+                "substrate_rows": substrate_total,
+                "other_rows": max(0, total - agent_report_total - substrate_total),
+                "telemetry_envelopes": telemetry_total,
+            },
+            "telemetry_included": include_telemetry,
+            "points": points,
+        })
     except Exception as exc:  # noqa: BLE001 — read-only panel endpoint, degrade gracefully
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 

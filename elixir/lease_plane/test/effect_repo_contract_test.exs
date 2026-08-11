@@ -43,6 +43,51 @@ defmodule UnitaresLeasePlane.EffectRepoContractTest do
     })
   end
 
+  # required_leases must land as a jsonb ARRAY, not a jsonb string. The bare
+  # `$5::jsonb` bind made Postgrex re-encode the already-encoded binary, and
+  # every one of the 40 rows written between 2026-06-28 and 2026-08-10 stored a
+  # string. The insert succeeded and the column SELECTs fine as text, so no
+  # existing assertion here could see it — EffectReconcile even grew an
+  # `is_binary` branch to cope. Assert the TYPE, not just that a row exists.
+  test "insert_effect_payload stores required_leases as a jsonb array, not a string" do
+    id = eid("leases-jsonb")
+    cleanup(id)
+
+    leases = [%{"surface" => "file:///tmp/x.json", "ttl_s" => 300}]
+
+    assert :ok =
+             EffectRepo.insert_effect_payload(%{
+               effect_id: id,
+               effect_type: "file_write",
+               payload_bytes: "content",
+               payload_sha256: "psha",
+               required_leases: leases,
+               proposer_agent_uuid: nil,
+               idempotency_key: "k-#{id}",
+               idempotency_digest: "d-#{id}"
+             })
+
+    %{rows: [[typ]]} =
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "SELECT jsonb_typeof(required_leases) FROM effects.payloads WHERE effect_id = $1",
+        [id]
+      )
+
+    assert typ == "array"
+
+    # And the surface must be reachable by path, which is what
+    # EffectReconcile.surface_path/1 actually needs.
+    %{rows: [[surface]]} =
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "SELECT required_leases -> 0 ->> 'surface' FROM effects.payloads WHERE effect_id = $1",
+        [id]
+      )
+
+    assert surface == "file:///tmp/x.json"
+  end
+
   test "record_pre_image is UPDATE-only: a never-inserted effect is :already and creates NO row" do
     id = eid("noinsert")
     cleanup(id)

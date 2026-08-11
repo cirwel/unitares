@@ -167,19 +167,34 @@ def _reconstruct_session_from_dict(session_id: str, session_data: Dict) -> Optio
         logger.error(f"Error reconstructing session {session_id}: {e}", exc_info=True)
         return None
 
-async def save_session(session: DialecticSession) -> None:
+async def save_session(session: DialecticSession, *, defer_terminal: bool = False) -> None:
     """
     Persist dialectic session to PostgreSQL (upsert) and JSON (snapshot).
 
     Uses pg_update_phase to sync phase/synthesis_round to PG (not INSERT).
     The JSON snapshot captures the full in-memory state for offline debugging.
+
+    ``defer_terminal`` suppresses the terminal PostgreSQL write (the JSON
+    snapshot still happens). Pass it when the caller has just converged but has
+    not yet run ``finalize_resolution`` — ``submit_synthesis`` sets
+    ``phase = RESOLVED`` before the resolution object exists, so an eager flush
+    here commits a terminal row with an empty resolution and the guarded write
+    then refuses the real one as an already-terminal conflict. That is what
+    emptied ``resolution_json`` on every session resolved between 2026-06-28 and
+    2026-08-10. Mirrors the same deferral already applied to the phase write in
+    ``handle_submit_synthesis``.
     """
     # Primary: update phase + resolution in PostgreSQL
     try:
         from src.dialectic_db import update_session_phase_async as pg_update_phase
         from src.dialectic_db import resolve_session_async as pg_resolve_session
         from .beam_resolve_client import beam_resolve, beam_update_phase
-        if session.phase in (DialecticPhase.RESOLVED, DialecticPhase.FAILED):
+        if session.phase in (DialecticPhase.RESOLVED, DialecticPhase.FAILED) and defer_terminal:
+            # Caller owns the terminal write once it has a resolution; skip the
+            # PG sync entirely (not even a phase write — the phase IS terminal
+            # here, and update_session_phase refuses terminal values).
+            pass
+        elif session.phase in (DialecticPhase.RESOLVED, DialecticPhase.FAILED):
             resolution_dict = session.resolution.to_dict() if session.resolution else None
             status = session.phase.value if session.phase == DialecticPhase.RESOLVED else "failed"
             # save_session is the catch-all flush that resolves the session in the
@@ -424,6 +439,15 @@ async def list_all_sessions(
                     ds.created_at,
                     ds.resolution_json,
                     ds.awaiting_facilitation,
+                    -- The paused agent's LABEL, not just its uuid. The
+                    -- test_/demo_ filter below keys on paused_agent_id, which
+                    -- is a uuid, so the scheduled probe families
+                    -- (canary_dialectic_*, RP*/AgreeRateProbe) are invisible to
+                    -- it and land in the list as ordinary sessions. Consumers
+                    -- counting sessions have to be able to exclude them —
+                    -- pooling probes with organic traffic manufactures a rate
+                    -- describing no regime that ever existed.
+                    pa.label AS paused_agent_label,
                     COALESCE(mc.cnt, 0) as message_count,
                     (SELECT dm.agent_id
                      FROM core.dialectic_messages dm
@@ -435,6 +459,7 @@ async def list_all_sessions(
                      ORDER BY dm.message_id
                      LIMIT 1) as synthesizer
                 FROM core.dialectic_sessions ds
+                LEFT JOIN core.agents pa ON pa.id = ds.paused_agent_id
                 LEFT JOIN (
                     SELECT session_id, COUNT(*) as cnt
                     FROM core.dialectic_messages
@@ -471,6 +496,7 @@ async def list_all_sessions(
                     "phase": row["phase"] or row["status"] or "unknown",
                     "session_type": row["session_type"] or "unknown",
                     "paused_agent": row["paused_agent_id"] or "unknown",
+                    "paused_agent_label": row["paused_agent_label"] if "paused_agent_label" in row else None,
                     "reviewer": row["reviewer_agent_id"],
                     "synthesizer": row.get("synthesizer") if "synthesizer" in row else None,
                     "topic": row["topic"] or "",

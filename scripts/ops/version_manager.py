@@ -65,6 +65,27 @@ VERSION_REFERENCES = [
     ("pyproject.toml", [
         (r'version = "([\d.]+)"', r'version = "{version}"'),
     ]),
+    ("CITATION.cff", [
+        (r'version: "([\d.]+)"', r'version: "{version}"'),
+    ]),
+    ("README.md", [
+        (r'\*\*Status:\*\* v([\d.]+) public overview',
+         r'**Status:** v{version} public overview'),
+        (r'git clone --branch v([\d.]+) --depth 1',
+         r'git clone --branch v{version} --depth 1'),
+    ]),
+    ("agents/sdk/README.md", [
+        (r'unitares@v([\d.]+)#subdirectory=agents/sdk',
+         r'unitares@v{version}#subdirectory=agents/sdk'),
+        (r'Replace `@v([\d.]+)` with another server release tag',
+         r'Replace `@v{version}` with another server release tag'),
+    ]),
+    ("COMPATIBILITY.md", [
+        (r'\| UNITARES server \| `v([\d.]+)`',
+         r'| UNITARES server | `v{version}`'),
+        (r'aligned with server `v([\d.]+)`',
+         r'aligned with server `v{version}`'),
+    ]),
 ]
 
 

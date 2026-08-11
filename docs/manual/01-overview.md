@@ -6,9 +6,14 @@ This chapter gives you the mental model and the vocabulary. Read it once; the re
 
 ## 1.1 The problem it solves
 
-Autonomous and semi-autonomous agents fail *gradually*. By the time output visibly breaks, the agent has usually been drifting for a while — looping, getting overconfident, wandering off its own normal behavior. Pre-deploy evals can't see this (they run before the work), and per-action guardrails can't either (they only see one action at a time).
+Some autonomous-agent failures unfold gradually: loops, repeated tool errors,
+miscalibrated confidence, or movement away from prior behavior. Pre-deploy evals
+and per-action guardrails answer different questions and may not retain this
+longitudinal context.
 
-UNITARES watches each agent **mid-run** and reports state change as it happens — to you *and to the agent itself* — while it's still just numbers moving and not yet broken output.
+UNITARES records check-ins **mid-run** and reports state change to the operator
+and the agent. Whether a change precedes a bad outcome is measured separately;
+the state estimate is not an early-warning guarantee.
 
 ## 1.2 Where it fits
 
@@ -18,7 +23,7 @@ UNITARES runs **alongside** your evals and guardrails. It does not replace eithe
 |---|---|---|
 | **Evals** | Is this model good enough to ship? | before deploy |
 | **Guardrails** | Is this *action* allowed right now? | per action |
-| **UNITARES** | Is this agent *still healthy* as it works? | continuously, mid-run |
+| **UNITARES** | What state and evidence does this process have as it works? | continuously, mid-run |
 
 It is **not** an output validator, a sandbox, or a hosted agent platform. It is the runtime *state layer* between evals and guardrails. (Full scope: [`../SCOPE_AND_THREAT_MODEL.md`](../SCOPE_AND_THREAT_MODEL.md).)
 
@@ -26,28 +31,39 @@ It is **not** an output validator, a sandbox, or a hosted agent platform. It is 
 
 ## 1.3 The core loop
 
-The entire contract is two calls inside the agent's loop:
+The minimal contract starts a process session, then checks in after meaningful
+work:
 
 ```python
-# After a unit of work:
-result = sync_state(response_text=output, complexity=0.6, confidence=0.8)
-verdict = result.get("verdict", {}).get("value")   # proceed / guide / pause / reject
+session = start_session(force_new=True)
 
-if verdict in ("pause", "reject"):
-    agent.require_human_review(result["verdict"]["next_action"])
+result = sync_state(
+    response_text=output,
+    complexity=0.6,
+    confidence=0.8,
+    client_session_id=session["client_session_id"],
+)
+action = result.get("state_summary", {}).get("action")
+
+if action in ("pause", "reject"):
+    stop_and_request_review(result)  # implement this in the host client
 ```
 
 The agent reports **what it did** plus its self-reported `complexity` and `confidence`, and gets back a policy action it can act on using its own state estimate. That's it — no new vocabulary required to *use* it. The vocabulary below is for when you want to act on *why*, not just the action.
 
 ## 1.4 The four numbers: EISV
 
-Each check-in returns four proprioceptive scores per agent. After warmup, the useful signal is a residual — current state against that agent's **own** ~30-check-in baseline — so slow drift surfaces even while output still looks fine. Before warmup, the verdict falls back to a mostly server-derived cold-start prior (the behavioral track scores against fixed universal thresholds until its confidence clears the bar) — read it as cold-start guidance, not a personalized drift read:
+Each check-in returns four proprioceptive scores per agent. With the current
+constants, check-ins 1–2 use the Φ cold-start prior, check-ins 3–24 use
+behavioral fixed thresholds, and check-in 25 enables self-relative scoring
+against the agent's own history (the target reaches full confidence at 30).
+Only the last stage is a personalized residual:
 
 | | Name | Reads | Goes wrong when… |
 |---|---|---|---|
 | **E** | Energy | Is the work advancing? | thrashing, retries, no progress |
 | **I** | Integrity | Do claims match results? | high confidence, low actual success |
-| **S** | Entropy | Drifting from its own normal? | erratic, divergent behavior |
+| **S** | Drift (legacy field: entropy) | Drifting from its reference? | erratic, divergent behavior |
 | **V** | Valence | Derived: energy vs integrity | motion without coherence (or vice-versa) |
 
 Two honesty notes that matter for interpretation (full detail in [chapter 5](05-reading-the-signals.md) and [`../EISV_COMPUTATION.md`](../EISV_COMPUTATION.md)):
@@ -72,14 +88,29 @@ Verdicts also carry a **margin** (`comfortable` / `tight` / `critical`) indicati
 
 - **Coherence** — a scalar summary of how internally consistent the agent's state is; it modulates risk and is one input to the E/I observations.
 - **Ethical drift** — a four-signal vector (calibration deviation, complexity divergence, coherence deviation, stability deviation) that feeds entropy. No human oracle is needed for runtime drift estimation.
-- **Calibration** — the system tracks whether stated `confidence` matches *verifiable evidence* (test pass/fail, exit codes, lint). Persistent overconfidence costs Integrity. This is why an agent can inflate its `confidence` number but not the evidence trail.
+- **Calibration** — the system tracks whether stated `confidence` matches
+  recorded outcomes such as tests, exit codes, or review labels. Evidence from
+  CI or an operator is stronger than an agent-authored outcome; if the agent
+  controls both channels, calibration can be forged.
 - **Knowledge graph (KG)** — a shared discovery store across all agents and sessions, so agents build on each other's findings instead of re-discovering known issues. Agent-facing discipline: [`../../skills/knowledge-graph/SKILL.md`](../../skills/knowledge-graph/SKILL.md).
-- **Dialectic** — the structured recovery/peer-review protocol (thesis → antithesis → synthesis) an agent enters after a `pause`/`reject`.
-- **Identity** — a fresh process mints a fresh agent UUID; cross-process continuity is *declared* and verified, never silently inherited. See [chapter 4](04-integrating-agents.md#43-identity-the-one-rule-that-matters) and [`../ontology/identity.md`](../ontology/identity.md).
+- **Dialectic** — a structured recovery/review protocol (thesis → antithesis
+  → synthesis) that an agent or operator can request after a disputed decision.
+- **Identity** — a fresh process mints a fresh agent UUID; cross-process
+  continuity is *declared* and assessed, never silently inherited. See
+  [chapter 4](04-integrating-agents.md#42-identity-rule) and
+  [`../ontology/identity.md`](../ontology/identity.md).
 
 ## 1.7 Don't trust the prose — verify it
 
-A central design stance: the project does not ask you to believe the numbers by prose. On a fresh clone, the [falsifiability harness](../REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) asks whether EISV/prior-state telemetry adds signal over deliberately dumb baselines (AUC, Brier) and self-labels each slice `INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING` rather than asserting. The harness tests calibration and falsifiability for a proprioceptive signal; it is not a claim that UNITARES is an outcome oracle. The current honest read is a *weak early signal* at short lead, with no demonstrated prevention — run it yourself before relying on it for anything load-bearing.
+A central design stance: the project does not ask you to believe the numbers by
+prose. On a fresh clone, the
+[falsifiability harness](../REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc)
+asks whether EISV/prior-state telemetry adds signal over a simple
+previous-outcome baseline on AUC and Brier, then compares the selected best
+candidate with a matching permutation null. In the frozen 2026-08-09
+trusted-anchor matrix, every overall slice is `NOISE-LEVEL`; none clears the
+selection-aware p < 0.05 threshold. There is no demonstrated prevention. Run it
+yourself before relying on EISV for anything load-bearing.
 
 ---
 

@@ -18,6 +18,13 @@ defmodule UnitaresLeasePlane.EffectRepo do
   Insert the fresh effect-payload row (rollback_state NULL). Called at propose
   time, before the custodian starts. ON CONFLICT DO NOTHING so a same-key retry
   does not error.
+
+  `required_leases` is pre-encoded and MUST bind through `($5::text)::jsonb`.
+  A bare `$5::jsonb` makes Postgrex encode the already-encoded binary a second
+  time, storing a jsonb *string* instead of an array — which is what corrupted
+  all 40 rows written between 2026-06-28 and 2026-08-10, and why
+  `EffectReconcile.decode_leases/1` carries an `is_binary` branch it should
+  never have needed. Same defect as `DialecticSaga`; see `encode_json/1` there.
   """
   @spec insert_effect_payload(map()) :: :ok | {:error, term()}
   def insert_effect_payload(p) do
@@ -25,7 +32,7 @@ defmodule UnitaresLeasePlane.EffectRepo do
     INSERT INTO effects.payloads
       (effect_id, effect_type, payload_bytes, payload_sha256, required_leases,
        proposer_agent_uuid, idempotency_key, idempotency_digest)
-    VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)
+    VALUES ($1, $2, $3, $4, ($5::text)::jsonb, $6, $7, $8)
     ON CONFLICT (effect_id) DO NOTHING
     """
 

@@ -9,7 +9,7 @@ If you're considering a contribution, please **open an issue first** describing 
 ```bash
 git clone https://github.com/cirwel/unitares.git && cd unitares
 docker compose up -d --wait         # Postgres + AGE + pgvector + Redis + server
-make demo                           # 60-second scripted trajectory
+make demo                           # 60-second install check (six check-ins)
 ```
 
 If you already have services on `5432`, `6379`, or `8767`, either skip Compose when a local UNITARES server is already live, or set `POSTGRES_HOST_PORT`, `REDIS_HOST_PORT`, `GOVERNANCE_HOST_PORT`, and `UNITARES_DEMO_PORT` to use alternate host ports.
@@ -19,7 +19,8 @@ Bare-metal install (Homebrew Postgres + native Python) is in [`docs/install/PLAY
 ## Tests
 
 ```bash
-make test                          # primary; uses tree-hash cache (.test-cache/)
+make test                          # full suite with coverage
+make test-cache-quick              # cached full suite without coverage
 pytest tests/test_<specific>.py    # single test file
 ```
 
@@ -47,7 +48,9 @@ Pure-unit suites (e.g. `tests/test_naming_helpers.py`, `tests/test_lifecycle_age
 
 ## Code style
 
-- Python 3.12+, formatted with `ruff format`. Lint with `ruff check`. CI enforces both.
+- Python 3.12+. Format touched Python files with `ruff format` and lint with
+  `ruff check`. CI currently gates the configured Ruff rule set (unused imports)
+  but does not run a repository-wide format check.
 - Type hints encouraged but not enforced repo-wide; new modules should be fully typed.
 - No new SQLite or in-process state stores — one Postgres, schema-isolated. See [`docs/operations/database_architecture.md`](docs/operations/database_architecture.md).
 

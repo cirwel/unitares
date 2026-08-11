@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/cirwel/unitares/security/advisories/new
+    about: Report vulnerabilities privately; do not open a public issue.
+  - name: Usage and integration question
+    url: https://github.com/cirwel/unitares/discussions
+    about: Ask for help or discuss an integration without filing a defect.
+  - name: Support policy
+    url: https://github.com/cirwel/unitares/blob/master/SUPPORT.md
+    about: Check supported versions, response expectations, and routing.

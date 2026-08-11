@@ -1,7 +1,7 @@
 # UNITARES Reviewer Guide
 
 **Created:** May 23, 2026  
-**Last Updated:** August 9, 2026
+**Last Updated:** August 11, 2026
 **Status:** Active
 
 ---
@@ -10,7 +10,12 @@ This guide is for a cold evaluator deciding whether UNITARES is real, what layer
 
 ## One-sentence read
 
-UNITARES is proprioceptive runtime state telemetry for long-lived AI-agent fleets: agents check in after units of work, UNITARES reads drift and calibration against each agent's own baseline, and policy/enforcement layers can use that signal before failures become visible incidents.
+UNITARES is runtime state telemetry for long-lived AI-agent fleets: agents check
+in after units of work, the server estimates drift and calibration through
+staged cold-start, fixed-threshold, and self-relative scoring, and policy or
+review layers can consume that state mid-run.
+Whether the telemetry predicts incidents or helps prevent them remains an open,
+measured question.
 
 ## What this is
 
@@ -27,7 +32,10 @@ UNITARES is proprioceptive runtime state telemetry for long-lived AI-agent fleet
 - Not a sandbox or permission system.
 - Not an outcome oracle or grand jury. EISV can report strain; external outcome evidence and policy/review layers decide task-negative, contract, authority/harm, or synthetic labels.
 - Not a universal ethics oracle. "No ethics classifier" means no hand-labeled ethics model — not that the system is value-free; drift is a salience flag, not a verdict, and Integrity is anchored to outcomes rather than to the agent's own history.
-- Not hardened against a motivated adversary gaming the EISV proxy. The design is adversarial-aware — outcomes can't be faked, baselines are self-relative — but enforcement leans lenient by intent and there has been no red-team. See [README → Scope and threat model](../README.md#scope-and-threat-model).
+- Not hardened against a motivated adversary gaming the EISV proxy. Some outcome
+  sources are harder for the agent to manipulate and baselines are self-relative,
+  but enforcement leans lenient by intent and red-teaming has been ad hoc rather
+  than sustained. See the [scope and threat model](SCOPE_AND_THREAT_MODEL.md).
 - Not a claim of broad external adoption yet; the public deployment metrics describe a single-operator stress test.
 
 ## Implementation status: what's live vs proposed
@@ -61,7 +69,11 @@ docker compose up -d --wait
 make demo
 ```
 
-`make demo` runs a short synthetic trajectory: clean work, calibration drift, and confusion. The useful thing to inspect is not just whether the command exits; it is whether the returned state and verdicts change in the expected direction as the synthetic agent drifts.
+`make demo` is an installation smoke test. It onboards a fresh process, sends six
+check-ins, and prints the response shape and warmup position. The run stays below
+the self-relative baseline threshold, so it does not establish predictive value
+or demonstrate the post-warmup model. Use the falsifiability path below for that
+question.
 
 If port `8767` is already in use because a local UNITARES service is running, skip Compose and run `make demo` directly. For a separate Docker stack on alternate host ports:
 
@@ -118,9 +130,10 @@ may be stale. Regenerate the evidence instead. The strongest anti-handwave artif
 UNITARES has is the ablation/skeptic harness: it scores EISV/prior-state features
 **against a deliberately dumb `previous_outcome_bad` baseline** on ranking (AUC) and
 calibration (Brier), timestamps its output, and self-labels each slice
-`INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING` rather than asserting.
+`INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING`; the matrix adds
+`NOISE-LEVEL` when a selected best candidate does not clear its matching null.
 
-**No deployment DB (fresh clone)** — proves the *pipeline* sees and labels a bad
+**No deployment DB (fresh clone)** — exercises the pipeline on an injected bad
 class. This is plumbing/containment, **not** evidence that EISV predicts anything
 (see `docs/operations/ablation-negative-controls.md`):
 
@@ -189,26 +202,35 @@ failure by themselves. Actual violation counts are confined to fields that
 disagree inside the same persisted observation. None of these rollout metrics
 establish predictive lift, prevention, or qualia.
 
-**Honest current read** — *snapshot generated 2026-06-16; regenerate to confirm and
-treat as stale if the harness output is newer than this date:*
+**Honest current read** — frozen at `2026-08-09T20:00:00Z`, trusted anchors,
+BEAM harness lane excluded:
 
-- **Task scope** (the only scope with adequate volume — ~6,870 trusted / 80 bad over
-  90d): the best EISV/prior-state model beats the baseline on both ranking and
-  calibration at 0–5 min lead (**weak signal**); at 30 min lead it does **not**
-  (skeptical). All 30-day task slices are skeptical.
-- **Strict scope:** the first strict bad outcome only just appeared (**n=1**) →
-  `INCONCLUSIVE` (the report gates `<10` bad outcomes as too fragile to read).
-- **No prevention is demonstrated**, and the measured task-scope lift may be carried
-  largely by `prior_risk` added on top of the baseline rather than by the full
-  E/I/S/V decomposition. See `docs/operations/ablation-initiates-finding-2026-06-16.md`.
+- The overall strict/task slices contain 223–227 outcomes, 53 bad rows grouped
+  into 28–29 bad clusters across 16 agents, depending on lead and window.
+- Across both scopes, 30/90-day windows, and 0/5/30-minute leads, **all 12
+  overall slices are `NOISE-LEVEL`** after the selected best candidate is
+  compared with the matching best-of-candidates permutation null. Selective p
+  ranges from 0.070 to 0.567; none clears p < 0.05.
+- Several unqualified point estimates improve both ranking and calibration, but
+  the selected features are usually `prior_risk`, `prior_s`, or recent
+  dispersion rather than evidence for the full E/I/S/V decomposition.
+- The frozen rows predate the telemetry envelope, so all source/warmup/
+  enforcement/missingness strata are `legacy/no-envelope`. **No prevention is
+  demonstrated.**
 
-What this earns a cold evaluator is **not** "EISV is validated." It is the more
-defensible read: the methodology is *falsifiable and self-skeptical*, with an early
-weak signal on real data — a system that hands you its own falsification harness and
-labels its results honestly, not one asking you to take its word. The matrix states
-its own ceiling: it does not validate EISV as ontology, only checks for measurable
-predictive signal over a dumb baseline.
+This does not validate EISV, and it does not establish predictive lift. It shows
+that the current organic-fleet sample supports a reproducible negative read once
+best-candidate selection is included in the null. The matrix tests measurable
+signal over a simple previous-outcome baseline; it does not validate the EISV
+ontology or justify load-bearing deployment decisions.
+
+The 12 overall rows and run provenance are preserved in
+[`operations/eisv-ablation-frozen-2026-08-09.md`](operations/eisv-ablation-frozen-2026-08-09.md).
 
 ## Current caveat
 
-The public deployment is intentionally described as single-operator. Treat it as proof that the pipeline can survive sustained real use, not as proof of external product-market pull. The next validation step is external design partners running their own long-lived agents through the same check-in and outcome loop.
+The public deployment is intentionally described as single-operator. Treat it
+as evidence that the pipeline has operated under sustained maintainer traffic,
+not as evidence of external product-market pull or efficacy. The next validation
+step is an independent operator running long-lived agents through the same
+check-in and outcome loop.

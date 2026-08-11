@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""60-second demo: onboard a synthetic agent and drive it through a trajectory.
+"""Install check: onboard an agent and drive six check-ins over the real API.
+
+Verifies your stack is wired and shows the exact response shape a client
+receives.
 
 Prereq: a governance MCP server reachable at http://127.0.0.1:8767.
 Either ``docker compose up -d --wait`` or
@@ -13,19 +16,22 @@ Run::
 If the server is on another host-side port, set UNITARES_DEMO_PORT=18767 or
 UNITARES_DEMO_URL=http://127.0.0.1:18767/v1/tools/call.
 
-What you'll see:
-- The agent onboards (fresh UUID + thread).
-- Seven check-ins simulate clean work → calibration drift → confusion.
-- Each step prints the verdict, the reason, and the four-channel state.
-- The graded proprioceptive signal moves in the drift direction: entropy S
-  rises, integrity I slips, valence V swings, and the decision margin tightens
-  (settling → tight) as the calibration miss and confusion accumulate.
-- The verdict stays `proceed` across this short run. Governance gates on a
-  smoothed risk (mean-of-10), which a seven-step synthetic trajectory does not
-  push over the pause threshold — by design, to avoid false pauses on normal
-  work. A `proceed` whose margin has gone `tight` is the signal here, not a
-  pause. Sustained or higher-severity drift can cross the gate and pause; the
-  code still handles that AGENT_PAUSED reply, you just won't trip it in 7 steps.
+What this shows:
+- The agent onboards and gets a real UUID + session.
+- Six check-ins land and each returns a well-formed decision + four scores.
+- Complexity divergence is visible on step 4, where the self-reported
+  complexity (0.25) contradicts the work the text describes. That signal is
+  server-derived and does not require the agent to cooperate.
+- Warmup position, printed per step. Scoring switches from fixed thresholds to
+  the agent's own baseline at 25 check-ins (``is_baselined``, derived from
+  ``BASELINE_WARMUP_UPDATES`` in ``src/behavioral_state.py``); this run reaches
+  6, so it shows the phase every agent starts in. Long-running residents
+  operate past it — see ``agents/README.md``.
+
+Related, deliberately not duplicated here: the falsifiability harness
+(``docs/REVIEWER_GUIDE.md``) grades the signal against deliberately dumb
+baselines on externally labeled evidence, reproducibly on a fresh clone. That is
+the evaluation surface; this is the install check.
 
 No Postgres reads, no dashboard required — everything you see comes back
 in the check-in response shape that any client would receive. The run still
@@ -58,6 +64,16 @@ def _rest_url() -> str:
 
 REST = _rest_url()
 
+# Check-ins required before `is_baselined` flips and scoring switches from
+# `_score_fixed_threshold` to `_score_self_relative`.
+#
+# Derived, not guessed: `is_baselined` is `baseline_confidence >= 0.8`, and
+# `baseline_confidence` is `(update_count - 5) / (BASELINE_WARMUP_UPDATES - 5)`
+# (src/behavioral_state.py). With BASELINE_WARMUP_UPDATES = 30 that resolves to
+# 0.8 * (30 - 5) + 5 = 25. tests/test_quick_demo.py re-derives this against the
+# live constant so the number cannot silently drift out of sync.
+BASELINE_UPDATES_REQUIRED = 25
+
 
 def _health_url() -> str:
     """Return the liveness endpoint matching REST's scheme/host/port."""
@@ -65,26 +81,30 @@ def _health_url() -> str:
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "/health/live", "", ""))
 
 # (response_text, complexity_self_report, confidence_self_report)
-# The story: 3 clean check-ins, then a calibration miss (claims easy but the
-# text describes hard work), then declining confidence, then an overconfident
-# garbled output. Numbers are realistic for what an agent loop would emit.
+# Inputs a real agent loop would plausibly emit: three routine check-ins, one
+# where the self-reported complexity contradicts the described work, then
+# declining confidence. Indices 0-2 are the clean head that
+# tests/integration/test_drift_trajectory_fullstack.py asserts against.
+#
+# There is deliberately no step where the agent confesses a failure in its own
+# response text. Text-level self-incrimination is not a signal the server can
+# rely on, and staging one would make this run look like a detection demo,
+# which it is not.
 TRAJECTORY = [
     ("Refactored auth middleware; tests pass.",                              0.3, 0.85),
     ("Added rate limiter; rolled out behind flag.",                          0.35, 0.85),
     ("Reviewed PR #482, requested one change.",                              0.25, 0.9),
-    # Calibration drift: agent claims trivial, text says otherwise.
+    # Complexity divergence: self-report says trivial, the text describes
+    # three new invariants and a lease-ladder rework. Server-derived signal.
     ("Rewrote the session-pool acquisition path under contention; "
      "added 3 new invariants, reworked the lease ladder, "
      "and shimmed the asyncpg cursor wrap.",                                  0.25, 0.85),
     # Confidence starts slipping.
     ("Investigated a 5xx spike. Possibly the cache layer? "
      "Not sure if it's the same as the Tuesday incident.",                    0.6, 0.55),
-    # Confused, scattered.
+    # Scattered, unresolved.
     ("Looked at logs, tried a few things, reverted some of it. "
      "Going to look again tomorrow.",                                         0.7, 0.4),
-    # Overconfident on garbled output.
-    ("DONE. All systems green. Migration complete. "
-     "(Note: did not actually run migrations on staging.)",                   0.2, 0.95),
 ]
 
 
@@ -289,16 +309,34 @@ def main() -> int:
         print(f"     said: \"{text[:70]}{'…' if len(text) > 70 else ''}\"")
         print(f"     self-report: complexity={complexity} confidence={confidence}")
         print(f"     {fmt_metrics(m)}")
+        print(f"     baseline: {i}/{BASELINE_UPDATES_REQUIRED} (warmup)")
         print(f"     reason: {d.get('reason', 'No reason supplied.')}")
 
-    banner("3. what just happened")
-    print("  Two risk signals to watch in each step above:")
+    banner("3. reading the output")
+    print("  Two risk signals appear in each step above:")
     print()
     print("  • risk         = smoothed mean of the last 10 observations.")
     print("                   This is the value `make_decision` gates on, and")
     print("                   the percentage you see in `decision.reason`.")
     print("  • latest       = raw last observation. A single bad check-in can")
     print("                   spike this without moving the gating signal.")
+
+    banner("4. where to go next")
+    print("  Your stack is wired. An agent onboarded, six check-ins landed over")
+    print("  the real API, and each returned a decision plus four scores — the")
+    print("  exact shape your client will parse.")
+    print()
+    print(
+        f"  This agent is {len(TRAJECTORY)}/{BASELINE_UPDATES_REQUIRED} through warmup, "
+        f"where every agent starts."
+    )
+    print("  At 25 check-ins, scoring switches from fixed thresholds to that")
+    print("  agent's own baseline. Long-running residents operate there:")
+    print("      agents/README.md")
+    print()
+    print("  To grade the signal against deliberately dumb baselines on labeled")
+    print("  evidence, on your own clone:")
+    print("      docs/REVIEWER_GUIDE.md")
 
     banner("done")
     print("  • Every number above came from check-in responses — no DB queries.")

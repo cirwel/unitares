@@ -14,7 +14,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**114 flags.**
+**116 flags.**
 
 | Flag | Default | Purpose | Read at |
 |---|---|---|---|
@@ -24,6 +24,7 @@ index; that one is the curated decision record.
 | `GOVERNANCE_COLD_START_RISK_CONFIRMATION_SHADOW` | `'true'` | — | config/governance_config.py |
 | `GOVERNANCE_DATABASE_URL` | `'postgresql://postgres:postgr…` | Poll lease_plane_events for forced-release alarms; emit findings | agents/sentinel/agent.py |
 | `GOVERNANCE_HEALTH_URL` | `'http://localhost:8767/health'` | — | agents/vigil/checks/governance_health.py |
+| `GOVERNANCE_NON_AUTHORED_COLD_START_GUARD` | `'true'` | — | config/governance_config.py |
 | `GOVERNANCE_TOOL_MODE` | `'lite'` | — | src/tool_modes.py |
 | `GOVERNANCE_URL` | `'http://localhost:8767/mcp/'` | read by _governance_url() | src/gateway/constants.py, src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
 | `GOVERNANCE_VERIFICATION_FLOOR` | `'false'` | — | config/governance_config.py |
@@ -41,6 +42,7 @@ index; that one is the curated decision record.
 | `UNITARES_CALIBRATION_ALLOW_SCRAPED_CONFIDENCE` | `''` | Shared body for outcome_event recording | src/mcp_handlers/observability/outcome_events.py |
 | `UNITARES_CALIBRATION_BACKEND` | `'postgres'` | Initialize calibration checker with confidence bins | src/calibration.py |
 | `UNITARES_CLASS_CALIBRATION` | `''` | Merge a deployment-local per-class calibration overlay into the class-keyed dicts, if ``UNITARES_CLASS_CALIBRATION`` names a JSON file | config/governance_config.py |
+| `UNITARES_COHERENCE_GATE_SHADOW` | `''` | Whether to record the proprioceptive-vs-fleet gate comparison | src/coherence_gate_shadow.py |
 | `UNITARES_COHORT_PRIOR` | `(required)` | Whether cohort-prior warm-start is active at all | src/cohort_prior.py |
 | `UNITARES_COHORT_PRIOR_MODE` | `(required)` | Behavior when cohort priors are enabled: 'observe' (default) or 'apply' | src/cohort_prior.py |
 | `UNITARES_CONNECT_RETRIES` | `'1'` | read by __init__() | agents/sdk/src/unitares_sdk/client.py |

@@ -81,6 +81,43 @@ therefore instrumentation-first:
 This shadow record unveils the policy-to-actuator edge without changing a single
 pause. It is evidence for a later decision, not that decision itself.
 
+## Decision record — non-authored cold-start authority guard (2026-08-10)
+
+Prospective evidence after the confirmation shadow shipped exposed a narrower
+fault than the dormant two-observation proposal addresses. The first three
+`shadow_would_defer` events were `substrate_interpretation` rows rather than agent
+reports; all three nevertheless delivered circuit-breaker pauses and began from
+the same Phi-fallback risk (`0.7858974`). A fourth fresh-process reproduction
+during implementation also auto-paused on a `substrate_interpretation` before its
+first authored `sync_state`; its exact persisted row satisfies the same recovery
+predicate. One of the fresh identities then could not recover: every
+reviewed attempt re-read the same frozen risk while the pause gate prevented the
+identity from writing the observation that could mature the estimator.
+
+The deployed correction is an epistemic-authority rule, not promotion of the
+confirmation actuator:
+
+1. With `GOVERNANCE_NON_AUTHORED_COLD_START_GUARD=true` (default), downgrade only
+   an original `pause/risk_pause` whose row is non-agent-authored, verdict source
+   is exactly `phi_cold_start`, behavioral confidence is below 0.3, readiness is
+   explicitly false, and no independent verification override fired.
+2. Preserve the original pause and reason in decision history, audit, and the
+   versioned `epistemic_gate`; send `proceed/guide` with
+   `enforcement.requested=false` to the authenticated runtime boundary.
+3. Leave agent-authored reports, behaviorally ready evidence, independent
+   verification, void/coherence/basin/CIRS gates, loop detection, and every other
+   pause source unchanged. Missing or contradictory provenance fails closed.
+4. For identities already trapped by the legacy behavior, reviewed recovery may
+   discount the frozen risk check only when the latest persisted telemetry proves
+   the exact non-authored `shadow_would_defer` circuit breaker. Ownership,
+   reflection, coherence, no-void, and persistence checks still apply; quick
+   recovery is unchanged.
+
+The separate two-confirmation actuator remains dormant under dialectic decision
+`8539c516649a08af`. The new guard has no counter, does not trust a second fallback
+observation, and does not weaken independently grounded safety evidence. Rollback
+sets `GOVERNANCE_NON_AUTHORED_COLD_START_GUARD=false` and restarts the service.
+
 ## Decision record — V-reintroduction deferred (2026-08-07)
 
 The grounded-coherence re-derivation proposal
@@ -802,7 +839,7 @@ it). **Correction:** a governed fallback-owned `risk_pause` was delivered on
 
 **25.** "In updates 1-2, phi measures the agent's behavior." — **REFUTED BY CONSTRUCTION** for non-self-reporting callers. Warmup ramp `update_count/5` zeroes calibration/coherence/stability at update 1 and scales them ×0.2 at update 2, with `complexity` explicitly exempt (`governance_core/ethical_drift.py:375-381`, comment `:379`); `_last_state_velocity` is provably 0.0 through update 2 by two mechanisms — first-update branch (`src/governance_monitor.py:748,758-759`) and a one-update pipeline lag (drift at `:1149` precedes `update_dynamics` at `:1208`); velocity-risk needs ≥3 history rows (`src/monitor_risk.py:37,95`); behavioral assessment discarded at confidence <0.3 (`:1306`). Surviving verdict inputs are all caller MCP args (`src/mcp_handlers/updates/phases.py:733,753,792,795`): `complexity` (via `|derived−self|`), `ethical_drift` (blend fixed 0.3 post-dampening, `src/monitor_drift.py:102-113`, phi ceiling ≈0.053 = caution only), `task_type` (−0.08 risk, floor 0.45, `src/monitor_phi.py:63-73`), `sensor_eisv`. Live: 1 firing ever (2026-08-02, agent 3568f987) with divergence 0.6708 = **99.2% of norm²**, `self_cx=0.9` vs `derived_cx=0.2292`; simultaneous behavioral read `safe`/0.1733 discarded. Evasion: echo the derived value → divergence 0; omitting `complexity` yields |derived−0.5| ≤ 0.5 (phi penalty ≤0.125, cannot reach high-risk) because `phases.py:733-737` coerces None→0.5, making the `continuity.py:163` None-branch dead on the live MCP path.
 
-**26.** "The phi cold-start path is a fallback; the self-relative behavioral machinery governs the fleet." — **REFUTED** empirically. `core.agent_state` (synthetic=false), lifetime max `behavioral_eisv.updates` per identity over 2,793 identities-with-rows (of 6,230 identities): 387 (13.9%) ever reached update 3, 186 (6.7%) reached confidence 1.0, 73 (2.6%) `is_baselined`, 58 (2.1%) phase `baselined`; 2,327/2,793 (83.3%) have ≤2 rows ever, median 1. Recently-active (≥2026-07-01, N=277): 155-156 in-window, 89 fixed-threshold, 32 (11.6%) self-relative. Verdict concentration: updates ≤2 → 1,293 rows, 11 high-risk, mean risk 0.2649; ≥3 → ~44,946 rows, 66 high-risk (all June 2026), mean 0.0515; since 07-01, in-window share of high-risk = 1/1. Crosser latency: 466/median 8m13s/p90 1h45m (persisted-row proxy) or 387/9m10s/1h50m (behavioral-updates definition) — state the definition. Caveat: pre-#545 rows lack the blob, undercounting old-agent maturity; row-count proxy bounds it (83% vs 86%).
+**26.** "The phi cold-start path is a fallback; the self-relative behavioral machinery governs the fleet." — **REFUTED** empirically. At the 2026-08-06 audit cutoff, only 13.9% of identities with state rows had ever reached update 3, 6.7% reached behavioral confidence 1.0, 2.6% were `is_baselined`, and 2.1% reported phase `baselined`; 83.3% had no more than two rows (median 1). Among recently active identities, 11.6% were self-relative. High-risk verdicts were concentrated differently across the first-two-update and later cohorts; crosser latency was roughly nine minutes at the median and under two hours at p90, depending on the persisted-row or behavioral-update definition. Caveat: pre-#545 rows lack the blob, undercounting old-agent maturity; the row-count proxy bounds the gap (83% vs 86%). Regenerate the deployment query before citing a population count.
 
 **27.** "Enforcement is currently protecting the fleet." — **UNTESTED as a protection claim; delivery path EARNED.** The 2026-08-06 snapshot counted 21 delivered pauses through 2026-06-28 and no recent governed delivery. That recency conclusion was falsified by a governed `lifecycle_paused` event on 2026-08-09 at behavioral confidence 0.1. The event proves the circuit breaker can actuate; it does not show prevention, benefit, or correctness. The next observation did not repeat the pause, which motivates prospective shadow measurement rather than a retrospective false-positive label.
 

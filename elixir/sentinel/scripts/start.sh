@@ -13,12 +13,22 @@ REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 SENTINEL_DIR="$REPO_ROOT/elixir/sentinel"
 SECRETS_FILE="$HOME/.config/cirwel/secrets.env"
 
+# The rendered LaunchAgent bearer is synchronized with governance and rotated
+# alongside it. Preserve that authoritative value while sourcing the separate
+# lease-plane/operator secrets file; an older secrets.env entry must not
+# silently overwrite the launchd-provisioned governance bearer.
+sentinel_launchd_http_token="${UNITARES_HTTP_API_TOKEN:-}"
+
 if [[ -f "$SECRETS_FILE" ]]; then
     # shellcheck disable=SC1090
     source "$SECRETS_FILE"
 else
     echo "[sentinel-beam] WARNING: $SECRETS_FILE missing - HTTP/lease auth may fail closed" >&2
 fi
+if [[ -n "$sentinel_launchd_http_token" ]]; then
+    export UNITARES_HTTP_API_TOKEN="$sentinel_launchd_http_token"
+fi
+unset sentinel_launchd_http_token
 
 # Homebrew Elixir lives at /opt/homebrew/bin on Apple Silicon. PATH inherited
 # from launchd's user environment is sparse, so set it explicitly.

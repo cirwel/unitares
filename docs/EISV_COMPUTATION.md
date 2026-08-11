@@ -87,8 +87,13 @@ identity of EISV itself.
 *"No sigmoid/phi black box. Each risk component has a clear source and weight. Assessment is auditable — you can trace exactly why a verdict was issued."* (module docstring.)
 
 - Total risk = sum of named components (`low_E`, `low_I`, high-`S`, `|V|`, …), each with an explicit weight.
-- **Warmup** (first ~30 check-ins): the behavioral track scores against fixed universal thresholds, while the *live verdict* comes from the cold-start prior (≥70% server-derived drift signals; see [SCOPE_AND_THREAT_MODEL.md](SCOPE_AND_THREAT_MODEL.md)). The behavioral assessment becomes the verdict authority once its confidence clears the bar.
-- **After warmup**: self-relative z-score deviations from the agent's *own* behavioral baseline.
+- **Check-ins 1–2**: behavioral confidence is below 0.3, so the live verdict is
+  owned by the Φ cold-start prior. The behavioral assessment is telemetry-only.
+- **Check-ins 3–24**: the behavioral assessment is authoritative, using fixed
+  universal thresholds because the agent-specific baseline is not ready.
+- **From check-in 25 with the current constants**: `baseline_confidence >= 0.8`
+  against the 30-update target, enabling self-relative z-score deviations from
+  the agent's own behavioral baseline.
 - **Absolute safety floors always apply**, overriding the baseline.
 - Self-relative deviation risk is **gated by absolute basin health** (issue #689): inside the healthy basin a deviation from your own norm is treated as information, not danger; the gate opens only as a dimension leaves the basin toward its absolute floor. (This replaced a flat σ-floor that was false-pausing ultra-stable agents.)
 
@@ -116,4 +121,14 @@ for the schema, privacy bounds, export surfaces, and legacy-row behavior.
 
 ## Don't take this document's word for it
 
-Whether these numbers add useful signal beyond dumb baselines is an **open, measured** question — not an assumption. The [Reviewer Guide's falsifiability harness](REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) scores EISV/prior-state features against deliberately boring baselines such as `previous_outcome_bad` on ranking (AUC) and calibration (Brier), then self-labels each slice (`INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING`). Treat that as a test of calibration and falsifiability for the proprioceptive signal, not as the headline purpose of UNITARES. The current read is a weak early signal on the task scope at short lead, no demonstrated prevention, and a caveat that the lift may be carried by a single `prior_risk` feature rather than the full decomposition. Run it yourself.
+Whether these numbers add useful signal beyond simple baselines is an **open,
+measured** question — not an assumption. The [Reviewer Guide's falsifiability
+harness](REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc)
+scores EISV/prior-state features against `previous_outcome_bad` on ranking (AUC)
+and calibration (Brier), then compares the selected best candidate with a
+best-of-candidates permutation null. In the frozen 2026-08-09 trusted-anchor
+matrix, every overall scope/window/lead slice is `NOISE-LEVEL` (selective
+p = 0.070–0.567). Some unadjusted point estimates improve both metrics, but none
+separates from the selection-aware null at p < 0.05; the selected features are
+usually `prior_risk`, `prior_s`, or dispersion rather than the full
+decomposition. No prevention is demonstrated. Run the frozen command yourself.

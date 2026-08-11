@@ -21,6 +21,33 @@
     } catch { return null; }
   }
 
+  // Scheduled probe families, by paused-agent label. The daily canary ALWAYS
+  // ends `failed` by design — its real verdict lives in dialectic_canary.jsonl,
+  // not in the session row — so counting probes alongside organic sessions
+  // makes the failure count tick up ~1/day for a reason that is not a defect.
+  // canary_dialectic_* and RP*/AgreeRateProbe are different families testing
+  // different things; neither is organic traffic.
+  function isProbe(label) {
+    if (!label) return false;
+    return /^(canary_dialectic|RP\d|RateProbe|AgreeRateProbe)/i.test(label);
+  }
+
+  // Normalise a dialectic `resolution` into something renderable, or null.
+  // Two shapes have to be rejected rather than shown as an empty disclosure:
+  // the literal string "{}" (sessions resolved between 2026-06-28 and
+  // 2026-08-10 stored a double-encoded jsonb string, so the server unwraps one
+  // layer and hands back a string), and an object carrying no usable field.
+  function resolutionOf(res) {
+    if (!res || typeof res !== "object" || Array.isArray(res)) return null;
+    const out = {
+      action: res.action || res.type,
+      reasoning: res.reasoning || res.reason,
+      conditions: (res.conditions || []).length,
+      rootCause: res.root_cause,
+    };
+    return out.action || out.reasoning || out.rootCause || out.conditions ? out : null;
+  }
+
   // Operator write credential (X-Unitares-Operator). Provision once via
   // ?operator_token=… — persisted to localStorage and scrubbed from the URL
   // (same handoff pattern the classic dashboard used, #643).
@@ -230,10 +257,17 @@
         // flags how many sources didn't answer. The whole-accessor snapshot
         // fallback (() => snap, honestly badged "snapshot") only fires when EVERY
         // source failed.
-        let agentsActive = null, agentsTotal = null;
+        let agentsActive = null, agentsLive = null, agentsPresenceUnknown = null;
+        let agentsPresenceUnavailable = null, agentsTotal = null;
         if (agentsR && agentsR.summary) {
           agentsTotal = agentsR.summary.total;
           agentsActive = (agentsR.summary.by_status || {}).active;
+          const presence = agentsR.summary.by_presence;
+          if (presence) {
+            agentsLive = presence.live;
+            agentsPresenceUnknown = presence.unknown;
+            agentsPresenceUnavailable = presence.unavailable;
+          }
         }
         let trustTiers = null, trustEarned = null, trustFleet = null, trustUnknown = null;
         if (tierR && tierR.tiers) {
@@ -249,11 +283,14 @@
         const hb = healthR && healthR.status_breakdown ? healthR.status_breakdown : null;
 
         return {
-          agentsActive, agentsTotal, trustTiers, trustEarned, trustFleet, trustUnknown,
+          agentsActive, agentsLive, agentsPresenceUnknown, agentsPresenceUnavailable,
+          agentsTotal, trustTiers, trustEarned, trustFleet, trustUnknown,
           discoveries: kg && typeof kg.total_discoveries === "number" ? kg.total_discoveries : null,
           discoveriesToday: null, // no honest live "today" delta; show neutral subtitle
           dialectic: dlcSessions ? dlcSessions.filter((s) => !["resolved", "failed"].includes(s.phase || s.status)).length : null,
           stuck: stuckR ? (stuckR.stuck_agents || []).length : null,
+          stuckHard: stuckR ? (stuckR.stuck_agents || []).filter((s) => s.soft !== true).length : null,
+          stuckSoft: stuckR ? (stuckR.stuck_agents || []).filter((s) => s.soft === true).length : null,
           // Named entries so the Stuck card can say WHICH agents and go
           // somewhere. Capped here, not in the view: a real incident flagging
           // 40 agents must not grow the card without bound.
@@ -284,12 +321,18 @@
               // trust_tier is the tier NAME (lifecycle/query.py emits
               // tier_info["name"]); `null` for agents with no computed tier —
               // the badge distinguishes "unknown" from "not computed".
-              tier: a.trust_tier, updates: a.total_updates || 0,
+              tier: a.trust_tier,
+              // Compatibility fallback for servers before observation_count.
+              // This is a state-row count, never an authored-activity count.
+              updates: a.observation_count ?? a.total_updates ?? 0,
               last: a.last_update || a.created, purpose: a.purpose, tags: a.tags || [],
               event_driven: a.event_driven === true, health: a.health_status,
               redacted: a.agent_id_redacted === true, parent: a.parent_agent_id,
               superseded: a.superseded === true, lifecycleReason: a.last_lifecycle_reason,
-              metrics: { coherence: m.coherence, risk: m.risk_score, verdict: m.verdict, E: m.E, I: m.I, S: m.S, V: m.V, basin: m.basin, phi: m.phi },
+              presence: a.presence || { status: "unavailable", signals: [] },
+              metrics: { coherence: m.coherence, risk: m.risk_score, verdict: m.verdict, E: m.E, I: m.I, S: m.S, V: m.V, basin: m.basin, phi: m.phi,
+                source: m.source, recordedAt: m.recorded_at,
+                rollingMetricsAvailable: m.rolling_metrics_available },
             });
           });
         });
@@ -297,7 +340,11 @@
         return {
           list: flat,
           summary: { total: s.total, active: (s.by_status || {}).active, archived: (s.by_status || {}).archived,
-            paused: (s.by_status || {}).paused, participated: s.participated, neverParticipated: s.never_participated },
+            paused: (s.by_status || {}).paused, observed: s.observed ?? s.participated,
+            unobserved: s.unobserved ?? s.never_participated,
+            live: s.by_presence && s.by_presence.live,
+            presenceUnknown: s.by_presence && s.by_presence.unknown,
+            presenceUnavailable: s.by_presence && s.by_presence.unavailable },
         };
       }, () => ({ list: S().agentsList, summary: S().agentsSummary }));
     },
@@ -342,10 +389,32 @@
           id: s.session_id, phase: s.phase || s.status, type: s.session_type || "review",
           paused: (s.paused_agent || s.paused_agent_id || "").slice(0, 8), reviewer: (s.reviewer || s.reviewer_agent_id || "") ? (s.reviewer || s.reviewer_agent_id).slice(0, 8) : null,
           synthesizer: s.synthesizer, topic: s.topic || s.reason || "", created: s.created || s.created_at, msgs: s.message_count || 0,
-          resolution: s.resolution ? { action: s.resolution.action || s.resolution.type, reasoning: s.resolution.reasoning || s.resolution.reason, conditions: (s.resolution.conditions || []).length, rootCause: s.resolution.root_cause } : null,
+          awaiting: !!s.awaiting_facilitation,
+          probe: isProbe(s.paused_agent_label),
+          resolution: resolutionOf(s.resolution),
         }));
-        const c = { total: sessions.length, resolved: 0, active: 0, failed: 0 };
-        sessions.forEach((s) => { if (["resolved"].includes(s.phase)) c.resolved++; else if (["failed", "escalated"].includes(s.phase)) c.failed++; else c.active++; });
+        // `awaiting_facilitation` means the session asked for a human. It does
+        // NOT mean one can still be assigned: reassign is refused in any phase
+        // but THESIS/ANTITHESIS, and every such session on record has already
+        // been swept to `failed` by the stuck-session timer (38 of 38 as of
+        // 2026-08-10). So these are unfacilitated failures, not a work queue —
+        // they stay in the failed count, and get their own label because "why
+        // it failed" is the useful part. Do not relabel them as pending work:
+        // there is no action available, and prior work already established
+        // that a badge alone changes nothing (36 flagged, 35 failed, 2 reassign
+        // messages in the entire DB).
+        const c = { total: sessions.length, resolved: 0, active: 0, failed: 0, unfacilitated: 0, probes: 0 };
+        sessions.forEach((s) => {
+          if (s.probe) c.probes++;
+          if (["resolved"].includes(s.phase)) c.resolved++;
+          else if (["failed", "escalated"].includes(s.phase)) {
+            c.failed++;
+            // Probes are excluded from the defect count only — they stay in
+            // `failed`, because they DID fail; they just were never going to
+            // do anything else.
+            if (s.awaiting && !s.probe) c.unfacilitated++;
+          } else c.active++;
+        });
         return { sessions, counts: c };
       }, () => ({ sessions: S().dialectic.sessions, counts: S().dialectic.counts }));
     },
@@ -453,8 +522,10 @@
     },
 
     async agentHistory(id, opts) {
-      // EISV check-in trajectory for one agent (no snapshot fallback — empty if offline).
-      // opts: { limit, mode: "recent"|"all" }. Returns { points, total, mode }.
+      // EISV state-observation trajectory for one agent (no snapshot fallback —
+      // empty if offline). Authored reports and automatic substrate rows remain
+      // separate in observationSummary; neither is inferred from the other.
+      // opts: { limit, mode: "recent"|"all" }.
       opts = opts || {};
       return withFallback(async () => {
         const q = "?limit=" + (opts.limit || 200) +
@@ -462,7 +533,8 @@
           (opts.includeTelemetry ? "&include_telemetry=true" : "");
         const r = await authFetch("/v1/agents/" + encodeURIComponent(id) + "/history" + q);
         return r && Array.isArray(r.points)
-          ? { points: r.points, total: r.total || r.points.length, mode: r.mode || "recent" }
+          ? { points: r.points, total: r.total || r.points.length, mode: r.mode || "recent",
+              observationSummary: r.observation_summary || null }
           : null;
       }, () => {
         // Offline: serve a bundled trajectory if the snapshot carries one for
@@ -558,7 +630,7 @@
     // Light freshness map for the residents (label -> {silence, status, coherence}).
     // The Agents pane uses it to keep lease-anchored in-process residents
     // (e.g. Steward — zero agent_state rows BY DESIGN, liveness lives in
-    // lease_plane heartbeats) out of the "Never checked in" bucket. `coherence`
+    // lease_plane heartbeats) out of the unobserved bucket. `coherence`
     // rides along so the pane can apply DATA.residentLiveness — the SAME
     // predicate the Overview applies — instead of inferring liveness from the
     // mere presence of a silence number.
@@ -579,7 +651,7 @@
 
     // Stuck detections on their own (one tool call). The Overview card gets its
     // copy inside the coordinated stats() batch; the Agents pane calls this so a
-    // stuck row can name its REASON instead of the generic "inactive" tag.
+    // stuck row can name its REASON instead of a generic stale-observation tag.
     // Read-only: auto_recover defaults false server-side.
     async stuckAgents() {
       return withFallback(async () => {

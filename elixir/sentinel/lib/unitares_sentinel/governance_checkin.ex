@@ -22,9 +22,11 @@ defmodule UnitaresSentinel.GovernanceCheckin do
   """
   @spec checkin(map(), keyword()) :: {:ok, map()} | {:error, term()}
   def checkin(summary, opts \\ []) when is_map(summary) do
-    summary
-    |> body(opts)
-    |> post_json(opts)
+    with :ok <- maybe_attest_substrate(opts) do
+      summary
+      |> body(opts)
+      |> post_json(opts)
+    end
   end
 
   @doc false
@@ -75,11 +77,16 @@ defmodule UnitaresSentinel.GovernanceCheckin do
   @doc false
   @spec post_json(map(), keyword()) :: {:ok, map()} | {:error, term()}
   def post_json(body, opts \\ []) when is_map(body) do
-    http_post = Keyword.get(opts, :http_post, &finch_post/4)
     url = Keyword.get(opts, :url, governance_tools_url())
     timeout_ms = Keyword.get(opts, :timeout_ms, governance_timeout_ms())
 
-    case http_post.(url, body, headers(), timeout_ms) do
+    result =
+      case Keyword.fetch(opts, :http_post) do
+        {:ok, http_post} -> http_post.(url, body, headers(), timeout_ms)
+        :error -> finch_post(url, body, headers(), timeout_ms, opts)
+      end
+
+    case result do
       {:ok, 200, response_body} ->
         decode_response(response_body)
 
@@ -102,9 +109,8 @@ defmodule UnitaresSentinel.GovernanceCheckin do
       {:error, {:exit, reason}}
   end
 
-  defp finch_post(url, body, headers, timeout_ms) do
-    json = Jason.encode!(body)
-    request = Finch.build(:post, url, headers, json)
+  defp finch_post(url, body, headers, timeout_ms, opts) do
+    request = build_request(url, body, headers, opts)
 
     case Finch.request(request, UnitaresSentinel.Finch, receive_timeout: timeout_ms) do
       {:ok, %Finch.Response{status: status, body: response_body}} ->
@@ -115,13 +121,25 @@ defmodule UnitaresSentinel.GovernanceCheckin do
     end
   end
 
+  @doc false
+  @spec build_request(String.t(), map(), [{String.t(), String.t()}], keyword()) ::
+          Finch.Request.t()
+  def build_request(url, body, headers, opts \\ []) do
+    json = Jason.encode!(body)
+
+    socket =
+      case Keyword.fetch(opts, :uds_socket) do
+        {:ok, value} -> value
+        :error -> governance_uds_socket()
+      end
+
+    Finch.build(:post, url, headers, json, unix_socket_opts(socket))
+  end
+
   defp decode_response(response_body) when is_binary(response_body) do
     case Jason.decode(response_body) do
       {:ok, %{"success" => true, "result" => %{} = result}} ->
-        case ensure_tool_success(result) do
-          :ok -> {:ok, result}
-          {:error, _reason} = error -> error
-        end
+        classify_tool_result(result)
 
       {:ok, %{"success" => false} = decoded} ->
         {:error, {:tool_error, Map.get(decoded, "error", "unknown")}}
@@ -157,6 +175,63 @@ defmodule UnitaresSentinel.GovernanceCheckin do
     do: {:error, {:tool_error, Map.get(result, "error", "unknown")}}
 
   defp ensure_tool_success(_result), do: :ok
+
+  # The HTTP bridge wraps handler output under `result`. A strict identity
+  # refusal is itself a success-shaped handler response, so checking only the
+  # outer envelope (or only result["success"]) silently turns the refusal into
+  # {:ok, result}. Classify the inner payload after preserving the more
+  # detailed paused/tool-error forms above.
+  defp classify_tool_result(result) do
+    case ensure_tool_success(result) do
+      :ok ->
+        case UnitaresSdk.Envelope.classify(result) do
+          {:ok, _classified} -> {:ok, result}
+          {:error, _reason} = error -> error
+        end
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  # A substrate claim is meaningful only when governance verifies the kernel-
+  # attested UDS peer against the enrolled launchd label and executable. PATH 2
+  # session resolution alone is continuity, not that process attestation, so a
+  # UDS-enabled resident proves its UUID with `identity` before every sensitive
+  # write. Sentinel checks in every five minutes; one small local request per
+  # cycle is preferable to caching an attestation longer than the process that
+  # earned it.
+  defp maybe_attest_substrate(opts) do
+    if uds_socket_configured?(opts) do
+      anchor = Keyword.get(opts, :anchor, %{})
+      expected_uuid = Keyword.get(opts, :agent_uuid) || Map.get(anchor, "agent_uuid")
+
+      if is_binary(expected_uuid) and expected_uuid != "" do
+        arguments =
+          %{"agent_uuid" => expected_uuid, "resume" => true}
+          |> put_optional(
+            "client_session_id",
+            Keyword.get(opts, :client_session_id) || Map.get(anchor, "client_session_id")
+          )
+
+        case post_json(%{"name" => "identity", "arguments" => arguments}, opts) do
+          {:ok, result} -> verify_attested_uuid(result, expected_uuid)
+          {:error, _reason} = error -> error
+        end
+      else
+        {:error, :missing_substrate_agent_uuid}
+      end
+    else
+      :ok
+    end
+  end
+
+  defp verify_attested_uuid(result, expected_uuid) do
+    case Map.get(result, "uuid") || Map.get(result, "agent_uuid") do
+      ^expected_uuid -> :ok
+      actual -> {:error, {:attestation_identity_mismatch, actual}}
+    end
+  end
 
   defp pause_detail(result) do
     %{
@@ -198,8 +273,10 @@ defmodule UnitaresSentinel.GovernanceCheckin do
         Keyword.get(opts, :continuity_token) || Map.get(anchor, "continuity_token")
       )
 
-    %{"name" => "self_recovery", "arguments" => arguments}
-    |> post_json(opts)
+    with :ok <- maybe_attest_substrate(opts) do
+      %{"name" => "self_recovery", "arguments" => arguments}
+      |> post_json(opts)
+    end
   end
 
   defp headers do
@@ -216,6 +293,32 @@ defmodule UnitaresSentinel.GovernanceCheckin do
     Application.get_env(:unitares_sentinel, :governance_tools_url) ||
       System.get_env("UNITARES_GOVERNANCE_TOOLS_URL") ||
       @default_url
+  end
+
+  defp governance_uds_socket do
+    Application.get_env(:unitares_sentinel, :governance_uds_socket) ||
+      System.get_env("UNITARES_UDS_SOCKET")
+  end
+
+  defp uds_socket_configured?(opts) do
+    socket =
+      case Keyword.fetch(opts, :uds_socket) do
+        {:ok, value} -> value
+        :error -> governance_uds_socket()
+      end
+
+    is_binary(socket) and socket != ""
+  end
+
+  defp unix_socket_opts(nil), do: []
+  defp unix_socket_opts(""), do: []
+
+  defp unix_socket_opts(path) when is_binary(path) do
+    if Path.type(path) == :absolute do
+      [unix_socket: path]
+    else
+      raise ArgumentError, "UNITARES_UDS_SOCKET must be an absolute path"
+    end
   end
 
   defp governance_timeout_ms do

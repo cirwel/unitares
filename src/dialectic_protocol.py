@@ -688,20 +688,12 @@ class DialecticSession:
                     "The paused agent cannot resolve its own session over that "
                     "objection."
                 ),
-                # Deliberately NOT advertising remediation routes here: as of
-                # 2026-08-09 none of the obvious ones works from SYNTHESIS. The
-                # handler's non-participant allow-list blocks a third-party
-                # synthesizer, reassign_reviewer refuses any phase but
-                # THESIS/ANTITHESIS, and the auto-resolve sweeper's facilitation
-                # branch is ANTITHESIS-only so this session will be marked FAILED
-                # after STUCK_SESSION_THRESHOLD rather than reaching a human.
-                # Failing closed beats resuming over a rejection, but it is not
-                # facilitation and must not be described as such until one of those
-                # three paths is opened.
                 "operator_note": (
-                    "No in-protocol remediation path currently exists from this "
-                    "state; the session will be swept to FAILED rather than "
-                    "facilitated. Tracked as follow-up work."
+                    "The paused agent has no self-service resolution path from this "
+                    "state. The reviewer may revise its verdict with a later "
+                    "synthesis; otherwise an operator can assign a facilitator or "
+                    "replacement reviewer with dialectic(action='reassign'). The "
+                    "session remains awaiting facilitation until one of those occurs."
                 ),
             }
 
@@ -871,9 +863,18 @@ class DialecticSession:
             else:
                 merged_root_cause = thesis_rc or antithesis_rc or ""
 
-        # Merge reasoning
-        reasoning_a = msg_a.reasoning or ""
-        reasoning_b = msg_b.reasoning or ""
+        # Merge reasoning. Fall back to each author's own antithesis when their
+        # synthesis carries only a verdict — the reviewer states its argument
+        # once, in the antithesis, and should not have to restate it. Same
+        # fallback finalize_resolution uses; kept same-author for attribution.
+        def _own_antithesis(msg) -> str:
+            for prior in reversed(self.transcript):
+                if prior.phase == "antithesis" and prior.agent_id == msg.agent_id and prior.reasoning:
+                    return prior.reasoning
+            return ""
+
+        reasoning_a = msg_a.reasoning or _own_antithesis(msg_a)
+        reasoning_b = msg_b.reasoning or _own_antithesis(msg_b)
 
         if reasoning_a and reasoning_b:
             merged_reasoning = f"Agent A: {reasoning_a}\nAgent B: {reasoning_b}"
@@ -956,6 +957,30 @@ class DialecticSession:
             if msg.phase == "antithesis" and msg.root_cause and not antithesis_root_cause:
                 antithesis_root_cause = msg.root_cause
 
+        def reasoning_of(msg) -> str:
+            """
+            A synthesis message's rationale, falling back to its author's own
+            antithesis.
+
+            The reviewer states its rationale once, in the antithesis. Its
+            synthesis carries the VERDICT — agrees, conditions, root_cause —
+            and need not restate the argument. Before this fallback existed,
+            the reviewer had to duplicate the whole antithesis text into the
+            synthesis or the resolution's `reasoning` came out empty, which is
+            why `agents/dialectic_reviewer/reviewer.py` posted the same string
+            twice and why every transcript since 2026-06-23 shows the same
+            paragraph under both headings (60/60 orchestrated sessions).
+
+            Fall back only to the SAME author's antithesis: attributing one
+            agent's argument to another is how the v1 attestation bug worked.
+            """
+            if msg.reasoning:
+                return msg.reasoning
+            for prior in reversed(self.transcript):
+                if prior.phase == "antithesis" and prior.agent_id == msg.agent_id and prior.reasoning:
+                    return prior.reasoning
+            return ""
+
         # Check for mediator resolution (third-party synthesis)
         participants = {self.paused_agent_id, self.reviewer_agent_id}
         mediator_msg = None
@@ -968,7 +993,7 @@ class DialecticSession:
             merged = {
                 "conditions": mediator_msg.proposed_conditions or [],
                 "root_cause": mediator_msg.root_cause or thesis_root_cause or antithesis_root_cause or "Unknown",
-                "reasoning": mediator_msg.reasoning or ""
+                "reasoning": reasoning_of(mediator_msg)
             }
         else:
             # Get agreed synthesis messages from both agents
@@ -988,7 +1013,7 @@ class DialecticSession:
                 merged = {
                     "conditions": agreed_message.proposed_conditions or [],
                     "root_cause": agreed_message.root_cause or thesis_root_cause or antithesis_root_cause or "Unknown",
-                    "reasoning": agreed_message.reasoning or ""
+                    "reasoning": reasoning_of(agreed_message)
                 }
             else:
                 # Get last message from each agent
@@ -1004,13 +1029,13 @@ class DialecticSession:
                     merged = {
                         "conditions": agent_a_msg.proposed_conditions or [],
                         "root_cause": agent_a_msg.root_cause or thesis_root_cause or "Unknown",
-                        "reasoning": agent_a_msg.reasoning or ""
+                        "reasoning": reasoning_of(agent_a_msg)
                     }
                 elif agent_b_msg:
                     merged = {
                         "conditions": agent_b_msg.proposed_conditions or [],
                         "root_cause": agent_b_msg.root_cause or thesis_root_cause or "Unknown",
-                        "reasoning": agent_b_msg.reasoning or ""
+                        "reasoning": reasoning_of(agent_b_msg)
                     }
                 else:
                     raise ValueError("No valid synthesis messages found")

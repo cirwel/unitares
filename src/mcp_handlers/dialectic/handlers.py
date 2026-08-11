@@ -143,6 +143,7 @@ from src.dialectic_db import (
     update_session_phase_async as pg_update_phase,
     update_session_reviewer_async as pg_update_reviewer,
     update_session_awaiting_facilitation_async as pg_update_awaiting_facilitation,
+    reopen_session_async as pg_reopen_session,
     add_message_async as pg_add_message,
     resolve_session_async as pg_resolve_session,
     get_all_sessions_by_agent_async as pg_get_all_sessions_by_agent,
@@ -419,6 +420,54 @@ async def handle_quick_dialectic(arguments: Dict[str, Any]) -> Sequence[TextCont
     }, arguments=arguments)
 
 
+def _reviewer_objection_stands_in_session_data(session_data: Dict[str, Any]) -> bool:
+    """Mirror ``DialecticSession._reviewer_objection_stands`` for API dicts.
+
+    The get-session fast path never reconstructs a ``DialecticSession``, so its
+    actionability must derive the standing verdict from either dict messages or
+    ``DialecticMessage`` objects. The last synthesis verdict not authored by the
+    paused agent wins; this deliberately survives reviewer reassignment, just as
+    the protocol guard does.
+    """
+    paused_agent_id = session_data.get("paused_agent_id") or session_data.get("paused_agent")
+    reviewer_agent_id = session_data.get("reviewer_agent_id") or session_data.get("reviewer")
+    self_review = bool(reviewer_agent_id and reviewer_agent_id == paused_agent_id)
+    transcript = session_data.get("transcript") or session_data.get("messages") or []
+
+    for message in reversed(transcript):
+        if isinstance(message, dict):
+            phase = message.get("phase") or message.get("message_type") or message.get("role")
+            agent_id = message.get("agent_id")
+            agrees = message.get("agrees")
+        else:
+            phase = getattr(message, "phase", None)
+            agent_id = getattr(message, "agent_id", None)
+            agrees = getattr(message, "agrees", None)
+
+        if phase != "synthesis" or agrees is None:
+            continue
+        if not self_review and agent_id == paused_agent_id:
+            continue
+
+        if isinstance(agrees, bool):
+            verdict = agrees
+        elif isinstance(agrees, str):
+            token = agrees.strip().lower()
+            if token in {"true", "1", "yes"}:
+                verdict = True
+            elif token in {"false", "0", "no"}:
+                verdict = False
+            else:
+                continue
+        elif isinstance(agrees, (int, float)) and agrees in (0, 1):
+            verdict = bool(agrees)
+        else:
+            continue
+        return verdict is False
+
+    return False
+
+
 def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, Any]:
     """Annotate a session payload with concrete next-action metadata."""
     # Two dict shapes reach this function. `load_session_as_dict`
@@ -434,6 +483,13 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
     reviewer_agent_id = session_data.get("reviewer_agent_id") or session_data.get("reviewer")
     phase = str(session_data.get("phase") or "").lower()
     session_id = session_data.get("session_id") or "<session_id>"
+    reviewer_objection_stands = (
+        phase == "synthesis"
+        and _reviewer_objection_stands_in_session_data(session_data)
+    )
+    independent_reviewer_can_revise = bool(
+        reviewer_agent_id and reviewer_agent_id != paused_agent_id
+    )
 
     try:
         from ..context import get_context_agent_id
@@ -485,15 +541,31 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
                 "Any eligible reviewer may claim this session by submitting antithesis."
             )
     elif phase == "synthesis":
-        required_role = "participant"
-        required_agent_id = None
-        required_agent_label = None
-        allowed_agent_ids = [
-            agent_id for agent_id in [paused_agent_id, reviewer_agent_id] if agent_id
-        ]
-        recommended_action = (
-            "Paused agent and reviewer should negotiate via submit_synthesis() until convergence."
-        )
+        if reviewer_objection_stands:
+            required_role = "reviewer_or_facilitator"
+            required_agent_id = reviewer_agent_id if independent_reviewer_can_revise else None
+            required_agent_label = (
+                _agent_label(reviewer_agent_id) if independent_reviewer_can_revise else None
+            )
+            allowed_agent_ids = (
+                [reviewer_agent_id] if independent_reviewer_can_revise else []
+            )
+            recommended_action = (
+                "The reviewer's rejection stands. The paused agent must not retry an "
+                "agreeing synthesis. The reviewer may revise its verdict after reviewing "
+                "new evidence; otherwise an operator should reassign the reviewer to "
+                "facilitate the session."
+            )
+        else:
+            required_role = "participant"
+            required_agent_id = None
+            required_agent_label = None
+            allowed_agent_ids = [
+                agent_id for agent_id in [paused_agent_id, reviewer_agent_id] if agent_id
+            ]
+            recommended_action = (
+                "Paused agent and reviewer should negotiate via submit_synthesis() until convergence."
+            )
     elif phase in {"resolved", "failed", "escalated", "quorum_voting"}:
         required_role = "none"
         recommended_action = (
@@ -542,6 +614,27 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
             )
         else:
             whose_move = "the reviewer's — their antithesis is owed"
+    elif phase == "synthesis" and reviewer_objection_stands:
+        if current_agent_role == "reviewer" and independent_reviewer_can_revise:
+            whose_move = "YOURS — review the new evidence and maintain or revise your verdict"
+            next_call = (
+                f"dialectic(action='synthesis', session_id='{session_id}', "
+                "agrees=true/false, root_cause='...', reasoning='...', "
+                "proposed_conditions=[...])"
+            )
+        elif current_agent_role == "paused_agent":
+            whose_move = (
+                "NOT YOURS — the reviewer's rejection stands; wait for the reviewer "
+                "or ask an operator to reassign/facilitate"
+            )
+        else:
+            whose_move = (
+                "an operator's — reassign/facilitate unless the reviewer will revise its verdict"
+            )
+            next_call = (
+                f"dialectic(action='reassign', session_id='{session_id}', "
+                "reason='Facilitate standing reviewer rejection')"
+            )
     elif phase == "synthesis":
         if current_agent_role in {"paused_agent", "reviewer"}:
             whose_move = "YOURS — a converging synthesis is owed (negotiate until agreement)"
@@ -613,8 +706,24 @@ async def _apply_reviewer_reassignment(
 ) -> Dict[str, Any]:
     """Update the reviewer assignment in memory and persistence layers."""
     old_reviewer_id = session.reviewer_agent_id
+    was_awaiting = bool(getattr(session, "awaiting_facilitation", False))
+    was_terminal = session.phase in (DialecticPhase.RESOLVED, DialecticPhase.FAILED)
     session.reviewer_agent_id = new_reviewer_id
     session.awaiting_facilitation = False
+
+    # Revive a session that was swept while its facilitation request stood.
+    # Assigning a reviewer to a row still marked `failed` would answer the
+    # request on paper and leave it dead in fact: no phase the new reviewer can
+    # act in. Reopen to the phase the session was actually waiting in —
+    # ANTITHESIS if a thesis is already on the record, THESIS otherwise.
+    #
+    # Scoped to was_awaiting: an ordinary failed/resolved session is never
+    # resurrected by a reassign, only one carrying an unanswered request.
+    revived = False
+    if was_terminal and was_awaiting:
+        has_thesis = any(m.phase == "thesis" for m in session.transcript)
+        session.phase = DialecticPhase.ANTITHESIS if has_thesis else DialecticPhase.THESIS
+        revived = True
 
     reasoning = (
         f"Reviewer reassigned: {old_reviewer_id or 'unassigned'} -> {new_reviewer_id}. "
@@ -634,6 +743,11 @@ async def _apply_reviewer_reassignment(
             await pg_update_reviewer(session_id, new_reviewer_id)
         # A reassigned reviewer clears the stuck/facilitation state (#1167 Ask 2).
         await pg_update_awaiting_facilitation(session_id, False)
+        # Persist the revival. `update_session_phase` refuses terminal values
+        # but accepts non-terminal ones, and the row's status must come back to
+        # `active` or the sweeper immediately re-terminates it.
+        if revived:
+            await pg_reopen_session(session_id, session.phase.value)
         await pg_add_message(
             session_id=session_id,
             agent_id="system",
@@ -1656,14 +1770,24 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                     reviewer_crashed_fast,
                 )
                 if orchestrated_review_enabled():
+                    situation_parts = []
+                    if getattr(session, "topic", None):
+                        situation_parts.append(f"Topic: {session.topic}")
+                    if getattr(session, "reason", None):
+                        situation_parts.append(f"Reason: {session.reason}")
                     dispatched = await dispatch_orchestrated_review(
                         session_id,
                         {
                             "root_cause": arguments.get('root_cause'),
                             "proposed_conditions": proposed_conditions,
                             "reasoning": arguments.get('reasoning') or "",
-                            # why the agent paused — the reviewer's situation context
-                            "situation": getattr(session, "reason", "") or "",
+                            # Server-owned context and telemetry captured when the
+                            # session was opened. The reviewer receives these
+                            # separately from the paused agent's authored claims.
+                            "situation": "\n".join(situation_parts),
+                            "paused_agent_state": getattr(
+                                session, "paused_agent_state", {}
+                            ) or {},
                         },
                         session.paused_agent_id,
                     )
@@ -2086,12 +2210,20 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                 except Exception as e:
                     logger.warning(f"Could not update PostgreSQL after synthesis: {e}")
     
-                # Persist to JSON
+                # Persist to JSON.
+                #
+                # On the converged path this must NOT commit the terminal row:
+                # submit_synthesis has already set phase=RESOLVED, but the
+                # resolution object is only built by finalize_resolution a few
+                # lines below. An eager terminal write here lands an empty
+                # `{}` resolution, and the guarded write (B-4 / the BEAM saga)
+                # then treats the real one as an already-terminal conflict and
+                # drops it. Same deferral the phase write above already uses.
                 try:
-                    await save_session(session)
+                    await save_session(session, defer_terminal=bool(result.get("converged")))
                 except Exception as e:
                     logger.warning(f"Could not save session after synthesis: {e}")
-    
+
             # If converged, finalize resolution
             if result.get("success") and result.get("converged"):
                 # Bilateral attestation (v2): finalize_resolution signs the
@@ -2226,6 +2358,11 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
             # caller keying on `success` would otherwise read a governance refusal as
             # convergence.
             if result.get("blocked") == "reviewer_objection_stands":
+                operator_next_call = (
+                    f"dialectic(action='reassign', session_id='{session_id}', "
+                    "new_reviewer_id='<agent_id>', "
+                    "reason='Facilitate standing reviewer rejection')"
+                )
                 return [error_response(
                     result.get("reason") or result.get("error")
                     or "Refused: the reviewer's standing verdict is a rejection.",
@@ -2237,7 +2374,16 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                             "reviewer's standing rejection. Do not retry — repeat "
                             "attempts are refused without being recorded."
                         ),
-                        "related_tools": ["dialectic"],
+                        "what_you_can_do": [
+                            (
+                                "Reviewer: submit a later synthesis to maintain or revise "
+                                "the verdict after reviewing new evidence."
+                            ),
+                            f"Operator: assign a facilitator/replacement reviewer with {operator_next_call}",
+                            "Paused agent: wait for reviewer or operator action; do not retry agrees=true.",
+                        ],
+                        "operator_next_call": operator_next_call,
+                        "related_tools": ["dialectic", "agent"],
                     },
                 )]
 
@@ -2291,8 +2437,19 @@ async def handle_reassign_reviewer(arguments: Dict[str, Any]) -> Sequence[TextCo
             recovery=session_not_found_recovery(),
         )]
 
-    # Validate phase — only reassign during THESIS or ANTITHESIS
-    if session.phase not in (DialecticPhase.THESIS, DialecticPhase.ANTITHESIS):
+    # Validate phase — THESIS/ANTITHESIS, or any session explicitly waiting on a
+    # human.
+    #
+    # A session that raised its hand for facilitation and was then swept to
+    # `failed` used to become unreassignable at exactly the moment someone might
+    # act on it: the request is visible, and the one operation that answers it
+    # is refused. Honouring `awaiting_facilitation` here is what makes the
+    # request answerable at all — assigning a reviewer IS the facilitation.
+    #
+    # Deliberately NOT a blanket relaxation: an ordinary resolved/failed session
+    # stays closed. Only a standing, unanswered request reopens.
+    _awaiting = bool(getattr(session, "awaiting_facilitation", False))
+    if session.phase not in (DialecticPhase.THESIS, DialecticPhase.ANTITHESIS) and not _awaiting:
         return [error_response(
             f"Cannot reassign reviewer in phase '{session.phase.value}'. Only THESIS or ANTITHESIS phases allow reassignment.",
             error_code="INVALID_PHASE",
@@ -2361,6 +2518,7 @@ async def handle_reassign_reviewer(arguments: Dict[str, Any]) -> Sequence[TextCo
             old_reviewer_id,
             new_reviewer_id,
             reason=reason,
+            phase=session.phase.value,
         ),
     })
 

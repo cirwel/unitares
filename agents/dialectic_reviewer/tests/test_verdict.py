@@ -82,6 +82,25 @@ def test_prompt_frames_disagreement_as_valid():
     assert "STRICT JSON" in prompt
 
 
+def test_prompt_separates_server_captured_pause_evidence_from_agent_claims():
+    prompt = build_review_prompt(
+        Thesis(
+            session_id="s1",
+            root_cause="claimed cause",
+            paused_agent_state={
+                "risk_score": 0.7859,
+                "coherence": 0.4986,
+                "verdict": "high-risk",
+            },
+        )
+    )
+    assert "SERVER-CAPTURED PAUSE EVIDENCE" in prompt
+    assert "not authored by the paused agent" in prompt
+    assert '"risk_score": 0.7859' in prompt
+    assert '"coherence": 0.4986' in prompt
+    assert '"verdict": "high-risk"' in prompt
+
+
 # --------------------------- Thesis.from_env --------------------------- #
 def test_thesis_from_env_parses_json_conditions():
     env = {
@@ -89,15 +108,26 @@ def test_thesis_from_env_parses_json_conditions():
         "DIALECTIC_THESIS_ROOT_CAUSE": "rc",
         "DIALECTIC_THESIS_CONDITIONS": json.dumps(["x", "y"]),
         "DIALECTIC_THESIS_REASONING": "because",
+        "DIALECTIC_PAUSED_AGENT_STATE": json.dumps({"coherence": 0.42}),
     }
     t = Thesis.from_env(env)
     assert t.session_id == "sess-123"
     assert t.proposed_conditions == ["x", "y"]
+    assert t.paused_agent_state == {"coherence": 0.42}
 
 
 def test_thesis_from_env_tolerates_newline_conditions():
     env = {"DIALECTIC_SESSION_ID": "s", "DIALECTIC_THESIS_CONDITIONS": "one\ntwo\n"}
     assert Thesis.from_env(env).proposed_conditions == ["one", "two"]
+
+
+@pytest.mark.parametrize("raw_state", ["not-json", "[]", '"agent-authored prose"'])
+def test_thesis_from_env_discards_malformed_or_non_object_pause_evidence(raw_state):
+    env = {
+        "DIALECTIC_SESSION_ID": "s",
+        "DIALECTIC_PAUSED_AGENT_STATE": raw_state,
+    }
+    assert Thesis.from_env(env).paused_agent_state == {}
 
 
 # --------------------------- SDK interface conformance --------------------------- #
@@ -182,3 +212,16 @@ async def test_run_submits_disagreement_through_protocol(monkeypatch):
     # synthesis carried agrees=False — the reviewer actually blocked
     assert synth and synth[0]["agrees"] is False
     assert synth[0]["session_id"] == "sess-9"
+
+    # THE REPLAY GUARD. Passing verdict.reasoning to both calls made the
+    # synthesis a byte-identical copy of the antithesis in 60 of 60 orchestrated
+    # sessions from 2026-06-23 onward, so every transcript printed the same
+    # paragraph under both headings. The argument belongs to the antithesis; the
+    # synthesis carries the verdict. finalize_resolution recovers the rationale
+    # from this agent's own antithesis, so nothing is lost downstream.
+    assert "reasoning" not in synth[0], (
+        "synthesis must not restate the antithesis — that is the replay bug"
+    )
+    assert anti[0].get("reasoning"), "the antithesis is where the argument goes"
+    assert synth[0]["root_cause"] == "shallow"
+    assert synth[0]["proposed_conditions"] == ["real fix"]

@@ -10,7 +10,9 @@ The canonical Unitares database is whatever instance `DB_POSTGRES_URL` points to
 
 - PostgreSQL is the sole durable database backend
 - Apache AGE lives inside PostgreSQL for graph data
-- Redis is an optional ephemeral cache for session continuity and fast lookups
+- Redis is the de-facto primary runtime session and identity store in the
+  maintainer deployment. The server can boot without it only in degraded
+  local-only mode; PostgreSQL remains the durable system of record.
 - `audit_log.jsonl` is a raw append-only audit artifact, not a second source of truth
 
 ## What Lives Where
@@ -28,7 +30,7 @@ Stores the durable system of record:
 
 ### Redis
 
-Stores optional ephemeral support data:
+Stores ephemeral runtime support data in the production posture:
 
 - session bindings
 - metadata cache
