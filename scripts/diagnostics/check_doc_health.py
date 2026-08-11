@@ -28,10 +28,23 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # `.worktrees` lives inside the parent checkout but belongs to parallel branches;
 # auditing it double-counts every other worktree's in-flight docs as "dead refs"
 # against the current branch's tree.
-SKIP_DIRS = {".git", ".venv", "venv", ".pytest_cache", "node_modules",
-             ".claude", "archive", "__pycache__", ".hypothesis",
-             ".agent-guides", "plans", "superpowers", ".worktrees",
-             "deps", "_build"}
+SKIP_DIRS = {
+    ".git",
+    ".venv",
+    "venv",
+    ".pytest_cache",
+    "node_modules",
+    ".claude",
+    "archive",
+    "__pycache__",
+    ".hypothesis",
+    ".agent-guides",
+    "plans",
+    "superpowers",
+    ".worktrees",
+    "deps",
+    "_build",
+}
 
 # Files to skip (historical records — dead refs are expected)
 SKIP_FILES = {"docs/CHANGELOG.md", "CHANGELOG.md"}
@@ -41,9 +54,9 @@ SKIP_FILES = {"docs/CHANGELOG.md", "CHANGELOG.md"}
 # Patterns that look like file paths in docs
 _PATH_PATTERNS = [
     # Backtick-quoted paths: `src/foo.py`, `config/bar.py`
-    re.compile(r'`((?:src|config|scripts|docs|db|dashboard)/[^`\s]+)`'),
+    re.compile(r"`((?:src|config|scripts|docs|db|dashboard)/[^`\s]+)`"),
     # Markdown links: [text](path/to/file)
-    re.compile(r'\]\(((?:src|config|scripts|docs|db|dashboard)/[^\)#\s]+)\)'),
+    re.compile(r"\]\(((?:src|config|scripts|docs|db|dashboard)/[^\)#\s]+)\)"),
 ]
 
 # Individual files where dead refs are expected. Keep these narrow: most
@@ -146,7 +159,7 @@ def check_dead_refs(md_files: list[Path]) -> list[str]:
 # proposals/specs/handoffs/plans and plan.md reference paths that don't (yet)
 # exist by design, so they stay exempt.
 
-_REL_MD_LINK = re.compile(r'\]\((\.{0,2}/?[^)\s#]+\.md)(?:#[^)]*)?\)')
+_REL_MD_LINK = re.compile(r"\]\((\.{0,2}/?[^)\s#]+\.md)(?:#[^)]*)?\)")
 _REPO_ROOT_PREFIXES = ("src/", "config/", "scripts/", "docs/", "db/", "dashboard/")
 
 
@@ -187,10 +200,10 @@ def check_relative_links(md_files: list[Path]) -> list[str]:
 # deliberately preserved in place and may legitimately be unlinked. README
 # files are index roots, not index targets.
 
-_DATED_RECORD = re.compile(r'-\d{4}-\d{2}-\d{2}\.md$')
+_DATED_RECORD = re.compile(r"-\d{4}-\d{2}-\d{2}\.md$")
 _ORPHAN_SKIP_NAMES = {"README.md"}
 _REF_SCAN_EXTS = {".md", ".py", ".ex", ".exs", ".sh", ".js", ".ts", ".toml", ".txt"}
-_MD_BASENAME = re.compile(r'([\w.\-/]+\.md)')
+_MD_BASENAME = re.compile(r"([\w.\-/]+\.md)")
 
 
 def _collect_md_basename_refs() -> dict[str, set[str]]:
@@ -238,6 +251,7 @@ def check_index_orphans(md_files: list[Path]) -> list[str]:
 
 
 # --- Check 2: Ghost tools ---
+
 
 def _load_tool_names() -> set[str]:
     """Load canonical tool names from this repo's registry.
@@ -294,31 +308,75 @@ def _load_tool_names() -> set[str]:
 
 # Common words and internal functions that appear in backticks but aren't MCP tools
 _TOOL_ALLOWLIST = {
-    "master", "main", "true", "false", "null", "none", "ok",
-    "proceed", "guide", "pause", "reject",  # verdict names
-    "open", "resolved", "archived",  # status names
-    "convergent", "divergent", "mixed",  # task types
-    "note", "insight", "bug_found", "improvement", "analysis", "pattern",  # discovery types
-    "comfortable", "tight", "critical",  # margin levels
-    "high", "low", "boundary",  # basin names
-    "postgres", "redis", "age", "docker",  # infra
-    "smoke", "pytest",  # test
+    "master",
+    "main",
+    "true",
+    "false",
+    "null",
+    "none",
+    "ok",
+    "proceed",
+    "guide",
+    "pause",
+    "reject",  # verdict names
+    "open",
+    "resolved",
+    "archived",  # status names
+    "convergent",
+    "divergent",
+    "mixed",  # task types
+    "note",
+    "insight",
+    "bug_found",
+    "improvement",
+    "analysis",
+    "pattern",  # discovery types
+    "comfortable",
+    "tight",
+    "critical",  # margin levels
+    "high",
+    "low",
+    "boundary",  # basin names
+    "postgres",
+    "redis",
+    "age",
+    "docker",  # infra
+    "smoke",
+    "pytest",  # test
     "export",  # consolidated tool (registered as action, not standalone)
     "get_db",  # internal DB helper, not an MCP tool
     "create_task",  # asyncio.create_task(), not an MCP tool
-    "str", "float", "int", "bool", "dict", "list", "set", "tuple",  # Python casts
-    "acquire", "release",  # asyncio.Lock / Semaphore methods
+    "str",
+    "float",
+    "int",
+    "bool",
+    "dict",
+    "list",
+    "set",
+    "tuple",  # Python casts
+    "acquire",
+    "release",  # asyncio.Lock / Semaphore methods
     "accept",  # socket.accept(), TLS accept
     "getAuthToken",  # JS dashboard helper
-    "load", "retheme", "applyEvent", "notifyNew", "refreshActive",  # dashboard hooks
+    "load",
+    "retheme",
+    "applyEvent",
+    "notifyNew",
+    "refreshActive",  # dashboard hooks
 }
 
 # Files/dirs where ghost tool warnings are noise (plans, specs, internal
 # analysis docs that reference implementation details by name as part of
 # the analysis — the names are correct internal-function references, not
 # MCP-tool claims).
-_GHOST_SKIP_DIRS = {"plans", "superpowers", "specs", "handoffs",
-                    "ontology", "proposals"}
+_GHOST_SKIP_DIRS = {
+    "plans",
+    "superpowers",
+    "specs",
+    "handoffs",
+    "ontology",
+    "proposals",
+}
 
 # Individual files (not whole dirs) where ghost-tool warnings are noise.
 # The dormant-capability-registry is, by definition, a catalogue of internal
@@ -337,7 +395,7 @@ def check_ghost_tools(md_files: list[Path], tool_names: set[str]) -> list[str]:
     warnings = []
     # Match backtick-quoted identifiers that look like MCP tool calls: `foo()`
     # Only check function-call patterns, not arbitrary backtick-quoted words
-    pat = re.compile(r'`(\w+)\(\)`')
+    pat = re.compile(r"`(\w+)\(\)`")
     seen = set()
 
     for fpath in md_files:
@@ -364,12 +422,12 @@ def check_ghost_tools(md_files: list[Path], tool_names: set[str]) -> list[str]:
 
 # --- Check 3: Hardcoded Tailscale IPs ---
 
-_IP_PATTERN = re.compile(r'100\.\d{1,3}\.\d{1,3}\.\d{1,3}')
+_IP_PATTERN = re.compile(r"100\.\d{1,3}\.\d{1,3}\.\d{1,3}")
 # CIDR suffix marks a network spec (e.g. `100.64.0.0/10` is Tailscale CGNAT
 # block per RFC 6598), not a specific operator's IP. The linter's job is to
 # catch live operator defaults baked into shipping code/docs, not constants
 # describing IP-space topology.
-_CIDR_AFTER_IP = re.compile(r'100\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d+')
+_CIDR_AFTER_IP = re.compile(r"100\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d+")
 
 
 def check_hardcoded_ips(md_files: list[Path]) -> list[str]:
@@ -393,8 +451,11 @@ def check_hardcoded_ips(md_files: list[Path]) -> list[str]:
                 # cells marked ✅ resolved or ⏸ deferred describe prior state,
                 # not live config. The fix has already been applied; the IP
                 # value is preserved for traceability.
-                if ("✅ resolved" in line or "⏸ deferred" in line or
-                        "historical" in line.lower()):
+                if (
+                    "✅ resolved" in line
+                    or "⏸ deferred" in line
+                    or "historical" in line.lower()
+                ):
                     continue
                 rel = fpath.relative_to(REPO_ROOT)
                 warnings.append(f"  {rel}:{i}: hardcoded Tailscale IP {ip}")
@@ -404,7 +465,7 @@ def check_hardcoded_ips(md_files: list[Path]) -> list[str]:
 # --- Check 4: Hardcoded counts ---
 
 _COUNT_PATTERN = re.compile(
-    r'\d{1,2},\d{3}\+?\s*(?:tests|agents|discoveries|identities|awakenings|check-ins|entries|edges)',
+    r"\d{1,2},\d{3}\+?\s*(?:tests|agents|discoveries|identities|awakenings|check-ins|entries|edges)",
     re.IGNORECASE,
 )
 
@@ -415,7 +476,7 @@ def check_hardcoded_counts(md_files: list[Path]) -> list[str]:
         for i, line in enumerate(fpath.read_text(errors="replace").splitlines(), 1):
             for match in _COUNT_PATTERN.finditer(line):
                 rel = fpath.relative_to(REPO_ROOT)
-                warnings.append(f"  {rel}:{i}: hardcoded count \"{match.group(0)}\"")
+                warnings.append(f'  {rel}:{i}: hardcoded count "{match.group(0)}"')
     return warnings
 
 
@@ -438,7 +499,11 @@ def check_hardcoded_counts(md_files: list[Path]) -> list[str]:
 
 # Anchor docs of docs/ontology/ — living canonical/ledger docs, not plans.
 _DEMOTION_SKIP_ONTOLOGY = {
-    "README.md", "identity.md", "plan.md", "paper-positioning.md", "glossary.md",
+    "README.md",
+    "identity.md",
+    "plan.md",
+    "paper-positioning.md",
+    "glossary.md",
 }
 
 # A doc that already labels itself historical/archived/superseded is honest
@@ -447,21 +512,21 @@ _DEMOTION_SKIP_ONTOLOGY = {
 # aggregation-plan.md: "archived implementation plan ... retained as design
 # provenance" — flagging it would be noise.)
 _ALREADY_HISTORICAL = re.compile(
-    r'\b(archived|superseded|withdrawn|retained as|design provenance|'
-    r'historical record|historical provenance|for provenance|deprecated)\b',
+    r"\b(archived|superseded|withdrawn|retained as|design provenance|"
+    r"historical record|historical provenance|for provenance|deprecated)\b",
     re.IGNORECASE,
 )
 
 _SHIPPED_MARKERS = re.compile(
-    r'\b(shipped|deployed|landed|merged|in production|live in prod|'
-    r'enforcement shipped|complete[d]?|resolved|done)\b',
+    r"\b(shipped|deployed|landed|merged|in production|live in prod|"
+    r"enforcement shipped|complete[d]?|resolved|done)\b",
     re.IGNORECASE,
 )
 # Signals the doc still tracks open work — distinguishes "fully shipped" (move
 # it) from "partially shipped" (split out the done part, keep the open part).
 _ACTIVE_REMAINING = re.compile(
-    r'\b(not started|remaining|in progress|in-flight|wip|todo|pending|'
-    r'proposed|design-gated|draft|next step|open question|phase [b-z] remains)\b',
+    r"\b(not started|remaining|in progress|in-flight|wip|todo|pending|"
+    r"proposed|design-gated|draft|next step|open question|phase [b-z] remains)\b",
     re.IGNORECASE,
 )
 
@@ -493,7 +558,8 @@ def check_demotion_candidates(md_files: list[Path]) -> list[str]:
         # move. Count doc-to-doc citations only; code/test mentions of a
         # filename don't make a planning doc a load-bearing reference.
         inbound = {
-            m for m in refs.get(rel.name, set())
+            m
+            for m in refs.get(rel.name, set())
             if m.startswith("docs/") and m.endswith(".md") and m != rel.as_posix()
         }
         if len(inbound) >= _DEMOTION_LIVING_REF_THRESHOLD:
@@ -551,14 +617,14 @@ def check_demotion_candidates(md_files: list[Path]) -> list[str]:
 
 _CONTESTED_CLAIMS: list[tuple[re.Pattern, str]] = [
     (
-        re.compile(r"Redis is optional", re.IGNORECASE),
-        'corrected: Redis is the de-facto primary session store (boots degraded '
-        'local-only without it) — see UNIFIED_ARCHITECTURE.md and the registry',
+        re.compile(r"Redis is (?:an? )?optional", re.IGNORECASE),
+        "corrected: Redis is the de-facto primary session store (boots degraded "
+        "local-only without it) — see UNIFIED_ARCHITECTURE.md and the registry",
     ),
     (
         re.compile(r"falls back to self-reported signals", re.IGNORECASE),
-        "corrected (PR #1235 inversion): warmup verdict is the cold-start prior, "
-        "≥70% server-derived; self-report capped at ≤30%",
+        "corrected (PR #1235 inversion): the first two check-ins use the "
+        "cold-start prior; behavioral scoring owns later warmup stages",
     ),
     (
         re.compile(r"verdict[^.\n]{0,40}self-report(?:ed)?-driven", re.IGNORECASE),
@@ -569,9 +635,45 @@ _CONTESTED_CLAIMS: list[tuple[re.Pattern, str]] = [
             r"(?:live (?:path|verdict)|warmup) uses fixed universal thresholds",
             re.IGNORECASE,
         ),
-        "conflation: the behavioral TRACK scores against fixed thresholds during "
-        "warmup, but the live VERDICT falls back to the server-derived cold-start "
-        "prior — say which one you mean (canonical wording in the registry)",
+        "conflation: check-ins 1–2 use the cold-start prior, check-ins 3–24 "
+        "use behavioral fixed thresholds, and self-relative scoring starts at "
+        "25 with the current constants (canonical wording in the registry)",
+    ),
+    (
+        re.compile(
+            r"(?:during|before) (?:baseline )?warmup.{0,180}?"
+            r"(?:verdict|action).{0,60}?(?:falls back to|comes from).{0,80}?"
+            r"cold-start",
+            re.IGNORECASE | re.DOTALL,
+        ),
+        "over-broad warmup claim: the cold-start prior owns only check-ins 1–2; "
+        "fixed-threshold behavioral scoring owns 3–24 and self-relative scoring "
+        "starts at 25 with the current constants",
+    ),
+    (
+        re.compile(
+            r"outcomes? (?:that |an agent )?can(?:not|'t) fake",
+            re.IGNORECASE,
+        ),
+        "overclaim: record_result stores an outcome claim; independence depends "
+        "on producer and provenance, and an agent-controlled outcome can be forged",
+    ),
+    (
+        re.compile(
+            r"agent can inflate[^.\n]{0,100}but (?:it )?cannot inflate[^.\n]{0,80}"
+            r"(?:evidence|results?|success rate)",
+            re.IGNORECASE,
+        ),
+        "overclaim: trusted external evidence is harder to forge, but generic "
+        "agent-authored outcome records are not independently verified",
+    ),
+    (
+        re.compile(
+            r"current (?:honest )?read is (?:a )?weak (?:early|short-lead) signal",
+            re.IGNORECASE,
+        ),
+        "superseded: the frozen 2026-08-09 trusted-anchor matrix labels every "
+        "overall slice NOISE-LEVEL against the best-of-candidates null",
     ),
 ]
 
@@ -639,7 +741,9 @@ def main():
 
     contested = check_contested_claims(md_files)
     if contested:
-        all_warnings.append(("Contested claims (corrected facts reappearing)", contested))
+        all_warnings.append(
+            ("Contested claims (corrected facts reappearing)", contested)
+        )
 
     # Advisory: surfaced only when requested, never gates the exit code
     # (demotion is a judgment call, not a defect). Printed separately from the
@@ -662,7 +766,9 @@ def main():
         print("📄 Doc health: all clear")
 
     if demotion:
-        print(f"📦 Demotion candidates ({len(demotion)}) — advisory, does not fail the check:")
+        print(
+            f"📦 Demotion candidates ({len(demotion)}) — advisory, does not fail the check:"
+        )
         for item in demotion:
             print(item)
         print()

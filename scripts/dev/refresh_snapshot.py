@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Regenerate the README "Production snapshot" numbers from the live governance DB.
+"""Render/check aggregate production-snapshot numbers from the governance DB.
 
-The snapshot in README.md is a dated, single-operator figure block. Hand-maintaining
-it means it silently goes stale (it drifted ~10x once). This turns the refresh into one
-command so an evaluator never quotes a number that is six weeks behind.
+The public snapshot is a dated, single-operator figure block. Hand-maintaining it
+means it can silently go stale. This command renders current aggregates or checks
+the table in the frozen snapshot. The frozen report also contains composition,
+cutoff SQL, and interpretation that this helper cannot safely rewrite in isolation.
 
 Usage:
     python3 scripts/dev/refresh_snapshot.py              # print refreshed block to stdout
-    python3 scripts/dev/refresh_snapshot.py --write README.md   # update in place (row-keyed)
-    python3 scripts/dev/refresh_snapshot.py --check README.md   # report drift (exit 1 if stale)
+    python3 scripts/dev/refresh_snapshot.py --check docs/PRODUCTION_SNAPSHOT.md
 
 --check is a manual "is the snapshot stale?" probe. It is deliberately NOT wired into CI:
 the live numbers move every day, so a hard gate would always be red. Run it before a
@@ -53,7 +53,7 @@ STATIC_ROWS = [
     ("V operating range", "Active agents often within [-0.1, 0.1]"),
     (
         "Tests",
-        f"8,500+ collected · smoke/pre-push subset plus {_cov_fail_under()}% min coverage gate",
+        f"12,500+ collected · smoke/pre-push subset plus {_cov_fail_under()}% min coverage gate",
     ),
 ]
 
@@ -88,7 +88,7 @@ def headline(snap: Snapshot, date_str: str) -> str:
     return (
         f"Frozen public snapshot from {date_str} (single-operator deployment — "
         f"the author's own traffic, not external adoption). Headline: "
-        f"**{events}+ governance events processed · ≈{last7} in the last 7 days**."
+        f"**{events}+ audit/telemetry events recorded · ≈{last7} in the prior 7 days**."
     )
 
 
@@ -103,16 +103,16 @@ def db_rows(snap: Snapshot) -> list[tuple[str, str]]:
             "resident agents (launchd crons)",
         ),
         (
-            "Distinct event-emitting identities (last 21 days)",
+            "Distinct event-emitting identities (prior 21 days)",
             f"{snap.distinct_21d:,}; mostly ephemeral local CLI sessions, not external adoption",
         ),
         (
-            "Unique agents active (last 7 days)",
+            "Distinct event-emitting identities (prior 7 days)",
             f"{snap.distinct_7d:,} distinct event emitters",
         ),
         (
-            "Governance events processed",
-            f"{floor_thousands(snap.events_total)}+ (≈{last7} in the last 7 days)",
+            "Audit/telemetry events recorded",
+            f"{floor_thousands(snap.events_total)}+ (≈{last7} in the prior 7 days)",
         ),
         ("Knowledge graph discoveries", f"{snap.kg_discoveries:,}"),
     ]
@@ -132,7 +132,7 @@ def _row_re(metric: str) -> re.Pattern[str]:
 
 
 _HEADLINE_RE = re.compile(
-    r"^Frozen public snapshot from .*? in the last 7 days\*\*\.\s*$",
+    r"^Frozen public snapshot from .*? in the prior 7 days\*\*\.\s*$",
     re.MULTILINE,
 )
 
@@ -140,12 +140,16 @@ _HEADLINE_RE = re.compile(
 def apply_to_readme(text: str, snap: Snapshot, date_str: str) -> str:
     """Row-keyed in-place update of headline + DB rows. Loud failure if anchors absent."""
     if not _HEADLINE_RE.search(text):
-        raise SystemExit("error: snapshot headline line not found in target; aborting --write.")
+        raise SystemExit(
+            "error: snapshot headline line not found in target; aborting --write."
+        )
     text = _HEADLINE_RE.sub(lambda _m: headline(snap, date_str), text, count=1)
     for metric, value in db_rows(snap):
         pat = _row_re(metric)
         if not pat.search(text):
-            raise SystemExit(f"error: table row '{metric}' not found in target; aborting --write.")
+            raise SystemExit(
+                f"error: table row '{metric}' not found in target; aborting --write."
+            )
         text = pat.sub(lambda _m, v=value, k=metric: f"| {k} | {v} |", text, count=1)
     return text
 
@@ -160,7 +164,9 @@ def check_readme(text: str, snap: Snapshot) -> list[str]:
             continue
         expected = f"| {metric} | {value} |"
         if m.group(0).rstrip() != expected:
-            drift.append(f"{metric}: README has `{m.group(0).strip()}` — live is `{value}`")
+            drift.append(
+                f"{metric}: README has `{m.group(0).strip()}` — live is `{value}`"
+            )
     return drift
 
 
@@ -168,7 +174,9 @@ async def fetch_snapshot(db_url: str) -> Snapshot:
     try:
         import asyncpg
     except ModuleNotFoundError:
-        raise SystemExit("error: asyncpg not installed. Install with `pip install asyncpg`.")
+        raise SystemExit(
+            "error: asyncpg not installed. Install with `pip install asyncpg`."
+        )
 
     conn = await asyncpg.connect(db_url)
     try:
@@ -195,8 +203,12 @@ async def fetch_snapshot(db_url: str) -> Snapshot:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--write", metavar="PATH", help="update the snapshot in PATH in place")
-    parser.add_argument("--check", metavar="PATH", help="report drift in PATH (exit 1 if stale)")
+    parser.add_argument(
+        "--write", metavar="PATH", help="update the snapshot in PATH in place"
+    )
+    parser.add_argument(
+        "--check", metavar="PATH", help="report drift in PATH (exit 1 if stale)"
+    )
     parser.add_argument(
         "--date",
         help="snapshot date label (default: today, UTC). Pass explicitly for reproducible runs.",
@@ -228,6 +240,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.write:
         with open(args.write, encoding="utf-8") as fh:
             original = fh.read()
+        if "## Reproduce the frozen counts" in original:
+            raise SystemExit(
+                "error: refusing a partial rewrite of the frozen public snapshot; "
+                "render current values, then update its cutoff, composition, SQL, "
+                "and interpretation together"
+            )
         updated = apply_to_readme(original, snap, date_str)
         if updated == original:
             print(f"{args.write}: already current, no change")
