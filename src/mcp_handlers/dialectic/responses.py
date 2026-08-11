@@ -70,6 +70,7 @@ def get_reviewer_reassigned_recovery(
     new_reviewer_id: str,
     *,
     reason: str | None = None,
+    phase: str = "antithesis",
 ) -> Dict[str, Any]:
     """Recovery payload after successful reviewer reassignment."""
     if old_reviewer_id:
@@ -78,13 +79,23 @@ def get_reviewer_reassigned_recovery(
         happened = f"Reviewer '{new_reviewer_id}' assigned."
     if reason:
         happened = f"{happened} Reason: {reason}"
+    if phase == "synthesis":
+        next_steps = [
+            (
+                f"New reviewer '{new_reviewer_id}' should review the transcript and "
+                "submit synthesis to maintain or revise the standing verdict"
+            ),
+            "The previous rejection remains in force until a reviewer revises it",
+        ]
+    else:
+        next_steps = [
+            f"New reviewer '{new_reviewer_id}' should submit antithesis",
+            "Session phase and transcript are preserved",
+        ]
     return {
         "action": "Reviewer reassigned - session continues",
         "what_happened": happened,
-        "next_steps": [
-            f"New reviewer '{new_reviewer_id}' should submit antithesis",
-            "Session phase and transcript are preserved",
-        ],
+        "next_steps": next_steps,
         "related_tools": ["dialectic"],
     }
 

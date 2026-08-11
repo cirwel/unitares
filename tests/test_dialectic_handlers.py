@@ -910,6 +910,51 @@ class TestHandleSubmitSynthesis:
         assert data["success"] is True
 
     @pytest.mark.asyncio
+    async def test_self_clear_refusal_points_to_reviewer_or_operator_action(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_context_agent,
+    ):
+        from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
+
+        session = _make_session(phase=DialecticPhase.SYNTHESIS)
+        session.synthesis_round = 1
+        session.transcript.append(DialecticMessage(
+            phase="synthesis",
+            agent_id="agent-reviewer",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            proposed_conditions=["Require independent evidence"],
+            reasoning="The evidence does not support resumption.",
+            agrees=False,
+        ))
+
+        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+                   return_value=session), \
+             patch(f"{DIALECTIC}.pg_update_awaiting_facilitation",
+                   new_callable=AsyncMock), \
+             mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
+             mock_context_agent:
+            result = await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-paused",
+                "proposed_conditions": ["Resume anyway"],
+                "root_cause": "claimed false positive",
+                "reasoning": "I disagree with the reviewer.",
+                "agrees": True,
+                "api_key": "key",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "SELF_CLEAR_REFUSED"
+        assert "Do not retry" in data["recovery"]["action"]
+        assert "action='reassign'" in data["recovery"]["operator_next_call"]
+        assert session.session_id in data["recovery"]["operator_next_call"]
+        assert any(
+            step.startswith("Reviewer:")
+            for step in data["recovery"]["what_you_can_do"]
+        )
+
+    @pytest.mark.asyncio
     async def test_missing_required_args(self, mock_context_agent):
         """Returns error when session_id and agent_id both missing."""
         from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
@@ -1866,4 +1911,3 @@ class TestGetDialecticNextSteps:
         assert len(steps) == 3
         # Falls through to ESCALATE branch
         assert any("human" in s.lower() for s in steps)
-

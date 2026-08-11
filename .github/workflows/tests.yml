@@ -218,6 +218,48 @@ jobs:
       working-directory: dashboard
       run: npm run lint
 
+  server-package:
+    # Build the non-editable distribution and keep the checkout off sys.path.
+    # Setuptools otherwise treats `src/` as a layout root, flattens the literal
+    # `src` package, and silently drops the top-level governance_core package.
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v7
+      with:
+        python-version: '3.12'
+
+    - name: Build and install the server package
+      run: |
+        python -m pip install --upgrade pip build
+        python -m build
+        pip install dist/governance_mcp-*.whl
+
+    - name: Verify installed package layout and metadata
+      run: |
+        cd /tmp
+        python - <<'PY'
+        from importlib.metadata import version
+        from importlib.resources import files
+        from pathlib import Path
+        import governance_core
+        import src
+        from src.versioning import load_version_from_file
+
+        installed_version = version("governance-mcp")
+        assert installed_version != "0.0.0"
+        package_root = Path(src.__file__).resolve().parent.parent
+        assert load_version_from_file(package_root) == installed_version
+        assert files("src").joinpath("tool_descriptions.json").is_file()
+        assert files("src").joinpath("violation_taxonomy.yaml").is_file()
+        print("installed server packages and metadata verified")
+        PY
+
   sdk-package:
     # Be our own consumer.
     #

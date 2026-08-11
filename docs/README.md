@@ -16,6 +16,11 @@ an analogy or proposal is not mistaken for a deployed contract.
 | **Contributing to the identity layer** | [`../AGENTS.md`](../AGENTS.md) → [`ontology/README.md`](ontology/README.md) → [`ontology/identity.md`](ontology/identity.md) → [`ontology/plan.md`](ontology/plan.md) |
 | **Reading research history** | [`EVALUATION_INDEX.md`](EVALUATION_INDEX.md) → [`ontology/README.md`](ontology/README.md) → [`proposals/README.md`](proposals/README.md) |
 
+Project-level status and participation live at the repository root:
+[roadmap](../ROADMAP.md), [compatibility](../COMPATIBILITY.md),
+[governance](../GOVERNANCE.md), [support](../SUPPORT.md), and
+[contributing](../CONTRIBUTING.md).
+
 ## Reader-facing documentation
 
 ### `manual/` — the user manual

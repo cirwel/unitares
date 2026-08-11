@@ -1,0 +1,8 @@
+# UNITARES is currently maintained by one operator. CODEOWNERS makes that
+# ownership explicit; branch protection can require code-owner review if a
+# second maintainer joins.
+* @cirwel
+
+/.github/ @cirwel
+/db/postgres/migrations/ @cirwel
+/SECURITY.md @cirwel

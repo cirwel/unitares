@@ -43,14 +43,16 @@ REVIEWER_NAME = "DialecticReviewer"
 
 @dataclass
 class Thesis:
-    """What the paused agent claimed — passed in the spawn payload, not read over
-    MCP (get_dialectic_session is register=False)."""
+    """Review payload passed at spawn time, including clearly separated paused-
+    agent claims and the server-captured state snapshot. The child cannot read
+    ``get_dialectic_session`` because that tool is ``register=False``."""
 
     session_id: str
     root_cause: str = ""
     proposed_conditions: list[str] = field(default_factory=list)
     reasoning: str = ""
     situation: str = ""  # free-text context about why the agent paused
+    paused_agent_state: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_env(cls, env: Optional[dict[str, str]] = None) -> "Thesis":
@@ -63,12 +65,22 @@ class Thesis:
                 conditions = [str(conditions)]
         except (json.JSONDecodeError, ValueError):
             conditions = [c.strip() for c in raw_conditions.split("\n") if c.strip()]
+
+        raw_state = env.get("DIALECTIC_PAUSED_AGENT_STATE", "")
+        try:
+            paused_agent_state = json.loads(raw_state) if raw_state else {}
+            if not isinstance(paused_agent_state, dict):
+                paused_agent_state = {}
+        except (json.JSONDecodeError, ValueError, TypeError):
+            paused_agent_state = {}
+
         return cls(
             session_id=sid,
             root_cause=env.get("DIALECTIC_THESIS_ROOT_CAUSE", ""),
             proposed_conditions=conditions,
             reasoning=env.get("DIALECTIC_THESIS_REASONING", ""),
             situation=env.get("DIALECTIC_THESIS_SITUATION", ""),
+            paused_agent_state=paused_agent_state,
         )
 
 
@@ -86,6 +98,11 @@ class Verdict:
 def build_review_prompt(thesis: Thesis) -> str:
     """Construct the independent-review prompt. Pure."""
     conditions = "\n".join(f"  - {c}" for c in thesis.proposed_conditions) or "  (none proposed)"
+    pause_evidence = (
+        json.dumps(thesis.paused_agent_state, indent=2, sort_keys=True, default=str)
+        if thesis.paused_agent_state
+        else "(not provided)"
+    )
     return (
         "You are an INDEPENDENT reviewer in a dialectic governance process. A paused "
         "AI agent has proposed conditions under which it should resume work. Your job "
@@ -93,6 +110,8 @@ def build_review_prompt(thesis: Thesis) -> str:
         "a valid, expected outcome when the root-cause analysis is shallow, the "
         "conditions don't address the root cause, or the agent is rationalizing.\n\n"
         f"PAUSED AGENT'S SITUATION:\n{thesis.situation or '(not provided)'}\n\n"
+        "SERVER-CAPTURED PAUSE EVIDENCE "
+        f"(not authored by the paused agent; may be partial):\n{pause_evidence}\n\n"
         f"PROPOSED ROOT CAUSE:\n{thesis.root_cause or '(none)'}\n\n"
         f"PROPOSED RESUMPTION CONDITIONS:\n{conditions}\n\n"
         f"AGENT'S REASONING:\n{thesis.reasoning or '(none)'}\n\n"

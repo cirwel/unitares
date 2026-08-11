@@ -1,0 +1,46 @@
+name: Feature request
+description: Propose a concrete capability or usability improvement.
+title: "proposal: "
+labels:
+  - enhancement
+  - needs-triage
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What operator, integrator, or evaluator problem is currently unsolved?
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence and scope
+      description: Describe the observed workflow, affected users, and any measured failure or friction.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed outcome
+      description: Describe the desired behavior, not only a preferred implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and tradeoffs
+      description: What simpler approach, workaround, or non-goal should reviewers consider?
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched the roadmap, active proposals, and existing issues.
+          required: true
+        - label: I have separated deployed behavior from research or future-state claims.
+          required: true

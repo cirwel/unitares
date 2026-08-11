@@ -50,136 +50,19 @@ payload under `raw_governance`.
 - `session_resolution_source` tells you how the runtime actually resolved continuity
 - if continuity falls back to a weak source, rerun `/governance-start`; do not repair it with bare UUID resume
 
-## Local Cache
+## Operational detail
 
-Codex should treat continuity as local workspace state, not Claude-only adapter state.
+`.unitares/session.json` is the local cache for `uuid`, `client_session_id`, and
+the observed resolution source. It assists the client; the server remains the
+source of truth. Do not treat every edit or tool call as a governance event.
 
-Preferred cache path:
+The machine-facing rules, Watcher commands, surface-claim procedure, tests, and
+delivery checks live in [`AGENTS.md`](AGENTS.md). Repository delivery uses a
+draft PR and human merge gate; the full contract is
+[`docs/operations/github-workflow-conventions.md`](docs/operations/github-workflow-conventions.md).
 
-- `.unitares/session.json`
-
-Shared helper:
-
-- `scripts/client/session_cache.py`
-
-Treat this as local runtime state. It should not be used as a source of truth over the server, but it is the first place to look for:
-
-- `uuid`
-- `agent_id`
-- `display_name`
-- `continuity_token` when present for in-process proof-owned calls, not startup resume
-- `client_session_id`
-- `session_resolution_source`
-
-## Minimal Session Pattern
-
-Typical session:
-
-- start or declare lineage with `/governance-start`
-- do meaningful work
-- check in once per assistant turn as a baseline
-- add a check-in after a milestone, completed step, or decision point
-- diagnose only when needed
-
-Do not treat every file edit or tool call as a governance event. Turn-level baseline check-ins are useful; raw file churn is not.
-
-## What to Watch
-
-- `identity_status`
-- `bound_identity`
-- `session_resolution_source`
-- `continuity_token_supported`
-- `identity_assurance` when an update response includes it
-
-## Housekeeping
-
-Use the read-only inventory before starting or resuming messy local work:
-
-```bash
-python3 scripts/dev/housekeeping_inventory.py
-```
-
-It reports dirty or detached worktrees, gone-upstream branches, old stashes,
-open GitHub PRs, and unresolved Watcher output. For automation, add
-`--fail-on-attention` to exit nonzero when any reported attention item exists,
-or narrow it with comma-separated categories such as
-`--fail-on-attention worktrees,watcher`.
-
-Use closeout before the final response after edits:
-
-```bash
-python3 scripts/dev/workspace_closeout.py
-```
-
-The `delivery:` line is mandatory context. In particular:
-
-- `local_changes` means not committed, not pushed, not merged.
-- `unpushed_commits` means committed locally but not pushed.
-- `pushed_branch` means pushed, but PR/merge state is not proven by local git.
-- `synced_default` means clean and synced with the default upstream.
-
-If you want Codex to ship the current staged change, use:
-
-```bash
-./scripts/dev/ship.sh "type(scope): concise message"
-```
-
-If the whole dirty worktree belongs in the PR, use:
-
-```bash
-./scripts/dev/ship.sh --stage-all "type(scope): concise message"
-```
-
-Per `docs/operations/github-workflow-conventions.md`, delivery is **draft PR for
-everything** — Codex and Claude share one contract so concurrent sessions stay
-predictable, and the operator is the merge gate. The default `auto` route now
-opens a draft PR for every change; `--direct` opts out for docs/tests-only
-pushes, and `--auto-merge` is only for when the operator explicitly asks.
-
-## Commands
-
-- `/governance-start` to create or declare lineage and refresh local continuity state
-- `/checkin` for the turn baseline and meaningful milestones
-- `/diagnose` for identity, state, and operator diagnostics
-- `/dialectic` for structured review
-- `/closeout` for workspace hygiene and explicit GitHub delivery state
-
-## Watcher
-
-Codex does not get automatic Watcher surfacing. Use the CLI directly when you want the same signal:
-
-```bash
-python3 agents/watcher/agent.py --list-findings --only-open
-python3 agents/watcher/agent.py --print-unresolved
-python3 agents/watcher/agent.py --resolve <fingerprint> --agent-id <your-uuid>
-python3 agents/watcher/agent.py --dismiss <fingerprint> --agent-id <your-uuid>
-```
-
-## BEAM File Leases
-
-For multi-agent edits, claim codebase surfaces through the Elixir lease plane before mutating shared files. The helper maps paths to canonical `file://` surfaces.
-
-For longer editing sessions, keep a foreground hold running in another terminal:
-
-```bash
-python3 scripts/dev/file_lease.py hold --changed
-```
-
-`hold --changed` refreshes the changed-file set on every heartbeat. If a new changed file is already held by another agent, it releases its own leases and exits blocked.
-
-For single commands that mutate or validate the current worktree, wrap them:
-
-```bash
-python3 scripts/dev/file_lease.py guard --changed -- ./scripts/dev/test-cache.sh
-```
-
-Useful inspection commands:
-
-```bash
-python3 scripts/dev/file_lease.py changed
-python3 scripts/dev/file_lease.py status path/to/file.py
-python3 scripts/dev/file_lease.py acquire path/to/file.py --enforce
-```
+For the installable client rather than direct repository work, use the
+[governance plugin](https://github.com/cirwel/unitares-governance-plugin).
 
 ## Scope
 

@@ -7,6 +7,7 @@ cannot drift independently.
 
 import datetime as _dt
 import subprocess
+from importlib.metadata import PackageNotFoundError, version as distribution_version
 from pathlib import Path
 
 
@@ -16,10 +17,24 @@ DEFAULT_BUILD_SHA_FALLBACK = "unknown"
 
 
 def load_version_from_file(project_root: Path) -> str:
-    """Load version from project VERSION file, with centralized fallback."""
+    """Load the checkout version, or installed distribution metadata."""
     version_file = project_root / "VERSION"
     if version_file.exists():
         return version_file.read_text().strip()
+
+    # A wheel has no repository-root VERSION file. Only consult distribution
+    # metadata when the caller supplied this installed module's actual package
+    # root; arbitrary/mocked paths retain the explicit 0.0.0 fallback.
+    package_root = Path(__file__).resolve().parent.parent
+    try:
+        same_root = project_root.resolve() == package_root.resolve()
+    except OSError:
+        same_root = False
+    if same_root:
+        try:
+            return distribution_version("governance-mcp")
+        except PackageNotFoundError:
+            pass
     return DEFAULT_VERSION_FALLBACK
 
 
