@@ -43,14 +43,16 @@ REVIEWER_NAME = "DialecticReviewer"
 
 @dataclass
 class Thesis:
-    """What the paused agent claimed — passed in the spawn payload, not read over
-    MCP (get_dialectic_session is register=False)."""
+    """Review payload passed at spawn time, including clearly separated paused-
+    agent claims and the server-captured state snapshot. The child cannot read
+    ``get_dialectic_session`` because that tool is ``register=False``."""
 
     session_id: str
     root_cause: str = ""
     proposed_conditions: list[str] = field(default_factory=list)
     reasoning: str = ""
     situation: str = ""  # free-text context about why the agent paused
+    paused_agent_state: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_env(cls, env: Optional[dict[str, str]] = None) -> "Thesis":
@@ -63,12 +65,22 @@ class Thesis:
                 conditions = [str(conditions)]
         except (json.JSONDecodeError, ValueError):
             conditions = [c.strip() for c in raw_conditions.split("\n") if c.strip()]
+
+        raw_state = env.get("DIALECTIC_PAUSED_AGENT_STATE", "")
+        try:
+            paused_agent_state = json.loads(raw_state) if raw_state else {}
+            if not isinstance(paused_agent_state, dict):
+                paused_agent_state = {}
+        except (json.JSONDecodeError, ValueError, TypeError):
+            paused_agent_state = {}
+
         return cls(
             session_id=sid,
             root_cause=env.get("DIALECTIC_THESIS_ROOT_CAUSE", ""),
             proposed_conditions=conditions,
             reasoning=env.get("DIALECTIC_THESIS_REASONING", ""),
             situation=env.get("DIALECTIC_THESIS_SITUATION", ""),
+            paused_agent_state=paused_agent_state,
         )
 
 
@@ -86,6 +98,11 @@ class Verdict:
 def build_review_prompt(thesis: Thesis) -> str:
     """Construct the independent-review prompt. Pure."""
     conditions = "\n".join(f"  - {c}" for c in thesis.proposed_conditions) or "  (none proposed)"
+    pause_evidence = (
+        json.dumps(thesis.paused_agent_state, indent=2, sort_keys=True, default=str)
+        if thesis.paused_agent_state
+        else "(not provided)"
+    )
     return (
         "You are an INDEPENDENT reviewer in a dialectic governance process. A paused "
         "AI agent has proposed conditions under which it should resume work. Your job "
@@ -93,6 +110,8 @@ def build_review_prompt(thesis: Thesis) -> str:
         "a valid, expected outcome when the root-cause analysis is shallow, the "
         "conditions don't address the root cause, or the agent is rationalizing.\n\n"
         f"PAUSED AGENT'S SITUATION:\n{thesis.situation or '(not provided)'}\n\n"
+        "SERVER-CAPTURED PAUSE EVIDENCE "
+        f"(not authored by the paused agent; may be partial):\n{pause_evidence}\n\n"
         f"PROPOSED ROOT CAUSE:\n{thesis.root_cause or '(none)'}\n\n"
         f"PROPOSED RESUMPTION CONDITIONS:\n{conditions}\n\n"
         f"AGENT'S REASONING:\n{thesis.reasoning or '(none)'}\n\n"
@@ -292,6 +311,20 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
             {"action": "antithesis", "session_id": thesis.session_id, "reasoning": verdict.reasoning},
         )
         # Submit the model-derived verdict — agrees may be False (the whole point).
+        #
+        # No `reasoning` here, deliberately. The argument was made once, in the
+        # antithesis above; this message is the VERDICT (agrees + conditions +
+        # root_cause), which is what the synthesis row is actually for —
+        # antithesis rows carry those fields in 1 of 98 rows, synthesis rows in
+        # ~134 of 149. Passing verdict.reasoning to both calls is what made the
+        # synthesis a byte-identical replay of the antithesis in 60 of 60
+        # orchestrated sessions since 2026-06-23, so every transcript showed
+        # the same paragraph twice under two different headings.
+        #
+        # Safe to omit only because finalize_resolution now falls back to this
+        # same agent's antithesis reasoning (dialectic_protocol.reasoning_of);
+        # without that fallback this would blank the rationale on every
+        # approved resolution, which is why the naive version was reverted.
         await client.call_tool(
             "dialectic",
             {
@@ -300,7 +333,6 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
                 "agrees": verdict.agrees,
                 "proposed_conditions": verdict.proposed_conditions,
                 "root_cause": verdict.root_cause,
-                "reasoning": verdict.reasoning,
             },
         )
         # A real check-in before exit (subagent-onboarding discipline).

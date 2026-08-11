@@ -1,28 +1,96 @@
 # Production snapshot
 
-Frozen public snapshot from July 2, 2026 (single-operator — the author's own
-traffic; previous snapshot: June 16, 2026). Headline: **4.2M+ governance events
-processed · ≈72K in the last 7 days**. Weekly volume varies with the operator's
-workload — the June snapshot coincided with a high-throughput period, and
-identity-consolidation work since then removed phantom per-session traffic. Running continuously since November 2025 and dogfooded — the agents
-building UNITARES run under it. The falsifiability checks run on a fresh clone;
-the live deployment metrics below need governance-DB access to reproduce — see
-the [Reviewer Guide](REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc).
+Frozen at **2026-08-11 14:02:51 MDT** from a single-operator deployment: the
+author's own traffic, not external adoption. Headline: **4,573,890 audit and
+telemetry events recorded · 68,075 in the prior 7 days**. Weekly volume varies with the
+operator's workload. The service has run since November 2025, and the agents
+building UNITARES also run under it; this is co-development dogfood, not an
+independent efficacy study.
+
+The falsifiability checks run on a fresh clone. Reproducing the deployment
+counts requires read access to the governance database; the exact queries are
+included below. See the [Reviewer Guide](REVIEWER_GUIDE.md) for the public
+evaluation path.
 
 ## Full metrics table
 
 | Metric | Value |
 |--------|-------|
-| Agents onboarded | 5,162 total process-instances — overwhelmingly ephemeral CLI sessions from one operator's workstation plus a handful of long-running resident agents (launchd crons) |
-| Distinct event-emitting identities (last 21 days) | 1,336; mostly ephemeral local CLI sessions |
-| Unique agents active (last 7 days) | 448 distinct event emitters |
-| Governance events processed | 4,244,000+ (≈72K in the last 7 days) |
-| Knowledge graph discoveries | 1,339 |
+| Agents onboarded | 6,080 total process-instances — overwhelmingly ephemeral CLI sessions from one operator's workstation plus a handful of long-running resident agents |
+| Distinct event-emitting identities (prior 21 days) | 1,068; mostly ephemeral local CLI sessions, not external adopters |
+| Distinct event-emitting identities (prior 7 days) | 345 |
+| Audit/telemetry events recorded | 4,573,890 total; 68,075 in the prior 7 days |
+| Stored EISV state rows | 71,141 observations; not independent agents or trials |
+| Canonical non-automatic lifecycle resumes | 21, including 15 whose recorded reason begins `Self-recovery:`; requiring a `type` field excludes legacy dual-written rows |
+| Knowledge graph discoveries | 1,447 |
 | V operating range | Active agents often within [-0.1, 0.1] |
-| Tests | 10,300+ collected · smoke/pre-push subset plus 75% min coverage gate |
+| Tests | 12,500+ collected · smoke/pre-push subset plus 75% min coverage gate |
 
-*What these numbers show:* the pipeline holds up under sustained volume. *What
-they don't show:* product-market traction. External adoption is the open question.
+*What these numbers show:* the pipeline has operated under sustained maintainer
+traffic, and the recovery path has been exercised. *What they do not show:*
+product-market traction, independent replications, or improved task outcomes.
+External adoption and efficacy remain open questions.
+
+The headline event count is mostly operational instrumentation, not one row per
+governance decision:
+
+| Event type | Rows | Share |
+|---|---:|---:|
+| `session_resolve_miss_observed` | 3,440,358 | 75.22% |
+| `cross_device_call` | 738,728 | 16.15% |
+| `auto_attest` | 142,609 | 3.12% |
+| `progress_flat_candidate` | 56,461 | 1.23% |
+| All other event types | 195,734 | 4.28% |
+
+## Reproduce the frozen counts
+
+Run read-only SQL against the deployment database. The cutoff keeps growing
+tables comparable with this snapshot:
+
+```sql
+WITH p AS (
+  SELECT timestamptz '2026-08-11 14:02:51.657463-06' AS cutoff
+)
+SELECT
+  (SELECT count(*) FROM audit.events, p WHERE ts <= cutoff) AS events_total,
+  (SELECT count(*) FROM audit.events, p
+    WHERE ts > cutoff - interval '7 days' AND ts <= cutoff) AS events_7d,
+  (SELECT count(*) FROM core.agents, p WHERE created_at <= cutoff) AS agents,
+  (SELECT count(DISTINCT agent_id) FROM audit.events, p
+    WHERE ts > cutoff - interval '21 days' AND ts <= cutoff) AS emitters_21d,
+  (SELECT count(DISTINCT agent_id) FROM audit.events, p
+    WHERE ts > cutoff - interval '7 days' AND ts <= cutoff) AS emitters_7d,
+  (SELECT count(*) FROM core.agent_state, p
+    WHERE recorded_at <= cutoff) AS state_rows,
+  (SELECT count(*) FROM knowledge.discoveries, p
+    WHERE created_at <= cutoff) AS discoveries,
+  (SELECT count(*) FROM audit.events, p
+    WHERE ts <= cutoff
+      AND event_type = 'lifecycle_resumed'
+      AND payload ? 'type'
+      AND payload->>'reason' NOT LIKE 'Auto-resumed%') AS non_auto_resumes,
+  (SELECT count(*) FROM audit.events, p
+    WHERE ts <= cutoff
+      AND event_type = 'lifecycle_resumed'
+      AND payload ? 'type'
+      AND payload->>'reason' LIKE 'Self-recovery:%') AS self_recoveries;
+```
+
+Expected row:
+
+```text
+4573890 | 68075 | 6080 | 1068 | 345 | 71141 | 1447 | 21 | 15
+```
+
+To inspect the composition behind the headline count:
+
+```sql
+SELECT event_type, count(*)
+FROM audit.events
+WHERE ts <= timestamptz '2026-08-11 14:02:51.657463-06'
+GROUP BY event_type
+ORDER BY count(*) DESC;
+```
 
 ## Dashboard views
 

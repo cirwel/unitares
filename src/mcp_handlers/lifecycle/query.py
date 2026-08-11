@@ -478,10 +478,190 @@ def _monitor_metrics(agent_id: str, meta: Any) -> tuple[str, Optional[dict]]:
             "mean_risk": safe_float(metrics.get("mean_risk", 0.5)),
             "lambda1": safe_float(state.lambda1),
             "void_active": bool(state.void_active) if state.void_active is not None else False,
+            "source": "live_monitor",
+            "recorded_at": getattr(meta, "last_update", None),
+            "rolling_metrics_available": True,
         }
     except Exception as exc:
         logger.warning("Error getting metrics for %s: %s", agent_id, exc)
         return "error", None
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    """Convert a persisted scalar without turning missing data into zero."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _persisted_state_metrics(state: Any) -> tuple[str, dict[str, Any]]:
+    """Project one durable state row into the list-agents metrics shape.
+
+    This is deliberately a read projection, not monitor hydration.  The agent
+    list used to return ``metrics=null`` for every process whose monitor was not
+    loaded in the current server process, even when PostgreSQL held a measured
+    state row.  A single batch read can expose that last observation honestly
+    while ``source``/``recorded_at`` keep it distinct from an in-memory monitor.
+    """
+    state_json = state.state_json if isinstance(state.state_json, dict) else {}
+    E = _optional_float(state.energy)
+    I = _optional_float(state.integrity)
+    S = _optional_float(state.entropy)
+    V = _optional_float(state.void)
+    coherence = _optional_float(state.coherence)
+    risk = _optional_float(state_json.get("risk_score"))
+
+    basin = None
+    if None not in (E, I, S, V, coherence):
+        try:
+            from config.governance_config import classify_basin
+            basin = classify_basin(
+                E=E, I=I, S=S, V=V, coherence=coherence, risk_score=risk,
+            )
+        except Exception:
+            basin = None
+
+    stored_health = state_json.get("health_status")
+    if stored_health in {"healthy", "moderate", "critical"}:
+        health_status = stored_health
+    else:
+        health, _ = mcp_server.health_checker.get_health_status(
+            risk_score=risk,
+            coherence=coherence,
+            void_active=bool(state_json.get("void_active", False)),
+        )
+        health_status = health.value
+
+    recorded_at = getattr(state, "recorded_at", None)
+    if hasattr(recorded_at, "isoformat"):
+        recorded_at = recorded_at.isoformat()
+
+    return health_status, {
+        "E": E,
+        "I": I,
+        "S": S,
+        "V": V,
+        "coherence": coherence,
+        "current_risk": risk,
+        "risk_score": risk,
+        "phi": _optional_float(state_json.get("phi")),
+        "verdict": state_json.get("verdict"),
+        "basin": basin,
+        "mean_risk": None,
+        "lambda1": _optional_float(state_json.get("lambda1")),
+        "void_active": bool(state_json.get("void_active", False)),
+        "source": "persisted_state",
+        "recorded_at": recorded_at,
+        # Rolling aggregates live only in the process-local monitor.  A durable
+        # state row can restore the point observation, but must not imply that
+        # monitor history survived a restart.
+        "rolling_metrics_available": False,
+    }
+
+
+async def _load_persisted_metrics() -> dict[str, tuple[str, dict[str, Any]]]:
+    """Batch-load latest measured state projections, keyed by registry UUID."""
+    from src.db import get_db
+
+    states = await get_db().get_all_latest_agent_states()
+    projected: dict[str, tuple[str, dict[str, Any]]] = {}
+    for state in states:
+        try:
+            projected[state.agent_id] = _persisted_state_metrics(state)
+        except Exception as exc:
+            logger.debug(
+                "Could not project persisted metrics for %s: %s",
+                getattr(state, "agent_id", "unknown"),
+                exc,
+            )
+    return projected
+
+
+def _isoformat_or_none(value: Any) -> Optional[str]:
+    """Serialize a database timestamp without inventing one for missing data."""
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+async def _load_presence_profiles(
+    agent_ids: Sequence[str],
+) -> dict[str, dict[str, Any]]:
+    """Batch-read explicit runtime-presence evidence for fleet list rows.
+
+    Registry lifecycle status and ``last_update`` are not liveness signals.  A
+    process binding or an unexpired lease is positive evidence that a process is
+    live; absence of both remains ``unknown`` rather than being promoted to a
+    claim that the process is offline.  The query is fleet-batched so the agent
+    list never performs one liveness lookup per identity.
+    """
+    ids = list(dict.fromkeys(str(agent_id) for agent_id in agent_ids if agent_id))
+    if not ids:
+        return {}
+
+    from src.db import get_db
+    from src.mcp_handlers.identity.process_binding import LIVE_WINDOW_SECONDS
+
+    async with get_db().acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            WITH requested AS (
+                SELECT unnest($1::text[]) AS agent_id
+            ), live_bindings AS (
+                SELECT agent_id, max(last_seen) AS last_seen
+                FROM core.agent_process_bindings
+                WHERE agent_id = ANY($1::text[])
+                  AND stale_at IS NULL
+                  AND last_seen > NOW() - INTERVAL '{LIVE_WINDOW_SECONDS} seconds'
+                GROUP BY agent_id
+            ), live_leases AS (
+                SELECT holder_agent_uuid::text AS agent_id,
+                       max(expires_at) AS expires_at,
+                       bool_or(surface_id LIKE 'agent:/%') AS has_agent_lease,
+                       bool_or(surface_id LIKE 'resident:/%') AS has_resident_lease
+                FROM lease_plane.surface_leases
+                WHERE holder_agent_uuid::text = ANY($1::text[])
+                  AND released_at IS NULL
+                  AND expires_at > NOW()
+                GROUP BY holder_agent_uuid
+            )
+            SELECT r.agent_id,
+                   b.last_seen AS binding_last_seen,
+                   l.expires_at AS lease_expires_at,
+                   coalesce(l.has_agent_lease, false) AS has_agent_lease,
+                   coalesce(l.has_resident_lease, false) AS has_resident_lease
+            FROM requested r
+            LEFT JOIN live_bindings b USING (agent_id)
+            LEFT JOIN live_leases l USING (agent_id)
+            """,
+            ids,
+        )
+
+    profiles: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        signals: list[str] = []
+        if row["binding_last_seen"] is not None:
+            signals.append("process_binding")
+        if row["has_resident_lease"]:
+            signals.append("resident_lease")
+        if row["has_agent_lease"]:
+            signals.append("agent_presence_lease")
+        if row["lease_expires_at"] is not None and not (
+            row["has_resident_lease"] or row["has_agent_lease"]
+        ):
+            signals.append("surface_lease")
+        profiles[row["agent_id"]] = {
+            "status": "live" if signals else "unknown",
+            "signals": signals,
+            "binding_last_seen": _isoformat_or_none(row["binding_last_seen"]),
+            "lease_expires_at": _isoformat_or_none(row["lease_expires_at"]),
+        }
+    return profiles
 
 
 async def _list_agents_lite(
@@ -516,7 +696,7 @@ async def _list_agents_lite(
     test_count = 0
     for agent_id, meta in list(mcp_server.agent_metadata.items()):
         total_all += 1
-        # Ghost: no label, no purpose, zero check-ins — session-binding artifact
+        # Ghost: no label, no purpose, zero state observations — session artifact
         has_label = bool(getattr(meta, 'label', None))
         is_ghost = _is_ghost_agent(meta)
         if is_ghost:
@@ -703,6 +883,10 @@ async def _list_agents_full(
             "created": meta.created_at,
             "last_update": meta.last_update,
             "total_updates": meta.total_updates,
+            # Additive honest name for consumers migrating away from the old
+            # "updates == authored activity" interpretation.  This counter is
+            # state observations and may include automatic substrate rows.
+            "observation_count": meta.total_updates,
             "tags": meta.tags.copy() if meta.tags else [],
             "notes": meta.notes if meta.notes else "",
             "parent_agent_id": parent_id,
@@ -739,6 +923,55 @@ async def _list_agents_full(
 
         agents_list.append(agent_info)
 
+    # Registry ``active`` is a lifecycle label, not process liveness.  Attach
+    # positive runtime evidence from one batch query.  A successful lookup with
+    # no evidence is ``unknown``; a failed lookup is ``unavailable``.  Neither is
+    # silently converted into "offline".
+    try:
+        presence_profiles = await _load_presence_profiles(
+            [a["_agent_uuid"] for a in agents_list]
+        )
+    except Exception as exc:
+        logger.debug("Batch presence lookup failed: %s", exc)
+        presence_profiles = None
+    for agent_info in agents_list:
+        if presence_profiles is None:
+            agent_info["presence"] = {
+                "status": "unavailable",
+                "signals": [],
+            }
+        else:
+            agent_info["presence"] = presence_profiles.get(
+                agent_info["_agent_uuid"],
+                {"status": "unknown", "signals": []},
+            )
+
+    # The in-memory monitor map is process-local and intentionally sparse after
+    # a server restart.  Fill only those absent-monitor gaps from ONE durable
+    # batch read; never hydrate/create a monitor per agent (the old N+1 path
+    # exceeded the tool timeout on a large fleet).  A loaded-but-broken monitor
+    # keeps its error rather than being masked by an older persisted row.
+    if include_metrics and any(
+        a.get("metrics") is None and a["_agent_uuid"] not in mcp_server.monitors
+        for a in agents_list
+    ):
+        try:
+            persisted_metrics = await _load_persisted_metrics()
+        except Exception as exc:
+            logger.debug("Batch persisted-metrics lookup failed: %s", exc)
+            persisted_metrics = {}
+        for agent_info in agents_list:
+            aid = agent_info["_agent_uuid"]
+            fallback = persisted_metrics.get(aid)
+            if (
+                fallback is not None
+                and agent_info.get("metrics") is None
+                and aid not in mcp_server.monitors
+            ):
+                health_status, metrics = fallback
+                agent_info["health_status"] = health_status
+                agent_info["metrics"] = metrics
+
     # Batch-load trust tiers for agents missing cached values (avoids N+1 queries)
     # (S6 Option B: substrate-earned routing)
     agents_needing_tiers = [a for a in agents_list if a["trust_tier"] is None]
@@ -768,12 +1001,12 @@ async def _list_agents_full(
         except Exception as e:
             logger.debug(f"Batch trust tier lookup failed: {e}")
 
-    # Sort participated agents (>=1 check-in) ahead of never-checked-in
-    # ghosts, then by recency (most recent first) within each group.
-    # Never-checked-in agents carry last_update == created (onboard time),
+    # Sort observed agents (>=1 state row) ahead of never-observed ghosts, then
+    # by recency (most recent first) within each group. Never-observed agents
+    # carry last_update == created (onboard time),
     # so a burst of freshly-onboarded ghost sessions — the dashboard's own
     # read sweep, anima/connector traffic minting fresh identities — would
-    # otherwise outrank genuinely-participated agents on a pure recency sort
+    # otherwise outrank genuinely-observed agents on a pure recency sort
     # and crowd them out of the paginated `limit` window. That left only the
     # always-on residents (which check in continuously) visible, with every
     # other real participant pushed below the cutoff. #826 folds the ghosts
@@ -798,10 +1031,16 @@ async def _list_agents_full(
         "deleted": sum(1 for a in agents_list if a.get("lifecycle_status") == "deleted"),
         "unknown": sum(1 for a in agents_list if a.get("lifecycle_status") not in ["active", "waiting_input", "paused", "archived", "deleted"])
     }
-    # Participation split (before pagination): an agent has "participated"
-    # once it has recorded at least one check-in (total_updates >= 1). This
-    # is the same signal the lite-path ghost filter uses (total_updates < 1).
-    # Surfaced so count consumers can show working agents, not raw row count.
+    presence_counts = {
+        key: sum(
+            1 for a in agents_list
+            if (a.get("presence") or {}).get("status") == key
+        )
+        for key in ("live", "unknown", "unavailable")
+    }
+    # Observation split (before pagination).  Keep the historical
+    # participated aliases for wire compatibility, but do not call a measured
+    # state row authored activity: automatic substrate rows count here too.
     participated = sum(1 for a in agents_list if (a.get("total_updates") or 0) >= 1)
     never_participated = total_count - participated
     # Principal (octopus) rollup over the same pre-pagination population:
@@ -837,10 +1076,13 @@ async def _list_agents_full(
                 "offset": offset,
                 "limit": limit,
                 "by_status": status_counts,  # Use counts from BEFORE pagination
-                "participated": participated,  # checked in >=1 time
-                "never_participated": never_participated,  # onboarded but never checked in
+                "by_presence": presence_counts,
+                "observed": participated,
+                "unobserved": never_participated,
+                "participated": participated,  # compatibility alias: >=1 state row
+                "never_participated": never_participated,  # compatibility alias
                 "principals": principal_counts["principals"],  # distinct logical workers (octopi)
-                "participated_principals": principal_counts["participated_principals"],  # principals with >=1 checked-in instance
+                "participated_principals": principal_counts["participated_principals"],  # compatibility alias: principal with >=1 observed instance
                 "multi_instance_principals": principal_counts["multi_instance_principals"],  # principals spanning >1 process-instance
             }
         }
@@ -864,10 +1106,13 @@ async def _list_agents_full(
                 "offset": offset,
                 "limit": limit,
                 "by_status": status_counts,  # Use counts from BEFORE pagination
-                "participated": participated,  # checked in >=1 time
-                "never_participated": never_participated,  # onboarded but never checked in
+                "by_presence": presence_counts,
+                "observed": participated,
+                "unobserved": never_participated,
+                "participated": participated,  # compatibility alias: >=1 state row
+                "never_participated": never_participated,  # compatibility alias
                 "principals": principal_counts["principals"],  # distinct logical workers (octopi)
-                "participated_principals": principal_counts["participated_principals"],  # principals with >=1 checked-in instance
+                "participated_principals": principal_counts["participated_principals"],  # compatibility alias: principal with >=1 observed instance
                 "multi_instance_principals": principal_counts["multi_instance_principals"],  # principals spanning >1 process-instance
             }
         }

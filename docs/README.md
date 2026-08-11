@@ -1,19 +1,27 @@
 # UNITARES Documentation
 
-This is the documentation tree for the [UNITARES governance MCP server](../README.md). If you're new to the project, **start with the [repo README](../README.md)** — it has the core idea, the `make demo` walkthrough, and the integration loop. The deeper [scope & threat model](SCOPE_AND_THREAT_MODEL.md) and [production snapshot](PRODUCTION_SNAPSHOT.md) now live here under `docs/`. This page is the map for everything under `docs/`.
-
-For a single, task-ordered walkthrough that stitches the docs below into one guide — install → run → integrate → read the signals → operate → troubleshoot — see the **[User Manual](manual/README.md)**.
+This is the documentation tree for the
+[UNITARES governance MCP server](../README.md). Start with the repo README for
+the core idea and quickstart, then choose the path below. Canonical references,
+operator runbooks, research provenance, and optional essays are kept separate so
+an analogy or proposal is not mistaken for a deployed contract.
 
 ## Reader's path
 
 | You are… | Read in this order |
 |---|---|
-| **A reviewer / first-time visitor** | [repo README](../README.md) → [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md) → [`ontology/identity.md`](ontology/identity.md) → [`ontology/paper-positioning.md`](ontology/paper-positioning.md) |
+| **A reviewer / first-time visitor** | [repo README](../README.md) → [`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md) → [`EISV_COMPUTATION.md`](EISV_COMPUTATION.md) → [`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md) → [`PRODUCTION_SNAPSHOT.md`](PRODUCTION_SNAPSHOT.md) |
 | **Integrating an MCP client** | [`manual/04-integrating-agents.md`](manual/04-integrating-agents.md) → [`integration/MCP_CLIENTS.md`](integration/MCP_CLIENTS.md) → [`guides/TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) |
 | **Installing / deploying** | [`manual/02-install.md`](manual/02-install.md) → [`install/PLAYBOOK.md`](install/PLAYBOOK.md) → [`operations/OPERATOR_RUNBOOK.md`](operations/OPERATOR_RUNBOOK.md) |
-| **Working on the identity layer** | [`../AGENTS.md`](../AGENTS.md) → [`ontology/README.md`](ontology/README.md) → [`ontology/identity.md`](ontology/identity.md) → [`ontology/plan.md`](ontology/plan.md) |
+| **Contributing to the identity layer** | [`../AGENTS.md`](../AGENTS.md) → [`ontology/README.md`](ontology/README.md) → [`ontology/identity.md`](ontology/identity.md) → [`ontology/plan.md`](ontology/plan.md) |
+| **Reading research history** | [`EVALUATION_INDEX.md`](EVALUATION_INDEX.md) → [`ontology/README.md`](ontology/README.md) → [`proposals/README.md`](proposals/README.md) |
 
-## Layout
+Project-level status and participation live at the repository root:
+[roadmap](../ROADMAP.md), [compatibility](../COMPATIBILITY.md),
+[governance](../GOVERNANCE.md), [support](../SUPPORT.md), and
+[contributing](../CONTRIBUTING.md).
+
+## Reader-facing documentation
 
 ### `manual/` — the user manual
 
@@ -26,10 +34,9 @@ A cohesive, multi-chapter front door for operators and integrators. Thin chapter
 - **[`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md)** — the canonical architecture doc. End-to-end picture of the server, state model, transports, and storage.
 - **[`CANONICAL_COMPONENTS.md`](CANONICAL_COMPONENTS.md)** — component/layer map, orthogonal to the check-in pipeline view in `UNIFIED_ARCHITECTURE.md`.
 - **[`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md)** — guided tour for reviewers evaluating the project.
-- **[`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md)** — who this is for, why an agent can't game the signal, and what robustness is still unproven.
+- **[`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md)** — who this is for, what anchors the signal, and what gaming or robustness remains unproven.
 - **[`PRODUCTION_SNAPSHOT.md`](PRODUCTION_SNAPSHOT.md)** — frozen live metrics and dashboard views.
 - **[`trust-contract.md`](trust-contract.md)** — what the system guarantees, what it does not, and what honest failure looks like.
-- **[`tonality-metaphor.md`](tonality-metaphor.md)** — a teaching lens: how key signatures and chromaticism map onto EISV, coherence, and drift. Intuition for [`EISV_COMPUTATION.md`](EISV_COMPUTATION.md), not a spec.
 - **[`ontology/eisv-telemetry-envelope-v1.md`](ontology/eisv-telemetry-envelope-v1.md)** — versioned measurement → derivation → policy → enforcement provenance stored with each new state row.
 - **[`CHANGELOG.md`](CHANGELOG.md)** — release history.
 
@@ -43,8 +50,8 @@ Operating guidance for individual subsystems lives next to the code as Skills, n
 
 User- and integrator-facing how-tos. Thin by design — most architecture lives in `UNIFIED_ARCHITECTURE.md` and the repo README.
 
-- [`START_HERE.md`](guides/START_HERE.md) — workflow + canonical-sources pointer
-- [`TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) — common failures
+- [`START_HERE.md`](guides/START_HERE.md) — compatibility redirect to the current audience paths
+- [`TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) — canonical symptom-and-recovery guide
 - [`CIRS_PROTOCOL.md`](guides/CIRS_PROTOCOL.md) — multi-agent coordination protocol (specialized; not a general architecture overview)
 
 ### `install/` — installation
@@ -62,33 +69,17 @@ The system's versioned identity ontology, the resolution ledger, and the working
 
 → Start at **[`ontology/README.md`](ontology/README.md)**.
 
+## Operator and contributor documentation
+
 ### `operations/` — operator-internal runbooks
 
 How to run this in production. Most readers can skip these.
 
-- [`OPERATOR_RUNBOOK.md`](operations/OPERATOR_RUNBOOK.md) — primary runbook
-- [`github-workflow-conventions.md`](operations/github-workflow-conventions.md) — canonical delivery contract (branch naming, draft PRs) shared by Codex and Claude; `AGENTS.md`/`CLAUDE.md` carry the short form
-- [`merge-automation-plan.md`](operations/merge-automation-plan.md) — branch-protection + operator-armed auto-merge plan (not yet applied)
-- [`ci-issue-surfacing.md`](operations/ci-issue-surfacing.md) — experiment wiring the surfacing instinct into GitHub CI (deduped issues from new findings)
-- [`automation-overrides.md`](operations/automation-overrides.md) — operator-authored metadata layered onto the automation census for accountability/gate classification
-- [`automation-census-setup.md`](operations/automation-census-setup.md) — agnostic setup for the automation census behind the dashboard Automations registry
-- [`resident-roster.md`](operations/resident-roster.md) — `UNITARES_RESIDENTS` configuration; the named resident set is config, not a hardcoded fleet
-- [`redis-retirement-soak-runbook.md`](operations/redis-retirement-soak-runbook.md) — staged Redis identity/session mirror retirement checks and rollback gates
-- [`ablation-negative-controls.md`](operations/ablation-negative-controls.md) — synthetic bad-outcome fixtures for red-team ablation plumbing
-- [`DEFINITIVE_PORTS.md`](operations/DEFINITIVE_PORTS.md) — port assignments across services
-- [`database_architecture.md`](operations/database_architecture.md) — single-Postgres / schema-isolation model
-- [`glossary-site.md`](operations/glossary-site.md) — GitHub Pages publishing path for the ontology glossary site
-- [`lease-plane-operator-runbook.md`](operations/lease-plane-operator-runbook.md) — Elixir lease-plane operations
-- [`branch-hygiene-runbook.md`](operations/branch-hygiene-runbook.md) — resident branch-hygiene sweep (`agents/vigil_hygiene`)
-- [`resident-validation-cohort.md`](operations/resident-validation-cohort.md) — experimental long-running resident validation tick contract
-- [`resident-validation-supervised-invocation.md`](operations/resident-validation-supervised-invocation.md) — local-only supervised canary invocation wrapper
-- [`dormant-capability-registry.md`](operations/dormant-capability-registry.md) — distinguishes built-but-unwired capability from genuine cruft, so cleanup is deliberate
-- [`research-registry.md`](operations/research-registry.md) — file-backed registry for agent-network research runs, rigor checklist, and REST/MCP query surfaces
-- [`kg-lineage-dashboard-handoff.md`](operations/kg-lineage-dashboard-handoff.md) — deferred implementation handoff for KG supersession/related-lineage dashboard exposure
-- [`test-suite-triage.md`](operations/test-suite-triage.md) — current state of the test gate and known-triaged suites
-- [`DATA_NOTES.md`](operations/DATA_NOTES.md) — operational data dictionary for the production governance database
-- [`DEPLOYMENT_DATA_CAVEAT.md`](operations/DEPLOYMENT_DATA_CAVEAT.md) — what the cited deployment numbers do and don't mean
-- Dated finding record (point-in-time, preserved by design): [`ablation-initiates-finding-2026-06-16.md`](operations/ablation-initiates-finding-2026-06-16.md)
+→ Start at **[`operations/README.md`](operations/README.md)**. The primary
+documents are the [operator runbook](operations/OPERATOR_RUNBOOK.md),
+[port registry](operations/DEFINITIVE_PORTS.md),
+[database architecture](operations/database_architecture.md), and
+[deployment-data caveat](operations/DEPLOYMENT_DATA_CAVEAT.md).
 
 ### `dev/` — developer-internal
 
@@ -99,11 +90,22 @@ For people working on UNITARES itself, not using it.
 - [`TOOL_REGISTRATION.md`](dev/TOOL_REGISTRATION.md) — how tools are wired into the MCP server
 - [`CIRCUIT_BREAKER_DIALECTIC.md`](dev/CIRCUIT_BREAKER_DIALECTIC.md) — recovery semantics (specialized)
 
-### `proposals/` — RFCs
+## Research, provenance, and optional interpretation
 
-Active and resolved RFCs that don't (yet) belong in `ontology/`. The Plexus / lease-plane / BEAM-coordination thread lives here. Each doc carries its own resolution status in the body.
+### `proposals/` — internal RFCs and decision history
+
+These are research and engineering provenance, not a list of shipped features.
+Active and resolved RFCs that do not belong in `ontology/` live here. Each doc
+carries its own resolution status in the body.
 
 → Status-grouped index at **[`proposals/README.md`](proposals/README.md)**.
+
+### `essays/` — optional, non-normative interpretation
+
+Analogies and philosophical readings live here so they cannot be mistaken for
+canonical architecture, evaluation evidence, or deployed semantics.
+
+→ Start at **[`essays/README.md`](essays/README.md)**.
 
 ### `assets/`
 

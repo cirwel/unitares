@@ -52,7 +52,13 @@ At runtime, the reflective fields above (`complexity`, `confidence`) are not tru
 
 ### 2. EISV Evolution
 
-**Primary system: Behavioral EISV** — EMA (exponential moving average) observations from grounded behavioral signals. These signals are assembled from operational log analysis, continuity metrics, tool usage, calibration history, and outcome history; self-reports are one input, not the whole substrate. After ~30 check-ins, the system builds per-agent Welford baselines and assesses agents by z-score deviation from their own operating point rather than universal thresholds.
+**Primary system: Behavioral EISV** — EMA (exponential moving average)
+observations from grounded behavioral signals. These signals are assembled from
+operational log analysis, continuity metrics, tool usage, calibration history,
+and outcome history; self-reports are one input, not the whole substrate. With
+the current constants, check-ins 1–2 use the Φ cold-start prior, check-ins 3–24
+use behavioral fixed thresholds, and check-in 25 enables per-agent Welford
+z-score scoring against a 30-update target.
 
 **Secondary system: ODE (diagnostic only)** — coupled differential equations run in parallel but do not drive verdicts. The ODE provides a dynamical-systems lens for analysis but behavioral verdicts override.
 

@@ -1,0 +1,187 @@
+{
+  "schema_version": 1,
+  "cohort_id": "dialectic-reviewer-verdicts-2026-08-09",
+  "annotation_scope": "Recorded reviewer rejections in the frozen, probe-family-excluded cohort",
+  "annotations": [
+    {
+      "case_id": "rv-8b261954b60a",
+      "route_label": "deny",
+      "confidence": "medium",
+      "basis_codes": [
+        "proposal_rejected_as_scoped",
+        "fundamental_reframe_required"
+      ],
+      "block_correctness": "unadjudicated"
+    },
+    {
+      "case_id": "rv-abe036a5f58f",
+      "route_label": "needs_evidence",
+      "confidence": "high",
+      "basis_codes": [
+        "explicit_implementation_gate",
+        "explicit_verification_gate"
+      ],
+      "block_correctness": "unadjudicated"
+    },
+    {
+      "case_id": "rv-0627f72bebb6",
+      "route_label": "deny",
+      "confidence": "medium",
+      "basis_codes": [
+        "proposal_rejected_as_scoped",
+        "security_policy_reframe_required"
+      ],
+      "block_correctness": "unadjudicated"
+    },
+    {
+      "case_id": "rv-2393ffeb9f4c",
+      "route_label": "needs_evidence",
+      "confidence": "high",
+      "basis_codes": [
+        "explicit_verification_gate",
+        "rollback_evidence_required"
+      ],
+      "block_correctness": "unadjudicated"
+    },
+    {
+      "case_id": "rv-d7b8a44513b5",
+      "route_label": "human",
+      "confidence": "high",
+      "basis_codes": [
+        "unparseable_verdict",
+        "fail_closed_escalation"
+      ],
+      "block_correctness": "unadjudicated"
+    },
+    {
+      "case_id": "rv-cd7cd4745962",
+      "route_label": "needs_evidence",
+      "confidence": "high",
+      "basis_codes": [
+        "root_cause_evidence_required",
+        "explicit_reasoning_gate"
+      ],
+      "block_correctness": "unadjudicated"
+    },
+    {
+      "case_id": "rv-e7d84c042ca2",
+      "route_label": "needs_evidence",
+      "confidence": "high",
+      "basis_codes": [
+        "architecture_proof_required",
+        "conformance_evidence_required"
+      ],
+      "block_correctness": "unadjudicated"
+    },
+    {
+      "case_id": "rv-121875342d61",
+      "route_label": "human",
+      "confidence": "high",
+      "basis_codes": [
+        "unparseable_verdict",
+        "fail_closed_escalation"
+      ],
+      "block_correctness": "unadjudicated"
+    },
+    {
+      "case_id": "rv-ed187fc07436",
+      "route_label": "needs_evidence",
+      "confidence": "high",
+      "basis_codes": [
+        "architecture_review_required",
+        "proof_of_concept_required"
+      ],
+      "block_correctness": "unadjudicated"
+    },
+    {
+      "case_id": "rv-5a10d0758c15",
+      "route_label": "human",
+      "confidence": "high",
+      "basis_codes": [
+        "unparseable_verdict",
+        "fail_closed_escalation"
+      ],
+      "block_correctness": "unadjudicated"
+    },
+    {
+      "case_id": "rv-68feea57766d",
+      "route_label": "human",
+      "confidence": "medium",
+      "basis_codes": [
+        "normative_architecture_choice",
+        "stakeholder_agreement_required"
+      ],
+      "block_correctness": "unadjudicated"
+    },
+    {
+      "case_id": "rv-2803b6f251ca",
+      "route_label": "needs_evidence",
+      "confidence": "high",
+      "basis_codes": [
+        "pause_evidence_required",
+        "calibration_evidence_required"
+      ],
+      "block_correctness": "unadjudicated"
+    },
+    {
+      "case_id": "rv-53b2aacc0b9e",
+      "route_label": "needs_evidence",
+      "confidence": "high",
+      "basis_codes": [
+        "live_smoke_evidence_required",
+        "failure_matrix_evidence_required"
+      ],
+      "block_correctness": "unadjudicated"
+    },
+    {
+      "case_id": "rv-c6a5b651ca01",
+      "route_label": "needs_evidence",
+      "confidence": "high",
+      "basis_codes": [
+        "construct_validity_evidence_required",
+        "independent_review_required"
+      ],
+      "block_correctness": "unadjudicated"
+    },
+    {
+      "case_id": "rv-22d6f998dd50",
+      "route_label": "needs_evidence",
+      "confidence": "high",
+      "basis_codes": [
+        "pause_evidence_required",
+        "independent_review_required"
+      ],
+      "block_correctness": "unadjudicated"
+    },
+    {
+      "case_id": "rv-d4bbbe36872b",
+      "route_label": "cooldown",
+      "confidence": "high",
+      "basis_codes": [
+        "calendar_deferral",
+        "evidence_threshold_before_retry"
+      ],
+      "block_correctness": "unadjudicated"
+    },
+    {
+      "case_id": "rv-961103dee40f",
+      "route_label": "needs_evidence",
+      "confidence": "high",
+      "basis_codes": [
+        "bounded_independent_review_required",
+        "arithmetic_verification_required"
+      ],
+      "block_correctness": "unadjudicated"
+    },
+    {
+      "case_id": "rv-f0bae9697ad5",
+      "route_label": "needs_evidence",
+      "confidence": "high",
+      "basis_codes": [
+        "pause_evidence_required",
+        "preregistered_evidence_threshold"
+      ],
+      "block_correctness": "unadjudicated"
+    }
+  ]
+}

@@ -1,7 +1,8 @@
 # Prior-Art & Novelty Audit: Trajectory Identity, EISV Proprioception, Substrate-Earned Identity
 
 **Status:** Research note (external-literature audit). Companion to
-`trajectory-identity-philosophy-of-mind.md` (the essay this grounds),
+[`../essays/trajectory-identity-philosophy-of-mind.md`](../essays/trajectory-identity-philosophy-of-mind.md)
+(the essay this grounds),
 `identity.md` (taxonomy + axioms), and `paper-positioning.md` (v7 framing).
 **Date:** 2026-06-30.
 **Method:** multi-source web research pass — 5 search angles, 27 sources

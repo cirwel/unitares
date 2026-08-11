@@ -110,3 +110,41 @@ def test_extract_metrics_accepts_top_level_minimal_fields():
 
 def test_fmt_metrics_tolerates_missing_values():
     assert quick_demo.fmt_metrics({}) == "E=- I=- S=- V=-  coh=- risk=-"
+
+
+def test_declared_baseline_threshold_matches_behavioral_state():
+    """The demo prints a baseline threshold; re-derive it from the live constant.
+
+    The demo is a standalone stdlib script (no repo imports), so it hardcodes
+    the number it prints. This test is the guard: if BASELINE_WARMUP_UPDATES or
+    the is_baselined rule changes, the demo's claim about how far it is from
+    baselining goes stale and this fails.
+    """
+    from src.behavioral_state import BASELINE_WARMUP_UPDATES
+
+    # is_baselined <=> baseline_confidence >= 0.8, where
+    # baseline_confidence = (update_count - 5) / (BASELINE_WARMUP_UPDATES - 5)
+    expected = 5 + 0.8 * (BASELINE_WARMUP_UPDATES - 5)
+
+    assert quick_demo.BASELINE_UPDATES_REQUIRED == expected, (
+        f"demo claims baseline at {quick_demo.BASELINE_UPDATES_REQUIRED} check-ins, "
+        f"but behavioral_state implies {expected}"
+    )
+
+
+def test_trajectory_stays_under_baseline_and_carries_no_confession():
+    """The demo must not look like a detection demo.
+
+    Two properties it has to keep:
+      1. It runs entirely in warmup, so nothing it prints can be read as
+         evidence about the per-agent self-relative model.
+      2. No step has the agent confess a failure in its own response text.
+         Text-level self-incrimination is not a signal the server can rely on.
+    """
+    assert len(quick_demo.TRAJECTORY) < quick_demo.BASELINE_UPDATES_REQUIRED
+
+    confession_markers = ("did not actually", "i lied", "actually failed")
+    for text, _complexity, _confidence in quick_demo.TRAJECTORY:
+        lowered = text.lower()
+        for marker in confession_markers:
+            assert marker not in lowered, f"confession-style step reintroduced: {text!r}"

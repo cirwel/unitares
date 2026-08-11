@@ -165,6 +165,7 @@ def _isolate_db_backend(monkeypatch):
     mock_backend.record_agent_state.return_value = 1
     mock_backend.get_latest_agent_state.return_value = None
     mock_backend.get_agent_state_history.return_value = []
+    mock_backend.get_all_latest_agent_states.return_value = []
     mock_backend.reconstruct_eisv_series.return_value = {
         "E": [], "I": [], "S": [], "V": [],
     }

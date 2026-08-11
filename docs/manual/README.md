@@ -6,7 +6,13 @@ An end-to-end, task-ordered guide to **installing, running, integrating with, re
 
 ## What UNITARES is, in one breath
 
-Runtime governance and online proprioception for fleets of autonomous AI agents. Each agent checks in while it works; once the agent has enough history, UNITARES compares the current run to that agent's *own* baseline and returns a four-number state vector (EISV) plus one plain policy action: `proceed` / `guide` / `pause` / `reject`. During baseline warmup, the verdict falls back to a mostly server-derived cold-start prior rather than a personalized drift read. The point is to make drift visible to the agent while the output still looks fine. It runs **alongside** evals (pre-deploy) and guardrails (per-action), answering a third question: *is this agent still healthy as it works?*
+Runtime governance and online proprioception for fleets of autonomous AI agents.
+Each agent checks in while it works and receives a four-number state vector
+(EISV) plus one policy action: `proceed` / `guide` / `pause` / `reject`. The
+first two check-ins use a cold-start prior, the next stage uses behavioral fixed
+thresholds, and self-relative scoring starts once the agent has enough history.
+It runs **alongside** evals (pre-deploy) and guardrails (per-action), answering a
+third question: *what state is this agent in as it works?*
 
 ## How to read this manual
 
@@ -22,7 +28,7 @@ Runtime governance and online proprioception for fleets of autonomous AI agents.
 
 ### Two fast paths
 
-- **Operator, "just make it run":** [Try the demo locally](../../README.md#try-the-demo-locally) (Docker) → [3 · Running the server](03-running-the-server.md). Bare-metal instead: [2 · Installation](02-install.md).
+- **Operator, "just make it run":** [Quickstart](../../README.md#quickstart) (Docker) → [3 · Running the server](03-running-the-server.md). Bare-metal instead: [2 · Installation](02-install.md).
 - **Integrator, "I have a server, wire my agent":** [4 · Integrating agents](04-integrating-agents.md) → [5 · Reading the signals](05-reading-the-signals.md).
 
 ## Chapters
@@ -30,7 +36,7 @@ Runtime governance and online proprioception for fleets of autonomous AI agents.
 1. **[Overview & concepts](01-overview.md)** — what it is, where it fits, the EISV / policy-action / coherence / drift vocabulary, and the honest scope.
 2. **[Installation](02-install.md)** — Docker quickstart and the bare-metal (Postgres + AGE + pgvector) playbook.
 3. **[Running the server](03-running-the-server.md)** — entry point, ports, transports, the dashboard, environment configuration, and exposing beyond loopback.
-4. **[Integrating agents](04-integrating-agents.md)** — the check-in loop, identity rules, the full tool surface, policy-action handling, and the long-running-agent SDK.
+4. **[Integrating agents](04-integrating-agents.md)** — the check-in loop, identity rules, primary tools, policy-action handling, and links to the complete client references.
 5. **[Reading the signals](05-reading-the-signals.md)** — EISV computation, policy actions and margin, calibration, the knowledge graph, dialectic review, and how *not* to trust the numbers blindly.
 6. **[Operating](06-operating.md)** — resident agents, security posture, database ownership, config tuning, and the operator runbook map.
 7. **[Troubleshooting & FAQ](07-troubleshooting.md)** — common failures and the questions new users actually ask.
@@ -41,7 +47,7 @@ This manual deliberately does not restate the deep references. Keep these open a
 
 - [`../UNIFIED_ARCHITECTURE.md`](../UNIFIED_ARCHITECTURE.md) — the canonical architecture and pipeline.
 - [`../EISV_COMPUTATION.md`](../EISV_COMPUTATION.md) — the exact formulas the running code computes.
-- [`../SCOPE_AND_THREAT_MODEL.md`](../SCOPE_AND_THREAT_MODEL.md) — who it's for, why an agent can't game it, what's unproven.
+- [`../SCOPE_AND_THREAT_MODEL.md`](../SCOPE_AND_THREAT_MODEL.md) — who it's for, what anchors the signal, and what remains unproven.
 - [`../REVIEWER_GUIDE.md`](../REVIEWER_GUIDE.md) — the falsifiability harness you run yourself.
 - [`../integration/MCP_CLIENTS.md`](../integration/MCP_CLIENTS.md) — client wiring and remote-connector auth.
 - [`../install/PLAYBOOK.md`](../install/PLAYBOOK.md) — the zero-assumption bare-metal install.

@@ -244,6 +244,37 @@ def test_policy_and_enforcement_preserve_cold_start_maturity_gate():
     assert _build_enforcement_stub(decision)["basis"] == "gap_suppressed"
 
 
+def test_policy_and_enforcement_surface_non_authored_cold_start_guard():
+    from src.monitor_result import _build_enforcement_stub, _build_policy_evaluation
+
+    epistemic_gate = {
+        "schema": "eisv.cold-start-epistemic-guard.v1",
+        "applied": True,
+        "epistemic_class": "substrate_interpretation",
+        "enforcement_basis": "non_authored_phi_cold_start_deferred",
+    }
+    decision = {
+        "action": "proceed",
+        "sub_action": "guide",
+        "reason": "non-authored Phi cold-start pause deferred",
+        "original_action": "pause",
+        "original_sub_action": "risk_pause",
+        "cold_start_epistemic_deferred": True,
+        "cold_start_epistemic_gate": epistemic_gate,
+    }
+
+    policy = _build_policy_evaluation(decision, {})
+    enforcement = _build_enforcement_stub(decision)
+
+    assert policy["epistemic_gate"] == epistemic_gate
+    assert policy["suppression"]["cold_start_epistemic_deferred"] is True
+    assert enforcement["requested"] is False
+    assert enforcement["applied"] is False
+    assert enforcement["mode"] == "advisory"
+    assert enforcement["basis"] == "non_authored_phi_cold_start_deferred"
+    assert enforcement["epistemic_gate"] == epistemic_gate
+
+
 def test_risk_attribution_handles_missing_signals():
     """No drift/continuity/behavioral computed → None, never a crash, and
     still labeled by provenance."""

@@ -35,12 +35,14 @@ Use `bad` only as a data label, never as an undefined success/failure slogan:
 
 Don't rebuild discrimination analysis — these exist and are current:
 
-- **`scripts/analysis/eisv_skeptic_report.py`** ✓ — the substantive one. Computes AUC/Brier
+- **`scripts/analysis/eisv_skeptic_report.py`** ✓ — computes AUC/Brier
   **lift of EISV/prior-state over a previous-outcome baseline**, emits a runtime verdict
-  (`SKEPTICAL` / `KEEP-TESTING` / `WEAK` / `INCONCLUSIVE`). The EISV-distributional KILL in
-  memory came from running this (Probe A: negative AUC lift). No hardcoded conclusion.
+  (`SKEPTICAL` / `KEEP-TESTING` / `WEAK` / `INCONCLUSIVE`). The
+  [resolved distributional-probe record](proposals/resolved/eisv-distributional-signal-probe-v0.md)
+  used this path for its negative result. No hardcoded conclusion.
 - **`scripts/analysis/eisv_ablation_matrix.py`** ✓ — same question across scope/window/lead
-  slices with bootstrap CIs, permutation p-values, BEAM-lane exclusion.
+  slices with bootstrap CIs, permutation p-values, BEAM-lane exclusion, and a
+  `NOISE-LEVEL` label when the selected best candidate does not clear its null.
 
 **Reading either output — three columns decide whether a "lift" is real:**
 
@@ -64,17 +66,24 @@ read [`proposals/eisv-outcome-grounding-stop-rule-v0.md`](proposals/eisv-outcome
 That question now has a measured bound (any lift is below ≈ 0.05 AUC at ~100
 independent bad clusters) and a pre-registered confirmatory read on 2026-12-01
 with a kill criterion. Ad-hoc reruns between now and then will keep surfacing a
-selected maximum that the null explains.
+selected maximum that the null explains. Corpora that might one day answer the
+question better than organic telemetry are recorded under
+[Candidate corpora](#candidate-corpora--not-yet-evaluated) — recorded, not run.
 
-The honest current state of "does EISV discriminate / add predictive signal / support safer policy" lives in memory
-`project_eisv-validation-gap.md` (the `frt_autonomy_sandbagging` demo and its
-`REAL_LLM_FINDINGS.md` write-up were removed from the repo as out-of-scope — see
-[`REPO_SCOPE.md`](REPO_SCOPE.md); the headline below preserves the finding).
-Headline (2026-06-23): **organic-fleet validation is structurally impossible** (tool-failure
-population and EISV-bearing population are disjoint); the **`~/.unitares/analysis/eisv-validation-*`
-scheduled oneshot is a broken join — do not trust**; EISV Integrity catches naive overconfidence
-against a calibrated baseline but **collapses on noisy baselines (~0.75) and inverts on
-calibrated concealment (~0.19)**, where **cross-framing dominates (~0.97)**.
+**Current citable read:** the frozen 2026-08-09 trusted-anchor matrix has
+223–227 outcomes, 53 bad rows grouped into 28–29 bad clusters across 16 agents,
+depending on slice. All 12 overall strict/task × 30/90-day × 0/5/30-minute
+slices are `NOISE-LEVEL` after best-candidate selection is included in the null
+(selective p = 0.070–0.567). The removed sandbagging demo and private analysis
+memory are not reproducible evidence from this repository and should not be
+cited for numeric performance.
+
+The 2026-08-11 run repeated the already-documented frozen command solely to
+replace stale public wording; it does not alter the 2026-12-01 preregistered
+confirmatory read or its stop rule.
+
+Compact run provenance and all 12 overall rows are preserved in
+[`operations/eisv-ablation-frozen-2026-08-09.md`](operations/eisv-ablation-frozen-2026-08-09.md).
 
 ## Validation — "does EISV track reality / discriminate?"
 
@@ -86,10 +95,34 @@ calibrated concealment (~0.19)**, where **cross-framing dominates (~0.97)**.
 | `scripts/analysis/prospective_prediction_cohort.py` ✓ | Counts registry-bound holdout predictions (plumbing only, no claim) | Markdown cohort summary | current |
 | `scripts/analysis/validate_basin_gate.py` ✓ | Validates #689 basin-health gate never raises risk; healthy wobbles stay safe | Console PASS/FAIL + exit; hardcoded 06-13 Sentinel false-pause fixture | current |
 | `scripts/analysis/validate_theoretical_foundations.py` ✓ | Greps `governance_core` source for ODE/coherence terms vs theory doc | Pass/fail console | **⚠ won't run by default** — needs `governance_core/` source symlink; brittle exact-string greps |
-| ~~`demos/frt_autonomy_sandbagging/`~~ (removed) | Model-organism sandbagging through real `BehavioralEISV` | Integrity AUC naive=1.0, calibrated≈0.35 | **removed** from repo as out-of-scope (#1043, see `REPO_SCOPE.md`); finding preserved in `SCOPE_AND_THREAT_MODEL.md` |
-| ~~`demos/frt_autonomy_sandbagging/real_llm_probe.py`~~ (removed) | Real-LLM (Ollama) extension; competence boundary + cross-framing | naive≈0.75, calibrated inverts≈0.19, cross-framing≈0.97 | **removed** with the demo (#1043); finding preserved in `SCOPE_AND_THREAT_MODEL.md` |
-| `~/.unitares/analysis/eisv-validation-2026-06-13_0900.md` ✓ | Scheduled oneshot cohort comparison | **BROKEN JOIN — null, do not trust** | retire/repoint |
-| (scratchpad) `eisv_validation/leadtime_probe.py` ✓ | Lead-time / warning-vs-reaction on real data | No advance-warning for task-failure (AUC 0.545) | not yet in repo; overlaps `eisv_skeptic_report` |
+| ~~`demos/frt_autonomy_sandbagging/`~~ (removed) | Historical model-organism probe | Not independently reproducible from this repo; do not cite its numeric result | **removed** as out-of-scope (#1043, see `REPO_SCOPE.md`) |
+| ~~`demos/frt_autonomy_sandbagging/real_llm_probe.py`~~ (removed) | Historical real-LLM extension | Not independently reproducible from this repo; do not cite its numeric result | **removed** with the demo (#1043) |
+| `~/.unitares/analysis/eisv-validation-2026-06-13_0900.md` ✓ | Historical operator-local cohort comparison | **BROKEN JOIN — not citable evidence** | retire/repoint |
+| (removed scratchpad) `eisv_validation/leadtime_probe.py` | Historical lead-time probe | Not reproducible from this repo; do not cite its numeric result | superseded by `eisv_skeptic_report` |
+
+## Candidate corpora — not yet evaluated
+
+Entries here are **candidates only**. None has been run against the
+discrimination scripts above, and none may be run before the 2026-12-01
+confirmatory read defined in
+[`proposals/eisv-outcome-grounding-stop-rule-v0.md`](proposals/eisv-outcome-grounding-stop-rule-v0.md).
+Listing a corpus is a record that it exists and what it would still need — not a
+claim that it produces lift.
+
+**Parallel kernel-optimization rounds** (out-of-repo local benchmark lab, 2026-05-02)
+
+| Property | Value |
+|---|---|
+| Shape | 3 rounds; 1–4 agents per round given a byte-identical brief, each returning an independent GPU kernel for one fixed task |
+| Outcome label | External and machine-checked: a numerical correctness gate (`correct` at `rtol=atol=1e-2`) plus continuous `speedup_vs_baseline` against a hardware-verified fp16 matmul baseline |
+| Why a candidate | The outcome is not authored, scored, or observed by the agent that produced the work, and the attempts are independent draws on an identical task. That is the property organic fleet telemetry lacks — there the tool-failure population and the EISV-bearing population are disjoint (see headline above) |
+| Blocking gap | **No paired governance telemetry exists.** The lab's check-in and hypothesis logs are empty scaffolding (0 rows), and the rounds predate the 2026-07-31 instrumentation change, so no server-side state vector was captured for any attempt |
+| Scale | 6 attempts across a single task family — far below the ~100 independent bad clusters at which the ≈ 0.05 AUC bound is measured |
+
+Usable only if re-generated with identities bound at spawn and check-ins landing
+during the attempt. As it stands the corpus supplies outcome labels with nothing
+to join them to, so it cannot answer a discrimination question in its current
+form.
 
 ## Ablation
 
