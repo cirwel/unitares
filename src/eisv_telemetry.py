@@ -109,12 +109,21 @@ def build_behavioral_derivation(
     tool_call_velocity: Any = None,
     unique_tools_ratio: Any = None,
     computed: Mapping[str, Any] | None = None,
+    substrate_canaries: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Capture the bounded inputs used by ``compute_behavioral_sensor_eisv``.
 
     Histories are capped at ten because every behavioral formula reads only
     that suffix.  Outcome rows are capped at the query limit and stripped of
     free-form detail/text, which the formula never reads.
+
+    ``substrate_canaries`` records, per check-in, which continuity features were
+    real measurements and which were defaults or clipped constants. The three
+    ``continuity_*`` features above are derived from markdown structure in the
+    agent's ``response_text``; that is a valid reading for a natural-language
+    assistant turn and a near-constant for anything else. Recording the
+    distinction keeps an export consumer from reading a template artifact as
+    evidence.
     """
     features = {
         "calibration_error": _number(calibration_error),
@@ -153,6 +162,7 @@ def build_behavioral_derivation(
         # evidence for the observation.
         "unused_legacy_parameters": ["S_history", "V_history"],
         "missing_inputs": missing_inputs,
+        "substrate_canaries": dict(substrate_canaries or {}),
         "computed_observation": _eisv_values(computed),
     }
 

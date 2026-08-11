@@ -97,12 +97,19 @@ are 0.13-0.25% for high-n agents but **1.4-3.2% for agents with 55-79 samples** 
 plus dispersion estimated from too few points. Two consequences, both required:
 
 1. **A maturity gate.** Do not apply a proprioceptive threshold until the agent's baseline has
-   enough observations to estimate `sigma_a`. `BehavioralEISV` already gates on
-   `confidence >= 0.3`; reuse that rather than inventing a second maturity notion. Below it,
-   fall back to a fleet prior and say so in the response.
-2. **A robust dispersion estimate.** Plain sd over-reacts to tails. MAD or a trimmed estimator
-   is the standard fix. #1518 flags the same issue for its residual form ("heavy tails
-   over-react; a Student-t/trimmed surprise is a refinement, not derived").
+   enough observations to estimate `sigma_a`. **Correction after reading the code:** an earlier
+   draft of this section said to reuse `BehavioralEISV`'s `confidence >= 0.3`. That is the wrong
+   constant — `confidence` is *bootstrap* confidence over 10 updates, not dispersion stability.
+   The repo already has the right notion: `is_baselined` (`baseline_confidence >= 0.8`, i.e.
+   `BASELINE_WARMUP_UPDATES = 30`). Use that. Below it, fire nothing and report ineligibility
+   explicitly rather than falling back to a fleet prior silently.
+2. **A robust dispersion estimate.** Plain sd over-reacts to tails. **Also already solved in
+   the repo:** `deviation()` floors its denominator with `eisv_min_std_for_dimension`, an
+   empirical constant calibrated against the 2026-06-13 Sentinel false-pause trace — precisely
+   the "tiny sigma makes everything look anomalous" failure. Reuse it; a fresh MAD/trimmed
+   estimator here would discard a calibration already paid for in production. #1518 flags the
+   same issue for its residual form ("heavy tails over-react; a Student-t/trimmed surprise is a
+   refinement, not derived"), which remains the longer-term refinement.
 
 **What is genuinely derived here is the *form*, not the constant** — the 3:1 between-to-within
 ratio is a measurement, and it rules out a fleet constant regardless of which `k` is chosen.
@@ -133,7 +140,15 @@ Choosing `k` is a policy call and should be recorded as one.
 2. Land per-agent thresholds **in the same change**, never after. Unfreezing the signal against
    the current fleet constants puts two live agents into permanent pause immediately.
 3. Ship behind the existing shadow pattern first: compute both, record the divergence, apply
-   nothing — the same discipline `grounding_shadow` already uses.
+   nothing — the same discipline `grounding_shadow` already uses. **Built:**
+   `src/coherence_gate_shadow.py` + `coherence_gate_shadow` audit event, behind
+   `UNITARES_COHERENCE_GATE_SHADOW` (default off, no APPLY counterpart by design). The gate
+   statistic is the agent's own **V** z-score rather than a separate coherence baseline: `C(V)`
+   is strictly monotone in `V`, so "coherence below this agent's own normal" and "V below its
+   own normal" are the same event, and a second baseline could only drift out of sync with the
+   first. The tanh is not affine, so a fixed z on V is not exactly a fixed z on C — acceptable
+   only because `k` is a stated tolerance, and recorded here so it is never mistaken for an
+   identity.
 4. Re-read the gate crossing counts after a soak. A proprioceptive gate that still never fires
    is an unfair zero (the lever is untested, not disproven) and needs a positive control before
    anyone concludes anything from its silence.

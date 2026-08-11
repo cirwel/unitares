@@ -51,6 +51,12 @@ async def test_governance_metrics_caller_asserted_binding_still_reads_agent(monk
     monkeypatch.setattr(context, "get_context_agent_id", lambda: "agent-uuid")
     monkeypatch.setattr(context, "get_session_proof_origin", lambda: "caller_asserted")
     monkeypatch.setattr(core, "require_agent_id", lambda _arguments: ("agent-uuid", None))
+    # The caller is a real onboarded agent; the unknown-agent refusal is
+    # exercised separately in test_metrics_unknown_agent_refused.py.
+    async def _known(_agent_id):
+        return True
+
+    monkeypatch.setattr(core, "metrics_agent_is_known", _known)
 
     async def fake_metrics(agent_id, arguments, server=None):
         calls.append(agent_id)
