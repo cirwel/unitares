@@ -19,7 +19,8 @@ Bare-metal install (Homebrew Postgres + native Python) is in [`docs/install/PLAY
 ## Tests
 
 ```bash
-make test                          # primary; uses tree-hash cache (.test-cache/)
+make test                          # full suite with coverage
+make test-cache-quick              # cached full suite without coverage
 pytest tests/test_<specific>.py    # single test file
 ```
 
