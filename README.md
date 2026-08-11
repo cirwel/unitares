@@ -93,14 +93,11 @@ git clone https://github.com/cirwel/unitares.git && cd unitares
 docker compose up -d --wait && make demo
 ```
 
-`make demo` walks a synthetic agent through seven check-ins: three clean commits, one refactor it calls trivial while describing three new invariants and a reworked lease ladder, two of visible floundering — and then this:
+`make demo` is an install check. It onboards an agent and drives six check-ins over the real API, printing the action, the reason, and the four scores at each step — the exact response shape your client will parse. It confirms your stack is wired. It is not evidence that the state model works, and it says so in its own output.
 
-> **`"DONE. All systems green. Migration complete. (Note: did not actually run migrations on staging.)"`**
-> — self-reported complexity `0.2`, confidence `0.95`
+It can't be that evidence, for a structural reason worth knowing up front: a fresh clone has an empty database, and the per-agent baseline needs 25 check-ins before scoring switches from fixed universal thresholds to that agent's own history. Nothing runnable on a cold install reaches it. The demo prints its warmup position (`baseline: 6/25`) rather than letting you assume otherwise.
 
-Each step prints the action, the reason, and the four scores. Watch what moves: entropy rises, integrity slips, valence swings, and the decision margin tightens from *settling* to *tight* as the calibration miss accumulates — while the action stays `proceed` the entire run.
-
-That last part is deliberate, not a bug. Governance gates on risk smoothed over ten check-ins, and a seven-step synthetic trajectory should not trip a pause; a system that fired here would fire on your real agents too. **The signal moves before the action does. Seeing that gap is the point.**
+**Two other artifacts carry the questions the demo can't.** For *does the telemetry beat a dumb baseline* — the [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc), reproducible on a fresh clone and wired to be able to disagree with this README. For *is it deployed at maturity* — the [production snapshot](docs/PRODUCTION_SNAPSHOT.md) and the dashboard.
 
 First run spends a few minutes building images; later runs are fast. Then point any MCP client at `http://localhost:8767/mcp/`.
 

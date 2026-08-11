@@ -18,9 +18,11 @@ then run::
 
     RUN_INTEGRATION_STACK=1 pytest tests/integration/test_drift_trajectory_fullstack.py -v -m integration
 
-Trajectory source is reused from ``scripts/demo/quick_demo.py`` (the same story
-``make demo`` tells: three clean check-ins, a calibration miss, then declining /
-overconfident confusion).
+Trajectory source is reused from ``scripts/demo/quick_demo.py``: three clean
+check-ins, a complexity-divergence step, then declining confidence. That script
+is an install check and deliberately stops short of a sharp confusion leg, so
+this test appends its own (``confusion_tail``) to get the deterministic
+``risk_score_latest`` separation it asserts on.
 
 What this asserts (the robust, deterministic contract):
 
