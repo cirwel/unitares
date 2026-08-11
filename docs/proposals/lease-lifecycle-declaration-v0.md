@@ -1,15 +1,88 @@
 ---
-status: PROPOSED — not implemented, no code changed
+status: REFUTED as written (v0.1) — diagnosis stands, proposed fix does NOT. See §0.
 authored: 2026-08-11
 amends: surface-lease-plane-v0.md (§7.10 force-release, §7.13 substrate state, §4 architecture)
 trigger: 7h permanent strand of `resident:/steward_eisv_sync` (2026-08-10 16:28 → 23:45), cleared manually
 review_target: |
-  NOT council-reviewed. Written after three refuted fix attempts on this subsystem
-  in one hour (§6) — the refutations are the most load-bearing content here and
-  should be read before any alternative is proposed.
+  Cross-principal review by Codex (2026-08-11, read-only sandbox): 4 BLOCK, 2 CONCERN,
+  verdict "I do not accept the RFC as written." Two BLOCKs independently re-verified
+  against source before acceptance. §0 records the refutation; §5 is retained ONLY as
+  the refuted proposal and must not be implemented.
 ---
 
 # Lease lifecycle must be declared, not inferred from the surface scheme
+
+## 0. REFUTED — read before anything below (v0.2, 2026-08-11)
+
+The **diagnosis** (§1–§4: two lease kinds share one scheme; exclusion leases get an
+auto-renewing holder; a strand is permanent because all four recovery paths are
+disqualified at once) was not disputed and stands.
+
+The **proposed fix** (§5) is wrong and must not be built. Two independently
+verified BLOCKs:
+
+**B1 — the load-bearing measurement in §4 is mislabeled, and its conclusion is false.**
+§4 claims "every `resident:/` acquire requests `local_beam` + `heartbeat_required=false`,
+so no distinguishing signal exists." That column was read from
+`lease_plane_events`, which persists the **post-routing effective** lease, not the
+request. Verified in source: exclusion callers request
+`holder_kind="remote_heartbeat"`, `holder_class="process_instance"`
+(`advisory.py:168`); presence callers request `holder_kind="remote_heartbeat"`,
+`holder_class="substrate_earned"` (`_substrate.py:172`). `heartbeat_required` is
+not a request field at all (`models.py:102`) — it is derived server-side from the
+effective kind (`repo.ex:183`).
+
+So **both kinds already request the self-healing path and the router overrides
+them**, and `holder_class` does distinguish the two uses today. "The scheme is
+the only signal" is false. (`holder_class` is nonetheless the wrong permanent
+routing key: RFC v0 §487 defines it as identity provenance, not lifecycle.)
+
+**B2 — pure TTL gives row exclusion, not execution exclusion. This is the one
+that makes the fix actively harmful.**
+At the DB layer the route is sound: a partial unique index enforces one active
+row and every racer gets `held_by_other`. But the *protected work* is not fenced.
+`lease_advisory_scope` acquires once, **never heartbeats or re-checks ownership**,
+and releases only on scope exit (`advisory.py:141`; verified — zero renew calls in
+the module). Once holder A's TTL lapses, B may acquire and execute while A is
+still running after a suspension, a clock movement, or a timeout.
+
+Concrete: Chronicler holds `ttl_s=120` while its own `cycle_timeout_seconds=120.0`,
+and the protected work runs in `asyncio.to_thread` — cancelling the await does not
+stop the worker thread (`chronicler/agent.py:176,187`).
+
+Therefore §5 would convert a **stuck-but-harmless** lease into **two jobs running
+concurrently**. Strictly worse than the bug it fixes. Mutual exclusion needs a
+*fence* — heartbeat plus abort-on-lease-loss, or a fencing token checked by every
+protected effect — and a fixed TTL alone is only orphan cleanup.
+
+Two further BLOCKs, not re-verified here but recorded:
+
+- **B3** — `presence → local_beam` is false as a general rule: `agent:/` is a
+  presence surface that MUST expire on orphaning (migration 042). A binary
+  presence/exclusion mapping would make agent presence immortal. Explicit
+  precedence also lets a mislabeled `resident:/steward` expire, which breaks the
+  router comment's claim that scheme scoping "CANNOT regress resident
+  coordination" — acquire has no lifecycle-specific authorization.
+- **B4** — rolling deploy hazard: an old server silently drops unknown acquire
+  fields (test asserts this), so a new client can send `exclusive_job`, get a
+  `local_beam` lease, receive 200, and proceed believing it is fenced. Requires
+  server-first rollout with the effective lifecycle echoed and verified by the
+  client before entering protected work.
+
+**Where this leaves the work.** The next proposal must lead with the fence, not
+the routing. Lease-loss detection in `lease_advisory_scope` is a prerequisite for
+*any* change to expiry semantics, and is independently valuable: it is what makes
+the existing exclusion guarantee real rather than nominal. Routing/lifecycle is
+downstream of that and should not be designed first.
+
+**Method note.** This is the fourth refuted approach on this subsystem in one
+session (see §6 for the first three). Every one was proposed with confidence and
+died to one more layer of checking. The pattern is consistent: each fix was
+validated at the layer it operated on and broken at the layer below.
+
+---
+
+*Everything below is v0.1 as written, retained for the record. §5 is REFUTED.*
 
 ## 1. Problem
 
