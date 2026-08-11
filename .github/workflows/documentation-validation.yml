@@ -39,6 +39,11 @@ jobs:
         echo "🔍 Checking version consistency..."
         python scripts/ops/version_manager.py --check
 
+    - name: Validate reader-facing documentation health
+      run: |
+        echo "🔍 Checking documentation references, counts, and contested claims..."
+        python scripts/diagnostics/check_doc_health.py --strict
+
     - name: Display tool count breakdown
       if: success()
       env:
@@ -55,7 +60,6 @@ jobs:
       uses: actions/github-script@v9
       with:
         script: |
-          const fs = require('fs');
           const { execSync } = require('child_process');
 
           // Get tool count
@@ -68,7 +72,8 @@ jobs:
           **Tool Count:** ${toolCount} tools
           **Version:** ${version}
 
-          All documentation is synchronized with the codebase.`;
+          Passed the CI/Python, tool-inventory, version-consistency, and
+          reader-facing documentation-health checks.`;
 
           github.rest.issues.createComment({
             issue_number: context.issue.number,

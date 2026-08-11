@@ -5,6 +5,9 @@
 **Surface:** ablation analysis path (`scripts/analysis/outcome_inventory.py`,
 `scripts/analysis/eisv_ablation_matrix.py`, `eisv_skeptic_report.py`)
 
+> Historical measurement. For the current frozen, selection-adjusted result,
+> see [`eisv-ablation-frozen-2026-08-09.md`](eisv-ablation-frozen-2026-08-09.md).
+
 ---
 
 ## Correction to the original report

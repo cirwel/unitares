@@ -15,7 +15,12 @@ observables ──► observation blend ──► EMA state ──► residual /
 
 The **behavioral EISV** path (EMA observations from grounded signals) is primary and drives verdicts. The **ODE / thermodynamic model** (`governance_core/`) runs in parallel as a research lens and does **not** drive verdicts by default.
 
-After ~30 check-ins the system builds per-agent **Welford baselines** and assesses by z-score deviation from the agent's *own* operating point, rather than universal thresholds. Before that ("warmup"), the behavioral track scores against fixed universal thresholds while the live verdict falls back to a mostly server-derived cold-start prior (see [EISV_COMPUTATION.md](../EISV_COMPUTATION.md)). Read the result as proprioceptive residuals — state change against a grounded reference — not as an outcome judgment.
+The current implementation has three stages: check-ins 1–2 use the Φ
+cold-start prior; check-ins 3–24 use the behavioral assessment with fixed
+universal thresholds; and check-in 25 enables per-agent **Welford-baseline**
+z-scores against a 30-update target. Read the state as telemetry against the
+reference available in that stage, not as an outcome judgment. The exact gates
+are in [EISV_COMPUTATION.md](../EISV_COMPUTATION.md).
 
 ## 5.2 The four dimensions
 
@@ -47,18 +52,28 @@ Total risk is the **sum of named components** (`low_E`, `low_I`, high-`S`, `|V|`
 
 **Margin** (`comfortable` / `tight` / `critical`) rides along with the verdict, telling you how close the agent is to a basin boundary even while the verdict is still `proceed`.
 
-## 5.4 Calibration: why the signal resists gaming
+## 5.4 Calibration and its trust boundary
 
-The system tracks whether stated `confidence` matches **objective** evidence — test pass/fail, command exit codes, lint results — fed back via `record_result` / `outcome_event`. Over time this builds a calibration curve, and persistent overconfidence penalizes **Integrity** through the check-in pipeline.
+The system tracks whether stated `confidence` matches recorded outcomes — test
+pass/fail, command exit codes, lint results, or review labels — fed back via
+`record_result` / `outcome_event`. Over time this builds a calibration curve, and
+persistent overconfidence can penalize **Integrity** through the check-in
+pipeline.
 
-The practical consequence: an agent can inflate the `confidence` number it reports, but it cannot inflate externally observed evidence. Reported confidence is checked *against results*, so dishonest self-assessment shows up as falling Integrity rather than as a passing grade. Feed verifiable evidence back (`record_result`) to make the calibration meaningful.
+Evidence is not automatically independent merely because it is called an
+outcome. CI-, tool-, or operator-authored records provide a stronger anchor than
+an outcome authored by the monitored process. If the agent controls both its
+confidence and every result record, it can forge a calibrated story. Preserve
+provenance and keep high-stakes outcome channels outside the agent's authority.
 
 ## 5.5 Recovery: self-recovery → dialectic
 
 When an agent is paused, recovery is a structured escalation:
 
 1. **Self-recovery** — `self_recovery(reflection=..., mode="quick_resume")` when coherence is high and risk is low; the agent reflects and resumes.
-2. **LLM-assisted dialectic** — a local LLM supplies an antithesis for single-agent reflection (no paid API — the operator constraint rules those out).
+2. **LLM-assisted dialectic** — a configured reviewer model supplies an
+   antithesis for single-agent reflection; the default reference path supports a
+   local model.
 3. **Peer dialectic** — another agent reviews via `dialectic`: thesis → antithesis → synthesis.
 
 Full protocol: [`../dev/CIRCUIT_BREAKER_DIALECTIC.md`](../dev/CIRCUIT_BREAKER_DIALECTIC.md).
@@ -71,9 +86,20 @@ The KG isn't just storage — searching it *before* acting is how agents avoid r
 
 The most important interpretation rule. The deployed EISV is **auditable heuristics over observable behavior**, not the information-theoretic quantities (free energy, mutual information, entropy) the paper targets — those become instrumentable only when the inference layer exposes things like token-level logprobs. Every coordinate carries a provenance tier (`e_source`, `s_source`, …) so a heuristic is never laundered as a measurement.
 
-Whether the numbers add useful signal beyond dumb baselines is an **open, measured question.** The [falsifiability harness](../REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) asks whether EISV/prior-state telemetry adds signal over deliberately boring baselines on ranking (AUC) and calibration (Brier), self-labeling each slice `INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING`. Treat that as a test of calibration and falsifiability for the proprioceptive signal, not the product's headline. Current read: a **weak early signal** at short lead, **no demonstrated prevention**, and a caveat that the lift may be carried by a single `prior_risk` feature rather than the full decomposition. Run it yourself before treating EISV as load-bearing.
+Whether the numbers add useful signal beyond simple baselines is an **open,
+measured question.** The
+[falsifiability harness](../REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc)
+tests ranking (AUC), calibration (Brier), and the selection cost of reporting the
+best of several candidates. In the frozen 2026-08-09 trusted-anchor matrix,
+every overall scope/window/lead slice is `NOISE-LEVEL` against the
+best-of-candidates null (selective p = 0.070–0.567). Unadjusted lift sometimes
+appears, usually in `prior_risk`, `prior_s`, or dispersion, but none clears
+p < 0.05 after that correction. There is **no demonstrated prevention**. Run it
+yourself before treating EISV as load-bearing.
 
-For intuition (not a spec), [`../tonality-metaphor.md`](../tonality-metaphor.md) maps key signatures and chromaticism onto EISV, coherence, and drift.
+For optional intuition (not a spec),
+[`../essays/tonality-metaphor.md`](../essays/tonality-metaphor.md) uses a bounded
+tonal analogy for self-relative measurement and names where the comparison stops.
 
 ---
 
