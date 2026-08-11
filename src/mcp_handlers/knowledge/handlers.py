@@ -3767,6 +3767,16 @@ async def store_discovery_internal(
     """
     from src.knowledge_graph import tag_provenance_source
 
+    normalized_severity = str(severity).strip().lower()
+    normalized_severity = SEVERITY_ALIASES.get(
+        normalized_severity, normalized_severity
+    )
+    if normalized_severity not in VALID_SEVERITIES:
+        raise ValueError(
+            f"Invalid internal discovery severity '{severity}'. "
+            f"Valid: {sorted(VALID_SEVERITIES)}"
+        )
+
     graph = await get_knowledge_graph()
     discovery_id = _new_discovery_id()
     provenance = tag_provenance_source(extra_provenance, source)
@@ -3777,7 +3787,7 @@ async def store_discovery_internal(
         summary=summary,
         details=details,
         tags=normalize_tags(tags or []),
-        severity=severity,
+        severity=normalized_severity,
         provenance=provenance,
     )
     await graph.add_discovery(node)
