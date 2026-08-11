@@ -257,10 +257,17 @@
         // flags how many sources didn't answer. The whole-accessor snapshot
         // fallback (() => snap, honestly badged "snapshot") only fires when EVERY
         // source failed.
-        let agentsActive = null, agentsTotal = null;
+        let agentsActive = null, agentsLive = null, agentsPresenceUnknown = null;
+        let agentsPresenceUnavailable = null, agentsTotal = null;
         if (agentsR && agentsR.summary) {
           agentsTotal = agentsR.summary.total;
           agentsActive = (agentsR.summary.by_status || {}).active;
+          const presence = agentsR.summary.by_presence;
+          if (presence) {
+            agentsLive = presence.live;
+            agentsPresenceUnknown = presence.unknown;
+            agentsPresenceUnavailable = presence.unavailable;
+          }
         }
         let trustTiers = null, trustEarned = null, trustFleet = null, trustUnknown = null;
         if (tierR && tierR.tiers) {
@@ -276,7 +283,8 @@
         const hb = healthR && healthR.status_breakdown ? healthR.status_breakdown : null;
 
         return {
-          agentsActive, agentsTotal, trustTiers, trustEarned, trustFleet, trustUnknown,
+          agentsActive, agentsLive, agentsPresenceUnknown, agentsPresenceUnavailable,
+          agentsTotal, trustTiers, trustEarned, trustFleet, trustUnknown,
           discoveries: kg && typeof kg.total_discoveries === "number" ? kg.total_discoveries : null,
           discoveriesToday: null, // no honest live "today" delta; show neutral subtitle
           dialectic: dlcSessions ? dlcSessions.filter((s) => !["resolved", "failed"].includes(s.phase || s.status)).length : null,
@@ -313,13 +321,18 @@
               // trust_tier is the tier NAME (lifecycle/query.py emits
               // tier_info["name"]); `null` for agents with no computed tier —
               // the badge distinguishes "unknown" from "not computed".
-              tier: a.trust_tier, updates: a.total_updates || 0,
+              tier: a.trust_tier,
+              // Compatibility fallback for servers before observation_count.
+              // This is a state-row count, never an authored-activity count.
+              updates: a.observation_count ?? a.total_updates ?? 0,
               last: a.last_update || a.created, purpose: a.purpose, tags: a.tags || [],
               event_driven: a.event_driven === true, health: a.health_status,
               redacted: a.agent_id_redacted === true, parent: a.parent_agent_id,
               superseded: a.superseded === true, lifecycleReason: a.last_lifecycle_reason,
+              presence: a.presence || { status: "unavailable", signals: [] },
               metrics: { coherence: m.coherence, risk: m.risk_score, verdict: m.verdict, E: m.E, I: m.I, S: m.S, V: m.V, basin: m.basin, phi: m.phi,
-                source: m.source, recordedAt: m.recorded_at },
+                source: m.source, recordedAt: m.recorded_at,
+                rollingMetricsAvailable: m.rolling_metrics_available },
             });
           });
         });
@@ -327,7 +340,11 @@
         return {
           list: flat,
           summary: { total: s.total, active: (s.by_status || {}).active, archived: (s.by_status || {}).archived,
-            paused: (s.by_status || {}).paused, participated: s.participated, neverParticipated: s.never_participated },
+            paused: (s.by_status || {}).paused, observed: s.observed ?? s.participated,
+            unobserved: s.unobserved ?? s.never_participated,
+            live: s.by_presence && s.by_presence.live,
+            presenceUnknown: s.by_presence && s.by_presence.unknown,
+            presenceUnavailable: s.by_presence && s.by_presence.unavailable },
         };
       }, () => ({ list: S().agentsList, summary: S().agentsSummary }));
     },
@@ -613,7 +630,7 @@
     // Light freshness map for the residents (label -> {silence, status, coherence}).
     // The Agents pane uses it to keep lease-anchored in-process residents
     // (e.g. Steward — zero agent_state rows BY DESIGN, liveness lives in
-    // lease_plane heartbeats) out of the "Never checked in" bucket. `coherence`
+    // lease_plane heartbeats) out of the unobserved bucket. `coherence`
     // rides along so the pane can apply DATA.residentLiveness — the SAME
     // predicate the Overview applies — instead of inferring liveness from the
     // mere presence of a silence number.
@@ -634,7 +651,7 @@
 
     // Stuck detections on their own (one tool call). The Overview card gets its
     // copy inside the coordinated stats() batch; the Agents pane calls this so a
-    // stuck row can name its REASON instead of the generic "inactive" tag.
+    // stuck row can name its REASON instead of a generic stale-observation tag.
     // Read-only: auto_recover defaults false server-side.
     async stuckAgents() {
       return withFallback(async () => {
