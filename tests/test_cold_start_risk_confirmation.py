@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from src.cold_start_risk_confirmation import (
+    NON_AUTHORED_COLD_START_ENFORCEMENT_BASIS,
+    NON_AUTHORED_COLD_START_RECOVERY_BASIS,
+    apply_non_authored_cold_start_guard,
     classify_verdict_driver,
     evaluate_cold_start_risk_confirmation,
+    evaluate_non_authored_cold_start_trap,
 )
 
 
@@ -34,6 +39,46 @@ def _evaluate(*, previous=None, cycle=1, **overrides):
     }
     arguments.update(overrides)
     return evaluate_cold_start_risk_confirmation(_risk_pause(), **arguments)
+
+
+def _decision_with_gate(**gate_overrides):
+    decision = _risk_pause()
+    decision["cold_start_confirmation"] = _evaluate(**gate_overrides)
+    return decision
+
+
+def _legacy_trap_record(
+    *,
+    epistemic_class="substrate_interpretation",
+    enforcement_basis="phi_cold_start_unconfirmed_shadow",
+):
+    maturity_gate = _evaluate()
+    return SimpleNamespace(
+        epistemic_class=epistemic_class,
+        state_json={
+            "epistemic_class": epistemic_class,
+            "eisv_telemetry": {
+                "schema": "eisv.telemetry.v1",
+                "policy_evaluation": {
+                    "action": "pause",
+                    "sub_action": "risk_pause",
+                    "inputs": {
+                        "verdict_source": "phi_cold_start",
+                        "primary_eisv_source": "ode_fallback",
+                    },
+                    "maturity_gate": maturity_gate,
+                },
+                "enforcement": {
+                    "requested": True,
+                    "applied": True,
+                    "mode": "circuit_breaker",
+                    "basis": enforcement_basis,
+                    "actor": "agent_loop_detection",
+                    "effect": "agent_metadata.status=paused",
+                },
+            },
+        },
+    )
 
 
 def test_first_fallback_risk_pause_is_shadow_would_defer_only():
@@ -166,6 +211,125 @@ def test_actuation_flag_remains_fail_closed_without_durable_state():
     assert gate["actuation_blocker"] == "durable_confirmation_state_not_implemented"
 
 
+def test_non_authored_phi_cold_start_pause_becomes_advisory_guidance():
+    guarded = apply_non_authored_cold_start_guard(
+        _decision_with_gate(),
+        epistemic_class="substrate_interpretation",
+        enabled=True,
+    )
+
+    assert guarded["action"] == "proceed"
+    assert guarded["sub_action"] == "guide"
+    assert guarded["original_action"] == "pause"
+    assert guarded["original_sub_action"] == "risk_pause"
+    assert guarded["cold_start_epistemic_deferred"] is True
+    assert guarded["cold_start_epistemic_gate"]["applied"] is True
+    assert (
+        guarded["cold_start_epistemic_gate"]["enforcement_basis"]
+        == NON_AUTHORED_COLD_START_ENFORCEMENT_BASIS
+    )
+
+
+def test_epistemic_guard_preserves_authoritative_or_uncertain_pauses():
+    agent_report = apply_non_authored_cold_start_guard(
+        _decision_with_gate(),
+        epistemic_class="agent_report",
+        enabled=True,
+    )
+    behavioral_ready = apply_non_authored_cold_start_guard(
+        _decision_with_gate(
+            behavioral_confidence=0.3,
+            primary_driver="behavioral_assessment",
+        ),
+        epistemic_class="substrate_interpretation",
+        enabled=True,
+    )
+    independent_override = apply_non_authored_cold_start_guard(
+        _decision_with_gate(
+            primary_driver="independent_verification_floor",
+            independent_override="independent_verification_floor",
+        ),
+        epistemic_class="substrate_observation",
+        enabled=True,
+    )
+    unknown = apply_non_authored_cold_start_guard(
+        _decision_with_gate(),
+        epistemic_class=None,
+        enabled=True,
+    )
+    disabled = apply_non_authored_cold_start_guard(
+        _decision_with_gate(),
+        epistemic_class="substrate_interpretation",
+        enabled=False,
+    )
+
+    for decision in (
+        agent_report,
+        behavioral_ready,
+        independent_override,
+        unknown,
+        disabled,
+    ):
+        assert decision["action"] == "pause"
+        assert decision["sub_action"] == "risk_pause"
+        assert decision["cold_start_epistemic_gate"]["applied"] is False
+    assert agent_report["cold_start_epistemic_gate"]["ineligibility_reason"] == (
+        "agent_authored_report"
+    )
+    assert independent_override["cold_start_epistemic_gate"][
+        "ineligibility_reason"
+    ] == "independent_override"
+    assert unknown["cold_start_epistemic_gate"]["ineligibility_reason"] == (
+        "epistemic_class_missing_or_unknown"
+    )
+    assert disabled["cold_start_epistemic_gate"]["ineligibility_reason"] == (
+        "guard_disabled"
+    )
+
+
+def test_epistemic_guard_never_changes_non_risk_pause():
+    decision = {
+        "action": "pause",
+        "sub_action": "void_pause",
+        "reason": "void active",
+        "cold_start_confirmation": _evaluate(),
+    }
+
+    guarded = apply_non_authored_cold_start_guard(
+        decision,
+        epistemic_class="substrate_interpretation",
+        enabled=True,
+    )
+
+    assert guarded == decision
+
+
+def test_reviewed_recovery_recognizes_only_exact_persisted_legacy_trap():
+    eligible = evaluate_non_authored_cold_start_trap(
+        _legacy_trap_record(),
+        enabled=True,
+    )
+    agent_authored = evaluate_non_authored_cold_start_trap(
+        _legacy_trap_record(epistemic_class="agent_report"),
+        enabled=True,
+    )
+    wrong_basis = evaluate_non_authored_cold_start_trap(
+        _legacy_trap_record(enforcement_basis="risk_policy"),
+        enabled=True,
+    )
+    missing = evaluate_non_authored_cold_start_trap(None, enabled=True)
+
+    assert eligible["eligible"] is True
+    assert eligible["failed_requirements"] == []
+    assert eligible["recovery_basis"] == NON_AUTHORED_COLD_START_RECOVERY_BASIS
+    assert agent_authored["eligible"] is False
+    assert "epistemic_class_non_authoring" in agent_authored["failed_requirements"]
+    assert wrong_basis["eligible"] is False
+    assert "circuit_breaker_applied" in wrong_basis["failed_requirements"]
+    assert missing["eligible"] is False
+    assert "state_record_present" in missing["failed_requirements"]
+
+
 def test_verdict_driver_names_authority_boundary():
     cold = classify_verdict_driver(
         behavioral_confidence=0.2,
@@ -223,3 +387,43 @@ def test_monitor_path_surfaces_shadow_without_mutating_pause():
     assert first_gate["outcome"] == "shadow_would_defer"
     assert second_gate["outcome"] == "shadow_confirmed"
     assert second_gate["confirmation_count"] == 2
+
+
+def test_monitor_path_defers_non_authored_phi_cold_start_from_runtime_actuator():
+    from src.governance_monitor import UNITARESMonitor
+
+    monitor = UNITARESMonitor("cold-start-epistemic-guard", load_state=False)
+    monitor._cold_start_confirmation_lineage_status = "identity_genesis"
+    agent_state = {
+        "parameters": [0.1, 0.2],
+        "ethical_drift": [0.0, 0.0, 0.0],
+        "response_text": "Automatic stop-hook substrate interpretation.",
+        "complexity": 0.4,
+        "task_type": "mixed",
+        "epistemic_class": "substrate_interpretation",
+    }
+
+    with (
+        patch.object(
+            monitor,
+            "make_decision",
+            return_value=_risk_pause(),
+        ),
+        patch("src.governance_monitor.audit_logger._write_entry"),
+    ):
+        result = monitor.process_update(agent_state, confidence=0.5)
+
+    assert result["decision"]["action"] == "proceed"
+    assert result["decision"]["sub_action"] == "guide"
+    assert result["policy_evaluation"]["suppression"] == {
+        "original_action": "pause",
+        "original_sub_action": "risk_pause",
+        "cold_start_epistemic_deferred": True,
+    }
+    assert result["policy_evaluation"]["epistemic_gate"]["applied"] is True
+    assert result["enforcement"]["requested"] is False
+    assert result["enforcement"]["applied"] is False
+    assert (
+        result["enforcement"]["basis"]
+        == NON_AUTHORED_COLD_START_ENFORCEMENT_BASIS
+    )
