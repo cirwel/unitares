@@ -91,6 +91,8 @@ class TestSelfClearBlocked:
 
         assert result["awaiting_facilitation"] is True
         assert s.awaiting_facilitation is True
+        assert "no self-service" in result["operator_note"]
+        assert "action='reassign'" in result["operator_note"]
 
     def test_repeat_attempts_are_refused_without_being_recorded(self):
         """Sweeper-starvation guard: only the FIRST attempt is persisted.
