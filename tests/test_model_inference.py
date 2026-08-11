@@ -218,7 +218,14 @@ class TestInferenceHostRegistry:
 # =============================================================================
 
 class TestCallModelReachabilityGate:
-    """call_model refuses hosts the registry says it cannot route to."""
+    """call_model refuses hosts the registry says it cannot route to.
+
+    Every test here patches OPENAI_AVAILABLE. The SDK check is the very first
+    thing handle_call_model does, so without the patch these pass locally (where
+    openai is installed) and fail in CI (where it is not) with
+    DEPENDENCY_MISSING — asserting the wrong branch entirely. See the module
+    docstring note about the CI environment.
+    """
 
     @pytest.mark.asyncio
     async def test_unreachable_host_refused_with_reachability_error(self):
@@ -230,10 +237,11 @@ class TestCallModelReachabilityGate:
         """
         from src.mcp_handlers.support.model_inference import handle_call_model
 
-        result = await handle_call_model({
-            "prompt": "hi",
-            "host_id": "codex:host-adapter",
-        })
+        with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True):
+            result = await handle_call_model({
+                "prompt": "hi",
+                "host_id": "codex:host-adapter",
+            })
 
         parsed = _parse_text_content(result)
         assert parsed["success"] is False
@@ -252,7 +260,8 @@ class TestCallModelReachabilityGate:
                 "AGENT_ORCHESTRATOR_BEARER_TOKEN": "tok",
             },
             clear=False,
-        ), patch.object(ha.shutil, "which", lambda c: "/usr/bin/" + c):
+        ), patch.object(ha.shutil, "which", lambda c: "/usr/bin/" + c), \
+             patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True):
             result = await handle_call_model({
                 "prompt": "hi",
                 "host_id": "claude:host-adapter",
@@ -266,7 +275,8 @@ class TestCallModelReachabilityGate:
     async def test_unknown_host_still_fails_closed_as_not_found(self):
         from src.mcp_handlers.support.model_inference import handle_call_model
 
-        result = await handle_call_model({"prompt": "hi", "host_id": "nope:host"})
+        with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True):
+            result = await handle_call_model({"prompt": "hi", "host_id": "nope:host"})
 
         parsed = _parse_text_content(result)
         assert parsed["success"] is False
