@@ -496,6 +496,57 @@ class TestHandleRequestDialecticReview:
         assert call_kwargs["topic"] == "Knowledge graph accuracy"
         assert call_kwargs["discovery_id"] == "disc-123"
 
+    @pytest.mark.asyncio
+    async def test_request_persists_decision_time_evidence_not_bare_ode_state(
+        self, mock_server, mock_require_registered, mock_verify_ownership,
+        mock_pg_create, mock_is_in_session, mock_context_agent,
+    ):
+        """The reviewer gets the actual policy bundle, not state.to_dict()."""
+        from src.mcp_handlers.dialectic.handlers import handle_request_dialectic_review
+
+        mock_server.monitors["agent-paused"] = SimpleNamespace(
+            state=SimpleNamespace(
+                to_dict=lambda: {"E": 9.9, "diagnostic_only": True}
+            ),
+            _last_governance_result={
+                "timestamp": "2026-08-11T20:00:00Z",
+                "metrics": {
+                    "E": 0.31,
+                    "I": 0.82,
+                    "S": 0.74,
+                    "V": -0.51,
+                    "primary_eisv_source": "behavioral",
+                    "ode": {"E": 0.7, "I": 0.7, "S": 0.1, "V": 0.0},
+                },
+                "policy_evaluation": {
+                    "action": "pause",
+                    "inputs": {
+                        "risk_score": 0.81,
+                        "verdict": "high-risk",
+                        "verdict_source": "behavioral",
+                    },
+                },
+                "enforcement": {"requested": True},
+            },
+        )
+
+        with mock_require_registered("agent-paused"), mock_verify_ownership, \
+             mock_pg_create as pg_create, mock_is_in_session, mock_context_agent:
+            result = await handle_request_dialectic_review({
+                "agent_id": "agent-paused",
+                "_agent_uuid": "agent-paused",
+                "reason": "Review the pause",
+                "reviewer_mode": "self",
+            })
+
+        assert parse_result(result)["success"] is True
+        evidence = pg_create.await_args.kwargs["paused_agent_state"]
+        assert evidence["evidence_status"] == "available"
+        assert evidence["measurement"]["primary"]["source"] == "behavioral"
+        assert evidence["policy_evaluation"]["action"] == "pause"
+        assert evidence["policy_evaluation"]["inputs"]["risk_score"] == 0.81
+        assert evidence.get("diagnostic_only") is None
+
 
 # ============================================================================
 # 2. handle_submit_thesis
@@ -851,6 +902,7 @@ class TestHandleSubmitAntithesis:
 
         with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
              patch("src.mcp_handlers.context.get_context_agent_id", return_value="agent-active"), \
+             patch("src.mcp_handlers.identity.operator.is_operator_caller", return_value=True), \
              mock_pg_add_message as add_message, mock_pg_update_phase, mock_save_session, mock_pg_update_reviewer:
             result = await handle_submit_antithesis({
                 "session_id": session.session_id,
@@ -869,6 +921,38 @@ class TestHandleSubmitAntithesis:
         assert data.get("reviewer_auto_assigned") is not True
         assert session.reviewer_agent_id == "agent-active"
         assert add_message.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_antithesis_takeover_requires_operator_credential(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_pg_update_reviewer,
+    ):
+        """A bound observer cannot use the takeover alias to bypass reassign auth."""
+        from src.mcp_handlers.dialectic.handlers import handle_submit_antithesis
+
+        session = _make_session(phase=DialecticPhase.ANTITHESIS)
+
+        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+                   return_value=session), \
+             patch("src.mcp_handlers.context.get_context_agent_id",
+                   return_value="agent-active"), \
+             patch("src.mcp_handlers.identity.operator.is_operator_caller",
+                   return_value=False), \
+             mock_pg_add_message as add_message, mock_pg_update_phase, \
+             mock_save_session, mock_pg_update_reviewer:
+            result = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-active",
+                "concerns": ["Trying to seize the reviewer slot"],
+                "reasoning": "I am bound but not an operator.",
+                "take_over_if_requested": True,
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "TAKEOVER_FORBIDDEN"
+        assert session.reviewer_agent_id == "agent-reviewer"
+        add_message.assert_not_awaited()
 
 
 # ============================================================================
@@ -908,6 +992,45 @@ class TestHandleSubmitSynthesis:
 
         data = parse_result(result)
         assert data["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_paused_agreement_waits_for_reviewers_first_synthesis_verdict(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_context_agent,
+    ):
+        from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
+
+        session = _make_session(phase=DialecticPhase.SYNTHESIS)
+        session.synthesis_round = 1
+        session.transcript.append(DialecticMessage(
+            phase="antithesis",
+            agent_id="agent-reviewer",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            concerns=["The pause evidence needs an independent verdict."],
+            reasoning="I am reviewing the evidence.",
+        ))
+        recorded = len(session.transcript)
+
+        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock,
+                   return_value=session), \
+             mock_pg_add_message as add_message, mock_pg_update_phase, \
+             mock_save_session, mock_context_agent:
+            result = await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-paused",
+                "proposed_conditions": ["Resume now"],
+                "root_cause": "claimed false positive",
+                "reasoning": "I agree before the reviewer has ruled.",
+                "agrees": True,
+                "api_key": "key",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "REVIEWER_VERDICT_PENDING"
+        assert "action='get'" in data["recovery"]["next_call"]
+        assert len(session.transcript) == recorded
+        add_message.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_self_clear_refusal_points_to_reviewer_or_operator_action(

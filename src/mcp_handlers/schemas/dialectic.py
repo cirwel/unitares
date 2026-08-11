@@ -80,7 +80,7 @@ class SubmitAntithesisParams(AgentIdentityMixin):
     reasoning: Optional[str] = Field(default=None, description="Natural language explanation")
     take_over_if_requested: Union[bool, str, None] = Field(
         default=False,
-        description="If true, let the bound reviewer candidate take over reviewer ownership before submitting"
+        description="If true, let a credentialed operator move reviewer ownership to the bound candidate before submitting"
     )
     takeover_reason: Optional[str] = Field(
         default=None,
@@ -138,7 +138,7 @@ class DialecticParams(AgentIdentityMixin):
     reasoning: Optional[str] = Field(None, description="Explanation/reasoning")
     observed_metrics: Optional[dict] = Field(None, description="Observed metrics (for action=antithesis)")
     concerns: Optional[List[str]] = Field(None, description="Concerns (for action=antithesis)")
-    take_over_if_requested: Optional[bool] = Field(None, description="Let the current bound agent take reviewer ownership before antithesis")
+    take_over_if_requested: Optional[bool] = Field(None, description="Let a credentialed operator move reviewer ownership to the bound agent before antithesis")
     takeover_reason: Optional[str] = Field(None, description="Reason for reviewer takeover during antithesis")
     agrees: Union[bool, str, None] = Field(None, description="Agreement flag (for action=synthesis)")
     vote: Optional[str] = Field(None, description="Vote: resume, block, or cooldown (for action=vote)")
@@ -147,11 +147,11 @@ class DialecticParams(AgentIdentityMixin):
     reason: Optional[str] = Field(None, description="Reason (for action=request/reassign)")
 
 class ReassignReviewerParams(AgentIdentityMixin):
-    """Reassign the reviewer for an active dialectic session."""
+    """Operator/current-reviewer handoff for an active dialectic session."""
     session_id: str = Field(..., description="Dialectic session ID")
     new_reviewer_id: Optional[str] = Field(
         default=None,
-        description="Agent ID to assign as new reviewer (auto-selected if omitted)"
+        description="Agent ID to assign as new reviewer (operator/current reviewer authorization required; auto-selected if omitted)"
     )
     reason: Optional[str] = Field(
         default="Reviewer unresponsive",

@@ -131,6 +131,8 @@ def _reconstruct_session_from_dict(session_id: str, session_data: Dict) -> Optio
             session_type=session_type,
             topic=topic,
             max_synthesis_rounds=max_synthesis_rounds,
+            reason=session_data.get("reason"),
+            trigger_source=session_data.get("trigger_source"),
         )
 
         session.session_id = session_id
@@ -315,7 +317,8 @@ async def load_session_as_dict(session_id: str) -> Optional[Dict[str, Any]]:
             row = await conn.fetchrow("""
                 SELECT session_id, phase, status, session_type,
                        paused_agent_id, reviewer_agent_id, topic,
-                       created_at, resolution_json, reason, trigger_source
+                       created_at, resolution_json, reason, trigger_source,
+                       awaiting_facilitation
                 FROM core.dialectic_sessions WHERE session_id = $1
             """, session_id)
             if not row:
@@ -339,6 +342,9 @@ async def load_session_as_dict(session_id: str) -> Optional[Dict[str, Any]]:
                 "created": created.isoformat() if hasattr(created, 'isoformat') else str(created or ""),
                 "reason": row.get("reason") or None,
                 "trigger_source": row.get("trigger_source") or None,
+                "awaiting_facilitation": bool(
+                    row.get("awaiting_facilitation", False)
+                ),
                 "message_count": len(msg_rows),
                 "transcript": [],
             }
