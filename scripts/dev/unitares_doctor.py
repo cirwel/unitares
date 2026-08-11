@@ -1612,6 +1612,122 @@ def check_producer_never_reported(db_url: str, repo_root: Path) -> CheckResult:
     )
 
 
+# The adjudication queue's own definition, mirrored from
+# src/http_api.py (_SENTINEL_FINDING_EVENT_TYPES, _SENTINEL_BACKLOG_DEFAULT_
+# SEVERITIES). Duplicated deliberately rather than imported: the doctor runs
+# against a DEPLOYED database from a checkout that may not be the deployed
+# tree, so importing server code would silently measure the wrong definition.
+# tests/test_adjudication_feedstock.py asserts the mirror still matches source,
+# so a change to the queue's definition cannot silently desync this check.
+ADJUDICABLE_EVENT_TYPES = ("sentinel_finding", "sentinel_alarm_finding")
+ADJUDICABLE_SEVERITIES = ("high", "critical")
+FEEDSTOCK_DRY_DAYS = 7       # queue-eligible findings absent this long
+FEEDSTOCK_ALIVE_MIN = 20     # ...while producers emitted at least this many
+
+
+def check_adjudication_feedstock(db_url: str) -> CheckResult:
+    """WARN when findings still flow but NONE of them can be adjudicated.
+
+    ``finding_producer_live`` asks whether producers are alive.
+    ``producer_never_reported`` asks whether they were ever born. Both are
+    answered by the finding stream itself, and both read green while the thing
+    the findings exist to feed receives nothing — because the adjudication
+    queue does not consume the stream, it consumes a narrow SLICE of it:
+    ``ADJUDICABLE_EVENT_TYPES`` at ``ADJUDICABLE_SEVERITIES``. A producer can
+    be loudly, healthily alive and contribute zero adjudicable rows, and every
+    liveness signal stays green while the falsifiability anchor starves.
+
+    That is the live state as of 2026-08-10 and the reason this check exists.
+    Sentinel emitted 201 findings in 7 days — 136 on one day — and **not one**
+    was queue-eligible: all `medium`. Its last high was 2026-08-01 20:20:20,
+    31 seconds after the last real forced lease release, because the lease
+    fixes (#1443/#1444/#1459) removed the condition that produced them. The
+    zero is FAIR — the detector is correct and there is genuinely nothing to
+    report. But the queue had been dry for nine days and nothing said so,
+    because an empty queue and a healthy queue are the same observation.
+
+    Federation note, and the reason this reports PER PRODUCER rather than a
+    single boolean: 8 of 10 finding producers are structurally unadjudicatable
+    — wrong event_type, wrong severity, or both — so the entire falsifiability
+    anchor rests on one producer's output. When that producer legitimately goes
+    quiet there is no second source, and the coverage table below is the
+    measurement any fix to that has to be designed against. Do NOT respond to
+    this warning by widening the queue: ``http_sentinel_adjudicate`` attributes
+    outcomes to the sentinel substrate uuid, so admitting a doctor finding
+    today books it against SENTINEL's EISV. Attribution comes first.
+
+    WARN, not FAIL. A dry queue is a real condition to surface, not a broken
+    install, and the correct response is sometimes "nothing is wrong, the
+    lever retired" — which is a decision, not a defect.
+    """
+    name, mode = "adjudication_feedstock", "operator"
+
+    types_sql = ", ".join(f"'{t}'" for t in ADJUDICABLE_EVENT_TYPES)
+    sevs_sql = ", ".join(f"'{s}'" for s in ADJUDICABLE_SEVERITIES)
+
+    rows = _psql_rows(db_url, (
+        "SELECT event_type, "
+        "  count(*), "
+        f"  count(*) FILTER (WHERE payload->>'severity' IN ({sevs_sql}) "
+        f"                     AND event_type IN ({types_sql})), "
+        "  coalesce(round(extract(epoch FROM (now() - max(ts))) / 86400.0, 1), -1) "
+        "FROM audit.events "
+        "WHERE event_type LIKE '%\\_finding' "
+        f"  AND ts > now() - interval '{FEEDSTOCK_DRY_DAYS} days' "
+        "GROUP BY event_type ORDER BY 2 DESC"
+    ))
+    if rows is None:
+        return CheckResult(name, mode, Status.SKIP, "audit.events not queryable")
+    if not rows:
+        # No findings at all is finding_producer_live's question, not this one.
+        return CheckResult(name, mode, Status.SKIP,
+                           f"no findings in {FEEDSTOCK_DRY_DAYS}d — liveness "
+                           "is finding_producer_live's call, not this check's")
+
+    total = sum(int(r[1]) for r in rows if len(r) > 1)
+    eligible = sum(int(r[2]) for r in rows if len(r) > 2)
+
+    coverage = ", ".join(
+        f"{r[0]}={r[2]}/{r[1]}" for r in rows if len(r) > 2
+    )
+
+    if eligible > 0:
+        return CheckResult(
+            name, mode, Status.PASS,
+            f"{eligible}/{total} finding(s) in {FEEDSTOCK_DRY_DAYS}d are "
+            f"queue-eligible across {len(rows)} producer(s)",
+            detail=f"per-producer eligible/total: {coverage}",
+        )
+
+    if total < FEEDSTOCK_ALIVE_MIN:
+        # Too quiet overall to distinguish a dry queue from a quiet fleet.
+        return CheckResult(
+            name, mode, Status.PASS,
+            f"only {total} finding(s) in {FEEDSTOCK_DRY_DAYS}d — too few to "
+            "call the queue dry",
+            detail=f"per-producer eligible/total: {coverage}",
+        )
+
+    return CheckResult(
+        name, mode, Status.WARN,
+        f"adjudication queue is DRY: {total} finding(s) in "
+        f"{FEEDSTOCK_DRY_DAYS}d from {len(rows)} producer(s), 0 eligible",
+        detail=(
+            f"per-producer eligible/total: {coverage}. "
+            f"Eligible = event_type in {ADJUDICABLE_EVENT_TYPES} at severity "
+            f"in {ADJUDICABLE_SEVERITIES}. Producers are alive; nothing they "
+            "emit can be adjudicated, so the falsifiability anchor receives "
+            "nothing while every liveness check stays green. This is not "
+            "automatically a defect — the producing condition may have been "
+            "genuinely fixed, in which case the honest response is to retire "
+            "the lever rather than restore the alarm. ⛔Do NOT widen the queue "
+            "to clear this warning: adjudication attributes the outcome to the "
+            "sentinel substrate uuid, so admitting another producer's finding "
+            "books it against Sentinel's EISV. Fix attribution first."
+        ),
+    )
+
+
 def build_checks(repo_root: Path, db_url: str) -> list[Check]:
     loaded_cache: dict[str, set[str]] = {}
 
@@ -1659,6 +1775,13 @@ def build_checks(repo_root: Path, db_url: str) -> list[Check]:
         # NEVER-BORN. Neither sees the other's case.
         Check("producer_never_reported", "operator",
               lambda: check_producer_never_reported(db_url, repo_root)),
+        # Third of the family. Those two ask whether findings are BEING MADE;
+        # this one asks whether any of them can be CONSUMED. A producer that is
+        # alive and loud satisfies both of the above while contributing nothing
+        # the adjudication queue will accept — which is the live 2026-08-10
+        # state and is invisible to every liveness signal.
+        Check("adjudication_feedstock", "operator",
+              lambda: check_adjudication_feedstock(db_url)),
     ]
 
 
