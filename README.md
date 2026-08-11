@@ -6,6 +6,10 @@
 
 </div>
 
+**Status:** v2.17.0 public overview. Production data below is maintainer
+dogfood; current outcome-lift evidence is negative, and external adoption
+remains unvalidated.
+
 An agent forty turns into a task reports high confidence while its tests are
 failing. Every individual tool call was allowed, so an action-level guardrail may
 have nothing to object to. What is missing is a longitudinal record that compares
