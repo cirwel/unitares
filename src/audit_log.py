@@ -150,6 +150,39 @@ class AuditLogger:
         )
         self._write_entry(entry)
 
+    def log_coherence_gate_shadow(self, agent_id: str, eligible: bool,
+                                  v_zscore: Optional[float], would_action: Optional[str],
+                                  fleet_action: Optional[str], coherence_seen: Optional[float],
+                                  agrees: Optional[bool], k: dict):
+        """Compare a per-agent coherence gate against the live fleet-constant one.
+
+        Measurement only — nothing acts on this. Records what a proprioceptive
+        gate WOULD have decided (`would_action`, from the agent's own V z-score)
+        next to what the fleet-constant gates actually decided (`fleet_action`),
+        so the two can be compared on real traffic before either changes.
+
+        `eligible` is False until the agent's behavioral baseline is mature
+        enough to estimate its own dispersion; those rows carry agrees=None so
+        they cannot be silently counted as agreement.
+        See docs/proposals/coherence-proprioceptive-thresholds-v0.md.
+        """
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_id,
+            event_type="coherence_gate_shadow",
+            confidence=0.0,
+            details={
+                "eligible": bool(eligible),
+                "v_zscore": v_zscore,
+                "would_action": would_action,
+                "fleet_action": fleet_action,
+                "coherence_seen": coherence_seen,
+                "agrees": agrees,
+                "k": k,
+            },
+        )
+        self._write_entry(entry)
+
     def log_pause_auto_expired(self, agent_id: str,
                                 original_paused_at: Optional[str],
                                 elapsed_seconds: float):

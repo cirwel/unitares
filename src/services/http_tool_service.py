@@ -27,7 +27,12 @@ from src.mcp_handlers.identity.handlers import (
     handle_identity_adapter,
     handle_onboard_v2,
 )
-from src.mcp_handlers.core import handle_process_agent_update, unbound_metrics_payload
+from src.mcp_handlers.core import (
+    handle_process_agent_update,
+    metrics_agent_is_known,
+    unbound_metrics_payload,
+    unknown_agent_error,
+)
 from src.mcp_handlers.utils import require_agent_id
 from src.services.http_dispatch_fallback import execute_http_dispatch_fallback
 from src.services.runtime_queries import get_governance_metrics_data, get_health_check_data
@@ -107,6 +112,11 @@ async def _execute_http_get_governance_metrics(arguments: Dict[str, Any]) -> Any
     agent_id, error = require_agent_id(arguments)
     if error:
         return [error]
+    # Same per-transport split as the unbound guard above: the refusal is
+    # defined once in core.py, but each transport has to invoke it or the
+    # REST shortcut answers seeded metrics for an id that names no agent.
+    if not await metrics_agent_is_known(agent_id):
+        return [unknown_agent_error(agent_id)]
     return await get_governance_metrics_data(agent_id, arguments)
 
 

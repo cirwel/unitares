@@ -42,6 +42,7 @@ index; that one is the curated decision record.
 | `UNITARES_CALIBRATION_ALLOW_SCRAPED_CONFIDENCE` | `''` | Shared body for outcome_event recording | src/mcp_handlers/observability/outcome_events.py |
 | `UNITARES_CALIBRATION_BACKEND` | `'postgres'` | Initialize calibration checker with confidence bins | src/calibration.py |
 | `UNITARES_CLASS_CALIBRATION` | `''` | Merge a deployment-local per-class calibration overlay into the class-keyed dicts, if ``UNITARES_CLASS_CALIBRATION`` names a JSON file | config/governance_config.py |
+| `UNITARES_COHERENCE_GATE_SHADOW` | `''` | Whether to record the proprioceptive-vs-fleet gate comparison | src/coherence_gate_shadow.py |
 | `UNITARES_COHORT_PRIOR` | `(required)` | Whether cohort-prior warm-start is active at all | src/cohort_prior.py |
 | `UNITARES_COHORT_PRIOR_MODE` | `(required)` | Behavior when cohort priors are enabled: 'observe' (default) or 'apply' | src/cohort_prior.py |
 | `UNITARES_CONNECT_RETRIES` | `'1'` | read by __init__() | agents/sdk/src/unitares_sdk/client.py |
