@@ -57,6 +57,68 @@ _MIDDLEWARE_IDENTITY_ARG_KEYS = (
 # still receive the dispatch-threaded resolution they rely on.
 _IDENTITY_LIFECYCLE_TOOLS = frozenset({"identity", "onboard", "bind_session"})
 
+def _hard_resume_refusal_response(
+    tool_name: str,
+    identity_result: Dict[str, Any],
+) -> Any:
+    """Return an identity-neutral response for a terminal resolver refusal."""
+    from src.mcp_handlers.identity_bootstrap import strict_identity_refusal_payload
+    from src.mcp_handlers.response_base import success_response
+
+    resolve_error = identity_result.get("error") or "resume_failed"
+    hint = identity_result.get("message") or (
+        f"Identity resume was refused ({resolve_error}). Nothing was written."
+    )
+    payload_options: Dict[str, Any] = {}
+
+    if resolve_error == "substrate_anchored_uuid_requires_uds":
+        payload_options = {
+            "next_step": (
+                "Retry this substrate-enrolled resident through "
+                "UNITARES_UDS_SOCKET so governance can verify kernel peer "
+                "credentials."
+            ),
+            "safe_options": (
+                {
+                    "action": "use_attested_uds",
+                    "call": "Retry the same request through UNITARES_UDS_SOCKET.",
+                    "when": (
+                        "The resident is launchd-managed and its substrate "
+                        "claim matches the running executable."
+                    ),
+                },
+                {
+                    "action": "inspect_enrollment",
+                    "call": "Verify the registered launchd label and executable path.",
+                    "when": "The attested UDS request is still refused.",
+                },
+            ),
+            "do_not": (
+                "Do not retry a substrate-anchored session over HTTP; bearer "
+                "or session material is not process attestation.",
+            ),
+        }
+
+    return success_response(
+        strict_identity_refusal_payload(
+            tool_name,
+            hint=hint,
+            surface_context={
+                "transport_surface": "mcp_dispatch",
+                "lifecycle_automation": "not_confirmed",
+                "resume_rejected_reason": resolve_error,
+                "hard_refusal": True,
+                "handler_invoked": False,
+                "enforced_independent_of_rollout": True,
+                "note": (
+                    "Identity resolution returned a terminal refusal; dispatch "
+                    "stopped before context binding or tool execution."
+                ),
+            },
+            **payload_options,
+        )
+    )
+
 
 def _clear_middleware_identity(arguments: Optional[Dict[str, Any]]) -> None:
     """Remove caller-provided internal identity handoff fields."""
@@ -1001,6 +1063,29 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                         token_agent_uuid=_token_agent_uuid,
                         spawn_reason="dispatch_auto_mint",
                     )
+
+        _resolve_error = identity_result.get("error")
+        if (
+            identity_result.get("resume_failed")
+            and _resolve_error not in (
+                "session_resolve_miss",
+                "resume_rejected_hijack_guard",
+            )
+        ):
+            # #1579: a resolver refusal is an authorization decision, not a
+            # partially-resolved identity.  The old fall-through read the
+            # refusal's ``agent_uuid``, bound it, populated sticky state, and
+            # invoked the target handler.  Stop before every one of those
+            # side effects.  Keeping the two dispatch-owned outcomes as an
+            # allowlist makes future hard refusal types fail closed by default.
+            logger.warning(
+                "[DISPATCH] hard identity resume refusal %s for tool=%s — "
+                "stopping before binding and handler execution.",
+                _resolve_error or "resume_failed",
+                name,
+            )
+            return _hard_resume_refusal_response(name, identity_result)
+
         # PATH 2.75: X-Agent-Id UUID recovery (substrate-over-HTTP gated, #802).
         bound_agent_id = await _maybe_recover_via_x_agent_id(
             identity_result, x_agent_id_header, session_key
