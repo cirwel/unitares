@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Install check: onboard an agent and drive six check-ins over the real API.
 
-This verifies your stack is wired and shows the exact response shape a client
-receives. It is not evidence that the state model works — see below.
+Verifies your stack is wired and shows the exact response shape a client
+receives.
 
 Prereq: a governance MCP server reachable at http://127.0.0.1:8767.
 Either ``docker compose up -d --wait`` or
@@ -22,18 +22,16 @@ What this shows:
 - Complexity divergence is visible on step 4, where the self-reported
   complexity (0.25) contradicts the work the text describes. That signal is
   server-derived and does not require the agent to cooperate.
+- Warmup position, printed per step. Scoring switches from fixed thresholds to
+  the agent's own baseline at 25 check-ins (``is_baselined``, derived from
+  ``BASELINE_WARMUP_UPDATES`` in ``src/behavioral_state.py``); this run reaches
+  6, so it shows the phase every agent starts in. Long-running residents
+  operate past it — see ``agents/README.md``.
 
-What this does NOT show, and cannot:
-- **Per-agent baseline scoring.** ``is_baselined`` requires 25 check-ins
-  (``BASELINE_WARMUP_UPDATES``, ``src/behavioral_state.py``). This run reaches 6,
-  so every step is scored by ``_score_fixed_threshold`` — fixed universal
-  thresholds, not the self-relative model. The run prints its warmup position
-  so you can see this rather than infer it.
-- **Detection.** A six-step synthetic run on a fresh agent is not evidence about
-  whether the telemetry predicts anything. For that, run the falsifiability
-  harness (``docs/REVIEWER_GUIDE.md``), which scores the signal against
-  deliberately dumb baselines on externally labeled evidence and is wired to be
-  able to disagree with the README.
+Related, deliberately not duplicated here: the falsifiability harness
+(``docs/REVIEWER_GUIDE.md``) grades the signal against deliberately dumb
+baselines on externally labeled evidence, reproducibly on a fresh clone. That is
+the evaluation surface; this is the install check.
 
 No Postgres reads, no dashboard required — everything you see comes back
 in the check-in response shape that any client would receive. The run still
@@ -311,10 +309,7 @@ def main() -> int:
         print(f"     said: \"{text[:70]}{'…' if len(text) > 70 else ''}\"")
         print(f"     self-report: complexity={complexity} confidence={confidence}")
         print(f"     {fmt_metrics(m)}")
-        print(
-            f"     baseline: {i}/{BASELINE_UPDATES_REQUIRED} — not baselined, "
-            f"scored by fixed universal thresholds"
-        )
+        print(f"     baseline: {i}/{BASELINE_UPDATES_REQUIRED} (warmup)")
         print(f"     reason: {d.get('reason', 'No reason supplied.')}")
 
     banner("3. reading the output")
@@ -326,22 +321,22 @@ def main() -> int:
     print("  • latest       = raw last observation. A single bad check-in can")
     print("                   spike this without moving the gating signal.")
 
-    banner("4. what this run does and does not establish")
-    print("  Established: the stack is wired. An agent onboarded, six check-ins")
-    print("  landed over the real API, and each returned a well-formed decision")
-    print("  plus four scores — the exact shape your client will parse.")
+    banner("4. where to go next")
+    print("  Your stack is wired. An agent onboarded, six check-ins landed over")
+    print("  the real API, and each returned a decision plus four scores — the")
+    print("  exact shape your client will parse.")
     print()
     print(
-        f"  Not established: this agent never baselined "
-        f"({len(TRAJECTORY)} of {BASELINE_UPDATES_REQUIRED} check-ins), so the"
+        f"  This agent is {len(TRAJECTORY)}/{BASELINE_UPDATES_REQUIRED} through warmup, "
+        f"where every agent starts."
     )
-    print("  per-agent self-relative model never ran. Every score above came from")
-    print("  fixed universal thresholds. A short synthetic run is not evidence")
-    print("  about whether the telemetry predicts anything.")
+    print("  At 25 check-ins, scoring switches from fixed thresholds to that")
+    print("  agent's own baseline. Long-running residents operate there:")
+    print("      agents/README.md")
     print()
-    print("  For that question, run the falsifiability harness — it scores the")
-    print("  signal against deliberately dumb baselines on externally labeled")
-    print("  evidence:  docs/REVIEWER_GUIDE.md")
+    print("  To grade the signal against deliberately dumb baselines on labeled")
+    print("  evidence, on your own clone:")
+    print("      docs/REVIEWER_GUIDE.md")
 
     banner("done")
     print("  • Every number above came from check-in responses — no DB queries.")

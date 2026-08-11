@@ -93,11 +93,11 @@ git clone https://github.com/cirwel/unitares.git && cd unitares
 docker compose up -d --wait && make demo
 ```
 
-`make demo` is an install check. It onboards an agent and drives six check-ins over the real API, printing the action, the reason, and the four scores at each step — the exact response shape your client will parse. It confirms your stack is wired. It is not evidence that the state model works, and it says so in its own output.
+`make demo` onboards an agent and drives six check-ins over the real API, printing the action, the reason, and the four scores at each step — the exact response shape your client will parse. Sixty seconds, no DB queries, everything on screen came back in a check-in response.
 
-It can't be that evidence, for a structural reason worth knowing up front: a fresh clone has an empty database, and the per-agent baseline needs 25 check-ins before scoring switches from fixed universal thresholds to that agent's own history. Nothing runnable on a cold install reaches it. The demo prints its warmup position (`baseline: 6/25`) rather than letting you assume otherwise.
+Each step also prints its warmup position (`baseline: 4/25`, `5/25`, …). Scoring runs on fixed thresholds until an agent has 25 check-ins of its own history, then switches to that agent's baseline — so a fresh install shows you the warmup phase, which is where every agent starts and where most short-lived ones stay. The [residents](agents/README.md) operate past it.
 
-**Two other artifacts carry the questions the demo can't.** For *does the telemetry beat a dumb baseline* — the [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc), reproducible on a fresh clone and wired to be able to disagree with this README. For *is it deployed at maturity* — the [production snapshot](docs/PRODUCTION_SNAPSHOT.md) and the dashboard.
+**Three surfaces, three questions.** *Is my stack wired* — this demo. *Does the signal beat a dumb baseline* — the [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc), on your own clone, wired to be able to disagree with this README. *What does it look like deployed* — the [production snapshot](docs/PRODUCTION_SNAPSHOT.md) and the dashboard.
 
 First run spends a few minutes building images; later runs are fast. Then point any MCP client at `http://localhost:8767/mcp/`.
 
