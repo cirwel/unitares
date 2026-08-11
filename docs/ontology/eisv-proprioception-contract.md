@@ -81,6 +81,43 @@ therefore instrumentation-first:
 This shadow record unveils the policy-to-actuator edge without changing a single
 pause. It is evidence for a later decision, not that decision itself.
 
+## Decision record — non-authored cold-start authority guard (2026-08-10)
+
+Prospective evidence after the confirmation shadow shipped exposed a narrower
+fault than the dormant two-observation proposal addresses. The first three
+`shadow_would_defer` events were `substrate_interpretation` rows rather than agent
+reports; all three nevertheless delivered circuit-breaker pauses and began from
+the same Phi-fallback risk (`0.7858974`). A fourth fresh-process reproduction
+during implementation also auto-paused on a `substrate_interpretation` before its
+first authored `sync_state`; its exact persisted row satisfies the same recovery
+predicate. One of the fresh identities then could not recover: every
+reviewed attempt re-read the same frozen risk while the pause gate prevented the
+identity from writing the observation that could mature the estimator.
+
+The deployed correction is an epistemic-authority rule, not promotion of the
+confirmation actuator:
+
+1. With `GOVERNANCE_NON_AUTHORED_COLD_START_GUARD=true` (default), downgrade only
+   an original `pause/risk_pause` whose row is non-agent-authored, verdict source
+   is exactly `phi_cold_start`, behavioral confidence is below 0.3, readiness is
+   explicitly false, and no independent verification override fired.
+2. Preserve the original pause and reason in decision history, audit, and the
+   versioned `epistemic_gate`; send `proceed/guide` with
+   `enforcement.requested=false` to the authenticated runtime boundary.
+3. Leave agent-authored reports, behaviorally ready evidence, independent
+   verification, void/coherence/basin/CIRS gates, loop detection, and every other
+   pause source unchanged. Missing or contradictory provenance fails closed.
+4. For identities already trapped by the legacy behavior, reviewed recovery may
+   discount the frozen risk check only when the latest persisted telemetry proves
+   the exact non-authored `shadow_would_defer` circuit breaker. Ownership,
+   reflection, coherence, no-void, and persistence checks still apply; quick
+   recovery is unchanged.
+
+The separate two-confirmation actuator remains dormant under dialectic decision
+`8539c516649a08af`. The new guard has no counter, does not trust a second fallback
+observation, and does not weaken independently grounded safety evidence. Rollback
+sets `GOVERNANCE_NON_AUTHORED_COLD_START_GUARD=false` and restarts the service.
+
 ## Decision record — V-reintroduction deferred (2026-08-07)
 
 The grounded-coherence re-derivation proposal

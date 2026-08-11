@@ -98,7 +98,8 @@ ResponseType = Literal[
 VALID_RESPONSE_TYPES = frozenset(get_args(ResponseType))
 
 VALID_DISCOVERY_STATUSES = frozenset({
-    "open", "resolved", "archived", "disputed", "closed", "wont_fix", "superseded",
+    "open", "resolved", "archived", "disputed", "closed", "wont_fix",
+    "superseded", "cold",
 })
 
 VALID_SEVERITIES = frozenset({"low", "medium", "high", "critical"})
@@ -121,7 +122,7 @@ class DiscoveryNode:
     tags: List[str] = field(default_factory=list)
     severity: Optional[str] = None  # "low", "medium", "high", "critical"
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    status: str = "open"  # "open", "resolved", "archived", "disputed", "superseded", "closed", "wont_fix"
+    status: str = "open"  # includes lifecycle deep-archive state "cold"
     superseded_by: Optional[str] = None  # discovery_id of the entry that superseded this one (KG hygiene v1)
     related_to: List[str] = field(default_factory=list)  # IDs of related discoveries (backward compat)
     response_to: Optional[ResponseTo] = None  # Typed response to parent discovery

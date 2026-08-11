@@ -354,6 +354,117 @@ class KnowledgeGraphAGE:
             return int(result[0])
         return 0
 
+    async def _find_duplicate_age_tag_groups(
+        self,
+        db,
+        *,
+        conn=None,
+    ) -> List[Dict[str, Any]]:
+        """Return same-name Tag groups with deterministic vertex-id ordering."""
+        cypher = """
+            MATCH (t:Tag)
+            WITH t
+            ORDER BY id(t)
+            WITH t.name AS name, collect(id(t)) AS ids
+            WHERE size(ids) > 1
+            RETURN {name: name, ids: ids}
+            ORDER BY name
+        """
+        rows = await db.graph_query(cypher, {}, conn=conn)
+        groups: List[Dict[str, Any]] = []
+        for row in rows or []:
+            if (
+                not isinstance(row, dict)
+                or not isinstance(row.get("name"), str)
+                or not row["name"]
+            ):
+                raise RuntimeError(f"Malformed duplicate AGE Tag group: {row!r}")
+            try:
+                ids = sorted({int(vertex_id) for vertex_id in row.get("ids", [])})
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    f"Malformed duplicate AGE Tag vertex ids: {row!r}"
+                ) from exc
+            if len(ids) > 1:
+                groups.append({"name": str(row["name"]), "ids": ids})
+        return sorted(groups, key=lambda group: (group["name"], group["ids"]))
+
+    async def _consolidate_duplicate_age_tags(
+        self,
+        db,
+        conn,
+        groups: List[Dict[str, Any]],
+    ) -> int:
+        """Rewire and remove duplicate Tag vertices inside one transaction.
+
+        The lowest AGE vertex id is the canonical node. All incoming TAGGED
+        relationships are MERGEd onto it before the duplicate's relationships
+        and vertex are deleted. A postcondition fails the transaction if any
+        same-name duplicate remains, so later tag MERGEs never run against an
+        ambiguous match set.
+        """
+        consolidated = 0
+        for group in groups:
+            ids = sorted({int(vertex_id) for vertex_id in group.get("ids", [])})
+            if len(ids) < 2:
+                continue
+            canonical_id = ids[0]
+            for duplicate_id in ids[1:]:
+                await db.graph_query(
+                    """
+                    MATCH (d:Discovery)-[:TAGGED]->(duplicate:Tag)
+                    MATCH (canonical:Tag)
+                    WHERE id(duplicate) = ${duplicate_id}
+                      AND id(canonical) = ${canonical_id}
+                    MERGE (d)-[:TAGGED]->(canonical)
+                    RETURN count(d)
+                    """,
+                    {
+                        "canonical_id": canonical_id,
+                        "duplicate_id": duplicate_id,
+                    },
+                    conn=conn,
+                )
+                await db.graph_query(
+                    """
+                    MATCH (:Discovery)-[r:TAGGED]->(duplicate:Tag)
+                    WHERE id(duplicate) = ${duplicate_id}
+                    DELETE r
+                    RETURN count(r)
+                    """,
+                    {"duplicate_id": duplicate_id},
+                    conn=conn,
+                )
+                deleted = await db.graph_query(
+                    """
+                    MATCH (duplicate:Tag)
+                    WHERE id(duplicate) = ${duplicate_id}
+                    DELETE duplicate
+                    RETURN count(duplicate)
+                    """,
+                    {"duplicate_id": duplicate_id},
+                    conn=conn,
+                )
+                deleted_count = (
+                    int(deleted[0])
+                    if deleted and isinstance(deleted[0], (int, float))
+                    else 0
+                )
+                if deleted_count != 1:
+                    raise RuntimeError(
+                        "AGE duplicate Tag consolidation did not delete exactly "
+                        f"one vertex (name={group['name']!r}, id={duplicate_id})"
+                    )
+                consolidated += 1
+
+        remaining = await self._find_duplicate_age_tag_groups(db, conn=conn)
+        if remaining:
+            raise RuntimeError(
+                "AGE duplicate Tag consolidation postcondition failed: "
+                f"{len(remaining)} same-name group(s) remain"
+            )
+        return consolidated
+
     async def _get_db(self):
         """Get database backend (lazy initialization)."""
         if self._db is None:
@@ -653,8 +764,9 @@ class KnowledgeGraphAGE:
         makes those rows retrievable via query()/get()/search(), but only a
         backfill restores graph traversal over them.
 
-        Every builder uses MERGE, and tag repair replaces each drifted
-        discovery's edge set, so this is idempotent and safe to re-run.
+        Before any edge MERGE, same-name Tag vertices are consolidated onto the
+        lowest AGE vertex id. Tag repair then replaces each drifted discovery's
+        edge set, so this is idempotent and safe to re-run.
 
         Args:
             dry_run: When True, only count what would be created; no writes.
@@ -674,6 +786,19 @@ class KnowledgeGraphAGE:
 
         age_rows = await db.graph_query("MATCH (d:Discovery) RETURN collect(d.id)", {})
         age_ids = set(age_rows[0]) if age_rows and isinstance(age_rows[0], list) else set()
+
+        duplicate_tag_groups = await self._find_duplicate_age_tag_groups(db)
+        duplicate_tag_vertices = sum(
+            len(group["ids"]) - 1 for group in duplicate_tag_groups
+        )
+        duplicate_tag_samples = [
+            {
+                "name": group["name"],
+                "canonical_id": group["ids"][0],
+                "duplicate_ids": group["ids"][1:],
+            }
+            for group in duplicate_tag_groups[:10]
+        ]
 
         from src.knowledge_graph import normalize_tags
 
@@ -743,6 +868,9 @@ class KnowledgeGraphAGE:
             "tag_assignments_stale": len(stale_tag_assignments),
             "tag_assignments_duplicate": duplicate_tag_assignments,
             "tag_discoveries_drifted": len(drifted_tag_ids),
+            "duplicate_tag_groups": len(duplicate_tag_groups),
+            "duplicate_tag_vertices": duplicate_tag_vertices,
+            "tag_vertices_consolidated": 0,
             "tags_reconciled": 0,
             "tag_repair_failed": 0,
             "orphan_tags_removed": 0,
@@ -757,9 +885,24 @@ class KnowledgeGraphAGE:
                 for (discovery_id, tag), count in sorted(present_counts.items())
                 if count > 1
             ][:10],
+            "sample_duplicate_tag_vertices": duplicate_tag_samples,
         }
         if dry_run:
             return summary
+
+        # Fail closed before any node/edge MERGE: MERGE against duplicate
+        # same-name Tag vertices can match every copy and recreate duplicate
+        # assignments. Consolidation and its postcondition share one AGE
+        # transaction, so an incomplete repair rolls back in full.
+        if duplicate_tag_groups:
+            async with db.transaction() as conn:
+                summary["tag_vertices_consolidated"] = (
+                    await self._consolidate_duplicate_age_tags(
+                        db,
+                        conn,
+                        duplicate_tag_groups,
+                    )
+                )
 
         for disc_id in missing:
             try:
@@ -808,9 +951,11 @@ class KnowledgeGraphAGE:
 
         logger.info(
             "AGE projection backfill complete: nodes created=%d failed=%d; "
+            "Tag vertices consolidated=%d; "
             "tag discoveries reconciled=%d failed=%d",
             summary["created"],
             summary["failed"],
+            summary["tag_vertices_consolidated"],
             summary["tags_reconciled"],
             summary["tag_repair_failed"],
         )
