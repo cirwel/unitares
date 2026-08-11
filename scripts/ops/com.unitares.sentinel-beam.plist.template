@@ -10,25 +10,32 @@
   UNITARES_SENTINEL_LEGACY_SESSION_FILE (not __UNITARES_ROOT__-relative) so they
   survive a re-point; the session anchor is already fixed under $HOME.
 
-  Render, but do NOT load while Python Sentinel is still running:
-    sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \
-        -e "s|__HOME__|$HOME|g" \
-        -e "s|__SENTINEL_AUDIT_SESSION__|agent-...|g" \
-        -e "s|__LEASE_PLANE_ENFORCED_SURFACE_KINDS__||g" \
-        scripts/ops/com.unitares.sentinel-beam.plist.template \
-        > ~/Library/LaunchAgents/com.unitares.sentinel-beam.plist
+  Render, but do NOT load while Python Sentinel is still running. The renderer
+  copies the current bearer directly from the governance plist, never through
+  argv/stdout, and writes the resulting secret-bearing plist at mode 0600:
+    python3 scripts/ops/sentinel-plist.py render \
+        -r "$HOME/projects/unitares-deploy" \
+        -a "agent-..." \
+        -k "resident"
+
+  Existing audit-session and enforced-kind values are preserved when those two
+  options are omitted. Verify auth + UDS without printing the bearer:
+    python3 scripts/ops/sentinel-plist.py check
+    python3 scripts/ops/sentinel-plist.py probe
 
   Direct cutover sequence:
     launchctl unload ~/Library/LaunchAgents/com.unitares.sentinel.plist
     cd __UNITARES_ROOT__/elixir/sentinel
     mix sentinel.session_backup
-    mix sentinel.cutover --to=beam --state-file __UNITARES_ROOT__/.sentinel_state
+    Run the sentinel.cutover Mix task with target=beam and
+      state-file=__UNITARES_ROOT__/.sentinel_state
     launchctl load ~/Library/LaunchAgents/com.unitares.sentinel-beam.plist
 
   Rollback:
     launchctl unload ~/Library/LaunchAgents/com.unitares.sentinel-beam.plist
     cd __UNITARES_ROOT__/elixir/sentinel
-    mix sentinel.rollback --to=python --state-file __UNITARES_ROOT__/.sentinel_state
+    Run the sentinel.rollback Mix task with target=python and
+      state-file=__UNITARES_ROOT__/.sentinel_state
     launchctl load ~/Library/LaunchAgents/com.unitares.sentinel.plist
 
   Verify:
@@ -95,6 +102,12 @@
         <string>http://localhost:8767/api/findings</string>
         <key>UNITARES_GOVERNANCE_TOOLS_URL</key>
         <string>http://localhost:8767/v1/tools/call</string>
+        <!-- Filled from the installed governance plist by sentinel-plist.py.
+             Do not substitute the bearer on a shell command line. -->
+        <key>UNITARES_HTTP_API_TOKEN</key>
+        <string>__UNITARES_HTTP_API_TOKEN__</string>
+        <key>UNITARES_UDS_SOCKET</key>
+        <string>__HOME__/.unitares/governance.sock</string>
         <key>LEASE_PLANE_BASE_URL</key>
         <string>http://127.0.0.1:8788</string>
     </dict>
