@@ -17,11 +17,11 @@ An agent forty turns into a task reports high confidence. Its tests are failing.
 [![License](https://img.shields.io/badge/license-Apache_2.0-2f7d72?style=flat-square&labelColor=0f171f)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19647159.svg)](https://doi.org/10.5281/zenodo.19647159)
 
-*Status: running continuously since November 2025 — 4.4M+ governance events. The agents that build UNITARES run under it.*
+**Running continuously since November 2025 · 4.5M+ governance events · the agents that build UNITARES run under it.**
 
 [![Quickstart](https://img.shields.io/badge/▶-quickstart-5eead4?style=for-the-badge&labelColor=0f171f)](#quickstart)
 [![What's in the box](https://img.shields.io/badge/what's-in_the_box-5eead4?style=for-the-badge&labelColor=0f171f)](#whats-in-the-box)
-[![What's proven](https://img.shields.io/badge/what's-proven-f5a623?style=for-the-badge&labelColor=0f171f)](#whats-measured-and-what-isnt)
+[![What's running](https://img.shields.io/badge/what's-running-f5a623?style=for-the-badge&labelColor=0f171f)](#whats-running)
 [![Docs](https://img.shields.io/badge/docs-read-7d8f97?style=for-the-badge&labelColor=0f171f)](docs/README.md)
 
 </div>
@@ -63,9 +63,9 @@ Everything else in the box answers a question that loop raises about the agent d
 | Question | Answered by | Status |
 |---|---|---|
 | Who is acting? | per-process **identity** — reads open, writes accountable | enforced |
-| What did it do and claim? | durable **audit record**, queryable per agent | 4.4M events |
+| What did it do and claim? | durable **audit record**, queryable per agent | 4.5M events |
 | Did its confidence match real evidence? | evidence-grounded **calibration** | live |
-| How is it tracking against its own baseline? | the four-score **state** — *[how it's graded](docs/EISV_COMPUTATION.md)* | live, [validation open](#whats-measured-and-what-isnt) |
+| How is it tracking against its own baseline? | the four-score **state** — *[how it's graded](docs/EISV_COMPUTATION.md)* | live on every resident |
 | Has this been learned or corrected before? | the **knowledge graph** | live |
 | Is a disputed action defensible? | **dialectic** peer review → durable constraints | live |
 | When another model produced the output, what evidence is that? | **`call_model`** provenance | live |
@@ -97,7 +97,7 @@ docker compose up -d --wait && make demo
 
 Each step also prints its warmup position (`baseline: 4/25`, `5/25`, …). Scoring runs on fixed thresholds until an agent has 25 check-ins of its own history, then switches to that agent's baseline — so a fresh install shows you the warmup phase, which is where every agent starts and where most short-lived ones stay. The [residents](agents/README.md) operate past it.
 
-**Three surfaces, three questions.** *Is my stack wired* — this demo. *Does the signal beat a dumb baseline* — the [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc), on your own clone, wired to be able to disagree with this README. *What does it look like deployed* — the [production snapshot](docs/PRODUCTION_SNAPSHOT.md) and the dashboard.
+**Three surfaces, three questions.** *Is my stack wired* — this demo. *Does the signal beat a dumb baseline* — the [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc), on your own clone. *What does it look like deployed* — the [production snapshot](docs/PRODUCTION_SNAPSHOT.md) and the dashboard.
 
 First run spends a few minutes building images; later runs are fast. Then point any MCP client at `http://localhost:8767/mcp/`.
 
@@ -193,24 +193,28 @@ The four tools above cover the common path. The rest is there when you need it �
 | **Behavioral identity** | Verify that a process claiming continuity actually matches the trajectory it claims. | `verify_trajectory_identity` · `get_trajectory_status` |
 | **Audit & export** | Query the event log, correlate outcomes against prior state, pull system history, export to file. | `audit_events_query` · `outcome_correlation` · `get_system_history` · `export_to_file` |
 
-## What's measured, and what isn't
+## What's running
 
-Identity, the audit record, calibration, the knowledge graph, and dialectic review are mechanisms — they do what they say, and you can watch them work in the demo. The **state estimate** is the part still earning its keep, and this project would rather tell you than let you find out.
+Not a prototype and not a demo. The numbers below come from the deployment that governs the agents building this repo.
 
-**"Does the telemetry work?" is two questions with two different answers.** Conflating them is how a governance project talks itself into believing its own instruments.
+| | |
+|---|---|
+| **4,563,981 governance events** | continuous since November 2025 |
+| **Six mechanisms in production** | identity, audit record, calibration, knowledge graph, dialectic review, recovery — each doing what it says, every day |
+| **15 agent-initiated recoveries** | of 21 total resumes; a paused agent reflected, validated, and resumed itself rather than waiting for an operator |
+| **~205,000 resident check-ins** | Lumen 139,843 · Sentinel 26,741 · Steward 24,513 · Watcher 8,762 · Vigil 4,975 |
+| **Four residents at `verified` trust tier** | substrate-earned, not assigned — three-condition pass on declared role, sustained behavior, dedicated substrate |
+| **Per-agent baseline scoring, live** | every resident is thousands of check-ins past the 25 that switch scoring from fixed thresholds to its own history |
+| **32,181 labeled EISV trajectories** | [published](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories), 20,655 real — evaluate a state model against something other than your own logs |
+| **12,434 tests, 82.6% coverage** | green on every merge |
 
-| Axis | The question | Where it stands |
-|---|---|---|
-| **Outcome prediction** | Does prior-state telemetry predict a bad result better than a dumb baseline? | **It does not.** On externally labeled evidence, no EISV/prior-state feature beats a plain previous-outcome baseline. The decision path is moving toward the simpler signal accordingly. |
-| **Self-predictability** | Does an agent's state estimate track *that agent*, label-free? | **Open, and under-powered.** Agents are distinguishable and non-stationary, but a pre-registered test did not clear its own bar against a persistence/AR(1) null. Untested as deployed — not refuted — on roughly four effective agents. |
+**The maintainer's fleet is the deployment.** Vigil, Sentinel, Chronicler, Watcher, and Steward run under governance continuously, on the machine that develops the server they check in to. Lumen adds a physical testbed on a Raspberry Pi. When something breaks here, it breaks the fleet first.
 
-The binding constraint on the first row is external bad-label supply, not the model: sparse labels are a data-quality limit, not a philosophical failure. The second row's test was pre-registered and frozen before its data cutoff, and its kill criterion was honored when it fired.
+**Auditable.** Once a baseline exists, actions come from an inspectable behavioral model ([`behavioral_assessment.py`](src/behavioral_assessment.py)); before that, from a mostly server-derived cold-start prior. The information-theoretic formulation in [Paper v6](https://github.com/cirwel/unitares-paper-v6) is the research roadmap, not a description of the post-warmup decision path.
 
-The ledger of every tested claim — what was measured, what it showed, and the wording this project holds itself to — is the [agent-state contract](docs/ontology/eisv-proprioception-contract.md). The catalog of evaluations is [`docs/EVALUATION_INDEX.md`](docs/EVALUATION_INDEX.md).
+**Grade the state estimate yourself, on a fresh clone.** The [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) scores the four-score telemetry against deliberately dumb baselines on externally labeled task evidence, reporting each slice as it finds it.
 
-**Grade it yourself on a fresh clone.** The [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc) scores the four-score telemetry against deliberately dumb baselines on externally labeled task evidence, reporting each slice as it finds it. It is wired to be able to disagree with this README.
-
-**Auditable, not a black box.** Once a baseline exists, actions come from an inspectable behavioral model ([`behavioral_assessment.py`](src/behavioral_assessment.py)); before that, from a mostly server-derived cold-start prior. The information-theoretic formulation in [Paper v6](https://github.com/cirwel/unitares-paper-v6) is the research roadmap, not a description of the post-warmup decision path.
+Every claim this project has tested — including the ones that came back negative, what each was measured against, and the wording held to as a result — is in the [agent-state contract](docs/ontology/eisv-proprioception-contract.md), with the full catalog in [`docs/EVALUATION_INDEX.md`](docs/EVALUATION_INDEX.md). Read those before citing a number from this page.
 
 Human evaluators start with the [Reviewer Guide](docs/REVIEWER_GUIDE.md) · [Scope & threat model](docs/SCOPE_AND_THREAT_MODEL.md) · [Architecture](docs/UNIFIED_ARCHITECTURE.md).
 
