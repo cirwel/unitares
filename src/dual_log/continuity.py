@@ -44,7 +44,17 @@ class ContinuityMetrics:
     
     # === Calibration ===
     calibration_weight: float = 0.5  # How much to trust this agent
-    
+
+    # === Substrate-portability canaries (observe-only) ===
+    # These record, per check-in, whether an input was actually supplied or was
+    # silently filled by a default. Nothing below changes the math — they exist
+    # so the decision to change the defaults can be made against the live
+    # distribution instead of an assumption. See
+    # docs/proposals/substrate-portability-checkin-v0.md.
+    self_complexity_defaulted: bool = False   # divergence used the 0.2 stand-in
+    E_input_clipped: bool = False             # E_input hit a clip bound, carries no signal
+    continuity_degenerate: bool = False       # text features can't move for this caller
+
     def to_dict(self) -> dict:
         """Serialize for storage and API responses."""
         return {
@@ -59,6 +69,9 @@ class ContinuityMetrics:
             'I_input': self.I_input,
             'S_input': self.S_input,
             'calibration_weight': self.calibration_weight,
+            'self_complexity_defaulted': self.self_complexity_defaulted,
+            'E_input_clipped': self.E_input_clipped,
+            'continuity_degenerate': self.continuity_degenerate,
         }
 
 
@@ -158,10 +171,17 @@ def compute_continuity_metrics(
     # === Divergence ===
     if refl.self_complexity is not None:
         complexity_divergence = abs(derived_complexity - refl.self_complexity)
+        self_complexity_defaulted = False
     else:
-        # No self-report: can't compute divergence, use moderate default
+        # No self-report: can't compute divergence, use moderate default.
+        # NOTE: ProcessAgentUpdateParams.complexity currently defaults to 0.5,
+        # so a caller that omits it usually arrives here looking like a caller
+        # that reported 0.5, and this branch is rarer than it should be. The
+        # flag records which rows had no real self-report so the default can be
+        # retired against evidence rather than by assertion.
         complexity_divergence = 0.2
-    
+        self_complexity_defaulted = True
+
     # === Confidence signals ===
     overconfidence = (
         refl.self_confidence is not None and
@@ -178,12 +198,25 @@ def compute_continuity_metrics(
     # === Grounded EISV inputs ===
     
     # E_input: Activity rate
+    #
+    # DEGENERACY WARNING: `latency_ms` is the wall-clock gap between check-ins,
+    # not generation time, but the /200 normalizer was written for tokens-per-
+    # second of *generation*. Clearing the 0.3 floor therefore needs >60 tok/s
+    # sustained across the entire idle gap, which essentially never happens —
+    # a 2000-token Claude turn 60s after the last check-in scores 33 tok/s and
+    # clips; Lumen clips at any interval. In practice this term contributes a
+    # constant 0.3, which the behavioral sensor then blends in at 20% as a
+    # steady downward pull on E rather than as a measurement. Do not "fix" the
+    # constant by picking a new divisor — measure `E_input_clipped` first and
+    # decide whether the term earns its place at all.
     if op.latency_ms and op.latency_ms > 0:
         tokens_per_sec = op.response_tokens / (op.latency_ms / 1000)
-        E_input = float(np.clip(tokens_per_sec / 200, 0.3, 1.0))
+        E_raw = tokens_per_sec / 200
     else:
-        E_input = float(np.clip(0.5 + 0.3 * (op.response_tokens / 1000), 0.3, 1.0))
-    
+        E_raw = 0.5 + 0.3 * (op.response_tokens / 1000)
+    E_input = float(np.clip(E_raw, 0.3, 1.0))
+    E_input_clipped = not (0.3 < E_raw < 1.0)
+
     # I_input: Alignment (low divergence = high integrity)
     I_input = float(1.0 - complexity_divergence)
     
@@ -196,6 +229,21 @@ def compute_continuity_metrics(
         0.0, 1.0
     ))
     
+    # Degeneracy: with no markdown structure, no tool mentions and no questions,
+    # every term of derive_complexity except the token count is zero, so the
+    # "operational" reading collapses to a function of response length alone.
+    # For a caller whose response_text is a fixed-shape template (a sensor
+    # bridge, a process harness, a tool-call-only turn) that is a constant, and
+    # the divergence computed against it is an artifact of the template rather
+    # than a miscalibration signal.
+    continuity_degenerate = (
+        not op.has_code_blocks
+        and op.list_item_count == 0
+        and op.paragraph_count <= 1
+        and op.question_count == 0
+        and not op.mentioned_tools
+    )
+
     return ContinuityMetrics(
         timestamp=datetime.now(),
         agent_id=op.agent_id,
@@ -207,7 +255,10 @@ def compute_continuity_metrics(
         E_input=E_input,
         I_input=I_input,
         S_input=S_input,
-        calibration_weight=calibration_weight
+        calibration_weight=calibration_weight,
+        self_complexity_defaulted=self_complexity_defaulted,
+        E_input_clipped=E_input_clipped,
+        continuity_degenerate=continuity_degenerate,
     )
 
 

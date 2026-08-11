@@ -86,7 +86,27 @@ def analyze_response_text(text: str) -> dict:
     """
     Extract operational features from response_text.
     Pure text analysis - no ML models needed.
-    
+
+    SUBSTRATE ASSUMPTION: every feature here (code fences, markdown list items,
+    blank-line paragraphs, question marks, tool names mentioned in prose) is a
+    property of a *natural-language assistant turn formatted in markdown*. This
+    is the operational half of the dual log — the half that is supposed to be
+    independent of what the agent claims about itself — and it is independent of
+    self-report but NOT independent of substrate.
+
+    Measured on the live formulas (2026-08-10): sweeping a Claude turn from
+    trivial to heavy moves ``derive_complexity`` by 0.270. Sweeping Lumen from
+    healthy to near-dead moves it by 0.0016, because Lumen's ``response_text``
+    is a fixed-shape template whose structural features do not vary with its
+    state. For non-linguistic substrates this function returns a near-constant
+    and the "grounding" it provides is nominal.
+
+    That does not reach an embodied agent's verdict — ``governance_monitor``
+    prefers a caller-published ``sensor_eisv`` when one is present — but it does
+    reach stored drift/calibration telemetry for every agent. Read
+    ``continuity_degenerate`` on the emitted metrics before treating
+    ``complexity_divergence`` as a miscalibration signal.
+
     Returns dict with:
         tokens, chars, has_code, code_blocks, list_items,
         paragraphs, questions, topic_hash, tools
@@ -111,7 +131,12 @@ def analyze_response_text(text: str) -> dict:
     code_blocks = len(re.findall(r'```[\s\S]*?```', text))
     
     # List items (- item or * item or 1. item)
-    list_items = len(re.findall(r'^\s*[-*•]\s+|\d+\.\s+', text, re.MULTILINE))
+    # Both alternatives must be line-anchored. The ordered-item branch used to
+    # sit outside the `^\s*` group, so any "<digits>. " sequence mid-sentence
+    # counted as a list item. Agents that report decimals in prose (Lumen's
+    # period-joined status line: "Warmth: 0.62. Clarity: 0.71. ...") scored one
+    # phantom item per reading — 6 on a string containing no list at all.
+    list_items = len(re.findall(r'^\s*(?:[-*•]|\d+\.)\s+', text, re.MULTILINE))
     
     # Paragraphs (double newline separated)
     paragraphs = len([p for p in text.split('\n\n') if p.strip()])

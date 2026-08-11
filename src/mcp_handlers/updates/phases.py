@@ -919,12 +919,25 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                 # Continuity metrics from previous check-in
                 comp_div = None
                 cont_E, cont_I, cont_S = None, None, None
+                substrate_canaries = {}
                 cm = getattr(monitor, '_last_continuity_metrics', None)
                 if cm is not None:
                     comp_div = getattr(cm, 'complexity_divergence', None)
                     cont_E = getattr(cm, 'E_input', None)
                     cont_I = getattr(cm, 'I_input', None)
                     cont_S = getattr(cm, 'S_input', None)
+                    # Observe-only: were these three features measurements, or
+                    # defaults/constants? getattr-with-default so a monitor
+                    # carrying a pre-upgrade ContinuityMetrics stays readable.
+                    substrate_canaries = {
+                        "self_complexity_defaulted": bool(
+                            getattr(cm, 'self_complexity_defaulted', False)
+                        ),
+                        "E_input_clipped": bool(getattr(cm, 'E_input_clipped', False)),
+                        "continuity_degenerate": bool(
+                            getattr(cm, 'continuity_degenerate', False)
+                        ),
+                    }
 
                 # Tool usage signals for behavioral sensor
                 tool_err, tool_vel, tool_div = None, None, None
@@ -1006,6 +1019,7 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                     tool_call_velocity=tool_vel,
                     unique_tools_ratio=tool_div,
                     computed=behavioral_eisv,
+                    substrate_canaries=substrate_canaries,
                 )
                 if behavioral_eisv:
                     ctx.agent_state["sensor_eisv"] = behavioral_eisv

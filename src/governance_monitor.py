@@ -1384,6 +1384,14 @@ class UNITARESMonitor:
         # regardless of behavioral confidence because it is self-report-independent.
         # Only the fast regex floor runs inline; the local-model backend is
         # out-of-band by design (40–70s/call must never sit on the request path).
+        #
+        # SCOPE: self-report-independent is not substrate-independent. The floor
+        # reads English first-person prose, so it cannot fire for a caller whose
+        # response_text is a templated status line or a state digest (Lumen, the
+        # BEAM harnesses, tool-call-only turns). Those agents are unscored here,
+        # not cleared here — see governance_core/verification.py's final bullet
+        # before quoting a fleet-wide false-positive or recall rate from the
+        # shadow record.
         self._last_verification_signal = None
         self._last_verification_shadow = None
         if GovConfig.VERIFICATION_FLOOR_ENABLED:
@@ -1438,6 +1446,26 @@ class UNITARESMonitor:
             response_tier=response_tier,
             oscillation_state=oscillation_state
         )
+
+        # Shadow-measure a per-agent coherence gate against the fleet-constant
+        # one that just ran. Flag-gated, default off, and it MUTATES NOTHING —
+        # `decision` above is already final. Optional measurement on a mandatory
+        # path, so it fails open (same posture as _record_sensor_divergence).
+        try:
+            from src.coherence_gate_shadow import (
+                coherence_gate_shadow_enabled, evaluate as _coh_gate_eval,
+                record as _coh_gate_record,
+            )
+            if coherence_gate_shadow_enabled():
+                from src.audit_log import audit_logger as _audit
+                _coh_gate_record(_audit, getattr(self, "agent_id", "") or "unknown",
+                                 _coh_gate_eval(
+                                     behavioral=self._behavioral_state,
+                                     fleet_action=decision.get("action"),
+                                     coherence=self.state.coherence,
+                                 ))
+        except Exception as exc:
+            logger.debug(f"coherence gate shadow skipped: {exc}")
 
         # Pre-flag gap-suppression so calibration, audit, and history can record
         # the *original* verdict truthfully — the actual decision mutation
@@ -1516,6 +1544,7 @@ class UNITARESMonitor:
         # hydration uncertainty, gaps, missing provenance, and independent
         # verification all fail closed (the pause remains intact).
         from src.cold_start_risk_confirmation import (
+            apply_non_authored_cold_start_guard,
             evaluate_cold_start_risk_confirmation,
         )
         cold_start_confirmation = evaluate_cold_start_risk_confirmation(
@@ -1549,6 +1578,35 @@ class UNITARESMonitor:
             except Exception:
                 logger.debug(
                     "cold_start_risk_confirmation audit log skipped",
+                    exc_info=True,
+                )
+
+        # Epistemic-authority guard: a non-agent-authored row cannot turn the
+        # non-discriminative Phi cold-start fallback into a hard pause before
+        # agent-authored or behaviorally authoritative evidence exists.  This is
+        # stateless and separate from the two-confirmation shadow above.  The raw
+        # pause has already been recorded in audit/history; downstream runtime
+        # enforcement receives the guarded proceed/guide decision.
+        decision = apply_non_authored_cold_start_guard(
+            decision,
+            epistemic_class=agent_state.get("epistemic_class"),
+            enabled=GovConfig.NON_AUTHORED_COLD_START_GUARD_ENABLED,
+        )
+        cold_start_epistemic_gate = decision.get("cold_start_epistemic_gate")
+        if (
+            isinstance(cold_start_epistemic_gate, dict)
+            and cold_start_epistemic_gate.get("applied") is True
+            and not self._simulation_active
+        ):
+            try:
+                audit_logger.log_cold_start_epistemic_deferred(
+                    agent_id=self.agent_id,
+                    risk_score=risk_score,
+                    evaluation=cold_start_epistemic_gate,
+                )
+            except Exception:
+                logger.debug(
+                    "cold_start_epistemic_deferred audit log skipped",
                     exc_info=True,
                 )
 
