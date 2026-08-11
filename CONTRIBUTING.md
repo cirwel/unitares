@@ -9,7 +9,7 @@ If you're considering a contribution, please **open an issue first** describing 
 ```bash
 git clone https://github.com/cirwel/unitares.git && cd unitares
 docker compose up -d --wait         # Postgres + AGE + pgvector + Redis + server
-make demo                           # 60-second scripted trajectory
+make demo                           # 60-second install check (six check-ins)
 ```
 
 If you already have services on `5432`, `6379`, or `8767`, either skip Compose when a local UNITARES server is already live, or set `POSTGRES_HOST_PORT`, `REDIS_HOST_PORT`, `GOVERNANCE_HOST_PORT`, and `UNITARES_DEMO_PORT` to use alternate host ports.
