@@ -221,13 +221,14 @@ class GovernanceState:
             )
         
         # Load derived metrics
-        # CRITICAL FIX: Recalculate coherence from current V to avoid discontinuity
-        # Old state files may have blended coherence (0.64), but we now use pure C(V)
-        # Recalculate immediately to prevent discontinuity on first update
-        from governance_core.coherence import coherence as coherence_func
+        # Recalculate the legacy control-feedback field from current ODE V to
+        # avoid a restart discontinuity. Old files may contain the former blend.
+        from governance_core.coherence import control_feedback
         from governance_core.parameters import get_active_params
         # Recalculate from current V to ensure consistency (ignore persisted value)
-        recalculated_coherence = coherence_func(state.V, state.unitaires_theta, get_active_params())
+        recalculated_coherence = control_feedback(
+            state.V, state.unitaires_theta, get_active_params()
+        )
         state.coherence = float(np.clip(recalculated_coherence, 0.0, 1.0))
         state.void_active = bool(data.get('void_active', False))
         state.time = float(data.get('time', 0.0))

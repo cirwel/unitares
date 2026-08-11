@@ -2078,8 +2078,9 @@ async def run_grounding_stage(ctx: UpdateContext) -> None:
     since it shipped.
 
     This stage runs early, but is gated:
-      * neither flag set  -> no-op (current behavior; the late enrich_grounding
-        stays the existing discarded no-op).
+      * neither flag set  -> metrics remain untouched; stamp
+        coherence_form="legacy_tanh_v" on ctx for persistence. The late
+        enrich_grounding stays the existing discarded no-op.
       * GROUNDING_SHADOW   -> compute grounded metrics, emit a 'grounding_shadow'
         audit event with the per-dimension shift, then REVERT the live metrics
         (behavior-neutral) unless APPLY is also set.
@@ -2094,12 +2095,22 @@ async def run_grounding_stage(ctx: UpdateContext) -> None:
 
     shadow = grounding_shadow_enabled()
     apply = grounding_apply_enabled()
+    result = ctx.result or {}
+    metrics = result.get("metrics")
+    if not isinstance(metrics, dict):
+        return
+
+    # Provenance is not conditional on an experiment flag. With both flags off
+    # the canonical value is the legacy ODE tanh(V) form, so stamp that fact on
+    # every newly persisted row. This rides ``ctx`` into state_json and does not
+    # alter metrics, responses, policy, or enforcement.
+    if "coherence" in metrics:
+        ctx.coherence_form = metrics.get("coherence_source") or "legacy_tanh_v"
+
     if not (shadow or apply):
         return
 
-    result = ctx.result or {}
-    metrics = result.get("metrics")
-    if not isinstance(metrics, dict) or "E_legacy" in metrics:
+    if "E_legacy" in metrics:
         return  # nothing to ground, or already grounded
 
     dims = ("E", "I", "S", "coherence")

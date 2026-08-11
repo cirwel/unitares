@@ -116,7 +116,8 @@ ensure_project_root()
 from governance_core import (
     State, Theta,
     DEFAULT_STATE, DEFAULT_THETA, DEFAULT_PARAMS,
-    step_state, coherence,
+    step_state, control_feedback,
+    coherence,  # noqa: F401 — compatibility re-export; internal ODE code uses control_feedback
     eisv_divergence,
     phi_objective, verdict_from_phi,  # noqa: F401 — re-exported; consumers import them from this module
     )
@@ -488,11 +489,12 @@ class UNITARESMonitor:
 
     def coherence_function(self, V: float) -> float:
         """
-        Bounded coherence function C(V) using governance_core coherence function.
+        Compatibility wrapper for the bounded ODE control-feedback function C(V).
 
-        Delegates to canonical governance_core.coherence() function.
+        The method name is retained for callers; C(V) is directional controller
+        activation, not a symmetric health/balance score.
         """
-        return coherence(V, self.state.unitaires_theta, DEFAULT_PARAMS)
+        return control_feedback(V, self.state.unitaires_theta, DEFAULT_PARAMS)
     
     def compute_ethical_drift(self,
                              current_params: np.ndarray,
@@ -716,7 +718,7 @@ class UNITARESMonitor:
         # V bounds: soft barrier in _derivatives() handles this now; clip is safety net only
         # (kept in ODE integrators as defense-in-depth)
 
-        # Update coherence from governance_core coherence function (pure thermodynamic)
+        # Update the legacy ``coherence`` field from directional ODE feedback.
         # Removed param_coherence blend - using pure C(V) signal for honest calibration
         #
         # ⛔ KNOWN GAP — this reads the ODE V, which 69ee5a79 (2026-04-01)
@@ -733,7 +735,7 @@ class UNITARESMonitor:
         # check-ins below AdaptiveGovernor's tau_floor (0.25), which the frozen
         # signal has never once reached — so the threshold must be re-derived
         # first. See governance_core/coherence.py for the full measurement.
-        C_V = coherence(self.state.V, self.state.unitaires_theta, active_params)
+        C_V = control_feedback(self.state.V, self.state.unitaires_theta, active_params)
         self.state.coherence = C_V
         self.state.coherence = np.clip(self.state.coherence, 0.0, 1.0)
 
@@ -1447,8 +1449,9 @@ class UNITARESMonitor:
             oscillation_state=oscillation_state
         )
 
-        # Shadow-measure a per-agent coherence gate against the fleet-constant
-        # one that just ran. Flag-gated, default off, and it MUTATES NOTHING —
+        # Shadow-measure a two-sided recent behavioral-V deviation gate against
+        # the legacy fleet coherence gates that just ran. Flag-gated, default
+        # off, and it MUTATES NOTHING —
         # `decision` above is already final. Optional measurement on a mandatory
         # path, so it fails open (same posture as _record_sensor_divergence).
         try:

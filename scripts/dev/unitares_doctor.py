@@ -1280,23 +1280,25 @@ def check_label_join_overlap(db_url: str) -> CheckResult:
     )
 
 
-# Metric columns on core.agent_state that are supposed to vary across the fleet.
-# All are bounded in [0, 1] (or [-1, 1]), so a single absolute dispersion floor
-# is meaningful across them without per-metric scaling.
+# Metric columns on core.agent_state whose fleet-level dynamic range is useful
+# to screen. All are bounded in [0, 1] (or [-1, 1]), so one absolute floor is a
+# practical operator heuristic. It is not an information-theoretic test: low
+# population SD can hide useful within-agent or outcome-linked structure.
 DEGENERACY_METRICS = ("coherence", "entropy", "integrity", "risk_score")
 DEGENERACY_MIN_N = 500      # below this, flatness is small-sample, not a defect
 DEGENERACY_SD = 0.01        # measured margin: nearest healthy metric is 4x above
+DEGENERACY_FIELDS_PER_METRIC = 5  # sd, distinct, n, min, max
 
 
 def check_signal_degeneracy(db_url: str) -> CheckResult:
-    """WARN when a live metric has stopped carrying information.
+    """WARN when a live metric needs a producer/consumer dynamic-range review.
 
     The sibling checks above ask "is this stream still flowing?". This one asks
-    the other half of the same question — "can this signal still move?" — which
-    the section header has always claimed ("silent *or flat*") but nothing
-    implemented. A metric pinned to one value, or wobbling only in its fourth
-    decimal, keeps flowing forever and reads as healthy on every liveness check
-    while telling you nothing.
+    the other half of the same question — "does this signal have enough fleet
+    dynamic range for its consumers?" — which the section header has always
+    claimed ("silent *or flat*") but nothing implemented. A metric pinned to
+    one value, or wobbling only in its fourth decimal, keeps flowing forever and
+    can leave a fixed-threshold consumer effectively inert.
 
     Two degeneracy modes, both seen in production:
       * constant  — exactly one distinct value
@@ -1327,24 +1329,31 @@ def check_signal_degeneracy(db_url: str) -> CheckResult:
     class needs a per-metric hypothesis about what *should* vary the signal, and
     is deliberately out of scope here.
 
-    WARN, not FAIL — a degenerate metric degrades evidence, it doesn't break the
-    install. It is still expected to fire on arrival: coherence is degenerate
-    as of 2026-07-30 and remains so.
+    Important limit: population SD is a screening statistic, not mutual
+    information and not predictive validity. A low-SD metric may still encode
+    within-agent, cohort, temporal, or outcome-linked structure. This check
+    therefore asks for contract review; it does not declare the producer dead.
+
+    WARN, not FAIL — insufficient dynamic range can degrade a consumer without
+    breaking the install. It is still expected to fire on arrival: coherence
+    has low fleet dispersion as of 2026-07-30 and remains so.
     """
     name, mode = "signal_degeneracy", "operator"
     cols = ", ".join(
-        f"stddev({m}::numeric), count(DISTINCT {m}), count({m})" for m in DEGENERACY_METRICS
+        f"stddev({m}::numeric), count(DISTINCT {m}), count({m}), "
+        f"min({m}::numeric), max({m}::numeric)" for m in DEGENERACY_METRICS
     )
     row = _psql_row(db_url, (
         f"SELECT {cols} FROM core.agent_state "
         "WHERE recorded_at > now() - interval '7 days'"
     ), timeout=30)
-    if row is None or len(row) < 3 * len(DEGENERACY_METRICS):
+    if row is None or len(row) < DEGENERACY_FIELDS_PER_METRIC * len(DEGENERACY_METRICS):
         return CheckResult(name, mode, Status.SKIP, "core.agent_state not queryable")
 
-    degenerate, healthy, thin = [], [], []
+    review, healthy, thin = [], [], []
     for i, metric in enumerate(DEGENERACY_METRICS):
-        sd_raw, distinct_raw, n_raw = row[3 * i], row[3 * i + 1], row[3 * i + 2]
+        offset = DEGENERACY_FIELDS_PER_METRIC * i
+        sd_raw, distinct_raw, n_raw, min_raw, max_raw = row[offset:offset + 5]
         try:
             n, distinct = int(n_raw), int(distinct_raw)
         except ValueError:
@@ -1353,27 +1362,36 @@ def check_signal_degeneracy(db_url: str) -> CheckResult:
             thin.append(f"{metric} (n={n})")
             continue
         if distinct <= 1:
-            degenerate.append(f"{metric}: constant (n={n})")
+            review.append(f"{metric}: constant in 7d (n={n})")
             continue
         try:
-            sd = float(sd_raw)
+            sd, low, high = float(sd_raw), float(min_raw), float(max_raw)
         except ValueError:
             continue
         if sd < DEGENERACY_SD:
-            degenerate.append(f"{metric}: sd={sd:.6f} over {distinct} values (n={n})")
+            review.append(
+                f"{metric}: low fleet dispersion sd={sd:.6f}, "
+                f"range=[{low:.4f}, {high:.4f}] over {distinct} values (n={n})"
+            )
         else:
             healthy.append(f"{metric} sd={sd:.4f}")
 
-    if not degenerate and not healthy:
+    if not review and not healthy:
         return CheckResult(name, mode, Status.SKIP,
                            f"insufficient state rows in 7d ({', '.join(thin) or 'none'})")
-    if degenerate:
+    if review:
         return CheckResult(
             name, mode, Status.WARN,
-            f"{len(degenerate)} metric(s) carry no information: " + "; ".join(degenerate),
-            detail=("A metric that cannot move cannot support a threshold. Retire the "
-                    "field or fix its producer — do not recalibrate a gate against it. "
-                    + (f"Healthy: {', '.join(healthy)}." if healthy else "")),
+            f"{len(review)} metric(s) need dynamic-range review: " + "; ".join(review),
+            detail=(
+                "Low population SD is a screening heuristic, not proof of zero "
+                "information. Compare the observed range with every configured "
+                "consumer threshold; then check producer provenance, within-agent "
+                "and cohort variation, autocorrelation/effective sample size, and "
+                "outcome association. Retire or repair a field only from that full "
+                "contract review, and do not recalibrate merely to force crossings. "
+                + (f"Other metrics: {', '.join(healthy)}." if healthy else "")
+            ),
         )
     return CheckResult(name, mode, Status.PASS,
                        f"all {len(healthy)} metrics vary: {', '.join(healthy)}")

@@ -126,7 +126,9 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
 
         # Grounding must run BEFORE persist + response-build read ctx.result.
         # (enrich_grounding still runs in the late pipeline but is idempotent.)
-        # Flag-gated: no-op unless GROUNDING_SHADOW/APPLY set. See #1092 ordering fix.
+        # Metric replacement is flag-gated. Provenance is always stamped on ctx
+        # so the persisted row identifies the winning coherence instrument even
+        # when both flags are off. See #1092 ordering fix.
         await run_grounding_stage(ctx)
         _tick("grounding")
 

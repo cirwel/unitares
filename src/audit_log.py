@@ -153,11 +153,24 @@ class AuditLogger:
     def log_coherence_gate_shadow(self, agent_id: str, eligible: bool,
                                   v_zscore: Optional[float], would_action: Optional[str],
                                   fleet_action: Optional[str], coherence_seen: Optional[float],
-                                  agrees: Optional[bool], k: dict):
-        """Compare a per-agent coherence gate against the live fleet-constant one.
+                                  agrees: Optional[bool], k: dict,
+                                  eligibility_reason: Optional[str] = None,
+                                  statistic_version: Optional[str] = None,
+                                  tail: Optional[str] = None,
+                                  v_standardized_residual: Optional[float] = None,
+                                  v_deviation_magnitude: Optional[float] = None,
+                                  deviation_direction: Optional[str] = None,
+                                  current_v: Optional[float] = None,
+                                  sample_count: Optional[int] = None,
+                                  sample_mean: Optional[float] = None,
+                                  sample_std: Optional[float] = None,
+                                  effective_scale: Optional[float] = None,
+                                  scale_source: Optional[str] = None,
+                                  window: Optional[dict] = None):
+        """Compare a behavioral-V shadow gate against legacy coherence gates.
 
         Measurement only — nothing acts on this. Records what a proprioceptive
-        gate WOULD have decided (`would_action`, from the agent's own V z-score)
+        gate WOULD have decided (`would_action`, from recent V deviation)
         next to what the fleet-constant gates actually decided (`fleet_action`),
         so the two can be compared on real traffic before either changes.
 
@@ -173,7 +186,22 @@ class AuditLogger:
             confidence=0.0,
             details={
                 "eligible": bool(eligible),
+                "eligibility_reason": eligibility_reason,
+                "statistic_version": statistic_version,
+                "tail": tail,
+                "v_standardized_residual": v_standardized_residual,
+                # Compatibility alias retained for v1-era queries. Read
+                # scale_source before interpreting it as empirical sigma.
                 "v_zscore": v_zscore,
+                "v_deviation_magnitude": v_deviation_magnitude,
+                "deviation_direction": deviation_direction,
+                "current_v": current_v,
+                "sample_count": sample_count,
+                "sample_mean": sample_mean,
+                "sample_std": sample_std,
+                "effective_scale": effective_scale,
+                "scale_source": scale_source,
+                "window": window,
                 "would_action": would_action,
                 "fleet_action": fleet_action,
                 "coherence_seen": coherence_seen,

@@ -113,16 +113,20 @@ async def test_no_logprobs_falls_to_heuristic_under_apply(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_no_flags_leaves_coherence_form_unset(monkeypatch):
+async def test_no_flags_tags_legacy_coherence_without_changing_metrics(monkeypatch):
     monkeypatch.delenv("UNITARES_GROUNDING_SHADOW", raising=False)
     monkeypatch.delenv("UNITARES_GROUNDING_APPLY", raising=False)
 
     ctx = _ctx()
     await run_grounding_stage(ctx)
 
-    # Stage no-ops, so it must not claim provenance it did not establish —
-    # absence is how pre-existing rows stay identifiable.
-    assert ctx.coherence_form is None
+    # Flag-off is itself enough to establish which producer won: the deployed
+    # canonical value is legacy tanh(V). The tag rides ctx only, so policy and
+    # response metrics remain byte-identical.
+    assert ctx.coherence_form == "legacy_tanh_v"
+    assert ctx.result["metrics"] == {
+        "E": 0.72, "I": 0.80, "S": 0.1415, "V": -0.02, "coherence": 0.49,
+    }
 
 
 @pytest.mark.asyncio

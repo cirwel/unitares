@@ -8,6 +8,15 @@
 > that `69ee5a79` demoted). Nothing here is actionable until that is repaired. This document
 > exists so the repair does not land against thresholds nobody re-derived.
 
+> **Correction (2026-08-11):** Sections 2–4 preserve the original one-sided derivation as
+> archaeology, but its health interpretation is invalid. Strict monotonicity of `C(V)` preserves
+> order; it does not make positive `V` healthier than negative `V`. Positive means running hot,
+> negative means running careful, and both are directional imbalance. The shadow implementation
+> is therefore now v2: a **two-sided**, leave-current-out behavioral-V residual over a bounded
+> recent window. It remains measurement-only. Its payload names whether empirical dispersion or
+> the calibrated scale floor supplied the denominator, so floor-normalized units are never
+> presented as measured sigma.
+
 ## 1. Why the existing thresholds cannot simply be scaled
 
 Four gates read `coherence`. All were calibrated while it was frozen. Crossing counts over
@@ -140,15 +149,13 @@ Choosing `k` is a policy call and should be recorded as one.
 2. Land per-agent thresholds **in the same change**, never after. Unfreezing the signal against
    the current fleet constants puts two live agents into permanent pause immediately.
 3. Ship behind the existing shadow pattern first: compute both, record the divergence, apply
-   nothing — the same discipline `grounding_shadow` already uses. **Built:**
+   nothing — the same discipline `grounding_shadow` already uses. **Built and corrected:**
    `src/coherence_gate_shadow.py` + `coherence_gate_shadow` audit event, behind
-   `UNITARES_COHERENCE_GATE_SHADOW` (default off, no APPLY counterpart by design). The gate
-   statistic is the agent's own **V** z-score rather than a separate coherence baseline: `C(V)`
-   is strictly monotone in `V`, so "coherence below this agent's own normal" and "V below its
-   own normal" are the same event, and a second baseline could only drift out of sync with the
-   first. The tanh is not affine, so a fixed z on V is not exactly a fixed z on C — acceptable
-   only because `k` is a stated tolerance, and recorded here so it is never mistaken for an
-   identity.
+   `UNITARES_COHERENCE_GATE_SHADOW` (default off, no APPLY counterpart by design). Shadow v1 used
+   a one-sided expanding-Welford V score. Shadow v2 supersedes it with
+   `abs(V_current - mean(V_recent_prior)) / effective_scale`: both directions count, the current
+   sample is excluded, history is bounded, and `effective_scale=max(sample_sd, calibrated_floor)`
+   is accompanied by `scale_source`. `statistic_version` keeps v1/v2 events from being pooled.
 4. Re-read the gate crossing counts after a soak. A proprioceptive gate that still never fires
    is an unfair zero (the lever is untested, not disproven) and needs a positive control before
    anyone concludes anything from its silence.

@@ -53,7 +53,8 @@ class UpdateContext:
     coherence: Optional[float] = None
     # Which form produced `coherence`: "legacy_tanh_v" or the grounded source
     # ("manifold"). Set by run_grounding_stage, persisted to state_json by
-    # agent_storage. None when neither grounding flag is set (stage no-ops).
+    # agent_storage. New rows are tagged even when neither grounding flag is set;
+    # None is reserved for malformed/no-metrics paths and pre-tag stored rows.
     coherence_form: Optional[str] = None
     cirs_alert: Optional[Dict] = None
     cirs_state_announce: Optional[Dict] = None

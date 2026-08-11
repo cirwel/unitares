@@ -3,7 +3,7 @@
 from typing import Dict, Optional, Tuple
 
 from governance_core import (
-    coherence, compute_ethical_drift, get_agent_baseline,
+    control_feedback, compute_ethical_drift, get_agent_baseline,
     EthicalDriftVector,
 )
 from governance_core.parameters import get_active_params
@@ -75,15 +75,19 @@ def compute_drift_vector(
         # how the dead `.check()` call stayed invisible).
         logger.warning(f"calibration_error unavailable for drift vector: {exc}")
 
-    # Get current coherence for deviation calculation
+    # Legacy drift API still names this input ``current_coherence``. The value
+    # is actually directional ODE control feedback; keep policy behavior stable
+    # until the drift consumer is outcome-calibrated against a replacement.
     active_params = get_active_params()
-    current_coherence = coherence(monitor.state.V, monitor.state.unitaires_theta, active_params)
+    current_control_feedback = control_feedback(
+        monitor.state.V, monitor.state.unitaires_theta, active_params
+    )
 
     # Compute concrete drift vector from governance-observed signals
     drift_vector = compute_ethical_drift(
         agent_id=monitor.agent_id,
         baseline=agent_baseline,
-        current_coherence=current_coherence,
+        current_coherence=current_control_feedback,
         current_confidence=confidence if confidence is not None else 0.6,
         complexity_divergence=continuity_metrics.complexity_divergence,
         calibration_error=calibration_error,
