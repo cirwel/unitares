@@ -1,6 +1,6 @@
 # Canonical Sources
 
-**Last Updated:** 2026-06-28 (re-verified: all listed runtime sources and thin-doc targets resolve)
+**Last Updated:** 2026-08-11 (re-verified: all listed runtime sources and thin-doc targets resolve)
 
 Use this page to resolve architecture disputes and doc drift.
 
@@ -26,8 +26,10 @@ and grep all reader-facing docs for the old claim **in the same PR**.
 | Claim | Canonical wording | Owner |
 |-------|-------------------|-------|
 | Redis posture | Redis is the de-facto primary session store; the server boots without it in a degraded local-only mode (fine for the demo; sessions won't persist). It is not "optional" in production. | `docs/UNIFIED_ARCHITECTURE.md` · `docs/proposals/redis-retirement-v0.md` |
-| Warmup verdict source | During warmup (~first 30 check-ins) the live verdict falls back to a cold-start prior computed mostly (≥70%) from server-derived signals (complexity divergence, coherence, calibration); self-reported drift is a capped ≤30% blend and a zero report is ignored. The behavioral track meanwhile scores against fixed universal thresholds and becomes the verdict authority once its confidence clears the bar. | `docs/EISV_COMPUTATION.md` · `src/monitor_result.py`, `src/governance_monitor.py` |
+| Warmup and baselining | Three stages are distinct with the current constants: check-ins 1–2 use the Φ cold-start prior because behavioral confidence is below 0.3; from check-in 3 the behavioral assessment is authoritative but uses fixed universal thresholds; at check-in 25, `baseline_confidence >= 0.8` against the 30-update target enables self-relative z-score scoring. Absolute safety floors and basin gates remain in force. | `docs/EISV_COMPUTATION.md` · `src/behavioral_state.py` · `src/cold_start_risk_confirmation.py` · `src/governance_monitor.py` |
 | Post-warmup verdict authority | Post-warmup the verdict IS the behavioral assessment (z-scores vs the agent's own baseline, absolute floors and basin gates always in force); Φ is telemetry by default. | `docs/EISV_COMPUTATION.md` · `config/governance_config.py` (`phi_telemetry_only`) |
+| Outcome-evidence trust | `record_result()` records an outcome claim and its provenance; it does not make an agent-authored result independently true. CI-, tool-, or operator-authored evidence can be a stronger calibration anchor. If the monitored process controls both confidence and every outcome record, it can forge a consistent story. | `docs/SCOPE_AND_THREAT_MODEL.md` · `src/grounding/outcome_anchors.py` · `src/mcp_handlers/observability/outcome_events.py` |
+| Current public ablation read | The frozen 2026-08-09 trusted-anchor matrix labels all 12 overall scope/window/lead slices `NOISE-LEVEL` against the best-of-candidates null (selective p = 0.070–0.567). Unadjusted lift is not selection-adjusted evidence, and no prevention is demonstrated. | `docs/operations/eisv-ablation-frozen-2026-08-09.md` · `docs/REVIEWER_GUIDE.md` |
 
 ## Current Architecture Truth
 
@@ -41,7 +43,7 @@ These files are the canonical runtime sources for current behavior:
 | Behavioral EISV state | `src/behavioral_state.py` | Defines warmup, bootstrap confidence, baselining, and self-relative assessment |
 | Behavioral sensor inputs | `src/behavioral_sensor.py` | Shows which observable signals feed behavioral EISV |
 | Public semantics returned to operators/agents | `src/services/runtime_queries.py` | Declares behavioral EISV primary, ODE diagnostic, and the surfaced state hierarchy |
-| Calibration and objective outcomes | `src/calibration.py`, `src/auto_ground_truth.py` | Defines objective/exogenous calibration signals and confidence correction |
+| Calibration and outcome ingestion | `src/calibration.py`, `src/auto_ground_truth.py`, `src/grounding/outcome_anchors.py` | Defines outcome records, provenance classes, anchor scopes, and confidence correction; independence depends on the producer |
 
 ## How To Use This Page
 

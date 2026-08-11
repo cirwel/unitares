@@ -47,7 +47,9 @@ Pure-unit suites (e.g. `tests/test_naming_helpers.py`, `tests/test_lifecycle_age
 
 ## Code style
 
-- Python 3.12+, formatted with `ruff format`. Lint with `ruff check`. CI enforces both.
+- Python 3.12+. Format touched Python files with `ruff format` and lint with
+  `ruff check`. CI currently gates the configured Ruff rule set (unused imports)
+  but does not run a repository-wide format check.
 - Type hints encouraged but not enforced repo-wide; new modules should be fully typed.
 - No new SQLite or in-process state stores — one Postgres, schema-isolated. See [`docs/operations/database_architecture.md`](docs/operations/database_architecture.md).
 

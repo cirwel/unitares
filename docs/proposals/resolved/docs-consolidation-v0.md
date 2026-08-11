@@ -1,8 +1,7 @@
 # Docs consolidation v0 — one owner per claim
 
-**Status:** Phase 0 shipped (this PR). Phase 1 is planned work, deliberately
-deferred to after 2026-08-08 (reader-facing docs are frozen through an external
-review window; churn during it is risk without payoff).
+**Status:** RESOLVED — Phase 0 and Phase 1 shipped by 2026-08-11, after the
+reader-facing documentation freeze ended.
 
 ## Problem
 
@@ -40,7 +39,7 @@ the canonical wording instead of paraphrasing it independently.
 at most one sentence and links to the owner. A surface that asserts less is
 harder to make wrong.
 
-## Phase 0 — shipped in this PR
+## Phase 0 — shipped before Phase 1
 
 1. **Contested-claims registry** — new section in `docs/dev/CANONICAL_SOURCES.md`:
    corrected facts, their canonical wording, their owner docs.
@@ -57,34 +56,29 @@ harder to make wrong.
    architecture fact greps reader-facing docs for the old claim and updates the
    registry in the same PR.
 
-## Phase 1 — after 2026-08-08 (one deliberate PR)
+## Phase 1 — shipped 2026-08-11
 
-1. **README dedup (~30–40% shorter).** The EISV details block, warmup
-   mechanics, and stack detail become one-sentence pointers to their owner
-   docs. Keep: hero, the loop table, "Use UNITARES if", demo, "Where it fits",
-   verify-yourself, the CIRWEL stack table, citation.
-2. **Collapse the double layer.** For each single-topic doc that the manual
-   also covers, pick exactly one shape:
-   - `guides/START_HERE.md` → fold into `manual/README.md` (redundant front door).
-   - `guides/TROUBLESHOOTING.md` + `manual/07-troubleshooting.md` → merge into
-     the manual chapter; leave a one-line stub.
-   - `install/PLAYBOOK.md` → stays canonical (live reference); `manual/02`
-     stops restating and links.
-   - `integration/MCP_CLIENTS.md` → stays canonical; `manual/04` stops
-     restating and links.
-3. **Audience-split the docs index.** `docs/README.md` gets explicit
-   "reader-facing" vs "operator-internal" vs "research/provenance" sections;
-   `proposals/` marked internal at the top of the index.
-4. **Registry growth as the standing mechanism.** Each future correction adds
-   a registry row + deny-pattern; the lint keeps old claims from reverting.
+1. **README dedup.** The front door was cut by roughly half while retaining the
+   governing loop, quickstart, fit, evidence, limits, verification path, and
+   citation. Detailed mechanics now point to their canonical owners.
+2. **Collapsed duplicate layers.** `guides/START_HERE.md` is a compatibility
+   redirect; `guides/TROUBLESHOOTING.md` owns symptom-and-recovery guidance and
+   `manual/07` routes to it; `install/PLAYBOOK.md` and
+   `integration/MCP_CLIENTS.md` remain canonical while `manual/02` and
+   `manual/04` provide thin workflows.
+3. **Audience-split docs index.** `docs/README.md` now separates reader-facing,
+   operator/contributor, research/provenance, and optional essay material.
+4. **Separated optional interpretation.** Tonality and philosophy-of-mind
+   essays moved under `docs/essays/` and are explicitly non-normative.
+5. **CI enforcement.** Strict doc-health, contested-claim, tool-count, and
+   Python-version checks now run in the documentation validation workflow.
 
 ## Non-goals
 
-- No README rewrite — the register and structure are good; the defect class is
-  claims drift, which Phase 0 addresses mechanically.
 - No doc-generation tooling beyond the lint. (Catalog generation was DEFERRED
   and doc quarantine REJECTED in the doc-generator hardening thread; this
   proposal respects both decisions — the registry + lint is the accepted
   machine-facts pattern, not a new pipeline.)
-- No change to `proposals/`/`ontology/` content — they are provenance; the
-  demotion-candidates check already triages them advisorily.
+- No attempt to rewrite research history. This record moved to `resolved/`;
+  unrelated proposal and ontology content remains provenance and the
+  demotion-candidates check continues to triage it advisorily.

@@ -43,7 +43,9 @@ curl -s -X POST http://127.0.0.1:8767/v1/tools/call \
   -d '{"tool":"<tool_name>","arguments":{ ... }}'
 ```
 
-Client-specific MCP JSON (Cursor, Claude Code, Claude Desktop) is in [chapter 4](04-integrating-agents.md#42-pointing-a-client-at-the-server) and canonically in [`../integration/MCP_CLIENTS.md`](../integration/MCP_CLIENTS.md).
+Client-specific MCP JSON (Cursor, Claude Code, Claude Desktop) is routed from
+[chapter 4](04-integrating-agents.md#45-connect-a-client-or-resident) and lives
+canonically in [`../integration/MCP_CLIENTS.md`](../integration/MCP_CLIENTS.md).
 
 ## 3.4 The dashboard
 

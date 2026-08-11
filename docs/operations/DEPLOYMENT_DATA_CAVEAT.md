@@ -1,12 +1,21 @@
 # Deployment Data — Honest Caveat
 
-*This document exists because the paper and repo cite deployment numbers (agents, check-ins, pauses) that do not mean what a reader might assume without context.*
+**Status:** Historical audit of the 2025-12-11 → 2026-04-10 deployment
+window. Current aggregate counts live in
+[`../PRODUCTION_SNAPSHOT.md`](../PRODUCTION_SNAPSHOT.md); the interpretation
+limits below still apply.
+
+*This document exists because the paper and repo cite deployment numbers
+(agents, check-ins, pauses) that do not mean what a reader might assume without
+context.*
 
 ---
 
 ## The seesaw
 
-The UNITARES governance system has been running for approximately 120 days (2025-12-11 → 2026-04-10) against a population of agents that were, during the deployment window, actively constructing the governance system itself.
+This audit covers approximately 120 days (2025-12-11 → 2026-04-10) in which
+UNITARES ran against a population of agents actively constructing the governance
+system itself.
 
 Put simply: the system was being built by agents that were simultaneously being measured by the system they were building — a seesaw.
 

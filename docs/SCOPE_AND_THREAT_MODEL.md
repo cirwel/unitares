@@ -1,8 +1,8 @@
-# Scope, threat model, and why the signal is trustworthy
+# Scope, threat model, and signal limits
 
 This is the deeper justification that used to live in the repo README. It answers
-three questions a careful evaluator asks: *who is this for*, *why can't an agent
-just game it*, and *what is it honestly not robust against yet*.
+three questions a careful evaluator asks: *who is this for*, *what anchors the
+signal*, and *what is it not robust against yet*.
 
 For how the numbers are actually computed, see [How EISV is computed](EISV_COMPUTATION.md);
 for the cold-evaluator path and the falsifiability harness, see the
@@ -13,12 +13,15 @@ for the cold-evaluator path and the falsifiability harness, see the
 UNITARES is for you if you run **multiple long-lived autonomous agents** —
 tool-using, multi-step, doing real work over hours or days — and you've watched
 an agent quietly drift without anyone noticing until something visible broke. The
-check-in loop surfaces that drift while it's still just numbers moving (Integrity
-slipping, overconfidence climbing) instead of waiting for a user to complain.
+check-in loop makes mid-run state changes inspectable. Whether those changes
+predict a later incident or support effective prevention is an open evaluation
+question, not a premise of the integration.
 
 **The threshold that matters is check-in count, not wall-clock time.**
-Self-relative grading needs roughly **30 check-ins** to establish an agent's
-baseline (absolute safety floors apply before that). An agent doing dozens of
+With the current constants, the cold-start prior owns check-ins 1–2, behavioral
+fixed-threshold scoring owns check-ins 3–24, and self-relative scoring starts at
+check-in 25 against a 30-update baseline target. Absolute safety floors apply in
+every stage. An agent doing dozens of
 units of work — over an hour or a week — crosses it; one that does three and
 exits never does. That's the real line for "is my session long enough to
 benefit," not a duration.
@@ -27,27 +30,31 @@ benefit," not a duration.
 overhead outweighs the benefit, or for teams that can't instrument their agent
 loop.
 
-## Why an agent can't just inflate its own confidence
+## What grounds confidence — and where that boundary fails
 
-Self-reported confidence is only one input. UNITARES also watches **real outcomes
-it can verify** — test pass/fail, exit codes, tool results — sent back via
-`record_result()`. Over many tasks it compares the agent's *claimed* confidence
-against its *actual* success rate. An agent that reports `confidence=0.9` while
-only succeeding 50% of the time builds up a track record of being overconfident;
-its Integrity (I) drops, and the verdict shifts to `guide` or `pause`. The signal
-is anchored to what actually happened, not to what the agent said about itself.
+Self-reported confidence is only one input. UNITARES can also consume outcomes
+such as test pass/fail, exit codes, tool results, CI labels, or operator review
+through `record_result()`. When those records come from a trusted client or
+external integration, they give calibration a stronger anchor than the agent's
+own narrative. Persistent high confidence paired with poor recorded outcomes can
+lower Integrity (I) and raise risk.
 
-After about 30 check-ins, the four numbers are graded against the agent's *own*
-running history rather than a one-size-fits-all threshold. Absolute safety floors
-still apply on top of that.
+The generic API does not make an agent-authored outcome cryptographically true.
+If the monitored process controls both its confidence and every outcome record,
+it can forge a consistent story. Outcome provenance and integration boundaries
+therefore matter; CI- or operator-authored evidence is stronger than an
+unverified self-report.
 
-**Before the behavioral baseline warms** (behavioral confidence < 0.3 — the first
-few check-ins), the verdict falls back to the Φ cold-start prior: computed mostly
+From check-in 25 with the current constants, the four numbers are graded against
+the agent's *own* running history rather than only a one-size-fits-all threshold.
+Absolute safety floors still apply on top of that.
+
+**Before the behavioral channel reaches confidence 0.3** (check-ins 1–2), the
+verdict comes from the Φ cold-start prior: computed mostly
 from server-derived signals (complexity divergence, coherence, calibration), with
 any self-reported `ethical_drift` only a capped ≤30% blend and the independent
 behavioral signal telemetry-only. Described-behavior semantics don't fully register
-until the agent is warm; the self-relative defenses described here are the warmed
-steady state, not the cold-start regime.
+until check-in 3; self-relative scoring still waits until check-in 25.
 
 State lives in PostgreSQL + AGE. **The verdict path is the auditable behavioral
 model** — component risk plus self-relative z-scores, source in
@@ -59,31 +66,30 @@ verdicts by default** ([`governance_monitor.py`](../src/governance_monitor.py):
 from behavioral assessment"*). Its derivation is in
 [Paper v6](https://github.com/cirwel/unitares-paper-v6) (DOI 10.5281/zenodo.19647159).
 
-## What makes the signal trustworthy
+## What anchors the signal
 
-**Trajectory as identity.** An agent's EISV pattern over time answers continuity
-questions ("is this still the same agent across restarts?") and surfaces slow
-drift that no single check-in could catch.
+**Trajectory as continuity evidence.** An EISV pattern can contribute to the
+question "does this process behave like the recorded predecessor?" and can
+surface slow drift that no single check-in shows. It is a forgeable behavioral
+similarity signal, not authentication or proof of personal identity.
 
-**Peer review when it matters.** When an agent's confidence and the system's
-assessment disagree, UNITARES runs a short back-and-forth review with other
-agents — or with an LLM when no peers are around — before anything halts. (In the
+**Structured review when requested.** After a pause or disputed decision, an
+agent or operator can open a thesis–antithesis–synthesis review with another
+agent or a configured LLM reviewer. Review is an available recovery path, not a
+guarantee that an independent reviewer ran before the original pause. (In the
 codebase and papers this is called *dialectic*.) See
 [dialectic-dataset](https://github.com/cirwel/dialectic-dataset).
 
 ## Scope and threat model
 
-UNITARES is **adversarial-aware, not adversarial-naive**, with deliberately
-conservative enforcement. The signal is anchored to outcomes an agent can't fake
-— test pass/fail, exit codes, tool results via `record_result()`: an agent can
-inflate its self-reported `confidence` but not its actual success rate, and drift
-(S) is graded against its *own* prior trajectory, so there is no fixed threshold
-to pre-game. Verdicts lean toward `proceed`/`guide` over `pause`/`reject` by
-design — a false-positive pause on a productive agent is itself a failure mode
-(acutely so here, since the agents building UNITARES run under it). And "no ethics
-classifier" means no hand-labeled ethics model, *not* that the system is
-value-free: drift (S) is a salience flag, not a verdict, and Integrity (I) is
-anchored to ground-truth outcomes rather than to the agent's own history.
+UNITARES exposes several adversarial boundaries rather than claiming to close
+them. Trusted external outcomes are harder for a monitored agent to forge than
+self-report, but an agent-controlled `record_result()` call is not independent
+evidence. Self-relative scoring removes one universal cut after check-in 25, but
+a patient actor may still shape or poison its own baseline. Verdicts lean toward
+`proceed`/`guide` over `pause`/`reject` by design because false-positive pauses
+are also costly. Drift (S) is a salience signal, not an ethics label; Integrity
+(I) is only as grounded as the outcome channel feeding it.
 
 **The genuine open question.** Robustness against a *motivated* attacker
 deliberately optimizing the EISV proxy, at scale, is unproven — red-teaming so far
@@ -97,28 +103,18 @@ Integrity (I) signal anchors confidence to outcomes, so it catches an agent that
 evaluation while still reporting high confidence. It does **not** catch an agent
 that suppresses performance *and* lowers its reported confidence to match: such an
 agent stays calibrated and is indistinguishable from an honestly less-capable one.
-This is structural, not a tuning gap — every EISV dimension is computed in-band,
+This is structural, not merely a tuning gap — every EISV dimension is computed in-band,
 from what the agent does and claims inside the monitored session, so concealment
 that leaves the agent's claims internally consistent leaves no in-band trace. The
 instrument that catches it is out-of-band — comparing performance across a
 monitored vs. an unmonitored framing — which is a capability-elicitation probe, a
-different tool than this runtime drift signal. A reproducible model-organism
-demonstration of both the catch (naive sandbagging, detection AUC ≈ 1.0) and the
-blind spot (calibrated sandbagging, AUC ≈ 0.5 against the real `BehavioralEISV` +
-`assess_behavioral_state` path) was built as the `frt_autonomy_sandbagging`
-model-organism demo, since removed from the repo as out-of-scope (see
-[`REPO_SCOPE.md`](REPO_SCOPE.md)); its findings are recorded here.
-A real-LLM extension (`real_llm_probe.py`) sharpened the picture against a *noisy*
-honest baseline — real models are themselves overconfident on hard tasks, so the
-naive catch degrades to AUC ≈ 0.75 and the calibrated blind spot **inverts** to
-≈ 0.19 (Integrity rates a calibrated concealer as *healthier* than honest agents),
-while the out-of-band cross-framing probe still catches it (≈ 0.97). In short: the
-Integrity signal is a calibration-consistency detector for naive overconfidence and
-drift, **not** a deliberate-concealment detector — for that, use cross-framing.
-Scope note: that demonstration exercises the behavioral-EISV core and verdict, not
-the full server pipeline (sensors, continuity, dialectic peer review); the
-structural argument is expected to carry to those paths but has not been measured
-there.
+different tool than this runtime drift signal. An internal model-organism probe
+previously exercised this failure shape, but its implementation was removed as
+out of repository scope (see [`REPO_SCOPE.md`](REPO_SCOPE.md)); it is therefore
+not reproducible evidence for an external evaluator. The load-bearing claim here
+is narrower: calibration consistency cannot distinguish honest low capability
+from capability that is concealed while confidence is reduced to match. Test
+deliberate concealment with an independent, cross-framing capability evaluation.
 
 **The highest-stakes surface: the governed-effect execute plane.** Everything above
 concerns the *signal* and whether an agent can game it. The most security-relevant
@@ -136,4 +132,3 @@ residual: those gates have had the same ad-hoc-rather-than-sustained adversarial
 testing as the rest of the system, and a compromised strong-tier proposer credential
 would convert to host execution — so the credential boundary is load-bearing. The
 security-reporting contract for this surface lives in [`SECURITY.md`](../SECURITY.md).
-

@@ -11,7 +11,7 @@
 ## 1. Why the existing thresholds cannot simply be scaled
 
 Four gates read `coherence`. All were calibrated while it was frozen. Crossing counts over
-all 69,395 non-synthetic `core.agent_state` rows (observed range [0.288, 0.561]):
+the 2026-08-10 non-synthetic `core.agent_state` snapshot (observed range [0.288, 0.561]):
 
 | gate | threshold | crossings | consumer |
 |---|---|---|---|
@@ -20,7 +20,7 @@ all 69,395 non-synthetic `core.agent_state` rows (observed range [0.288, 0.561])
 | `COHERENCE_CRITICAL_THRESHOLD` | 0.40 | 9 (0.013%) | `coherence_pause`, `is_critical`, `critical` health status |
 | `TARGET_COHERENCE` | 0.50 | reachable | `coherence_deficit`, fed a near-constant |
 
-The whole stack produced **2 `coherence_pause` actions in 69,395 check-ins**. The obvious
+The whole stack produced **2 `coherence_pause` actions in that snapshot**. The obvious
 repair — unfreeze the signal, keep the numbers — is the thing this document argues against.
 
 ## 2. The measurement that decides the form
