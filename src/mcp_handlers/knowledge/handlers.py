@@ -18,6 +18,7 @@ from mcp.types import TextContent
 from datetime import datetime, timezone, timedelta
 import hashlib
 import os
+import re
 import secrets
 import threading
 
@@ -287,6 +288,60 @@ async def _broadcast_knowledge_write(discovery, agent_id: str) -> None:
         )
     except Exception as exc:
         logger.debug("knowledge_write broadcast skipped: %s", exc)
+
+
+#: Upper bound on the query text stored in an audit row. Long enough for the
+#: real distribution (mean term count is 0.1; a two-digit-term query is already
+#: an outlier) and short enough that an accidental paste cannot bloat the table.
+_AUDIT_QUERY_TEXT_MAX = 300
+
+#: Credential shapes to blank before a query string reaches audit.events. Sibling
+#: of `_redact_sensitive_report_text` in scripts/analysis/eisv_ablation_matrix.py;
+#: kept local because src/ must not import from scripts/. An agent searching the
+#: KG for "rotate the api_key=..." would otherwise persist the value verbatim.
+_AUDIT_QUERY_REDACTIONS = (
+    (re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://[^\s:/@]+):([^\s/@]+)@"), r"\1:[REDACTED]@"),
+    (
+        re.compile(
+            r"(?i)\b(api[_-]?key|passwd|password|secret|token|bearer)\s*([:=]|\s)\s*[^\s,;|]+"
+        ),
+        r"\1\2[REDACTED]",
+    ),
+)
+
+
+def _audit_safe_query_text(query: Any) -> Optional[str]:
+    """Redact and bound a search query for storage in ``audit.events``.
+
+    Read traffic has been counted since PR #532, but only ever as
+    ``query_present`` / ``query_term_count`` / ``result_count`` — never the
+    terms. That makes retrievability unauditable: you can see that a search
+    happened and how many rows came back, but not whether the right entry was
+    reachable for what was actually asked. Measuring retrieval quality has so
+    far required hand-building a gold set, which does not scale and does not
+    reflect production traffic.
+
+    Returns None for anything that is not a usable string, so the payload key is
+    simply absent rather than present-and-null.
+    """
+    if not isinstance(query, str):
+        return None
+    text = query.strip()
+    if not text:
+        return None
+    for pattern, replacement in _AUDIT_QUERY_REDACTIONS:
+        text = pattern.sub(replacement, text)
+    if len(text) > _AUDIT_QUERY_TEXT_MAX:
+        text = text[:_AUDIT_QUERY_TEXT_MAX] + "…"
+    return text
+
+
+def _audit_safe_tags(tags: Any) -> Optional[list]:
+    """Bounded, string-only view of a caller's tag filter for the audit row."""
+    if not isinstance(tags, (list, tuple)):
+        return None
+    cleaned = [str(tag)[:64] for tag in tags if isinstance(tag, (str, int))][:10]
+    return cleaned or None
 
 
 async def _broadcast_knowledge_read(
@@ -2161,7 +2216,17 @@ async def _execute_knowledge_search(state: _KnowledgeSearchState) -> dict[str, A
             "result_count": len(state.results),
             "query_present": bool(state.request.query_text),
             "query_term_count": state.request.query_term_count,
+            # The terms themselves, redacted and bounded. Without these the
+            # counts above can say a search happened but never whether the right
+            # entry was reachable for what was asked.
+            "query_text": _audit_safe_query_text(state.request.query_text),
             "search_mode": state.search_mode or state.request.search_mode_requested,
+            # Tag filter separates the two very different callers that both
+            # land here: an open semantic recall, versus a tag-scoped poll of a
+            # known lane (Vigil reads tags=["sentinel"] with semantic=False on a
+            # 30-minute cron, and is the majority of queried searches). Judging
+            # retrieval without splitting those measures the wrong population.
+            "filter_tags": _audit_safe_tags(state.request.arguments.get("tags")),
             "writer_agent_ids": writers,
             "filter_agent_id": state.request.arguments.get("agent_id"),
         },
