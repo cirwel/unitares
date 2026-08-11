@@ -441,6 +441,19 @@ class GovernanceConfig:
         ).lower() == 'true'
     )
 
+    # Epistemic-authority guard for pre-authored cold starts.  A non-agent-
+    # authored row (substrate observation/interpretation or prediction) cannot
+    # hard-pause an identity when the verdict is still owned solely by the Phi
+    # fallback below behavioral authority.  This is a stateless provenance rule,
+    # not promotion of the dormant two-confirmation actuator above.  It also
+    # enables the exact-provenance reviewed-recovery escape for identities trapped
+    # by the legacy behavior.  Default ON; set false for an immediate rollback.
+    NON_AUTHORED_COLD_START_GUARD_ENABLED = (
+        os.environ.get(
+            'GOVERNANCE_NON_AUTHORED_COLD_START_GUARD', 'true'
+        ).lower() == 'true'
+    )
+
     # =================================================================
     # Error Handling Constants
     # =================================================================

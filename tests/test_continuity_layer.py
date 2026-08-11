@@ -132,6 +132,22 @@ class TestAnalyzeResponseText:
         result = analyze_response_text(text)
         assert result["list_items"] == 3
 
+    def test_decimals_in_prose_are_not_list_items(self):
+        """Regression: the ordered-list branch used to be unanchored, so any
+        "<digits>. " sequence mid-sentence scored as a list item. A sensor
+        bridge reporting period-separated decimals banked one phantom item per
+        reading — Lumen's real status line scored 6 on a string with no list."""
+        text = (
+            "Anima state: calm. Warmth: 0.62. Clarity: 0.71. Stability: 0.55. "
+            "Presence: 0.80. EISV: E=0.58, I=0.72, S=0.31, V=+0.14."
+        )
+        assert analyze_response_text(text)["list_items"] == 0
+
+    def test_numbered_list_still_counts_when_line_anchored(self):
+        """The fix must not cost real ordered lists — including indented ones."""
+        text = "Plan:\n1. first\n  2. second indented\n3. third"
+        assert analyze_response_text(text)["list_items"] == 3
+
     def test_paragraphs_single(self):
         text = "Just one paragraph of text."
         result = analyze_response_text(text)
@@ -582,6 +598,88 @@ class TestComputeContinuityMetrics:
         refl = _make_refl_entry()
         metrics = compute_continuity_metrics(op, refl, calibration_weight=0.75)
         assert metrics.calibration_weight == 0.75
+
+
+# ===========================================================================
+# 7b. Substrate-portability canaries (observe-only)
+# ===========================================================================
+
+def _lumen_status(mood="calm", w=0.62, c=0.81, s=0.77, p=0.80,
+                  E=0.58, I=0.82, S=0.21, V=0.34, marks=47):
+    """Reproduces anima_mcp.eisv_mapper.generate_status_text's real shape:
+    a single-line, period-joined template. This is what an embodied agent
+    actually puts in response_text."""
+    return (
+        f"Anima state: {mood}. Warmth: {w:.2f}. Clarity: {c:.2f}. "
+        f"Stability: {s:.2f}. Presence: {p:.2f}. "
+        f"EISV: E={E:.2f}, I={I:.2f}, S={S:.2f}, V={V:+.2f}. "
+        f"Experience: {marks} marks."
+    )
+
+
+class TestSubstrateCanaries:
+    """The canaries record whether a continuity feature was a measurement or a
+    default. They must never change the math — only describe it."""
+
+    def test_self_complexity_defaulted_flags_the_stand_in(self):
+        op = create_operational_entry("a", "Some prose response.", "s1")
+        without = compute_continuity_metrics(op, create_reflective_entry("a"))
+        assert without.self_complexity_defaulted is True
+        assert without.complexity_divergence == 0.2  # unchanged stand-in
+
+        with_report = compute_continuity_metrics(
+            op, create_reflective_entry("a", complexity=0.6)
+        )
+        assert with_report.self_complexity_defaulted is False
+
+    def test_e_input_clipped_flags_the_floor(self):
+        """E_input's /200 normalizer is fed the inter-check-in gap, not
+        generation time, so it pins to the 0.3 floor for realistic traffic.
+        The flag makes that visible instead of looking like a measurement."""
+        op = create_operational_entry(
+            "a", "word " * 500, "s1",
+            prev_session_id="s1",
+            prev_timestamp=datetime.now() - timedelta(seconds=60),
+        )
+        m = compute_continuity_metrics(op, create_reflective_entry("a"))
+        assert m.E_input == pytest.approx(0.3)
+        assert m.E_input_clipped is True
+
+    def test_templated_status_line_is_flagged_degenerate(self):
+        op = create_operational_entry("lumen", _lumen_status(), "s1")
+        m = compute_continuity_metrics(op, create_reflective_entry("lumen"))
+        assert m.continuity_degenerate is True
+
+    def test_markdown_assistant_turn_is_not_degenerate(self):
+        text = (
+            "I traced the failure to the retry loop.\n\n"
+            "- the except clause is too broad\n- the counter resets\n"
+            "- no backoff\n- the log line is debug-level\n\n"
+            "Want me to narrow the except first?"
+        )
+        op = create_operational_entry("claude", text, "s1")
+        m = compute_continuity_metrics(op, create_reflective_entry("claude"))
+        assert m.continuity_degenerate is False
+
+    def test_derived_complexity_is_inert_across_embodied_state(self):
+        """The finding the canaries exist to surface: sweeping an embodied
+        agent from healthy to near-dead barely moves the operational reading,
+        because the template's structure does not depend on the state it
+        reports. Guards against a future 'grounding' claim over this channel
+        for non-linguistic substrates."""
+        healthy = _lumen_status("calm", 0.62, 0.81, 0.77, 0.80,
+                                0.58, 0.82, 0.21, 0.34, 47)
+        dying = _lumen_status("flat", 0.02, 0.05, 0.03, 0.01,
+                              0.03, 0.09, 0.07, -0.02, 0)
+        spread = abs(
+            derive_complexity(create_operational_entry("l", healthy, "s"))
+            - derive_complexity(create_operational_entry("l", dying, "s"))
+        )
+        assert spread < 0.01, (
+            f"operational channel moved {spread:.4f} between a healthy and a "
+            "near-dead embodied agent; if this ever becomes informative, "
+            "revisit continuity_degenerate rather than deleting the test"
+        )
 
 
 # ===========================================================================

@@ -21,6 +21,22 @@ from typing import Any
 
 BEHAVIORAL_AUTHORITY_THRESHOLD = 0.3
 COLD_START_CONFIRMATIONS_REQUIRED = 2
+NON_AUTHORING_EPISTEMIC_CLASSES = frozenset({
+    "substrate_observation",
+    "substrate_interpretation",
+    "prediction",
+    "synthetic",
+})
+_KNOWN_EPISTEMIC_CLASSES = NON_AUTHORING_EPISTEMIC_CLASSES | {"agent_report"}
+
+NON_AUTHORED_COLD_START_GUARD_SCHEMA = "eisv.cold-start-epistemic-guard.v1"
+NON_AUTHORED_COLD_START_RECOVERY_SCHEMA = "eisv.cold-start-recovery.v1"
+NON_AUTHORED_COLD_START_ENFORCEMENT_BASIS = (
+    "non_authored_phi_cold_start_deferred"
+)
+NON_AUTHORED_COLD_START_RECOVERY_BASIS = (
+    "non_authored_phi_cold_start_trap"
+)
 
 
 def classify_verdict_driver(
@@ -220,6 +236,225 @@ def evaluate_cold_start_risk_confirmation(
             "Actuation fails closed until confirmation state is durable and atomic."
         ),
     }
+
+
+def apply_non_authored_cold_start_guard(
+    decision: Mapping[str, Any],
+    *,
+    epistemic_class: Any,
+    enabled: bool,
+) -> dict[str, Any]:
+    """Downgrade a non-authoritative Phi cold-start pause to guidance.
+
+    This is deliberately separate from the two-observation confirmation shadow.
+    It has no counter and promotes none of that shadow's dormant actuation.  The
+    guard asks a narrower authority question: may a non-agent-authored row, whose
+    verdict is still owned by the non-discriminative Phi cold-start fallback,
+    hard-pause the identity before it has authored a report?  When provenance is
+    exact, the answer is no; the raw pause remains in audit/history while runtime
+    enforcement receives ``proceed/guide``.
+
+    Unknown or incomplete provenance fails closed and leaves the pause intact.
+    Agent-authored reports, behaviorally ready rows, independent verification,
+    and every non-``risk_pause`` policy path are also untouched.
+    """
+    guarded = dict(decision)
+    action = guarded.get("action")
+    sub_action = guarded.get("sub_action")
+    if action != "pause" or sub_action != "risk_pause":
+        return guarded
+
+    maturity_gate = guarded.get("cold_start_confirmation")
+    maturity_gate = maturity_gate if isinstance(maturity_gate, Mapping) else {}
+    confidence = _finite_number(maturity_gate.get("behavioral_confidence"))
+    primary_driver = maturity_gate.get("primary_driver")
+    measurement_ready = maturity_gate.get("measurement_ready")
+    independent_override = maturity_gate.get("independent_override")
+    epistemic_class_known = (
+        isinstance(epistemic_class, str)
+        and epistemic_class in _KNOWN_EPISTEMIC_CLASSES
+    )
+    non_authoring = epistemic_class in NON_AUTHORING_EPISTEMIC_CLASSES
+
+    if not enabled:
+        ineligibility_reason = "guard_disabled"
+    elif not epistemic_class_known:
+        ineligibility_reason = "epistemic_class_missing_or_unknown"
+    elif not non_authoring:
+        ineligibility_reason = "agent_authored_report"
+    elif not maturity_gate:
+        ineligibility_reason = "maturity_provenance_missing"
+    elif independent_override:
+        ineligibility_reason = "independent_override"
+    elif primary_driver != "phi_cold_start":
+        ineligibility_reason = "verdict_source_not_phi_cold_start"
+    elif confidence is None:
+        ineligibility_reason = "behavioral_confidence_missing"
+    elif measurement_ready is not False:
+        ineligibility_reason = (
+            "behavioral_measurement_ready"
+            if measurement_ready is True
+            else "measurement_readiness_missing"
+        )
+    elif confidence >= BEHAVIORAL_AUTHORITY_THRESHOLD:
+        ineligibility_reason = "behavioral_measurement_ready"
+    else:
+        ineligibility_reason = None
+
+    applied = ineligibility_reason is None
+    original_reason = guarded.get("reason")
+    epistemic_gate = {
+        "schema": NON_AUTHORED_COLD_START_GUARD_SCHEMA,
+        "enabled": bool(enabled),
+        "applied": applied,
+        "ineligibility_reason": ineligibility_reason,
+        "epistemic_class": epistemic_class,
+        "agent_authored": epistemic_class == "agent_report",
+        "non_authoring": non_authoring,
+        "primary_driver": primary_driver,
+        "measurement_ready": measurement_ready,
+        "behavioral_confidence": confidence,
+        "behavioral_authority_threshold": BEHAVIORAL_AUTHORITY_THRESHOLD,
+        "independent_override": independent_override,
+        "enforcement_basis": (
+            NON_AUTHORED_COLD_START_ENFORCEMENT_BASIS if applied else None
+        ),
+        "original_decision": {
+            "action": action,
+            "sub_action": sub_action,
+            "reason": original_reason,
+            "guidance": guarded.get("guidance"),
+        },
+        "note": (
+            "A non-agent-authored Phi cold-start fallback is advisory until "
+            "agent-authored or behaviorally authoritative evidence exists."
+            if applied else
+            "Guard did not apply; the original policy decision remains intact."
+        ),
+    }
+    guarded["cold_start_epistemic_gate"] = epistemic_gate
+    if not applied:
+        return guarded
+
+    guarded["original_action"] = action
+    guarded["original_sub_action"] = sub_action
+    guarded["cold_start_epistemic_deferred"] = True
+    guarded["action"] = "proceed"
+    guarded["sub_action"] = "guide"
+    guarded["reason"] = (
+        "non-authored Phi cold-start pause deferred to guidance "
+        f"(epistemic_class={epistemic_class}, "
+        f"behavioral_confidence={confidence:.3f}; was: {original_reason})"
+    )
+    guarded["guidance"] = (
+        "Treat this fallback estimate as advisory. Hard-pause authority remains "
+        "available to agent-authored, behaviorally ready, independently verified, "
+        "structural, and runtime-safety evidence."
+    )
+    return guarded
+
+
+def evaluate_non_authored_cold_start_trap(
+    state_record: Any,
+    *,
+    enabled: bool,
+) -> dict[str, Any]:
+    """Recognize the exact persisted provenance of the legacy recovery trap.
+
+    A paused identity cannot write a new state row, so its frozen cold-start risk
+    can make reviewed recovery impossible.  This evaluator permits the review
+    handler to discount that one risk check only when the latest persisted row
+    proves that a non-authored, first-observation Phi fallback was actually
+    enforced.  Every field is matched explicitly; missing or contradictory
+    evidence fails closed.
+    """
+    epistemic_class = _record_field(state_record, "epistemic_class")
+    state_json = _record_field(state_record, "state_json")
+    state_json = state_json if isinstance(state_json, Mapping) else {}
+    state_epistemic_class = state_json.get("epistemic_class")
+    telemetry = state_json.get("eisv_telemetry")
+    telemetry = telemetry if isinstance(telemetry, Mapping) else {}
+    policy = telemetry.get("policy_evaluation")
+    policy = policy if isinstance(policy, Mapping) else {}
+    policy_inputs = policy.get("inputs")
+    policy_inputs = policy_inputs if isinstance(policy_inputs, Mapping) else {}
+    maturity_gate = policy.get("maturity_gate")
+    maturity_gate = maturity_gate if isinstance(maturity_gate, Mapping) else {}
+    enforcement = telemetry.get("enforcement")
+    enforcement = enforcement if isinstance(enforcement, Mapping) else {}
+    confidence = _finite_number(maturity_gate.get("behavioral_confidence"))
+
+    requirements = {
+        "guard_enabled": bool(enabled),
+        "state_record_present": state_record is not None,
+        "epistemic_class_non_authoring": (
+            epistemic_class in NON_AUTHORING_EPISTEMIC_CLASSES
+        ),
+        "epistemic_class_consistent": (
+            isinstance(state_epistemic_class, str)
+            and state_epistemic_class == epistemic_class
+        ),
+        "telemetry_schema_exact": telemetry.get("schema") == "eisv.telemetry.v1",
+        "policy_was_risk_pause": (
+            policy.get("action") == "pause"
+            and policy.get("sub_action") == "risk_pause"
+            and not policy.get("suppression")
+        ),
+        "policy_source_was_phi_fallback": (
+            policy_inputs.get("verdict_source") == "phi_cold_start"
+            and policy_inputs.get("primary_eisv_source") == "ode_fallback"
+        ),
+        "maturity_gate_exact": (
+            maturity_gate.get("schema") == "eisv.cold-start-confirmation.v1"
+            and maturity_gate.get("outcome") == "shadow_would_defer"
+            and maturity_gate.get("eligible") is True
+            and maturity_gate.get("would_defer") is True
+            and maturity_gate.get("confirmed") is False
+            and maturity_gate.get("confirmation_count") == 1
+            and maturity_gate.get("confirmations_required") == 2
+            and maturity_gate.get("primary_driver") == "phi_cold_start"
+            and maturity_gate.get("measurement_ready") is False
+            and maturity_gate.get("independent_override") in (None, "")
+            and maturity_gate.get("lineage_status") == "identity_genesis"
+            and confidence is not None
+            and confidence < BEHAVIORAL_AUTHORITY_THRESHOLD
+        ),
+        "circuit_breaker_applied": (
+            enforcement.get("requested") is True
+            and enforcement.get("applied") is True
+            and enforcement.get("mode") == "circuit_breaker"
+            and enforcement.get("basis") == "phi_cold_start_unconfirmed_shadow"
+            and enforcement.get("actor") == "agent_loop_detection"
+            and enforcement.get("effect") == "agent_metadata.status=paused"
+        ),
+    }
+    failed_requirements = [
+        name for name, satisfied in requirements.items() if not satisfied
+    ]
+    eligible = not failed_requirements
+    return {
+        "schema": NON_AUTHORED_COLD_START_RECOVERY_SCHEMA,
+        "eligible": eligible,
+        "recovery_basis": (
+            NON_AUTHORED_COLD_START_RECOVERY_BASIS if eligible else None
+        ),
+        "epistemic_class": epistemic_class,
+        "behavioral_confidence": confidence,
+        "failed_requirements": failed_requirements,
+        "requirements": requirements,
+        "note": (
+            "Latest persisted row proves the legacy non-authored Phi cold-start "
+            "circuit-breaker trap; reviewed recovery may discount frozen risk only."
+            if eligible else
+            "Persisted provenance does not authorize a cold-start recovery exception."
+        ),
+    }
+
+
+def _record_field(record: Any, field: str) -> Any:
+    if isinstance(record, Mapping):
+        return record.get(field)
+    return getattr(record, field, None)
 
 
 def _finite_number(value: Any) -> float | None:

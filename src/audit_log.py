@@ -150,6 +150,39 @@ class AuditLogger:
         )
         self._write_entry(entry)
 
+    def log_coherence_gate_shadow(self, agent_id: str, eligible: bool,
+                                  v_zscore: Optional[float], would_action: Optional[str],
+                                  fleet_action: Optional[str], coherence_seen: Optional[float],
+                                  agrees: Optional[bool], k: dict):
+        """Compare a per-agent coherence gate against the live fleet-constant one.
+
+        Measurement only — nothing acts on this. Records what a proprioceptive
+        gate WOULD have decided (`would_action`, from the agent's own V z-score)
+        next to what the fleet-constant gates actually decided (`fleet_action`),
+        so the two can be compared on real traffic before either changes.
+
+        `eligible` is False until the agent's behavioral baseline is mature
+        enough to estimate its own dispersion; those rows carry agrees=None so
+        they cannot be silently counted as agreement.
+        See docs/proposals/coherence-proprioceptive-thresholds-v0.md.
+        """
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_id,
+            event_type="coherence_gate_shadow",
+            confidence=0.0,
+            details={
+                "eligible": bool(eligible),
+                "v_zscore": v_zscore,
+                "would_action": would_action,
+                "fleet_action": fleet_action,
+                "coherence_seen": coherence_seen,
+                "agrees": agrees,
+                "k": k,
+            },
+        )
+        self._write_entry(entry)
+
     def log_pause_auto_expired(self, agent_id: str,
                                 original_paused_at: Optional[str],
                                 elapsed_seconds: float):
@@ -269,6 +302,39 @@ class AuditLogger:
                 "monitor_lineage": evaluation.get("monitor_lineage"),
                 "lineage_status": evaluation.get("lineage_status"),
                 "process_cycle": evaluation.get("process_cycle"),
+                "original_decision": evaluation.get("original_decision"),
+            },
+        )
+        self._write_entry(entry)
+
+    def log_cold_start_epistemic_deferred(
+        self,
+        agent_id: str,
+        risk_score: float,
+        evaluation: Dict,
+    ):
+        """Log an enforced-boundary downgrade based on epistemic authority.
+
+        The raw policy pause is logged separately by ``auto_attest``.  This event
+        records why runtime enforcement received guidance instead, without
+        conflating the stateless source guard with confirmation-shadow actuation.
+        """
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_id,
+            event_type="cold_start_epistemic_deferred",
+            confidence=float(evaluation.get("behavioral_confidence") or 0.0),
+            details={
+                "schema": evaluation.get("schema"),
+                "risk_score": risk_score,
+                "applied": evaluation.get("applied"),
+                "epistemic_class": evaluation.get("epistemic_class"),
+                "agent_authored": evaluation.get("agent_authored"),
+                "non_authoring": evaluation.get("non_authoring"),
+                "primary_driver": evaluation.get("primary_driver"),
+                "measurement_ready": evaluation.get("measurement_ready"),
+                "independent_override": evaluation.get("independent_override"),
+                "enforcement_basis": evaluation.get("enforcement_basis"),
                 "original_decision": evaluation.get("original_decision"),
             },
         )
