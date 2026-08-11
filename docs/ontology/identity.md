@@ -52,7 +52,7 @@ resolvers (`src/mcp_handlers/support/agent_auth.py`).
 |---|---|---|---|
 | `client_session_id` | Accountable **write binding** for the running process; returned by `start_session`/`onboard`. | The normal path: every check-in and write from the same live process (adapters do this automatically). | — (this *is* the day-to-day proof) |
 | `uuid` (`agent_uuid`) | Immutable server record key; internal storage key. | Resume-by-proof (`identity(agent_uuid=…, continuity_token=…)`) or an operator/admin targeting a specific agent. | A bearer credential on its own — a bare `agent_uuid` resume is refused without a matching token (see "strict" mode). |
-| `agent_id` (argument) | **Overloaded** target selector: accepts a UUID, `display_name`/`label`, `structured_agent_id`, or `public_agent_id`; resolvers canonicalize it to the UUID. | You are targeting a **different** agent (cross-agent/admin op). For *self*, leave it unset — the session binding resolves it. | Self-identification when you're already session-bound (passing your own label round-trips through alias resolution for nothing). |
+| `agent_id` (argument) | Target selector. **Cross-agent: UUID only.** An alias (`display_name`/`label`, `structured_agent_id`, `public_agent_id`) canonicalizes to a UUID *only when it names the caller's own identity*; a cross-agent alias is honored verbatim, resolves to no agent, and is refused (`error_type: unknown_agent`). | You are targeting a **different** agent (cross-agent/admin op) — pass its UUID. For *self*, leave it unset; the session binding resolves it. | Self-identification when you're already session-bound (passing your own label round-trips through alias resolution for nothing). |
 | `agent_id` (return field) | The **display** value (chosen `display_name`, else an auto id). | — (read-only output) | An input proof — it is cosmetic on the way out. |
 | `structured_agent_id` / `public_agent_id` | Auto-derived model+date style label. | Rarely; only as a human-readable cross-agent reference. | Proof of anything; it is server-generated and cosmetic. |
 | `display_name` / `label` | User-chosen cosmetic name. | Display only. | Identity. "Name is cosmetic" (identity-invariant #4). |
@@ -73,8 +73,16 @@ When the server needs to answer "who is this caller?" the **canonical order
 is**:
 
 1. **Explicit `agent_id` argument** (UUID, or an alias the resolver
-   canonicalizes to a UUID) — used to *target*, and for cross-agent ops it is
-   honored verbatim so ownership checks can run downstream.
+   canonicalizes to a UUID *when it names the caller itself*) — used to
+   *target*, and for cross-agent ops it is honored verbatim so ownership
+   checks can run downstream. Honored verbatim means exactly that: a prebind
+   path may bind the **caller**, but must never overwrite a caller-supplied
+   target with the identity it resolved (`_preserve_explicit_target`).
+   Deliberately NOT canonicalized for cross-agent targets: resolving a label
+   to a UUID is the lookup-by-label primitive removed in 2026-04, where two
+   agents sharing a name silently collapse onto one record. Cross-agent
+   therefore means UUID, and an unresolvable target is refused rather than
+   guessed.
 2. **Session-bound context identity** — the UUID the dispatch middleware bound
    for this request (from `client_session_id` / sticky transport binding /
    `continuity_token`).
