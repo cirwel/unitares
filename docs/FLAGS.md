@@ -14,7 +14,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**115 flags.**
+**116 flags.**
 
 | Flag | Default | Purpose | Read at |
 |---|---|---|---|
@@ -24,6 +24,7 @@ index; that one is the curated decision record.
 | `GOVERNANCE_COLD_START_RISK_CONFIRMATION_SHADOW` | `'true'` | — | config/governance_config.py |
 | `GOVERNANCE_DATABASE_URL` | `'postgresql://postgres:postgr…` | Poll lease_plane_events for forced-release alarms; emit findings | agents/sentinel/agent.py |
 | `GOVERNANCE_HEALTH_URL` | `'http://localhost:8767/health'` | — | agents/vigil/checks/governance_health.py |
+| `GOVERNANCE_NON_AUTHORED_COLD_START_GUARD` | `'true'` | — | config/governance_config.py |
 | `GOVERNANCE_TOOL_MODE` | `'lite'` | — | src/tool_modes.py |
 | `GOVERNANCE_URL` | `'http://localhost:8767/mcp/'` | read by _governance_url() | src/gateway/constants.py, src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
 | `GOVERNANCE_VERIFICATION_FLOOR` | `'false'` | — | config/governance_config.py |
