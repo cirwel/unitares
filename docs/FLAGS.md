@@ -14,7 +14,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**115 flags.**
+**116 flags.**
 
 | Flag | Default | Purpose | Read at |
 |---|---|---|---|
