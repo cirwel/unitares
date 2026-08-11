@@ -1447,6 +1447,26 @@ class UNITARESMonitor:
             oscillation_state=oscillation_state
         )
 
+        # Shadow-measure a per-agent coherence gate against the fleet-constant
+        # one that just ran. Flag-gated, default off, and it MUTATES NOTHING —
+        # `decision` above is already final. Optional measurement on a mandatory
+        # path, so it fails open (same posture as _record_sensor_divergence).
+        try:
+            from src.coherence_gate_shadow import (
+                coherence_gate_shadow_enabled, evaluate as _coh_gate_eval,
+                record as _coh_gate_record,
+            )
+            if coherence_gate_shadow_enabled():
+                from src.audit_log import audit_logger as _audit
+                _coh_gate_record(_audit, getattr(self, "agent_id", "") or "unknown",
+                                 _coh_gate_eval(
+                                     behavioral=self._behavioral_state,
+                                     fleet_action=decision.get("action"),
+                                     coherence=self.state.coherence,
+                                 ))
+        except Exception as exc:
+            logger.debug(f"coherence gate shadow skipped: {exc}")
+
         # Pre-flag gap-suppression so calibration, audit, and history can record
         # the *original* verdict truthfully — the actual decision mutation
         # happens after those recording paths so calibration doesn't learn from
