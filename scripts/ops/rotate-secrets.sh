@@ -3,7 +3,7 @@
 #
 # Rotation steps:
 #   1. Generate new secret values (32 bytes, base64url).
-#   2. Write them into the 9 LaunchAgent plists that reference them.
+#   2. Write them into the installed LaunchAgent plists that reference them.
 #   3. Surgical-strip each anchor in ~/.unitares/anchors/:
 #        drop continuity_token + client_session_id, keep agent_uuid.
 #   4. Bounce the governance-mcp launchd service.
@@ -22,8 +22,13 @@ set -euo pipefail
 ANCHOR_DIR="${HOME}/.unitares/anchors"
 LAUNCHAGENTS_DIR="${HOME}/Library/LaunchAgents"
 GOVERNANCE_PLIST="${LAUNCHAGENTS_DIR}/com.unitares.governance-mcp.plist"
+SENTINEL_PLIST="${LAUNCHAGENTS_DIR}/com.unitares.sentinel-beam.plist"
 DATE_STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="${HOME}/.unitares/rotation-backup-${DATE_STAMP}"
+OPS_DIR="$(cd "$(dirname "$0")" && pwd)"
+SENTINEL_PLIST_TOOL="${UNITARES_SENTINEL_PLIST_TOOL:-$OPS_DIR/sentinel-plist.py}"
+PLIST_BUDDY="${UNITARES_PLIST_BUDDY:-/usr/libexec/PlistBuddy}"
+LAUNCHCTL="${UNITARES_LAUNCHCTL:-launchctl}"
 
 log()  { printf '\033[1;34m[rotate]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[rotate]\033[0m %s\n' "$*" >&2; }
@@ -32,6 +37,14 @@ die()  { printf '\033[1;31m[rotate]\033[0m %s\n' "$*" >&2; exit 1; }
 # --- Pre-flight ---
 [[ -d "${ANCHOR_DIR}" ]] || die "anchor dir missing: ${ANCHOR_DIR}"
 [[ -f "${GOVERNANCE_PLIST}" ]] || die "governance plist missing: ${GOVERNANCE_PLIST}"
+
+# PlistBuddy's `Set` fails when a key is absent. Historically that error was
+# suppressed for every plist, so a template-created Sentinel could remain on
+# the old/missing bearer after an otherwise successful rotation. Refuse before
+# writing any plist if an installed Sentinel is not structurally rotatable.
+if [[ -f "${SENTINEL_PLIST}" ]]; then
+  python3 "${SENTINEL_PLIST_TOOL}" rotation-preflight --plist "${SENTINEL_PLIST}"
+fi
 
 # Every anchor must already have an agent_uuid — if any don't, abort loudly;
 # operator needs to re-bootstrap that resident explicitly.
@@ -58,13 +71,20 @@ cp -a "${ANCHOR_DIR}" "${BACKUP_DIR}/anchors"
 new_continuity_secret="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 new_http_api_token="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 
-# --- Write into plists (all 9 com.unitares.*.plist files) ---
+# --- Write into installed com.unitares.*.plist files ---
 log "rotating secrets in LaunchAgents plists..."
 for plist in "${LAUNCHAGENTS_DIR}"/com.unitares.*.plist; do
   [[ -e "$plist" ]] || continue
   cp "$plist" "${BACKUP_DIR}/$(basename "$plist")"
-  /usr/libexec/PlistBuddy -c "Set :EnvironmentVariables:UNITARES_CONTINUITY_TOKEN_SECRET ${new_continuity_secret}" "$plist" 2>/dev/null || true
-  /usr/libexec/PlistBuddy -c "Set :EnvironmentVariables:UNITARES_HTTP_API_TOKEN ${new_http_api_token}" "$plist" 2>/dev/null || true
+  "${PLIST_BUDDY}" -c "Set :EnvironmentVariables:UNITARES_CONTINUITY_TOKEN_SECRET ${new_continuity_secret}" "$plist" 2>/dev/null || true
+  if [[ "$plist" == "${SENTINEL_PLIST}" ]]; then
+    # stdin keeps the bearer out of argv and the helper requires the key to
+    # exist, so rotation cannot silently skip Sentinel again.
+    printf '%s' "${new_http_api_token}" | \
+      python3 "${SENTINEL_PLIST_TOOL}" rotate-token --plist "$plist"
+  else
+    "${PLIST_BUDDY}" -c "Set :EnvironmentVariables:UNITARES_HTTP_API_TOKEN ${new_http_api_token}" "$plist" 2>/dev/null || true
+  fi
 done
 
 # --- Surgical anchor strip: drop continuity_token + client_session_id,
@@ -91,8 +111,8 @@ done
 
 # --- Bounce governance-mcp so it picks up the new secrets. ---
 log "restarting governance-mcp..."
-launchctl unload "${GOVERNANCE_PLIST}" 2>/dev/null || true
-launchctl load   "${GOVERNANCE_PLIST}"
+"${LAUNCHCTL}" unload "${GOVERNANCE_PLIST}" 2>/dev/null || true
+"${LAUNCHCTL}" load   "${GOVERNANCE_PLIST}"
 
 log "rotation complete. backup at ${BACKUP_DIR}"
 log "residents will re-auth via PATH 0 on their next cycle."

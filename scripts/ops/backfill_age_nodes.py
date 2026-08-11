@@ -94,6 +94,8 @@ def main() -> None:
     print(f"  stale TAGGED edges:     {summary['tag_assignments_stale']}")
     print(f"  duplicate TAGGED edges: {summary['tag_assignments_duplicate']}")
     print(f"  discoveries drifted:    {summary['tag_discoveries_drifted']}")
+    print(f"  duplicate Tag groups:   {summary['duplicate_tag_groups']}")
+    print(f"  duplicate Tag vertices: {summary['duplicate_tag_vertices']}")
     if summary.get("sample_missing_tag_assignments"):
         print(
             "  sample missing tags:    "
@@ -109,14 +111,21 @@ def main() -> None:
             "  sample duplicate tags:  "
             f"{summary['sample_duplicate_tag_assignments']}"
         )
+    if summary.get("sample_duplicate_tag_vertices"):
+        print(
+            "  sample duplicate nodes: "
+            f"{summary['sample_duplicate_tag_vertices']}"
+        )
 
     projection_drift = (
         summary["missing"]
         or summary["tag_assignments_missing"]
         or summary["tag_assignments_stale"]
         or summary["tag_assignments_duplicate"]
+        or summary["duplicate_tag_vertices"]
     )
     if not summary.get("dry_run"):
+        print(f"  Tag vertices merged:    {summary['tag_vertices_consolidated']}")
         print(f"  tag sets reconciled:    {summary['tags_reconciled']}")
         print(f"  tag repair failures:    {summary['tag_repair_failed']}")
         print(f"  orphan tags removed:    {summary['orphan_tags_removed']}")

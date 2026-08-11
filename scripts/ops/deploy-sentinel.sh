@@ -30,8 +30,12 @@ DEPLOY="${UNITARES_DEPLOY:-$HOME/projects/unitares-deploy}"
 LABEL="com.unitares.sentinel-beam"
 LOG="${UNITARES_SENTINEL_LOG:-$HOME/Library/Logs/unitares-sentinel-beam.log}"
 PLIST="${UNITARES_SENTINEL_PLIST:-$HOME/Library/LaunchAgents/$LABEL.plist}"
+GOVERNANCE_PLIST="${UNITARES_GOVERNANCE_PLIST:-$HOME/Library/LaunchAgents/com.unitares.governance-mcp.plist}"
+GOVERNANCE_SOCKET="${UNITARES_UDS_SOCKET:-$HOME/.unitares/governance.sock}"
 UID_NUM="$(id -u)"
 TAG="deploy"
+OPS_DIR="$(cd "$(dirname "$0")" && pwd)"
+SENTINEL_PLIST_TOOL="$OPS_DIR/sentinel-plist.py"
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
@@ -42,9 +46,16 @@ deploy_lib_acquire_lock "$TAG" "$DEPLOY"
 
 deploy_lib_require_plist_target "$TAG" "$PLIST" "$DEPLOY" \
   --allow-env UNITARES_SENTINEL_ALLOW_DEV \
-  --recipe "[deploy]   sed -e \"s|__UNITARES_ROOT__|$DEPLOY|g\" -e \"s|__HOME__|\$HOME|g\" \\
-[deploy]       (… plus the other placeholders in the template header …) \\
-[deploy]       \"$DEPLOY/scripts/ops/com.unitares.sentinel-beam.plist.template\" > \"$PLIST\""
+  --recipe "[deploy]   python3 \"$DEPLOY/scripts/ops/sentinel-plist.py\" render --root \"$DEPLOY\" --output \"$PLIST\""
+
+# A path-correct plist can still launch a Sentinel that silently falls back to
+# TCP or is rejected at the outer bearer gate. Refuse before moving/restarting
+# anything unless the installed secret-bearing plist is complete, private, and
+# synchronized with the governance service's current bearer.
+python3 "$SENTINEL_PLIST_TOOL" check \
+  --plist "$PLIST" \
+  --governance-plist "$GOVERNANCE_PLIST" \
+  --socket "$GOVERNANCE_SOCKET"
 
 deploy_lib_ff_worktree "$TAG" "$REPO" "$DEPLOY"
 deploy_lib_nudge_lease_plane "$TAG" "deploy-sentinel.sh" "$DEPLOY"
