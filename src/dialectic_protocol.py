@@ -688,20 +688,12 @@ class DialecticSession:
                     "The paused agent cannot resolve its own session over that "
                     "objection."
                 ),
-                # Deliberately NOT advertising remediation routes here: as of
-                # 2026-08-09 none of the obvious ones works from SYNTHESIS. The
-                # handler's non-participant allow-list blocks a third-party
-                # synthesizer, reassign_reviewer refuses any phase but
-                # THESIS/ANTITHESIS, and the auto-resolve sweeper's facilitation
-                # branch is ANTITHESIS-only so this session will be marked FAILED
-                # after STUCK_SESSION_THRESHOLD rather than reaching a human.
-                # Failing closed beats resuming over a rejection, but it is not
-                # facilitation and must not be described as such until one of those
-                # three paths is opened.
                 "operator_note": (
-                    "No in-protocol remediation path currently exists from this "
-                    "state; the session will be swept to FAILED rather than "
-                    "facilitated. Tracked as follow-up work."
+                    "The paused agent has no self-service resolution path from this "
+                    "state. The reviewer may revise its verdict with a later "
+                    "synthesis; otherwise an operator can assign a facilitator or "
+                    "replacement reviewer with dialectic(action='reassign'). The "
+                    "session remains awaiting facilitation until one of those occurs."
                 ),
             }
 

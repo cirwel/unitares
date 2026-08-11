@@ -420,6 +420,54 @@ async def handle_quick_dialectic(arguments: Dict[str, Any]) -> Sequence[TextCont
     }, arguments=arguments)
 
 
+def _reviewer_objection_stands_in_session_data(session_data: Dict[str, Any]) -> bool:
+    """Mirror ``DialecticSession._reviewer_objection_stands`` for API dicts.
+
+    The get-session fast path never reconstructs a ``DialecticSession``, so its
+    actionability must derive the standing verdict from either dict messages or
+    ``DialecticMessage`` objects. The last synthesis verdict not authored by the
+    paused agent wins; this deliberately survives reviewer reassignment, just as
+    the protocol guard does.
+    """
+    paused_agent_id = session_data.get("paused_agent_id") or session_data.get("paused_agent")
+    reviewer_agent_id = session_data.get("reviewer_agent_id") or session_data.get("reviewer")
+    self_review = bool(reviewer_agent_id and reviewer_agent_id == paused_agent_id)
+    transcript = session_data.get("transcript") or session_data.get("messages") or []
+
+    for message in reversed(transcript):
+        if isinstance(message, dict):
+            phase = message.get("phase") or message.get("message_type") or message.get("role")
+            agent_id = message.get("agent_id")
+            agrees = message.get("agrees")
+        else:
+            phase = getattr(message, "phase", None)
+            agent_id = getattr(message, "agent_id", None)
+            agrees = getattr(message, "agrees", None)
+
+        if phase != "synthesis" or agrees is None:
+            continue
+        if not self_review and agent_id == paused_agent_id:
+            continue
+
+        if isinstance(agrees, bool):
+            verdict = agrees
+        elif isinstance(agrees, str):
+            token = agrees.strip().lower()
+            if token in {"true", "1", "yes"}:
+                verdict = True
+            elif token in {"false", "0", "no"}:
+                verdict = False
+            else:
+                continue
+        elif isinstance(agrees, (int, float)) and agrees in (0, 1):
+            verdict = bool(agrees)
+        else:
+            continue
+        return verdict is False
+
+    return False
+
+
 def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, Any]:
     """Annotate a session payload with concrete next-action metadata."""
     # Two dict shapes reach this function. `load_session_as_dict`
@@ -435,6 +483,13 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
     reviewer_agent_id = session_data.get("reviewer_agent_id") or session_data.get("reviewer")
     phase = str(session_data.get("phase") or "").lower()
     session_id = session_data.get("session_id") or "<session_id>"
+    reviewer_objection_stands = (
+        phase == "synthesis"
+        and _reviewer_objection_stands_in_session_data(session_data)
+    )
+    independent_reviewer_can_revise = bool(
+        reviewer_agent_id and reviewer_agent_id != paused_agent_id
+    )
 
     try:
         from ..context import get_context_agent_id
@@ -486,15 +541,31 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
                 "Any eligible reviewer may claim this session by submitting antithesis."
             )
     elif phase == "synthesis":
-        required_role = "participant"
-        required_agent_id = None
-        required_agent_label = None
-        allowed_agent_ids = [
-            agent_id for agent_id in [paused_agent_id, reviewer_agent_id] if agent_id
-        ]
-        recommended_action = (
-            "Paused agent and reviewer should negotiate via submit_synthesis() until convergence."
-        )
+        if reviewer_objection_stands:
+            required_role = "reviewer_or_facilitator"
+            required_agent_id = reviewer_agent_id if independent_reviewer_can_revise else None
+            required_agent_label = (
+                _agent_label(reviewer_agent_id) if independent_reviewer_can_revise else None
+            )
+            allowed_agent_ids = (
+                [reviewer_agent_id] if independent_reviewer_can_revise else []
+            )
+            recommended_action = (
+                "The reviewer's rejection stands. The paused agent must not retry an "
+                "agreeing synthesis. The reviewer may revise its verdict after reviewing "
+                "new evidence; otherwise an operator should reassign the reviewer to "
+                "facilitate the session."
+            )
+        else:
+            required_role = "participant"
+            required_agent_id = None
+            required_agent_label = None
+            allowed_agent_ids = [
+                agent_id for agent_id in [paused_agent_id, reviewer_agent_id] if agent_id
+            ]
+            recommended_action = (
+                "Paused agent and reviewer should negotiate via submit_synthesis() until convergence."
+            )
     elif phase in {"resolved", "failed", "escalated", "quorum_voting"}:
         required_role = "none"
         recommended_action = (
@@ -543,6 +614,27 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
             )
         else:
             whose_move = "the reviewer's — their antithesis is owed"
+    elif phase == "synthesis" and reviewer_objection_stands:
+        if current_agent_role == "reviewer" and independent_reviewer_can_revise:
+            whose_move = "YOURS — review the new evidence and maintain or revise your verdict"
+            next_call = (
+                f"dialectic(action='synthesis', session_id='{session_id}', "
+                "agrees=true/false, root_cause='...', reasoning='...', "
+                "proposed_conditions=[...])"
+            )
+        elif current_agent_role == "paused_agent":
+            whose_move = (
+                "NOT YOURS — the reviewer's rejection stands; wait for the reviewer "
+                "or ask an operator to reassign/facilitate"
+            )
+        else:
+            whose_move = (
+                "an operator's — reassign/facilitate unless the reviewer will revise its verdict"
+            )
+            next_call = (
+                f"dialectic(action='reassign', session_id='{session_id}', "
+                "reason='Facilitate standing reviewer rejection')"
+            )
     elif phase == "synthesis":
         if current_agent_role in {"paused_agent", "reviewer"}:
             whose_move = "YOURS — a converging synthesis is owed (negotiate until agreement)"
@@ -1678,14 +1770,24 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                     reviewer_crashed_fast,
                 )
                 if orchestrated_review_enabled():
+                    situation_parts = []
+                    if getattr(session, "topic", None):
+                        situation_parts.append(f"Topic: {session.topic}")
+                    if getattr(session, "reason", None):
+                        situation_parts.append(f"Reason: {session.reason}")
                     dispatched = await dispatch_orchestrated_review(
                         session_id,
                         {
                             "root_cause": arguments.get('root_cause'),
                             "proposed_conditions": proposed_conditions,
                             "reasoning": arguments.get('reasoning') or "",
-                            # why the agent paused — the reviewer's situation context
-                            "situation": getattr(session, "reason", "") or "",
+                            # Server-owned context and telemetry captured when the
+                            # session was opened. The reviewer receives these
+                            # separately from the paused agent's authored claims.
+                            "situation": "\n".join(situation_parts),
+                            "paused_agent_state": getattr(
+                                session, "paused_agent_state", {}
+                            ) or {},
                         },
                         session.paused_agent_id,
                     )
@@ -2256,6 +2358,11 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
             # caller keying on `success` would otherwise read a governance refusal as
             # convergence.
             if result.get("blocked") == "reviewer_objection_stands":
+                operator_next_call = (
+                    f"dialectic(action='reassign', session_id='{session_id}', "
+                    "new_reviewer_id='<agent_id>', "
+                    "reason='Facilitate standing reviewer rejection')"
+                )
                 return [error_response(
                     result.get("reason") or result.get("error")
                     or "Refused: the reviewer's standing verdict is a rejection.",
@@ -2267,7 +2374,16 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                             "reviewer's standing rejection. Do not retry — repeat "
                             "attempts are refused without being recorded."
                         ),
-                        "related_tools": ["dialectic"],
+                        "what_you_can_do": [
+                            (
+                                "Reviewer: submit a later synthesis to maintain or revise "
+                                "the verdict after reviewing new evidence."
+                            ),
+                            f"Operator: assign a facilitator/replacement reviewer with {operator_next_call}",
+                            "Paused agent: wait for reviewer or operator action; do not retry agrees=true.",
+                        ],
+                        "operator_next_call": operator_next_call,
+                        "related_tools": ["dialectic", "agent"],
                     },
                 )]
 
@@ -2402,6 +2518,7 @@ async def handle_reassign_reviewer(arguments: Dict[str, Any]) -> Sequence[TextCo
             old_reviewer_id,
             new_reviewer_id,
             reason=reason,
+            phase=session.phase.value,
         ),
     })
 

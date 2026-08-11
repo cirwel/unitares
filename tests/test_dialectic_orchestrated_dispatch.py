@@ -32,7 +32,13 @@ def test_gate_default_off(monkeypatch):
 def test_build_spec_marshals_thesis_and_paths():
     spec = od._build_spec(
         "sess-1",
-        {"root_cause": "rc", "proposed_conditions": ["a", "b"], "reasoning": "why"},
+        {
+            "root_cause": "rc",
+            "proposed_conditions": ["a", "b"],
+            "reasoning": "why",
+            "situation": "Topic: evidence handoff",
+            "paused_agent_state": {"risk_score": 0.78, "coherence": 0.49},
+        },
         "parent-uuid",
     )
     assert spec["cmd"] == sys.executable
@@ -42,6 +48,11 @@ def test_build_spec_marshals_thesis_and_paths():
     assert env["DIALECTIC_THESIS_ROOT_CAUSE"] == "rc"
     assert json.loads(env["DIALECTIC_THESIS_CONDITIONS"]) == ["a", "b"]
     assert env["DIALECTIC_THESIS_REASONING"] == "why"
+    assert env["DIALECTIC_THESIS_SITUATION"] == "Topic: evidence handoff"
+    assert json.loads(env["DIALECTIC_PAUSED_AGENT_STATE"]) == {
+        "coherence": 0.49,
+        "risk_score": 0.78,
+    }
     assert env["UNITARES_PARENT_AGENT_ID"] == "parent-uuid"
     # PYTHONPATH must let the spawned process import both packages.
     assert "agents/sdk/src" in env["PYTHONPATH"]
@@ -52,6 +63,7 @@ def test_build_spec_omits_parent_when_absent():
     spec = od._build_spec("s", {"root_cause": "", "proposed_conditions": [], "reasoning": ""}, None)
     assert "UNITARES_PARENT_AGENT_ID" not in spec["env"]
     assert json.loads(spec["env"]["DIALECTIC_THESIS_CONDITIONS"]) == []
+    assert json.loads(spec["env"]["DIALECTIC_PAUSED_AGENT_STATE"]) == {}
 
 
 def test_build_spec_does_not_forward_beam_flag(monkeypatch):
