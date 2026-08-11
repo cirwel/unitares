@@ -208,6 +208,8 @@ Not a prototype and not a demo. The numbers below come from the deployment that 
 | **32,181 labeled EISV trajectories** | [published](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories), 20,655 real — evaluate a state model against something other than your own logs |
 | **12,434 tests, 82.6% coverage** | green on every merge |
 
+*Status: figures queried 2026-08-10 against the live deployment; continuous operation since 2025-11-28. Counts grow — treat them as a floor.*
+
 **The maintainer's fleet is the deployment.** Vigil, Sentinel, Chronicler, Watcher, and Steward run under governance continuously, on the machine that develops the server they check in to. Lumen adds a physical testbed on a Raspberry Pi. When something breaks here, it breaks the fleet first.
 
 **Auditable.** Once a baseline exists, actions come from an inspectable behavioral model ([`behavioral_assessment.py`](src/behavioral_assessment.py)); before that, from a mostly server-derived cold-start prior. The information-theoretic formulation in [Paper v6](https://github.com/cirwel/unitares-paper-v6) is the research roadmap, not a description of the post-warmup decision path.
