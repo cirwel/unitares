@@ -206,7 +206,6 @@ Not a prototype and not a demo. The numbers below come from the deployment that 
 | **Four residents at `verified` trust tier** | substrate-earned, not assigned — three-condition pass on declared role, sustained behavior, dedicated substrate |
 | **Per-agent baseline scoring, live** | every resident is thousands of check-ins past the 25 that switch scoring from fixed thresholds to its own history |
 | **32,181 labeled EISV trajectories** | [published](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories), 20,655 real — evaluate a state model against something other than your own logs |
-| **12,434 tests, 82.6% coverage** | green on every merge |
 
 *Status: figures queried 2026-08-10 against the live deployment; continuous operation since 2025-11-28. Counts grow — treat them as a floor.*
 
