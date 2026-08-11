@@ -1,8 +1,10 @@
 # Troubleshooting Guide
 
-Status: live troubleshooting guide. Use for failure diagnosis and operator recovery steps, not as the primary architecture reference.
+Status: canonical symptom and recovery guide. The user-manual troubleshooting
+chapter points here instead of maintaining a second copy. Use this for failure
+diagnosis and operator recovery, not as the primary architecture reference.
 
-**Last Updated:** June 2026
+**Last Updated:** August 11, 2026
 
 ---
 

@@ -14,6 +14,7 @@ Several of these are **single-writer surfaces** (see the shared contract in `AGE
 | [`surface-lease-plane-v0.md`](surface-lease-plane-v0.md) | The lease-plane RFC, v0.11+. Phase A shipped 2026-05-03 (PR #305); Phase B promotion window opened 2026-05-16; `resident` enforcement shipped (PR #476) |
 | [`surface-lease-plane-phase-a-plan.md`](surface-lease-plane-phase-a-plan.md) | COMPLETE — Phase A execution plan, shipped with PR #305 |
 | [`worktree-isolation-vs-lease-default.md`](worktree-isolation-vs-lease-default.md) | v0.2 counter-note / companion to the lease-plane RFC (not a replacement) |
+| [`lease-lifecycle-declaration-v0.md`](lease-lifecycle-declaration-v0.md) | **REFUTED as written.** The permanent-strand diagnosis stands; the proposed TTL-only fix would break execution exclusion. Retained as a negative design record and prerequisite warning for any fence/lifecycle follow-up |
 | [`lease-plane-phase-a-latency-2026-05-20.md`](lease-plane-phase-a-latency-2026-05-20.md) | First latency measurement anchoring the substrate-tax gate from the BEAM roadmap |
 
 ### BEAM footprint (substrate migration waves)
@@ -66,7 +67,6 @@ The ADR-001 thread: do not enable operator-vision delegation as first proposed; 
 | [`harness-registry-v0.md`](harness-registry-v0.md) | v0 (2026-06-28) — design-only, **DO NOT BUILD YET.** Authoritative catalog of harness *types* (not identity; instances stay observed in the census). Resolves the type-vs-instance open question by splitting declared-type authority from observed-instance telemetry. Build-trigger = harness-census evidence (PR #1153) crosses the §6 promotion thresholds; conforms to plan.md Track D |
 | [`orchestrated-dialectic-reviewer-v0.md`](orchestrated-dialectic-reviewer-v0.md) | Design-first (2026-06-23) — the agent-orchestrator's **first real consumer**: spawn a governed headless reviewer (own identity, local gemma4, model-derived `agrees` incl. `False`) to retire the hardcoded-`agrees=True` rubber-stamp. Answers the gate's Call A. No code yet |
 | [`bridge-dispatch-v0.md`](bridge-dispatch-v0.md) | v0 draft (2026-08-01), pre-review and not an implementation gate — move the operator from transport bottleneck to evidence-backed exception handler |
-| [`docs-consolidation-v0.md`](docs-consolidation-v0.md) | Phase 0 shipped; Phase 1 planned after the 2026-08-08 reader-facing docs freeze — establish one canonical owner per load-bearing claim |
 | [`thread-trajectory-stitching-v0.md`](thread-trajectory-stitching-v0.md) | v0 proposal, demoted to a metrics-layer backstop — keep genuine cross-instance deaths legible without forging identity continuity |
 | [`relational-calibration-pilot-v0.md`](relational-calibration-pilot-v0.md) | v0.2 specification and adversarial threat model only — adds temporal/instrument validity, experimental-principal accounting, dyadic inference, and a frozen exposure/horizon contract; runtime collection remains explicitly blocked |
 | [`relational-calibration-maturity-capacity-v0.md`](relational-calibration-maturity-capacity-v0.md) | Immutable v0 capacity preregistration, superseded for protocol v0.2; retained as design history and not a current implementation gate |
@@ -94,6 +94,7 @@ dead-ref exemption continues to apply to these point-in-time records.)
 | [`section-129-measurement-fix-2026-06-03.md`](resolved/section-129-measurement-fix-2026-06-03.md) | Council-passed fix restoring the Wave 1 condition-1 measurement gate |
 | [`eisv-basin-health-gating-v0.md`](resolved/eisv-basin-health-gating-v0.md) | SHIPPED — PR #696 (issue #689), 2026-06-14; absolute-basin-health gating for self-relative risk, refined by #699 |
 | [`dashboard-hero-severity-rollup.md`](resolved/dashboard-hero-severity-rollup.md) | SHIPPED (Phase 1) — PR #875; hero reflects all severity sources + "needs attention" band; `computeFleetSeverity` + 12 tests; verified live 2026-06-22 |
+| [`docs-consolidation-v0.md`](resolved/docs-consolidation-v0.md) | SHIPPED — contested-claim lint, audience-split index, shorter README, and thin compatibility/manual routes landed by 2026-08-11 |
 
 ### Closed by negative result
 

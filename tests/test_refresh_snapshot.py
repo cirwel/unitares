@@ -54,40 +54,54 @@ def test_floor_thousands(mod):
 def test_headline(mod, snap):
     line = mod.headline(snap, "June 16, 2026")
     assert line.startswith("Frozen public snapshot from June 16, 2026")
-    assert "**3.7M+ governance events processed · ≈714K in the last 7 days**." in line
+    assert (
+        "**3.7M+ audit/telemetry events recorded · ≈714K in the prior 7 days**." in line
+    )
 
 
 def test_render_block_includes_db_and_static_rows(mod, snap):
     block = mod.render_block(snap, "June 16, 2026")
-    assert "| Governance events processed | 3,748,000+ (≈714K in the last 7 days) |" in block
+    assert (
+        "| Audit/telemetry events recorded | 3,748,000+ (≈714K in the prior 7 days) |"
+        in block
+    )
     assert "| Knowledge graph discoveries | 1,054 |" in block
     # Static (non-DB) rows survive into the printed block.
     assert "| V operating range | Active agents often within [-0.1, 0.1] |" in block
-    assert "| Tests | 8,500+ collected" in block
+    assert "| Tests | 12,500+ collected" in block
 
 
 def test_apply_to_readme_updates_db_rows_and_leaves_static(mod, snap):
     original = (
         "Frozen public snapshot from May 6, 2026 (single-operator deployment — "
         "the author's own traffic, not external adoption). Headline: "
-        "**351K+ governance events processed · ≈94K in the last 7 days**.\n\n"
+        "**351K+ audit/telemetry events recorded · ≈94K in the prior 7 days**.\n\n"
         "| Metric | Value |\n"
         "|--------|-------|\n"
         "| Agents onboarded | 3,660 total process-instances — old text |\n"
-        "| Distinct event-emitting identities (last 21 days) | 1,144 total; old |\n"
-        "| Unique agents active (last 7 days) | 135 distinct event emitters |\n"
-        "| Governance events processed | 351,000+ (≈94K in the last 7 days) |\n"
+        "| Distinct event-emitting identities (prior 21 days) | 1,144 total; old |\n"
+        "| Distinct event-emitting identities (prior 7 days) | 135 distinct event emitters |\n"
+        "| Audit/telemetry events recorded | 351,000+ (≈94K in the prior 7 days) |\n"
         "| Knowledge graph discoveries | 860 |\n"
         "| V operating range | Active agents often within [-0.1, 0.1] |\n"
-        "| Tests | 8,500+ collected · smoke/pre-push subset plus 75% min coverage gate |\n"
+        "| Tests | 12,500+ collected · smoke/pre-push subset plus 75% min coverage gate |\n"
     )
     updated = mod.apply_to_readme(original, snap, "June 16, 2026")
-    assert "**3.7M+ governance events processed · ≈714K in the last 7 days**." in updated
-    assert "| Governance events processed | 3,748,000+ (≈714K in the last 7 days) |" in updated
+    assert (
+        "**3.7M+ audit/telemetry events recorded · ≈714K in the prior 7 days**."
+        in updated
+    )
+    assert (
+        "| Audit/telemetry events recorded | 3,748,000+ (≈714K in the prior 7 days) |"
+        in updated
+    )
     assert "| Knowledge graph discoveries | 1,054 |" in updated
     # Non-DB rows are untouched.
     assert "| V operating range | Active agents often within [-0.1, 0.1] |" in updated
-    assert "| Tests | 8,500+ collected · smoke/pre-push subset plus 75% min coverage gate |" in updated
+    assert (
+        "| Tests | 12,500+ collected · smoke/pre-push subset plus 75% min coverage gate |"
+        in updated
+    )
     # Old numbers are gone.
     assert "351,000+" not in updated
     assert "| Knowledge graph discoveries | 860 |" not in updated
