@@ -9,9 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_No unreleased changes yet. New entries accumulate here until the next release bump._
+
+---
+
+## [2.17.0] - 2026-08-11
+
+_Notable changes merged between 2.16.0 (2026-08-08) and this release — identity-bound execution, knowledge-integrity repair, dialectic correctness, and the shared BEAM governance contract. `pyproject.toml`/`VERSION` bumped to 2.17.0; the live `build_sha` remains the deploy-identity signal._
+
+### Added
+
+- **eisv/telemetry:** persist and evaluate provenance telemetry, expose its health on the dashboard, publish cold-start risk maturity, and shadow the coherence gate before it can influence policy (#1547, #1562, #1569, #1589)
+- **beam/orchestrator:** introduce the shared `unitares_sdk` envelope, move Sentinel and Dialectic Live onto it, and make orchestrated nodes reachable with explicit telemetry (#1549, #1561, #1564)
+- **audit/doctor:** record redacted knowledge-query text and tag filters, include originating check names in findings, and warn when findings flow without an adjudication path (#1560, #1594, #1600)
+- **http:** canary the explicit `agent_id` binding path without weakening the caller-proof contract (#1566)
+
+### Changed
+
+- **evidence semantics:** separate host/runtime observations from agent-authored check-ins and document the evidence classes and confidence contract (#1539, #1542)
+- **ci/contracts:** restore session-attribution scope guards, block silent dependency-floor regressions, and version the Dependabot triage policy (#1544, #1555, #1567)
+- **dependencies:** refresh the dashboard lint/runtime toolchain with regenerated lock data (#1502, #1536, #1559)
+
 ### Fixed
 
-- **governance:** `get_governance_metrics` refuses an `agent_id` that resolves to no identity (`error_type: unknown_agent`) instead of answering with the default seed vector under a `success` envelope. Trust-contract §6 row 8 — the *unknown target* half of read purity, which the *unbound caller* guard (PR #608) runs past. Surfaced by the Discord HUD rendering 50 agents at a constant E=0.70 I=0.80 S=0.20 V=0.00
+- **knowledge integrity:** honor audit defaults from SQL, enforce backend-independent write budgets, retain complete medium-detail documents, normalize null pagination/response-chain inputs, repair AGE tag projection, and restore validated severity/status constraints with migration 060 (#1529, #1538, #1552, #1553, #1554, #1595)
+- **identity:** preserve one public handle per field, reject unverified REST identity headers, classify live-parent lineage honestly, preserve UDS peer context, stop dispatch after hard resume refusal, and keep prebinding attached to the caller that supplied it (#1532, #1533, #1540, #1570, #1586, #1590, #1598)
+- **dialectic:** prevent paused agents from clearing reviewer rejection, repair double-encoded JSONB with migration 059, treat synthesis as the verdict rather than replaying antithesis, and keep facilitation requests alive long enough to answer (#1543, #1571, #1576, #1577)
+- **governance/eisv:** score the pause sub-actions actually emitted, restore coherence after the behavioral migration, prevent a pre-authored cold-start deadlock, and refuse metrics reads for unknown identities instead of returning seed vectors (#1550, #1572, #1591, #1592)
+- **residents/ops:** bind Sentinel writes by `client_session_id`, attest them over authenticated UDS, reclaim expired lease rows during acquire, and provision the installed Sentinel plist without exposing bearer material (#1568, #1575, #1578, #1596)
+- **security/dashboard:** gate severity changes on effective severity, distinguish presence from lifecycle/state cadence, and stop the HUD from rendering unknown agents as a plausible default vector (#1535, #1581, #1587, #1592)
+
+### Documentation
+
+- **knowledge/eisv:** require lifecycle-safe tags for recurring snapshots, document retrieval selection effects, derive coherence thresholds, and preregister/gate relational calibration on maturity and validity (#1531, #1563, #1573, #1574, #1580, #1593)
+- **evaluation:** record the parallel-kernel rounds as a candidate evaluation corpus (#1584)
+- **project framing:** lead the README with deployed results and present the quick demo as an installation smoke test with an explicit warmup phase (#1597, #1599)
 
 ---
 
