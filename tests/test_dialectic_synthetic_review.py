@@ -167,8 +167,12 @@ async def test_orchestrated_dispatch_skips_in_process(server_patch):
     from src.mcp_handlers.dialectic.handlers import handle_submit_thesis, ACTIVE_SESSIONS
 
     session = _make_session(reviewer_id=None)
+    session.topic = "Investigate false high-risk pause"
+    session.reason = "Risk guard requested independent review"
+    session.paused_agent_state = {"risk_score": 0.7859, "coherence": 0.4986}
     ACTIVE_SESSIONS[session.session_id] = session
     gen_anti = AsyncMock(return_value=_antithesis())
+    dispatch = AsyncMock(return_value={"ok": True, "agent_id": "agent-rev-1"})
 
     import contextlib
     with contextlib.ExitStack() as stack:
@@ -176,8 +180,7 @@ async def test_orchestrated_dispatch_skips_in_process(server_patch):
             stack.enter_context(p)
         stack.enter_context(patch(f"{LLM}.generate_antithesis", new=gen_anti))
         stack.enter_context(patch(f"{OD}.orchestrated_review_enabled", return_value=True))
-        stack.enter_context(patch(f"{OD}.dispatch_orchestrated_review",
-                                  new=AsyncMock(return_value={"ok": True, "agent_id": "agent-rev-1"})))
+        stack.enter_context(patch(f"{OD}.dispatch_orchestrated_review", new=dispatch))
         # reviewer is running/healthy (not a fast crash) → async path owns it
         stack.enter_context(patch(f"{OD}.reviewer_crashed_fast", new=AsyncMock(return_value=False)))
         result = await handle_submit_thesis({
@@ -192,6 +195,13 @@ async def test_orchestrated_dispatch_skips_in_process(server_patch):
     # The in-process reviewer must NOT have run — the orchestrator owns this review.
     gen_anti.assert_not_called()
     assert "resolved" not in data  # slot left open for the spawned reviewer
+    dispatched_thesis = dispatch.await_args.args[1]
+    assert dispatched_thesis["paused_agent_state"] == {
+        "risk_score": 0.7859,
+        "coherence": 0.4986,
+    }
+    assert "Topic: Investigate false high-risk pause" in dispatched_thesis["situation"]
+    assert "Reason: Risk guard requested independent review" in dispatched_thesis["situation"]
 
 
 @pytest.mark.asyncio

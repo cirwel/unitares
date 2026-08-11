@@ -85,6 +85,9 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
         "DIALECTIC_THESIS_CONDITIONS": json.dumps(conditions),
         "DIALECTIC_THESIS_REASONING": thesis.get("reasoning") or "",
         "DIALECTIC_THESIS_SITUATION": thesis.get("situation") or "",
+        "DIALECTIC_PAUSED_AGENT_STATE": json.dumps(
+            thesis.get("paused_agent_state") or {}, sort_keys=True, default=str
+        ),
         "UNITARES_GOVERNANCE_URL": _governance_url(),
         "PYTHONPATH": pythonpath,
     }

@@ -82,6 +82,25 @@ def test_prompt_frames_disagreement_as_valid():
     assert "STRICT JSON" in prompt
 
 
+def test_prompt_separates_server_captured_pause_evidence_from_agent_claims():
+    prompt = build_review_prompt(
+        Thesis(
+            session_id="s1",
+            root_cause="claimed cause",
+            paused_agent_state={
+                "risk_score": 0.7859,
+                "coherence": 0.4986,
+                "verdict": "high-risk",
+            },
+        )
+    )
+    assert "SERVER-CAPTURED PAUSE EVIDENCE" in prompt
+    assert "not authored by the paused agent" in prompt
+    assert '"risk_score": 0.7859' in prompt
+    assert '"coherence": 0.4986' in prompt
+    assert '"verdict": "high-risk"' in prompt
+
+
 # --------------------------- Thesis.from_env --------------------------- #
 def test_thesis_from_env_parses_json_conditions():
     env = {
@@ -89,15 +108,26 @@ def test_thesis_from_env_parses_json_conditions():
         "DIALECTIC_THESIS_ROOT_CAUSE": "rc",
         "DIALECTIC_THESIS_CONDITIONS": json.dumps(["x", "y"]),
         "DIALECTIC_THESIS_REASONING": "because",
+        "DIALECTIC_PAUSED_AGENT_STATE": json.dumps({"coherence": 0.42}),
     }
     t = Thesis.from_env(env)
     assert t.session_id == "sess-123"
     assert t.proposed_conditions == ["x", "y"]
+    assert t.paused_agent_state == {"coherence": 0.42}
 
 
 def test_thesis_from_env_tolerates_newline_conditions():
     env = {"DIALECTIC_SESSION_ID": "s", "DIALECTIC_THESIS_CONDITIONS": "one\ntwo\n"}
     assert Thesis.from_env(env).proposed_conditions == ["one", "two"]
+
+
+@pytest.mark.parametrize("raw_state", ["not-json", "[]", '"agent-authored prose"'])
+def test_thesis_from_env_discards_malformed_or_non_object_pause_evidence(raw_state):
+    env = {
+        "DIALECTIC_SESSION_ID": "s",
+        "DIALECTIC_PAUSED_AGENT_STATE": raw_state,
+    }
+    assert Thesis.from_env(env).paused_agent_state == {}
 
 
 # --------------------------- SDK interface conformance --------------------------- #

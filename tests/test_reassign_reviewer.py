@@ -153,6 +153,47 @@ async def test_reassign_reviewer_wrong_phase():
 
 
 @pytest.mark.asyncio
+async def test_reassign_facilitates_standing_rejection_in_synthesis():
+    session = _make_session(phase=DialecticPhase.SYNTHESIS)
+    session.awaiting_facilitation = True
+    session.transcript.append(DialecticMessage(
+        phase="synthesis",
+        agent_id="agent-reviewer",
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        proposed_conditions=["Require independent evidence"],
+        reasoning="Reject until the evidence is supplied.",
+        agrees=False,
+    ))
+    server = _make_mock_server({
+        "agent-paused": _make_agent_meta(status="paused"),
+        "agent-reviewer": _make_agent_meta(status="active"),
+        "agent-new": _make_agent_meta(status="active"),
+    })
+
+    with patch(f"{DIALECTIC}.mcp_server", server), \
+         patch(f"{DIALECTIC}.ACTIVE_SESSIONS", {session.session_id: session}), \
+         patch(f"{DIALECTIC}.beam_update_reviewer", new_callable=AsyncMock,
+               return_value=None), \
+         patch(f"{DIALECTIC}.pg_update_reviewer", new_callable=AsyncMock), \
+         patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", new_callable=AsyncMock), \
+         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+         patch("src.audit_db.append_audit_event_async", new_callable=AsyncMock):
+        from src.mcp_handlers.dialectic.handlers import handle_reassign_reviewer
+        result = parse_result(await handle_reassign_reviewer({
+            "session_id": session.session_id,
+            "new_reviewer_id": "agent-new",
+            "reason": "Facilitate standing reviewer rejection",
+        }))
+
+    assert result["success"] is True
+    assert result["phase"] == "synthesis"
+    assert session.reviewer_agent_id == "agent-new"
+    guidance = " ".join(result["recovery"]["next_steps"]).lower()
+    assert "submit synthesis" in guidance
+    assert "submit antithesis" not in guidance
+
+
+@pytest.mark.asyncio
 async def test_reassign_reviewer_self_assign():
     """Should reject assigning paused agent as its own reviewer."""
     session = _make_session()
@@ -402,6 +443,18 @@ def test_get_reviewer_reassigned_recovery():
     assert "new-agent" in r["what_happened"]
     assert "get_dialectic_session" not in r["related_tools"]
     assert "dialectic" in r["related_tools"]
+
+
+def test_get_reviewer_reassigned_recovery_is_phase_correct_for_synthesis():
+    from src.mcp_handlers.dialectic.responses import get_reviewer_reassigned_recovery
+
+    r = get_reviewer_reassigned_recovery(
+        "old-agent", "new-agent", phase="synthesis"
+    )
+    guidance = " ".join(r["next_steps"]).lower()
+    assert "submit synthesis" in guidance
+    assert "standing verdict" in guidance
+    assert "submit antithesis" not in guidance
 
 
 def test_get_awaiting_facilitation_recovery():
