@@ -26,13 +26,18 @@ describe("agents observability semantics", () => {
             updates: 42,
             last,
             tags: [],
+            presence: { status: "unknown", signals: [] },
             metrics: {
               E: 0.70, I: 0.74, S: 0.28, V: -0.04,
               coherence: 0.48, risk: 0, verdict: "safe",
               source: "persisted_state", recordedAt: last,
+              rollingMetricsAvailable: false,
             },
           }],
-          summary: { total: 1, active: 1, participated: 1, archived: 0 },
+          summary: {
+            total: 1, active: 1, observed: 1, unobserved: 0,
+            live: 0, presenceUnknown: 1, presenceUnavailable: 0, archived: 0,
+          },
         },
       }),
       residentFreshness: async () => ({ source: "live", data: {} }),
@@ -88,10 +93,58 @@ describe("agents observability semantics", () => {
     expect(text).toContain("Possible cadence silence");
     expect(text).not.toContain("Flagged stuck");
     expect(text).toContain("persisted");
+    expect(text).toContain("rolling metrics unavailable");
+    expect(text).toContain("registry lifecycle");
+    expect(text).toContain("runtime presence");
+    expect(text).toContain("unknown · no live binding/lease");
     expect(text).toContain("state rows");
+    expect(text).toContain("Last observation");
+    expect(text).not.toContain("Last seen");
     expect(text).toContain("state observations of 42");
     expect(text).toContain("0 authored");
     expect(text).toContain("42 automatic");
     expect(text).toContain("telemetry legacy/missing");
+  });
+
+  it("keeps positive presence independent from archived lifecycle and state rows", async () => {
+    const dom = new JSDOM('<div id="ag-mount"></div>', {
+      runScripts: "outside-only",
+      url: "https://governance.test/#agents",
+    });
+    dom.window.DATA = {
+      agents: async () => ({
+        source: "live",
+        data: {
+          list: [{
+            agent_id: "archived-but-bound",
+            label: "Resident",
+            status: "archived",
+            updates: 0,
+            tags: [],
+            presence: { status: "unknown", signals: [] },
+            metrics: {},
+          }],
+          summary: {
+            total: 1, active: 0, archived: 1, observed: 0, unobserved: 1,
+            live: 1, presenceUnknown: 0, presenceUnavailable: 0,
+          },
+        },
+      }),
+      residentFreshness: async () => ({
+        source: "live",
+        data: { Resident: { silence: 5, status: "healthy", coherence: 0.5 } },
+      }),
+      residentLiveness: () => "reporting",
+      stuckAgents: async () => ({ source: "live", data: [] }),
+    };
+
+    dom.window.eval(sectionSource);
+    await dom.window.Agents.load();
+
+    const text = dom.window.document.getElementById("ag-mount").textContent;
+    expect(text).toContain("No state observations — 1");
+    expect(text).toContain("Resident");
+    expect(text).toContain("live");
+    expect(text).not.toContain("not live · registry archived");
   });
 });

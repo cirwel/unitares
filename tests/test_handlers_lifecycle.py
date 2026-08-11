@@ -732,7 +732,7 @@ class TestListAgentsParticipation:
 
     @pytest.mark.asyncio
     async def test_summary_splits_participated_vs_never(self, mock_mcp_server):
-        # 2 agents have checked in (total_updates >= 1), 2 never did (==0)
+        # 2 agents have state observations, 2 have no measured rows.
         mock_mcp_server.agent_metadata = {
             "p1": make_agent_meta(label="Worker1", total_updates=5),
             "p2": make_agent_meta(label="Worker2", total_updates=1),
@@ -747,6 +747,8 @@ class TestListAgentsParticipation:
             data = json.loads(result[0].text)
             assert data["participated"] == 2
             assert data["never_participated"] == 2
+            assert data["observed"] == 2
+            assert data["unobserved"] == 2
             # total accounts for both buckets — never-participated are not hidden
             assert data["total"] == data["participated"] + data["never_participated"]
 
@@ -810,6 +812,122 @@ class TestListAgentsParticipation:
             # Counts stay truthful — ghosts are not dropped, just ordered last.
             assert data["summary"]["participated"] == 2
             assert data["summary"]["never_participated"] == 10
+
+
+class TestListAgentsPresence:
+
+    @pytest.fixture
+    def mock_mcp_server(self):
+        return make_mock_server()
+
+    @pytest.mark.asyncio
+    async def test_list_separates_registry_lifecycle_from_runtime_presence(
+        self, mock_mcp_server
+    ):
+        mock_mcp_server.agent_metadata = {
+            "live-1": make_agent_meta(
+                label="Live", status="active", total_updates=5
+            ),
+            "unknown-1": make_agent_meta(
+                label="Unknown", status="active", total_updates=42
+            ),
+        }
+        profiles = {
+            "live-1": {
+                "status": "live",
+                "signals": ["process_binding"],
+                "binding_last_seen": "2026-08-10T20:00:00+00:00",
+                "lease_expires_at": None,
+            },
+            "unknown-1": {
+                "status": "unknown",
+                "signals": [],
+                "binding_last_seen": None,
+                "lease_expires_at": None,
+            },
+        }
+
+        with patch_lifecycle_server(mock_mcp_server), patch(
+            "src.mcp_handlers.lifecycle.query._load_presence_profiles",
+            new=AsyncMock(return_value=profiles),
+        ):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            result = await handle_list_agents({
+                "include_metrics": False,
+                "grouped": False,
+                "status_filter": "all",
+            })
+
+        data = json.loads(result[0].text)
+        by_label = {agent["label"]: agent for agent in data["agents"]}
+        assert by_label["Live"]["lifecycle_status"] == "active"
+        assert by_label["Live"]["presence"]["status"] == "live"
+        assert by_label["Unknown"]["lifecycle_status"] == "active"
+        assert by_label["Unknown"]["presence"]["status"] == "unknown"
+        assert by_label["Unknown"]["observation_count"] == 42
+        assert data["summary"]["by_presence"] == {
+            "live": 1,
+            "unknown": 1,
+            "unavailable": 0,
+        }
+
+    @pytest.mark.asyncio
+    async def test_presence_loader_batches_bindings_and_leases(self):
+        from src.mcp_handlers.lifecycle.query import _load_presence_profiles
+
+        seen = datetime(2026, 8, 10, 20, 0, tzinfo=timezone.utc)
+        expires = datetime(2026, 8, 10, 20, 15, tzinfo=timezone.utc)
+        conn = MagicMock()
+        conn.fetch = AsyncMock(return_value=[
+            {
+                "agent_id": "agent-1",
+                "binding_last_seen": seen,
+                "lease_expires_at": None,
+                "has_agent_lease": False,
+                "has_resident_lease": False,
+            },
+            {
+                "agent_id": "agent-2",
+                "binding_last_seen": None,
+                "lease_expires_at": expires,
+                "has_agent_lease": False,
+                "has_resident_lease": True,
+            },
+            {
+                "agent_id": "agent-3",
+                "binding_last_seen": None,
+                "lease_expires_at": None,
+                "has_agent_lease": False,
+                "has_resident_lease": False,
+            },
+        ])
+
+        class Acquire:
+            async def __aenter__(self):
+                return conn
+
+            async def __aexit__(self, *_args):
+                return False
+
+        db = MagicMock()
+        db.acquire.return_value = Acquire()
+        with patch("src.db.get_db", return_value=db):
+            profiles = await _load_presence_profiles(
+                ["agent-1", "agent-2", "agent-3", "agent-1"]
+            )
+
+        assert profiles["agent-1"] == {
+            "status": "live",
+            "signals": ["process_binding"],
+            "binding_last_seen": seen.isoformat(),
+            "lease_expires_at": None,
+        }
+        assert profiles["agent-2"]["signals"] == ["resident_lease"]
+        assert profiles["agent-2"]["lease_expires_at"] == expires.isoformat()
+        assert profiles["agent-3"]["status"] == "unknown"
+        assert conn.fetch.await_args.args[1] == ["agent-1", "agent-2", "agent-3"]
+        assert "agent_process_bindings" in conn.fetch.await_args.args[0]
+        assert "surface_leases" in conn.fetch.await_args.args[0]
 
 
 # ============================================================================
@@ -916,6 +1034,7 @@ class TestListAgentsNoHydration:
         assert agent["metrics"]["risk_score"] == pytest.approx(0.0)
         assert agent["metrics"]["source"] == "persisted_state"
         assert agent["metrics"]["recorded_at"] == recorded_at.isoformat()
+        assert agent["metrics"]["rolling_metrics_available"] is False
         mock_db.get_all_latest_agent_states.assert_awaited_once()
         mock_mcp_server.get_or_create_monitor.assert_not_called()
 
