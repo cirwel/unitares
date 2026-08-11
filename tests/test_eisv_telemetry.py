@@ -117,6 +117,11 @@ def test_summary_prefers_consumed_observation_source_and_stays_compact():
                 "actuation_ready": False,
                 "actuation_applied": False,
             },
+            "epistemic_gate": {
+                "applied": False,
+                "epistemic_class": "agent_report",
+                "ineligibility_reason": "agent_authored_report",
+            },
         },
         enforcement={
             "requested": True,
@@ -135,6 +140,11 @@ def test_summary_prefers_consumed_observation_source_and_stays_compact():
     assert summary["confirmation_count"] == 0
     assert summary["confirmations_required"] == 2
     assert summary["actuation_applied"] is False
+    assert summary["epistemic_guard_applied"] is False
+    assert summary["epistemic_guard_class"] == "agent_report"
+    assert summary["epistemic_guard_ineligibility_reason"] == (
+        "agent_authored_report"
+    )
     assert summary["enforcement_basis"] == "risk_policy"
     assert summary["enforcement_requested"] is True
     assert summary["enforcement_applied"] is True
@@ -174,6 +184,7 @@ def test_legacy_rows_are_labeled_incomplete_instead_of_inventing_provenance():
     assert summary["schema"] == "eisv.telemetry.summary.legacy"
     assert summary["measurement_source"] == "behavioral_sensor"
     assert summary["missing_inputs"] == ["eisv_telemetry"]
+    assert summary["epistemic_guard_applied"] is None
     assert summary["enforcement_requested"] is None
 
 

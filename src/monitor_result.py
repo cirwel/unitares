@@ -84,6 +84,7 @@ def _build_policy_evaluation(decision: Dict, metrics: Dict,
             "original_sub_action",
             "gap_suppressed",
             "warmup_structural_suppressed",
+            "cold_start_epistemic_deferred",
         )
         if key in decision
     }
@@ -92,6 +93,9 @@ def _build_policy_evaluation(decision: Dict, metrics: Dict,
     maturity_gate = decision.get("cold_start_confirmation")
     if isinstance(maturity_gate, dict):
         evaluation["maturity_gate"] = maturity_gate
+    epistemic_gate = decision.get("cold_start_epistemic_gate")
+    if isinstance(epistemic_gate, dict):
+        evaluation["epistemic_gate"] = epistemic_gate
     if decision.get("latest_risk_fast_trip"):
         evaluation["latest_risk_fast_trip"] = decision["latest_risk_fast_trip"]
     return evaluation
@@ -102,7 +106,14 @@ def _build_enforcement_stub(decision: Dict) -> Dict:
     requested = decision.get("action") in {"pause", "reject"}
     maturity_gate = decision.get("cold_start_confirmation")
     maturity_gate = maturity_gate if isinstance(maturity_gate, dict) else None
-    if decision.get("gap_suppressed"):
+    epistemic_gate = decision.get("cold_start_epistemic_gate")
+    epistemic_gate = epistemic_gate if isinstance(epistemic_gate, dict) else None
+    if decision.get("cold_start_epistemic_deferred"):
+        basis = (
+            (epistemic_gate or {}).get("enforcement_basis")
+            or "non_authored_phi_cold_start_deferred"
+        )
+    elif decision.get("gap_suppressed"):
         basis = "gap_suppressed"
     elif decision.get("warmup_structural_suppressed"):
         basis = "warmup_structural_suppressed"
@@ -129,6 +140,8 @@ def _build_enforcement_stub(decision: Dict) -> Dict:
     }
     if maturity_gate is not None:
         enforcement["maturity_gate"] = maturity_gate
+    if epistemic_gate is not None:
+        enforcement["epistemic_gate"] = epistemic_gate
     return enforcement
 
 

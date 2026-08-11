@@ -150,6 +150,38 @@ class TestColdStartRiskConfirmationAudit:
         assert entry["details"]["actuation_applied"] is False
         assert entry["details"]["original_decision"]["sub_action"] == "risk_pause"
 
+    def test_records_non_authored_epistemic_defer_as_distinct_event(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        logger.log_cold_start_epistemic_deferred(
+            agent_id="agent-cold-start",
+            risk_score=0.78,
+            evaluation={
+                "schema": "eisv.cold-start-epistemic-guard.v1",
+                "behavioral_confidence": 0.1,
+                "applied": True,
+                "epistemic_class": "substrate_interpretation",
+                "agent_authored": False,
+                "non_authoring": True,
+                "primary_driver": "phi_cold_start",
+                "measurement_ready": False,
+                "independent_override": None,
+                "enforcement_basis": "non_authored_phi_cold_start_deferred",
+                "original_decision": {
+                    "action": "pause",
+                    "sub_action": "risk_pause",
+                    "reason": "high-risk",
+                },
+            },
+        )
+
+        [entry] = _read_jsonl(logger.log_file)
+        assert entry["event_type"] == "cold_start_epistemic_deferred"
+        assert entry["details"]["applied"] is True
+        assert entry["details"]["epistemic_class"] == "substrate_interpretation"
+        assert entry["details"]["enforcement_basis"] == (
+            "non_authored_phi_cold_start_deferred"
+        )
+
 
 # ===========================================================================
 # log_identity_resolution_observed
