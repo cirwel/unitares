@@ -160,6 +160,7 @@ def check_dead_refs(md_files: list[Path]) -> list[str]:
 # exist by design, so they stay exempt.
 
 _REL_MD_LINK = re.compile(r"\]\((\.{0,2}/?[^)\s#]+\.md)(?:#[^)]*)?\)")
+_ABSOLUTE_URL = re.compile(r"^[a-z][a-z0-9+.\-]*://|^mailto:", re.IGNORECASE)
 _REPO_ROOT_PREFIXES = ("src/", "config/", "scripts/", "docs/", "db/", "dashboard/")
 
 
@@ -176,6 +177,14 @@ def check_relative_links(md_files: list[Path]) -> list[str]:
         for i, line in enumerate(fpath.read_text(errors="replace").splitlines(), 1):
             for match in _REL_MD_LINK.finditer(line):
                 link = match.group(1)
+                # Absolute URLs are not filesystem paths. The pattern's
+                # `\.{0,2}/?` prefix is optional, so a bare
+                # `https://host/x.md` also matches; without this guard it
+                # resolves against the doc's parent and reports as broken.
+                # agents/sdk/README.md needs absolute links because PyPI
+                # renders it as the package description, outside the repo.
+                if _ABSOLUTE_URL.match(link):
+                    continue
                 # Repo-root-prefixed links are handled by check_dead_refs.
                 if link.startswith(_REPO_ROOT_PREFIXES):
                     continue
