@@ -373,6 +373,33 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
         old_name="search_shared_memory", new_name="knowledge", reason="intuitive_alias",
         migration_note="Primary workflow name for memory search; implemented by knowledge(action='search').",
         inject_action="search", experience=True),
+    # The write half of shared memory. `search_shared_memory` named the read and
+    # left store/update reachable only through the `knowledge` router — and a
+    # caller that matches on the domain noun never gets to the router, because
+    # the read alias absorbs the intent first. Measured 2026-08-11 with the
+    # fleet's local gemma4: 0/3 on both a store task and an update task against
+    # the deployed surface (it picked `record_result` and `search_shared_memory`
+    # respectively), 3/3 once it could reach `knowledge` directly. These give the
+    # two write actions their own names so reaching them does not depend on
+    # out-reasoning the read alias. `knowledge` stays registered and unchanged;
+    # this adds names, it does not move capability.
+    "store_finding": ToolAlias(
+        old_name="store_finding", new_name="knowledge", reason="intuitive_alias",
+        migration_note=(
+            "Primary workflow name for recording a finding to shared memory; "
+            "implemented by knowledge(action='store'). Use for durable knowledge "
+            "— a discovery, root cause, or correction. For task/tool/test "
+            "outcomes use record_result instead."
+        ),
+        inject_action="store", experience=True),
+    "update_finding": ToolAlias(
+        old_name="update_finding", new_name="knowledge", reason="intuitive_alias",
+        migration_note=(
+            "Primary workflow name for revising a finding already in shared "
+            "memory; implemented by knowledge(action='update'). Needs the "
+            "discovery_id; set status when the finding is resolved or superseded."
+        ),
+        inject_action="update", experience=True),
     "record_result": ToolAlias(
         old_name="record_result", new_name="outcome_event", reason="intuitive_alias",
         migration_note=(
@@ -402,6 +429,8 @@ AGENT_WORKFLOW_ALIASES: tuple[str, ...] = (
     "sync_state",
     "check_working_state",
     "search_shared_memory",
+    "store_finding",
+    "update_finding",
     "record_result",
     "request_review",
 )
