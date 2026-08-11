@@ -407,6 +407,33 @@ ALIAS_SCHEMA_DROP = {
     }),
 }
 
+# `store_finding` / `update_finding` are NEW names, so no caller can be passing a
+# parameter they omit. That makes a keep-list safe here where it would not be
+# for `search_shared_memory` (subtracting is the only safe direction once a name
+# has callers). Keeping them tight also stops the new names re-creating the very
+# problem they exist to solve: a write alias advertising every search filter
+# would compete for read intents the same way the read alias swallowed writes.
+#
+# Names are the ROUTER's, not the narrow tool's — `knowledge(action='update')`
+# routes to `update_discovery_status_graph`, but that handler's own schema says
+# `new_status` while the code path reads `status`. Verified against
+# `_parse_knowledge_update_request`. Identity params are added back below.
+ALIAS_SCHEMA_KEEP = {
+    "store_finding": frozenset({
+        "summary", "details", "content", "discovery_type", "severity", "tags",
+        "comparison_key", "memory_context", "task_label", "task_outcome",
+    }),
+    "update_finding": frozenset({
+        "discovery_id", "status", "details", "content", "resolution_notes",
+        "summary", "severity", "discovery_type", "tags", "superseded_by",
+    }),
+}
+
+# Auto-injected/plumbing params every alias keeps regardless of its keep-list.
+_ALIAS_ALWAYS_KEEP = frozenset({
+    "agent_id", "client_session_id", "continuity_token",
+})
+
 
 def auto_register_all_tools(mcp):
     """
@@ -553,9 +580,14 @@ def _register_common_aliases(mcp):
             actual_schema = copy.deepcopy(actual_schema)
             props = actual_schema.get("properties", {})
             props.pop("action", None)
-            for param in ALIAS_SCHEMA_DROP.get(alias_name, ()):
+            keep = ALIAS_SCHEMA_KEEP.get(alias_name)
+            if keep is not None:
+                allowed = keep | _ALIAS_ALWAYS_KEEP
+                dropped = frozenset(props) - allowed
+            else:
+                dropped = ALIAS_SCHEMA_DROP.get(alias_name) or frozenset()
+            for param in dropped:
                 props.pop(param, None)
-            dropped = ALIAS_SCHEMA_DROP.get(alias_name) or frozenset()
             req = actual_schema.get("required", [])
             if "action" in req or dropped:
                 actual_schema["required"] = [

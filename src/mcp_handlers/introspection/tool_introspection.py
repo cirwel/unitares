@@ -366,6 +366,8 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 "sync_state": "(response_text?:str, complexity?:float, confidence?:float, task_type?:str)",
                 "check_working_state": "(lite?:bool, include_state?:bool)",
                 "search_shared_memory": "(query?:str, tags?:list, limit?:int, include_details?:bool)",
+                "store_finding": "(summary:str, details?:str, discovery_type?:str, tags?:list, severity?:str)",
+                "update_finding": "(discovery_id:str, status?:str, details?:str, resolution_notes?:str)",
                 "record_result": "(outcome_type:str, confidence?:float, prediction_id?:str, detail?:dict)",
                 "request_review": "(issue_description:str, reason?:str, reasoning?:str — with reasoning, the whole review runs in this one call)",
                 "store_knowledge_graph": "(summary:str, tags?:list, severity?:str, details?:str)",
