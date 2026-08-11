@@ -43,7 +43,11 @@ window.SNAPSHOT = {
   },
   // representative until wired to live tool calls (agent/detect_stuck/knowledge/calibration)
   stats: {
-    agentsActive: 6, agentsTotal: 658, stuck: 2, discoveries: 1204, discoveriesToday: 12,
+    // This capture predates explicit binding/lease presence counts. Keep the
+    // lifecycle count for offline context without presenting it as liveness.
+    agentsActive: 6, agentsLive: null, agentsPresenceUnknown: null,
+    agentsPresenceUnavailable: null, agentsTotal: 658,
+    stuck: 2, discoveries: 1204, discoveriesToday: 12,
     dialectic: 0, systemHealth: "OK", calibration: 0.71, anomalies: 1,
     // Non-empty on purpose: `stuck: 0` never exercises the card body, so the
     // offline page could not show (or review) the drill-down at all. Second
@@ -81,7 +85,9 @@ window.SNAPSHOT = {
   // (verified/persistent), engaged-ephemerals (emerging), one-shots (unknown),
   // a redacted resident, an event-driven resident, and an anon. Plus the
   // real fleet summary so counts and the never-participated cohort are true.
-  agentsSummary: { total:620, active:584, archived:36, paused:0, participated:259, neverParticipated:361 },
+  agentsSummary: { total:620, active:584, archived:36, paused:0,
+    observed:259, unobserved:361, live:null,
+    presenceUnknown:null, presenceUnavailable:620 },
   agentsList: [
     { agent_id:"mcp_20260428_69a1a4f7", label:"Lumen", status:"active", tier:"verified", updates:125681, last:"2026-06-19T20:01:21Z", purpose:"Lumen — embodied digital creature", tags:["pinned","autonomous","embodied","persistent"], event_driven:false, health:"healthy", redacted:true, metrics:{coherence:0.497,risk:0.191,verdict:"safe",E:0.851,I:0.854,S:0.048,V:-0.005} },
     { agent_id:"mcp_20260407_f92dcea8", label:"Sentinel", status:"active", tier:"verified", updates:15669, last:"2026-06-19T19:59:05Z", purpose:"Sentinel — analytical resident, WebSocket fleet monitor", tags:["persistent","autonomous"], event_driven:false, health:"healthy", redacted:true, lifecycleReason:"Self-recovery probe", metrics:{coherence:0.497,risk:0.265,verdict:"safe",E:0.764,I:0.768,S:0.095,V:-0.006} },
