@@ -414,6 +414,24 @@ def _bind_explicit_http_agent(arguments: dict) -> str | None:
     return explicit_agent_id
 
 
+def _preserve_explicit_target(arguments: dict, resolved_uuid: str) -> None:
+    """Stamp the resolved identity as the call target ONLY if none was asked for.
+
+    Every prebind path resolves two different things at once: WHO is calling
+    (the context binding, which authorizes) and WHAT the call is about (the
+    ``agent_id`` argument, which selects). They coincide for the common
+    self-read, so writing the resolved uuid into ``arguments`` was harmless
+    there and wrong whenever a caller named a target — the read came back for
+    the caller instead, under a `success` envelope, with the response's own
+    ``agent_id`` field quietly reading the substituted identity.
+
+    A caller that names no target still gets the resolved identity stamped, so
+    the self-read path is unchanged.
+    """
+    if not arguments.get("agent_id"):
+        arguments["agent_id"] = resolved_uuid
+
+
 async def _resolve_http_operator(arguments: dict, signals) -> str | None:
     from src.mcp_handlers.context import (
         set_session_proof_origin,
@@ -431,7 +449,17 @@ async def _resolve_http_operator(arguments: dict, signals) -> str | None:
         return None
     agent_uuid = operator_identity["agent_uuid"]
     update_context_agent_id(agent_uuid)
-    arguments["agent_id"] = agent_uuid
+    # Bind the CALLER, do not retarget the CALL. Overwriting a caller-supplied
+    # agent_id here answered a question about agent X with agent Y's state and
+    # said nothing about it — the silent-substitution shape invariant 1 exists
+    # to forbid. It only bit a NON-uuid-shaped agent_id, because
+    # _bind_explicit_http_agent returns early on the uuid shape and never
+    # reaches this branch; a structured handle
+    # (`Claude_Code_<date>_<uuid8>`) fell straight through. Since #1533 a
+    # read-state response reports `agent_id` AS that handle, so a caller
+    # round-tripping the field it was just handed was exactly the caller that
+    # got silently redirected to itself.
+    _preserve_explicit_target(arguments, agent_uuid)
     set_session_resolution_source("operator_token")
     set_session_proof_origin("caller_asserted")
     return agent_uuid
@@ -456,7 +484,12 @@ async def _consult_http_sticky_binding(arguments: dict, signals):
             return None, consult
         cached = consult.binding
         update_context_agent_id(cached.agent_uuid)
-        arguments["agent_id"] = cached.agent_uuid
+        # Same split as the operator path: a sticky binding says who the
+        # transport belongs to, never what the caller asked about. This one is
+        # strictly worse when it retargets — proof_origin is
+        # "server_inferred", so it silently substituted an identity the caller
+        # never asserted at all.
+        _preserve_explicit_target(arguments, cached.agent_uuid)
         set_session_resolution_source(sticky_resolution_source(cached))
         set_session_proof_origin("server_inferred")
         return cached.agent_uuid, consult
@@ -549,7 +582,9 @@ async def _resolve_http_session_binding(
         return None
 
     update_context_agent_id(agent_uuid)
-    arguments["agent_id"] = agent_uuid
+    # Third and last prebind path, same rule (see _preserve_explicit_target):
+    # a resumed session binding identifies the caller, not the target.
+    _preserve_explicit_target(arguments, agent_uuid)
     _cache_http_resolution(consult, resolved, agent_uuid, session_key)
     await _touch_http_session_activity(session_key, agent_uuid)
     return agent_uuid

@@ -24,13 +24,13 @@ CREATE TABLE IF NOT EXISTS knowledge.discoveries (
     id                  TEXT PRIMARY KEY,
     agent_id            TEXT NOT NULL,
     type                TEXT NOT NULL,
-    -- severity/status/response_type CHECK sets widened by migration 047;
+    -- severity/status/response_type CHECK sets widened by migrations 047/060;
     -- backported here so base DDL is honest. Single-sourced from
     -- src/knowledge_graph.py (see tests/test_knowledge_enum_sync.py).
     severity            TEXT DEFAULT 'low'
                         CHECK (severity IN ('low', 'medium', 'high', 'critical')),
     status              TEXT NOT NULL DEFAULT 'open'
-                        CHECK (status IN ('open', 'resolved', 'archived', 'disputed', 'closed', 'wont_fix', 'superseded')),
+                        CHECK (status IN ('open', 'resolved', 'archived', 'disputed', 'closed', 'wont_fix', 'superseded', 'cold')),
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ,
     resolved_at         TIMESTAMPTZ,
