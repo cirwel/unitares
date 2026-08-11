@@ -165,6 +165,27 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                     "related_tools": ["list_inference_hosts"],
                 },
             )]
+        # Reachability is checked BEFORE availability on purpose. A host that
+        # nothing routes to stays unreachable no matter how configured it is, so
+        # reporting it as "not available" would send the caller off to enable a
+        # flag that cannot help. Say the true thing first.
+        if "call_model" not in (host.get("accepts_host_id_from") or []):
+            return [error_response(
+                f"Inference host '{host_id}' is registered but not reachable from call_model",
+                error_code="INFERENCE_HOST_UNREACHABLE",
+                error_category="validation_error",
+                details={"host": host, "accepts_host_id_from": host.get("accepts_host_id_from") or []},
+                recovery={
+                    "action": (
+                        "Pick a host whose accepts_host_id_from includes call_model. "
+                        "Strong-model hosts (codex/claude host adapters) run async "
+                        "through the agent-orchestrator and have no agent-callable "
+                        "entrypoint yet — enabling UNITARES_HOST_ADAPTER_ENABLED "
+                        "does not change that."
+                    ),
+                    "related_tools": ["list_inference_hosts"],
+                },
+            )]
         if not host.get("configured") or not host.get("available"):
             return [error_response(
                 f"Inference host '{host_id}' is not available",
@@ -184,13 +205,19 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             provider = "hf"
             privacy = "cloud"
         else:
+            # Reachable per the registry but this handler has no branch for it —
+            # a registry/handler drift, not an agent error.
             return [error_response(
                 f"Inference host '{host_id}' uses unsupported provider kind '{provider_kind}'",
                 error_code="INFERENCE_HOST_UNSUPPORTED",
                 error_category="system_error",
                 details={"host": host},
                 recovery={
-                    "action": "Use a host with provider_kind ollama or hf in Phase 1",
+                    "action": (
+                        "Registry drift: the host claims call_model reachability but "
+                        "call_model has no route for this provider_kind. Use an "
+                        "ollama or hf host and report the drift."
+                    ),
                     "related_tools": ["list_inference_hosts"],
                 },
             )]

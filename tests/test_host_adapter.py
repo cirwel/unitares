@@ -163,9 +163,40 @@ def test_registry_reflects_availability(monkeypatch):
     _enable(monkeypatch)
     hosts = {h["host_id"]: h for h in reg.list_inference_hosts()}
     assert hosts["codex:host-adapter"]["available"] is True
-    assert hosts["codex:host-adapter"]["implementation_status"] == "active"
 
     monkeypatch.delenv("UNITARES_HOST_ADAPTER_ENABLED", raising=False)
     hosts2 = {h["host_id"]: h for h in reg.list_inference_hosts()}
     assert hosts2["codex:host-adapter"]["available"] is False
-    assert hosts2["codex:host-adapter"]["implementation_status"] == "opt_in"
+
+
+def test_host_adapters_accept_no_host_id(monkeypatch):
+    """Availability is not callability.
+
+    ``invoke_host_adapter()`` has no production caller, so no tool will accept
+    the Codex/Claude adapters as a ``host_id`` — at any flag setting. The
+    registry must say so, or ``list_inference_hosts`` advertises a host nothing
+    can invoke. When a caller lands, update ``accepts_host_id_from`` and
+    ``implementation_status`` in the same change and this test with them.
+
+    The flag is varied deliberately: the whole point is that enabling the opt-in
+    does NOT make these callable, so an implementation that derived the field
+    from ``host_adapter_available()`` would pass the disabled half and fail here.
+    """
+    from src.mcp_handlers.support import inference_registry as reg
+
+    for enabled in (True, False):
+        if enabled:
+            _enable(monkeypatch)
+        else:
+            monkeypatch.delenv("UNITARES_HOST_ADAPTER_ENABLED", raising=False)
+        hosts = {h["host_id"]: h for h in reg.list_inference_hosts()}
+        for host_id in ("codex:host-adapter", "claude:host-adapter"):
+            assert hosts[host_id]["accepts_host_id_from"] == [], (
+                f"{host_id} claims host_id validity with flag enabled={enabled}"
+            )
+            assert hosts[host_id]["implementation_status"] == "built_unwired"
+
+    # The synchronous hosts are the ones call_model can actually serve.
+    hosts = {h["host_id"]: h for h in reg.list_inference_hosts()}
+    assert hosts["ollama:local"]["accepts_host_id_from"] == ["call_model"]
+    assert hosts["hf:router"]["accepts_host_id_from"] == ["call_model"]
