@@ -36,27 +36,84 @@ import re
 import pytest
 
 import src.mcp_handlers  # noqa: F401  (populates the tool registry)
-from src.tool_registration import ALIAS_SCHEMA_DROP
+from src.tool_registration import (
+    ALIAS_SCHEMA_DROP,
+    ALIAS_SCHEMA_KEEP,
+    _ALIAS_ALWAYS_KEEP,
+)
 from src.mcp_handlers.tool_stability import _TOOL_ALIASES
 from src.tool_schemas import get_tool_definitions
 
 
 def _schema(tool_name: str) -> dict:
+    # Via mcp_compat: the SDK exposes `.inputSchema` on 1.x and `.input_schema`
+    # on 2.x, and the two versions do differ between dev and CI here.
+    from src.mcp_compat import get_tool_input_schema
+
     for t in get_tool_definitions():
         if t.name == tool_name:
-            return t.inputSchema or {}
+            return get_tool_input_schema(t, {}) or {}
     raise AssertionError(f"{tool_name} has no tool definition")
 
 
-def test_every_narrowed_alias_injects_an_action():
+@pytest.mark.parametrize("table", [ALIAS_SCHEMA_DROP, ALIAS_SCHEMA_KEEP])
+def test_every_narrowed_alias_injects_an_action(table):
     """Narrowing only makes sense when the alias pins the action itself."""
-    for alias in ALIAS_SCHEMA_DROP:
+    for alias in table:
         info = _TOOL_ALIASES.get(alias)
         assert info is not None, f"{alias} is not a registered alias"
         assert info.inject_action, (
             f"{alias} does not inject an action, so it cannot know which "
             "parameters are out of scope — narrowing it would be a guess"
         )
+
+
+def test_keep_lists_name_only_real_router_params():
+    """A keep entry the router does not have is silent dead weight.
+
+    Keep-lists are allowed only for names with no existing callers, so an
+    unrecognised entry cannot break anyone — it just quietly does nothing while
+    reading like intent. `related_to` and `discoveries` were in the first draft
+    of store_finding's list and neither exists on `knowledge`.
+    """
+    for alias, keep in ALIAS_SCHEMA_KEEP.items():
+        router = _TOOL_ALIASES[alias].new_name
+        props = set((_schema(router).get("properties") or {}))
+        unknown = sorted(keep - props - _ALIAS_ALWAYS_KEEP)
+        assert not unknown, (
+            f"{alias} keeps {unknown}, which {router} does not advertise"
+        )
+
+
+def test_write_aliases_do_not_advertise_read_filters():
+    """The new write names must not re-create the crowding they exist to fix.
+
+    `store_finding` / `update_finding` were added because a model matching on
+    the domain noun never reached `knowledge` — `search_shared_memory` absorbed
+    the intent first. A write alias that also advertised `query`, `limit` and
+    `search_mode` would compete for read intents the same way, in reverse.
+    """
+    for alias in ("store_finding", "update_finding"):
+        keep = ALIAS_SCHEMA_KEEP[alias]
+        for read_only in ("query", "limit", "search_mode", "offset",
+                          "include_archived", "semantic", "min_similarity"):
+            assert read_only not in keep, (
+                f"{alias} advertises the read filter {read_only!r}"
+            )
+
+
+def test_write_aliases_carry_what_their_action_needs():
+    """Guard the overcorrection: a keep-list too tight makes the alias useless."""
+    assert "discovery_id" in ALIAS_SCHEMA_KEEP["update_finding"], (
+        "update_finding cannot identify what to update"
+    )
+    assert "status" in ALIAS_SCHEMA_KEEP["update_finding"], (
+        "update_finding cannot set the field it exists to set — note the router "
+        "reads `status`, not the narrow tool's legacy `new_status`"
+    )
+    assert {"summary", "details"} <= ALIAS_SCHEMA_KEEP["store_finding"], (
+        "store_finding cannot carry the finding itself"
+    )
 
 
 def test_dropped_params_exist_on_the_router():
