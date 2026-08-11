@@ -1544,6 +1544,7 @@ class UNITARESMonitor:
         # hydration uncertainty, gaps, missing provenance, and independent
         # verification all fail closed (the pause remains intact).
         from src.cold_start_risk_confirmation import (
+            apply_non_authored_cold_start_guard,
             evaluate_cold_start_risk_confirmation,
         )
         cold_start_confirmation = evaluate_cold_start_risk_confirmation(
@@ -1577,6 +1578,35 @@ class UNITARESMonitor:
             except Exception:
                 logger.debug(
                     "cold_start_risk_confirmation audit log skipped",
+                    exc_info=True,
+                )
+
+        # Epistemic-authority guard: a non-agent-authored row cannot turn the
+        # non-discriminative Phi cold-start fallback into a hard pause before
+        # agent-authored or behaviorally authoritative evidence exists.  This is
+        # stateless and separate from the two-confirmation shadow above.  The raw
+        # pause has already been recorded in audit/history; downstream runtime
+        # enforcement receives the guarded proceed/guide decision.
+        decision = apply_non_authored_cold_start_guard(
+            decision,
+            epistemic_class=agent_state.get("epistemic_class"),
+            enabled=GovConfig.NON_AUTHORED_COLD_START_GUARD_ENABLED,
+        )
+        cold_start_epistemic_gate = decision.get("cold_start_epistemic_gate")
+        if (
+            isinstance(cold_start_epistemic_gate, dict)
+            and cold_start_epistemic_gate.get("applied") is True
+            and not self._simulation_active
+        ):
+            try:
+                audit_logger.log_cold_start_epistemic_deferred(
+                    agent_id=self.agent_id,
+                    risk_score=risk_score,
+                    evaluation=cold_start_epistemic_gate,
+                )
+            except Exception:
+                logger.debug(
+                    "cold_start_epistemic_deferred audit log skipped",
                     exc_info=True,
                 )
 

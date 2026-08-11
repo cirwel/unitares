@@ -307,6 +307,39 @@ class AuditLogger:
         )
         self._write_entry(entry)
 
+    def log_cold_start_epistemic_deferred(
+        self,
+        agent_id: str,
+        risk_score: float,
+        evaluation: Dict,
+    ):
+        """Log an enforced-boundary downgrade based on epistemic authority.
+
+        The raw policy pause is logged separately by ``auto_attest``.  This event
+        records why runtime enforcement received guidance instead, without
+        conflating the stateless source guard with confirmation-shadow actuation.
+        """
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_id,
+            event_type="cold_start_epistemic_deferred",
+            confidence=float(evaluation.get("behavioral_confidence") or 0.0),
+            details={
+                "schema": evaluation.get("schema"),
+                "risk_score": risk_score,
+                "applied": evaluation.get("applied"),
+                "epistemic_class": evaluation.get("epistemic_class"),
+                "agent_authored": evaluation.get("agent_authored"),
+                "non_authoring": evaluation.get("non_authoring"),
+                "primary_driver": evaluation.get("primary_driver"),
+                "measurement_ready": evaluation.get("measurement_ready"),
+                "independent_override": evaluation.get("independent_override"),
+                "enforcement_basis": evaluation.get("enforcement_basis"),
+                "original_decision": evaluation.get("original_decision"),
+            },
+        )
+        self._write_entry(entry)
+
     def log_auto_attest(self, agent_id: str, confidence: float, ci_passed: bool,
                        risk_score: float, decision: str, details: Dict = None):
         """Log an auto-attestation event"""
