@@ -49,7 +49,11 @@ everyone else by default, and reachable only via loopback + bearer token there).
 
 ## Supported versions
 
-This project is pre-1.0; only the current `master` branch and the most recent tagged release receive security fixes. Tagged releases pre-`v2.13.0` are not supported.
+Only the current `master` branch and the most recent tagged server release
+receive security fixes. Tagged releases before `v2.13.0` are not supported.
+Experimental and operator-internal surfaces are identified separately from the
+documented public contract; that status does not expand the supported-release
+window.
 
 ## Disclosure timeline
 

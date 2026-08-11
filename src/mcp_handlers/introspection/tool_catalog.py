@@ -670,7 +670,12 @@ TOOL_DESCRIPTION_OVERRIDES: Dict[str, str] = {
     "list_tools": "📚 Discover all available tools. Your guide to what's possible",
     "describe_tool": "📖 Get full details for a specific tool. Deep dive into any tool",
     "cleanup_stale_locks": "🧹 Clean up stale lock files from crashed/killed processes",
-    "dialectic": "📋 Dialectic operations: get, list, request, thesis, antithesis, synthesis, vote, reassign",
+    # Keep in sync with the action map in consolidated.py's `handle_dialectic`.
+    # This override takes PRIORITY over the tool_descriptions.json entry
+    # (tool_introspection.py resolves overrides first), so a stale action list
+    # here silently wins over a corrected one there. `vote` was advertised for
+    # months after the action was removed; `quick` was live and unlisted.
+    "dialectic": "📋 Dialectic operations: get, list, quick, request, thesis, antithesis, synthesis, reassign",
     "health_check": "🏥 Quick health check - system status and component health",
     "check_calibration": "📏 Check calibration of confidence estimates",
     "update_calibration_ground_truth": "📝 Record external truth signal for calibration (optional)",

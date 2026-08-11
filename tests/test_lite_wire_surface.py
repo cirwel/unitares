@@ -84,6 +84,34 @@ def test_lite_wire_surface_equals_lite_mode_tools():
     assert surface == LITE_MODE_TOOLS
 
 
+def test_recovery_hint_targets_are_advertised_in_lite():
+    """A tool named in another tool's recovery hints must be reachable in lite.
+
+    On the live streamable-HTTP `/mcp/` transport a `register=True` handler that
+    is NOT in the advertised set comes back `Unknown tool` — verified 2026-08-11
+    against the deployed server on :8767 for both `get_workspace_health` and
+    `process_agent_update`, with no `audit.tool_usage` row, so the rejection
+    happens above the audited dispatch layer. "Unadvertised but still callable"
+    holds for the REST/gateway paths, NOT for a `/mcp/` client.
+
+    Consequence: pulling one of these from LITE_MODE_TOOLS to reduce orientation
+    noise would turn `call_model`'s own `related_tools` pointers into dead ends
+    for every MCP-native agent. That trade was considered and rejected; this test
+    is the guard, so a future trim has to confront the transport behavior rather
+    than rediscover it.
+    """
+    registry = set(get_tool_registry().keys())
+
+    # call_model's error paths point at these by name (support/model_inference.py).
+    for name in ("list_inference_hosts", "describe_inference_host"):
+        assert name in registry, f"{name} lost register=True"
+        assert name in LITE_MODE_TOOLS, (
+            f"{name} is named in call_model's recovery hints but is not advertised "
+            "in lite mode — an MCP-native agent following that hint gets "
+            "'Unknown tool'. Either re-advertise it or strip the hint."
+        )
+
+
 def test_every_lite_tool_is_backed_by_handler_or_alias():
     """Each LITE_MODE_TOOLS name resolves to a real handler or a workflow alias.
 

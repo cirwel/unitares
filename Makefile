@@ -16,7 +16,7 @@ version-check: ## Check all version references are in sync
 version-bump: ## Bump version (usage: make version-bump PART=patch)
 	@python3 scripts/ops/version_manager.py --bump $(PART)
 	@python3 scripts/ops/version_manager.py --update
-	@echo "Don't forget to commit and restart the server"
+	@echo "Review the generated changes and follow docs/operations/RELEASE_PROCESS.md"
 
 # ── Testing ──────────────────────────────────────────────
 

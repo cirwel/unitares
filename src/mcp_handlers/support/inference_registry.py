@@ -5,6 +5,25 @@ via ``call_model``) plus the strong-heterogeneous subscription-CLI hosts (Codex,
 Claude) served ASYNCHRONOUSLY via the agent-orchestrator (``host_adapter.py``).
 It does not store credentials; availability is probed live (socket / CLI on PATH /
 opt-in flag). The strong hosts are gated by ``UNITARES_HOST_ADAPTER_ENABLED``.
+
+**Availability is not callability.** ``available`` answers "could this adapter
+run if something invoked it". ``accepts_host_id_from`` answers the question an
+agent actually has: "which tools will accept this host as a ``host_id``
+argument". They diverge today — the Codex/Claude host adapters are built and
+tested, but ``invoke_host_adapter()`` has no production caller, so no agent can
+reach them at any flag setting. A host that advertises itself as usable while
+nothing can call it is a discoverability lie, so those records carry
+``accepts_host_id_from=[]`` and ``implementation_status="built_unwired"`` until a
+consumer lands. Wire a caller -> update both fields in the same change.
+
+``accepts_host_id_from`` is deliberately a claim about *parameter validity*, not
+about traffic. This registry does not see all inference: ``llm_delegation.py``
+opens the Ollama endpoint directly for the dialectic, knowledge-synthesis, and
+check-in-coaching paths, none of which take a ``host_id`` or consult this
+module. So ``ollama:local`` carries ``["call_model"]`` — the tools that will
+accept it as an argument — and that is not a claim that ``call_model`` is the
+only code reaching Ollama. Do not "fix" it to enumerate those callers; that
+would answer a question no caller of this registry is asking.
 """
 
 from __future__ import annotations
@@ -33,6 +52,9 @@ class InferenceHost:
     models: list[str]
     implementation_status: str
     notes: str
+    # Agent-callable tools that actually route to this host. Empty = registered
+    # but unreachable; see the module docstring.
+    accepts_host_id_from: list[str]
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -98,6 +120,7 @@ def _base_hosts() -> list[InferenceHost]:
             capabilities=["reasoning", "generation", "analysis"],
             models=[ollama_model],
             implementation_status="active",
+            accepts_host_id_from=["call_model"],
             notes=(
                 "Local Ollama OpenAI-compatible endpoint. Model names are "
                 "passed through; use `ollama list` on the host for inventory."
@@ -116,6 +139,7 @@ def _base_hosts() -> list[InferenceHost]:
             capabilities=["reasoning", "generation", "analysis"],
             models=["deepseek-ai/DeepSeek-R1:fastest", "Qwen/Qwen2.5-72B-Instruct:fastest"],
             implementation_status="active",
+            accepts_host_id_from=["call_model"],
             notes="Requires HF_TOKEN or HUGGINGFACE_TOKEN in the server environment.",
         ),
         InferenceHost(
@@ -130,14 +154,17 @@ def _base_hosts() -> list[InferenceHost]:
             accountability_class="tool_evidence",
             capabilities=["reasoning", "review", "summarize"],
             models=["codex"],
-            implementation_status=(
-                "active" if host_adapter_available("codex:host-adapter") else "opt_in"
-            ),
+            implementation_status="built_unwired",
+            accepts_host_id_from=[],
             notes=(
-                "Subscription-backed Codex (`codex exec`) served ASYNC via the "
-                "agent-orchestrator (not the sync call_model path). Enable with "
-                "UNITARES_HOST_ADAPTER_ENABLED=1; needs the codex CLI on PATH + "
-                "AGENT_ORCHESTRATOR_BEARER_TOKEN. See support/host_adapter.py."
+                "NOT REACHABLE BY AGENTS YET. Subscription-backed Codex "
+                "(`codex exec`) served ASYNC via the agent-orchestrator, not the "
+                "sync call_model path. The adapter is built and tested, but "
+                "invoke_host_adapter() has no production caller, so no tool "
+                "routes here even with UNITARES_HOST_ADAPTER_ENABLED=1 + the "
+                "codex CLI on PATH + AGENT_ORCHESTRATOR_BEARER_TOKEN. "
+                "`available` reports adapter readiness, not callability. "
+                "See support/host_adapter.py."
             ),
         ),
         InferenceHost(
@@ -152,14 +179,17 @@ def _base_hosts() -> list[InferenceHost]:
             accountability_class="tool_evidence",
             capabilities=["reasoning", "review", "summarize"],
             models=["claude"],
-            implementation_status=(
-                "active" if host_adapter_available("claude:host-adapter") else "opt_in"
-            ),
+            implementation_status="built_unwired",
+            accepts_host_id_from=[],
             notes=(
-                "Subscription-backed Claude (`claude -p`) served ASYNC via the "
-                "agent-orchestrator (not the sync call_model path). Enable with "
-                "UNITARES_HOST_ADAPTER_ENABLED=1; needs the claude CLI on PATH + "
-                "AGENT_ORCHESTRATOR_BEARER_TOKEN. See support/host_adapter.py."
+                "NOT REACHABLE BY AGENTS YET. Subscription-backed Claude "
+                "(`claude -p`) served ASYNC via the agent-orchestrator, not the "
+                "sync call_model path. The adapter is built and tested, but "
+                "invoke_host_adapter() has no production caller, so no tool "
+                "routes here even with UNITARES_HOST_ADAPTER_ENABLED=1 + the "
+                "claude CLI on PATH + AGENT_ORCHESTRATOR_BEARER_TOKEN. "
+                "`available` reports adapter readiness, not callability. "
+                "See support/host_adapter.py."
             ),
         ),
     ]
@@ -203,5 +233,8 @@ def host_for_routed_provider(provider: str) -> dict[str, Any]:
         privacy_class="unknown",
         cost_class="unknown",
         implementation_status="unregistered",
+        # This branch only runs on a provider call_model already routed, so it is
+        # reachable by construction even though the catalog does not list it.
+        accepts_host_id_from=["call_model"],
         notes="Provider was routed but is not registered in the inference host catalog.",
     ).to_dict()
