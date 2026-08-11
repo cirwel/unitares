@@ -115,7 +115,7 @@ meaning for.
 ## Quickstart
 
 ```bash
-git clone https://github.com/cirwel/unitares.git
+git clone --branch v2.17.0 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
 make demo
@@ -223,6 +223,10 @@ server starts in degraded local-only mode suitable for the demo.
 The complete documentation map is [`docs/README.md`](docs/README.md). Optional
 analogies and philosophical readings are isolated under
 [`docs/essays/`](docs/essays/README.md); they are not specifications or evidence.
+
+Project operation is explicit: see the [roadmap](ROADMAP.md),
+[compatibility and naming map](COMPATIBILITY.md), [governance](GOVERNANCE.md),
+[support policy](SUPPORT.md), and [release process](docs/operations/RELEASE_PROCESS.md).
 
 ## Related CIRWEL projects
 

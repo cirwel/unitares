@@ -1,0 +1,70 @@
+name: Bug report
+description: Report reproducible incorrect behavior in a supported UNITARES release.
+title: "bug: "
+labels:
+  - bug
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem. Do not include secrets,
+        access tokens, private telemetry, or agent identifiers you do not want public.
+        Security issues belong in [private vulnerability reporting](https://github.com/cirwel/unitares/security/advisories/new).
+
+  - type: input
+    id: version
+    attributes:
+      label: UNITARES version or commit
+      description: Run `cat VERSION` and, for a checkout, `git rev-parse --short HEAD`.
+      placeholder: v2.17.0 / 5f050f0
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, Python, deployment path, and relevant client or adapter version.
+      placeholder: macOS 15, Python 3.12, Docker Compose, Codex plugin 0.4.13
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: List the smallest sequence that reproduces the behavior.
+      placeholder: |
+        1. Start ...
+        2. Call ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and evidence
+      description: Include sanitized logs, response shapes, or a minimal traceback.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues and did not find the same report.
+          required: true
+        - label: I removed credentials and private identifiers from this report.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true

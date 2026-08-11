@@ -16,6 +16,8 @@ or [User Manual](../manual/README.md).
 
 ## Delivery and automation
 
+- [`RELEASE_PROCESS.md`](RELEASE_PROCESS.md) — server, SDK, container, and
+  deployment release checklist.
 - [`github-workflow-conventions.md`](github-workflow-conventions.md) — branch,
   draft-PR, and delivery contract.
 - [`merge-automation-plan.md`](merge-automation-plan.md) — operator-armed
