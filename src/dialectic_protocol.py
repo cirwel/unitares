@@ -251,8 +251,9 @@ class DialecticMessage:
         """
         Generate cryptographic signature for this message.
 
-        Uses SHA-256 hash of message JSON + API key to ensure authenticity.
-        Prevents message tampering and verifies agent identity.
+        Uses HMAC-SHA256 over canonical message JSON. HMAC keeps the API key in
+        the cryptographic key position rather than concatenating it into the
+        message being hashed.
 
         Args:
             api_key: Agent's API key for signing
@@ -261,8 +262,11 @@ class DialecticMessage:
             Hexadecimal signature string
         """
         message_json = json.dumps(self.to_dict(), sort_keys=True)
-        signature_input = f"{message_json}:{api_key}"
-        return hashlib.sha256(signature_input.encode()).hexdigest()
+        return hmac.new(
+            api_key.encode("utf-8"),
+            message_json.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
 
 
 @dataclass

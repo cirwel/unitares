@@ -29,8 +29,13 @@ from src.mcp_handlers.dialectic.calibration import (
 )
 import unittest.mock
 
-# Use temporary calibration state file for test isolation
-TEMP_CALIBRATION_FILE = Path(tempfile.mktemp(suffix='.json'))
+# Keep a process-scoped temporary directory alive for the module. Unlike
+# tempfile.mktemp(), this allocates the directory atomically and cleans it up
+# when the interpreter exits.
+_TEMP_CALIBRATION_DIR = tempfile.TemporaryDirectory(
+    prefix="unitares-calibration-"
+)
+TEMP_CALIBRATION_FILE = Path(_TEMP_CALIBRATION_DIR.name) / "state.json"
 
 
 def create_isolated_checker():
@@ -382,4 +387,3 @@ async def main():
 if __name__ == "__main__":
     success = asyncio.run(main())
     sys.exit(0 if success else 1)
-

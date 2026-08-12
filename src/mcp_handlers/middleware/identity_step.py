@@ -342,7 +342,7 @@ async def _load_binding_from_redis_inner(key: str) -> Optional[TransportBinding]
     )
     # Warm the in-memory cache
     _transport_identity_cache[key] = binding
-    logger.debug(f"[STICKY] Redis recovery for {key}: agent={binding.agent_uuid[:8]}...")
+    logger.debug("[STICKY] Redis transport-binding recovery succeeded")
     return binding
 
 
@@ -599,8 +599,8 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
     if consult.binding is not None:
         cached = consult.binding
         logger.debug(
-            f"[STICKY] Cache hit for {transport_key}: agent={cached.agent_uuid[:8]}... "
-            f"session_key={cached.session_key[:30]}..."
+            "[STICKY] Cache hit for transport binding (source=%s)",
+            cached.source,
         )
         core_status = await _lookup_core_agent_row_status(
             cached.agent_uuid,
@@ -657,8 +657,12 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
     session_key = await derive_session_key(signals, arguments)
 
     logger.debug(
-        f"[SESSION] dispatch entry: tool={name} session_key={session_key[:30] if session_key else 'None'}... "
-        f"client_session_id={client_session_id!r} signals={signals.transport if signals else 'None'}"
+        "[SESSION] dispatch entry: tool=%s session_key_present=%s "
+        "client_session_id_present=%s transport=%s",
+        name,
+        bool(session_key),
+        bool(client_session_id),
+        signals.transport if signals else "None",
     )
 
     # Resolve identity (Redis → PostgreSQL → Token Rebind → Create).
@@ -923,10 +927,10 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
             from src.mcp_handlers.decorators import get_call_identity_requirement
             if get_call_identity_requirement(canonical_name, arguments) == "pre_onboard":
                 logger.info(
-                    "[DISPATCH] session_resolve_miss for %s under %s... "
+                    "[DISPATCH] session_resolve_miss for %s "
                     "— leaving request unbound (no middleware auto-mint, "
                     "call resolved to pre_onboard)",
-                    name, session_key[:20],
+                    name,
                 )
             else:
                 # #425 contract: when STRICT_IDENTITY_REQUIRED is on, return
@@ -943,10 +947,10 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                 if is_strict_identity_required():
                     _resolve_error = identity_result.get("error")
                     logger.info(
-                        "[DISPATCH] %s for %s... "
+                        "[DISPATCH] %s "
                         "— STRICT_IDENTITY_REQUIRED=true; returning typed "
                         "refusal (no auto-mint).",
-                        _resolve_error, session_key[:20],
+                        _resolve_error,
                     )
                     from src.mcp_handlers.response_base import success_response
                     # Single-sourced payload — the REST gate returns the
@@ -1108,7 +1112,7 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                     if attempt == 0:
                         await asyncio.sleep(0.05)
                     else:
-                        logger.warning(f"[DISPATCH] Session TTL update failed for {session_key[:20]}...: {e}")
+                        logger.warning(f"[DISPATCH] Session TTL update failed: {e}")
     except Exception as e:
         logger.debug(f"Could not resolve session identity: {e}")
 

@@ -40,7 +40,7 @@ or [User Manual](../manual/README.md).
   staged Redis mirror-retirement checks and rollback gates.
 - [`lease-plane-operator-runbook.md`](lease-plane-operator-runbook.md) — Elixir
   lease-plane operations.
-- [`glossary-site.md`](glossary-site.md) — ontology glossary publishing path.
+- [`public-site.md`](public-site.md) — public landing page and ontology glossary publishing path.
 - [`dormant-capability-registry.md`](dormant-capability-registry.md) — built but
   unwired capabilities and their disposition.
 - [`research-registry.md`](research-registry.md) — agent-network research-run

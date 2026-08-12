@@ -111,9 +111,7 @@ def _emit_audit(agent_uuid: str, original_paused_at: Optional[str]) -> None:
             elapsed_seconds=elapsed_s,
         )
     except Exception as exc:  # noqa: BLE001 — observability MUST NOT mask
-        logger.debug(
-            "[pause-ttl] audit emit failed for %s: %r", agent_uuid[:12], exc
-        )
+        logger.debug("[pause-ttl] audit emit failed: %r", exc)
 
 
 # ─── Async entry point (process_agent_update path) ─────────────────────
@@ -132,9 +130,8 @@ async def maybe_auto_expire_pause_async(agent_uuid: str, meta: Any) -> bool:
 
     original_paused_at = _apply_in_memory_expire(meta)
     logger.warning(
-        "[pause-ttl] auto-expired stale pause for %s (paused_at=%s); "
+        "[pause-ttl] auto-expired stale pause (paused_at=%s); "
         "categorizer will re-evaluate",
-        agent_uuid[:12],
         original_paused_at,
     )
     _emit_audit(agent_uuid, original_paused_at)
@@ -158,8 +155,7 @@ async def maybe_auto_expire_pause_async(agent_uuid: str, meta: Any) -> bool:
         # persistence succeeds.
         logger.warning(
             "[pause-ttl] persist_runtime_state(pause_auto_expired) failed "
-            "for %s: %r",
-            agent_uuid[:12],
+            "after in-memory expiry: %r",
             exc,
         )
     return True
@@ -224,11 +220,7 @@ def _schedule_persistence_fire_and_forget(
                 _spawn_persistence_task(captured_loop, _coro_factory())
             captured_loop.call_soon_threadsafe(_spawn_on_main)
     except Exception as exc:  # noqa: BLE001
-        logger.debug(
-            "[pause-ttl] persistence schedule failed for %s: %r",
-            agent_uuid[:12],
-            exc,
-        )
+        logger.debug("[pause-ttl] persistence schedule failed: %r", exc)
 
 
 def maybe_auto_expire_pause_sync(agent_uuid: str, meta: Any) -> bool:
@@ -243,9 +235,8 @@ def maybe_auto_expire_pause_sync(agent_uuid: str, meta: Any) -> bool:
 
     original_paused_at = _apply_in_memory_expire(meta)
     logger.warning(
-        "[pause-ttl] auto-expired stale pause for %s (paused_at=%s); "
+        "[pause-ttl] auto-expired stale pause (paused_at=%s); "
         "categorizer will re-evaluate (sync path)",
-        agent_uuid[:12],
         original_paused_at,
     )
     _emit_audit(agent_uuid, original_paused_at)
