@@ -55,7 +55,7 @@ full = [
     # Ed25519 signing/verification for the Agent Identity Credential (AIC)
     # attestation primitive (src/identity/agent_identity_credential.py). The
     # module guards the import, so the core install does not require it.
-    "cryptography>=41.0.0,<50.0.0",
+    "cryptography>=41.0.0,<51.0.0",
     # Passkey ceremonies for the browser dashboard. Imported lazily so the
     # core (non-HTTP) install remains minimal.
     "webauthn>=2.8.0,<4.0.0",
