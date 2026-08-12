@@ -6,7 +6,7 @@
 
 </div>
 
-**Status:** v2.17.0. Sustained operation is documented in one long-running
+**Status:** v2.18.0. Sustained operation is documented in one long-running
 maintainer deployment. External adoption remains unvalidated, and the current
 outcome-lift evaluation found no result beyond a selection-aware null.
 

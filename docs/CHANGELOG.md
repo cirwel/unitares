@@ -13,7 +13,7 @@ _No unreleased changes yet. New entries accumulate here until the next release b
 
 ---
 
-## [2.18.0] - 2026-08-11
+## [2.18.0] - 2026-08-12
 
 _Notable changes merged between 2.17.0 (2026-08-11) and this release — dialectic review hardening, coherence provenance cleanup, evaluator-facing release surfaces, and operational telemetry corrections. `pyproject.toml`/`VERSION` bumped to 2.18.0; the live `build_sha` remains the deploy-identity signal._
 

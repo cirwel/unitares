@@ -5,7 +5,7 @@ message: >
   software (this entry) and the paper (preferred-citation, below).
 type: software
 version: "2.18.0"
-date-released: "2026-08-11"
+date-released: "2026-08-12"
 authors:
   - family-names: Wang
     given-names: Kenny
