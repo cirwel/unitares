@@ -9,8 +9,59 @@ PostgreSQL audit.events table provides indexed querying.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+
+
+# ``audit.tool_usage`` is one table holding two incompatible eras, and nothing
+# about its shape says so.
+#
+# Until PR #1424 deployed, the FastMCP wrapper serving ``/mcp`` and ``/sse`` —
+# i.e. every MCP-protocol client, including Claude Code — recorded nothing. Only
+# REST callers landed rows. So any count, adoption figure, or per-agent
+# attribution computed over a window reaching before this instant measured hooks
+# and pollers, not agents, and a trend line spanning it measures the
+# instrumentation change rather than any behaviour.
+#
+# The value is empirical, not a guess from the merge date: it is the first row
+# carrying the ``action_source`` payload key that #1424 introduced
+# (``select min(ts) from audit.tool_usage where payload ? 'action_source'``),
+# which is also where distinct agents/day steps up. Recorded in UTC because the
+# server stores UTC and a Denver-local bound here would reintroduce the
+# partition off-by-six-hours class of bug.
+TOOL_USAGE_MCP_INSTRUMENTED_SINCE = datetime(2026, 7, 31, 19, 24, 49, tzinfo=timezone.utc)
+
+
+def tool_usage_window_coverage(
+    window_hours: float,
+    *,
+    now: Optional[datetime] = None,
+) -> Optional[Dict[str, Any]]:
+    """Describe what a lookback window can and cannot support.
+
+    Returns ``None`` when the window lies entirely inside the instrumented era —
+    the common case, and one that should not carry a caveat it does not need.
+    Otherwise returns a block naming the boundary and what is missing before it,
+    so a caller reporting the number has to see the limit at the same time.
+    """
+    current = now or datetime.now(timezone.utc)
+    start = current - timedelta(hours=float(window_hours))
+    if start >= TOOL_USAGE_MCP_INSTRUMENTED_SINCE:
+        return None
+
+    return {
+        "partial": True,
+        "window_start": start.isoformat(),
+        "mcp_instrumented_since": TOOL_USAGE_MCP_INSTRUMENTED_SINCE.isoformat(),
+        "caveat": (
+            "This window predates MCP-transport instrumentation. Rows before "
+            "mcp_instrumented_since capture REST callers only (hooks, pollers, "
+            "dashboard) — agent tool use over /mcp and /sse was not recorded. "
+            "Counts spanning the boundary measure the instrumentation change, "
+            "not behaviour. Narrow the window to the instrumented era before "
+            "citing adoption, per-agent attribution, or a trend."
+        ),
+    }
 
 
 async def append_audit_event_async(entry: Dict[str, Any], raw_hash: Optional[str] = None) -> bool:
@@ -182,6 +233,13 @@ async def get_tool_usage_stats_async(
             if agent_id else None
         ),
         "source": "db",
+        # Present only when the window reaches into the pre-instrumentation era.
+        # Omitted entirely otherwise, so its presence is the signal.
+        **(
+            {"coverage": coverage}
+            if (coverage := tool_usage_window_coverage(window_hours))
+            else {}
+        ),
     }
 
 
