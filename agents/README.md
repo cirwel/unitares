@@ -19,13 +19,14 @@ To deploy your own residents, depend on `unitares-sdk` and follow the `run_cycle
 
 Lumen (the embodied agent) lives in a separate repo (`anima-mcp`) and shows that a resident can run **out-of-tree** — it is declared through `UNITARES_RESIDENTS` like any other. It is *not* an SDK consumer, though: it talks to governance directly and imports nothing from `unitares_sdk`. As of 2026-08, every SDK consumer is in this repo, so the `sdk-package` CI job is what stands in for an outside consumer.
 
-The SDK is **not on PyPI** — install it from git (or `-e agents/sdk` from a checkout):
+Install it from PyPI (or `-e agents/sdk` from a checkout):
 
 ```bash
-pip install "unitares-sdk @ git+https://github.com/cirwel/unitares@master#subdirectory=agents/sdk"
+pip install unitares-sdk
 ```
 
-See [`sdk/README.md`](sdk/README.md) for why, and for the release path if that changes.
+See [`sdk/README.md`](sdk/README.md) for pinning to a specific server release, and
+for the tag-driven release path.
 
 Declare the resident to a deployment with `UNITARES_RESIDENTS` (names and calibration class) and the `UNITARES_RESIDENT_PROGRESS_MANIFEST` (progress probing). If you want the progress probe to track a metric of your own, ship a source in the `unitares.resident_progress_sources` entry-point group — no change to this repo is required. See [`docs/operations/resident-roster.md`](../docs/operations/resident-roster.md).
 
