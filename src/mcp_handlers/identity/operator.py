@@ -178,10 +178,7 @@ async def _persisted_operator_uuid(session_key: str) -> Optional[str]:
         if stored and len(stored) == 36 and stored.count("-") == 4:
             return stored
     except Exception as e:
-        logger.debug(
-            "[OPERATOR] adopt-winner PG readback failed for %s...: %s",
-            session_key[:24], e,
-        )
+        logger.debug("[OPERATOR] adopt-winner PG readback failed: %s", e)
     return None
 
 

@@ -405,11 +405,10 @@ async def emit_event(
         )
 
     logger.debug(
-        "[coord-events] emitted %s/%s event_id=%s agent_id=%s",
+        "[coord-events] emitted %s/%s event_id=%s",
         service,
         event_type,
         event_id,
-        agent_id,
     )
     return event_id
 

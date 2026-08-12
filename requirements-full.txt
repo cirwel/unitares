@@ -47,5 +47,8 @@ pytest-cov>=4.1.0,<8.0.0
 pytest-asyncio>=0.21.0,<2.0.0
 fakeredis>=2.37.0,<3.0.0
 
+# Public Pages generator and its regression tests
+Markdown>=3.6.0,<4.0.0
+
 # Environment variable loading
 python-dotenv>=1.0.0,<2.0.0

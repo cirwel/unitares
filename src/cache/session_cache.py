@@ -108,7 +108,7 @@ class SessionCache:
                 await redis.setex(key, GovernanceConfig.SESSION_TTL_SECONDS, json.dumps(data))
                 # Also update in-memory cache to prevent stale data
                 _fallback_cache[session_id] = data
-                logger.debug(f"Session bound in Redis: {session_id} -> {agent_id[:8]}...")
+                logger.debug("Session bound in Redis")
                 return True
             except Exception as e:
                 logger.warning(f"Redis bind failed: {e}")
@@ -119,7 +119,7 @@ class SessionCache:
         if existing:
             data["bind_count"] = existing.get("bind_count", 0) + 1
         _fallback_cache[session_id] = data
-        logger.debug(f"Session bound in memory: {session_id} -> {agent_id[:8]}...")
+        logger.debug("Session bound in memory")
         return True
 
     async def get(self, session_id: str) -> Optional[Dict[str, Any]]:

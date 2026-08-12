@@ -5,10 +5,14 @@ Tests _reconstruct_session_from_dict
 and DialecticMessage/Resolution/DialecticSession from dialectic_protocol.
 """
 
-import pytest
+import hashlib
+import hmac
+import json
 import sys
-from pathlib import Path
 from datetime import datetime, timedelta
+from pathlib import Path
+
+import pytest
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -110,8 +114,14 @@ class TestDialecticMessage:
             phase="thesis", agent_id="agent-a", timestamp="2026-01-15T12:00:00"
         )
         sig = msg.sign("test-api-key")
+        expected = hmac.new(
+            b"test-api-key",
+            json.dumps(msg.to_dict(), sort_keys=True).encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
         assert isinstance(sig, str)
         assert len(sig) == 64  # SHA-256 hex
+        assert sig == expected
 
     def test_sign_deterministic(self):
         msg = DialecticMessage(
@@ -627,4 +637,3 @@ class TestDialecticProtocolFlow:
         assert d["reviewer_agent_id"] == "agent-b"
         assert d["session_type"] == "review"
         assert d["session_id"] is not None
-
