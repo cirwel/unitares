@@ -90,73 +90,35 @@ async def ensure_test_database_schema() -> None:
         if not has_knowledge_discoveries:
             await _execute_sql_file(conn, "db/postgres/knowledge_schema.sql")
 
-        # Bring older test DBs forward to current backend assumptions.
-        await _execute_sql_file(conn, "db/postgres/migrations/004_outcome_events.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/005_agent_baselines.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/006_thread_identity.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/007_epochs.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/008_dashboard_matview.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/009_quorum_support.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/010_trigger_source.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/011_behavioral_baselines.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/012_identity_last_activity_at.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/013_metrics_series.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/014_seed_epoch_2.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/017_substrate_claims.sql")
-        # Slots 018 and 019 were renumbered to 022 and 023 in PR #236
-        # (migration-drift triage); the old paths no longer exist.
-        await _execute_sql_file(conn, "db/postgres/migrations/022_bootstrap_synthetic_state.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/023_matview_measured_only.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/020_progress_flat_telemetry.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/021_seed_epoch_3.sql")
- # Surface lease plane (RFC ):
-        # 024 + 025 build the lease_plane schema + immutability triggers; 026 adds
-        # storage-layer grammar CHECK + generated surface_kind column (PR 1, this branch).
-        await _execute_sql_file(conn, "db/postgres/migrations/024_lease_plane.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/025_lease_plane_invariants.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/026_lease_plane_grammar.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/027_lease_plane_deprecation.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/028_lease_plane_trigger_fix.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/029_lease_plane_earned_status_guard.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/030_lease_plane_aborted_event.sql")
-        # Migrations 031-033 are R1-related (provisional lineage, calibration_state,
-        # score_audit verdict cols). Required so 034 lands on the same baseline as
-        # production. See db/postgres/migrations/ for descriptions.
-        await _execute_sql_file(conn, "db/postgres/migrations/031_r1_provisional_lineage.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/032_r1_calibration_state.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/033_r1_score_audit_verdict_cols.sql")
-        # Migration 034: substrate_state columns for §7.13 resident heartbeat surface
-        # (RFC v0.11). Adds 2 NULLABLE columns + 4 CHECK constraints + freshness index.
-        await _execute_sql_file(conn, "db/postgres/migrations/034_lease_plane_substrate_state.sql")
-        # Migration 035: Wave 0 coordination_events instrumentation table.
-        await _execute_sql_file(conn, "db/postgres/migrations/035_coordination_events.sql")
-        # Migration 036: R2 lineage lifecycle columns + sweeper-friendly partial index.
-        # Adds lineage_declared_at, lineage_demoted_at, lineage_archived_at,
-        # lineage_last_eval_at, chain_obs_count to core.identities. Required for
-        # the R2 provisional → confirmed/demoted/archived FSM (PR 1).
-        await _execute_sql_file(conn, "db/postgres/migrations/036_r2_lineage_lifecycle.sql")
-        # Migration 041: audit.coordination_measurements (Wave 3a measurement
-        # channel; flat table). Needed by the lease measurement-bridge tests
-        # (§14 prereq PR #6). Depends only on the audit schema (035).
-        await _execute_sql_file(conn, "db/postgres/migrations/041_wave3a_coordination_measurements.sql")
-        # Migration 042: agent:/ ephemeral-agent presence scheme (extends the 026
-        # grammar CHECK). Applied last here so the bootstrap order matches the
-        # production numeric apply-order (042 > 036); it only depends on 026.
-        await _execute_sql_file(conn, "db/postgres/migrations/042_lease_plane_agent_scheme.sql")
-        # Migrations 043/044: Wave 3 §8.1 shadow tables (LIKE core.identities /
-        # core.agents INCLUDING ALL — depend only on schema.sql base tables).
-        await _execute_sql_file(conn, "db/postgres/migrations/043_identities_shadow.sql")
-        await _execute_sql_file(conn, "db/postgres/migrations/044_agents_shadow.sql")
-        # Migration 049: Wave 3 §9.1 crash-safe session-resolution saga table.
-        await _execute_sql_file(conn, "db/postgres/migrations/049_wave3_session_resolution_sagas.sql")
-        # Migration 050: maintenance:/ cleanup/repair coordination scheme
-        # (extends the 026/042 grammar CHECK). Applied after 042 here because
-        # it supersedes the same surface_id_grammar constraint.
-        await _execute_sql_file(conn, "db/postgres/migrations/050_lease_plane_maintenance_scheme.sql")
-        # Migration 051: Redis-retirement Phase 1 session-binding + onboard-pin
-        # mirror tables (FK-less; additive/inert). Depends only on the core
-        # schema. See docs/proposals/redis-retirement-phase-1-plan.md.
-        await _execute_sql_file(conn, "db/postgres/migrations/051_session_mirror_tables.sql")
+        # Apply EVERY migration on disk, in numeric order.
+        #
+        # This was a hand-maintained list of `_execute_sql_file` calls, and it
+        # had drifted 22 migrations behind `db/postgres/migrations/` — 038
+        # (agent_state.risk_score) through 058, plus 015/016/037. The result was
+        # a test database whose schema was not the one the migrations produce,
+        # so `tests/test_postgres_backend_integration.py` failed on a fresh DB
+        # with `column "risk_score" does not exist` while passing locally on a
+        # long-lived `governance_test` that had drifted into correctness.
+        #
+        # A list that must be appended to by hand every time someone adds a
+        # migration will fall behind again; a scan cannot. Migrations are
+        # numerically prefixed, so sorted order is apply order, and each is
+        # written to be re-runnable (this bootstrap re-applies on every call).
+        for migration in sorted(
+            (_PROJECT_ROOT / "db/postgres/migrations").glob("*.sql"),
+            key=lambda p: p.name,
+        ):
+            try:
+                await _execute_sql_file(conn, f"db/postgres/migrations/{migration.name}")
+            except Exception as exc:  # noqa: BLE001
+                # Loud, not fatal: one non-idempotent migration must not block
+                # every DB-backed test, but it must not pass silently either —
+                # a swallowed failure here is how the schema drifted in the
+                # first place.
+                print(
+                    f"[test-db-bootstrap] migration {migration.name} did not apply: "
+                    f"{type(exc).__name__}: {exc}"
+                )
 
         # Ensure partitioned audit tables can accept inserts for current month.
         await _execute_sql_file(conn, "db/postgres/partitions.sql")
