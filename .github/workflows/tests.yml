@@ -125,13 +125,18 @@ jobs:
     # in the repo was verified by nobody. Credentials match tests/test_db_utils
     # TEST_DB_URL exactly (postgres:postgres@localhost:5432/governance_test).
     #
-    # Stock `postgres`, not an AGE image: the schema bootstrap already treats
-    # `LOAD 'age'` as best-effort, and the four graph-dependent tests skip when
-    # the extension is absent. Pulling an AGE build to satisfy four tests would
-    # trade a large image and a version pin for very little.
+    # pgvector's image, not stock `postgres`: the migrations `CREATE EXTENSION
+    # vector`, and a stock image fails 67 tests with "extension vector is not
+    # available". That was invisible until the tests actually ran here — the
+    # dev machine has pgvector installed, so a local from-scratch database
+    # proved nothing about this.
+    #
+    # Still NOT an AGE image. The schema bootstrap treats `LOAD 'age'` as
+    # best-effort and the graph-dependent tests skip when the extension is
+    # absent, so the remaining gap costs four skips rather than a red build.
     services:
       postgres:
-        image: postgres:17
+        image: pgvector/pgvector:pg17
         env:
           POSTGRES_PASSWORD: postgres
         ports:
