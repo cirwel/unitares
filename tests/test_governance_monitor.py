@@ -1095,6 +1095,47 @@ class TestEstimateRisk:
         risk = monitor.estimate_risk({'response_text': 'Test'}, score_result=score_result)
         assert 0.0 <= risk <= 1.0
 
+    def test_risk_history_stores_bounded_ode_value(self, monitor):
+        """The ODE path must persist the same bounded value it returns."""
+        for history in (
+            monitor.state.E_history,
+            monitor.state.I_history,
+            monitor.state.S_history,
+            monitor.state.V_history,
+        ):
+            history.extend([0.0, 1.0])
+
+        risk = monitor.estimate_risk(
+            {'response_text': 'Test'},
+            score_result={'phi': -1.0, 'verdict': 'high-risk'},
+        )
+
+        assert risk == 1.0
+        assert monitor.state.risk_history[-1] == risk
+
+    def test_risk_history_stores_bounded_behavioral_value(self, monitor, monkeypatch):
+        """The behavioral path must not leak risk above one into history."""
+        from config.governance_config import GovernanceConfig
+        from src.monitor_risk import estimate_risk
+
+        monkeypatch.setattr(GovernanceConfig, "BEHAVIORAL_VERDICT_ENABLED", True)
+        for history in (
+            monitor.state.E_history,
+            monitor.state.I_history,
+            monitor.state.S_history,
+            monitor.state.V_history,
+        ):
+            history.extend([0.0, 1.0])
+
+        risk = estimate_risk(
+            monitor.state,
+            {'response_text': 'Test'},
+            behavioral_risk=1.0,
+        )
+
+        assert risk == 1.0
+        assert monitor.state.risk_history[-1] == risk
+
     def test_worsening_declared_inputs_do_not_lower_risk_after_behavioral_override(self, monkeypatch):
         """Behavioral risk may add signal, but must not erase worse self-attested risk.
 
