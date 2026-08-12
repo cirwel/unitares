@@ -109,9 +109,10 @@ re-judged using current risk thresholds.
 
 The dashboard separately publishes the three current numeric vocabularies
 (`behavioral_verdict`, `experience_summary`, and `health_status`). Their bands
-overlap by design and health can also be overridden by coherence/void gates, so
-different words for the same risk value are visible but are **not** automatically
-counted as contradictions.
+overlap by design. Policy can also be overridden by legacy coherence-compatibility
+or void gates, while health is risk/void-derived; those policy overrides are not
+additional health evidence. Different words for the same risk value are visible
+but are **not** automatically counted as contradictions.
 
 Outcome bins use only strict external anchors, exclude structurally marked
 controlled fixtures, require a prior state at least five minutes before the

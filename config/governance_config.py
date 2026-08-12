@@ -375,10 +375,10 @@ class GovernanceConfig:
     RISK_PHI_WEIGHT = 1.0            # Phi-based risk only
     RISK_TRADITIONAL_WEIGHT = 0.0    # Traditional risk disabled (keyword blocklist preserved but zeroed)
     
-    # Coherence-based override (safety check)
-    # Updated for pure thermodynamic C(V) signal (removed param_coherence blend)
-    # C(V) typically ranges 0.3-0.7 in normal operation, so threshold lowered accordingly
-    COHERENCE_CRITICAL_THRESHOLD = 0.40  # Below this: force intervention (recalibrated for pure C(V))
+    # Legacy C(V)-based compatibility override. C(V) is directional ODE control
+    # feedback, not health; retain this backstop until a validated replacement
+    # completes prospective shadowing. Do not recalibrate it as a health gate.
+    COHERENCE_CRITICAL_THRESHOLD = 0.40
     
     # =================================================================
     # Significance Detection Thresholds
@@ -476,9 +476,9 @@ class GovernanceConfig:
         """
         Compute proprioceptive margin - how close agent is to decision boundaries.
 
-        This implements the "viability envelope" concept: agents need to know where they
-        are relative to their limits, not just absolute numbers. This is proprioception
-        as felt experience, not telemetry data.
+        This reports distance to configured policy boundaries. The legacy
+        coherence boundary is a compatibility backstop, not a health or
+        viability measurement.
 
         Returns margin level and nearest edge:
         - "comfortable": Well within limits, proceed freely
@@ -516,7 +516,8 @@ class GovernanceConfig:
         
         # Compute margins (distance to thresholds)
         # For risk: lower is better, so margin = threshold - current
-        # For coherence: higher is better, so margin = current - threshold
+        # The compatibility policy treats C(V) above its floor as passing; this
+        # ordering is a gate convention, not a claim that higher means healthier.
         # For void: lower is better, so margin = threshold - abs(current)
         
         risk_margin = risk_revise - risk_score  # Distance to pause threshold
@@ -610,7 +611,7 @@ class GovernanceConfig:
 
         Verdict logic (the value this function returns):
         1. If void_active: pause (system unstable - agent should halt)
-        2. If coherence < critical: pause (incoherent output - agent should halt)
+        2. If legacy C(V) < configured floor: pause (compatibility backstop)
         3. If risk_score < 0.35: proceed (no guidance needed)
         4. If risk_score < 0.60: proceed (with optional guidance for medium risk)
         5. Else: pause (agent halts or escalates to another AI layer)
@@ -667,8 +668,14 @@ class GovernanceConfig:
             return {
                 'action': 'pause',
                 'sub_action': 'coherence_pause',
-                'reason': f'Coherence needs attention ({coherence:.2f}) - moment to regroup',
-                'guidance': 'Things are getting fragmented. Simplify, refocus, or take a breather.',
+                'reason': (
+                    'Configured legacy control-feedback floor crossed '
+                    f'({coherence:.2f} < {effective_coherence_threshold:.2f})'
+                ),
+                'guidance': (
+                    'This compatibility safety backstop is not a health diagnosis. '
+                    'Inspect producer provenance and independent behavioral signals.'
+                ),
                 'margin': 'critical',
                 'nearest_edge': 'coherence'
             }
@@ -718,7 +725,11 @@ class GovernanceConfig:
             'action': 'pause',
             'sub_action': 'reject',
             'reason': f'Risk threshold reached ({risk_score:.1%} ≥ {effective_revise_threshold:.0%})',
-            'guidance': f'Pause suggested: simplify approach, break into smaller steps, or take a break. Coherence: {coherence:.2f} (critical: {effective_coherence_threshold:.2f})',
+            'guidance': (
+                'Pause suggested by measured risk. '
+                f'Legacy control feedback: {coherence:.2f} '
+                f'(compatibility floor: {effective_coherence_threshold:.2f}).'
+            ),
             'margin': margin_info['margin'],
             'nearest_edge': margin_info['nearest_edge']
         }

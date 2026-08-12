@@ -8,6 +8,15 @@
 > that `69ee5a79` demoted). Nothing here is actionable until that is repaired. This document
 > exists so the repair does not land against thresholds nobody re-derived.
 
+> **Correction (2026-08-11):** Sections 2–4 preserve the original one-sided derivation as
+> archaeology, but its health interpretation is invalid. Strict monotonicity of `C(V)` preserves
+> order; it does not make positive `V` healthier than negative `V`. Positive means running hot,
+> negative means running careful, and both are directional imbalance. The shadow implementation
+> is therefore now v2: a **two-sided**, leave-current-out behavioral-V residual over a bounded
+> recent window. It remains measurement-only. Its payload names whether empirical dispersion or
+> the calibrated scale floor supplied the denominator, so floor-normalized units are never
+> presented as measured sigma.
+
 ## 1. Why the existing thresholds cannot simply be scaled
 
 Four gates read `coherence`. All were calibrated while it was frozen. Crossing counts over
@@ -17,7 +26,7 @@ the 2026-08-10 non-synthetic `core.agent_state` snapshot (observed range [0.288,
 |---|---|---|---|
 | `tau_floor` | 0.25 | **0, ever** | `AdaptiveGovernor.make_verdict` hard block |
 | `tau_low` | 0.30 | 1 | CIRS hard block |
-| `COHERENCE_CRITICAL_THRESHOLD` | 0.40 | 9 (0.013%) | `coherence_pause`, `is_critical`, `critical` health status |
+| `COHERENCE_CRITICAL_THRESHOLD` | 0.40 | 9 (0.013%) | `coherence_pause`, `is_critical`; former coherence-derived health status removed 2026-08-11 |
 | `TARGET_COHERENCE` | 0.50 | reachable | `coherence_deficit`, fed a near-constant |
 
 The whole stack produced **2 `coherence_pause` actions in that snapshot**. The obvious
@@ -135,20 +144,27 @@ Choosing `k` is a policy call and should be recorded as one.
 
 ## 6. Sequence
 
-1. Repair the signal (#1572 documents why; the repair itself is feeding coherence
-   `get_primary_eisv()`'s V, finishing `69ee5a79`).
-2. Land per-agent thresholds **in the same change**, never after. Unfreezing the signal against
-   the current fleet constants puts two live agents into permanent pause immediately.
+1. Preserve the legacy scalar as explicitly tagged `ode_control_feedback`; do not
+   “repair” a directional controller by feeding it behavioral V and then calling
+   the result health. Define the replacement instrument separately (for example a
+   two-sided behavioral residual or V-free manifold measurement).
+2. Land the replacement instrument and its prospective, per-agent policy together,
+   never by swapping a new distribution under the fleet constants. Also shadow the
+   E/I sensor without its current 25–40% legacy-controller contribution before
+   changing those behavioral baselines.
 3. Ship behind the existing shadow pattern first: compute both, record the divergence, apply
-   nothing — the same discipline `grounding_shadow` already uses. **Built:**
+   nothing — the same discipline `grounding_shadow` already uses. **Built and corrected:**
    `src/coherence_gate_shadow.py` + `coherence_gate_shadow` audit event, behind
-   `UNITARES_COHERENCE_GATE_SHADOW` (default off, no APPLY counterpart by design). The gate
-   statistic is the agent's own **V** z-score rather than a separate coherence baseline: `C(V)`
-   is strictly monotone in `V`, so "coherence below this agent's own normal" and "V below its
-   own normal" are the same event, and a second baseline could only drift out of sync with the
-   first. The tanh is not affine, so a fixed z on V is not exactly a fixed z on C — acceptable
-   only because `k` is a stated tolerance, and recorded here so it is never mistaken for an
-   identity.
+   `UNITARES_COHERENCE_GATE_SHADOW` (default off, no APPLY counterpart by design). Shadow v1 used
+   a one-sided expanding-Welford V score. Shadow v2 supersedes it with
+   `abs(V_current - mean(V_recent_prior)) / effective_scale`: both directions count, the current
+   sample is excluded, history is bounded, and `effective_scale=max(sample_sd, calibrated_floor)`
+   is accompanied by `scale_source`. `statistic_version` keeps v1/v2 events from being pooled.
+   The comparison contract is separately versioned as
+   `coherence_cause_attribution_v2`: agreement uses `sub_action` and
+   `nearest_edge`, so risk/void/basin pauses are no longer mislabeled as
+   legacy coherence-gate firings. Rows without enough causal detail carry
+   `agrees=null` and stay out of agreement rates.
 4. Re-read the gate crossing counts after a soak. A proprioceptive gate that still never fires
    is an unfair zero (the lever is untested, not disproven) and needs a positive control before
    anyone concludes anything from its silence.

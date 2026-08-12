@@ -95,8 +95,15 @@ def make_decision(
             guidance = 'Risk score exceeded the hard-block ceiling. Pause to investigate the input driving the spike.'
             nearest_edge = 'risk'
         elif state.coherence < CIRS_DEFAULTS['tau_low']:
-            reason = f'CIRS coherence floor breached (coherence={state.coherence:.2f} < {CIRS_DEFAULTS["tau_low"]})'
-            guidance = 'Coherence fell below the hard-block floor. Pause to let state stabilize.'
+            reason = (
+                'CIRS legacy control-feedback floor crossed '
+                f'(value={state.coherence:.2f} < {CIRS_DEFAULTS["tau_low"]})'
+            )
+            guidance = (
+                'A configured compatibility backstop fired. Inspect coherence '
+                'producer provenance, EISV, and risk attribution before drawing '
+                'a health conclusion.'
+            )
             nearest_edge = 'coherence'
         else:
             # hard_block reached us but none of the documented conditions hold —
@@ -133,15 +140,21 @@ def make_decision(
             'nearest_edge': 'void',
         }
 
-    # --- Priority 3: coherence below critical → pause (safety gate) ---
+    # --- Priority 3: legacy control feedback below configured floor → pause ---
     effective_coherence_threshold = get_effective_threshold(
         "coherence_critical_threshold", default=config.COHERENCE_CRITICAL_THRESHOLD)
     if state.coherence < effective_coherence_threshold:
         return {
             'action': 'pause',
             'sub_action': 'coherence_pause',
-            'reason': f'Coherence needs attention ({state.coherence:.2f}) — moment to regroup',
-            'guidance': 'Things are getting fragmented. Simplify, refocus, or take a breather.',
+            'reason': (
+                'Configured legacy control-feedback floor crossed '
+                f'({state.coherence:.2f} < {effective_coherence_threshold:.2f})'
+            ),
+            'guidance': (
+                'This compatibility safety backstop is not a health diagnosis. '
+                'Inspect coherence_source, EISV, and risk_attribution before acting.'
+            ),
             'critical': True,
             'basin': basin,
             'margin': 'critical',
@@ -198,8 +211,14 @@ def make_decision(
         return {
             'action': 'pause',
             'sub_action': 'basin_pause',
-            'reason': f'Low basin (I={state.I:.2f}, coherence={state.coherence:.2f}, risk={risk_score:.2f})',
-            'guidance': 'State has entered the low basin. Simplify approach or take a break.',
+            'reason': (
+                f'Low policy basin (I={state.I:.2f}, '
+                f'legacy_control_feedback={state.coherence:.2f}, risk={risk_score:.2f})'
+            ),
+            'guidance': (
+                'A configured basin boundary was crossed. Inspect the individual '
+                'inputs and their provenance before interpreting the cause.'
+            ),
             'critical': is_critical,
             'basin': basin,
             'margin': margin_info['margin'],

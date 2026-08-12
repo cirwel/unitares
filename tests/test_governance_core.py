@@ -21,7 +21,7 @@ def test_imports():
     from governance_core import (
         State, DynamicsParams, Theta, Weights,
         compute_dynamics, step_state,
-        coherence, lambda1, lambda2,
+        control_feedback, coherence, lambda1, lambda2,
         phi_objective, verdict_from_phi,
         clip, drift_norm,
         DEFAULT_PARAMS, DEFAULT_WEIGHTS, DEFAULT_THETA, DEFAULT_STATE,
@@ -67,13 +67,16 @@ def test_coherence():
     """Test coherence functions"""
     print("\nTesting coherence functions...")
 
-    from governance_core import coherence, lambda1, lambda2
+    from governance_core import control_feedback, coherence, lambda1, lambda2
     from governance_core import DEFAULT_THETA, DEFAULT_PARAMS
 
     # Test coherence at V=0 (should be ~0.5*Cmax)
     C = coherence(0.0, DEFAULT_THETA, DEFAULT_PARAMS)
     print(f"  C(V=0) = {C:.4f}")
     assert abs(C - 0.5) < 0.01
+    # The old public name remains an exact compatibility alias; new ODE code
+    # uses the role-accurate name.
+    assert control_feedback(0.0, DEFAULT_THETA, DEFAULT_PARAMS) == C
 
     # Test coherence at high V (should approach Cmax)
     C_high = coherence(5.0, DEFAULT_THETA, DEFAULT_PARAMS)

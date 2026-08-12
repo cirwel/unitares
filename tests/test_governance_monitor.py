@@ -698,7 +698,7 @@ class TestProcessUpdate:
         """Status should be one of the valid health statuses."""
         agent_state = {'response_text': "Test.", 'complexity': 0.5}
         result = monitor.process_update(agent_state)
-        assert result['status'] in ('healthy', 'moderate', 'critical')
+        assert result['status'] in ('healthy', 'moderate', 'critical', 'unknown')
 
     def test_decision_has_action(self, monitor):
         """Decision should always have an action."""
@@ -791,6 +791,11 @@ class TestProcessUpdate:
         cr = result['confidence_reliability']
         assert 'reliability' in cr
         assert 'source' in cr
+        assert cr['coherence_dependency'] == 'ode_control_feedback'
+        assert cr['coherence_source'] == 'legacy_tanh_v'
+        assert cr['coherence_weight'] == 0.55
+        assert cr['coherence_is_health_evidence'] is False
+        assert cr['known_limitations']
 
     def test_verdict_is_valid(self, monitor):
         """Verdict should be one of the known values."""
@@ -1782,7 +1787,7 @@ class TestFullLifecycle:
         metrics = mon.get_metrics()
         assert metrics['initialized'] is True
         assert metrics['history_size'] == 10
-        assert metrics['status'] in ('healthy', 'moderate', 'critical')
+        assert metrics['status'] in ('healthy', 'moderate', 'critical', 'unknown')
 
         # Export history
         json_export = mon.export_history(format='json')

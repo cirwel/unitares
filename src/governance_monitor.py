@@ -116,7 +116,8 @@ ensure_project_root()
 from governance_core import (
     State, Theta,
     DEFAULT_STATE, DEFAULT_THETA, DEFAULT_PARAMS,
-    step_state, coherence,
+    step_state, control_feedback,
+    coherence,  # noqa: F401 — compatibility re-export; internal ODE code uses control_feedback
     eisv_divergence,
     phi_objective, verdict_from_phi,  # noqa: F401 — re-exported; consumers import them from this module
     )
@@ -144,6 +145,10 @@ from src.monitor_metrics import (
 from src.behavioral_state import BehavioralEISV
 from src.behavioral_assessment import assess_behavioral_state
 from src.behavioral_sensor import compute_behavioral_sensor_eisv
+from src.coherence_provenance import (
+    LEGACY_COHERENCE_SOURCE,
+    ODE_CONTROL_FEEDBACK_ROLE,
+)
 
 # Extracted monitor subsystems (Phase 7 decomposition)
 from src.monitor_drift import compute_drift_vector as _compute_drift_vector_impl
@@ -241,6 +246,12 @@ class UNITARESMonitor:
         # Behavioral EISV: observation-first state (no ODE, no attractor)
         self._behavioral_state = BehavioralEISV()
         self._last_behavioral_verdict: Optional[str] = None  # safe/caution/high-risk
+        # Exact result of the last completed, non-simulated governance update.
+        # Dialectic review uses this decision-time bundle rather than rebuilding
+        # evidence from ``state.to_dict()`` (which is only the diagnostic ODE
+        # state and omits the authoritative behavioral vector, risk/verdict
+        # provenance, policy decision, and enforcement request).
+        self._last_governance_result: Optional[Dict[str, Any]] = None
         self._cached_outcome_history: Optional[list] = None  # Populated by Phase 5, used by process_update
 
         # Continuous self-validation: track previous verdict for trajectory comparison
@@ -488,11 +499,12 @@ class UNITARESMonitor:
 
     def coherence_function(self, V: float) -> float:
         """
-        Bounded coherence function C(V) using governance_core coherence function.
+        Compatibility wrapper for the bounded ODE control-feedback function C(V).
 
-        Delegates to canonical governance_core.coherence() function.
+        The method name is retained for callers; C(V) is directional controller
+        activation, not a symmetric health/balance score.
         """
-        return coherence(V, self.state.unitaires_theta, DEFAULT_PARAMS)
+        return control_feedback(V, self.state.unitaires_theta, DEFAULT_PARAMS)
     
     def compute_ethical_drift(self,
                              current_params: np.ndarray,
@@ -716,7 +728,7 @@ class UNITARESMonitor:
         # V bounds: soft barrier in _derivatives() handles this now; clip is safety net only
         # (kept in ODE integrators as defense-in-depth)
 
-        # Update coherence from governance_core coherence function (pure thermodynamic)
+        # Update the legacy ``coherence`` field from directional ODE feedback.
         # Removed param_coherence blend - using pure C(V) signal for honest calibration
         #
         # ⛔ KNOWN GAP — this reads the ODE V, which 69ee5a79 (2026-04-01)
@@ -733,7 +745,7 @@ class UNITARESMonitor:
         # check-ins below AdaptiveGovernor's tau_floor (0.25), which the frozen
         # signal has never once reached — so the threshold must be re-derived
         # first. See governance_core/coherence.py for the full measurement.
-        C_V = coherence(self.state.V, self.state.unitaires_theta, active_params)
+        C_V = control_feedback(self.state.V, self.state.unitaires_theta, active_params)
         self.state.coherence = C_V
         self.state.coherence = np.clip(self.state.coherence, 0.0, 1.0)
 
@@ -1010,6 +1022,7 @@ class UNITARESMonitor:
         saved_process_local_updates = self._process_local_updates
         saved_cold_start_previous = self._cold_start_confirmation_previous
         saved_simulation_active = self._simulation_active
+        saved_last_governance_result = self._last_governance_result
         # The novelty gate for the mirror's complexity line mutates during
         # result building (monitor_result._complexity_divergence_novel); a
         # simulation must not consume the agent's first real surfacing.
@@ -1062,6 +1075,7 @@ class UNITARESMonitor:
             self._process_local_updates = saved_process_local_updates
             self._cold_start_confirmation_previous = saved_cold_start_previous
             self._simulation_active = saved_simulation_active
+            self._last_governance_result = saved_last_governance_result
             self._last_surfaced_complexity_gap = saved_last_gap
     
     def process_update(self, agent_state: Dict, confidence: Optional[float] = None, task_type: str = "mixed") -> Dict:
@@ -1080,14 +1094,14 @@ class UNITARESMonitor:
         This is the main API method called by the MCP server.
 
         Confidence derivation (when not explicitly provided):
-            - High Integrity (I) → high confidence
-            - Low Entropy (S) → high confidence
-            - High Coherence (C) → high confidence
-            - Low |Void| (V) → high confidence
+            - Compatibility blend of I, S, |V| and legacy C(V_ODE)
+            - C(V_ODE) retains 55% weight pending prospective deconfounding
+            - That controller term is not independent confidence/health evidence;
+              inspect confidence_reliability.coherence_dependency
 
         Returns:
         {
-            'status': 'healthy' | 'moderate' | 'critical',
+            'status': 'healthy' | 'moderate' | 'critical' | 'unknown',
             'decision': {...},
             'metrics': {...},
         }
@@ -1447,8 +1461,9 @@ class UNITARESMonitor:
             oscillation_state=oscillation_state
         )
 
-        # Shadow-measure a per-agent coherence gate against the fleet-constant
-        # one that just ran. Flag-gated, default off, and it MUTATES NOTHING —
+        # Shadow-measure a two-sided recent behavioral-V deviation gate against
+        # the legacy fleet coherence gates that just ran. Flag-gated, default
+        # off, and it MUTATES NOTHING —
         # `decision` above is already final. Optional measurement on a mandatory
         # path, so it fails open (same posture as _record_sensor_divergence).
         try:
@@ -1463,6 +1478,8 @@ class UNITARESMonitor:
                                      behavioral=self._behavioral_state,
                                      fleet_action=decision.get("action"),
                                      coherence=self.state.coherence,
+                                     fleet_sub_action=decision.get("sub_action"),
+                                     fleet_nearest_edge=decision.get("nearest_edge"),
                                  ))
         except Exception as exc:
             logger.debug(f"coherence gate shadow skipped: {exc}")
@@ -1656,6 +1673,11 @@ class UNITARESMonitor:
             'V': pV,
             'primary_eisv_source': primary_eisv_source,
             'coherence': float(self.state.coherence),
+            # Compatibility scalar: the monitor itself always produces the
+            # legacy ODE controller output. The pre-persist grounding stage may
+            # replace both value and labels under explicit APPLY.
+            'coherence_source': LEGACY_COHERENCE_SOURCE,
+            'coherence_role': ODE_CONTROL_FEEDBACK_ROLE,
             'lambda1': float(self.state.lambda1),
             'risk_score': float(risk_score),  # Governance/operational risk (70% phi-based + 30% traditional)
             'phi': float(phi),  # Primary physics signal: Φ objective function
@@ -1704,6 +1726,12 @@ class UNITARESMonitor:
         _vshadow = getattr(self, '_last_verification_shadow', None)
         if _vshadow is not None:
             result['verification_floor_shadow'] = {**_vshadow.to_dict(), 'applied': False}
+        # Keep the actual result object: later update phases append the persisted
+        # EISV telemetry envelope to it, so the retained reference becomes the
+        # complete decision-time evidence bundle. Simulations restore the prior
+        # reference in ``simulate_update`` and therefore cannot replace it.
+        if not self._simulation_active:
+            self._last_governance_result = result
         return result
     
     def _compute_drift_vector(self, grounded_agent_state, agent_state, confidence, task_type, continuity_metrics):
@@ -1757,7 +1785,7 @@ class UNITARESMonitor:
 
         Rationale: on the first WARMUP_STRUCTURAL_GRACE_CYCLES process-LOCAL
         cycles, the ODE integrators are cold and state.coherence/V can briefly
-        cross the void/coherence/basin floors even for a healthy agent (verified
+        cross the void/coherence/basin compatibility floors even when independent signals are nominal (verified
         2026-06-03: a restored-but-healthy Lumen still tripped void_pause on the
         first post-restart check-in, with behavioral risk 0.00). We trust the
         restored behavioral baseline over the cold structural metric — but ONLY

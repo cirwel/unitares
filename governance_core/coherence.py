@@ -1,5 +1,5 @@
 """
-UNITARES Governance Core - Coherence Functions (LEGACY THERMODYNAMIC FORM)
+UNITARES Governance Core - directional control feedback (legacy ``coherence`` form)
 
 NOTE — terminology drift, and a correction. An earlier version of this note
 claimed the `coherence` field exposed in MCP responses is "NO LONGER this
@@ -13,36 +13,42 @@ drops `coherence_legacy`/`coherence_source` entirely
 and in `core.agent_state.coherence` is THIS function.
 
 Read the row's `state_json.coherence_form` to know which form produced a
-stored value ("legacy_tanh_v" here, "manifold" under APPLY); rows written
-before that tag shipped, or with both grounding flags off, carry no tag.
+stored value ("legacy_tanh_v" here, "manifold" under APPLY). Rows written
+before the provenance tag shipped remain untagged; new rows are tagged even
+when both grounding flags are off. New response metrics carry the same source
+plus `coherence_role`; do not infer either from the scalar's range.
 
 The manifold-distance form over (E, I, S) lives in
 `src/grounding/coherence.py::compute_coherence` and becomes canonical only
 when APPLY is enabled. It is not a drop-in: see the degeneracy note below.
 
-Use this module when you specifically want the V-driven thermodynamic
-coherence (e.g. ODE integration, drift telemetry baselines). For "is this
-agent's state coherent" questions in handler/response code, read
-`metrics["coherence"]` (manifold form) or `metrics["coherence_legacy"]`
-(this form) — and be explicit about which one your code depends on.
+Use :func:`control_feedback` when the ODE specifically needs its V-driven
+feedback term. :func:`coherence` remains a compatibility alias because the
+old name is embedded in persisted schemas and public imports. For "is this
+agent's state coherent" questions in handler/response code, first inspect
+`coherence_source` / `coherence_role` (or persisted `coherence_form` for stored
+rows): canonical `metrics["coherence"]` is manifold only under APPLY and is
+otherwise this legacy feedback value. When APPLY is active,
+`metrics["coherence_legacy"]` preserves this form.
 
 See `src/mcp_handlers/updates/enrichments.py` for the swap site that
 populates both fields, and the paper v6.8.1 §6.7 translation table for
 the vocabulary mapping (paper ↔ runtime ↔ audit).
 
-Coherence is a key feedback mechanism in UNITARES that stabilizes
-the system. It depends on the void integral V and control parameters Θ.
+This function is a key feedback mechanism in UNITARES. It depends on the
+signed void integral V and control parameters Θ.
 
 Mathematical Definition (UNITARES v4.1 Section 3.4):
     C(V, Θ) = Cmax · 0.5 · (1 + tanh(Θ.C₁ · V))
 
     λ₁ = 0.3  (ethical drift into S)
-    λ₂ = 0.05 (coherence coupling)
+    λ₂ = 0.05 (control-feedback coupling)
 
-Physical Interpretation:
-    - C(V, Θ) ∈ [0, Cmax] represents system coherence
-    - When V → -∞: C → 0 (incoherent, I >> E)
-    - When V → +∞: C → Cmax (coherent, E >> I)
+Control interpretation:
+    - C(V, Θ) ∈ [0, Cmax] is directional controller activation
+    - When V → -∞: C → 0 (integrity surplus / running careful)
+    - When V → +∞: C → Cmax (energy surplus / running hot)
+    - C(0, Θ) = Cmax/2, so it is not a balance score
     - Θ.C₁ controls the steepness of the transition
 """
 
@@ -50,9 +56,9 @@ import math
 from .parameters import DynamicsParams, Theta
 
 
-def coherence(V: float, theta: Theta, params: DynamicsParams) -> float:
+def control_feedback(V: float, theta: Theta, params: DynamicsParams) -> float:
     """
-    Compute UNITARES coherence function (pure thermodynamic).
+    Compute the UNITARES ODE's directional V-feedback term.
 
     C(V, Θ) = Cmax · 0.5 · (1 + tanh(Θ.C₁ · V))
 
@@ -62,13 +68,15 @@ def coherence(V: float, theta: Theta, params: DynamicsParams) -> float:
         params: Dynamics parameters (for Cmax)
 
     Returns:
-        Coherence value in [0, Cmax]
+        Controller activation in [0, Cmax]
 
     Notes:
-        - Coherence acts as a stabilizing feedback
-        - Higher V (E > I) → higher coherence
-        - Lower V (I > E) → lower coherence
+        - The value acts as stabilizing feedback inside the ODE
+        - Higher V (E > I) → greater controller activation
+        - Lower V (I > E) → lower controller activation
         - C1 parameter controls transition steepness
+        - Its sign-asymmetric monotonicity makes it unsuitable as a symmetric
+          score of balance or agent health
         
     Physical Interpretation:
         - With V typically in [-0.1, 0.1] (actual operating range due to damping)
@@ -97,9 +105,9 @@ def coherence(V: float, theta: Theta, params: DynamicsParams) -> float:
         behavioral (EMA + Welford) values and moved the ODE values to a
         `metrics['ode']` diagnostic sub-field. **Coherence was not part of the
         swap** — verified: the commit changes zero lines mentioning coherence.
-        `governance_monitor.py` still computes it as
-        `coherence(self.state.V, ...)`, i.e. from the ODE V that the same
-        commit demoted.
+        `governance_monitor.py` still computes the legacy field as
+        `control_feedback(self.state.V, ...)`, i.e. from the ODE V that the
+        same commit demoted.
 
         So this function is the last surfaced field still reporting the ODE
         attractor, and "all agents look identical" is still true of it alone.
@@ -131,8 +139,9 @@ def coherence(V: float, theta: Theta, params: DynamicsParams) -> float:
         `e_tau = tau_ref - coherence` (tau_ref 0.38/0.44), which against a
         value pinned at ~0.484 is a near-constant error term.
 
-        Do NOT respond by lowering tau_floor to make the gate fire; that fits
-        a threshold to a signal with no information in it.
+        Do NOT respond by lowering tau_floor merely to make the gate fire; that
+        fits a threshold to observed alarm rate without validating the signal's
+        relationship to outcomes.
 
         FOUR separate gates were calibrated against this frozen signal, not
         one. Any repair has to re-derive all of them, so they are inventoried
@@ -173,6 +182,16 @@ def coherence(V: float, theta: Theta, params: DynamicsParams) -> float:
         needs outcome evidence rather than a chosen alarm rate.
     """
     return params.Cmax * 0.5 * (1.0 + math.tanh(theta.C1 * V))
+
+
+def coherence(V: float, theta: Theta, params: DynamicsParams) -> float:
+    """Backward-compatible alias for :func:`control_feedback`.
+
+    The historical name is retained for public imports and persisted contracts.
+    New ODE code should use ``control_feedback`` so an internal actuator is not
+    mistaken for an externally validated health measurement.
+    """
+    return control_feedback(V, theta, params)
 
 
 def lambda1(theta: Theta, params: DynamicsParams, lambda1_min: float = 0.05, lambda1_max: float = 0.20) -> float:
@@ -231,7 +250,7 @@ def lambda2(theta: Theta, params: DynamicsParams, lambda2_min: float = 0.02, lam
     """
     Compute λ₂ parameter (adaptive via theta.eta2).
 
-    λ₂ controls how much coherence reduces semantic uncertainty S.
+    λ₂ controls how much ODE control feedback reduces semantic uncertainty S.
     Now adaptive via theta.eta2, mapped to [lambda2_min, lambda2_max].
 
     Mapping: eta2 ∈ [0.1, 0.5] → lambda2 ∈ [lambda2_min, lambda2_max]
@@ -244,7 +263,8 @@ def lambda2(theta: Theta, params: DynamicsParams, lambda2_min: float = 0.02, lam
         lambda2_max: Maximum lambda2 value (default: 0.10)
 
     Returns:
-        λ₂ value (coherence → S reduction strength) in [lambda2_min, lambda2_max]
+        λ₂ value (control feedback → S reduction strength) in
+        [lambda2_min, lambda2_max]
     """
     eta2 = getattr(theta, 'eta2', None)
     if eta2 is None:

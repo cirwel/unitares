@@ -485,24 +485,43 @@ class TestGenerateActionableFeedback:
         assert any("uncertainty" in f.lower() or "not sure" in f.lower() for f in fb)
 
     def test_response_text_overconfidence_low_coherence(self):
-        metrics = {"coherence": 0.4, "updates": 5}
+        metrics = {
+            "coherence": 0.4,
+            "coherence_role": "behavioral_update_consistency",
+            "updates": 5,
+        }
         fb = generate_actionable_feedback(
             metrics, response_text="This is definitely the right answer"
         )
         assert any("confidence" in f.lower() or "assumptions" in f.lower() for f in fb)
 
     def test_exploration_low_coherence_drop(self):
-        metrics = {"coherence": 0.2, "regime": "exploration", "updates": 5}
+        metrics = {
+            "coherence": 0.2,
+            "coherence_role": "behavioral_update_consistency",
+            "regime": "exploration",
+            "updates": 5,
+        }
         fb = generate_actionable_feedback(metrics, previous_coherence=0.5)
         assert any("exploration" in f.lower() or "coherence" in f.lower() for f in fb)
 
     def test_stable_coherence_drop(self):
-        metrics = {"coherence": 0.5, "regime": "locked", "updates": 5}
+        metrics = {
+            "coherence": 0.5,
+            "coherence_role": "behavioral_update_consistency",
+            "regime": "locked",
+            "updates": 5,
+        }
         fb = generate_actionable_feedback(metrics, previous_coherence=0.8)
         assert any("drop" in f.lower() or "coherence" in f.lower() for f in fb)
 
     def test_convergent_task_low_coherence(self):
-        metrics = {"coherence": 0.3, "regime": "transition", "updates": 5}
+        metrics = {
+            "coherence": 0.3,
+            "coherence_role": "behavioral_update_consistency",
+            "regime": "transition",
+            "updates": 5,
+        }
         fb = generate_actionable_feedback(metrics, task_type="convergent")
         assert any("coherence" in f.lower() or "convergent" in f.lower() for f in fb)
 

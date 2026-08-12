@@ -1078,7 +1078,7 @@ class VigilAgent(GovernanceAgent):
             "cycle_time": datetime.now(timezone.utc).isoformat(),
         }
 
-        # Change notes (health transitions, coherence drift, etc.)
+        # Change notes (health transitions, compatibility-signal movement, etc.)
         changes = detect_changes(prev_state, self._cycle_state)
         note_tuples = [(c["summary"], c["tags"]) for c in changes]
 

@@ -468,6 +468,36 @@ def _reviewer_objection_stands_in_session_data(session_data: Dict[str, Any]) -> 
     return False
 
 
+def _reviewer_verdict_pending_in_session_data(session_data: Dict[str, Any]) -> bool:
+    """Mirror ``DialecticSession._reviewer_verdict_pending`` for fast reads."""
+    paused_agent_id = session_data.get("paused_agent_id") or session_data.get("paused_agent")
+    reviewer_agent_id = session_data.get("reviewer_agent_id") or session_data.get("reviewer")
+    if not reviewer_agent_id or reviewer_agent_id == paused_agent_id:
+        return False
+
+    transcript = session_data.get("transcript") or session_data.get("messages") or []
+    has_independent_antithesis = False
+    has_independent_verdict = False
+    for message in transcript:
+        if isinstance(message, dict):
+            phase = message.get("phase") or message.get("message_type") or message.get("role")
+            agent_id = message.get("agent_id")
+            agrees = message.get("agrees")
+        else:
+            phase = getattr(message, "phase", None)
+            agent_id = getattr(message, "agent_id", None)
+            agrees = getattr(message, "agrees", None)
+
+        if agent_id == paused_agent_id:
+            continue
+        if phase == "antithesis":
+            has_independent_antithesis = True
+        elif phase == "synthesis" and agrees is not None:
+            has_independent_verdict = True
+
+    return has_independent_antithesis and not has_independent_verdict
+
+
 def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, Any]:
     """Annotate a session payload with concrete next-action metadata."""
     # Two dict shapes reach this function. `load_session_as_dict`
@@ -483,9 +513,14 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
     reviewer_agent_id = session_data.get("reviewer_agent_id") or session_data.get("reviewer")
     phase = str(session_data.get("phase") or "").lower()
     session_id = session_data.get("session_id") or "<session_id>"
+    awaiting_facilitation = bool(session_data.get("awaiting_facilitation", False))
     reviewer_objection_stands = (
         phase == "synthesis"
         and _reviewer_objection_stands_in_session_data(session_data)
+    )
+    reviewer_verdict_pending = (
+        phase == "synthesis"
+        and _reviewer_verdict_pending_in_session_data(session_data)
     )
     independent_reviewer_can_revise = bool(
         reviewer_agent_id and reviewer_agent_id != paused_agent_id
@@ -496,9 +531,16 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
         current_agent_id = get_context_agent_id()
     except Exception:
         current_agent_id = None
+    try:
+        from ..identity.operator import is_operator_caller
+        operator_caller = is_operator_caller()
+    except Exception:
+        operator_caller = False
 
     current_agent_role = None
-    if current_agent_id:
+    if operator_caller:
+        current_agent_role = "operator"
+    elif current_agent_id:
         if current_agent_id == paused_agent_id:
             current_agent_role = "paused_agent"
         elif reviewer_agent_id and current_agent_id == reviewer_agent_id:
@@ -541,7 +583,17 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
                 "Any eligible reviewer may claim this session by submitting antithesis."
             )
     elif phase == "synthesis":
-        if reviewer_objection_stands:
+        if reviewer_verdict_pending:
+            required_role = "reviewer"
+            required_agent_id = reviewer_agent_id
+            required_agent_label = _agent_label(reviewer_agent_id)
+            allowed_agent_ids = [reviewer_agent_id] if reviewer_agent_id else []
+            recommended_action = (
+                "The independent reviewer has submitted antithesis and now owes "
+                "the first synthesis verdict. The paused agent may not agree to "
+                "resume until that verdict is recorded."
+            )
+        elif reviewer_objection_stands:
             required_role = "reviewer_or_facilitator"
             required_agent_id = reviewer_agent_id if independent_reviewer_can_revise else None
             required_agent_label = (
@@ -566,6 +618,18 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
             recommended_action = (
                 "Paused agent and reviewer should negotiate via submit_synthesis() until convergence."
             )
+    elif phase == "failed" and awaiting_facilitation:
+        required_role = "reviewer_or_operator"
+        required_agent_id = reviewer_agent_id
+        required_agent_label = _agent_label(reviewer_agent_id)
+        allowed_agent_ids = [reviewer_agent_id] if reviewer_agent_id else []
+        if operator_caller and current_agent_id:
+            allowed_agent_ids.append(current_agent_id)
+        recommended_action = (
+            "This failed session still carries an unanswered facilitation request. "
+            "An operator should assign a replacement reviewer, or the current "
+            "independent reviewer may hand the session off; reassignment revives it."
+        )
     elif phase in {"resolved", "failed", "escalated", "quorum_voting"}:
         required_role = "none"
         recommended_action = (
@@ -577,6 +641,11 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
         current_agent_can_submit = None
     elif phase == "antithesis" and reviewer_agent_id is None:
         current_agent_can_submit = current_agent_id != paused_agent_id
+    elif phase == "failed" and awaiting_facilitation:
+        current_agent_can_submit = operator_caller or (
+            current_agent_id == reviewer_agent_id
+            and current_agent_id != paused_agent_id
+        )
     else:
         current_agent_can_submit = current_agent_id in allowed_agent_ids
 
@@ -614,6 +683,20 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
             )
         else:
             whose_move = "the reviewer's — their antithesis is owed"
+    elif phase == "synthesis" and reviewer_verdict_pending:
+        if current_agent_role == "reviewer":
+            whose_move = "YOURS — your first synthesis verdict is owed"
+            next_call = (
+                f"dialectic(action='synthesis', session_id='{session_id}', "
+                "agrees=true/false, root_cause='...', reasoning='...', "
+                "proposed_conditions=[...])"
+            )
+        elif current_agent_role == "paused_agent":
+            whose_move = (
+                "NOT YOURS — the independent reviewer's synthesis verdict is pending"
+            )
+        else:
+            whose_move = "the reviewer's — their first synthesis verdict is owed"
     elif phase == "synthesis" and reviewer_objection_stands:
         if current_agent_role == "reviewer" and independent_reviewer_can_revise:
             whose_move = "YOURS — review the new evidence and maintain or revise your verdict"
@@ -627,13 +710,15 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
                 "NOT YOURS — the reviewer's rejection stands; wait for the reviewer "
                 "or ask an operator to reassign/facilitate"
             )
-        else:
-            whose_move = (
-                "an operator's — reassign/facilitate unless the reviewer will revise its verdict"
-            )
+        elif current_agent_role == "operator":
+            whose_move = "YOURS — reassign/facilitate unless the reviewer will revise"
             next_call = (
                 f"dialectic(action='reassign', session_id='{session_id}', "
                 "reason='Facilitate standing reviewer rejection')"
+            )
+        else:
+            whose_move = (
+                "an operator's — reassign/facilitate unless the reviewer will revise its verdict"
             )
     elif phase == "synthesis":
         if current_agent_role in {"paused_agent", "reviewer"}:
@@ -645,6 +730,28 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
             )
         else:
             whose_move = "the participants' — they negotiate synthesis until convergence"
+    elif phase == "failed" and awaiting_facilitation:
+        reassign_call = (
+            f"dialectic(action='reassign', session_id='{session_id}', "
+            "reason='Answer outstanding facilitation request')"
+        )
+        if current_agent_role == "operator":
+            whose_move = "YOURS — reassign a reviewer to revive this session"
+            next_call = reassign_call
+        elif (
+            current_agent_role == "reviewer"
+            and reviewer_agent_id != paused_agent_id
+        ):
+            whose_move = "YOURS — hand this session to a replacement reviewer"
+            next_call = reassign_call
+        elif current_agent_role == "paused_agent":
+            whose_move = (
+                "NOT YOURS — wait for the reviewer or an operator to reassign/facilitate"
+            )
+        else:
+            whose_move = (
+                "an operator's or the current reviewer's — reassignment revives this session"
+            )
 
     return {
         "whose_move": whose_move,
@@ -659,6 +766,7 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
         "current_agent_id": current_agent_id,
         "current_agent_role": current_agent_role,
         "current_agent_can_submit": current_agent_can_submit,
+        "reviewer_verdict_pending": reviewer_verdict_pending,
         "recommended_action": recommended_action,
     }
 
@@ -693,6 +801,37 @@ async def _validate_explicit_reviewer_candidate(
             error_category="validation_error",
         )]
 
+    return None
+
+
+def _reviewer_reassignment_actor(session: DialecticSession) -> Optional[str]:
+    """Return the authorized reassignment role for the current request.
+
+    A normal bound identity is accountability, not operator authority. Public
+    reassignment is therefore limited to a credentialed operator or the current
+    independent reviewer handing its own assignment off. The paused agent is
+    never allowed to choose its replacement reviewer, including self-review
+    sessions where it occupies both participant fields.
+    """
+    try:
+        from ..identity.operator import is_operator_caller
+        if is_operator_caller():
+            return "operator"
+    except Exception:
+        pass
+
+    try:
+        from ..context import get_context_agent_id
+        current_agent_id = get_context_agent_id()
+    except Exception:
+        current_agent_id = None
+
+    if (
+        current_agent_id
+        and current_agent_id == session.reviewer_agent_id
+        and current_agent_id != session.paused_agent_id
+    ):
+        return "current_reviewer"
     return None
 
 
@@ -796,6 +935,99 @@ async def _apply_reviewer_reassignment(
         "reason": reason,
         "reasoning": reasoning,
     }
+
+
+_PAUSE_EVIDENCE_SCHEMA = "dialectic.pause_evidence.v1"
+
+
+def _capture_pause_evidence(monitor: Any) -> Dict[str, Any]:
+    """Return the exact last governance decision bundle for dialectic review.
+
+    ``GovernanceState.to_dict()`` is the diagnostic ODE state. It does not carry
+    the verdict-authoritative behavioral vector, final risk/verdict provenance,
+    policy decision, or enforcement request. A reviewer must not be invited to
+    treat that partial diagnostic state as the basis of a pause.
+
+    The monitor retains the actual result object from its last completed update.
+    Later update phases enrich that same object with the persisted EISV telemetry
+    envelope, so prefer the envelope when present and fall back to the result's
+    already-final metrics/policy fields. If no completed update is available, say
+    so explicitly rather than manufacturing authoritative-looking evidence.
+    """
+    unavailable = {
+        "schema": _PAUSE_EVIDENCE_SCHEMA,
+        "evidence_status": "unavailable",
+        "source": "live_monitor",
+        "selection": "last_completed_governance_update_at_session_open",
+    }
+    if monitor is None:
+        return {
+            **unavailable,
+            "source": "none",
+            "limitation": "No live governance monitor was available when the session opened.",
+        }
+
+    result = getattr(monitor, "_last_governance_result", None)
+    if not isinstance(result, dict):
+        return {
+            **unavailable,
+            "limitation": (
+                "The live monitor had no completed governance update retained; "
+                "diagnostic ODE state was intentionally not substituted."
+            ),
+        }
+
+    metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+    telemetry = (
+        result.get("eisv_telemetry")
+        if isinstance(result.get("eisv_telemetry"), dict)
+        else {}
+    )
+    measurement = (
+        telemetry.get("measurement")
+        if isinstance(telemetry.get("measurement"), dict)
+        else {
+            "primary": {
+                "source": metrics.get("primary_eisv_source") or "unknown",
+                "values": {
+                    key: metrics.get(key) for key in ("E", "I", "S", "V")
+                },
+            },
+            "ode": {
+                "source": "ode_diagnostic",
+                "values": (
+                    dict(metrics.get("ode"))
+                    if isinstance(metrics.get("ode"), dict)
+                    else {}
+                ),
+            },
+        }
+    )
+    policy_evaluation = (
+        telemetry.get("policy_evaluation")
+        if isinstance(telemetry.get("policy_evaluation"), dict)
+        else result.get("policy_evaluation")
+    )
+    enforcement = (
+        telemetry.get("enforcement")
+        if isinstance(telemetry.get("enforcement"), dict)
+        else result.get("enforcement")
+    )
+
+    evidence = {
+        "schema": _PAUSE_EVIDENCE_SCHEMA,
+        "evidence_status": "available",
+        "source": "last_completed_governance_update",
+        "selection": "last_completed_governance_update_at_session_open",
+        "observed_at": telemetry.get("observed_at") or result.get("timestamp"),
+        "measurement_id": telemetry.get("measurement_id"),
+        "measurement": measurement,
+        "policy_evaluation": policy_evaluation if isinstance(policy_evaluation, dict) else {},
+        "enforcement": enforcement if isinstance(enforcement, dict) else {},
+    }
+    if isinstance(result.get("risk_attribution"), dict):
+        evidence["risk_attribution"] = result["risk_attribution"]
+    return evidence
 
 @mcp_tool("request_dialectic_review", timeout=REQUEST_REVIEW_TIMEOUT, register=True)
 async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence[TextContent]:
@@ -929,14 +1161,19 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
                 llm_args[key] = arguments[key]
         return await handle_llm_assisted_dialectic(llm_args)
 
-    # Capture paused agent state snapshot if available
-    paused_agent_state = {}
+    # Capture the exact decision-time evidence bundle. Never substitute the
+    # monitor's bare ODE state: it is diagnostic and not the verdict authority.
     try:
         monitor = getattr(mcp_server, "monitors", {}).get(agent_uuid)
-        if monitor and hasattr(monitor, "state") and hasattr(monitor.state, "to_dict"):
-            paused_agent_state = monitor.state.to_dict()
+        paused_agent_state = _capture_pause_evidence(monitor)
     except Exception:
-        paused_agent_state = {}
+        paused_agent_state = {
+            "schema": _PAUSE_EVIDENCE_SCHEMA,
+            "evidence_status": "unavailable",
+            "source": "capture_error",
+            "selection": "last_completed_governance_update_at_session_open",
+            "limitation": "Governance evidence capture failed at session open.",
+        }
 
     # Reviewer selection
     auto_awaiting_reviewer = False
@@ -1511,21 +1748,31 @@ def _synthetic_reviewer_enabled() -> bool:
 
 
 def _snapshot_agent_state(agent_uuid: str) -> Optional[Dict[str, Any]]:
-    """EISV/risk snapshot for an agent, for grounding the synthetic antithesis.
-    Returns None when no live monitor exists (the reviewer then critiques on the
-    thesis alone). Mirrors the snapshot the one-shot llm_assisted path builds."""
+    """Compact authoritative evidence for the legacy synthetic-review prompt."""
     try:
         monitor = getattr(mcp_server, "monitors", {}).get(agent_uuid)
-        if not monitor:
+        evidence = _capture_pause_evidence(monitor)
+        if evidence.get("evidence_status") != "available":
             return None
-        state = getattr(monitor, "state", None)
+        measurement = evidence.get("measurement") or {}
+        primary = measurement.get("primary") or {}
+        values = primary.get("values") or {}
+        policy = evidence.get("policy_evaluation") or {}
+        inputs = policy.get("inputs") or {}
         return {
-            "risk_score": getattr(monitor, "risk_score", None),
-            "coherence": getattr(state, "coherence", None) if state else None,
-            "E": getattr(state, "E", None) if state else None,
-            "I": getattr(state, "I", None) if state else None,
-            "S": getattr(state, "S", None) if state else None,
-            "V": getattr(state, "V", None) if state else None,
+            "E": values.get("E"),
+            "I": values.get("I"),
+            "S": values.get("S"),
+            "V": values.get("V"),
+            "primary_eisv_source": primary.get("source"),
+            "coherence": inputs.get("coherence"),
+            "risk_score": inputs.get("risk_score"),
+            "phi": inputs.get("phi"),
+            "verdict": inputs.get("verdict"),
+            "verdict_source": inputs.get("verdict_source"),
+            "action": policy.get("action"),
+            "sub_action": policy.get("sub_action"),
+            "ode": (measurement.get("ode") or {}).get("values"),
         }
     except Exception:
         return None
@@ -1927,13 +2174,16 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
         if session.reviewer_agent_id and agent_id != session.reviewer_agent_id:
             if not take_over_if_requested:
                 workflow = (
-                    "Wait for the assigned reviewer to answer, or use "
+                    "Wait for the assigned reviewer to answer, or ask an "
+                    "authenticated operator/current reviewer to use "
                     "dialectic(action='reassign', session_id='...', new_reviewer_id='...')."
                 )
                 if agent_id != session.paused_agent_id:
                     workflow = (
-                        "Retry with take_over_if_requested=true from your bound session, "
-                        "or use dialectic(action='reassign', session_id='...', new_reviewer_id='...')."
+                        "Ask an authenticated operator to retry with "
+                        "take_over_if_requested=true, or ask the current reviewer/operator "
+                        "to use dialectic(action='reassign', session_id='...', "
+                        "new_reviewer_id='...')."
                     )
                 return [error_response(
                     "Only the assigned reviewer can submit antithesis for this session.",
@@ -1944,6 +2194,25 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
                         "related_tools": ["dialectic", "identity"],
                         "workflow": workflow,
                     },
+                )]
+
+            # ``take_over_if_requested`` is an in-one-call reassignment alias.
+            # Identity binding alone must not let an unrelated agent seize an
+            # occupied reviewer slot, so require the same operator credential as
+            # an operator-initiated explicit reassignment.
+            if _reviewer_reassignment_actor(session) != "operator":
+                return [error_response(
+                    "Reviewer takeover requires an authenticated operator.",
+                    error_code="TAKEOVER_FORBIDDEN",
+                    error_category="auth_error",
+                    recovery={
+                        "action": (
+                            "Wait for the assigned reviewer, or ask an authenticated "
+                            "operator/current reviewer to reassign the session."
+                        ),
+                        "related_tools": ["dialectic", "identity"],
+                    },
+                    arguments=arguments,
                 )]
 
             validation_error = await _validate_explicit_reviewer_candidate(session, agent_id)
@@ -2176,7 +2445,31 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
     
             # Submit to session
             result = session.submit_synthesis(message, api_key)
-    
+
+            # Ordering guard: the independent reviewer has posted antithesis but
+            # its verdict call has not landed yet. This attempt was not recorded
+            # and is not a max-rounds failure; tell the paused agent to wait for
+            # the reviewer instead of applying the conservative-default branch.
+            if result.get("blocked") == "reviewer_verdict_pending":
+                return [error_response(
+                    result.get("error")
+                    or "The independent reviewer's synthesis verdict is still pending.",
+                    error_code="REVIEWER_VERDICT_PENDING",
+                    error_category="governance_refusal",
+                    recovery={
+                        "action": (
+                            "Wait for the assigned reviewer to submit its synthesis "
+                            "verdict, then inspect the session before responding."
+                        ),
+                        "reviewer_agent_id": session.reviewer_agent_id,
+                        "next_call": (
+                            f"dialectic(action='get', session_id='{session_id}')"
+                        ),
+                        "related_tools": ["dialectic"],
+                    },
+                    arguments=arguments,
+                )]
+
             if result.get("success"):
                 # Persist synthesis message to PostgreSQL
                 # NOTE: Defer phase update for converged sessions until after finalize_resolution
@@ -2399,7 +2692,9 @@ async def handle_reassign_reviewer(arguments: Dict[str, Any]) -> Sequence[TextCo
     Reassign the reviewer for an active dialectic session.
 
     Use when the current reviewer is unresponsive (ephemeral session ended)
-    or you need to manually assign a specific reviewer.
+    or a facilitation request needs a replacement reviewer. Requires either an
+    authenticated operator credential or the current independent reviewer
+    handing off its own assignment.
 
     Args:
         session_id: Dialectic session ID
@@ -2435,6 +2730,23 @@ async def handle_reassign_reviewer(arguments: Dict[str, Any]) -> Sequence[TextCo
         return [error_response(
             f"Session '{session_id}' not found",
             recovery=session_not_found_recovery(),
+        )]
+
+    reassignment_actor = _reviewer_reassignment_actor(session)
+    if reassignment_actor is None:
+        return [error_response(
+            "Reviewer reassignment requires an operator credential or the current "
+            "independent reviewer handing off its own assignment.",
+            error_code="REASSIGN_FORBIDDEN",
+            error_category="auth_error",
+            recovery={
+                "action": (
+                    "Ask an authenticated operator or the currently assigned "
+                    "reviewer to perform the reassignment."
+                ),
+                "related_tools": ["dialectic", "identity"],
+            },
+            arguments=arguments,
         )]
 
     # Validate phase — THESIS/ANTITHESIS, or any session explicitly waiting on a
@@ -2512,6 +2824,7 @@ async def handle_reassign_reviewer(arguments: Dict[str, Any]) -> Sequence[TextCo
         "session_id": session_id,
         "old_reviewer_id": old_reviewer_id,
         "new_reviewer_id": new_reviewer_id,
+        "reassigned_by_role": reassignment_actor,
         "phase": session.phase.value,
         "reason": reason,
         "recovery": get_reviewer_reassigned_recovery(
@@ -2590,21 +2903,13 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
-    # Get agent state for context
-    agent_state = None
-    try:
-        monitor = getattr(mcp_server, "monitors", {}).get(agent_uuid)
-        if monitor:
-            agent_state = {
-                "risk_score": getattr(monitor, "risk_score", None),
-                "coherence": getattr(monitor.state, "coherence", None) if hasattr(monitor, "state") else None,
-                "E": getattr(monitor.state, "E", None) if hasattr(monitor, "state") else None,
-                "I": getattr(monitor.state, "I", None) if hasattr(monitor, "state") else None,
-                "S": getattr(monitor.state, "S", None) if hasattr(monitor, "state") else None,
-                "V": getattr(monitor.state, "V", None) if hasattr(monitor, "state") else None,
-            }
-    except Exception as e:
-        logger.debug(f"Could not get agent state: {e}")
+    # Use the same decision-time, behavioral-first evidence projection as the
+    # peer/orchestrated reviewer path. The prior code read ``monitor.risk_score``
+    # (an attribute the monitor does not define) plus raw ODE state.
+    pause_evidence = _capture_pause_evidence(
+        getattr(mcp_server, "monitors", {}).get(agent_uuid)
+    )
+    agent_state = _snapshot_agent_state(agent_uuid)
 
     # Run full dialectic
     logger.info("Running LLM-assisted dialectic")
@@ -2646,6 +2951,7 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
             topic=root_cause[:200],
             max_synthesis_rounds=2,
             reason=root_cause,
+            paused_agent_state=pause_evidence,
         )
         session_id = session.session_id
 
@@ -2658,6 +2964,7 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
             topic=root_cause[:200],
             max_synthesis_rounds=2,
             synthesis_round=0,
+            paused_agent_state=pause_evidence,
         )
 
         now = datetime.now(timezone.utc).isoformat()

@@ -141,7 +141,13 @@ def generate_actionable_feedback(
     is_first_update = updates <= 1
 
     # --- Coherence Feedback (Context-Aware) ---
-    if coherence is not None and not is_first_update:
+    # The canonical field is producer-overloaded. Never turn the deployed ODE
+    # controller output or the uncalibrated E/I/S manifold into task coaching.
+    # Unknown provenance is not permission to guess. Only the explicitly
+    # behavioral update-consistency instrument may opt into this coaching.
+    coherence_role = metrics.get("coherence_role")
+    coherence_is_interpretable = coherence_role == "behavioral_update_consistency"
+    if coherence is not None and not is_first_update and coherence_is_interpretable:
         coherence_dropped = previous_coherence is not None and coherence < previous_coherence - 0.1
         coherence_delta = previous_coherence - coherence if previous_coherence else None
 
@@ -149,45 +155,45 @@ def generate_actionable_feedback(
             if coherence < 0.3:
                 if coherence_dropped:
                     feedback.append(
-                        f"Coherence dropped significantly ({coherence_delta:.2f}) during exploration. "
+                        f"Behavioral update consistency dropped significantly ({coherence_delta:.2f}) during exploration. "
                         "This may indicate you're trying too many directions at once. "
                         "Try: Pick your most promising direction and explore it deeper before switching."
                     )
                 else:
                     feedback.append(
-                        "Very low coherence (<0.3) even for exploration phase. "
+                        "Very low behavioral update consistency (<0.3) even for exploration phase. "
                         "Consider: Note down your current hypotheses, then focus on testing one at a time."
                     )
         elif regime == "locked" or regime == "stable":
             if coherence < 0.7:
                 if coherence_dropped:
                     feedback.append(
-                        f"Unexpected coherence drop ({coherence_delta:.2f}) in stable regime. "
+                        f"Unexpected behavioral update-consistency drop ({coherence_delta:.2f}) in stable regime. "
                         "Something disrupted your flow. "
                         "Check: Did requirements change? Did you encounter an unexpected edge case?"
                     )
                 else:
                     feedback.append(
-                        "Coherence below 0.7 in stable regime indicates drift. "
+                        "Behavioral update consistency below 0.7 in stable regime indicates drift. "
                         "Action: Review your original plan and verify you're still aligned with the goal."
                     )
         else:
             if coherence < 0.5:
                 if task == 'convergent':
                     feedback.append(
-                        f"Low coherence ({coherence:.2f}) during convergent task. "
+                        f"Low behavioral update consistency ({coherence:.2f}) during convergent task. "
                         "You should be focusing, but your state suggests divergence. "
                         "Tip: Write down your solution in one sentence before continuing."
                     )
                 elif task == 'divergent':
                     if coherence < 0.35:
                         feedback.append(
-                            f"Very low coherence ({coherence:.2f}) even for divergent work. "
+                            f"Very low behavioral update consistency ({coherence:.2f}) even for divergent work. "
                             "Tip: Note your top 3 ideas, then explore the most promising one deeper."
                         )
                 else:
                     feedback.append(
-                        f"Coherence at {coherence:.2f}. "
+                        f"Behavioral update consistency at {coherence:.2f}. "
                         "Tip: Pause and articulate your current goal in one sentence."
                     )
 
@@ -253,7 +259,7 @@ def generate_actionable_feedback(
                 break
 
         if any(p in text_lower for p in ['definitely', 'obviously', 'clearly', 'certainly']):
-            if coherence and coherence < 0.6:
+            if coherence_is_interpretable and coherence and coherence < 0.6:
                 feedback.append(
                     "Your language suggests confidence, but metrics show uncertainty. "
                     "Worth double-checking: Are you sure about your assumptions?"

@@ -42,38 +42,55 @@ defmodule UnitaresSentinel.FleetAnalysis do
   end
 
   defp coordinated_degradation(agents, now_ms) do
-    degraded =
+    shifted_by_producer =
       agents
       |> Enum.reject(fn {_agent_id, snapshot} ->
         now_ms - snapshot.last_seen_ms > @coordinated_window_ms * 2
       end)
       |> Enum.map(fn {agent_id, snapshot} ->
-        {agent_id, snapshot.name, coherence_drop(snapshot, now_ms, @coordinated_window_ms)}
+        {drop, source, role} = coherence_drop(snapshot, now_ms, @coordinated_window_ms)
+        {agent_id, snapshot.name, drop, source, role}
       end)
-      |> Enum.filter(fn {_agent_id, _name, drop} -> drop >= @coherence_drop_threshold end)
+      |> Enum.filter(fn {_agent_id, _name, drop, _source, _role} ->
+        drop >= @coherence_drop_threshold
+      end)
+      |> Enum.group_by(fn {_agent_id, _name, _drop, source, role} -> {source, role} end)
 
-    if length(degraded) >= @coordinated_min_agents do
-      agents_str =
-        Enum.map_join(degraded, ", ", fn {agent_id, name, drop} ->
-          "#{display_name(agent_id, name)}(-#{format_float(drop, 2)})"
-        end)
+    Enum.flat_map(shifted_by_producer, fn
+      {{source, role}, shifted} when length(shifted) >= @coordinated_min_agents ->
+        agents_str =
+          Enum.map_join(shifted, ", ", fn {agent_id, name, drop, _source, _role} ->
+            "#{display_name(agent_id, name)}(-#{format_float(drop, 2)})"
+          end)
 
-      [
-        %{
-          type: "coordinated_degradation",
-          violation_class: "CON",
-          severity: "high",
-          summary: "Coordinated coherence drop: #{agents_str}",
-          agents: Enum.map(degraded, fn {agent_id, _name, _drop} -> agent_id end),
-          details:
-            Map.new(degraded, fn {agent_id, _name, drop} ->
-              {agent_id, Float.round(drop * 1.0, 3)}
-            end)
-        }
-      ]
-    else
-      []
-    end
+        signal_label =
+          case role do
+            "ode_control_feedback" -> "legacy control-feedback"
+            "eis_structural_measurement" -> "structural-coherence"
+            "behavioral_update_consistency" -> "behavioral update-consistency"
+            _ -> "unknown-producer coherence"
+          end
+
+        [
+          %{
+            type: "coordinated_degradation",
+            violation_class: "CON",
+            severity: "high",
+            summary: "Coordinated #{signal_label} drop (not a health diagnosis): #{agents_str}",
+            agents:
+              Enum.map(shifted, fn {agent_id, _name, _drop, _source, _role} -> agent_id end),
+            coherence_source: source,
+            coherence_role: role,
+            details:
+              Map.new(shifted, fn {agent_id, _name, drop, _source, _role} ->
+                {agent_id, Float.round(drop * 1.0, 3)}
+              end)
+          }
+        ]
+
+      _ ->
+        []
+    end)
   end
 
   defp entropy_outliers(agents, now_ms, self_agent_id) do
@@ -192,10 +209,19 @@ defmodule UnitaresSentinel.FleetAnalysis do
         history.ts_ms >= now_ms - window_ms
       end)
 
-    if length(recent) >= 2 do
-      List.first(recent).coherence - List.last(recent).coherence
+    provenance =
+      recent
+      |> Enum.map(fn history ->
+        {Map.get(history, :coherence_source, "unknown"),
+         Map.get(history, :coherence_role, "unknown")}
+      end)
+      |> Enum.uniq()
+
+    if length(recent) >= 2 and length(provenance) == 1 do
+      {source, role} = List.first(provenance)
+      {List.first(recent).coherence - List.last(recent).coherence, source, role}
     else
-      0.0
+      {0.0, "mixed", "unknown"}
     end
   end
 

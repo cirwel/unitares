@@ -73,7 +73,7 @@ ANALYSIS_INTERVAL = 300  # 5 minutes
 CYCLE_TIMEOUT = 45  # seconds
 
 # Fleet anomaly thresholds
-FLEET_COHERENCE_DROP_THRESHOLD = 0.15   # single-agent coherence drop to flag
+FLEET_COHERENCE_DROP_THRESHOLD = 0.15   # compatibility-signal shift to flag
 FLEET_COORDINATED_WINDOW = 600          # 10 min window for coordinated detection
 FLEET_COORDINATED_MIN_AGENTS = 2        # min agents degrading simultaneously
 FLEET_ENTROPY_SIGMA = 2.0               # z-score for fleet entropy anomaly
@@ -126,6 +126,22 @@ class AgentSnapshot:
         self.name = event.get("agent_name", self.name)
 
         eisv = event.get("eisv", {})
+        metrics = event.get("metrics", {})
+        telemetry = event.get("eisv_telemetry", {})
+        if not isinstance(metrics, dict):
+            metrics = {}
+        if not isinstance(telemetry, dict):
+            telemetry = {}
+        coherence_source = (
+            metrics.get("coherence_source")
+            or telemetry.get("coherence_source")
+            or "unknown"
+        )
+        coherence_role = (
+            metrics.get("coherence_role")
+            or telemetry.get("coherence_role")
+            or "unknown"
+        )
         coherence = event.get("coherence", 0)
         decision = event.get("decision", {})
         verdict = decision.get("action", "") if isinstance(decision, dict) else ""
@@ -137,6 +153,8 @@ class AgentSnapshot:
             "S": eisv.get("S", 0),
             "V": eisv.get("V", 0),
             "coherence": coherence,
+            "coherence_source": coherence_source,
+            "coherence_role": coherence_role,
             "verdict": verdict,
         })
         self.coherence_history.append(coherence)
@@ -144,14 +162,32 @@ class AgentSnapshot:
         self.last_coherence = coherence
 
     def coherence_drop(self, window_seconds: float = 600) -> float:
-        """Return coherence drop in the last window. Positive = degradation."""
+        """Return a within-producer scalar decrease; mixed producers yield 0."""
         if len(self.coherence_history) < 2:
             return 0.0
         cutoff = time.time() - window_seconds
         recent = [h for h in self.eisv_history if h["ts"] >= cutoff]
         if len(recent) < 2:
             return 0.0
+        provenance = {
+            (h.get("coherence_source", "unknown"), h.get("coherence_role", "unknown"))
+            for h in recent
+        }
+        if len(provenance) != 1:
+            return 0.0
         return recent[0]["coherence"] - recent[-1]["coherence"]
+
+    def coherence_provenance(self, window_seconds: float = 600) -> tuple[str, str] | None:
+        """Return one stable producer/role for the window, otherwise unknown."""
+        cutoff = time.time() - window_seconds
+        recent = [h for h in self.eisv_history if h["ts"] >= cutoff]
+        if len(recent) < 2:
+            return None
+        provenance = {
+            (h.get("coherence_source", "unknown"), h.get("coherence_role", "unknown"))
+            for h in recent
+        }
+        return next(iter(provenance)) if len(provenance) == 1 else None
 
     def mean_entropy(self, window_seconds: float = 3600) -> float:
         cutoff = time.time() - window_seconds
@@ -186,24 +222,39 @@ class FleetState:
         findings: List[Dict[str, Any]] = []
         now = time.time()
 
-        # --- 1. Coordinated coherence drop ---
-        degraded = []
+        # --- 1. Coordinated compatibility-signal shift ---
+        shifted_by_producer: Dict[tuple[str, str], list[tuple[str, str, float]]] = {}
         for aid, snap in self.agents.items():
             if now - snap.last_seen > FLEET_COORDINATED_WINDOW * 2:
                 continue  # stale agent, skip
             drop = snap.coherence_drop(FLEET_COORDINATED_WINDOW)
-            if drop >= FLEET_COHERENCE_DROP_THRESHOLD:
-                degraded.append((aid, snap.name, drop))
+            provenance = snap.coherence_provenance(FLEET_COORDINATED_WINDOW)
+            if drop >= FLEET_COHERENCE_DROP_THRESHOLD and provenance is not None:
+                shifted_by_producer.setdefault(provenance, []).append((aid, snap.name, drop))
 
-        if len(degraded) >= FLEET_COORDINATED_MIN_AGENTS:
-            agents_str = ", ".join(f"{name or aid[:8]}(-{drop:.2f})" for aid, name, drop in degraded)
+        for (source, role), shifted in shifted_by_producer.items():
+            if len(shifted) < FLEET_COORDINATED_MIN_AGENTS:
+                continue
+            agents_str = ", ".join(
+                f"{name or aid[:8]}(-{drop:.2f})" for aid, name, drop in shifted
+            )
+            signal_label = {
+                "ode_control_feedback": "legacy control-feedback",
+                "eis_structural_measurement": "structural-coherence",
+                "behavioral_update_consistency": "behavioral update-consistency",
+            }.get(role, "unknown-producer coherence")
             findings.append({
                 "type": "coordinated_degradation",
                 "violation_class": "CON",
                 "severity": "high",
-                "summary": f"Coordinated coherence drop: {agents_str}",
-                "agents": [aid for aid, _, _ in degraded],
-                "details": {aid: round(drop, 3) for aid, _, drop in degraded},
+                "summary": (
+                    f"Coordinated {signal_label} drop (not a health diagnosis): "
+                    f"{agents_str}"
+                ),
+                "agents": [aid for aid, _, _ in shifted],
+                "details": {aid: round(drop, 3) for aid, _, drop in shifted},
+                "coherence_source": source,
+                "coherence_role": role,
             })
 
         # --- 2. Fleet entropy anomaly ---

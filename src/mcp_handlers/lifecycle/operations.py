@@ -482,7 +482,10 @@ async def handle_self_recovery_review(arguments: Dict[str, Any]) -> Sequence[Tex
 
         guidance = []
         if not safety_checks["coherence_ok"]:
-            guidance.append(f"Coherence is low ({coherence:.3f}). Consider what's causing fragmentation in your approach.")
+            guidance.append(
+                f"Coherence compatibility floor crossed ({coherence:.3f}). "
+                "Inspect the producer provenance and behavioral signals before resuming."
+            )
         if not safety_checks["risk_ok"]:
             guidance.append(f"Risk is elevated ({risk_score:.3f}). What could you do differently to reduce risk?")
         if not safety_checks["no_void"]:

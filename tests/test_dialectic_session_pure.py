@@ -602,11 +602,11 @@ class TestDialecticProtocolFlow:
         assert result.get("action") == "failed_max_rounds"
 
     def test_convergence_single_agrees(self):
-        """Single synthesis with agrees=True resolves. No fourth phase."""
+        """A reviewer's single approval resolves. No fourth phase."""
         session = self._make_session()
         session.submit_thesis(self._thesis_msg(), "key-a")
         session.submit_antithesis(self._antithesis_msg(), "key-b")
-        result = session.submit_synthesis(self._synthesis_msg("agent-a", agrees=True), "key-a")
+        result = session.submit_synthesis(self._synthesis_msg("agent-b", agrees=True), "key-b")
         assert result["success"] is True
         assert result["converged"] is True
         assert session.phase == DialecticPhase.RESOLVED
@@ -627,5 +627,4 @@ class TestDialecticProtocolFlow:
         assert d["reviewer_agent_id"] == "agent-b"
         assert d["session_type"] == "review"
         assert d["session_id"] is not None
-
 

@@ -31,6 +31,7 @@ from .dynamics import (
 )
 
 from .coherence import (
+    control_feedback,
     coherence,
     lambda1,
     lambda2,
@@ -104,7 +105,8 @@ __all__ = [
     'compute_saturation_diagnostics',
     'eisv_divergence',
 
-    # Coherence functions
+    # ODE control feedback (``coherence`` is the legacy compatibility name)
+    'control_feedback',
     'coherence',
     'lambda1',
     'lambda2',

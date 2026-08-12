@@ -925,19 +925,19 @@ class TestGenerateActionableFeedback:
         assert all("coherence" not in f.lower() for f in fb)
 
     def test_low_coherence_exploration(self):
-        fb = generate_actionable_feedback({"coherence": 0.2, "regime": "exploration", "updates": 5})
+        fb = generate_actionable_feedback({"coherence": 0.2, "coherence_role": "behavioral_update_consistency", "regime": "exploration", "updates": 5})
         assert any("exploration" in f.lower() or "hypothes" in f.lower() for f in fb)
 
     def test_coherence_drop(self):
-        fb = generate_actionable_feedback({"coherence": 0.29, "regime": "exploration", "updates": 5}, previous_coherence=0.7)
+        fb = generate_actionable_feedback({"coherence": 0.29, "coherence_role": "behavioral_update_consistency", "regime": "exploration", "updates": 5}, previous_coherence=0.7)
         assert any("drop" in f.lower() for f in fb)
 
     def test_low_coherence_stable(self):
-        fb = generate_actionable_feedback({"coherence": 0.5, "regime": "stable", "updates": 5})
+        fb = generate_actionable_feedback({"coherence": 0.5, "coherence_role": "behavioral_update_consistency", "regime": "stable", "updates": 5})
         assert any("drift" in f.lower() or "plan" in f.lower() for f in fb)
 
     def test_drop_in_locked(self):
-        fb = generate_actionable_feedback({"coherence": 0.5, "regime": "locked", "updates": 5}, previous_coherence=0.9)
+        fb = generate_actionable_feedback({"coherence": 0.5, "coherence_role": "behavioral_update_consistency", "regime": "locked", "updates": 5}, previous_coherence=0.9)
         assert any("drop" in f.lower() or "disrupt" in f.lower() for f in fb)
 
     def test_high_risk(self):
@@ -975,19 +975,19 @@ class TestGenerateActionableFeedback:
         assert any("stuck" in f.lower() or "rubber duck" in f.lower() for f in fb)
 
     def test_overconfidence(self):
-        fb = generate_actionable_feedback({"coherence": 0.4, "updates": 5}, response_text="definitely right")
+        fb = generate_actionable_feedback({"coherence": 0.4, "coherence_role": "behavioral_update_consistency", "updates": 5}, response_text="definitely right")
         assert any("confidence" in f.lower() or "assumption" in f.lower() for f in fb)
 
     def test_convergent_low(self):
-        fb = generate_actionable_feedback({"coherence": 0.3, "regime": "transition", "updates": 5}, task_type="convergent")
+        fb = generate_actionable_feedback({"coherence": 0.3, "coherence_role": "behavioral_update_consistency", "regime": "transition", "updates": 5}, task_type="convergent")
         assert any("convergent" in f.lower() or "focusing" in f.lower() for f in fb)
 
     def test_divergent_very_low(self):
-        fb = generate_actionable_feedback({"coherence": 0.2, "regime": "transition", "updates": 5}, task_type="divergent")
+        fb = generate_actionable_feedback({"coherence": 0.2, "coherence_role": "behavioral_update_consistency", "regime": "transition", "updates": 5}, task_type="divergent")
         assert any("divergent" in f.lower() or "idea" in f.lower() for f in fb)
 
     def test_divergent_moderate_no_feedback(self):
-        fb = generate_actionable_feedback({"coherence": 0.45, "regime": "transition", "updates": 5}, task_type="divergent")
+        fb = generate_actionable_feedback({"coherence": 0.45, "coherence_role": "behavioral_update_consistency", "regime": "transition", "updates": 5}, task_type="divergent")
         assert all("coherence" not in f for f in fb)
 
 

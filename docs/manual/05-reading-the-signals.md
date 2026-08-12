@@ -26,8 +26,8 @@ are in [EISV_COMPUTATION.md](../EISV_COMPUTATION.md).
 
 | Coord | What it reads | Deployed computation (heuristic) |
 |---|---|---|
-| **E** · Energy | Is work advancing? | weighted blend of recent decision-success, coherence, complexity-calibration (and outcomes when present) |
-| **I** · Integrity | Do claims match results? | calibration accuracy + coherence trend (+ outcome consistency) |
+| **E** · Energy | Is work advancing? | weighted blend of recent decision-success, complexity-calibration, outcomes when present, and a legacy `legacy_tanh_v` controller-level term (known compatibility debt) |
+| **I** · Integrity | Do claims match results? | calibration accuracy + trend of that same legacy controller scalar (+ outcome consistency); not a pure integrity measurement |
 | **S** · Entropy | Drifting from own normal? | drift-norm + regime instability + complexity divergence |
 | **V** · Valence | Energy-vs-integrity imbalance | EMA-smoothed `E − I` (derived) |
 
@@ -70,7 +70,7 @@ provenance and keep high-stakes outcome channels outside the agent's authority.
 
 When an agent is paused, recovery is a structured escalation:
 
-1. **Self-recovery** — `self_recovery(reflection=..., mode="quick_resume")` when coherence is high and risk is low; the agent reflects and resumes.
+1. **Self-recovery** — `self_recovery(reflection=..., mode="quick_resume")` when risk is low and the configured compatibility checks pass; the agent reflects and resumes. A passing legacy coherence check is not itself a health claim.
 2. **LLM-assisted dialectic** — a configured reviewer model supplies an
    antithesis for single-agent reflection; the default reference path supports a
    local model.

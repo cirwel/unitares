@@ -622,8 +622,9 @@ async def record_agent_state(
     # manifold form spans [0, ~0.91] — so an untagged history cannot tell them
     # apart, and any threshold derived from mixed rows is derived from two
     # different instruments. Provenance only: nothing computed here reads it.
-    # Absent on rows written before this shipped, and whenever the grounding
-    # stage did not run (both grounding flags off).
+    # Absent on rows written before this shipped or on malformed paths where no
+    # coherence metric reached the grounding stage. Both grounding flags being
+    # off now correctly records "legacy_tanh_v" rather than omitting provenance.
     if coherence_form is not None:
         state_json["coherence_form"] = coherence_form
     # Versioned measurement -> derivation -> policy -> enforcement provenance.

@@ -20,9 +20,15 @@ class TestHealthStatus:
         assert HealthStatus.HEALTHY.value == "healthy"
         assert HealthStatus.MODERATE.value == "moderate"
         assert HealthStatus.CRITICAL.value == "critical"
+        assert HealthStatus.UNKNOWN.value == "unknown"
 
     def test_all_members(self):
-        assert set(HealthStatus) == {HealthStatus.HEALTHY, HealthStatus.MODERATE, HealthStatus.CRITICAL}
+        assert set(HealthStatus) == {
+            HealthStatus.HEALTHY,
+            HealthStatus.MODERATE,
+            HealthStatus.CRITICAL,
+            HealthStatus.UNKNOWN,
+        }
 
 
 class TestHealthThresholdsDefaults:
@@ -62,18 +68,17 @@ class TestGetHealthStatus:
         status, _ = self.ht.get_health_status(risk_score=0.0, coherence=1.0, void_active=True)
         assert status == HealthStatus.CRITICAL
 
-    # --- Coherence critical check (second priority) ---
+    # --- Coherence is not health evidence ---
 
     def test_coherence_below_critical_threshold(self):
         status, msg = self.ht.get_health_status(coherence=0.35)
-        assert status == HealthStatus.CRITICAL
-        assert "coherence" in msg.lower()
+        assert status == HealthStatus.UNKNOWN
+        assert "not health-rated" in msg
 
     def test_coherence_at_critical_threshold_not_critical(self):
         """Coherence exactly at threshold is NOT below it."""
         status, _ = self.ht.get_health_status(coherence=0.40)
-        # Should fall through to coherence-based assessment, not critical
-        assert status != HealthStatus.CRITICAL or "below critical" not in _
+        assert status == HealthStatus.UNKNOWN
 
     # --- Risk-based assessment ---
 
@@ -113,35 +118,35 @@ class TestGetHealthStatus:
         status, _ = self.ht.get_health_status(risk_score=0.10, coherence=0.49)
         assert status == HealthStatus.HEALTHY  # Risk says healthy
 
-    # --- Coherence-based fallback (when no risk score) ---
+    # --- Coherence-only calls remain compatible but unclassified ---
 
     def test_coherence_uninitialized(self):
-        """High coherence (>=0.60) indicates uninitialized state."""
+        """A placeholder-looking scalar still cannot establish health."""
         status, msg = self.ht.get_health_status(coherence=1.0)
-        assert status == HealthStatus.HEALTHY
-        assert "Uninitialized" in msg
+        assert status == HealthStatus.UNKNOWN
+        assert "not health-rated" in msg
 
     def test_coherence_healthy(self):
         status, msg = self.ht.get_health_status(coherence=0.55)
-        assert status == HealthStatus.HEALTHY
-        assert "High coherence" in msg
+        assert status == HealthStatus.UNKNOWN
+        assert "not health-rated" in msg
 
     def test_coherence_moderate(self):
         status, msg = self.ht.get_health_status(coherence=0.49)
-        assert status == HealthStatus.MODERATE
-        assert "Typical coherence" in msg
+        assert status == HealthStatus.UNKNOWN
+        assert "not health-rated" in msg
 
     def test_coherence_low(self):
         """Coherence below moderate_min but above critical."""
         status, msg = self.ht.get_health_status(coherence=0.42)
-        assert status == HealthStatus.CRITICAL
-        assert "needs attention" in msg
+        assert status == HealthStatus.UNKNOWN
+        assert "not health-rated" in msg
 
     # --- No metrics ---
 
-    def test_no_metrics_moderate(self):
+    def test_no_metrics_unknown(self):
         status, msg = self.ht.get_health_status()
-        assert status == HealthStatus.MODERATE
+        assert status == HealthStatus.UNKNOWN
         assert "unknown" in msg.lower()
 
 
@@ -159,8 +164,8 @@ class TestShouldAlert:
     def test_risk_at_boundary_alerts(self):
         assert self.ht.should_alert(risk_score=0.70) is True
 
-    def test_low_coherence_alerts(self):
-        assert self.ht.should_alert(coherence=0.45) is True
+    def test_low_coherence_does_not_create_health_alert(self):
+        assert self.ht.should_alert(coherence=0.45) is False
 
     def test_high_coherence_no_alert(self):
         assert self.ht.should_alert(coherence=0.55) is False
@@ -168,8 +173,8 @@ class TestShouldAlert:
     def test_coherence_at_boundary_alerts(self):
         assert self.ht.should_alert(coherence=0.48) is False  # >= moderate_min
 
-    def test_coherence_below_boundary_alerts(self):
-        assert self.ht.should_alert(coherence=0.47) is True
+    def test_coherence_below_boundary_does_not_alert(self):
+        assert self.ht.should_alert(coherence=0.47) is False
 
     def test_no_metrics_no_alert(self):
         assert self.ht.should_alert() is False

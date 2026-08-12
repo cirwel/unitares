@@ -15,6 +15,10 @@ from src.eisv_telemetry import (
     summarize_eisv_telemetry,
     summarize_state_eisv_telemetry,
 )
+from src.coherence_provenance import (
+    LEGACY_COHERENCE_SOURCE,
+    ODE_CONTROL_FEEDBACK_ROLE,
+)
 
 
 def _derivation():
@@ -41,6 +45,8 @@ def _derivation():
         tool_call_velocity=1.2,
         unique_tools_ratio=0.4,
         computed={"E": 0.71, "I": 0.82, "S": 0.16, "V": -0.1},
+        coherence_source=LEGACY_COHERENCE_SOURCE,
+        coherence_role=ODE_CONTROL_FEEDBACK_ROLE,
     )
 
 
@@ -51,6 +57,13 @@ def test_behavioral_derivation_is_bounded_exact_and_privacy_reduced():
     assert len(trace["inputs"]["history"]["decision"]) == 10
     assert len(trace["inputs"]["history"]["coherence"]) == 10
     assert trace["inputs"]["features"]["calibration_error"] == 0.12
+    assert trace["inputs"]["history_provenance"]["coherence"] == {
+        "source": "legacy_tanh_v",
+        "role": "ode_control_feedback",
+        "usage": ["E_level_term", "I_trend_term"],
+        "health_evidence": False,
+    }
+    assert "legacy ODE control feedback" in trace["known_limitations"][0]
     assert "drift_norm" in trace["missing_inputs"]
     assert trace["unused_legacy_parameters"] == ["S_history", "V_history"]
     assert "detail" not in trace["inputs"]["outcomes"][0]
@@ -62,6 +75,9 @@ def test_full_envelope_keeps_measurement_policy_and_actuator_separate():
         metrics={
             "E": 0.69, "I": 0.81, "S": 0.17, "V": -0.12,
             "primary_eisv_source": "behavioral",
+            "coherence": 0.49,
+            "coherence_source": "legacy_tanh_v",
+            "coherence_role": "ode_control_feedback",
             "ode": {"E": 0.51, "I": 0.53, "S": 0.31, "V": -0.02},
         },
         behavioral_snapshot={
@@ -80,6 +96,11 @@ def test_full_envelope_keeps_measurement_policy_and_actuator_separate():
 
     assert envelope["schema"] == EISV_TELEMETRY_SCHEMA
     assert envelope["measurement"]["primary"]["values"]["E"] == 0.69
+    assert envelope["measurement"]["coherence"] == {
+        "value": 0.49,
+        "source": "legacy_tanh_v",
+        "role": "ode_control_feedback",
+    }
     assert envelope["measurement"]["behavioral"]["raw_observation"] == {
         "E": 0.71, "I": 0.82, "S": 0.16,
     }

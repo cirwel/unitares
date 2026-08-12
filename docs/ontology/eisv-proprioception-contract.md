@@ -1,7 +1,7 @@
 # EISV Proprioception Contract
 
 **Created:** June 26, 2026
-**Last Updated:** August 10, 2026
+**Last Updated:** August 11, 2026
 **Status:** Active
 
 ---
@@ -50,6 +50,57 @@ The proprioceptive instrument, guidance, audit record, and circuit breaker are a
 real. A surface may say an agent was halted only when the same observation records
 `enforcement.applied=true` (or a matching lifecycle event); a produced pause alone
 is insufficient.
+
+## Decision record — legacy C(V) is control feedback, not health evidence (2026-08-11)
+
+Historical reconstruction separated three objects that runtime vocabulary had
+collapsed into “coherence”: directional ODE control feedback `C(V)`, update-direction
+consistency `rho`, and an external state-coherence readout. The deployed legacy
+function
+
+```text
+C(V) = Cmax * 0.5 * (1 + tanh(C1 * V))
+```
+
+is monotone in signed imbalance, equals `Cmax/2` at balance, and satisfies
+`C(-V)=Cmax-C(V)`. It therefore encodes controller direction/activation: positive V
+is running hot and negative V is running careful. It is not a symmetric score whose
+higher values mean healthier balance.
+
+The compatibility field and `coherence()` import remain because they are embedded in
+stored and public contracts. New ODE code names the producer `control_feedback`;
+new persisted rows identify the winning instrument in `state_json.coherence_form`,
+and response metrics carry the additive `coherence_source` / `coherence_role`
+pair. The flag-gated grounding function runs only in the explicit pre-persist
+stage; it is no longer also registered as a late response enrichment that could
+silently change what downstream enrichments observed.
+No live gate or threshold changes in this correction: replacing the frozen legacy
+field with behavioral-V or manifold coherence would move previously unreachable
+branches and requires prospective calibration first.
+
+The legacy scalar also has an indirect verdict path that the old “ODE is only
+parallel telemetry” description hid: `behavioral_sensor.py` assigns its level
+25–30% of E and its trend 30–40% of I. That coupling was added to differentiate
+the sensor before the April behavioral migration demoted ODE E/I/S/V but omitted
+coherence. Removing it changes behavioral baselines and verdict inputs, so this
+correction makes its provenance explicit in the EISV derivation envelope and
+documentation but does not silently reweight it. A prospective deconfounding
+shadow is the next prerequisite.
+
+The same legacy scalar retains 55% of the base weight in the omitted-confidence
+fallback (`src/confidence.py`). That makes derived confidence another mixed-
+provenance consumer, and confidence history can feed a later calibration penalty
+on ODE entropy. New response metadata exposes this causal dependency; removal or
+reweighting belongs in the same prospective deconfounding program rather than a
+silent compatibility change.
+
+The shadow comparison is likewise measurement-only. Its corrected v2 statistic is
+two-sided, uses a bounded recent window, excludes the current observation from its
+own reference, and states whether empirical dispersion or a calibrated scale floor
+supplied the denominator. Its comparison label is independently versioned and
+attributes the fleet result from `sub_action` + `nearest_edge`; an unrelated risk,
+void, or basin pause is not counted as a coherence-gate agreement. Monotonicity
+alone is no longer treated as health semantics.
 
 ## Decision record — cold-start confirmation remains shadow-only (2026-08-10)
 
@@ -170,10 +221,10 @@ condition 4's tests must cover; dev tree `4bc9d4af`):
 
 | Surface | Mechanism |
 |---|---|
-| `governance_core/coherence.py:79` | deployed coherence **is** `C(V) = Cmax·0.5·(1+tanh(C₁·V))` — pinned ≈0.49 by near-zero live V |
-| `governance_core/dynamics.py` | V feeds back into the ODE through the coherence term |
+| `governance_core/coherence.py` | deployed `coherence` field is the legacy-named directional `control_feedback(V)` — pinned ≈0.49 by near-zero ODE V |
+| `governance_core/dynamics.py` | V feeds back into the ODE through the directional control-feedback term |
 | `governance_core/stability.py:141` | `dC/dV` enters the contraction certificate (the deployed α_c = 0.019 is certified over the 4-coordinate system) |
-| `src/grounding/coherence.py` | grounded path preserves the same `C(V)` form |
+| `src/grounding/coherence.py` | intended grounded readout is a **V-free** manifold distance over (E,I,S), shadowed by default and canonical only under APPLY |
 | `src/behavioral_sensor.py:203` | behavioral V = E−I slope difference (the ~0.99-corr estimator; ledger row 1) |
 | `dashboard/redesign/{data,snapshot}.js` | display surfaces render V as a first-class axis |
 

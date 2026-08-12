@@ -736,16 +736,20 @@ def test_telemetry_checks_are_registered_as_operator(doctor):
 
 
 # --- signal_degeneracy -----------------------------------------------------
-# Row layout is (stddev, distinct, count) per metric, in DEGENERACY_METRICS
+# Row layout is (stddev, distinct, count, min, max) per metric, in DEGENERACY_METRICS
 # order: coherence, entropy, integrity, risk_score.
 # stability_index left the tuple with migration 058 — the retired column is
 # NULL now, so there is no signal there to be degenerate.
 
-def _degeneracy_row(*triples):
-    return "|".join(str(v) for t in triples for v in t) + "\n"
+def _degeneracy_row(*metric_stats):
+    return "|".join(str(v) for stats in metric_stats for v in stats) + "\n"
 
 
-_HEALTHY = ((0.0432, 6192, 6232), (0.0612, 833, 6232), (0.0804, 5815, 6232))
+_HEALTHY = (
+    (0.0432, 6192, 6232, 0.12, 0.71),
+    (0.0612, 833, 6232, 0.55, 0.91),
+    (0.0804, 5815, 6232, 0.01, 0.72),
+)
 
 
 def test_signal_degeneracy_warns_on_constant_metric(doctor, monkeypatch):
@@ -756,26 +760,30 @@ def test_signal_degeneracy_warns_on_constant_metric(doctor, monkeypatch):
     the check must still catch a constant wherever one appears.
     """
     _mock_psql(doctor, monkeypatch, _degeneracy_row(
-        (0.0432, 6192, 6232), ("", 1, 6232), *_HEALTHY[:2]))
+        (0.0432, 6192, 6232, 0.1, 0.8), ("", 1, 6232, 0.4, 0.4), *_HEALTHY[:2]))
     result = doctor.check_signal_degeneracy("postgresql://x/y")
     assert result.status == doctor.Status.WARN
-    assert "entropy: constant" in result.message
+    assert "entropy: constant in 7d" in result.message
 
 
 def test_signal_degeneracy_warns_on_collapsed_dispersion(doctor, monkeypatch):
     """coherence: 5632 distinct values but sd 0.005 — moves only in the 4th decimal."""
     _mock_psql(doctor, monkeypatch, _degeneracy_row(
-        (0.005262, 5632, 6233), *_HEALTHY))
+        (0.005262, 5632, 6233, 0.4696, 0.5039), *_HEALTHY))
     result = doctor.check_signal_degeneracy("postgresql://x/y")
     assert result.status == doctor.Status.WARN
-    assert "coherence" in result.message
+    assert "coherence: low fleet dispersion" in result.message
+    assert "range=[0.4696, 0.5039]" in result.message
     # many distinct values must NOT be mistaken for a healthy signal
     assert "constant" not in result.message
+    # SD alone is not an information-theoretic verdict.
+    assert "not proof of zero information" in result.detail
+    assert "effective sample size" in result.detail
 
 
 def test_signal_degeneracy_passes_when_all_metrics_vary(doctor, monkeypatch):
     _mock_psql(doctor, monkeypatch, _degeneracy_row(
-        (0.0217, 5000, 6232), *_HEALTHY))
+        (0.0217, 5000, 6232, 0.35, 0.66), *_HEALTHY))
     result = doctor.check_signal_degeneracy("postgresql://x/y")
     assert result.status == doctor.Status.PASS
 
@@ -783,14 +791,15 @@ def test_signal_degeneracy_passes_when_all_metrics_vary(doctor, monkeypatch):
 def test_signal_degeneracy_skips_thin_data(doctor, monkeypatch):
     """A flat metric on 10 rows is small-sample, not a defect."""
     _mock_psql(doctor, monkeypatch, _degeneracy_row(
-        ("", 1, 10), ("", 1, 10), ("", 1, 10), ("", 1, 10)))
+        ("", 1, 10, 0.5, 0.5), ("", 1, 10, 0.2, 0.2),
+        ("", 1, 10, 0.7, 0.7), ("", 1, 10, 0.1, 0.1)))
     result = doctor.check_signal_degeneracy("postgresql://x/y")
     assert result.status == doctor.Status.SKIP
 
 
 def test_signal_degeneracy_skips_on_short_row(doctor, monkeypatch):
     """A truncated/malformed row must not be read as 'everything healthy'."""
-    _mock_psql(doctor, monkeypatch, "0.02|100|6232\n")
+    _mock_psql(doctor, monkeypatch, "0.02|100|6232|0.4|0.6\n")
     result = doctor.check_signal_degeneracy("postgresql://x/y")
     assert result.status == doctor.Status.SKIP
 

@@ -4,7 +4,7 @@ enrich_grounding previously ran AFTER persist + response-build, so its grounded
 E/I/S/coherence were silently discarded. run_grounding_stage runs grounding
 early, flag-gated, with a shadow-compare:
 
-  * no flags        -> no-op (metrics byte-identical to today)
+  * no flags        -> values unchanged; producer/role metadata attached
   * GROUNDING_SHADOW -> emit grounding_shadow audit + REVERT metrics (neutral)
   * GROUNDING_APPLY  -> keep grounded values (S becomes logprob-derived, etc.)
 """
@@ -34,7 +34,7 @@ def _ctx(logprobs=None):
 
 
 @pytest.mark.asyncio
-async def test_no_flags_is_noop(monkeypatch):
+async def test_no_flags_only_adds_provenance(monkeypatch):
     monkeypatch.delenv("UNITARES_GROUNDING_SHADOW", raising=False)
     monkeypatch.delenv("UNITARES_GROUNDING_APPLY", raising=False)
     spy = MagicMock()
@@ -44,7 +44,10 @@ async def test_no_flags_is_noop(monkeypatch):
     before = dict(ctx.result["metrics"])
     await run_grounding_stage(ctx)
 
-    assert ctx.result["metrics"] == before  # untouched
+    metrics = ctx.result["metrics"]
+    assert {key: metrics[key] for key in before} == before
+    assert metrics["coherence_source"] == "legacy_tanh_v"
+    assert metrics["coherence_role"] == "ode_control_feedback"
     assert "s_source" not in ctx.result["metrics"]
     spy.assert_not_called()
 
@@ -60,9 +63,11 @@ async def test_shadow_logs_but_reverts(monkeypatch):
     before = dict(ctx.result["metrics"])
     await run_grounding_stage(ctx)
 
-    # behavior-neutral: live metrics reverted, no grounding bookkeeping left
+    # behavior-neutral: live values reverted; only winning-producer metadata remains
     m = ctx.result["metrics"]
-    assert m == before
+    assert {key: m[key] for key in before} == before
+    assert m["coherence_source"] == "legacy_tanh_v"
+    assert m["coherence_role"] == "ode_control_feedback"
     assert "s_source" not in m and "S_legacy" not in m
 
     # but the shadow WAS recorded, with applied=False and a logprob S source
@@ -85,6 +90,8 @@ async def test_apply_grounds_live_metrics(monkeypatch):
     m = ctx.result["metrics"]
     # grounded values are now live and tagged
     assert m["s_source"] == "logprob"
+    assert m["coherence_source"] == "manifold"
+    assert m["coherence_role"] == "eis_structural_measurement"
     assert m["S_legacy"] == pytest.approx(0.1415)
     assert m["S"] != pytest.approx(0.1415)  # S replaced by logprob entropy
     assert 0.0 <= m["S"] <= 1.0
@@ -113,16 +120,22 @@ async def test_no_logprobs_falls_to_heuristic_under_apply(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_no_flags_leaves_coherence_form_unset(monkeypatch):
+async def test_no_flags_tags_legacy_coherence_without_changing_metrics(monkeypatch):
     monkeypatch.delenv("UNITARES_GROUNDING_SHADOW", raising=False)
     monkeypatch.delenv("UNITARES_GROUNDING_APPLY", raising=False)
 
     ctx = _ctx()
     await run_grounding_stage(ctx)
 
-    # Stage no-ops, so it must not claim provenance it did not establish —
-    # absence is how pre-existing rows stay identifiable.
-    assert ctx.coherence_form is None
+    # Flag-off is itself enough to establish which producer won: the deployed
+    # canonical value is legacy tanh(V). The row and returned measurement carry
+    # the same producer identity; values remain unchanged.
+    assert ctx.coherence_form == "legacy_tanh_v"
+    assert ctx.result["metrics"] == {
+        "E": 0.72, "I": 0.80, "S": 0.1415, "V": -0.02, "coherence": 0.49,
+        "coherence_source": "legacy_tanh_v",
+        "coherence_role": "ode_control_feedback",
+    }
 
 
 @pytest.mark.asyncio
@@ -138,9 +151,10 @@ async def test_shadow_tags_legacy_without_changing_response(monkeypatch):
     # Under SHADOW the reverted (legacy) value is what persists, so that is what
     # the row must be tagged with — regardless of the grounded value computed.
     assert ctx.coherence_form == "legacy_tanh_v"
-    # ...and the tag rides ctx, never the metrics dict: the response stays
-    # byte-identical, which is the whole point of shadow being behavior-neutral.
-    assert ctx.result["metrics"] == before
+    # ...and source/role travel with the response without changing its values.
+    assert {key: ctx.result["metrics"][key] for key in before} == before
+    assert ctx.result["metrics"]["coherence_source"] == "legacy_tanh_v"
+    assert ctx.result["metrics"]["coherence_role"] == "ode_control_feedback"
     assert "coherence_form" not in ctx.result["metrics"]
 
 
@@ -157,3 +171,4 @@ async def test_apply_tags_the_grounded_source(monkeypatch):
     # rather than the generic "grounded" fallback.
     assert ctx.coherence_form == ctx.result["metrics"]["coherence_source"]
     assert ctx.coherence_form == "manifold"
+    assert ctx.result["metrics"]["coherence_role"] == "eis_structural_measurement"
