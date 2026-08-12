@@ -30,13 +30,17 @@ def test_mark_circuit_breaker_enforcement_applied_preserves_policy_request():
         },
     }
 
-    mark_circuit_breaker_enforcement_applied(
+    returned_id = mark_circuit_breaker_enforcement_applied(
         result,
         actor="agent_loop_detection",
         effect="agent_metadata.status=paused",
+        actuation_id="actuation-123",
+        applied_at="2026-08-11T23:47:55+00:00",
     )
 
     assert result["enforcement"] == {
+        "schema": "governance.enforcement.v1",
+        "scope": "runtime_circuit_breaker",
         "requested": True,
         "applied": True,
         "mode": "circuit_breaker",
@@ -47,7 +51,10 @@ def test_mark_circuit_breaker_enforcement_applied_preserves_policy_request():
         },
         "actor": "agent_loop_detection",
         "effect": "agent_metadata.status=paused",
+        "actuation_id": "actuation-123",
+        "applied_at": "2026-08-11T23:47:55+00:00",
         "note": "Circuit breaker applied at the runtime boundary after policy evaluation.",
     }
+    assert returned_id == "actuation-123"
     assert result["paused"] is True
     assert result["circuit_breaker_triggered"] is True
