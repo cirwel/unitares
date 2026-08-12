@@ -27,6 +27,7 @@ _Notable changes merged between 2.17.0 (2026-08-11) and this release — dialect
 
 - **public surface:** add dedicated knowledge write aliases, correct advertised dialectic actions, and make inference-host reachability explicit (#1610, #1618)
 - **release/operations:** professionalize the public release surface, tighten evaluator claims, and bound persisted risk history (#1603, #1612, #1617)
+- **security/release:** redact caller-controlled identity/session material from logs, pin external actions, and tighten workflow permissions (#1620)
 - **dependencies:** refresh Python, cryptography, and dashboard development dependencies (#1556, #1557, #1558)
 
 ### Fixed
