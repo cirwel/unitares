@@ -241,6 +241,12 @@ class UNITARESMonitor:
         # Behavioral EISV: observation-first state (no ODE, no attractor)
         self._behavioral_state = BehavioralEISV()
         self._last_behavioral_verdict: Optional[str] = None  # safe/caution/high-risk
+        # Exact result of the last completed, non-simulated governance update.
+        # Dialectic review uses this decision-time bundle rather than rebuilding
+        # evidence from ``state.to_dict()`` (which is only the diagnostic ODE
+        # state and omits the authoritative behavioral vector, risk/verdict
+        # provenance, policy decision, and enforcement request).
+        self._last_governance_result: Optional[Dict[str, Any]] = None
         self._cached_outcome_history: Optional[list] = None  # Populated by Phase 5, used by process_update
 
         # Continuous self-validation: track previous verdict for trajectory comparison
@@ -1010,6 +1016,7 @@ class UNITARESMonitor:
         saved_process_local_updates = self._process_local_updates
         saved_cold_start_previous = self._cold_start_confirmation_previous
         saved_simulation_active = self._simulation_active
+        saved_last_governance_result = self._last_governance_result
         # The novelty gate for the mirror's complexity line mutates during
         # result building (monitor_result._complexity_divergence_novel); a
         # simulation must not consume the agent's first real surfacing.
@@ -1062,6 +1069,7 @@ class UNITARESMonitor:
             self._process_local_updates = saved_process_local_updates
             self._cold_start_confirmation_previous = saved_cold_start_previous
             self._simulation_active = saved_simulation_active
+            self._last_governance_result = saved_last_governance_result
             self._last_surfaced_complexity_gap = saved_last_gap
     
     def process_update(self, agent_state: Dict, confidence: Optional[float] = None, task_type: str = "mixed") -> Dict:
@@ -1704,6 +1712,12 @@ class UNITARESMonitor:
         _vshadow = getattr(self, '_last_verification_shadow', None)
         if _vshadow is not None:
             result['verification_floor_shadow'] = {**_vshadow.to_dict(), 'applied': False}
+        # Keep the actual result object: later update phases append the persisted
+        # EISV telemetry envelope to it, so the retained reference becomes the
+        # complete decision-time evidence bundle. Simulations restore the prior
+        # reference in ``simulate_update`` and therefore cannot replace it.
+        if not self._simulation_active:
+            self._last_governance_result = result
         return result
     
     def _compute_drift_vector(self, grounded_agent_state, agent_state, confidence, task_type, continuity_metrics):

@@ -108,9 +108,9 @@ def get_awaiting_facilitation_recovery(session_id: str) -> Dict[str, Any]:
             "Reviewer went stale and no eligible replacement agent is available for auto-assignment."
         ),
         "what_you_can_do": [
-            f"1. Use dialectic(action='reassign', session_id='{session_id}', new_reviewer_id='<agent_id>') to assign a reviewer manually",
+            f"1. Authenticated operator/current reviewer: use dialectic(action='reassign', session_id='{session_id}', new_reviewer_id='<agent_id>')",
             "2. Use agent(action='list') to find available agents",
-            "3. Or let your bound session answer directly with dialectic(action='antithesis', session_id='...', reasoning='...', take_over_if_requested=true)",
+            "3. Authenticated operator: move the slot and answer in one call with dialectic(action='antithesis', session_id='...', reasoning='...', take_over_if_requested=true)",
         ],
         "related_tools": ["dialectic", "agent", "identity"],
         "note": "Session is paused, not failed. It will auto-fail after 4 hours total if no reviewer is assigned.",
