@@ -285,7 +285,7 @@ async def _shadow_mirror_session_binding(
         if outcome == "blocked":
             logger.warning(
                 "[S21A_PG_BINDING_BLOCKED] session mirror refused overwrite of a "
-                "different agent_uuid for session_key=%s...", session_key[:24],
+                "different agent_uuid",
             )
     except Exception as e:
         logger.debug(f"session-binding shadow mirror skipped: {e}")

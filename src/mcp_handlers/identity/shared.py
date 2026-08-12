@@ -89,22 +89,22 @@ def _get_session_key(arguments: Optional[Dict[str, Any]] = None, session_id: Opt
     4) fallback to a stable per-process key (stdio/single-user)
     """
     if session_id:
-        logger.debug(f"_get_session_key: using explicit session_id={session_id}")
+        logger.debug("_get_session_key: using explicit session_id")
         return str(session_id)
     if arguments and arguments.get("client_session_id"):
-        logger.debug(f"_get_session_key: using client_session_id={arguments['client_session_id']}")
+        logger.debug("_get_session_key: using client_session_id")
         return str(arguments["client_session_id"])
 
     # Check contextvars for session key (set at SSE dispatch entry)
     from ..context import get_context_session_key
     context_key = get_context_session_key()
     if context_key:
-        logger.debug(f"_get_session_key: using context session_key={context_key}")
+        logger.debug("_get_session_key: using context session_key")
         return str(context_key)
 
     # STABLE FALLBACK: Use only PID (no timestamp) for single-user scenarios
     fallback = f"stdio:{os.getpid()}"
-    logger.debug(f"_get_session_key: using fallback={fallback}")
+    logger.debug("_get_session_key: using stable stdio fallback")
     return fallback
 
 # =============================================================================

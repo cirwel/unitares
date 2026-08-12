@@ -1,0 +1,53 @@
+name: public-pages
+
+# Publishes the product landing page, glossary, and latest drift audit to GitHub
+# Pages via the Actions deployment (Pages source = "GitHub Actions").
+# Requires Pages to be enabled once (Settings -> Pages -> Source = GitHub Actions),
+# which it now is — the workflow GITHUB_TOKEN cannot create the Pages site itself
+# but can deploy to it once it exists.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "docs/public-site/**"
+      - "docs/ontology/glossary.md"
+      - "docs/ontology/glossary-drift-audit-*.md"
+      - "scripts/dev/build_public_site.py"
+      - ".github/workflows/public-pages.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: public-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet markdown
+      - name: Build public site
+        # To brand the URL, append: --cname unitares.cirwel.org
+        run: python3 scripts/dev/build_public_site.py --out build/public-site
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
+        with:
+          path: build/public-site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5
