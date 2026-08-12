@@ -432,10 +432,19 @@ async def generate_antithesis(
 
     state_context = ""
     if agent_state:
+        coherence_role = agent_state.get("coherence_role", "unknown")
+        coherence_authority = (
+            "behavioral_update_consistency"
+            if coherence_role == "behavioral_update_consistency"
+            else "diagnostic_only"
+        )
         state_context = f"""
 Independent governance signals you can ground critique in:
   - risk_score: {agent_state.get('risk_score', '?')}
   - coherence: {agent_state.get('coherence', '?')}
+    source={agent_state.get('coherence_source', 'unknown')}
+    role={coherence_role}
+    authority={coherence_authority}
   - E (energy): {agent_state.get('E', '?')}
   - I (information integrity): {agent_state.get('I', '?')}
   - S (entropy): {agent_state.get('S', '?')}
@@ -446,9 +455,11 @@ Independent governance signals you can ground critique in:
         "You are an INDEPENDENT adversarial reviewer in a UNITARES governance "
         "dialectic. The paused agent wrote the thesis; your job is the ANTITHESIS "
         "— find what it underestimates or gets wrong. Do not be agreeable. Ground "
-        "every concern in an independent governance signal (EISV state E/I/S/V, "
-        "coherence, calibration, trajectory, audit history), NOT in re-reading the "
-        "thesis's own prose. If after genuine scrutiny the thesis holds, set "
+        "every concern in governance evidence (EISV state E/I/S/V, calibrated "
+        "outcomes, trajectory, or audit history), NOT in re-reading the thesis's "
+        "own prose. Treat coherence as diagnostic-only unless its explicit role is "
+        "behavioral_update_consistency; it is never outcome evidence by itself. "
+        "If after genuine scrutiny the thesis holds, set "
         "position=agree; otherwise dispute or refine."
     )
     user = (

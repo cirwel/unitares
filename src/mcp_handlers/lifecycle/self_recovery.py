@@ -45,9 +45,9 @@ from .helpers import (
     _resume_with_persistence,
     clear_loop_detector_state,  # noqa: F401 — re-exported for legacy imports from this module
 )
+from .recovery_policy import compute_recovery_margin, recovery_policy_context
 from src import agent_storage
 from src.logging_utils import get_logger
-from config.governance_config import GovernanceConfig
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 
 logger = get_logger(__name__)
@@ -62,7 +62,6 @@ FORBIDDEN_CONDITIONS = [
 ]
 
 MAX_RISK_FOR_SELF_RECOVERY = 0.65  # Matches lifecycle.py review thresholds
-MIN_COHERENCE_FOR_SELF_RECOVERY = 0.35  # Matches lifecycle.py review thresholds
 
 def validate_recovery_conditions(conditions: List[str]) -> tuple[bool, Optional[str]]:
     """
@@ -108,10 +107,17 @@ def assess_recovery_safety(
     """
     metrics = {
         "coherence": coherence,
+        "coherence_source": "legacy_tanh_v",
+        "coherence_role": "ode_control_feedback",
+        "coherence_authoritative": False,
         "risk_score": risk_score,
         "void_active": void_active,
         "void_value": void_value,
     }
+    policy = recovery_policy_context(
+        coherence=coherence,
+        authoritative_inputs=("risk_score", "void_active", "reflection"),
+    )
     
     # Hard limits - must escalate
     if void_active:
@@ -121,6 +127,7 @@ def assess_recovery_safety(
             "recommendation": "Wait for void to clear or request human assistance",
             "escalate": True,
             "metrics": metrics,
+            "recovery_policy": policy,
         }
     
     if risk_score > MAX_RISK_FOR_SELF_RECOVERY:
@@ -130,18 +137,7 @@ def assess_recovery_safety(
             "recommendation": "Request human review or wait for risk to decrease",
             "escalate": True,
             "metrics": metrics,
-        }
-    
-    if coherence < MIN_COHERENCE_FOR_SELF_RECOVERY:
-        return {
-            "safe": False,
-            "reason": f"Coherence ({coherence:.2f}) below self-recovery threshold ({MIN_COHERENCE_FOR_SELF_RECOVERY})",
-            "recommendation": (
-                "Request human review - the configured compatibility floor was crossed; "
-                "inspect producer provenance and the behavioral signals"
-            ),
-            "escalate": True,
-            "metrics": metrics,
+            "recovery_policy": policy,
         }
     
     # Check reflection quality (basic heuristics)
@@ -152,14 +148,13 @@ def assess_recovery_safety(
             "recommendation": "Provide a more detailed reflection on what happened and what you'll change",
             "escalate": False,  # Not dangerous, just needs more thought
             "metrics": metrics,
+            "recovery_policy": policy,
         }
     
     # Soft limits - allowed but with warnings
     warnings = []
     if risk_score > 0.50:
         warnings.append(f"Risk score ({risk_score:.2f}) is elevated - proceed carefully")
-    if coherence < 0.50:
-        warnings.append(f"Coherence ({coherence:.2f}) is below optimal - consider simpler tasks")
     if abs(void_value) > 0.5:
         warnings.append(f"Void value ({void_value:.2f}) shows some E-I imbalance")
     
@@ -170,6 +165,7 @@ def assess_recovery_safety(
         "warnings": warnings,
         "escalate": False,
         "metrics": metrics,
+        "recovery_policy": policy,
     }
 
 # NOTE: handle_self_recovery_review is defined in lifecycle.py (canonical version)
@@ -200,7 +196,7 @@ async def handle_self_recovery(arguments: Dict[str, Any]) -> Sequence[TextConten
 
     Actions:
         check  - See what recovery options are available (read-only)
-        quick  - Fast resume for safe states (coherence >= target ~0.50, risk < 0.40)
+        quick  - Fast resume for safe states (risk <= 0.40, no void)
         review - Full recovery with reflection (for moderate states)
 
     Natural workflow:
@@ -253,7 +249,8 @@ async def handle_check_recovery_options(arguments: Dict[str, Any]) -> Sequence[T
     
     agent_uuid = resolve_agent_uuid(arguments, agent_id)
     
-    # Get current metrics (use safe_float for uninitialized agents with None coherence/risk)
+    # Get current metrics (coherence is compatibility-only diagnostic context;
+    # risk and void supply recovery authority).
     try:
         monitor = mcp_server.get_or_create_monitor(agent_uuid)
         from src.agent_monitor_state import ensure_hydrated
@@ -284,15 +281,6 @@ async def handle_check_recovery_options(arguments: Dict[str, Any]) -> Sequence[T
             "resolution": "Wait for risk to decrease or request human review",
         })
     
-    if coherence < MIN_COHERENCE_FOR_SELF_RECOVERY:
-        blockers.append({
-            "type": "low_coherence",
-            "message": f"Coherence ({coherence:.2f}) below threshold ({MIN_COHERENCE_FOR_SELF_RECOVERY})",
-            "resolution": (
-                "Request human help - inspect producer provenance and behavioral signals"
-            ),
-        })
-    
     eligible = len(blockers) == 0
     
     # Build recommendations
@@ -309,13 +297,17 @@ async def handle_check_recovery_options(arguments: Dict[str, Any]) -> Sequence[T
             "Consider using leave_note(tags=['needs-human']) to request help",
         ]
     
-    # Get margin info
-    margin_info = GovernanceConfig.compute_proprioceptive_margin(
+    # Recovery headroom is based only on recovery-authoritative readings.
+    margin_info = compute_recovery_margin(
         risk_score=risk_score,
-        coherence=coherence,
         void_active=void_active,
-        void_value=void_value,
-        coherence_history=monitor.state.coherence_history,
+        max_risk=MAX_RISK_FOR_SELF_RECOVERY,
+    )
+    policy = recovery_policy_context(
+        coherence=coherence,
+        authoritative_inputs=("risk_score", "void_active"),
+        coherence_source=metrics.get("coherence_source"),
+        coherence_role=metrics.get("coherence_role"),
     )
     
     return success_response({
@@ -330,8 +322,8 @@ async def handle_check_recovery_options(arguments: Dict[str, Any]) -> Sequence[T
         "margin": margin_info,
         "thresholds": {
             "max_risk_for_self_recovery": MAX_RISK_FOR_SELF_RECOVERY,
-            "min_coherence_for_self_recovery": MIN_COHERENCE_FOR_SELF_RECOVERY,
         },
+        "recovery_policy": policy,
         "recommendations": recommendations,
     })
 
@@ -341,8 +333,6 @@ async def handle_quick_resume(arguments: Dict[str, Any]) -> Sequence[TextContent
     Quick resume for agents in clearly safe states - no reflection required.
     
     This is the fastest path to recovery when:
-    - legacy coherence compatibility value >= 0.50 (temporary recovery floor,
-      not a health grade)
     - risk < 0.40 (low risk)
     - no void active
     - status is waiting_input or paused
@@ -412,13 +402,9 @@ async def handle_quick_resume(arguments: Dict[str, Any]) -> Sequence[TextContent
     except Exception as e:
         return [error_response(f"Could not assess state: {e}")]
     
-    # Strict safety checks for quick_resume (stricter than self_recovery_review).
-    # Coherence gate is anchored to the config's target/"good" coherence rather
-    # than a hardcoded 0.60: the old value sat ABOVE TARGET_COHERENCE (0.50), so
-    # an agent at the controller's neutral compatibility target could never quick-resume. risk_low
-    # (<=0.40) remains the substantive safety gate — a genuinely risky paused
-    # agent still cannot quick-resume regardless of coherence.
-    QUICK_RESUME_MIN_COHERENCE = GovernanceConfig.TARGET_COHERENCE  # 0.50
+    # Strict safety checks for quick_resume (stricter than self-recovery review).
+    # Legacy coherence is C(V), directional ODE control feedback.  It remains
+    # in the audit payload but cannot authorize or deny recovery.
     QUICK_RESUME_MAX_RISK = 0.40
 
     # Uninitialized agents (0 check-ins) have default EISV values (~0.5) which
@@ -426,15 +412,22 @@ async def handle_quick_resume(arguments: Dict[str, Any]) -> Sequence[TextContent
     meta = mcp_server.agent_metadata.get(agent_uuid)
     if meta and getattr(meta, 'total_updates', 0) == 0:
         checks = {"no_void": not void_active}
+        authoritative_inputs = ("void_active", "status")
         logger.info(
             "[SELF_RECOVERY] Skipping strict thresholds for uninitialized agent"
         )
     else:
         checks = {
-            "coherence_high": coherence >= QUICK_RESUME_MIN_COHERENCE,
             "risk_low": risk_score <= QUICK_RESUME_MAX_RISK,
             "no_void": not void_active,
         }
+        authoritative_inputs = ("risk_score", "void_active", "status")
+    policy = recovery_policy_context(
+        coherence=coherence,
+        authoritative_inputs=authoritative_inputs,
+        coherence_source=metrics.get("coherence_source"),
+        coherence_role=metrics.get("coherence_role"),
+    )
     
     if not all(checks.values()):
         failed = [k for k, v in checks.items() if not v]
@@ -455,9 +448,9 @@ async def handle_quick_resume(arguments: Dict[str, Any]) -> Sequence[TextContent
                     "void_active": void_active,
                 },
                 "thresholds": {
-                    "min_coherence": QUICK_RESUME_MIN_COHERENCE,
                     "max_risk": QUICK_RESUME_MAX_RISK,
                 },
+                "recovery_policy": policy,
             }
         )]
     
@@ -522,6 +515,7 @@ async def handle_quick_resume(arguments: Dict[str, Any]) -> Sequence[TextContent
             "coherence": coherence,
             "risk_score": risk_score,
         },
+        "recovery_policy": policy,
     })
 
 # ============================================================================
@@ -629,21 +623,11 @@ async def handle_operator_resume_agent(arguments: Dict[str, Any]) -> Sequence[Te
             error_category="safety_error",
         )]
     
-    if coherence < 0.20:
-        return [error_response(
-            f"Cannot resume {target_agent_id}: coherence ({coherence:.2f}) below hard limit (0.20). "
-            "This requires human intervention.",
-            error_code="COHERENCE_TOO_LOW",
-            error_category="safety_error",
-        )]
-    
     # Soft limits - warn but allow if force=True
     warnings = []
     if not force:
         if risk_score > 0.60:
             warnings.append(f"Risk ({risk_score:.2f}) is elevated")
-        if coherence < 0.40:
-            warnings.append(f"Coherence ({coherence:.2f}) is low")
         
         if warnings:
             return [error_response(
@@ -718,5 +702,11 @@ async def handle_operator_resume_agent(arguments: Dict[str, Any]) -> Sequence[Te
             "risk_score": risk_score,
             "void_active": void_active,
         },
+        "recovery_policy": recovery_policy_context(
+            coherence=coherence,
+            authoritative_inputs=("risk_score", "void_active", "operator_authorization", "status"),
+            coherence_source=metrics.get("coherence_source"),
+            coherence_role=metrics.get("coherence_role"),
+        ),
         "audit_note": "This intervention has been logged to the knowledge graph",
     })

@@ -77,13 +77,16 @@ class TestAssessThermodynamicSignificance:
         assert result["is_significant"] is True
         assert any("risk_spike" in r for r in result["reasons"])
 
-    def test_coherence_drop_is_significant(self):
-        # Baseline ~0.8, drop to 0.5 => delta 0.3 > 0.10 threshold
+    def test_behavioral_consistency_drop_is_significant(self):
+        # Baseline ~0.8, drop to 0.5 => delta 0.3 > 0.10 threshold.
         monitor = self._make_monitor(
             risk_history=[0.3, 0.3, 0.3, 0.3, 0.3],
             coherence_history=[0.8, 0.8, 0.8, 0.8, 0.5],
         )
-        result = self.assess(monitor, {})
+        result = self.assess(
+            monitor,
+            {"metrics": {"coherence_role": "behavioral_update_consistency"}},
+        )
         assert result["is_significant"] is True
         assert any("coherence_drop" in r for r in result["reasons"])
 

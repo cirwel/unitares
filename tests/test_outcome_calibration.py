@@ -73,7 +73,7 @@ class TestPhase5CalibrationWiring:
                     agent_id=agent_id,
                     outcome_type='task_completed',
                     is_bad=False,
-                    outcome_score=min(1.0, ctx.metrics_dict.get('coherence', 0.5) * 1.5),
+                    outcome_score=1.0,
                     session_id=ctx.arguments.get('client_session_id'),
                     eisv_e=ctx.metrics_dict.get('E'),
                     eisv_i=ctx.metrics_dict.get('I'),
@@ -93,18 +93,17 @@ class TestPhase5CalibrationWiring:
                 if ctx.outcome_event_id:
                     _conf = ctx.confidence
                     if _conf is not None:
-                        _outcome_score = min(1.0, ctx.metrics_dict.get('coherence', 0.5) * 1.5)
                         mock_checker.record_prediction(
                             confidence=float(_conf),
                             predicted_correct=(float(_conf) >= 0.5),
-                            actual_correct=_outcome_score,
+                            actual_correct=1.0,
                         )
 
         assert ctx.outcome_event_id == 'outcome-123'
         mock_checker.record_prediction.assert_called_once_with(
             confidence=0.8,
             predicted_correct=True,
-            actual_correct=min(1.0, 0.48 * 1.5),
+            actual_correct=1.0,
         )
 
     @pytest.mark.asyncio
@@ -171,7 +170,7 @@ class TestPhase5CalibrationWiring:
                     'stuck', 'crash', 'regression',
                 )
                 if any(sig in _rt_lower for sig in _failure_signals):
-                    _bad_score = max(0.0, 1.0 - ctx.metrics_dict.get('coherence', 0.5) * 1.5)
+                    _bad_score = 0.0
                     _bad_oid = await mock_db.record_outcome_event(
                         agent_id=agent_id,
                         outcome_type='task_failed',
@@ -209,11 +208,10 @@ class TestPhase5CalibrationWiring:
         assert call_kwargs.kwargs['outcome_type'] == 'task_failed'
         assert call_kwargs.kwargs['is_bad'] is True
 
-        expected_bad_score = max(0.0, 1.0 - 0.48 * 1.5)
         mock_checker.record_prediction.assert_called_once_with(
             confidence=0.8,
             predicted_correct=True,
-            actual_correct=expected_bad_score,
+            actual_correct=0.0,
         )
 
     @pytest.mark.asyncio

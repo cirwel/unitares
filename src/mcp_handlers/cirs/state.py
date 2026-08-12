@@ -35,18 +35,9 @@ def _compute_decision_bias(state) -> str:
         return "pause_bias"
     return "balanced"
 
-def _compute_focus_stability(state) -> float:
-    """Compute focus stability from coherence history"""
-    if not hasattr(state, 'coherence_history') or len(state.coherence_history) < 5:
-        return 0.5
-
-    recent = state.coherence_history[-10:]
-    if len(recent) < 2:
-        return 0.5
-
-    import numpy as np
-    variance = np.var(recent)
-    return float(max(0, 1 - variance * 4))
+def _compute_focus_stability(_state) -> None:
+    """Retired: legacy C(V) variance is not evidence of focus stability."""
+    return None
 
 def _compute_maturity(state) -> str:
     """Compute agent maturity from update count"""
@@ -161,6 +152,13 @@ async def _handle_state_announce_emit(arguments: Dict[str, Any]) -> Sequence[Tex
                 "alpha": {
                     "coherence": float(state.coherence),
                     "focus_stability": _compute_focus_stability(state),
+                    "focus_stability_provenance": {
+                        "status": "retired",
+                        "former_source": "legacy_tanh_v",
+                        "former_role": "ode_control_feedback",
+                        "health_evidence": False,
+                        "reason": "non_discriminative_producer",
+                    },
                 },
                 "rho": {
                     "update_count": int(state.update_count),
@@ -196,6 +194,8 @@ async def _handle_state_announce_emit(arguments: Dict[str, Any]) -> Sequence[Tex
         phi=float(metrics.get("phi", 0.0)),
         verdict=str(metrics.get("verdict", "caution")),
         risk_score=float(metrics.get("risk_score") or metrics.get("current_risk") or 0.0),
+        coherence_source=str(metrics.get("coherence_source") or "unknown"),
+        coherence_role=str(metrics.get("coherence_role") or "unknown"),
         trajectory_signature=trajectory_signature,
         purpose=purpose,
         update_count=int(metrics.get("updates", 0)),
@@ -227,22 +227,46 @@ async def _handle_state_announce_query(arguments: Dict[str, Any]) -> Sequence[Te
             recovery={"valid_values": valid_regimes}
         )]
 
+    if min_coherence is not None:
+        return [error_response(
+            "min_coherence is retired: the announced scalar may be legacy C(V) "
+            "control feedback and cannot support a peer-quality threshold.",
+            error_code="UNSUPPORTED_COHERENCE_FILTER",
+            error_category="validation_error",
+            recovery={
+                "action": "Filter by max_risk, regime, or explicit agent_ids instead",
+                "invalid_parameter": "min_coherence",
+            },
+        )]
+
     announces = _get_state_announces(
         agent_ids=agent_ids,
         regime=regime.lower() if regime else None,
-        min_coherence=float(min_coherence) if min_coherence is not None else None,
         max_risk=float(max_risk) if max_risk is not None else None,
         limit=limit
     )
 
     regimes = [a.get("regime", "unknown") for a in announces]
     verdicts = [a.get("verdict", "unknown") for a in announces]
+    coherence_roles = [a.get("coherence_role", "unknown") for a in announces]
+    coherence_sources = [a.get("coherence_source", "unknown") for a in announces]
 
     summary = {
         "total_agents": len(announces),
         "by_regime": {r: regimes.count(r) for r in set(regimes)},
         "by_verdict": {v: verdicts.count(v) for v in set(verdicts)},
         "avg_coherence": sum(a.get("coherence", 0) for a in announces) / len(announces) if announces else 0,
+        "coherence_role_counts": {
+            role: coherence_roles.count(role) for role in set(coherence_roles)
+        },
+        "avg_coherence_provenance": {
+            "health_evidence": False,
+            "source_counts": {
+                source: coherence_sources.count(source)
+                for source in set(coherence_sources)
+            },
+            "warning": "Do not compare or threshold averages across producer roles",
+        },
         "avg_risk": sum(a.get("risk_score", 0) for a in announces) / len(announces) if announces else 0,
     }
 
@@ -254,7 +278,6 @@ async def _handle_state_announce_query(arguments: Dict[str, Any]) -> Sequence[Te
         "filters_applied": {
             "agent_ids": agent_ids,
             "regime": regime,
-            "min_coherence": min_coherence,
             "max_risk": max_risk,
             "limit": limit
         }

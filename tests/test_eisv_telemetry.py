@@ -101,6 +101,12 @@ def test_full_envelope_keeps_measurement_policy_and_actuator_separate():
                     "eligible": True,
                     "candidate": {"final": 0.62},
                 },
+                "trajectory_identity": {
+                    "eligible": True,
+                    "candidate": {
+                        "identity_confidence_without_legacy_stability_multiplier": 0.7
+                    },
+                },
             }
         },
         observed_at="2026-08-09T18:00:00+00:00",
@@ -128,6 +134,8 @@ def test_full_envelope_keeps_measurement_policy_and_actuator_separate():
     assert summary["legacy_coherence_behavioral_shadow_eligible"] is True
     assert summary["legacy_coherence_confidence_shadow_recorded"] is True
     assert summary["legacy_coherence_confidence_shadow_eligible"] is True
+    assert summary["legacy_coherence_trajectory_shadow_recorded"] is True
+    assert summary["legacy_coherence_trajectory_shadow_eligible"] is True
     json.dumps(envelope)  # no default=str escape hatch required
 
 
@@ -302,6 +310,14 @@ async def test_post_update_persists_the_same_envelope_exposed_in_full_result():
     monitor = SimpleNamespace(
         _behavioral_state=behavioral,
         _behavioral_obs_source="behavioral_sensor",
+        state=SimpleNamespace(
+            update_count=100,
+            coherence_history=[0.45, 0.55] * 10,
+            E_history=[0.7] * 20,
+            I_history=[0.8] * 20,
+            S_history=[0.2] * 20,
+            V_history=[-0.1] * 20,
+        ),
     )
     ctx = UpdateContext(
         agent_id="agent-1",
@@ -359,3 +375,8 @@ async def test_post_update_persists_the_same_envelope_exposed_in_full_result():
     ]
     assert candidate["behavioral_sensor"]["candidate"]["E"] == 0.68
     assert candidate["derived_confidence"]["candidate"]["final"] == 0.61
+    assert candidate["trajectory_identity"]["eligible"] is True
+    assert candidate["trajectory_identity"]["policy_applied"] is False
+    assert candidate["trajectory_identity"]["deployed"][
+        "identity_confidence"
+    ] == pytest.approx(0.375)

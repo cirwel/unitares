@@ -261,7 +261,19 @@ async def handle_compare_agents(arguments: Dict[str, Any]) -> Sequence[TextConte
             }
         )]
     
-    compare_metrics = arguments.get("compare_metrics") or ["risk_score", "coherence", "E", "I", "S", "V"]
+    requested_compare_metrics = arguments.get("compare_metrics") or [
+        "risk_score",
+        "E",
+        "I",
+        "S",
+        "V",
+    ]
+    # Keep the raw scalar visible below for audit compatibility, but never use
+    # the overloaded legacy C(V) field to declare peers similar or anomalous.
+    # A future producer needs its own calibrated, role-specific comparison.
+    compare_metrics = [
+        metric for metric in requested_compare_metrics if metric != "coherence"
+    ]
     
     # Get metrics for all agents
     agents_data = []
@@ -314,6 +326,8 @@ async def handle_compare_agents(arguments: Dict[str, Any]) -> Sequence[TextConte
                 "verdict": metrics.get("verdict"),  # Primary governance signal
                 "mean_risk": metrics.get("mean_risk") or 0.0,  # Overall mean (all-time average) - for historical context
                 "coherence": float(_state.coherence if _state and _state.coherence is not None else 0.5),
+                "coherence_source": metrics.get("coherence_source", "unknown"),
+                "coherence_role": metrics.get("coherence_role", "unknown"),
                 "E": float(_state.E if _state and _state.E is not None else 0.5),
                 "I": float(_state.I if _state and _state.I is not None else 0.5),
                 "S": float(_state.S if _state and _state.S is not None else 0.5),
@@ -379,6 +393,17 @@ async def handle_compare_agents(arguments: Dict[str, Any]) -> Sequence[TextConte
             "differences": differences,
             "outliers": outliers
         },
+        "comparison_policy": {
+            "schema": "peer_metric_comparison.v2",
+            "requested_metrics": list(requested_compare_metrics),
+            "compared_metrics": list(compare_metrics),
+            "excluded_metrics": {
+                "coherence": {
+                    "reason": "producer_overloaded_and_legacy_tanh_v_non_discriminative",
+                    "health_evidence": False,
+                }
+            },
+        },
         "eisv_labels": get_eisv_glossary(),
     }
     
@@ -420,6 +445,16 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
     # Find similar agents (similar EISV values)
     similar_agents = []
     similarity_threshold = arguments.get("similarity_threshold", 0.15)  # Within 15% on each metric
+    similarity_provenance = {
+        "formula": "peer_similarity.v2",
+        "included_components": ["E", "I", "S"],
+        "excluded_components": {
+            "coherence": {
+                "reason": "producer_overloaded_and_legacy_tanh_v_non_discriminative",
+                "health_evidence": False,
+            }
+        },
+    }
     
     for other_id, other_meta in mcp_server.agent_metadata.items():
         if other_id == agent_id or other_meta.status not in ["active", "waiting_input"]:
@@ -442,14 +477,13 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
             E_diff = abs(my_E - other_E)
             I_diff = abs(my_I - other_I)
             S_diff = abs(my_S - other_S)
-            coherence_diff = abs(my_coherence - other_coherence)
             
             # Similar if within threshold on all metrics
             if (E_diff <= similarity_threshold and 
                 I_diff <= similarity_threshold and 
                 S_diff <= similarity_threshold):
                 
-                similarity_score = 1.0 - ((E_diff + I_diff + S_diff + coherence_diff) / 4.0)
+                similarity_score = 1.0 - ((E_diff + I_diff + S_diff) / 3.0)
                 similar_agents.append({
                     "agent_id": other_id,
                     "similarity_score": similarity_score,
@@ -459,6 +493,8 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
                         "S": other_S,
                         "V": other_V,
                         "coherence": other_coherence,
+                        "coherence_source": other_metrics.get("coherence_source", "unknown"),
+                        "coherence_role": other_metrics.get("coherence_role", "unknown"),
                         "phi": other_phi,
                         "verdict": other_metrics.get('verdict', 'caution'),
                         "risk_score": other_risk
@@ -493,9 +529,12 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
                 "S": my_S,
                 "V": my_V,
                 "coherence": my_coherence,
+                "coherence_source": my_metrics.get("coherence_source", "unknown"),
+                "coherence_role": my_metrics.get("coherence_role", "unknown"),
                 "phi": my_phi,
                 "verdict": my_verdict
             },
+            "similarity_provenance": similarity_provenance,
             "eisv_labels": get_eisv_glossary(),
             "suggestion": "Try adjusting similarity_threshold parameter or use compare_agents with specific agent_ids"
         })
@@ -510,11 +549,14 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
             "S": my_S,
             "V": my_V,
             "coherence": my_coherence,
+            "coherence_source": my_metrics.get("coherence_source", "unknown"),
+            "coherence_role": my_metrics.get("coherence_role", "unknown"),
             "phi": my_phi,
             "verdict": my_verdict,
             "risk_score": _coerce_float_metric(my_metrics.get('risk_score'), 0.4)
         },
         "similar_agents": top_similar,
+        "similarity_provenance": similarity_provenance,
         "message": f"Found {len(top_similar)} similar agent(s). Here's how you compare:",
         "insights": []
     }
@@ -613,14 +655,11 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
         avg_delta_E = sum(s["differences"]["E"] for s in top_similar) / len(top_similar)
         avg_delta_I = sum(s["differences"]["I"] for s in top_similar) / len(top_similar)
         avg_delta_S = sum(s["differences"]["S"] for s in top_similar) / len(top_similar)
-        avg_delta_C = sum(s["differences"]["coherence"] for s in top_similar) / len(top_similar)
-
         # Rank by absolute delta magnitude
         deltas = [
             ("E", avg_delta_E, "Energy"),
             ("I", avg_delta_I, "Integrity"),
             ("S", avg_delta_S, "Entropy"),
-            ("coherence", avg_delta_C, "Coherence"),
         ]
         deltas.sort(key=lambda x: abs(x[1]), reverse=True)
 
@@ -823,6 +862,15 @@ async def handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCon
     return success_response({
         "anomalies": all_anomalies,
         "eisv_labels": get_eisv_glossary(),
+        "anomaly_policy": {
+            "schema": "observability.anomaly.authority.v2",
+            "coherence_drop_required_role": "behavioral_update_consistency",
+            "excluded_roles": {
+                "ode_control_feedback": "directional_control_signal_not_health_evidence",
+                "eis_structural_measurement": "thresholds_uncalibrated",
+                "unknown": "missing_provenance_fails_closed",
+            },
+        },
         "summary": {
             "total_anomalies": len(all_anomalies),
             # stale = recomputed from a frozen (idle) history window; already
@@ -1005,6 +1053,14 @@ async def handle_aggregate_metrics(arguments: Dict[str, Any]) -> Sequence[TextCo
         "mean_risk_score": float(state_row["mean_risk_score"] or 0.0),
         "mean_risk": float(state_row["mean_risk_score"] or 0.0),  # DEPRECATED alias
         "mean_coherence": float(state_row["mean_coherence"] or 0.0),
+        "mean_coherence_provenance": {
+            "role": "producer_mixed_or_unknown",
+            "health_evidence": False,
+            "warning": (
+                "Compatibility aggregate only; do not compare or threshold "
+                "without per-row producer provenance"
+            ),
+        },
         "paused_now": int(paused_now or 0),
         "pauses_this_epoch": int(pauses_this_epoch or 0),
         "epoch": int(current_epoch),

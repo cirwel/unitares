@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from src.behavioral_trajectory import (
     compute_behavioral_trajectory,
+    compute_legacy_coherence_identity_shadow,
     project_eisv_trajectory,
     _compute_preferences,
     _compute_beliefs,
@@ -124,6 +125,51 @@ class TestBehavioralTrajectory:
         r_none = compute_behavioral_trajectory(**h, calibration_error=None)
         r_high = compute_behavioral_trajectory(**h, calibration_error=0.8)
         assert r_none["beliefs"]["confidence"] > r_high["beliefs"]["confidence"]
+
+
+class TestLegacyCoherenceIdentityShadow:
+    def test_insufficient_history_is_ineligible(self):
+        result = compute_legacy_coherence_identity_shadow(
+            coherence_history=[0.5] * 9,
+            update_count=9,
+            eisv_history_count=9,
+        )
+
+        assert result["eligible"] is False
+        assert result["policy_applied"] is False
+        assert result["eligibility_reason"] == "insufficient_trajectory_history"
+
+    def test_removes_coherence_only_fields_instead_of_zero_filling(self):
+        result = compute_legacy_coherence_identity_shadow(
+            coherence_history=[0.45, 0.55] * 10,
+            update_count=100,
+            eisv_history_count=20,
+        )
+
+        assert result["eligible"] is True
+        assert result["deployed"]["stability_score"] == pytest.approx(0.75)
+        assert result["deployed"]["identity_confidence"] == pytest.approx(0.375)
+        assert result["candidate"]["recovery_tau"] is None
+        assert result["candidate"]["stability_score"] is None
+        assert result["candidate"][
+            "identity_confidence_without_legacy_stability_multiplier"
+        ] == pytest.approx(0.5)
+        assert result["candidate_minus_deployed"][
+            "identity_confidence_without_legacy_stability_multiplier"
+        ] == pytest.approx(0.125)
+
+    def test_shadow_cannot_apply_identity_or_trust_policy(self):
+        result = compute_legacy_coherence_identity_shadow(
+            coherence_history=[0.5] * 20,
+            update_count=250,
+            eisv_history_count=20,
+        )
+
+        assert result["mode"] == "measurement_only"
+        assert result["policy_applied"] is False
+        assert result["health_evidence"] is False
+        assert "trajectory_similarity" in result["not_modeled"]
+        assert "trust_tier" in result["not_modeled"]
 
 
 # ══════════════════════════════════════════════════

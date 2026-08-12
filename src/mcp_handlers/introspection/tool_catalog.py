@@ -28,7 +28,7 @@ DEPRECATION_REGISTRY: Dict[str, Dict[str, str]] = {
         "deprecated_since": "2026-01-29",
         "superseded_by": "quick_resume",
         "migration": (
-            "Use quick_resume() if coherence > 0.60 and risk < 0.40, "
+            "Use quick_resume() if risk < 0.40 and no void is active; "
             "otherwise use self_recovery_review(reflection='...')"
         ),
     },
@@ -187,7 +187,7 @@ TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
         "depends_on": [],
         "related_to": ["quick_resume", "self_recovery_review", "check_recovery_options"],
         "category": "lifecycle",
-        "migration": "Use quick_resume() if coherence > 0.60 and risk < 0.40, otherwise use self_recovery_review(reflection='...')"
+        "migration": "Use quick_resume() if risk < 0.40 and no void is active; otherwise use self_recovery_review(reflection='...')"
     },
     "self_recovery_review": {
         "depends_on": ["get_governance_metrics"],

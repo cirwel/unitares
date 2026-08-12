@@ -517,10 +517,10 @@ class TestEvaluateDecisionOutcome:
         metadata = {"a1": {"status": "active", "update_count": 5}}
         assert evaluate_decision_outcome(entry, metadata) is not None
 
-    def test_confidence_from_details_coherence(self):
+    def test_legacy_coherence_does_not_substitute_for_confidence(self):
         entry = {"agent_id": "a1", "details": {"coherence": 0.7}}
         metadata = {"a1": {"status": "active", "update_count": 0}}
-        assert evaluate_decision_outcome(entry, metadata) is True
+        assert evaluate_decision_outcome(entry, metadata) is None
 
     def test_top_level_confidence_over_details(self):
         entry = {"confidence": 0.9, "agent_id": "a1", "details": {"confidence": 0.2}}
