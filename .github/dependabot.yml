@@ -30,6 +30,7 @@ updates:
         patterns:
           - "pytest*"
           - "hypothesis"
+          - "Markdown"
           - "scipy"
           - "matplotlib"
           - "editdistance"

@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
-"""Build the public glossary site from the canonical ontology markdown.
+"""Build the public UNITARES site from canonical repository markdown.
 
-Single-source by construction: this renders ``docs/ontology/glossary.md`` and the
-latest ``glossary-drift-audit-*.md`` directly to HTML. It never holds its own copy
-of the content, so the published site cannot drift from the markdown the way a
-hand-maintained app would.
+Single-source by construction: this renders ``docs/public-site/index.md``,
+``docs/ontology/glossary.md``, and the latest ``glossary-drift-audit-*.md``
+directly to HTML. It never holds its own copy of the page content, so the
+published site cannot drift from the repository markdown.
 
 Usage:
-    python3 scripts/dev/build_glossary_site.py [--out build/glossary-site] [--cname glossary.cirwel.org]
+    python3 scripts/dev/build_public_site.py [--out build/public-site] [--cname unitares.cirwel.org]
 
 Dependencies: the pure-Python ``markdown`` package (free; no model API).
-Deployed to GitHub Pages by .github/workflows/glossary-pages.yml.
+Deployed to GitHub Pages by .github/workflows/public-pages.yml.
 """
 
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from pathlib import Path
 
@@ -27,7 +28,10 @@ except ImportError:  # pragma: no cover - surfaced clearly in CI
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ONTOLOGY = PROJECT_ROOT / "docs" / "ontology"
+SITE = PROJECT_ROOT / "docs" / "public-site"
+FAVICON = SITE / "favicon.svg"
 REPO_URL = "https://github.com/cirwel/unitares"
+LANDING_BLOB = f"{REPO_URL}/blob/master/docs/public-site/index.md"
 GLOSSARY_BLOB = f"{REPO_URL}/blob/master/docs/ontology/glossary.md"
 
 # Public-facing framing prepended to the glossary page so a cold visitor is not
@@ -50,13 +54,15 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0e1116">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
 <title>{title}</title>
 <style>
   :root{{--bg:#0e1116;--panel:#161b22;--line:#2a313c;--ink:#e6edf3;--dim:#8b949e;--acc:#58a6ff}}
   *{{box-sizing:border-box}}
   body{{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}}
   header{{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur(6px);border-bottom:1px solid var(--line);padding:14px 22px;display:flex;gap:18px;align-items:baseline;flex-wrap:wrap}}
-  header .brand{{font-weight:600}}
+  header .brand{{font-weight:650;letter-spacing:.01em}}
   header nav a{{color:var(--dim);text-decoration:none;margin-right:14px;font-size:14px}}
   header nav a.active,header nav a:hover{{color:var(--ink)}}
   main{{max-width:880px;margin:0 auto;padding:30px 22px 90px}}
@@ -68,6 +74,7 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   th,td{{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}}
   th{{background:#1c232c;color:var(--dim);font-size:12.5px;text-transform:uppercase;letter-spacing:.4px}}
   blockquote{{border-left:3px solid var(--acc);background:#1c232c;margin:16px 0;padding:10px 16px;border-radius:0 8px 8px 0;color:var(--dim)}}
+  main > p:first-of-type{{font-size:18px;color:#b8c3cf;max-width:760px}}
   .admonition{{border:1px solid var(--line);border-left:3px solid var(--acc);background:#161b22;border-radius:0 8px 8px 0;padding:12px 16px;margin:18px 0}}
   .admonition-title{{font-weight:600;color:var(--ink);margin:0 0 6px}}
   hr{{border:0;border-top:1px solid var(--line);margin:28px 0}}
@@ -76,9 +83,10 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
 <header>
-  <span class="brand">UNITARES · glossary</span>
+  <span class="brand">UNITARES</span>
   <nav>
-    <a href="index.html"{glossary_active}>Glossary</a>
+    <a href="index.html"{home_active}>Home</a>
+    <a href="glossary.html"{glossary_active}>Glossary</a>
     <a href="drift-audit.html"{audit_active}>Drift audit</a>
     <a href="{repo}">Repo ↗</a>
   </nav>
@@ -87,7 +95,7 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 {body}
 </main>
 <footer>
-  Generated from <code>docs/ontology/</code> — the markdown is the source of truth.
+  Generated from <code>{source_path}</code> — repository markdown is the source of truth.
   Edit there, not here. <a href="{blob}">View source</a>.
 </footer>
 </body>
@@ -109,16 +117,35 @@ def latest_drift_audit() -> Path | None:
 
 
 def build(out_dir: Path, cname: str | None) -> None:
+    landing_md = (SITE / "index.md").read_text(encoding="utf-8")
     glossary_md = (ONTOLOGY / "glossary.md").read_text(encoding="utf-8")
     out_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(FAVICON, out_dir / "favicon.svg")
 
-    # Glossary page (with the public intro prepended).
+    # Product/evaluator landing page. Its copy remains reviewable as markdown.
     out_dir.joinpath("index.html").write_text(
         PAGE_TEMPLATE.format(
+            title="UNITARES — Runtime Accountability for AI Agents",
+            home_active=' class="active"',
+            glossary_active="",
+            audit_active="",
+            repo=REPO_URL,
+            source_path="docs/public-site/index.md",
+            blob=LANDING_BLOB,
+            body=render(landing_md),
+        ),
+        encoding="utf-8",
+    )
+
+    # Glossary page (with the public intro prepended).
+    out_dir.joinpath("glossary.html").write_text(
+        PAGE_TEMPLATE.format(
             title="UNITARES Glossary",
+            home_active="",
             glossary_active=' class="active"',
             audit_active="",
             repo=REPO_URL,
+            source_path="docs/ontology/glossary.md",
             blob=GLOSSARY_BLOB,
             body=render(INTRO_MD + glossary_md),
         ),
@@ -131,9 +158,11 @@ def build(out_dir: Path, cname: str | None) -> None:
         out_dir.joinpath("drift-audit.html").write_text(
             PAGE_TEMPLATE.format(
                 title="UNITARES Glossary — Drift Audit",
+                home_active="",
                 glossary_active="",
                 audit_active=' class="active"',
                 repo=REPO_URL,
+                source_path=f"docs/ontology/{audit.name}",
                 blob=f"{REPO_URL}/blob/master/docs/ontology/{audit.name}",
                 body=render(audit.read_text(encoding="utf-8")),
             ),
@@ -144,16 +173,16 @@ def build(out_dir: Path, cname: str | None) -> None:
     if cname:
         out_dir.joinpath("CNAME").write_text(cname.strip() + "\n", encoding="utf-8")
 
-    print(f"Built glossary site -> {out_dir} ({'with' if cname else 'no'} CNAME)")
+    print(f"Built public site -> {out_dir} ({'with' if cname else 'no'} CNAME)")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--out", default="build/glossary-site", help="Output directory")
+    p.add_argument("--out", default="build/public-site", help="Output directory")
     p.add_argument(
         "--cname",
         default=None,
-        help="Custom domain to serve from (writes a CNAME file, e.g. glossary.cirwel.org)",
+        help="Custom domain to serve from (writes a CNAME file, e.g. unitares.cirwel.org)",
     )
     return p.parse_args(argv)
 
