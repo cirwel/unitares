@@ -904,7 +904,10 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
         try:
             monitor = mcp_server.monitors.get(ctx.agent_id)
             if monitor and len(getattr(monitor.state, 'decision_history', [])) >= 3:
-                from src.behavioral_sensor import compute_behavioral_sensor_eisv
+                from src.behavioral_sensor import (
+                    compute_behavioral_sensor_eisv,
+                    compute_legacy_coherence_dependency_shadow,
+                )
                 from src.coherence_provenance import (
                     LEGACY_COHERENCE_SOURCE,
                     ODE_CONTROL_FEEDBACK_ROLE,
@@ -987,7 +990,7 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                 I_history = list(monitor.state.I_history)
                 S_history = list(monitor.state.S_history)
                 V_history = list(monitor.state.V_history)
-                behavioral_eisv = compute_behavioral_sensor_eisv(
+                behavioral_sensor_inputs = dict(
                     decision_history=decision_history,
                     coherence_history=coherence_history,
                     regime_history=regime_history,
@@ -1006,6 +1009,18 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                     tool_call_velocity=tool_vel,
                     unique_tools_ratio=tool_div,
                 )
+                behavioral_eisv = compute_behavioral_sensor_eisv(
+                    **behavioral_sensor_inputs
+                )
+                behavioral_shadow = compute_legacy_coherence_dependency_shadow(
+                    **behavioral_sensor_inputs,
+                    deployed_observation=behavioral_eisv,
+                )
+                ctx.agent_state["_eisv_shadow_ablations"] = {
+                    "legacy_coherence_neutralized": {
+                        "behavioral_sensor": behavioral_shadow,
+                    }
+                }
                 ctx.agent_state["_eisv_derivation"] = build_behavioral_derivation(
                     decision_history=decision_history,
                     coherence_history=coherence_history,
@@ -1835,6 +1850,25 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
     eisv_telemetry = None
     try:
         from src.eisv_telemetry import build_eisv_telemetry_envelope
+        shadow_ablations = {
+            name: dict(candidate)
+            for name, candidate in (
+                ctx.agent_state.get("_eisv_shadow_ablations") or {}
+            ).items()
+            if isinstance(candidate, dict)
+        }
+        confidence_shadows = (
+            (ctx.result.get("confidence_reliability") or {}).get(
+                "shadow_ablations"
+            )
+            or {}
+        )
+        for name, candidate in confidence_shadows.items():
+            if not isinstance(candidate, dict):
+                continue
+            shadow_ablations.setdefault(name, {})[
+                "derived_confidence"
+            ] = dict(candidate)
         eisv_telemetry = build_eisv_telemetry_envelope(
             metrics=ctx.metrics_dict,
             behavioral_snapshot=behavioral_snapshot,
@@ -1843,6 +1877,7 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
             derivation=ctx.agent_state.get("_eisv_derivation"),
             policy_evaluation=ctx.result.get("policy_evaluation"),
             enforcement=ctx.result.get("enforcement"),
+            shadow_ablations=shadow_ablations,
             observed_at=ctx.result.get("timestamp"),
         )
         # Full response mode can expose the same record that was persisted;

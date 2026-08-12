@@ -795,6 +795,9 @@ class TestProcessUpdate:
         assert cr['coherence_source'] == 'legacy_tanh_v'
         assert cr['coherence_weight'] == 0.55
         assert cr['coherence_is_health_evidence'] is False
+        assert cr['shadow_ablations'][
+            'legacy_coherence_neutralized'
+        ]['policy_applied'] is False
         assert cr['known_limitations']
 
     def test_verdict_is_valid(self, monitor):
