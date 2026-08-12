@@ -8,8 +8,8 @@ artifact in another.
 
 | Artifact | Current version | Role and compatibility |
 |---|---:|---|
-| UNITARES server | `v2.17.0` | Current supported runtime and canonical API behavior. |
-| `unitares-governance` plugin | `v0.4.13` | Claude Code/Codex packaging aligned with server `v2.17.0`; tested with Claude Code 2.1.220+ and Codex CLI 0.146.0+. |
+| UNITARES server | `v2.18.0` | Current supported runtime and canonical API behavior. |
+| `unitares-governance` plugin | `v0.4.13` | Claude Code/Codex packaging aligned with server `v2.18.0`; tested with Claude Code 2.1.220+ and Codex CLI 0.146.0+. |
 | `unitares-sdk` | `0.1.0` | In-tree Python client tested against the server at the same commit. Until its first PyPI release, install from the server's matching Git tag. |
 | `unitares-host-adapter` | `0.2` alpha | Separately released host bindings; capabilities vary by host and remain pre-stable. |
 | Paper / reproducibility kit | paper `v6.9.1`, kit `v6.8.1-repro` | Research and evaluation artifacts, not runtime dependencies or server compatibility numbers. |

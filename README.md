@@ -61,7 +61,7 @@ README carries the current install command and server compatibility guidance.
 ## Quickstart
 
 ```bash
-git clone --branch v2.17.0 --depth 1 https://github.com/cirwel/unitares.git
+git clone --branch v2.18.0 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
 make demo
