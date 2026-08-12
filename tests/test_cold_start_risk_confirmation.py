@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from src.cold_start_risk_confirmation import (
+    COLD_START_CONFIRMATION_ACTUATION_SCOPE,
     NON_AUTHORED_COLD_START_ENFORCEMENT_BASIS,
     NON_AUTHORED_COLD_START_RECOVERY_BASIS,
     apply_non_authored_cold_start_guard,
@@ -51,8 +52,9 @@ def _legacy_trap_record(
     *,
     epistemic_class="substrate_interpretation",
     enforcement_basis="phi_cold_start_unconfirmed_shadow",
+    maturity_gate=None,
 ):
-    maturity_gate = _evaluate()
+    maturity_gate = maturity_gate or _evaluate()
     return SimpleNamespace(
         epistemic_class=epistemic_class,
         state_json={
@@ -73,8 +75,11 @@ def _legacy_trap_record(
                     "applied": True,
                     "mode": "circuit_breaker",
                     "basis": enforcement_basis,
+                    "scope": "runtime_circuit_breaker",
                     "actor": "agent_loop_detection",
                     "effect": "agent_metadata.status=paused",
+                    "actuation_id": "actuation-123",
+                    "applied_at": "2026-08-11T23:47:55+00:00",
                 },
             },
         },
@@ -89,7 +94,9 @@ def test_first_fallback_risk_pause_is_shadow_would_defer_only():
     assert gate["confirmations_required"] == 2
     assert gate["would_defer"] is True
     assert gate["outcome"] == "shadow_would_defer"
+    assert gate["actuation_scope"] == COLD_START_CONFIRMATION_ACTUATION_SCOPE
     assert gate["actuation_applied"] is False
+    assert "runtime circuit breaker" in gate["note"]
     assert gate["original_decision"] == {
         "action": "pause",
         "sub_action": "risk_pause",
@@ -206,6 +213,7 @@ def test_actuation_flag_remains_fail_closed_without_durable_state():
     gate = _evaluate(actuation_enabled=True)
 
     assert gate["actuation_enabled"] is True
+    assert gate["actuation_scope"] == "fallback_risk_pause_deferral"
     assert gate["actuation_ready"] is False
     assert gate["actuation_applied"] is False
     assert gate["actuation_blocker"] == "durable_confirmation_state_not_implemented"
@@ -322,12 +330,47 @@ def test_reviewed_recovery_recognizes_only_exact_persisted_legacy_trap():
     assert eligible["eligible"] is True
     assert eligible["failed_requirements"] == []
     assert eligible["recovery_basis"] == NON_AUTHORED_COLD_START_RECOVERY_BASIS
+    assert eligible["observed_enforcement"]["circuit_breaker_applied"] is True
+    assert eligible["observed_enforcement"]["actuation_id"] == "actuation-123"
     assert agent_authored["eligible"] is False
     assert "epistemic_class_non_authoring" in agent_authored["failed_requirements"]
     assert wrong_basis["eligible"] is False
-    assert "circuit_breaker_applied" in wrong_basis["failed_requirements"]
+    assert "circuit_breaker_applied" not in wrong_basis["failed_requirements"]
+    assert "legacy_enforcement_basis_exact" in wrong_basis["failed_requirements"]
+    assert wrong_basis["observed_enforcement"]["circuit_breaker_applied"] is True
     assert missing["eligible"] is False
     assert "state_record_present" in missing["failed_requirements"]
+
+
+def test_recovery_reports_confirmed_agent_report_actuation_without_granting_exception():
+    first = _evaluate()
+    confirmed = _evaluate(previous=first, cycle=2, behavioral_confidence=0.2)
+    observed = evaluate_non_authored_cold_start_trap(
+        _legacy_trap_record(
+            epistemic_class="agent_report",
+            enforcement_basis="phi_cold_start_confirmed",
+            maturity_gate=confirmed,
+        ),
+        enabled=True,
+    )
+
+    assert observed["eligible"] is False
+    assert observed["observed_enforcement"] == {
+        "requested": True,
+        "applied": True,
+        "mode": "circuit_breaker",
+        "basis": "phi_cold_start_confirmed",
+        "scope": "runtime_circuit_breaker",
+        "actor": "agent_loop_detection",
+        "effect": "agent_metadata.status=paused",
+        "actuation_id": "actuation-123",
+        "applied_at": "2026-08-11T23:47:55+00:00",
+        "circuit_breaker_applied": True,
+    }
+    assert observed["requirements"]["circuit_breaker_applied"] is True
+    assert "circuit_breaker_applied" not in observed["failed_requirements"]
+    assert "legacy_enforcement_basis_exact" in observed["failed_requirements"]
+    assert "applied circuit breaker" in observed["note"]
 
 
 def test_verdict_driver_names_authority_boundary():
