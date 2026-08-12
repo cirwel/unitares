@@ -43,10 +43,11 @@ def estimate_risk(state, agent_state: Dict, score_result: Optional[Dict] = None,
             velocity_magnitude = sum(diffs)
             velocity_risk = min(0.15, velocity_magnitude * 2.0)
         risk += velocity_risk
+        risk = float(np.clip(risk, 0.0, 1.0))
         state.risk_history.append(risk)
         if len(state.risk_history) > config.HISTORY_WINDOW:
             state.risk_history = state.risk_history[-config.HISTORY_WINDOW:]
-        return float(np.clip(risk, 0.0, 1.0))
+        return risk
     if score_result is None:
         ethical_signals = np.array(agent_state.get('ethical_drift', [0.0, 0.0, 0.0, 0.0]))
         if len(ethical_signals) == 0:
@@ -102,8 +103,11 @@ def estimate_risk(state, agent_state: Dict, score_result: Optional[Dict] = None,
         velocity_risk = min(0.15, velocity_magnitude * 2.0)
     risk += velocity_risk
 
+    # The public return contract is [0, 1]. Persist that same value so
+    # latest/smoothed history consumers cannot observe a different range.
+    risk = float(np.clip(risk, 0.0, 1.0))
     state.risk_history.append(risk)
     if len(state.risk_history) > config.HISTORY_WINDOW:
         state.risk_history = state.risk_history[-config.HISTORY_WINDOW:]
 
-    return float(np.clip(risk, 0.0, 1.0))
+    return risk
