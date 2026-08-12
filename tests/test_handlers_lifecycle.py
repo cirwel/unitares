@@ -1032,6 +1032,9 @@ class TestListAgentsNoHydration:
         assert agent["metrics"]["S"] == pytest.approx(0.28)
         assert agent["metrics"]["V"] == pytest.approx(-0.04)
         assert agent["metrics"]["risk_score"] == pytest.approx(0.0)
+        assert agent["metrics"]["coherence_source"] == "legacy_tanh_v"
+        assert agent["metrics"]["coherence_role"] == "ode_control_feedback"
+        assert agent["metrics"]["coherence_health_evidence"] is False
         assert agent["metrics"]["source"] == "persisted_state"
         assert agent["metrics"]["recorded_at"] == recorded_at.isoformat()
         assert agent["metrics"]["rolling_metrics_available"] is False

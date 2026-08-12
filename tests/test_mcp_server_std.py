@@ -1116,7 +1116,7 @@ class TestSafetyNetResume:
         meta.add_lifecycle_event = MagicMock()
 
         monitor = MagicMock()
-        monitor.state = MagicMock(coherence=0.62)
+        monitor.state = MagicMock(coherence=0.62, void_active=False)
         monitor.get_metrics.return_value = {"mean_risk": 0.21}
 
         agent_metadata[agent_id] = meta
@@ -1154,7 +1154,7 @@ class TestSafetyNetResume:
         meta.add_lifecycle_event = MagicMock()
 
         monitor = MagicMock()
-        monitor.state = MagicMock(coherence=0.25)
+        monitor.state = MagicMock(coherence=0.25, void_active=False)
         monitor.get_metrics.return_value = {"mean_risk": 0.75}
 
         agent_metadata[agent_id] = meta

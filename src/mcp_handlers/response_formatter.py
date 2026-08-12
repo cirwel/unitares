@@ -544,9 +544,9 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
     # signal line — they sit top-level beside margin/nearest_edge, never
     # in the prose signals (dogfood 2026-06-10). NOT named "state": the
     # full payload has a deliberately-stripped duplicate key of that name.
-    # "Don't chase a number" still holds: these are governed-over values
-    # the agent cannot write, only influence through behavior — gaming
-    # coherence requires actually behaving more coherently.
+    # "Don't chase a number" still holds. Risk is governed-over; legacy
+    # coherence remains diagnostic controller context with explicit provenance
+    # while its remaining policy gates undergo prospective shadow evaluation.
     for state_key, state_val in (
         ("phi", metrics.get("phi")),
         ("coherence", metrics.get("coherence")),

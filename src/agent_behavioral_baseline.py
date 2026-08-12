@@ -80,12 +80,26 @@ class WelfordStats:
 class AgentBehavioralBaseline:
     """Rolling statistics for an agent's behavioral signals."""
 
-    # Signals tracked per agent
+    # Signals retained per agent. ``coherence`` remains for compatibility and
+    # replay only: the deployed producer is legacy ODE control feedback, not a
+    # behavioral-health measurement.
     TRACKED_SIGNALS = (
         "tool_error_rate",
         "tool_call_velocity",
         "complexity_divergence",
         "coherence",
+    )
+
+    # Only signals with an interpretable behavioral producer may add entropy.
+    # Keeping this allow-list beside the persisted compatibility schema prevents
+    # a future caller from accidentally restoring legacy coherence authority by
+    # including it in ``signals``.
+    ANOMALY_AUTHORITY_SIGNALS = frozenset(
+        {
+            "tool_error_rate",
+            "tool_call_velocity",
+            "complexity_divergence",
+        }
     )
 
     def __init__(self):
@@ -268,9 +282,14 @@ def compute_anomaly_entropy(
     Returns additional noise_S to add to the ODE update.
     Per-signal z_score already returns 0.0 with insufficient data (<5 samples),
     so anomaly detection is per-signal, not gated on all signals having data.
+    Compatibility-only signals such as legacy ``coherence`` are ignored even
+    when supplied: a field without meaningful dynamic range cannot support a
+    z-score threshold or an entropy actuator.
     """
     penalty = 0.0
     for signal_name, value in signals.items():
+        if signal_name not in baseline.ANOMALY_AUTHORITY_SIGNALS:
+            continue
         if value is not None and baseline.is_anomalous(signal_name, value, threshold):
             penalty += penalty_per_anomaly
     return penalty

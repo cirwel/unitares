@@ -265,10 +265,13 @@ def evaluate_decision_outcome(entry: Dict, metadata: Dict) -> Optional[bool]:
     confidence = entry.get('confidence')
     if confidence is None:
         details = entry.get('details', {})
-        confidence = details.get('confidence', details.get('coherence', None))
+        confidence = details.get('confidence')
 
     if confidence is None:
-        return None  # Can't evaluate without confidence
+        # Do not substitute the legacy ``coherence`` compatibility scalar.
+        # C(V) is directional ODE control feedback, not a confidence estimate;
+        # treating it as one silently fabricates calibration evidence.
+        return None
 
     confidence = float(confidence)
 
@@ -511,4 +514,3 @@ async def auto_ground_truth_collector_task(interval_hours: float = 6.0):
             logger.error(f"Error in auto ground truth collector: {e}", exc_info=True)
             # Wait before retrying
             await asyncio.sleep(3600)  # Wait 1 hour on error
-

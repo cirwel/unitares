@@ -13,6 +13,7 @@ from ..utils import success_response, error_response, require_registered_agent
 from ..error_helpers import agent_not_found_error, system_error as system_error_helper
 from ..support.coerce import resolve_agent_uuid
 from .helpers import _resume_with_persistence, _invalidate_agent_cache  # noqa: F401
+from .recovery_policy import recovery_policy_context
 from src import agent_storage
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
@@ -24,14 +25,14 @@ async def handle_direct_resume_if_safe(arguments: Dict[str, Any]) -> Sequence[Te
     """⚠️ DEPRECATED: Use quick_resume() or self_recovery_review() instead.
 
     This tool is deprecated in favor of clearer recovery paths:
-    - quick_resume() - for clearly safe states (coherence > 0.60, risk < 0.40, no reflection needed)
-    - self_recovery_review() - for moderate states with reflection (coherence > 0.35, risk < 0.65)
+    - quick_resume() - for clearly safe states (risk < 0.40, no void, no reflection needed)
+    - self_recovery_review() - for moderate states with reflection (risk < 0.65, no void)
 
     Migration guidance:
-    - If coherence > 0.60 and risk < 0.40 → use quick_resume()
+    - If risk < 0.40 and no void is active → use quick_resume()
     - Otherwise → use self_recovery_review(reflection="...")
 
-    This tool will be removed in v2.0. Current thresholds: coherence > 0.40, risk < 0.60.
+    This tool will be removed in v2.0. Current threshold: risk < 0.60, no void.
 
     SECURITY: Requires registered agent_id and API key authentication.
     """
@@ -86,11 +87,17 @@ async def handle_direct_resume_if_safe(arguments: Dict[str, Any]) -> Sequence[Te
 
     # Safety checks
     safety_checks = {
-        "coherence_ok": coherence > 0.40,
         "risk_ok": risk_score < 0.60,
         "no_void": not void_active,
         "status_ok": status in ["paused", "waiting_input", "moderate"]
     }
+    policy = recovery_policy_context(
+        coherence=coherence,
+        authoritative_inputs=("risk_score", "void_active", "status"),
+        coherence_source=metrics.get("coherence_source"),
+        coherence_role=metrics.get("coherence_role"),
+    )
+    coherence_diagnostic = policy["diagnostic_inputs"]["coherence"]
 
     if not all(safety_checks.values()):
         failed_checks = [k for k, v in safety_checks.items() if not v]
@@ -98,7 +105,8 @@ async def handle_direct_resume_if_safe(arguments: Dict[str, Any]) -> Sequence[Te
             f"Not safe to resume. Failed checks: {failed_checks}. "
             f"Metrics: coherence={coherence:.3f}, risk={risk_score:.3f}, "
             f"void_active={void_active}, status={status}. "
-            f"Check get_governance_metrics and reflect on what needs to change."
+            f"Check get_governance_metrics and reflect on what needs to change.",
+            context={"recovery_policy": policy},
         )]
 
     # Get conditions if provided
@@ -126,17 +134,21 @@ async def handle_direct_resume_if_safe(arguments: Dict[str, Any]) -> Sequence[Te
         "reason": reason,
         "metrics": {
             "coherence": coherence,
+            "coherence_source": coherence_diagnostic["source"],
+            "coherence_role": coherence_diagnostic["role"],
+            "coherence_authoritative": False,
             "risk_score": risk_score,
             "void_active": void_active,
             "previous_status": status
         },
+        "recovery_policy": policy,
         "note": "Agent resumed. Check get_governance_metrics periodically to stay aware of your state.",
         "deprecation_warning": {
             "tool": "direct_resume_if_safe",
             "status": "deprecated",
             "message": "This tool is deprecated. Use quick_resume() or self_recovery_review() instead.",
             "migration": {
-                "if_coherence_gt_0_60_and_risk_lt_0_40": "Use quick_resume() - fastest path, no reflection needed",
+                "if_risk_lt_0_40_and_no_void": "Use quick_resume() - fastest path, no reflection needed",
                 "otherwise": "Use self_recovery_review(reflection='...') - requires reflection but allows recovery at lower thresholds",
                 "related_tools": ["quick_resume", "self_recovery_review", "check_recovery_options"]
             },

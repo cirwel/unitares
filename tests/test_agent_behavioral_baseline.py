@@ -119,6 +119,7 @@ class TestAgentBehavioralBaseline:
         assert "tool_call_velocity" in b.TRACKED_SIGNALS
         assert "complexity_divergence" in b.TRACKED_SIGNALS
         assert "coherence" in b.TRACKED_SIGNALS
+        assert "coherence" not in b.ANOMALY_AUTHORITY_SIGNALS
 
     def test_roundtrip_serialization(self):
         b = AgentBehavioralBaseline()
@@ -147,12 +148,20 @@ class TestComputeAnomalyEntropy:
         penalty = compute_anomaly_entropy(b, {"coherence": 0.51})
         assert penalty == 0.0
 
-    def test_anomalous_signal_adds_penalty(self):
+    def test_anomalous_authoritative_signal_adds_penalty(self):
         b = AgentBehavioralBaseline()
         for v in [0.5, 0.52, 0.48, 0.51, 0.49, 0.50, 0.53, 0.47]:
-            b.update("coherence", v)
-        penalty = compute_anomaly_entropy(b, {"coherence": 0.9})
+            b.update("complexity_divergence", v)
+        penalty = compute_anomaly_entropy(b, {"complexity_divergence": 0.9})
         assert penalty == 0.05  # One anomaly at default penalty
+
+    def test_legacy_coherence_is_diagnostic_only(self):
+        b = AgentBehavioralBaseline()
+        for v in [0.5, 0.502, 0.498, 0.501, 0.499, 0.5, 0.503, 0.497]:
+            b.update("coherence", v)
+
+        assert b.is_anomalous("coherence", 0.9)
+        assert compute_anomaly_entropy(b, {"coherence": 0.9}) == 0.0
 
     def test_multiple_anomalies_stack(self):
         b = AgentBehavioralBaseline()
@@ -167,16 +176,16 @@ class TestComputeAnomalyEntropy:
         # Need variance for detection
         assert penalty == 0.0  # All-same values = zero variance
 
-    def test_multiple_anomalies_with_variance(self):
+    def test_only_authoritative_anomalies_stack(self):
         b = AgentBehavioralBaseline()
         for v in [0.1, 0.12, 0.09, 0.11, 0.10, 0.13, 0.08]:
             b.update("coherence", v + 0.4)
             b.update("tool_error_rate", v)
         penalty = compute_anomaly_entropy(b, {
-            "coherence": 0.9,        # Far from ~0.5
+            "coherence": 0.9,        # Far from ~0.5, but diagnostic-only
             "tool_error_rate": 0.8,  # Far from ~0.1
         })
-        assert penalty == 0.10  # Two anomalies × 0.05
+        assert penalty == 0.05
 
     def test_none_values_skipped(self):
         b = AgentBehavioralBaseline()
@@ -188,10 +197,13 @@ class TestComputeAnomalyEntropy:
     def test_custom_threshold_and_penalty(self):
         b = AgentBehavioralBaseline()
         for v in [0.5, 0.52, 0.48, 0.51, 0.49, 0.50, 0.53, 0.47]:
-            b.update("coherence", v)
+            b.update("complexity_divergence", v)
         # Lower threshold, higher penalty
         penalty = compute_anomaly_entropy(
-            b, {"coherence": 0.9}, threshold=1.0, penalty_per_anomaly=0.1
+            b,
+            {"complexity_divergence": 0.9},
+            threshold=1.0,
+            penalty_per_anomaly=0.1,
         )
         assert penalty == 0.1
 

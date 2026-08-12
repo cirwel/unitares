@@ -348,7 +348,7 @@ class TestSafetyNetResume:
 
     @pytest.fixture
     def safe_monitor(self):
-        state = SimpleNamespace(coherence=0.55)
+        state = SimpleNamespace(coherence=0.05, void_active=False)
         monitor = MagicMock()
         monitor.state = state
         monitor.get_metrics.return_value = {"mean_risk": 0.3}
@@ -356,7 +356,7 @@ class TestSafetyNetResume:
 
     @pytest.fixture
     def unsafe_monitor(self):
-        state = SimpleNamespace(coherence=0.30)
+        state = SimpleNamespace(coherence=0.90, void_active=False)
         monitor = MagicMock()
         monitor.state = state
         monitor.get_metrics.return_value = {"mean_risk": 0.7}
@@ -364,7 +364,7 @@ class TestSafetyNetResume:
 
     @pytest.mark.asyncio
     async def test_safe_agent_is_resumed(self, safe_monitor):
-        """Agent with coherence > 0.40 and risk < 0.60 should be auto-resumed."""
+        """Low-risk/no-void agent resumes regardless of legacy C(V) direction."""
         meta = _make_metadata(status="paused")
 
         with (
@@ -381,7 +381,7 @@ class TestSafetyNetResume:
 
     @pytest.mark.asyncio
     async def test_unsafe_agent_stays_paused(self, unsafe_monitor):
-        """Agent with low coherence or high risk should NOT be resumed."""
+        """High risk prevents safety-net recovery."""
         meta = _make_metadata(status="paused")
 
         with (
@@ -392,6 +392,21 @@ class TestSafetyNetResume:
             await _safety_net_resume("agent-1", reason="LLM unavailable")
 
         assert meta.status == "paused", "unsafe agent should stay paused"
+
+    @pytest.mark.asyncio
+    async def test_void_active_agent_stays_paused(self, safe_monitor):
+        safe_monitor.state.void_active = True
+        meta = _make_metadata(status="paused")
+
+        with (
+            patch("src.agent_loop_detection.agent_metadata", {"agent-1": meta}),
+            patch("src.agent_loop_detection.monitors", {"agent-1": safe_monitor}),
+        ):
+            from src.agent_loop_detection import _safety_net_resume
+
+            await _safety_net_resume("agent-1", reason="LLM unavailable")
+
+        assert meta.status == "paused"
 
     @pytest.mark.asyncio
     async def test_already_active_agent_is_noop(self, safe_monitor):

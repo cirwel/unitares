@@ -77,6 +77,8 @@ class StateAnnounce:
     purpose: Optional[str] = None
     update_count: int = 0
     trust_tier: Optional[str] = None
+    coherence_source: Optional[str] = None
+    coherence_role: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result = {
@@ -90,6 +92,10 @@ class StateAnnounce:
             "risk_score": self.risk_score,
             "update_count": self.update_count,
         }
+        if self.coherence_source:
+            result["coherence_source"] = self.coherence_source
+        if self.coherence_role:
+            result["coherence_role"] = self.coherence_role
         if self.trajectory_signature:
             result["trajectory_signature"] = self.trajectory_signature
             from src.governance_glossary import annotate_trajectory_signature_terms
@@ -167,6 +173,7 @@ class CoherenceReport:
     verdict_match: bool
     trajectory_similarity: Optional[Dict[str, float]] = None
     recommendation: Optional[str] = None
+    similarity_provenance: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result = {
@@ -182,6 +189,8 @@ class CoherenceReport:
             result["trajectory_similarity"] = self.trajectory_similarity
         if self.recommendation:
             result["recommendation"] = self.recommendation
+        if self.similarity_provenance:
+            result["similarity_provenance"] = self.similarity_provenance
         return result
 
 

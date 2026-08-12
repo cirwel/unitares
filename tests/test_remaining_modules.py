@@ -158,8 +158,10 @@ class TestApplyCondition:
     async def test_set_coherence(self, mock_server):
         pc = parse_condition("Set coherence to 0.7")
         result = await apply_condition(pc, "agent-1", mock_server)
-        assert result["status"] == "applied"
-        assert "coherence_target" in result["changes"]
+        assert result["status"] == "retired"
+        assert result["changes"] == {}
+        assert result["authority"]["coherence_condition_applied"] is False
+        assert mock_server.agent_metadata["agent-1"].dialectic_conditions == []
 
     @pytest.mark.asyncio
     async def test_monitor_hours(self, mock_server):

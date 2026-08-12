@@ -40,7 +40,10 @@ class DetectAnomaliesParams(AgentIdentityMixin):
     """
     focus: Literal["all", "drift", "complexity", "void", "coherence"] = Field(
         default="all",
-        description="Type of anomaly to focus on"
+        description=(
+            "Type of anomaly to focus on. coherence means provenance-qualified "
+            "behavioral update consistency; legacy C(V) is excluded."
+        ),
     )
 
 class AggregateMetricsParams(AgentIdentityMixin):
@@ -59,7 +62,14 @@ class ObserveParams(AgentIdentityMixin):
     agent_ids: Optional[List[Any]] = Field(None, description="Agent identifiers to compare (for action=compare, min 2)")
     include_history: bool = Field(True, description="Include recent history (for action=agent). Default true.")
     analyze_patterns: bool = Field(True, description="Perform pattern analysis (for action=agent). Default true.")
-    compare_metrics: Optional[List[Any]] = Field(None, description="Metrics to compare (for action=compare). Default: risk_score, coherence, E, I, S, V")
+    compare_metrics: Optional[List[Any]] = Field(
+        None,
+        description=(
+            "Metrics to compare (for action=compare). Default: risk_score, E, I, S, V. "
+            "Raw coherence remains visible with provenance but is excluded from "
+            "similarity and outlier calculations even when requested."
+        ),
+    )
     limit: Optional[int] = Field(None, description="Max results to return (for action=similar, anomalies, audit_events, outcome_evidence, bridge)")
     event_type: Optional[str] = Field(None, description="Audit event type to filter on (for action=audit_events)")
     event_types: Optional[List[str]] = Field(None, description="IN-list of audit event types (for action=audit_events, alternative to event_type)")

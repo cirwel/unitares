@@ -262,11 +262,15 @@ class TestStateAnnounce:
             verdict="safe",
             risk_score=0.3,
             update_count=10,
+            coherence_source="legacy_tanh_v",
+            coherence_role="ode_control_feedback",
         )
         d = announce.to_dict()
         assert d["agent_id"] == "agent-1"
         assert d["eisv"]["E"] == 0.7
         assert d["regime"] == "convergence"
+        assert d["coherence_source"] == "legacy_tanh_v"
+        assert d["coherence_role"] == "ode_control_feedback"
         assert "trajectory_signature" not in d
         assert "purpose" not in d
 
@@ -432,20 +436,19 @@ class TestHelperFunctions:
     def test_compute_focus_stability_insufficient_data(self):
         from src.mcp_handlers.cirs.protocol import _compute_focus_stability
         state = SimpleNamespace(coherence_history=[0.5, 0.6])
-        assert _compute_focus_stability(state) == 0.5
+        assert _compute_focus_stability(state) is None
 
     def test_compute_focus_stability_no_attr(self):
         from src.mcp_handlers.cirs.protocol import _compute_focus_stability
         state = SimpleNamespace()
-        assert _compute_focus_stability(state) == 0.5
+        assert _compute_focus_stability(state) is None
 
-    def test_compute_focus_stability_stable(self):
+    def test_compute_focus_stability_constant_signal_is_retired(self):
         from src.mcp_handlers.cirs.protocol import _compute_focus_stability
         state = SimpleNamespace(
             coherence_history=[0.7] * 10,
         )
-        # Variance of constant = 0, so stability = 1.0
-        assert _compute_focus_stability(state) == 1.0
+        assert _compute_focus_stability(state) is None
 
     def test_compute_maturity_nascent(self):
         from src.mcp_handlers.cirs.protocol import _compute_maturity
@@ -914,10 +917,18 @@ class TestHandleStateAnnounce:
             eisv={"E": 0.7, "I": 0.8, "S": 0.2, "V": 0.0},
             coherence=0.7, regime="convergence", phi=0.5,
             verdict="safe", risk_score=0.2, update_count=10,
+            coherence_source="legacy_tanh_v",
+            coherence_role="ode_control_feedback",
         ))
         result = await handle_state_announce.__wrapped__({"action": "query"})
         data = parse_result(result)
         assert data["summary"]["total_agents"] == 1
+        assert data["summary"]["coherence_role_counts"] == {
+            "ode_control_feedback": 1
+        }
+        assert data["summary"]["avg_coherence_provenance"][
+            "health_evidence"
+        ] is False
 
     @pytest.mark.asyncio
     async def test_query_filter_by_regime(self, mock_server):
@@ -957,7 +968,7 @@ class TestHandleStateAnnounce:
         assert data["success"] is False
 
     @pytest.mark.asyncio
-    async def test_query_filter_by_min_coherence(self, mock_server):
+    async def test_query_rejects_retired_min_coherence_filter(self, mock_server):
         from src.mcp_handlers.cirs.protocol import (
             handle_state_announce, _store_state_announce, StateAnnounce,
         )
@@ -980,7 +991,9 @@ class TestHandleStateAnnounce:
             "min_coherence": 0.5,
         })
         data = parse_result(result)
-        assert data["summary"]["total_agents"] == 1
+        assert data["success"] is False
+        assert data["error_code"] == "UNSUPPORTED_COHERENCE_FILTER"
+        assert "retired" in data["error"].lower()
 
     @pytest.mark.asyncio
     async def test_emit_requires_registered_agent(self, mock_server):
@@ -1017,8 +1030,11 @@ class TestHandleStateAnnounce:
         data = parse_result(result)
         assert data["success"] is True
         announcement = data["announcement"]
-        # Trajectory signature should be computed from mock monitor state
-        assert "trajectory_signature" in announcement or announcement.get("trajectory_signature") is None
+        signature = announcement["trajectory_signature"]
+        assert signature["alpha"]["focus_stability"] is None
+        provenance = signature["alpha"]["focus_stability_provenance"]
+        assert provenance["status"] == "retired"
+        assert provenance["health_evidence"] is False
 
     @pytest.mark.asyncio
     async def test_emit_with_agent_purpose(self, mock_server, patch_require_registered):
@@ -1166,6 +1182,9 @@ class TestHandleCoherenceReport:
         assert report["target_agent_id"] == "agent-2"
         assert 0 <= report["similarity_score"] <= 1
         assert "eisv_similarity" in report
+        assert report["similarity_provenance"]["formula"] == "cirs_pairwise_similarity.v2"
+        if "trajectory_similarity" in report:
+            assert "coherence" not in report["trajectory_similarity"]
         assert data["cirs_protocol"] == "COHERENCE_REPORT"
 
 

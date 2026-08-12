@@ -318,6 +318,10 @@ def summarize_eisv_telemetry(envelope: Mapping[str, Any] | None) -> dict[str, An
     confidence_shadow = (
         confidence_shadow if isinstance(confidence_shadow, Mapping) else {}
     )
+    trajectory_shadow = legacy_candidate.get("trajectory_identity")
+    trajectory_shadow = (
+        trajectory_shadow if isinstance(trajectory_shadow, Mapping) else {}
+    )
     maturity_gate = policy.get("maturity_gate")
     maturity_gate = maturity_gate if isinstance(maturity_gate, Mapping) else {}
     epistemic_gate = policy.get("epistemic_gate")
@@ -358,6 +362,12 @@ def summarize_eisv_telemetry(envelope: Mapping[str, Any] | None) -> dict[str, An
         "legacy_coherence_confidence_shadow_eligible": (
             confidence_shadow.get("eligible")
             if isinstance(confidence_shadow.get("eligible"), bool)
+            else None
+        ),
+        "legacy_coherence_trajectory_shadow_recorded": bool(trajectory_shadow),
+        "legacy_coherence_trajectory_shadow_eligible": (
+            trajectory_shadow.get("eligible")
+            if isinstance(trajectory_shadow.get("eligible"), bool)
             else None
         ),
         "policy_action": policy.get("action"),
@@ -432,6 +442,8 @@ def summarize_state_eisv_telemetry(state_json: Mapping[str, Any] | None) -> dict
         "legacy_coherence_behavioral_shadow_eligible": None,
         "legacy_coherence_confidence_shadow_recorded": False,
         "legacy_coherence_confidence_shadow_eligible": None,
+        "legacy_coherence_trajectory_shadow_recorded": False,
+        "legacy_coherence_trajectory_shadow_eligible": None,
         "policy_action": state.get("action"),
         "policy_sub_action": None,
         "verdict_source": None,
