@@ -113,6 +113,7 @@ def test_summary_prefers_consumed_observation_source_and_stays_compact():
                 "would_defer": False,
                 "confirmation_count": 0,
                 "confirmations_required": 2,
+                "actuation_scope": "fallback_risk_pause_deferral",
                 "actuation_enabled": False,
                 "actuation_ready": False,
                 "actuation_applied": False,
@@ -127,6 +128,9 @@ def test_summary_prefers_consumed_observation_source_and_stays_compact():
             "requested": True,
             "applied": True,
             "basis": "risk_policy",
+            "scope": "runtime_circuit_breaker",
+            "actuation_id": "actuation-123",
+            "applied_at": "2026-08-11T23:47:55+00:00",
         },
     )
 
@@ -139,6 +143,7 @@ def test_summary_prefers_consumed_observation_source_and_stays_compact():
     assert summary["maturity_gate_would_defer"] is False
     assert summary["confirmation_count"] == 0
     assert summary["confirmations_required"] == 2
+    assert summary["actuation_scope"] == "fallback_risk_pause_deferral"
     assert summary["actuation_applied"] is False
     assert summary["epistemic_guard_applied"] is False
     assert summary["epistemic_guard_class"] == "agent_report"
@@ -146,6 +151,9 @@ def test_summary_prefers_consumed_observation_source_and_stays_compact():
         "agent_authored_report"
     )
     assert summary["enforcement_basis"] == "risk_policy"
+    assert summary["enforcement_scope"] == "runtime_circuit_breaker"
+    assert summary["enforcement_actuation_id"] == "actuation-123"
+    assert summary["enforcement_applied_at"] == "2026-08-11T23:47:55+00:00"
     assert summary["enforcement_requested"] is True
     assert summary["enforcement_applied"] is True
     assert "inputs" not in summary

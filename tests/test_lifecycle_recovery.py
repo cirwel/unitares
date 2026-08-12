@@ -298,6 +298,9 @@ class TestSelfRecoveryReview:
         assert data["action"] == "resumed"
         assert data["recovery_basis"] == "non_authored_phi_cold_start_trap"
         assert data["cold_start_recovery"]["eligible"] is True
+        assert data["cold_start_recovery"]["observed_enforcement"][
+            "circuit_breaker_applied"
+        ] is True
         assert data["metrics"]["risk_score"] == pytest.approx(0.79)
         assert meta.status == "active"
         mock_storage.update_agent.assert_awaited_once_with(

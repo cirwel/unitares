@@ -162,12 +162,16 @@ def test_build_result_exposes_policy_and_unapplied_enforcement_layers():
         "measurement_role": "EISV/risk/coherence are policy inputs, not the actuator itself.",
     }
     assert result["enforcement"] == {
+        "schema": "governance.enforcement.v1",
+        "scope": "runtime_circuit_breaker",
         "requested": True,
         "applied": False,
         "mode": "circuit_breaker_candidate",
         "basis": "policy_request",
         "actor": None,
         "effect": None,
+        "actuation_id": None,
+        "applied_at": None,
         "note": (
             "Policy requested enforcement. This envelope is the pre-actuation "
             "candidate; the authenticated update boundary applies it as a circuit "
@@ -213,6 +217,7 @@ def test_policy_and_enforcement_preserve_cold_start_maturity_gate():
     gate = {
         "outcome": "shadow_would_defer",
         "would_defer": True,
+        "actuation_scope": "fallback_risk_pause_deferral",
         "actuation_applied": False,
         "enforcement_basis": "phi_cold_start_unconfirmed_shadow",
     }
@@ -236,8 +241,11 @@ def test_policy_and_enforcement_preserve_cold_start_maturity_gate():
     assert policy["maturity_gate"] == gate
     assert enforcement["requested"] is True
     assert enforcement["applied"] is False
+    assert enforcement["scope"] == "runtime_circuit_breaker"
+    assert enforcement["actuation_id"] is None
     assert enforcement["basis"] == "phi_cold_start_unconfirmed_shadow"
     assert enforcement["maturity_gate"] == gate
+    assert "confirmation-deferral" in enforcement["scope_note"]
 
     decision["gap_suppressed"] = True
     decision["action"] = "proceed"
