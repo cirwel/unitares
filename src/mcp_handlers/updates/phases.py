@@ -905,6 +905,10 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
             monitor = mcp_server.monitors.get(ctx.agent_id)
             if monitor and len(getattr(monitor.state, 'decision_history', [])) >= 3:
                 from src.behavioral_sensor import compute_behavioral_sensor_eisv
+                from src.coherence_provenance import (
+                    LEGACY_COHERENCE_SOURCE,
+                    ODE_CONTROL_FEEDBACK_ROLE,
+                )
                 from src.eisv_telemetry import build_behavioral_derivation
                 from src.mcp_handlers.updates.context import get_mean_calibration_error
 
@@ -1020,6 +1024,8 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                     unique_tools_ratio=tool_div,
                     computed=behavioral_eisv,
                     substrate_canaries=substrate_canaries,
+                    coherence_source=LEGACY_COHERENCE_SOURCE,
+                    coherence_role=ODE_CONTROL_FEEDBACK_ROLE,
                 )
                 if behavioral_eisv:
                     ctx.agent_state["sensor_eisv"] = behavioral_eisv

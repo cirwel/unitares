@@ -134,12 +134,12 @@ def test_threshold_alignment():
     print(f"   Coherence: {coherence:.2f} | Void: {void_active}")
     print(f"   Health status: {health_status.value}")
     
-    # Should be critical (coherence < coherence_moderate_min = 0.48)
-    if health_status.value == "critical":
-        print("   ✅ PASS - Low coherence triggers critical when risk unavailable")
+    # The legacy directional scalar is not health evidence by itself.
+    if health_status.value == "unknown":
+        print("   ✅ PASS - Coherence-only health remains unclassified")
         passed += 1
     else:
-        print(f"   ❌ FAIL - Should be critical, got {health_status.value}")
+        print(f"   ❌ FAIL - Should be unknown, got {health_status.value}")
         failed += 1
     
     # Test Case 6: Void active
@@ -384,4 +384,3 @@ if __name__ == "__main__":
     else:
         print("⚠️  Some tests failed - review needed")
         sys.exit(1)
-

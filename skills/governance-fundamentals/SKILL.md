@@ -4,15 +4,18 @@ description: >
   Use when an agent needs to understand UNITARES governance concepts — EISV state vectors,
   basins, policy actions, coherence, calibration. Reference material for interpreting
   governance metrics as proprioceptive state estimation, not outcome judgment.
-last_verified: "2026-08-09"
+last_verified: "2026-08-11"
 freshness_days: 21
 source_files:
   - unitares/config/governance_config.py
   - unitares/src/auto_ground_truth.py
   - unitares/src/governance_monitor.py
   - unitares/src/behavioral_state.py
+  - unitares/src/behavioral_sensor.py
   - unitares/src/behavioral_assessment.py
   - unitares/src/monitor_decision.py
+  - unitares/src/coherence_provenance.py
+  - unitares/src/confidence.py
   - unitares/src/mcp_handlers/core.py
 ---
 
@@ -35,8 +38,8 @@ Every agent has four dimensions, updated through check-ins:
 
 ### How the Live Path Reads Them
 
-- **E (Energy)** blends observable progress signals such as decision success, coherence, complexity calibration, and sometimes external task evidence.
-- **I (Integrity)** tracks whether claims/confidence match observed results and whether coherence is holding.
+- **E (Energy)** currently blends decision success, complexity calibration, sometimes external task evidence, and a legacy coherence-level term sourced from `legacy_tanh_v` ODE control feedback. That last input is compatibility debt, not behavioral health evidence.
+- **I (Integrity)** currently blends calibration/outcome consistency with the trend of that same legacy controller scalar. Read it as a deployed heuristic, not a pure claims-match-results measurement.
 - **S (Entropy / drift)** rises with drift norm, regime instability, and complexity divergence.
 - **V (Valence)** is derived from the E-I imbalance. Positive means running hot (motion outruns integrity); negative means running careful (integrity outruns progress).
 
@@ -87,7 +90,7 @@ Governance issues a decision after each check-in. The response's `verdict` field
 | **pause** | `reject` | Risk threshold reached | Stop current work, reflect; dialectic review or human input |
 | **pause** | `void_pause`, `coherence_pause`, `basin_pause`, `risk_pause`, `cirs_block` | A specific subsystem tripped | Read the `reason`/`guidance` fields; consider dialectic review |
 
-Separately, `metrics.verdict` may carry an internal UNITARES verdict such as `safe` / `caution` / `high-risk`. Read it as interpreted state/context, not as moral judgment. In current default posture, behavioral assessment drives live policy actions: fixed thresholds during warmup, Welford z-score residuals after warmup, with floors and gates always in force. Φ/ODE scoring is telemetry and research lens, not the control loop.
+Separately, `metrics.verdict` may carry an internal UNITARES verdict such as `safe` / `caution` / `high-risk`. Read it as interpreted state/context, not as moral judgment. In current default posture, behavioral assessment drives the main risk/verdict path: fixed thresholds during warmup, Welford z-score residuals after warmup, with floors and basin gates always in force. Legacy coherence compatibility gates still exist while their replacement is shadow-calibrated; their presence does not make the ODE scalar behavioral evidence. Φ/ODE scoring is telemetry and research lens, not the primary control loop.
 
 ### Margin
 
@@ -107,12 +110,19 @@ The plain-English `mirror` array in your check-in response already summarizes an
 
 ## Coherence
 
-Coherence measures how well your state vector holds together. It is calculated from EISV/monitor signals — not from the content of your work. Think of it as structural health, not semantic quality.
+`coherence` is an overloaded compatibility field, not one universal instrument.
+Interpret it only with the accompanying `coherence_source` and `coherence_role`:
 
-- Full range is [0, 1]
-- Critical threshold is available via `get_governance_metrics()` in the `thresholds` field — do not hardcode it
-- Do not chase a number — check in honestly and let it track naturally
-- Coherence reflects balance, not performance
+| Source | Role | Valid interpretation |
+|--------|------|----------------------|
+| `legacy_tanh_v` | `ode_control_feedback` | Directional ODE controller activation. It is monotone in signed V, equals 0.5 at balance, and is **not** a symmetric health/balance score. |
+| `manifold` | `eis_structural_measurement` | Grounded distance over E/I/S. It has a different distribution; legacy thresholds do not transfer. |
+| `behavioral_assessment` | `behavioral_update_consistency` | HCK/update consistency carried in the behavioral assessment, distinct from the canonical compatibility scalar. |
+
+- Full range is [0, 1], but range alone does not establish semantics.
+- Untagged historical rows are `unknown_legacy` unless their producer can be reconstructed deterministically.
+- Existing critical thresholds are compatibility gates, not validated quality grades. Do not recalibrate them merely to force alarm crossings.
+- Prefer the behavioral assessment and policy provenance for live interpretation; use legacy ODE values as telemetry/research context.
 
 ## Calibration
 
@@ -120,6 +130,7 @@ The system tracks whether your stated confidence matches evidence. Over time thi
 
 - Grounding comes from objective signals: test pass/fail, command exit codes, lint results, file operations. These feed calibration automatically via `auto_ground_truth.py` and the `outcome_event` hook. Human validation is not required for deterministic evidence.
 - Overconfidence is tracked and can lower Integrity / raise uncertainty through the check-in pipeline
+- When an agent omits confidence, the deployed compatibility estimator still gives legacy `C(V_ODE)` 55% of its base weight. Responses expose this as `confidence_reliability.coherence_dependency=ode_control_feedback`; it is known causal debt, not independent confidence evidence. Do not reweight it without prospective outcome calibration because confidence history can feed later entropy penalties.
 
 ## Diagnostics
 
@@ -131,7 +142,7 @@ When the numbers look surprising, do not guess first. Use:
 
 ## What NOT to Do
 
-- **Do not game coherence** by reporting low complexity / high confidence on everything
+- **Do not treat coherence as a score to optimize** — interpret its producer and role
 - **Do not ignore guide verdicts** — they are early warnings before pause/reject
 - **Do not create duplicate discoveries** — always search the knowledge graph first
 - **Do not check in after every trivial action** — it is noise, not signal

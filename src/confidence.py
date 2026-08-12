@@ -1,11 +1,18 @@
 """
-Confidence Derivation Module (fallback path)
+Confidence Derivation Module (compatibility fallback path)
 
 Used ONLY when agents report no confidence. When agents provide confidence,
 it passes through uncapped (see governance_monitor.py process_update).
 
 Derives confidence from observed tool outcomes and EISV state dynamics.
-Uses epistemic (uncertainty-aware) penalties, not punitive measures.
+
+Known compatibility debt: the deployed formula still assigns 55% of its base
+to ``state.coherence``, whose producer is legacy ``C(V_ODE)`` directional
+control feedback. That input is not independent confidence or health evidence.
+The dependency is surfaced in returned metadata so a prospective deconfounding
+experiment can measure the distributional/calibration shift before changing the
+live formula. Do not silently reweight this path: its output feeds calibration
+history and can later affect the entropy penalty.
 """
 
 import math
@@ -120,11 +127,14 @@ def derive_confidence(
             # If tracker unavailable, continue with EISV only
             metadata['tracker_error'] = str(e)
     
-    # === EISV CONSISTENCY (internal but meaningful) ===
+    # === MIXED-PROVENANCE COMPATIBILITY ESTIMATE ===
     #
     # IMPORTANT: Avoid confidence saturation.
     # We explicitly incorporate entropy (S) and void magnitude (|V|) as *uncertainty penalties*.
-    # High entropy and large |V| should reduce confidence even if coherence/integrity are high.
+    # High entropy and large |V| should reduce confidence. The legacy
+    # ``coherence`` term below is retained to avoid an unshadowed production
+    # distribution shift; it is directional controller feedback, not
+    # independent evidence that confidence should rise.
     eisv_confidence = 0.5
     coherence_val = 0.5
     integrity_val = 0.5
@@ -145,7 +155,8 @@ def derive_confidence(
         # Entropy penalty: higher S means more uncertainty.
         entropy_penalty = 0.20 * float(entropy_val)
 
-        # Base EISV confidence favors coherence/integrity and (1-entropy), then applies void penalty.
+        # Compatibility formula. Preserve its live weights until a prospective
+        # candidate is outcome-calibrated; make the causal debt machine-readable.
         eisv_confidence = (
             (float(coherence_val) * 0.55) +
             (float(integrity_val) * 0.35) +
@@ -160,6 +171,10 @@ def derive_confidence(
 
         metadata['eisv'] = {
             'coherence': float(coherence_val),
+            'coherence_source': 'legacy_tanh_v',
+            'coherence_role': 'ode_control_feedback',
+            'coherence_weight': 0.55,
+            'coherence_is_health_evidence': False,
             'integrity': float(integrity_val),
             'entropy': float(entropy_val),
             'void': float(void_val),
@@ -168,6 +183,9 @@ def derive_confidence(
             'entropy_penalty': float(entropy_penalty),
             'deviation_penalty': float(deviation_penalty),
         }
+        metadata['known_limitations'] = [
+            'base confidence retains a 55% legacy ODE control-feedback term pending prospective deconfounding'
+        ]
     
     # === COMBINE: EISV-based confidence with tool-gap deviation ===
     #
@@ -182,6 +200,8 @@ def derive_confidence(
     # tool outcomes and EISV state IS genuine uncertainty.
     #
     final_confidence = eisv_confidence
+    # Compatibility source label retained for existing consumers; inspect the
+    # nested coherence provenance before interpreting the estimate.
     metadata['source'] = 'eisv_with_variance'
 
     # Tool-EISV gap penalty: disagreement = uncertainty
@@ -211,4 +231,3 @@ def derive_confidence(
     metadata['confidence'] = final_confidence
     
     return (final_confidence, metadata)
-

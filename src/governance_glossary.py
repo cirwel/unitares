@@ -40,14 +40,26 @@ EISV_DIMENSIONS: Dict[str, Dict[str, str]] = {
     "E": {
         "label": "Energy",
         "range": "[0, 1]",
-        "description": "Productive capacity.",
-        "user_friendly": "How much capacity is available for useful work.",
+        "description": (
+            "Heuristic productive-capacity estimate; the deployed blend still "
+            "contains a legacy ODE control-feedback level term."
+        ),
+        "user_friendly": (
+            "An estimate of capacity for useful work, with mixed behavioral and "
+            "legacy-controller provenance."
+        ),
     },
     "I": {
         "label": "Information Integrity",
         "range": "[0, 1]",
-        "description": "How well claims and confidence match results.",
-        "user_friendly": "How closely the work's claims match what verification shows.",
+        "description": (
+            "Heuristic calibration/integrity estimate; the deployed blend still "
+            "contains a legacy ODE control-feedback trend term."
+        ),
+        "user_friendly": (
+            "An estimate of calibration and claim integrity, not a pure verified "
+            "claims-match-results measurement."
+        ),
     },
     "S": {
         "label": "Entropy",
@@ -77,8 +89,8 @@ EISV_DIMENSIONS: Dict[str, Dict[str, str]] = {
 }
 
 EISV_INLINE_SUMMARY = (
-    "EISV fields: E=Energy [0,1] (productive capacity); "
-    "I=Information Integrity [0,1] (claims matching results); "
+    "EISV fields: E=Energy [0,1] (mixed-provenance capacity estimate); "
+    "I=Information Integrity [0,1] (mixed-provenance calibration estimate); "
     "S=Entropy [0,1] (drift from the agent's own normal); "
     "V=Valence [-1,1] (EMA-smoothed E-I imbalance; positive=motion outruns "
     "integrity, negative=integrity outruns motion)."
@@ -278,7 +290,10 @@ DRIFT_COMPONENTS: Dict[str, Dict[str, str]] = {
         "ideal": "<0.1",
     },
     "coherence_deviation": {
-        "meaning": "Coherence drift from expected baseline.",
+        "meaning": (
+            "Movement in the configured coherence compatibility signal from its "
+            "baseline; the deployed legacy source is ODE control feedback, not health."
+        ),
         "range": "[0, 1]",
         "ideal": "<0.1",
     },

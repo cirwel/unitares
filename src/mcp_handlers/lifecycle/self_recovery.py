@@ -136,7 +136,10 @@ def assess_recovery_safety(
         return {
             "safe": False,
             "reason": f"Coherence ({coherence:.2f}) below self-recovery threshold ({MIN_COHERENCE_FOR_SELF_RECOVERY})",
-            "recommendation": "Request human review - low coherence suggests confusion",
+            "recommendation": (
+                "Request human review - the configured compatibility floor was crossed; "
+                "inspect producer provenance and the behavioral signals"
+            ),
             "escalate": True,
             "metrics": metrics,
         }
@@ -285,7 +288,9 @@ async def handle_check_recovery_options(arguments: Dict[str, Any]) -> Sequence[T
         blockers.append({
             "type": "low_coherence",
             "message": f"Coherence ({coherence:.2f}) below threshold ({MIN_COHERENCE_FOR_SELF_RECOVERY})",
-            "resolution": "Request human help - low coherence suggests confusion",
+            "resolution": (
+                "Request human help - inspect producer provenance and behavioral signals"
+            ),
         })
     
     eligible = len(blockers) == 0
@@ -336,7 +341,8 @@ async def handle_quick_resume(arguments: Dict[str, Any]) -> Sequence[TextContent
     Quick resume for agents in clearly safe states - no reflection required.
     
     This is the fastest path to recovery when:
-    - coherence >= target coherence (~0.50, "good" or better)
+    - legacy coherence compatibility value >= 0.50 (temporary recovery floor,
+      not a health grade)
     - risk < 0.40 (low risk)
     - no void active
     - status is waiting_input or paused
@@ -409,7 +415,7 @@ async def handle_quick_resume(arguments: Dict[str, Any]) -> Sequence[TextContent
     # Strict safety checks for quick_resume (stricter than self_recovery_review).
     # Coherence gate is anchored to the config's target/"good" coherence rather
     # than a hardcoded 0.60: the old value sat ABOVE TARGET_COHERENCE (0.50), so
-    # an agent at its healthy target coherence could never quick-resume. risk_low
+    # an agent at the controller's neutral compatibility target could never quick-resume. risk_low
     # (<=0.40) remains the substantive safety gate — a genuinely risky paused
     # agent still cannot quick-resume regardless of coherence.
     QUICK_RESUME_MIN_COHERENCE = GovernanceConfig.TARGET_COHERENCE  # 0.50

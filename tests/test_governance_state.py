@@ -255,7 +255,7 @@ class TestInterpretState:
         state.coherence = 0.9
         # Don't provide risk_score — should auto-estimate
         result = state.interpret_state()
-        assert result["health"] in ["healthy", "moderate", "at_risk", "critical", "unstable"]
+        assert result["health"] in ["healthy", "moderate", "at_risk", "critical"]
 
 
 # ============================================================================
@@ -272,9 +272,13 @@ class TestInterpretHealth:
         state = GovernanceState()
         assert state._interpret_health(0.5, 0.6) == "at_risk"
 
-    def test_unstable(self):
+    def test_low_controller_feedback_does_not_mean_unstable(self):
         state = GovernanceState()
-        assert state._interpret_health(0.2, 0.1) == "unstable"
+        assert state._interpret_health(0.2, 0.1) == "healthy"
+
+    def test_controller_direction_does_not_change_health(self):
+        state = GovernanceState()
+        assert state._interpret_health(0.1, 0.4) == state._interpret_health(0.9, 0.4)
 
     def test_healthy(self):
         state = GovernanceState()
@@ -476,3 +480,10 @@ class TestEstimateRiskSimple:
         state.coherence = 0.0
         risk = state._estimate_risk_simple()
         assert 0 <= risk <= 1
+
+    def test_fallback_risk_is_symmetric_in_signed_v(self):
+        state = GovernanceState()
+        state.unitaires_state = State(E=0.5, I=0.5, S=0.2, V=-0.4)
+        negative_v = state._estimate_risk_simple()
+        state.unitaires_state = State(E=0.5, I=0.5, S=0.2, V=0.4)
+        assert state._estimate_risk_simple() == negative_v

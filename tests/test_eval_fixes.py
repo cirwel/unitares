@@ -320,7 +320,8 @@ class TestDecisionSubAction:
             response_tier='hard_block', oscillation_state=oi_state
         )
         assert decision['sub_action'] == 'cirs_block'
-        assert 'coherence floor' in decision['reason'].lower()
+        assert 'legacy control-feedback floor' in decision['reason'].lower()
+        assert decision['nearest_edge'] == 'coherence'
         assert 'resonance' not in decision['reason'].lower()
         assert decision['nearest_edge'] == 'coherence'
 

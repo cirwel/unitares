@@ -6,15 +6,16 @@ Enables agents to collaboratively resolve critical states without human interven
 
 ## Overview
 
-When an agent triggers the circuit breaker (risk_score >= 0.60, coherence < 0.40, or void_active),
-the system initiates a dialectic recovery process. A healthy reviewer agent is selected to engage
+When an agent triggers the circuit breaker (risk_score, a configured legacy
+coherence-compatibility floor, or void_active), the system initiates a dialectic
+recovery process. The coherence branch is not a health diagnosis. A reviewer is selected to engage
 in a structured dialogue (thesis -> antithesis -> synthesis) to reach a consensus on recovery conditions.
 
 ## Protocol Flow
 
 ```
 1. Circuit Breaker Triggers
-   └─> Agent A paused (high risk, low coherence, or void active)
+   └─> Agent A paused (high risk, compatibility floor, or void active)
 
 2. Reviewer Selection
    └─> System selects healthy Agent B (authority_score calculation)
@@ -102,7 +103,7 @@ antithesis = DialecticMessage(
     agent_id="agent_b",
     timestamp=datetime.now().isoformat(),
     observed_metrics={"risk_score": 0.75, "coherence": 0.35},
-    concerns=["High risk score", "Low coherence"],
+    concerns=["High risk score", "Legacy control-feedback floor crossed"],
     reasoning="I observe that..."
 )
 result = session.submit_antithesis(antithesis, api_key_b)

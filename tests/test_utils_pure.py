@@ -722,69 +722,84 @@ class TestGenerateActionableFeedback:
         coherence_msgs = [f for f in result if "coherence" in f.lower() or "Coherence" in f]
         assert len(coherence_msgs) == 0
 
+    @pytest.mark.parametrize(
+        "role",
+        [None, "unknown", "ode_control_feedback", "eis_structural_measurement"],
+    )
+    def test_non_behavioral_coherence_never_becomes_task_coaching(self, role):
+        metrics = {
+            "coherence": 0.2,
+            "coherence_role": role,
+            "regime": "exploration",
+            "updates": 5,
+        }
+        result = generate_actionable_feedback(metrics, previous_coherence=0.8)
+        assert not any("coherence" in line.lower() for line in result)
+        assert not any("direction" in line.lower() for line in result)
+
     def test_exploration_low_coherence_dropped(self):
-        metrics = {"coherence": 0.2, "regime": "exploration", "updates": 5}
+        metrics = {"coherence": 0.2, "coherence_role": "behavioral_update_consistency", "regime": "exploration", "updates": 5}
         result = generate_actionable_feedback(metrics, previous_coherence=0.5)
         assert any("dropped significantly" in f for f in result)
         assert any("most promising direction" in f for f in result)
 
     def test_exploration_low_coherence_not_dropped(self):
-        metrics = {"coherence": 0.2, "regime": "exploration", "updates": 5}
+        metrics = {"coherence": 0.2, "coherence_role": "behavioral_update_consistency", "regime": "exploration", "updates": 5}
         result = generate_actionable_feedback(metrics, previous_coherence=0.2)
-        assert any("Very low coherence" in f and "exploration" in f for f in result)
+        assert any("Very low behavioral update consistency" in f and "exploration" in f for f in result)
         assert any("hypotheses" in f for f in result)
 
     def test_exploration_low_coherence_no_previous(self):
-        metrics = {"coherence": 0.2, "regime": "exploration", "updates": 5}
+        metrics = {"coherence": 0.2, "coherence_role": "behavioral_update_consistency", "regime": "exploration", "updates": 5}
         result = generate_actionable_feedback(metrics, previous_coherence=None)
-        assert any("Very low coherence" in f for f in result)
+        assert any("Very low behavioral update consistency" in f for f in result)
 
     def test_stable_regime_low_coherence_dropped(self):
-        metrics = {"coherence": 0.5, "regime": "stable", "updates": 5}
+        metrics = {"coherence": 0.5, "coherence_role": "behavioral_update_consistency", "regime": "stable", "updates": 5}
         result = generate_actionable_feedback(metrics, previous_coherence=0.8)
-        assert any("Unexpected coherence drop" in f for f in result)
+        assert any("Unexpected behavioral update-consistency drop" in f for f in result)
         assert any("disrupted your flow" in f for f in result)
 
     def test_stable_regime_low_coherence_not_dropped(self):
-        metrics = {"coherence": 0.5, "regime": "stable", "updates": 5}
+        metrics = {"coherence": 0.5, "coherence_role": "behavioral_update_consistency", "regime": "stable", "updates": 5}
         result = generate_actionable_feedback(metrics, previous_coherence=0.55)
         assert any("drift" in f.lower() for f in result)
         assert any("original plan" in f for f in result)
 
     def test_locked_regime_low_coherence_dropped(self):
-        metrics = {"coherence": 0.5, "regime": "locked", "updates": 5}
+        metrics = {"coherence": 0.5, "coherence_role": "behavioral_update_consistency", "regime": "locked", "updates": 5}
         result = generate_actionable_feedback(metrics, previous_coherence=0.8)
-        assert any("Unexpected coherence drop" in f for f in result)
+        assert any("Unexpected behavioral update-consistency drop" in f for f in result)
 
     def test_locked_regime_low_coherence_not_dropped(self):
-        metrics = {"coherence": 0.6, "regime": "locked", "updates": 5}
+        metrics = {"coherence": 0.6, "coherence_role": "behavioral_update_consistency", "regime": "locked", "updates": 5}
         result = generate_actionable_feedback(metrics, previous_coherence=0.55)
         assert any("drift" in f.lower() for f in result)
 
     def test_convergent_task_low_coherence(self):
-        metrics = {"coherence": 0.4, "regime": "transition", "updates": 5}
+        metrics = {"coherence": 0.4, "coherence_role": "behavioral_update_consistency", "regime": "transition", "updates": 5}
         result = generate_actionable_feedback(metrics, task_type="convergent")
         assert any("convergent task" in f for f in result)
         assert any("one sentence" in f for f in result)
 
     def test_divergent_task_very_low_coherence(self):
-        metrics = {"coherence": 0.3, "regime": "transition", "updates": 5}
+        metrics = {"coherence": 0.3, "coherence_role": "behavioral_update_consistency", "regime": "transition", "updates": 5}
         result = generate_actionable_feedback(metrics, task_type="divergent")
         assert any("top 3" in f for f in result)
 
     def test_divergent_task_moderate_low_coherence_no_feedback(self):
-        metrics = {"coherence": 0.45, "regime": "transition", "updates": 5}
+        metrics = {"coherence": 0.45, "coherence_role": "behavioral_update_consistency", "regime": "transition", "updates": 5}
         result = generate_actionable_feedback(metrics, task_type="divergent")
         coherence_msgs = [f for f in result if "coherence" in f.lower() or "Coherence" in f]
         assert len(coherence_msgs) == 0
 
     def test_mixed_task_low_coherence(self):
-        metrics = {"coherence": 0.4, "regime": "transition", "updates": 5}
+        metrics = {"coherence": 0.4, "coherence_role": "behavioral_update_consistency", "regime": "transition", "updates": 5}
         result = generate_actionable_feedback(metrics, task_type="mixed")
         assert any("articulate your current goal" in f for f in result)
 
     def test_unknown_task_defaults_to_mixed(self):
-        metrics = {"coherence": 0.4, "regime": "transition", "updates": 5}
+        metrics = {"coherence": 0.4, "coherence_role": "behavioral_update_consistency", "regime": "transition", "updates": 5}
         result = generate_actionable_feedback(metrics)
         assert any("articulate your current goal" in f for f in result)
 
@@ -893,35 +908,35 @@ class TestGenerateActionableFeedback:
         assert len(confusion_msgs) == 1
 
     def test_definitely_with_low_coherence(self):
-        metrics = {"coherence": 0.4, "regime": "transition", "updates": 5}
+        metrics = {"coherence": 0.4, "coherence_role": "behavioral_update_consistency", "regime": "transition", "updates": 5}
         result = generate_actionable_feedback(
             metrics, response_text="This is definitely the right approach"
         )
         assert any("overconfidence" in f.lower() or "assumptions" in f for f in result)
 
     def test_obviously_with_low_coherence(self):
-        metrics = {"coherence": 0.4, "regime": "transition", "updates": 5}
+        metrics = {"coherence": 0.4, "coherence_role": "behavioral_update_consistency", "regime": "transition", "updates": 5}
         result = generate_actionable_feedback(
             metrics, response_text="Obviously the answer is 42"
         )
         assert any("assumptions" in f for f in result)
 
     def test_clearly_with_low_coherence(self):
-        metrics = {"coherence": 0.4, "regime": "transition", "updates": 5}
+        metrics = {"coherence": 0.4, "coherence_role": "behavioral_update_consistency", "regime": "transition", "updates": 5}
         result = generate_actionable_feedback(
             metrics, response_text="Clearly this is the best option"
         )
         assert any("assumptions" in f for f in result)
 
     def test_certainly_with_low_coherence(self):
-        metrics = {"coherence": 0.4, "regime": "transition", "updates": 5}
+        metrics = {"coherence": 0.4, "coherence_role": "behavioral_update_consistency", "regime": "transition", "updates": 5}
         result = generate_actionable_feedback(
             metrics, response_text="This is certainly correct"
         )
         assert any("assumptions" in f for f in result)
 
     def test_definitely_with_high_coherence_no_overconfidence(self):
-        metrics = {"coherence": 0.8, "regime": "stable", "updates": 5}
+        metrics = {"coherence": 0.8, "coherence_role": "behavioral_update_consistency", "regime": "stable", "updates": 5}
         result = generate_actionable_feedback(
             metrics, response_text="This is definitely the right approach"
         )
@@ -958,6 +973,7 @@ class TestGenerateActionableFeedback:
     def test_multiple_feedback_items(self):
         metrics = {
             "coherence": 0.2,
+            "coherence_role": "behavioral_update_consistency",
             "regime": "exploration",
             "risk_score": 0.8,
             "void_active": True,

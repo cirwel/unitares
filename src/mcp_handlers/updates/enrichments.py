@@ -1057,6 +1057,25 @@ def enrich_eisv_validation(ctx: UpdateContext) -> None:
 
 # ─── Learning Context ──────────────────────────────────────────────────
 
+def _behavioral_coherence_pattern(metrics: dict) -> str | None:
+    """Return coaching only for the behavioral update-consistency producer.
+
+    The canonical field is producer-overloaded. Legacy ODE feedback and the
+    E/I/S manifold are useful measurements in their own roles, but neither can
+    support claims that an agent's approach is scattered or consistent.
+    Unknown provenance fails closed.
+    """
+    if metrics.get("coherence_role") != "behavioral_update_consistency":
+        return None
+    coherence = metrics.get("coherence")
+    if coherence is None:
+        return None
+    if coherence < 0.4:
+        return "Low behavioral update consistency - review whether the approach is scattered"
+    if coherence > 0.8:
+        return "High behavioral update consistency - maintaining a consistent approach"
+    return None
+
 @enrichment(order=210, lite_safe=True)
 async def enrich_learning_context(ctx: UpdateContext) -> None:
     """Surface agent's own history for in-context learning."""
@@ -1204,11 +1223,11 @@ async def enrich_learning_context(ctx: UpdateContext) -> None:
             elif E < 0.5:
                 patterns.append("Low energy - consider taking a step back")
 
-            coherence_val = ctx.response_data.get('metrics', {}).get('coherence', 0.5)
-            if coherence_val < 0.4:
-                patterns.append("Low coherence - your approach may be scattered")
-            elif coherence_val > 0.8:
-                patterns.append("High coherence - maintaining consistent approach")
+            coherence_pattern = _behavioral_coherence_pattern(
+                ctx.response_data.get('metrics', {})
+            )
+            if coherence_pattern:
+                patterns.append(coherence_pattern)
 
             if patterns:
                 learning_context["patterns"] = {
@@ -2020,14 +2039,19 @@ from src.grounding.mutual_info import compute_mutual_info
 from src.grounding.free_energy import compute_free_energy
 from src.grounding.coherence import compute_coherence
 from src.grounding.class_indicator import classify_agent
+from src.coherence_provenance import (
+    LEGACY_COHERENCE_SOURCE,
+    annotate_coherence_metrics,
+)
 
 
-@enrichment(order=75)
 async def enrich_grounding(ctx: UpdateContext) -> None:
     """Swap grounded E/I/S/coherence into canonical metrics slots.
 
     Class-conditional: classifies the agent first, sets ctx.agent_class so
-    compute functions can look up per-class scale constants.
+    compute functions can look up per-class scale constants. This function is
+    called only by the explicit pre-persist grounding stage; it is deliberately
+    not registered in the late response-enrichment pipeline.
     """
     result = ctx.result or {}
     metrics = result.get("metrics")
@@ -2062,6 +2086,7 @@ async def enrich_grounding(ctx: UpdateContext) -> None:
     metrics["i_source"] = i.source
     metrics["s_source"] = s.source
     metrics["coherence_source"] = c.source
+    annotate_coherence_metrics(metrics, source=c.source)
 
     # Surface the calibration class so audit/broadcast can see what
     # class-conditional constants were applied to this check-in.
@@ -2078,8 +2103,8 @@ async def run_grounding_stage(ctx: UpdateContext) -> None:
     since it shipped.
 
     This stage runs early, but is gated:
-      * neither flag set  -> no-op (current behavior; the late enrich_grounding
-        stays the existing discarded no-op).
+      * neither flag set  -> values remain untouched; attach source/role
+        metadata and stamp coherence_form="legacy_tanh_v" for persistence.
       * GROUNDING_SHADOW   -> compute grounded metrics, emit a 'grounding_shadow'
         audit event with the per-dimension shift, then REVERT the live metrics
         (behavior-neutral) unless APPLY is also set.
@@ -2094,12 +2119,24 @@ async def run_grounding_stage(ctx: UpdateContext) -> None:
 
     shadow = grounding_shadow_enabled()
     apply = grounding_apply_enabled()
+    result = ctx.result or {}
+    metrics = result.get("metrics")
+    if not isinstance(metrics, dict):
+        return
+
+    # Provenance is not conditional on an experiment flag. With both flags off
+    # the canonical value is the legacy ODE tanh(V) form, so stamp that fact on
+    # every persisted row AND response. The two additive metadata fields do not
+    # alter the value, policy, or enforcement.
+    if "coherence" in metrics:
+        source = metrics.get("coherence_source") or LEGACY_COHERENCE_SOURCE
+        annotate_coherence_metrics(metrics, source=source)
+        ctx.coherence_form = source
+
     if not (shadow or apply):
         return
 
-    result = ctx.result or {}
-    metrics = result.get("metrics")
-    if not isinstance(metrics, dict) or "E_legacy" in metrics:
+    if "E_legacy" in metrics:
         return  # nothing to ground, or already grounded
 
     dims = ("E", "I", "S", "coherence")
@@ -2132,21 +2169,23 @@ async def run_grounding_stage(ctx: UpdateContext) -> None:
             logger.debug(f"grounding_shadow audit failed: {exc}")
 
     # Which instrument actually produced the coherence that gets persisted and
-    # returned. Recorded on ctx (NOT injected into `metrics`) so the response
-    # stays byte-identical while the stored row becomes self-describing —
-    # the same provenance-only treatment `sensor_eisv_source` already gets in
-    # agent_storage. Without this, a stored coherence cannot be attributed to a
-    # form after the fact, so an APPLY flip is unverifiable in the history and
-    # legacy rows are indistinguishable from grounded ones.
+    # returned. The ctx field preserves the historical state_json contract;
+    # source/role travel with the response measurement itself.
     ctx.coherence_form = (
-        (metrics.get("coherence_source") or "grounded") if apply else "legacy_tanh_v"
+        (metrics.get("coherence_source") or "grounded")
+        if apply
+        else LEGACY_COHERENCE_SOURCE
     )
 
     if not apply:
-        # Behavior-neutral: restore the ungrounded canonical values and drop the
-        # grounding bookkeeping so persist + response are byte-identical to today.
+        # Behavior-neutral: restore the ungrounded canonical values and drop
+        # grounded bookkeeping. Keep only the winning producer/role metadata.
         for d in dims:
             metrics[d] = pre[d]
         for k in ("E_legacy", "I_legacy", "S_legacy", "coherence_legacy",
-                  "e_source", "i_source", "s_source", "coherence_source", "agent_class"):
+                  "e_source", "i_source", "s_source", "coherence_source",
+                  "coherence_role", "agent_class"):
             metrics.pop(k, None)
+        annotate_coherence_metrics(metrics, source=LEGACY_COHERENCE_SOURCE)
+    else:
+        annotate_coherence_metrics(metrics, source=ctx.coherence_form)

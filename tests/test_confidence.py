@@ -117,6 +117,11 @@ class TestDeriveConfidenceEISV:
         _, metadata = derive_confidence(state)
         assert "eisv" in metadata
         assert metadata["eisv"]["coherence"] == 0.8
+        assert metadata["eisv"]["coherence_source"] == "legacy_tanh_v"
+        assert metadata["eisv"]["coherence_role"] == "ode_control_feedback"
+        assert metadata["eisv"]["coherence_weight"] == 0.55
+        assert metadata["eisv"]["coherence_is_health_evidence"] is False
+        assert metadata["known_limitations"]
         assert metadata["eisv"]["integrity"] == 0.7
         assert metadata["eisv"]["entropy"] == 0.2
         assert metadata["eisv"]["void"] == 0.1

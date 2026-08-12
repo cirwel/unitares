@@ -20,10 +20,10 @@ where:
     S: Semantic uncertainty [0,2]
     V: E-I imbalance integral (damped accumulator, like Helmholtz free energy) [-2,2]
         V > 0: energy surplus (running hot), V < 0: integrity surplus (running careful)
-        Feeds back through coherence: C(V,Θ) = Cmax · 0.5 · (1 + tanh(C₁·V))
+        Feeds a directional controller: C(V,Θ) = Cmax · 0.5 · (1 + tanh(C₁·V))
         Note: "Void" name comes from Lumen mapping V=(1-presence)*0.3; the ODE
         evolves V as a signed integrator, which is a different quantity.
-    C(V,Θ): Coherence function
+    C(V,Θ): Legacy-named directional control-feedback function
     ‖Δη‖: Ethical drift norm
     C: Task complexity [0,1] - increases entropy S
 """
@@ -34,7 +34,7 @@ from typing import List, Optional
 
 from .parameters import DynamicsParams, Theta
 from .utils import clip, drift_norm, barrier
-from .coherence import coherence, lambda1, lambda2
+from .coherence import control_feedback, lambda1, lambda2
 
 
 @dataclass
@@ -49,7 +49,7 @@ class State:
         I: Information integrity [0, 1]
         S: Semantic uncertainty / disorder [0, 2]
         V: E-I imbalance integral [-2, 2]. Positive=energy surplus, negative=integrity surplus.
-           Drives coherence feedback. Named "Void" in Lumen's observation layer.
+           Drives directional control feedback. Named "Void" in Lumen's observation layer.
     """
     E: float
     I: float
@@ -126,8 +126,8 @@ def _derivatives(
     Returns:
         (dE_dt, dI_dt, dS_dt, dV_dt) tuple
     """
-    # Compute coherence at this state's V
-    C = coherence(state.V, theta, params)
+    # Directional ODE feedback at this state's V. This is not a health score.
+    C = control_feedback(state.V, theta, params)
 
     # Compute adaptive lambda values (theta-dependent, state-independent)
     lam1 = lambda1(theta, params)
@@ -413,7 +413,7 @@ def compute_equilibrium(
     """
     Compute an equilibrium for the current softened ODE.
 
-    The active dynamics include coherence feedback, soft barriers, and a
+    The active dynamics include directional control feedback, soft barriers, and a
     complexity-aware entropy floor, so the older closed-form approximation can
     miss the true operating point. We therefore relax the full system forward
     until it reaches a fixed point, then return that settled state.
@@ -579,13 +579,13 @@ def compute_saturation_diagnostics(
         - will_saturate: Whether logistic mode will saturate to I=1
     """
     from .parameters import DEFAULT_PARAMS, get_i_dynamics_mode
-    from .coherence import coherence
+    from .coherence import control_feedback
     
     if params is None:
         params = DEFAULT_PARAMS
     
-    # Compute coherence
-    C = coherence(state.V, theta, params)
+    # Compute the legacy-named directional ODE feedback.
+    C = control_feedback(state.V, theta, params)
     
     # Forcing term (isolated input)
     A = params.beta_I * C - params.k * state.S

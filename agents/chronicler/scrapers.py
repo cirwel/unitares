@@ -129,19 +129,20 @@ def checkins_7d(_repo_root: Path) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Governance-health series. The metrics above answer "how big / how busy";
-# these answer "how healthy" — the core EISV / verdict / finding signal, which
-# was live-only (no time-series) until now. Each reads core.agent_state (every
-# non-synthetic check-in) or audit.events over a trailing 7-day window, so they
-# share the `.7d` convention and group under "governance" on the dashboard.
+# Governance-state series. The metrics above answer "how big / how busy";
+# these retain EISV / verdict / finding time series that were previously
+# live-only. Each reads core.agent_state or audit.events over a trailing 7-day
+# window, so they share the `.7d` convention. Individual metrics carry their own
+# interpretation; the compatibility coherence mean is not itself health.
 # ---------------------------------------------------------------------------
 
 
 def governance_coherence_mean_7d(_repo_root: Path) -> float:
-    """Fleet-mean coherence over the last 7 days — headline governance health.
+    """Fleet-mean compatibility coherence over the last 7 days.
 
-    avg() across every non-synthetic check-in. A sustained drop is the earliest
-    broad signal that the fleet is drifting."""
+    This legacy aggregate predates producer provenance. It must be stratified by
+    ``state_json.coherence_form`` before interpretation; legacy_tanh_v movement
+    is directional control-feedback movement, not a fleet-health trend."""
     return _fetchval(
         "SELECT avg(coherence) FROM core.agent_state "
         "WHERE recorded_at > now() - interval '7 days' AND synthetic = false"

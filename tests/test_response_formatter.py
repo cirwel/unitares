@@ -47,6 +47,8 @@ def _sample_response():
             "S": 0.1,
             "V": -0.02,
             "coherence": 0.92,
+            "coherence_source": "legacy_tanh_v",
+            "coherence_role": "ode_control_feedback",
             "risk_score": 0.08,           # smoothed (gating)
             "latest_risk_score": 0.42,    # raw last observation (spike)
             "phi": 1.23,
@@ -111,6 +113,8 @@ class TestFormatMinimal:
         assert result["S"] == 0.1
         assert result["V"] == -0.02
         assert result["coherence"] == 0.92
+        assert result["coherence_source"] == "legacy_tanh_v"
+        assert result["coherence_role"] == "ode_control_feedback"
 
     def test_includes_phi(self):
         """phi is the primary basin discriminator — minimal carried every
@@ -213,6 +217,10 @@ class TestFormatCompact:
         m = result["metrics"]
         assert m["E"] == 0.7
         assert m["coherence"] == 0.92
+        assert m["coherence_source"] == "legacy_tanh_v"
+        assert m["coherence_role"] == "ode_control_feedback"
+        assert "control_feedback=0.92" in result["summary"]
+        assert "| coherence=" not in result["summary"]
         assert m["phi"] == 1.23
 
     def test_decision_included(self):
@@ -796,6 +804,8 @@ class TestFormatMirror:
         result = _format_mirror(data, saved_trust_tier=None)
         assert result["phi"] == 1.23
         assert result["coherence"] == 0.92
+        assert result["coherence_source"] == "legacy_tanh_v"
+        assert result["coherence_role"] == "ode_control_feedback"
         assert result["risk_score"] == 0.08
         # Data keys, not prose — the signals list must not gain a
         # numbers line out of this.

@@ -819,6 +819,28 @@ class TestPhaseAware:
         assert isinstance(reason, str)
         assert status in ["healthy", "caution", "critical"]
 
+    def test_phase_health_ignores_directional_control_feedback(self):
+        low_feedback = evaluate_health_with_phase(
+            coherence=0.1,
+            risk=0.2,
+            phase="integration",
+        )
+        high_feedback = evaluate_health_with_phase(
+            coherence=0.9,
+            risk=0.2,
+            phase="integration",
+        )
+        assert low_feedback[0] == high_feedback[0] == "healthy"
+
+    def test_phase_health_uses_risk_reflect_threshold(self):
+        status, reason = evaluate_health_with_phase(
+            coherence=0.9,
+            risk=0.6,
+            phase="integration",
+        )
+        assert status == "moderate"
+        assert "Risk" in reason
+
 
 # ============================================================================
 # 6. PARAMETERS.PY TESTS

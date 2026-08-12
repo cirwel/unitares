@@ -320,6 +320,8 @@ def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any 
         "metrics": {
             "E": E, "I": I, "S": S, "V": V,
             "coherence": coherence, "risk_score": risk_score,
+            "coherence_source": metrics.get("coherence_source"),
+            "coherence_role": metrics.get("coherence_role"),
         },
         "_mode": "standard",
         "_raw_available": "Use response_mode='full' to see complete metrics",
@@ -549,6 +551,8 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
         ("phi", metrics.get("phi")),
         ("coherence", metrics.get("coherence")),
         ("risk_score", metrics.get("risk_score")),
+        ("coherence_source", metrics.get("coherence_source")),
+        ("coherence_role", metrics.get("coherence_role")),
     ):
         if state_val is not None:
             result[state_key] = state_val
@@ -609,6 +613,8 @@ def _format_minimal(response_data: dict, using_default_mode: bool, saved_trust_t
         "S": metrics.get("S"),
         "V": metrics.get("V"),
         "coherence": metrics.get("coherence"),
+        "coherence_source": metrics.get("coherence_source"),
+        "coherence_role": metrics.get("coherence_role"),
         # phi is the primary basin discriminator (empirical, 2026-04-30);
         # minimal carried every EISV channel except it. Compact already
         # includes it — parity, not a new surface.
@@ -664,6 +670,8 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
         "S": metrics.get("S"),
         "V": metrics.get("V"),
         "coherence": metrics.get("coherence"),
+        "coherence_source": metrics.get("coherence_source"),
+        "coherence_role": metrics.get("coherence_role"),
         "risk_score": canonical_risk,
         "risk_score_latest": latest_risk,
         "phi": metrics.get("phi"),
@@ -692,9 +700,20 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
 
     health_status = response_data.get("health_status") or compact_metrics.get("health_status") or response_data.get("status")
     coherence = compact_metrics.get("coherence")
+    coherence_role = compact_metrics.get("coherence_role")
+    coherence_label = (
+        "control_feedback"
+        if coherence_role == "ode_control_feedback"
+        else "structural_coherence"
+        if coherence_role == "eis_structural_measurement"
+        else "coherence"
+    )
     risk_val = compact_metrics.get("risk_score")
     action = compact_decision.get("action") or response_data.get("status")
-    summary = f"{action} | health={health_status} | coherence={coherence} | risk_score={risk_val}"
+    summary = (
+        f"{action} | health={health_status} | {coherence_label}={coherence} "
+        f"| risk_score={risk_val}"
+    )
 
     result = {
         "success": True,

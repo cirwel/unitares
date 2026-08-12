@@ -132,6 +132,23 @@ defmodule UnitaresSentinel.FleetState do
 
   defp record_agent(%AgentSnapshot{} = snapshot, event, now_ms, window_size) do
     eisv = map_value(event, "eisv")
+    metrics = map_value(event, "metrics")
+    telemetry = map_value(event, "eisv_telemetry")
+
+    coherence_source =
+      string_value(
+        metrics,
+        "coherence_source",
+        string_value(telemetry, "coherence_source", "unknown")
+      )
+
+    coherence_role =
+      string_value(
+        metrics,
+        "coherence_role",
+        string_value(telemetry, "coherence_role", "unknown")
+      )
+
     coherence = number_value(event, "coherence", 0)
     verdict = verdict(event)
 
@@ -142,6 +159,8 @@ defmodule UnitaresSentinel.FleetState do
       S: number_value(eisv, "S", 0),
       V: number_value(eisv, "V", 0),
       coherence: coherence,
+      coherence_source: coherence_source,
+      coherence_role: coherence_role,
       verdict: verdict
     }
 

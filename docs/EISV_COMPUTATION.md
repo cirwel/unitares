@@ -15,7 +15,14 @@ observables ──► observation blend ──► EMA state ──► residual /
  drift, tools)                                                               pause/reject
 ```
 
-The dynamical-systems / thermodynamic model (`governance_core/`, the ODE) runs **in parallel and does not drive verdicts** by default (`governance_monitor.py`, the "does NOT drive verdicts" guard comment: *"The ODE engine runs in parallel but does NOT drive verdicts… Primary verdicts come from behavioral assessment (EMA + z-score deviations)."*). It supplies the phi objective, regime detection, and historical continuity — the research lens, not the control loop.
+The dynamical-systems / thermodynamic model (`governance_core/`, the ODE) is
+**not the direct verdict owner** by default: behavioral assessment owns the
+post-warmup verdict. It is not fully parallel, however. The behavioral sensor
+still gives the legacy ODE `C(V)` scalar 25–30% of E and 30–40% of I, and also
+uses ODE-derived regime/history inputs. The old “does NOT drive verdicts” comment
+therefore describes authority, not causal independence. This residual coupling
+is compatibility debt and must be shadow-evaluated before removal because it
+changes the E/I distribution and every downstream baseline.
 
 ## Step 1 — Observations (`src/behavioral_sensor.py`)
 
@@ -25,7 +32,7 @@ For non-embodied agents (the common case), three observations are computed from 
 ```
 decision_e = exp-weighted (α=0.3) mean of verdict scores over last 10 decisions
              {proceed/approve: 1.0, guide: 0.7, revise/reflect: 0.5, pause/reject: 0.0}
-coh_e      = mean coherence remapped [0.35, 0.65] → [0.3, 0.9]
+coh_e      = mean legacy_tanh_v ODE control feedback remapped [0.35, 0.65] → [0.3, 0.9]
 cal_e      = clamp(1 − complexity_divergence, 0.3, 1.0)
 E_obs      = 0.40·decision_e + 0.30·coh_e + 0.30·cal_e         # no outcomes
            = 0.35·decision_e + 0.25·coh_e + 0.20·cal_e + 0.20·outcome_e   # with outcomes
@@ -34,7 +41,7 @@ E_obs      = 0.40·decision_e + 0.30·coh_e + 0.30·cal_e         # no outcomes
 **I_obs** — claims-match-results (`_compute_I`):
 ```
 cal_I = clamp(1 − calibration_error, 0, 1)     # calibration_error = drift-blended claimed-vs-observed deviation (monitor_drift.py), not literally |confidence − success|
-coh_I = split-half coherence trend, mapped to [0.3, 0.9]
+coh_I = split-half trend of legacy_tanh_v ODE control feedback, mapped to [0.3, 0.9]
 I_obs = 0.6·cal_I + 0.4·coh_I                                   # no outcomes
       = 0.50·cal_I + 0.30·coh_I + 0.20·consistency_I            # with outcomes
 ```
@@ -48,6 +55,21 @@ S_obs    = 0.40·drift_s + 0.35·regime_s + 0.25·cd_s
 ```
 
 Optional small blends (when those signals exist): continuity-log inputs (≤20%), tool error-rate (≤15%), tool velocity / unique-tools ratio (≤10%). The weights are hand-set, not derived — that is the honest status of the current estimator.
+
+`coh_e` and `coh_I` are especially important to interpret honestly. They were
+introduced to reduce E saturation and differentiate agents while `coherence`
+still meant `C(V_ODE)`. The later behavioral-EISV migration promoted E/I/S/V
+but left the coherence producer behind, so these terms now carry a demoted ODE
+controller signal into the allegedly behavioral vector. The current patch tags
+that input; it does not silently reweight the live estimator.
+
+There is a second compatibility dependency in `src/confidence.py`: when callers
+omit confidence, 55% of the fallback estimate's base is the same legacy
+`C(V_ODE)` scalar. That estimate is recorded into calibration history, whose
+aggregate overconfidence penalty can later raise ODE S. Responses now disclose
+the source, role, weight, and `health_evidence=false` under
+`confidence_reliability`; the formula is not silently reweighted because its
+distribution and downstream calibration need prospective outcome comparison.
 
 ## Step 2 — Smoothing, and what V really is (`src/behavioral_state.py`)
 
@@ -103,8 +125,8 @@ Internally the assessment emits a `safe` / `caution` / `high-risk` label; that d
 
 | Coord | Deployed today (tier: heuristic / resource) | Target semantics (Paper v6) |
 |---|---|---|
-| **E** | weighted blend of decision-success, coherence, complexity-calibration, outcomes | negative variational free energy (−F) |
-| **I** | calibration accuracy + coherence trend (+ outcome consistency) | mutual information I(context; response) |
+| **E** | weighted blend of decision-success, complexity-calibration, outcomes, and legacy ODE control-feedback level | negative variational free energy (−F) |
+| **I** | calibration accuracy + legacy ODE control-feedback trend (+ outcome consistency) | mutual information I(context; response) |
 | **S** | drift-norm + regime instability + complexity divergence | response-distribution entropy H |
 | **V** | EMA-smoothed E−I imbalance (derived) | accumulated free-energy residual |
 
