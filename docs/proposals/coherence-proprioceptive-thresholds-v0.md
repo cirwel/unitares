@@ -151,7 +151,9 @@ Choosing `k` is a policy call and should be recorded as one.
 2. Land the replacement instrument and its prospective, per-agent policy together,
    never by swapping a new distribution under the fleet constants. Also shadow the
    E/I sensor without its current 25–40% legacy-controller contribution before
-   changing those behavioral baselines.
+   changing those behavioral baselines. The measurement-only first step and its
+   separate trusted-outcome safety read are specified in
+   [Legacy-coherence dependency ablation v0](legacy-coherence-dependency-ablation-v0.md).
 3. Ship behind the existing shadow pattern first: compute both, record the divergence, apply
    nothing — the same discipline `grounding_shadow` already uses. **Built and corrected:**
    `src/coherence_gate_shadow.py` + `coherence_gate_shadow` audit event, behind

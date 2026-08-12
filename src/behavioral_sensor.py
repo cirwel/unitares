@@ -13,6 +13,11 @@ distribution and downstream baselines first.
 import math
 
 
+LEGACY_COHERENCE_ABLATION_SCHEMA = "legacy_coherence_dependency_ablation.v1"
+LEGACY_COHERENCE_NEUTRAL_VALUE = 0.5
+LEGACY_COHERENCE_NEUTRAL_COMPONENT = 0.6
+
+
 def compute_behavioral_sensor_eisv(
     decision_history: list,
     coherence_history: list,
@@ -64,6 +69,135 @@ def compute_behavioral_sensor_eisv(
         I = 0.90 * I + 0.10 * unique_tools_ratio
 
     return {"E": E, "I": I, "S": S, "V": V}
+
+
+def compute_legacy_coherence_dependency_shadow(
+    decision_history: list,
+    coherence_history: list,
+    regime_history: list,
+    E_history: list,
+    I_history: list,
+    S_history: list,
+    V_history: list,
+    calibration_error: float | None = None,
+    drift_norm: float | None = None,
+    complexity_divergence: float | None = None,
+    continuity_E_input: float | None = None,
+    continuity_I_input: float | None = None,
+    continuity_S_input: float | None = None,
+    outcome_history: list | None = None,
+    tool_error_rate: float | None = None,
+    tool_call_velocity: float | None = None,
+    unique_tools_ratio: float | None = None,
+    deployed_observation: dict | None = None,
+) -> dict:
+    """Shadow the behavioral E/I reading with legacy coherence neutralized.
+
+    This is a measurement-only intervention.  It replaces the bounded history
+    of legacy ``C(V_ODE)`` values with the transfer function's midpoint (0.5),
+    which maps to the existing neutral E-level and I-trend component (0.6).
+    All other inputs and all deployed weights remain identical.  The live
+    observation is never changed.
+
+    The candidate intentionally stops at the raw behavioral E/I observation.
+    Replaying recursive E/I history, the behavioral EMA, V, policy, or later
+    outcomes would require a separate longitudinal simulator and is not implied
+    by this per-check-in shadow.
+    """
+    base = {
+        "schema": LEGACY_COHERENCE_ABLATION_SCHEMA,
+        "mode": "measurement_only",
+        "policy_applied": False,
+        "intervention": {
+            "field": "coherence_history",
+            "source": "legacy_tanh_v",
+            "role": "ode_control_feedback",
+            "operation": "replace_with_transfer_midpoint",
+            "replacement_value": LEGACY_COHERENCE_NEUTRAL_VALUE,
+            "mapped_E_level_component": LEGACY_COHERENCE_NEUTRAL_COMPONENT,
+            "mapped_I_trend_component": LEGACY_COHERENCE_NEUTRAL_COMPONENT,
+        },
+        "not_modeled": [
+            "recursive_E_I_history_replay",
+            "behavioral_ema_replay",
+            "V_counterfactual",
+            "policy_effect",
+            "future_outcomes",
+        ],
+    }
+    if len(decision_history) < 3 or len(coherence_history) < 3:
+        return {
+            **base,
+            "eligible": False,
+            "eligibility_reason": "insufficient_behavioral_history",
+            "deployed": None,
+            "candidate": None,
+            "candidate_minus_deployed": None,
+        }
+
+    deployed = deployed_observation or compute_behavioral_sensor_eisv(
+        decision_history=decision_history,
+        coherence_history=coherence_history,
+        regime_history=regime_history,
+        E_history=E_history,
+        I_history=I_history,
+        S_history=S_history,
+        V_history=V_history,
+        calibration_error=calibration_error,
+        drift_norm=drift_norm,
+        complexity_divergence=complexity_divergence,
+        continuity_E_input=continuity_E_input,
+        continuity_I_input=continuity_I_input,
+        continuity_S_input=continuity_S_input,
+        outcome_history=outcome_history,
+        tool_error_rate=tool_error_rate,
+        tool_call_velocity=tool_call_velocity,
+        unique_tools_ratio=unique_tools_ratio,
+    )
+    neutral_history = [LEGACY_COHERENCE_NEUTRAL_VALUE] * min(
+        len(coherence_history), 10
+    )
+    candidate = compute_behavioral_sensor_eisv(
+        decision_history=decision_history,
+        coherence_history=neutral_history,
+        regime_history=regime_history,
+        E_history=E_history,
+        I_history=I_history,
+        S_history=S_history,
+        V_history=V_history,
+        calibration_error=calibration_error,
+        drift_norm=drift_norm,
+        complexity_divergence=complexity_divergence,
+        continuity_E_input=continuity_E_input,
+        continuity_I_input=continuity_I_input,
+        continuity_S_input=continuity_S_input,
+        outcome_history=outcome_history,
+        tool_error_rate=tool_error_rate,
+        tool_call_velocity=tool_call_velocity,
+        unique_tools_ratio=unique_tools_ratio,
+    )
+    if deployed is None or candidate is None:
+        return {
+            **base,
+            "eligible": False,
+            "eligibility_reason": "behavioral_sensor_unavailable",
+            "deployed": None,
+            "candidate": None,
+            "candidate_minus_deployed": None,
+        }
+
+    deployed_ei = {key: float(deployed[key]) for key in ("E", "I")}
+    candidate_ei = {key: float(candidate[key]) for key in ("E", "I")}
+    return {
+        **base,
+        "eligible": True,
+        "eligibility_reason": None,
+        "deployed": deployed_ei,
+        "candidate": candidate_ei,
+        "candidate_minus_deployed": {
+            key: candidate_ei[key] - deployed_ei[key] for key in ("E", "I")
+        },
+    }
 
 
 # --- E: Decision success rate, exponentially weighted ---

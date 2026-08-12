@@ -9,6 +9,7 @@ import pytest
 
 from src.eisv_telemetry import (
     BEHAVIORAL_SENSOR_FORMULA_VERSION,
+    EISV_SHADOW_ABLATIONS_SCHEMA,
     EISV_TELEMETRY_SCHEMA,
     build_behavioral_derivation,
     build_eisv_telemetry_envelope,
@@ -90,6 +91,18 @@ def test_full_envelope_keeps_measurement_policy_and_actuator_separate():
         derivation=_derivation(),
         policy_evaluation={"action": "proceed", "sub_action": "guide"},
         enforcement={"requested": False, "applied": False, "mode": "advisory"},
+        shadow_ablations={
+            "legacy_coherence_neutralized": {
+                "behavioral_sensor": {
+                    "eligible": True,
+                    "candidate": {"E": 0.7, "I": 0.8},
+                },
+                "derived_confidence": {
+                    "eligible": True,
+                    "candidate": {"final": 0.62},
+                },
+            }
+        },
         observed_at="2026-08-09T18:00:00+00:00",
         measurement_id="measurement-1",
     )
@@ -107,6 +120,14 @@ def test_full_envelope_keeps_measurement_policy_and_actuator_separate():
     assert envelope["measurement"]["ode"]["values"]["E"] == 0.51
     assert envelope["policy_evaluation"]["action"] == "proceed"
     assert envelope["enforcement"]["applied"] is False
+    assert envelope["shadow_ablations"]["schema"] == EISV_SHADOW_ABLATIONS_SCHEMA
+    assert envelope["shadow_ablations"]["mode"] == "measurement_only"
+    assert envelope["shadow_ablations"]["policy_applied"] is False
+    summary = summarize_eisv_telemetry(envelope)
+    assert summary["legacy_coherence_behavioral_shadow_recorded"] is True
+    assert summary["legacy_coherence_behavioral_shadow_eligible"] is True
+    assert summary["legacy_coherence_confidence_shadow_recorded"] is True
+    assert summary["legacy_coherence_confidence_shadow_eligible"] is True
     json.dumps(envelope)  # no default=str escape hatch required
 
 
@@ -298,11 +319,29 @@ async def test_post_update_persists_the_same_envelope_exposed_in_full_result():
             "decision": {"action": "proceed", "sub_action": "guide"},
             "policy_evaluation": {"action": "proceed", "sub_action": "guide"},
             "enforcement": {"requested": False, "applied": False},
+            "confidence_reliability": {
+                "shadow_ablations": {
+                    "legacy_coherence_neutralized": {
+                        "eligible": True,
+                        "candidate": {"final": 0.61},
+                    }
+                }
+            },
         },
         monitor=monitor,
         health_status=SimpleNamespace(value="healthy"),
         risk_score=0.1,
-        agent_state={"_eisv_derivation": _derivation()},
+        agent_state={
+            "_eisv_derivation": _derivation(),
+            "_eisv_shadow_ablations": {
+                "legacy_coherence_neutralized": {
+                    "behavioral_sensor": {
+                        "eligible": True,
+                        "candidate": {"E": 0.68, "I": 0.79},
+                    }
+                }
+            },
+        },
     )
     ctx.mcp_server = MagicMock()
 
@@ -315,3 +354,8 @@ async def test_post_update_persists_the_same_envelope_exposed_in_full_result():
     assert persisted is ctx.result["eisv_telemetry"]
     assert persisted["policy_evaluation"]["sub_action"] == "guide"
     assert persisted["measurement"]["behavioral"]["raw_observation"]["E"] == 0.7
+    candidate = persisted["shadow_ablations"]["candidates"][
+        "legacy_coherence_neutralized"
+    ]
+    assert candidate["behavioral_sensor"]["candidate"]["E"] == 0.68
+    assert candidate["derived_confidence"]["candidate"]["final"] == 0.61
