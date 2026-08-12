@@ -77,6 +77,12 @@ class TestGovernanceStateSerialization:
         assert "unitaires_state" in d
         assert "unitaires_theta" in d
 
+    def test_to_dict_bounds_legacy_risk_history(self):
+        state = GovernanceState()
+        state.risk_history = [-0.2, 0.4, 1.2]
+
+        assert state.to_dict_with_history()["risk_history"] == [0.0, 0.4, 1.0]
+
     def test_history_capping(self):
         state = GovernanceState()
         state.E_history = list(range(200))
@@ -129,6 +135,11 @@ class TestGovernanceStateSerialization:
         assert len(state.E_history) == 3
         assert state.regime == "convergence"
         assert len(state.regime_history) == 2
+
+    def test_from_dict_bounds_legacy_risk_history(self):
+        state = GovernanceState.from_dict({"risk_history": [-0.2, 0.4, 1.2]})
+
+        assert state.risk_history == [0.0, 0.4, 1.0]
 
     def test_from_dict_empty(self):
         state = GovernanceState.from_dict({})

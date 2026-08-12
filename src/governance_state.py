@@ -165,7 +165,10 @@ class GovernanceState:
             'S_history': [float(s) for s in cap_history(self.S_history)],
             'V_history': [float(v) for v in cap_history(self.V_history)],
             'coherence_history': [float(c) for c in cap_history(self.coherence_history)],
-            'risk_history': [float(r) for r in cap_history(self.risk_history)],
+            'risk_history': [
+                float(np.clip(r, 0.0, 1.0))
+                for r in cap_history(self.risk_history)
+            ],
             'lambda1_history': [float(l) for l in cap_history(getattr(self, 'lambda1_history', []))],  # Lambda1 adaptation history
             'decision_history': list(cap_history(self.decision_history)),
             'verdict_history': list(cap_history(self.verdict_history)),
@@ -245,7 +248,13 @@ class GovernanceState:
         state.S_history = [float(s) for s in data.get('S_history', [])]
         state.V_history = [float(v) for v in data.get('V_history', [])]
         state.coherence_history = [float(c) for c in data.get('coherence_history', [])]
-        state.risk_history = [float(r) for r in data.get('risk_history', [])]
+        # Older state files can contain the pre-fix raw risk plus velocity
+        # contribution (>1). Normalize at hydration so their read surfaces
+        # immediately recover the documented [0, 1] invariant.
+        state.risk_history = [
+            float(np.clip(r, 0.0, 1.0))
+            for r in data.get('risk_history', [])
+        ]
         state.decision_history = list(data.get('decision_history', []))
         state.verdict_history = list(data.get('verdict_history', []))
         state.timestamp_history = list(data.get('timestamp_history', []))  # Load timestamps
