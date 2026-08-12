@@ -110,6 +110,8 @@ def build_behavioral_derivation(
     unique_tools_ratio: Any = None,
     computed: Mapping[str, Any] | None = None,
     substrate_canaries: Mapping[str, Any] | None = None,
+    coherence_source: str | None = None,
+    coherence_role: str | None = None,
 ) -> dict[str, Any]:
     """Capture the bounded inputs used by ``compute_behavioral_sensor_eisv``.
 
@@ -153,6 +155,14 @@ def build_behavioral_derivation(
                 "E": _history(E_history),
                 "I": _history(I_history),
             },
+            "history_provenance": {
+                "coherence": {
+                    "source": coherence_source,
+                    "role": coherence_role,
+                    "usage": ["E_level_term", "I_trend_term"],
+                    "health_evidence": False,
+                }
+            },
             "features": features,
             "outcomes": _sanitize_outcomes(outcome_history),
         },
@@ -163,6 +173,9 @@ def build_behavioral_derivation(
         "unused_legacy_parameters": ["S_history", "V_history"],
         "missing_inputs": missing_inputs,
         "substrate_canaries": dict(substrate_canaries or {}),
+        "known_limitations": [
+            "coherence_history carries legacy ODE control feedback into the behavioral E/I blend"
+        ],
         "computed_observation": _eisv_values(computed),
     }
 
@@ -231,6 +244,11 @@ def build_eisv_telemetry_envelope(
                 "source": primary_source,
                 "values": _eisv_values(metrics),
             },
+            "coherence": {
+                "value": _number(metrics.get("coherence")),
+                "source": metrics.get("coherence_source") or "unknown",
+                "role": metrics.get("coherence_role") or "unknown",
+            },
             "behavioral": behavioral,
             "ode": {
                 "source": "ode_diagnostic",
@@ -264,6 +282,8 @@ def summarize_eisv_telemetry(envelope: Mapping[str, Any] | None) -> dict[str, An
     measurement = measurement if isinstance(measurement, Mapping) else {}
     primary = measurement.get("primary")
     primary = primary if isinstance(primary, Mapping) else {}
+    coherence = measurement.get("coherence")
+    coherence = coherence if isinstance(coherence, Mapping) else {}
     behavioral = measurement.get("behavioral")
     behavioral = behavioral if isinstance(behavioral, Mapping) else {}
     submitted = measurement.get("submitted_sensor")
@@ -297,6 +317,8 @@ def summarize_eisv_telemetry(envelope: Mapping[str, Any] | None) -> dict[str, An
         "measurement_id": envelope.get("measurement_id"),
         "measurement_source": measurement_source,
         "primary_source": primary_source or "unknown",
+        "coherence_source": coherence.get("source") or "unknown",
+        "coherence_role": coherence.get("role") or "unknown",
         "submitted_source": submitted_source,
         "behavioral_source": behavioral_source,
         "behavioral_confidence": _number(behavioral.get("confidence")),
@@ -358,6 +380,8 @@ def summarize_state_eisv_telemetry(state_json: Mapping[str, Any] | None) -> dict
         "measurement_id": None,
         "measurement_source": measurement_source,
         "primary_source": primary_source,
+        "coherence_source": state.get("coherence_form") or "unknown_legacy",
+        "coherence_role": "unknown",
         "submitted_source": submitted_source,
         "behavioral_source": behavioral_source,
         "behavioral_confidence": confidence,

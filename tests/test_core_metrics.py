@@ -1415,6 +1415,33 @@ class TestEdgeCases:
             assert "good" in data["coherence"]["status"]
 
     @pytest.mark.asyncio
+    async def test_get_metrics_legacy_coherence_is_not_health_rated(self):
+        mock_server = _make_mock_mcp_server()
+        monitor = _make_monitor()
+        monitor.get_metrics.return_value.update({
+            "coherence": 0.55,
+            "coherence_source": "legacy_tanh_v",
+            "coherence_role": "ode_control_feedback",
+        })
+        mock_server.agent_metadata = {"agent-1": _make_metadata()}
+        mock_server.get_or_create_monitor.return_value = monitor
+
+        with patch("src.mcp_handlers.core.mcp_server", mock_server), \
+             patch("src.mcp_handlers.core.require_agent_id", return_value=("agent-1", None)), \
+             patch("src.governance_monitor.UNITARESMonitor") as MockClass:
+            MockClass.get_eisv_labels.return_value = {
+                "E": "Energy", "I": "Information", "S": "Entropy", "V": "Void"
+            }
+            from src.mcp_handlers.core import handle_get_governance_metrics
+
+            result = await handle_get_governance_metrics({"lite": True})
+            data = _parse(result)
+
+        assert data["coherence"]["source"] == "legacy_tanh_v"
+        assert data["coherence"]["role"] == "ode_control_feedback"
+        assert "not health-rated" in data["coherence"]["status"]
+
+    @pytest.mark.asyncio
     async def test_get_metrics_none_risk_shows_unknown(self):
         """None risk_score shows as unknown."""
         mock_server = _make_mock_mcp_server()

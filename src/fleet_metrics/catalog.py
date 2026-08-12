@@ -116,7 +116,7 @@ register(Metric(
 # daily by Chronicler.
 register(Metric(
     name="governance.coherence.mean.7d",
-    description="Fleet-mean coherence over the last 7 days (non-synthetic check-ins). Headline governance-health signal; a sustained drop = broad drift.",
+    description="Fleet-mean compatibility coherence over the last 7 days (non-synthetic check-ins). Stratify by producer before interpretation; mixed or legacy_tanh_v rows are not a health trend.",
     unit="coherence",
 ))
 register(Metric(

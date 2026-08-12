@@ -150,6 +150,8 @@ def test_build_result_exposes_policy_and_unapplied_enforcement_layers():
             "policy_basin_source": "monitor_decision.classify_basin",
             "primary_eisv_source": None,
             "coherence": 0.31,
+            "coherence_source": None,
+            "coherence_role": None,
             "margin": "critical",
             "nearest_edge": "coherence",
             "phi": 0.24,
@@ -361,6 +363,8 @@ def test_build_result_includes_risk_attribution():
     assert "risk_attribution" in result
     assert result["risk_attribution"]["sources"]["phi_drift"]["ethical_drift_norm"] == pytest.approx(0.9)
     assert result["risk_attribution"]["sources"]["behavioral"]["risk"] == pytest.approx(0.006)
+    assert result["behavioral"]["assessment"]["coherence_source"] == "behavioral_assessment"
+    assert result["behavioral"]["assessment"]["coherence_role"] == "behavioral_update_consistency"
 
 
 def test_simulate_update_does_not_consume_novelty():

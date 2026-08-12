@@ -145,6 +145,10 @@ from src.monitor_metrics import (
 from src.behavioral_state import BehavioralEISV
 from src.behavioral_assessment import assess_behavioral_state
 from src.behavioral_sensor import compute_behavioral_sensor_eisv
+from src.coherence_provenance import (
+    LEGACY_COHERENCE_SOURCE,
+    ODE_CONTROL_FEEDBACK_ROLE,
+)
 
 # Extracted monitor subsystems (Phase 7 decomposition)
 from src.monitor_drift import compute_drift_vector as _compute_drift_vector_impl
@@ -1090,14 +1094,14 @@ class UNITARESMonitor:
         This is the main API method called by the MCP server.
 
         Confidence derivation (when not explicitly provided):
-            - High Integrity (I) → high confidence
-            - Low Entropy (S) → high confidence
-            - High Coherence (C) → high confidence
-            - Low |Void| (V) → high confidence
+            - Compatibility blend of I, S, |V| and legacy C(V_ODE)
+            - C(V_ODE) retains 55% weight pending prospective deconfounding
+            - That controller term is not independent confidence/health evidence;
+              inspect confidence_reliability.coherence_dependency
 
         Returns:
         {
-            'status': 'healthy' | 'moderate' | 'critical',
+            'status': 'healthy' | 'moderate' | 'critical' | 'unknown',
             'decision': {...},
             'metrics': {...},
         }
@@ -1474,6 +1478,8 @@ class UNITARESMonitor:
                                      behavioral=self._behavioral_state,
                                      fleet_action=decision.get("action"),
                                      coherence=self.state.coherence,
+                                     fleet_sub_action=decision.get("sub_action"),
+                                     fleet_nearest_edge=decision.get("nearest_edge"),
                                  ))
         except Exception as exc:
             logger.debug(f"coherence gate shadow skipped: {exc}")
@@ -1667,6 +1673,11 @@ class UNITARESMonitor:
             'V': pV,
             'primary_eisv_source': primary_eisv_source,
             'coherence': float(self.state.coherence),
+            # Compatibility scalar: the monitor itself always produces the
+            # legacy ODE controller output. The pre-persist grounding stage may
+            # replace both value and labels under explicit APPLY.
+            'coherence_source': LEGACY_COHERENCE_SOURCE,
+            'coherence_role': ODE_CONTROL_FEEDBACK_ROLE,
             'lambda1': float(self.state.lambda1),
             'risk_score': float(risk_score),  # Governance/operational risk (70% phi-based + 30% traditional)
             'phi': float(phi),  # Primary physics signal: Φ objective function
@@ -1774,7 +1785,7 @@ class UNITARESMonitor:
 
         Rationale: on the first WARMUP_STRUCTURAL_GRACE_CYCLES process-LOCAL
         cycles, the ODE integrators are cold and state.coherence/V can briefly
-        cross the void/coherence/basin floors even for a healthy agent (verified
+        cross the void/coherence/basin compatibility floors even when independent signals are nominal (verified
         2026-06-03: a restored-but-healthy Lumen still tripped void_pause on the
         first post-restart check-in, with behavioral risk 0.00). We trust the
         restored behavioral baseline over the cold structural metric — but ONLY

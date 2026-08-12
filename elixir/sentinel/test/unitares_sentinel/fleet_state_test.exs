@@ -25,6 +25,10 @@ defmodule UnitaresSentinel.FleetStateTest do
         "agent_name" => "Agent A",
         "eisv" => %{"E" => 0.1, "I" => 0.2, "S" => 0.3, "V" => 0.4},
         "coherence" => 0.9,
+        "metrics" => %{
+          "coherence_source" => "legacy_tanh_v",
+          "coherence_role" => "ode_control_feedback"
+        },
         "decision" => %{"action" => "proceed"}
       })
 
@@ -36,6 +40,10 @@ defmodule UnitaresSentinel.FleetStateTest do
         "agent_name" => "Agent A",
         "eisv" => %{"E" => 0.2, "I" => 0.3, "S" => 0.4, "V" => 0.5},
         "coherence" => 0.8,
+        "metrics" => %{
+          "coherence_source" => "legacy_tanh_v",
+          "coherence_role" => "ode_control_feedback"
+        },
         "decision" => %{"action" => "guide"}
       })
 
@@ -47,6 +55,10 @@ defmodule UnitaresSentinel.FleetStateTest do
         "agent_name" => "Agent A",
         "eisv" => %{"E" => 0.3, "I" => 0.4, "S" => 0.5, "V" => 0.6},
         "coherence" => 0.7,
+        "metrics" => %{
+          "coherence_source" => "legacy_tanh_v",
+          "coherence_role" => "ode_control_feedback"
+        },
         "decision" => %{"action" => "pause"}
       })
 

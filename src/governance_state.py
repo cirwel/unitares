@@ -399,27 +399,34 @@ class GovernanceState:
         }
     
     def _estimate_risk_simple(self) -> float:
-        """Simple risk estimate when full risk_score not available."""
-        # Risk increases with entropy, decreases with coherence
-        S = self.S
-        coh = self.coherence
-        V_abs = abs(self.V)
-        
-        # Base risk from entropy and void
-        risk = 0.3 * S + 0.3 * V_abs
-        # Coherence reduces risk
-        risk += 0.4 * (1.0 - coh)
+        """Compatibility risk proxy when the full estimator is unavailable.
+
+        This is intentionally EISV-only. The old fallback assigned 40% of its
+        weight to ``1 - coherence`` even though the deployed scalar is a
+        signed-V controller output: it therefore treated an integrity surplus
+        as risk and an energy surplus as safety. Keep this fallback symmetric
+        in V and leave the canonical risk pipeline authoritative.
+        """
+        risk = (
+            0.30 * self.S
+            + 0.30 * abs(self.V)
+            + 0.20 * (1.0 - self.E)
+            + 0.20 * (1.0 - self.I)
+        )
         return min(1.0, max(0.0, risk))
     
     def _interpret_health(self, coherence: float, risk_score: float) -> str:
-        """Map coherence and risk to health status."""
+        """Map measured risk to health; retain ``coherence`` for API compatibility.
+
+        The compatibility argument is deliberately ignored. A directional ODE
+        controller output cannot make the same low-risk state healthy on one
+        side of V=0 and unstable on the other.
+        """
         if risk_score > 0.7:
             return "critical"
         if risk_score > 0.5:
             return "at_risk"
-        if coherence < 0.3:
-            return "unstable"
-        if coherence > 0.6 and risk_score < 0.3:
+        if risk_score < 0.3:
             return "healthy"
         return "moderate"
     

@@ -25,6 +25,10 @@ from governance_core.scoring import phi_objective, verdict_from_phi
 from governance_core import approximate_stability_check
 from src.governance_glossary import get_eisv_glossary
 from src.health_thresholds import HealthThresholds
+from src.coherence_provenance import (
+    LEGACY_COHERENCE_SOURCE,
+    ODE_CONTROL_FEEDBACK_ROLE,
+)
 
 # Module-level stability cache (shared across all monitors, keyed by agent_id)
 _stability_cache: Dict[str, Dict[str, Any]] = {}
@@ -136,6 +140,8 @@ def get_monitor_metrics(monitor: Any, include_state: bool = True) -> Dict:
         'S': pS,
         'V': pV,
         'coherence': None if is_uninitialized else float(state.coherence),
+        'coherence_source': LEGACY_COHERENCE_SOURCE,
+        'coherence_role': ODE_CONTROL_FEEDBACK_ROLE,
         'lambda1': float(state.lambda1),
         'regime': str(regime),
         'status': 'uninitialized' if is_uninitialized else status,

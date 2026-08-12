@@ -69,15 +69,38 @@ higher values mean healthier balance.
 
 The compatibility field and `coherence()` import remain because they are embedded in
 stored and public contracts. New ODE code names the producer `control_feedback`;
-new persisted rows identify the winning instrument in `state_json.coherence_form`.
+new persisted rows identify the winning instrument in `state_json.coherence_form`,
+and response metrics carry the additive `coherence_source` / `coherence_role`
+pair. The flag-gated grounding function runs only in the explicit pre-persist
+stage; it is no longer also registered as a late response enrichment that could
+silently change what downstream enrichments observed.
 No live gate or threshold changes in this correction: replacing the frozen legacy
 field with behavioral-V or manifold coherence would move previously unreachable
 branches and requires prospective calibration first.
 
+The legacy scalar also has an indirect verdict path that the old “ODE is only
+parallel telemetry” description hid: `behavioral_sensor.py` assigns its level
+25–30% of E and its trend 30–40% of I. That coupling was added to differentiate
+the sensor before the April behavioral migration demoted ODE E/I/S/V but omitted
+coherence. Removing it changes behavioral baselines and verdict inputs, so this
+correction makes its provenance explicit in the EISV derivation envelope and
+documentation but does not silently reweight it. A prospective deconfounding
+shadow is the next prerequisite.
+
+The same legacy scalar retains 55% of the base weight in the omitted-confidence
+fallback (`src/confidence.py`). That makes derived confidence another mixed-
+provenance consumer, and confidence history can feed a later calibration penalty
+on ODE entropy. New response metadata exposes this causal dependency; removal or
+reweighting belongs in the same prospective deconfounding program rather than a
+silent compatibility change.
+
 The shadow comparison is likewise measurement-only. Its corrected v2 statistic is
 two-sided, uses a bounded recent window, excludes the current observation from its
 own reference, and states whether empirical dispersion or a calibrated scale floor
-supplied the denominator. Monotonicity alone is no longer treated as health semantics.
+supplied the denominator. Its comparison label is independently versioned and
+attributes the fleet result from `sub_action` + `nearest_edge`; an unrelated risk,
+void, or basin pause is not counted as a coherence-gate agreement. Monotonicity
+alone is no longer treated as health semantics.
 
 ## Decision record — cold-start confirmation remains shadow-only (2026-08-10)
 

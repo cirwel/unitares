@@ -461,6 +461,8 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
 
     if lite:
         coherence = metrics.get("coherence")
+        coherence_source = metrics.get("coherence_source")
+        coherence_role = metrics.get("coherence_role")
         risk_score = metrics.get("risk_score")
         health = standardized_metrics.get("state", {}).get("health", "unknown")
         status_indicator = {
@@ -480,6 +482,10 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
             status_display = f"{status_indicator} {health}"
             if coherence is None:
                 coherence_status = "⚪ unknown"
+            elif coherence_role == "ode_control_feedback":
+                coherence_status = "⚪ legacy control feedback (not health-rated)"
+            elif coherence_role == "eis_structural_measurement":
+                coherence_status = "⚪ structural measurement (thresholds uncalibrated)"
             elif coherence >= 0.50:
                 coherence_status = "🟢 good"
             elif coherence >= 0.45:
@@ -522,7 +528,13 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
             "I": _lite_eisv_value("I", metrics.get("I")),
             "S": _lite_eisv_value("S", metrics.get("S")),
             "V": _lite_eisv_value("V", valence_display),
-            "coherence": {"value": coherence, "range": "[0, 1]", "status": coherence_status},
+            "coherence": {
+                "value": coherence,
+                "range": "[0, 1]",
+                "status": coherence_status,
+                "source": coherence_source or "unknown",
+                "role": coherence_role or "unknown",
+            },
             "risk_score": {"value": risk_score, "threshold": 0.5, "status": risk_status},
         })
         if public_agent_id != agent_id:

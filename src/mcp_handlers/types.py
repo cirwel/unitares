@@ -32,6 +32,8 @@ class GovernanceMetricsDict(TypedDict, total=False):
     S: float  # Entropy
     V: float  # Valence (EMA-smoothed signed E-I imbalance)
     coherence: float
+    coherence_source: str
+    coherence_role: str
     risk_score: float
     attention_score: float
     void_active: bool

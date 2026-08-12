@@ -4,6 +4,10 @@ from datetime import datetime, timezone
 from typing import Dict
 
 from governance_core import get_agent_baseline
+from src.coherence_provenance import (
+    BEHAVIORAL_COHERENCE_SOURCE,
+    BEHAVIORAL_UPDATE_CONSISTENCY_ROLE,
+)
 from src.drift_telemetry import record_drift
 from src.logging_utils import get_logger
 
@@ -21,6 +25,8 @@ _DIVERGENCE_NOVELTY_DELTA = 0.10
 
 _POLICY_INPUT_FIELDS = (
     "coherence",
+    "coherence_source",
+    "coherence_role",
     "risk_score",
     "phi",
     "verdict",
@@ -393,7 +399,14 @@ def build_result(
             'calibration_samples': confidence_metadata.get('calibration_samples', 0),
             'external_provided': confidence_metadata.get('external_provided'),
             'derived_cap': confidence_metadata.get('derived_cap'),
-            'honesty_note': confidence_metadata.get('honesty_note', 'No metadata available')
+            'honesty_note': confidence_metadata.get('honesty_note', 'No metadata available'),
+            'coherence_dependency': confidence_metadata.get('eisv', {}).get('coherence_role'),
+            'coherence_source': confidence_metadata.get('eisv', {}).get('coherence_source'),
+            'coherence_weight': confidence_metadata.get('eisv', {}).get('coherence_weight'),
+            'coherence_is_health_evidence': confidence_metadata.get('eisv', {}).get(
+                'coherence_is_health_evidence'
+            ),
+            'known_limitations': confidence_metadata.get('known_limitations', []),
         }
     }
 
@@ -529,6 +542,8 @@ def build_result(
                 'verdict': explain_verdict(behavioral_assessment.verdict),
                 'risk': behavioral_assessment.risk,
                 'coherence': behavioral_assessment.coherence,
+                'coherence_source': BEHAVIORAL_COHERENCE_SOURCE,
+                'coherence_role': BEHAVIORAL_UPDATE_CONSISTENCY_ROLE,
                 'components': behavioral_assessment.components,
                 'guidance': behavioral_assessment.guidance,
             },

@@ -7,6 +7,7 @@ import pytest
 
 # Import enrichments to trigger registration
 import src.mcp_handlers.updates.enrichments  # noqa: F401
+from src.mcp_handlers.updates.enrichments import _behavioral_coherence_pattern
 
 from src.mcp_handlers.updates.pipeline import (
     get_enrichment_count,
@@ -18,7 +19,7 @@ from src.mcp_handlers.updates.pipeline import (
 
 class TestEnrichmentRegistration:
     def test_all_enrichments_registered(self):
-        assert get_enrichment_count() == 31
+        assert get_enrichment_count() == 30
 
     def test_enrichment_order_is_unique(self):
         orders = [e.order for e in _ENRICHMENTS]
@@ -26,6 +27,9 @@ class TestEnrichmentRegistration:
 
     def test_ordering_constraints(self):
         names = get_enrichment_names()
+        # Grounding is a pre-persist flag-gated stage, never a late implicit
+        # response enrichment.
+        assert "enrich_grounding" not in names
         idx = {n: i for i, n in enumerate(names)}
         # state_interpretation before actionable_feedback before llm_coaching
         assert idx["enrich_state_interpretation"] < idx["enrich_actionable_feedback"]
@@ -325,3 +329,22 @@ class TestLiteModeSkipping:
         assert names_to_lite_safe.get("enrich_websocket_broadcast") is False
         assert names_to_lite_safe.get("enrich_basin_tracking") is False
         assert names_to_lite_safe.get("enrich_identity_notifications") is False
+
+
+class TestLearningContextCoherenceProvenance:
+    def test_legacy_control_feedback_does_not_generate_task_coaching(self):
+        assert _behavioral_coherence_pattern({
+            "coherence": 0.2,
+            "coherence_role": "ode_control_feedback",
+        }) is None
+
+    def test_unknown_provenance_fails_closed(self):
+        assert _behavioral_coherence_pattern({"coherence": 0.2}) is None
+
+    def test_behavioral_consistency_can_generate_task_coaching(self):
+        pattern = _behavioral_coherence_pattern({
+            "coherence": 0.2,
+            "coherence_role": "behavioral_update_consistency",
+        })
+        assert pattern is not None
+        assert "behavioral update consistency" in pattern.lower()

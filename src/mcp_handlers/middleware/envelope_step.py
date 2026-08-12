@@ -139,9 +139,9 @@ def _recovery_hint(
 ) -> Optional[str]:
     """Only speaks when the existing verdict/risk says something is off.
 
-    The quick_resume/self_recovery thresholds are recovery-tool thresholds,
-    not a live-state alarm. Coherence often sits near 0.5 in healthy governed
-    operation, so coherence alone must not produce a recovery warning.
+    The quick_resume/self_recovery thresholds are recovery-tool compatibility
+    checks, not live-state alarms. The deployed coherence value is directional
+    controller feedback, so it cannot independently produce a recovery warning.
     """
     risky = risk is not None and risk >= _RECOVERY_RISK_CEILING
     attention = _needs_attention(payload)
@@ -151,22 +151,25 @@ def _recovery_hint(
     severe = action in {"pause", "reject", "block", "stop"} or (
         risk is not None and risk >= 0.7
     )
-    drifting = coherence is not None and coherence < _RECOVERY_COHERENCE_FLOOR
+    # Kept in the signature for wire/caller compatibility. Recovery guidance
+    # follows the decision and measured risk; the overloaded coherence scalar
+    # must not independently become a drift diagnosis.
+    del coherence
     continuing = action in {"proceed", "continue", "approve", "ok", "healthy"}
-    if severe or (attention and drifting and not continuing):
+    if severe:
         return (
             "Working state looks degraded - pause and call "
             "self_recovery_review(reflection='...') before continuing."
         )
-    if attention and drifting and continuing:
+    if attention and continuing:
         return (
-            "Coherence is near an edge - keep scope tight, sync_state after "
+            "Policy margin is near an edge - keep scope tight, sync_state after "
             "the next substantial step, and use self_recovery_review(reflection='...') "
             "only if work stalls."
         )
     return (
         "Risk is elevated - if you feel stuck, quick_resume() applies when "
-        f"coherence > {_RECOVERY_COHERENCE_FLOOR:.2f} and risk < "
+        f"the configured compatibility check passes and risk < "
         f"{_RECOVERY_RISK_CEILING:.2f}; otherwise self_recovery_review()."
     )
 

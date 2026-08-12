@@ -64,7 +64,7 @@ Only the last stage is a personalized residual:
 | **E** | Energy | Is the work advancing? | thrashing, retries, no progress |
 | **I** | Integrity | Do claims match results? | high confidence, low actual success |
 | **S** | Drift (legacy field: entropy) | Drifting from its reference? | erratic, divergent behavior |
-| **V** | Valence | Derived: energy vs integrity | motion without coherence (or vice-versa) |
+| **V** | Valence | Derived: energy vs integrity | signed imbalance: positive runs hot, negative runs careful |
 
 Two honesty notes that matter for interpretation (full detail in [chapter 5](05-reading-the-signals.md) and [`../EISV_COMPUTATION.md`](../EISV_COMPUTATION.md)):
 
@@ -86,8 +86,8 @@ Verdicts also carry a **margin** (`comfortable` / `tight` / `critical`) indicati
 
 ## 1.6 Supporting concepts
 
-- **Coherence** — a scalar summary of how internally consistent the agent's state is; it modulates risk and is one input to the E/I observations.
-- **Ethical drift** — a four-signal vector (calibration deviation, complexity divergence, coherence deviation, stability deviation) that feeds entropy. No human oracle is needed for runtime drift estimation.
+- **Coherence** — an overloaded compatibility field. Read `coherence_source` and `coherence_role` with it: the default `legacy_tanh_v` value is directional ODE control feedback, while the dormant manifold producer is a structural E/I/S measurement. Neither is an outcome or health score.
+- **Ethical drift** — a four-signal vector (calibration deviation, complexity divergence, change in the configured coherence signal, stability deviation) that feeds entropy. The component inherits the coherence producer's semantics; it is not independent outcome evidence.
 - **Calibration** — the system tracks whether stated `confidence` matches
   recorded outcomes such as tests, exit codes, or review labels. Evidence from
   CI or an operator is stronger than an agent-authored outcome; if the agent

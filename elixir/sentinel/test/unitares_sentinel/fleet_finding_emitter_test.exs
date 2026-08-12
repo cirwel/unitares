@@ -8,7 +8,9 @@ defmodule UnitaresSentinel.FleetFindingEmitterTest do
       type: "coordinated_degradation",
       violation_class: "CON",
       severity: "high",
-      summary: "Coordinated coherence drop: Agent A(-0.20), Agent B(-0.20)"
+      summary:
+        "Coordinated legacy control-feedback drop (not a health diagnosis): " <>
+          "Agent A(-0.20), Agent B(-0.20)"
     }
   end
 
@@ -113,7 +115,8 @@ defmodule UnitaresSentinel.FleetFindingEmitterTest do
 
     assert args["response_text"] ==
              "Sentinel analysis: Cycle 4 | Fleet: 2 agents | WS: DISCONNECTED | " <>
-               "[HIGH] [CON] Coordinated coherence drop: Agent A(-0.20), Agent B(-0.20) | " <>
+               "[HIGH] [CON] Coordinated legacy control-feedback drop " <>
+               "(not a health diagnosis): Agent A(-0.20), Agent B(-0.20) | " <>
                "[SELF] Sentinel entropy outlier (z=2.8, S=1.000)"
   end
 
@@ -598,7 +601,11 @@ defmodule UnitaresSentinel.FleetFindingEmitterTest do
           {:ok, 200,
            Jason.encode!(%{
              "success" => true,
-             "result" => %{"success" => false, "error_code" => "AGENT_PAUSED", "status" => "paused"}
+             "result" => %{
+               "success" => false,
+               "error_code" => "AGENT_PAUSED",
+               "status" => "paused"
+             }
            })}
 
         "self_recovery" ->

@@ -586,14 +586,15 @@ def _detect_stuck_agents(
                     ))
                     continue
 
-                # Detection rule 2: Tight margin + inactivity + unhealthy state
+                # Detection rule 2: Tight margin + inactivity + another
+                # configured attention signal.
                 # Tight margin alone is NOT stuck — coherence ~0.49 is the steady state
-                # for ALL agents. Only flag if the agent also has genuinely degraded
-                # metrics (high risk, low coherence, or high entropy).
+                # for ALL agents. The coherence clause below is retained as a
+                # compatibility backstop, not as independent health evidence.
                 # Skip low-update agents (<50) - their EISV dynamics are noise, not signal
                 _is_actually_degraded = (
                     risk_score > 0.45  # Approaching pause threshold
-                    or coherence < 0.42  # Near critical coherence
+                    or coherence < 0.42  # Near legacy compatibility floor
                     or float(monitor.state.S) > 0.5  # High entropy
                 )
                 if margin == "tight" and age_minutes > max(tight_margin_timeout_minutes, 60.0) and total_updates >= 50 and _is_actually_degraded:

@@ -6,15 +6,19 @@ Resolves the exploration-thermodynamics friction by recognizing that:
 - Exploration SHOULD have I > E (learning creates disequilibrium)
 - The thermodynamic state is honest - we adjust EXPECTATIONS, not MEASUREMENTS
 
-Critical Insight (from claude_opus_governance_explorer_20251127):
-- DON'T inflate coherence to make agents look healthier
-- DO adjust thresholds to recognize that exploration has different norms
-- Maintain single source of truth: C(V) is always the real thermodynamic state
+Historical insight (from claude_opus_governance_explorer_20251127):
+- Do not alter measurements merely to clear a policy threshold
+- Context may change policy expectations
+
+Semantic correction (2026-08-11): deployed C(V) is directional ODE control
+feedback, not symmetric health, balance, or reasoning quality. Phase-aware
+coherence thresholds below are retained as compatibility policy backstops; they
+must not be reused as health evidence.
 
 Mathematical Honesty Preserved:
 - EISV differential equations unchanged
 - C(V) formula unchanged (no transformation!)
-- Coherence value is always the true thermodynamic state
+- C(V) remains the original directional controller output
 - All parameters (α, β, γ, etc.) unchanged
 
 What Changes: Threshold interpretation
@@ -210,16 +214,17 @@ def get_phase_aware_thresholds(phase: str) -> Dict[str, float]:
     Get context-appropriate thresholds for governance decisions.
 
     CRITICAL: This does NOT change measurements - it adjusts expectations.
-    The thermodynamic state (E, I, S, V, coherence) is always honest.
+    The measurements are unchanged, but the legacy coherence field is a
+    directional controller output rather than a health score.
 
     Exploration phase thresholds are more forgiving because:
     - I > E is expected (learning creates disequilibrium)
     - Negative V is the signature of exploration, not pathology
-    - Lower coherence during learning is normal
+    - Lower C(V) follows negative V (I > E); that direction is expected here
 
     Integration phase thresholds require equilibrium:
     - V → 0 expected (balance seeking)
-    - Higher coherence expected (consolidated state)
+    - V near zero is expected; C(V) near 0.5 is the neutral controller point
 
     Args:
         phase: "exploration" or "integration"
@@ -232,7 +237,7 @@ def get_phase_aware_thresholds(phase: str) -> Dict[str, float]:
             # Coherence thresholds (more forgiving during exploration)
             "coherence_critical": 0.35,        # vs 0.40 in integration
             "coherence_degraded_min": 0.45,    # vs 0.50 in integration
-            "coherence_healthy_min": 0.55,     # vs 0.60 in integration
+            "coherence_healthy_min": 0.55,     # legacy key; not health-rated
 
             # Risk thresholds (more forgiving during exploration)
             "risk_approve_threshold": 0.35,    # vs 0.30 in integration (HIGHER to allow more exploration)
@@ -248,7 +253,7 @@ def get_phase_aware_thresholds(phase: str) -> Dict[str, float]:
             # Coherence thresholds (stricter during integration)
             "coherence_critical": 0.40,        # Original threshold
             "coherence_degraded_min": 0.50,    # Original threshold
-            "coherence_healthy_min": 0.60,     # Original threshold
+            "coherence_healthy_min": 0.60,     # legacy key; not health-rated
 
             # Risk thresholds (stricter during integration)
             "risk_approve_threshold": 0.30,    # Original threshold
@@ -340,13 +345,14 @@ def evaluate_health_with_phase(
     phase: str
 ) -> Tuple[str, str]:
     """
-    Evaluate agent health using phase-appropriate thresholds.
+    Evaluate health from risk using phase-appropriate thresholds.
 
-    CRITICAL: coherence and risk are UNCHANGED (honest measurements)
-    Only the thresholds are adjusted for context.
+    ``coherence`` remains a compatibility argument for callers of the original
+    API. It is deliberately ignored: C(V) is directional control feedback and
+    cannot independently classify health.
 
     Args:
-        coherence: True thermodynamic coherence C(V)
+        coherence: Legacy C(V) compatibility value (not health-rated)
         risk: Calculated risk score
         phase: "exploration" or "integration"
 
@@ -355,22 +361,13 @@ def evaluate_health_with_phase(
     """
     thresholds = get_phase_aware_thresholds(phase)
 
-    # Check critical conditions (same logic, different thresholds)
-    if coherence < thresholds["coherence_critical"]:
-        return "critical", f"Coherence {coherence:.3f} < {thresholds['coherence_critical']:.3f} (critical for {phase})"
-
     if risk >= thresholds["risk_reject_threshold"]:
         return "critical", f"Risk {risk:.3f} >= {thresholds['risk_reject_threshold']:.3f} (reject threshold)"
-
-    # Check moderate conditions (renamed from "degraded")
-    if coherence < thresholds.get("coherence_moderate_min", thresholds.get("coherence_degraded_min", 0.40)):
-        return "moderate", f"Coherence {coherence:.3f} < {thresholds.get('coherence_moderate_min', thresholds.get('coherence_degraded_min', 0.40)):.3f} (moderate for {phase})"
 
     if risk >= thresholds["risk_revise_threshold"]:
         return "moderate", f"Risk {risk:.3f} >= {thresholds['risk_revise_threshold']:.3f} (reflect threshold)"
 
-    # Healthy
-    return "healthy", f"Coherence {coherence:.3f}, risk {risk:.3f} acceptable for {phase}"
+    return "healthy", f"Risk {risk:.3f} is below the {phase} reflect threshold"
 
 
 def make_decision_with_phase(
@@ -382,12 +379,12 @@ def make_decision_with_phase(
     """
     Make governance decision using phase-appropriate thresholds.
 
-    CRITICAL: Measurements (risk, coherence) are UNCHANGED
-    Only decision thresholds are adjusted for context.
+    Measurements are unchanged. The coherence branch is a retained
+    compatibility policy backstop, not a health diagnosis.
 
     Args:
         risk: True risk score
-        coherence: True thermodynamic coherence C(V)
+        coherence: Legacy C(V) directional control feedback
         void_active: Whether void is active
         phase: "exploration" or "integration"
 
@@ -408,8 +405,14 @@ def make_decision_with_phase(
     if coherence < thresholds["coherence_critical"]:
         return {
             'action': 'pause',
-            'reason': f'Coherence critically low ({coherence:.2f} < {thresholds["coherence_critical"]}) for {phase} phase',
-            'guidance': 'Low coherence. Consider simplifying your approach.',
+            'reason': (
+                'Phase-aware legacy control-feedback floor crossed '
+                f'({coherence:.2f} < {thresholds["coherence_critical"]}) for {phase} phase'
+            ),
+            'guidance': (
+                'Compatibility backstop only; inspect producer provenance, EISV, '
+                'and risk before interpreting the cause.'
+            ),
             'phase': phase
         }
 

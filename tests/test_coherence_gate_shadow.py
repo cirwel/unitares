@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.coherence_gate_shadow import (
+    COMPARISON_VERSION,
     K_BLOCK,
     K_FLOOR,
     K_PAUSE,
@@ -21,6 +22,10 @@ from src.coherence_gate_shadow import (
     coherence_gate_shadow_enabled,
     evaluate,
     record,
+)
+from src.coherence_provenance import (
+    LEGACY_COHERENCE_SOURCE,
+    ODE_CONTROL_FEEDBACK_ROLE,
 )
 
 
@@ -110,9 +115,12 @@ def test_current_value_is_excluded_from_its_own_baseline():
 def test_payload_versions_the_corrected_two_sided_statistic():
     out = evaluate(_beh(3.5), fleet_action="approve")
     assert out["statistic_version"] == STATISTIC_VERSION
+    assert out["comparison_version"] == COMPARISON_VERSION
     assert out["tail"] == "two_sided"
     assert out["v_standardized_residual"] == 3.5
     assert out["v_deviation_magnitude"] == 3.5
+    assert out["coherence_seen_source"] == LEGACY_COHERENCE_SOURCE
+    assert out["coherence_seen_role"] == ODE_CONTROL_FEEDBACK_ROLE
     assert out["deviation_direction"] == "higher_v"
 
 
@@ -134,8 +142,54 @@ def test_divergence_when_proprioceptive_fires_and_fleet_does_not():
 
 
 def test_agreement_when_both_pause():
-    out = evaluate(_beh(-4.0), fleet_action="coherence_pause")
+    out = evaluate(
+        _beh(-4.0),
+        fleet_action="pause",
+        fleet_sub_action="coherence_pause",
+        fleet_nearest_edge="coherence",
+    )
     assert out["agrees"] is True
+    assert out["fleet_coherence_gated"] is True
+    assert out["fleet_gate_family"] == "coherence_pause"
+
+
+def test_risk_pause_is_not_mislabeled_as_coherence_gate_agreement():
+    out = evaluate(
+        _beh(-4.0),
+        fleet_action="pause",
+        fleet_sub_action="risk_pause",
+        fleet_nearest_edge="risk",
+    )
+    assert out["would_action"] == "hard_block"
+    assert out["fleet_coherence_gated"] is False
+    assert out["fleet_gate_family"] == "non_coherence_pause"
+    assert out["agrees"] is False
+
+
+def test_cirs_block_requires_coherence_cause_for_gate_agreement():
+    coherence_block = evaluate(
+        _beh(-4.0),
+        fleet_action="pause",
+        fleet_sub_action="cirs_block",
+        fleet_nearest_edge="coherence",
+    )
+    risk_block = evaluate(
+        _beh(-4.0),
+        fleet_action="pause",
+        fleet_sub_action="cirs_block",
+        fleet_nearest_edge="risk",
+    )
+    assert coherence_block["fleet_coherence_gated"] is True
+    assert coherence_block["agrees"] is True
+    assert risk_block["fleet_coherence_gated"] is False
+    assert risk_block["agrees"] is False
+
+
+def test_unattributed_pause_is_excluded_from_agreement_rate():
+    out = evaluate(_beh(-4.0), fleet_action="pause")
+    assert out["fleet_coherence_gated"] is None
+    assert out["fleet_gate_family"] == "pause_cause_unknown"
+    assert out["agrees"] is None
 
 
 # ── contract / safety ──────────────────────────────────────────────────────
@@ -175,6 +229,7 @@ def test_record_passes_payload_through():
     assert kw["would_action"] == "hard_block"
     assert kw["fleet_action"] == "approve"
     assert kw["statistic_version"] == STATISTIC_VERSION
+    assert kw["comparison_version"] == COMPARISON_VERSION
     assert kw["tail"] == "two_sided"
 
 
@@ -192,3 +247,5 @@ def test_payload_matches_real_audit_logger_contract(tmp_path, monkeypatch):
     assert row["details"]["statistic_version"] == STATISTIC_VERSION
     assert row["details"]["v_standardized_residual"] == 3.5
     assert row["details"]["scale_source"] == "floor"
+    assert row["details"]["coherence_seen_source"] == LEGACY_COHERENCE_SOURCE
+    assert row["details"]["coherence_seen_role"] == ODE_CONTROL_FEEDBACK_ROLE

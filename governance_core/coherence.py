@@ -15,7 +15,8 @@ and in `core.agent_state.coherence` is THIS function.
 Read the row's `state_json.coherence_form` to know which form produced a
 stored value ("legacy_tanh_v" here, "manifold" under APPLY). Rows written
 before the provenance tag shipped remain untagged; new rows are tagged even
-when both grounding flags are off.
+when both grounding flags are off. New response metrics carry the same source
+plus `coherence_role`; do not infer either from the scalar's range.
 
 The manifold-distance form over (E, I, S) lives in
 `src/grounding/coherence.py::compute_coherence` and becomes canonical only
@@ -24,9 +25,10 @@ when APPLY is enabled. It is not a drop-in: see the degeneracy note below.
 Use :func:`control_feedback` when the ODE specifically needs its V-driven
 feedback term. :func:`coherence` remains a compatibility alias because the
 old name is embedded in persisted schemas and public imports. For "is this
-agent's state coherent" questions in handler/response code, first inspect the
-persisted `coherence_form`: canonical `metrics["coherence"]` is manifold only
-under APPLY and is otherwise this legacy feedback value. When APPLY is active,
+agent's state coherent" questions in handler/response code, first inspect
+`coherence_source` / `coherence_role` (or persisted `coherence_form` for stored
+rows): canonical `metrics["coherence"]` is manifold only under APPLY and is
+otherwise this legacy feedback value. When APPLY is active,
 `metrics["coherence_legacy"]` preserves this form.
 
 See `src/mcp_handlers/updates/enrichments.py` for the swap site that

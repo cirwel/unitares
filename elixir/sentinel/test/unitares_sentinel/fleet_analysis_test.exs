@@ -24,7 +24,62 @@ defmodule UnitaresSentinel.FleetAnalysisTest do
              } = finding
            ] = FleetAnalysis.analyze(state, now_ms: @now_ms)
 
-    assert finding.summary == "Coordinated coherence drop: Agent A(-0.20), Agent B(-0.20)"
+    assert finding.summary ==
+             "Coordinated legacy control-feedback drop (not a health diagnosis): " <>
+               "Agent A(-0.20), Agent B(-0.20)"
+
+    assert finding.coherence_source == "legacy_tanh_v"
+    assert finding.coherence_role == "ode_control_feedback"
+  end
+
+  test "does not combine drops from different coherence producers" do
+    state =
+      FleetState.new()
+      |> ingest_eisv(
+        @now_ms - 300_000,
+        "agent-a",
+        "Agent A",
+        0.9,
+        0.2,
+        "proceed",
+        "legacy_tanh_v",
+        "ode_control_feedback"
+      )
+      |> ingest_eisv(
+        @now_ms,
+        "agent-a",
+        "Agent A",
+        0.6,
+        0.2,
+        "guide",
+        "legacy_tanh_v",
+        "ode_control_feedback"
+      )
+      |> ingest_eisv(
+        @now_ms - 300_000,
+        "agent-b",
+        "Agent B",
+        0.9,
+        0.2,
+        "proceed",
+        "manifold",
+        "eis_structural_measurement"
+      )
+      |> ingest_eisv(
+        @now_ms,
+        "agent-b",
+        "Agent B",
+        0.6,
+        0.2,
+        "guide",
+        "manifold",
+        "eis_structural_measurement"
+      )
+
+    refute Enum.any?(
+             FleetAnalysis.analyze(state, now_ms: @now_ms),
+             &(&1.type == "coordinated_degradation")
+           )
   end
 
   test "detects entropy outliers and tags self observations" do
@@ -106,7 +161,17 @@ defmodule UnitaresSentinel.FleetAnalysisTest do
              "3 governance events in 10min: identity_drift, lifecycle_paused, lifecycle_resumed"
   end
 
-  defp ingest_eisv(state, now_ms, agent_id, agent_name, coherence, entropy, verdict) do
+  defp ingest_eisv(
+         state,
+         now_ms,
+         agent_id,
+         agent_name,
+         coherence,
+         entropy,
+         verdict,
+         source \\ "legacy_tanh_v",
+         role \\ "ode_control_feedback"
+       ) do
     state
     |> Map.put(:clock, fn :millisecond -> now_ms end)
     |> FleetState.ingest_event(%{
@@ -115,6 +180,7 @@ defmodule UnitaresSentinel.FleetAnalysisTest do
       "agent_name" => agent_name,
       "eisv" => %{"E" => 0.2, "I" => 0.3, "S" => entropy, "V" => 0.4},
       "coherence" => coherence,
+      "metrics" => %{"coherence_source" => source, "coherence_role" => role},
       "decision" => %{"action" => verdict}
     })
   end

@@ -1,7 +1,13 @@
-"""Behavioral sensor: compute EISV from governance observables for non-embodied agents.
+"""Compatibility behavioral sensor for non-embodied agents.
 
 Pure function — no imports from governance modules. Takes extracted history lists
 and returns an EISV dict suitable for spring coupling in the ODE.
+
+Despite the historical name, this is not fully behavior-only: the deployed
+``coherence_history`` contains legacy ``C(V_ODE)`` directional control feedback.
+It contributes 25–30% of E and 30–40% of I. Keep that causal dependency visible
+in telemetry and do not replace/reweight it without shadowing the resulting E/I
+distribution and downstream baselines first.
 """
 
 import math
@@ -26,7 +32,7 @@ def compute_behavioral_sensor_eisv(
     tool_call_velocity: float | None = None,
     unique_tools_ratio: float | None = None,
 ) -> dict | None:
-    """Compute behavioral sensor EISV from governance observables.
+    """Compute the deployed mixed-provenance EISV observation.
 
     Returns {"E", "I", "S", "V"} dict or None if insufficient history (< 3 entries).
     """
@@ -96,7 +102,7 @@ def _compute_E(
     complexity_divergence: float | None = None,
     outcome_history: list | None = None,
 ) -> float:
-    """E from decision success, coherence level, complexity calibration, and outcome success.
+    """E from decisions, legacy control-feedback level, calibration, and outcomes.
 
     Pure decision-based E saturates at 1.0 for healthy agents (all "proceed").
     Blending with coherence, calibration, and outcomes makes E reflect actual capacity.
@@ -115,7 +121,8 @@ def _compute_E(
             for w, d in zip(weights, window)
         ) / total_w
 
-    # Coherence level — map mean coherence [0.35, 0.65] → [0.3, 0.9]
+    # Legacy C(V_ODE) controller level — map [0.35, 0.65] → [0.3, 0.9].
+    # ``coherence_history`` is retained as the compatibility parameter name.
     if coherence_history and len(coherence_history) >= 3:
         recent_coh = coherence_history[-10:]
         mean_coh = sum(recent_coh) / len(recent_coh)
@@ -142,7 +149,7 @@ def _compute_E(
     return max(0.0, min(1.0, raw))
 
 
-# --- I: Calibration accuracy + coherence trend ---
+# --- I: Calibration accuracy + legacy control-feedback trend ---
 
 def _compute_I(
     coherence_history: list,
@@ -170,7 +177,7 @@ def _compute_I(
 
 
 def _coherence_trend(coherence_history: list) -> float:
-    """Split-half coherence trend mapped to [0.3, 0.9]."""
+    """Split-half legacy C(V_ODE) trend mapped to [0.3, 0.9]."""
     window = coherence_history[-10:]
     if len(window) < 4:
         return 0.6  # neutral default

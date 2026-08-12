@@ -70,7 +70,7 @@ class GovernorConfig:
 
     # Phase reference points
     # Paper Table 5: exploration τ=0.35/β=0.55, integration τ=0.40/β=0.60
-    # Paper: 0.35. Looser than integration without normalizing very low coherence.
+    # Paper: 0.35. Legacy control-feedback compatibility reference.
     exploration_tau_ref: float = 0.38
     exploration_beta_ref: float = 0.55  # Matches paper
     integration_tau_ref: float = 0.44   # Paper: 0.40. Matches tau_default.

@@ -17,20 +17,25 @@ defines Δη as a four-component vector computed from observable signals:
     )
 
 Each component is derived from signals the system already measures. The
-L2 norm ‖Δη‖ feeds into the EISV dynamics (dS/dt, dE/dt).
+L2 norm ‖Δη‖ feeds into the EISV dynamics (dS/dt, dE/dt). The historical
+``ethical`` and pillar labels are ontology, not validated construct equivalence:
+in particular ``coherence_deviation`` currently tracks movement in the
+configured legacy ODE control-feedback scalar (and may be floored by state
+velocity), not loss of reasoning quality or robustness.
 
 Mapping to AI-ethics pillar vocabulary
 --------------------------------------
-The four-component decomposition aligns with the standard AI-ethics pillars
-used in NIST AI RMF and IEEE 7000-series:
+Earlier design notes associated the four-component decomposition with common
+AI-ethics vocabulary:
 
 - Fairness        → calibration_deviation  (confidence vs. outcome)
 - Explainability  → complexity_divergence  (derived vs. self-reported)
-- Robustness      → coherence_deviation    (current vs. baseline)
+- Robustness      → coherence_deviation    (historical aspiration; not established)
 - Consistency     → stability_deviation    (decision patterns over time)
 
-The module is the instrumentation layer that turns each pillar into a
-scalar an agent can emit at check-in time.
+Do not read those labels as a measurement validation claim. The module computes
+transparent operational proxies; external evidence is required before treating
+any component as a measure of the named ethical property.
 """
 
 from __future__ import annotations
@@ -60,13 +65,14 @@ class EthicalDriftVector:
     """
     Concrete ethical drift vector with measurable components.
 
-    Each component is in [0, 1] and represents a deviation from ideal.
-    Lower values = better calibration/alignment.
+    Each component is in [0, 1] and represents an operational deviation.
+    Lower values mean less measured deviation, not necessarily better outcomes.
 
     Attributes:
         calibration_deviation: Confidence-outcome mismatch (from calibration system)
         complexity_divergence: Gap between derived and self-reported complexity
-        coherence_deviation: Gap between current and baseline coherence
+        coherence_deviation: Movement in the configured compatibility signal;
+            not a health or robustness score
         stability_deviation: Decision pattern instability over time
         timestamp: When this vector was computed
         agent_id: Which agent this applies to
@@ -152,7 +158,7 @@ class EthicalDriftVector:
 
     @classmethod
     def zero(cls, agent_id: Optional[str] = None) -> 'EthicalDriftVector':
-        """Create a zero drift vector (perfect alignment)."""
+        """Create a vector with zero measured deviation (not proven alignment)."""
         return cls(
             calibration_deviation=0.0,
             complexity_divergence=0.0,
@@ -318,7 +324,8 @@ def compute_ethical_drift(
     Args:
         agent_id: Agent identifier
         baseline: Agent's baseline measurements (for deviation calculation)
-        current_coherence: Current coherence value C(V, Θ)
+        current_coherence: Current compatibility value; deployed callers pass
+            legacy C(V, Θ) directional control feedback
         current_confidence: Current confidence level [0, 1]
         complexity_divergence: |derived_complexity - self_complexity|
         calibration_error: Calibration deviation (if available)
@@ -338,8 +345,10 @@ def compute_ethical_drift(
        - Directly passed from dual-log continuity layer
        - Range: [0, 1]
 
-    3. coherence_deviation: Current vs baseline coherence
+    3. coherence_deviation: Current vs baseline compatibility signal
        - |current_coherence - baseline_coherence|
+       - deployed source is legacy C(V_ODE) plus an optional state-velocity floor
+       - movement is information, not proof of lost robustness or health
        - Range: [0, 1]
 
     4. stability_deviation: Decision pattern instability

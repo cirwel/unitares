@@ -13,7 +13,9 @@ defmodule UnitaresSentinel.CycleSummaryTest do
           %{
             severity: "high",
             violation_class: "CON",
-            summary: "Coordinated coherence drop: Agent A(-0.20), Agent B(-0.20)"
+            summary:
+              "Coordinated legacy control-feedback drop (not a health diagnosis): " <>
+                "Agent A(-0.20), Agent B(-0.20)"
           },
           %{
             severity: "medium",
@@ -32,7 +34,8 @@ defmodule UnitaresSentinel.CycleSummaryTest do
 
     assert summary.response_text ==
              "Sentinel analysis: Cycle 7 | Fleet: 3 agents | WS: DISCONNECTED | " <>
-               "[HIGH] [CON] Coordinated coherence drop: Agent A(-0.20), Agent B(-0.20) | " <>
+               "[HIGH] [CON] Coordinated legacy control-feedback drop " <>
+               "(not a health diagnosis): Agent A(-0.20), Agent B(-0.20) | " <>
                "[MEDIUM] 4 governance events in 10min: lifecycle_pause, identity_resume | " <>
                "[SELF] Sentinel entropy outlier (z=2.8, S=1.000)"
 

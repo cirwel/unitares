@@ -4,7 +4,7 @@ Status: specialized recovery reference. Use for circuit-breaker and dialectic re
 
 **Last Updated:** 2026-03-22
 
-This system uses a **circuit breaker** to pause agents when risk signals or coherence drop below safe thresholds. Recovery is handled via a **dialectic protocol** that provides a safe path to resume.
+This system uses a **circuit breaker** to pause agents on risk signals and configured compatibility backstops. One historical backstop is named `coherence`, but its default producer is directional ODE control feedback; crossing it is a policy event, not proof of poor health or fragmented work. Recovery is handled via a **dialectic protocol** that provides a safe path to resume.
 
 This document is the canonical overview for the dialectic flow implemented in `src/dialectic_protocol.py`.
 
@@ -12,10 +12,10 @@ This document is the canonical overview for the dialectic flow implemented in `s
 
 ## When the Circuit Breaker Triggers
 
-The governance loop evaluates EISV state, coherence, and risk. If the agent enters a high‑risk or low‑coherence region, the system returns a **pause** decision and the agent enters a "paused" or "waiting_input" state.
+The governance loop evaluates EISV state, risk, and compatibility gates. If the agent enters a high-risk region or crosses a configured backstop, the system returns a **pause** decision and the agent enters a "paused" or "waiting_input" state. Inspect `coherence_source`, `coherence_role`, `sub_action`, and `nearest_edge` before attributing the cause.
 
 Common triggers:
-- Low coherence (fragmented output or inconsistent work)
+- A configured legacy control-feedback floor crossing (cause requires provenance; it is not a fragmentation diagnosis)
 - Elevated risk score
 - Persistent valence excursion (energy–integrity imbalance)
 
@@ -81,7 +81,7 @@ Key tools:
 
 For simple stuck scenarios (timeouts, trivial stalls) when the state is safe:
 
-- `self_recovery(action="quick")` — checks coherence/risk/valence and resumes if safe (coherence > 0.60, risk < 0.40)
+- `self_recovery(action="quick")` — checks risk, valence, and the configured legacy compatibility floor before resuming. The floor is a recovery backstop, not a health rating.
 - `self_recovery(action="review", reflection="...")` — reflective recovery for cases that don't meet quick-resume thresholds
 
 > **Note:** `direct_resume_if_safe` is deprecated. Use `self_recovery` instead.
@@ -170,7 +170,7 @@ A key insight from dialectic synthesis (Feb 2026):
 >
 > **Antithesis:** Ephemerality might enable "distributed governance" — training data shapes behavior even without personal continuity.
 >
-> **Synthesis:** Self-governance for ephemeral agents isn't impossible, it's *different*. The knowledge graph isn't a substitute self — it's a **coordination substrate**. Coherence metrics measure **trajectory consistency**, not personal continuity.
+> **Synthesis:** Self-governance for ephemeral agents isn't impossible, it's *different*. The knowledge graph isn't a substitute self — it's a **coordination substrate**. Behavioral trajectory consistency, structural EIS measurements, and legacy ODE control feedback are distinct signals; none establishes personal continuity.
 
 This reframes the dialectic protocol: it's not about recovering a persistent agent, but about maintaining coherent trajectories across ephemeral instances that share knowledge.
 

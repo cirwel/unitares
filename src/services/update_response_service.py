@@ -78,6 +78,8 @@ def serialize_process_update_response(
                 "S": float(metrics.get("S", 0)),
                 "V": float(metrics.get("V", 0)),
                 "coherence": float(metrics.get("coherence", 0)),
+                "coherence_source": metrics.get("coherence_source", "unknown"),
+                "coherence_role": metrics.get("coherence_role", "unknown"),
                 "risk_score": float(metrics.get("risk_score", 0))
             },
             "_warning": "Response serialization had issues - some fields may be missing"
