@@ -6,7 +6,7 @@
 
 </div>
 
-**Status:** v2.17.0. Sustained operation is documented in one long-running
+**Status:** v2.18.0. Sustained operation is documented in one long-running
 maintainer deployment. External adoption remains unvalidated, and the current
 outcome-lift evaluation found no result beyond a selection-aware null.
 
@@ -61,7 +61,7 @@ README carries the current install command and server compatibility guidance.
 ## Quickstart
 
 ```bash
-git clone --branch v2.17.0 --depth 1 https://github.com/cirwel/unitares.git
+git clone --branch v2.18.0 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
 make demo

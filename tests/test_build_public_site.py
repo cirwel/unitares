@@ -1,6 +1,11 @@
 """Regression tests for the generated public GitHub Pages site."""
 
+from pathlib import Path
+
 from scripts.dev.build_public_site import build
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_build_separates_product_landing_from_glossary(tmp_path):
@@ -8,12 +13,14 @@ def test_build_separates_product_landing_from_glossary(tmp_path):
 
     landing = (tmp_path / "index.html").read_text(encoding="utf-8")
     glossary = (tmp_path / "glossary.html").read_text(encoding="utf-8")
+    server_version = (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
     assert "Runtime accountability for long-lived AI agents" in landing
     assert "External adoption remains unvalidated" in landing
     assert "selection-aware null" in landing
     assert "https://pypi.org/project/unitares-sdk/" in landing
-    assert "ghcr.io/cirwel/unitares:v2.17.0" in landing
+    assert f"releases/tag/v{server_version}" in landing
+    assert f"ghcr.io/cirwel/unitares:v{server_version}" in landing
     assert "field is inventing terms" not in landing
 
     assert "UNITARES Glossary" in glossary

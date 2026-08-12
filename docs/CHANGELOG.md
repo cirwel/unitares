@@ -13,6 +13,35 @@ _No unreleased changes yet. New entries accumulate here until the next release b
 
 ---
 
+## [2.18.0] - 2026-08-12
+
+_Notable changes merged between 2.17.0 (2026-08-11) and this release — dialectic review hardening, coherence provenance cleanup, evaluator-facing release surfaces, and operational telemetry corrections. `pyproject.toml`/`VERSION` bumped to 2.18.0; the live `build_sha` remains the deploy-identity signal._
+
+### Added
+
+- **dialectic/evaluation:** ground reviewer responses in evidence, label the frozen verdict cohort, and add recovery and reassignment coverage (#1604, #1609, #1611)
+- **governance:** add measurement-only shadowing for legacy coherence dependencies and clarify cold-start actuation provenance (#1614, #1615, #1619)
+- **residents/SDK:** publish the SDK README as package metadata and document the operational federation path (#1613, #1616)
+
+### Changed
+
+- **public surface:** add dedicated knowledge write aliases, correct advertised dialectic actions, and make inference-host reachability explicit (#1610, #1618)
+- **release/operations:** professionalize the public release surface, tighten evaluator claims, and bound persisted risk history (#1603, #1612, #1617)
+- **security/release:** redact caller-controlled identity/session material from logs, pin external actions, and tighten workflow permissions (#1620)
+- **dependencies:** refresh Python, cryptography, and dashboard development dependencies (#1556, #1557, #1558)
+
+### Fixed
+
+- **governance/eisv:** separate legacy control feedback from coherence and preserve causal provenance without changing the advisory policy posture (#1614)
+- **dialectic:** harden evidence handling and reviewer recovery so standing rejections and synthetic reviews cannot be cleared or misrepresented (#1604, #1611)
+- **telemetry:** state explicitly which tool-usage fields the public read surface can support (#1618)
+
+### Documentation
+
+- **project framing:** consolidate public entry points, publish evaluator-facing limitations, and document federation as a research direction rather than a deployed guarantee (#1603, #1612, #1616)
+
+---
+
 ## [2.17.0] - 2026-08-11
 
 _Notable changes merged between 2.16.0 (2026-08-08) and this release — identity-bound execution, knowledge-integrity repair, dialectic correctness, and the shared BEAM governance contract. `pyproject.toml`/`VERSION` bumped to 2.17.0; the live `build_sha` remains the deploy-identity signal._
