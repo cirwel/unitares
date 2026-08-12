@@ -118,7 +118,7 @@ Agents and operators interact through several bound services. All bind to `127.0
 
 When an agent is paused, recovery follows a structured protocol:
 
-1. **Self-recovery** — `self_recovery(action="quick")` if coherence > 0.60 and risk < 0.40
+1. **Self-recovery** — `self_recovery(action="quick")` if risk < 0.40 and no void is active; legacy `C(V)` is diagnostic context only
 2. **LLM-assisted dialectic** — local LLM provides antithesis for single-agent reflection
 3. **Peer dialectic** — another agent reviews (thesis -> antithesis -> synthesis)
 

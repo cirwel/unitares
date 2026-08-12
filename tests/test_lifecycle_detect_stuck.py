@@ -81,7 +81,7 @@ def _margin_info(margin="comfortable", nearest_edge=None, distance=0.5):
 # Patches needed for every test (lifecycle_stuck has its own mcp_server)
 _PATCHES = {
     "mcp_server": "src.mcp_handlers.lifecycle.stuck.mcp_server",
-    "gov_config": "src.mcp_handlers.lifecycle.stuck.GovernanceConfig",
+    "recovery_margin": "src.mcp_handlers.lifecycle.stuck.compute_recovery_margin",
 }
 
 
@@ -209,9 +209,9 @@ class TestDetectStuckAgentsTimeout:
         result = _detect_stuck_agents(max_age_minutes=30)
         assert result == []
 
-    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["recovery_margin"])
     @patch(_PATCHES["mcp_server"])
-    def test_comfortable_margin_not_stuck(self, mock_server, mock_config):
+    def test_comfortable_margin_not_stuck(self, mock_server, mock_margin):
         """Agent past max_age with comfortable margin → NOT stuck (inactivity ≠ stuck)."""
         old_time = datetime.now(timezone.utc) - timedelta(minutes=45)
         mock_server.agent_metadata = {
@@ -219,7 +219,7 @@ class TestDetectStuckAgentsTimeout:
         }
         monitor = _make_monitor()
         mock_server.monitors = {"a1": monitor}
-        mock_config.compute_proprioceptive_margin.return_value = _margin_info("comfortable")
+        mock_margin.return_value = _margin_info("comfortable")
 
         from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
         result = _detect_stuck_agents(max_age_minutes=30, include_pattern_detection=False)
@@ -229,9 +229,9 @@ class TestDetectStuckAgentsTimeout:
 
 class TestDetectStuckAgentsMarginBased:
 
-    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["recovery_margin"])
     @patch(_PATCHES["mcp_server"])
-    def test_critical_margin_timeout(self, mock_server, mock_config):
+    def test_critical_margin_timeout(self, mock_server, mock_margin):
         """Critical margin + timeout → critical_margin_timeout."""
         old_time = datetime.now(timezone.utc) - timedelta(minutes=10)
         mock_server.agent_metadata = {
@@ -239,7 +239,7 @@ class TestDetectStuckAgentsMarginBased:
         }
         monitor = _make_monitor(risk=0.8, coherence=0.42)
         mock_server.monitors = {"a1": monitor}
-        mock_config.compute_proprioceptive_margin.return_value = _margin_info(
+        mock_margin.return_value = _margin_info(
             "critical", nearest_edge="risk", distance=0.02
         )
 
@@ -253,9 +253,9 @@ class TestDetectStuckAgentsMarginBased:
         assert result[0]["margin"] == "critical"
         assert result[0]["nearest_edge"] == "risk"
 
-    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["recovery_margin"])
     @patch(_PATCHES["mcp_server"])
-    def test_critical_margin_below_timeout_not_stuck(self, mock_server, mock_config):
+    def test_critical_margin_below_timeout_not_stuck(self, mock_server, mock_margin):
         """Critical margin but within timeout → not stuck."""
         recent = datetime.now(timezone.utc) - timedelta(minutes=3)
         mock_server.agent_metadata = {
@@ -263,7 +263,7 @@ class TestDetectStuckAgentsMarginBased:
         }
         monitor = _make_monitor(risk=0.8)
         mock_server.monitors = {"a1": monitor}
-        mock_config.compute_proprioceptive_margin.return_value = _margin_info("critical")
+        mock_margin.return_value = _margin_info("critical")
 
         from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
         result = _detect_stuck_agents(
@@ -273,9 +273,9 @@ class TestDetectStuckAgentsMarginBased:
         )
         assert result == []
 
-    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["recovery_margin"])
     @patch(_PATCHES["mcp_server"])
-    def test_tight_margin_timeout(self, mock_server, mock_config):
+    def test_tight_margin_timeout(self, mock_server, mock_margin):
         """Tight margin + inactivity + degraded state → tight_margin_timeout."""
         old_time = datetime.now(timezone.utc) - timedelta(minutes=90)
         mock_server.agent_metadata = {
@@ -284,8 +284,8 @@ class TestDetectStuckAgentsMarginBased:
         # Use degraded metrics (risk > 0.45) so the stuck check fires
         monitor = _make_monitor(risk=0.5, coherence=0.45)
         mock_server.monitors = {"a1": monitor}
-        mock_config.compute_proprioceptive_margin.return_value = _margin_info(
-            "tight", nearest_edge="coherence", distance=0.08
+        mock_margin.return_value = _margin_info(
+            "tight", nearest_edge="risk_score", distance=0.08
         )
 
         from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
@@ -298,9 +298,9 @@ class TestDetectStuckAgentsMarginBased:
         assert result[0]["reason"] == "tight_margin_timeout"
         assert result[0]["margin"] == "tight"
 
-    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["recovery_margin"])
     @patch(_PATCHES["mcp_server"])
-    def test_tight_margin_below_timeout_not_stuck(self, mock_server, mock_config):
+    def test_tight_margin_below_timeout_not_stuck(self, mock_server, mock_margin):
         """Tight margin within timeout → not stuck."""
         recent = datetime.now(timezone.utc) - timedelta(minutes=10)
         mock_server.agent_metadata = {
@@ -308,7 +308,7 @@ class TestDetectStuckAgentsMarginBased:
         }
         monitor = _make_monitor()
         mock_server.monitors = {"a1": monitor}
-        mock_config.compute_proprioceptive_margin.return_value = _margin_info("tight")
+        mock_margin.return_value = _margin_info("tight")
 
         from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
         result = _detect_stuck_agents(
@@ -321,9 +321,9 @@ class TestDetectStuckAgentsMarginBased:
 
 class TestDetectStuckAgentsMultiple:
 
-    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["recovery_margin"])
     @patch(_PATCHES["mcp_server"])
-    def test_multiple_agents_mixed(self, mock_server, mock_config):
+    def test_multiple_agents_mixed(self, mock_server, mock_margin):
         """Multiple agents with different states - only margin-based issues = stuck."""
         old_45 = datetime.now(timezone.utc) - timedelta(minutes=45)
         old_10 = datetime.now(timezone.utc) - timedelta(minutes=10)
@@ -342,12 +342,12 @@ class TestDetectStuckAgentsMultiple:
         }
         mock_server.load_monitor_state.return_value = None
 
-        def margin_side_effect(risk_score, coherence, void_active, void_value=0.0, coherence_history=None):
+        def margin_side_effect(*, risk_score, **_kwargs):
             if risk_score > 0.7:
                 return _margin_info("critical", "risk")
             return _margin_info("comfortable")
 
-        mock_config.compute_proprioceptive_margin.side_effect = margin_side_effect
+        mock_margin.side_effect = margin_side_effect
 
         from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
         result = _detect_stuck_agents(include_pattern_detection=False)
@@ -374,9 +374,9 @@ class TestDetectStuckAgentsEdgeCases:
         result = _detect_stuck_agents()
         assert result == []
 
-    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["recovery_margin"])
     @patch(_PATCHES["mcp_server"])
-    def test_none_last_update_uses_created_at_with_margin(self, mock_server, mock_config):
+    def test_none_last_update_uses_created_at_with_margin(self, mock_server, mock_margin):
         """When last_update is None, uses created_at for age calculation."""
         old_time = datetime.now(timezone.utc) - timedelta(minutes=10)
         meta = _make_agent_meta(created_at=old_time)
@@ -385,16 +385,16 @@ class TestDetectStuckAgentsEdgeCases:
         mock_server.agent_metadata = {"a1": meta}
         mock_server.monitors = {"a1": _make_monitor(risk=0.9)}
         mock_server.load_monitor_state.return_value = None
-        mock_config.compute_proprioceptive_margin.return_value = _margin_info("critical", "risk")
+        mock_margin.return_value = _margin_info("critical", "risk")
 
         from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
         result = _detect_stuck_agents(critical_margin_timeout_minutes=5)
         assert len(result) == 1
         assert result[0]["reason"] == "critical_margin_timeout"
 
-    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["recovery_margin"])
     @patch(_PATCHES["mcp_server"])
-    def test_z_suffix_timestamp_handled(self, mock_server, mock_config):
+    def test_z_suffix_timestamp_handled(self, mock_server, mock_margin):
         """Timestamps with Z suffix are correctly parsed."""
         old_time = datetime.now(timezone.utc) - timedelta(minutes=10)
         meta = _make_agent_meta()
@@ -402,16 +402,16 @@ class TestDetectStuckAgentsEdgeCases:
         mock_server.agent_metadata = {"a1": meta}
         mock_server.monitors = {"a1": _make_monitor(risk=0.9)}
         mock_server.load_monitor_state.return_value = None
-        mock_config.compute_proprioceptive_margin.return_value = _margin_info("critical", "risk")
+        mock_margin.return_value = _margin_info("critical", "risk")
 
         from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
         result = _detect_stuck_agents(critical_margin_timeout_minutes=5)
         assert len(result) == 1
         assert result[0]["reason"] == "critical_margin_timeout"
 
-    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["recovery_margin"])
     @patch(_PATCHES["mcp_server"])
-    def test_monitor_exception_does_not_flag_stuck(self, mock_server, mock_config):
+    def test_monitor_exception_does_not_flag_stuck(self, mock_server, mock_margin):
         """If monitor.get_metrics raises, agent is NOT flagged as stuck (can't determine margin)."""
         old_time = datetime.now(timezone.utc) - timedelta(minutes=45)
         mock_server.agent_metadata = {
@@ -446,9 +446,9 @@ class TestDetectStuckAgentsEdgeCases:
         # Without margin info, can't determine if stuck - don't assume
         assert len(result) == 0
 
-    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["recovery_margin"])
     @patch(_PATCHES["mcp_server"])
-    def test_persisted_state_used_when_no_monitor(self, mock_server, mock_config):
+    def test_persisted_state_used_when_no_monitor(self, mock_server, mock_margin):
         """When no in-memory monitor, loads persisted state via the cached factory."""
         old_time = datetime.now(timezone.utc) - timedelta(minutes=10)
         mock_server.agent_metadata = {
@@ -465,8 +465,8 @@ class TestDetectStuckAgentsEdgeCases:
         monitor_instance = _make_monitor(risk=0.7, coherence=0.42)
         mock_server.get_or_create_monitor.return_value = monitor_instance
 
-        mock_config.compute_proprioceptive_margin.return_value = _margin_info(
-            "critical", "coherence"
+        mock_margin.return_value = _margin_info(
+            "critical", "risk_score"
         )
 
         from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
@@ -479,9 +479,9 @@ class TestDetectStuckAgentsEdgeCases:
         # Regression: must use the caching factory, not a transient constructor.
         mock_server.get_or_create_monitor.assert_called_once_with("a1")
 
-    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["recovery_margin"])
     @patch(_PATCHES["mcp_server"])
-    def test_no_persisted_state_skips_without_calling_factory(self, mock_server, mock_config):
+    def test_no_persisted_state_skips_without_calling_factory(self, mock_server, mock_margin):
         """Regression: when load_monitor_state returns None, we must skip the agent
         WITHOUT calling get_or_create_monitor (which would otherwise synthesize a
         fresh zero-state monitor and cache it permanently)."""
@@ -501,8 +501,8 @@ class TestDetectStuckAgentsEdgeCases:
         mock_server.get_or_create_monitor.assert_not_called()
 
 
-class TestBaselineRelativeMargin:
-    """Test baseline-relative coherence tight threshold in compute_proprioceptive_margin."""
+class TestLegacyProprioceptiveMargin:
+    """Lock the legacy margin still used by monitor-decision policy, not recovery."""
 
     def test_steady_state_agent_comfortable(self):
         """Agent at ODE steady state (~0.49) with stable history → comfortable, not tight."""
@@ -735,9 +735,9 @@ class TestDetectStuckAgentsCadenceSilence:
         result = _detect_stuck_agents(cadence_profiles={})
         assert [r for r in result if r["reason"] == "cadence_silence"] == []
 
-    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["recovery_margin"])
     @patch(_PATCHES["mcp_server"])
-    def test_silent_agent_not_double_listed_with_margin(self, mock_server, mock_config):
+    def test_silent_agent_not_double_listed_with_margin(self, mock_server, mock_margin):
         # Fires cadence_silence AND has a (stale) critical-margin monitor: must
         # appear ONCE (cadence_silence), not also as a margin entry — the
         # `continue` after the cadence append is what guarantees this.
@@ -746,7 +746,7 @@ class TestDetectStuckAgentsCadenceSilence:
             "a1": self._silent_meta(now, created_min_ago=60, last_update_min_ago=50, total_updates=13),
         }
         mock_server.monitors = {"a1": _make_monitor(risk=0.8, coherence=0.42)}
-        mock_config.compute_proprioceptive_margin.return_value = _margin_info(
+        mock_margin.return_value = _margin_info(
             "critical", nearest_edge="risk", distance=0.02
         )
         from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
@@ -812,16 +812,16 @@ class TestMarginStaleCap:
     stuck KPI and re-fired the audit trail on every sweep).
     """
 
-    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["recovery_margin"])
     @patch(_PATCHES["mcp_server"])
-    def test_abandoned_critical_margin_suppressed(self, mock_server, mock_config):
+    def test_abandoned_critical_margin_suppressed(self, mock_server, mock_margin):
         """Critical margin but idle > MARGIN_STUCK_STALE_CAP_MINUTES → not stuck."""
         old_time = datetime.now(timezone.utc) - timedelta(hours=25)
         mock_server.agent_metadata = {
             "a1": _make_agent_meta(last_update=old_time),
         }
         mock_server.monitors = {"a1": _make_monitor(risk=0.8, coherence=0.42)}
-        mock_config.compute_proprioceptive_margin.return_value = _margin_info(
+        mock_margin.return_value = _margin_info(
             "critical", nearest_edge="risk", distance=0.02
         )
 
@@ -832,16 +832,16 @@ class TestMarginStaleCap:
         )
         assert result == []
 
-    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["recovery_margin"])
     @patch(_PATCHES["mcp_server"])
-    def test_old_but_under_cap_still_stuck(self, mock_server, mock_config):
+    def test_old_but_under_cap_still_stuck(self, mock_server, mock_margin):
         """Idle 23h (< cap) with critical margin → still detected."""
         old_time = datetime.now(timezone.utc) - timedelta(hours=23)
         mock_server.agent_metadata = {
             "a1": _make_agent_meta(last_update=old_time),
         }
         mock_server.monitors = {"a1": _make_monitor(risk=0.8, coherence=0.42)}
-        mock_config.compute_proprioceptive_margin.return_value = _margin_info(
+        mock_margin.return_value = _margin_info(
             "critical", nearest_edge="risk", distance=0.02
         )
 
@@ -942,9 +942,9 @@ class TestLineageSuccession:
     """A parent whose declared-lineage child is actively checking in is not
     stuck — the process rotated, lineage continuous (KG 2026-05-06)."""
 
-    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["recovery_margin"])
     @patch(_PATCHES["mcp_server"])
-    def test_parent_with_live_child_suppressed(self, mock_server, mock_config):
+    def test_parent_with_live_child_suppressed(self, mock_server, mock_margin):
         """Parent would fire critical_margin_timeout, but a live lineage child
         checking in suppresses it entirely."""
         old_time = datetime.now(timezone.utc) - timedelta(minutes=10)
@@ -955,7 +955,7 @@ class TestLineageSuccession:
         }
         monitor = _make_monitor(risk=0.8, coherence=0.42)
         mock_server.monitors = {"p1": monitor, "c1": _make_monitor()}
-        mock_config.compute_proprioceptive_margin.return_value = _margin_info(
+        mock_margin.return_value = _margin_info(
             "critical", nearest_edge="risk", distance=0.02
         )
 
@@ -966,9 +966,9 @@ class TestLineageSuccession:
         # p1 suppressed by lineage; c1 is recent + healthy → neither stuck.
         assert result == []
 
-    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["recovery_margin"])
     @patch(_PATCHES["mcp_server"])
-    def test_parent_matched_by_agent_uuid(self, mock_server, mock_config):
+    def test_parent_matched_by_agent_uuid(self, mock_server, mock_margin):
         """Child declares the parent's agent_uuid (not the dict key) → suppressed."""
         old_time = datetime.now(timezone.utc) - timedelta(minutes=10)
         recent = datetime.now(timezone.utc) - timedelta(minutes=2)
@@ -977,7 +977,7 @@ class TestLineageSuccession:
             "c1": _make_agent_meta(last_update=recent, parent_agent_id="uuid-parent"),
         }
         mock_server.monitors = {"p1": _make_monitor(risk=0.8), "c1": _make_monitor()}
-        mock_config.compute_proprioceptive_margin.return_value = _margin_info("critical")
+        mock_margin.return_value = _margin_info("critical")
 
         from src.mcp_handlers.lifecycle.stuck import _detect_stuck_agents
         result = _detect_stuck_agents(
@@ -985,9 +985,9 @@ class TestLineageSuccession:
         )
         assert result == []
 
-    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["recovery_margin"])
     @patch(_PATCHES["mcp_server"])
-    def test_stale_child_does_not_suppress(self, mock_server, mock_config):
+    def test_stale_child_does_not_suppress(self, mock_server, mock_margin):
         """A child that itself went silent (beyond the freshness window) does NOT
         explain the parent's silence → parent still flagged."""
         old_time = datetime.now(timezone.utc) - timedelta(minutes=10)
@@ -1000,7 +1000,7 @@ class TestLineageSuccession:
         }
         mock_server.monitors = {"p1": _make_monitor(risk=0.8, coherence=0.42)}
         mock_server.load_monitor_state.return_value = None
-        mock_config.compute_proprioceptive_margin.return_value = _margin_info(
+        mock_margin.return_value = _margin_info(
             "critical", nearest_edge="risk", distance=0.02
         )
 
@@ -1012,9 +1012,9 @@ class TestLineageSuccession:
         assert result[0]["agent_id"] == "p1"
         assert result[0]["reason"] == "critical_margin_timeout"
 
-    @patch(_PATCHES["gov_config"])
+    @patch(_PATCHES["recovery_margin"])
     @patch(_PATCHES["mcp_server"])
-    def test_inactive_child_does_not_suppress(self, mock_server, mock_config):
+    def test_inactive_child_does_not_suppress(self, mock_server, mock_margin):
         """A non-active (paused/archived) child is not a live successor."""
         old_time = datetime.now(timezone.utc) - timedelta(minutes=10)
         recent = datetime.now(timezone.utc) - timedelta(minutes=2)
@@ -1025,7 +1025,7 @@ class TestLineageSuccession:
             ),
         }
         mock_server.monitors = {"p1": _make_monitor(risk=0.8, coherence=0.42)}
-        mock_config.compute_proprioceptive_margin.return_value = _margin_info(
+        mock_margin.return_value = _margin_info(
             "critical", nearest_edge="risk", distance=0.02
         )
 

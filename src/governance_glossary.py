@@ -139,7 +139,7 @@ VERDICTS: Dict[str, Dict[str, str]] = {
     },
     "caution": {
         "meaning": "Behavioral assessment: elevated risk — proceed deliberately.",
-        "next_action": "Continue but watch coherence and risk_score; consider a check-in.",
+        "next_action": "Continue but watch risk_score and the EISV trend; consider a check-in.",
     },
     "high-risk": {
         "meaning": "Behavioral assessment: significant risk.",
@@ -344,7 +344,7 @@ TRAJECTORY_SIGNATURE_TERMS: Dict[str, Dict[str, Any]] = {
     },
     "transition": {
         "meaning": "Between exploration and convergence; state may shift quickly.",
-        "next_action": "Avoid raising complexity until coherence stabilizes.",
+        "next_action": "Avoid raising complexity until risk and entropy settle.",
     },
     "convergence": {
         "meaning": "Focused regime; integrity and low entropy matter more than novelty.",

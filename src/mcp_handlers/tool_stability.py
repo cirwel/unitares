@@ -195,7 +195,7 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
         new_name="quick_resume",  # Default to quick_resume, but suggest self_recovery_review if thresholds not met
         reason="deprecated",
         deprecated_since=datetime(2026, 1, 29),
-        migration_note="Use quick_resume() if coherence > 0.60 and risk < 0.40, otherwise use self_recovery_review(reflection='...')"
+        migration_note="Use quick_resume() if risk < 0.40 and no void is active; otherwise use self_recovery_review(reflection='...')"
     ),
     
     # Dialectic tools - legacy creation remains archived (except request_dialectic_review restored)

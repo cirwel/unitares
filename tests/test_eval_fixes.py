@@ -437,18 +437,17 @@ class TestPIControllerGateRelaxation:
 
 
 class TestCoherenceMonitoringTask:
-    """Background coherence monitoring should log warnings for below-target agents."""
+    """Legacy C(V) must not drive background health alarms."""
 
-    @pytest.mark.asyncio
-    async def test_task_function_exists(self):
-        """coherence_monitoring_task should be importable."""
-        from src.background_tasks import coherence_monitoring_task
-        assert callable(coherence_monitoring_task)
+    def test_legacy_health_alarm_task_is_retired(self):
+        import src.background_tasks as background_tasks
 
-    @pytest.mark.asyncio
-    async def test_task_wired_in_orchestrator(self):
-        """coherence_monitoring_task should be started by start_all_background_tasks."""
+        assert not hasattr(background_tasks, "coherence_monitoring_task")
+
+    def test_legacy_health_alarm_is_not_scheduled(self):
         import inspect
         from src.background_tasks import start_all_background_tasks
+
         source = inspect.getsource(start_all_background_tasks)
-        assert 'coherence_monitoring_task' in source
+        assert "coherence_monitoring_task" not in source
+        assert "coherence_monitor" not in source

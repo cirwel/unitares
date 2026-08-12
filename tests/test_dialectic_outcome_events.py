@@ -133,3 +133,25 @@ class TestExecuteResolutionEmitsOutcomeEvent:
         detail = emit.await_args.args[0]["detail"]
         assert detail["conditions_total"] == 3
         assert detail["conditions_applied"] == 2  # c2 failed
+
+    @pytest.mark.asyncio
+    async def test_conditions_applied_count_excludes_retired(self):
+        emit = AsyncMock(return_value={"outcome_id": "evt-retired"})
+        session = _session()
+        resolution = _resolution(conditions=["risk", "coherence"])
+
+        _, _, p_module, p_storage = _patch_targets(emit)
+        from src.mcp_handlers.dialectic import resolution as resolution_mod
+
+        async def fake_apply(parsed, agent_id, server):
+            status = "retired" if parsed["raw"] == "coherence" else "applied"
+            return {"condition": parsed["raw"], "status": status}
+
+        with p_module, p_storage, \
+             patch.object(resolution_mod, "parse_condition", side_effect=lambda c: {"raw": c}), \
+             patch.object(resolution_mod, "apply_condition", side_effect=fake_apply):
+            await resolution_mod.execute_resolution(session, resolution)
+
+        detail = emit.await_args.args[0]["detail"]
+        assert detail["conditions_total"] == 2
+        assert detail["conditions_applied"] == 1

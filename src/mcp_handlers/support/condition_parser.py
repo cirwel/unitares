@@ -194,6 +194,20 @@ async def apply_condition(parsed: ParsedCondition, agent_id: str, mcp_server) ->
         return result
     
     meta = mcp_server.agent_metadata[agent_id]
+
+    if parsed.target in {"coherence", "coherence_threshold"}:
+        result["status"] = "retired"
+        result["warning"] = (
+            "Coherence conditions are not installed: the public field is "
+            "producer-overloaded and legacy C(V) is not health evidence. "
+            "Use a risk target or an explicitly measured E/I/S/V condition."
+        )
+        result["authority"] = {
+            "schema": "dialectic.condition.authority.v2",
+            "coherence_condition_applied": False,
+            "reason": "producer_unprovenanced",
+        }
+        return result
     
     # Apply condition based on action and target
     try:
@@ -214,15 +228,7 @@ async def apply_condition(parsed: ParsedCondition, agent_id: str, mcp_server) ->
                     "applied_at": datetime.now().isoformat()
                 })
                 result["changes"]["risk_target"] = parsed.value
-            elif parsed.target == "coherence":
-                # Can't directly set coherence (it's computed), but can note it
-                _append_dialectic_condition(meta, {
-                    "type": "coherence_target",
-                    "value": parsed.value,
-                    "applied_at": datetime.now().isoformat()
-                })
-                result["changes"]["coherence_target"] = parsed.value
-        
+
         elif parsed.action == "monitor":
             if parsed.target == "monitoring_duration":
                 # Store monitoring duration in metadata

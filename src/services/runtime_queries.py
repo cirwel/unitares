@@ -486,12 +486,15 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
                 coherence_status = "⚪ legacy control feedback (not health-rated)"
             elif coherence_role == "eis_structural_measurement":
                 coherence_status = "⚪ structural measurement (thresholds uncalibrated)"
-            elif coherence >= 0.50:
-                coherence_status = "🟢 good"
-            elif coherence >= 0.45:
-                coherence_status = "🟡 moderate"
+            elif coherence_role == "behavioral_update_consistency":
+                if coherence >= 0.50:
+                    coherence_status = "🟢 good"
+                elif coherence >= 0.45:
+                    coherence_status = "🟡 moderate"
+                else:
+                    coherence_status = "🔴 low"
             else:
-                coherence_status = "🔴 low"
+                coherence_status = "⚪ unknown producer (not health-rated)"
             risk_status = (
                 "🟢 low" if risk_score is not None and risk_score < 0.5 else
                 "🟡 medium" if risk_score is not None and risk_score < 0.75 else

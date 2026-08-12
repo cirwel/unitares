@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from ..decorators import mcp_tool
 from ..utils import success_response, error_response
 from src.logging_utils import get_logger
-from config.governance_config import GovernanceConfig
+from .recovery_policy import compute_recovery_margin
 from src.identity.lineage_semantics import is_non_succession_spawn_reason
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 # Same redacted-handle synthesis agent(action=list) uses, so a stuck entry and
@@ -558,17 +558,15 @@ def _detect_stuck_agents(
             if monitor:
                 metrics = monitor.get_metrics()
                 risk_score = float(metrics.get("mean_risk") or 0.5)
-                coherence = float(monitor.state.coherence)
                 void_active = bool(monitor.state.void_active)
-                void_value = float(monitor.state.V)
 
-                # Compute margin
-                margin_info = GovernanceConfig.compute_proprioceptive_margin(
+                # Stuck/recovery headroom must use recovery-authoritative
+                # readings only. Legacy coherence is C(V), so its direction is
+                # not independent evidence that an idle agent is degraded.
+                margin_info = compute_recovery_margin(
                     risk_score=risk_score,
-                    coherence=coherence,
                     void_active=void_active,
-                    void_value=void_value,
-                    coherence_history=monitor.state.coherence_history,
+                    max_risk=0.65,
                 )
                 margin = margin_info['margin']
 
@@ -588,13 +586,11 @@ def _detect_stuck_agents(
 
                 # Detection rule 2: Tight margin + inactivity + another
                 # configured attention signal.
-                # Tight margin alone is NOT stuck — coherence ~0.49 is the steady state
-                # for ALL agents. The coherence clause below is retained as a
-                # compatibility backstop, not as independent health evidence.
+                # Tight margin alone is NOT stuck. Require risk or entropy as a
+                # second, independently measured attention signal.
                 # Skip low-update agents (<50) - their EISV dynamics are noise, not signal
                 _is_actually_degraded = (
                     risk_score > 0.45  # Approaching pause threshold
-                    or coherence < 0.42  # Near legacy compatibility floor
                     or float(monitor.state.S) > 0.5  # High entropy
                 )
                 if margin == "tight" and age_minutes > max(tight_margin_timeout_minutes, 60.0) and total_updates >= 50 and _is_actually_degraded:
@@ -861,7 +857,9 @@ async def _try_recover_agent(stuck: dict, note_cooldown_minutes: float) -> list:
                 logger.warning(f"[STUCK_AGENT_RECOVERY] Could not trigger dialectic for unresponsive {agent_id[:8]}...: {e}", exc_info=True)
             return results
 
-        is_safe = coherence > 0.40 and risk_score < 0.60 and not void_active
+        # C(V) is retained in the dialectic/audit payload below, but recovery
+        # authority rests on risk and void state.
+        is_safe = risk_score < 0.60 and not void_active
 
         if is_safe:
             meta = mcp_server.agent_metadata.get(agent_id)
@@ -888,7 +886,10 @@ async def _try_recover_agent(stuck: dict, note_cooldown_minutes: float) -> list:
                         "risk_score": risk_score, "coherence": coherence,
                         "void_active": void_active, "stuck_reason": stuck["reason"],
                     },
-                    note=f"Unsafe stuck - triggered dialectic (risk={risk_score:.2f}, coherence={coherence:.2f})",
+                    note=(
+                        "Unsafe stuck - triggered dialectic "
+                        f"(risk={risk_score:.2f}, legacy_CV={coherence:.2f} diagnostic)"
+                    ),
                 )
                 if result:
                     results.append(result)
