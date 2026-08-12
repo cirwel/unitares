@@ -58,9 +58,8 @@ def bump_version(part: str) -> str:
 
 # Files and patterns to check/update.
 # Keep this list tight — every entry runs on --check and must match real text in
-# the named file, or --update silently no-ops. Historical entries for README.md
-# and src/tool_schemas.py were removed after the README was restructured to a
-# badge/hero layout and admin.py moved to dynamic SERVER_VERSION.
+# the named file. A stale pattern is itself a check failure so release-facing
+# references cannot silently fall out of version management.
 VERSION_REFERENCES = [
     ("pyproject.toml", [
         (r'version = "([\d.]+)"', r'version = "{version}"'),
@@ -69,10 +68,18 @@ VERSION_REFERENCES = [
         (r'version: "([\d.]+)"', r'version: "{version}"'),
     ]),
     ("README.md", [
-        (r'\*\*Status:\*\* v([\d.]+) public overview',
-         r'**Status:** v{version} public overview'),
+        (r'\*\*Status:\*\* v([\d.]+)\.',
+         r'**Status:** v{version}.'),
         (r'git clone --branch v([\d.]+) --depth 1',
          r'git clone --branch v{version} --depth 1'),
+    ]),
+    ("docs/public-site/index.md", [
+        (r'\[server v([\d.]+)\]\(https://github.com/cirwel/unitares/releases/tag/v[\d.]+\)',
+         r'[server v{version}](https://github.com/cirwel/unitares/releases/tag/v{version})'),
+        (r'git clone --branch v([\d.]+) --depth 1',
+         r'git clone --branch v{version} --depth 1'),
+        (r'ghcr\.io/cirwel/unitares:v([\d.]+)',
+         r'ghcr.io/cirwel/unitares:v{version}'),
     ]),
     ("agents/sdk/README.md", [
         (r'unitares@v([\d.]+)#subdirectory=agents/sdk',
@@ -101,8 +108,11 @@ def check_file_versions(filepath: Path, patterns: List[Tuple[str, str]], expecte
         lines = content.split('\n')
 
     for pattern, _ in patterns:
+        pattern_matched = False
         for i, line in enumerate(lines, 1):
             matches = re.findall(pattern, line)
+            if matches:
+                pattern_matched = True
             for match in matches:
                 if match != expected_version:
                     issues.append({
@@ -112,6 +122,15 @@ def check_file_versions(filepath: Path, patterns: List[Tuple[str, str]], expecte
                         'expected': expected_version,
                         'text': line.strip()
                     })
+
+        if not pattern_matched:
+            issues.append({
+                'file': str(filepath),
+                'line': 0,
+                'found': '<configured pattern did not match>',
+                'expected': expected_version,
+                'text': pattern,
+            })
 
     return issues
 
