@@ -6,12 +6,12 @@
 # pick up deploy changes."
 #
 # SAFE BY CONSTRUCTION: this never pulls or restarts a service itself. It only
-# dispatches to per-service deploy scripts (deploy-mcp.sh / deploy-lease-plane.sh
-# / deploy-sentinel.sh), each of which deploys from a master-pinned worktree and
-# REFUSES if its LaunchAgent still loads from the shared dev checkout. Services
-# still on restart-DEV with no deploy script (e.g. gateway-mcp, wave3a-handlers)
-# are REPORTED, never touched — give them a deploy worktree + a deploy script to
-# bring them into the sweep.
+# dispatches to per-service deploy scripts (deploy-mcp.sh / deploy-gateway.sh /
+# deploy-lease-plane.sh / deploy-sentinel.sh / deploy-wave3a.sh), each of which
+# deploys from a master-pinned worktree and REFUSES if its LaunchAgent still
+# loads from the shared dev checkout. Any service NOT in the script_for() table
+# below is REPORTED, never touched — give it a deploy worktree + a deploy script
+# to bring it into the sweep. Keep this list in sync with that table.
 #
 # Detection is delegated to deploy-status.sh (single source of truth for "what's
 # live vs on disk"), so this stays a thin, safe orchestrator.

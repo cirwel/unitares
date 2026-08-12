@@ -82,6 +82,16 @@ health() { # port -> short ok/string or ""
   [ -z "$1" ] && return
   curl -s -m 2 "http://127.0.0.1:$1/health" 2>/dev/null | head -c 60
 }
+# build_sha -> the commit the RUNNING process was started from, as it reports
+# itself on /health. Authoritative and timestamp-free, so it is preferred over
+# the commit-date heuristic below. Empty when the service exposes no build_sha
+# (only some do) — callers must fall back.
+build_sha() { # port -> sha or ""
+  [ -z "$1" ] && return
+  curl -s -m 2 "http://127.0.0.1:$1/health" 2>/dev/null \
+    | sed -n 's/.*"build_sha"[[:space:]]*:[[:space:]]*"\([0-9a-fA-F]\{7,40\}\)".*/\1/p' \
+    | head -1
+}
 
 rows=()
 for c in "${COMPONENTS[@]}"; do
@@ -104,16 +114,37 @@ for c in "${COMPONENTS[@]}"; do
       pid=$(proc_pid "$label")
       if [ -z "$pid" ]; then verdict="DOWN"
       else
-        start=$(proc_start_epoch "$pid")
-        if [ -n "$start" ] && [ -n "$headep" ] && [ "$headep" -gt "$start" ]; then
-          # process predates checkout HEAD — but is its OWN code actually newer?
-          # Count commits to this service's code path since the process started;
-          # 0 => process is old but its code is unchanged (no restart needed).
-          startiso=$(date -r "$start" "+%Y-%m-%d %H:%M:%S" 2>/dev/null)
-          cpath="$subdir"; [ -z "$cpath" ] && cpath="."
-          delta=$(git -C "$repo" rev-list --count --since="$startiso" "$base" -- "$cpath" 2>/dev/null || echo "?")
-          if [ "$delta" = "0" ]; then verdict="CURRENT*"; else verdict="STALE(Δ$delta)"; fi
-        else verdict="CURRENT"; fi
+        cpath="$subdir"; [ -z "$cpath" ] && cpath="."
+        bsha=$(build_sha "$port")
+        if [ -n "$bsha" ] && [ -n "$sha" ]; then
+          # SHA path: compare what the process says it is running against the
+          # checkout. Exact, and immune to the merge-commit trap below.
+          n=${#bsha}; [ "${#sha}" -lt "$n" ] && n=${#sha}
+          if [ "${bsha:0:$n}" = "${sha:0:$n}" ]; then verdict="CURRENT"
+          else
+            delta=$(git -C "$repo" rev-list --count --full-history "$bsha..$base" -- "$cpath" 2>/dev/null || echo "?")
+            [ -z "$delta" ] && delta="?"
+            verdict="STALE(Δ$delta)"
+          fi
+        else
+          start=$(proc_start_epoch "$pid")
+          if [ -n "$start" ] && [ -n "$headep" ] && [ "$headep" -gt "$start" ]; then
+            # No build_sha to compare, so fall back to commit dates: count
+            # commits to this service's code path since the process started.
+            # 0 => process is old but its code is unchanged (no restart needed).
+            #
+            # --full-history is REQUIRED. Without it, pathspec history
+            # simplification prunes merge commits, and the branch commits
+            # underneath carry pre-merge dates that fall outside --since — so a
+            # PR merged after the process started counts 0 and reports CURRENT*
+            # ("skip restart") while the process runs older code. Measured
+            # 2026-08-12: the governance MCP ran build_sha 1ac9912a against a
+            # 56728eba checkout and was labelled CURRENT*.
+            startiso=$(date -r "$start" "+%Y-%m-%d %H:%M:%S" 2>/dev/null)
+            delta=$(git -C "$repo" rev-list --count --full-history --since="$startiso" "$base" -- "$cpath" 2>/dev/null || echo "?")
+            if [ "$delta" = "0" ]; then verdict="CURRENT*"; else verdict="STALE(Δ$delta)"; fi
+          else verdict="CURRENT"; fi
+        fi
       fi ;;
   esac
   [ "$ghost" = "yes" ] && verdict="GHOST-BRANCH"
