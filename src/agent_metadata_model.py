@@ -39,6 +39,7 @@ def _emit_lifecycle_event(
     reason: str | None,
     timestamp: str,
     label: str = "",
+    actuation_id: str | None = None,
 ):
     """Broadcast a lifecycle event via the event bus. Fire-and-forget."""
     try:
@@ -74,7 +75,14 @@ def _emit_lifecycle_event(
                     await broadcaster_instance.broadcast_event(
                         event_type=f"lifecycle_{event}",
                         agent_id=agent_id,
-                        payload={"reason": reason, "event": event},
+                        payload={
+                            "reason": reason,
+                            "event": event,
+                            **(
+                                {"actuation_id": actuation_id}
+                                if actuation_id is not None else {}
+                            ),
+                        },
                     )
                     broadcast_persisted = True
                 except Exception as e:
@@ -87,7 +95,14 @@ def _emit_lifecycle_event(
                         "timestamp": timestamp,
                         "event_type": f"lifecycle_{event}",
                         "agent_id": agent_id,
-                        "details": {"reason": reason, "event": event},
+                        "details": {
+                            "reason": reason,
+                            "event": event,
+                            **(
+                                {"actuation_id": actuation_id}
+                                if actuation_id is not None else {}
+                            ),
+                        },
                     })
                 except Exception as e:
                     logger.debug(f"Lifecycle audit write failed: {e}")
@@ -199,19 +214,35 @@ class AgentMetadata:
     MAX_LIFECYCLE_EVENTS = 50
     MAX_RECENT_UPDATES = 10
 
-    def add_lifecycle_event(self, event: str, reason: str = None):
+    def add_lifecycle_event(
+        self,
+        event: str,
+        reason: str = None,
+        *,
+        actuation_id: str | None = None,
+    ):
         """Add a lifecycle event with timestamp. Broadcasts via event bus."""
         ts = datetime.now(timezone.utc).isoformat()
-        self.lifecycle_events.append({
+        entry = {
             "event": event,
             "timestamp": ts,
             "reason": reason
-        })
+        }
+        if actuation_id is not None:
+            entry["actuation_id"] = actuation_id
+        self.lifecycle_events.append(entry)
         if len(self.lifecycle_events) > self.MAX_LIFECYCLE_EVENTS:
             self.lifecycle_events = self.lifecycle_events[-self.MAX_LIFECYCLE_EVENTS:]
         # Fire-and-forget broadcast + audit for sentinel consumption
         label = getattr(self, "label", None) or ""
-        _emit_lifecycle_event(self.agent_id, event, reason, ts, label=label)
+        _emit_lifecycle_event(
+            self.agent_id,
+            event,
+            reason,
+            ts,
+            label=label,
+            actuation_id=actuation_id,
+        )
 
     def add_recent_update(self, timestamp: str, decision: str) -> None:
         """Append to recent_update_timestamps and recent_decisions with bounded cap.

@@ -132,6 +132,24 @@ therefore instrumentation-first:
 This shadow record unveils the policy-to-actuator edge without changing a single
 pause. It is evidence for a later decision, not that decision itself.
 
+The word *actuation* has two scopes on this record and they must not be compared
+as if they were the same switch:
+
+- `policy_evaluation.maturity_gate.actuation_*` describes only the dormant
+  **confirmation deferral** that could convert a first fallback-owned pause into
+  guidance. Its scope is now emitted as `fallback_risk_pause_deferral`.
+- `enforcement.*` describes the existing authenticated **runtime circuit
+  breaker**. An underlying `risk_pause` can therefore have confirmation
+  `actuation_applied=false` while runtime `enforcement.applied=true`; that means
+  the shadow did not alter the policy and the pre-existing pause was delivered.
+
+Every newly delivered runtime circuit breaker carries one `actuation_id` and
+`applied_at` across the response, persisted EISV envelope, lifecycle metadata,
+and broadcast payload. Recovery diagnostics report the observed enforcement
+facts separately from whether they match a narrow recovery exception. A failed
+exception predicate must never be presented as evidence that actuation did not
+occur.
+
 ## Decision record — non-authored cold-start authority guard (2026-08-10)
 
 Prospective evidence after the confirmation shadow shipped exposed a narrower

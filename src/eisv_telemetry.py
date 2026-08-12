@@ -340,6 +340,7 @@ def summarize_eisv_telemetry(envelope: Mapping[str, Any] | None) -> dict[str, An
         "maturity_independent_override": maturity_gate.get("independent_override"),
         "confirmation_count": maturity_gate.get("confirmation_count"),
         "confirmations_required": maturity_gate.get("confirmations_required"),
+        "actuation_scope": maturity_gate.get("actuation_scope"),
         "actuation_enabled": maturity_gate.get("actuation_enabled"),
         "actuation_ready": maturity_gate.get("actuation_ready"),
         "actuation_applied": maturity_gate.get("actuation_applied"),
@@ -351,6 +352,9 @@ def summarize_eisv_telemetry(envelope: Mapping[str, Any] | None) -> dict[str, An
             "ineligibility_reason"
         ),
         "enforcement_basis": enforcement.get("basis"),
+        "enforcement_scope": enforcement.get("scope"),
+        "enforcement_actuation_id": enforcement.get("actuation_id"),
+        "enforcement_applied_at": enforcement.get("applied_at"),
         "enforcement_requested": bool(enforcement.get("requested", False)),
         "enforcement_applied": bool(enforcement.get("applied", False)),
     }
@@ -399,6 +403,7 @@ def summarize_state_eisv_telemetry(state_json: Mapping[str, Any] | None) -> dict
         "maturity_independent_override": None,
         "confirmation_count": None,
         "confirmations_required": None,
+        "actuation_scope": None,
         "actuation_enabled": None,
         "actuation_ready": None,
         "actuation_applied": None,
@@ -408,6 +413,9 @@ def summarize_state_eisv_telemetry(state_json: Mapping[str, Any] | None) -> dict
         "epistemic_guard_class": None,
         "epistemic_guard_ineligibility_reason": None,
         "enforcement_basis": None,
+        "enforcement_scope": None,
+        "enforcement_actuation_id": None,
+        "enforcement_applied_at": None,
         "enforcement_requested": None,
         "enforcement_applied": None,
     }
