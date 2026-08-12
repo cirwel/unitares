@@ -8,12 +8,19 @@ and Chronicler are reference implementations.
 ## Install
 
 ```bash
+pip install unitares-sdk
+```
+
+To install the SDK as it shipped with a specific server release, use the Git
+URL instead:
+
+```bash
 pip install "unitares-sdk @ git+https://github.com/cirwel/unitares@v2.17.0#subdirectory=agents/sdk"
 ```
 
 Replace `@v2.17.0` with another server release tag only after checking the
-[compatibility map](../../COMPATIBILITY.md). Pin a commit SHA when reproducing a
-specific development build.
+[compatibility map](https://github.com/cirwel/unitares/blob/master/COMPATIBILITY.md).
+Pin a commit SHA when reproducing a specific development build.
 
 Or from a checkout of the [unitares repo](https://github.com/cirwel/unitares):
 
@@ -21,12 +28,14 @@ Or from a checkout of the [unitares repo](https://github.com/cirwel/unitares):
 pip install -e agents/sdk
 ```
 
-> **Not on PyPI yet.** `pip install unitares-sdk` does not resolve today. The release
-> workflow (`.github/workflows/publish-sdk.yml`) is written and uses PyPI
-> Trusted Publishing, so no API token is involved. Publication is gated on the
-> one-time publisher registration, a merged SDK release commit, and an
-> `sdk-v*` tag. The version-pinned Git URL above remains the supported install
-> path until the first package is verified on PyPI.
+> **Releases are tag-driven.** Pushing an `sdk-v*` tag whose version matches
+> `version` in `pyproject.toml` runs `.github/workflows/publish-sdk.yml`, which
+> builds and uploads via PyPI Trusted Publishing — OIDC, no API token. The SDK
+> carries its own version series, independent of the server's. See the
+> [release process](https://github.com/cirwel/unitares/blob/master/docs/operations/RELEASE_PROCESS.md).
+
+Links in this file are absolute on purpose: `pyproject.toml` uses it as the
+package `readme`, so PyPI renders it outside the repo and relative paths 404.
 
 The package is standalone — it talks to a UNITARES server over MCP/REST and
 never needs the server codebase importable. Fully typed (`py.typed`).
