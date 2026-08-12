@@ -310,7 +310,11 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
     )
     ethical_drift: List[float] = Field(
         default_factory=lambda: [0.0, 0.0, 0.0],
-        description="Ethical drift signals (3 components): [primary_drift, coherence_loss, complexity_contribution]"
+        description=(
+            "Ethical drift signals (3 components): [primary_drift, declared "
+            "coherence_loss, complexity_contribution]. declared coherence_loss "
+            "is caller context, not the server's legacy C(V) field."
+        ),
     )
     response_text: Optional[str] = Field(
         default=None,
@@ -499,9 +503,18 @@ class OutcomeEventParams(AgentIdentityMixin):
 
 class CirsProtocolParams(AgentIdentityMixin):
     """Parameters for cirs_protocol"""
-    protocol: Literal["void_alert", "state_announce", "coherence_report", "boundary_contract", "governance_action"] = Field(..., description="Which CIRS protocol to use")
+    protocol: Literal["void_alert", "state_announce", "coherence_report", "boundary_contract", "governance_action"] = Field(
+        ...,
+        description=(
+            "Which CIRS protocol to use. coherence_report is the historical name "
+            "for provenance-tagged pairwise state similarity; v2 excludes legacy C(V)."
+        ),
+    )
     action: Optional[str] = Field(None, description="Action within the protocol (emit/query/compute/set/get/initiate/respond)")
-    target_agent_id: Optional[str] = Field(None, description="Target agent (for coherence_report)")
+    target_agent_id: Optional[str] = Field(
+        None,
+        description="Target agent (for the coherence_report pairwise-similarity protocol)",
+    )
     severity: Optional[Literal["warning", "critical"]] = Field(None, description="Alert severity (for void_alert)")
     limit: Optional[int] = Field(None, description="Max results for queries")
 

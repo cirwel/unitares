@@ -38,6 +38,35 @@ async def test_antithesis_structured_path():
 
 
 @pytest.mark.asyncio
+async def test_antithesis_marks_legacy_coherence_diagnostic_only():
+    """A synthetic reviewer must not mistake legacy C(V) for evidence."""
+    from src.mcp_handlers.support.llm_delegation import generate_antithesis
+
+    structured = {
+        "concerns": ["risk evidence is incomplete", "outcome evidence is absent"],
+        "counter_reasoning": "The compatibility scalar cannot resolve either concern.",
+        "grounding_cited": "risk and audit history",
+        "position": "refine",
+        "suggested_conditions": [],
+    }
+    reviewer = AsyncMock(return_value=structured)
+    with patch(f"{MOD}.call_local_llm_structured", new=reviewer):
+        await generate_antithesis(
+            {"root_cause": "rc", "proposed_conditions": [], "reasoning": "r"},
+            agent_state={
+                "risk_score": 0.2,
+                "coherence": 0.49,
+                "coherence_source": "legacy_tanh_v",
+                "coherence_role": "ode_control_feedback",
+            },
+        )
+
+    messages = reviewer.await_args.kwargs["messages"]
+    assert "authority=diagnostic_only" in messages[1]["content"]
+    assert "Treat coherence as diagnostic-only" in messages[0]["content"]
+
+
+@pytest.mark.asyncio
 async def test_antithesis_falls_back_to_prose_never_silent_empty():
     """When structured returns None/empty, capture free-text as counter_reasoning."""
     from src.mcp_handlers.support.llm_delegation import generate_antithesis

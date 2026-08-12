@@ -73,12 +73,27 @@ class TestAssessThermodynamicSignificance:
         result = self._call(monitor, {}, mock_config)
         assert not any('risk_spike' in r for r in result['reasons'])
 
-    def test_coherence_drop_detected(self, mock_config):
+    def test_behavioral_consistency_drop_detected(self, mock_config):
         state = MockState(coherence_history=[0.8, 0.8, 0.8, 0.5])
         monitor = MockMonitor(state)
-        result = self._call(monitor, {}, mock_config)
+        result = self._call(
+            monitor,
+            {"metrics": {"coherence_role": "behavioral_update_consistency"}},
+            mock_config,
+        )
         assert result['is_significant'] is True
         assert any('coherence_drop' in r for r in result['reasons'])
+
+    def test_legacy_control_feedback_drop_not_significant(self, mock_config):
+        state = MockState(coherence_history=[0.8, 0.8, 0.8, 0.5])
+        monitor = MockMonitor(state)
+        result = self._call(
+            monitor,
+            {"metrics": {"coherence_role": "ode_control_feedback"}},
+            mock_config,
+        )
+        assert result['is_significant'] is False
+        assert not any('coherence_drop' in r for r in result['reasons'])
 
     def test_no_coherence_drop_small_delta(self, mock_config):
         state = MockState(coherence_history=[0.8, 0.8, 0.75])

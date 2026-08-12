@@ -118,7 +118,15 @@ class GetThresholdsParams(AgentIdentityMixin):
 
 class SetThresholdsParams(AgentIdentityMixin):
     """Parameters for set_thresholds"""
-    thresholds: Dict[str, Any] = Field(..., description="Dict of threshold_name -> value. Valid keys: risk_approve_threshold, risk_revise_threshold, coherence_critical_threshold, void_threshold_initial")
+    thresholds: Dict[str, Any] = Field(
+        ...,
+        description=(
+            "Dict of threshold_name -> value. Valid keys: risk_approve_threshold, "
+            "risk_revise_threshold, coherence_critical_threshold, void_threshold_initial. "
+            "coherence_critical_threshold is a legacy controller-policy compatibility "
+            "surface, not a health threshold; do not recalibrate it from variance."
+        ),
+    )
     validate_params: bool = Field(True, alias="validate", description="Validate values are in reasonable ranges")
 
 
@@ -148,7 +156,9 @@ class ConfigParams(AgentIdentityMixin):
         description=(
             "Threshold name-to-value mapping for action=set. Valid keys: "
             "risk_approve_threshold, risk_revise_threshold, "
-            "coherence_critical_threshold, void_threshold_initial"
+            "coherence_critical_threshold, void_threshold_initial. "
+            "coherence_critical_threshold is a legacy controller-policy "
+            "compatibility surface, not a health threshold."
         ),
     )
     validate_params: bool = Field(

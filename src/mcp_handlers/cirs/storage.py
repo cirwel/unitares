@@ -96,7 +96,6 @@ def _store_state_announce(announce: StateAnnounce):
 def _get_state_announces(
     agent_ids: Optional[List[str]] = None,
     regime: Optional[str] = None,
-    min_coherence: Optional[float] = None,
     max_risk: Optional[float] = None,
     limit: int = 50
 ) -> List[Dict[str, Any]]:
@@ -108,8 +107,6 @@ def _get_state_announces(
         if agent_ids and agent_id not in agent_ids:
             continue
         if regime and announce.get("regime") != regime:
-            continue
-        if min_coherence is not None and announce.get("coherence", 0) < min_coherence:
             continue
         if max_risk is not None and announce.get("risk_score", 1.0) > max_risk:
             continue

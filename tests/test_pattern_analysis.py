@@ -111,16 +111,31 @@ class TestDetectAnomalies:
         risk_spikes = [a for a in anomalies if a["type"] == "risk_spike"]
         assert len(risk_spikes) == 0
 
-    def test_coherence_drop_detected(self):
-        """5%+ coherence drop should be detected."""
+    def test_behavioral_consistency_drop_detected(self):
+        """5%+ drop is meaningful with an explicitly compatible producer."""
         risk = [0.3] * 8
         coherence = [0.8, 0.8, 0.8, 0.8, 0.8, 0.6, 0.6, 0.6]
         timestamps = [f"t{i}" for i in range(8)]
 
-        anomalies = detect_anomalies_in_history(risk, coherence, timestamps)
+        anomalies = detect_anomalies_in_history(
+            risk,
+            coherence,
+            timestamps,
+            coherence_role="behavioral_update_consistency",
+        )
 
         drops = [a for a in anomalies if a["type"] == "coherence_drop"]
         assert len(drops) >= 1
+
+    def test_legacy_control_feedback_drop_is_not_health_anomaly(self):
+        anomalies = detect_anomalies_in_history(
+            [0.3] * 8,
+            [0.8, 0.8, 0.8, 0.8, 0.8, 0.6, 0.6, 0.6],
+            [f"t{i}" for i in range(8)],
+            coherence_role="ode_control_feedback",
+        )
+
+        assert [a for a in anomalies if a["type"] == "coherence_drop"] == []
 
     def test_anomaly_includes_context(self):
         """Anomalies should include context dict."""
@@ -264,7 +279,10 @@ class TestAnalyzeAgentPatterns:
         )
         result = analyze_agent_patterns(monitor)
         assert result["patterns"]["risk_trend"] == "stable"
-        assert result["patterns"]["coherence_trend"] == "stable"
+        assert result["patterns"]["coherence_trend"] is None
+        assert result["patterns"]["coherence_trend_provenance"][
+            "interpretable"
+        ] is False
         assert result["summary"]["mean_risk"] == 0.0
 
 
@@ -353,12 +371,22 @@ class TestFrozenWindowGuard:
     def test_anomaly_types_tracked_independently(self):
         emitted = {}
         first = detect_anomalies_in_history(
-            SPIKE_RISK, DROP_COHERENCE, self._ts(8), emitted_windows=emitted)
+            SPIKE_RISK,
+            DROP_COHERENCE,
+            self._ts(8),
+            emitted_windows=emitted,
+            coherence_role="behavioral_update_consistency",
+        )
         assert {a["type"]: a["stale"] for a in first} == {
             "risk_spike": False, "coherence_drop": False}
 
         second = detect_anomalies_in_history(
-            SPIKE_RISK, DROP_COHERENCE, self._ts(8), emitted_windows=emitted)
+            SPIKE_RISK,
+            DROP_COHERENCE,
+            self._ts(8),
+            emitted_windows=emitted,
+            coherence_role="behavioral_update_consistency",
+        )
         assert {a["type"]: a["stale"] for a in second} == {
             "risk_spike": True, "coherence_drop": True}
 

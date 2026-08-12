@@ -63,6 +63,7 @@ def detect_anomalies_in_history(
     coherence_history: List[float],
     timestamps: List[str],
     emitted_windows: Optional[Dict[str, str]] = None,
+    coherence_role: Optional[str] = None,
 ) -> List[Dict]:
     """
     Detect anomalies in agent history.
@@ -86,6 +87,11 @@ def detect_anomalies_in_history(
     same window fresh, which downstream change_token dedup absorbs.
     ``None`` (stateless callers, e.g. direct library use) keeps the legacy
     pure behavior with no ``stale`` field.
+
+    ``coherence_history`` is thresholded only when its producer role is
+    explicitly ``behavioral_update_consistency``. The deployed legacy C(V)
+    history is directional ODE control feedback, so unknown or legacy
+    provenance cannot produce a health/anomaly claim.
     """
     anomalies = []
 
@@ -127,8 +133,11 @@ def detect_anomalies_in_history(
                 anomaly["stale"] = stale
             anomalies.append(anomaly)
     
-    # Coherence drop detection
-    if len(coherence_history) >= 5:
+    # Provenance-qualified behavioral update-consistency drop detection.
+    if (
+        coherence_role == "behavioral_update_consistency"
+        and len(coherence_history) >= 5
+    ):
         recent_coherence = coherence_history[-3:]
         older_coherence = coherence_history[-5:-3]
         
@@ -219,6 +228,18 @@ def analyze_agent_patterns(
     """
     state = monitor.state
 
+    try:
+        current_metrics = monitor.get_metrics()
+        if not isinstance(current_metrics, dict):
+            current_metrics = {}
+    except (AttributeError, TypeError, ValueError):
+        current_metrics = {}
+    coherence_source = current_metrics.get("coherence_source", "unknown")
+    coherence_role = current_metrics.get("coherence_role", "unknown")
+    coherence_history_interpretable = (
+        coherence_role == "behavioral_update_consistency"
+    )
+
     # Current state — behavioral-first EISV
     try:
         pE, pI, pS, pV = monitor.get_primary_eisv()
@@ -231,6 +252,8 @@ def analyze_agent_patterns(
         "S": pS,
         "V": pV,
         "coherence": float(state.coherence),
+        "coherence_source": coherence_source,
+        "coherence_role": coherence_role,
         "risk_score": risk_score,  # Governance/operational risk
         "lambda1": float(state.lambda1),
         "update_count": state.update_count
@@ -251,10 +274,16 @@ def analyze_agent_patterns(
     else:
         patterns["risk_trend"] = "stable"
 
-    if len(state.coherence_history) >= 2:
+    if coherence_history_interpretable and len(state.coherence_history) >= 2:
         patterns["coherence_trend"] = analyze_trend(state.coherence_history)
     else:
-        patterns["coherence_trend"] = "stable"
+        patterns["coherence_trend"] = None
+    patterns["coherence_trend_provenance"] = {
+        "source": coherence_source,
+        "role": coherence_role,
+        "interpretable": coherence_history_interpretable,
+        "health_evidence": coherence_history_interpretable,
+    }
 
     if len(e_hist) >= 2:
         patterns["E_trend"] = analyze_trend(e_hist)
@@ -262,12 +291,26 @@ def analyze_agent_patterns(
         patterns["E_trend"] = "stable"
 
     # Overall trend
-    if patterns.get("risk_trend") == "decreasing" and patterns.get("coherence_trend") == "increasing":
-        patterns["trend"] = "improving"
-    elif patterns.get("risk_trend") == "increasing" and patterns.get("coherence_trend") == "decreasing":
-        patterns["trend"] = "degrading"
+    if coherence_history_interpretable:
+        if patterns.get("risk_trend") == "decreasing" and patterns.get("coherence_trend") == "increasing":
+            patterns["trend"] = "improving"
+        elif patterns.get("risk_trend") == "increasing" and patterns.get("coherence_trend") == "decreasing":
+            patterns["trend"] = "degrading"
+        else:
+            patterns["trend"] = "stable"
     else:
-        patterns["trend"] = "stable"
+        patterns["trend"] = {
+            "decreasing": "improving",
+            "increasing": "degrading",
+        }.get(patterns.get("risk_trend"), "stable")
+    patterns["trend_provenance"] = {
+        "formula": (
+            "risk_plus_behavioral_consistency.v2"
+            if coherence_history_interpretable
+            else "risk_trend_only.v2"
+        ),
+        "legacy_coherence_excluded": not coherence_history_interpretable,
+    }
 
     # Anomaly detection — with the per-monitor freshness guard (#637).
     # Monitors are cached per agent (get_or_create_monitor, never evicted),
@@ -291,6 +334,7 @@ def analyze_agent_patterns(
         state.coherence_history,
         timestamps,
         emitted_windows=emitted_windows,
+        coherence_role=coherence_role,
     )
 
     # Summary statistics
@@ -305,6 +349,11 @@ def analyze_agent_patterns(
         "total_updates": state.update_count,
         "mean_risk": float(np.mean(state.risk_history)) if state.risk_history else 0.0,
         "mean_coherence": float(np.mean(state.coherence_history)) if state.coherence_history else 0.0,
+        "mean_coherence_provenance": {
+            "source": coherence_source,
+            "role": coherence_role,
+            "health_evidence": coherence_history_interpretable,
+        },
         "decision_distribution": build_decision_distribution(decision_history),
         "verdict_distribution": build_verdict_distribution(verdict_history),
     }
@@ -324,6 +373,11 @@ def analyze_agent_patterns(
             "timestamps": timestamps[-recent_window:] if timestamps else [],
             "risk_history": [float(r) for r in state.risk_history[-recent_window:]],
             "coherence_history": [float(c) for c in state.coherence_history[-recent_window:]],
+            "coherence_history_provenance": {
+                "source": coherence_source,
+                "role": coherence_role,
+                "health_evidence": coherence_history_interpretable,
+            },
             "E_history": [float(e) for e in e_hist[-eisv_window:]],
             "I_history": [float(i) for i in i_hist[-eisv_window:]],
             "S_history": [float(s) for s in s_hist[-eisv_window:]],
@@ -331,4 +385,3 @@ def analyze_agent_patterns(
         }
 
     return result
-

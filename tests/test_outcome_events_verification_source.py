@@ -163,7 +163,11 @@ async def test_task_completed_auto_checkin_emits_agent_reported():
         await execute_post_update_effects(ctx)
     by_type = _calls_by_type(db.record_outcome_event)
     assert "task_completed" in by_type, by_type
-    assert by_type["task_completed"][0].get("verification_source") == "agent_reported_tool_result"
+    emitted = by_type["task_completed"][0]
+    assert emitted.get("verification_source") == "agent_reported_tool_result"
+    assert emitted["outcome_score"] == 1.0
+    assert emitted["detail"]["outcome_score_source"] == "agent_reported_completion_label"
+    assert emitted["detail"]["coherence_used_for_outcome_score"] is False
 
 
 @pytest.mark.asyncio
@@ -178,7 +182,11 @@ async def test_task_failed_auto_checkin_emits_agent_reported():
         await execute_post_update_effects(ctx)
     by_type = _calls_by_type(db.record_outcome_event)
     assert "task_failed" in by_type, by_type
-    assert by_type["task_failed"][0].get("verification_source") == "agent_reported_tool_result"
+    emitted = by_type["task_failed"][0]
+    assert emitted.get("verification_source") == "agent_reported_tool_result"
+    assert emitted["outcome_score"] == 0.0
+    assert emitted["detail"]["outcome_score_source"] == "agent_reported_failure_label"
+    assert emitted["detail"]["coherence_used_for_outcome_score"] is False
 
 
 @pytest.mark.asyncio

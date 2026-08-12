@@ -77,18 +77,21 @@ class TestRiskTarget:
 # ── coherence_target tests ───────────────────────────────────────────────
 
 class TestCoherenceTarget:
-    def test_escalates_when_low(self):
+    def test_low_value_is_retired_without_escalation(self):
         conditions = [{"type": "coherence_target", "value": 0.5, "applied_at": _now_iso()}]
         metrics = _make_metrics(coherence=0.42)
         decision = _make_decision("proceed")
 
         result, warnings = enforce_post_ode_conditions(conditions, metrics, decision)
 
-        assert result["action"] == "guide"
+        assert result["action"] == "proceed"
+        assert result is decision
         assert len(warnings) == 1
-        assert "coherence" in warnings[0]
+        assert "retired" in warnings[0]
+        assert conditions[0]["expired"] is True
+        assert conditions[0]["retired_reason"] == "coherence_producer_unprovenanced"
 
-    def test_no_escalation_when_above_target(self):
+    def test_above_target_is_also_retired(self):
         conditions = [{"type": "coherence_target", "value": 0.4, "applied_at": _now_iso()}]
         metrics = _make_metrics(coherence=0.5)
         decision = _make_decision("proceed")
@@ -96,9 +99,10 @@ class TestCoherenceTarget:
         result, warnings = enforce_post_ode_conditions(conditions, metrics, decision)
 
         assert result["action"] == "proceed"
-        assert len(warnings) == 0
+        assert len(warnings) == 1
+        assert conditions[0]["retired"] is True
 
-    def test_severe_deficit_escalates_to_pause(self):
+    def test_severe_deficit_cannot_pause(self):
         conditions = [{"type": "coherence_target", "value": 0.6, "applied_at": _now_iso()}]
         # Deficit > 0.6 * 0.5 = 0.3, so coherence < 0.3
         metrics = _make_metrics(coherence=0.2)
@@ -106,7 +110,13 @@ class TestCoherenceTarget:
 
         result, warnings = enforce_post_ode_conditions(conditions, metrics, decision)
 
-        assert result["action"] == "pause"
+        assert result["action"] == "proceed"
+        assert len(warnings) == 1
+
+        # Retirement is sticky, so subsequent check-ins do not repeat warnings.
+        result, warnings = enforce_post_ode_conditions(conditions, metrics, decision)
+        assert result["action"] == "proceed"
+        assert warnings == []
 
 
 # ── monitoring_duration / expiry tests ───────────────────────────────────
@@ -255,7 +265,7 @@ class TestCombinedConditions:
 
         result, warnings = enforce_post_ode_conditions(conditions, metrics, decision)
 
-        assert result["action"] in ("guide", "pause")
+        assert result["action"] == "pause"  # risk target alone owns this escalation
         assert len(warnings) == 2
 
     def test_no_conditions_passthrough(self):

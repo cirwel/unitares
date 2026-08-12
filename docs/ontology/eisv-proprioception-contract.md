@@ -1,7 +1,7 @@
 # EISV Proprioception Contract
 
 **Created:** June 26, 2026
-**Last Updated:** August 11, 2026
+**Last Updated:** August 12, 2026
 **Status:** Active
 
 ---
@@ -102,6 +102,36 @@ attributes the fleet result from `sub_action` + `nearest_edge`; an unrelated ris
 void, or basin pause is not counted as a coherence-gate agreement. Monotonicity
 alone is no longer treated as health semantics.
 
+## Decision record — retire legacy coherence authority outside the shadowed actuator (2026-08-12)
+
+Once producer provenance established that the deployed scalar is legacy C(V),
+non-actuator consumers no longer needed outcome evidence to stop making an
+invalid category claim. Recovery eligibility and margin, stuck recovery,
+dialectic triage, peer similarity/outlier ranking, state-announcement filtering,
+focus stability, significance logging, anomaly/trend classification, and
+behavioral-baseline anomaly entropy now exclude legacy C(V) from authority.
+Knowledge-write confidence and auto-outcome quality likewise no longer inherit
+their values from that controller, and synthetic dialectic reviewers receive it
+as provenance-tagged diagnostic context rather than independent evidence.
+Automatic ground-truth evaluation no longer substitutes it when an audit row's
+actual confidence is missing; absence stays absent instead of becoming invented
+calibration evidence. New dialectic coherence conditions are not installed, and
+stored unprovenanced `coherence_target` conditions retire in place without
+escalating a decision.
+Compatibility responses may still display or retain the value for replay, but
+identify its source/role and mark it non-authoritative.
+
+The check-in actuator is a different migration boundary. The configured
+coherence pause, CIRS, basin, and adaptive-governor paths remain deployed while
+their versioned gate shadow collects prospective evidence; changing those paths
+would alter interventions and learned baselines. The coherence-derived
+ethical-drift/ΔEta path likewise remains policy-stable, but needs its own
+measurement-only ablation before migration. Trajectory identity remains
+deployed while
+`legacy_coherence_identity_ablation.v1` records the coherence-only
+recovery/stability dependency without writing candidate signatures or changing
+trust and risk policy.
+
 ## Decision record — cold-start confirmation remains shadow-only (2026-08-10)
 
 Trailing-90-day inspection found 66,890 non-synthetic state rows, including 1,420
@@ -179,8 +209,9 @@ confirmation actuator:
 4. For identities already trapped by the legacy behavior, reviewed recovery may
    discount the frozen risk check only when the latest persisted telemetry proves
    the exact non-authored `shadow_would_defer` circuit breaker. Ownership,
-   reflection, coherence, no-void, and persistence checks still apply; quick
-   recovery is unchanged.
+   reflection, no-void, and persistence checks still apply. Legacy `C(V)` is
+   diagnostic context, not recovery authority. Quick recovery retains its
+   stricter risk/no-void contract and cannot use the cold-start risk exception.
 
 The separate two-confirmation actuator remains dormant under dialectic decision
 `8539c516649a08af`. The new guard has no counter, does not trust a second fallback

@@ -42,10 +42,9 @@ from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
-# Recovery thresholds quoted to agents — same pair the registry teaches
-# for the quick_resume / self_recovery_review split (tool_stability's
-# direct_resume_if_safe migration note).
-_RECOVERY_COHERENCE_FLOOR = 0.60
+# Recovery threshold quoted to agents — the same risk ceiling used by the
+# quick_resume contract. Legacy coherence is directional controller feedback
+# and is deliberately absent from recovery guidance.
 _RECOVERY_RISK_CEILING = 0.40
 
 _MEMORY_SUGGESTION_LIMIT = 3
@@ -90,7 +89,7 @@ def _risk_summary(coherence: Optional[float], risk: Optional[float]) -> Optional
         band = "high"
     parts = [f"risk {band} ({risk:.2f})"]
     if coherence is not None:
-        parts.append(f"coherence {coherence:.2f}")
+        parts.append(f"coherence diagnostic {coherence:.2f}")
     return ", ".join(parts)
 
 
@@ -169,8 +168,8 @@ def _recovery_hint(
         )
     return (
         "Risk is elevated - if you feel stuck, quick_resume() applies when "
-        f"the configured compatibility check passes and risk < "
-        f"{_RECOVERY_RISK_CEILING:.2f}; otherwise self_recovery_review()."
+        f"risk < {_RECOVERY_RISK_CEILING:.2f} and no void is active; otherwise "
+        "self_recovery_review()."
     )
 
 

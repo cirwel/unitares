@@ -8,7 +8,7 @@ computed metrics after the ODE step.
 Condition types:
 - complexity_limit: Caps input complexity before ODE (pre-ODE enforcement)
 - risk_target: Escalates verdict if risk exceeds target (post-ODE enforcement)
-- coherence_target: Escalates verdict if coherence falls below target (post-ODE)
+- coherence_target: Retired compatibility condition; never escalates
 - monitoring_duration: Time-bounds other conditions; expires them after duration
 """
 
@@ -85,7 +85,7 @@ def enforce_post_ode_conditions(
     metrics: Dict[str, Any],
     decision: Dict[str, Any],
 ) -> Tuple[Dict[str, Any], List[str]]:
-    """Enforce risk_target and coherence_target against computed metrics.
+    """Enforce risk targets; retire unprovenanced coherence targets.
 
     Args:
         conditions: List of condition dicts from meta.dialectic_conditions
@@ -103,7 +103,6 @@ def enforce_post_ode_conditions(
 
     warnings: List[str] = []
     risk_score = metrics.get("risk_score", 0.0)
-    coherence_val = metrics.get("coherence", 0.5)
     current_action = decision.get("action", "proceed")
     escalated = False
 
@@ -136,20 +135,18 @@ def enforce_post_ode_conditions(
                 )
 
         elif ctype == "coherence_target":
-            if coherence_val < value:
-                deficit = value - coherence_val
-                if deficit > value * 0.5:
-                    new_action = _escalate(current_action, "pause")
-                else:
-                    new_action = _escalate(current_action, "guide")
-
-                if new_action != current_action:
-                    current_action = new_action
-                    escalated = True
-
-                warnings.append(
-                    f"Dialectic condition: coherence {coherence_val:.3f} below target {value:.3f}"
-                )
+            # Stored conditions have no producer provenance. They therefore
+            # cannot distinguish behavioral update consistency from legacy C(V)
+            # control feedback. Fail closed on epistemic authority: retire the
+            # condition in place and surface one warning, without changing the
+            # decision.
+            c["expired"] = True
+            c["retired"] = True
+            c["retired_reason"] = "coherence_producer_unprovenanced"
+            warnings.append(
+                "Dialectic coherence_target retired without enforcement: "
+                "the stored condition has no producer provenance"
+            )
 
     if escalated:
         decision = dict(decision)  # Shallow copy to avoid mutating original

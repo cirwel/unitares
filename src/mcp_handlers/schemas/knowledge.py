@@ -346,8 +346,8 @@ class KnowledgeParams(AgentIdentityMixin):
     confidence: Union[float, str, None] = Field(
         None,
         description=(
-            "Writer confidence for action=store, clamped to 0-1 and "
-            "cross-checked against agent coherence"
+            "Writer-supplied confidence for action=store, validated to 0-1; "
+            "not independently verified or adjusted by governance metrics"
         ),
     )
     discovery_id: Optional[str] = Field(None, description="Discovery ID (for action=get/details, update; the NEW discovery for action=supersede)")

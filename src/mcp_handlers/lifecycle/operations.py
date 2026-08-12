@@ -30,6 +30,7 @@ from .helpers import (
     _is_test_agent,
     _resume_with_persistence,
 )
+from .recovery_policy import compute_recovery_margin, recovery_policy_context
 
 logger = get_logger(__name__)
 
@@ -318,14 +319,27 @@ async def handle_self_recovery_review(arguments: Dict[str, Any]) -> Sequence[Tex
     void_value = safe_float(monitor.state.V, 0.0)
     status = meta.status
 
-    # 5. Compute margin for context
-    margin_info = GovernanceConfig.compute_proprioceptive_margin(
+    # 5. Compute recovery-specific headroom. Legacy C(V) remains diagnostic
+    # context only; it is directional ODE feedback, not health evidence.
+    margin_info = compute_recovery_margin(
         risk_score=risk_score,
-        coherence=coherence,
         void_active=void_active,
-        void_value=void_value,
-        coherence_history=monitor.state.coherence_history,
+        max_risk=0.65,
     )
+    policy = recovery_policy_context(
+        coherence=coherence,
+        authoritative_inputs=(
+            "risk_score",
+            "void_active",
+            "reflection",
+            "proposed_conditions",
+            "status",
+            "persisted_cold_start_provenance",
+        ),
+        coherence_source=metrics.get("coherence_source"),
+        coherence_role=metrics.get("coherence_role"),
+    )
+    coherence_diagnostic = policy["diagnostic_inputs"]["coherence"]
 
     # 6. Safety validation
     proposed_conditions = arguments.get("proposed_conditions", [])
@@ -380,7 +394,6 @@ async def handle_self_recovery_review(arguments: Dict[str, Any]) -> Sequence[Tex
 
     # 7. Determine if safe to resume
     safety_checks = {
-        "coherence_ok": coherence > 0.35,  # Slightly more lenient than direct_resume
         # Slightly more lenient since reflecting.  The only exception is the
         # exact persisted cold-start trap evaluated above; no generic high-risk
         # state is bypassed.
@@ -404,7 +417,9 @@ async def handle_self_recovery_review(arguments: Dict[str, Any]) -> Sequence[Tex
             details=(
                 f"Reflection: {reflection}\n\nRoot cause: {root_cause}\n\n"
                 f"Proposed conditions: {proposed_conditions}\n\n"
-                f"Metrics at reflection: coherence={coherence:.3f}, "
+                f"Metrics at reflection: coherence={coherence:.3f} "
+                f"({coherence_diagnostic['source']}/{coherence_diagnostic['role']}, "
+                "diagnostic-only), "
                 f"risk={risk_score:.3f}, void={void_value:.3f}\n\n"
                 f"Recovery basis: {recovery_basis}"
             ),
@@ -470,9 +485,14 @@ async def handle_self_recovery_review(arguments: Dict[str, Any]) -> Sequence[Tex
             "cold_start_recovery": cold_start_recovery,
             "metrics": {
                 "coherence": coherence,
+                "coherence_source": coherence_diagnostic["source"],
+                "coherence_role": coherence_diagnostic["role"],
+                "coherence_authoritative": False,
                 "risk_score": risk_score,
                 "margin": margin_info.get('margin', 'unknown')
             },
+            "margin": margin_info,
+            "recovery_policy": policy,
             "guidance": "You've reflected and recovered. Consider your proposed conditions as you continue."
         })
 
@@ -481,11 +501,6 @@ async def handle_self_recovery_review(arguments: Dict[str, Any]) -> Sequence[Tex
         failed = [k for k, v in safety_checks.items() if not v]
 
         guidance = []
-        if not safety_checks["coherence_ok"]:
-            guidance.append(
-                f"Coherence compatibility floor crossed ({coherence:.3f}). "
-                "Inspect the producer provenance and behavioral signals before resuming."
-            )
         if not safety_checks["risk_ok"]:
             guidance.append(f"Risk is elevated ({risk_score:.3f}). What could you do differently to reduce risk?")
         if not safety_checks["no_void"]:
@@ -501,10 +516,15 @@ async def handle_self_recovery_review(arguments: Dict[str, Any]) -> Sequence[Tex
             "cold_start_recovery": cold_start_recovery,
             "metrics": {
                 "coherence": coherence,
+                "coherence_source": coherence_diagnostic["source"],
+                "coherence_role": coherence_diagnostic["role"],
+                "coherence_authoritative": False,
                 "risk_score": risk_score,
                 "void_active": void_active,
                 "margin": margin_info.get('margin', 'unknown')
             },
+            "margin": margin_info,
+            "recovery_policy": policy,
             "guidance": guidance,
             "next_steps": [
                 "Review the guidance above",

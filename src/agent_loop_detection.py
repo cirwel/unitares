@@ -598,8 +598,9 @@ async def _auto_initiate_dialectic_recovery(agent_id: str, reason: str) -> None:
 async def _safety_net_resume(agent_id: str, reason: str) -> None:
     """Auto-resume a paused agent if its EISV state is safe, as a last resort.
 
-    Thresholds mirror self_recovery's "quick" action: coherence > 0.40
-    and risk < 0.60. If the agent isn't safe, it stays paused for the
+    Thresholds mirror the fallback recovery path: risk < 0.60 and no active
+    void. Legacy coherence remains diagnostic C(V) context and cannot authorize
+    or deny recovery. If the agent isn't safe, it stays paused for the
     stuck-agent detector to pick up on its next sweep.
     """
     try:
@@ -612,10 +613,11 @@ async def _safety_net_resume(agent_id: str, reason: str) -> None:
             return
 
         coherence = getattr(monitor.state, 'coherence', None) or 0.0
+        void_active = bool(getattr(monitor.state, 'void_active', False))
         metrics = monitor.get_metrics()
         risk = metrics.get('mean_risk') or metrics.get('risk_score') or 0.5
 
-        if coherence >= 0.40 and risk < 0.60:
+        if risk < 0.60 and not void_active:
             meta.status = "active"
             meta.paused_at = None
             meta.loop_cooldown_until = None
@@ -624,12 +626,14 @@ async def _safety_net_resume(agent_id: str, reason: str) -> None:
             meta.recent_decisions = []
             resume_reason = (
                 f"All dialectic paths failed ({reason}); state safe "
-                f"(coherence={coherence:.2f}, risk={risk:.2f}) — auto-resumed"
+                f"(risk={risk:.2f}, void_active={void_active}, "
+                f"coherence={coherence:.2f} diagnostic-only) — auto-resumed"
             )
             meta.add_lifecycle_event("safety_net_resumed", resume_reason)
             logger.info(
                 f"Agent '{agent_id}' safety-net resumed "
-                f"(coherence={coherence:.2f}, risk={risk:.2f}, dialectic failure: {reason})"
+                f"(risk={risk:.2f}, void_active={void_active}, "
+                f"coherence={coherence:.2f} diagnostic-only, dialectic failure: {reason})"
             )
 
             # P011: persist the resume so paused_at=None survives reload and
@@ -654,7 +658,8 @@ async def _safety_net_resume(agent_id: str, reason: str) -> None:
         else:
             logger.warning(
                 f"Agent '{agent_id}' NOT safe for safety-net resume "
-                f"(coherence={coherence:.2f}, risk={risk:.2f}) — stays paused"
+                f"(risk={risk:.2f}, void_active={void_active}, "
+                f"coherence={coherence:.2f} diagnostic-only) — stays paused"
             )
     except Exception as e:
         logger.error(f"Safety-net resume check failed for '{agent_id}': {e}")
