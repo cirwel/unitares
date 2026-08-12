@@ -92,21 +92,56 @@ COOLDOWN_SECONDS = int(os.environ.get("DEPLOY_DRIFT_COOLDOWN_SECONDS", str(12 * 
 RUNTIME_SUFFIXES = (".py", ".pyi", ".so", ".pth")
 
 
+
+def _pyproject_version(pyproject_text: Optional[str]) -> Optional[str]:
+    """Pull `version = "..."` from a pyproject blob. Returns None when unreadable.
+
+    Deliberately shallow: only the first top-level `version =` before any
+    `[tool.*]` section, so a dependency pin or a tool's own version field cannot
+    be mistaken for the project's. Returning None on anything unexpected means a
+    parse failure degrades to silence rather than to a false drift alarm — this
+    check exists to be believed, so it must not cry wolf.
+    """
+    if not pyproject_text:
+        return None
+    for line in pyproject_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[tool."):
+            break
+        if stripped.startswith("version") and "=" in stripped:
+            value = stripped.split("=", 1)[1].strip()
+            return value.strip('"\'') or None
+    return None
+
+
 class Surface:
     """A checkout whose code is expected to be running somewhere.
 
     ``check_behind`` is False for the pinned deploy worktree: it lags origin by
     design, so behind-ness there is a deliberate staging decision, not drift.
     Restart-pending still applies — that one is never intentional.
+
+    But "lagging is deliberate" stops being true at some distance. On
+    2026-08-12 the deploy worktree sat 28 commits and a full minor version
+    behind master — `pyproject.toml` said 2.18.0, the running server answered
+    2.17.0 — while this doctor printed "all surfaces running merged code" every
+    hour, because by its own definition it was. The operator reasonably believed
+    the fleet was synced; nothing was watching the one gap that mattered.
+
+    ``check_version`` closes that without reintroducing hourly commit-count
+    noise: a pinned checkout may lag by any number of commits, but a lag that
+    crosses a declared version is a staging decision someone should have made on
+    purpose. It is a much rarer event than a commit, so it can be loud.
     """
 
     def __init__(self, name: str, path: str, branch: str, launchd_label: Optional[str],
-                 check_behind: bool = True):
+                 check_behind: bool = True, check_version: bool = False):
         self.name = name
         self.path = os.path.expanduser(path)
         self.branch = branch
         self.launchd_label = launchd_label
         self.check_behind = check_behind
+        self.check_version = check_version
 
 
 DEFAULT_SURFACES: List[Surface] = [
@@ -118,7 +153,7 @@ DEFAULT_SURFACES: List[Surface] = [
             "com.unitares.governance-mcp"),
     # Pinned deploy worktree: lagging origin is deliberate, restart lag is not.
     Surface("unitares-deploy", "~/projects/unitares-deploy", "master",
-            "com.unitares.governance-mcp", check_behind=False),
+            "com.unitares.governance-mcp", check_behind=False, check_version=True),
 ]
 
 
@@ -311,6 +346,31 @@ def diagnose(surface: Surface, io: Dict[str, Callable[..., Any]]) -> List[Diagno
                     + "; ".join(first),
                     behind=behind,
                 ))
+
+    # Version lag on a deliberately-pinned checkout.
+    #
+    # Deliberately NOT gated on `check_behind`: this fires precisely for the
+    # surface whose commit-lag is suppressed. A pinned worktree may sit any
+    # number of commits behind without that meaning anything; a pin that has
+    # fallen behind a declared version is a staging decision that should have
+    # been made on purpose, and on 2026-08-12 one had not been — 2.17.0 served
+    # live while master said 2.18.0, unremarked for eleven hours.
+    #
+    # Reads the version out of git rather than the working tree so an
+    # uncommitted local edit cannot manufacture or mask the signal.
+    if surface.check_version and not mismatched:
+        local_v = _pyproject_version(io["git"](surface.path, "show", "HEAD:pyproject.toml"))
+        origin_v = _pyproject_version(
+            io["git"](surface.path, "show", f"origin/{surface.branch}:pyproject.toml")
+        )
+        if local_v and origin_v and local_v != origin_v:
+            found.append(Diagnosis(
+                surface.name, "version_lag",
+                f"pinned checkout serves {local_v} while origin/{surface.branch} "
+                f"declares {origin_v}. Commit-lag on a pinned worktree is "
+                "expected and suppressed; a version gap is not. Deploy, or "
+                "record why the pin is held back.",
+            ))
 
     # Restart-pending: commits on disk that the running process predates.
     #
