@@ -128,6 +128,32 @@ class TestDeriveConfidenceEISV:
         assert "void_penalty" in metadata["eisv"]
         assert "entropy_penalty" in metadata["eisv"]
 
+    def test_records_measurement_only_legacy_coherence_shadow(self):
+        state = _mock_state(coherence=0.8, I=0.7, S=0.2, V=0.1)
+
+        deployed, metadata = derive_confidence(state)
+        shadow = metadata["shadow_ablations"]["legacy_coherence_neutralized"]
+
+        assert shadow["eligible"] is True
+        assert shadow["mode"] == "measurement_only"
+        assert shadow["policy_applied"] is False
+        assert shadow["deployed"]["final"] == deployed
+        assert shadow["candidate"]["final"] < deployed
+        assert shadow["intervention"]["replacement_value"] == 0.5
+        assert shadow["intervention"]["preserved_weight"] == 0.55
+
+    def test_midpoint_coherence_shadow_matches_deployed_confidence(self):
+        state = _mock_state(coherence=0.5, I=0.7, S=0.2, V=0.1)
+
+        deployed, metadata = derive_confidence(state)
+        shadow = metadata["shadow_ablations"]["legacy_coherence_neutralized"]
+
+        assert shadow["candidate"]["base"] == pytest.approx(
+            shadow["deployed"]["base"]
+        )
+        assert shadow["candidate"]["final"] == pytest.approx(deployed)
+        assert shadow["candidate_minus_deployed"]["final"] == pytest.approx(0.0)
+
 
 # ============================================================================
 # derive_confidence — tool tracker integration
