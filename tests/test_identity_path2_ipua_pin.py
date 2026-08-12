@@ -130,7 +130,8 @@ class TestPath2IpuaPinCheck:
         assert payload.get("path") == "path2_ipua_pin"
         assert payload.get("mode") == "log"
         assert payload.get("source") == "onboard_pin_fallback"
-        assert payload.get("session_key_prefix") == "fp-ipua-abcdef:c"
+        assert payload.get("session_key_length") == len("fp-ipua-abcdef:claude")
+        assert "session_key_prefix" not in payload
 
     @pytest.mark.asyncio
     async def test_strict_mode_flips_resume_and_emits(

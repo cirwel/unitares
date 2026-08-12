@@ -74,9 +74,10 @@ def normalize_client_session_id(value: Any) -> Optional[str]:
 
     if sanitized != explicit:
         logger.warning(
-            "[SECURITY] client_session_id sanitized: %s... -> %s...",
-            explicit[:30],
-            sanitized[:30],
+            "[SECURITY] client_session_id sanitized "
+            "(input_length=%s, output_length=%s)",
+            len(explicit),
+            len(sanitized),
         )
     return sanitized
 
@@ -822,19 +823,27 @@ def _extract_base_fingerprint(session_key: str) -> Optional[str]:
         return None
     # Keys with stable identity don't need pinning
     if session_key.startswith(("mcp:", "stdio:", "agent-", "oauth:")):
-        logger.debug(f"[ONBOARD_PIN] Skipping stable key: {session_key[:30]}...")
+        logger.debug(
+            "[ONBOARD_PIN] Skipping stable key (length=%s)", len(session_key)
+        )
         return None
     # Pattern: IP:UA_hash or IP:UA_hash:random_suffix or IP:UA_hash:model_hint
     # Pin by UA_hash only (parts[1]) — IP rotates across Claude.ai proxy pool
     parts = session_key.split(":")
     if len(parts) >= 2:
         ua_hash = parts[1]
-        # Redact the full session_key (it is a write-proof string); a prefix +
-        # length keeps the fingerprint shape debuggable without logging the proof.
-        logger.debug(f"[ONBOARD_PIN] extract_fp: raw={session_key[:8]}...(len={len(session_key)}) ({len(parts)} parts) -> ua_hash={ua_hash!r}")
+        logger.debug(
+            "[ONBOARD_PIN] extracted rotating-transport fingerprint "
+            "(key_length=%s, parts=%s)",
+            len(session_key),
+            len(parts),
+        )
         return f"ua:{ua_hash}"
     # Single-part key (unusual) — return as-is
-    logger.debug(f"[ONBOARD_PIN] extract_fp: raw={session_key[:8]}...(len={len(session_key)}) (single part) -> as-is")
+    logger.debug(
+        "[ONBOARD_PIN] retained single-part fingerprint (key_length=%s)",
+        len(session_key),
+    )
     return session_key
 
 
@@ -1289,6 +1298,6 @@ async def _shadow_mirror_onboard_pins(
                     ttl_seconds=_PIN_TTL, if_absent=if_absent,
                 )
             except Exception as e:
-                logger.debug(f"onboard-pin shadow mirror skipped for {fp}: {e}")
+                logger.debug(f"onboard-pin shadow mirror skipped: {e}")
     except Exception as e:
         logger.debug(f"onboard-pin shadow mirror unavailable: {e}")

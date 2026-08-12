@@ -814,7 +814,11 @@ async def resolve_session_identity(
         # Contains characters outside allowed set - sanitize
         original = session_key
         session_key = re.sub(r'[^\w\-.:@]', '_', session_key)
-        logger.warning(f"[SECURITY] Session key sanitized: {original[:30]}... -> {session_key[:30]}...")
+        logger.warning(
+            "[SECURITY] Session key sanitized (input_length=%s, output_length=%s)",
+            len(original),
+            len(session_key),
+        )
 
     # S19 defense-in-depth: a substrate resident's copied continuity token
     # must not resume over non-UDS transport even when the token's embedded
@@ -942,10 +946,9 @@ async def resolve_session_identity(
                         # through to PATH 2.8 so token_rebind can take over.
                         if token_agent_uuid and token_agent_uuid != agent_uuid:
                             logger.warning(
-                                "[PATH1_TOKEN_MISMATCH] session_key=%s... "
-                                "cached_uuid=%s... token_uuid=%s... — "
+                                "[PATH1_TOKEN_MISMATCH] cached_uuid=%s... "
+                                "token_uuid=%s... — "
                                 "cache hijacked, deferring to token rebind",
-                                session_key[:20],
                                 agent_uuid[:8],
                                 token_agent_uuid[:8],
                             )
@@ -1058,7 +1061,7 @@ async def resolve_session_identity(
 
             except Exception as e:
                 # INFO level (v2.5.7): Redis lookup failures are recoverable but should be visible
-                logger.info(f"Redis lookup failed for session {session_key[:20]}...: {e}")
+                logger.info(f"Redis session lookup failed: {e}")
 
 
 
@@ -1097,9 +1100,8 @@ async def resolve_session_identity(
             # rejection and the legitimate token-rebind recovery path.
             if resume and not (session and session.agent_id) and not token_agent_uuid:
                 logger.info(
-                    "[PATH2_RESUME_MISS] session_key=%s... no PG session "
-                    "row, refusing silent PATH 3 fall-through (S21-a)",
-                    session_key[:20],
+                    "[PATH2_RESUME_MISS] no PG session row; refusing silent "
+                    "PATH 3 fall-through (S21-a)",
                 )
                 _audit_session_resolve_miss(
                     session_key=session_key,
