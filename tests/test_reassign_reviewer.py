@@ -60,6 +60,21 @@ def _make_session(paused_id="agent-paused", reviewer_id="agent-reviewer",
     return session
 
 
+@pytest.fixture(autouse=True)
+def _authorized_reassignment_request():
+    """Existing behavior tests run as an authenticated operator.
+
+    Authorization-specific cases live in test_dialectic_reassignment_auth.py;
+    keeping this concern mocked here leaves these tests focused on reassignment
+    state transitions and persistence.
+    """
+    with patch(
+        f"{DIALECTIC}._reviewer_reassignment_actor",
+        return_value="operator",
+    ):
+        yield
+
+
 # ============================================================================
 # handle_reassign_reviewer tests
 # ============================================================================
@@ -88,6 +103,7 @@ async def test_reassign_reviewer_manual():
 
     assert result["success"] is True
     assert result["new_reviewer_id"] == "agent-new"
+    assert result["reassigned_by_role"] == "operator"
     assert result["old_reviewer_id"] == "agent-reviewer"
     assert session.reviewer_agent_id == "agent-new"
     assert "unresponsive" not in result["recovery"]["what_happened"].lower()

@@ -145,24 +145,19 @@ class TestLegitimateResolutionStillWorks:
         assert result["converged"] is True
         assert s.phase == DialecticPhase.RESOLVED
 
-    def test_paused_agent_resolves_before_reviewer_posts_its_verdict(self):
-        """KNOWN GAP, pinned deliberately rather than asserted as correct.
-
-        The reviewer here has ALREADY filed a disputing antithesis ("the claimed
-        cause is unproven") — it is not silent. It just has not posted its synthesis
-        verdict yet, and the guard only recognises synthesis verdicts. The live
-        reviewer submits antithesis and synthesis as two separate awaited calls, so
-        a paused agent can win the gap between them.
-
-        Whether a disputing antithesis alone should block self-clearing is a
-        governance decision (it would stop nearly every paused agent from resolving
-        its own session). This test records today's behaviour so that a change to it
-        is deliberate and visible in the diff.
-        """
+    def test_paused_agent_cannot_resolve_before_reviewer_posts_its_verdict(self):
+        """The two-call reviewer boundary must not become a self-clear race."""
         s = _session_at_synthesis()
         result = s.submit_synthesis(_synthesis(PAUSED, agrees=True))
-        assert result["converged"] is True
-        assert s.phase == DialecticPhase.RESOLVED
+        assert result["success"] is False
+        assert result["converged"] is False
+        assert result["blocked"] == "reviewer_verdict_pending"
+        assert result["awaiting_facilitation"] is False
+        assert s.phase == DialecticPhase.SYNTHESIS
+        assert not any(
+            msg.phase == "synthesis" and msg.agent_id == PAUSED
+            for msg in s.transcript
+        )
 
     def test_reviewer_may_change_its_mind(self):
         """A later reviewer verdict supersedes the earlier rejection.
@@ -290,3 +285,29 @@ class TestObjectionStandsHelper:
         s = _session_at_synthesis()
         s.transcript.append(_synthesis(PAUSED, agrees=False, ts="2026-08-09T00:02:00Z"))
         assert s._reviewer_objection_stands() is False
+
+
+class TestReviewerVerdictPendingHelper:
+    def test_independent_antithesis_without_synthesis_is_pending(self):
+        assert _session_at_synthesis()._reviewer_verdict_pending() is True
+
+    def test_reviewer_synthesis_clears_pending_state(self):
+        s = _session_at_synthesis()
+        s.submit_synthesis(_synthesis(REVIEWER, agrees=False))
+        assert s._reviewer_verdict_pending() is False
+
+    def test_paused_negotiation_does_not_satisfy_reviewer_verdict(self):
+        s = _session_at_synthesis()
+        s.submit_synthesis(_synthesis(PAUSED, agrees=False))
+        assert s._reviewer_verdict_pending() is True
+
+    def test_explicit_self_review_has_no_independent_verdict_boundary(self):
+        s = DialecticSession(paused_agent_id=PAUSED, reviewer_agent_id=PAUSED)
+        s.transcript.append(DialecticMessage(
+            phase="antithesis",
+            agent_id=PAUSED,
+            timestamp="2026-08-09T00:01:00Z",
+            reasoning="self-review",
+        ))
+        s.phase = DialecticPhase.SYNTHESIS
+        assert s._reviewer_verdict_pending() is False

@@ -164,6 +164,7 @@ class TestProcessUpdate:
         assert "metrics" in result
         assert "decision" in result
         assert "status" in result
+        assert monitor._last_governance_result is result
 
         # Check metrics structure
         metrics = result["metrics"]
@@ -696,6 +697,7 @@ class TestSimulateUpdate:
         E_before = monitor.state.E
         I_before = monitor.state.I
         update_count_before = monitor.state.update_count
+        last_real_result = monitor._last_governance_result
 
         # Simulate an update
         result = monitor.simulate_update({
@@ -708,6 +710,9 @@ class TestSimulateUpdate:
         assert monitor.state.E == E_before, "E should not change after simulation"
         assert monitor.state.I == I_before, "I should not change after simulation"
         assert monitor.state.update_count == update_count_before, "Update count should not change"
+        assert monitor._last_governance_result is last_real_result, (
+            "a simulation must not replace the evidence used by later dialectic review"
+        )
 
         # Result should indicate simulation
         assert result.get('simulation') is True, "Result should be marked as simulation"
