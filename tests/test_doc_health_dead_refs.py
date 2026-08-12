@@ -331,6 +331,27 @@ def test_repo_root_prefixed_links_left_to_dead_ref_check(tmp_path, monkeypatch, 
     assert doc_health.check_relative_links([doc]) == []
 
 
+def test_absolute_url_ending_in_md_not_treated_as_path(tmp_path, monkeypatch, doc_health):
+    """An `https://` link ending in `.md` is a URL, not a relative path.
+
+    The link pattern's `\\.{0,2}/?` prefix is optional, so a bare
+    `https://host/x.md` matches it and used to resolve against the doc's
+    parent directory and report as broken. agents/sdk/README.md needs
+    absolute links because PyPI renders it as the package description,
+    outside the repo, where relative paths 404.
+    """
+    d = tmp_path / "docs"
+    d.mkdir()
+    doc = d / "a.md"
+    doc.write_text(
+        "See [map](https://github.com/cirwel/unitares/blob/master/COMPATIBILITY.md)\n"
+        "and [http](http://example.com/x.md).\n"
+    )
+
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    assert doc_health.check_relative_links([doc]) == []
+
+
 # --- check_index_orphans -----------------------------------------------------
 
 
