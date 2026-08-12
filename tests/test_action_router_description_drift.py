@@ -67,3 +67,45 @@ async def test_dialectic_describes_quick_and_drops_dead_vote():
         "dialectic must not advertise 'vote' — there is no vote handler "
         "(the quorum_voting phase is vestigial)"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", CONSOLIDATED_TOOLS)
+async def test_description_override_does_not_contradict_routed_actions(tool):
+    """The override table outranks the derived description — guard it too.
+
+    ``tool_introspection.py`` resolves ``TOOL_DESCRIPTION_OVERRIDES`` at priority
+    1, above the schema description that ``tool_descriptions.json`` feeds. So the
+    derive-from-map fix above does NOT protect the string an agent actually sees
+    from ``list_tools``: the override is hand-maintained and silently wins.
+
+    That gap was live — the dialectic override advertised ``vote`` (removed) and
+    omitted ``quick`` (routed) long after the derived description was corrected,
+    leaving ``list_tools`` and ``describe_tool`` contradicting each other about
+    the same tool.
+
+    Asserting the override names *every* action would force churn on a
+    deliberately short one-liner, so this pins the direction that misleads: an
+    override may abbreviate, but must never name an action that does not route.
+    """
+    routed = set(await _routed_actions(tool))
+    assert routed, f"{tool} reported no valid_actions"
+
+    from src.mcp_handlers.introspection.tool_catalog import TOOL_DESCRIPTION_OVERRIDES
+
+    override = TOOL_DESCRIPTION_OVERRIDES.get(tool)
+    if not override:
+        pytest.skip(f"{tool} has no description override")
+
+    # Only inspect the action-list clause, so ordinary prose can't trip this.
+    _, _, listed = override.partition(":")
+    claimed = {
+        word.strip().strip(".")
+        for word in listed.split(",")
+        if word.strip().strip(".").isidentifier()
+    }
+    phantom = sorted(claimed - routed)
+    assert not phantom, (
+        f"{tool} override advertises actions that do not route: {phantom}. "
+        f"Routed actions: {sorted(routed)}. Override: {override!r}"
+    )

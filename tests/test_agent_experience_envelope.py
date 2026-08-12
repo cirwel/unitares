@@ -43,12 +43,21 @@ def _parse(result) -> dict:
 
 
 def test_experience_flag_inventory():
-    """Exactly the six workflow aliases are experience-enveloped - a
-    seventh (or a canonical name) sneaking in changes response shapes
-    and must be a deliberate edit here."""
+    """Exactly the eight workflow aliases are experience-enveloped - a
+    ninth (or a canonical name) sneaking in changes response shapes
+    and must be a deliberate edit here.
+
+    Grew from six on 2026-08-11: `store_finding` / `update_finding` were added
+    so the `knowledge` write actions have names of their own. They are flagged
+    like every other workflow alias, and deliberately so — an agent that reaches
+    shared memory through a friendly name should get the same envelope whether
+    it is reading or writing. `record_result`, the existing write-side alias,
+    already sets the precedent.
+    """
     expected = {
         "start_session", "sync_state", "check_working_state",
-        "search_shared_memory", "record_result", "request_review",
+        "search_shared_memory", "store_finding", "update_finding",
+        "record_result", "request_review",
     }
     from src.mcp_handlers.tool_stability import _TOOL_ALIASES
 

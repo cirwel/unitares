@@ -616,6 +616,30 @@ class DialecticSession:
         # read the agent's own approval as "the reviewer's latest verdict",
         # superseding its own earlier rejection.
         objection_stands = self._reviewer_objection_stands()
+        reviewer_verdict_pending = self._reviewer_verdict_pending()
+
+        # An independent reviewer's antithesis and synthesis verdict are two
+        # separate protocol calls. Until the verdict arrives, the paused agent
+        # must not win the gap between those calls with ``agrees=True`` and
+        # resolve its own session. Refuse without recording: this is an ordering
+        # guard, not a synthesis contribution or a facilitation request.
+        if (
+            message.agrees
+            and message.agent_id == self.paused_agent_id
+            and reviewer_verdict_pending
+        ):
+            return {
+                "success": False,
+                "converged": False,
+                "blocked": "reviewer_verdict_pending",
+                "error": (
+                    "The independent reviewer has submitted an antithesis but has "
+                    "not yet submitted its synthesis verdict. Wait for that verdict "
+                    "before agreeing to resume."
+                ),
+                "phase": self.phase.value,
+                "awaiting_facilitation": False,
+            }
 
         # Repeat self-clear attempts are refused WITHOUT being recorded.
         #
@@ -737,14 +761,6 @@ class DialecticSession:
 
         Call this BEFORE appending the message under evaluation; see submit_synthesis.
 
-        KNOWN GAP (2026-08-09): this only recognises reviewer *synthesis* verdicts.
-        A reviewer that has filed a disputing antithesis but not yet posted its
-        synthesis does not count as a standing objection, so a paused agent that
-        wins the race between the reviewer's two calls can still self-clear.
-        Whether a disputing antithesis alone should block is a governance decision,
-        not a bug fix — it would stop nearly every paused agent from ever resolving
-        its own session, which may well be correct.
-
         In reviewer_mode='self' the paused agent holds BOTH roles, so its own recorded
         rejection is the only verdict in existence — excluding paused-agent messages
         there would make the guard permanently blind to exactly the self-certification
@@ -758,6 +774,37 @@ class DialecticSession:
                 continue
             return msg.agrees is False
         return False
+
+    def _reviewer_verdict_pending(self) -> bool:
+        """True after an independent antithesis and before its first verdict.
+
+        The orchestrated reviewer posts antithesis and synthesis as separate calls.
+        This state is therefore an expected short-lived protocol boundary, not a
+        standing rejection and not a request for facilitation. Self-review is
+        excluded because one identity necessarily submits both roles; its first
+        agreeing synthesis remains the explicit self-review completion path.
+        """
+        if (
+            self.reviewer_agent_id is None
+            or self.reviewer_agent_id == self.paused_agent_id
+        ):
+            return False
+
+        has_independent_antithesis = any(
+            getattr(msg, "phase", None) == "antithesis"
+            and msg.agent_id != self.paused_agent_id
+            for msg in self.transcript
+        )
+        if not has_independent_antithesis:
+            return False
+
+        has_independent_verdict = any(
+            getattr(msg, "phase", None) == "synthesis"
+            and msg.agent_id != self.paused_agent_id
+            and msg.agrees is not None
+            for msg in self.transcript
+        )
+        return not has_independent_verdict
 
     def _paused_agent_already_tried_to_clear(self) -> bool:
         """True when the paused agent has already filed an agreeing synthesis.

@@ -37,6 +37,8 @@ LITE_MODE_TOOLS: Set[str] = {
     "sync_state",                 # Log agent work
     "check_working_state",        # Check agent state
     "search_shared_memory",       # Search shared memory
+    "store_finding",              # Write a finding to shared memory
+    "update_finding",             # Revise a finding already in shared memory
     "record_result",              # Record task/tool/test outcomes
     "request_review",             # Ask for structured review
 

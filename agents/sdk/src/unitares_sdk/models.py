@@ -118,6 +118,12 @@ class InferenceHost(_GovModel):
     models: list[str] = Field(default_factory=list)
     implementation_status: str | None = None
     notes: str | None = None
+    # Tools that will accept this host as a `host_id` argument. Empty = the host
+    # is registered but no tool takes it. `_GovModel` is extra="ignore", so
+    # omitting this field would silently drop the one signal a caller needs to
+    # pick a host — and drop it toward "looks usable", which is the wrong way to
+    # fail. Server-side source: mcp_handlers/support/inference_registry.py.
+    accepts_host_id_from: list[str] = Field(default_factory=list)
 
 
 class InferenceProvenance(_GovModel):

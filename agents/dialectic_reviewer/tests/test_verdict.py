@@ -82,7 +82,7 @@ def test_prompt_frames_disagreement_as_valid():
     assert "STRICT JSON" in prompt
 
 
-def test_prompt_separates_server_captured_pause_evidence_from_agent_claims():
+def test_prompt_separates_server_captured_governance_evidence_from_agent_claims():
     prompt = build_review_prompt(
         Thesis(
             session_id="s1",
@@ -94,8 +94,9 @@ def test_prompt_separates_server_captured_pause_evidence_from_agent_claims():
             },
         )
     )
-    assert "SERVER-CAPTURED PAUSE EVIDENCE" in prompt
+    assert "SERVER-CAPTURED GOVERNANCE EVIDENCE AT SESSION OPEN" in prompt
     assert "not authored by the paused agent" in prompt
+    assert "policy_evaluation.action/enforcement" in prompt
     assert '"risk_score": 0.7859' in prompt
     assert '"coherence": 0.4986' in prompt
     assert '"verdict": "high-risk"' in prompt
