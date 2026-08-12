@@ -129,20 +129,42 @@ def test_disconnect_happens_even_when_the_job_raises(patched_client, monkeypatch
 # ---------------------------------------------------------------------------
 
 
-def test_anomaly_formatting_names_agents_and_reasons():
-    payload = {"anomalies": [
-        {"agent_id": "ag-1", "reasons": ["coherence_drop", "stall"]},
-        {"name": "ag-2", "reason": "risk_spike"},
-    ]}
+def test_anomaly_formatting_uses_the_fields_observe_actually_returns():
+    """The payload has type/severity/description — not `reasons`.
+
+    The first version looked for `reasons` / `anomaly_types` / `reason`, found
+    none, and rendered every row as "flagged, no reason given". A local model
+    reading that concluded the fleet's flags were uninformative, which was true
+    of the prompt and false of the tool. Verified against the live server:
+    keys are agent_id, agent_name, context, description, severity, stale,
+    timestamp, type.
+    """
+    payload = {"anomalies": [{
+        "agent_name": "codex-cirwel#7168c86d",
+        "type": "risk_spike",
+        "severity": "high",
+        "description": "Risk increased from 0.49 to 0.81 (0.32 change)",
+        "stale": False,
+    }]}
     text = format_anomalies(payload)
-    assert "ag-1: coherence_drop, stall" in text
-    assert "ag-2: risk_spike" in text
+    assert "codex-cirwel#7168c86d" in text
+    assert "risk_spike" in text
+    assert "high" in text
+    assert "Risk increased from 0.49 to 0.81" in text
+    assert "no detail" not in text
 
 
-def test_flagged_without_a_reason_says_so_rather_than_rendering_none():
-    """`None` in a prompt reads to a model as a value, not as an absence."""
+def test_stale_is_carried_because_it_changes_the_response():
+    """A stale anomaly means the agent stopped reporting, not that it recovered."""
+    text = format_anomalies({"anomalies": [{
+        "agent_name": "ag-1", "type": "risk_spike", "stale": True,
+    }]})
+    assert "[stale]" in text
+
+
+def test_genuinely_detail_free_row_says_so_without_claiming_a_reason_exists():
     text = format_anomalies({"anomalies": [{"agent_id": "ag-3"}]})
-    assert "no reason given" in text
+    assert "no detail in payload" in text
     assert "None" not in text
 
 

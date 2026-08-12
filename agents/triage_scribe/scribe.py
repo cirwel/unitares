@@ -73,15 +73,32 @@ def format_anomalies(payload: dict[str, Any]) -> str:
             lines.append(str(item))
             continue
         label = (
-            item.get("agent_id")
+            item.get("agent_name")
+            or item.get("agent_id")
             or item.get("name")
-            or item.get("agent")
             or "unknown agent"
         )
-        reasons = item.get("reasons") or item.get("anomaly_types") or item.get("reason")
-        if isinstance(reasons, list):
-            reasons = ", ".join(str(r) for r in reasons)
-        lines.append(f"{label}: {reasons or 'flagged, no reason given'}")
+        # `observe(action='anomalies')` returns type / severity / description —
+        # a populated, specific explanation like "Risk increased from 0.49 to
+        # 0.81". The first version of this function looked for `reasons` /
+        # `anomaly_types` / `reason`, none of which the payload has, so every
+        # row rendered "flagged, no reason given" and the model correctly
+        # concluded the fleet's own flags were uninformative. They are not; the
+        # formatter was throwing the information away before the model saw it.
+        detail = " ".join(
+            part
+            for part in (
+                item.get("type"),
+                f"({item.get('severity')})" if item.get("severity") else None,
+                item.get("description"),
+            )
+            if part
+        ).strip()
+        if item.get("stale"):
+            # Worth carrying: a stale anomaly says the agent stopped reporting,
+            # which changes what an operator should do about it.
+            detail = f"{detail} [stale]" if detail else "[stale]"
+        lines.append(f"{label}: {detail or 'flagged, no detail in payload'}")
     return "\n".join(lines)
 
 
