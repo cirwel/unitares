@@ -415,6 +415,7 @@ def build_result(
             'coherence_is_health_evidence': confidence_metadata.get('eisv', {}).get(
                 'coherence_is_health_evidence'
             ),
+            'shadow_ablations': confidence_metadata.get('shadow_ablations', {}),
             'known_limitations': confidence_metadata.get('known_limitations', []),
         }
     }

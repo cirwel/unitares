@@ -21,6 +21,7 @@ from uuid import uuid4
 
 EISV_TELEMETRY_SCHEMA = "eisv.telemetry.v1"
 EISV_TELEMETRY_SUMMARY_SCHEMA = "eisv.telemetry.summary.v1"
+EISV_SHADOW_ABLATIONS_SCHEMA = "eisv.shadow_ablations.v1"
 BEHAVIORAL_SENSOR_FORMULA_VERSION = "behavioral_sensor.v1"
 BEHAVIORAL_HISTORY_WINDOW = 10
 OUTCOME_WINDOW = 20
@@ -201,6 +202,7 @@ def build_eisv_telemetry_envelope(
     derivation: Mapping[str, Any] | None,
     policy_evaluation: Mapping[str, Any] | None,
     enforcement: Mapping[str, Any] | None,
+    shadow_ablations: Mapping[str, Any] | None = None,
     observed_at: str | None = None,
     measurement_id: str | None = None,
 ) -> dict[str, Any]:
@@ -264,6 +266,12 @@ def build_eisv_telemetry_envelope(
             ),
         },
         "derivation": derivation_record,
+        "shadow_ablations": {
+            "schema": EISV_SHADOW_ABLATIONS_SCHEMA,
+            "mode": "measurement_only",
+            "policy_applied": False,
+            "candidates": _json_safe(dict(shadow_ablations or {})),
+        },
         "policy_evaluation": _json_safe(policy_evaluation or {}),
         "enforcement": _json_safe(enforcement or {}),
         "semantics": {
@@ -294,6 +302,22 @@ def summarize_eisv_telemetry(envelope: Mapping[str, Any] | None) -> dict[str, An
     policy = policy if isinstance(policy, Mapping) else {}
     enforcement = envelope.get("enforcement")
     enforcement = enforcement if isinstance(enforcement, Mapping) else {}
+    shadow = envelope.get("shadow_ablations")
+    shadow = shadow if isinstance(shadow, Mapping) else {}
+    candidates = shadow.get("candidates")
+    candidates = candidates if isinstance(candidates, Mapping) else {}
+    legacy_candidate = candidates.get("legacy_coherence_neutralized")
+    legacy_candidate = (
+        legacy_candidate if isinstance(legacy_candidate, Mapping) else {}
+    )
+    behavioral_shadow = legacy_candidate.get("behavioral_sensor")
+    behavioral_shadow = (
+        behavioral_shadow if isinstance(behavioral_shadow, Mapping) else {}
+    )
+    confidence_shadow = legacy_candidate.get("derived_confidence")
+    confidence_shadow = (
+        confidence_shadow if isinstance(confidence_shadow, Mapping) else {}
+    )
     maturity_gate = policy.get("maturity_gate")
     maturity_gate = maturity_gate if isinstance(maturity_gate, Mapping) else {}
     epistemic_gate = policy.get("epistemic_gate")
@@ -323,6 +347,19 @@ def summarize_eisv_telemetry(envelope: Mapping[str, Any] | None) -> dict[str, An
         "behavioral_source": behavioral_source,
         "behavioral_confidence": _number(behavioral.get("confidence")),
         "missing_inputs": list(derivation.get("missing_inputs") or ()),
+        "shadow_ablation_schema": shadow.get("schema"),
+        "legacy_coherence_behavioral_shadow_recorded": bool(behavioral_shadow),
+        "legacy_coherence_behavioral_shadow_eligible": (
+            behavioral_shadow.get("eligible")
+            if isinstance(behavioral_shadow.get("eligible"), bool)
+            else None
+        ),
+        "legacy_coherence_confidence_shadow_recorded": bool(confidence_shadow),
+        "legacy_coherence_confidence_shadow_eligible": (
+            confidence_shadow.get("eligible")
+            if isinstance(confidence_shadow.get("eligible"), bool)
+            else None
+        ),
         "policy_action": policy.get("action"),
         "policy_sub_action": policy.get("sub_action"),
         "verdict_source": (
@@ -390,6 +427,11 @@ def summarize_state_eisv_telemetry(state_json: Mapping[str, Any] | None) -> dict
         "behavioral_source": behavioral_source,
         "behavioral_confidence": confidence,
         "missing_inputs": ["eisv_telemetry"],
+        "shadow_ablation_schema": None,
+        "legacy_coherence_behavioral_shadow_recorded": False,
+        "legacy_coherence_behavioral_shadow_eligible": None,
+        "legacy_coherence_confidence_shadow_recorded": False,
+        "legacy_coherence_confidence_shadow_eligible": None,
         "policy_action": state.get("action"),
         "policy_sub_action": None,
         "verdict_source": None,
