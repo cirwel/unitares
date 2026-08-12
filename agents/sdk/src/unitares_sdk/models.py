@@ -160,6 +160,10 @@ class InferenceHostsResult(_GovModel):
     )
     hosts: list[InferenceHost] = Field(default_factory=list)
     count: int = 0
+    # Disclosed by the discovery reads: calling a host has its own identity
+    # gate. _GovModel is extra="ignore", so an undeclared field vanishes —
+    # and vanishes toward "no gate", which is the wrong way to fail.
+    invocation: dict | None = None
     error: str | None = None
 
 
@@ -171,6 +175,8 @@ class InferenceHostResult(_GovModel):
         serialization_alias="schema",
     )
     host: InferenceHost | None = None
+    # See InferenceHostsResult.invocation.
+    invocation: dict | None = None
     error: str | None = None
 
 

@@ -42,6 +42,32 @@ def _sha256_text(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _invocation_gate() -> Dict[str, Any]:
+    """Disclose call_model's identity gate on the two discovery reads.
+
+    Both discovery tools serve ``pre_onboard``; ``call_model`` does not. So an
+    unbound caller can enumerate every host and then fail on all of them — the
+    same discoverable-but-not-usable shape that ``accepts_host_id_from`` exists
+    to kill, one level up. The gate itself is worth keeping: model calls consume
+    Energy in EISV, and unattributed consumption is exactly what that accounting
+    is for. What is not worth keeping is finding out only at the call.
+
+    Derived from the decorator rather than restated, so relaxing or tightening
+    the gate cannot leave this text behind claiming the old rule.
+    """
+    from ..decorators import get_call_identity_requirement
+
+    requirement = get_call_identity_requirement("call_model", {})
+    gate: Dict[str, Any] = {"tool": "call_model", "requires_identity": requirement}
+    if requirement == "required":
+        gate["note"] = (
+            "Listing hosts serves unbound callers; calling one does not. "
+            "Bind first with start_session(force_new=true) — model calls are "
+            "attributed as Energy consumption, which needs an agent to attribute to."
+        )
+    return gate
+
+
 @mcp_tool("list_inference_hosts", timeout=5.0, requires_identity="pre_onboard")
 async def handle_list_inference_hosts(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """List known inference hosts and adapter placeholders."""
@@ -64,6 +90,7 @@ async def handle_list_inference_hosts(arguments: Dict[str, Any]) -> Sequence[Tex
         "schema": "unitares.inference_hosts.v0",
         "hosts": hosts,
         "count": len(hosts),
+        "invocation": _invocation_gate(),
     }, agent_id=arguments.get("agent_id"), arguments=arguments)
 
 
@@ -92,6 +119,7 @@ async def handle_describe_inference_host(arguments: Dict[str, Any]) -> Sequence[
         "success": True,
         "schema": "unitares.inference_host.v0",
         "host": host,
+        "invocation": _invocation_gate(),
     }, agent_id=arguments.get("agent_id"), arguments=arguments)
 
 
