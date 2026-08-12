@@ -280,8 +280,7 @@ async def _path2_ipua_pin_check(
 
     logger.warning(
         "[PATH2_IPUA_PIN_RESUME] onboard() with no ownership proof resolved "
-        "to pinned session via IP:UA fingerprint — session_key=%s... (mode=%s)",
-        str(base_session_key)[:20],
+        "to pinned session via IP:UA fingerprint (mode=%s)",
         pin_mode,
     )
     try:
@@ -294,7 +293,7 @@ async def _path2_ipua_pin_check(
                     "path": "path2_ipua_pin",
                     "mode": pin_mode,
                     "source": "onboard_pin_fallback",
-                    "session_key_prefix": str(base_session_key)[:16],
+                    "session_key_length": len(str(base_session_key)),
                 },
             )
     except Exception as _be:
@@ -1494,7 +1493,7 @@ async def _perform_session_bind(
         bound_info["transport"] = False
 
     bound_info["bound"] = True
-    logger.info(f"[{source}] Bound session {session_key[:20]}... -> agent {agent_uuid[:8]}...")
+    logger.info("[%s] Bound session", source)
     return bound_info
 
 
@@ -1973,9 +1972,9 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                         ),
                     ))
                 logger.info(
-                    "[ONBOARD] No existing session for session_key=%s... "
-                    "minting fresh in-memory identity (spawn_reason=%s)",
-                    base_session_key[:20], _spawn_reason,
+                    "[ONBOARD] No existing session; minting fresh in-memory "
+                    "identity (spawn_reason=%s)",
+                    _spawn_reason,
                 )
                 # Mint via persist=False + force_new=True so the captured-
                 # fresh branch below handles persistence + error surfacing
@@ -2347,9 +2346,11 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # that boundary is documented on the constant and in
     # docs/ontology/identity.md.
     try:
-        # Redact the full session_key (write-proof string) — prefix + length only.
-        _bsk = f"{base_session_key[:8]}...(len={len(base_session_key)})" if base_session_key else repr(base_session_key)
-        logger.debug(f"[ONBOARD_PIN] base_session_key={_bsk}")
+        logger.debug(
+            "[ONBOARD_PIN] base session key present=%s length=%s",
+            bool(base_session_key),
+            len(base_session_key) if base_session_key else 0,
+        )
         base_fp = _extract_base_fingerprint(base_session_key)
         from .session import DISPATCHED_CHILD_PIN_NX_SPAWN_REASONS
         await set_onboard_pin(
