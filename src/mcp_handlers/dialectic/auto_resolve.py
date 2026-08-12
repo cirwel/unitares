@@ -51,6 +51,54 @@ def _parse_timestamp(value) -> datetime | None:
     return None
 
 
+
+def _describe_reap(
+    *,
+    phase: str | None,
+    awaiting_facilitation: bool,
+    idle_seconds: float | None,
+) -> str:
+    """Say what actually happened, using what this loop already knows.
+
+    The previous text was a single hardcoded string — "Session auto-resolved:
+    inactive for >120 minutes" — written identically whether the session had
+    stalled mid-negotiation or had been sitting in `awaiting_facilitation`
+    waiting for a human who never arrived. Both facts are local variables three
+    lines up.
+
+    That cost real diagnosis time: reading those rows produces "the agent opened
+    a session and walked away", which is the opposite of what the transcripts
+    show — paused agents came back, submitted a synthesis, and were correctly
+    refused by the self-clear guard. A reader who trusts this field reconstructs
+    the wrong causal story, and the row is the only artifact that outlives the
+    session.
+
+    Deliberately does NOT claim a verdict. The sweeper does not load the
+    transcript, so it cannot know whether the reviewer rejected or the parties
+    simply stopped; asserting either would trade one confident wrong sentence
+    for another. It reports what it observed and points at the record that has
+    the rest.
+    """
+    idle = ""
+    if idle_seconds is not None and idle_seconds >= 0:
+        idle = f" after {idle_seconds / 3600:.1f}h idle"
+
+    where = f" in phase '{phase}'" if phase else ""
+
+    if awaiting_facilitation:
+        return (
+            f"Reaped by the inactivity sweep{idle}{where} while awaiting human "
+            "facilitation. No operator acted. This is a sweep outcome, not a "
+            "reviewer verdict, and not evidence that the paused agent abandoned "
+            "the session."
+        )
+    return (
+        f"Reaped by the inactivity sweep{idle}{where}. This is a sweep outcome, "
+        "not a reviewer verdict — read the last synthesis for the position that "
+        "was standing when the sweep ran."
+    )
+
+
 async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
     """
     Handle sessions that are stuck/inactive.
@@ -219,7 +267,11 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
             # Fall through: mark as FAILED (session too old or non-reassignable phase)
             try:
                 await update_session_status_async(session_id, "failed")
-                failure_reason = f"Session auto-resolved: inactive for >{STUCK_SESSION_THRESHOLD.total_seconds()/60:.0f} minutes"
+                failure_reason = _describe_reap(
+                    phase=phase,
+                    awaiting_facilitation=awaiting_facilitation,
+                    idle_seconds=(now - check_time).total_seconds() if check_time else None,
+                )
                 try:
                     await add_message_async(
                         session_id=session_id,
