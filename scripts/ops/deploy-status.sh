@@ -148,7 +148,24 @@ for c in "${COMPONENTS[@]}"; do
       fi ;;
   esac
   [ "$ghost" = "yes" ] && verdict="GHOST-BRANCH"
-  [ "$behind" != "0" ] && [ "$behind" != "?" ] && [ "$verdict" = "CURRENT" ] && verdict="BEHIND($behind)"
+  # BEHIND means "the checkout itself is behind origin — pull before anything
+  # else", so it applies to every RUNNING/LIVE verdict, not just CURRENT.
+  #
+  # Gating this on CURRENT made drift structurally invisible for anything that
+  # never reports CURRENT. live-from-checkout is set to LIVE unconditionally, so
+  # gov-plugin could sit any number of commits behind origin and still display a
+  # reassuring LIVE — measured 2026-08-12 at behind=2, including a release bump.
+  # For that service the checkout IS the deployed artifact, so "behind" is the
+  # ONLY drift signal that exists; there is no process to be STALE.
+  #
+  # DOWN and GHOST-BRANCH are left alone: both name a more urgent, different
+  # action (start it / discard the branch) than "pull". n/a rows have no repo
+  # relationship worth reporting.
+  if [ "$behind" != "0" ] && [ "$behind" != "?" ]; then
+    case "$verdict" in
+      CURRENT|CURRENT\*|LIVE|HOT-RELOAD|STALE*) verdict="BEHIND($behind)" ;;
+    esac
+  fi
   devflag=""; [ "$pickup" = "restart-DEV" ] && devflag=" [DEV]"
 
   hz=""; [ -n "$pid" ] && hz=$(health "$port")

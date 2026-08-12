@@ -107,6 +107,44 @@ exp_head="$(git -C "$REPO" rev-parse origin/master)"
 ) && ok "deploy-status counts merge commits (--full-history)" \
   || bad "deploy-status merge-commit staleness counting"
 
+# ── deploy-status.sh: BEHIND must apply to every running/live verdict ──
+# Gating the BEHIND promotion on CURRENT made checkout drift structurally
+# invisible for anything that never reports CURRENT. live-from-checkout is set
+# to LIVE unconditionally, so gov-plugin could sit any number of commits behind
+# origin and still display LIVE — measured 2026-08-12 at behind=2, including a
+# release bump. For that service the checkout IS the deployed artifact, so
+# "behind" is the only drift signal that exists. DOWN and GHOST-BRANCH must NOT
+# be overridden: each names a more urgent, different action than "pull".
+(
+  set -uo pipefail
+  promote() { # verdict behind -> verdict
+    local verdict="$1" behind="$2"
+    if [ "$behind" != "0" ] && [ "$behind" != "?" ]; then
+      case "$verdict" in
+        CURRENT|CURRENT\*|LIVE|HOT-RELOAD|STALE*) verdict="BEHIND($behind)" ;;
+      esac
+    fi
+    printf '%s' "$verdict"
+  }
+  # promoted
+  [ "$(promote LIVE 2)"          = "BEHIND(2)" ] || exit 20
+  [ "$(promote CURRENT 5)"       = "BEHIND(5)" ] || exit 21
+  [ "$(promote 'CURRENT*' 3)"    = "BEHIND(3)" ] || exit 22
+  [ "$(promote HOT-RELOAD 1)"    = "BEHIND(1)" ] || exit 23
+  [ "$(promote 'STALE(4)' 7)"    = "BEHIND(7)" ] || exit 24
+  # preserved
+  [ "$(promote DOWN 2)"          = "DOWN" ]         || exit 25
+  [ "$(promote GHOST-BRANCH 1)"  = "GHOST-BRANCH" ] || exit 26
+  [ "$(promote n/a 2)"           = "n/a" ]          || exit 27
+  [ "$(promote LIVE 0)"          = "LIVE" ]         || exit 28
+  [ "$(promote LIVE '?')"        = "LIVE" ]         || exit 29
+  # and the real script must not have re-gated it on CURRENT alone
+  grep -q '\[ "\$verdict" = "CURRENT" \] && verdict="BEHIND' \
+    "$(dirname "$LIB")/deploy-status.sh" && exit 30
+  exit 0
+) && ok "deploy-status BEHIND applies to LIVE/HOT-RELOAD/STALE, not DOWN/GHOST" \
+  || bad "deploy-status BEHIND promotion rules"
+
 echo; echo "passed=$pass failed=$fail"
 rm -rf "$SB"
 exit "$((fail > 0))"
