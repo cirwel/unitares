@@ -180,6 +180,48 @@ def test_search_alias_keeps_every_filter_the_action_uses():
         )
 
 
+def test_discovery_reads_disclose_the_call_gate():
+    """Enumerating hosts must say that calling one needs an identity.
+
+    Both discovery tools serve `pre_onboard`; `call_model` is `required`. An
+    unbound caller could therefore list every host and fail on all of them —
+    the same discoverable-but-unusable shape `accepts_host_id_from` fixes at
+    the host level, one level up. The gate stays (model calls are attributed as
+    Energy, which needs an agent); the silence about it does not.
+    """
+    import asyncio
+    import json
+
+    from src.mcp_handlers.decorators import get_call_identity_requirement
+    from src.mcp_handlers.support.model_inference import (
+        handle_describe_inference_host,
+        handle_list_inference_hosts,
+    )
+
+    requirement = get_call_identity_requirement("call_model", {})
+
+    listed = json.loads(asyncio.run(handle_list_inference_hosts({}))[0].text)
+    described = json.loads(
+        asyncio.run(handle_describe_inference_host({"host_id": "ollama:local"}))[0].text
+    )
+
+    for payload, label in ((listed, "list"), (described, "describe")):
+        gate = payload.get("invocation")
+        assert gate, f"{label} response does not disclose the call gate"
+        assert gate["tool"] == "call_model"
+        # Derived, not restated — relaxing the gate must not strand old text.
+        assert gate["requires_identity"] == requirement
+        if requirement == "required":
+            assert "start_session" in gate.get("note", ""), (
+                f"{label} says an identity is needed but not how to get one"
+            )
+        else:
+            assert "note" not in gate, (
+                "the gate is no longer 'required' but the response still "
+                "carries the bind-first note"
+            )
+
+
 @pytest.mark.parametrize(
     "lure", ["content", "summary", "discovery_id", "superseded_by"]
 )
