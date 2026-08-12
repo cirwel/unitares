@@ -30,7 +30,7 @@ def _assess_thermodynamic_significance(
     
     Significant events worth logging:
     - Risk spiked > 15%
-    - Coherence dropped > 10%
+    - Provenance-qualified behavioral update consistency dropped > 10%
     - Void crossed threshold (|V| > 0.10)
     - Circuit breaker triggered
     - Decision is pause/reject
@@ -70,8 +70,14 @@ def _assess_thermodynamic_significance(
             if risk_delta > RISK_SPIKE_THRESHOLD:
                 reasons.append(f"risk_spike: +{risk_delta:.3f} (from {baseline_risk:.3f} to {current_risk:.3f})")
     
-    # Check coherence drop
-    if len(state.coherence_history) >= 2:
+    # A drop threshold is meaningful only for an explicitly compatible
+    # producer. The deployed default is legacy C(V) control feedback, whose
+    # direction and tiny dispersion are not health/significance evidence.
+    # Unknown provenance fails closed rather than inheriting the old meaning.
+    if (
+        metrics.get("coherence_role") == "behavioral_update_consistency"
+        and len(state.coherence_history) >= 2
+    ):
         current_coherence = state.coherence_history[-1]
         history_slice = state.coherence_history[-HISTORY_WINDOW:-1] if len(state.coherence_history) > 1 else []
         if history_slice:
@@ -338,7 +344,7 @@ async def handle_simulate_update(arguments: ToolArgumentsDict) -> Sequence[TextC
     # Run simulation (doesn't persist state) with confidence
     result = monitor.simulate_update(agent_state, confidence=confidence)
 
-    # Post-ODE: Enforce risk_target and coherence_target
+    # Post-ODE: enforce risk targets and retire stored, unprovenanced coherence targets.
     if meta and agent_state_source == "existing":
         try:
             if getattr(meta, "dialectic_conditions", None):

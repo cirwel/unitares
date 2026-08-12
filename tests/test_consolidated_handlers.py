@@ -793,6 +793,28 @@ class TestDialecticHandler:
         assert "issue_contains_high_risk_terms" in data["risk_flags"]
 
     @pytest.mark.asyncio
+    async def test_quick_action_treats_coherence_as_diagnostic_only(self):
+        from src.mcp_handlers.consolidated import handle_dialectic
+
+        result = await handle_dialectic({
+            "action": "quick",
+            "issue_description": "Should I merge this bounded refactor?",
+            "position": "Proceed after the focused tests pass",
+            "observed_metrics": {
+                "risk_score": 0.2,
+                "coherence": 0.05,
+                "coherence_source": "legacy_tanh_v",
+            },
+        })
+
+        data = _parse_response(result)
+        assert data["recommendation"] == "record_decision"
+        coherence = data["triage_policy"]["diagnostic_inputs"]["coherence"]
+        assert coherence["role"] == "ode_control_feedback"
+        assert coherence["authoritative"] is False
+        assert coherence["health_evidence"] is False
+
+    @pytest.mark.asyncio
     async def test_quick_action_escalates_high_risk_in_position_or_concerns(self):
         from src.mcp_handlers.consolidated import handle_dialectic
 

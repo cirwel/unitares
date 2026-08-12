@@ -2,8 +2,9 @@
 Tests for self_recovery_review tool per SELF_RECOVERY_SPEC.md
 """
 
-import pytest
 import asyncio
+import json
+import pytest
 from typing import Dict, Any
 from unittest.mock import AsyncMock, patch
 from mcp.types import TextContent
@@ -119,8 +120,8 @@ async def test_dangerous_conditions_rejected(test_agent_setup):
 
 
 @pytest.mark.asyncio
-async def test_low_coherence_not_resumed(test_agent_setup):
-    """Test 4: Low coherence should prevent resume."""
+async def test_low_legacy_coherence_does_not_block_resume(test_agent_setup):
+    """Test 4: Directional C(V) remains diagnostic during recovery."""
     from src.mcp_handlers.shared import get_mcp_server
     mcp_server = get_mcp_server()
 
@@ -128,7 +129,7 @@ async def test_low_coherence_not_resumed(test_agent_setup):
     monitor = mcp_server.get_or_create_monitor(test_agent_setup["_agent_uuid"])
     from governance_core import State
     monitor.state.unitaires_state = State(E=0.7, I=0.8, S=0.2, V=0.0)
-    monitor.state.coherence = 0.2  # Below threshold of 0.35
+    monitor.state.coherence = 0.2
     monitor.state.void_active = False
 
     arguments = {
@@ -139,10 +140,13 @@ async def test_low_coherence_not_resumed(test_agent_setup):
     with _PATCH_AUTH, _PATCH_OWNERSHIP:
         result = await handle_self_recovery_review(arguments)
 
-    # Should not resume
     assert len(result) > 0
-    result_text = result[0].text if hasattr(result[0], 'text') else str(result[0])
-    assert "not_resumed" in result_text.lower() or "not yet safe" in result_text.lower()
+    payload = json.loads(result[0].text)
+    data = payload.get("data", payload)
+    assert data["success"] is True
+    coherence_policy = data["recovery_policy"]["diagnostic_inputs"]["coherence"]
+    assert coherence_policy["authoritative"] is False
+    assert coherence_policy["health_evidence"] is False
 
 
 @pytest.mark.asyncio

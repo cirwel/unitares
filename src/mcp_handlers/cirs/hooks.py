@@ -100,6 +100,8 @@ def auto_emit_state_announce(
             purpose=None,
             update_count=int(update_count),
             trust_tier=trust_tier_name,
+            coherence_source=str(metrics.get("coherence_source") or "unknown"),
+            coherence_role=str(metrics.get("coherence_role") or "unknown"),
         )
 
         _store_state_announce(announce)
@@ -158,4 +160,3 @@ def maybe_emit_resonance_signal(
             f"OI={restored.oi:.3f}"
         )
         return restored.to_dict()
-

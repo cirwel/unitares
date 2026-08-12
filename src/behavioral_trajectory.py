@@ -9,6 +9,11 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 
+LEGACY_COHERENCE_IDENTITY_ABLATION_SCHEMA = (
+    "legacy_coherence_identity_ablation.v1"
+)
+
+
 def compute_behavioral_trajectory(
     E_history: list,
     I_history: list,
@@ -62,6 +67,94 @@ def compute_behavioral_trajectory(
         "stability_score": stability,
         "identity_confidence": confidence,
         "computed_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def compute_legacy_coherence_identity_shadow(
+    *,
+    coherence_history: list,
+    update_count: int,
+    eisv_history_count: int,
+) -> dict:
+    """Measure the legacy ``C(V)`` dependency in trajectory identity.
+
+    The deployed trajectory is left untouched.  The shadow treats every field
+    derived solely from legacy coherence as unavailable evidence instead of
+    replacing a degenerate signal with another constant.  For visibility it
+    also reports the maturity-only factor that remains when the legacy
+    stability multiplier is removed; that number is not a candidate identity
+    policy and is never persisted as a trajectory signature.
+    """
+    base = {
+        "schema": LEGACY_COHERENCE_IDENTITY_ABLATION_SCHEMA,
+        "mode": "measurement_only",
+        "policy_applied": False,
+        "health_evidence": False,
+        "intervention": {
+            "field": "coherence_history",
+            "source": "legacy_tanh_v",
+            "role": "ode_control_feedback",
+            "operation": "remove_from_identity_evidence",
+            "affected_fields": [
+                "recovery.tau_estimate",
+                "homeostatic.recovery_tau",
+                "stability_score",
+                "identity_confidence.stability_multiplier",
+            ],
+        },
+        "not_modeled": [
+            "counterfactual_trajectory_signature",
+            "genesis_or_current_signature_replay",
+            "trajectory_similarity",
+            "trust_tier",
+            "risk_adjustment",
+            "candidate_signature_persistence_or_alerts",
+            "future_outcomes",
+        ],
+    }
+    if len(coherence_history) < 10 or eisv_history_count < 10:
+        return {
+            **base,
+            "eligible": False,
+            "eligibility_reason": "insufficient_trajectory_history",
+            "deployed": None,
+            "candidate": None,
+            "candidate_minus_deployed": None,
+        }
+
+    stability = _compute_stability(coherence_history)
+    maturity_factor = min(1.0, max(0, update_count) / 200.0)
+    deployed_confidence = maturity_factor * stability
+    recovery_tau = _compute_recovery(coherence_history).get("tau_estimate")
+    candidate_confidence = maturity_factor
+
+    return {
+        **base,
+        "eligible": True,
+        "eligibility_reason": None,
+        "deployed": {
+            "recovery_tau": recovery_tau,
+            "stability_score": stability,
+            "identity_confidence": deployed_confidence,
+            "maturity_factor": maturity_factor,
+        },
+        "candidate": {
+            "recovery_tau": None,
+            "stability_score": None,
+            "identity_confidence_without_legacy_stability_multiplier": (
+                candidate_confidence
+            ),
+            "maturity_factor": maturity_factor,
+            "removed_similarity_evidence": [
+                "recovery",
+                "homeostatic.recovery_tau",
+            ],
+        },
+        "candidate_minus_deployed": {
+            "identity_confidence_without_legacy_stability_multiplier": (
+                candidate_confidence - deployed_confidence
+            )
+        },
     }
 
 

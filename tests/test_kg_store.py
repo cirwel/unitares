@@ -21,6 +21,7 @@ import json
 import sys
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock, AsyncMock, PropertyMock
 from datetime import datetime
 from dataclasses import dataclass, field
@@ -199,6 +200,36 @@ class TestStoreKnowledgeGraph:
         assert "discovery_id" in data
         assert "Discovery stored" in data["message"]
         mock_graph.add_discovery.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_store_preserves_writer_confidence_without_coherence_clamp(
+        self, patch_common, registered_agent
+    ):
+        """Legacy ODE feedback cannot cap confidence in shared knowledge."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        mock_mcp_server.monitors[registered_agent] = SimpleNamespace(
+            state=SimpleNamespace(coherence=0.1)
+        )
+        result = await handle_store_knowledge_graph({
+            "agent_id": registered_agent,
+            "summary": "Outcome-backed federation finding",
+            "confidence": 0.95,
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        discovery = mock_graph.add_discovery.await_args.args[0]
+        assert discovery.confidence == 0.95
+        assert discovery.provenance["confidence_authority"] == {
+            "schema": "knowledge.confidence.authority.v2",
+            "source": "writer_supplied",
+            "validation": "range_only",
+            "legacy_coherence_clamp": "retired",
+            "coherence_used": False,
+        }
+        assert "confidence_clamped" not in discovery.provenance
 
     @pytest.mark.asyncio
     async def test_store_agent_block_reuses_agent_signature_assurance(
@@ -844,6 +875,10 @@ class TestStoreKnowledgeGraphAdditional:
 
         mock_monitor = MagicMock()
         mock_monitor.state = mock_state
+        mock_monitor.get_metrics.return_value = {
+            "coherence_source": "manifold",
+            "coherence_role": "eis_structural_measurement",
+        }
         mock_mcp_server.monitors = {registered_agent: mock_monitor}
 
         from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
@@ -862,6 +897,12 @@ class TestStoreKnowledgeGraphAdditional:
             discovery = call_args[0][0]
             assert discovery.provenance is not None
             assert "agent_state" in discovery.provenance
+            assert discovery.provenance["agent_state"]["coherence_source"] == "manifold"
+            assert discovery.provenance["agent_state"]["coherence_role"] == "eis_structural_measurement"
+            assert discovery.provenance["agent_state"]["coherence_health_evidence"] is False
+            assert discovery.provenance["agent_state"][
+                "coherence_knowledge_confidence_evidence"
+            ] is False
 
     @pytest.mark.asyncio
     async def test_store_with_provenance_chain(self, patch_common, registered_agent):

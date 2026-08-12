@@ -197,8 +197,7 @@ def test_sync_state_envelope_emits_recovery_hint_when_degraded():
 
 
 def test_sync_state_envelope_does_not_warn_on_low_risk_proceed_mid_coherence():
-    """Coherence near 0.5 is normal in the governed range; a proceed
-    verdict with low risk should not tell agents to self-recover."""
+    """Legacy C(V) is diagnostic; low risk should not trigger recovery."""
     payload = {
         "success": True,
         "verdict": {"value": "proceed"},
@@ -206,7 +205,7 @@ def test_sync_state_envelope_does_not_warn_on_low_risk_proceed_mid_coherence():
         "risk_score": 0.26,
     }
     env = build_experience_envelope("sync_state", "process_agent_update", payload)
-    assert env["risk_summary"] == "risk low (0.26), coherence 0.49"
+    assert env["risk_summary"] == "risk low (0.26), coherence diagnostic 0.49"
     assert "recovery_hint" not in env
 
 

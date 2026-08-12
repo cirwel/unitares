@@ -18,6 +18,7 @@ from src.dialectic_protocol import (
     DialecticMessage,
     DialecticPhase,
 )
+from src.coherence_provenance import coherence_role_for_source
 from ..utils import success_response, error_response, require_registered_agent
 from ..decorators import mcp_tool
 from ..support.coerce import coerce_bool, resolve_agent_uuid
@@ -382,12 +383,23 @@ async def handle_quick_dialectic(arguments: Dict[str, Any]) -> Sequence[TextCont
     except (TypeError, ValueError):
         pass
 
-    try:
-        coherence = float(observed_metrics.get("coherence"))
-        if coherence <= 0.4:
-            risk_flags.append("coherence_at_or_below_0.40")
-    except (TypeError, ValueError):
-        pass
+    coherence_diagnostic = None
+    if "coherence" in observed_metrics:
+        try:
+            coherence_value = float(observed_metrics.get("coherence"))
+        except (TypeError, ValueError):
+            coherence_value = None
+        coherence_source = observed_metrics.get("coherence_source") or "unknown"
+        coherence_diagnostic = {
+            "value": coherence_value,
+            "source": coherence_source,
+            "role": (
+                observed_metrics.get("coherence_role")
+                or coherence_role_for_source(coherence_source)
+            ),
+            "authoritative": False,
+            "health_evidence": False,
+        }
 
     if not position:
         risk_flags.append("no_position_supplied")
@@ -414,6 +426,21 @@ async def handle_quick_dialectic(arguments: Dict[str, Any]) -> Sequence[TextCont
         "concerns": concerns,
         "proposed_conditions": proposed_conditions,
         "risk_flags": risk_flags,
+        "triage_policy": {
+            "schema": "dialectic.triage.authority.v2",
+            "authoritative_inputs": [
+                "issue_terms",
+                "decision_context_terms",
+                "concern_count",
+                "risk_score",
+                "position_presence",
+            ],
+            "diagnostic_inputs": (
+                {"coherence": coherence_diagnostic}
+                if coherence_diagnostic is not None
+                else {}
+            ),
+        },
         "recommendation": recommendation,
         "next_steps": next_steps,
         "escalation_tool": "dialectic(action='request')" if risk_flags else None,

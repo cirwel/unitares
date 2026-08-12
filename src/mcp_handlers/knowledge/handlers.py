@@ -76,6 +76,10 @@ from src.knowledge_graph import (
 from src.mcp_handlers.knowledge.limits import MAX_SUMMARY_LEN, MAX_DETAILS_LEN
 from config.governance_config import config
 from src.logging_utils import get_logger
+from src.coherence_provenance import (
+    BEHAVIORAL_UPDATE_CONSISTENCY_ROLE,
+    coherence_role_for_source,
+)
 from src.perf_monitor import record_ms
 from src.recall_telemetry import LOW_CONFIDENCE, ZERO_RESULT, record_recall_event
 from ..support.llm_delegation import synthesize_results
@@ -214,47 +218,25 @@ def _coerce_pagination_int(value: Any, *, default: int, minimum: int) -> int:
     return coerced
 
 
-async def _clamp_confidence_to_coherence(discovery, agent_id: str) -> bool:
-    """Cross-check discovery confidence against agent's EISV coherence.
+def _annotate_knowledge_confidence_authority(discovery) -> None:
+    """Preserve writer confidence and record its actual authority boundary.
 
-    If confidence > coherence + 0.3, clamp it and annotate provenance.
-    Returns True if clamping occurred.
+    The retired implementation capped a discovery at ``legacy C(V) + 0.3``.
+    That directional ODE control value is neither evidence about the discovery
+    nor a calibrated writer-reliability measurement, so the cap manufactured a
+    federation-wide confidence ceiling from an unrelated signal.
     """
     if discovery.confidence is None:
-        return False
-    try:
-        monitor = mcp_server.monitors.get(agent_id)
-        if monitor is None:
-            return False
-        coherence = monitor.state.coherence
-        max_allowed = coherence + 0.3
-        if discovery.confidence > max_allowed:
-            original = discovery.confidence
-            discovery.confidence = round(max_allowed, 6)
-            # Annotate provenance
-            if discovery.provenance is None:
-                discovery.provenance = {}
-            discovery.provenance["confidence_clamped"] = True
-            discovery.provenance["original_confidence"] = original
-            logger.info(
-                "Knowledge confidence clamped: %.3f -> %.3f (coherence=%.3f)",
-                original,
-                discovery.confidence,
-                coherence,
-            )
-            await broadcaster_instance.broadcast_event(
-                "knowledge_confidence_clamped",
-                agent_id=agent_id,
-                payload={
-                    "original_confidence": original,
-                    "clamped_confidence": discovery.confidence,
-                    "coherence": round(coherence, 6),
-                },
-            )
-            return True
-    except Exception as e:
-        logger.debug("Confidence cross-check skipped: %s", e)
-    return False
+        return
+    if discovery.provenance is None:
+        discovery.provenance = {}
+    discovery.provenance["confidence_authority"] = {
+        "schema": "knowledge.confidence.authority.v2",
+        "source": "writer_supplied",
+        "validation": "range_only",
+        "legacy_coherence_clamp": "retired",
+        "coherence_used": False,
+    }
 
 
 async def _broadcast_knowledge_write(discovery, agent_id: str) -> None:
@@ -1011,10 +993,31 @@ async def _capture_store_provenance(arguments: Dict[str, Any], agent_id: str) ->
             meta = mcp_server.agent_metadata[agent_id]
             monitor_state = {}
             if agent_id in mcp_server.monitors:
-                state = mcp_server.monitors[agent_id].state
+                monitor = mcp_server.monitors[agent_id]
+                state = monitor.state
+                monitor_metrics = {}
+                try:
+                    candidate_metrics = monitor.get_metrics()
+                    if isinstance(candidate_metrics, dict):
+                        monitor_metrics = candidate_metrics
+                except (AttributeError, TypeError, ValueError):
+                    pass
+                coherence_source = str(
+                    monitor_metrics.get("coherence_source") or "unknown"
+                )
+                coherence_role = str(
+                    monitor_metrics.get("coherence_role")
+                    or coherence_role_for_source(coherence_source)
+                )
                 monitor_state = {
                     "regime": state.regime,
                     "coherence": round(state.coherence, 6),
+                    "coherence_source": coherence_source,
+                    "coherence_role": coherence_role,
+                    "coherence_health_evidence": (
+                        coherence_role == BEHAVIORAL_UPDATE_CONSISTENCY_ROLE
+                    ),
+                    "coherence_knowledge_confidence_evidence": False,
                     "energy": round(state.E, 6),
                     "entropy": round(state.S, 6),
                     "void_active": state.void_active,
@@ -1243,7 +1246,7 @@ async def _execute_single_store(request: _KnowledgeStoreRequest, graph: Any) -> 
     _truncate_store_content(state)
     await _build_store_discovery(state)
     await _prepare_store_supersession(state)
-    await _clamp_confidence_to_coherence(state.discovery, request.agent_id)
+    _annotate_knowledge_confidence_authority(state.discovery)
     await _link_similar_store_discoveries(state)
     _authorize_store_discovery(state)
     await _persist_store_discovery(state)
@@ -3119,7 +3122,7 @@ async def _persist_batch_discovery(
 ) -> dict[str, Any]:
     """Apply graph-side enrichment, authorization, and persistence."""
     discovery = prepared.discovery
-    await _clamp_confidence_to_coherence(discovery, agent_id)
+    _annotate_knowledge_confidence_authority(discovery)
 
     if disc_data.get("auto_link_related", True):
         similar = await graph.find_similar(discovery, limit=3)

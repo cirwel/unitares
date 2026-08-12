@@ -70,11 +70,18 @@ provenance and keep high-stakes outcome channels outside the agent's authority.
 
 When an agent is paused, recovery is a structured escalation:
 
-1. **Self-recovery** — `self_recovery(reflection=..., mode="quick_resume")` when risk is low and the configured compatibility checks pass; the agent reflects and resumes. A passing legacy coherence check is not itself a health claim.
+1. **Self-recovery** — `self_recovery(reflection=..., mode="quick_resume")` when risk is low and no void is active; the agent reflects and resumes. Legacy `C(V)` remains visible as ODE-control diagnostic context, but it does not authorize or deny recovery.
 2. **LLM-assisted dialectic** — a configured reviewer model supplies an
    antithesis for single-agent reflection; the default reference path supports a
    local model.
 3. **Peer dialectic** — another agent reviews via `dialectic`: thesis → antithesis → synthesis.
+
+Federation comparisons follow the same rule. Peer-similarity scores use E/I/S/V,
+controller state, maturity, regime, and verdict where available; legacy
+`coherence` is reported with producer/role tags but excluded from ranking. The
+old `min_coherence` state-announcement filter is rejected, and the former
+coherence-variance `focus_stability` value is explicitly retired rather than
+recalibrated around a nearly constant producer.
 
 Full protocol: [`../dev/CIRCUIT_BREAKER_DIALECTIC.md`](../dev/CIRCUIT_BREAKER_DIALECTIC.md).
 

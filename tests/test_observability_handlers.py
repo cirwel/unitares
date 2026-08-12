@@ -511,6 +511,7 @@ class TestHandleCompareAgents:
         assert len(comparison["agents"]) == 2
         assert "similarities" in comparison
         assert "outliers" in comparison
+        assert "coherence" not in data["comparison_policy"]["compared_metrics"]
         assert data["eisv_labels"]["V"]["label"] == "Valence"
 
     @pytest.mark.asyncio
@@ -590,6 +591,15 @@ class TestHandleCompareAgents:
         data = parse_result(result)
         assert data["success"] is True
         assert len(data["comparison"]["agents"]) == 2
+        assert data["comparison_policy"]["requested_metrics"] == [
+            "coherence",
+            "E",
+        ]
+        assert data["comparison_policy"]["compared_metrics"] == ["E"]
+        assert all(
+            item["metric"] != "coherence"
+            for item in data["comparison"]["similarities"]
+        )
 
     @pytest.mark.asyncio
     async def test_three_agents_with_outlier(self):
@@ -735,6 +745,32 @@ class TestHandleCompareMeToSimilar:
         assert data["eisv_labels"]["V"]["label"] == "Valence"
         assert "V" in data["my_metrics"]
         assert "V" in data["similar_agents"][0]["metrics"]
+
+    @pytest.mark.asyncio
+    async def test_legacy_coherence_difference_does_not_affect_peer_score(self):
+        my_uuid = "aaaaaaaa-bbbb-cccc-dddd-000000000000"
+        others = {
+            "aaaaaaaa-bbbb-cccc-dddd-111111111111": {
+                "E": 0.75,
+                "I": 0.85,
+                "S": 0.15,
+                "coherence": 0.05,
+            },
+        }
+        server = self._setup_server_with_similar(my_uuid, others)
+
+        with self._patches(server, my_uuid):
+            from src.mcp_handlers.observability.handlers import handle_compare_me_to_similar
+
+            result = await handle_compare_me_to_similar({"agent_id": my_uuid})
+
+        data = parse_result(result)
+        assert data["similar_agents"][0]["similarity_score"] == pytest.approx(1.0)
+        provenance = data["similarity_provenance"]
+        assert provenance["included_components"] == ["E", "I", "S"]
+        assert provenance["excluded_components"]["coherence"][
+            "health_evidence"
+        ] is False
 
     @pytest.mark.asyncio
     async def test_no_similar_agents(self):
@@ -986,6 +1022,9 @@ class TestHandleDetectAnomalies:
         assert data["success"] is True
         assert data["summary"]["total_anomalies"] == 0
         assert data["eisv_labels"]["V"]["label"] == "Valence"
+        assert data["anomaly_policy"]["excluded_roles"][
+            "ode_control_feedback"
+        ] == "directional_control_signal_not_health_evidence"
 
     @pytest.mark.asyncio
     async def test_happy_path_with_anomalies(self):
@@ -1501,6 +1540,7 @@ class TestHandleAggregateMetrics:
         assert agg["agents_with_data"] == 2
         assert agg["mean_risk_score"] == pytest.approx(0.25)
         assert agg["mean_coherence"] == pytest.approx(0.5)
+        assert agg["mean_coherence_provenance"]["health_evidence"] is False
         assert agg["total_updates"] == 137000
         assert agg["pauses_this_epoch"] == 81
         assert agg["paused_now"] == 0

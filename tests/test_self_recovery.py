@@ -3,7 +3,7 @@ Tests for src/mcp_handlers/self_recovery.py
 
 Covers:
 - validate_recovery_conditions (forbidden terms, vague terms, valid)
-- assess_recovery_safety (void, high risk, low coherence, brief reflection, warnings, safe)
+- assess_recovery_safety (void, high risk, diagnostic coherence, reflection, warnings)
 - handle_self_recovery (action dispatch)
 - handle_check_recovery_options (eligible, blockers)
 - handle_quick_resume (safe state, unsafe state, ownership, status check)
@@ -18,9 +18,9 @@ from src.mcp_handlers.lifecycle.self_recovery import (
     validate_recovery_conditions,
     assess_recovery_safety,
     MAX_RISK_FOR_SELF_RECOVERY,
-    MIN_COHERENCE_FOR_SELF_RECOVERY,
     FORBIDDEN_CONDITIONS,
 )
+from src.mcp_handlers.lifecycle.recovery_policy import recovery_policy_context
 
 
 # ============================================================================
@@ -83,6 +83,19 @@ class TestValidateRecoveryConditions:
 
 class TestAssessRecoverySafety:
 
+    def test_recovery_context_preserves_explicit_coherence_provenance(self):
+        policy = recovery_policy_context(
+            coherence=0.82,
+            coherence_source="manifold",
+            coherence_role="eis_structural_measurement",
+            authoritative_inputs=("risk_score", "void_active"),
+        )
+
+        diagnostic = policy["diagnostic_inputs"]["coherence"]
+        assert diagnostic["source"] == "manifold"
+        assert diagnostic["role"] == "eis_structural_measurement"
+        assert diagnostic["authoritative"] is False
+
     def test_void_active_blocks(self):
         result = assess_recovery_safety(
             coherence=0.8,
@@ -107,7 +120,7 @@ class TestAssessRecoverySafety:
         assert result["escalate"] is True
         assert "risk" in result["reason"].lower()
 
-    def test_low_coherence_blocks(self):
+    def test_low_coherence_is_diagnostic_not_authoritative(self):
         result = assess_recovery_safety(
             coherence=0.2,
             risk_score=0.3,
@@ -115,9 +128,12 @@ class TestAssessRecoverySafety:
             void_value=0.0,
             reflection="I lost track of what I was doing.",
         )
-        assert result["safe"] is False
-        assert result["escalate"] is True
-        assert "coherence" in result["reason"].lower()
+        assert result["safe"] is True
+        assert result["escalate"] is False
+        coherence_policy = result["recovery_policy"]["diagnostic_inputs"]["coherence"]
+        assert coherence_policy["role"] == "ode_control_feedback"
+        assert coherence_policy["authoritative"] is False
+        assert coherence_policy["health_evidence"] is False
 
     def test_brief_reflection_rejected(self):
         result = assess_recovery_safety(
@@ -186,16 +202,18 @@ class TestAssessRecoverySafety:
         )
         assert result["safe"] is False
 
-    def test_boundary_coherence_at_limit(self):
-        """Coherence exactly below MIN should block."""
-        result = assess_recovery_safety(
-            coherence=MIN_COHERENCE_FOR_SELF_RECOVERY - 0.01,
-            risk_score=0.3,
-            void_active=False,
-            void_value=0.0,
-            reflection="Testing boundary conditions for recovery safety.",
-        )
-        assert result["safe"] is False
+    def test_coherence_direction_does_not_change_recovery_decision(self):
+        common = {
+            "risk_score": 0.3,
+            "void_active": False,
+            "void_value": 0.0,
+            "reflection": "Testing whether control direction changes recovery safety.",
+        }
+        low = assess_recovery_safety(coherence=0.05, **common)
+        high = assess_recovery_safety(coherence=0.95, **common)
+        assert low["safe"] is True
+        assert high["safe"] is True
+        assert low["warnings"] == high["warnings"]
 
 
 # ============================================================================
@@ -327,6 +345,26 @@ class TestCheckRecoveryOptions:
             assert any(b["type"] == "high_risk" for b in data["blockers"])
 
     @pytest.mark.asyncio
+    async def test_low_coherence_does_not_block_eligibility(self):
+        from src.mcp_handlers.lifecycle.self_recovery import handle_check_recovery_options
+        mock_server = self._make_mock_server(coherence=0.05, risk=0.2)
+
+        with patch(
+            "src.mcp_handlers.lifecycle.self_recovery.require_registered_agent",
+            return_value=("test-agent", None),
+        ), patch(
+            "src.mcp_handlers.lifecycle.self_recovery.mcp_server",
+            mock_server,
+        ):
+            result = await handle_check_recovery_options({"_agent_uuid": "test-uuid"})
+            text = json.loads(result[0].text)
+            data = text.get("data", text)
+            assert data["eligible"] is True
+            assert data["recovery_policy"]["diagnostic_inputs"]["coherence"][
+                "authoritative"
+            ] is False
+
+    @pytest.mark.asyncio
     async def test_unregistered_agent_error(self):
         from src.mcp_handlers.lifecycle.self_recovery import handle_check_recovery_options
         mock_error = MagicMock()
@@ -396,14 +434,12 @@ class TestQuickResume:
             assert data.get("success") is True or data.get("recovered") is True
 
     @pytest.mark.asyncio
-    async def test_quick_resume_allows_target_coherence(self):
-        # Coherence at the config target (~0.50) with low risk must quick-resume.
-        # The old hardcoded 0.60 gate sat ABOVE target, so a healthy agent at
-        # its target coherence could never quick-resume — that was the bug.
+    async def test_quick_resume_allows_low_legacy_coherence(self):
+        # C(V) below 0.5 means negative signed V, not poor health. Low risk and
+        # no active void remain sufficient for the fast recovery path.
         from src.mcp_handlers.lifecycle.self_recovery import handle_quick_resume
-        from config.governance_config import GovernanceConfig
 
-        mock_server = self._make_mock_server(coherence=GovernanceConfig.TARGET_COHERENCE + 0.02, risk=0.2)
+        mock_server = self._make_mock_server(coherence=0.05, risk=0.2)
 
         with patch(
             "src.mcp_handlers.lifecycle.self_recovery.require_registered_agent",
@@ -429,6 +465,9 @@ class TestQuickResume:
             text = json.loads(result[0].text)
             data = text.get("data", text)
             assert data.get("success") is True or data.get("recovered") is True
+            assert data["recovery_policy"]["diagnostic_inputs"]["coherence"][
+                "authoritative"
+            ] is False
 
     @pytest.mark.asyncio
     async def test_quick_resume_high_risk_still_refused_at_good_coherence(self):
@@ -676,6 +715,43 @@ class TestOperatorResumeAgent:
             text = json.loads(result[0].text)
             data = text.get("data", text)
             assert data.get("success") is True
+
+    @pytest.mark.asyncio
+    async def test_operator_low_legacy_coherence_is_not_a_safety_limit(self):
+        from src.mcp_handlers.lifecycle.self_recovery import handle_operator_resume_agent
+        mock_server = self._make_mock_server(
+            target_coherence=0.05,
+            target_risk=0.3,
+        )
+
+        with patch(
+            "src.mcp_handlers.lifecycle.self_recovery.require_registered_agent",
+            return_value=("caller-agent", None),
+        ), patch(
+            "src.mcp_handlers.lifecycle.self_recovery.mcp_server",
+            mock_server,
+        ), patch(
+            "src.mcp_handlers.lifecycle.self_recovery.store_discovery_internal",
+            new_callable=AsyncMock,
+            create=True,
+        ), patch(
+            "src.agent_storage.update_agent",
+            new_callable=AsyncMock,
+        ), patch(
+            "src.agent_storage.persist_runtime_state",
+            new_callable=AsyncMock,
+        ):
+            result = await handle_operator_resume_agent({
+                "_agent_uuid": "caller-uuid",
+                "target_agent_id": "target-uuid",
+                "reason": "Controller direction is not health evidence",
+            })
+            text = json.loads(result[0].text)
+            data = text.get("data", text)
+            assert data["success"] is True
+            assert data["recovery_policy"]["diagnostic_inputs"]["coherence"][
+                "authoritative"
+            ] is False
 
     @pytest.mark.asyncio
     async def test_non_operator_rejected(self):

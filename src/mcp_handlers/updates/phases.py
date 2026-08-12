@@ -687,7 +687,7 @@ async def handle_onboarding_and_resume(ctx: UpdateContext) -> Optional[Sequence[
                     "workflow": (
                         "1. Check your state with get_governance_metrics "
                         "2. Reflect on what triggered the pause "
-                        "3. Use self_recovery(action='quick') if safe (coherence > 0.60, risk < 0.40), otherwise use self_recovery(action='review', reflection='...')"
+                        "3. Use self_recovery(action='quick') if safe (risk < 0.40 and no void), otherwise use self_recovery(action='review', reflection='...')"
                     )
                 },
                 context={
@@ -1457,10 +1457,7 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
         except Exception:
             pass
 
-        # Coherence from monitor history
         _mon = mcp_server.monitors.get(ctx.agent_id)
-        if _mon and hasattr(_mon.state, 'coherence_history') and _mon.state.coherence_history:
-            anomaly_signals["coherence"] = _mon.state.coherence_history[-1]
 
         # Complexity divergence from continuity metrics
         if _mon:
@@ -1631,6 +1628,9 @@ async def _post_update_health_and_baselines(ctx: UpdateContext) -> None:
     try:
         from src.agent_behavioral_baseline import get_agent_behavioral_baseline, schedule_baseline_save
         baseline = get_agent_behavioral_baseline(agent_id)
+        # Retain legacy C(V) statistics for compatibility/replay, but never pass
+        # them to compute_anomaly_entropy: the producer is not behavioral-health
+        # evidence and its narrow range cannot support a z-score actuator.
         if ctx.coherence is not None:
             baseline.update("coherence", ctx.coherence)
         # Tool usage signals
@@ -1676,7 +1676,7 @@ async def _post_update_health_and_baselines(ctx: UpdateContext) -> None:
     except Exception as e:
         logger.debug(f"Agent profile update skipped for {agent_id}: {e}")
 
-    # Post-ODE: Enforce risk_target and coherence_target from dialectic conditions
+    # Post-ODE: enforce risk targets and retire stored, unprovenanced coherence targets.
     try:
         if ctx.meta and getattr(ctx.meta, 'dialectic_conditions', None):
             from ..dialectic.enforcement import enforce_post_ode_conditions
@@ -1857,6 +1857,49 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
             ).items()
             if isinstance(candidate, dict)
         }
+        # Observe the legacy C(V) dependency in trajectory identity without
+        # changing the signature, similarity, trust tier, or risk policy.  This
+        # runs at the append-only state boundary so every eligible check-in can
+        # be replayed before any live identity migration is considered.
+        try:
+            from src.behavioral_trajectory import (
+                compute_legacy_coherence_identity_shadow,
+            )
+
+            state = monitor.state if monitor is not None else None
+            lifetime_updates = getattr(state, "update_count", 0) if state else 0
+            if ctx.meta and hasattr(ctx.meta, "total_updates"):
+                try:
+                    lifetime_updates = max(
+                        int(lifetime_updates or 0),
+                        int(ctx.meta.total_updates or 0),
+                    )
+                except (TypeError, ValueError):
+                    lifetime_updates = int(lifetime_updates or 0)
+            coherence_history = list(
+                getattr(state, "coherence_history", []) if state else []
+            )
+            eisv_history_count = min(
+                (
+                    len(list(getattr(state, name, []) or []))
+                    for name in ("E_history", "I_history", "S_history", "V_history")
+                ),
+                default=0,
+            )
+            trajectory_shadow = compute_legacy_coherence_identity_shadow(
+                coherence_history=coherence_history,
+                update_count=lifetime_updates,
+                eisv_history_count=eisv_history_count,
+            )
+            shadow_ablations.setdefault("legacy_coherence_neutralized", {})[
+                "trajectory_identity"
+            ] = trajectory_shadow
+        except Exception as exc:
+            logger.debug(
+                "Legacy-coherence trajectory identity shadow skipped for %s...: %s",
+                (agent_id or "")[:8],
+                exc,
+            )
         confidence_shadows = (
             (ctx.result.get("confidence_reliability") or {}).get(
                 "shadow_ablations"
@@ -2024,12 +2067,9 @@ async def _post_update_save_baseline(ctx: UpdateContext) -> None:
 
 async def _post_update_auto_outcome(ctx: UpdateContext) -> None:
     agent_id = ctx.agent_id
-    # Auto-emit outcome event
-    # Use behavioral coherence (real per-agent signal) when available,
-    # fall back to ODE coherence (thermostat attractor ~0.48)
-    _beh = ctx.result.get('behavioral', {}).get('assessment', {}) if ctx.result else {}
-    _beh_coherence = _beh.get('coherence')
-    _coherence_for_outcome = _beh_coherence if _beh_coherence is not None else ctx.metrics_dict.get('coherence', 0.5)
+    # Auto-emitted outcomes are weak agent-reported labels inferred from text.
+    # Score the label itself (completed=1, failed=0); neither behavioral update
+    # consistency nor legacy ODE control feedback measures outcome quality.
 
     ctx.outcome_event_id = None
     try:
@@ -2047,6 +2087,8 @@ async def _post_update_auto_outcome(ctx: UpdateContext) -> None:
                     _summary = ctx.response_text[:500] if len(ctx.response_text) > 500 else ctx.response_text
                     _detail = {
                         'source': 'auto_checkin',
+                        'outcome_score_source': 'agent_reported_completion_label',
+                        'coherence_used_for_outcome_score': False,
                         'complexity': ctx.complexity,
                         'confidence': ctx.arguments.get('confidence'),
                         'summary': _summary,
@@ -2065,7 +2107,7 @@ async def _post_update_auto_outcome(ctx: UpdateContext) -> None:
                         agent_id=agent_id,
                         outcome_type='task_completed',
                         is_bad=False,
-                        outcome_score=min(1.0, _coherence_for_outcome * 1.5),
+                        outcome_score=1.0,
                         session_id=ctx.arguments.get('client_session_id'),
                         eisv_e=ctx.metrics_dict.get('E'),
                         eisv_i=ctx.metrics_dict.get('I'),
@@ -2090,11 +2132,10 @@ async def _post_update_auto_outcome(ctx: UpdateContext) -> None:
                         ):
                             try:
                                 from src.calibration import calibration_checker
-                                _outcome_score = min(1.0, _coherence_for_outcome * 1.5)
                                 calibration_checker.record_prediction(
                                     confidence=float(_conf),
                                     predicted_correct=(float(_conf) >= 0.5),
-                                    actual_correct=_outcome_score,
+                                    actual_correct=1.0,
                                 )
                             except Exception as _ce:
                                 logger.debug(f"Calibration from positive outcome skipped: {_ce}")
@@ -2109,9 +2150,11 @@ async def _post_update_auto_outcome(ctx: UpdateContext) -> None:
                     _db = get_db()
                     if _db:
                         _summary = ctx.response_text[:500] if len(ctx.response_text) > 500 else ctx.response_text
-                        _bad_score = max(0.0, 1.0 - _coherence_for_outcome * 1.5)
+                        _bad_score = 0.0
                         _detail = {
                             'source': 'auto_checkin',
+                            'outcome_score_source': 'agent_reported_failure_label',
+                            'coherence_used_for_outcome_score': False,
                             'complexity': ctx.complexity,
                             'confidence': ctx.arguments.get('confidence'),
                             'summary': _summary,

@@ -69,9 +69,6 @@ def compute_pairwise_similarity(source_monitor, target_monitor) -> Optional[Cohe
             lambda_diff = abs(float(source_state.lambda1) - float(target_state.lambda1))
             traj_sims["lambda1"] = 1.0 - min(1.0, lambda_diff / 2.0)
 
-            coh_diff = abs(float(source_state.coherence) - float(target_state.coherence))
-            traj_sims["coherence"] = 1.0 - coh_diff
-
             max_updates = max(source_state.update_count, target_state.update_count, 1)
             update_diff = abs(source_state.update_count - target_state.update_count)
             traj_sims["maturity"] = 1.0 - min(1.0, update_diff / max_updates)
@@ -80,17 +77,20 @@ def compute_pairwise_similarity(source_monitor, target_monitor) -> Optional[Cohe
         except Exception:
             pass
 
-        traj_factor = 1.0
+        traj_factor = None
         if trajectory_similarity:
             traj_factor = sum(trajectory_similarity.values()) / len(trajectory_similarity)
 
-        similarity_score = round(
-            overall_eisv_sim * 0.6 +
-            traj_factor * 0.2 +
-            (0.1 if regime_match else 0.0) +
-            (0.1 if verdict_match else 0.0),
-            3
+        weighted_score = (
+            overall_eisv_sim * 0.6
+            + (0.1 if regime_match else 0.0)
+            + (0.1 if verdict_match else 0.0)
         )
+        available_weight = 0.8
+        if traj_factor is not None:
+            weighted_score += traj_factor * 0.2
+            available_weight += 0.2
+        similarity_score = round(weighted_score / available_weight, 3)
 
         return CoherenceReport(
             source_agent_id=getattr(source_monitor, 'agent_id', ''),
@@ -101,6 +101,21 @@ def compute_pairwise_similarity(source_monitor, target_monitor) -> Optional[Cohe
             regime_match=regime_match,
             verdict_match=verdict_match,
             trajectory_similarity=trajectory_similarity,
+            similarity_provenance={
+                "formula": "cirs_pairwise_similarity.v2",
+                "included_components": {
+                    "eisv": ["E", "I", "S", "V"],
+                    "trajectory": ["lambda1", "maturity"],
+                    "categorical": ["regime_match", "verdict_match"],
+                },
+                "excluded_components": {
+                    "coherence": {
+                        "reason": "legacy_tanh_v_is_non_discriminative_control_feedback",
+                        "health_evidence": False,
+                    }
+                },
+                "missing_component_policy": "renormalize_available_weights",
+            },
         )
     except Exception as e:
         logger.debug(f"Could not compute pairwise similarity: {e}")

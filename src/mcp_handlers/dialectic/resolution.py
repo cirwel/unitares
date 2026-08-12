@@ -167,7 +167,7 @@ async def execute_resolution(session: DialecticSession, resolution: Resolution) 
     try:
         applied_count = sum(
             1 for c in applied_conditions
-            if isinstance(c, dict) and c.get("status") != "failed"
+            if isinstance(c, dict) and c.get("status") == "applied"
         )
         await _record_outcome_event_inline({
             "agent_id": agent_id,
@@ -204,4 +204,3 @@ async def execute_resolution(session: DialecticSession, resolution: Resolution) 
         )
 
     return result
-
