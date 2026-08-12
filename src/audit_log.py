@@ -269,10 +269,11 @@ class AuditLogger:
     ):
         """Log a shadow maturity evaluation for a cold-start risk pause.
 
-        This event is observational.  ``actuation_applied`` is expected to be
-        false until a separately reviewed durable confirmation transaction is
-        implemented; the original policy decision continues to the existing
-        enforcement boundary unchanged.
+        This event is observational.  ``actuation_applied`` is scoped to the
+        dormant confirmation-deferral policy and is expected to be false until
+        a separately reviewed durable confirmation transaction is implemented;
+        the original policy decision continues to the existing enforcement
+        boundary unchanged.
         """
         entry = AuditEntry(
             timestamp=datetime.now().isoformat(),
@@ -294,6 +295,7 @@ class AuditLogger:
                 "confirmed": evaluation.get("confirmed"),
                 "outcome": evaluation.get("outcome"),
                 "independent_override": evaluation.get("independent_override"),
+                "actuation_scope": evaluation.get("actuation_scope"),
                 "actuation_enabled": evaluation.get("actuation_enabled"),
                 "actuation_ready": evaluation.get("actuation_ready"),
                 "actuation_applied": evaluation.get("actuation_applied"),

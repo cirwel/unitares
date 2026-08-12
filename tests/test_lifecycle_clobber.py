@@ -367,7 +367,7 @@ class TestCircuitBreakerPersistsRuntimeState:
              patch.object(ald, "save_monitor_state_async", AsyncMock()):
             # Disable auto-recovery to avoid touching unrelated code paths
             with patch.dict("os.environ", {"UNITARES_AUTO_DIALECTIC_RECOVERY": "0"}):
-                await ald.process_update_authenticated_async(
+                result = await ald.process_update_authenticated_async(
                     AGENT_ID, "test-key", {"task_type": "mixed"}
                 )
 
@@ -385,6 +385,15 @@ class TestCircuitBreakerPersistsRuntimeState:
             "persist_runtime_state must include the 'paused' lifecycle event"
         assert "high-risk" in (event.get("reason") or ""), \
             "lifecycle event reason must carry the decision reason"
+        assert event.get("actuation_id"), \
+            "persisted pause event must carry the runtime actuation id"
+        assert result["enforcement"]["actuation_id"] == event["actuation_id"]
+        assert result["enforcement"]["applied_at"] == kwargs["paused_at"]
+        meta.add_lifecycle_event.assert_called_once_with(
+            "paused",
+            "UNITARES high-risk verdict (risk_score=0.65)",
+            actuation_id=event["actuation_id"],
+        )
 
     @pytest.mark.asyncio
     async def test_safety_net_resume_persists_paused_at_clear_and_event(self):

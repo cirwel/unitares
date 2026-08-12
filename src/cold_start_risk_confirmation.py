@@ -37,6 +37,7 @@ NON_AUTHORED_COLD_START_ENFORCEMENT_BASIS = (
 NON_AUTHORED_COLD_START_RECOVERY_BASIS = (
     "non_authored_phi_cold_start_trap"
 )
+COLD_START_CONFIRMATION_ACTUATION_SCOPE = "fallback_risk_pause_deferral"
 
 
 def classify_verdict_driver(
@@ -199,6 +200,11 @@ def evaluate_cold_start_risk_confirmation(
         "schema": "eisv.cold-start-confirmation.v1",
         "mode": "shadow" if enabled else "disabled",
         "shadow_enabled": bool(shadow_enabled),
+        # These actuation fields describe only the dormant confirmation policy:
+        # whether the *first* fallback-owned risk pause would be deferred.  They
+        # do not describe the underlying risk policy's runtime circuit breaker;
+        # that effect lives in the sibling ``enforcement`` envelope.
+        "actuation_scope": COLD_START_CONFIRMATION_ACTUATION_SCOPE,
         "actuation_enabled": bool(actuation_enabled),
         "actuation_ready": actuation_ready,
         "actuation_applied": actuation_applied,
@@ -233,7 +239,9 @@ def evaluate_cold_start_risk_confirmation(
         },
         "note": (
             "Shadow evaluation only: the original policy decision is unchanged. "
-            "Actuation fails closed until confirmation state is durable and atomic."
+            "actuation_* describes only fallback-risk-pause deferral, not the "
+            "runtime circuit breaker recorded in envelope.enforcement. Confirmation "
+            "deferral fails closed until its state is durable and atomic."
         ),
     }
 
@@ -384,6 +392,17 @@ def evaluate_non_authored_cold_start_trap(
     enforcement = enforcement if isinstance(enforcement, Mapping) else {}
     confidence = _finite_number(maturity_gate.get("behavioral_confidence"))
 
+    circuit_breaker_applied = (
+        enforcement.get("requested") is True
+        and enforcement.get("applied") is True
+        and enforcement.get("mode") == "circuit_breaker"
+        and enforcement.get("actor") == "agent_loop_detection"
+        and enforcement.get("effect") == "agent_metadata.status=paused"
+    )
+    legacy_enforcement_basis_exact = (
+        enforcement.get("basis") == "phi_cold_start_unconfirmed_shadow"
+    )
+
     requirements = {
         "guard_enabled": bool(enabled),
         "state_record_present": state_record is not None,
@@ -419,14 +438,12 @@ def evaluate_non_authored_cold_start_trap(
             and confidence is not None
             and confidence < BEHAVIORAL_AUTHORITY_THRESHOLD
         ),
-        "circuit_breaker_applied": (
-            enforcement.get("requested") is True
-            and enforcement.get("applied") is True
-            and enforcement.get("mode") == "circuit_breaker"
-            and enforcement.get("basis") == "phi_cold_start_unconfirmed_shadow"
-            and enforcement.get("actor") == "agent_loop_detection"
-            and enforcement.get("effect") == "agent_metadata.status=paused"
-        ),
+        # Keep the factual actuation observation separate from the narrow
+        # legacy-exception basis.  Previously this predicate folded both
+        # together, so a real circuit breaker with a different basis appeared
+        # as ``circuit_breaker_applied=false`` in recovery diagnostics.
+        "circuit_breaker_applied": circuit_breaker_applied,
+        "legacy_enforcement_basis_exact": legacy_enforcement_basis_exact,
     }
     failed_requirements = [
         name for name, satisfied in requirements.items() if not satisfied
@@ -440,13 +457,31 @@ def evaluate_non_authored_cold_start_trap(
         ),
         "epistemic_class": epistemic_class,
         "behavioral_confidence": confidence,
+        "observed_enforcement": {
+            "requested": enforcement.get("requested"),
+            "applied": enforcement.get("applied"),
+            "mode": enforcement.get("mode"),
+            "basis": enforcement.get("basis"),
+            "scope": enforcement.get("scope"),
+            "actor": enforcement.get("actor"),
+            "effect": enforcement.get("effect"),
+            "actuation_id": enforcement.get("actuation_id"),
+            "applied_at": enforcement.get("applied_at"),
+            "circuit_breaker_applied": circuit_breaker_applied,
+        },
         "failed_requirements": failed_requirements,
         "requirements": requirements,
         "note": (
             "Latest persisted row proves the legacy non-authored Phi cold-start "
             "circuit-breaker trap; reviewed recovery may discount frozen risk only."
             if eligible else
-            "Persisted provenance does not authorize a cold-start recovery exception."
+            (
+                "Persisted provenance records an applied circuit breaker, but does "
+                "not match the narrow legacy non-authored recovery exception."
+                if circuit_breaker_applied else
+                "Persisted provenance does not record an applied circuit breaker or "
+                "authorize a cold-start recovery exception."
+            )
         ),
     }
 

@@ -16,6 +16,7 @@ from typing import Any, Dict, Optional
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from functools import partial
+from uuid import uuid4
 
 from src.logging_utils import get_logger
 from src.agent_metadata_model import agent_metadata
@@ -39,7 +40,9 @@ def mark_circuit_breaker_enforcement_applied(
     *,
     actor: str,
     effect: str,
-) -> None:
+    actuation_id: str | None = None,
+    applied_at: str | None = None,
+) -> str:
     """Mark that the runtime actuator applied a policy-requested pause.
 
     ``monitor_result`` records policy evaluation and an unapplied enforcement
@@ -49,17 +52,24 @@ def mark_circuit_breaker_enforcement_applied(
     """
     prior = result.get("enforcement")
     prior = dict(prior) if isinstance(prior, dict) else {}
+    resolved_actuation_id = actuation_id or str(uuid4())
+    resolved_applied_at = applied_at or datetime.now(timezone.utc).isoformat()
     result["enforcement"] = {
         **prior,
+        "schema": prior.get("schema") or "governance.enforcement.v1",
+        "scope": prior.get("scope") or "runtime_circuit_breaker",
         "requested": True,
         "applied": True,
         "mode": "circuit_breaker",
         "actor": actor,
         "effect": effect,
+        "actuation_id": resolved_actuation_id,
+        "applied_at": resolved_applied_at,
         "note": "Circuit breaker applied at the runtime boundary after policy evaluation.",
     }
     result["paused"] = True
     result["circuit_breaker_triggered"] = True
+    return resolved_actuation_id
 
 
 def get_circuit_breaker_telemetry() -> Dict[str, Any]:
@@ -388,13 +398,18 @@ async def process_update_authenticated_async(
             meta.status = "paused"
             meta.paused_at = now
             decision_reason = result.get('decision', {}).get('reason', 'Circuit breaker triggered')
-            meta.add_lifecycle_event("paused", decision_reason)
-            logger.warning(f"⚠️  Circuit breaker triggered for agent '{agent_id}': {decision_reason}")
-            mark_circuit_breaker_enforcement_applied(
+            actuation_id = mark_circuit_breaker_enforcement_applied(
                 result,
                 actor="agent_loop_detection",
                 effect="agent_metadata.status=paused",
+                applied_at=now,
             )
+            meta.add_lifecycle_event(
+                "paused",
+                decision_reason,
+                actuation_id=actuation_id,
+            )
+            logger.warning(f"⚠️  Circuit breaker triggered for agent '{agent_id}': {decision_reason}")
 
             # P011: persist paused_at + the lifecycle event so they survive
             # the next load_metadata_async(force=True). Without this, the
@@ -409,6 +424,7 @@ async def process_update_authenticated_async(
                         "event": "paused",
                         "timestamp": now,
                         "reason": decision_reason,
+                        "actuation_id": actuation_id,
                     },
                 )
             except Exception as e:
@@ -425,7 +441,10 @@ async def process_update_authenticated_async(
                 task = loop.create_task(broadcaster_instance.broadcast_event(
                     "circuit_breaker_trip",
                     agent_id=agent_id,
-                    payload={"reason": decision_reason},
+                    payload={
+                        "reason": decision_reason,
+                        "actuation_id": actuation_id,
+                    },
                 ))
                 _background_tasks.add(task)
                 task.add_done_callback(_background_tasks.discard)

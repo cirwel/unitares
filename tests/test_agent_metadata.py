@@ -119,6 +119,16 @@ class TestAddLifecycleEvent:
         meta.add_lifecycle_event("paused", reason="User requested")
         assert meta.lifecycle_events[0]['reason'] == "User requested"
 
+    def test_pause_event_can_carry_actuation_id(self):
+        meta = AgentMetadata(agent_id="test", status="active",
+                            created_at="2026-01-15", last_update="2026-01-15")
+        meta.add_lifecycle_event(
+            "paused",
+            reason="Policy pause",
+            actuation_id="actuation-123",
+        )
+        assert meta.lifecycle_events[0]["actuation_id"] == "actuation-123"
+
     def test_multiple_events_accumulate(self):
         meta = AgentMetadata(agent_id="test", status="active",
                             created_at="2026-01-15", last_update="2026-01-15")

@@ -122,12 +122,16 @@ def _build_enforcement_stub(decision: Dict) -> Dict:
     else:
         basis = "policy_request" if requested else "advisory_policy"
     enforcement = {
+        "schema": "governance.enforcement.v1",
+        "scope": "runtime_circuit_breaker",
         "requested": requested,
         "applied": False,
         "mode": "circuit_breaker_candidate" if requested else "advisory",
         "basis": basis,
         "actor": None,
         "effect": None,
+        "actuation_id": None,
+        "applied_at": None,
         "note": (
             "Policy requested enforcement. This envelope is the pre-actuation "
             "candidate; the authenticated update boundary applies it as a circuit "
@@ -140,6 +144,11 @@ def _build_enforcement_stub(decision: Dict) -> Dict:
     }
     if maturity_gate is not None:
         enforcement["maturity_gate"] = maturity_gate
+        enforcement["scope_note"] = (
+            "enforcement.applied describes the runtime circuit breaker; "
+            "maturity_gate.actuation_* describes only the dormant cold-start "
+            "confirmation-deferral policy."
+        )
     if epistemic_gate is not None:
         enforcement["epistemic_gate"] = epistemic_gate
     return enforcement

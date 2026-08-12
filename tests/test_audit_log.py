@@ -127,6 +127,7 @@ class TestColdStartRiskConfirmationAudit:
                 "would_defer": True,
                 "confirmed": False,
                 "outcome": "shadow_would_defer",
+                "actuation_scope": "fallback_risk_pause_deferral",
                 "actuation_enabled": False,
                 "actuation_ready": False,
                 "actuation_applied": False,
@@ -147,6 +148,7 @@ class TestColdStartRiskConfirmationAudit:
         assert entry["event_type"] == "cold_start_risk_confirmation_evaluated"
         assert entry["confidence"] == 0.1
         assert entry["details"]["outcome"] == "shadow_would_defer"
+        assert entry["details"]["actuation_scope"] == "fallback_risk_pause_deferral"
         assert entry["details"]["actuation_applied"] is False
         assert entry["details"]["original_decision"]["sub_action"] == "risk_pause"
 
