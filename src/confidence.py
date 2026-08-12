@@ -24,6 +24,12 @@ if TYPE_CHECKING:
 from config.governance_config import config
 
 
+LEGACY_COHERENCE_CONFIDENCE_ABLATION_SCHEMA = (
+    "legacy_coherence_confidence_ablation.v1"
+)
+LEGACY_COHERENCE_CONFIDENCE_NEUTRAL_VALUE = 0.5
+
+
 def _compute_deviation_signal(state: 'GovernanceState', agent_id: str = None) -> float:
     """
     Compute deviation penalty from EISV history.
@@ -140,6 +146,7 @@ def derive_confidence(
     integrity_val = 0.5
     entropy_val = 0.5
     void_val = 0.0
+    neutralized_eisv_confidence = None
     
     if state is not None:
         coherence_val = state.coherence if hasattr(state, 'coherence') else 0.5
@@ -163,11 +170,26 @@ def derive_confidence(
             ((1.0 - float(entropy_val)) * 0.10)
         ) - void_penalty - entropy_penalty
 
+        # Prospective measurement-only candidate.  Replacing the directional
+        # legacy controller with its transfer midpoint removes its variation
+        # while preserving the deployed 55% weight and intercept.  This lets a
+        # later trusted-outcome read ask whether that variation added anything
+        # without changing today's confidence, calibration history, or policy.
+        neutralized_eisv_confidence = (
+            (LEGACY_COHERENCE_CONFIDENCE_NEUTRAL_VALUE * 0.55) +
+            (float(integrity_val) * 0.35) +
+            ((1.0 - float(entropy_val)) * 0.10)
+        ) - void_penalty - entropy_penalty
+
         # Deviation-based penalty: breaks constant confidence when EISV shifts
         deviation_penalty = _compute_deviation_signal(state, agent_id)
         eisv_confidence -= deviation_penalty
+        neutralized_eisv_confidence -= deviation_penalty
 
         eisv_confidence = float(max(0.0, min(1.0, eisv_confidence)))
+        neutralized_eisv_confidence = float(
+            max(0.0, min(1.0, neutralized_eisv_confidence))
+        )
 
         metadata['eisv'] = {
             'coherence': float(coherence_val),
@@ -229,5 +251,52 @@ def derive_confidence(
     # NOTE: We intentionally avoid 1.0 in derived mode; perfect certainty is not available here.
     final_confidence = max(0.05, min(0.95, float(final_confidence)))
     metadata['confidence'] = final_confidence
+
+    if neutralized_eisv_confidence is not None:
+        candidate_gap = abs(tool_confidence - neutralized_eisv_confidence)
+        candidate_gap_penalty = 0.0
+        if candidate_gap > 0.1:
+            candidate_gap_penalty = min(0.08, (candidate_gap - 0.1) * 0.2)
+        candidate_confidence = neutralized_eisv_confidence - candidate_gap_penalty
+        candidate_confidence += agent_offset
+        candidate_confidence = max(0.05, min(0.95, float(candidate_confidence)))
+        metadata['shadow_ablations'] = {
+            'legacy_coherence_neutralized': {
+                'schema': LEGACY_COHERENCE_CONFIDENCE_ABLATION_SCHEMA,
+                'mode': 'measurement_only',
+                'policy_applied': False,
+                'eligible': True,
+                'eligibility_reason': None,
+                'applies_to': 'omitted_confidence_fallback_only',
+                'intervention': {
+                    'field': 'state.coherence',
+                    'source': 'legacy_tanh_v',
+                    'role': 'ode_control_feedback',
+                    'operation': 'replace_with_transfer_midpoint',
+                    'replacement_value': LEGACY_COHERENCE_CONFIDENCE_NEUTRAL_VALUE,
+                    'preserved_weight': 0.55,
+                },
+                'deployed': {
+                    'base': float(eisv_confidence),
+                    'final': float(final_confidence),
+                    'tool_gap_penalty': float(gap_penalty),
+                },
+                'candidate': {
+                    'base': float(neutralized_eisv_confidence),
+                    'final': float(candidate_confidence),
+                    'tool_gap_penalty': float(candidate_gap_penalty),
+                },
+                'candidate_minus_deployed': {
+                    'base': float(neutralized_eisv_confidence - eisv_confidence),
+                    'final': float(candidate_confidence - final_confidence),
+                },
+                'not_modeled': [
+                    'calibration_history_replay',
+                    'entropy_feedback_replay',
+                    'policy_effect',
+                    'future_outcomes',
+                ],
+            }
+        }
     
     return (final_confidence, metadata)

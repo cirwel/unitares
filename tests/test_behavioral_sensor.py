@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 
 from src.behavioral_sensor import (
     compute_behavioral_sensor_eisv,
+    compute_legacy_coherence_dependency_shadow,
     _compute_E,
     _compute_I,
     _compute_S,
@@ -89,6 +90,69 @@ class TestBehavioralSensor:
         r1 = compute_behavioral_sensor_eisv(**h1)
         r2 = compute_behavioral_sensor_eisv(**h2)
         assert r1["V"] == r2["V"]
+
+
+class TestLegacyCoherenceDependencyShadow:
+    def test_midpoint_history_has_zero_shadow_delta(self):
+        histories = make_histories(n=10, coherence=0.5)
+        deployed = compute_behavioral_sensor_eisv(**histories)
+
+        shadow = compute_legacy_coherence_dependency_shadow(
+            **histories,
+            deployed_observation=deployed,
+        )
+
+        assert shadow["eligible"] is True
+        assert shadow["mode"] == "measurement_only"
+        assert shadow["policy_applied"] is False
+        assert shadow["candidate"] == shadow["deployed"]
+        assert shadow["candidate_minus_deployed"] == {"E": 0.0, "I": 0.0}
+
+    def test_neutralizes_level_and_trend_without_changing_live_observation(self):
+        histories = make_histories(n=10)
+        histories["coherence_history"] = [0.40 + 0.02 * idx for idx in range(10)]
+        deployed = compute_behavioral_sensor_eisv(
+            **histories,
+            calibration_error=0.1,
+            continuity_E_input=0.8,
+            continuity_I_input=0.7,
+            tool_error_rate=0.2,
+            unique_tools_ratio=0.6,
+        )
+
+        shadow = compute_legacy_coherence_dependency_shadow(
+            **histories,
+            calibration_error=0.1,
+            continuity_E_input=0.8,
+            continuity_I_input=0.7,
+            tool_error_rate=0.2,
+            unique_tools_ratio=0.6,
+            deployed_observation=deployed,
+        )
+
+        assert shadow["deployed"] == {"E": deployed["E"], "I": deployed["I"]}
+        assert shadow["candidate"]["E"] != pytest.approx(deployed["E"])
+        assert shadow["candidate"]["I"] < deployed["I"]
+        assert shadow["intervention"]["replacement_value"] == 0.5
+        assert "behavioral_ema_replay" in shadow["not_modeled"]
+        # The shadow function is pure and cannot mutate the deployed reading.
+        assert deployed == compute_behavioral_sensor_eisv(
+            **histories,
+            calibration_error=0.1,
+            continuity_E_input=0.8,
+            continuity_I_input=0.7,
+            tool_error_rate=0.2,
+            unique_tools_ratio=0.6,
+        )
+
+    def test_insufficient_history_is_explicitly_ineligible(self):
+        shadow = compute_legacy_coherence_dependency_shadow(
+            **make_histories(n=2)
+        )
+
+        assert shadow["eligible"] is False
+        assert shadow["eligibility_reason"] == "insufficient_behavioral_history"
+        assert shadow["candidate"] is None
 
 
 # ══════════════════════════════════════════════════
@@ -574,6 +638,11 @@ class TestPrepareUnlockedInputsContract:
                    return_value=MagicMock(get_usage_stats=MagicMock(return_value={"total_calls": 0}))):
             await prepare_unlocked_inputs(ctx)
         assert "sensor_eisv" in ctx.agent_state
+        shadow = ctx.agent_state["_eisv_shadow_ablations"][
+            "legacy_coherence_neutralized"
+        ]["behavioral_sensor"]
+        assert shadow["eligible"] is True
+        assert shadow["policy_applied"] is False
 
     @pytest.mark.asyncio
     async def test_explicit_sensor_data_routed_unlocked(self):
