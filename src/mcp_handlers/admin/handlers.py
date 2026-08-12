@@ -282,6 +282,24 @@ async def handle_get_tool_usage_stats(arguments: Dict[str, Any]) -> Sequence[Tex
         )
         if isinstance(stats, dict):
             stats["source"] = "jsonl_fallback"
+            # NOT the same caveat as the DB path's `coverage`. audit.tool_usage
+            # has two eras and gained the MCP transport at a known instant; the
+            # JSONL sink never receives it at all, because #1424 instrumented
+            # the MCP wrapper with audit_only=True on purpose — that sink is a
+            # behavioural-sensor input with verdict authority, and adding a
+            # whole transport to it would be a fleet-wide sensor change. So this
+            # fallback is permanently REST+stdio, at every window.
+            stats["coverage"] = {
+                "partial": True,
+                "transports": ["rest", "stdio"],
+                "caveat": (
+                    "Degraded read: the DB sink was unavailable, so these counts "
+                    "come from the JSONL tracker, which by design never records "
+                    "MCP-transport (/mcp, /sse) calls at any window. Agent tool "
+                    "use is missing here, not merely undercounted. Do not cite "
+                    "adoption or per-agent figures from this source."
+                ),
+            }
 
     return success_response(stats)
 
