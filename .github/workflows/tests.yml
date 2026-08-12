@@ -120,6 +120,33 @@ jobs:
       matrix:
         python-version: ['3.12']
 
+    # Without a database, 333 tests across 29 modules skip themselves — every
+    # migration test among them. The suite went green while the riskiest surface
+    # in the repo was verified by nobody. Credentials match tests/test_db_utils
+    # TEST_DB_URL exactly (postgres:postgres@localhost:5432/governance_test).
+    #
+    # pgvector's image, not stock `postgres`: the migrations `CREATE EXTENSION
+    # vector`, and a stock image fails 67 tests with "extension vector is not
+    # available". That was invisible until the tests actually ran here — the
+    # dev machine has pgvector installed, so a local from-scratch database
+    # proved nothing about this.
+    #
+    # Still NOT an AGE image. The schema bootstrap treats `LOAD 'age'` as
+    # best-effort and the graph-dependent tests skip when the extension is
+    # absent, so the remaining gap costs four skips rather than a red build.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
     - name: Checkout code
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -152,6 +179,12 @@ jobs:
     - name: Check doc drift
       run: |
         python scripts/diagnostics/check_doc_drift.py
+
+    - name: Create test database
+      env:
+        PGPASSWORD: postgres
+      run: |
+        psql -h localhost -U postgres -c 'CREATE DATABASE governance_test'
 
     - name: Run tests with coverage
       run: |

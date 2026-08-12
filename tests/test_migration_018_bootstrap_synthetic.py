@@ -213,16 +213,40 @@ async def test_matview_projects_synthetic_column():
 
 @pytest.mark.asyncio
 async def test_migration_018_registered():
-    """Migration row landed in core.schema_migrations."""
+    """Migration row landed in core.schema_migrations.
+
+    Asserts version 22, not 18: slot 018 was renumbered to 022 in PR #236's
+    migration-drift triage, and the file itself registers
+    `(22, 'bootstrap_synthetic_state')`. This assertion still said 18 and passed
+    anyway, because a long-lived `governance_test` kept the pre-renumber row —
+    the same drifted-into-correctness failure that hid the missing migrations
+    from the bootstrap. On a fresh database it fails, which is what CI will use.
+    """
     await ensure_test_database_schema()
 
     conn = await asyncpg.connect(TEST_DB_URL)
     try:
         row = await conn.fetchrow(
-            "SELECT version, name FROM core.schema_migrations WHERE version = 18"
+            "SELECT version, name FROM core.schema_migrations WHERE version = 22"
+        )
+        misfiled = await conn.fetchrow(
+            "SELECT version FROM core.schema_migrations "
+            "WHERE name = 'bootstrap_synthetic_state' AND version <> 22"
         )
     finally:
         await conn.close()
 
-    assert row is not None
+    if misfiled is not None:
+        raise AssertionError(
+            "bootstrap_synthetic_state is registered at version "
+            f"{misfiled['version']}, not 22. This test database predates PR "
+            "#236's renumbering of slot 018 to 022, so its migration registry "
+            "no longer matches production or the migration files. Recreate it: "
+            "dropdb governance_test && createdb governance_test"
+        )
+    assert row is not None, (
+        "core.schema_migrations has no version 22. Either the test database is "
+        "stale or 022_bootstrap_synthetic_state.sql did not apply — check the "
+        "[test-db-bootstrap] output above for a migration that failed."
+    )
     assert row["name"] == "bootstrap_synthetic_state"
