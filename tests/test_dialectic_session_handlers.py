@@ -197,6 +197,19 @@ class TestReconstructSessionFromDict:
         session2 = _reconstruct_session_from_dict("sess_aw2", data2)
         assert session2.awaiting_facilitation is False
 
+    def test_reconstruction_restores_reason_and_trigger_source(self):
+        """Reloaded sessions retain the server-owned context sent to reviewers."""
+        from src.mcp_handlers.dialectic.session import _reconstruct_session_from_dict
+
+        data = _make_session_dict(topic="Short topic")
+        data["reason"] = "Circuit breaker paused on a high-risk verdict"
+        data["trigger_source"] = "circuit_breaker"
+
+        session = _reconstruct_session_from_dict("sess_context", data)
+
+        assert session.reason == "Circuit breaker paused on a high-risk verdict"
+        assert session.trigger_source == "circuit_breaker"
+
     def test_reconstruction_with_resolution(self):
         from src.mcp_handlers.dialectic.session import _reconstruct_session_from_dict
 
@@ -711,6 +724,9 @@ class TestLoadSessionAsDict:
             "topic": "Test topic",
             "created_at": now,
             "resolution_json": None,
+            "reason": "Circuit breaker pause",
+            "trigger_source": "circuit_breaker",
+            "awaiting_facilitation": True,
         }
 
         mock_msg_rows = [
@@ -748,6 +764,9 @@ class TestLoadSessionAsDict:
         assert result["paused_agent"] == "agent_a"
         assert result["reviewer"] == "agent_b"
         assert result["topic"] == "Test topic"
+        assert result["reason"] == "Circuit breaker pause"
+        assert result["trigger_source"] == "circuit_breaker"
+        assert result["awaiting_facilitation"] is True
         assert result["message_count"] == 1
         assert len(result["transcript"]) == 1
         assert result["transcript"][0]["phase"] == "thesis"
