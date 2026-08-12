@@ -79,6 +79,72 @@ exp_head="$(git -C "$REPO" rev-parse origin/master)"
   deploy_lib_poll 5 0 probe ) && ok "poll succeeds when probe eventually passes" || bad "poll eventual success"
 ( set -euo pipefail; . "$LIB"; deploy_lib_poll 3 0 false ) && bad "poll fails after attempts exhausted" || ok "poll fails after attempts exhausted"
 
+# ── deploy-status.sh staleness counting must survive merge commits ──
+# Regression guard for the false-CURRENT* bug (measured 2026-08-12: the
+# governance MCP ran build_sha 1ac9912a against a 56728eba checkout and was
+# reported CURRENT*, i.e. "skip restart"). With a pathspec, git applies history
+# simplification and prunes the merge commit; the branch commits underneath
+# carry pre-merge dates that fall outside --since, so the count comes back 0.
+# --full-history keeps the merge visible. This repo lands work as PR merges, so
+# without it every post-restart merge is invisible to the staleness check.
+(
+  set -euo pipefail
+  R="$SB/mergecount"; mkdir -p "$R"; cd "$R"
+  git init -q -b master .; git config user.email t@t; git config user.name t
+  echo a > f.txt; git add f.txt; git commit -qm init
+  git checkout -qb feat
+  echo b > f.txt
+  # branch commit dated well BEFORE the cutoff; the merge lands after it
+  GIT_COMMITTER_DATE="2020-01-01T00:00:00" git commit -qam "work" --date="2020-01-01T00:00:00"
+  git checkout -q master
+  git merge -q --no-ff feat -m "Merge pull request #1 from feat"
+  S="2021-01-01 00:00:00"
+  simplified=$(git rev-list --count --since="$S" master -- .)
+  full=$(git rev-list --count --full-history --since="$S" master -- .)
+  [ "$simplified" = "0" ] || exit 9        # the trap this guards against
+  [ "$full" -ge 1 ] || exit 10             # --full-history must see the merge
+  grep -q -- '--full-history' "$(dirname "$LIB")/deploy-status.sh" || exit 11
+) && ok "deploy-status counts merge commits (--full-history)" \
+  || bad "deploy-status merge-commit staleness counting"
+
+# ── deploy-status.sh: BEHIND must apply to every running/live verdict ──
+# Gating the BEHIND promotion on CURRENT made checkout drift structurally
+# invisible for anything that never reports CURRENT. live-from-checkout is set
+# to LIVE unconditionally, so gov-plugin could sit any number of commits behind
+# origin and still display LIVE — measured 2026-08-12 at behind=2, including a
+# release bump. For that service the checkout IS the deployed artifact, so
+# "behind" is the only drift signal that exists. DOWN and GHOST-BRANCH must NOT
+# be overridden: each names a more urgent, different action than "pull".
+(
+  set -uo pipefail
+  promote() { # verdict behind -> verdict
+    local verdict="$1" behind="$2"
+    if [ "$behind" != "0" ] && [ "$behind" != "?" ]; then
+      case "$verdict" in
+        CURRENT|CURRENT\*|LIVE|HOT-RELOAD|STALE*) verdict="BEHIND($behind)" ;;
+      esac
+    fi
+    printf '%s' "$verdict"
+  }
+  # promoted
+  [ "$(promote LIVE 2)"          = "BEHIND(2)" ] || exit 20
+  [ "$(promote CURRENT 5)"       = "BEHIND(5)" ] || exit 21
+  [ "$(promote 'CURRENT*' 3)"    = "BEHIND(3)" ] || exit 22
+  [ "$(promote HOT-RELOAD 1)"    = "BEHIND(1)" ] || exit 23
+  [ "$(promote 'STALE(4)' 7)"    = "BEHIND(7)" ] || exit 24
+  # preserved
+  [ "$(promote DOWN 2)"          = "DOWN" ]         || exit 25
+  [ "$(promote GHOST-BRANCH 1)"  = "GHOST-BRANCH" ] || exit 26
+  [ "$(promote n/a 2)"           = "n/a" ]          || exit 27
+  [ "$(promote LIVE 0)"          = "LIVE" ]         || exit 28
+  [ "$(promote LIVE '?')"        = "LIVE" ]         || exit 29
+  # and the real script must not have re-gated it on CURRENT alone
+  grep -q '\[ "\$verdict" = "CURRENT" \] && verdict="BEHIND' \
+    "$(dirname "$LIB")/deploy-status.sh" && exit 30
+  exit 0
+) && ok "deploy-status BEHIND applies to LIVE/HOT-RELOAD/STALE, not DOWN/GHOST" \
+  || bad "deploy-status BEHIND promotion rules"
+
 echo; echo "passed=$pass failed=$fail"
 rm -rf "$SB"
 exit "$((fail > 0))"
