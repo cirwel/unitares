@@ -21,8 +21,10 @@ where:
     V: E-I imbalance integral (damped accumulator, like Helmholtz free energy) [-2,2]
         V > 0: energy surplus (running hot), V < 0: integrity surplus (running careful)
         Feeds a directional controller: C(V,Θ) = Cmax · 0.5 · (1 + tanh(C₁·V))
-        Note: "Void" name comes from Lumen mapping V=(1-presence)*0.3; the ODE
-        evolves V as a signed integrator, which is a different quantity.
+        Note: "Void" is a legacy name from an early Lumen mapping,
+        V=(1-presence)*0.3, retired in anima-mcp #164. Lumen now submits a
+        signed E-I imbalance in the same sense as this axis; the ODE still
+        evolves V as an accumulator, so the ranges differ but the sign does not.
     C(V,Θ): Legacy-named directional control-feedback function
     ‖Δη‖: Ethical drift norm
     C: Task complexity [0,1] - increases entropy S
@@ -81,9 +83,12 @@ def eisv_divergence(sensor_eisv: State, ode_state: State) -> dict:
 
     The values are in each axis's NATIVE units and are not comparable across
     axes: the ODE's V is a signed E-I-imbalance accumulator in [-2, 2], whereas
-    a sensor layer (e.g. Lumen's Pi mapping V=(1-presence)*0.3) may put V in a
-    different range derived from a different quantity. Read the axes
-    individually; treat ``magnitude`` as a coarse "how far apart" scalar only.
+    a sensor layer reports an instantaneous readout over its own range. Lumen's
+    Pi submits V = clamp(E - I, -1, 1) — the same quantity and sign as this
+    axis, undamped, so ``dV`` is dominated by the ODE's accumulation rather than
+    by a units mismatch. (It previously mapped V=(1-presence)*0.3, a different
+    quantity entirely; retired in anima-mcp #164.) Read the axes individually;
+    treat ``magnitude`` as a coarse "how far apart" scalar only.
     """
     dE = sensor_eisv.E - ode_state.E
     dI = sensor_eisv.I - ode_state.I
