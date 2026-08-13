@@ -785,6 +785,42 @@ def check_flags_catalog_fresh(repo_root: Path) -> CheckResult:
     )
 
 
+def check_tool_edge_index_fresh(repo_root: Path) -> CheckResult:
+    """FAIL if docs/dev/TOOL_EDGE_INDEX.md is out of date vs the live registries.
+
+    The index resolves every tool -> handler -> action delegate -> params schema
+    edge by importing the handler package, because none of those edges are
+    written down anywhere statically (decorator registration, router closures, a
+    string list of schema modules). A tool, action, or alias added without
+    regenerating leaves the only readable map of dispatch silently wrong.
+
+    SKIPs on exit 2 — the generator needs the handler package importable
+    (requirements-core.txt). "Cannot look" is not "looked and found drift", and
+    this check must stay honest on a pre-install tree like the rest of the
+    doctor.
+    """
+    name, mode = "tool_edge_index_fresh", "local"
+    script = repo_root / "scripts" / "dev" / "tool_edge_index.py"
+    if not script.exists():
+        return CheckResult(name, mode, Status.SKIP, "tool_edge_index.py not present")
+    proc = subprocess.run(
+        [sys.executable, str(script), "--check"],
+        cwd=str(repo_root), capture_output=True, text=True,
+    )
+    if proc.returncode == 0:
+        return CheckResult(name, mode, Status.PASS, "docs/dev/TOOL_EDGE_INDEX.md is up to date")
+    if proc.returncode == 2:
+        return CheckResult(
+            name, mode, Status.SKIP, "handler package not importable",
+            detail=(proc.stderr or proc.stdout or "").strip(),
+        )
+    return CheckResult(
+        name, mode, Status.FAIL, "docs/dev/TOOL_EDGE_INDEX.md is stale",
+        detail=((proc.stderr or proc.stdout or "").strip()
+                + "  -> run: python3 scripts/dev/tool_edge_index.py"),
+    )
+
+
 def check_class_anchors_fresh(repo_root: Path) -> CheckResult:
     """WARN if the per-class manifold anchors have gone stale.
 
@@ -1769,6 +1805,8 @@ def build_checks(repo_root: Path, db_url: str) -> list[Check]:
               lambda: check_dockerfile_pinned_tags(repo_root)),
         Check("flags_catalog_fresh", "local",
               lambda: check_flags_catalog_fresh(repo_root)),
+        Check("tool_edge_index_fresh", "local",
+              lambda: check_tool_edge_index_fresh(repo_root)),
         Check("class_anchors_fresh", "local",
               lambda: check_class_anchors_fresh(repo_root)),
         Check("anchor_directory", "local", check_anchor_dir),
