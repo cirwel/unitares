@@ -129,15 +129,63 @@ deploy_lib_require_plist_target() {
 # serving in-RAM modules — the 06-27 ~5.4h fail-open, #1277).
 #
 # usage: deploy_lib_ff_worktree TAG REPO DEPLOY_PATH
+# Does $repo already have a worktree at $deploy?
+#
+# `git worktree list --porcelain` prints RESOLVED paths, so a literal string
+# compare against the caller's argument reports "missing" whenever any parent is
+# a symlink — on macOS /tmp -> /private/tmp does exactly this. The old
+# `grep -qx "worktree $deploy"` then fell through to `git worktree add` on a
+# directory that already existed, and the deploy died on
+# `fatal: '<path>' already exists` instead of fast-forwarding. Production dodged
+# it only because $HOME/projects has no symlink in it; the lib's own test suite
+# runs in /tmp and has been red on this.
+#
+# Both sides are resolved with `pwd -P` before comparing, so symlinked and
+# case-folded paths (Projects vs projects on APFS) match the same worktree.
+_deploy_lib_worktree_exists() {
+  local repo="$1" deploy="$2" want w found=1
+  want="$(cd "$deploy" 2>/dev/null && pwd -P)" || want="$deploy"
+  [ -n "$want" ] || want="$deploy"
+  # Process substitution keeps the loop in THIS shell, so `found` survives it
+  # (a `... | while` pipeline would assign in a subshell and always report 1).
+  while IFS= read -r w; do
+    w="${w#worktree }"
+    [ "$(cd "$w" 2>/dev/null && pwd -P || printf '%s' "$w")" = "$want" ] && { found=0; break; }
+  done < <(git -C "$repo" worktree list --porcelain 2>/dev/null | grep '^worktree ')
+  return "$found"
+}
+
+# usage: deploy_lib_ff_worktree TAG REPO DEPLOY [--detach]
+#
+# --detach creates the worktree on a DETACHED origin/master instead of the
+# `master` branch. Required for any second dedicated worktree: git allows one
+# checkout of a branch across a repo, and `master` is already held by
+# unitares-deploy, so a branch-mode `worktree add` fails with "already used by
+# worktree at ...". The orchestrator's tree is detached for exactly this reason.
+# Fast-forwarding works identically either way (`merge --ff-only` advances a
+# detached HEAD), so this only affects the create-if-missing path.
 deploy_lib_ff_worktree() {
-  local tag="$1" repo="$2" deploy="$3"
+  local tag="$1" repo="$2" deploy="$3" detach=0
+  shift 3
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --detach) detach=1 ;;
+      *) echo "[$tag] deploy_lib_ff_worktree: unknown arg $1" >&2; return 2 ;;
+    esac
+    shift
+  done
   echo "[$tag] fetching origin/master"
   git -C "$repo" fetch origin master --quiet
 
   DEPLOY_LIB_FRESH=0
-  if ! git -C "$repo" worktree list --porcelain | grep -qx "worktree $deploy"; then
-    echo "[$tag] creating dedicated deploy worktree at $deploy (on master)"
-    git -C "$repo" worktree add "$deploy" master
+  if ! _deploy_lib_worktree_exists "$repo" "$deploy"; then
+    if [ "$detach" = 1 ]; then
+      echo "[$tag] creating dedicated deploy worktree at $deploy (detached at origin/master)"
+      git -C "$repo" worktree add --detach "$deploy" origin/master
+    else
+      echo "[$tag] creating dedicated deploy worktree at $deploy (on master)"
+      git -C "$repo" worktree add "$deploy" master
+    fi
     DEPLOY_LIB_FRESH=1
   fi
 
