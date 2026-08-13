@@ -66,8 +66,8 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `observe` | `src/mcp_handlers/consolidated.py:311 action_router` | `src/mcp_handlers/schemas/observability.py:58 ObserveParams` | 15s | — |
 | `onboard` | `src/mcp_handlers/identity/handlers.py:1719 handle_onboard_v2` | `src/mcp_handlers/schemas/identity.py:45 OnboardParams` | 15s | identity=pre_onboard |
 | `operator_resume_agent` | `src/mcp_handlers/lifecycle/self_recovery.py:526 handle_operator_resume_agent` | `src/mcp_handlers/schemas/lifecycle.py:327 OperatorResumeAgentParams` | 15s | — |
-| `outcome_correlation` | `src/mcp_handlers/observability/outcome_events.py:708 handle_outcome_correlation` | `src/mcp_handlers/schemas/observability.py:87 OutcomeCorrelationParams` | 30s | — |
-| `outcome_event` | `src/mcp_handlers/observability/outcome_events.py:568 handle_outcome_event` | `src/mcp_handlers/schemas/core.py:467 OutcomeEventParams` | 15s | — |
+| `outcome_correlation` | `src/mcp_handlers/observability/outcome_events.py:719 handle_outcome_correlation` | `src/mcp_handlers/schemas/observability.py:87 OutcomeCorrelationParams` | 30s | — |
+| `outcome_event` | `src/mcp_handlers/observability/outcome_events.py:579 handle_outcome_event` | `src/mcp_handlers/schemas/core.py:467 OutcomeEventParams` | 15s | — |
 | `process_agent_update` | `src/mcp_handlers/core.py:436 handle_process_agent_update` | `src/mcp_handlers/schemas/core.py:303 ProcessAgentUpdateParams` | 60s | — |
 | `reassign_reviewer` | `src/mcp_handlers/dialectic/handlers.py:2716 handle_reassign_reviewer` | `src/mcp_handlers/schemas/dialectic.py:149 ReassignReviewerParams` | 15s | — |
 | `record_progress_pulse` | `src/mcp_handlers/resident_progress.py:20 handle_record_progress_pulse` | — | 5s | — |
