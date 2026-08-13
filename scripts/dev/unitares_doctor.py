@@ -332,6 +332,151 @@ def check_column_drift(db_url: str, repo_root: Path) -> CheckResult:
     )
 
 
+_SQL_LINE_COMMENT = re.compile(r"--[^\n]*")
+_SQL_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+_ALTER_TABLE = re.compile(r"\bALTER\s+TABLE\s+(?:ONLY\s+)?([A-Za-z_][\w.]*)", re.I)
+_ADD_CONSTRAINT = re.compile(r"\bADD\s+CONSTRAINT\s+([A-Za-z_]\w*)", re.I)
+_DROP_CONSTRAINT = re.compile(
+    r"\bDROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?([A-Za-z_]\w*)", re.I
+)
+
+
+def _declared_constraints(migrations_dir: Path) -> dict[tuple[str, str], str]:
+    """Map (qualified_table, constraint_name) -> migration file that last ADDed it.
+
+    Replays every ADD/DROP CONSTRAINT across the migration set in apply order
+    (version, then position within the file) and keeps only constraints whose
+    LAST action is an ADD. That is what makes drop-then-re-add
+    (056_lease_release_reason_reclaimed) and deliberate retirement
+    (047_knowledge_check_constraints_widen) read correctly instead of as drift.
+
+    Comments are stripped first — 034's own header contains the words "ADD
+    CONSTRAINT IF NOT EXISTS" in prose, which a naive scan reports as a
+    constraint literally named "IF".
+
+    Scope limit: only ALTER TABLE ... ADD CONSTRAINT is tracked. Constraints
+    written inline in a CREATE TABLE body are owned by schema.sql, not by the
+    migration replay, so they are out of scope here.
+    """
+    live: dict[tuple[str, str], str] = {}
+    for path in sorted(migrations_dir.glob("*.sql"), key=lambda p: p.name):
+        sql = _SQL_BLOCK_COMMENT.sub(" ", path.read_text(encoding="utf-8"))
+        sql = _SQL_LINE_COMMENT.sub(" ", sql)
+
+        # Each ADD/DROP belongs to the nearest preceding ALTER TABLE, since the
+        # two clauses routinely sit on different lines.
+        tables = [(m.start(), m.group(1).lower()) for m in _ALTER_TABLE.finditer(sql)]
+
+        def table_at(pos: int) -> str | None:
+            prior = [t for off, t in tables if off < pos]
+            return prior[-1] if prior else None
+
+        events: list[tuple[int, str, str]] = []
+        for m in _ADD_CONSTRAINT.finditer(sql):
+            events.append((m.start(), "add", m.group(1).lower()))
+        for m in _DROP_CONSTRAINT.finditer(sql):
+            events.append((m.start(), "drop", m.group(1).lower()))
+
+        for pos, action, cname in sorted(events):
+            tbl = table_at(pos)
+            if tbl is None:
+                continue
+            if action == "add":
+                live[(tbl, cname)] = path.name
+            else:
+                live.pop((tbl, cname), None)
+    return live
+
+
+def _fetch_live_constraints(db_url: str) -> set[tuple[str, str]] | None:
+    """Every constraint in the DB as (qualified_table, constraint_name), or None."""
+    proc = subprocess.run(
+        ["psql", db_url, "-Atqc",
+         "SELECT n.nspname || '.' || cl.relname || '|' || c.conname "
+         "FROM pg_constraint c "
+         "JOIN pg_class cl ON cl.oid = c.conrelid "
+         "JOIN pg_namespace n ON n.oid = cl.relnamespace"],
+        capture_output=True, text=True, timeout=10,
+    )
+    if proc.returncode != 0:
+        return None
+    out: set[tuple[str, str]] = set()
+    for line in proc.stdout.splitlines():
+        if "|" in line:
+            tbl, cname = line.strip().rsplit("|", 1)
+            out.add((tbl.lower(), cname.lower()))
+    return out
+
+
+def check_constraint_drift(db_url: str, repo_root: Path) -> CheckResult:
+    """FAIL when a migration declares a constraint the live DB does not have.
+
+    The companion to ``column_drift``: that one catches code referencing a
+    column the DB lacks, this one catches the DB lacking an *enforcement rule*
+    the migrations claim to have installed. Nothing else can see it — a missing
+    CHECK does not crash anything, it just silently stops rejecting the writes
+    it exists to reject.
+
+    Found live on 2026-08-10: ``substrate_state_has_sensor_status`` (migration
+    034) was absent from the governance DB for three months. Root cause is the
+    general hazard this check exists to catch — ``core.schema_migrations``
+    recorded version 34 applied at 2026-05-03T21:28:22Z, but the commit that
+    finished the file landed 74 minutes LATER, so prod was migrated from an
+    in-progress working tree and ``apply_migrations.py``, which plans by
+    registered version and never by file content, never revisited it. Any
+    migration applied from an uncommitted tree can half-land the same way.
+
+    Tests cannot cover this: ``ensure_test_database_schema`` re-executes
+    migration files IN FULL against the test DB, so the test population is
+    correct by construction while production stays wrong. This is a property of
+    the deployed database, and only a check against that database can see it.
+    """
+    name, mode = "constraint_drift", "local"
+    if shutil.which("psql") is None:
+        return CheckResult(name, mode, Status.SKIP, "psql not on PATH")
+
+    migrations_dir = repo_root / "db" / "postgres" / "migrations"
+    if not migrations_dir.is_dir():
+        return CheckResult(name, mode, Status.SKIP, "no db/postgres/migrations directory")
+
+    declared = _declared_constraints(migrations_dir)
+    if not declared:
+        return CheckResult(name, mode, Status.SKIP, "no ADD CONSTRAINT statements found")
+
+    live = _fetch_live_constraints(db_url)
+    if live is None:
+        return CheckResult(name, mode, Status.SKIP, "pg_constraint not queryable")
+
+    live_tables = {tbl for tbl, _ in live}
+    missing = [
+        f"{tbl}.{cname}  (declared by {src})"
+        for (tbl, cname), src in sorted(declared.items())
+        # A table absent entirely is a different failure; schema_migrations and
+        # column_drift own that, and reporting it here would just double-count.
+        if tbl in live_tables and (tbl, cname) not in live
+    ]
+
+    if missing:
+        return CheckResult(
+            name, mode, Status.FAIL,
+            f"{len(missing)} constraint(s) declared by migrations are missing from the DB",
+            detail="\n".join(missing) + (
+                "\n\nThe migration that declares it is almost certainly already "
+                "registered in core.schema_migrations, so re-running it is a no-op "
+                "— apply_migrations.py plans by version, not by file content. "
+                "Repair with a NEW forward migration that re-adds the constraint "
+                "(see 061_lease_plane_sensor_status_check_repair.sql for the shape, "
+                "including the post-condition that refuses to register a repair it "
+                "did not actually make). Check for violating rows first: adding the "
+                "constraint re-validates the whole table."
+            ),
+        )
+    return CheckResult(
+        name, mode, Status.PASS,
+        f"all {len(declared)} migration-declared constraint(s) present in the DB",
+    )
+
+
 def check_elixir_deprecated_scheme_lint(db_url: str, repo_root: Path) -> CheckResult:
     """Phase B prep (RFC §7.11.8): WARN if any Elixir source mentions a
     surface_kind currently in lease_plane.deprecated_schemes.
@@ -1761,6 +1906,11 @@ def build_checks(repo_root: Path, db_url: str) -> list[Check]:
         Check("pg_extensions", "local", lambda: check_pg_extensions(db_url)),
         Check("schema_migrations", "local", lambda: check_schema_migrations(db_url, repo_root)),
         Check("column_drift", "local", lambda: check_column_drift(db_url, repo_root)),
+        # Companion to the above: column_drift catches code naming a column the
+        # DB lacks, this one catches the DB lacking an enforcement rule the
+        # migrations claim to have installed. Neither sees the other's case.
+        Check("constraint_drift", "local",
+              lambda: check_constraint_drift(db_url, repo_root)),
         Check("elixir_deprecated_scheme_lint", "local",
               lambda: check_elixir_deprecated_scheme_lint(db_url, repo_root)),
         Check("elixir_scheme_grammar_lint", "local",
