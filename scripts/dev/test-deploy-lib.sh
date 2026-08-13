@@ -145,6 +145,53 @@ exp_head="$(git -C "$REPO" rev-parse origin/master)"
 ) && ok "deploy-status BEHIND applies to LIVE/HOT-RELOAD/STALE, not DOWN/GHOST" \
   || bad "deploy-status BEHIND promotion rules"
 
+# NOTE on the symlink class: `git worktree list --porcelain` prints FULLY
+# resolved paths (macOS /var -> /private/var, and any intermediate symlink), so
+# comparing them to the caller's literal argument reported "missing" for an
+# existing worktree and then died on `worktree add ... already exists`. The
+# regression test for that is the "ff_worktree ffs to origin/master" case above
+# — it runs under mktemp (/var/folders/...), which IS a symlinked path, and it
+# was RED until deploy-lib resolved both sides. A separate symlink case was
+# tried here and removed: it could not be made to fail against the old lib, so
+# it asserted nothing.
+
+# ── ff_worktree --detach: a SECOND dedicated worktree cannot use the branch ──
+# git allows one checkout of `master` per repo, so branch-mode add fails once
+# unitares-deploy holds it. The orchestrator's tree is detached for this reason.
+ORIGIN3="$SB/o3.git"; REPO3="$SB/r3"; DEP3A="$SB/dep3a"; DEP3B="$SB/dep3b"
+git init -q --bare "$ORIGIN3"
+git init -q -b master "$REPO3"
+( cd "$REPO3" && echo a > f && git add f && git commit -qm c1 && git remote add origin "$ORIGIN3" \
+  && git push -q origin master && git checkout -qb dev ) >/dev/null 2>&1
+( set -euo pipefail; . "$LIB"; deploy_lib_ff_worktree t "$REPO3" "$DEP3A" >/dev/null 2>&1 ) || true
+if ( set -euo pipefail; . "$LIB"; deploy_lib_ff_worktree t "$REPO3" "$DEP3B" --detach ) >/dev/null 2>&1 \
+   && [ "$(git -C "$DEP3B" rev-parse --abbrev-ref HEAD 2>/dev/null)" = "HEAD" ]; then
+  ok "ff_worktree --detach creates a second worktree detached at origin/master"
+else
+  bad "ff_worktree --detach second worktree"
+fi
+
+# ── deploy-status health(): bearer-gated 401 is proof of life, not a failure ──
+# agent-orchestrator :8789 and lease-plane :8788 refuse an unauthenticated
+# /health. Pasting the permission_denied blob into the table reads as broken.
+(
+  set -euo pipefail
+  ds="$(dirname "$LIB")/deploy-status.sh"
+  grep -q '401|403) printf .up (bearer-gated' "$ds" || exit 1
+  # and the orchestrator must actually be in the component table with its port
+  grep -q '^"agent-orchestrator|com.unitares.agent-orchestrator|' "$ds" || exit 2
+  grep -q 'elixir/agent_orchestrator|restart|8789"' "$ds" || exit 3
+) && ok "deploy-status treats a gated 401 as up and lists agent-orchestrator" \
+  || bad "deploy-status gated-health / orchestrator row"
+
+# ── deploy-apply dispatches the orchestrator ──
+(
+  set -euo pipefail
+  grep -q 'agent-orchestrator) echo "$OPS_DIR/deploy-orchestrator.sh"' \
+    "$(dirname "$LIB")/deploy-apply.sh"
+) && ok "deploy-apply dispatches agent-orchestrator" \
+  || bad "deploy-apply orchestrator dispatch"
+
 echo; echo "passed=$pass failed=$fail"
 rm -rf "$SB"
 exit "$((fail > 0))"
