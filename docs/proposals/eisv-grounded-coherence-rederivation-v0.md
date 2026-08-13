@@ -185,7 +185,11 @@ that framing and not the oracle one.
   per-agent independence the data currently supports. This is the real prerequisite,
   and it is a data/positioning question, not a derivation.
 - **[L2]** Deferred proofs: the Tikhonov timescale-separation result and the
-  stochastic mean-square constant.
+  stochastic mean-square constant. **Update 2026-08-13:** both are now derived
+  at the general level in `eisv-general-solution-v0.md` (ISS tracking bound
+  with explicit constants; closed-form Lyapunov covariance), numerically
+  verified in `scripts/analysis/eisv_general_solution.py`. The **[L3]**
+  drift-rate setting and all outcome-grounding caveats are unchanged.
 - **[L1]** Gate calibration (lengthscale, dispersion floor, `τ`) and E-channel
   weighting must be *measured* per class, not asserted.
 - Each *move* toward deployment (should it ever be taken) lands as its own flagged,
