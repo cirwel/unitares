@@ -510,6 +510,21 @@ def schema_attestation(
     any row is unverifiable. A digest whose coverage is partial is a weaker
     claim, and callers must be able to see that rather than read equality as
     proof of agreement.
+
+    WHAT THIS DOES NOT DO
+    ---------------------
+    The digest is self-computed and unsigned. It detects *accidental* divergence
+    between cooperating peers — the failure mode that actually happens, and the
+    one that produced 034 — and it is not evidence against a peer that
+    misreports its own state. Nothing here binds the digest to anything
+    unforgeable, so a principal that wants to claim a schema it does not run
+    can. Treat agreement as a cheap consistency check between parties already
+    trusted to answer honestly, not as an adversarial proof.
+
+    A second, quieter limit: an all-NULL registry is cheap to match, since the
+    chain then reduces to ``version:name`` pairs anyone can reproduce. That is
+    the concrete reason ``fully_anchored`` exists rather than a bare digest —
+    a partially-anchored match is close to no evidence at all.
     """
     chain = []
     for version in sorted(applied):

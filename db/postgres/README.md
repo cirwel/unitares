@@ -199,6 +199,14 @@ whose rows are all unverifiable can produce matching digests while having run
 different SQL — the coverage fields are what keep the digest an honest claim
 rather than a stronger one than the data supports.
 
+**What it is not.** The digest is self-computed and unsigned. It detects
+*accidental* divergence between cooperating peers — the failure mode that
+actually happens, and the one that produced 034 — and it is not evidence against
+a peer that misreports its own state. Nothing binds it to anything unforgeable.
+And an all-NULL registry is cheap to match, because the chain then reduces to
+`version:name` pairs anyone can reproduce, which is why a partially-anchored
+match is close to no evidence at all.
+
 The table below is a milestone summary, not the full migration ledger. See `db/postgres/migrations/` for every numbered migration; the current checked-in series runs through `036_r2_lineage_lifecycle.sql`.
 
 | Version | Migration | Description |
