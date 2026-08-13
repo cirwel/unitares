@@ -64,7 +64,10 @@ async def test_lifecycle_paused_emits_single_audit_row(captured_audit_and_broadc
     broadcaster, audit, scheduled = captured_audit_and_broadcast
 
     agent_metadata_model._emit_lifecycle_event(
-        agent_id="resident-uuid",
+        # A real UUID, not a placeholder string: audit.events.agent_id is clamped
+        # to a joinable key or NULL, so a made-up id now correctly audits as
+        # unattributed and this assertion would test the clamp, not the dedup.
+        agent_id="7f3a1c02-9b45-4e18-8c6d-2a5e91d4b077",
         event="paused",
         reason="EI imbalance",
         timestamp="2026-04-23T22:00:00+00:00",
@@ -78,7 +81,7 @@ async def test_lifecycle_paused_emits_single_audit_row(captured_audit_and_broadc
     broadcaster.broadcast_event.assert_awaited_once()
     call_kwargs = broadcaster.broadcast_event.await_args.kwargs
     assert call_kwargs["event_type"] == "lifecycle_paused"
-    assert call_kwargs["agent_id"] == "resident-uuid"
+    assert call_kwargs["agent_id"] == "7f3a1c02-9b45-4e18-8c6d-2a5e91d4b077"
     assert call_kwargs["payload"]["reason"] == "EI imbalance"
     assert call_kwargs["payload"]["event"] == "paused"
 
@@ -124,7 +127,7 @@ async def test_broadcast_failure_falls_back_to_direct_audit(
     broadcaster.broadcast_event.side_effect = RuntimeError("ws pipe closed")
 
     agent_metadata_model._emit_lifecycle_event(
-        agent_id="resident-uuid",
+        agent_id="7f3a1c02-9b45-4e18-8c6d-2a5e91d4b077",
         event="paused",
         reason="EI imbalance",
         timestamp="2026-04-23T22:00:00+00:00",
