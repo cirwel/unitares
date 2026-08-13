@@ -96,12 +96,15 @@ jobs:
         PY
 
     - name: Check generated docs are fresh
-      # Fails the build if a generated doc has drifted from its source. These
-      # generators read the tree (AST / config) and need no live DB, so they run
-      # in the smoke job. Re-run the named generator and commit to fix.
+      # Fails the build if a generated doc has drifted from its source. None of
+      # these need a live DB, so they run in the smoke job. flag/ports read the
+      # tree (AST / config); tool_edge_index imports the handler package and
+      # reads the live registries — deliberately, since the dispatch edges it
+      # indexes exist only after import. Re-run the named generator to fix.
       run: |
         python3 scripts/dev/flag_catalog.py --check
         python3 scripts/dev/ports_catalog.py --check
+        python3 scripts/dev/tool_edge_index.py --check
 
     - name: Deploy-script contract (shared lib, no re-inlined blocks)
       run: |
