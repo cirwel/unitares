@@ -199,3 +199,35 @@ inventory, or (2) one that regressed into unreachability since. The sibling of
 move?"* — is a reachability check asking *"can this path still be called?"* Two decidable
 queries would have caught both rows above: surfaces with zero calls that appear nowhere in
 this registry, and surfaces this registry marks live/RESOLVED that have zero calls.
+
+## Theme 8 — Import-reachability sweep (2026-08-13)
+
+**Method, and why it is weaker than the 2026-06-16 inventory.** Transitive import
+reachability from every real consumer — the server entrypoints, each resident's `agent.py`,
+and every script under `scripts/` — over `src/`, `governance_core/`, and `agents/`. This is a
+*static* pass, so it answers "is there an import edge" and **not** the registry's actual
+question, "can this path still be called". It is a cheap first filter, not the reachability
+check Theme 7 asks for.
+
+Result: **363 of 381 library modules reachable.** Of the 18 that were not, 12 are
+`agents/sdk/` — a package published to PyPI whose consumers are external by design — and one
+is `agents/watcher/hook_input.py`, driven by `watcher-hook.sh`. That leaves the four rows
+below.
+
+**The method's own false positives, recorded as a warning.** The first pass also flagged
+`src/mcp_handlers/identity/process_binding_handler.py` and
+`src/mcp_handlers/identity/core.py`. Both are imported by
+`src/mcp_handlers/identity/__init__.py` (lines 13 and 18) and are fully wired — the sweep's
+relative-import resolution missed them. Two false-dead claims in a set of six, caught only by
+reading the importer by hand. Rule 2 of this registry holds: **do not act on a static
+reachability claim without confirming it at the import site.**
+
+`docs/dev/TOOL_EDGE_INDEX.md` covers the complementary surface — the MCP dispatch edges that
+are made at import time and are invisible to a static pass like this one.
+
+| Capability | Location | Live evidence | Status |
+|---|---|---|---|
+| **Trust-contract §7 provenance validator** — mechanical linting of the governance-metrics read surface | `src/trust_contract_lint.py` | Zero importers outside its own tests. Encodes three rule families (labeled-field presence, ignorance honesty, scope honesty) each pinning a violation class that PRs #605/#607/#608 already paid to fix. `docs/trust-contract.md` §7 explicitly calls for this validator; §6 notes rows 1–3 *"would have been caught at design time by a single test"* — the test exists here and nothing runs it. | **WIRE.** The clearest wire-on-build gap in this sweep: a lint with no CI step means the §6 classes can regress silently and the contract's central guarantee goes unenforced. Wants a `documentation-validation.yml` step or a doctor check. |
+| **Orchestrator-vouched identity** — strong cross-process credential for an ephemeral child | `src/substrate/vouch.py` | Zero importers outside its own tests, and the module says so itself (`:1-8`: "INERT proof-of-concept seam… NOT WIRED INTO IDENTITY RESOLUTION"). Pure-logic seam for `docs/proposals/orchestrator-vouched-identity-v0.md`, deferred at the 2026-06-24 Wave-3 gate read. | **KEEP-DORMANT — wake condition: the BEAM Agent Orchestrator landing on a live surface** (Wave 3 decision A). Parked correctly and self-documented, but it had no row here, which is what Theme 7 names as the blind spot: a dormancy documented only inside the dormant file is invisible to anyone auditing from this registry. |
+| **Unified configuration manager** — single read-through access point over the four config sources with per-value source/changeability metadata | `src/config_manager.py` | Zero importers outside its own tests. The live threshold path calls `src/runtime_config.py` (`get_thresholds`, `get_effective_threshold`) directly; `config_manager` wraps that plus `config/governance_config.py`, `governance_core.parameters`, and the server constants, and nothing consumes the wrapper. | **DECIDE.** Two readings are consistent with the evidence and they differ in what should happen: either the intended single access point that never got adopted (→ WIRE), or a layer superseded by direct `runtime_config` use (→ CUT). Needs an operator call, not a guess. |
+| **Agent Identity Credential (AIC)** | `src/identity/agent_identity_credential.py` | Independently rediscovered by this sweep. | **Already listed — see Theme 7.** No new decision; recorded here only so the sweep's output reconciles against the registry. |
