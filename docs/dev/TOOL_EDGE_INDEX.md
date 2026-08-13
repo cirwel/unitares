@@ -76,7 +76,7 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `reset_monitor` | `src/mcp_handlers/admin/handlers.py:462 handle_reset_monitor` | `src/mcp_handlers/schemas/admin.py:110 ResetMonitorParams` | 10s | — |
 | `search_knowledge_graph` | `src/mcp_handlers/knowledge/handlers.py:2240 handle_search_knowledge_graph` | `src/mcp_handlers/schemas/knowledge.py:80 SearchKnowledgeGraphParams` | 15s | identity=pre_onboard |
 | `self_recovery` | `src/mcp_handlers/lifecycle/self_recovery.py:187 handle_self_recovery` | `src/mcp_handlers/schemas/lifecycle.py:319 SelfRecoveryParams` | 15s | — |
-| `set_thresholds` | `src/mcp_handlers/admin/config.py:31 handle_set_thresholds` | `src/mcp_handlers/schemas/admin.py:119 SetThresholdsParams` | 15s | — |
+| `set_thresholds` | `src/mcp_handlers/admin/config.py:45 handle_set_thresholds` | `src/mcp_handlers/schemas/admin.py:119 SetThresholdsParams` | 15s | — |
 | `simulate_update` | `src/mcp_handlers/core.py:266 handle_simulate_update` | `src/mcp_handlers/schemas/core.py:195 SimulateUpdateParams` | 30s | — |
 | `skills` | `src/mcp_handlers/introspection/skills.py:193 handle_skills` | `src/mcp_handlers/schemas/skills.py:15 SkillsParams` | 10s | identity=pre_onboard |
 | `submit_antithesis` | `src/mcp_handlers/dialectic/handlers.py:2150 handle_submit_antithesis` | `src/mcp_handlers/schemas/dialectic.py:73 SubmitAntithesisParams` | 10s | — |
@@ -131,7 +131,7 @@ runs (`from→to`, filled only when the destination is absent).
 | Action | Delegate | Remaps |
 |---|---|---|
 | `get` | `src/mcp_handlers/admin/config.py:16 handle_get_thresholds` | — |
-| `set` | `src/mcp_handlers/admin/config.py:31 handle_set_thresholds` | — |
+| `set` | `src/mcp_handlers/admin/config.py:45 handle_set_thresholds` | — |
 
 ### `dialectic` · default `list`
 

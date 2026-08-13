@@ -18,32 +18,42 @@ from config import governance_config as config_module
 _runtime_overrides: Dict[str, float] = {}
 
 
+# The overridable thresholds: name -> (GovernanceConfig attribute, valid range).
+#
+# Single source for three things that must agree — the effective value returned
+# by get_thresholds, the write gate in set_thresholds, and the `settable` /
+# `class_default` fields in describe_thresholds. Held as one table because a
+# second hand-maintained list of "which thresholds can be set" is exactly the
+# drift that makes a config surface lie. Every other key in get_thresholds is
+# structural: read from the config class, no override path, not settable.
+OVERRIDABLE_THRESHOLDS: Dict[str, tuple] = {
+    "risk_approve_threshold": ("RISK_APPROVE_THRESHOLD", (0.0, 1.0)),
+    "risk_revise_threshold": ("RISK_REVISE_THRESHOLD", (0.0, 1.0)),
+    # Note: reject threshold is implicit (risk > revise_threshold triggers reject)
+    "coherence_critical_threshold": ("COHERENCE_CRITICAL_THRESHOLD", (0.0, 1.0)),
+    "void_threshold_initial": ("VOID_THRESHOLD_INITIAL", (0.0, 1.0)),
+}
+
+
+def _class_default(name: str) -> float:
+    """The GovernanceConfig default for an overridable threshold."""
+    attr, _range = OVERRIDABLE_THRESHOLDS[name]
+    return getattr(config_module.GovernanceConfig, attr)
+
+
 def get_thresholds() -> Dict[str, float]:
     """
     Get current threshold configuration (runtime overrides + defaults).
-    
+
     Returns all decision thresholds for governance system.
     """
     config = config_module.GovernanceConfig
-    
+
     return {
-        "risk_approve_threshold": _runtime_overrides.get(
-            "risk_approve_threshold",
-            config.RISK_APPROVE_THRESHOLD
-        ),
-        "risk_revise_threshold": _runtime_overrides.get(
-            "risk_revise_threshold",
-            config.RISK_REVISE_THRESHOLD
-        ),
-        # Note: reject threshold is implicit (risk > revise_threshold triggers reject)
-        "coherence_critical_threshold": _runtime_overrides.get(
-            "coherence_critical_threshold",
-            config.COHERENCE_CRITICAL_THRESHOLD
-        ),
-        "void_threshold_initial": _runtime_overrides.get(
-            "void_threshold_initial",
-            config.VOID_THRESHOLD_INITIAL
-        ),
+        **{
+            name: _runtime_overrides.get(name, _class_default(name))
+            for name in OVERRIDABLE_THRESHOLDS
+        },
         "void_threshold_min": config.VOID_THRESHOLD_MIN,
         "void_threshold_max": config.VOID_THRESHOLD_MAX,
         "lambda1_min": config.LAMBDA1_MIN,
@@ -80,14 +90,12 @@ def set_thresholds(thresholds: Dict[str, float], validate: bool = True) -> Dict[
     updated = []
     errors = []
     
-    # Validation ranges
+    # Derived from the one table, so the write gate cannot drift from what
+    # describe_thresholds reports as settable.
     valid_ranges = {
-        "risk_approve_threshold": (0.0, 1.0),
-        "risk_revise_threshold": (0.0, 1.0),
-        "coherence_critical_threshold": (0.0, 1.0),
-        "void_threshold_initial": (0.0, 1.0),
+        name: rng for name, (_attr, rng) in OVERRIDABLE_THRESHOLDS.items()
     }
-    
+
     for name, value in thresholds.items():
         if name not in valid_ranges:
             errors.append(f"Unknown threshold: {name}")
@@ -160,6 +168,45 @@ def get_effective_threshold(threshold_name: str, default: Optional[float] = None
         if default is not None:
             return default
         raise ValueError(f"Unknown threshold: {threshold_name}")
+
+
+def describe_thresholds() -> Dict[str, Dict[str, Any]]:
+    """Every threshold with the layer that supplied it.
+
+    ``get_thresholds`` merges runtime overrides into class defaults and returns
+    bare numbers, so a reader cannot tell an operator-set value from a shipped
+    one — and the mixed set also hides that most keys cannot be set at all. This
+    reports each value alongside where it came from.
+
+    Per key:
+      ``value``          effective value, identical to get_thresholds()[key]
+      ``source``         ``runtime_override`` or ``class_default``
+      ``settable``       whether set_thresholds accepts it
+      ``class_default``  the shipped value — present only when overridden, so
+                         the reader can see what was displaced
+
+    ``source`` is the config *layer* a value came from. It is deliberately not
+    the ``docs/trust-contract.md`` §1 provenance vocabulary
+    (measured / derived / prior-default / unknown), which classifies epistemic
+    status. Do not map one onto the other: a class default is not a "prior" in
+    the §1 sense, and labelling it as one would assert something this function
+    has no basis for.
+    """
+    return {
+        name: {
+            "value": value,
+            "source": (
+                "runtime_override" if name in _runtime_overrides else "class_default"
+            ),
+            "settable": name in OVERRIDABLE_THRESHOLDS,
+            **(
+                {"class_default": _class_default(name)}
+                if name in _runtime_overrides
+                else {}
+            ),
+        }
+        for name, value in get_thresholds().items()
+    }
 
 
 def clear_overrides() -> None:
