@@ -7,6 +7,7 @@ and project-level constants shared across agent_state sub-modules.
 
 from __future__ import annotations
 
+import re
 import sys
 import threading
 from pathlib import Path
@@ -33,6 +34,42 @@ from src.logging_utils import get_logger
 logger = get_logger(__name__)
 
 
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
+)
+
+
+def _joinable_audit_agent_id(agent_id: str | None) -> tuple[str | None, str | None]:
+    """Split a lifecycle agent_id into (joinable key, unjoinable handle).
+
+    `audit.events.agent_id` was being written with whatever this metadata object
+    happened to carry, and that is two different identifier spaces. Measured
+    2026-08-12: of 12 `lifecycle_paused` rows in eleven days, 5 held a UUID and
+    7 held a structured handle like `Gpt_5_20260810` — which resolves in NO
+    table. `core.identities.agent_id` holds UUIDs; the handle is a presentation
+    construct returned by onboard and persisted as a key nowhere. Those 7 rows
+    are permanently unattributable, and no backfill can recover them because the
+    mapping was never stored.
+
+    Worse than losing the attribution is what the handle does to readers. Such a
+    row is the ONLY row that identifier ever produces, so "the paused agent went
+    silent afterwards" is true of the schema and says nothing about the agent. A
+    pause-compliance conclusion was drawn from exactly that and was wrong.
+
+    So: emit the UUID when there is one, otherwise NULL plus the handle in the
+    payload. This follows the rule already stated for the tool-usage recorder —
+    "a UUID clamp alone would only make a forged value JOINABLE, which is worse
+    than NULL". An honestly unattributed event is recoverable by a human reading
+    the payload; a plausible-looking key that joins to nothing is not.
+    """
+    candidate = (agent_id or "").strip()
+    if _UUID_RE.match(candidate):
+        return candidate, None
+    # Whitespace is absence, not a handle worth carrying.
+    return None, (candidate or None)
+
+
 def _emit_lifecycle_event(
     agent_id: str,
     event: str,
@@ -45,6 +82,10 @@ def _emit_lifecycle_event(
     try:
         import asyncio
         from src.broadcaster import broadcaster_instance
+
+        # Both write paths below share one clamp, so neither can reintroduce an
+        # unjoinable key. See _joinable_audit_agent_id.
+        audit_agent_id, unjoinable_handle = _joinable_audit_agent_id(agent_id)
 
         # Test-agent lifecycle is housekeeping, not governance-relevant.
         # Still audit, but don't broadcast (avoids flooding Discord).
@@ -74,10 +115,14 @@ def _emit_lifecycle_event(
                 try:
                     await broadcaster_instance.broadcast_event(
                         event_type=f"lifecycle_{event}",
-                        agent_id=agent_id,
+                        agent_id=audit_agent_id,
                         payload={
                             "reason": reason,
                             "event": event,
+                            **(
+                                {"agent_handle": unjoinable_handle}
+                                if unjoinable_handle else {}
+                            ),
                             **(
                                 {"actuation_id": actuation_id}
                                 if actuation_id is not None else {}
@@ -94,10 +139,14 @@ def _emit_lifecycle_event(
                     await append_audit_event_async({
                         "timestamp": timestamp,
                         "event_type": f"lifecycle_{event}",
-                        "agent_id": agent_id,
+                        "agent_id": audit_agent_id,
                         "details": {
                             "reason": reason,
                             "event": event,
+                            **(
+                                {"agent_handle": unjoinable_handle}
+                                if unjoinable_handle else {}
+                            ),
                             **(
                                 {"actuation_id": actuation_id}
                                 if actuation_id is not None else {}

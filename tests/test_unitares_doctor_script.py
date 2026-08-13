@@ -1182,3 +1182,99 @@ def test_producer_never_reported_skips_with_no_declarations(
         doctor, monkeypatch, tmp_path):
     result = doctor.check_producer_never_reported("postgresql://x/y", tmp_path)
     assert result.status == doctor.Status.SKIP
+
+
+# --- constraint_drift -------------------------------------------------------
+# The parser is the risky half: it must replay drop-then-re-add correctly and
+# must not read SQL comments as declarations. Both mistakes were live hazards —
+# 056 drops and re-adds the same constraint, and 034's header contains the
+# words "ADD CONSTRAINT IF NOT EXISTS" in prose.
+
+def _migrations(tmp_path: Path, files: dict[str, str]) -> Path:
+    root = tmp_path / "repo"
+    mig = root / "db" / "postgres" / "migrations"
+    mig.mkdir(parents=True, exist_ok=True)
+    for name, body in files.items():
+        (mig / name).write_text(body)
+    return root
+
+
+def test_declared_constraints_keeps_readded_constraint(doctor, tmp_path):
+    """Drop-then-re-add in one file ends as ADDed, not as retired (cf. 056)."""
+    root = _migrations(tmp_path, {"010_x.sql": """
+        ALTER TABLE lease_plane.surface_leases DROP CONSTRAINT reason_check;
+        ALTER TABLE lease_plane.surface_leases ADD CONSTRAINT reason_check CHECK (x IN ('a'));
+    """})
+    declared = doctor._declared_constraints(root / "db" / "postgres" / "migrations")
+    assert ("lease_plane.surface_leases", "reason_check") in declared
+
+
+def test_declared_constraints_drops_retired_constraint(doctor, tmp_path):
+    """A later migration's DROP retires it — absence from the DB is correct."""
+    root = _migrations(tmp_path, {
+        "010_x.sql": "ALTER TABLE k.t ADD CONSTRAINT old_check CHECK (x > 0);",
+        "011_y.sql": "ALTER TABLE k.t DROP CONSTRAINT IF EXISTS old_check;",
+    })
+    declared = doctor._declared_constraints(root / "db" / "postgres" / "migrations")
+    assert ("k.t", "old_check") not in declared
+
+
+def test_declared_constraints_ignores_comments(doctor, tmp_path):
+    """Prose mentioning ADD CONSTRAINT must not register a constraint."""
+    root = _migrations(tmp_path, {"010_x.sql": """
+        -- PG has no ADD CONSTRAINT IF NOT EXISTS syntax, so we use a DO block.
+        /* also ADD CONSTRAINT block_comment_check here */
+        ALTER TABLE k.t ADD CONSTRAINT real_check CHECK (x > 0);
+    """})
+    declared = doctor._declared_constraints(root / "db" / "postgres" / "migrations")
+    assert set(declared) == {("k.t", "real_check")}
+
+
+def test_declared_constraints_binds_to_nearest_alter_table(doctor, tmp_path):
+    """ALTER TABLE and ADD CONSTRAINT routinely sit on separate lines."""
+    root = _migrations(tmp_path, {"010_x.sql": """
+        ALTER TABLE a.one
+            ADD CONSTRAINT c_one CHECK (x > 0);
+        ALTER TABLE b.two
+            ADD CONSTRAINT c_two CHECK (y > 0);
+    """})
+    declared = doctor._declared_constraints(root / "db" / "postgres" / "migrations")
+    assert declared.keys() == {("a.one", "c_one"), ("b.two", "c_two")}
+
+
+def test_constraint_drift_fails_on_missing_constraint(doctor, monkeypatch, tmp_path):
+    root = _migrations(tmp_path, {
+        "010_x.sql": "ALTER TABLE k.t ADD CONSTRAINT missing_check CHECK (x > 0);"})
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    # The table exists in the DB but carries only an unrelated constraint.
+    monkeypatch.setattr(doctor, "_fetch_live_constraints", lambda _: {("k.t", "other_check")})
+    result = doctor.check_constraint_drift("postgresql://x/y", root)
+    assert result.status == doctor.Status.FAIL
+    assert "missing_check" in result.detail
+
+
+def test_constraint_drift_passes_when_present(doctor, monkeypatch, tmp_path):
+    root = _migrations(tmp_path, {
+        "010_x.sql": "ALTER TABLE k.t ADD CONSTRAINT c CHECK (x > 0);"})
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor, "_fetch_live_constraints", lambda _: {("k.t", "c")})
+    result = doctor.check_constraint_drift("postgresql://x/y", root)
+    assert result.status == doctor.Status.PASS
+
+
+def test_constraint_drift_ignores_absent_table(doctor, monkeypatch, tmp_path):
+    """A table missing entirely is schema_migrations' failure, not this one."""
+    root = _migrations(tmp_path, {
+        "010_x.sql": "ALTER TABLE gone.t ADD CONSTRAINT c CHECK (x > 0);"})
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor, "_fetch_live_constraints", lambda _: {("k.other", "z")})
+    result = doctor.check_constraint_drift("postgresql://x/y", root)
+    assert result.status == doctor.Status.PASS
+
+
+def test_constraint_drift_skips_without_psql(doctor, monkeypatch, tmp_path):
+    root = _migrations(tmp_path, {
+        "010_x.sql": "ALTER TABLE k.t ADD CONSTRAINT c CHECK (x > 0);"})
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: None)
+    result = doctor.check_constraint_drift("postgresql://x/y", root)
+    assert result.status == doctor.Status.SKIP
