@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<!-- Template for the interactive glossary viewer. Built by
+     scripts/dev/build_public_site.py, which replaces __GLOSSARY_DATA_JSON__
+     with data parsed from docs/ontology/glossary.md (scripts/dev/glossary_data.py)
+     and __REPO_URL__ with the repository URL. Never hand-edit the built page;
+     the markdown stays canonical and this page is a generated view of it. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0e1116">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<title>UNITARES Glossary — Viewer</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c232c; --line:#2a313c;
+    --ink:#e6edf3; --dim:#8b949e; --acc:#58a6ff;
+    --earned:#3fb950; --lens:#d29922; --cand:#6e7681; --false:#f85149;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink)}
+  header.site{position:sticky;top:0;z-index:10;background:#0e1116ee;backdrop-filter:blur(6px);border-bottom:1px solid var(--line);padding:14px 22px}
+  header.site .brand{font-weight:650;letter-spacing:.01em;margin-right:18px}
+  header.site nav{display:inline}
+  header.site nav a{color:var(--dim);text-decoration:none;margin-right:14px;font-size:14px}
+  header.site nav a.active,header.site nav a:hover{color:var(--ink)}
+  .controls{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;align-items:center}
+  input[type=search]{flex:1;min-width:200px;background:var(--panel2);border:1px solid var(--line);color:var(--ink);padding:8px 12px;border-radius:8px;font-size:13px}
+  .chip{cursor:pointer;border:1px solid var(--line);background:var(--panel);color:var(--dim);padding:5px 11px;border-radius:999px;font-size:12px;user-select:none}
+  .chip.on{color:var(--ink);border-color:var(--acc);background:#1f2a3a}
+  main{max-width:1100px;margin:0 auto;padding:20px 22px 80px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .card h3{margin:0 0 2px;font-size:15px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .typebadge{font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--dim);border:1px solid var(--line);border-radius:5px;padding:1px 6px;margin-left:8px;vertical-align:middle}
+  .sense{border-top:1px dashed var(--line);padding-top:9px;margin-top:9px}
+  .sense:first-of-type{border-top:0;margin-top:6px}
+  .sname{font-family:ui-monospace,monospace;font-size:12.5px;color:var(--acc)}
+  .q{color:var(--ink);margin:2px 0}
+  .src{color:var(--dim);font-size:11.5px}
+  .status{font-size:10.5px;padding:1px 7px;border-radius:5px;font-weight:600;white-space:nowrap}
+  .status.earned{color:#06240f;background:var(--earned)} .status.lens{color:#241a00;background:var(--lens)}
+  .status.cand{color:#0c0f14;background:var(--cand)} .status.false{color:#2b0707;background:var(--false)}
+  .sectitle{grid-column:1/-1;margin:22px 0 2px;font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--dim)}
+  .tablewrap{grid-column:1/-1;overflow-x:auto}
+  table.rosetta{width:100%;border-collapse:collapse;font-size:12.5px;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  table.rosetta th,table.rosetta td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+  table.rosetta th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+  table.rosetta tr:last-child td{border-bottom:0}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:11.5px;color:var(--dim)}
+  .legend span b{font-weight:600}
+  .hidden{display:none}
+  footer{max-width:1100px;margin:0 auto;padding:0 22px 40px;color:var(--dim);font-size:11.5px;border-top:1px solid var(--line)}
+</style>
+</head>
+<body>
+<header class="site">
+  <span class="brand">UNITARES</span>
+  <nav>
+    <a href="index.html">Home</a>
+    <a href="glossary.html">Glossary</a>
+    <a href="glossary-viewer.html" class="active">Viewer</a>
+    <a href="drift-audit.html">Drift audit</a>
+    <a href="__REPO_URL__">Repo ↗</a>
+  </nav>
+  <div class="controls">
+    <input id="q" type="search" placeholder="Search term, question, or source…" autocomplete="off">
+    <span class="chip on" data-f="all">All</span>
+    <span class="chip" data-f="homonym">Homonyms</span>
+    <span class="chip" data-f="single">Single-sense</span>
+    <span class="chip" data-f="rosetta">Rosetta</span>
+    <span class="chip" data-f="gap">Open gaps</span>
+  </div>
+  <div class="legend">
+    <span><b>fep status:</b></span>
+    <span class="status earned">✓ earned</span><span class="status lens">◐ research-lens</span><span class="status cand">~ candidate</span><span class="status false">✗ false friend</span>
+  </div>
+</header>
+<main>
+  <div class="grid" id="grid"></div>
+</main>
+<footer>
+  Generated from <code>docs/ontology/glossary.md</code> at build time — the
+  markdown is the source of truth; this page holds no data of its own.
+  <a href="__REPO_URL__/blob/master/docs/ontology/glossary.md" style="color:var(--acc)">View source</a>.
+</footer>
+<script>
+const DATA=__GLOSSARY_DATA_JSON__;
+const grid=document.getElementById("grid"), qbox=document.getElementById("q");
+let filter="all", query="";
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+// Status glyphs are carried verbatim in the markdown's fep cells.
+function statusBadge(cell){
+  const map=[["✓","earned","✓ earned"],["◐","lens","◐ research-lens"],["~","cand","~ candidate"],["✗","false","✗ false friend"]];
+  for(const [glyph,cls,label] of map){
+    if(cell.startsWith(glyph)) return {badge:`<span class="status ${cls}">${label}</span> `,rest:cell.slice(glyph.length).trim()};
+  }
+  return {badge:"",rest:cell};
+}
+function card(t,type){
+  const senses=t.senses.map(s=>`
+    <div class="sense">
+      <div class="sname">${esc(s.name)}${t.code_level?' <span class="typebadge">code</span>':''}</div>
+      <div class="q">${esc(s.question)}</div>
+      <div class="src">${esc(s.source)}</div>
+    </div>`).join("");
+  const blob=(t.term+" "+t.senses.map(s=>s.name+" "+s.question+" "+s.source).join(" ")).toLowerCase();
+  return `<div class="card" data-type="${type}" data-blob="${esc(blob)}">
+    <h3>${esc(t.term)}<span class="typebadge">${type}</span></h3>${senses}</div>`;
+}
+function gapCard(g){
+  return card({term:g.title,code_level:false,senses:[{name:"open gap",question:g.detail,source:"glossary.md · Open gaps"}]},"gap");
+}
+function rosetta(){
+  const cols=DATA.rosetta.columns, fepIdx=cols.indexOf("fep");
+  const head=cols.map(c=>`<th>${esc(c)}</th>`).join("");
+  const rows=DATA.rosetta.rows.map(r=>"<tr>"+r.map((cell,i)=>{
+    if(i===0) return `<td><b>${esc(cell)}</b></td>`;
+    if(i===fepIdx){const {badge,rest}=statusBadge(cell);return `<td>${badge}${esc(rest)||"—"}</td>`;}
+    return `<td>${esc(cell)||"—"}</td>`;
+  }).join("")+"</tr>").join("");
+  return `<div class="sectitle" data-section="rosetta">Cross-register map (Rosetta)</div>
+  <div class="tablewrap" data-section="rosetta"><table class="rosetta"><tr>${head}</tr>${rows}</table></div>`;
+}
+function render(){
+  const parts=[];
+  if(filter==="all"||filter==="homonym") parts.push(...DATA.homonyms.map(t=>card(t,"homonym")));
+  if(filter==="all"||filter==="single") parts.push(...DATA.single_sense.map(t=>card({term:t.term,code_level:false,senses:[{name:t.term,question:t.question,source:t.source}]},"single")));
+  if(filter==="all"||filter==="gap") parts.push(...DATA.open_gaps.map(gapCard));
+  const showRos=(filter==="all"||filter==="rosetta");
+  grid.innerHTML=parts.join("")+(showRos?rosetta():"");
+  document.querySelectorAll(".card").forEach(c=>{
+    c.classList.toggle("hidden", Boolean(query) && !c.dataset.blob.includes(query));
+  });
+  if(query){document.querySelectorAll('[data-section="rosetta"]').forEach(e=>e.classList.add("hidden"));}
+}
+document.querySelectorAll(".chip").forEach(ch=>ch.onclick=()=>{
+  document.querySelectorAll(".chip").forEach(c=>c.classList.remove("on"));
+  ch.classList.add("on"); filter=ch.dataset.f; render();
+});
+qbox.oninput=()=>{query=qbox.value.trim().toLowerCase();render();};
+render();
+</script>
+</body>
+</html>

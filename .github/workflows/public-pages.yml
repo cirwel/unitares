@@ -14,6 +14,7 @@ on:
       - "docs/ontology/glossary.md"
       - "docs/ontology/glossary-drift-audit-*.md"
       - "scripts/dev/build_public_site.py"
+      - "scripts/dev/glossary_data.py"
       - ".github/workflows/public-pages.yml"
   workflow_dispatch: {}
 

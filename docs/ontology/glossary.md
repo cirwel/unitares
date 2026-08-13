@@ -371,3 +371,13 @@ When a sweep finds a new collision, add it to the high-risk table here and log
 the sweep as a dated audit alongside `glossary-drift-audit-2026-06-20.md`. Keep
 this file keyed by *question answered*; if you find yourself writing a definition
 that leads with examples, you are seeding the next drift.
+
+The mechanical half of that sweep now runs in CI:
+`scripts/dev/check_glossary_drift.py` verifies this file still parses into the
+structure the public-site viewer is generated from
+(`scripts/dev/glossary_data.py`), that every `<file>.py::<symbol>` reference
+here resolves to a real symbol, and that the cross-reference with the runtime
+glossary (`src/governance_glossary.py`) holds. Only *semantic* drift — a term's
+sense moving without its table row moving — still needs a human sweep. This
+file's section headings and table shapes are load-bearing for that parse; if
+you restructure them, run the checker before committing.

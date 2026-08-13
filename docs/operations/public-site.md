@@ -1,8 +1,9 @@
 # Public Site (GitHub Pages)
 
-The public UNITARES landing page, ontology glossary, and latest glossary drift
-audit are published to GitHub Pages. Each page is **generated from repository
-markdown**; the built HTML is never hand-edited.
+The public UNITARES landing page, ontology glossary, interactive glossary
+viewer, and latest glossary drift audit are published to GitHub Pages. Each
+page is **generated from repository markdown**; the built HTML is never
+hand-edited.
 
 ## How it builds
 
@@ -10,10 +11,21 @@ markdown**; the built HTML is never hand-edited.
   `docs/ontology/glossary.md`, and the latest `glossary-drift-audit-*.md` into a
   small static site (`build/public-site/`) with a shared theme. Only the
   `markdown` pip package is needed — no model API, no paid service.
-- `.github/workflows/public-pages.yml` runs that script and deploys to Pages on
+- The **interactive viewer** (`glossary-viewer.html` — search + homonym /
+  single-sense / Rosetta / open-gap filters) is generated from a structured
+  parse of the same `glossary.md` (`scripts/dev/glossary_data.py` injected into
+  `docs/public-site/glossary-viewer.template.html`), so it holds no data copy
+  of its own. The old hand-maintained viewer prototype (a standalone
+  `glossary-viewer.html` under `docs/ontology/`) carried its own `TERMS` array
+  and drifted; it is retired, and
+  `scripts/dev/check_glossary_drift.py` (run in CI by `tests.yml`) fails if it
+  comes back, if `glossary.md` stops parsing, or if the glossary's
+  `path.py::symbol` code references or its cross-references with the runtime
+  glossary (`src/governance_glossary.py`) go stale.
+- `.github/workflows/public-pages.yml` runs the build and deploys to Pages on
   every push to `master` that touches the landing page, glossary, drift audit,
-  build script, or workflow. Also runnable via **Actions → public-pages → Run
-  workflow**.
+  build script, parser, viewer template, or workflow. Also runnable via
+  **Actions → public-pages → Run workflow**.
 
 Build locally to preview:
 
@@ -22,6 +34,7 @@ pip install markdown
 python3 scripts/dev/build_public_site.py --out build/public-site
 # open build/public-site/index.html (landing page)
 # open build/public-site/glossary.html (canonical glossary)
+# open build/public-site/glossary-viewer.html (interactive viewer)
 ```
 
 ## How publishing works (Actions source)
