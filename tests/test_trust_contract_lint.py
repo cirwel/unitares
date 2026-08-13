@@ -21,10 +21,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-# Import-order anchor: settle the handler chain before runtime_queries is
-# pulled (same cycle guard as test_zero_observation_honesty).
-import src.mcp_handlers.core  # noqa: F401
-
 from src.trust_contract_lint import (
     GOVERNANCE_METRICS_SPEC,
     LintSpec,

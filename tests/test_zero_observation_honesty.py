@@ -46,12 +46,11 @@ def registered(*agent_ids: str):
     ):
         yield
 
-# Settle the handler import chain BEFORE anything pulls
-# src.services.runtime_queries: importing it while governance_monitor's
-# own import is mid-flight trips the runtime_queries ↔ observability/
-# outcome_events cycle (`_build_eisv_semantics` from a partially
-# initialized module).
-import src.mcp_handlers.core  # noqa: F401  (import-order anchor)
+# The import-order anchor that used to live here is gone: the
+# runtime_queries <-> observability/outcome_events cycle it worked around was
+# removed by deferring the `_build_eisv_semantics` import to its call site.
+# tests/test_module_import_independence.py pins that, so the anchor cannot
+# quietly become necessary again.
 
 
 def _server_for(monitor):

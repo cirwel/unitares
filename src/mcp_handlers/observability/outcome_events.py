@@ -14,7 +14,6 @@ from ..utils import success_response, error_response
 from ..decorators import mcp_tool
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
-from src.services.runtime_queries import _build_eisv_semantics
 from src.monitor_prediction import lookup_prediction, consume_prediction
 from src.outcome_corroboration import (
     GRADE_WEIGHTS,
@@ -259,6 +258,18 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
                 "V": eisv_v,
             },
         }
+        # Imported at call time, not module scope, for two reasons. It breaks
+        # the runtime_queries <-> mcp_handlers cycle: runtime_queries imports
+        # src.mcp_handlers.shared at module level, which executes the whole
+        # handler package, which lands back here — so a module-scope import
+        # made src.services.runtime_queries un-importable on its own (the
+        # reason test_zero_observation_honesty carries an import-order anchor).
+        # It also resolves the attribute per call, so patching
+        # runtime_queries._build_eisv_semantics actually reaches this call site;
+        # bound at import time it did not, and the stub in
+        # tests/integration/test_outcome_event_calibration_wiring.py was inert.
+        from src.services.runtime_queries import _build_eisv_semantics
+
         snapshot = _build_eisv_semantics(snapshot_metrics, monitor)
         detail["primary_eisv"] = snapshot.get("primary_eisv")
         detail["primary_eisv_source"] = snapshot.get("primary_eisv_source")
