@@ -154,6 +154,11 @@ _LEASE_ACQUIRED_OUTCOMES = {"acquired_new", "acquired_idempotent"}
 # it on 2026-04-11.
 DEFAULT_CONTEXT_LINES = 10000
 
+# Cap on the source-line snapshot stored with each finding. Long enough to
+# carry the offending statement, short enough that findings.jsonl stays a
+# findings file rather than a partial copy of the tree.
+SNAPSHOT_MAX_CHARS = 200
+
 # ---------------------------------------------------------------------------
 # Identity — persistent governance presence
 # ---------------------------------------------------------------------------
@@ -2403,6 +2408,12 @@ def scan_file(
         # bug A would never resurface.
         source_line = snippet_lines_by_num.get(f.line, "")
         f.line_content_hash = hash_line_content(source_line)
+        # Keep the line itself, not just its hash. A hash proves the finding
+        # is about specific code but cannot show anyone what that code was,
+        # so a finding whose file is later deleted becomes unreviewable. The
+        # snapshot is what lets the sweep retain it. Truncated because this
+        # is evidence for a human reading a chime, not a source of truth.
+        f.line_content = source_line.strip()[:SNAPSHOT_MAX_CHARS]
         f.fingerprint = f.compute_fingerprint()
         findings.append(f)
     if persist:

@@ -78,6 +78,15 @@ class Finding:
     fingerprint: str = ""
     status: str = "open"  # open | surfaced | confirmed | dismissed | aged_out
     violation_class: str = ""  # CON | INT | ENT | REC | BEH | VOI
+    # Snapshot of the offending source line, captured at detection. This is
+    # what lets a finding outlive the file it was found in: worktrees get
+    # pruned and scratch dirs vanish, but the evidence stays reviewable — and
+    # therefore adjudicable. See the retention branch in _sweep_stale_quiet.
+    line_content: str = ""
+    # Set by the sweep when the target path disappeared but the finding was
+    # retained on the strength of its snapshot. Display-only: it tells the
+    # reader "this code is gone" so they judge the snippet, not the path.
+    path_gone: bool = False
 
     def __post_init__(self) -> None:
         if not self.fingerprint:
@@ -434,17 +443,46 @@ def _sweep_stale_quiet() -> int:
 
     kept: list[dict[str, Any]] = []
     dropped = 0
+    newly_marked = 0
     for f in findings:
         if _finding_target_exists(f):
+            kept.append(f)
+        elif f.get("line_content"):
+            # The path is gone, but this finding carries its own evidence, so
+            # there IS still something to evaluate. Retain it.
+            #
+            # This branch exists because the unconditional drop silently
+            # destroyed real findings: Watcher scans worktrees and scratch
+            # dirs, those paths are deleted as a matter of routine, and the
+            # sweep runs from surface_pending — so the chime deleted findings
+            # on its way to displaying them. Measured 2026-08-12: 12 of 12
+            # recent target files no longer existed, findings.jsonl held zero
+            # open entries, and both surfacing paths printed nothing while
+            # every health check passed.
+            #
+            # Retention is not just cosmetic. An adjudicated finding yields
+            # one external_signal outcome, and label breadth is the binding
+            # constraint on outcome validation — so a dropped finding is a
+            # discarded label, not merely a missed notification.
+            if not f.get("path_gone"):
+                f = {**f, "path_gone": True}
+                newly_marked += 1
             kept.append(f)
         else:
             dropped += 1
 
-    if dropped == 0:
+    # Marking path_gone is itself a state change worth persisting, so the early
+    # return has to consider both. Returning on `dropped == 0` alone would
+    # leave the flag unwritten until some later sweep happened to drop
+    # something — the exact class of silent staleness this function exists for.
+    if dropped == 0 and newly_marked == 0:
         return 0
 
     _write_findings_atomic(kept)
-    log(f"sweep_stale_findings (auto): dropped {dropped} findings for missing files")
+    log(
+        f"sweep_stale_findings (auto): dropped {dropped} findings for missing "
+        f"files, retained {newly_marked} with a source snapshot"
+    )
     return dropped
 
 
