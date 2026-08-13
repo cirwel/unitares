@@ -107,8 +107,54 @@ def _attach_behavioral_state(monitor: UNITARESMonitor, state_data: dict) -> None
         return
     try:
         state_data["behavioral_eisv"] = beh.to_dict_with_history()
+        # Which source fed the last behavioral observation. `load_persisted_state`
+        # does not read this back into an attribute, but it is what tells an
+        # operator whether a restored snapshot's vector came from a physical
+        # sensor or the behavioral one.
+        obs_source = getattr(monitor, "_behavioral_obs_source", None)
+        if obs_source:
+            state_data["behavioral_eisv"]["obs_source"] = obs_source
     except Exception:  # noqa: BLE001 — never let a snapshot serialization break the save
         logger.debug("Behavioral state serialization skipped during save", exc_info=True)
+
+
+def _attach_monitor_transients(monitor: UNITARESMonitor, state_data: dict) -> None:
+    """Merge the monitor-level fields ``load_persisted_state`` already restores.
+
+    Same asymmetry `_attach_behavioral_state` fixed for the EMA, one layer up.
+    `GovernanceMonitor.load_persisted_state` pops four keys off the state file —
+    ``sensor_divergence``, ``sensor_divergence_history``, ``created_at_iso`` and
+    ``last_update_iso`` — but the live save path never wrote any of them, so all
+    four restored as absent on every process start. (`save_persisted_state` on
+    the monitor does write them; nothing calls it. This is the live writer.)
+
+    The divergence history is the one that matters. Per-source coupling
+    (`UNITARES_SENSOR_COUPLING`) cuts an embodied agent's sensor out of the ODE
+    spring on the stated grounds that "sustained disagreement is itself the
+    signal" — but with the trend resetting on every restart, the evidence window
+    was bounded by process uptime rather than by `SENSOR_DIVERGENCE_HISTORY_MAX`.
+
+    Fail-open: this is telemetry on the mandatory check-in path, same posture as
+    `_record_sensor_divergence` itself.
+    """
+    try:
+        last_div = getattr(monitor, "_last_sensor_divergence", None)
+        if last_div is not None:
+            state_data["sensor_divergence"] = last_div
+
+        div_hist = getattr(monitor, "_sensor_divergence_history", None)
+        if div_hist:
+            state_data["sensor_divergence_history"] = list(div_hist)
+
+        created_at = getattr(monitor, "created_at", None)
+        if created_at is not None:
+            state_data["created_at_iso"] = created_at.isoformat()
+
+        last_update = getattr(monitor, "last_update", None)
+        if last_update is not None:
+            state_data["last_update_iso"] = last_update.isoformat()
+    except Exception:  # noqa: BLE001 — never let a snapshot serialization break the save
+        logger.debug("Monitor transient serialization skipped during save", exc_info=True)
 
 
 async def save_monitor_state_async(agent_id: str, monitor: UNITARESMonitor) -> None:
@@ -120,6 +166,7 @@ async def save_monitor_state_async(agent_id: str, monitor: UNITARESMonitor) -> N
     _snapshot_governor_state(monitor)
     state_data = monitor.state.to_dict_with_history()
     _attach_behavioral_state(monitor, state_data)
+    _attach_monitor_transients(monitor, state_data)
 
     state_file = get_state_file(agent_id)
     state_file.parent.mkdir(parents=True, exist_ok=True)
@@ -190,6 +237,7 @@ def save_monitor_state(agent_id: str, monitor: UNITARESMonitor) -> None:
     _snapshot_governor_state(monitor)
     state_data = monitor.state.to_dict_with_history()
     _attach_behavioral_state(monitor, state_data)
+    _attach_monitor_transients(monitor, state_data)
 
     state_file = get_state_file(agent_id)
     state_file.parent.mkdir(parents=True, exist_ok=True)
