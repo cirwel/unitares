@@ -7,6 +7,7 @@ This folder is the system's **versioned identity ontology** — the conceptual m
 1. **[`identity.md`](identity.md)** — the canonical ontology doc, v2. Three stances (performative / descriptive / inventive), the layered taxonomy of continuity, and the Synthetic Life Axioms it's evaluated against. ~30 min read.
 2. **[`plan.md`](plan.md)** — the **resolution ledger**: every open question, research item, and system implication that flows from `identity.md`, with state and dependencies. Read the tables, skim the appendix. Not a starting point — a state board.
 3. **[`paper-positioning.md`](paper-positioning.md)** — how the ontology relates to the v6 paper and the planned v7. Read after `identity.md`.
+4. **[`glossary.md`](glossary.md)** — the question-keyed vocabulary glossary: high-risk homonyms (substrate, fingerprint, basin, …), single-sense terms, and the cross-register Rosetta map. Published at [cirwel.github.io/unitares/glossary.html](https://cirwel.github.io/unitares/glossary.html) with an [interactive viewer](https://cirwel.github.io/unitares/glossary-viewer.html); drift-checked in CI (`scripts/dev/check_glossary_drift.py`).
 
 The remaining files are working RFCs and specs that resolve specific rows in `plan.md`.
 
@@ -50,6 +51,7 @@ So `r1-verify-lineage-claim.md` resolves row R1 in `plan.md`; `s1-continuity-tok
 
 **Dated records**:
 - [`ledger-triage-2026-06-11.md`](ledger-triage-2026-06-11.md) — read-only triage of the deferred/blocked `plan.md` rows against their unblock triggers
+- [`glossary-drift-audit-2026-06-20.md`](glossary-drift-audit-2026-06-20.md) — the point-in-time vocabulary sweep that seeded [`glossary.md`](glossary.md)
 
 ## Operator-archived docs
 

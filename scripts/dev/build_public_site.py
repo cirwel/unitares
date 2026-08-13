@@ -3,8 +3,10 @@
 
 Single-source by construction: this renders ``docs/public-site/index.md``,
 ``docs/ontology/glossary.md``, and the latest ``glossary-drift-audit-*.md``
-directly to HTML. It never holds its own copy of the page content, so the
-published site cannot drift from the repository markdown.
+directly to HTML, and generates the interactive glossary viewer from a
+structured parse of the same ``glossary.md`` (``scripts/dev/glossary_data.py``).
+It never holds its own copy of the page content, so the published site cannot
+drift from the repository markdown.
 
 Usage:
     python3 scripts/dev/build_public_site.py [--out build/public-site] [--cname unitares.cirwel.org]
@@ -16,6 +18,7 @@ Deployed to GitHub Pages by .github/workflows/public-pages.yml.
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -25,6 +28,9 @@ try:
 except ImportError:  # pragma: no cover - surfaced clearly in CI
     print("error: the 'markdown' package is required (pip install markdown).", file=sys.stderr)
     raise SystemExit(1)
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from glossary_data import parse_glossary  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ONTOLOGY = PROJECT_ROOT / "docs" / "ontology"
@@ -87,6 +93,7 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   <nav>
     <a href="index.html"{home_active}>Home</a>
     <a href="glossary.html"{glossary_active}>Glossary</a>
+    <a href="glossary-viewer.html">Viewer</a>
     <a href="drift-audit.html"{audit_active}>Drift audit</a>
     <a href="{repo}">Repo ↗</a>
   </nav>
@@ -148,6 +155,19 @@ def build(out_dir: Path, cname: str | None) -> None:
             source_path="docs/ontology/glossary.md",
             blob=GLOSSARY_BLOB,
             body=render(INTRO_MD + glossary_md),
+        ),
+        encoding="utf-8",
+    )
+
+    # Interactive glossary viewer — generated from a structured parse of the
+    # same glossary.md, so the viewer holds no hand-maintained data copy (the
+    # retired docs/ontology/glossary-viewer.html prototype did, and drifted).
+    viewer_template = (SITE / "glossary-viewer.template.html").read_text(encoding="utf-8")
+    # "</" escaped so no glossary text can terminate the inline <script> block.
+    data_json = json.dumps(parse_glossary(), ensure_ascii=False).replace("</", "<\\/")
+    out_dir.joinpath("glossary-viewer.html").write_text(
+        viewer_template.replace("__GLOSSARY_DATA_JSON__", data_json).replace(
+            "__REPO_URL__", REPO_URL
         ),
         encoding="utf-8",
     )

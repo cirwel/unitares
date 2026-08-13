@@ -49,6 +49,14 @@ jobs:
       run: |
         python scripts/diagnostics/check_doc_drift.py
 
+    - name: Check glossary drift (doc <-> code <-> viewer)
+      # Deterministic replacement for the manual glossary drift sweeps: the
+      # doc glossary must parse (it feeds the generated public-site viewer),
+      # its path.py::symbol references must resolve, and it must stay
+      # cross-referenced with src/governance_glossary.py.
+      run: |
+        python scripts/dev/check_glossary_drift.py
+
     - name: Validate skills manifest (canonical fingerprint)
       # Fails if skills/ changed without regenerating SKILLS_MANIFEST.sha256.
       # Keeps the canonical fingerprint honest so the plugin mirror can verify

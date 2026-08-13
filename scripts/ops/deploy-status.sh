@@ -42,7 +42,13 @@ COMPONENTS=(
 "gateway-mcp|com.unitares.gateway-mcp|$H/projects/unitares-deploy||restart|8768"
 "sentinel-beam|com.unitares.sentinel-beam|$H/projects/unitares-deploy|elixir/sentinel|restart|"
 "wave3a-handlers|com.unitares.wave3a-handlers|$H/projects/unitares-deploy|elixir/wave3a_handlers|restart|8770"
-"lease-plane|com.unitares.lease-plane|$H/projects/unitares-deploy|elixir/lease_plane|hot-reload|"
+"lease-plane|com.unitares.lease-plane|$H/projects/unitares-deploy|elixir/lease_plane|hot-reload|8788"
+# Its OWN dedicated worktree, deliberately NOT unitares-deploy: pinning it there
+# would couple every orchestrator restart to gov-mcp's migration cadence. Scoped
+# to elixir/agent_orchestrator so the verdict tracks ITS code, not the 200+
+# unrelated commits the shared tree accumulates — that subdir has not changed
+# since 2026-06-29, so this reads CURRENT*, which is the honest answer.
+"agent-orchestrator|com.unitares.agent-orchestrator|$H/projects/unitares-orchestrator|elixir/agent_orchestrator|restart|8789"
 "discord-bridge|com.unitares.discord-bridge|$H/projects/unitares-discord-bridge||restart|"
 "dispatch-beam|com.cirwel.dispatch-beam|$H/projects/dispatch_beam||restart|"
 "dispatch-beam-codex|com.cirwel.dispatch-beam-codex|$H/projects/dispatch_beam||restart|"
@@ -80,7 +86,20 @@ proc_start_epoch() {
 }
 health() { # port -> short ok/string or ""
   [ -z "$1" ] && return
-  curl -s -m 2 "http://127.0.0.1:$1/health" 2>/dev/null | head -c 60
+  local out code body
+  out="$(curl -s -m 2 -w '\n%{http_code}' "http://127.0.0.1:$1/health" 2>/dev/null)" || return
+  code="${out##*$'\n'}"
+  body="${out%$'\n'*}"
+  # A bearer-gated /health (agent-orchestrator :8789, lease-plane :8788)
+  # answers 401 to this unauthenticated probe. That is PROOF OF LIFE — a dead
+  # service refuses the connection, it does not refuse the credential — so say
+  # so, instead of pasting `{"error":"permission_denied"...}` into the table
+  # where it reads as a failure. The probe stays unauthenticated on purpose:
+  # deploy-status must never need a secret to tell you what is running.
+  case "$code" in
+    401|403) printf 'up (bearer-gated %s)' "$code"; return ;;
+  esac
+  printf '%s' "$body" | head -c 60
 }
 # build_sha -> the commit the RUNNING process was started from, as it reports
 # itself on /health. Authoritative and timestamp-free, so it is preferred over
