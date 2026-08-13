@@ -4,6 +4,11 @@ Status: specialized developer reference. Use for MCP/tool-surface changes, not r
 
 **For AI agents and developers adding/modifying tools in the governance MCP server.**
 
+For the *current* wiring rather than how to add to it, see
+[`TOOL_EDGE_INDEX.md`](TOOL_EDGE_INDEX.md) — generated from the live registries, it resolves
+every registered tool to its handler, each consolidated tool's `action` → delegate map, and
+the params schema that validates it.
+
 ## Quick Reference: Adding a New Tool
 
 **Step 1: Define the tool schema** in `src/tool_schemas.py`:

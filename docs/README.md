@@ -88,6 +88,7 @@ For people working on UNITARES itself, not using it.
 - [`CANONICAL_SOURCES.md`](dev/CANONICAL_SOURCES.md) — arch-dispute resolution
 - [`DRIFT_LEDGER.md`](dev/DRIFT_LEDGER.md) — guard/seam index for drift prevention and known unguarded seams
 - [`TOOL_REGISTRATION.md`](dev/TOOL_REGISTRATION.md) — how tools are wired into the MCP server
+- [`TOOL_EDGE_INDEX.md`](dev/TOOL_EDGE_INDEX.md) — generated: every tool resolved to its handler, action delegates, and params schema
 - [`CIRCUIT_BREAKER_DIALECTIC.md`](dev/CIRCUIT_BREAKER_DIALECTIC.md) — recovery semantics (specialized)
 
 ## Research, provenance, and optional interpretation
