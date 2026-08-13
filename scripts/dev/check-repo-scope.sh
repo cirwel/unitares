@@ -25,10 +25,15 @@ cd "$PROJECT_ROOT" || exit 2
 ALLOW_FILE="scripts/dev/repo-scope-allow.txt"
 
 # Files that legitimately contain the trigger words (this guard and its docs).
+# pr_body_attribution.py and its test are part of this guard's machinery — they
+# exist to detect and remove the session-attribution footer, so they must name
+# the pattern they match.
 is_self() {
   case "$1" in
     scripts/dev/check-repo-scope.sh|\
     scripts/dev/repo-scope-allow.txt|\
+    scripts/dev/pr_body_attribution.py|\
+    tests/test_pr_body_attribution.py|\
     docs/REPO_SCOPE.md|\
     .github/workflows/repo-scope.yml) return 0;;
   esac
