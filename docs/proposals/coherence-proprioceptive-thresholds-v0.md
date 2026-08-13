@@ -169,7 +169,14 @@ Choosing `k` is a policy call and should be recorded as one.
    `agrees=null` and stay out of agreement rates.
 4. Re-read the gate crossing counts after a soak. A proprioceptive gate that still never fires
    is an unfair zero (the lever is untested, not disproven) and needs a positive control before
-   anyone concludes anything from its silence.
+   anyone concludes anything from its silence. **Built (2026-08-13):**
+   `scripts/analysis/coherence_gate_shadow_read.py` — the soak reader (volume, eligibility,
+   scale provenance, per-agent |z| structure, k sweep, tri-state agreement; v1/v2 never pooled;
+   prints the unfair-zero guard when nothing reached `k_pause`) and `--positive-control`, which
+   drives the real `evaluate()` path with injected excursions at every tier plus the
+   floor-scale and immature-baseline edges. The control also runs in CI
+   (`tests/test_coherence_gate_shadow_read.py`), so "the instrument can fire" is a
+   regression-tested property, not a one-off claim.
 
 ## 7. Reproduce
 
