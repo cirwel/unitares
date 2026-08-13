@@ -22,11 +22,14 @@ genuine cruft.
    A function with zero static callers may still be (a) invoked via MCP/dynamic dispatch,
    (b) a delegate behind a consolidated tool, (c) data-starved but correctly wired. Check
    row counts / edge counts / logs before concluding absence.
-3. **A caller count is not evidence — write down what you actually checked.** "0 callers"
-   reads like a measurement and is not one; it is the output of one tool, with that tool's
-   blind spots. Three rows in this file said `0 callers` about code with live call sites,
-   and two of those said *Cut* (2026-08-13, all three corrected below). The shapes that
-   defeated the scans, none exotic:
+3. **A caller count opens an investigation; it does not close one.** A zero count is a
+   perfectly good *lead* — it is how anything gets onto this list at all, and nobody is
+   asking for it to stop being collected. What it cannot do is carry a verdict, and `CUT` is
+   the verdict that matters, because it is the only irreversible one.
+
+   Three rows in this file said `0 callers` about code with live call sites, and two of them
+   said *Cut* (2026-08-13, all three corrected below). The shapes that defeated the scans,
+   none exotic:
 
    | Miss | Example |
    |---|---|
@@ -36,9 +39,13 @@ genuine cruft.
    | Reached only through a package `__init__` | `identity/core.py`, `process_binding_handler.py` |
    | Consumer is a test, by design | `trust_contract_lint.py` |
 
-   So state the evidence, not the number: *which* search, over what, and what it cannot see —
-   "no static reference outside its own module (does not resolve instance-method or
-   string-dispatch calls)" is a claim a reader can check and rebut. "0 callers" is not.
+   So keep the count and record what produced it. "No static reference outside its own module
+   (does not resolve instance-method or string-dispatch calls)" says the same thing as
+   "0 callers" while stating its own reach, so a reader can see what it missed and rebut it.
+   A bare number invites the reader to treat a search result as a fact about the world.
+
+   The count is enough to move a row to `DECIDE` or `KEEP-DORMANT` — both reversible, both
+   just parking. Only a checked call site is enough for `CUT`.
    `docs/dev/TOOL_EDGE_INDEX.md` settles the delegate-behind-a-tool case directly, since it
    is generated from the live registries rather than from source.
 4. **New capability should not merge unwired.** Ship it with one wired consumer, *or* add
