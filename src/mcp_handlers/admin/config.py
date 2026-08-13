@@ -16,14 +16,28 @@ logger = get_logger(__name__)
 @mcp_tool("get_thresholds", timeout=10.0)
 async def handle_get_thresholds(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Get current governance threshold configuration"""
-    from src.runtime_config import get_thresholds
-    
+    from src.runtime_config import describe_thresholds, get_thresholds
+
     thresholds = get_thresholds()
-    
+    sources = describe_thresholds()
+    overridden = sorted(n for n, d in sources.items() if d["source"] == "runtime_override")
+
     return success_response(
         {
             "thresholds": thresholds,
-            "note": "These are the effective thresholds (runtime overrides + defaults)"
+            # `thresholds` merges operator overrides into shipped defaults, so on
+            # its own it cannot answer "did I set this, or is it stock?" — nor
+            # that most of these keys are structural and cannot be set at all.
+            # `sources` carries that per value; `overridden` is the short answer.
+            "sources": sources,
+            "overridden": overridden,
+            "note": (
+                "`thresholds` are effective values (runtime overrides merged over "
+                "class defaults). `sources` says which layer supplied each one and "
+                "whether it is settable; a displaced default is kept as "
+                "`class_default`. Layer of origin only — not trust-contract §1 "
+                "provenance."
+            ),
         },
         arguments=arguments,
     )
