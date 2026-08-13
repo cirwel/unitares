@@ -11,10 +11,12 @@ import numpy as np
 import pytest
 
 from scripts.analysis.eisv_general_solution import (
+    ACTIVE_PARAMS,
     ALPHA_C,
     CERTIFICATE_PARAMS,
     DEPLOYED_PARAMS,
     Inputs,
+    max_certifiable_alpha_c,
     certificate_grid_margin,
     coherence_moments,
     equilibrium,
@@ -100,6 +102,34 @@ def test_coherence_nis_normalization_gives_expected_d2():
 @pytest.mark.parametrize("params", [CERTIFICATE_PARAMS, DEPLOYED_PARAMS])
 def test_contraction_certificate_grid(params):
     assert certificate_grid_margin(params) <= 0.0
+
+
+def test_certificate_fails_at_active_config():
+    # get_active_params() auto-applies gamma_I=0.169 (V42P, linear-mode
+    # default); the alpha_c=0.15 certificate does NOT survive that tuning.
+    assert certificate_grid_margin(ACTIVE_PARAMS) > 0.0
+    alpha_max = max_certifiable_alpha_c(ACTIVE_PARAMS)
+    assert alpha_max < ALPHA_C
+    assert alpha_max == pytest.approx(0.117, abs=0.002)
+
+
+def test_solve_I_stable_near_resonance():
+    # The naive b = -k*a/(gamma_I - mu) form cancels catastrophically near
+    # resonance; the expm1 form must stay accurate through it.
+    from dataclasses import replace
+
+    from scipy.integrate import solve_ivp
+
+    from scripts.analysis.eisv_general_solution import rhs, solve_I
+
+    p = replace(CERTIFICATE_PARAMS, gamma_I=0.5 + 1e-8, mu=0.5)
+    r = Inputs()
+    x0 = np.array([0.7, 0.6, 0.55])
+    sol = solve_ivp(
+        lambda _t, x: rhs(x, p, r), (0.0, 10.0), x0, rtol=1e-11, atol=1e-13
+    )
+    closed = solve_I(10.0, S0=x0[2], I0=x0[1], p=p, r=r)
+    assert closed == pytest.approx(sol.y[1, -1], abs=1e-7)
 
 
 def test_tracking_bound_holds_under_baseline_drift():

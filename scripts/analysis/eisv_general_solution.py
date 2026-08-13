@@ -51,9 +51,6 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
-_EPS_DEGENERATE = 1e-9
-
-
 @dataclass(frozen=True)
 class ReducedParams:
     """Parameters of the reduced 3-state system (rederivation proposal 3.2)."""
@@ -68,10 +65,14 @@ class ReducedParams:
     beta_c: float = 0.15    # task complexity -> S coupling
 
 
-# The two parameter sets the proposal's certificate discussion refers to:
-# the certified set (paper mu = 0.8) and the deployed-derived set (mu = 0.5).
+# The parameter sets the certificate discussion refers to: the certified set
+# (paper mu = 0.8), the deployed-derived set (mu = 0.5), and the ACTIVE
+# deployed configuration — get_active_params() auto-applies gamma_I = 0.169
+# (V42P tuning) whenever linear I-dynamics mode is on with the default
+# profile, which is the running default (governance_core/parameters.py).
 CERTIFICATE_PARAMS = ReducedParams()
 DEPLOYED_PARAMS = replace(CERTIFICATE_PARAMS, mu=0.5)
+ACTIVE_PARAMS = replace(DEPLOYED_PARAMS, gamma_I=0.169)
 
 # Contraction metric and certified rate from rederivation proposal 3.4.
 METRIC_M = np.diag([0.1, 1.0, 0.2])
@@ -119,17 +120,18 @@ def solve_S(t: float, S0: float, p: ReducedParams, r: Inputs) -> float:
 
 
 def solve_I(t: float, S0: float, I0: float, p: ReducedParams, r: Inputs) -> float:
-    """Exact I(t); handles the resonant case gamma_I == mu."""
+    """Exact I(t), in a form uniformly stable through the resonance gamma_I == mu.
+
+    The textbook b = -k a / (gamma_I - mu) two-exponential form cancels
+    catastrophically near resonance; rewriting the particular term as
+    -k a e^{-gamma_I t} * expm1((gamma_I - mu) t) / (gamma_I - mu) is exact for
+    gamma_I != mu and has the exact resonant limit t as gamma_I -> mu.
+    """
     _, I_star, S_star = equilibrium(p, r)
     a = S0 - S_star
-    if abs(p.gamma_I - p.mu) > _EPS_DEGENERATE:
-        b = -p.k * a / (p.gamma_I - p.mu)
-        return (
-            I_star
-            + (I0 - I_star - b) * math.exp(-p.gamma_I * t)
-            + b * math.exp(-p.mu * t)
-        )
-    return I_star + (I0 - I_star) * math.exp(-p.mu * t) - p.k * a * t * math.exp(-p.mu * t)
+    d = p.gamma_I - p.mu
+    ramp = t if d == 0.0 else math.expm1(d * t) / d
+    return I_star + (I0 - I_star) * math.exp(-p.gamma_I * t) - p.k * a * ramp * math.exp(-p.gamma_I * t)
 
 
 def solve_E(
@@ -307,6 +309,20 @@ def certificate_grid_margin(
     return worst
 
 
+def max_certifiable_alpha_c(
+    p: ReducedParams, M: np.ndarray = METRIC_M, tol: float = 1e-4
+) -> float:
+    """Largest contraction rate the grid certificate supports for params p."""
+    lo, hi = 0.0, 1.0
+    while hi - lo > tol:
+        mid = 0.5 * (lo + hi)
+        if certificate_grid_margin(p, M, alpha_c=mid) <= 0.0:
+            lo = mid
+        else:
+            hi = mid
+    return lo
+
+
 # ---------------------------------------------------------------------------
 # Verification suite
 # ---------------------------------------------------------------------------
@@ -383,24 +399,28 @@ def verify_covariance_monte_carlo(
     dt: float = 0.02,
     seed: int = 11,
 ) -> float:
-    """Max relative error of closed-form P vs Euler-Maruyama on the linear SDE."""
+    """Max relative error of closed-form P vs Euler-Maruyama on the FULL
+    NONLINEAR SDE (dx = rhs(x) dt + sigma_S dW on the S channel).
+
+    Running the nonlinear field (not the linearized one) makes this check
+    evidence for the adequacy of the E-row linearization, not merely a
+    re-check of the Lyapunov algebra. Covariance is taken about the empirical
+    mean, so the O(sigma^2) stationary-mean shift does not contaminate it.
+    """
     rng = np.random.default_rng(seed)
-    x_star = equilibrium(p, r)
-    J = jacobian(p, x_star[0], x_star[2])
     P = stationary_covariance(p, r, sigma_S)
 
-    y = np.zeros(3)
+    x = equilibrium(p, r).copy()
     burn = n_steps // 10
-    acc = np.zeros((3, 3))
-    count = 0
+    samples = np.empty((n_steps - burn, 3))
     sq = math.sqrt(dt)
     for i in range(n_steps):
-        y = y + dt * (J @ y)
-        y[2] += sigma_S * sq * rng.standard_normal()
+        x = x + dt * rhs(x, p, r)
+        x[2] += sigma_S * sq * rng.standard_normal()
         if i >= burn:
-            acc += np.outer(y, y)
-            count += 1
-    P_mc = acc / count
+            samples[i - burn] = x
+    dev = samples - samples.mean(axis=0)
+    P_mc = dev.T @ dev / len(dev)
     scale = max(float(np.max(np.abs(P))), 1e-12)
     return float(np.max(np.abs(P_mc - P)) / scale)
 
@@ -417,15 +437,23 @@ def verify_coherence_mgf(
     P = stationary_covariance(p, r, sigma_S)
     # Baseline offset: r slightly displaced from x* (imperfect baseline).
     m = np.array([0.02, -0.03, 0.05])
-    # NIS-style precision: W = diag(1 / P_jj).
-    W = np.diag(1.0 / np.diag(P))
+    # Two weight matrices: NIS-style diagonal, and a rotated NON-diagonal one
+    # so that an ordering error like (I+WP) vs (I+PW) could not slip through.
+    W_diag = np.diag(1.0 / np.diag(P))
+    theta_rot = 0.3
+    c, s = math.cos(theta_rot), math.sin(theta_rot)
+    R = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+    W_rot = R @ W_diag @ R.T
 
-    mean_a, sd_a = coherence_moments(m, P, W)
-    y = rng.multivariate_normal(m, P, size=n_samples)
-    d2 = np.einsum("ij,jj,ij->i", y, W, y)
-    C = np.exp(-0.5 * d2)
-    mean_mc, sd_mc = float(np.mean(C)), float(np.std(C))
-    return max(abs(mean_a - mean_mc) / mean_mc, abs(sd_a - sd_mc) / sd_mc)
+    worst = 0.0
+    for W in (W_diag, W_rot):
+        mean_a, sd_a = coherence_moments(m, P, W)
+        y = rng.multivariate_normal(m, P, size=n_samples)
+        d2 = np.einsum("ij,jk,ik->i", y, W, y)
+        C = np.exp(-0.5 * d2)
+        mean_mc, sd_mc = float(np.mean(C)), float(np.std(C))
+        worst = max(worst, abs(mean_a - mean_mc) / mean_mc, abs(sd_a - sd_mc) / sd_mc)
+    return worst
 
 
 def verify_tracking_bound(
@@ -504,6 +532,17 @@ def main() -> int:
         ("contraction certificate grid (mu=0.5)", margin_dep <= 0.0,
          f"worst eigenvalue {margin_dep:.4f}")
     )
+    # The ACTIVE deployed config (gamma_I auto-set to 0.169 in linear mode) is
+    # EXPECTED to fail at alpha_c = 0.15; the check asserts that finding and
+    # reports the largest rate the certificate does support there.
+    margin_act = certificate_grid_margin(ACTIVE_PARAMS)
+    alpha_act = max_certifiable_alpha_c(ACTIVE_PARAMS)
+    checks.append(
+        ("certificate FAILS at active config (gamma_I=0.169), as documented",
+         margin_act > 0.0 and alpha_act < ALPHA_C,
+         f"worst eigenvalue {margin_act:.4f} at alpha_c=0.15; "
+         f"max certifiable alpha_c ~= {alpha_act:.4f}")
+    )
 
     obs, bound = verify_tracking_bound(CERTIFICATE_PARAMS, r)
     checks.append(
@@ -518,7 +557,10 @@ def main() -> int:
         print(f"  [{'PASS' if passed else 'FAIL'}] {name}: {detail}")
 
     # Report the constants the proposal deferred (its section 3.5, items 1+3).
-    print("\n== derived constants (certificate params, sigma_S = 0.05) ==")
+    # All E-row quantities depend on the evaluation point below; P_SS, P_IS,
+    # P_II and the NIS-weight coherence moments are input-invariant.
+    print(f"\n== derived constants (certificate params; evaluation point "
+          f"u={r.u}, c={r.c}, I_bar={r.I_bar}, sigma_S = {sigma}) ==")
     P = stationary_covariance(CERTIFICATE_PARAMS, r, sigma)
     ball = mean_square_ball(P)
     generic = generic_contraction_ball(sigma)
