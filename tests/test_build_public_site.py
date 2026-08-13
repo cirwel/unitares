@@ -33,6 +33,22 @@ def test_build_separates_product_landing_from_glossary(tmp_path):
     assert "docs/public-site/index.md" in landing
 
 
+def test_build_generates_viewer_from_glossary_markdown(tmp_path):
+    build(tmp_path, None)
+
+    viewer = (tmp_path / "glossary-viewer.html").read_text(encoding="utf-8")
+
+    # Template tokens replaced with real data parsed from glossary.md.
+    assert "__GLOSSARY_DATA_JSON__" not in viewer
+    assert "__REPO_URL__" not in viewer
+    assert "substrate (inference)" in viewer
+    assert '"rosetta"' in viewer
+
+    # The other pages link to the viewer.
+    glossary = (tmp_path / "glossary.html").read_text(encoding="utf-8")
+    assert 'href="glossary-viewer.html"' in glossary
+
+
 def test_build_writes_normalized_cname(tmp_path):
     build(tmp_path, " unitares.cirwel.org ")
 
