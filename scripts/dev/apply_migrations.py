@@ -47,7 +47,10 @@ from pathlib import Path
 from unitares_doctor import (
     DEFAULT_DB_URL,
     KNOWN_SCHEMA_MIGRATION_EXCEPTIONS,
+    _checksum_drift,
+    _file_checksum,
     _parse_schema_migration_rows,
+    _query_applied_checksums,
     _redact,
     _source_schema_migrations,
 )
@@ -115,6 +118,54 @@ def apply_file(db_url: str, path: Path) -> bool:
     return True
 
 
+def record_checksum(db_url: str, version: int, path: Path) -> bool:
+    """Write the applied file's sha256 into core.schema_migrations.
+
+    Runs after the file itself, because a file cannot contain its own hash. Only
+    fills a NULL — an existing checksum is never overwritten, so this can never
+    launder a mismatch into agreement. A database still on pre-062 schema has no
+    checksum column; that is reported, not treated as failure, so this tool
+    keeps working against an older deployment.
+    """
+    proc = subprocess.run(
+        ["psql", db_url, "-v", "ON_ERROR_STOP=1", "-Atqc",
+         "UPDATE core.schema_migrations SET checksum = %s "
+         "WHERE version = %d AND checksum IS NULL" % (_sql_literal(_file_checksum(path)), version)],
+        capture_output=True, text=True, timeout=10,
+    )
+    if proc.returncode != 0:
+        stderr = proc.stderr.strip()
+        if "checksum" in stderr and "does not exist" in stderr:
+            print("  note: checksum column absent (DB predates migration 062) "
+                  "— content anchoring not recorded for this apply")
+            return True
+        print(f"  WARNING: could not record checksum for version {version}: {stderr}",
+              file=sys.stderr)
+        return False
+    return True
+
+
+def _sql_literal(value: str) -> str:
+    """Quote a string for inline SQL. Values here are hex digests, but the
+    escaping is unconditional so this stays safe if the caller ever changes."""
+    return "'" + value.replace("'", "''") + "'"
+
+
+def checksum_refusals(db_url: str) -> list[str]:
+    """Registered checksums that disagree with the file now on disk.
+
+    This is the refusal that did not exist for 034: a version already in the
+    registry was never re-read, so a file edited after its apply stayed
+    invisible forever. Blocking here means the next apply surfaces it instead of
+    silently building on a schema nobody can describe.
+    """
+    recorded = _query_applied_checksums(db_url)
+    if not recorded:
+        return []
+    mismatches, _unverifiable = _checksum_drift(recorded, MIGRATIONS_DIR)
+    return mismatches
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Apply pending UNITARES Postgres migrations (dry-run by default).",
@@ -162,6 +213,14 @@ def main(argv: list[str] | None = None) -> int:
         for v in unexpected:
             print(f"  {v}: {actual[v]!r}", file=sys.stderr)
 
+    # Content drift: a registered version whose file has since changed. Distinct
+    # from a name mismatch — the name can agree while the SQL does not.
+    content_drift = checksum_refusals(args.db_url)
+    if content_drift:
+        print("\ncontent drift (file changed after it was applied):", file=sys.stderr)
+        for issue in content_drift:
+            print(f"  {issue}", file=sys.stderr)
+
     if args.check:
         # Preflight gate: the DB is "ready for this code" only when there is
         # nothing left to do. Any pending migration, name mismatch, or DB
@@ -176,6 +235,11 @@ def main(argv: list[str] | None = None) -> int:
             blockers.append(
                 f"{len(unexpected)} DB version(s) with no source file "
                 f"(checkout behind the deployed DB): {unexpected}"
+            )
+        if content_drift:
+            blockers.append(
+                f"{len(content_drift)} migration(s) whose file changed after "
+                f"being applied (see above)"
             )
         if blockers:
             print("\nMigration check FAILED — DB not in sync with the source manifest:",
@@ -210,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {v}: {expected[v]!r}  [{path.name}]{backfill}")
         plan.append((v, path))
 
-    if mismatches or unexpected or missing_files:
+    if mismatches or unexpected or missing_files or content_drift:
         print(
             "\nRefusing to apply: reconcile the drift / missing-file issues above first.",
             file=sys.stderr,
@@ -231,6 +295,14 @@ def main(argv: list[str] | None = None) -> int:
         if v not in recorded:
             print(
                 f"  applied but version {v} is not recorded in schema_migrations — abort.",
+                file=sys.stderr,
+            )
+            return 1
+        if not record_checksum(args.db_url, v, path):
+            print(
+                f"  applied and registered, but the content anchor for version {v} "
+                f"could not be written — abort rather than leave a row that "
+                f"future runs will read as unverifiable.",
                 file=sys.stderr,
             )
             return 1
