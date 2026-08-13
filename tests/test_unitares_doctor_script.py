@@ -1278,3 +1278,132 @@ def test_constraint_drift_skips_without_psql(doctor, monkeypatch, tmp_path):
     monkeypatch.setattr(doctor.shutil, "which", lambda _: None)
     result = doctor.check_constraint_drift("postgresql://x/y", root)
     assert result.status == doctor.Status.SKIP
+
+
+# --- migration_checksum_drift -----------------------------------------------
+# The cause detector under column_drift / constraint_drift. Those know one DDL
+# family each; this one only compares bytes, so it catches any post-apply edit.
+# The load-bearing behaviour is what it does with a NULL checksum: a row applied
+# before content anchoring existed must read as UNVERIFIABLE, never as agreeing.
+# Back-filling those from source would re-create the exact false-green that let
+# migration 034 run 3-of-4 CHECK constraints in production for three months.
+
+def test_file_checksum_is_sha256_of_bytes(doctor, tmp_path):
+    import hashlib
+    p = tmp_path / "010_x.sql"
+    p.write_bytes(b"SELECT 1;\n")
+    assert doctor._file_checksum(p) == hashlib.sha256(b"SELECT 1;\n").hexdigest()
+
+
+def test_file_checksum_sees_line_ending_change(doctor, tmp_path):
+    """Bytes, not decoded text — psql would feed the server different bytes."""
+    a = tmp_path / "a.sql"
+    b = tmp_path / "b.sql"
+    a.write_bytes(b"SELECT 1;\n")
+    b.write_bytes(b"SELECT 1;\r\n")
+    assert doctor._file_checksum(a) != doctor._file_checksum(b)
+
+
+def test_checksum_drift_flags_edited_file(doctor, tmp_path):
+    """A recorded checksum disagreeing with the file is the 034 failure mode."""
+    root = _migrations(tmp_path, {"010_x.sql": "SELECT 1;"})
+    mig = root / "db" / "postgres" / "migrations"
+    mismatches, unverifiable = doctor._checksum_drift({10: "b" * 64}, mig)
+    assert len(mismatches) == 1
+    assert "010_x.sql" in mismatches[0]
+    assert "changed after it was applied" in mismatches[0]
+    assert unverifiable == []
+
+
+def test_checksum_drift_accepts_matching_file(doctor, tmp_path):
+    root = _migrations(tmp_path, {"010_x.sql": "SELECT 1;"})
+    mig = root / "db" / "postgres" / "migrations"
+    actual = doctor._file_checksum(mig / "010_x.sql")
+    assert doctor._checksum_drift({10: actual}, mig) == ([], [])
+
+
+def test_checksum_drift_reports_null_as_unverifiable_not_mismatch(doctor, tmp_path):
+    """NULL is 'unknowable', not 'wrong' — and never silently treated as OK."""
+    root = _migrations(tmp_path, {"010_x.sql": "SELECT 1;"})
+    mig = root / "db" / "postgres" / "migrations"
+    mismatches, unverifiable = doctor._checksum_drift({10: None}, mig)
+    assert mismatches == []
+    assert unverifiable == [10]
+
+
+def test_checksum_drift_ignores_version_with_no_source_file(doctor, tmp_path):
+    """schema_migrations already reports that as 'unexpected'; no double-count."""
+    root = _migrations(tmp_path, {"010_x.sql": "SELECT 1;"})
+    mig = root / "db" / "postgres" / "migrations"
+    mismatches, _ = doctor._checksum_drift({99: "c" * 64}, mig)
+    assert mismatches == []
+
+
+def test_checksum_check_fails_on_mismatch(doctor, monkeypatch, tmp_path):
+    root = _migrations(tmp_path, {"010_x.sql": "SELECT 1;"})
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor, "_query_applied_checksums", lambda _: {10: "d" * 64})
+    result = doctor.check_migration_checksum_drift("postgresql://x/y", root)
+    assert result.status == doctor.Status.FAIL
+    # The remedy must not be "edit the checksum to match" — that would launder
+    # the drift into agreement while leaving the deployed schema wrong.
+    assert "Do NOT edit the checksum" in result.detail
+    assert "NEW forward migration" in result.detail
+
+
+def test_checksum_check_passes_with_unverifiable_note(doctor, monkeypatch, tmp_path):
+    root = _migrations(tmp_path, {"010_x.sql": "SELECT 1;"})
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor, "_query_applied_checksums", lambda _: {10: None})
+    result = doctor.check_migration_checksum_drift("postgresql://x/y", root)
+    assert result.status == doctor.Status.PASS
+    assert "unverifiable" in result.message
+    assert "never back-fill" in result.detail
+
+
+def test_checksum_check_skips_before_migration_062(doctor, monkeypatch, tmp_path):
+    """A DB without the column is pre-062, not broken."""
+    root = _migrations(tmp_path, {"010_x.sql": "SELECT 1;"})
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor, "_query_applied_checksums", lambda _: {})
+    result = doctor.check_migration_checksum_drift("postgresql://x/y", root)
+    assert result.status == doctor.Status.SKIP
+
+
+# --- schema_attestation -----------------------------------------------------
+# The federation primitive: two principals compare digests computed over their
+# own registries. No shared root, no central registry, neither answer
+# authoritative. The property that must hold is that coverage travels WITH the
+# digest — equal digests over unverifiable rows are a weak claim, and callers
+# have to be able to tell.
+
+def test_attestation_digest_is_stable(doctor):
+    a = doctor.schema_attestation({1: "x", 2: "y"}, {1: "a" * 64, 2: "b" * 64})
+    b = doctor.schema_attestation({2: "y", 1: "x"}, {2: "b" * 64, 1: "a" * 64})
+    assert a["digest"] == b["digest"], "digest must not depend on dict order"
+
+
+def test_attestation_digest_differs_on_content_not_just_name(doctor):
+    """Same versions, same names, different SQL — must NOT attest as equal."""
+    peer_a = doctor.schema_attestation({1: "x"}, {1: "a" * 64})
+    peer_b = doctor.schema_attestation({1: "x"}, {1: "b" * 64})
+    assert peer_a["digest"] != peer_b["digest"]
+
+
+def test_attestation_marks_partial_coverage(doctor):
+    partial = doctor.schema_attestation({1: "x", 2: "y"}, {1: "a" * 64, 2: None})
+    assert partial["fully_anchored"] is False
+    assert partial["verified"] == 1
+    assert partial["unverifiable"] == 1
+
+
+def test_attestation_full_coverage_is_marked(doctor):
+    full = doctor.schema_attestation({1: "x"}, {1: "a" * 64})
+    assert full["fully_anchored"] is True
+    assert full["unverifiable"] == 0
+
+
+def test_attestation_empty_registry_is_not_fully_anchored(doctor):
+    """An empty DB must not read as 'fully verified' — it has verified nothing."""
+    empty = doctor.schema_attestation({}, {})
+    assert empty["fully_anchored"] is False

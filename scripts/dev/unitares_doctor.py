@@ -22,6 +22,7 @@ that the install can finish.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -184,6 +185,80 @@ def _parse_schema_migration_rows(stdout: str) -> dict[int, str]:
             raise ValueError(f"unexpected schema_migrations row: {line!r}")
         rows[int(version_raw)] = name
     return rows
+
+
+def _file_checksum(path: Path) -> str:
+    """sha256 (hex) of a migration file's bytes.
+
+    Hashes bytes, not decoded text, so an encoding or line-ending change is a
+    different migration — which is the honest reading: psql would feed different
+    bytes to the server.
+    """
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _query_applied_checksums(db_url: str) -> dict[int, str | None]:
+    """Return {version: checksum-or-None} from core.schema_migrations.
+
+    Returns ``{}`` if the checksum column does not exist yet, which is the
+    pre-migration-062 state and is not an error — callers treat an empty result
+    as "content anchoring not yet available on this database".
+    """
+    proc = subprocess.run(
+        ["psql", db_url, "-Atqc",
+         "SELECT version || '|' || COALESCE(checksum, '') "
+         "FROM core.schema_migrations ORDER BY version"],
+        capture_output=True, text=True, timeout=10,
+    )
+    if proc.returncode != 0:
+        return {}
+    out: dict[int, str | None] = {}
+    for line in proc.stdout.splitlines():
+        if not line.strip():
+            continue
+        version_raw, sep, checksum = line.partition("|")
+        if not sep:
+            raise ValueError(f"unexpected schema_migrations row: {line!r}")
+        out[int(version_raw)] = checksum or None
+    return out
+
+
+def _checksum_drift(
+    recorded: dict[int, str | None],
+    migrations_dir: Path,
+) -> tuple[list[str], list[int]]:
+    """Classify recorded checksums against the files on disk.
+
+    Returns ``(mismatches, unverifiable)``.
+
+    * ``mismatches`` — a recorded checksum that disagrees with the current file.
+      The file changed after it was applied, so the deployed schema and the
+      source no longer describe the same thing. This is the 034 failure mode,
+      and it is a hard error.
+    * ``unverifiable`` — versions with no recorded checksum. Applied before
+      migration 062, so what actually ran is unknowable. Reported, never
+      "repaired" by writing today's hash in (see 062's header).
+    """
+    mismatches: list[str] = []
+    unverifiable: list[int] = []
+    for version in sorted(recorded):
+        checksum = recorded[version]
+        if checksum is None:
+            unverifiable.append(version)
+            continue
+        matches = sorted(migrations_dir.glob(f"{version:03d}_*.sql"))
+        if not matches:
+            # A DB version with no source file is already reported by
+            # _schema_migration_drift as "unexpected"; not re-reported here.
+            continue
+        actual = _file_checksum(matches[0])
+        if actual != checksum:
+            mismatches.append(
+                f"version {version} ({matches[0].name}): "
+                f"recorded {checksum[:12]}… but file is {actual[:12]}… "
+                f"— the file changed after it was applied"
+            )
+    return mismatches, unverifiable
 
 
 def _schema_migration_drift(actual: dict[int, str], expected: dict[int, str]) -> list[str]:
@@ -406,6 +481,125 @@ def _fetch_live_constraints(db_url: str) -> set[tuple[str, str]] | None:
             tbl, cname = line.strip().rsplit("|", 1)
             out.add((tbl.lower(), cname.lower()))
     return out
+
+
+def schema_attestation(
+    applied: dict[int, str],
+    recorded: dict[int, str | None],
+) -> dict[str, object]:
+    """Reduce a database's migration registry to a comparable digest.
+
+    ``constraint_drift`` and ``column_drift`` answer "is THIS database intact?".
+    This answers a different question: "do two databases carry the same schema
+    contract?" — which is the one that matters once more than one principal runs
+    governance and they need to interoperate without a shared administrative
+    root. Comparing digests is attestation: each side computes over its own
+    state and the values either agree or they do not. Nothing here consults a
+    central registry, and no principal's answer is authoritative over another's.
+
+    The digest chains ``version:name:checksum`` in version order, so it is
+    sensitive to a missing migration, a renamed one, and — because the checksum
+    is in the chain — to a migration whose content differs from a peer's at the
+    same version.
+
+    ``coverage`` is the part that must not be dropped. A digest over rows whose
+    checksums are NULL says far less than one over fully anchored rows: two
+    databases could agree on every ``version:name`` pair and still have run
+    different SQL, which is exactly how 034 stayed invisible. So ``verified`` /
+    ``total`` travels WITH the digest and ``fully_anchored`` is false whenever
+    any row is unverifiable. A digest whose coverage is partial is a weaker
+    claim, and callers must be able to see that rather than read equality as
+    proof of agreement.
+    """
+    chain = []
+    for version in sorted(applied):
+        checksum = recorded.get(version)
+        chain.append(f"{version}:{applied[version]}:{checksum or '-'}")
+    body = "\n".join(chain)
+    verified = sum(1 for v in applied if recorded.get(v))
+    total = len(applied)
+    return {
+        "digest": hashlib.sha256(body.encode()).hexdigest(),
+        "migrations": total,
+        "verified": verified,
+        "unverifiable": total - verified,
+        "fully_anchored": total > 0 and verified == total,
+    }
+
+
+def check_migration_checksum_drift(db_url: str, repo_root: Path) -> CheckResult:
+    """FAIL when a migration file changed after it was applied.
+
+    ``constraint_drift`` and ``column_drift`` are symptom detectors: each knows
+    one DDL family and notices when that specific kind of change went missing.
+    They caught the 034 instance only because someone went looking. This is the
+    cause detector — it does not care what the migration did, only whether the
+    bytes that ran match the bytes on disk now.
+
+    The gap it closes: ``core.schema_migrations`` recorded only
+    ``(version, name, applied_at)``, so a registered version was a claim about
+    WHICH migration ran and never about WHAT ran. ``apply_migrations.py`` plans
+    by registered version, so once a version is in the table its file is never
+    read again — edit it afterwards and nothing anywhere notices. Migration 062
+    adds the checksum column that makes the two comparable.
+
+    Versions applied before 062 have no recorded checksum. Those are reported as
+    unverifiable rather than repaired: writing today's hash into an old row would
+    assert that the applied content matched the current file, which is precisely
+    the false-green being eliminated. See 062's header.
+    """
+    name, mode = "migration_checksum_drift", "local"
+    if shutil.which("psql") is None:
+        return CheckResult(name, mode, Status.SKIP, "psql not on PATH")
+
+    migrations_dir = repo_root / "db" / "postgres" / "migrations"
+    if not migrations_dir.is_dir():
+        return CheckResult(name, mode, Status.SKIP, "no db/postgres/migrations directory")
+
+    recorded = _query_applied_checksums(db_url)
+    if not recorded:
+        return CheckResult(
+            name, mode, Status.SKIP,
+            "checksum column absent (pre-062) or registry not queryable",
+        )
+
+    mismatches, unverifiable = _checksum_drift(recorded, migrations_dir)
+
+    if mismatches:
+        return CheckResult(
+            name, mode, Status.FAIL,
+            f"{len(mismatches)} migration file(s) changed after being applied",
+            detail="\n".join(mismatches) + (
+                "\n\nThe deployed schema and the source no longer describe the "
+                "same thing, and re-running is a no-op because the version is "
+                "already registered. Do NOT edit the checksum to match. Land a "
+                "NEW forward migration that makes the deployed schema agree with "
+                "the file, following the shape of "
+                "061_lease_plane_sensor_status_check_repair.sql."
+            ),
+        )
+
+    anchored = len(recorded) - len(unverifiable)
+    if unverifiable:
+        return CheckResult(
+            name, mode, Status.PASS,
+            f"{anchored}/{len(recorded)} migrations content-anchored; "
+            f"{len(unverifiable)} pre-062 and unverifiable",
+            detail=(
+                "Unverifiable versions: "
+                + ", ".join(str(v) for v in unverifiable[:20])
+                + ("…" if len(unverifiable) > 20 else "")
+                + "\n\nThese were applied before checksums existed, so what ran "
+                  "is unknowable. This is the honest state, not a defect to fix "
+                  "— never back-fill from source files. The count falls only "
+                  "when migrations are legitimately applied to a fresh database."
+            ),
+        )
+
+    return CheckResult(
+        name, mode, Status.PASS,
+        f"all {anchored} applied migrations match their source files",
+    )
 
 
 def check_constraint_drift(db_url: str, repo_root: Path) -> CheckResult:
@@ -1911,6 +2105,11 @@ def build_checks(repo_root: Path, db_url: str) -> list[Check]:
         # migrations claim to have installed. Neither sees the other's case.
         Check("constraint_drift", "local",
               lambda: check_constraint_drift(db_url, repo_root)),
+        # Cause detector under both of the above: they each know one DDL family
+        # and notice when that kind of change went missing, this one notices
+        # when the applied bytes and the file stopped agreeing at all.
+        Check("migration_checksum_drift", "local",
+              lambda: check_migration_checksum_drift(db_url, repo_root)),
         Check("elixir_deprecated_scheme_lint", "local",
               lambda: check_elixir_deprecated_scheme_lint(db_url, repo_root)),
         Check("elixir_scheme_grammar_lint", "local",
@@ -2010,9 +2209,33 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="emit JSON instead of text")
     parser.add_argument("--no-color", action="store_true")
     parser.add_argument("--db-url", default=os.environ.get("DB_POSTGRES_URL", DEFAULT_DB_URL))
+    parser.add_argument(
+        "--attest", action="store_true",
+        help="emit this database's schema attestation (digest + coverage) as "
+             "JSON and exit. Two deployments compare digests to establish that "
+             "they carry the same schema contract; neither consults the other, "
+             "and a digest whose coverage is partial is a weaker claim — read "
+             "fully_anchored before treating equality as agreement.",
+    )
     args = parser.parse_args(argv)
 
     repo_root = Path(__file__).resolve().parent.parent.parent
+
+    if args.attest:
+        applied = _parse_schema_migration_rows(
+            subprocess.run(
+                ["psql", args.db_url, "-Atqc",
+                 "SELECT version || '|' || name FROM core.schema_migrations "
+                 "ORDER BY version"],
+                capture_output=True, text=True, timeout=10,
+            ).stdout
+        )
+        print(json.dumps(
+            schema_attestation(applied, _query_applied_checksums(args.db_url)),
+            indent=2,
+        ))
+        return 0
+
     checks = build_checks(repo_root, args.db_url)
     results = run_checks(checks, args.mode)
 

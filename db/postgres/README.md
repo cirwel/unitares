@@ -161,8 +161,43 @@ psql "$DB_POSTGRES_URL" -c "SELECT graphid, name FROM ag_catalog.ag_graph WHERE 
 Schema versions are tracked in `core.schema_migrations`:
 
 ```sql
-SELECT version, name, applied_at FROM core.schema_migrations ORDER BY version;
+SELECT version, name, applied_at, checksum FROM core.schema_migrations ORDER BY version;
 ```
+
+### Content anchoring (migration 062)
+
+A registered version says *which* migration ran. `checksum` — sha256 of the file
+as applied — says *what* ran. The two came apart once already: 034 registered at
+`2026-05-03T21:28:22Z` while the commit finishing its file landed 74 minutes
+later, so production ran a 3-of-4-constraint version of that migration for three
+months and nothing could see it, because `apply_migrations.py` plans by
+registered version and never re-reads an applied file.
+
+With a checksum recorded, a file edited after its apply is a hard failure in both
+`apply_migrations.py` (refuses to apply anything further) and the doctor's
+`migration_checksum_drift` check.
+
+**`checksum IS NULL` means unverifiable, not OK.** Rows applied before 062 have
+no anchor and what actually ran is unknowable. Never back-fill them from the
+current source files: that asserts the applied content matched the file, which is
+the precise false-green being eliminated. The NULL count falls only when
+migrations are legitimately applied to a fresh database.
+
+### Attestation
+
+```bash
+python3 scripts/dev/unitares_doctor.py --attest --db-url "$DB_POSTGRES_URL"
+```
+
+Reduces the registry to a digest over the ordered `version:name:checksum` chain,
+plus its coverage. Two deployments compare digests to establish that they carry
+the same schema contract — each computes over its own state, neither consults a
+registry, and neither answer is authoritative over the other.
+
+Read `fully_anchored` before treating equal digests as agreement. Two databases
+whose rows are all unverifiable can produce matching digests while having run
+different SQL — the coverage fields are what keep the digest an honest claim
+rather than a stronger one than the data supports.
 
 The table below is a milestone summary, not the full migration ledger. See `db/postgres/migrations/` for every numbered migration; the current checked-in series runs through `036_r2_lineage_lifecycle.sql`.
 
