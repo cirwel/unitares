@@ -45,6 +45,10 @@ deploy_script_for() {
     lease-plane)     echo "$OPS_DIR/deploy-lease-plane.sh" ;;
     sentinel-beam)   echo "$OPS_DIR/deploy-sentinel.sh" ;;
     wave3a-handlers) echo "$OPS_DIR/deploy-wave3a.sh" ;;
+    # Deploys from its own worktree, not unitares-deploy, and self-skips the
+    # restart when elixir/agent_orchestrator is unchanged — so sweeping it is
+    # safe even though its shared-history commit distance is always large.
+    agent-orchestrator) echo "$OPS_DIR/deploy-orchestrator.sh" ;;
     *)               echo "" ;;
   esac
 }
