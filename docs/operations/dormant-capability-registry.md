@@ -141,6 +141,14 @@ The adversarial pass confirmed these are live, correcting plausible "looks dead"
   not unwired surface.
 - **`retrieval.py` `rrf_fuse`/`apply_tag_boost`**, `find_similar`, `semantic_search`,
   `full_text_search`, `knowledge_graph_lifecycle` (daily task) — all live.
+- **`src/trust_contract_lint.py` IS wired**, and its consumer is a test *by design*.
+  `tests/test_trust_contract_lint.py` runs `lint_response` against real
+  `get_governance_metrics_data` output across every verbosity, for an uninitialized and an
+  initialized agent (15 tests, no DB required, standard suite → CI). The module's own
+  docstring names "a contract test or a CI gate" as its intended consumers. A response-shape
+  validator has no production call site by construction — asserting on live output *is* the
+  wiring. Flagged `WIRE` by the Theme 8 sweep on 2026-08-13 and corrected the same day; see
+  that theme's false-positive count.
 
 ---
 
@@ -211,23 +219,35 @@ check Theme 7 asks for.
 
 Result: **363 of 381 library modules reachable.** Of the 18 that were not, 12 are
 `agents/sdk/` — a package published to PyPI whose consumers are external by design — and one
-is `agents/watcher/hook_input.py`, driven by `watcher-hook.sh`. That leaves the four rows
-below.
+is `agents/watcher/hook_input.py`, driven by `watcher-hook.sh`. Of the remaining five, one was
+a false positive corrected below, leaving the three rows at the end of this theme — and only
+two of those are new decisions.
 
-**The method's own false positives, recorded as a warning.** The first pass also flagged
-`src/mcp_handlers/identity/process_binding_handler.py` and
-`src/mcp_handlers/identity/core.py`. Both are imported by
+**The method's own false positives, recorded as a warning. Three in a set of six.** Two came
+from the mechanism: `src/mcp_handlers/identity/process_binding_handler.py` and
+`src/mcp_handlers/identity/core.py` are both imported by
 `src/mcp_handlers/identity/__init__.py` (lines 13 and 18) and are fully wired — the sweep's
-relative-import resolution missed them. Two false-dead claims in a set of six, caught only by
-reading the importer by hand. Rule 2 of this registry holds: **do not act on a static
-reachability claim without confirming it at the import site.**
+relative-import resolution missed them. Caught only by reading the importer by hand.
+
+The third came from the *premise*, and is the more instructive one. The sweep treated "no
+importer outside its own tests" as evidence of dormancy, which silently assumes a capability's
+consumer must be production code. `src/trust_contract_lint.py` was flagged `WIRE` on that
+basis and is not dormant at all: it is a response-shape validator, so it *has* no production
+call site by construction, and asserting on live output from a contract test is what wiring it
+means. `tests/test_trust_contract_lint.py` already does exactly that, in CI. Moved to
+*Verified-wired / false-dead* above.
+
+Both rules bear repeating. Rule 2: **do not act on a static reachability claim without
+confirming it at the import site.** And its sharper form, which this sweep had to learn:
+**before calling a capability unwired, name the consumer it was built for.** If that consumer
+is a test — as it is for a validator, a linter, or a schema guard — then a test importing it
+is the wiring, not the absence of it.
 
 `docs/dev/TOOL_EDGE_INDEX.md` covers the complementary surface — the MCP dispatch edges that
 are made at import time and are invisible to a static pass like this one.
 
 | Capability | Location | Live evidence | Status |
 |---|---|---|---|
-| **Trust-contract §7 provenance validator** — mechanical linting of the governance-metrics read surface | `src/trust_contract_lint.py` | Zero importers outside its own tests. Encodes three rule families (labeled-field presence, ignorance honesty, scope honesty) each pinning a violation class that PRs #605/#607/#608 already paid to fix. `docs/trust-contract.md` §7 explicitly calls for this validator; §6 notes rows 1–3 *"would have been caught at design time by a single test"* — the test exists here and nothing runs it. | **WIRE.** The clearest wire-on-build gap in this sweep: a lint with no CI step means the §6 classes can regress silently and the contract's central guarantee goes unenforced. Wants a `documentation-validation.yml` step or a doctor check. |
 | **Orchestrator-vouched identity** — strong cross-process credential for an ephemeral child | `src/substrate/vouch.py` | Zero importers outside its own tests, and the module says so itself (`:1-8`: "INERT proof-of-concept seam… NOT WIRED INTO IDENTITY RESOLUTION"). Pure-logic seam for `docs/proposals/orchestrator-vouched-identity-v0.md`, deferred at the 2026-06-24 Wave-3 gate read. | **KEEP-DORMANT — wake condition: the BEAM Agent Orchestrator landing on a live surface** (Wave 3 decision A). Parked correctly and self-documented, but it had no row here, which is what Theme 7 names as the blind spot: a dormancy documented only inside the dormant file is invisible to anyone auditing from this registry. |
 | **Unified configuration manager** — single read-through access point over the four config sources with per-value source/changeability metadata | `src/config_manager.py` | Zero importers outside its own tests. The live threshold path calls `src/runtime_config.py` (`get_thresholds`, `get_effective_threshold`) directly; `config_manager` wraps that plus `config/governance_config.py`, `governance_core.parameters`, and the server constants, and nothing consumes the wrapper. | **DECIDE.** Two readings are consistent with the evidence and they differ in what should happen: either the intended single access point that never got adopted (→ WIRE), or a layer superseded by direct `runtime_config` use (→ CUT). Needs an operator call, not a guess. |
 | **Agent Identity Credential (AIC)** | `src/identity/agent_identity_credential.py` | Independently rediscovered by this sweep. | **Already listed — see Theme 7.** No new decision; recorded here only so the sweep's output reconciles against the registry. |
