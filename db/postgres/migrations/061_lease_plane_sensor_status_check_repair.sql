@@ -1,4 +1,4 @@
--- 059_lease_plane_sensor_status_check_repair.sql
+-- 061_lease_plane_sensor_status_check_repair.sql
 --
 -- Repairs a partially-applied migration 034. The governance DB carries only 3
 -- of 034's 4 CHECK constraints on lease_plane.surface_leases:
@@ -76,13 +76,13 @@ DO $$ BEGIN
     ) THEN
         RAISE EXCEPTION
             'substrate_state_has_sensor_status absent after ADD CONSTRAINT — '
-            'migration 059 refuses to register a repair it did not make';
+            'migration 061 refuses to register a repair it did not make';
     END IF;
 END $$;
 
 -- Register migration
 INSERT INTO core.schema_migrations (version, name, applied_at)
-VALUES (59, 'lease_plane_sensor_status_check_repair', NOW())
+VALUES (61, 'lease_plane_sensor_status_check_repair', NOW())
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;

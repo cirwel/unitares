@@ -465,7 +465,7 @@ def check_constraint_drift(db_url: str, repo_root: Path) -> CheckResult:
                 "registered in core.schema_migrations, so re-running it is a no-op "
                 "— apply_migrations.py plans by version, not by file content. "
                 "Repair with a NEW forward migration that re-adds the constraint "
-                "(see 059_lease_plane_sensor_status_check_repair.sql for the shape, "
+                "(see 061_lease_plane_sensor_status_check_repair.sql for the shape, "
                 "including the post-condition that refuses to register a repair it "
                 "did not actually make). Check for violating rows first: adding the "
                 "constraint re-validates the whole table."
