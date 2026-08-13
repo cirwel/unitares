@@ -22,11 +22,31 @@ genuine cruft.
    A function with zero static callers may still be (a) invoked via MCP/dynamic dispatch,
    (b) a delegate behind a consolidated tool, (c) data-starved but correctly wired. Check
    row counts / edge counts / logs before concluding absence.
-3. **New capability should not merge unwired.** Ship it with one wired consumer, *or* add
+3. **A caller count is not evidence — write down what you actually checked.** "0 callers"
+   reads like a measurement and is not one; it is the output of one tool, with that tool's
+   blind spots. Three rows in this file said `0 callers` about code with live call sites,
+   and two of those said *Cut* (2026-08-13, all three corrected below). The shapes that
+   defeated the scans, none exotic:
+
+   | Miss | Example |
+   |---|---|
+   | Method called on an instance | `audit_logger.log_auto_attest(...)` |
+   | Call in the same file as the definition | `check_reviewer_stuck` |
+   | Group claim covering a member that is used | `calibration_health_check_async` |
+   | Reached only through a package `__init__` | `identity/core.py`, `process_binding_handler.py` |
+   | Consumer is a test, by design | `trust_contract_lint.py` |
+
+   So state the evidence, not the number: *which* search, over what, and what it cannot see —
+   "no static reference outside its own module (does not resolve instance-method or
+   string-dispatch calls)" is a claim a reader can check and rebut. "0 callers" is not.
+   `docs/dev/TOOL_EDGE_INDEX.md` settles the delegate-behind-a-tool case directly, since it
+   is generated from the live registries rather than from source.
+4. **New capability should not merge unwired.** Ship it with one wired consumer, *or* add
    a `KEEP-DORMANT` entry here naming what would wire it. "Wire-on-build."
-4. **Status legend:** `WIRE` = should be connected, has clear payoff · `KEEP-DORMANT` =
+5. **Status legend:** `WIRE` = should be connected, has clear payoff · `KEEP-DORMANT` =
    deliberately parked (roadmap frontier or external-dependency gated) · `DECIDE` = needs
-   an operator wire/cut call · `CUT` = genuine cruft, safe to remove.
+   an operator wire/cut call · `CUT` = genuine cruft, safe to remove *after* its call sites
+   are checked (rule 3).
 
 ---
 
@@ -47,7 +67,7 @@ false-archival bug lives here.
 | Search "graph expansion" reads a SQL field, not the graph | `retrieval.py:100`; handler `:1197` | Gated off (`UNITARES_ENABLE_GRAPH_EXPANSION` unset); even when on, reads `related_to` SQL field, not the 2186 RELATED_TO Cypher edges | **DECIDE** — repoint to a Cypher neighbor fetch, or stop calling it graph |
 | Cross-agent knowledge-flow query (collaboration DAG) | `src/db/age_queries.py:330` | Pure graph-native Cypher; **0 consumers**; data exists (1765 AUTHORED + 2186 RELATED_TO) | **WIRE** — the showcase "graph-native" query; runs today on live data |
 | Orphaned AGE analytics queries (entropy↔work, unresolved-questions-with-entropy, etc.) | `src/db/age_queries.py:309/352/359/379/406` | Zero callers outside the module (only `query_tags_with_discoveries` is wired) | **DECIDE** per query — dashboard-panel-shaped vs superseded |
-| `link_discoveries` manual typed-edge API | `storage/knowledge_graph_age.py:2034` | 0 callers, no MCP tool exposes it | **KEEP-DORMANT** — useful if a manual-curation surface lands |
+| `link_discoveries` manual typed-edge API | `storage/knowledge_graph_age.py:2034` | no static reference found, no MCP tool exposes it | **KEEP-DORMANT** — useful if a manual-curation surface lands |
 
 ## Theme 2 — The synthesis loop is built end-to-end but nothing fires it
 
@@ -79,13 +99,20 @@ and the registry's primary protectees.**
 | Agent Orchestrator on BEAM (ephemeral spawn + lineage provisioning) | `elixir/agent_orchestrator/lib/.../agent_runner.ex` | Complete + provisioning shipped (#581/#590/#648); nothing spawns through it yet — Wave-3b frontier | **KEEP-DORMANT** — tag so it survives cleanup |
 | Resident-validation authority/canary framework | `resident_validation.py`, `_runner.py`, `_invocation.py` | Complete + tested; awaits a supervisor tick. Encodes governed-resident capability boundaries (forbidden deploy/merge/force-push) | **KEEP-DORMANT** — the authority model; do not cut |
 | `verify_trajectory_identity` + `trajectory_step` middleware | `trajectory_identity.py:885`; `mcp_handlers/middleware/trajectory_step.py` | Wiring correct, gated on a caller `trajectory_signature`; 0/30k `agent_state` rows carry one — awaits anima/embodied submission | **KEEP-DORMANT** — embodied-only |
-| `trajectory_shape_similarity` / `_eisv_trajectory_similarity` (DTW discrimination primitive) | `trajectory_identity.py:363/215` | 0 callers; central to the trajectory-identity paper; nothing emits the per-dim arrays it needs | **DECIDE** — wire `compute_behavioral_trajectory` to emit + call, or cut. The measurement-only [legacy coherence identity ablation](../proposals/legacy-coherence-identity-ablation-v0.md) is the current evidence-gathering step. |
+| `trajectory_shape_similarity` / `_eisv_trajectory_similarity` (DTW discrimination primitive) | `trajectory_identity.py:363/215` | no static reference found; central to the trajectory-identity paper; nothing emits the per-dim arrays it needs | **DECIDE** — wire `compute_behavioral_trajectory` to emit + call, or cut. The measurement-only [legacy coherence identity ablation](../proposals/legacy-coherence-identity-ablation-v0.md) is the current evidence-gathering step. |
 | Lineage credit-assignment aggregation | `identity/provenance_chain.py:83/170` | Read/scoring half orphaned; write half produces empty chains (0/1056) | **DECIDE** — depends on whether discovery→lineage attribution is still a goal |
 | S22 H5 cross-harness coverage assessor | `identity/s22_h5_comparison.py:110/190/277` | Diagnostic-script-only; input data live (30k provenance rows) but no MCP surface reads the gate | **DECIDE** — surface via `get_governance_metrics`, or keep as a script |
 | `backfill_calibration_from_historical_sessions` | `mcp_handlers/dialectic/calibration.py:193` | One-shot admin migration util; no scheduled caller (by design) | **KEEP-DORMANT** — document as manual-only |
 | Cross-device / orchestration audit API (`AuditLogger.log_orchestration_request` / `log_orchestration_complete` / `log_cross_device_call` / `log_device_health_check` / `log_eisv_sync`) | `src/audit_log.py:229/265/294/331/361` | 0 in-repo callers — the consumer (Mac→Pi orchestration) was extracted to the external `unitares-pi-plugin` package in the Phase B1 Lumen decoupling (see `src/mcp_handlers/__init__.py:133`, `src/services/runtime_queries.py:849`). This repo owns the writer surface; the caller lives cross-repo. Same external-API shape as `register_extra_schemas` (Theme 5) | **KEEP-DORMANT** — cross-repo audit API; removal is a deprecation decision coordinated with `unitares-pi-plugin` |
 
 ## Theme 5 — Mechanical singletons (vulture cross-pass, 2026-06-16)
+
+> **Known blind spots in this pass (found 2026-08-13).** Its "zero static references" claim
+> missed at least two call shapes: a **method called on an instance**
+> (`audit_logger.log_auto_attest(...)`) and a **call in the same file as the definition**
+> (`check_reviewer_stuck`). One row here was also wrong for a single member of a grouped
+> claim (`calibration_health_check_async`). Treat a zero-reference reading in this theme as a
+> lead, not a finding, and confirm the call sites before acting on it.
 
 A second, mechanical pass (vulture → cross-referenced every flagged symbol against the
 whole repo, py + json + plist + elixir + js + md, to catch string-based dispatch) found
@@ -99,29 +126,36 @@ they are not re-flagged.
 
 | Capability | Location | Live evidence | Status |
 |---|---|---|---|
-| `create_indexes` AGE index-DDL builder | `src/db/age_queries.py:567` | 0 callers; AGE indexing is done by inline `CREATE INDEX` DDL in `storage/knowledge_graph_age.py` | **CUT** — dead duplicate, sibling of `query_response_chain` |
-| `create_temporally_near_edge` | `src/db/age_queries.py:537` | TEMPORALLY_NEAR edge writer, 0 callers | **DECIDE** — same per-query call as the orphaned analytics in Theme 1 |
-| `calibration_db.py` async wrapper layer (`get_calibration_async` / `update_calibration_async` / `calibration_health_check_async`) | `calibration_db.py:12/21/30` | 0 callers; live calibration writes go through `calibration.py` / `sequential_calibration.py` / `src/db/mixins/calibration.py` | **DECIDE/CUT** — NB the *store* `core.calibration` is busy (see false-dead list); these *wrappers* are the dead path, not the store |
-| `_get_pg_db` private accessor | `calibration.py:110` | 0 callers | **CUT** |
-| `check_idle_agents` / `get_recent_events_for_agent` | `event_detector.py:451/495` | 0 callers | **DECIDE** |
-| `list_restartable_tasks` | `background_tasks.py:1758` | 0 callers | **DECIDE** |
-| `reset_pin_match_scope` | `mcp_handlers/context.py:263` | 0 callers | **DECIDE** |
-| `get_reviewer_stuck_recovery` | `mcp_handlers/dialectic/responses.py:43` | 0 callers; same dead stuck-reviewer chain as `check_reviewer_stuck` (CUT below) | **CUT** — fold with `check_reviewer_stuck` |
-| `reranker_available` | `reranker.py:190` | 0 callers (`rrf_fuse`/`apply_tag_boost` are live; this flag-check is not) | **DECIDE** |
+| `create_indexes` AGE index-DDL builder | `src/db/age_queries.py:567` | no static reference found; AGE indexing is done by inline `CREATE INDEX` DDL in `storage/knowledge_graph_age.py` | **CUT** — dead duplicate, sibling of `query_response_chain` |
+| `create_temporally_near_edge` | `src/db/age_queries.py:537` | TEMPORALLY_NEAR edge writer, no static reference found | **DECIDE** — same per-query call as the orphaned analytics in Theme 1 |
+| `calibration_db.py` async wrapper layer (`get_calibration_async` / `update_calibration_async`) | `calibration_db.py:12/21` | No static reference found for these two; live calibration writes go through `calibration.py` / `sequential_calibration.py` / `src/db/mixins/calibration.py`. **`calibration_health_check_async` was in this row and is NOT dead** — `services/runtime_queries.py:725` calls it from `get_health_check_data` (corrected 2026-08-13). | **DECIDE/CUT** for the remaining two — NB the *store* `core.calibration` is busy (see false-dead list); these *wrappers* are the dead path, not the store |
+| `_get_pg_db` private accessor | `calibration.py:110` | no static reference found | **CUT** |
+| `check_idle_agents` / `get_recent_events_for_agent` | `event_detector.py:451/495` | no static reference found | **DECIDE** |
+| `list_restartable_tasks` | `background_tasks.py:1758` | no static reference found | **DECIDE** |
+| `reset_pin_match_scope` | `mcp_handlers/context.py:263` | no static reference found | **DECIDE** |
+| `get_reviewer_stuck_recovery` | `mcp_handlers/dialectic/responses.py:43` | no static reference found; same dead stuck-reviewer chain as `check_reviewer_stuck` (CUT below) | **CUT** — fold with `check_reviewer_stuck` |
+| `reranker_available` | `reranker.py:190` | no static reference found (`rrf_fuse`/`apply_tag_boost` are live; this flag-check is not) | **DECIDE** |
 | `register_extra_schemas` / `register_extra_descriptions` plugin entry-point API | `tool_schemas.py:20`; `tool_descriptions.py:145` | Published `governance_mcp.plugins` hook; **0 consumers** (incl. the plugin repo) | **KEEP-DORMANT** — extension hook, removal is a deprecation decision |
 | `gateway_server.py` `main()` script entrypoint | `src/gateway_server.py:99` | Has `__main__`; launched out-of-band via the gateway plist *template* (`scripts/ops/com.unitares.gateway-mcp.plist.template`), not by any import — install state is deployment-specific | **DECIDE** — confirm the gateway plist is installed on the target deployment |
 
-## Genuine cruft — CUT candidates (the only delete-safe set)
+## Genuine cruft — CUT candidates (check the call sites before deleting)
+
+> **This table was headed "the only delete-safe set" until 2026-08-13, when two of its rows
+> turned out to be live code.** `log_auto_attest` is called from the governance monitor's
+> decision path and `check_reviewer_stuck` from a registered dialectic handler; both said
+> "0 callers" and both said Cut. Nothing was deleted, but the label was doing work it had
+> not earned. Treat a row here as a *candidate* and confirm the call sites yourself —
+> Rule 2 applies in this table more than anywhere else in the file.
 
 | Item | Location | Note |
 |---|---|---|
 | ~~backfill embeddings script~~ | Removed legacy migration script | Hardcoded to the legacy 384d `core.discovery_embeddings` table, which live search no longer reads — broken against the active bge-m3 model. **CUT** (script-cleanup sweep): removed; recoverable from git history if the legacy table is ever backfilled |
 | Legacy `core.discovery_embeddings` table (1887 rows, 384d) | DB | Superseded by `_bge_m3` (1056, clean). **Cut after** concept-extraction confirmed reading the active table |
 | `query_response_chain` builder | `src/db/age_queries.py:309` | Dead duplicate; `get_response_chain` uses its own inline Cypher. **Cut** |
-| `log_auto_attest` typed helper | `audit_log.py:206` | 0 callers; real rows written by a different `log_event` path. **Cut** |
+| ~~`log_auto_attest` typed helper~~ | `audit_log.py` | **Withdrawn 2026-08-13 — it is called.** See *Verified-wired / false-dead*. |
 | Quorum `ESCALATE` resolution branch | `dialectic_protocol.py:196`; handler `:1526` | Retired by design ("0 of 47 sessions ever escalated"). **Cut the enum/dead branch** |
 | ~~`answer_question` handler~~ | Removed | **CUT** — it was `register=False` and unrouted; linked answers remain available through `knowledge(action="store", discovery_type="note", response_to={..., "response_type": "answer"})` |
-| `check_reviewer_stuck` | `mcp_handlers/dialectic/handlers.py:115` | 0 callers; auto-resolve handles reassignment. **Cut or fold** |
+| ~~`check_reviewer_stuck`~~ | `mcp_handlers/dialectic/handlers.py` | **Withdrawn 2026-08-13 — it is called, on a registered request path.** See *Verified-wired / false-dead*. |
 | CIRS announce tools (void_alert / state_announce / coherence_report / …) | 7 `register=False` handlers | **Verify before cut** — the CIRS *monitor* path is live (26 `cirs_resonance` events/14d); only these agent-facing announce tools are dark |
 
 ## Verified-wired / false-dead (do NOT re-flag these)
@@ -141,6 +175,21 @@ The adversarial pass confirmed these are live, correcting plausible "looks dead"
   not unwired surface.
 - **`retrieval.py` `rrf_fuse`/`apply_tag_boost`**, `find_similar`, `semantic_search`,
   `full_text_search`, `knowledge_graph_lifecycle` (daily task) — all live.
+- **`log_auto_attest` IS called** — `governance_monitor.py:1505` invokes it on the
+  `audit_logger` singleton (`audit_log.py`, `AuditLogger.log_auto_attest`) while recording an
+  un-suppressed decision. Listed as `0 callers` → **Cut** in the CUT-candidates table until
+  2026-08-13. The call is a method on an instance, which a symbol-level caller scan does not
+  resolve.
+- **`check_reviewer_stuck` IS called** — `mcp_handlers/dialectic/handlers.py:1489`, inside
+  `handle_get_dialectic_session`, which the generated
+  [`TOOL_EDGE_INDEX.md`](../dev/TOOL_EDGE_INDEX.md) shows as the delegate for
+  `dialectic(action="get")`. So it sits on a live request path, not a dead one. Listed as
+  `0 callers` → **Cut or fold** until 2026-08-13. The call is in the same file as the
+  definition, which the same scan also missed.
+- **`calibration_health_check_async` IS called** — `services/runtime_queries.py:725`, inside
+  `get_health_check_data`. Its two siblings in that row (`get_calibration_async`,
+  `update_calibration_async`) do appear unreferenced, so the row was right about the layer and
+  wrong about this member; a per-symbol claim cannot be made for a group.
 - **`src/trust_contract_lint.py` IS wired**, and its consumer is a test *by design*.
   `tests/test_trust_contract_lint.py` runs `lint_response` against real
   `get_governance_metrics_data` output across every verbosity, for an uninitialized and an
