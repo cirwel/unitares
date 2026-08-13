@@ -65,7 +65,7 @@ User- and integrator-facing how-tos. Thin by design — most architecture lives 
 
 ### `ontology/` — identity ontology
 
-The system's versioned identity ontology, the resolution ledger, and the working RFCs that evolve them. Has its own reader's guide because the folder is dense.
+The system's versioned identity ontology, the resolution ledger, and the working RFCs that evolve them. Has its own reader's guide because the folder is dense. The question-keyed vocabulary glossary also lives here: [`ontology/glossary.md`](ontology/glossary.md), published with an interactive viewer at [cirwel.github.io/unitares](https://cirwel.github.io/unitares/glossary.html).
 
 → Start at **[`ontology/README.md`](ontology/README.md)**.
 
