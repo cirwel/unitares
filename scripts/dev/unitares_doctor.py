@@ -200,9 +200,16 @@ def _file_checksum(path: Path) -> str:
 def _query_applied_checksums(db_url: str) -> dict[int, str | None]:
     """Return {version: checksum-or-None} from core.schema_migrations.
 
-    Returns ``{}`` if the checksum column does not exist yet, which is the
-    pre-migration-062 state and is not an error — callers treat an empty result
+    Returns ``{}`` ONLY when the checksum column does not exist yet, which is
+    the pre-migration-062 state and not an error — callers treat an empty result
     as "content anchoring not yet available on this database".
+
+    Any other psql failure RAISES. Swallowing it would return ``{}`` too, and
+    every caller reads that as "nothing to verify" — so a dropped connection or
+    a timeout would silently disarm the drift guard and report clean. That is
+    the same shape as the bug this whole mechanism exists to prevent: a check
+    that stops checking without saying so. A guard must fail loudly or not at
+    all.
     """
     proc = subprocess.run(
         ["psql", db_url, "-Atqc",
@@ -211,7 +218,18 @@ def _query_applied_checksums(db_url: str) -> dict[int, str | None]:
         capture_output=True, text=True, timeout=10,
     )
     if proc.returncode != 0:
-        return {}
+        stderr = proc.stderr.strip()
+        # 42703 undefined_column — the only benign failure. Matched on both the
+        # SQLSTATE and the message text because psql only emits the code when
+        # VERBOSITY is raised, and the default is terse.
+        if "42703" in stderr or (
+            "checksum" in stderr and "does not exist" in stderr
+        ):
+            return {}
+        raise RuntimeError(
+            f"core.schema_migrations checksums not queryable at "
+            f"{_redact(db_url)}: {stderr}"
+        )
     out: dict[int, str | None] = {}
     for line in proc.stdout.splitlines():
         if not line.strip():
@@ -571,11 +589,20 @@ def check_migration_checksum_drift(db_url: str, repo_root: Path) -> CheckResult:
     if not migrations_dir.is_dir():
         return CheckResult(name, mode, Status.SKIP, "no db/postgres/migrations directory")
 
-    recorded = _query_applied_checksums(db_url)
+    try:
+        recorded = _query_applied_checksums(db_url)
+    except RuntimeError as exc:
+        # Not a SKIP: we could not determine whether the schema drifted, and
+        # "could not check" must never render as "checked, fine".
+        return CheckResult(
+            name, mode, Status.FAIL,
+            "could not read migration checksums — drift state is UNKNOWN",
+            detail=str(exc),
+        )
     if not recorded:
         return CheckResult(
             name, mode, Status.SKIP,
-            "checksum column absent (pre-062) or registry not queryable",
+            "checksum column absent — database predates migration 062",
         )
 
     mismatches, unverifiable = _checksum_drift(recorded, migrations_dir)

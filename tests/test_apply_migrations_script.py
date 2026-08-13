@@ -100,10 +100,13 @@ def test_empty_db_makes_all_source_pending(mod):
 # sync. We drive main() with stubbed registry I/O so no live DB is needed.
 
 
-def _run_check(mod, monkeypatch, expected, actual):
+def _run_check(mod, monkeypatch, expected, actual, content_drift=()):
     monkeypatch.setattr(mod, "_source_schema_migrations", lambda _root: expected)
     monkeypatch.setattr(mod, "query_applied", lambda _url: actual)
     monkeypatch.setattr(mod, "KNOWN_SCHEMA_MIGRATION_EXCEPTIONS", {})
+    # Content anchoring reads the registry a second time; stub it too or the
+    # run does live I/O against the fake DSN.
+    monkeypatch.setattr(mod, "checksum_refusals", lambda _url: list(content_drift))
     return mod.main(["--check", "--db-url", "postgresql://x/y"])
 
 
@@ -122,3 +125,50 @@ def test_check_fails_on_name_mismatch(mod, monkeypatch):
 
 def test_check_fails_on_unexpected_db_version(mod, monkeypatch):
     assert _run_check(mod, monkeypatch, {1: "a"}, {1: "a", 99: "mystery"}) == 1
+
+
+# ── content drift (migration 062 checksums) ──────────────────────────────────
+# A registered version whose FILE has since changed. Distinct from a name
+# mismatch: the name can agree while the SQL does not, which is exactly how
+# migration 034 shipped 3-of-4 CHECK constraints to production for three months.
+
+
+def test_check_fails_on_content_drift(mod, monkeypatch):
+    """In sync by version AND name, but a file changed after it was applied."""
+    assert _run_check(
+        mod, monkeypatch, {1: "a"}, {1: "a"},
+        content_drift=["version 1 (001_a.sql): recorded aaa… but file is bbb…"],
+    ) == 1
+
+
+def test_check_passes_when_content_anchored(mod, monkeypatch):
+    assert _run_check(mod, monkeypatch, {1: "a"}, {1: "a"}, content_drift=[]) == 0
+
+
+def test_sql_literal_escapes_quotes(mod):
+    assert mod._sql_literal("ab'c") == "'ab''c'"
+
+
+def test_record_checksum_tolerates_pre_062_database(mod, monkeypatch, tmp_path):
+    """An older deployment has no checksum column; that must not fail the apply."""
+    class _Proc:
+        returncode = 1
+        stdout = ""
+        stderr = 'ERROR:  column "checksum" of relation "schema_migrations" does not exist'
+
+    p = tmp_path / "010_x.sql"
+    p.write_text("SELECT 1;")
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Proc())
+    assert mod.record_checksum("postgresql://x/y", 10, p) is True
+
+
+def test_record_checksum_reports_other_failures(mod, monkeypatch, tmp_path):
+    class _Proc:
+        returncode = 1
+        stdout = ""
+        stderr = "could not connect to server"
+
+    p = tmp_path / "010_x.sql"
+    p.write_text("SELECT 1;")
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Proc())
+    assert mod.record_checksum("postgresql://x/y", 10, p) is False

@@ -1407,3 +1407,44 @@ def test_attestation_empty_registry_is_not_fully_anchored(doctor):
     """An empty DB must not read as 'fully verified' — it has verified nothing."""
     empty = doctor.schema_attestation({}, {})
     assert empty["fully_anchored"] is False
+
+
+def test_checksum_query_raises_on_real_failure(doctor, monkeypatch):
+    """A dropped connection must NOT look like 'pre-062, nothing to verify'.
+
+    Both states would otherwise return {}, and every caller reads {} as "no
+    content anchoring here" — so an unreachable DB would silently disarm the
+    drift guard and report clean.
+    """
+    class _Proc:
+        returncode = 1
+        stdout = ""
+        stderr = "could not connect to server: Connection refused"
+
+    monkeypatch.setattr(doctor.subprocess, "run", lambda *a, **k: _Proc())
+    with pytest.raises(RuntimeError):
+        doctor._query_applied_checksums("postgresql://x/y")
+
+
+def test_checksum_query_returns_empty_only_for_missing_column(doctor, monkeypatch):
+    class _Proc:
+        returncode = 1
+        stdout = ""
+        stderr = 'ERROR:  column "checksum" does not exist'
+
+    monkeypatch.setattr(doctor.subprocess, "run", lambda *a, **k: _Proc())
+    assert doctor._query_applied_checksums("postgresql://x/y") == {}
+
+
+def test_checksum_check_fails_loudly_when_state_unknown(doctor, monkeypatch, tmp_path):
+    """'Could not check' must render as FAIL, never as SKIP or PASS."""
+    root = _migrations(tmp_path, {"010_x.sql": "SELECT 1;"})
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+
+    def _boom(_):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(doctor, "_query_applied_checksums", _boom)
+    result = doctor.check_migration_checksum_drift("postgresql://x/y", root)
+    assert result.status == doctor.Status.FAIL
+    assert "UNKNOWN" in result.message
