@@ -55,7 +55,28 @@ from src.grounding.class_indicator import (  # noqa: E402
     classify_by_label_and_tags as classify_from_db_row,
 )
 
-HEALTHY_REGIMES = ("nominal", "STABLE", "CONVERGENCE", "EXPLORATION")
+# The slice whose median defines each class's healthy operating point.
+#
+# 'nominal' was dropped (with migration 063): its only legitimate producer is
+# the bootstrap check-in, which is synthetic and excluded below — every
+# NON-synthetic 'nominal' row is a pre-063 coercion casualty whose real basin
+# was destroyed (dominantly TRANSITION, i.e. recovering). Measured at removal:
+# 1,358 such rows inside a 90-day window. Including them biased the healthy
+# anchor toward recovery transients.
+#
+# TRANSITION (admitted by 063) is deliberately NOT here: "S falling while I
+# rising" is recovery in progress, not the operating point being measured.
+# 'unknown' (063's explicit coercion sink) is NOT here: unclassifiable is not
+# healthy.
+#
+# EXPLORATION stays, although the fleet dashboard buckets it as moderate.
+# The divergence is deliberate and unresolved: this tuple defines a
+# measurement cohort for anchor medians (EXPLORATION is the fleet's modal
+# state and excluding it would anchor every class on a small unrepresentative
+# slice), while the dashboard tuple is a display triage. If the two are ever
+# unified, that is an operator decision about what "healthy" means, not a
+# drive-by edit here.
+HEALTHY_REGIMES = ("STABLE", "CONVERGENCE", "EXPLORATION")
 
 
 @dataclass
@@ -87,6 +108,10 @@ def fetch_class_observations(
         JOIN core.identities  i  USING (identity_id)
         WHERE s.recorded_at >= now() - (%s::int * INTERVAL '1 day')
           AND s.regime = ANY (%s)
+          -- Bootstrap rows seed trajectory genesis only; the identity contract
+          -- documents them as excluded from calibration. Without this filter
+          -- they entered via regime='nominal' before 063.
+          AND COALESCE(s.synthetic, false) = false
     """
     by_class: Dict[str, List[Tuple[float, float, float]]] = {}
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
