@@ -155,43 +155,57 @@ _deploy_lib_worktree_exists() {
   return "$found"
 }
 
-# usage: deploy_lib_ff_worktree TAG REPO DEPLOY [--detach]
+# usage: deploy_lib_ff_worktree TAG REPO DEPLOY [--detach] [--branch NAME]
 #
-# --detach creates the worktree on a DETACHED origin/master instead of the
-# `master` branch. Required for any second dedicated worktree: git allows one
+# --detach creates the worktree on a DETACHED origin/<trunk> instead of the
+# `<trunk>` branch. Required for any second dedicated worktree: git allows one
 # checkout of a branch across a repo, and `master` is already held by
 # unitares-deploy, so a branch-mode `worktree add` fails with "already used by
 # worktree at ...". The orchestrator's tree is detached for exactly this reason.
 # Fast-forwarding works identically either way (`merge --ff-only` advances a
 # detached HEAD), so this only affects the create-if-missing path.
+#
+# --branch NAME names the trunk when it is not `master` (the default, which is
+# every unitares-repo caller). The fleet is not single-repo: the discord-bridge
+# lives in cirwel/unitares-discord-bridge, whose trunk is `main`. Before this
+# flag the ref was hardcoded three ways in this function, so a `main` repo could
+# not use the lib at all and its deploy script would have had to re-inline the
+# whole ff block — the exact drift this library exists to prevent. Nothing else
+# about the flow changes; this only chooses which ref is fetched, checked out on
+# create, and fast-forwarded to.
 deploy_lib_ff_worktree() {
-  local tag="$1" repo="$2" deploy="$3" detach=0
+  local tag="$1" repo="$2" deploy="$3" detach=0 branch="master"
   shift 3
   while [ $# -gt 0 ]; do
     case "$1" in
       --detach) detach=1 ;;
+      --branch)
+        shift
+        branch="${1:-}"
+        [ -n "$branch" ] || { echo "[$tag] deploy_lib_ff_worktree: --branch needs a value" >&2; return 2; }
+        ;;
       *) echo "[$tag] deploy_lib_ff_worktree: unknown arg $1" >&2; return 2 ;;
     esac
     shift
   done
-  echo "[$tag] fetching origin/master"
-  git -C "$repo" fetch origin master --quiet
+  echo "[$tag] fetching origin/$branch"
+  git -C "$repo" fetch origin "$branch" --quiet
 
   DEPLOY_LIB_FRESH=0
   if ! _deploy_lib_worktree_exists "$repo" "$deploy"; then
     if [ "$detach" = 1 ]; then
-      echo "[$tag] creating dedicated deploy worktree at $deploy (detached at origin/master)"
-      git -C "$repo" worktree add --detach "$deploy" origin/master
+      echo "[$tag] creating dedicated deploy worktree at $deploy (detached at origin/$branch)"
+      git -C "$repo" worktree add --detach "$deploy" "origin/$branch"
     else
-      echo "[$tag] creating dedicated deploy worktree at $deploy (on master)"
-      git -C "$repo" worktree add "$deploy" master
+      echo "[$tag] creating dedicated deploy worktree at $deploy (on $branch)"
+      git -C "$repo" worktree add "$deploy" "$branch"
     fi
     DEPLOY_LIB_FRESH=1
   fi
 
   DEPLOY_LIB_PREV="$(git -C "$deploy" rev-parse HEAD)"
-  echo "[$tag] fast-forwarding $deploy to origin/master (ff-only; was ${DEPLOY_LIB_PREV:0:8})"
-  git -C "$deploy" merge --ff-only origin/master
+  echo "[$tag] fast-forwarding $deploy to origin/$branch (ff-only; was ${DEPLOY_LIB_PREV:0:8})"
+  git -C "$deploy" merge --ff-only "origin/$branch"
 }
 
 # ── #1277 fix 1: restart the lease plane at disturbance time ─────────────────

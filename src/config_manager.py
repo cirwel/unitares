@@ -17,7 +17,14 @@ from dataclasses import dataclass
 # Import static configs
 from config import governance_config as static_config_module
 from governance_core.parameters import DynamicsParams
-from src.runtime_config import get_thresholds, get_effective_threshold, set_thresholds as _set_thresholds
+# Aliased on import. The module defines its own convenience `get_thresholds`
+# below, which would otherwise shadow this one at call time and make
+# ConfigManager.get_thresholds() recurse into the wrapper that calls it.
+from src.runtime_config import (
+    get_thresholds as _runtime_get_thresholds,
+    get_effective_threshold,
+    set_thresholds as _set_thresholds,
+)
 
 
 @dataclass
@@ -48,8 +55,8 @@ class ConfigManager:
         Returns:
             Dict of threshold_name -> value
         """
-        return get_thresholds()
-    
+        return _runtime_get_thresholds()
+
     def get_threshold(self, name: str, default: Optional[float] = None) -> float:
         """
         Get a specific threshold value.
