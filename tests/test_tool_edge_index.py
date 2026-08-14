@@ -16,6 +16,7 @@ disagree.
 """
 
 import pathlib
+import subprocess
 import sys
 
 import pytest
@@ -94,10 +95,31 @@ def test_render_is_deterministic(collected):
     assert tei.render(*collected) == tei.render(*collected)
 
 
-def test_committed_index_is_fresh(collected):
-    """The checked-in doc must match what the live registries produce."""
-    committed = tei.OUT.read_text(encoding="utf-8") if tei.OUT.exists() else ""
-    assert committed == tei.render(*collected), (
-        f"{tei.OUT.relative_to(REPO)} is stale — run: "
-        "python3 scripts/dev/tool_edge_index.py"
+def test_committed_index_is_fresh():
+    """The checked-in doc must match what the standalone generator produces.
+
+    Deliberately NOT the module-scoped `collected` fixture: tool registration
+    is an import side effect, so the in-process registry contains whatever
+    earlier tests happened to import — under full-suite ordering this test saw
+    up to 57 tools against a committed index of 55 and failed while the index
+    was in fact fresh (passes in isolation, fails after pollution). The
+    committed doc's contract is "what `tool_edge_index.py` writes from a clean
+    interpreter", so check exactly that, in a subprocess, via the script's own
+    --check mode — the same invocation CI's doctor uses.
+
+    The other tests in this file keep the in-process fixture on purpose: they
+    cross-check two same-process derivations against each other, which is
+    pollution-invariant.
+    """
+    result = subprocess.run(
+        [sys.executable, str(REPO / "scripts" / "dev" / "tool_edge_index.py"), "--check"],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO),
+        timeout=120,
+    )
+    assert result.returncode == 0, (
+        f"docs/dev/TOOL_EDGE_INDEX.md is stale per the standalone generator — "
+        f"run: python3 scripts/dev/tool_edge_index.py\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
