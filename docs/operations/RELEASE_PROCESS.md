@@ -12,9 +12,13 @@ package reached a registry.
    [`docs/CHANGELOG.md`](../CHANGELOG.md) and the `date-released` field in
    [`CITATION.cff`](../../CITATION.cff), then review every generated version
    change. `VERSION` remains the authority.
-3. Run `./scripts/dev/test-cache.sh`, `make validate`, and the Docker quickstart
-   when build inputs changed.
-4. Merge the release PR only after required CI is green.
+3. Run `./scripts/dev/test-cache.sh` and `make validate`. When container build
+   inputs changed, also run the documented Docker quickstart on a Docker-capable
+   host and record the command/result in the release PR. Delegating this check
+   to CI counts only when the required CI workflow actually contains and passes
+   that quickstart; a green Python/package test job is not equivalent evidence.
+4. Merge the release PR only after required CI is green and every applicable
+   release-specific check from step 3 has recorded evidence.
 5. From the merged release commit, create a signed annotated tag when signing is
    available: `git tag -s vX.Y.Z -m "UNITARES vX.Y.Z"`. Do not replace an
    existing public tag merely to add a signature.
