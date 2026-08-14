@@ -49,7 +49,11 @@ COMPONENTS=(
 # unrelated commits the shared tree accumulates — that subdir has not changed
 # since 2026-06-29, so this reads CURRENT*, which is the honest answer.
 "agent-orchestrator|com.unitares.agent-orchestrator|$H/projects/unitares-orchestrator|elixir/agent_orchestrator|restart|8789"
-"discord-bridge|com.unitares.discord-bridge|$H/projects/unitares-discord-bridge||restart|"
+# Its own repo (cirwel/unitares-discord-bridge) on `main`, and its own deploy
+# worktree — base_ref() below already resolves main-vs-master, so the row needs
+# no special casing. Pointed here rather than at the dev checkout so the verdict
+# describes what deploy-bridge.sh actually deploys.
+"discord-bridge|com.unitares.discord-bridge|$H/projects/unitares-discord-bridge-deploy||restart|"
 "dispatch-beam|com.cirwel.dispatch-beam|$H/projects/dispatch_beam||restart|"
 "dispatch-beam-codex|com.cirwel.dispatch-beam-codex|$H/projects/dispatch_beam||restart|"
 "gov-plugin||$H/projects/unitares-governance-plugin||live-from-checkout|"

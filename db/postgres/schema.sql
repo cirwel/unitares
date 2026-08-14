@@ -162,8 +162,13 @@ CREATE TABLE IF NOT EXISTS core.agent_state (
     volatility          REAL NOT NULL DEFAULT 0.1,
 
     -- Derived
+    -- TRANSITION admitted + 'unknown' coercion sink: migration 063. 'unknown'
+    -- has no producer other than the record_agent_state fallback, so a row
+    -- carrying it is a coercion event by construction (raw value preserved at
+    -- state_json.regime_raw). Rows with regime='nominal' AND synthetic IS NOT
+    -- TRUE predate 063 and are unrecoverable coercion casualties.
     regime              TEXT NOT NULL DEFAULT 'nominal'
-                        CHECK (regime IN ('nominal', 'warning', 'critical', 'recovery', 'EXPLORATION', 'CONVERGENCE', 'DIVERGENCE', 'STABLE')),
+                        CHECK (regime IN ('nominal', 'warning', 'critical', 'recovery', 'EXPLORATION', 'CONVERGENCE', 'DIVERGENCE', 'STABLE', 'TRANSITION', 'unknown')),
     coherence           REAL NOT NULL DEFAULT 1.0,
 
     -- Full state snapshot (for complex queries)

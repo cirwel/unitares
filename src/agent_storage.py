@@ -46,6 +46,12 @@ from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
+# Distinct regime values already warned about, so a value the detector emits on
+# the mainline path (notably TRANSITION) logs once per process instead of once
+# per check-in. See the coercion block in record_agent_state.
+_WARNED_REGIMES: set[str] = set()
+_WARNED_REGIMES_MAX = 64
+
 
 # _sync_cache_entry removed - PostgreSQL is the persistence layer.
 # mcp_server.agent_metadata is the active runtime cache (not deprecated).
@@ -575,18 +581,60 @@ async def record_agent_state(
     if not identity:
         raise ValueError(f"Agent '{agent_id}' not found")
 
-    # Map regime to allowed DB values
+    # Map regime to allowed DB values.
+    #
+    # This set mirrors the CHECK constraint on core.agent_state.regime
+    # (schema.sql / migration 063) — the coercion below exists because an
+    # out-of-set value would otherwise fail the INSERT and take the check-in
+    # down with it. Widening this set therefore REQUIRES the matching migration
+    # to be applied first; see 063's ORDERING note.
+    #
+    # As of 063 the set includes all five basins the live detector
+    # (src/monitor_regime.py) can emit — TRANSITION ("S falling while I
+    # rising", i.e. recovering) was silently collapsed into 'nominal' for the
+    # entire pre-063 history of the table — plus 'unknown', the explicit
+    # coercion sink. 'nominal' was the old sink, and since it is also a
+    # legitimate bootstrap value, coerced rows were unrecognizable; 'unknown'
+    # has no other producer, so a row carrying it is a coercion event by
+    # construction. Pre-063 casualties remain identifiable as
+    # regime='nominal' AND synthetic IS NOT TRUE.
+    #
+    # The health-vocabulary fossils (warning/critical/recovery — zero rows
+    # ever) stay in the set until their retirement gets its own migration.
+    #
+    # Coercion is logged ONCE PER DISTINCT VALUE per process, not per
+    # check-in, and the raw value is preserved in state_json.regime_raw.
     allowed_regimes = {
         'nominal', 'warning', 'critical', 'recovery',
-        'EXPLORATION', 'CONVERGENCE', 'DIVERGENCE', 'STABLE'
+        'EXPLORATION', 'CONVERGENCE', 'DIVERGENCE', 'STABLE',
+        'TRANSITION', 'unknown'
     }
-    db_regime = regime if regime in allowed_regimes else 'nominal'
+    db_regime = regime if regime in allowed_regimes else 'unknown'
+    regime_was_coerced = db_regime != regime
+    if regime_was_coerced and regime not in _WARNED_REGIMES:
+        # Bounded so a pathological caller emitting unique strings cannot grow
+        # this without limit; past the cap we simply stop warning.
+        if len(_WARNED_REGIMES) < _WARNED_REGIMES_MAX:
+            _WARNED_REGIMES.add(regime)
+        logger.warning(
+            "regime %r not in allowed set (schema CHECK), coerced to %r; "
+            "raw value preserved at state_json.regime_raw. "
+            "Further occurrences of this value are not logged. "
+            "First seen for agent %s.",
+            regime,
+            db_regime,
+            agent_id[:8],
+        )
 
     # Build state_json
     state_json = {
         "E": E,
         "health_status": health_status,
     }
+    if regime_was_coerced:
+        # Keep the original so a coerced row stays distinguishable from a row
+        # whose regime genuinely was 'nominal'.
+        state_json["regime_raw"] = regime
     if risk_score is not None:
         state_json["risk_score"] = risk_score
     if phi is not None:

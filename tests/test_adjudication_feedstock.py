@@ -46,15 +46,15 @@ def test_mirrored_constants_match_the_queue_source(doctor):
     """The doctor duplicates the queue definition on purpose (it runs against a
     deployed DB from a possibly-undeployed checkout, so importing server code
     would measure the wrong thing). Duplication is only safe if it is pinned."""
-    source = (REPO_ROOT / "src" / "http_api.py").read_text()
+    source = (REPO_ROOT / "src" / "http_routes" / "sentinel.py").read_text()
 
     types_match = re.search(
         r"_SENTINEL_FINDING_EVENT_TYPES\s*=\s*\(([^)]*)\)", source
     )
-    assert types_match, "could not find _SENTINEL_FINDING_EVENT_TYPES in http_api.py"
+    assert types_match, "could not find _SENTINEL_FINDING_EVENT_TYPES in http_routes/sentinel.py"
     source_types = tuple(re.findall(r'"([^"]+)"', types_match.group(1)))
     assert source_types == doctor.ADJUDICABLE_EVENT_TYPES, (
-        f"queue event types changed in http_api.py ({source_types}) but the "
+        f"queue event types changed in http_routes/sentinel.py ({source_types}) but the "
         f"doctor mirror still says {doctor.ADJUDICABLE_EVENT_TYPES}"
     )
 

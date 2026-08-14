@@ -782,6 +782,128 @@ class TestRecordAgentState:
         # Same for sensor_eisv_source: absent unless explicitly supplied
         assert "sensor_eisv_source" not in call_kwargs["state_json"]
         assert "eisv_telemetry" not in call_kwargs["state_json"]
+        # A regime that is already allowed is not flagged as coerced.
+        assert "regime_raw" not in call_kwargs["state_json"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_regime_coerced_but_raw_value_preserved(self):
+        """An out-of-set regime must stay recoverable.
+
+        As of migration 063 the sink is 'unknown', which has no other producer
+        — so a stored 'unknown' is a coercion event by construction, unlike the
+        old 'nominal' sink which collided with a legitimate bootstrap value.
+        Coercion still happens (the CHECK constraint is why), but the original
+        survives in state_json.
+        """
+        identity = _make_identity(identity_id=42)
+        db = _mock_db(get_identity=identity, record_agent_state=1)
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import record_agent_state
+            await record_agent_state(
+                "agent-1",
+                E=0.4, I=0.6, S=0.2, V=-0.1,
+                regime="TOTALLY_UNKNOWN",
+                coherence=0.3,
+            )
+
+        call_kwargs = db.record_agent_state.call_args.kwargs
+        assert call_kwargs["regime"] == "unknown"
+        assert call_kwargs["state_json"]["regime_raw"] == "TOTALLY_UNKNOWN"
+
+    @pytest.mark.asyncio
+    async def test_transition_passes_through_uncoerced(self):
+        """TRANSITION is a real basin the detector emits (monitor_regime.py:
+        "S falling while I rising", i.e. recovering). Pre-063 it was silently
+        collapsed into 'nominal' on every check-in — the single largest source
+        of manufactured regime flips (31% of all transitions). It must now
+        store as itself, with no regime_raw marker.
+        """
+        identity = _make_identity(identity_id=42)
+        db = _mock_db(get_identity=identity, record_agent_state=1)
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import record_agent_state
+            await record_agent_state(
+                "agent-1",
+                E=0.4, I=0.6, S=0.2, V=-0.1,
+                regime="TRANSITION",
+                coherence=0.3,
+            )
+
+        call_kwargs = db.record_agent_state.call_args.kwargs
+        assert call_kwargs["regime"] == "TRANSITION"
+        assert "regime_raw" not in call_kwargs["state_json"]
+
+    @pytest.mark.asyncio
+    async def test_genuine_nominal_is_not_marked_coerced(self):
+        """'nominal' passed in explicitly is a real value, not a fallback.
+
+        Without this distinction, every coerced row and every genuine 'nominal'
+        row look identical after the fact.
+        """
+        identity = _make_identity(identity_id=42)
+        db = _mock_db(get_identity=identity, record_agent_state=1)
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import record_agent_state
+            await record_agent_state(
+                "agent-1",
+                E=0.4, I=0.6, S=0.2, V=-0.1,
+                regime="nominal",
+                coherence=0.3,
+            )
+
+        call_kwargs = db.record_agent_state.call_args.kwargs
+        assert call_kwargs["regime"] == "nominal"
+        assert "regime_raw" not in call_kwargs["state_json"]
+
+    @pytest.mark.asyncio
+    async def test_coercion_is_logged(self):
+        """The coercion was previously silent — no log, no error, value gone."""
+        identity = _make_identity(identity_id=42)
+        db = _mock_db(get_identity=identity, record_agent_state=1)
+        import src.agent_storage as storage
+        storage._WARNED_REGIMES.discard("drifting")
+        with patch("src.agent_storage.get_db", return_value=db), \
+             patch("src.agent_storage.logger") as mock_logger:
+            await storage.record_agent_state(
+                "agent-1",
+                E=0.4, I=0.6, S=0.2, V=-0.1,
+                regime="drifting",
+                coherence=0.3,
+            )
+
+        mock_logger.warning.assert_called_once()
+        assert "drifting" in str(mock_logger.warning.call_args)
+
+    @pytest.mark.asyncio
+    async def test_repeat_coercion_logs_once_per_value(self):
+        """A caller emitting the same out-of-set value on every check-in must
+        not flood the log — a muted log defeats the purpose of making the
+        coercion visible. Warn once per distinct value; keep coercing and
+        preserving every time. (Pre-063 the flood case was TRANSITION itself;
+        that now passes through, but the lowercase CIRS/phase vocabularies
+        still coerce.)
+        """
+        identity = _make_identity(identity_id=42)
+        db = _mock_db(get_identity=identity, record_agent_state=1)
+        import src.agent_storage as storage
+        storage._WARNED_REGIMES.discard("transition")
+        with patch("src.agent_storage.get_db", return_value=db), \
+             patch("src.agent_storage.logger") as mock_logger:
+            for _ in range(5):
+                await storage.record_agent_state(
+                    "agent-1",
+                    E=0.4, I=0.6, S=0.2, V=-0.1,
+                    regime="transition",
+                    coherence=0.3,
+                )
+
+        # Logged once...
+        mock_logger.warning.assert_called_once()
+        # ...but every single row still coerces and still preserves the raw value.
+        assert db.record_agent_state.await_count == 5
+        for call in db.record_agent_state.call_args_list:
+            assert call.kwargs["regime"] == "unknown"
+            assert call.kwargs["state_json"]["regime_raw"] == "transition"
 
     @pytest.mark.asyncio
     async def test_persists_behavioral_eisv_into_state_json(self):
@@ -895,7 +1017,10 @@ class TestRecordAgentState:
                 )
 
     @pytest.mark.asyncio
-    async def test_unknown_regime_maps_to_nominal(self):
+    async def test_unknown_regime_maps_to_unknown_sink(self):
+        """Sink moved from 'nominal' to 'unknown' in migration 063 — 'nominal'
+        collided with the legitimate bootstrap value, which is what made
+        coerced rows unrecognizable for the entire pre-063 history."""
         identity = _make_identity()
         db = _mock_db(get_identity=identity, record_agent_state=1)
         with patch("src.agent_storage.get_db", return_value=db):
@@ -908,7 +1033,7 @@ class TestRecordAgentState:
             )
 
         call_kwargs = db.record_agent_state.call_args.kwargs
-        assert call_kwargs["regime"] == "nominal"
+        assert call_kwargs["regime"] == "unknown"
 
     @pytest.mark.asyncio
     async def test_allowed_regimes_pass_through(self):
@@ -916,6 +1041,7 @@ class TestRecordAgentState:
         allowed = [
             "nominal", "warning", "critical", "recovery",
             "EXPLORATION", "CONVERGENCE", "DIVERGENCE", "STABLE",
+            "TRANSITION", "unknown",
         ]
         identity = _make_identity()
         for regime in allowed:

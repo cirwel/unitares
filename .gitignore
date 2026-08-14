@@ -146,6 +146,23 @@ site/
 .tox/
 *.pyc
 *.lock
+# ...but Elixir mix.lock files ARE tracked. The blanket *.lock rule above sits
+# in the Python section and swept them up as collateral, so every machine
+# resolved Elixir deps independently: CI ran a fresh resolve while the deploy
+# box kept whatever it locked months earlier. That is how production ended up
+# on plug 1.20.1 (retired 2026-06-23) while CI was already green on 1.20.3 —
+# a green build proving nothing about the dependency set actually running.
+# mix.lock is meant to be committed for applications; these are applications.
+!elixir/*/mix.lock
+#
+# uv.lock stays ignored, and that IS the decision, not more collateral. Nothing
+# consumes it: CI installs Python deps with `pip install -r requirements-*.txt`
+# (tracked), Dependabot scans the tracked pip ecosystem, and no workflow calls
+# uv at all. Committing a 450KB lockfile that no build reads would assert a
+# reproducibility guarantee nothing enforces. If exact Python pinning is ever
+# wanted, the change is `uv sync` in CI plus a tracked lock together — one
+# without the other is decoration. Note that Python deps are range-pinned by
+# design here: the repo guarantees a plain `pip install -e .` works for anyone.
 tests/security_audit_report.json
 tests/additional_security_report.json
 

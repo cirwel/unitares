@@ -2,7 +2,7 @@
 # check-deploy-lib.sh — contract check for the deploy-script library extraction.
 #
 # The per-service deploy scripts (deploy-mcp / gateway / sentinel / lease-plane
-# / wave3a / orchestrator) share their lock, plist-preflight, and ff blocks via
+# / wave3a / orchestrator / bridge) share their lock, plist-preflight, and ff blocks via
 # scripts/ops/deploy-lib.sh. Before the extraction those blocks were pasted
 # five times and drifted (stale lock comments; deploy-lease-plane.sh shipped
 # with NO plist preflight at all — the false-success gap the preflight exists
@@ -30,6 +30,7 @@ SERVICE_SCRIPTS=(
   "$OPS/deploy-lease-plane.sh"
   "$OPS/deploy-wave3a.sh"
   "$OPS/deploy-orchestrator.sh"
+  "$OPS/deploy-bridge.sh"
 )
 ALL_SCRIPTS=("$LIB" "${SERVICE_SCRIPTS[@]}" "$OPS/deploy-status.sh" "$OPS/deploy-apply.sh" "$OPS/nudge-lease-plane.sh")
 

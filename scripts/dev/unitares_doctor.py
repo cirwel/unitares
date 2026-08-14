@@ -2048,7 +2048,7 @@ def check_producer_never_reported(db_url: str, repo_root: Path) -> CheckResult:
 
 
 # The adjudication queue's own definition, mirrored from
-# src/http_api.py (_SENTINEL_FINDING_EVENT_TYPES, _SENTINEL_BACKLOG_DEFAULT_
+# src/http_routes/sentinel.py (_SENTINEL_FINDING_EVENT_TYPES, _SENTINEL_BACKLOG_DEFAULT_
 # SEVERITIES). Duplicated deliberately rather than imported: the doctor runs
 # against a DEPLOYED database from a checkout that may not be the deployed
 # tree, so importing server code would silently measure the wrong definition.
