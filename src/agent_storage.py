@@ -575,18 +575,44 @@ async def record_agent_state(
     if not identity:
         raise ValueError(f"Agent '{agent_id}' not found")
 
-    # Map regime to allowed DB values
+    # Map regime to allowed DB values.
+    #
+    # This set merges two vocabularies: a health one
+    # (nominal/warning/critical/recovery) and a basin one
+    # (EXPLORATION/CONVERGENCE/DIVERGENCE/STABLE). Only the three basin values
+    # plus 'nominal' have ever been written; 'warning'/'critical'/'recovery'/
+    # 'STABLE' have zero rows fleet-wide. So an out-of-set regime coerced to
+    # 'nominal' does not land as a health reading — it lands as a value readers
+    # parse as a *basin*, indistinguishable from a real one.
+    #
+    # The coercion is kept (the stored shape is a schema decision, not one to
+    # make here) but it is no longer silent: the raw value is preserved in
+    # state_json and the event is logged. Analyses that measure basin
+    # transitions must otherwise treat every coerced row as a genuine flip.
     allowed_regimes = {
         'nominal', 'warning', 'critical', 'recovery',
         'EXPLORATION', 'CONVERGENCE', 'DIVERGENCE', 'STABLE'
     }
     db_regime = regime if regime in allowed_regimes else 'nominal'
+    regime_was_coerced = db_regime != regime
+    if regime_was_coerced:
+        logger.warning(
+            "regime %r not in allowed set, coerced to %r for agent %s; "
+            "raw value preserved at state_json.regime_raw",
+            regime,
+            db_regime,
+            agent_id[:8],
+        )
 
     # Build state_json
     state_json = {
         "E": E,
         "health_status": health_status,
     }
+    if regime_was_coerced:
+        # Keep the original so a coerced row stays distinguishable from a row
+        # whose regime genuinely was 'nominal'.
+        state_json["regime_raw"] = regime
     if risk_score is not None:
         state_json["risk_score"] = risk_score
     if phi is not None:

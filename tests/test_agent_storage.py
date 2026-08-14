@@ -782,6 +782,73 @@ class TestRecordAgentState:
         # Same for sensor_eisv_source: absent unless explicitly supplied
         assert "sensor_eisv_source" not in call_kwargs["state_json"]
         assert "eisv_telemetry" not in call_kwargs["state_json"]
+        # A regime that is already allowed is not flagged as coerced.
+        assert "regime_raw" not in call_kwargs["state_json"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_regime_coerced_but_raw_value_preserved(self):
+        """An out-of-set regime must stay recoverable.
+
+        The allowed set merges a health vocabulary with a basin vocabulary, and
+        the fallback ('nominal') is itself a value readers parse as a basin. So
+        a silent coercion is indistinguishable downstream from a real basin
+        reading, and a transition analysis counts it as a genuine flip. Coercion
+        still happens, but the original must survive in state_json.
+        """
+        identity = _make_identity(identity_id=42)
+        db = _mock_db(get_identity=identity, record_agent_state=1)
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import record_agent_state
+            await record_agent_state(
+                "agent-1",
+                E=0.4, I=0.6, S=0.2, V=-0.1,
+                regime="TOTALLY_UNKNOWN",
+                coherence=0.3,
+            )
+
+        call_kwargs = db.record_agent_state.call_args.kwargs
+        assert call_kwargs["regime"] == "nominal"
+        assert call_kwargs["state_json"]["regime_raw"] == "TOTALLY_UNKNOWN"
+
+    @pytest.mark.asyncio
+    async def test_genuine_nominal_is_not_marked_coerced(self):
+        """'nominal' passed in explicitly is a real value, not a fallback.
+
+        Without this distinction, every coerced row and every genuine 'nominal'
+        row look identical after the fact.
+        """
+        identity = _make_identity(identity_id=42)
+        db = _mock_db(get_identity=identity, record_agent_state=1)
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import record_agent_state
+            await record_agent_state(
+                "agent-1",
+                E=0.4, I=0.6, S=0.2, V=-0.1,
+                regime="nominal",
+                coherence=0.3,
+            )
+
+        call_kwargs = db.record_agent_state.call_args.kwargs
+        assert call_kwargs["regime"] == "nominal"
+        assert "regime_raw" not in call_kwargs["state_json"]
+
+    @pytest.mark.asyncio
+    async def test_coercion_is_logged(self):
+        """The coercion was previously silent — no log, no error, value gone."""
+        identity = _make_identity(identity_id=42)
+        db = _mock_db(get_identity=identity, record_agent_state=1)
+        with patch("src.agent_storage.get_db", return_value=db), \
+             patch("src.agent_storage.logger") as mock_logger:
+            from src.agent_storage import record_agent_state
+            await record_agent_state(
+                "agent-1",
+                E=0.4, I=0.6, S=0.2, V=-0.1,
+                regime="drifting",
+                coherence=0.3,
+            )
+
+        mock_logger.warning.assert_called_once()
+        assert "drifting" in str(mock_logger.warning.call_args)
 
     @pytest.mark.asyncio
     async def test_persists_behavioral_eisv_into_state_json(self):
