@@ -939,13 +939,27 @@ async def handle_aggregate_metrics(arguments: Dict[str, Any]) -> Sequence[TextCo
               count(*) FILTER (
                   WHERE ls.regime IN ('nominal','STABLE','CONVERGENCE')
               )::int AS healthy,
+              -- TRANSITION = recovering (S falling, I rising; migration 063):
+              -- improving but not settled, so it buckets with moderate, not
+              -- healthy. Every legal regime value must appear in exactly one
+              -- bucket below (or in unknown_health) — a value left out of all
+              -- of them silently vanishes from the fleet roll-up while still
+              -- counting toward total_agents.
               count(*) FILTER (
-                  WHERE ls.regime IN ('warning','EXPLORATION','recovery')
+                  WHERE ls.regime IN ('warning','EXPLORATION','recovery','TRANSITION')
               )::int AS moderate,
               count(*) FILTER (
                   WHERE ls.regime IN ('critical','DIVERGENCE')
               )::int AS critical,
-              count(*) FILTER (WHERE ls.identity_id IS NULL)::int AS unknown_health,
+              -- regime='unknown' is the coercion sink (063): the row has data
+              -- but its basin label was unclassifiable, which is an unknown
+              -- health reading, not a healthy one. Pre-063 coerced rows sit in
+              -- 'nominal' and still count healthy here; they are not
+              -- separable at this layer (state_json.regime_raw is not in the
+              -- matview) and are a shrinking, dated cohort.
+              count(*) FILTER (
+                  WHERE ls.identity_id IS NULL OR ls.regime = 'unknown'
+              )::int AS unknown_health,
               EXTRACT(EPOCH FROM (now() - min(ls.recorded_at)))::bigint
                   AS staleness_oldest_seconds,
               EXTRACT(EPOCH FROM (now() - max(ls.recorded_at)))::bigint

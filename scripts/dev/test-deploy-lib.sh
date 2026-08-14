@@ -73,6 +73,28 @@ exp_head="$(git -C "$REPO" rev-parse origin/master)"
 [[ "$fresh" == "0" && "$head" == "$exp_head" && "$prev" != "$head" ]] \
   && ok "ff_worktree ffs to origin/master (FRESH=0, PREV=old)" || bad "ff_worktree ff: $res"
 
+# ── ff_worktree --branch: a repo whose trunk is `main`, not `master` ──
+# The fleet is not single-repo — unitares-discord-bridge is on `main`. Before
+# --branch the ref was hardcoded three ways (fetch, worktree add, merge), so
+# this repo shape could not use the lib at all. A create AND an ff are both
+# exercised: the create path is where a hardcoded `master` fails loudest
+# ("invalid reference: master"), the ff path is where it would silently do
+# nothing on a repo that happens to have both branches.
+ORIGIN2="$SB/origin2.git"; REPO2="$SB/repo2"; DEP2="$SB/dep2"
+git init -q --bare "$ORIGIN2"
+git init -q -b main "$REPO2"
+( cd "$REPO2" && echo a > f && git add f && git commit -qm c1 && git remote add origin "$ORIGIN2" && git push -q origin main && git checkout -qb dev )
+out2="$( set -euo pipefail; . "$LIB"; deploy_lib_ff_worktree t "$REPO2" "$DEP2" --branch main >/dev/null 2>&1; echo "$DEPLOY_LIB_FRESH" )"
+[[ "$out2" == "1" && -d "$DEP2" ]] && ok "ff_worktree --branch main creates worktree" || bad "ff_worktree --branch create: FRESH=$out2"
+( cd "$REPO2" && echo b >> f && git add f && git commit -qm c2 && git push -q origin HEAD:main )
+( set -euo pipefail; . "$LIB"; deploy_lib_ff_worktree t "$REPO2" "$DEP2" --branch main ) >/dev/null 2>&1
+[[ "$(git -C "$DEP2" rev-parse HEAD)" == "$(git -C "$REPO2" rev-parse origin/main)" ]] \
+  && ok "ff_worktree --branch main ffs to origin/main" || bad "ff_worktree --branch ff did not advance"
+
+# A typo'd flag must fail loudly, not silently deploy the wrong trunk.
+( set -euo pipefail; . "$LIB"; deploy_lib_ff_worktree t "$REPO2" "$DEP2" --branch ) >/dev/null 2>&1 \
+  && bad "ff_worktree --branch with no value refuses" || ok "ff_worktree --branch with no value refuses"
+
 # ── poll ──
 ( set -euo pipefail; . "$LIB"
   n=0; probe() { n=$((n+1)); [[ $n -ge 3 ]]; }
@@ -117,33 +139,57 @@ exp_head="$(git -C "$REPO" rev-parse origin/master)"
 # be overridden: each names a more urgent, different action than "pull".
 (
   set -uo pipefail
-  promote() { # verdict behind -> verdict
-    local verdict="$1" behind="$2"
-    if [ "$behind" != "0" ] && [ "$behind" != "?" ]; then
-      case "$verdict" in
-        CURRENT|CURRENT\*|LIVE|HOT-RELOAD|STALE*) verdict="BEHIND($behind)" ;;
-      esac
-    fi
-    printf '%s' "$verdict"
-  }
+  # EXTRACTED from deploy-status.sh, never retyped. The previous version of
+  # this test carried its own hand-copied promote(), so when the real script's
+  # case list changed the test kept passing against the copy — it was testing
+  # itself. Extraction is what stops the two drifting apart in silence.
+  DS="$(dirname "$LIB")/deploy-status.sh"
+  eval "promote() { local verdict=\"\$1\" behind=\"\$2\"
+    $(sed -n '/^  if \[ "\$behind" != "0" \]/,/^  fi$/p' "$DS")
+    printf '%s' \"\$verdict\"; }"
   # promoted
   [ "$(promote LIVE 2)"          = "BEHIND(2)" ] || exit 20
   [ "$(promote CURRENT 5)"       = "BEHIND(5)" ] || exit 21
   [ "$(promote 'CURRENT*' 3)"    = "BEHIND(3)" ] || exit 22
   [ "$(promote HOT-RELOAD 1)"    = "BEHIND(1)" ] || exit 23
-  [ "$(promote 'STALE(4)' 7)"    = "BEHIND(7)" ] || exit 24
   # preserved
+  # STALE moved from promoted to PRESERVED (2026-08-14). It is the sharper
+  # fact — the RUNNING PROCESS is executing superseded code — and letting
+  # "your checkout needs a pull" overwrite it made a STALE(12) service display
+  # as BEHIND(1): the milder problem hiding the worse one.
+  [ "$(promote 'STALE(4)' 7)"    = "STALE(4)" ]     || exit 24
   [ "$(promote DOWN 2)"          = "DOWN" ]         || exit 25
   [ "$(promote GHOST-BRANCH 1)"  = "GHOST-BRANCH" ] || exit 26
   [ "$(promote n/a 2)"           = "n/a" ]          || exit 27
   [ "$(promote LIVE 0)"          = "LIVE" ]         || exit 28
   [ "$(promote LIVE '?')"        = "LIVE" ]         || exit 29
-  # and the real script must not have re-gated it on CURRENT alone
-  grep -q '\[ "\$verdict" = "CURRENT" \] && verdict="BEHIND' \
-    "$(dirname "$LIB")/deploy-status.sh" && exit 30
   exit 0
-) && ok "deploy-status BEHIND applies to LIVE/HOT-RELOAD/STALE, not DOWN/GHOST" \
+) && ok "deploy-status BEHIND promotes CURRENT/LIVE/HOT-RELOAD, preserves STALE/DOWN/GHOST" \
   || bad "deploy-status BEHIND promotion rules"
+
+# ── behind must be scoped to the service's OWN code path ──
+# Repo-wide was the single worst bug in this tool. On a monorepo the shared
+# worktree is nearly always >=1 commit behind, so every service read BEHIND(n)
+# regardless of whether the commit touched it: measured 2026-08-13, one commit
+# to governance_monitor.py put SIX services in the restart set, including
+# sentinel-beam and the fail-closed lease-plane. It also made CURRENT*
+# unreachable, disabling this tool's best idea with its bluntest one.
+(
+  set -euo pipefail
+  eval "$(sed -n '/^behind_count() {/,/^}/p' "$(dirname "$LIB")/deploy-status.sh")"
+  O="$SB/origin5.git"; R="$SB/repo5"
+  git init -q --bare "$O"; git init -q -b master "$R"
+  cd "$R" && git remote add origin "$O"
+  mkdir -p svc other && echo a > svc/f && echo a > other/f
+  git add svc other && git commit -qm base && git push -q origin master
+  echo b >> other/f && git add other && git commit -qm "touches only other/" && git push -q origin master
+  git reset -q --hard HEAD~1      # checkout now sits 1 commit behind origin
+  [ "$(behind_count "$R" origin/master ".")"     = "1" ] || exit 41   # repo-wide sees it
+  [ "$(behind_count "$R" origin/master "svc")"   = "0" ] || exit 42   # svc untouched -> no restart
+  [ "$(behind_count "$R" origin/master "other")" = "1" ] || exit 43   # other touched -> restart
+  exit 0
+) && ok "behind_count is scoped to the service code path, not the whole repo" \
+  || bad "behind_count path scoping"
 
 # NOTE on the symlink class: `git worktree list --porcelain` prints FULLY
 # resolved paths (macOS /var -> /private/var, and any intermediate symlink), so
@@ -191,6 +237,165 @@ fi
     "$(dirname "$LIB")/deploy-apply.sh"
 ) && ok "deploy-apply dispatches agent-orchestrator" \
   || bad "deploy-apply orchestrator dispatch"
+
+# ── deploy-apply dispatches the discord bridge ──
+# It was the last SKIP in the sweep ("no deploy script"), which mattered more
+# than it looked: the bridge is the alert delivery path, so a stale bridge is a
+# stale alarm. Guard both halves of the wiring — a dispatch entry pointing at a
+# script that does not exist would re-open the same silent gap.
+(
+  set -euo pipefail
+  grep -q 'discord-bridge)  echo "$OPS_DIR/deploy-bridge.sh"' \
+    "$(dirname "$LIB")/deploy-apply.sh"
+  [ -x "$(dirname "$LIB")/deploy-bridge.sh" ]
+) && ok "deploy-apply dispatches discord-bridge to an executable script" \
+  || bad "deploy-apply discord-bridge dispatch"
+
+# The bridge repo's trunk is `main`; deploying it off `master` would be a
+# silent no-op forever. Pin that the script actually passes --branch main.
+# ── ff_worktree --detach --branch TOGETHER ──
+# The two flags were each covered alone and NEVER in combination, which is the
+# only way deploy-bridge.sh actually calls them: the bridge repo's trunk is
+# `main` AND its dev checkout already occupies that branch, so the real call
+# needs both at once. A source-grep for the flag string cannot catch arg
+# parsing that breaks only for the pair, so exercise it for real.
+ORIGIN4="$SB/origin4.git"; REPO4="$SB/repo4"; DEP4A="$SB/dep4a"; DEP4B="$SB/dep4b"
+git init -q --bare "$ORIGIN4"
+git init -q -b main "$REPO4"
+( cd "$REPO4" && echo a > f && git add f && git commit -qm c1 && git remote add origin "$ORIGIN4" && git push -q origin main )
+# REPO4 stays ON main, reproducing the bridge's actual layout: branch-mode
+# `worktree add` must fail here, which is precisely why --detach is required.
+( set -euo pipefail; . "$LIB"; deploy_lib_ff_worktree t "$REPO4" "$DEP4A" --detach --branch main ) >/dev/null 2>&1 \
+  && ok "ff_worktree --detach --branch main works when the trunk is checked out" \
+  || bad "ff_worktree --detach --branch main (the bridge's actual call) failed"
+[[ "$(git -C "$DEP4A" rev-parse HEAD 2>/dev/null)" == "$(git -C "$REPO4" rev-parse origin/main)" ]] \
+  && ok "ff_worktree --detach --branch main lands on origin/main" || bad "--detach --branch landed on the wrong ref"
+# Flag order must not matter.
+( set -euo pipefail; . "$LIB"; deploy_lib_ff_worktree t "$REPO4" "$DEP4B" --branch main --detach ) >/dev/null 2>&1 \
+  && ok "ff_worktree accepts --branch before --detach" || bad "ff_worktree flag order dependence"
+
+# The source-grep below is a deliberate regression guard, NOT a behavioral test:
+# it only catches someone deleting the flags from the call site. The behavior
+# itself is covered above.
+grep -q -- '--detach --branch main' "$(dirname "$LIB")/deploy-bridge.sh" \
+  && ok "[guard] deploy-bridge call site still passes --detach --branch main" \
+  || bad "deploy-bridge missing --detach --branch main"
+
+# The bridge has no HTTP health endpoint, so the verify probe MUST be the
+# heartbeat the liveness watchdog also trusts — a probe that only checked the
+# process was alive would pass against a wedged event loop, which is the exact
+# 2026-06-19 hang the watchdog exists for.
+grep -q 'BRIDGE_HEARTBEAT_PATH' "$(dirname "$LIB")/deploy-bridge.sh" \
+  && ok "[guard] deploy-bridge still reads the shared heartbeat env var" || bad "deploy-bridge heartbeat probe"
+
+# ── the heartbeat comparison itself ──
+# Above is a name-grep. This exercises the actual decision: mtime STRICTLY
+# greater than the pre-restart mark. A `-ge` there would pass on a heartbeat
+# that never moved — the exact false success the pre-restart snapshot exists to
+# prevent, and unreachable by any grep.
+#
+# Portability: the first version of this test used `stat -f` and `date -v`,
+# which are BSD-only. It passed on the macOS deploy host and failed on Linux
+# CI, where the fallback re-touched the file to "now" and the strict-greater
+# comparison then saw two identical timestamps. Rather than touch files and
+# race the clock, the mark is moved arithmetically — same comparison, no
+# sleeps, no platform-specific date handling, deterministic everywhere.
+#
+# The second version chained `stat -f %m || stat -c %Y` and was still red on
+# Linux, because an `||` chain assumes the failing branch prints nothing. GNU
+# stat's `-f` means "file system status", so `stat -f %m FILE` reads `%m` as a
+# second FILE: it fails on that one (firing the fallback) but still prints the
+# whole multi-line filesystem block for FILE. The mtime then arrives appended
+# to `File: … Block size: 4096 …`, and the comparison dies with "integer
+# expression expected". Trust the OUTPUT SHAPE, not the exit status: take the
+# first probe that yields a bare integer.
+_mt() {
+  local m
+  for m in "$(stat -c %Y "$1" 2>/dev/null)" "$(stat -f %m "$1" 2>/dev/null)"; do
+    case "$m" in ''|*[!0-9]*) ;; *) printf '%s\n' "$m"; return 0 ;; esac
+  done
+  echo 0
+}
+HB="$SB/hb"; : > "$HB"
+hb_probe() { [ "$(_mt "$HB")" -gt "$1" ]; }   # mirrors deploy-bridge.sh
+HB_NOW="$(_mt "$HB")"
+hb_probe "$HB_NOW" && bad "heartbeat probe passed on an UNCHANGED file" \
+  || ok "heartbeat probe rejects an unchanged heartbeat (stale-file false success)"
+hb_probe "$((HB_NOW - 10))" && ok "heartbeat probe accepts an advanced heartbeat" \
+  || bad "heartbeat probe rejected a genuinely advanced heartbeat"
+rm -f "$HB"
+hb_probe 0 && bad "heartbeat probe passed with NO heartbeat file" \
+  || ok "heartbeat probe treats a missing heartbeat as not-advanced"
+
+# ── derivation: an UNREGISTERED running service must be reported ──
+# The COMPONENTS array is a hand-maintained list of what exists, and a
+# hand-maintained list of what exists is what failed twice: dialectic_live
+# served traffic for months while absent from it, and once that was "fixed" a
+# review immediately found ipv6-loopback-proxy in the identical state. A
+# missing row was indistinguishable from a healthy fleet. This asserts the
+# derivation turns that silence into an UNGOVERNED row.
+(
+  set -euo pipefail
+  UG="$SB/ugrepo"; git init -q -b master "$UG"
+  ( cd "$UG" && echo x > f && git add f && git -c user.email=t@t -c user.name=t commit -qm c1 )
+  fake_plist_dir="$SB/agents"; mkdir -p "$fake_plist_dir"
+  # Extract the real function rather than reimplementing it.
+  eval "$(sed -n '/^ungoverned_rows() {/,/^}/p' "$(dirname "$LIB")/deploy-status.sh")"
+  git_branch() { git -C "$1" rev-parse --abbrev-ref HEAD 2>/dev/null; }
+  git_short()  { git -C "$1" rev-parse --short HEAD 2>/dev/null; }
+  COMPONENTS=("known|com.unitares.known|$UG||restart|")
+  HOME_BAK="$HOME"
+  rows=()
+  # A RUNNING job, not in COMPONENTS, whose plist resolves to a git checkout.
+  LAUNCHCTL_LIST_CMD="printf '4242\t0\tcom.unitares.mystery\n'"
+  mkdir -p "$SB/fakehome/Library/LaunchAgents"
+  printf '<string>%s</string>' "$UG" > "$SB/fakehome/Library/LaunchAgents/com.unitares.mystery.plist"
+  HOME="$SB/fakehome"
+  # the fixture repo lives outside $HOME/projects, so point the scan there
+  sed_out=$(declare -f ungoverned_rows | sed "s|\$HOME/projects/\[A-Za-z0-9_.-\]\*|$UG|")
+  eval "$sed_out"
+  ungoverned_rows
+  HOME="$HOME_BAK"
+  [ "${#rows[@]}" -eq 1 ] || exit 51
+  case "${rows[0]}" in *"|UNGOVERNED|"*) ;; *) exit 52 ;; esac
+  case "${rows[0]}" in mystery*) ;; *) exit 53 ;; esac
+  exit 0
+) && ok "derivation reports a running, unregistered service as UNGOVERNED" \
+  || bad "derivation did not flag an unregistered running service"
+
+# A job that IS registered must NOT be reported twice.
+(
+  set -euo pipefail
+  UG="$SB/ugrepo"
+  eval "$(sed -n '/^ungoverned_rows() {/,/^}/p' "$(dirname "$LIB")/deploy-status.sh")"
+  COMPONENTS=("known|com.unitares.mystery|$UG||restart|")
+  rows=()
+  LAUNCHCTL_LIST_CMD="printf '4242\t0\tcom.unitares.mystery\n'"
+  HOME="$SB/fakehome" ungoverned_rows
+  [ "${#rows[@]}" -eq 0 ] || exit 54
+  exit 0
+) && ok "derivation stays quiet for a service that IS registered" \
+  || bad "derivation double-reported a registered service"
+
+# ── deploy-apply dispatches dialectic-live ──
+# It ran for months absent from deploy-status.sh entirely — no row, no dispatch
+# — while loading from the SHARED worktree every other deploy fast-forwards.
+# The failure mode was silence, so the guard is that it stays wired at all.
+(
+  set -euo pipefail
+  grep -q 'dialectic-live)  echo "$OPS_DIR/deploy-dialectic-live.sh"' \
+    "$(dirname "$LIB")/deploy-apply.sh"
+  [ -x "$(dirname "$LIB")/deploy-dialectic-live.sh" ]
+) && ok "deploy-apply dispatches dialectic-live to an executable script" \
+  || bad "deploy-apply dialectic-live dispatch"
+
+# Every service that loads from the shared worktree needs a status row, or a ff
+# moves its code with nothing reporting the drift. Assert the row exists AND is
+# subdir-scoped — an unscoped row would read BEHIND(hundreds) forever and be
+# learned-to-ignore, which is the same silence in a louder costume.
+grep -q '"dialectic-live|com.unitares.dialectic-live|.*|elixir/dialectic_live|restart|8790"' \
+  "$(dirname "$LIB")/deploy-status.sh" \
+  && ok "deploy-status has a subdir-scoped dialectic-live row" || bad "dialectic-live status row"
 
 echo; echo "passed=$pass failed=$fail"
 rm -rf "$SB"

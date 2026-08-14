@@ -738,3 +738,15 @@ Codex's argument was that the trust-tier cost of B-relaxed is not theoretical �
 3. **Verbosity-mode consolidation** (collapse near-duplicate `minimal`/`compact`; unify cross-tool `lite`). Wire/test-pinned (`response_mode='lite'→compact` is asserted; `lite` differs across tools). Correction to an earlier session claim: `mirror_signal.emit` only fires on *signal-bearing* check-ins, so it is a **biased** sample — a clean minimal-vs-compact census needs new per-call mode telemetry first. Low ROI; defer unless the surface is being reworked anyway.
 
 **Inflection note.** Safe-now code work on this surface is effectively exhausted; the three above are deliberate operator decisions (run-a-checker / accept-risk / low-ROI), not more inline edits.
+
+---
+
+## 2026-08-13 — v7 empirics: the question died, the mechanism becomes the section
+
+**Driver.** A paper-landscape audit re-ran the v7 corpus-maturity check. The volume blocker cleared (~30× the flip target on epoch 3) — and clearing it exposed that the registered question was never answerable: both sides of the intended correlation are produced by the same estimator. Full statement, measurements, and decision: `v7-negative-result-observer-self-loop.md`.
+
+**The mechanism.** regime flips → `_regime_instability` → 0.35 of S → EISV → risk → the very intervention events (`circuit_breaker_trip`, `lifecycle_paused`, `anomaly_detected`) the flips were to be correlated against. Verified against the full historical record, not a sample: 100% of both pause-event types' reason strings, all-time, are EISV/CIRS/risk-derived — zero operator, timeout, transport, or external-signal triggers. The sole EISV-blind intervention channel is `trajectory_drift` (~1.9k events, 4 agents) — a v7.1/v8 seed, not a v7 corpus.
+
+**Compounding artifact, now repaired.** 31% of measured flips were manufactured by the `TRANSITION`→`'nominal'` storage coercion (detector emits five basins, schema admitted four; 1,374 casualty rows). #1650 made the coercion visible; #1653 (migration 063) admits `TRANSITION` and moves the sink to an explicit `unknown`. No backfill — pre-063 originals were destroyed pre-INSERT and stay identifiable as `regime='nominal' AND synthetic IS NOT TRUE`.
+
+**Decision.** The v7 empirical section reports this as a structural negative result inside the §0 observer frame — an undeclared self-loop in the observer's generative model, with its coefficient (0.35) and artifact rate (31%) — rather than deferring empirics again. This is the answer to `paper-positioning.md`'s scope-drift worry: publishing the blocker's mechanism is the one v7 that cannot be read as hiding it. The 2026-12-01 stop-rule read (#1425) is untouched; no probe reruns.
