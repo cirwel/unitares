@@ -55,8 +55,8 @@ async def test_rest_tool_context_exposes_uds_attestation_to_handlers(monkeypatch
         observed.append(get_session_signals())
         return {"ok": True}
 
-    monkeypatch.setattr("src.http_api._resolve_http_bound_agent", fake_resolve)
-    monkeypatch.setattr("src.http_api.execute_http_tool", fake_execute)
+    monkeypatch.setattr("src.http_routes.access._resolve_http_bound_agent", fake_resolve)
+    monkeypatch.setattr("src.http_routes.tools.execute_http_tool", fake_execute)
 
     result = await _execute_http_tool_in_context(
         _request(peer_pid=9876),

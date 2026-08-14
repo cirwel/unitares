@@ -83,11 +83,11 @@ class TestAdjudicateValidation:
 class TestAdjudicateRecording:
     def _patches(self, already=frozenset(), uuid=SENTINEL_UUID):
         return (
-            patch("src.http_api._adjudicated_sentinel_fingerprints",
+            patch("src.http_routes.sentinel._adjudicated_sentinel_fingerprints",
                   AsyncMock(return_value=set(already))),
-            patch("src.http_api._sentinel_substrate_uuid",
+            patch("src.http_routes.sentinel._sentinel_substrate_uuid",
                   AsyncMock(return_value=uuid)),
-            patch("src.http_api._adjudication_progress",
+            patch("src.http_routes.sentinel._adjudication_progress",
                   AsyncMock(return_value=dict(PROGRESS))),
             patch("src.mcp_handlers.observability.outcome_events._record_outcome_event_inline",
                   AsyncMock(return_value={"success": True})),
@@ -173,9 +173,9 @@ class TestAdjudicationQueue:
         ]
         with patch("src.audit_db.query_audit_events_async",
                    AsyncMock(return_value=events)), \
-             patch("src.http_api._adjudicated_sentinel_fingerprints",
+             patch("src.http_routes.sentinel._adjudicated_sentinel_fingerprints",
                    AsyncMock(return_value={"fp-done"})), \
-             patch("src.http_api._adjudication_progress",
+             patch("src.http_routes.sentinel._adjudication_progress",
                    AsyncMock(return_value=dict(PROGRESS))):
             r = client.get("/v1/sentinel/adjudication-queue?limit=5")
         assert r.status_code == 200
@@ -190,9 +190,9 @@ class TestAdjudicationQueue:
         events = [_event(f"fp-{i}") for i in range(8)]
         with patch("src.audit_db.query_audit_events_async",
                    AsyncMock(return_value=events)), \
-             patch("src.http_api._adjudicated_sentinel_fingerprints",
+             patch("src.http_routes.sentinel._adjudicated_sentinel_fingerprints",
                    AsyncMock(return_value=set())), \
-             patch("src.http_api._adjudication_progress",
+             patch("src.http_routes.sentinel._adjudication_progress",
                    AsyncMock(return_value=dict(PROGRESS))):
             r = client.get("/v1/sentinel/adjudication-queue?limit=3")
         body = r.json()
@@ -285,11 +285,11 @@ class TestQueueEvidenceEnrichment:
     def _get_queue(self, client, events, lease_rows):
         with patch("src.audit_db.query_audit_events_async",
                    AsyncMock(return_value=events)), \
-             patch("src.http_api._adjudicated_sentinel_fingerprints",
+             patch("src.http_routes.sentinel._adjudicated_sentinel_fingerprints",
                    AsyncMock(return_value=set())), \
-             patch("src.http_api._adjudication_progress",
+             patch("src.http_routes.sentinel._adjudication_progress",
                    AsyncMock(return_value=dict(PROGRESS))), \
-             patch("src.http_api._fetch_lease_rows", lease_rows):
+             patch("src.http_routes.sentinel._fetch_lease_rows", lease_rows):
             return client.get("/v1/sentinel/adjudication-queue?limit=5")
 
     def test_evidence_attached_only_to_forced_release_findings(self, client):
