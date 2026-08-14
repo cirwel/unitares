@@ -70,21 +70,32 @@ deploy_lib_ff_worktree "$TAG" "$REPO" "$DEPLOY" --detach --branch main
 PREV="$DEPLOY_LIB_PREV"
 
 # --- secrets ----------------------------------------------------------------
-# Symlink, never copy. Two real .env files would drift and the operator would
-# have no way to tell which one the live bot actually read. The dev checkout
-# stays the single source of the token.
-# TODO: the fleet convention is ~/.config/cirwel/secrets.env (0600). Moving the
-# bridge's token there would drop this dependency on the dev checkout existing;
-# left as a deliberate follow-up rather than relocating a live secret inside a
-# deploy-tooling change.
-if [ ! -e "$DEPLOY/.env" ]; then
-  if [ ! -f "$REPO/.env" ]; then
-    echo "[$TAG] REFUSING: no .env at $REPO/.env to link from." >&2
-    echo "[$TAG] The bot would boot with an empty DISCORD_BOT_TOKEN and never connect." >&2
-    exit 1
+# config.py calls load_dotenv() with no path, so the bot reads <cwd>/.env — and
+# .env is gitignored, so a worktree never carries one. The real file lives in
+# the fleet secrets dir (0600, outside every checkout) and both checkouts hold a
+# symlink to it. Symlink, never copy: two real files would drift and nobody
+# could tell which one the live bot actually read.
+#
+# Outside the checkouts ON PURPOSE. It first lived in the dev checkout, which
+# made the DEPLOY worktree depend on the DEV checkout still existing — delete or
+# move the dev tree and the live bridge dies at its next restart, for a reason
+# nothing in the deploy path would have explained.
+ENV_FILE="${BRIDGE_ENV_FILE:-$HOME/.config/cirwel/discord-bridge.env}"
+if [ ! -f "$ENV_FILE" ]; then
+  echo "[$TAG] REFUSING: no secrets file at $ENV_FILE." >&2
+  echo "[$TAG] The bot would boot with an empty DISCORD_BOT_TOKEN and never connect." >&2
+  if [ -f "$REPO/.env" ] && [ ! -L "$REPO/.env" ]; then
+    echo "[$TAG] This machine still has the pre-migration layout. One-time move:" >&2
+    echo "[$TAG]   mv \"$REPO/.env\" \"$ENV_FILE\" && chmod 600 \"$ENV_FILE\"" >&2
+    echo "[$TAG]   ln -sfn \"$ENV_FILE\" \"$REPO/.env\"" >&2
   fi
-  echo "[$TAG] linking .env -> $REPO/.env (gitignored; not carried by the worktree)"
-  ln -s "$REPO/.env" "$DEPLOY/.env"
+  exit 1
+fi
+# -L, not -e: -e is false for a DANGLING symlink, so a link left pointing at an
+# old location would fall through to `ln -s` on an existing path and fail.
+if [ ! -L "$DEPLOY/.env" ] || [ ! -e "$DEPLOY/.env" ]; then
+  echo "[$TAG] linking .env -> $ENV_FILE"
+  ln -sfn "$ENV_FILE" "$DEPLOY/.env"
 fi
 
 # --- dependencies -----------------------------------------------------------
