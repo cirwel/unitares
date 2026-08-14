@@ -14,6 +14,14 @@ defmodule DialecticLiveWeb.Router do
     plug :accepts, ["json"]
   end
 
+  # Before the browser scope: /health is machine-facing and must not pick up
+  # session/CSRF/layout plugs it has no use for.
+  scope "/", DialecticLiveWeb do
+    pipe_through :api
+
+    get "/health", HealthController, :index
+  end
+
   scope "/", DialecticLiveWeb do
     pipe_through :browser
 
