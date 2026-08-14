@@ -300,7 +300,22 @@ grep -q 'BRIDGE_HEARTBEAT_PATH' "$(dirname "$LIB")/deploy-bridge.sh" \
 # comparison then saw two identical timestamps. Rather than touch files and
 # race the clock, the mark is moved arithmetically — same comparison, no
 # sleeps, no platform-specific date handling, deterministic everywhere.
-_mt() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+#
+# The second version chained `stat -f %m || stat -c %Y` and was still red on
+# Linux, because an `||` chain assumes the failing branch prints nothing. GNU
+# stat's `-f` means "file system status", so `stat -f %m FILE` reads `%m` as a
+# second FILE: it fails on that one (firing the fallback) but still prints the
+# whole multi-line filesystem block for FILE. The mtime then arrives appended
+# to `File: … Block size: 4096 …`, and the comparison dies with "integer
+# expression expected". Trust the OUTPUT SHAPE, not the exit status: take the
+# first probe that yields a bare integer.
+_mt() {
+  local m
+  for m in "$(stat -c %Y "$1" 2>/dev/null)" "$(stat -f %m "$1" 2>/dev/null)"; do
+    case "$m" in ''|*[!0-9]*) ;; *) printf '%s\n' "$m"; return 0 ;; esac
+  done
+  echo 0
+}
 HB="$SB/hb"; : > "$HB"
 hb_probe() { [ "$(_mt "$HB")" -gt "$1" ]; }   # mirrors deploy-bridge.sh
 HB_NOW="$(_mt "$HB")"
