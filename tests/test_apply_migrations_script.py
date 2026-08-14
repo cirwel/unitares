@@ -172,3 +172,62 @@ def test_record_checksum_reports_other_failures(mod, monkeypatch, tmp_path):
     p.write_text("SELECT 1;")
     monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Proc())
     assert mod.record_checksum("postgresql://x/y", 10, p) is False
+
+
+class TestEveryMigrationRegistersItself:
+    """A migration file that does not INSERT its own schema_migrations row is
+    INERT — and silently so, which is the dangerous part.
+
+    `unitares_doctor._source_schema_migrations` builds the expected version set
+    by parsing `INSERT INTO core.schema_migrations ... VALUES (n, 'name')` out
+    of each file. A migration with no such INSERT is never in the expected set,
+    so it is never reported pending, never applied by `--apply`, and `--check`
+    happily reports "in sync" while the schema change it carries is absent.
+
+    2026-08-14: migration 063 shipped without the INSERT. deploy-mcp.sh's
+    preflight passed ("DB at version 62 ... max 62 — OK") and restarted the
+    governance MCP onto code that writes regime='TRANSITION' and coerces
+    out-of-set values to 'unknown', against a CHECK constraint that allowed
+    neither. The preflight exists precisely to stop a code/schema half-deploy
+    and it could not see the gap, because the gap was in its own input.
+    """
+
+    def test_every_migration_file_inserts_its_own_version_row(self):
+        import re
+        from pathlib import Path
+
+        migrations = Path(__file__).resolve().parents[1] / "db" / "postgres" / "migrations"
+        insert_re = re.compile(
+            r"INSERT\s+INTO\s+core\.schema_migrations", re.IGNORECASE
+        )
+
+        missing = [
+            p.name
+            for p in sorted(migrations.glob("[0-9][0-9][0-9]_*.sql"))
+            if not insert_re.search(p.read_text())
+        ]
+        assert not missing, (
+            "these migrations never register themselves, so the deploy preflight "
+            "cannot see them and they will never be applied: " + ", ".join(missing)
+        )
+
+    def test_registered_version_matches_the_filename_number(self):
+        """A registration row whose version disagrees with the filename is the
+        same failure wearing a disguise: the file looks registered, but it
+        claims a slot the deploy tooling maps to different SQL."""
+        import re
+        from pathlib import Path
+
+        migrations = Path(__file__).resolve().parents[1] / "db" / "postgres" / "migrations"
+        value_re = re.compile(r"VALUES\s*\(\s*(\d+)\s*,", re.IGNORECASE)
+
+        mismatched = []
+        for p in sorted(migrations.glob("[0-9][0-9][0-9]_*.sql")):
+            text = p.read_text()
+            if "core.schema_migrations" not in text:
+                continue
+            declared = {int(m) for m in value_re.findall(text)}
+            from_name = int(p.name[:3])
+            if declared and from_name not in declared:
+                mismatched.append(f"{p.name} registers {sorted(declared)}")
+        assert not mismatched, "filename/registration mismatch: " + "; ".join(mismatched)
