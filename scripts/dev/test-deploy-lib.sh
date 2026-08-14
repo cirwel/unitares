@@ -269,18 +269,21 @@ grep -q 'BRIDGE_HEARTBEAT_PATH' "$(dirname "$LIB")/deploy-bridge.sh" \
 # greater than the pre-restart mark. A `-ge` there would pass on a heartbeat
 # that never moved — the exact false success the pre-restart snapshot exists to
 # prevent, and unreachable by any grep.
+#
+# Portability: the first version of this test used `stat -f` and `date -v`,
+# which are BSD-only. It passed on the macOS deploy host and failed on Linux
+# CI, where the fallback re-touched the file to "now" and the strict-greater
+# comparison then saw two identical timestamps. Rather than touch files and
+# race the clock, the mark is moved arithmetically — same comparison, no
+# sleeps, no platform-specific date handling, deterministic everywhere.
+_mt() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
 HB="$SB/hb"; : > "$HB"
-hb_probe() { # mimic deploy-bridge.sh's hb_mtime + heartbeat_advanced
-  local before="$1"
-  [ "$(stat -f %m "$HB" 2>/dev/null || echo 0)" -gt "$before" ]
-}
-HB_AT="$(stat -f %m "$HB")"
-hb_probe "$HB_AT" && bad "heartbeat probe passed on an UNCHANGED file" \
+hb_probe() { [ "$(_mt "$HB")" -gt "$1" ]; }   # mirrors deploy-bridge.sh
+HB_NOW="$(_mt "$HB")"
+hb_probe "$HB_NOW" && bad "heartbeat probe passed on an UNCHANGED file" \
   || ok "heartbeat probe rejects an unchanged heartbeat (stale-file false success)"
-touch -t "$(date -v+1M '+%Y%m%d%H%M')" "$HB" 2>/dev/null || touch "$HB"
-hb_probe "$HB_AT" && ok "heartbeat probe accepts an advanced heartbeat" \
+hb_probe "$((HB_NOW - 10))" && ok "heartbeat probe accepts an advanced heartbeat" \
   || bad "heartbeat probe rejected a genuinely advanced heartbeat"
-# A missing heartbeat file must read as 0, never as success.
 rm -f "$HB"
 hb_probe 0 && bad "heartbeat probe passed with NO heartbeat file" \
   || ok "heartbeat probe treats a missing heartbeat as not-advanced"
