@@ -146,6 +146,14 @@ site/
 .tox/
 *.pyc
 *.lock
+# ...but Elixir mix.lock files ARE tracked. The blanket *.lock rule above sits
+# in the Python section and swept them up as collateral, so every machine
+# resolved Elixir deps independently: CI ran a fresh resolve while the deploy
+# box kept whatever it locked months earlier. That is how production ended up
+# on plug 1.20.1 (retired 2026-06-23) while CI was already green on 1.20.3 —
+# a green build proving nothing about the dependency set actually running.
+# mix.lock is meant to be committed for applications; these are applications.
+!elixir/*/mix.lock
 tests/security_audit_report.json
 tests/additional_security_report.json
 
