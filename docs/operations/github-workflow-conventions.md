@@ -128,6 +128,22 @@ deliberate per-PR act, and it says "this one is approved, land it when green" �
 you are giving up the waiting, not the decision. Draft PRs cannot take
 `--auto`, so mark ready first; that mark is the gate.
 
+**Confirmed working end-to-end 2026-08-14.** Two armed PRs were fixed and left
+alone: #1653 merged at 09:45; #1658 went `BEHIND` the moment it did, and GitHub
+moved its head on its own about two minutes later, re-ran CI against the fresh
+base, and merged it at 10:08. No script and no human touched the branch in
+between. **So do not write or run an update-branch babysitter for this repo** —
+polling and pushing only races GitHub's own updater and burns a CI cycle per
+redundant update. `unitares-governance-plugin` is the exception that still needs
+manual `gh pr update-branch`, because auto-merge is disallowed there.
+
+A workflow that predates this, `.github/workflows/pr-queue-autoupdate.yml`, was
+removed in the same pass. It was a poor-man's queue added before the repo
+setting existed, it required a PAT (`PR_AUTOUPDATE_TOKEN`) that was never
+created, and so every run since — on each push to master plus hourly — exited
+early having done nothing. Restoring it would put a second updater in a race
+with GitHub's native one.
+
 **Do not stack more than two deep.** Each level must land in order, and every
 merge below re-dirties everything above. A three-deep stack built 2026-08-13
 produced a conflicted middle PR within hours, purely from its own base moving.
