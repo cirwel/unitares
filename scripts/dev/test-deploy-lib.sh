@@ -73,6 +73,28 @@ exp_head="$(git -C "$REPO" rev-parse origin/master)"
 [[ "$fresh" == "0" && "$head" == "$exp_head" && "$prev" != "$head" ]] \
   && ok "ff_worktree ffs to origin/master (FRESH=0, PREV=old)" || bad "ff_worktree ff: $res"
 
+# ── ff_worktree --branch: a repo whose trunk is `main`, not `master` ──
+# The fleet is not single-repo — unitares-discord-bridge is on `main`. Before
+# --branch the ref was hardcoded three ways (fetch, worktree add, merge), so
+# this repo shape could not use the lib at all. A create AND an ff are both
+# exercised: the create path is where a hardcoded `master` fails loudest
+# ("invalid reference: master"), the ff path is where it would silently do
+# nothing on a repo that happens to have both branches.
+ORIGIN2="$SB/origin2.git"; REPO2="$SB/repo2"; DEP2="$SB/dep2"
+git init -q --bare "$ORIGIN2"
+git init -q -b main "$REPO2"
+( cd "$REPO2" && echo a > f && git add f && git commit -qm c1 && git remote add origin "$ORIGIN2" && git push -q origin main && git checkout -qb dev )
+out2="$( set -euo pipefail; . "$LIB"; deploy_lib_ff_worktree t "$REPO2" "$DEP2" --branch main >/dev/null 2>&1; echo "$DEPLOY_LIB_FRESH" )"
+[[ "$out2" == "1" && -d "$DEP2" ]] && ok "ff_worktree --branch main creates worktree" || bad "ff_worktree --branch create: FRESH=$out2"
+( cd "$REPO2" && echo b >> f && git add f && git commit -qm c2 && git push -q origin HEAD:main )
+( set -euo pipefail; . "$LIB"; deploy_lib_ff_worktree t "$REPO2" "$DEP2" --branch main ) >/dev/null 2>&1
+[[ "$(git -C "$DEP2" rev-parse HEAD)" == "$(git -C "$REPO2" rev-parse origin/main)" ]] \
+  && ok "ff_worktree --branch main ffs to origin/main" || bad "ff_worktree --branch ff did not advance"
+
+# A typo'd flag must fail loudly, not silently deploy the wrong trunk.
+( set -euo pipefail; . "$LIB"; deploy_lib_ff_worktree t "$REPO2" "$DEP2" --branch ) >/dev/null 2>&1 \
+  && bad "ff_worktree --branch with no value refuses" || ok "ff_worktree --branch with no value refuses"
+
 # ── poll ──
 ( set -euo pipefail; . "$LIB"
   n=0; probe() { n=$((n+1)); [[ $n -ge 3 ]]; }
@@ -191,6 +213,33 @@ fi
     "$(dirname "$LIB")/deploy-apply.sh"
 ) && ok "deploy-apply dispatches agent-orchestrator" \
   || bad "deploy-apply orchestrator dispatch"
+
+# ── deploy-apply dispatches the discord bridge ──
+# It was the last SKIP in the sweep ("no deploy script"), which mattered more
+# than it looked: the bridge is the alert delivery path, so a stale bridge is a
+# stale alarm. Guard both halves of the wiring — a dispatch entry pointing at a
+# script that does not exist would re-open the same silent gap.
+(
+  set -euo pipefail
+  grep -q 'discord-bridge)  echo "$OPS_DIR/deploy-bridge.sh"' \
+    "$(dirname "$LIB")/deploy-apply.sh"
+  [ -x "$(dirname "$LIB")/deploy-bridge.sh" ]
+) && ok "deploy-apply dispatches discord-bridge to an executable script" \
+  || bad "deploy-apply discord-bridge dispatch"
+
+# The bridge repo's trunk is `main`; deploying it off `master` would be a
+# silent no-op forever. Pin that the script actually passes --branch main.
+# --detach is load-bearing too: the dev checkout occupies `main`, so a
+# branch-mode worktree add would fail on the very first run.
+grep -q -- '--detach --branch main' "$(dirname "$LIB")/deploy-bridge.sh" \
+  && ok "deploy-bridge deploys detached from origin/main" || bad "deploy-bridge missing --detach --branch main"
+
+# The bridge has no HTTP health endpoint, so the verify probe MUST be the
+# heartbeat the liveness watchdog also trusts — a probe that only checked the
+# process was alive would pass against a wedged event loop, which is the exact
+# 2026-06-19 hang the watchdog exists for.
+grep -q 'BRIDGE_HEARTBEAT_PATH' "$(dirname "$LIB")/deploy-bridge.sh" \
+  && ok "deploy-bridge verifies via the shared heartbeat signal" || bad "deploy-bridge heartbeat probe"
 
 echo; echo "passed=$pass failed=$fail"
 rm -rf "$SB"
