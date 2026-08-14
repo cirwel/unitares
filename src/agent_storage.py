@@ -583,35 +583,33 @@ async def record_agent_state(
 
     # Map regime to allowed DB values.
     #
-    # This set merges two vocabularies: a health one
-    # (nominal/warning/critical/recovery) and a basin one
-    # (EXPLORATION/CONVERGENCE/DIVERGENCE/STABLE). Only the three basin values
-    # plus 'nominal' have ever been written; 'warning'/'critical'/'recovery'/
-    # 'STABLE' have zero rows fleet-wide. So an out-of-set regime coerced to
-    # 'nominal' does not land as a health reading — it lands as a value readers
-    # parse as a *basin*, indistinguishable from a real one.
+    # This set mirrors the CHECK constraint on core.agent_state.regime
+    # (schema.sql / migration 063) — the coercion below exists because an
+    # out-of-set value would otherwise fail the INSERT and take the check-in
+    # down with it. Widening this set therefore REQUIRES the matching migration
+    # to be applied first; see 063's ORDERING note.
     #
-    # The coercion is NOT gratuitous: db/postgres/schema.sql enforces this exact
-    # set as a CHECK constraint on core.agent_state.regime, so passing an
-    # out-of-set value straight through would fail the INSERT and take the
-    # check-in down with it. Removing the coercion needs a migration first.
+    # As of 063 the set includes all five basins the live detector
+    # (src/monitor_regime.py) can emit — TRANSITION ("S falling while I
+    # rising", i.e. recovering) was silently collapsed into 'nominal' for the
+    # entire pre-063 history of the table — plus 'unknown', the explicit
+    # coercion sink. 'nominal' was the old sink, and since it is also a
+    # legitimate bootstrap value, coerced rows were unrecognizable; 'unknown'
+    # has no other producer, so a row carrying it is a coercion event by
+    # construction. Pre-063 casualties remain identifiable as
+    # regime='nominal' AND synthetic IS NOT TRUE.
     #
-    # ⚠ `TRANSITION` is a live, in-set-of-the-detector, out-of-set-of-the-schema
-    # value: src/monitor_regime.py returns it ("S falling while I rising", i.e.
-    # recovering) and src/mcp_handlers/updates/phases.py passes it here
-    # unmodified. It has therefore been silently collapsed into 'nominal' for
-    # the entire history of the table. That is a real basin state being
-    # destroyed on the mainline check-in path, not malformed input.
+    # The health-vocabulary fossils (warning/critical/recovery — zero rows
+    # ever) stay in the set until their retirement gets its own migration.
     #
-    # So the coercion stays, but stops being silent: the raw value is preserved
-    # in state_json, and the event is logged ONCE PER DISTINCT VALUE per process
-    # rather than per check-in — TRANSITION fires often enough that a per-call
-    # warning would flood the log and get muted, defeating the point.
+    # Coercion is logged ONCE PER DISTINCT VALUE per process, not per
+    # check-in, and the raw value is preserved in state_json.regime_raw.
     allowed_regimes = {
         'nominal', 'warning', 'critical', 'recovery',
-        'EXPLORATION', 'CONVERGENCE', 'DIVERGENCE', 'STABLE'
+        'EXPLORATION', 'CONVERGENCE', 'DIVERGENCE', 'STABLE',
+        'TRANSITION', 'unknown'
     }
-    db_regime = regime if regime in allowed_regimes else 'nominal'
+    db_regime = regime if regime in allowed_regimes else 'unknown'
     regime_was_coerced = db_regime != regime
     if regime_was_coerced and regime not in _WARNED_REGIMES:
         # Bounded so a pathological caller emitting unique strings cannot grow

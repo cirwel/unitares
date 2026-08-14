@@ -26,13 +26,14 @@ jobs:
     - name: Validate CI/Python version sync
       run: |
         python scripts/dev/check_ci_python_version_sync.py
+        python scripts/diagnostics/check_ci_python_matrix_sync.py
 
     - name: Validate tool count synchronization
       env:
         PYTHONPATH: ${{ github.workspace }}/scripts:${{ github.workspace }}
       run: |
         echo "🔍 Checking tool count..."
-        python scripts/dev/update_docs_tool_count.py --check
+        python scripts/diagnostics/update_docs_tool_count.py --check
 
     - name: Validate version consistency
       run: |
@@ -50,7 +51,7 @@ jobs:
         PYTHONPATH: ${{ github.workspace }}/scripts:${{ github.workspace }}
       run: |
         echo "📊 Current tool inventory:"
-        python scripts/analysis/count_tools.py --by-module
+        python scripts/diagnostics/count_tools.py --by-module
 
     - name: Comment on PR with validation results
       if: github.event_name == 'pull_request' && success()
@@ -63,7 +64,7 @@ jobs:
           const { execSync } = require('child_process');
 
           // Get tool count
-          const toolCount = execSync('python scripts/analysis/count_tools.py').toString().trim();
+          const toolCount = execSync('python scripts/diagnostics/count_tools.py').toString().trim();
           const version = execSync('python scripts/ops/version_manager.py').toString().trim().split('\n')[0].replace('Current version: ', '');
 
           // Create comment

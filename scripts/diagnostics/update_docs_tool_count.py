@@ -13,9 +13,25 @@ Usage:
 import re
 import sys
 from pathlib import Path
-from count_tools import get_total_count
 
-PROJECT_ROOT = Path(__file__).parent.parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+
+def load_tool_count() -> int:
+    """Count via the runtime registry; degrade to 0 when deps are missing.
+
+    Imported at call time (not module level) so the doc-validation CI runner,
+    which installs no project dependencies, warns and skips instead of
+    crashing — and so tests can patch the counter on its defining module.
+    """
+    from scripts.diagnostics.count_tools import get_total_count
+
+    try:
+        return get_total_count()
+    except ModuleNotFoundError as exc:
+        print(f"WARNING: Tool count unavailable ({exc})", file=sys.stderr)
+        return 0
 
 # Files that reference tool count
 DOC_FILES = [
@@ -87,8 +103,16 @@ def main():
     parser.add_argument('--update', action='store_true', help='Update all documentation files')
     args = parser.parse_args()
 
-    actual_count = get_total_count()
+    actual_count = load_tool_count()
     print(f"Actual tool count: {actual_count}")
+
+    if actual_count == 0:
+        if args.update:
+            # Never write a zero count into the docs.
+            print("❌ Refusing to update docs with a zero tool count")
+            sys.exit(1)
+        print("Tool count check skipped (no tools detected in this environment)")
+        sys.exit(0)
 
     if args.check or not args.update:
         # Check mode

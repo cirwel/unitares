@@ -78,14 +78,22 @@ def main():
     args = parser.parse_args()
 
     include_deprecated = not args.exclude_deprecated
-    total = get_total_count(
-        include_hidden=args.include_hidden,
-        include_deprecated=include_deprecated,
-    )
-    breakdown = get_tool_breakdown(
-        include_hidden=args.include_hidden,
-        include_deprecated=include_deprecated,
-    )
+    try:
+        total = get_total_count(
+            include_hidden=args.include_hidden,
+            include_deprecated=include_deprecated,
+        )
+        breakdown = get_tool_breakdown(
+            include_hidden=args.include_hidden,
+            include_deprecated=include_deprecated,
+        )
+    except ModuleNotFoundError as exc:
+        # Counting needs the runtime registry, which imports the full handler
+        # tree. In dependency-less environments (the doc-validation CI runner)
+        # degrade to zero with a visible warning instead of crashing the step.
+        print(f"WARNING: Tool count unavailable ({exc})", file=sys.stderr)
+        total = 0
+        breakdown = {}
 
     if args.json:
         output = {

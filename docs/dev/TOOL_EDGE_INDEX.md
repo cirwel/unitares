@@ -53,7 +53,7 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `get_telemetry_metrics` | `src/mcp_handlers/admin/handlers.py:403 handle_get_telemetry_metrics` | `src/mcp_handlers/schemas/admin.py:91 GetTelemetryMetricsParams` | 15s | — |
 | `get_thresholds` | `src/mcp_handlers/admin/config.py:16 handle_get_thresholds` | `src/mcp_handlers/schemas/admin.py:115 GetThresholdsParams` | 10s | — |
 | `get_tool_usage_stats` | `src/mcp_handlers/admin/handlers.py:260 handle_get_tool_usage_stats` | `src/mcp_handlers/schemas/admin.py:98 GetToolUsageStatsParams` | 15s | — |
-| `get_trajectory_status` | `src/mcp_handlers/identity/handlers.py:2740 handle_get_trajectory_status` | `src/mcp_handlers/schemas/identity.py:202 GetTrajectoryStatusParams` | 10s | — |
+| `get_trajectory_status` | `src/mcp_handlers/identity/handlers.py:2801 handle_get_trajectory_status` | `src/mcp_handlers/schemas/identity.py:202 GetTrajectoryStatusParams` | 10s | — |
 | `get_workspace_health` | `src/mcp_handlers/admin/handlers.py:506 handle_get_workspace_health` | `src/mcp_handlers/schemas/core.py:527 GetWorkspaceHealthParams` | 20s | — |
 | `health_check` | `src/mcp_handlers/admin/handlers.py:332 handle_health_check` | `src/mcp_handlers/schemas/admin.py:85 HealthCheckParams` | 5s | identity=pre_onboard |
 | `identity` | `src/mcp_handlers/identity/handlers.py:1102 handle_identity_adapter` | `src/mcp_handlers/schemas/identity.py:6 IdentityParams` | 10s | identity=pre_onboard |
@@ -64,7 +64,7 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `list_tools` | `src/mcp_handlers/introspection/tool_introspection.py:100 handle_list_tools` | `src/mcp_handlers/schemas/admin.py:5 ListToolsParams` | 10s | identity=pre_onboard |
 | `mark_response_complete` | `src/mcp_handlers/lifecycle/operations.py:109 handle_mark_response_complete` | `src/mcp_handlers/schemas/lifecycle.py:251 MarkResponseCompleteParams` | 5s | — |
 | `observe` | `src/mcp_handlers/consolidated.py:311 action_router` | `src/mcp_handlers/schemas/observability.py:58 ObserveParams` | 15s | — |
-| `onboard` | `src/mcp_handlers/identity/handlers.py:1719 handle_onboard_v2` | `src/mcp_handlers/schemas/identity.py:45 OnboardParams` | 15s | identity=pre_onboard |
+| `onboard` | `src/mcp_handlers/identity/handlers.py:1994 handle_onboard_v2` | `src/mcp_handlers/schemas/identity.py:45 OnboardParams` | 15s | identity=pre_onboard |
 | `operator_resume_agent` | `src/mcp_handlers/lifecycle/self_recovery.py:526 handle_operator_resume_agent` | `src/mcp_handlers/schemas/lifecycle.py:327 OperatorResumeAgentParams` | 15s | — |
 | `outcome_correlation` | `src/mcp_handlers/observability/outcome_events.py:719 handle_outcome_correlation` | `src/mcp_handlers/schemas/observability.py:87 OutcomeCorrelationParams` | 30s | — |
 | `outcome_event` | `src/mcp_handlers/observability/outcome_events.py:579 handle_outcome_event` | `src/mcp_handlers/schemas/core.py:467 OutcomeEventParams` | 15s | — |
@@ -83,7 +83,7 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `submit_synthesis` | `src/mcp_handlers/dialectic/handlers.py:2342 handle_submit_synthesis` | `src/mcp_handlers/schemas/dialectic.py:96 SubmitSynthesisParams` | 15s | — |
 | `submit_thesis` | `src/mcp_handlers/dialectic/handlers.py:1942 handle_submit_thesis` | `src/mcp_handlers/schemas/dialectic.py:64 SubmitThesisParams` | 90s | — |
 | `validate_file_path` | `src/mcp_handlers/admin/handlers.py:631 handle_validate_file_path` | `src/mcp_handlers/schemas/core.py:522 ValidateFilePathParams` | 5s | — |
-| `verify_trajectory_identity` | `src/mcp_handlers/identity/handlers.py:2681 handle_verify_trajectory_identity` | `src/mcp_handlers/schemas/identity.py:206 VerifyTrajectoryIdentityParams` | 10s | — |
+| `verify_trajectory_identity` | `src/mcp_handlers/identity/handlers.py:2742 handle_verify_trajectory_identity` | `src/mcp_handlers/schemas/identity.py:206 VerifyTrajectoryIdentityParams` | 10s | — |
 
 ## Action routing
 
@@ -177,10 +177,10 @@ runs (`from→to`, filled only when the destination is absent).
 | `agent` | `src/mcp_handlers/observability/handlers.py:59 handle_observe_agent` | — |
 | `aggregate` | `src/mcp_handlers/observability/handlers.py:885 handle_aggregate_metrics` | — |
 | `anomalies` | `src/mcp_handlers/observability/handlers.py:711 handle_detect_anomalies` | — |
-| `audit_events` | `src/mcp_handlers/observability/handlers.py:1366 handle_audit_events` | — |
-| `bridge` | `src/mcp_handlers/observability/handlers.py:1543 handle_bridge_summary` | — |
+| `audit_events` | `src/mcp_handlers/observability/handlers.py:1380 handle_audit_events` | — |
+| `bridge` | `src/mcp_handlers/observability/handlers.py:1557 handle_bridge_summary` | — |
 | `compare` | `src/mcp_handlers/observability/handlers.py:243 handle_compare_agents` | — |
-| `outcome_evidence` | `src/mcp_handlers/observability/handlers.py:1133 handle_outcome_evidence` | — |
+| `outcome_evidence` | `src/mcp_handlers/observability/handlers.py:1147 handle_outcome_evidence` | — |
 | `similar` | `src/mcp_handlers/observability/handlers.py:412 handle_compare_me_to_similar` | — |
 | `telemetry` | `src/mcp_handlers/admin/handlers.py:403 handle_get_telemetry_metrics` | — |
 

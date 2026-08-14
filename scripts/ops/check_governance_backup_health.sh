@@ -44,7 +44,17 @@ fi
 # Fallback: newest governance_*.sql.gz mtime
 latest=$(ls -1t "$BACKUP_DIR"/governance_*.sql.gz 2>/dev/null | head -1 || true)
 if [ -n "$latest" ]; then
-    mtime=$(stat -f %m "$latest" 2>/dev/null || stat -c %Y "$latest" 2>/dev/null || echo 0)
+    # Read the mtime by output SHAPE, not exit status. GNU stat's `-f` means
+    # "file system status", so `stat -f %m FILE` parses `%m` as a second FILE:
+    # it exits non-zero — firing an `||` fallback — but has already printed a
+    # multi-line filesystem block for FILE, so the chained form yields the real
+    # mtime appended to garbage and `$((now - mtime))` dies. Latent here (this
+    # runs on the macOS backup host) but the identical chain was live-red on
+    # Linux CI in scripts/dev/test-deploy-lib.sh. GNU form first; BSD rejects
+    # `-c` outright with empty stdout, so macOS still lands on `stat -f`.
+    mtime=$(stat -c %Y "$latest" 2>/dev/null || true)
+    case "$mtime" in ''|*[!0-9]*) mtime=$(stat -f %m "$latest" 2>/dev/null || true) ;; esac
+    case "$mtime" in ''|*[!0-9]*) mtime=0 ;; esac
     age=$((now - mtime))
     if [ "$age" -gt "$MAX_AGE_SEC" ]; then
         die "newest dump is stale (${age}s): $latest"

@@ -692,7 +692,12 @@ class TestStrictModeMintPathClosure:
         # in strict mode if neither parent_agent_id nor force_new=True is
         # passed. Caller must declare lineage intent.
         source = self._read("src/mcp_handlers/identity/handlers.py")
-        idx = source.find("auto_onboard_no_session")
+        # Anchor inside the handler body: the outcome-derivation helper above
+        # the handler also mentions auto_onboard_no_session, but the mint
+        # branch this lock protects lives in handle_onboard_v2 itself.
+        handler_idx = source.find("async def handle_onboard_v2")
+        assert handler_idx != -1
+        idx = source.find("auto_onboard_no_session", handler_idx)
         assert idx != -1
         window = source[idx:idx + 3000]
         assert "is_strict_identity_required" in window, (
