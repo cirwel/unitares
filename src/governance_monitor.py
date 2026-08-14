@@ -1027,6 +1027,13 @@ class UNITARESMonitor:
         # result building (monitor_result._complexity_divergence_novel); a
         # simulation must not consume the agent's first real surfacing.
         saved_last_gap = self._last_surfaced_complexity_gap
+        # The risk the last REAL verdict was made from. process_update() sets it
+        # unconditionally, so without this a dry run would overwrite it and the
+        # read path would then serve a simulated number under
+        # risk_score_source="resolved" — the label that exists to mean "a real
+        # verdict produced this". That is the same dashboard-disagrees-with-the-
+        # record bug #1646 fixed, reintroduced through the simulation door.
+        saved_last_resolved_risk = getattr(self, "_last_resolved_risk", None)
         
         try:
             # OPTIMIZED: Shallow copy + selective deep copy
@@ -1077,6 +1084,7 @@ class UNITARESMonitor:
             self._simulation_active = saved_simulation_active
             self._last_governance_result = saved_last_governance_result
             self._last_surfaced_complexity_gap = saved_last_gap
+            self._last_resolved_risk = saved_last_resolved_risk
     
     def process_update(self, agent_state: Dict, confidence: Optional[float] = None, task_type: str = "mixed") -> Dict:
         """

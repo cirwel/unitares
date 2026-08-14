@@ -100,3 +100,53 @@ class TestReadPathRiskAuthority:
         read = get_monitor_metrics(monitor, include_state=False)
         assert read["risk_score"] is None
         assert read["risk_score_source"] is None
+
+
+class TestSimulationDoesNotLeakIntoTheRecord:
+    """A dry run must not become the agent's authoritative risk.
+
+    `simulate_update` swaps in a temp state, calls `process_update`, and restores
+    a curated list of attributes. `_last_resolved_risk` was not on that list, so
+    a simulation overwrote the real monitor's value permanently — and because the
+    read path labels it `risk_score_source="resolved"`, the dashboard would then
+    present a number no verdict was ever made from as authoritative. That is the
+    bug this module exists to prevent, re-entering through the simulation door.
+    """
+
+    def _sim_payload(self, risk_text):
+        return {
+            "response_text": risk_text,
+            "complexity": 0.9,
+            "parameters": [0.9] * 128,
+            "ethical_drift": [0.4, 0.4, 0.4],
+        }
+
+    def test_simulate_update_restores_the_resolved_risk(self):
+        monitor = _assessed_monitor("sim_leak_restore")
+        real = monitor._last_resolved_risk
+        assert real is not None
+
+        monitor.simulate_update(self._sim_payload("a wildly different situation"))
+
+        assert monitor._last_resolved_risk == pytest.approx(real), (
+            "a simulation overwrote the risk the last real verdict was made from"
+        )
+
+    def test_read_path_after_a_simulation_still_reports_the_real_verdict(self):
+        monitor = _assessed_monitor("sim_leak_readpath")
+        before = get_monitor_metrics(monitor, include_state=False)["risk_score"]
+
+        monitor.simulate_update(self._sim_payload("simulated catastrophe"))
+        after = get_monitor_metrics(monitor, include_state=False)
+
+        assert after["risk_score"] == pytest.approx(before)
+        assert after["risk_score_source"] == "resolved"
+
+    def test_simulation_on_a_never_assessed_monitor_leaves_it_unassessed(self):
+        """None must survive too, or the read path silently gains a fake 'resolved'."""
+        monitor = UNITARESMonitor(agent_id="sim_leak_virgin", load_state=False)
+        assert getattr(monitor, "_last_resolved_risk", None) is None
+
+        monitor.simulate_update(self._sim_payload("dry run before any real check-in"))
+
+        assert getattr(monitor, "_last_resolved_risk", None) is None
