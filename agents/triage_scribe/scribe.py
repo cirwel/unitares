@@ -110,6 +110,16 @@ async def _job(client: Any) -> str:
     raw = await client.call_tool("observe", {"action": "anomalies"})
     payload = raw if isinstance(raw, dict) else json.loads(str(raw))
 
+    # Nothing to triage is not a finding. Without this gate a healthy fleet
+    # produces a daily KG entry saying there is nothing to report, forever —
+    # the mirror image of the Chronicler problem that motivated scheduling
+    # this resident at all, and squarely against the repo's own write
+    # discipline ("store when a future agent would search for this and not
+    # already find it"). Returning here also skips the model call entirely,
+    # so a quiet day costs no Ollama load.
+    if not anomaly_items(payload):
+        return "triage scribe: no anomalies in window; recorded no finding"
+
     paragraph = (
         await call_local_model(
             PROMPT.format(anomalies=format_anomalies(payload)),

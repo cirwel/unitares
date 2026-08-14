@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -381,7 +382,7 @@ class TestFetchPrior:
                 ]
             }
         )
-        assert chronicler.fetch_prior(fake, "http://h", None, "x.y.z") == 130.0
+        assert chronicler.fetch_prior(fake, "http://h", None, "x.y.z") == (130.0, chronicler.PRIOR_READ)
 
     def test_reads_the_series_route_not_the_post_route(self, tmp_path: Path):
         """`/v1/metrics` is POST-only and answers a GET with 405, which
@@ -401,14 +402,14 @@ class TestFetchPrior:
                 return FakeHttpResponse(405, "Method Not Allowed")
 
         with caplog.at_level("WARNING"):
-            assert chronicler.fetch_prior(Rejects(), "http://h", None, "x") is None
+            assert chronicler.fetch_prior(Rejects(), "http://h", None, "x") == (None, chronicler.PRIOR_UNREADABLE)
         assert "405" in caplog.text
 
     def test_empty_series_means_no_prior(self, tmp_path: Path):
         from agents.chronicler import agent as chronicler
 
         fake = FakeHttpClient()
-        assert chronicler.fetch_prior(fake, "http://h", None, "never.seen") is None
+        assert chronicler.fetch_prior(fake, "http://h", None, "never.seen") == (None, chronicler.PRIOR_ABSENT)
 
     def test_unreadable_history_never_raises(self, tmp_path: Path):
         """A digest is layered on top of the scrape; it must not cost a metric."""
@@ -418,7 +419,59 @@ class TestFetchPrior:
             def get(self, *a, **kw):
                 raise RuntimeError("network down")
 
-        assert chronicler.fetch_prior(Exploding(), "http://h", None, "x") is None
+        assert chronicler.fetch_prior(Exploding(), "http://h", None, "x") == (None, chronicler.PRIOR_UNREADABLE)
+
+    def test_exhausted_budget_skips_the_call_entirely(self, tmp_path: Path):
+        """The read budget exists so an optional feature cannot eat the 120s
+        cycle timeout and cancel the check-in. With none left it must not dial
+        out at all — and must report unreadable, never 'no prior'."""
+        from agents.chronicler import agent as chronicler
+
+        fake = FakeHttpClient()
+        result = chronicler.fetch_prior(fake, "http://h", None, "x.y.z", budget_left=0)
+        assert result == (None, chronicler.PRIOR_UNREADABLE)
+        assert fake.gets == []
+
+    def test_budget_counts_read_time_not_scraper_time(self, tmp_path: Path):
+        """A slow SCRAPER must not consume the READ budget. Anchoring the
+        budget to wall-clock at run start meant the ~30s GitHub traffic
+        scraper burned the whole allowance, and twelve of fourteen metrics
+        reported 'History unreadable' against a healthy server."""
+        from agents.chronicler import agent as chronicler
+
+        fake = FakeHttpClient(
+            priors={"after.slow": [{"ts": "2026-08-13", "value": 7.0}]}
+        )
+
+        def slow(_root):
+            time.sleep(chronicler.PRIOR_READ_BUDGET_S / 10)
+            return 1.0
+
+        with (
+            patch.object(
+                chronicler, "PRIOR_READ_BUDGET_S", 0.5,
+            ),
+            patch.object(
+                chronicler, "SCRAPERS",
+                {"a.slow": slow, "after.slow": lambda _r: 7.0},
+            ),
+            patch("agents.chronicler.agent.httpx.Client", return_value=fake),
+        ):
+            report = chronicler.run("http://h", token=None, repo_root=tmp_path)
+
+        after = [m for m in report.movements if m.name == "after.slow"][0]
+        assert after.prior_status == chronicler.PRIOR_READ, (
+            "the metric after a slow scraper must still get its history"
+        )
+
+    def test_budget_is_small_enough_to_fit_the_cycle(self):
+        """Guards the arithmetic, not the constant: 14 scrapers at the old 10s
+        per-call timeout was 140s of reads inside a 120s cycle."""
+        from agents.chronicler.agent import PRIOR_READ_BUDGET_S, PRIOR_READ_TIMEOUT_S
+
+        # One in-flight call may overrun the deadline it was admitted under.
+        worst_case = PRIOR_READ_BUDGET_S + PRIOR_READ_TIMEOUT_S
+        assert worst_case < 120.0
 
     def test_reads_before_writing(self, tmp_path: Path):
         """The GET must precede the POST for the same metric, or 'prior' is
@@ -444,10 +497,18 @@ class TestFormatDigest:
     def _report(self, movements, **kw):
         from agents.chronicler.agent import Movement, ScrapeReport
 
+        from agents.chronicler.agent import PRIOR_ABSENT, PRIOR_READ
+
+        built = []
+        for name, value, prior in movements:
+            status = PRIOR_ABSENT if prior is None else PRIOR_READ
+            built.append(
+                Movement(name=name, value=value, prior=prior, prior_status=status)
+            )
         return ScrapeReport(
             successes=kw.get("successes", len(movements)),
             failures=kw.get("failures", 0),
-            movements=[Movement(*m) for m in movements],
+            movements=built,
             failed=kw.get("failed", []),
         )
 
@@ -482,6 +543,38 @@ class TestFormatDigest:
             self._report([("governance.coherence.mean.7d", 0.4799621, 0.4813619)])
         )
         assert "0.4814 -> 0.4800 (-0.0014)" in details
+
+    def test_subprecision_noise_is_not_movement(self):
+        """Raw float inequality called this 'moved' and then rendered
+        '0.4814 -> 0.4814 (+0.0000)' — a metric flagged as moved whose before,
+        after and delta all say otherwise. A sliding-window SQL avg() produces
+        exactly this every day."""
+        from agents.chronicler.agent import format_digest
+
+        summary, details = format_digest(
+            self._report([("governance.coherence.mean.7d", 0.48136192, 0.48136191)])
+        )
+        assert summary.endswith("0 moved")
+        assert "+0.0000" not in details
+        assert "Unchanged (1): governance.coherence.mean.7d" in details
+
+    def test_unreadable_history_is_not_called_a_first_reading(self):
+        """'No prior reading' asserts the series is empty. When the read
+        failed we do not know that, and must not write it down."""
+        from agents.chronicler.agent import (
+            Movement, PRIOR_ABSENT, PRIOR_UNREADABLE, ScrapeReport, format_digest,
+        )
+
+        report = ScrapeReport(
+            successes=2,
+            movements=[
+                Movement("broken", 1.0, None, PRIOR_UNREADABLE),
+                Movement("genuinely.new", 2.0, None, PRIOR_ABSENT),
+            ],
+        )
+        _, details = format_digest(report)
+        assert "History unreadable (1): broken" in details
+        assert "No prior reading in 30d (1): genuinely.new" in details
 
     def test_no_prior_is_distinct_from_unchanged(self):
         """After an outage these are different claims and an operator needs to
@@ -609,14 +702,81 @@ class TestChroniclerAgent:
 
     def test_digest_is_tagged_ephemeral(self, tmp_path: Path):
         """Without the tag a snapshot has no resolution condition, so every
-        later KG sweep re-reads it as unfinished work."""
-        from agents.chronicler.agent import DIGEST_TAGS
+        later KG sweep re-reads it as unfinished work.
 
-        assert "ephemeral" in DIGEST_TAGS
+        Asserts what reaches the wire, not that a constant contains a string —
+        the earlier version of this test checked `"ephemeral" in DIGEST_TAGS`
+        and so would have passed even if `_store_digest` stopped sending tags
+        altogether.
+        """
+        from agents.chronicler import agent as chronicler
+        from agents.chronicler.agent import ChroniclerAgent
+
+        client = AsyncMock()
+        fake = FakeHttpClient()
+        agent = ChroniclerAgent(
+            base_url="http://127.0.0.1:8767", token=None, repo_root=tmp_path,
+        )
+        with (
+            patch.object(chronicler, "SCRAPERS", {"x": lambda _r: 1.0}),
+            patch("agents.chronicler.agent.httpx.Client", return_value=fake),
+        ):
+            asyncio.run(agent.run_cycle(client=client))
+
+        _, args = client.call_tool.call_args.args
+        assert "ephemeral" in args["tags"]
+
+    def test_kg_failure_is_reported_on_the_checkin(self, tmp_path: Path):
+        """The whole point of the digest is that an unread channel is not a
+        report. A digest that fails forever while the check-in says
+        '1/1 scrapers ok' at confidence 0.9 reproduces that failure on the one
+        channel anyone watches."""
+        from agents.chronicler import agent as chronicler
+        from agents.chronicler.agent import ChroniclerAgent
+
+        client = AsyncMock()
+        client.call_tool.side_effect = RuntimeError("KG unreachable")
+        fake = FakeHttpClient()
+        agent = ChroniclerAgent(
+            base_url="http://127.0.0.1:8767", token=None, repo_root=tmp_path,
+        )
+        with (
+            patch.object(chronicler, "SCRAPERS", {"x": lambda _r: 1.0}),
+            patch("agents.chronicler.agent.httpx.Client", return_value=fake),
+        ):
+            result = asyncio.run(agent.run_cycle(client=client))
+
+        assert "KG digest FAILED" in result.summary
+        assert result.confidence <= 0.5
+        assert result.complexity >= 0.4
+
+    def test_disabled_digest_stays_silent_on_the_checkin(self, tmp_path: Path, monkeypatch):
+        """A deliberate opt-out is not a fault and must not perturb the
+        trajectory — only a broken write speaks up."""
+        from agents.chronicler import agent as chronicler
+        from agents.chronicler.agent import ChroniclerAgent
+
+        monkeypatch.setenv("CHRONICLER_KG_DIGEST", "0")
+        client = AsyncMock()
+        fake = FakeHttpClient()
+        agent = ChroniclerAgent(
+            base_url="http://127.0.0.1:8767", token=None, repo_root=tmp_path,
+        )
+        with (
+            patch.object(chronicler, "SCRAPERS", {"x": lambda _r: 1.0}),
+            patch("agents.chronicler.agent.httpx.Client", return_value=fake),
+        ):
+            result = asyncio.run(agent.run_cycle(client=client))
+
+        assert result.summary == "Chronicler: 1/1 scrapers ok"
+        assert result.confidence == 0.9
 
     def test_kg_failure_does_not_fail_the_run(self, tmp_path: Path):
         """The metrics have already landed by then — losing the digest is not
-        worth a red run."""
+        worth a red run. It must still complete and still report the scrape
+        truthfully; reporting the digest failure is
+        `test_kg_failure_is_reported_on_the_checkin`'s job, and the two
+        together are the whole contract: swallowed, but not hidden."""
         from agents.chronicler import agent as chronicler
         from agents.chronicler.agent import ChroniclerAgent
 
@@ -633,7 +793,8 @@ class TestChroniclerAgent:
             result = asyncio.run(agent.run_cycle(client=client))
 
         assert result is not None
-        assert result.summary == "Chronicler: 1/1 scrapers ok"
+        assert result.summary.startswith("Chronicler: 1/1 scrapers ok")
+        assert fake.calls, "the metric POST must still have happened"
 
     def test_digest_can_be_switched_off(self, tmp_path: Path, monkeypatch):
         from agents.chronicler import agent as chronicler
