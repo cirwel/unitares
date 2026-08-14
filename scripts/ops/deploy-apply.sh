@@ -54,6 +54,7 @@ deploy_script_for() {
     # (`main`). It is the alert delivery path, so leaving it out of the sweep
     # meant the alarm itself could go stale unnoticed.
     discord-bridge)  echo "$OPS_DIR/deploy-bridge.sh" ;;
+    dialectic-live)  echo "$OPS_DIR/deploy-dialectic-live.sh" ;;
     *)               echo "" ;;
   esac
 }
