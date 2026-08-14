@@ -7,11 +7,11 @@ Tests ConfigSource, ConfigManager, and convenience functions.
 import pytest
 import sys
 from pathlib import Path
-from unittest.mock import patch
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+import src.config_manager as config_manager
 import src.runtime_config as runtime_config
 from src.config_manager import (
     ConfigSource,
@@ -20,20 +20,21 @@ from src.config_manager import (
 )
 
 
-@pytest.fixture(autouse=True)
-def fix_get_thresholds_recursion():
-    """Patch module-level get_thresholds to break recursion bug.
+def test_get_thresholds_does_not_recurse():
+    """Regression: the module wrapper used to shadow the import it delegates to.
 
-    config_manager.py defines a module-level get_thresholds() (line 247) that
-    shadows the imported runtime_config.get_thresholds (line 22). This causes
-    ConfigManager.get_thresholds() -> module get_thresholds() ->
-    get_config_manager().get_thresholds() -> infinite recursion.
+    `config_manager` imports `get_thresholds` from `runtime_config` and also
+    defines a module-level `get_thresholds()` convenience wrapper. The wrapper
+    won the name, so `ConfigManager.get_thresholds()` called the wrapper, which
+    called `get_config_manager().get_thresholds()`, and the pair recursed until
+    the stack ended — taking `get_all_config` with it.
+
+    An autouse fixture used to patch that away, which kept this suite green over
+    a capability that could not run. The import is aliased now; this asserts the
+    real code path instead of replacing it.
     """
-    with patch(
-        "src.config_manager.get_thresholds",
-        side_effect=runtime_config.get_thresholds,
-    ):
-        yield
+    assert config_manager.get_thresholds() == runtime_config.get_thresholds()
+    assert ConfigManager().get_thresholds() == runtime_config.get_thresholds()
 
 
 # ============================================================================
