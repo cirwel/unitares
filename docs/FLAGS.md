@@ -35,7 +35,7 @@ index; that one is the curated decision record.
 | `UNITARES_ANCHORS_DIR` | `(required)` | Return the anchors directory path | src/identity/substrate.py |
 | `UNITARES_API_TOKEN` | `(required)` | Return continuity token support details for diagnostics. | src/mcp_handlers/identity/session.py |
 | `UNITARES_AUDIT_WRITE_JSONL` | `'1'` | read by __init__() | src/audit_log.py |
-| `UNITARES_AUTOMATION_CENSUS_PATH` | `default_path` | GET /api/automations — automation census snapshot for the dashboard | src/http_api.py |
+| `UNITARES_AUTOMATION_CENSUS_PATH` | `default_path` | GET /api/automations — automation census snapshot for the dashboard | src/http_routes/overview.py |
 | `UNITARES_AUTOSELECT_REVIEWER` | `''` | Gate for reviewer auto-selection | src/mcp_handlers/dialectic/reviewer.py |
 | `UNITARES_AUTO_DIALECTIC_RECOVERY` | `'1'` | Process governance update with authentication enforcement (async version) | src/agent_loop_detection.py |
 | `UNITARES_BASELINE_CACHE_MAXLEN` | `'1000'` | — | governance_core/ethical_drift.py |
@@ -74,7 +74,7 @@ index; that one is the curated decision record.
 | `UNITARES_GROUNDING_SHADOW` | `''` | Whether to shadow-compare grounded vs ungrounded canonical metrics each check-in (UNITARES_GROUNDING_SHADOW) | config/governance_config.py |
 | `UNITARES_HEALTH_PROBE_INTERVAL_SECONDS` | `(required)` | Periodically run the deep health check and cache the result | src/background_tasks.py |
 | `UNITARES_HOST_ADAPTER_ENABLED` | `''` | Opt-in flag | src/mcp_handlers/support/host_adapter.py |
-| `UNITARES_HTTP_API_TOKEN` | `(required)` | List all tools in OpenAI-compatible format Query params: mode: Tool mode filter - "minimal", "lite", "full" | src/http_api.py, src/mcp_handlers/identity/session.py (+3 more) |
+| `UNITARES_HTTP_API_TOKEN` | `(required)` | Serve the phase-space visualization | src/http_routes/dashboard.py, src/http_routes/effects.py (+14 more) |
 | `UNITARES_HTTP_CORS_ALLOW_ORIGIN` | `(required)` | read by _configure_middleware() | src/services/mcp_transport_service.py |
 | `UNITARES_IDENTITY_ANCHOR_RECOVERY` | `'1'` | Whether pre-mint anchor/pin recovery runs (UNITARES_IDENTITY_ANCHOR_RECOVERY) | src/mcp_handlers/identity/session.py |
 | `UNITARES_IDENTITY_ANCHOR_TTL` | `''` | Anchor TTL in seconds (UNITARES_IDENTITY_ANCHOR_TTL) | src/mcp_handlers/identity/session.py |
@@ -116,7 +116,7 @@ index; that one is the curated decision record.
 | `UNITARES_PROXY_URL` | `(required)` | — | src/mcp_server_std.py |
 | `UNITARES_REPO` | `str(Path(__file__).resolve().…` | read by main() | agents/vigil_hygiene/agent.py |
 | `UNITARES_RERANKER_MODEL` | `'bge-m3'` | — | src/reranker.py |
-| `UNITARES_RESIDENT_AGENTS` | `''` | Figure out which agent labels to treat as residents | src/http_api.py |
+| `UNITARES_RESIDENT_AGENTS` | `''` | Figure out which agent labels to treat as residents | src/http_routes/residents.py |
 | `UNITARES_SCRIBE_DRY_RUN` | `'1'` | read by _job() | agents/triage_scribe/scribe.py |
 | `UNITARES_SCRIBE_MAX_TOKENS` | `'1600'` | read by _job() | agents/triage_scribe/scribe.py |
 | `UNITARES_SENSOR_COUPLING` | `(required)` | Whether sensor-derived EISV spring-couples into the ODE | governance_core/parameters.py |
