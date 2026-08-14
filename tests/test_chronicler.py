@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -196,11 +196,21 @@ class FakeHttpResponse:
 
 
 class FakeHttpClient:
-    """Tracks calls to client.post so we can assert payload/url/auth shape."""
+    """Tracks calls to client.post so we can assert payload/url/auth shape.
 
-    def __init__(self, response: FakeHttpResponse | None = None):
+    `priors` maps a metric name to the series `points` the GET should return;
+    an absent name yields an empty series, i.e. no prior reading.
+    """
+
+    def __init__(
+        self,
+        response: FakeHttpResponse | None = None,
+        priors: dict[str, list[dict]] | None = None,
+    ):
         self.calls: list[dict] = []
+        self.gets: list[dict] = []
         self._response = response or FakeHttpResponse(201)
+        self._priors = priors or {}
 
     def __enter__(self):
         return self
@@ -219,6 +229,22 @@ class FakeHttpClient:
         )
         return self._response
 
+    def get(self, url, *, headers, params, timeout):
+        self.gets.append({"url": url, "headers": headers, "params": params})
+        name = params.get("name")
+        return FakeJsonResponse(
+            200, {"success": True, "points": self._priors.get(name, [])}
+        )
+
+
+class FakeJsonResponse(FakeHttpResponse):
+    def __init__(self, status_code: int, payload: dict):
+        super().__init__(status_code)
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
 
 class TestAgentRun:
     def test_success_case_posts_each_scraper(self, tmp_path: Path):
@@ -234,7 +260,8 @@ class TestAgentRun:
             patch.object(chronicler, "SCRAPERS", scrapers),
             patch("agents.chronicler.agent.httpx.Client", return_value=fake),
         ):
-            ok, fail = chronicler.run("http://127.0.0.1:8767", token=None, repo_root=tmp_path)
+            report = chronicler.run("http://127.0.0.1:8767", token=None, repo_root=tmp_path)
+            ok, fail = report.successes, report.failures
 
         assert ok == 2
         assert fail == 0
@@ -250,9 +277,10 @@ class TestAgentRun:
             patch.object(chronicler, "SCRAPERS", {"x.y.z": lambda _r: 1.0}),
             patch("agents.chronicler.agent.httpx.Client", return_value=fake),
         ):
-            ok, fail = chronicler.run(
+            report = chronicler.run(
                 "http://127.0.0.1:8767", token=None, repo_root=tmp_path, dry_run=True
             )
+            ok, fail = report.successes, report.failures
 
         assert ok == 1
         assert fail == 0
@@ -270,7 +298,8 @@ class TestAgentRun:
             patch.object(chronicler, "SCRAPERS", {"tokei.unitares.src.code": boom}),
             patch("agents.chronicler.agent.httpx.Client", return_value=fake),
         ):
-            ok, fail = chronicler.run("http://127.0.0.1:8767", token=None, repo_root=tmp_path)
+            report = chronicler.run("http://127.0.0.1:8767", token=None, repo_root=tmp_path)
+            ok, fail = report.successes, report.failures
 
         assert ok == 0
         assert fail == 1
@@ -287,7 +316,8 @@ class TestAgentRun:
             patch.object(chronicler, "SCRAPERS", {"x.y.z": lambda _r: 1.0}),
             patch("agents.chronicler.agent.httpx.Client", return_value=fake),
         ):
-            ok, fail = chronicler.run("http://127.0.0.1:8767", token=None, repo_root=tmp_path)
+            report = chronicler.run("http://127.0.0.1:8767", token=None, repo_root=tmp_path)
+            ok, fail = report.successes, report.failures
 
         assert ok == 0
         assert fail == 1
@@ -325,10 +355,161 @@ class TestAgentRun:
             patch.object(chronicler, "SCRAPERS", {"x.y.z": boom}),
             patch("agents.chronicler.agent.httpx.Client", return_value=AlwaysFails()),
         ):
-            ok, fail = chronicler.run("http://127.0.0.1:8767", token=None, repo_root=tmp_path)
+            report = chronicler.run("http://127.0.0.1:8767", token=None, repo_root=tmp_path)
+            ok, fail = report.successes, report.failures
 
         assert ok == 0
         assert fail == 1  # scrape failure counted, post-error failure swallowed
+
+
+# ---------------------------------------------------------------------------
+# fetch_prior / format_digest — the per-run KG digest
+# ---------------------------------------------------------------------------
+
+
+class TestFetchPrior:
+    def test_returns_most_recent_point_not_oldest(self, tmp_path: Path):
+        """`/v1/metrics` sorts ts ASC, so the newest reading is the LAST point.
+        Taking points[0] would compare today against ancient history."""
+        from agents.chronicler import agent as chronicler
+
+        fake = FakeHttpClient(
+            priors={
+                "x.y.z": [
+                    {"ts": "2026-08-01T00:00:00+00:00", "value": 100.0},
+                    {"ts": "2026-08-13T00:00:00+00:00", "value": 130.0},
+                ]
+            }
+        )
+        assert chronicler.fetch_prior(fake, "http://h", None, "x.y.z") == 130.0
+
+    def test_reads_the_series_route_not_the_post_route(self, tmp_path: Path):
+        """`/v1/metrics` is POST-only and answers a GET with 405, which
+        `fetch_prior` cannot distinguish from an empty series — so a regression
+        here would silently report every metric as a first reading forever."""
+        from agents.chronicler import agent as chronicler
+
+        fake = FakeHttpClient()
+        chronicler.fetch_prior(fake, "http://h", None, "x.y.z")
+        assert fake.gets[0]["url"] == "http://h/v1/metrics/series"
+
+    def test_http_error_is_logged_not_swallowed(self, tmp_path: Path, caplog):
+        from agents.chronicler import agent as chronicler
+
+        class Rejects:
+            def get(self, *a, **kw):
+                return FakeHttpResponse(405, "Method Not Allowed")
+
+        with caplog.at_level("WARNING"):
+            assert chronicler.fetch_prior(Rejects(), "http://h", None, "x") is None
+        assert "405" in caplog.text
+
+    def test_empty_series_means_no_prior(self, tmp_path: Path):
+        from agents.chronicler import agent as chronicler
+
+        fake = FakeHttpClient()
+        assert chronicler.fetch_prior(fake, "http://h", None, "never.seen") is None
+
+    def test_unreadable_history_never_raises(self, tmp_path: Path):
+        """A digest is layered on top of the scrape; it must not cost a metric."""
+        from agents.chronicler import agent as chronicler
+
+        class Exploding:
+            def get(self, *a, **kw):
+                raise RuntimeError("network down")
+
+        assert chronicler.fetch_prior(Exploding(), "http://h", None, "x") is None
+
+    def test_reads_before_writing(self, tmp_path: Path):
+        """The GET must precede the POST for the same metric, or 'prior' is
+        just the value we are about to write."""
+        from agents.chronicler import agent as chronicler
+
+        order: list[str] = []
+        fake = FakeHttpClient()
+        real_get, real_post = fake.get, fake.post
+        fake.get = lambda *a, **kw: (order.append("get"), real_get(*a, **kw))[1]
+        fake.post = lambda *a, **kw: (order.append("post"), real_post(*a, **kw))[1]
+
+        with (
+            patch.object(chronicler, "SCRAPERS", {"x.y.z": lambda _r: 1.0}),
+            patch("agents.chronicler.agent.httpx.Client", return_value=fake),
+        ):
+            chronicler.run("http://127.0.0.1:8767", token=None, repo_root=tmp_path)
+
+        assert order == ["get", "post"]
+
+
+class TestFormatDigest:
+    def _report(self, movements, **kw):
+        from agents.chronicler.agent import Movement, ScrapeReport
+
+        return ScrapeReport(
+            successes=kw.get("successes", len(movements)),
+            failures=kw.get("failures", 0),
+            movements=[Movement(*m) for m in movements],
+            failed=kw.get("failed", []),
+        )
+
+    def test_summary_counts_movers_not_scrapers(self):
+        from agents.chronicler.agent import format_digest
+
+        report = self._report(
+            [("a", 2.0, 1.0), ("b", 5.0, 5.0), ("c", 9.0, 7.0)]
+        )
+        summary, _ = format_digest(report)
+        assert summary == "Chronicler daily: 3/3 scrapers ok, 2 moved"
+
+    def test_details_name_the_delta(self):
+        from agents.chronicler.agent import format_digest
+
+        report = self._report([("tests.unitares.count", 663.0, 655.0)])
+        _, details = format_digest(report)
+        assert "tests.unitares.count: 655 -> 663 (+8)" in details
+
+    def test_negative_delta_renders_with_a_minus(self):
+        from agents.chronicler.agent import format_digest
+
+        _, details = format_digest(self._report([("kg.entries.count", 1450.0, 1459.0)]))
+        assert "1459 -> 1450 (-9)" in details
+
+    def test_means_keep_decimals_counts_do_not(self):
+        """The series mixes counts with means; 655.0 must not print '655.0000'
+        and a coherence mean must not round away to an integer."""
+        from agents.chronicler.agent import format_digest
+
+        _, details = format_digest(
+            self._report([("governance.coherence.mean.7d", 0.4799621, 0.4813619)])
+        )
+        assert "0.4814 -> 0.4800 (-0.0014)" in details
+
+    def test_no_prior_is_distinct_from_unchanged(self):
+        """After an outage these are different claims and an operator needs to
+        tell them apart."""
+        from agents.chronicler.agent import format_digest
+
+        _, details = format_digest(
+            self._report([("fresh", 1.0, None), ("steady", 4.0, 4.0)])
+        )
+        assert "No prior reading in 30d (1): fresh" in details
+        assert "Unchanged (1): steady" in details
+
+    def test_failures_are_named_not_just_counted(self):
+        from agents.chronicler.agent import format_digest
+
+        report = self._report(
+            [("ok", 1.0, 1.0)], successes=1, failures=1, failed=["tokei.unitares.src.code"]
+        )
+        summary, details = format_digest(report)
+        assert summary == "Chronicler daily: 1/2 scrapers ok, 0 moved"
+        assert "Failed (1): tokei.unitares.src.code" in details
+
+    def test_empty_run_still_says_something(self):
+        from agents.chronicler.agent import format_digest
+
+        summary, details = format_digest(self._report([]))
+        assert summary == "Chronicler daily: 0/0 scrapers ok, 0 moved"
+        assert details == "No scrapers ran."
 
 
 # ---------------------------------------------------------------------------
@@ -368,7 +549,7 @@ class TestChroniclerAgent:
             patch.object(chronicler, "SCRAPERS", scrapers),
             patch("agents.chronicler.agent.httpx.Client", return_value=fake),
         ):
-            result = asyncio.run(agent.run_cycle(client=MagicMock()))
+            result = asyncio.run(agent.run_cycle(client=AsyncMock()))
 
         assert result is not None
         assert result.summary == "Chronicler: 2/2 scrapers ok"
@@ -393,13 +574,103 @@ class TestChroniclerAgent:
             patch.object(chronicler, "SCRAPERS", scrapers),
             patch("agents.chronicler.agent.httpx.Client", return_value=fake),
         ):
-            result = asyncio.run(agent.run_cycle(client=MagicMock()))
+            result = asyncio.run(agent.run_cycle(client=AsyncMock()))
 
         assert result is not None
         assert result.summary == "Chronicler: 1/2 scrapers ok"
         # Failure bumps both dimensions so the check-in carries honest uncertainty.
         assert result.complexity == 0.4
         assert result.confidence == 0.5
+
+    def test_cycle_stores_a_kg_digest(self, tmp_path: Path):
+        """The point of the digest: a run leaves something an operator reads,
+        not just a chart point."""
+        from agents.chronicler import agent as chronicler
+        from agents.chronicler.agent import ChroniclerAgent
+
+        fake = FakeHttpClient(
+            priors={"tests.unitares.count": [{"ts": "2026-08-13", "value": 655.0}]}
+        )
+        client = AsyncMock()
+        agent = ChroniclerAgent(
+            base_url="http://127.0.0.1:8767", token=None, repo_root=tmp_path,
+        )
+        with (
+            patch.object(chronicler, "SCRAPERS", {"tests.unitares.count": lambda _r: 663.0}),
+            patch("agents.chronicler.agent.httpx.Client", return_value=fake),
+        ):
+            asyncio.run(agent.run_cycle(client=client))
+
+        tool, args = client.call_tool.call_args.args
+        assert tool == "knowledge"
+        assert args["action"] == "store"
+        assert args["summary"] == "Chronicler daily: 1/1 scrapers ok, 1 moved"
+        assert "tests.unitares.count: 655 -> 663 (+8)" in args["details"]
+
+    def test_digest_is_tagged_ephemeral(self, tmp_path: Path):
+        """Without the tag a snapshot has no resolution condition, so every
+        later KG sweep re-reads it as unfinished work."""
+        from agents.chronicler.agent import DIGEST_TAGS
+
+        assert "ephemeral" in DIGEST_TAGS
+
+    def test_kg_failure_does_not_fail_the_run(self, tmp_path: Path):
+        """The metrics have already landed by then — losing the digest is not
+        worth a red run."""
+        from agents.chronicler import agent as chronicler
+        from agents.chronicler.agent import ChroniclerAgent
+
+        client = AsyncMock()
+        client.call_tool.side_effect = RuntimeError("KG unreachable")
+        fake = FakeHttpClient()
+        agent = ChroniclerAgent(
+            base_url="http://127.0.0.1:8767", token=None, repo_root=tmp_path,
+        )
+        with (
+            patch.object(chronicler, "SCRAPERS", {"x": lambda _r: 1.0}),
+            patch("agents.chronicler.agent.httpx.Client", return_value=fake),
+        ):
+            result = asyncio.run(agent.run_cycle(client=client))
+
+        assert result is not None
+        assert result.summary == "Chronicler: 1/1 scrapers ok"
+
+    def test_digest_can_be_switched_off(self, tmp_path: Path, monkeypatch):
+        from agents.chronicler import agent as chronicler
+        from agents.chronicler.agent import ChroniclerAgent
+
+        monkeypatch.setenv("CHRONICLER_KG_DIGEST", "0")
+        client = AsyncMock()
+        fake = FakeHttpClient()
+        agent = ChroniclerAgent(
+            base_url="http://127.0.0.1:8767", token=None, repo_root=tmp_path,
+        )
+        with (
+            patch.object(chronicler, "SCRAPERS", {"x": lambda _r: 1.0}),
+            patch("agents.chronicler.agent.httpx.Client", return_value=fake),
+        ):
+            asyncio.run(agent.run_cycle(client=client))
+
+        client.call_tool.assert_not_called()
+
+    def test_dry_run_writes_no_digest(self, tmp_path: Path):
+        """--dry must stay a pure diagnostic: no check-in, no KG entry."""
+        from agents.chronicler import agent as chronicler
+        from agents.chronicler.agent import ChroniclerAgent
+
+        client = AsyncMock()
+        fake = FakeHttpClient()
+        agent = ChroniclerAgent(
+            base_url="http://127.0.0.1:8767", token=None, repo_root=tmp_path,
+            dry_run=True,
+        )
+        with (
+            patch.object(chronicler, "SCRAPERS", {"x": lambda _r: 1.0}),
+            patch("agents.chronicler.agent.httpx.Client", return_value=fake),
+        ):
+            asyncio.run(agent.run_cycle(client=client))
+
+        client.call_tool.assert_not_called()
 
     def test_dry_run_cycle_returns_none(self, tmp_path: Path):
         """--dry is a diagnostic — it must not write a check-in (would pollute
@@ -416,7 +687,7 @@ class TestChroniclerAgent:
             patch.object(chronicler, "SCRAPERS", {"x": lambda _r: 1.0}),
             patch("agents.chronicler.agent.httpx.Client", return_value=fake),
         ):
-            result = asyncio.run(agent.run_cycle(client=MagicMock()))
+            result = asyncio.run(agent.run_cycle(client=AsyncMock()))
 
         assert result is None  # GovernanceAgent._handle_cycle_result skips check-in
 

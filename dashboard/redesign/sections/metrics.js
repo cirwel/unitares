@@ -31,7 +31,10 @@
   // the picker reads as optgroups; unmatched series fall through to Other so a
   // new series never silently disappears. `.error` twins classify by base name.
   const METRIC_GROUPS = [
-    { label: "Fleet", test: /^(agents|checkins|kg)\./ },
+    // `governance.*` (coherence/guide/pause/risk/sentinel.findings) is fleet
+    // state, not "Other" — it landed 2026-06-29 without being added here, so
+    // the five governance-health series sat in the fallback group.
+    { label: "Fleet", test: /^(agents|checkins|kg|governance)\./ },
     { label: "Project", test: /^(github|tests|tokei)\./ },
     { label: "Infra", test: /^(lease_plane|ode)\./ },
   ];

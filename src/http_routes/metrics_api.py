@@ -69,7 +69,11 @@ async def http_post_metric(request):
 
 
 async def http_get_metrics(request):
-    """GET /v1/metrics?name=...&since=...&until=...&limit=... — return a series."""
+    """GET /v1/metrics/series?name=...&since=...&until=...&limit=... — a series.
+
+    Registered at `/v1/metrics/series`, not `/v1/metrics` — the latter is the
+    POST write route and answers a GET with 405.
+    """
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
     if not access._check_http_auth(request, http_api_token=http_api_token):
         return access._http_unauthorized()
