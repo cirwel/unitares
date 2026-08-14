@@ -31,6 +31,7 @@ SERVICE_SCRIPTS=(
   "$OPS/deploy-wave3a.sh"
   "$OPS/deploy-orchestrator.sh"
   "$OPS/deploy-bridge.sh"
+  "$OPS/deploy-dialectic-live.sh"
 )
 ALL_SCRIPTS=("$LIB" "${SERVICE_SCRIPTS[@]}" "$OPS/deploy-status.sh" "$OPS/deploy-apply.sh" "$OPS/nudge-lease-plane.sh")
 
