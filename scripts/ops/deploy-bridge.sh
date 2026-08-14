@@ -2,12 +2,20 @@
 # Deploy the Discord bridge (com.unitares.discord-bridge) from a DEDICATED
 # worktree pinned to origin/main — never the shared dev checkout.
 #
-# Why this exists: the bridge was the last service in deploy-status.sh with no
-# deploy script, so deploy-apply.sh could only REPORT it ("SKIP ... no deploy
-# script") and every sweep left it behind. It had been running 2 commits behind
-# its own checkout. That is worse here than elsewhere: the bridge IS the alert
-# delivery path (#alerts, the lease-plane and liveness criticals), so a silently
-# stale bridge is a silently stale alarm.
+# Why this exists: the bridge had a deploy-status.sh row but no deploy script,
+# so deploy-apply.sh could only REPORT it ("SKIP ... no deploy script") and
+# every sweep left it behind. It had been running 2 commits behind its own
+# checkout.
+#
+# NOT "the last service outside the sweep" — an earlier version of this comment
+# claimed that and it was false. dispatch-beam and dispatch-beam-codex also
+# have COMPONENTS rows with no deploy_script_for() case, and they read CURRENT
+# today, which is exactly why nobody notices. Absence of a dispatch entry is
+# invisible until the service happens to drift.
+#
+# It matters more here than elsewhere: the bridge IS the alert delivery path
+# (#alerts, the lease-plane and liveness criticals), so a silently stale bridge
+# is a silently stale alarm.
 #
 # Three things make this different from the other per-service scripts, and each
 # is the reason a generic script could not have covered it:
