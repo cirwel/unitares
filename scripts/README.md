@@ -21,8 +21,7 @@
 | `parse_update_phase_logs.py` | Parse `[checkin_phases]` and `[enrichment_phases]` timing lines from MCP logs |
 | `process_update_loadgen.py` | Drive concurrent `process_agent_update` load against the local governance MCP server |
 | `test-cache.sh` | Tree-hash pytest cache (skips if tests already passed against this exact working tree) |
-| `update_docs_tool_count.py` | Update tool counts in documentation |
-| `version_manager.py` | Version management utilities |
+| `version_manager.py` | Deprecated forwarding shim — use `ops/version_manager.py` |
 | `with_checkin.py` | Run a command and emit a best-effort `process_agent_update` check-in with command outcome evidence |
 
 ### BEAM File Lease Helper
@@ -132,6 +131,9 @@ checks:
 | Script | Description |
 |--------|-------------|
 | `agent_fragmentation.py` | Read-only report for identities with zero or sparse real check-ins, grouped by model/session/thread so fresh-UUID fragmentation is visible. |
+| `count_tools.py` | Canonical tool counter — counts from the runtime decorator registry (`--json`, `--by-module`); warns and reports 0 when runtime deps are absent. |
+| `update_docs_tool_count.py` | Check (`--check`) or update (`--update`) tool-count references in docs, counting via `count_tools.py`. |
+| `check_ci_python_matrix_sync.py` | Static check that the tests.yml Python matrix matches pyproject `requires-python`. |
 | `validate_tool_modes.py` | Asserts `TOOL_CATEGORIES` matches the tool schema (alias-aware) and that minimal/lite keep their discovery tools. DB-free; wired into the CI `smoke` gate. |
 
 ### `migration/`
