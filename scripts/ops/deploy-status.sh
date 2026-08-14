@@ -62,7 +62,20 @@ COMPONENTS=(
 "dispatch-beam|com.cirwel.dispatch-beam|$H/projects/dispatch_beam||restart|"
 "dispatch-beam-codex|com.cirwel.dispatch-beam-codex|$H/projects/dispatch_beam||restart|"
 "gov-plugin||$H/projects/unitares-governance-plugin||live-from-checkout|"
-"host-adapter||$H/projects/unitares-host-adapter||library|"
+# Was "library|" — which renders n/a, documented as "no local long-running
+# process". That was FALSE: com.unitares.openai-governance-proxy has run this
+# tree for weeks on the :8767 path. A blank row invites a look; a confident
+# n/a closes the question, so this was worse than an omission.
+"openai-gov-proxy|com.unitares.openai-governance-proxy|$H/projects/unitares-host-adapter|src|restart|"
+# Serves from the SHARED deploy worktree that every deploy fast-forwards —
+# the same hazard dialectic_live had, found by an adversarial review AFTER
+# that one was "fixed". Scoped to the single file it runs. No port: it proxies
+# to :8767, and probing that would report the governance MCP's health under
+# this proxy's name.
+"ipv6-loopback-proxy|com.unitares.ipv6-loopback-proxy|$H/projects/unitares-deploy|scripts/ops/ipv6_loopback_proxy.py|restart|"
+"anima-noauth-proxy|com.unitares.anima-noauth-proxy|$H/projects/anima-mcp|scripts/mcp_noauth_proxy.py|restart|"
+"anima-proxy|com.unitares.anima-proxy|$H/projects/anima-mcp|scripts/tcp_proxy.py|restart|"
+"concierge|com.cirwel.concierge|$H/projects/concierge|concierge.py|restart|"
 "pi-plugin||$H/projects/unitares-pi-plugin||pi-deploy|"
 "anima-mcp||$H/projects/anima-mcp||pi-deploy|"
 )
@@ -78,7 +91,27 @@ base_ref() { # echo origin/master or origin/main
 git_branch() { git -C "$1" rev-parse --abbrev-ref HEAD 2>/dev/null; }
 git_short()  { git -C "$1" rev-parse --short HEAD 2>/dev/null; }
 git_head_epoch() { git -C "$1" log -1 --format=%ct 2>/dev/null; }
-behind_count() { git -C "$1" rev-list --count "HEAD..$2" 2>/dev/null || echo "?"; }
+# behind_count REPO BASE [CPATH]
+#
+# Scoped to the service's own code path, not the whole repo. Repo-wide was the
+# single worst bug in this tool: on a monorepo the shared worktree is almost
+# always >=1 commit behind, so EVERY service read BEHIND(n) whether or not the
+# commit touched it. Measured 2026-08-13: one commit (#1651, governance_monitor
+# only) made six services report BEHIND(1), and `deploy-apply.sh` would have
+# restarted all six — including sentinel-beam, which the topology notes say
+# never to restart casually, and the fail-closed lease-plane.
+#
+# It also made CURRENT* — this tool's best idea, "old process but its OWN code
+# is unchanged, skip the restart" — structurally unreachable, because the
+# override below rewrote it to BEHIND before anyone could read it.
+#
+# CPATH="." degenerates to repo-wide, which is correct for the services that
+# genuinely have no subdir (the Python servers, and live-from-checkout where
+# the whole checkout IS the artifact).
+behind_count() {
+  local cpath="${3:-.}"
+  git -C "$1" rev-list --count --full-history "HEAD..$2" -- "$cpath" 2>/dev/null || echo "?"
+}
 # ghost = HEAD has commits not in base BY SHA, but the trees are identical
 is_ghost() {
   local d="$1" base="$2"
@@ -128,7 +161,12 @@ for c in "${COMPONENTS[@]}"; do
   [ "$FETCH" = 1 ] && git -C "$repo" fetch -q origin 2>/dev/null
 
   br=$(git_branch "$repo"); sha=$(git_short "$repo")
-  base=$(base_ref "$repo"); behind=$(behind_count "$repo" "$base")
+  # One definition of "this service's code", used by BOTH the behind count and
+  # the staleness delta below. They disagreed before: delta was path-scoped and
+  # behind was repo-wide, so the tool computed the right answer and then threw
+  # it away.
+  cpath="$subdir"; [ -z "$cpath" ] && cpath="."
+  base=$(base_ref "$repo"); behind=$(behind_count "$repo" "$base" "$cpath")
   headep=$(git_head_epoch "$repo")
   ghost="no"; is_ghost "$repo" "$base" && ghost="yes"
 
@@ -142,7 +180,6 @@ for c in "${COMPONENTS[@]}"; do
       pid=$(proc_pid "$label")
       if [ -z "$pid" ]; then verdict="DOWN"
       else
-        cpath="$subdir"; [ -z "$cpath" ] && cpath="."
         bsha=$(build_sha "$port")
         if [ -n "$bsha" ] && [ -n "$sha" ]; then
           # SHA path: compare what the process says it is running against the
@@ -191,7 +228,12 @@ for c in "${COMPONENTS[@]}"; do
   # relationship worth reporting.
   if [ "$behind" != "0" ] && [ "$behind" != "?" ]; then
     case "$verdict" in
-      CURRENT|CURRENT\*|LIVE|HOT-RELOAD|STALE*) verdict="BEHIND($behind)" ;;
+      # STALE deliberately NOT in this list. It is the more urgent and more
+      # specific fact -- the RUNNING PROCESS is executing superseded code --
+      # and letting "your checkout needs a pull" overwrite it meant a
+      # STALE(12) service displayed as BEHIND(1). The milder problem hid the
+      # sharper one.
+      CURRENT|CURRENT\*|LIVE|HOT-RELOAD) verdict="BEHIND($behind)" ;;
     esac
   fi
   devflag=""; [ "$pickup" = "restart-DEV" ] && devflag=" [DEV]"
@@ -200,6 +242,50 @@ for c in "${COMPONENTS[@]}"; do
 
   rows+=("$name|$verdict$devflag|$br|$sha|behind=$behind|pid=${pid:--}|$pickup|$hz")
 done
+
+# --- derivation: an unregistered service must be LOUD, not absent -----------
+# COMPONENTS above encodes INTENT. launchd knows what is actually RUNNING.
+# Joining them is the only way "nobody registered this service" becomes a
+# finding instead of a silence.
+#
+# The whole COMPONENTS array is a hand-maintained list of what EXISTS, and a
+# hand-maintained list of what exists is exactly the thing that was wrong:
+# dialectic_live served traffic for months while absent from this table, and
+# after that was "fixed" an adversarial review immediately found
+# ipv6-loopback-proxy in the identical state — running from the SHARED deploy
+# worktree, unlisted. Two instances of one class, found one at a time, because
+# a missing row is indistinguishable from a healthy fleet.
+#
+# So this pass asserts absence. A live launchd job whose code resolves into a
+# git checkout, with no COMPONENTS row, prints as UNGOVERNED. Registering it
+# is then a deliberate act, and forgetting is no longer quiet.
+#
+# Scope is deliberately narrow to stay signal: RUNNING only (a job with no PID
+# is periodic/cron, not a service), and only when the plist actually resolves
+# to a git work tree (Homebrew binaries and system paths resolve to nothing and
+# are skipped rather than becoming permanent noise you learn to ignore).
+# Stubbable so the derivation can be tested without launchd, the same way
+# bridge_liveness_watchdog.sh stubs its restart and PID probes. A guard nobody
+# can test is a guard nobody can trust — and this one exists precisely because
+# an untested absence went unnoticed for months.
+LAUNCHCTL_LIST_CMD="${LAUNCHCTL_LIST_CMD:-launchctl list}"
+
+ungoverned_rows() {
+  local known label pid st path
+  known="$(for c in "${COMPONENTS[@]}"; do IFS='|' read -r _ l _ <<< "$c"; [ -n "$l" ] && printf '%s\n' "$l"; done)"
+  while IFS=$'\t' read -r pid st label; do
+    case "$label" in com.unitares.*|com.cirwel.*) ;; *) continue ;; esac
+    [ "$pid" = "-" ] && continue
+    printf '%s\n' "$known" | grep -qxF "$label" && continue
+    [ -f "$HOME/Library/LaunchAgents/$label.plist" ] || continue
+    path=$(grep -o "$HOME/projects/[A-Za-z0-9_.-]*" "$HOME/Library/LaunchAgents/$label.plist" 2>/dev/null | head -1)
+    [ -n "$path" ] || continue
+    git -C "$path" rev-parse --git-dir >/dev/null 2>&1 || continue
+    rows+=("${label#com.*.}|UNGOVERNED|$(git_branch "$path")|$(git_short "$path")|behind=?|pid=$pid|unregistered|no deploy script")
+  done < <(eval "$LAUNCHCTL_LIST_CMD" 2>/dev/null)
+}
+ungoverned_rows
+
 
 if [ "$JSON" = 1 ]; then
   printf '['
@@ -223,7 +309,13 @@ else
     printf '  %-20s %-16s %-34s %-9s %s %s\n' \
       "$name" "$verdict" "$(echo "$br@$sha" | cut -c1-34)" "${pidf#pid=}" "$pickup" "$hz"
   done
-  printf '\n  CURRENT ok · CURRENT*=process old but its OWN code unchanged (skip restart)\n'
+  printf '\n  UNGOVERNED=running, code in a git checkout, NO row here — register it\n'
+  printf '  CURRENT ok · CURRENT*=process old but its OWN code unchanged (skip restart)\n'
   printf '  STALE(Δn)=process old AND n commits to its code since (restart) · BEHIND=pull needed\n'
-  printf '  GHOST-BRANCH=content already in master (discard) · DOWN · LIVE · [DEV]=loads from shared dev checkout\n\n'
+  # [DEV] dropped from the legend: no COMPONENTS row uses restart-DEV, so the
+  # verdict cannot print. It survived the condition it was built to describe and
+  # was advertising a state the operator can never see — while the actual
+  # "loads from a tree deploys rewrite" hazard it once named went unflagged on
+  # ipv6-loopback-proxy. The pickup value still works if a row ever sets it.
+  printf '  GHOST-BRANCH=content already in master (discard) · DOWN · LIVE\n\n'
 fi

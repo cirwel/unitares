@@ -139,33 +139,57 @@ out2="$( set -euo pipefail; . "$LIB"; deploy_lib_ff_worktree t "$REPO2" "$DEP2" 
 # be overridden: each names a more urgent, different action than "pull".
 (
   set -uo pipefail
-  promote() { # verdict behind -> verdict
-    local verdict="$1" behind="$2"
-    if [ "$behind" != "0" ] && [ "$behind" != "?" ]; then
-      case "$verdict" in
-        CURRENT|CURRENT\*|LIVE|HOT-RELOAD|STALE*) verdict="BEHIND($behind)" ;;
-      esac
-    fi
-    printf '%s' "$verdict"
-  }
+  # EXTRACTED from deploy-status.sh, never retyped. The previous version of
+  # this test carried its own hand-copied promote(), so when the real script's
+  # case list changed the test kept passing against the copy — it was testing
+  # itself. Extraction is what stops the two drifting apart in silence.
+  DS="$(dirname "$LIB")/deploy-status.sh"
+  eval "promote() { local verdict=\"\$1\" behind=\"\$2\"
+    $(sed -n '/^  if \[ "\$behind" != "0" \]/,/^  fi$/p' "$DS")
+    printf '%s' \"\$verdict\"; }"
   # promoted
   [ "$(promote LIVE 2)"          = "BEHIND(2)" ] || exit 20
   [ "$(promote CURRENT 5)"       = "BEHIND(5)" ] || exit 21
   [ "$(promote 'CURRENT*' 3)"    = "BEHIND(3)" ] || exit 22
   [ "$(promote HOT-RELOAD 1)"    = "BEHIND(1)" ] || exit 23
-  [ "$(promote 'STALE(4)' 7)"    = "BEHIND(7)" ] || exit 24
   # preserved
+  # STALE moved from promoted to PRESERVED (2026-08-14). It is the sharper
+  # fact — the RUNNING PROCESS is executing superseded code — and letting
+  # "your checkout needs a pull" overwrite it made a STALE(12) service display
+  # as BEHIND(1): the milder problem hiding the worse one.
+  [ "$(promote 'STALE(4)' 7)"    = "STALE(4)" ]     || exit 24
   [ "$(promote DOWN 2)"          = "DOWN" ]         || exit 25
   [ "$(promote GHOST-BRANCH 1)"  = "GHOST-BRANCH" ] || exit 26
   [ "$(promote n/a 2)"           = "n/a" ]          || exit 27
   [ "$(promote LIVE 0)"          = "LIVE" ]         || exit 28
   [ "$(promote LIVE '?')"        = "LIVE" ]         || exit 29
-  # and the real script must not have re-gated it on CURRENT alone
-  grep -q '\[ "\$verdict" = "CURRENT" \] && verdict="BEHIND' \
-    "$(dirname "$LIB")/deploy-status.sh" && exit 30
   exit 0
-) && ok "deploy-status BEHIND applies to LIVE/HOT-RELOAD/STALE, not DOWN/GHOST" \
+) && ok "deploy-status BEHIND promotes CURRENT/LIVE/HOT-RELOAD, preserves STALE/DOWN/GHOST" \
   || bad "deploy-status BEHIND promotion rules"
+
+# ── behind must be scoped to the service's OWN code path ──
+# Repo-wide was the single worst bug in this tool. On a monorepo the shared
+# worktree is nearly always >=1 commit behind, so every service read BEHIND(n)
+# regardless of whether the commit touched it: measured 2026-08-13, one commit
+# to governance_monitor.py put SIX services in the restart set, including
+# sentinel-beam and the fail-closed lease-plane. It also made CURRENT*
+# unreachable, disabling this tool's best idea with its bluntest one.
+(
+  set -euo pipefail
+  eval "$(sed -n '/^behind_count() {/,/^}/p' "$(dirname "$LIB")/deploy-status.sh")"
+  O="$SB/origin5.git"; R="$SB/repo5"
+  git init -q --bare "$O"; git init -q -b master "$R"
+  cd "$R" && git remote add origin "$O"
+  mkdir -p svc other && echo a > svc/f && echo a > other/f
+  git add svc other && git commit -qm base && git push -q origin master
+  echo b >> other/f && git add other && git commit -qm "touches only other/" && git push -q origin master
+  git reset -q --hard HEAD~1      # checkout now sits 1 commit behind origin
+  [ "$(behind_count "$R" origin/master ".")"     = "1" ] || exit 41   # repo-wide sees it
+  [ "$(behind_count "$R" origin/master "svc")"   = "0" ] || exit 42   # svc untouched -> no restart
+  [ "$(behind_count "$R" origin/master "other")" = "1" ] || exit 43   # other touched -> restart
+  exit 0
+) && ok "behind_count is scoped to the service code path, not the whole repo" \
+  || bad "behind_count path scoping"
 
 # NOTE on the symlink class: `git worktree list --porcelain` prints FULLY
 # resolved paths (macOS /var -> /private/var, and any intermediate symlink), so
@@ -284,6 +308,56 @@ hb_probe "$HB_AT" && ok "heartbeat probe accepts an advanced heartbeat" \
 rm -f "$HB"
 hb_probe 0 && bad "heartbeat probe passed with NO heartbeat file" \
   || ok "heartbeat probe treats a missing heartbeat as not-advanced"
+
+# ── derivation: an UNREGISTERED running service must be reported ──
+# The COMPONENTS array is a hand-maintained list of what exists, and a
+# hand-maintained list of what exists is what failed twice: dialectic_live
+# served traffic for months while absent from it, and once that was "fixed" a
+# review immediately found ipv6-loopback-proxy in the identical state. A
+# missing row was indistinguishable from a healthy fleet. This asserts the
+# derivation turns that silence into an UNGOVERNED row.
+(
+  set -euo pipefail
+  UG="$SB/ugrepo"; git init -q -b master "$UG"
+  ( cd "$UG" && echo x > f && git add f && git -c user.email=t@t -c user.name=t commit -qm c1 )
+  fake_plist_dir="$SB/agents"; mkdir -p "$fake_plist_dir"
+  # Extract the real function rather than reimplementing it.
+  eval "$(sed -n '/^ungoverned_rows() {/,/^}/p' "$(dirname "$LIB")/deploy-status.sh")"
+  git_branch() { git -C "$1" rev-parse --abbrev-ref HEAD 2>/dev/null; }
+  git_short()  { git -C "$1" rev-parse --short HEAD 2>/dev/null; }
+  COMPONENTS=("known|com.unitares.known|$UG||restart|")
+  HOME_BAK="$HOME"
+  rows=()
+  # A RUNNING job, not in COMPONENTS, whose plist resolves to a git checkout.
+  LAUNCHCTL_LIST_CMD="printf '4242\t0\tcom.unitares.mystery\n'"
+  mkdir -p "$SB/fakehome/Library/LaunchAgents"
+  printf '<string>%s</string>' "$UG" > "$SB/fakehome/Library/LaunchAgents/com.unitares.mystery.plist"
+  HOME="$SB/fakehome"
+  # the fixture repo lives outside $HOME/projects, so point the scan there
+  sed_out=$(declare -f ungoverned_rows | sed "s|\$HOME/projects/\[A-Za-z0-9_.-\]\*|$UG|")
+  eval "$sed_out"
+  ungoverned_rows
+  HOME="$HOME_BAK"
+  [ "${#rows[@]}" -eq 1 ] || exit 51
+  case "${rows[0]}" in *"|UNGOVERNED|"*) ;; *) exit 52 ;; esac
+  case "${rows[0]}" in mystery*) ;; *) exit 53 ;; esac
+  exit 0
+) && ok "derivation reports a running, unregistered service as UNGOVERNED" \
+  || bad "derivation did not flag an unregistered running service"
+
+# A job that IS registered must NOT be reported twice.
+(
+  set -euo pipefail
+  UG="$SB/ugrepo"
+  eval "$(sed -n '/^ungoverned_rows() {/,/^}/p' "$(dirname "$LIB")/deploy-status.sh")"
+  COMPONENTS=("known|com.unitares.mystery|$UG||restart|")
+  rows=()
+  LAUNCHCTL_LIST_CMD="printf '4242\t0\tcom.unitares.mystery\n'"
+  HOME="$SB/fakehome" ungoverned_rows
+  [ "${#rows[@]}" -eq 0 ] || exit 54
+  exit 0
+) && ok "derivation stays quiet for a service that IS registered" \
+  || bad "derivation double-reported a registered service"
 
 # ── deploy-apply dispatches dialectic-live ──
 # It ran for months absent from deploy-status.sh entirely — no row, no dispatch
