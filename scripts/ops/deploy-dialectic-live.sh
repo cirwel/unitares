@@ -40,6 +40,7 @@ deploy_lib_require_plist_target "$TAG" "$PLIST" "$DEPLOY" \
 [deploy]   (sed __UNITARES_ROOT__ -> $DEPLOY ; see the template header)"
 
 deploy_lib_ff_worktree "$TAG" "$REPO" "$DEPLOY"
+PREV="$DEPLOY_LIB_PREV"
 deploy_lib_nudge_lease_plane "$TAG" "deploy-dialectic-live.sh" "$DEPLOY"
 
 # scripts/start.sh already runs deps.get + assets.deploy on every boot, so a
@@ -58,21 +59,39 @@ echo "[deploy] compiling dialectic_live + assets (MIX_ENV=prod; surfaces errors 
 echo "[deploy] restarting $LABEL"
 launchctl kickstart -k "gui/$UID_NUM/$LABEL"
 
-# No /health route exists on this app — `/` is the LiveView root and is what
-# actually proves the endpoint booted and the router is serving. Deliberately
-# NOT a process-liveness check: KeepAlive keeps a crash-looping node "present"
-# in launchctl, so a PID proves nothing here.
+# Probes /health — the route added alongside this script — NOT the LiveView
+# root. `/` mounts the live view, which synchronously calls the governance
+# backend; a slow or degraded governance server would then make THIS deploy's
+# verify slow or failing for a reason that has nothing to do with whether the
+# deploy worked. /health is deliberately decoupled from that.
+#
+# Deliberately not a process-liveness check either: KeepAlive keeps a
+# crash-looping node "present" in launchctl, so a PID proves nothing here.
+#
+# -m 4 matches house style (deploy-mcp.sh -m4, deploy-status.sh -m 2). Without
+# it a single stalled connect can eat far more than its ~3s share of the poll
+# budget, silently turning a 45s verify window into one long hang.
 check_dialectic_live_health() {
-  curl -fsS -o /dev/null "http://127.0.0.1:$PORT/" 2>/dev/null
+  curl -fsS -m 4 -o /dev/null "http://127.0.0.1:$PORT/health" 2>/dev/null
 }
 
-echo "[deploy] verifying / on :$PORT"
+echo "[deploy] verifying /health on :$PORT"
 if deploy_lib_poll 15 3 check_dialectic_live_health; then
   echo "[deploy] OK — dialectic-live healthy on :$PORT (serving from $DEPLOY @ $(git -C "$DEPLOY" rev-parse --short HEAD))"
 else
-  echo "[deploy] FAILED — / on :$PORT did not respond within timeout." >&2
+  echo "[deploy] FAILED — /health on :$PORT did not respond within timeout." >&2
   echo "[deploy] Phoenix prod needs SECRET_KEY_BASE (DIALECTIC_LIVE_SECRET_KEY_BASE in secrets.env);" >&2
-  echo "[deploy] a missing one makes start.sh exit 1 and launchd restart it forever. Check:" >&2
+  echo "[deploy] a missing one makes start.sh exit 1 and launchd restart it forever." >&2
+  # Rolling back matters MORE here than for the single-service scripts: this app
+  # shares the unitares-deploy worktree with five other services, so leaving the
+  # tree parked at a known-bad commit hands the next deploy a broken baseline.
+  # Without this the app just crash-loops under KeepAlive with no recovery.
+  echo "[deploy] Rolling the worktree back to ${PREV:0:8} and restarting." >&2
+  git -C "$DEPLOY" reset --hard "$PREV"
+  ( cd "$DEPLOY/elixir/dialectic_live" && MIX_ENV=prod mix compile && MIX_ENV=prod mix assets.deploy ) || \
+    echo "[deploy] WARNING: rollback rebuild failed — the node may not come back cleanly." >&2
+  launchctl kickstart -k "gui/$UID_NUM/$LABEL"
+  echo "[deploy] rolled back. Investigate:" >&2
   echo "[deploy]   launchctl list | grep $LABEL" >&2
   echo "[deploy]   tail -80 \$HOME/Library/Logs/unitares-dialectic-live.log" >&2
   exit 1

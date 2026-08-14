@@ -229,10 +229,33 @@ fi
 
 # The bridge repo's trunk is `main`; deploying it off `master` would be a
 # silent no-op forever. Pin that the script actually passes --branch main.
-# --detach is load-bearing too: the dev checkout occupies `main`, so a
-# branch-mode worktree add would fail on the very first run.
+# ── ff_worktree --detach --branch TOGETHER ──
+# The two flags were each covered alone and NEVER in combination, which is the
+# only way deploy-bridge.sh actually calls them: the bridge repo's trunk is
+# `main` AND its dev checkout already occupies that branch, so the real call
+# needs both at once. A source-grep for the flag string cannot catch arg
+# parsing that breaks only for the pair, so exercise it for real.
+ORIGIN4="$SB/origin4.git"; REPO4="$SB/repo4"; DEP4A="$SB/dep4a"; DEP4B="$SB/dep4b"
+git init -q --bare "$ORIGIN4"
+git init -q -b main "$REPO4"
+( cd "$REPO4" && echo a > f && git add f && git commit -qm c1 && git remote add origin "$ORIGIN4" && git push -q origin main )
+# REPO4 stays ON main, reproducing the bridge's actual layout: branch-mode
+# `worktree add` must fail here, which is precisely why --detach is required.
+( set -euo pipefail; . "$LIB"; deploy_lib_ff_worktree t "$REPO4" "$DEP4A" --detach --branch main ) >/dev/null 2>&1 \
+  && ok "ff_worktree --detach --branch main works when the trunk is checked out" \
+  || bad "ff_worktree --detach --branch main (the bridge's actual call) failed"
+[[ "$(git -C "$DEP4A" rev-parse HEAD 2>/dev/null)" == "$(git -C "$REPO4" rev-parse origin/main)" ]] \
+  && ok "ff_worktree --detach --branch main lands on origin/main" || bad "--detach --branch landed on the wrong ref"
+# Flag order must not matter.
+( set -euo pipefail; . "$LIB"; deploy_lib_ff_worktree t "$REPO4" "$DEP4B" --branch main --detach ) >/dev/null 2>&1 \
+  && ok "ff_worktree accepts --branch before --detach" || bad "ff_worktree flag order dependence"
+
+# The source-grep below is a deliberate regression guard, NOT a behavioral test:
+# it only catches someone deleting the flags from the call site. The behavior
+# itself is covered above.
 grep -q -- '--detach --branch main' "$(dirname "$LIB")/deploy-bridge.sh" \
-  && ok "deploy-bridge deploys detached from origin/main" || bad "deploy-bridge missing --detach --branch main"
+  && ok "[guard] deploy-bridge call site still passes --detach --branch main" \
+  || bad "deploy-bridge missing --detach --branch main"
 
 # The bridge has no HTTP health endpoint, so the verify probe MUST be the
 # heartbeat the liveness watchdog also trusts — a probe that only checked the
