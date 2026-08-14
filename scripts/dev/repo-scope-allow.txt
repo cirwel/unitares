@@ -19,3 +19,11 @@ docs/proposals/beam-wave-3-gamma-hybrid-v0.md
 # could re-land without a gutting rewrite.
 docs/proposals/operator-decision-packet-v0.md
 docs/proposals/2026-06-24-wave-3-gate-framing.md
+
+# The ontology ledger — chronological record whose HISTORICAL entries (S15-c,
+# S21-b, S10, R1, R2; all pre-dating the 2026-08-13 guard tightening) document
+# the review process inline. Same class as the frozen decision records above:
+# rewriting the ledger's past entries to satisfy the guard would falsify the
+# record. New entries must still be written clean — the allowlist exempts the
+# file, not the practice (2026-08-13).
+docs/ontology/plan.md
