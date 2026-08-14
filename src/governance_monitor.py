@@ -1657,6 +1657,16 @@ class UNITARESMonitor:
         else:  # < 0.35: healthy
             status = 'healthy'
         
+        # The risk this verdict was actually made from, kept for the read path.
+        # `state.risk_history` collects the Φ-derived risk appended inside
+        # monitor_risk.estimate_risk — the signal UNITARES_PHI_TELEMETRY_ONLY
+        # demotes to telemetry. Nothing appended the resolved risk, so a reader
+        # averaging that history reported a number no verdict was made from
+        # (see get_monitor_metrics). Same shape as the coherence gap: a
+        # migration promoted the behavioral signal and left one consumer on the
+        # demoted one.
+        self._last_resolved_risk = float(risk_score)
+
         # Build metrics dict
         # Primary EISV: behavioral (per-agent EMA observations) when confident,
         # ODE fallback for new agents. ODE values preserved in 'ode' sub-field.
