@@ -7,8 +7,9 @@
 #
 # SAFE BY CONSTRUCTION: this never pulls or restarts a service itself. It only
 # dispatches to per-service deploy scripts (deploy-mcp.sh / deploy-gateway.sh /
-# deploy-lease-plane.sh / deploy-sentinel.sh / deploy-wave3a.sh), each of which
-# deploys from a master-pinned worktree and REFUSES if its LaunchAgent still
+# deploy-lease-plane.sh / deploy-sentinel.sh / deploy-wave3a.sh /
+# deploy-orchestrator.sh / deploy-bridge.sh), each of which deploys from a
+# trunk-pinned worktree and REFUSES if its LaunchAgent still
 # loads from the shared dev checkout. Any service NOT in the script_for() table
 # below is REPORTED, never touched — give it a deploy worktree + a deploy script
 # to bring it into the sweep. Keep this list in sync with that table.
@@ -49,6 +50,10 @@ deploy_script_for() {
     # restart when elixir/agent_orchestrator is unchanged — so sweeping it is
     # safe even though its shared-history commit distance is always large.
     agent-orchestrator) echo "$OPS_DIR/deploy-orchestrator.sh" ;;
+    # Different repo (cirwel/unitares-discord-bridge) and different trunk
+    # (`main`). It is the alert delivery path, so leaving it out of the sweep
+    # meant the alarm itself could go stale unnoticed.
+    discord-bridge)  echo "$OPS_DIR/deploy-bridge.sh" ;;
     *)               echo "" ;;
   esac
 }
