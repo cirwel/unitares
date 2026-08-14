@@ -111,6 +111,58 @@ guards keep concurrent sessions from clobbering each other:
   (`git cherry master <branch>` showing `+`) are held for review, never auto-
   deleted — so parking a draft PR is always safe.
 
+### 4. Landing work — do not babysit the queue
+
+`master` requires branches to be up to date before merging (`strict`), and
+`enforce_admins` is on, so nobody can bypass it. With seven required checks and
+a ~15-minute slowest job, **every merge invalidates every other open PR**. At
+nine open PRs that is nine update-branch clicks and over two hours of CI per
+pass through the queue, and each merge re-dirties the rest. That is arithmetic,
+not a discipline problem — no amount of care makes it cheaper.
+
+**Use `gh pr merge --auto <n>` instead of watching.** The repo now has
+"always suggest updating pull request branches" enabled, so with auto-merge set
+GitHub updates the branch itself when the base moves and merges as soon as
+checks pass. This does **not** weaken the human merge gate: `--auto` is a
+deliberate per-PR act, and it says "this one is approved, land it when green" —
+you are giving up the waiting, not the decision. Draft PRs cannot take
+`--auto`, so mark ready first; that mark is the gate.
+
+**Do not stack more than two deep.** Each level must land in order, and every
+merge below re-dirties everything above. A three-deep stack built 2026-08-13
+produced a conflicted middle PR within hours, purely from its own base moving.
+If two changes touch the same file, they are one PR — splitting them buys
+reviewability and pays for it in cascade.
+
+**Land or close drafts quickly.** An open draft accrues cascade debt: it needs
+a rebuild every time anything merges, whether or not anyone is working on it.
+
+### Merge queue — the real fix, and what blocks it today
+
+A merge queue is the native answer: it tests each PR against the *projected*
+result of the ones ahead and merges in order, so `strict` stays on and nobody
+hand-updates anything.
+
+**Do not enable it yet.** A merge queue only advances when the required checks
+report on `merge_group` events. Five of the seven do — `tests.yml`
+(smoke / test / dashboard), `repo-scope.yml` (scope), and
+`documentation-validation.yml` (validate) all carry a `merge_group` trigger.
+The remaining two, **`Analyze (actions)` and `Analyze (python)`, come from
+CodeQL default setup**, which has no workflow file to add a trigger to and does
+not run on `merge_group`. Enabling the queue against those two as required
+checks means every entry waits forever for a check that will never arrive —
+i.e. it blocks all merges rather than speeding them up.
+
+Two ways to unblock, whichever is preferred:
+
+1. Drop the two `Analyze` checks from *required* status checks. They still run
+   on every PR; they just stop gating the merge.
+2. Convert CodeQL from default setup to an advanced-setup workflow file and add
+   `merge_group` to its triggers.
+
+Verify with `gh api repos/cirwel/unitares/code-scanning/default-setup` before
+assuming this note is still current.
+
 ## Quick reference
 
 | Situation | Do this |
@@ -122,6 +174,8 @@ guards keep concurrent sessions from clobbering each other:
 | Claude on the web harness | Already parks a draft PR on its `claude/...` branch — nothing extra needed |
 | About to touch a single-writer surface | Check for an in-flight PR first; branch from its head if one exists |
 | Operator explicitly wants auto-merge | `./scripts/dev/ship.sh --auto-merge "msg"` (not the default) |
+| PR is approved and you want it to land unattended | `gh pr ready <n> && gh pr merge --auto <n>` |
+| Tempted to stack a third PR on a stack | Fold it into the one below instead |
 | Docs/tests-only, knowingly skipping the PR | `./scripts/dev/ship.sh --direct "msg"` (the opt-out) |
 
 ## Per-entrypoint mapping
