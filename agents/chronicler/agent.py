@@ -44,6 +44,7 @@ import logging
 import math
 import os
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -75,11 +76,34 @@ DEFAULT_URL = "http://127.0.0.1:8767"
 # reporting every metric as a first reading.
 PRIOR_WINDOW_DAYS = 30
 
+# The digest is a nicety bolted onto the scrape, so it gets a hard budget and
+# must never be able to cost the primary job. `ChroniclerAgent` runs under a
+# 120s `cycle_timeout_seconds`; a per-call 10s timeout across 14 metrics would
+# put 140s of prior-reads alone inside that budget and cancel the cycle before
+# the check-in — a cosmetic feature taking down the thing it decorates.
+# (The POST path carries the same pre-existing shape at 14x10s; that is not
+# introduced here and is left alone, but the reads must not compound it.)
+PRIOR_READ_TIMEOUT_S = 2.0
+PRIOR_READ_BUDGET_S = 20.0
+
 # `ephemeral` is mandatory and load-bearing: the digest is a reading taken at
 # a moment, with a timestamp rather than a resolution condition, so without
 # the tag every later KG sweep re-reads it as unfinished work. The tag is a
 # claim about the content's shelf life, never about the writer's.
 DIGEST_TAGS = ["ephemeral", "chronicler", "metrics"]
+
+# Three outcomes, deliberately not two. Collapsing "the server would not tell
+# us" into "there is no prior" writes a false claim into a durable artifact:
+# the digest would report a first reading for a metric with months of history.
+PRIOR_READ = "read"            # a previous value exists and we have it
+PRIOR_ABSENT = "absent"        # the series really is empty in the window
+PRIOR_UNREADABLE = "unreadable"  # error, or the read budget ran out
+
+# Likewise three, so the check-in can stay quiet about a deliberate opt-out
+# while still reporting a write that is broken.
+DIGEST_STORED = "stored"
+DIGEST_DISABLED = "disabled"
+DIGEST_FAILED = "failed"
 
 
 @dataclass(frozen=True)
@@ -89,6 +113,7 @@ class Movement:
     name: str
     value: float
     prior: float | None
+    prior_status: str = PRIOR_UNREADABLE
 
 
 @dataclass
@@ -106,21 +131,36 @@ def fetch_prior(
     base_url: str,
     token: str | None,
     name: str,
-) -> float | None:
-    """Most recent recorded value for `name`, or None if there is no prior.
+    budget_left: float | None = None,
+) -> tuple[float | None, str]:
+    """Most recent recorded value for `name`, as ``(value, status)``.
+
+    Status is one of `PRIOR_READ` / `PRIOR_ABSENT` / `PRIOR_UNREADABLE`. The
+    caller needs all three: "no history" and "could not read the history" look
+    identical at the call site but are different claims to write down.
 
     Called *before* the POST, so "prior" is genuinely the previous run's
     reading rather than the one about to be written.
 
     Two traps, both hit while building this. The read route is
     `/v1/metrics/series`; plain `/v1/metrics` is POST-only and answers a GET
-    with 405 (the handler's own docstring still says otherwise). And the
-    series sorts `ts ASC`, so `limit=1` would return the *oldest* point — the
-    window plus `points[-1]` is what gets the newest one.
+    with 405. And the series sorts `ts ASC`, so `limit=1` would return the
+    *oldest* point — the window plus `points[-1]` is what gets the newest one.
 
-    Never raises. The digest is a nicety layered on top of the scrape; a
-    metric must not go unrecorded because its history was unreadable.
+    Never raises, and with no `budget_left` does not even dial out. The digest
+    is a nicety layered on top of the scrape; a metric must not go unrecorded,
+    nor the cycle time out, because its history was slow or unreadable.
+
+    `budget_left` is remaining time *spent on reads*, not wall-clock since the
+    run began. The first version used an absolute deadline and the GitHub
+    traffic scraper — ~30s on its own — burned the whole allowance before the
+    reads had used any of it, so twelve of fourteen metrics reported
+    "History unreadable" on a completely healthy server.
     """
+    if budget_left is not None and budget_left <= 0:
+        log.warning("prior lookup for %s skipped: read budget exhausted", name)
+        return None, PRIOR_UNREADABLE
+
     headers = {}
     if token:
         headers["authorization"] = f"Bearer {token}"
@@ -132,21 +172,25 @@ def fetch_prior(
             f"{base_url}/v1/metrics/series",
             headers=headers,
             params={"name": name, "since": since},
-            timeout=10.0,
+            timeout=min(PRIOR_READ_TIMEOUT_S, budget_left)
+            if budget_left is not None
+            else PRIOR_READ_TIMEOUT_S,
         )
         if resp.status_code >= 400:
-            # Warn, don't shrug. A wrong route answers every metric with the
-            # same "no prior" as a genuinely empty series, which is how the
-            # 405 above survived a full run looking like a first reading.
+            # Warn, don't shrug. A wrong route answers every metric the same
+            # way an empty series does, which is how a 405 once survived a
+            # full run looking like fourteen first readings.
             log.warning(
                 "prior lookup for %s returned HTTP %s", name, resp.status_code
             )
-            return None
+            return None, PRIOR_UNREADABLE
         points = resp.json().get("points") or []
-        return float(points[-1]["value"]) if points else None
+        if not points:
+            return None, PRIOR_ABSENT
+        return float(points[-1]["value"]), PRIOR_READ
     except Exception as exc:
-        log.debug("no prior reading for %s: %s", name, exc)
-        return None
+        log.warning("prior lookup for %s failed: %s", name, exc)
+        return None, PRIOR_UNREADABLE
 
 
 def post_metric(
@@ -181,6 +225,9 @@ def run(
 ) -> ScrapeReport:
     """Run every registered scraper, recording counts and what moved."""
     report = ScrapeReport()
+    # Time spent inside fetch_prior only. Scraper wall-clock must not count
+    # against it — see fetch_prior's docstring for what that cost last time.
+    read_spent = 0.0
 
     with httpx.Client() as client:
         for name, scraper in sorted(SCRAPERS.items()):
@@ -202,18 +249,26 @@ def run(
 
             # Read the prior before writing, so the digest compares this run
             # against the last one rather than against itself.
-            prior = fetch_prior(client, base_url, token, name)
+            _read_started = time.monotonic()
+            prior, prior_status = fetch_prior(
+                client, base_url, token, name,
+                budget_left=PRIOR_READ_BUDGET_S - read_spent,
+            )
+            read_spent += time.monotonic() - _read_started
+            movement = Movement(
+                name=name, value=value, prior=prior, prior_status=prior_status
+            )
 
             if dry_run:
                 log.info("DRY %s = %s", name, value)
                 report.successes += 1
-                report.movements.append(Movement(name=name, value=value, prior=prior))
+                report.movements.append(movement)
                 continue
 
             try:
                 post_metric(client, base_url, token, name, value)
                 report.successes += 1
-                report.movements.append(Movement(name=name, value=value, prior=prior))
+                report.movements.append(movement)
                 log.info("recorded %s = %s", name, value)
             except Exception as exc:
                 report.failures += 1
@@ -224,12 +279,20 @@ def run(
     return report
 
 
+# Everything the digest prints is rounded to this, so movement is judged at
+# the same precision. Raw float inequality classified `0.48136191` against
+# `0.48136192` as movement and then rendered it `0.4814 -> 0.4814 (+0.0000)`:
+# a metric flagged as moved whose before, after, and delta all say it did not.
+# SQL `avg()` over a sliding 7-day window produces exactly that, daily.
+DISPLAY_DP = 4
+
+
 def _fmt(value: float) -> str:
     """Render a metric value. The series mixes counts with means, so whole
-    numbers print as integers and everything else to 4dp."""
+    numbers print as integers and everything else to DISPLAY_DP."""
     if math.isfinite(value) and value == int(value):
         return str(int(value))
-    return f"{value:.4f}"
+    return f"{value:.{DISPLAY_DP}f}"
 
 
 def _fmt_delta(delta: float) -> str:
@@ -237,19 +300,28 @@ def _fmt_delta(delta: float) -> str:
     return f"{sign}{_fmt(abs(delta))}"
 
 
+def visibly_moved(value: float, prior: float) -> bool:
+    """Did the metric move by enough that the rendered digest will show it?"""
+    return round(value, DISPLAY_DP) != round(prior, DISPLAY_DP)
+
+
 def format_digest(report: ScrapeReport) -> tuple[str, str]:
     """Render a run as the (summary, details) of a KG entry.
 
     Pure — no server, no clock — so the wording is testable on its own.
     """
+    read = [m for m in report.movements if m.prior_status == PRIOR_READ]
     moved = sorted(
-        (m for m in report.movements if m.prior is not None and m.value != m.prior),
+        (m for m in read if visibly_moved(m.value, m.prior)),
         key=lambda m: m.name,
     )
-    flat = sorted(
-        (m.name for m in report.movements if m.prior is not None and m.value == m.prior)
+    flat = sorted(m.name for m in read if not visibly_moved(m.value, m.prior))
+    first = sorted(
+        m.name for m in report.movements if m.prior_status == PRIOR_ABSENT
     )
-    first = sorted(m.name for m in report.movements if m.prior is None)
+    unreadable = sorted(
+        m.name for m in report.movements if m.prior_status == PRIOR_UNREADABLE
+    )
 
     total = report.successes + report.failures
     summary = (
@@ -274,6 +346,14 @@ def format_digest(report: ScrapeReport) -> tuple[str, str]:
         sections.append(
             f"No prior reading in {PRIOR_WINDOW_DAYS}d ({len(first)}): "
             f"{', '.join(first)}"
+        )
+    if unreadable:
+        # Never fold these into "no prior reading". That sentence asserts the
+        # series is empty; this one admits we do not know. A metric with
+        # months of history must never be described as a first reading just
+        # because the read failed or the budget ran out.
+        sections.append(
+            f"History unreadable ({len(unreadable)}): {', '.join(unreadable)}"
         )
     if report.failed:
         sections.append(
@@ -355,7 +435,7 @@ class ChroniclerAgent(GovernanceAgent):
             # the trajectory with ad-hoc operator invocations.
             return None
 
-        await self._store_digest(client, report)
+        digest_status = await self._store_digest(client, report)
 
         total = successes + failures
         summary = f"Chronicler: {successes}/{total} scrapers ok"
@@ -364,6 +444,18 @@ class ChroniclerAgent(GovernanceAgent):
         # transient-vs-persistent uncertainty.
         complexity = 0.4 if failures > 0 else 0.1
         confidence = 0.5 if failures > 0 else 0.9
+
+        # A digest that fails forever must not read as a clean run. Reporting
+        # "14/14 scrapers ok" at confidence 0.9 while the KG write has been
+        # dead for months would reproduce, on the check-in channel, the exact
+        # invisibility this whole feature exists to end — and the check-in is
+        # the channel anyone actually watches. `disabled` is deliberate
+        # operator intent and stays silent; only `failed` speaks up.
+        if digest_status == DIGEST_FAILED:
+            summary += "; KG digest FAILED"
+            complexity = max(complexity, 0.4)
+            confidence = min(confidence, 0.5)
+
         return CycleResult(
             summary=summary,
             complexity=complexity,
@@ -372,8 +464,11 @@ class ChroniclerAgent(GovernanceAgent):
 
     async def _store_digest(
         self, client: GovernanceClient, report: ScrapeReport
-    ) -> bool:
-        """Write one KG entry naming what moved. Returns whether it landed.
+    ) -> str:
+        """Write one KG entry naming what moved. Returns a DIGEST_* status.
+
+        Three outcomes, not two: the caller must tell a deliberate opt-out
+        from a broken write, because only the second belongs on the check-in.
 
         No search-before-write. The KG discipline asks for a search so a
         related entry gets corrected or superseded rather than duplicated,
@@ -382,14 +477,15 @@ class ChroniclerAgent(GovernanceAgent):
         `ephemeral` tag: KnowledgeGraphLifecycle archives after seven days,
         retrievable, never deleted. Same posture as agents/triage_scribe.
 
-        A failure here is logged and swallowed. The metrics have already
-        landed by this point, and losing the digest is not worth failing a
-        run over — the check-in still reports the scrape honestly.
+        A failure here is logged and swallowed rather than raised: the metrics
+        have already landed by this point, so losing the digest must not lose
+        the scrape. It is reported on the check-in instead — swallowed is not
+        the same as hidden.
         """
         if os.getenv("CHRONICLER_KG_DIGEST", "1").strip().lower() in (
             "0", "false", "no",
         ):
-            return False
+            return DIGEST_DISABLED
 
         summary, details = format_digest(report)
         try:
@@ -405,9 +501,9 @@ class ChroniclerAgent(GovernanceAgent):
             )
         except Exception as exc:
             log.warning("could not store KG digest: %s", exc)
-            return False
+            return DIGEST_FAILED
         log.info("stored KG digest: %s", summary)
-        return True
+        return DIGEST_STORED
 
 
 def main(argv: list[str] | None = None) -> int:
