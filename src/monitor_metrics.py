@@ -82,13 +82,29 @@ def get_monitor_metrics(monitor: Any, include_state: bool = True) -> Dict:
     else:
         current_risk = None
 
-    # Use LATEST (point-in-time) risk_score for consistency with process_update
-    latest_risk_score = float(state.risk_history[-1]) if state.risk_history else None
+    # `state.risk_history` is the Φ-DERIVED risk (appended inside
+    # monitor_risk.estimate_risk). Under UNITARES_PHI_TELEMETRY_ONLY — on by
+    # default — Φ is demoted to telemetry and the behavioral assessment is
+    # authoritative for the verdict and the persisted risk_score. Nothing
+    # appends that resolved risk to this history, so reading the history here
+    # reported a risk no verdict was made from: measured 2026-08-13, Lumen read
+    # 0.744 / "critical" on this path while the row written by the same check-in
+    # said 0.09 / "healthy". Prefer the resolved value; fall back to the history
+    # only for a monitor that has not completed an assessment yet (cold start,
+    # restored snapshot), where the Φ prior is the honest answer.
+    resolved_risk = getattr(monitor, "_last_resolved_risk", None)
 
-    # Smoothed trend (for historical context)
+    # Use LATEST (point-in-time) risk_score for consistency with process_update
+    latest_risk_score = (
+        float(resolved_risk)
+        if resolved_risk is not None
+        else (float(state.risk_history[-1]) if state.risk_history else None)
+    )
+
+    # Smoothed trend (for historical context) — Φ telemetry, not the verdict signal
     smoothed_risk_score = current_risk
 
-    # Overall mean risk (for display/comparison)
+    # Overall mean Φ risk (for display/comparison) — likewise telemetry
     mean_risk = float(np.mean(state.risk_history)) if state.risk_history else 0.0
 
     # Status calculation - USE LATEST VALUE to match process_update behavior
@@ -118,7 +134,13 @@ def get_monitor_metrics(monitor: Any, include_state: bool = True) -> Dict:
     behavioral_verdict = getattr(monitor, '_last_behavioral_verdict', None)
     verdict = behavioral_verdict if behavioral_verdict else ode_verdict
 
-    risk_score_value = current_risk if current_risk is not None else mean_risk
+    # Headline `risk_score` must be the verdict's risk, matching what the
+    # check-in persisted — not the Φ trend it used to report.
+    risk_score_value = (
+        float(resolved_risk)
+        if resolved_risk is not None
+        else (current_risk if current_risk is not None else mean_risk)
+    )
 
     # Get regime with fallback for backward compatibility
     regime = getattr(state, 'regime', 'divergence')
@@ -150,6 +172,14 @@ def get_monitor_metrics(monitor: Any, include_state: bool = True) -> Dict:
         'current_risk': None if is_uninitialized else current_risk,
         'mean_risk': None if is_uninitialized else mean_risk,
         'risk_score': None if is_uninitialized else risk_score_value,
+        # Which signal produced risk_score/status. 'resolved' = the risk the
+        # last verdict was made from (matches the persisted row);
+        # 'phi_history' = the Φ telemetry prior, used only before a monitor has
+        # completed an assessment. `current_risk`/`mean_risk` stay Φ either way.
+        'risk_score_source': (
+            None if is_uninitialized
+            else ('resolved' if resolved_risk is not None else 'phi_history')
+        ),
         'latest_risk_score': None if is_uninitialized else latest_risk_score,
         'phi': float(phi),
         'verdict': 'uninitialized' if is_uninitialized else verdict,
