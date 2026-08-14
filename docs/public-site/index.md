@@ -1,4 +1,4 @@
-# Runtime accountability for long-lived AI agents
+# Runtime governance for long-lived AI agents
 
 UNITARES is a self-hosted MCP and HTTP service that gives long-running agent
 processes accountable identities, evidence-linked check-ins, and policy responses

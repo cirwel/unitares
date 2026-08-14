@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src import http_api
+from src.http_routes import access
 from src.http_api import http_automations
 
 
@@ -24,7 +24,7 @@ def _req():
 
 @pytest.mark.asyncio
 async def test_passthrough_with_freshness(tmp_path, monkeypatch):
-    monkeypatch.setattr(http_api, "_check_http_auth", lambda *a, **k: True)
+    monkeypatch.setattr(access, "_check_http_auth", lambda *a, **k: True)
     snap = tmp_path / "census.json"
     snap.write_text(json.dumps({
         "schema": "unitares.automation_census.v1",
@@ -49,7 +49,7 @@ async def test_passthrough_with_freshness(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_missing_snapshot_degrades(tmp_path, monkeypatch):
-    monkeypatch.setattr(http_api, "_check_http_auth", lambda *a, **k: True)
+    monkeypatch.setattr(access, "_check_http_auth", lambda *a, **k: True)
     monkeypatch.setenv("UNITARES_AUTOMATION_CENSUS_PATH", str(tmp_path / "absent.json"))
 
     resp = await http_automations(_req())
