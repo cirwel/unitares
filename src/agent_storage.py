@@ -46,6 +46,12 @@ from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
+# Distinct regime values already warned about, so a value the detector emits on
+# the mainline path (notably TRANSITION) logs once per process instead of once
+# per check-in. See the coercion block in record_agent_state.
+_WARNED_REGIMES: set[str] = set()
+_WARNED_REGIMES_MAX = 64
+
 
 # _sync_cache_entry removed - PostgreSQL is the persistence layer.
 # mcp_server.agent_metadata is the active runtime cache (not deprecated).
@@ -585,20 +591,38 @@ async def record_agent_state(
     # 'nominal' does not land as a health reading — it lands as a value readers
     # parse as a *basin*, indistinguishable from a real one.
     #
-    # The coercion is kept (the stored shape is a schema decision, not one to
-    # make here) but it is no longer silent: the raw value is preserved in
-    # state_json and the event is logged. Analyses that measure basin
-    # transitions must otherwise treat every coerced row as a genuine flip.
+    # The coercion is NOT gratuitous: db/postgres/schema.sql enforces this exact
+    # set as a CHECK constraint on core.agent_state.regime, so passing an
+    # out-of-set value straight through would fail the INSERT and take the
+    # check-in down with it. Removing the coercion needs a migration first.
+    #
+    # ⚠ `TRANSITION` is a live, in-set-of-the-detector, out-of-set-of-the-schema
+    # value: src/monitor_regime.py returns it ("S falling while I rising", i.e.
+    # recovering) and src/mcp_handlers/updates/phases.py passes it here
+    # unmodified. It has therefore been silently collapsed into 'nominal' for
+    # the entire history of the table. That is a real basin state being
+    # destroyed on the mainline check-in path, not malformed input.
+    #
+    # So the coercion stays, but stops being silent: the raw value is preserved
+    # in state_json, and the event is logged ONCE PER DISTINCT VALUE per process
+    # rather than per check-in — TRANSITION fires often enough that a per-call
+    # warning would flood the log and get muted, defeating the point.
     allowed_regimes = {
         'nominal', 'warning', 'critical', 'recovery',
         'EXPLORATION', 'CONVERGENCE', 'DIVERGENCE', 'STABLE'
     }
     db_regime = regime if regime in allowed_regimes else 'nominal'
     regime_was_coerced = db_regime != regime
-    if regime_was_coerced:
+    if regime_was_coerced and regime not in _WARNED_REGIMES:
+        # Bounded so a pathological caller emitting unique strings cannot grow
+        # this without limit; past the cap we simply stop warning.
+        if len(_WARNED_REGIMES) < _WARNED_REGIMES_MAX:
+            _WARNED_REGIMES.add(regime)
         logger.warning(
-            "regime %r not in allowed set, coerced to %r for agent %s; "
-            "raw value preserved at state_json.regime_raw",
+            "regime %r not in allowed set (schema CHECK), coerced to %r; "
+            "raw value preserved at state_json.regime_raw. "
+            "Further occurrences of this value are not logged. "
+            "First seen for agent %s.",
             regime,
             db_regime,
             agent_id[:8],

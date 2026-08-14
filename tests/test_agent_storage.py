@@ -837,10 +837,11 @@ class TestRecordAgentState:
         """The coercion was previously silent — no log, no error, value gone."""
         identity = _make_identity(identity_id=42)
         db = _mock_db(get_identity=identity, record_agent_state=1)
+        import src.agent_storage as storage
+        storage._WARNED_REGIMES.discard("drifting")
         with patch("src.agent_storage.get_db", return_value=db), \
              patch("src.agent_storage.logger") as mock_logger:
-            from src.agent_storage import record_agent_state
-            await record_agent_state(
+            await storage.record_agent_state(
                 "agent-1",
                 E=0.4, I=0.6, S=0.2, V=-0.1,
                 regime="drifting",
@@ -849,6 +850,36 @@ class TestRecordAgentState:
 
         mock_logger.warning.assert_called_once()
         assert "drifting" in str(mock_logger.warning.call_args)
+
+    @pytest.mark.asyncio
+    async def test_repeat_coercion_logs_once_per_value(self):
+        """TRANSITION is emitted by monitor_regime.detect_regime on the mainline
+        check-in path and is absent from the schema CHECK set, so it is coerced
+        on a large share of check-ins. A per-call warning would flood the log and
+        get muted, which defeats the purpose of making the coercion visible.
+        Warn once per distinct value; keep coercing and preserving every time.
+        """
+        identity = _make_identity(identity_id=42)
+        db = _mock_db(get_identity=identity, record_agent_state=1)
+        import src.agent_storage as storage
+        storage._WARNED_REGIMES.discard("TRANSITION")
+        with patch("src.agent_storage.get_db", return_value=db), \
+             patch("src.agent_storage.logger") as mock_logger:
+            for _ in range(5):
+                await storage.record_agent_state(
+                    "agent-1",
+                    E=0.4, I=0.6, S=0.2, V=-0.1,
+                    regime="TRANSITION",
+                    coherence=0.3,
+                )
+
+        # Logged once...
+        mock_logger.warning.assert_called_once()
+        # ...but every single row still coerces and still preserves the raw value.
+        assert db.record_agent_state.await_count == 5
+        for call in db.record_agent_state.call_args_list:
+            assert call.kwargs["regime"] == "nominal"
+            assert call.kwargs["state_json"]["regime_raw"] == "TRANSITION"
 
     @pytest.mark.asyncio
     async def test_persists_behavioral_eisv_into_state_json(self):
