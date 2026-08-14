@@ -117,11 +117,19 @@ def test_all_prebind_paths_route_through_the_helper():
     """Structural lock. Three paths had the same unconditional write; a fourth
     added later must not reintroduce it. A bare
     `arguments["agent_id"] = <resolved>` outside the helper is the defect."""
+    import importlib
     import inspect
+    import pkgutil
 
-    source = inspect.getsource(http_api)
+    from src import http_routes
+
+    sources = [inspect.getsource(http_api)]
+    for mod_info in pkgutil.iter_modules(http_routes.__path__):
+        module = importlib.import_module(f"src.http_routes.{mod_info.name}")
+        sources.append(inspect.getsource(module))
     bare_writes = [
         line.strip()
+        for source in sources
         for line in source.splitlines()
         if 'arguments["agent_id"] =' in line
     ]

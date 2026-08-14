@@ -79,7 +79,7 @@ def _client():
 
 def test_history_returns_compact_source_and_actuator_summary_by_default():
     db = _DB([_row()])
-    with patch("src.http_api._check_http_auth", return_value=True), \
+    with patch("src.http_routes.access._check_http_auth", return_value=True), \
          patch("src.db.get_db", return_value=db):
         response = _client().get("/v1/agents/agent-1/history")
 
@@ -102,7 +102,7 @@ def test_history_returns_compact_source_and_actuator_summary_by_default():
 
 def test_history_can_opt_into_the_full_append_only_envelope():
     db = _DB([_row()])
-    with patch("src.http_api._check_http_auth", return_value=True), \
+    with patch("src.http_routes.access._check_http_auth", return_value=True), \
          patch("src.db.get_db", return_value=db):
         response = _client().get(
             "/v1/agents/agent-1/history?include_telemetry=true"
@@ -126,7 +126,7 @@ def test_history_exposes_legacy_substrate_rows_without_calling_them_reports():
         "telemetry_total": 0,
     })
     db = _DB([row])
-    with patch("src.http_api._check_http_auth", return_value=True), \
+    with patch("src.http_routes.access._check_http_auth", return_value=True), \
          patch("src.db.get_db", return_value=db):
         response = _client().get("/v1/agents/agent-1/history")
 
