@@ -90,8 +90,14 @@ VERSION_REFERENCES = [
     ("COMPATIBILITY.md", [
         (r'\| UNITARES server \| `v([\d.]+)`',
          r'| UNITARES server | `v{version}`'),
-        (r'aligned with server `v([\d.]+)`',
-         r'aligned with server `v{version}`'),
+        # Tracks the plugin row's server pin. The wording deliberately says
+        # "compatible with", not "aligned with": v0.4.13 is package-compatible
+        # with the server but its tagged skill bundle predates plugin PR #116,
+        # and the 2.18.0 errata exists precisely because "aligned" overclaimed
+        # that. Keep the pattern on the weaker word — if a future edit restores
+        # an alignment claim, this check should fail rather than bless it.
+        (r'compatible with server `v([\d.]+)`',
+         r'compatible with server `v{version}`'),
     ]),
 ]
 
