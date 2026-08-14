@@ -14,6 +14,11 @@ artifact in another.
 | `unitares-host-adapter` | `0.2` alpha | Separately released host bindings; capabilities vary by host and remain pre-stable. |
 | Paper / reproducibility kit | paper `v6.9.1`, kit `v6.8.1-repro` | Research and evaluation artifacts, not runtime dependencies or server compatibility numbers. |
 
+The plugin row above was corrected after the 2.18.0 release; the release-time
+table claimed a stronger alignment than the tagged bundle carried. See
+[docs/releases/2.18.0-errata.md](docs/releases/2.18.0-errata.md) for what was
+stated, what is actually true, and the evidence a future release note needs.
+
 ## Names you will encounter
 
 | Name | Meaning |
