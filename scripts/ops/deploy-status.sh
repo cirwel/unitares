@@ -43,6 +43,11 @@ COMPONENTS=(
 "sentinel-beam|com.unitares.sentinel-beam|$H/projects/unitares-deploy|elixir/sentinel|restart|"
 "wave3a-handlers|com.unitares.wave3a-handlers|$H/projects/unitares-deploy|elixir/wave3a_handlers|restart|8770"
 "lease-plane|com.unitares.lease-plane|$H/projects/unitares-deploy|elixir/lease_plane|hot-reload|8788"
+# Phoenix on :8790, loading from the SHARED deploy worktree. Was absent from
+# this table entirely until 2026-08-13, so every ff moved its source under a
+# running BEAM with no verdict row to report it. Scoped to its own subdir for
+# the same reason sentinel/wave3a are.
+"dialectic-live|com.unitares.dialectic-live|$H/projects/unitares-deploy|elixir/dialectic_live|restart|8790"
 # Its OWN dedicated worktree, deliberately NOT unitares-deploy: pinning it there
 # would couple every orchestrator restart to gov-mcp's migration cadence. Scoped
 # to elixir/agent_orchestrator so the verdict tracks ITS code, not the 200+

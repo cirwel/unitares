@@ -241,6 +241,26 @@ grep -q -- '--detach --branch main' "$(dirname "$LIB")/deploy-bridge.sh" \
 grep -q 'BRIDGE_HEARTBEAT_PATH' "$(dirname "$LIB")/deploy-bridge.sh" \
   && ok "deploy-bridge verifies via the shared heartbeat signal" || bad "deploy-bridge heartbeat probe"
 
+# ── deploy-apply dispatches dialectic-live ──
+# It ran for months absent from deploy-status.sh entirely — no row, no dispatch
+# — while loading from the SHARED worktree every other deploy fast-forwards.
+# The failure mode was silence, so the guard is that it stays wired at all.
+(
+  set -euo pipefail
+  grep -q 'dialectic-live)  echo "$OPS_DIR/deploy-dialectic-live.sh"' \
+    "$(dirname "$LIB")/deploy-apply.sh"
+  [ -x "$(dirname "$LIB")/deploy-dialectic-live.sh" ]
+) && ok "deploy-apply dispatches dialectic-live to an executable script" \
+  || bad "deploy-apply dialectic-live dispatch"
+
+# Every service that loads from the shared worktree needs a status row, or a ff
+# moves its code with nothing reporting the drift. Assert the row exists AND is
+# subdir-scoped — an unscoped row would read BEHIND(hundreds) forever and be
+# learned-to-ignore, which is the same silence in a louder costume.
+grep -q '"dialectic-live|com.unitares.dialectic-live|.*|elixir/dialectic_live|restart|8790"' \
+  "$(dirname "$LIB")/deploy-status.sh" \
+  && ok "deploy-status has a subdir-scoped dialectic-live row" || bad "dialectic-live status row"
+
 echo; echo "passed=$pass failed=$fail"
 rm -rf "$SB"
 exit "$((fail > 0))"
