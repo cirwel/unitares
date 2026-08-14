@@ -213,7 +213,7 @@ jobs:
     - name: Run tool count validation
       continue-on-error: true
       run: |
-        python scripts/analysis/count_tools.py --json
+        python scripts/diagnostics/count_tools.py --json
 
   dashboard:
     runs-on: ubuntu-latest

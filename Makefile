@@ -63,7 +63,7 @@ docs: ## Generate tool documentation from @mcp_tool decorators
 validate: ## Run CI validation checks locally
 	@python3 scripts/dev/check_ci_python_version_sync.py
 	@python3 scripts/diagnostics/check_ci_python_matrix_sync.py
-	@python3 scripts/dev/update_docs_tool_count.py --check
+	@python3 scripts/diagnostics/update_docs_tool_count.py --check
 	@python3 scripts/ops/version_manager.py --check
 	@echo "All checks passed"
 
