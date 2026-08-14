@@ -1,0 +1,518 @@
+"""Request interpretation shared by every HTTP route: trusted-network and
+bearer auth checks, session-signal extraction, sticky operator binding, and
+query-param coercion. Route modules call these through the module object
+(``access._check_http_auth(...)``) so tests can patch one path.
+
+Split out of src/http_api.py (see that module for route registration).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import ipaddress as _ipaddress
+import secrets
+
+from starlette.responses import JSONResponse
+
+
+from src.logging_utils import get_logger
+from src.mcp_listen_config import check_mcp_bearer, mcp_bearer_required
+from src.dashboard_auth import (
+    DASHBOARD_EXPECTED_ORIGIN,
+    dashboard_session_authenticated,
+)
+
+logger = get_logger(__name__)
+
+
+def _build_http_session_signals(request):
+    """Build SessionSignals from an HTTP request.
+
+    The optional ``unitares_peer_pid`` scope key is server-injected by the
+    owner-only UDS listener after a kernel ``LOCAL_PEERPID`` lookup.  Preserve
+    that signal for the direct REST tool bridge: substrate-attested residents
+    use ``POST /v1/tools/call``, not the streamable ``/mcp`` route, so dropping
+    it here silently turns an authenticated UDS request back into plain HTTP.
+
+    Only a positive, non-bool integer is accepted.  Request headers never
+    participate in this decision; ordinary TCP HTTP remains ``rest``.
+    """
+    from src.mcp_handlers.context import SessionSignals
+
+    ua = request.headers.get("user-agent", "")
+    x_session_id = request.headers.get("X-Session-ID") or request.headers.get("x-session-id")
+    peer_pid = getattr(request, "scope", {}).get("unitares_peer_pid")
+    if isinstance(peer_pid, bool) or not isinstance(peer_pid, int) or peer_pid <= 0:
+        peer_pid = None
+
+    ip_ua_fp = None
+    try:
+        host = request.client.host if request.client else "unknown"
+        import hashlib
+        ua_fp = hashlib.md5(ua.encode()).hexdigest()[:6] if ua else "000000"
+        from src.mcp_handlers.context import note_ua_fingerprint
+        note_ua_fingerprint(ua_fp, ua)
+        ip_ua_fp = f"{host}:{ua_fp}"
+    except Exception:
+        pass
+
+    return SessionSignals(
+        x_session_id=x_session_id,
+        x_client_id=request.headers.get("x-client-id") or request.headers.get("x-mcp-client-id"),
+        ip_ua_fingerprint=ip_ua_fp,
+        user_agent=ua,
+        x_agent_name=request.headers.get("x-agent-name"),
+        x_agent_id=request.headers.get("x-agent-id"),
+        transport="uds" if peer_pid is not None else "rest",
+        peer_pid=peer_pid,
+        unitares_operator_token=request.headers.get("x-unitares-operator"),
+    )
+
+# ---------------------------------------------------------------------------
+# Trusted networks: localhost, Tailscale CGNAT, private RFC1918 ranges
+# ---------------------------------------------------------------------------
+_TRUSTED_NETWORKS = [
+    _ipaddress.ip_network("127.0.0.0/8"),
+    _ipaddress.ip_network("::1/128"),
+    _ipaddress.ip_network("100.64.0.0/10"),   # Tailscale CGNAT
+    _ipaddress.ip_network("192.168.0.0/16"),
+    _ipaddress.ip_network("10.0.0.0/8"),
+    _ipaddress.ip_network("172.16.0.0/12"),
+]
+
+
+# ---------------------------------------------------------------------------
+# Auth helpers
+# ---------------------------------------------------------------------------
+
+def _is_trusted_network(request) -> bool:
+    """Check if request originates from a trusted network.
+
+    Uses the actual TCP peer address only -- never trust X-Forwarded-For
+    since there is no reverse proxy stripping it before us.
+    """
+    client_ip = request.client.host if request.client else None
+    if not client_ip:
+        return False
+    try:
+        addr = _ipaddress.ip_address(client_ip)
+        return any(addr in net for net in _TRUSTED_NETWORKS)
+    except ValueError:
+        return False
+
+
+def _http_unauthorized():
+    return JSONResponse(
+        {
+            "success": False,
+            "error": "Unauthorized",
+            "hint": "Sign in at /auth/signin or provide a valid bearer token. Tokens come from UNITARES_MCP_BEARER_TOKENS (hosted) or UNITARES_HTTP_API_TOKEN (local).",
+        },
+        status_code=401,
+    )
+
+
+def _bearer_from_header(auth: str | None) -> str | None:
+    """Extract ``<tok>`` from an ``Authorization: Bearer <tok>`` header."""
+    if not auth or not isinstance(auth, str):
+        return None
+    if not auth.lower().startswith("bearer "):
+        return None
+    return auth.split(" ", 1)[1].strip()
+
+
+def _check_ws_auth(websocket, *, http_api_token: str | None) -> bool:
+    """Bearer token auth for WebSocket endpoints.
+
+    Same posture as :func:`_check_http_auth` — hosted mode (``UNITARES_MCP_BEARER_TOKENS``)
+    requires a valid bearer with no IP bypass; the legacy/local posture keeps the
+    trusted-network bypass and then gates on ``UNITARES_HTTP_API_TOKEN``.
+
+    A browser cannot set request headers on a ``WebSocket``, so the break-glass
+    bearer rides in the query string (``/ws/eisv?token=…``); non-browser clients
+    may still send the ``Authorization`` header. A DB-validated passkey session
+    is also accepted in local posture when the browser supplies the exact RP
+    Origin.
+
+    Without this, ``/ws/eisv`` was the only route on the server with no auth
+    check at all: over the tunnel ``GET /v1/residents`` answered 401 while the
+    WebSocket handshake answered 101 and streamed the full governance feed
+    (agent ids, EISV, risk, verdicts, and Lumen's raw sensor payload) to any
+    unauthenticated caller.
+    """
+    tok = websocket.query_params.get("token") or _bearer_from_header(
+        websocket.headers.get("authorization") or websocket.headers.get("Authorization")
+    )
+
+    # Hosted posture: the MCP bearer governs every transport; no IP bypass.
+    # Dashboard cookies are intentionally NOT authorized into this bearer-only
+    # branch without a separate operator decision.
+    if mcp_bearer_required():
+        return check_mcp_bearer(f"Bearer {tok}" if tok else None)
+
+    # Legacy / local posture. Keep explicit tokens as break-glass, then allow
+    # a DB-validated cookie only from our exact RP origin (WebSockets do not
+    # receive CORS protection and sibling subdomains are same-site).
+    if tok and http_api_token and secrets.compare_digest(tok, http_api_token):
+        return True
+    if dashboard_session_authenticated(websocket):
+        origin = websocket.headers.get("origin") or websocket.headers.get("Origin")
+        return bool(origin) and secrets.compare_digest(origin, DASHBOARD_EXPECTED_ORIGIN)
+
+    # Loopback and Tailscale stay unauthenticated in local posture.
+    if _is_trusted_network(websocket):
+        return True
+    # An unset local token is deny, not "gate disabled". Passkey sessions and
+    # trusted-network access above remain usable after deliberate token removal.
+    return False
+
+
+def _check_http_auth(request, *, http_api_token: str | None) -> bool:
+    """Bearer token auth for HTTP endpoints.
+
+    Hosted mode — when ``UNITARES_MCP_BEARER_TOKENS`` is configured, the REST
+    surface inherits the strict ``/mcp`` posture: a valid bearer is required and
+    the trusted-network bypass does **not** apply. This closes a real gap: the
+    trusted set includes every RFC1918 range (10/8, 192.168/16, 172.16/12) plus
+    Tailscale, so a hosted server behind a cloud proxy (source IP typically
+    ``10.x``) would otherwise bypass auth on the write path. Same token, same
+    rule, both transports.
+
+    Local / self-host default — no MCP bearer configured: trusted networks
+    bypass, while the rest require either ``UNITARES_HTTP_API_TOKEN`` or a
+    DB-validated passkey session. An unset local token fails closed.
+    """
+    # Hosted posture: the MCP bearer governs every transport; no IP bypass.
+    # Dashboard cookies are intentionally NOT authorized into this bearer-only
+    # branch without a separate operator decision.
+    if mcp_bearer_required():
+        auth = request.headers.get("authorization") or request.headers.get("Authorization")
+        return check_mcp_bearer(auth)
+
+    # Legacy / local posture: trusted network -> bearer -> validated session.
+    if _is_trusted_network(request):
+        return True
+    auth = request.headers.get("authorization") or request.headers.get("Authorization")
+    token = _bearer_from_header(auth)
+    if token and http_api_token and secrets.compare_digest(token, http_api_token):
+        return True
+    if dashboard_session_authenticated(request):
+        return True
+    # Fail closed when UNITARES_HTTP_API_TOKEN is unset. Removing the token is
+    # a deliberate lockout of non-session, non-trusted clients—not cleanup.
+    return False
+
+
+async def _extract_client_session_id(request) -> str:
+    """
+    Stable per-client session id for HTTP callers.
+    Uses SessionSignals + derive_session_key() for unified derivation.
+    Falls back to legacy logic if signals unavailable.
+    """
+    from src.mcp_handlers.identity.handlers import derive_session_key
+
+    signals = _build_http_session_signals(request)
+    x_session_id = signals.x_session_id
+    ip_ua_fp = signals.ip_ua_fingerprint
+
+    result = await derive_session_key(signals)
+
+    # If derive_session_key returned the raw IP:UA fingerprint (no pin found),
+    # and there's no explicit session header, generate a unique ID so REST
+    # clients without session headers get distinct identities per request chain.
+    if result == ip_ua_fp and not x_session_id:
+        try:
+            if hasattr(request, "state") and hasattr(request.state, "governance_client_id"):
+                return str(getattr(request.state, "governance_client_id"))
+        except Exception:
+            pass
+        import uuid as _uuid
+        unique_id = str(_uuid.uuid4())[:12]
+        try:
+            host = request.client.host if request.client else "unknown"
+            return f"http:{host}:{unique_id}"
+        except Exception:
+            return f"http:unknown:{unique_id}"
+
+    return result
+
+
+_HTTP_PREBIND_SKIP_TOOLS = {
+    "identity",
+    "onboard",
+    "bind_session",
+    "health_check",
+    "list_tools",
+    "get_server_info",
+    "describe_tool",
+    "debug_request_context",
+}
+
+
+def _explicit_bind_corroboration(arguments: dict) -> str:
+    """Classify what *else* a caller offered alongside a declared ``agent_id``.
+
+    Pure and side-effect free. Exists so the canary below can answer one
+    question with data instead of estimation: if the explicit-``agent_id``
+    path required corroborating proof, which live callers would still bind?
+
+      * ``csid``  — echoed ``client_session_id``; the server issued it, so the
+        caller demonstrably completed an onboard.
+      * ``token`` — ``continuity_token``; same-live-process rebind proof.
+      * ``none``  — the uuid and nothing else.
+
+    ``none`` is the population that a corroboration requirement would turn
+    away, and therefore the whole cost of tightening this path.
+    """
+    if not isinstance(arguments, dict):
+        return "none"
+    if isinstance(arguments.get("client_session_id"), str) and arguments["client_session_id"]:
+        return "csid"
+    if isinstance(arguments.get("continuity_token"), str) and arguments["continuity_token"]:
+        return "token"
+    return "none"
+
+
+def _bind_explicit_http_agent(arguments: dict) -> str | None:
+    explicit_agent_id = arguments.get("agent_id")
+    if not (
+        isinstance(explicit_agent_id, str)
+        and len(explicit_agent_id) == 36
+        and explicit_agent_id.count("-") == 4
+    ):
+        return None
+    from src.mcp_handlers.context import update_context_agent_id
+
+    # CANARY — observation only, no behaviour change.
+    #
+    # This branch accepts an identity on the caller's word: the test above is
+    # a *shape* check (36 chars, 4 hyphens), not a lookup, and it runs first in
+    # `_resolve_http_prebind`, ahead of the operator token and the sticky
+    # binding. A resolution that succeeds here means the strict-identity gate
+    # downstream never sees a miss, so it never emits its typed refusal.
+    #
+    # That is the surface the trust-anchor audit is scoped to. Closing it is a
+    # behaviour change with real blast radius — some live callers declare a
+    # uuid and nothing else — and per the fleet rule that a gate needs a wired
+    # canary before it is armed, this measures the population first. The log
+    # line is the measurement; nothing here changes what binds.
+    #
+    # Deliberately NOT logged: the uuid itself, at any length. A prefix is
+    # still an identity fragment, and this line is meant to be safe to leave
+    # on in a live server and safe to read in a shared log.
+    logger.info(
+        "[ATTEST] explicit_agent_id bind corroboration=%s tool_arg_keys=%d",
+        _explicit_bind_corroboration(arguments),
+        len(arguments) if isinstance(arguments, dict) else 0,
+    )
+
+    update_context_agent_id(explicit_agent_id)
+    return explicit_agent_id
+
+
+def _preserve_explicit_target(arguments: dict, resolved_uuid: str) -> None:
+    """Stamp the resolved identity as the call target ONLY if none was asked for.
+
+    Every prebind path resolves two different things at once: WHO is calling
+    (the context binding, which authorizes) and WHAT the call is about (the
+    ``agent_id`` argument, which selects). They coincide for the common
+    self-read, so writing the resolved uuid into ``arguments`` was harmless
+    there and wrong whenever a caller named a target — the read came back for
+    the caller instead, under a `success` envelope, with the response's own
+    ``agent_id`` field quietly reading the substituted identity.
+
+    A caller that names no target still gets the resolved identity stamped, so
+    the self-read path is unchanged.
+    """
+    if not arguments.get("agent_id"):
+        arguments["agent_id"] = resolved_uuid
+
+
+async def _resolve_http_operator(arguments: dict, signals) -> str | None:
+    from src.mcp_handlers.context import (
+        set_session_proof_origin,
+        set_session_resolution_source,
+        update_context_agent_id,
+    )
+    from src.mcp_handlers.identity.operator import resolve_operator_identity
+
+    try:
+        operator_identity = await resolve_operator_identity(signals)
+    except Exception as exc:
+        logger.warning("[OPERATOR] identity resolution failed: %s", exc)
+        return None
+    if not operator_identity:
+        return None
+    agent_uuid = operator_identity["agent_uuid"]
+    update_context_agent_id(agent_uuid)
+    # Bind the CALLER, do not retarget the CALL. Overwriting a caller-supplied
+    # agent_id here answered a question about agent X with agent Y's state and
+    # said nothing about it — the silent-substitution shape invariant 1 exists
+    # to forbid. It only bit a NON-uuid-shaped agent_id, because
+    # _bind_explicit_http_agent returns early on the uuid shape and never
+    # reaches this branch; a structured handle
+    # (`Claude_Code_<date>_<uuid8>`) fell straight through. Since #1533 a
+    # read-state response reports `agent_id` AS that handle, so a caller
+    # round-tripping the field it was just handed was exactly the caller that
+    # got silently redirected to itself.
+    _preserve_explicit_target(arguments, agent_uuid)
+    set_session_resolution_source("operator_token")
+    set_session_proof_origin("caller_asserted")
+    return agent_uuid
+
+
+async def _consult_http_sticky_binding(arguments: dict, signals):
+    from src.mcp_handlers.context import (
+        set_session_proof_origin,
+        set_session_resolution_source,
+        update_context_agent_id,
+    )
+    from src.mcp_handlers.middleware.identity_step import (
+        consult_sticky_binding,
+        sticky_resolution_source,
+    )
+
+    try:
+        consult = await consult_sticky_binding(
+            signals, arguments, redis_recovery=False
+        )
+        if consult.binding is None:
+            return None, consult
+        cached = consult.binding
+        update_context_agent_id(cached.agent_uuid)
+        # Same split as the operator path: a sticky binding says who the
+        # transport belongs to, never what the caller asked about. This one is
+        # strictly worse when it retargets — proof_origin is
+        # "server_inferred", so it silently substituted an identity the caller
+        # never asserted at all.
+        _preserve_explicit_target(arguments, cached.agent_uuid)
+        set_session_resolution_source(sticky_resolution_source(cached))
+        set_session_proof_origin("server_inferred")
+        return cached.agent_uuid, consult
+    except Exception as exc:
+        logger.debug("[STICKY-REST] cache check failed: %s", exc)
+        return None, None
+
+
+def _cache_http_resolution(
+    consult,
+    resolved: dict,
+    agent_uuid: str,
+    session_key: str,
+) -> None:
+    writeback_key = (
+        consult.transport_key if (consult and consult.cacheable) else None
+    )
+    if not writeback_key:
+        return
+    try:
+        from src.mcp_handlers.middleware.identity_step import update_transport_binding
+
+        update_transport_binding(
+            writeback_key,
+            agent_uuid,
+            session_key,
+            source="rest",
+            original_session_source=resolved.get("source") or "rest_resolution",
+        )
+    except Exception as exc:
+        logger.debug("[STICKY-REST] cache update failed: %s", exc)
+
+
+async def _touch_http_session_activity(
+    session_key: str,
+    agent_uuid: str,
+) -> None:
+    for attempt in range(2):
+        try:
+            from src.db import get_db
+
+            await get_db().update_session_activity(session_key)
+            return
+        except Exception as exc:
+            if attempt == 0:
+                await asyncio.sleep(0.05)
+            else:
+                logger.warning(
+                    "[REST-SESSION] TTL update failed for agent %s...: %s",
+                    agent_uuid[:8],
+                    exc,
+                )
+
+
+async def _resolve_http_session_binding(
+    tool_name: str,
+    arguments: dict,
+    signals,
+    consult,
+) -> str | None:
+    from src.mcp_handlers.context import update_context_agent_id
+    from src.mcp_handlers.identity.handlers import (
+        derive_session_key,
+        resolve_session_identity,
+    )
+    from src.mcp_handlers.identity.session import extract_token_agent_uuid_safe
+
+    session_key = await derive_session_key(signals, arguments)
+    token_agent_uuid = extract_token_agent_uuid_safe(
+        arguments.get("continuity_token")
+    )
+    if not token_agent_uuid:
+        from src.mcp_handlers.decorators import get_call_identity_requirement
+
+        if get_call_identity_requirement(tool_name, arguments) == "pre_onboard":
+            return None
+
+    resolved = await resolve_session_identity(
+        session_key,
+        persist=False,
+        model_type=arguments.get("model_type"),
+        client_hint=arguments.get("client_hint"),
+        resume=True,
+        token_agent_uuid=token_agent_uuid,
+    )
+    if not resolved or resolved.get("created"):
+        return None
+    agent_uuid = resolved.get("agent_uuid")
+    if not agent_uuid:
+        return None
+
+    update_context_agent_id(agent_uuid)
+    # Third and last prebind path, same rule (see _preserve_explicit_target):
+    # a resumed session binding identifies the caller, not the target.
+    _preserve_explicit_target(arguments, agent_uuid)
+    _cache_http_resolution(consult, resolved, agent_uuid, session_key)
+    await _touch_http_session_activity(session_key, agent_uuid)
+    return agent_uuid
+
+
+async def _resolve_http_bound_agent(
+    tool_name: str,
+    arguments: dict,
+    signals,
+) -> str | None:
+    """Resolve an existing identity before dispatching a direct HTTP tool."""
+    if not isinstance(arguments, dict) or tool_name in _HTTP_PREBIND_SKIP_TOOLS:
+        return None
+
+    explicit_agent_id = _bind_explicit_http_agent(arguments)
+    if explicit_agent_id:
+        return explicit_agent_id
+
+    operator_agent_id = await _resolve_http_operator(arguments, signals)
+    if operator_agent_id:
+        return operator_agent_id
+
+    cached_agent_id, consult = await _consult_http_sticky_binding(
+        arguments, signals
+    )
+    if cached_agent_id:
+        return cached_agent_id
+
+    return await _resolve_http_session_binding(
+        tool_name, arguments, signals, consult
+    )
+
+
+def _http_bool(value) -> bool:
+    return str(value or "").strip().lower() in ("1", "true", "yes")
