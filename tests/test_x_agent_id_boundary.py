@@ -42,12 +42,12 @@ async def test_unverified_x_agent_id_never_seeds_bound_context(monkeypatch):
         }
 
     with patch(
-        "src.http_api._build_http_session_signals", return_value=MagicMock()
+        "src.http_routes.access._build_http_session_signals", return_value=MagicMock()
     ), patch(
-        "src.http_api._resolve_http_bound_agent",
+        "src.http_routes.access._resolve_http_bound_agent",
         new=AsyncMock(return_value=None),
     ), patch(
-        "src.http_api.execute_http_tool",
+        "src.http_routes.tools.execute_http_tool",
         new=AsyncMock(side_effect=inspect_boundary),
     ):
         observed = await _execute_http_tool_in_context(
@@ -76,9 +76,9 @@ async def test_forged_header_is_refused_before_rest_fallback(monkeypatch):
     fallback = AsyncMock(return_value={"unexpected": True})
 
     with patch(
-        "src.http_api._build_http_session_signals", return_value=MagicMock()
+        "src.http_routes.access._build_http_session_signals", return_value=MagicMock()
     ), patch(
-        "src.http_api._resolve_http_bound_agent",
+        "src.http_routes.access._resolve_http_bound_agent",
         new=AsyncMock(return_value=None),
     ), patch(
         "src.services.http_tool_service.execute_http_dispatch_fallback",
@@ -122,12 +122,12 @@ async def test_resolver_verified_http_identity_remains_bound(monkeypatch):
         }
 
     with patch(
-        "src.http_api._build_http_session_signals", return_value=MagicMock()
+        "src.http_routes.access._build_http_session_signals", return_value=MagicMock()
     ), patch(
-        "src.http_api._resolve_http_bound_agent",
+        "src.http_routes.access._resolve_http_bound_agent",
         new=AsyncMock(side_effect=resolve),
     ), patch(
-        "src.http_api.execute_http_tool",
+        "src.http_routes.tools.execute_http_tool",
         new=AsyncMock(side_effect=inspect_boundary),
     ):
         observed = await _execute_http_tool_in_context(

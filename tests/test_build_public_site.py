@@ -15,7 +15,7 @@ def test_build_separates_product_landing_from_glossary(tmp_path):
     glossary = (tmp_path / "glossary.html").read_text(encoding="utf-8")
     server_version = (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
-    assert "Runtime accountability for long-lived AI agents" in landing
+    assert "Runtime governance for long-lived AI agents" in landing
     assert "External adoption remains unvalidated" in landing
     assert "selection-aware null" in landing
     assert "https://pypi.org/project/unitares-sdk/" in landing

@@ -132,7 +132,7 @@ def build(out_dir: Path, cname: str | None) -> None:
     # Product/evaluator landing page. Its copy remains reviewable as markdown.
     out_dir.joinpath("index.html").write_text(
         PAGE_TEMPLATE.format(
-            title="UNITARES — Runtime Accountability for AI Agents",
+            title="UNITARES — Runtime Governance for AI Agents",
             home_active=' class="active"',
             glossary_active="",
             audit_active="",
