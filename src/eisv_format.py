@@ -25,7 +25,13 @@ class EISVMetrics(NamedTuple):
 
     Use this instead of dict to ensure all four metrics are always present.
 
-    Note on V: In Lumen's sensor layer, V = (1 - presence) * 0.3 [0, 0.3].
+    Note on V: Lumen's sensor layer submits a signed E-I imbalance,
+    V = clamp(E - I, -1, 1) — same sense as governance V (positive: running
+    hot, negative: running careful). The older (1 - presence) * 0.3 "Void"
+    reading is retired (anima-mcp #164): it only ever reported the positive
+    half and was not comparable to other agents' V. Live values sit well
+    outside [0, 0.3] — around -0.53 as of 2026-08-13 — so anything assuming
+    V >= 0, or reading V as inverse-presence, is wrong.
     In governance dynamics, V is a signed integrator: dV/dt = kappa(E-I) - delta*V [-2, 2].
     The observation-layer V seeds the ODE, which then evolves independently.
     """
