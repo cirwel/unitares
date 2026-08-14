@@ -165,7 +165,7 @@ async def test_residents_use_metadata_last_update_when_broadcaster_event_is_stal
     })
 
     with patch("src.mcp_handlers.shared.lazy_mcp_server", server), \
-            patch("src.http_api._recent_writes_for_agent", AsyncMock(return_value=[])):
+            patch("src.http_routes.residents._recent_writes_for_agent", AsyncMock(return_value=[])):
         resp = await http_api.http_residents(request)
 
     data = json.loads(resp.body.decode())
@@ -200,7 +200,7 @@ async def test_residents_use_broadcaster_event_when_it_is_newer(monkeypatch):
     })
 
     with patch("src.mcp_handlers.shared.lazy_mcp_server", server), \
-            patch("src.http_api._recent_writes_for_agent", AsyncMock(return_value=[])):
+            patch("src.http_routes.residents._recent_writes_for_agent", AsyncMock(return_value=[])):
         resp = await http_api.http_residents(request)
 
     data = json.loads(resp.body.decode())
@@ -245,7 +245,7 @@ async def test_residents_duplicate_label_prefers_fresh_real_metadata(monkeypatch
     })
 
     with patch("src.mcp_handlers.shared.lazy_mcp_server", server), \
-            patch("src.http_api._recent_writes_for_agent", AsyncMock(return_value=[])):
+            patch("src.http_routes.residents._recent_writes_for_agent", AsyncMock(return_value=[])):
         resp = await http_api.http_residents(request)
 
     data = json.loads(resp.body.decode())
@@ -282,14 +282,16 @@ async def test_residents_rebinds_stale_metadata_to_newer_label_event(monkeypatch
         "eisv": {"E": 0.74, "I": 0.68, "S": 0.24, "V": 0.08},
         "metrics": {"coherence": 0.496, "risk_score": 0.6535, "verdict": "high-risk"},
     })
+    from src.http_routes import residents
+
     monkeypatch.setattr(
-        http_api.time,
+        residents.time,
         "time",
         lambda: datetime(2026, 5, 18, 21, 33, 0, tzinfo=timezone.utc).timestamp(),
     )
 
     with patch("src.mcp_handlers.shared.lazy_mcp_server", server), \
-            patch("src.http_api._recent_writes_for_agent", AsyncMock(return_value=[])):
+            patch("src.http_routes.residents._recent_writes_for_agent", AsyncMock(return_value=[])):
         resp = await http_api.http_residents(request)
 
     data = json.loads(resp.body.decode())
@@ -333,7 +335,7 @@ async def test_residents_event_driven_flag_authoritative_for_watcher():
     http_api.broadcaster_instance.event_history.clear()
 
     with patch("src.mcp_handlers.shared.lazy_mcp_server", server), \
-            patch("src.http_api._recent_writes_for_agent", AsyncMock(return_value=[])):
+            patch("src.http_routes.residents._recent_writes_for_agent", AsyncMock(return_value=[])):
         resp = await http_api.http_residents(request)
 
     data = json.loads(resp.body.decode())
@@ -382,8 +384,8 @@ async def test_residents_durable_eisv_fallback_populates_daily_resident():
     }
 
     with patch("src.mcp_handlers.shared.lazy_mcp_server", server), \
-            patch("src.http_api._recent_writes_for_agent", AsyncMock(return_value=[])), \
-            patch("src.http_api._durable_latest_eisv_for_agent",
+            patch("src.http_routes.residents._recent_writes_for_agent", AsyncMock(return_value=[])), \
+            patch("src.http_routes.residents._durable_latest_eisv_for_agent",
                   AsyncMock(return_value=durable)) as durable_mock:
         resp = await http_api.http_residents(request)
 
@@ -428,8 +430,8 @@ async def test_residents_durable_eisv_not_consulted_when_ring_has_event():
     })
 
     with patch("src.mcp_handlers.shared.lazy_mcp_server", server), \
-            patch("src.http_api._recent_writes_for_agent", AsyncMock(return_value=[])), \
-            patch("src.http_api._durable_latest_eisv_for_agent",
+            patch("src.http_routes.residents._recent_writes_for_agent", AsyncMock(return_value=[])), \
+            patch("src.http_routes.residents._durable_latest_eisv_for_agent",
                   AsyncMock(return_value=None)) as durable_mock:
         resp = await http_api.http_residents(request)
 
