@@ -115,9 +115,10 @@ async def test_research_registry_http_reads(tmp_path, monkeypatch):
     record_research_run(_sample_run(), root=tmp_path)
 
     from src import http_api
+    from src.http_routes import access
 
     monkeypatch.setattr(
-        http_api,
+        access,
         "_check_http_auth",
         lambda request, *, http_api_token: True,
     )
