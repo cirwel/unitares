@@ -161,6 +161,7 @@ select = ["F401"]
 "src/mcp_handlers/utils.py" = ["F401"]
 "src/mcp_handlers/cirs/protocol.py" = ["F401"]
 "src/mcp_handlers/lifecycle/handlers.py" = ["F401"]
+"src/http_api.py" = ["F401"]
 "src/mcp_handlers/identity/core.py" = ["F401"]
 "src/mcp_handlers/identity/handlers.py" = ["F401"]
 # Re-export hub for watcher tests/hooks (tests monkeypatch.setattr these names on the agent module)
