@@ -650,3 +650,58 @@ def test_conclusion_is_untouched_when_no_selective_null_was_computed():
         )
         == "SKEPTICAL: nothing here"
     )
+
+
+def test_selective_null_survives_mixed_type_cluster_keys():
+    """Regression for the TypeError that killed the weekly skeptic-trend run.
+
+    `prior_state_cluster_key` returns a measurement-id STRING when provenance
+    telemetry carries one and a rounded-epoch INT when it does not. #1547
+    started populating `prior_measurement_id`, so real cohorts began holding
+    both; the next scheduled run (2026-08-10) died sorting them and the job
+    produced no report for two weeks. Nothing reported the failure because
+    nothing reported the job's outcome at all.
+    """
+    base = datetime.now(timezone.utc).replace(microsecond=0)
+    rows = []
+    for idx in range(6):
+        # Constant age against an advancing ts, so the int-keyed rows land in
+        # distinct clusters. (`60.0 + idx` would make ts-age constant and
+        # collapse all three into one — which is what the first draft of this
+        # test did, and it then measured almost nothing.)
+        row = dataclasses.replace(
+            _row(idx, bad=(idx % 2 == 0), risk=0.3, agent="agent-a"),
+            ts=base + timedelta(seconds=idx),
+            prior_state_age_seconds=60.0,
+        )
+        # Half the cohort carries provenance (str key), half does not (int key)
+        # — the exact mixture a live cohort has had since #1547.
+        if idx % 2 == 0:
+            row = dataclasses.replace(row, prior_measurement_id=f"m-{idx}")
+        rows.append(row)
+
+    null = matrix_module.estimate_selective_null(
+        rows, observed_best_delta=0.1, resamples=5
+    )
+
+    assert null is not None
+    assert null.clusters == 6
+
+
+def test_cluster_sort_key_is_a_total_order_and_keeps_none_last():
+    """Ordering only fixes which permutation a seed yields, so any total order
+    is valid — but it must BE total, and must not reorder None, which the
+    previous expression placed last within an agent."""
+    keys = [
+        ("agent-a", "measurement:z"),
+        ("agent-a", 1700000000),
+        ("agent-a", None),
+        ("agent-b", 42),
+    ]
+    ordered = sorted(keys, key=matrix_module._cluster_sort_key)
+
+    assert ordered[-2] == ("agent-a", None), "None sorts last within its agent"
+    assert ordered[-1] == ("agent-b", 42), "agent ordering still dominates"
+    # Reversing the input must not change the result — a total order, not an
+    # accident of insertion sequence.
+    assert sorted(keys[::-1], key=matrix_module._cluster_sort_key) == ordered

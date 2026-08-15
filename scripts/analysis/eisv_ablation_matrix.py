@@ -332,6 +332,29 @@ def _cluster_key(row: OutcomeRow) -> tuple[str, str | int | None]:
     return prior_state_cluster_key(row)
 
 
+def _cluster_sort_key(key: tuple[str, str | int | None]) -> tuple[str, int, str, int]:
+    """Total order over a deliberately heterogeneous cluster key.
+
+    The snapshot half of the key is a measurement-id ``str`` when provenance
+    telemetry carries one and a rounded-epoch ``int`` when it does not, so any
+    cohort holding both kinds makes a naive ``key[1] or 0`` compare ``str``
+    against ``int``. Rank by type first, then compare within type.
+
+    This is ordering, not a statistic. ``keys`` exists so a given RNG seed
+    reproduces the same permutation; the null is over random reassignment of
+    prior-state blocks between clusters, so every deterministic total order is
+    equally valid. Nothing here changes which clusters exist, how many there
+    are, or what is estimated. ``None`` still sorts last within an agent, as
+    the previous expression made it.
+    """
+    agent, snapshot = key
+    if snapshot is None:
+        return (agent, 2, "", 0)
+    if isinstance(snapshot, str):
+        return (agent, 0, snapshot, 0)
+    return (agent, 1, "", snapshot)
+
+
 def _best_delta_value(
     rows: Sequence[OutcomeRow],
     *,
@@ -371,13 +394,13 @@ def estimate_selective_null(
         return None
 
     # One representative EISV reading per cluster; constant within, by construction.
-    blocks: dict[tuple[str, int | None], dict[str, Any]] = {}
+    blocks: dict[tuple[str, str | int | None], dict[str, Any]] = {}
     for row in rows:
         blocks.setdefault(
             _cluster_key(row),
             {field: getattr(row, field) for field in PRIOR_STATE_FIELDS},
         )
-    keys = sorted(blocks, key=lambda key: (key[0], key[1] is None, key[1] or 0))
+    keys = sorted(blocks, key=_cluster_sort_key)
     if len(keys) < 3:
         # Fewer than three permutable units cannot produce a meaningful null.
         return SelectiveNull(
