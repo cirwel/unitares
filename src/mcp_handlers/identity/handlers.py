@@ -1716,24 +1716,8 @@ async def _finalize_onboard_lineage(
     return parent_agent_id, "provisional"
 
 
-@mcp_tool("onboard", timeout=15.0, requires_identity="pre_onboard")
-async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """
-    ONBOARD - Single entry point for new agents.
-
-    This is THE portal tool. Call it first, get back everything you need:
-    - Your identity (auto-created)
-    - Ready-to-use templates for next calls
-    - Client-specific guidance
-
-    Returns a "toolcard" payload with next_calls array.
-    """
-    from ..shared import get_mcp_server
-
-    # DEBUG: Log entry
-    logger.debug(f"[SESSION_DEBUG] onboard() entry: args_keys={list(arguments.keys()) if arguments else []}")
-
-    # === KWARGS STRING UNWRAPPING ===
+def _unwrap_kwargs_string_argument(arguments: Optional[Dict[str, Any]]) -> None:
+    """Unwrap a JSON-string ``kwargs`` argument in place (client quirk shim)."""
     if arguments and "kwargs" in arguments and isinstance(arguments["kwargs"], str):
         try:
             import json
@@ -1745,18 +1729,23 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         except (json.JSONDecodeError, TypeError) as e:
             logger.warning(f"[KWARGS] Failed to parse: {e}")
 
-    arguments = arguments or {}
-    normalize_client_session_id_argument(arguments)
 
-    # S13 v2-ontology gate: arg-less onboard from a fresh process-instance
-    # mints fresh by default per identity.md §"Layered taxonomy of continuity".
-    # Caller opts back into resume by passing any proof signal — explicit
-    # force_new flag, ownership proof (continuity_token, agent_uuid, agent_id),
-    # transport-bound session signal (client_session_id), or display name.
-    # Without any signal we have nothing to honestly resume to; the legacy
-    # IP:UA pin path was the performative fill-in this gate retires for the
-    # arg-less case. Plugin-side complement of this gate landed as
-    # unitares-governance-plugin#17 (S11) on 2026-04-21.
+def _s13_freshness_gate(arguments: Dict[str, Any]):
+    """S13 v2-ontology gate: arg-less onboard from a fresh process-instance
+    mints fresh by default per identity.md §"Layered taxonomy of continuity".
+
+    Caller opts back into resume by passing any proof signal — explicit
+    force_new flag, ownership proof (continuity_token, agent_uuid, agent_id),
+    transport-bound session signal (client_session_id), or display name.
+    Without any signal we have nothing to honestly resume to; the legacy
+    IP:UA pin path was the performative fill-in this gate retires for the
+    arg-less case. Plugin-side complement of this gate landed as
+    unitares-governance-plugin#17 (S11) on 2026-04-21.
+
+    Returns a refusal response when STRICT_IDENTITY_REQUIRED blocks the
+    bare call; otherwise may set ``arguments["force_new"] = True`` in place
+    and returns None.
+    """
     try:
         from ..context import get_csid_transport_injected
         _client_session_id_caller_asserted = (
@@ -1802,6 +1791,233 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             "[FRESH_INSTANCE] arg-less onboard() with no proof signal — "
             "defaulting to force_new=true per v2 ontology (S13)"
         )
+    return None
+
+
+def _derive_onboard_response_mode(arguments: Dict[str, Any]) -> tuple:
+    """Resolve (verbose, response_mode) for the onboard envelope.
+
+    #734: lean onboard envelope is the DEFAULT. "minimal" drops the nested
+    identity ontology (identity_context) and the descriptive extras
+    (session_resolution_source, continuity_token_supported, date_context),
+    keeping uuid / agent_id / client_session_id / a single identity_assurance
+    block / trajectory genesis+trust_tier / lineage flags / continuity_token /
+    next_step. Callers that need the full self-description pass
+    response_mode="full". The functional fields the plugin/dashboard rely on
+    (uuid, client_session_id) are retained in both modes.
+
+    verbose=True is the legacy "give me everything" signal; honor it as full
+    so existing verbose callers keep the next_calls/session_continuity/
+    tool_mode/workflow extras (minimal returns before those are built). An
+    explicit response_mode always wins over the verbose-derived default.
+    """
+    verbose = coerce_bool(arguments.get("verbose"), default=False)
+    response_mode = str(
+        arguments.get("response_mode") or ("full" if verbose else "minimal")
+    ).strip().lower()
+    if response_mode not in {"full", "minimal"}:
+        response_mode = "full" if verbose else "minimal"
+    return verbose, response_mode
+
+
+def _resolve_response_agent_id(agent_uuid: str, agent_id) -> str:
+    """Public handle for the response: registry metadata over raw fallback."""
+    public_agent_id = agent_id if agent_id and agent_id != agent_uuid else None
+    structured_id = None
+    try:
+        # Atomic read via .get — avoids TOCTOU between `in` check and subscript
+        # if another task mutates agent_metadata concurrently.
+        meta = mcp_server.agent_metadata.get(agent_uuid)
+        if meta is not None:
+            public_agent_id = getattr(meta, "public_agent_id", None) or public_agent_id
+            structured_id = getattr(meta, 'structured_id', None)
+    except Exception:
+        pass
+    return public_agent_id or structured_id or f"agent_{agent_uuid[:8]}"
+
+
+def _derive_identity_resolution_outcome(identity, is_new, force_new, spawn_reason) -> str:
+    """Name how this call resolved identity: minted vs resumed taxonomy."""
+    identity_resolution_outcome = (
+        identity.get("identity_resolution_outcome")
+        if isinstance(identity, dict)
+        else None
+    )
+    if not identity_resolution_outcome:
+        if is_new and spawn_reason in {
+            "dispatch_auto_mint",
+            "auto_onboard_no_session",
+            "orchestrated_thread_anchor",
+        }:
+            identity_resolution_outcome = "minted_after_resume_miss"
+        elif is_new and force_new:
+            identity_resolution_outcome = "minted_force_new"
+        elif is_new:
+            identity_resolution_outcome = "minted_fresh"
+        else:
+            identity_resolution_outcome = "resumed"
+    return identity_resolution_outcome
+
+
+def _build_tool_mode_info(verbose: bool):
+    """Verbose-only tool-mode discovery block for the onboard envelope."""
+    tool_mode_info = None
+    if verbose:
+        try:
+            from src.tool_modes import TOOL_MODE, get_tools_for_mode
+            from src.tool_schemas import get_tool_definitions
+            all_tools = get_tool_definitions()
+            mode_tools = get_tools_for_mode(TOOL_MODE)
+            tool_mode_info = {
+                "current_mode": TOOL_MODE,
+                "visible_tools": len(mode_tools),
+                "total_tools": len(all_tools),
+                "available_modes": ["minimal", "lite", "full"],
+                "tip": f"You're seeing {len(mode_tools)}/{len(all_tools)} tools in '{TOOL_MODE}' mode. Use list_tools() for discovery, or ask for ?mode=full if you need more."
+            }
+        except Exception as e:
+            logger.debug(f"Could not add tool_mode info: {e}")
+    return tool_mode_info
+
+
+async def _apply_r2_lineage_state(agent_uuid: str, lineage_for_response):
+    """R2 PR 3: read the post-pre-check lineage state from the row so
+    the response surfaces both the per-call decision (lineage_state)
+    and the persisted column (provisional_lineage). On the resume
+    branch these come from the existing row; on the fresh/forced
+    branches they reflect what _r2_pre_check_and_declare just stamped.
+    `isinstance(..., dict)` guards against test backends that return
+    AsyncMock auto-children instead of None (per the conftest leak-
+    detection contract noted at L143 — bare get() on a Mock surfaces
+    a coroutine that the response builder never awaits).
+
+    Returns (lineage_for_response, provisional_lineage).
+    """
+    _r2_provisional_lineage = False
+    try:
+        _r2_lineage_row = await get_db().read_lineage_state(agent_uuid)
+        if isinstance(_r2_lineage_row, dict):
+            _r2_provisional_lineage = bool(_r2_lineage_row.get("provisional_lineage"))
+            # Resume branch fallback: if the row already has a parent and
+            # the FSM hasn't moved it to a terminal state, surface the
+            # row's lineage state in the response. The fresh/forced
+            # branches set _lineage_for_response explicitly above and
+            # we honor that — only override when this onboard call was
+            # the resume branch (no fresh declaration this call).
+            # Council fix: delegated to `derive_lineage_state` so the
+            # cascade lives in one place (shared with identity()).
+            if lineage_for_response == "no_lineage_declared" and _r2_lineage_row.get("parent_agent_id"):
+                from src.identity.lineage_lifecycle import derive_lineage_state
+                _derived = derive_lineage_state(_r2_lineage_row)
+                if _derived is not None:
+                    lineage_for_response = _derived
+    except Exception as e:
+        logger.debug(f"[R2] read_lineage_state failed (non-fatal): {e}")
+    return lineage_for_response, _r2_provisional_lineage
+
+
+async def _maybe_write_bootstrap_checkin(arguments, agent_uuid: str, client_hint, result) -> None:
+    """Bootstrap check-in (onboard-bootstrap-checkin §3.5). Conditional on
+    initial_state being present in the request — the response gains a
+    `bootstrap` key only when the caller asked for a bootstrap row. The
+    write itself is timeout-bounded and fail-open per §3.5."""
+    _initial_state = arguments.get("initial_state")
+    if _initial_state is not None:
+        try:
+            from src.mcp_handlers.identity.bootstrap_checkin import write_bootstrap
+            from src.mcp_handlers.schemas.core import BootstrapStateParams
+            _bootstrap_params = (
+                _initial_state if isinstance(_initial_state, BootstrapStateParams)
+                else BootstrapStateParams(**_initial_state)
+            )
+            db = get_db()
+            _identity_record = await db.get_identity(agent_uuid)
+            if _identity_record is not None:
+                result["bootstrap"] = await write_bootstrap(
+                    db,
+                    identity_id=_identity_record.identity_id,
+                    agent_id=agent_uuid,
+                    params=_bootstrap_params,
+                    client_hint=client_hint,
+                    purpose=arguments.get("purpose"),
+                )
+        except Exception as _bootstrap_err:  # noqa: BLE001 — bootstrap is fail-open
+            logger.warning(
+                f"[BOOTSTRAP] onboard initial_state handling failed (non-fatal): {_bootstrap_err}"
+            )
+
+
+def _log_identity_resolution_observation(arguments, agent_uuid: str) -> None:
+    """Identity-resolution observation event. One per successful onboard, used
+    later to answer "is the 30-min sliding pin TTL bleeding into
+    continuity-token-only resumes?" Pin shadow fields are populated when
+    the IP/UA pin path didn't win but a fingerprint signal was present.
+    See the audit-log schema in src/audit_log.py:log_identity_resolution_observed."""
+    try:
+        import time as _ires_time
+        from src.audit_log import audit_logger as _ires_audit
+        from ..context import (
+            get_session_resolution_source,
+            get_pin_match_scope,
+            get_shadow_pin_observation,
+            get_session_proof_origin,
+            get_csid_transport_injected,
+        )
+        _ires_token = arguments.get("continuity_token")
+        _ires_iat: Optional[int] = None
+        _ires_exp: Optional[int] = None
+        _ires_age: Optional[int] = None
+        if _ires_token:
+            _ires_iat = extract_token_iat(str(_ires_token))
+            from .session import extract_token_exp as _extract_exp
+            _ires_exp = _extract_exp(str(_ires_token))
+            if _ires_iat is not None:
+                _ires_age = max(0, int(_ires_time.time()) - int(_ires_iat))
+        _ires_shadow = get_shadow_pin_observation()
+        _ires_audit.log_identity_resolution_observed(
+            agent_uuid=agent_uuid,
+            resolution_source=get_session_resolution_source(),
+            pin_match_scope=get_pin_match_scope(),
+            pin_entry_present=_ires_shadow["pin_entry_present"],
+            pin_fingerprint_match=_ires_shadow["pin_fingerprint_match"],
+            pin_entry_age_seconds=_ires_shadow["pin_entry_age_seconds"],
+            token_iat=_ires_iat,
+            token_exp=_ires_exp,
+            token_age_seconds=_ires_age,
+            proof_origin=get_session_proof_origin(),
+            csid_transport_injected=get_csid_transport_injected(),
+        )
+    except Exception as _ires_err:  # pragma: no cover — defensive
+        logger.debug(f"[IRES] identity_resolution_observed write failed (non-fatal): {_ires_err}")
+
+
+@mcp_tool("onboard", timeout=15.0, requires_identity="pre_onboard")
+async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """
+    ONBOARD - Single entry point for new agents.
+
+    This is THE portal tool. Call it first, get back everything you need:
+    - Your identity (auto-created)
+    - Ready-to-use templates for next calls
+    - Client-specific guidance
+
+    Returns a "toolcard" payload with next_calls array.
+    """
+    from ..shared import get_mcp_server
+
+    # DEBUG: Log entry
+    logger.debug(f"[SESSION_DEBUG] onboard() entry: args_keys={list(arguments.keys()) if arguments else []}")
+
+    _unwrap_kwargs_string_argument(arguments)
+
+    arguments = arguments or {}
+    normalize_client_session_id_argument(arguments)
+
+    # S13 v2-ontology gate (see _s13_freshness_gate): may refuse the bare
+    # call under STRICT_IDENTITY_REQUIRED, or default force_new=true in place.
+    _s13_refusal = _s13_freshness_gate(arguments)
+    if _s13_refusal is not None:
+        return _s13_refusal
 
     # Extract optional parameters
     name = arguments.get("name")  # Optional: set display name
@@ -2409,25 +2625,7 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         logger.debug(f"[THREAD] Could not build thread context: {e}")
 
     # STEP 6: Build response
-    verbose = coerce_bool(arguments.get("verbose"), default=False)
-    # #734: lean onboard envelope is now the DEFAULT. "minimal" drops the
-    # nested identity ontology (identity_context) and the descriptive extras
-    # (session_resolution_source, continuity_token_supported, date_context),
-    # keeping uuid / agent_id / client_session_id / a single identity_assurance
-    # block / trajectory genesis+trust_tier / lineage flags / continuity_token /
-    # next_step. Callers that need the full self-description pass
-    # response_mode="full". The functional fields the plugin/dashboard rely on
-    # (uuid, client_session_id) are retained in both modes.
-    #
-    # verbose=True is the legacy "give me everything" signal; honor it as full
-    # so existing verbose callers keep the next_calls/session_continuity/
-    # tool_mode/workflow extras (minimal returns before those are built). An
-    # explicit response_mode always wins over the verbose-derived default.
-    response_mode = str(
-        arguments.get("response_mode") or ("full" if verbose else "minimal")
-    ).strip().lower()
-    if response_mode not in {"full", "minimal"}:
-        response_mode = "full" if verbose else "minimal"
+    verbose, response_mode = _derive_onboard_response_mode(arguments)
     try:
         from ..context import get_session_resolution_source, get_session_proof_origin
         continuity_source = get_session_resolution_source()
@@ -2443,83 +2641,14 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         client_hint=client_hint,
     )
 
-    public_agent_id = agent_id if agent_id and agent_id != agent_uuid else None
-    structured_id = None
-    try:
-        # Atomic read via .get — avoids TOCTOU between `in` check and subscript
-        # if another task mutates agent_metadata concurrently.
-        meta = mcp_server.agent_metadata.get(agent_uuid)
-        if meta is not None:
-            public_agent_id = getattr(meta, "public_agent_id", None) or public_agent_id
-            structured_id = getattr(meta, 'structured_id', None)
-    except Exception:
-        pass
-    response_agent_id = public_agent_id or structured_id or f"agent_{agent_uuid[:8]}"
-    identity_resolution_outcome = (
-        identity.get("identity_resolution_outcome")
-        if isinstance(identity, dict)
-        else None
+    response_agent_id = _resolve_response_agent_id(agent_uuid, agent_id)
+    identity_resolution_outcome = _derive_identity_resolution_outcome(
+        identity, is_new, force_new, _spawn_reason
     )
-    if not identity_resolution_outcome:
-        if is_new and _spawn_reason in {
-            "dispatch_auto_mint",
-            "auto_onboard_no_session",
-            "orchestrated_thread_anchor",
-        }:
-            identity_resolution_outcome = "minted_after_resume_miss"
-        elif is_new and force_new:
-            identity_resolution_outcome = "minted_force_new"
-        elif is_new:
-            identity_resolution_outcome = "minted_fresh"
-        else:
-            identity_resolution_outcome = "resumed"
-
-    tool_mode_info = None
-    if verbose:
-        try:
-            from src.tool_modes import TOOL_MODE, get_tools_for_mode
-            from src.tool_schemas import get_tool_definitions
-            all_tools = get_tool_definitions()
-            mode_tools = get_tools_for_mode(TOOL_MODE)
-            tool_mode_info = {
-                "current_mode": TOOL_MODE,
-                "visible_tools": len(mode_tools),
-                "total_tools": len(all_tools),
-                "available_modes": ["minimal", "lite", "full"],
-                "tip": f"You're seeing {len(mode_tools)}/{len(all_tools)} tools in '{TOOL_MODE}' mode. Use list_tools() for discovery, or ask for ?mode=full if you need more."
-            }
-        except Exception as e:
-            logger.debug(f"Could not add tool_mode info: {e}")
-
-    # R2 PR 3: read the post-pre-check lineage state from the row so
-    # the response surfaces both the per-call decision (lineage_state)
-    # and the persisted column (provisional_lineage). On the resume
-    # branch these come from the existing row; on the fresh/forced
-    # branches they reflect what _r2_pre_check_and_declare just stamped.
-    # `isinstance(..., dict)` guards against test backends that return
-    # AsyncMock auto-children instead of None (per the conftest leak-
-    # detection contract noted at L143 — bare get() on a Mock surfaces
-    # a coroutine that the response builder never awaits).
-    _r2_provisional_lineage = False
-    try:
-        _r2_lineage_row = await get_db().read_lineage_state(agent_uuid)
-        if isinstance(_r2_lineage_row, dict):
-            _r2_provisional_lineage = bool(_r2_lineage_row.get("provisional_lineage"))
-            # Resume branch fallback: if the row already has a parent and
-            # the FSM hasn't moved it to a terminal state, surface the
-            # row's lineage state in the response. The fresh/forced
-            # branches set _lineage_for_response explicitly above and
-            # we honor that — only override when this onboard call was
-            # the resume branch (no fresh declaration this call).
-            # Council fix: delegated to `derive_lineage_state` so the
-            # cascade lives in one place (shared with identity()).
-            if _lineage_for_response == "no_lineage_declared" and _r2_lineage_row.get("parent_agent_id"):
-                from src.identity.lineage_lifecycle import derive_lineage_state
-                _derived = derive_lineage_state(_r2_lineage_row)
-                if _derived is not None:
-                    _lineage_for_response = _derived
-    except Exception as e:
-        logger.debug(f"[R2] read_lineage_state failed (non-fatal): {e}")
+    tool_mode_info = _build_tool_mode_info(verbose)
+    _lineage_for_response, _r2_provisional_lineage = await _apply_r2_lineage_state(
+        agent_uuid, _lineage_for_response
+    )
 
     result = build_onboard_response_data(
         agent_uuid=agent_uuid,
@@ -2546,34 +2675,7 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         response_mode=response_mode,
     )
 
-    # Bootstrap check-in (onboard-bootstrap-checkin §3.5). Conditional on
-    # initial_state being present in the request — the response gains a
-    # `bootstrap` key only when the caller asked for a bootstrap row. The
-    # write itself is timeout-bounded and fail-open per §3.5.
-    _initial_state = arguments.get("initial_state")
-    if _initial_state is not None:
-        try:
-            from src.mcp_handlers.identity.bootstrap_checkin import write_bootstrap
-            from src.mcp_handlers.schemas.core import BootstrapStateParams
-            _bootstrap_params = (
-                _initial_state if isinstance(_initial_state, BootstrapStateParams)
-                else BootstrapStateParams(**_initial_state)
-            )
-            db = get_db()
-            _identity_record = await db.get_identity(agent_uuid)
-            if _identity_record is not None:
-                result["bootstrap"] = await write_bootstrap(
-                    db,
-                    identity_id=_identity_record.identity_id,
-                    agent_id=agent_uuid,
-                    params=_bootstrap_params,
-                    client_hint=client_hint,
-                    purpose=arguments.get("purpose"),
-                )
-        except Exception as _bootstrap_err:  # noqa: BLE001 — bootstrap is fail-open
-            logger.warning(
-                f"[BOOTSTRAP] onboard initial_state handling failed (non-fatal): {_bootstrap_err}"
-            )
+    await _maybe_write_bootstrap_checkin(arguments, agent_uuid, client_hint, result)
 
     # S1-a (2026-04-24): grace-period deprecation surface. onboard() called
     # with continuity_token AND without force_new=true is the retired
@@ -2606,48 +2708,7 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 
     logger.info(f"[ONBOARD] Agent {agent_uuid[:8]}... onboarded (is_new={is_new}, label={agent_label})")
 
-    # Identity-resolution observation event. One per successful onboard, used
-    # later to answer "is the 30-min sliding pin TTL bleeding into
-    # continuity-token-only resumes?" Pin shadow fields are populated when
-    # the IP/UA pin path didn't win but a fingerprint signal was present.
- # and the audit-log
-    # schema in src/audit_log.py:log_identity_resolution_observed.
-    try:
-        import time as _ires_time
-        from src.audit_log import audit_logger as _ires_audit
-        from ..context import (
-            get_session_resolution_source,
-            get_pin_match_scope,
-            get_shadow_pin_observation,
-            get_session_proof_origin,
-            get_csid_transport_injected,
-        )
-        _ires_token = arguments.get("continuity_token")
-        _ires_iat: Optional[int] = None
-        _ires_exp: Optional[int] = None
-        _ires_age: Optional[int] = None
-        if _ires_token:
-            _ires_iat = extract_token_iat(str(_ires_token))
-            from .session import extract_token_exp as _extract_exp
-            _ires_exp = _extract_exp(str(_ires_token))
-            if _ires_iat is not None:
-                _ires_age = max(0, int(_ires_time.time()) - int(_ires_iat))
-        _ires_shadow = get_shadow_pin_observation()
-        _ires_audit.log_identity_resolution_observed(
-            agent_uuid=agent_uuid,
-            resolution_source=get_session_resolution_source(),
-            pin_match_scope=get_pin_match_scope(),
-            pin_entry_present=_ires_shadow["pin_entry_present"],
-            pin_fingerprint_match=_ires_shadow["pin_fingerprint_match"],
-            pin_entry_age_seconds=_ires_shadow["pin_entry_age_seconds"],
-            token_iat=_ires_iat,
-            token_exp=_ires_exp,
-            token_age_seconds=_ires_age,
-            proof_origin=get_session_proof_origin(),
-            csid_transport_injected=get_csid_transport_injected(),
-        )
-    except Exception as _ires_err:  # pragma: no cover — defensive
-        logger.debug(f"[IRES] identity_resolution_observed write failed (non-fatal): {_ires_err}")
+    _log_identity_resolution_observation(arguments, agent_uuid)
 
     # Identity Honesty Part C: onboard-triggered orphan sweep REMOVED.
     # It was the driver of 'agent archived almost immediately' — catching

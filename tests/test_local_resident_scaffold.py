@@ -231,3 +231,53 @@ def test_content_wins_over_reasoning():
 
     msg = _Msg(content="final answer", reasoning="scratch work")
     assert extract_model_text(msg) == "final answer"
+
+
+class TestScribeStoreGate:
+    """A quiet fleet must not produce a daily KG entry saying so."""
+
+    def test_no_anomalies_records_nothing_and_calls_no_model(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from agents.triage_scribe import scribe
+
+        client = AsyncMock()
+        client.call_tool.return_value = {"anomalies": []}
+
+        with patch.object(scribe, "call_local_model", new=AsyncMock()) as model:
+            summary = asyncio.run(scribe._job(client))
+
+        assert "no anomalies" in summary
+        model.assert_not_called()
+        # observe() only — no knowledge(action='store').
+        assert [c.args[0] for c in client.call_tool.call_args_list] == ["observe"]
+
+    def test_real_anomaly_still_stores(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from agents.triage_scribe import scribe
+
+        client = AsyncMock()
+        client.call_tool.return_value = {
+            "anomalies": [{"agent_name": "a", "type": "risk_spike", "severity": "high"}]
+        }
+
+        with (
+            patch.object(scribe, "call_local_model", new=AsyncMock(return_value="A pattern.")),
+            patch.dict("os.environ", {"UNITARES_SCRIBE_DRY_RUN": "0"}),
+        ):
+            summary = asyncio.run(scribe._job(client))
+
+        assert "stored" in summary
+        assert "knowledge" in [c.args[0] for c in client.call_tool.call_args_list]
+
+    def test_gate_and_prompt_agree_on_emptiness(self):
+        """One accessor feeds both, so they cannot disagree about whether
+        there was anything to triage."""
+        from agents.triage_scribe.scribe import anomaly_items, format_anomalies
+
+        empty = {"anomalies": []}
+        assert anomaly_items(empty) == []
+        assert "no anomalous agents" in format_anomalies(empty)
