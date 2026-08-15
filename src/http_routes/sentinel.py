@@ -419,6 +419,55 @@ async def _adjudicated_sentinel_fingerprints() -> set:
     return {r["fp"] for r in rows if r["fp"]}
 
 
+def event_type_is_sentinel_family(producer_ref: Optional[str]) -> bool:
+    """True for Sentinel's own producer refs.
+
+    Sentinel writes the bare slug ``sentinel`` on its alarm/build findings and
+    its UUID on ``sentinel_finding``, so the slug case still needs the
+    substrate-claim lookup. Scoped to Sentinel on purpose: this is the one
+    producer for which "fall back to Sentinel's UUID" is the *correct*
+    attribution rather than a convenient one.
+    """
+    return producer_ref == "sentinel"
+
+
+async def _finding_producer_uuid(fingerprint: str) -> tuple[Optional[str], Optional[str]]:
+    """``(producer_uuid, producer_ref)`` for the newest finding with this fingerprint.
+
+    ``build_resolution_outcome_args`` states the contract: *"agent_uuid must be
+    the resident's own UUID so the handler snapshots that resident's EISV."*
+    The adjudication endpoint passed Sentinel's UUID unconditionally, which is
+    correct only because the queue is Sentinel-only. It is the landmine under
+    any widening: the first doctor finding adjudicated would book its outcome
+    against **Sentinel's** trajectory.
+
+    Producers do not agree on what they write into ``audit.events.agent_id``.
+    Measured 2026-08-15 over 14d: Sentinel's ``sentinel_finding`` (150 rows)
+    and Watcher's resolution/capability findings carry real governance UUIDs,
+    while ``doctor-findings`` (96), ``sentinel_alarm_finding`` (249),
+    ``deploy-drift-doctor`` (20), ``lumen-checkin-doctor`` (13) and
+    ``cron-unitares-dogfood-pulse`` (9) carry a stable slug instead. So this
+    returns the UUID only when the row resolves to a real agent, and hands the
+    raw ref back either way — the caller decides, rather than guessing.
+    """
+    from src.db import get_db
+    db = get_db()
+    async with db.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT e.agent_id AS ref, a.id AS resolved
+               FROM audit.events e
+               LEFT JOIN core.agents a ON a.id = e.agent_id
+               WHERE e.event_type LIKE '%\\_finding' ESCAPE '\\'
+                 AND e.payload->>'fingerprint' = $1
+               ORDER BY e.ts DESC
+               LIMIT 1""",
+            fingerprint,
+        )
+    if row is None:
+        return None, None
+    return row["resolved"], row["ref"]
+
+
 async def _sentinel_substrate_uuid() -> Optional[str]:
     """Sentinel's UUID from the operator-enrolled substrate-claims registry.
 
@@ -718,18 +767,47 @@ async def http_sentinel_adjudicate(request):
                 {"success": False, "error": "already adjudicated", "fingerprint": fingerprint},
                 status_code=409,
             )
-        sentinel_uuid = await _sentinel_substrate_uuid()
-        if not sentinel_uuid:
+        # Attribute to the PRODUCER, not to Sentinel. Falling back to Sentinel
+        # for its own families keeps today's behaviour byte-identical (its
+        # alarm rows carry the slug 'sentinel', not a UUID) while removing the
+        # mis-attribution that would fire on the first non-Sentinel finding.
+        producer_uuid, producer_ref = await _finding_producer_uuid(fingerprint)
+        if not producer_uuid and event_type_is_sentinel_family(producer_ref):
+            producer_uuid = await _sentinel_substrate_uuid()
+            if not producer_uuid:
+                # Distinct from the 422 below: Sentinel IS the right producer
+                # here and simply is not enrolled. That is a configuration
+                # problem on this deployment, not a bad request.
+                return JSONResponse(
+                    {"success": False,
+                     "error": "no enrolled Sentinel substrate claim — cannot attribute outcome"},
+                    status_code=503,
+                )
+        if not producer_uuid:
+            # Refuse rather than book it against the wrong resident. A silent
+            # wrong attribution corrupts the anchor channel the falsifiability
+            # test depends on; an honest 422 names the missing piece.
             return JSONResponse(
                 {"success": False,
-                 "error": "no enrolled Sentinel substrate claim — cannot attribute outcome"},
-                status_code=503,
+                 "error": (
+                     "cannot attribute outcome: finding producer "
+                     f"{producer_ref!r} has no governance identity. Adjudicating "
+                     "it would book the outcome against another resident's EISV."
+                 ),
+                 "fingerprint": fingerprint,
+                 "producer": producer_ref},
+                status_code=422,
             )
 
         from agents.common.resolution_outcome import build_resolution_outcome_args
+        # `finding_kind` stays "sentinel_finding" deliberately: it prefixes
+        # outcome_type, and both the dedup set (_SENTINEL_ADJUDICATION_OUTCOME_TYPES)
+        # and _adjudication_progress filter on those exact strings. Per-producer
+        # outcome types must land WITH those filters, not before them.
         args = build_resolution_outcome_args(
-            "sentinel_finding", status, fingerprint, sentinel_uuid, reason
+            "sentinel_finding", status, fingerprint, producer_uuid, reason
         )
+        args["detail"]["producer_ref"] = producer_ref
         args["detail"]["adjudicated_via"] = "dashboard"
 
         from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
