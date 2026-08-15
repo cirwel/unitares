@@ -234,7 +234,10 @@ async def main() -> int:
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of text.")
     args = parser.parse_args()
 
-    pool = await get_db()
+    # get_db() is synchronous — it returns the backend, not a coroutine.
+    # close_db() is async. Mirrors the production call site in
+    # src/http_routes/telemetry.py.
+    pool = get_db()
     try:
         delivered = await _event_timeline(pool, DELIVERED_EVENT, args.since)
         trips = await _event_timeline(pool, TRIP_EVENT, args.since)
