@@ -130,8 +130,12 @@ class SearchKnowledgeGraphParams(AgentIdentityMixin):
         description="If true, includes provenance chain"
     )
     include_details: Union[bool, str, None] = Field(
-        default=False,
-        description="If true, includes full details for each discovery"
+        default=None,
+        description=(
+            "If true, includes full details for each discovery. Omit to let "
+            "the server auto-include for small result sets; pass false to "
+            "suppress that and get summaries only."
+        ),
     )
     search_mode: Optional[Literal["auto", "fts", "semantic", "hybrid"]] = Field(
         default="auto",

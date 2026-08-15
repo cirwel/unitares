@@ -1308,7 +1308,8 @@ class _SearchParameterError(ValueError):
 class _KnowledgeSearchRequest:
     arguments: Dict[str, Any]
     limit: int
-    include_details: bool
+    # None = caller expressed no preference; True/False = they did.
+    include_details: Optional[bool]
     include_provenance: bool
     synthesize: bool
     query_text: Any
@@ -1363,6 +1364,54 @@ class _KnowledgeSearchState:
     hybrid_path: bool = False
 
 
+def _optional_flag(value: Any) -> Optional[bool]:
+    """Tri-state flag: None when the caller said nothing, else a real bool.
+
+    Collapsing "unspecified" and "explicitly false" into `False` is what made
+    `include_details=false` unhonorable — the auto-include heuristic could not
+    tell a caller who wanted summaries from one who had no opinion, so it
+    overrode both.
+
+    MCP admits these as strings, so `"false"` must not become `True` the way a
+    bare `bool("false")` would.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in ("true", "1", "yes"):
+            return True
+        if token in ("false", "0", "no"):
+            return False
+        return None
+    return bool(value)
+
+
+
+AUTO_DETAIL_MAX_RESULTS = 3
+
+
+def _resolve_detail_inclusion(
+    requested: Optional[bool], result_count: int
+) -> tuple[bool, bool]:
+    """Decide ``(auto_details, include_details)`` for one search response.
+
+    Auto-include is a convenience for a caller with no opinion, NOT an
+    override of one. The old expression was ``not request.include_details``,
+    which was True for "unspecified" and for an explicit ``false`` alike, so
+    there was no way to ask for summaries of a small result set. A dogfood
+    probe measured the cost of that: 3 results, 44,205 bytes, into the
+    caller's context after they had asked for none of it.
+
+    Extracted so the contract is testable directly. A test that re-implements
+    this arithmetic would pass against a broken caller.
+    """
+    auto = requested is None and 0 < result_count <= AUTO_DETAIL_MAX_RESULTS
+    return auto, bool(requested) or auto
+
+
 def _parse_knowledge_search_request(
     arguments: Dict[str, Any],
 ) -> _KnowledgeSearchRequest:
@@ -1370,6 +1419,22 @@ def _parse_knowledge_search_request(
     if search_mode not in {"auto", "fts", "semantic", "hybrid"}:
         raise _SearchParameterError(
             f"Invalid search_mode {search_mode!r}; expected one of: auto, fts, semantic, hybrid"
+        )
+
+    query_effective = arguments.get("query") or arguments.get("text")
+    if isinstance(query_effective, str) and query_effective and not query_effective.strip():
+        # A supplied-but-blank query is a caller mistake, and silence about it
+        # is worse than an error. `"   "` is truthy, so it reached the semantic
+        # path, embedded whitespace, and returned nearest neighbours at ~0.34
+        # similarity — arbitrary rows reported as success=true. Meanwhile
+        # `"   ".split()` is `[]`, so every term-based path downstream already
+        # saw "no terms": the two halves of the request disagreed.
+        #
+        # Only a *supplied* blank raises. An absent query is a real, supported
+        # shape (filter by tags / type / severity alone) and keeps its path.
+        raise _SearchParameterError(
+            "Query is blank. Pass a non-empty query, or omit `query` entirely "
+            "to filter by tags/discovery_type/severity alone."
         )
 
     operator_raw = arguments.get("operator")
@@ -1392,7 +1457,7 @@ def _parse_knowledge_search_request(
     return _KnowledgeSearchRequest(
         arguments=arguments,
         limit=arguments.get("limit") or config.KNOWLEDGE_QUERY_DEFAULT_LIMIT,
-        include_details=arguments.get("include_details", False),
+        include_details=_optional_flag(arguments.get("include_details")),
         include_provenance=arguments.get("include_provenance", False),
         synthesize=arguments.get("synthesize", False),
         query_text=arguments.get("query") or arguments.get("text"),
@@ -2191,8 +2256,9 @@ async def _execute_knowledge_search(state: _KnowledgeSearchState) -> dict[str, A
     )
 
     _exclude_search_labels(state)
-    auto_details = not state.request.include_details and 0 < len(state.results) <= 3
-    include_details = state.request.include_details or auto_details
+    auto_details, include_details = _resolve_detail_inclusion(
+        state.request.include_details, len(state.results)
+    )
     discoveries = _serialize_search_discoveries(
         state,
         include_details=include_details,
