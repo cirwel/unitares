@@ -49,6 +49,7 @@ RESIDENT_LAUNCHD_SLOTS = (
 ANCHOR_DIR = Path.home() / ".unitares"
 SECRETS_FILE = Path.home() / ".config" / "cirwel" / "secrets.env"
 HTTP_HEALTH_URL = "http://127.0.0.1:8767/health/live"
+HTTP_RESIDENTS_URL = "http://127.0.0.1:8767/v1/residents"
 PID_FILE_REL = "data/.mcp_server.pid"
 GOVERNANCE_LAUNCHD_LABEL = "com.unitares.governance-mcp"
 KNOWN_SCHEMA_MIGRATION_EXCEPTIONS = {
@@ -1407,6 +1408,54 @@ def _db_is_local(db_url: str) -> bool:
     return host in (None, "", "localhost", "127.0.0.1", "::1")
 
 
+def _event_driven_labels(timeout: float = 3.0) -> set[str]:
+    """Resident labels the SERVER reports as event-driven.
+
+    Asked of the server rather than decided here, because the disagreement is
+    the defect: on 2026-08-15 `/v1/residents` reported Watcher healthy at 110s
+    silence against a 48h threshold while this check warned it had been silent
+    98min. Two surfaces answering "is this agent inactive?" about the same
+    agent at the same instant, differently. Reading the answer from the one
+    that owns the concept makes them structurally unable to diverge.
+
+    Two rejected alternatives, both of which look right and are not:
+
+    * A hardcoded event-driven roster — this check's own docstring argues at
+      length against rosters, because they go stale silently. That argument
+      does not stop applying just because the roster would be short.
+    * Importing ``src.resident_progress.registry.is_event_driven_label`` —
+      it resolves against a manifest named by
+      ``UNITARES_RESIDENT_PROGRESS_MANIFEST``, and the doctor plists set only
+      ``PATH``. The import would return False for every label and the
+      exemption would be permanently, invisibly inert: a fix that reads as
+      correct in review and does nothing in production.
+
+    Fails OPEN — an empty set means every resident is judged, exactly as
+    before. A doctor that goes quiet because the server it monitors is
+    unreachable would be the worst possible failure mode for this check.
+    """
+    try:
+        with urllib.request.urlopen(HTTP_RESIDENTS_URL, timeout=timeout) as resp:
+            if resp.status != 200:
+                return set()
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception:  # noqa: BLE001 — availability of the exemption is optional
+        return set()
+    residents = payload.get("residents")
+    if not isinstance(residents, list):
+        return set()
+    return {
+        str(r.get("label"))
+        for r in residents
+        if isinstance(r, dict) and r.get("event_driven") is True and r.get("label")
+    }
+
+
+def _sql_string_list(values: set[str]) -> str:
+    """Render labels as a SQL literal list. Labels arrive over HTTP, so quote."""
+    return ", ".join("'" + v.replace("'", "''") + "'" for v in sorted(values))
+
+
 def check_resident_checkin_stale(db_url: str) -> CheckResult:
     """WARN if an INDIVIDUAL agent has gone silent, against its OWN cadence.
 
@@ -1495,6 +1544,19 @@ def check_resident_checkin_stale(db_url: str) -> CheckResult:
     """
     name, mode = "resident_checkin_stale", "operator"
     awake_s = _host_awake_s() if _db_is_local(db_url) else None
+    # An event-driven resident has no cadence to be stale against: it fires on
+    # external triggers, so silence measures operator activity, not health.
+    # Worse, its envelope is self-referential -- a busy session compresses its
+    # own median/p95, TIGHTENING the threshold until an ordinary quiet stretch
+    # trips it. Measured on Watcher: p95 80min (2026-08-05, per the envelope
+    # rationale above) -> 28min (2026-08-15), so 2 x p95 fell 160min -> 56min
+    # and routine 98min gaps began warning. The envelope fix narrowed this
+    # class; it cannot close it, because the premise it rests on does not hold
+    # for a producer with no cadence of its own.
+    exempt = _event_driven_labels()
+    exempt_clause = (
+        f" AND label NOT IN ({_sql_string_list(exempt)})" if exempt else ""
+    )
     attributable_silence = (
         f"least(EXTRACT(epoch FROM (now() - last_seen)), {awake_s:.0f})"
         if awake_s is not None
@@ -1529,7 +1591,8 @@ def check_resident_checkin_stale(db_url: str) -> CheckResult:
         f"         {attributable_silence} AS attr_s"
         "  FROM stats"
         f"  WHERE {attributable_silence} "
-        "        > greatest(med_gap * 6, p95_gap * 2, 1800)) "
+        "        > greatest(med_gap * 6, p95_gap * 2, 1800)"
+        f"{exempt_clause}) "
         "SELECT (SELECT count(*) FROM stats), (SELECT count(*) FROM stale), "
         "       coalesce((SELECT string_agg("
         "         label || ' silent ' || round(silent_s/60.0) || 'min "
@@ -1541,6 +1604,10 @@ def check_resident_checkin_stale(db_url: str) -> CheckResult:
     if row is None:
         return CheckResult(name, mode, Status.SKIP, "core.agent_state not queryable")
     tracked, stale, detail = int(row[0]), int(row[1]), row[2]
+    exempt_note = (
+        f" ({len(exempt)} event-driven, exempt: {', '.join(sorted(exempt))})"
+        if exempt else ""
+    )
     if tracked == 0:
         return CheckResult(
             name, mode, Status.SKIP,
@@ -1549,12 +1616,14 @@ def check_resident_checkin_stale(db_url: str) -> CheckResult:
     if stale:
         return CheckResult(
             name, mode, Status.WARN,
-            f"{stale} of {tracked} residents silent past their own idle envelope: {detail}",
+            f"{stale} of {tracked} residents silent past their own idle "
+            f"envelope: {detail}{exempt_note}",
             detail="a live PID proves nothing — check the agent's log for an "
                    "upstream gate (see immortal_lease) before assuming a crash",
         )
-    return CheckResult(name, mode, Status.PASS,
-                       f"{tracked} residents all within their own idle envelope")
+    return CheckResult(
+        name, mode, Status.PASS,
+        f"{tracked} residents all within their own idle envelope{exempt_note}")
 
 
 def check_immortal_lease(db_url: str) -> CheckResult:
