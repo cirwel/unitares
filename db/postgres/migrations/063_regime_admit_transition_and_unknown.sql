@@ -72,4 +72,21 @@ ALTER TABLE core.agent_state
         'TRANSITION', 'unknown'
     ));
 
+-- Register the migration. Without these three lines the file is INERT: the
+-- deploy preflight (scripts/dev/apply_migrations.py, via unitares_doctor's
+-- _source_schema_migrations) builds its expected set by parsing exactly this
+-- INSERT out of each migration file. No INSERT => the version is not in the
+-- expected set => never reported pending, never applied, and --check reports
+-- "in sync" while the constraint the code depends on does not exist.
+--
+-- That is what happened on 2026-08-14: this migration merged, deploy-mcp.sh's
+-- preflight said "DB at version 62; source manifest defines 60 migration(s)
+-- (max 62) — OK", and the governance MCP restarted onto code that writes
+-- 'TRANSITION' and coerces unknown values to 'unknown', against a live CHECK
+-- constraint that allowed neither. Both writes would have raised
+-- agent_state_regime_check on INSERT.
+INSERT INTO core.schema_migrations (version, name, applied_at)
+VALUES (63, 'regime_admit_transition_and_unknown', NOW())
+ON CONFLICT (version) DO NOTHING;
+
 COMMIT;
