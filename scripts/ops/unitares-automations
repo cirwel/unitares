@@ -491,8 +491,74 @@ def collect_codex(warnings: list[str]) -> list[Automation]:
     return results
 
 
+# hermes's own execution states, mapped onto the census vocabulary.
+_HERMES_STATUS: dict[str, str] = {
+    "completed": "ok",
+    "failed": "failed",
+    # Non-terminal. Reporting these as ok would assert a success nobody has
+    # observed yet — the same error this census refuses to make in the other
+    # direction (see snapshot_cannot_confirm_run).
+    "claimed": "running",
+    "running": "running",
+    "unknown": "unknown",
+}
+
+
+def load_hermes_last_runs(warnings: list[str]) -> dict[str, dict[str, Any]]:
+    """Most recent execution per hermes job, from hermes's own ledger.
+
+    hermes records every cron execution in `~/.hermes/cron/executions.db`, but
+    `jobs.json` carries no `last_status`, so the census read the one file that
+    could not answer and reported every hermes job as `last=-` — "we have no
+    idea" — while a complete record sat one file over. On 2026-08-15 that hid
+    two UNITARES jobs (the dogfood/ablation guard and the ablation watchdog)
+    that had been failing every six hours since 2026-08-12 because a worktree
+    they depend on had been deleted.
+
+    Opened read-only so a census run can never block or corrupt the scheduler
+    it is reporting on.
+    """
+    path = HOME / ".hermes/cron/executions.db"
+    if not path.exists():
+        return {}
+    try:
+        import sqlite3
+
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2.0)
+        try:
+            rows = conn.execute(
+                """
+                SELECT job_id, status, claimed_at, finished_at, error
+                FROM executions
+                WHERE id IN (
+                    SELECT id FROM executions e2
+                    WHERE e2.job_id = executions.job_id
+                    ORDER BY e2.claimed_at DESC, e2.id DESC
+                    LIMIT 1
+                )
+                """
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        # Degrade to the previous behaviour (last=-) rather than failing the
+        # whole census for one source.
+        warnings.append(f"hermes: could not read {short_path(path)}: {exc}")
+        return {}
+
+    latest: dict[str, dict[str, Any]] = {}
+    for job_id, status, claimed_at, finished_at, error in rows:
+        latest[str(job_id)] = {
+            "status": _HERMES_STATUS.get(str(status or "").lower(), str(status or "")),
+            "timestamp": finished_at or claimed_at,
+            "message": (error or "").strip().splitlines()[0] if error else None,
+        }
+    return latest
+
+
 def collect_hermes(warnings: list[str]) -> list[Automation]:
     results: list[Automation] = []
+    last_runs = load_hermes_last_runs(warnings)
     path = HOME / ".hermes/cron/jobs.json"
     if not path.exists():
         return results
@@ -534,8 +600,14 @@ def collect_hermes(warnings: list[str]) -> list[Automation]:
                 status="active" if job.get("enabled") else "disabled",
                 cadence=str(schedule_display or ""),
                 next_run=job.get("next_run_at"),
-                last_run=job.get("last_run_at"),
-                last_status=job.get("last_status"),
+                last_run=(
+                    job.get("last_run_at")
+                    or (last_runs.get(job_id) or {}).get("timestamp")
+                ),
+                last_status=(
+                    job.get("last_status")
+                    or (last_runs.get(job_id) or {}).get("status")
+                ),
                 repo=repo_for_workdir(str(workdir)) if workdir else None,
                 workdir=str(workdir) if workdir else None,
                 command=command,
