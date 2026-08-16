@@ -426,25 +426,61 @@ async def _record_supersession_edge(graph, *, new_id: str, old_id: str) -> Optio
 
 
 def _compute_staleness_warning(discovery, current_server_version: str) -> Optional[str]:
-    """Flag open entries that are likely stale (>60 days old or 2+ minor versions behind)."""
+    """Flag open entries whose LAST write is likely stale.
+
+    Keyed on the last write (``updated_at`` when newer than the store time),
+    not the first store. Before 2026-08-16 both checks keyed on store-time
+    facts, so long-lived entries that are actively maintained — e.g. the
+    memory-mirror corpus, re-pushed on every source-file edit — warned forever,
+    and a warning that always fires trains readers to ignore it (observed live:
+    an entry updated 25 minutes earlier still said "written against v2.14.0").
+
+    The version claim is only made when the content has never been updated
+    since store: after an update, provenance's store-time ``system_version`` no
+    longer describes the current content, and the update-time version is not
+    recorded anywhere, so the claim would be a guess. The age check carries the
+    staleness signal for updated entries instead.
+
+    ``updated_at`` is stamped by any field update (status, tags, severity), not
+    only content rewrites — accepted imprecision: a lifecycle touch on an open
+    entry is itself a recency signal, and content-hash timestamps are not worth
+    the machinery.
+    """
     warning_parts = []
 
-    # Age-based check: >60 days old
-    # Compare in UTC. Legacy rows may have naive timestamps (treat as UTC);
-    # post-2026-04-25 rows are UTC-aware.
+    def _parse_utc(value):
+        ts = datetime.fromisoformat(value) if isinstance(value, str) else value
+        if ts.tzinfo is None:
+            # Legacy rows may have naive timestamps (treat as UTC);
+            # post-2026-04-25 rows are UTC-aware.
+            ts = ts.replace(tzinfo=timezone.utc)
+        return ts
+
+    # Age-based check: >60 days since the last write. Compare in UTC.
+    was_updated = False
     try:
-        created = datetime.fromisoformat(discovery.timestamp) if isinstance(discovery.timestamp, str) else discovery.timestamp
-        if created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
-        age_days = (datetime.now(timezone.utc) - created).days
+        last_write = _parse_utc(discovery.timestamp)
+        try:
+            if getattr(discovery, "updated_at", None):
+                updated = _parse_utc(discovery.updated_at)
+                if updated > last_write:
+                    last_write = updated
+                    was_updated = True
+        except (ValueError, TypeError):
+            pass
+        age_days = (datetime.now(timezone.utc) - last_write).days
         if age_days > 60:
-            warning_parts.append(f"This entry is {age_days} days old and still open.")
+            if was_updated:
+                warning_parts.append(f"This entry was last updated {age_days} days ago and is still open.")
+            else:
+                warning_parts.append(f"This entry is {age_days} days old and still open.")
     except (ValueError, TypeError):
         pass
 
-    # Version-based check: 2+ minor versions behind current
+    # Version-based check: 2+ minor versions behind current — only meaningful
+    # while the store-time version still describes the content (never updated).
     entry_version = None
-    if discovery.provenance and isinstance(discovery.provenance, dict):
+    if not was_updated and discovery.provenance and isinstance(discovery.provenance, dict):
         entry_version = discovery.provenance.get("system_version")
     if entry_version and current_server_version and current_server_version != "unknown":
         try:
