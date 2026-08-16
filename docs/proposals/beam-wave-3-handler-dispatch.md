@@ -908,91 +908,77 @@ Each criterion names its measurement source. If any source is missing at gate, g
 
 ---
 
-## §11.1 Gate audit (2026-08-16) — three criteria cannot be evaluated before the thing they gate
+## §11.1 Gate audit (2026-08-16) — two entry criteria were never closed out
 
-Every criterion above was re-read against live data. The result is not "the gate
-says no." It is that **the gate has no reachable state**, which is a different
-problem and the reason nothing has started: three criteria require the artifact
-of the work they gate, one halts on an axis the operator struck, and one has
-already fired and been resolved by scope reduction without being recorded as
-such.
+Every criterion above was re-read against live data. **A first version of this
+audit claimed the gate was "circular" and proposed replacing criteria 2/3/5.
+Adversarial review refuted it and that claim is withdrawn** — the refutation is
+recorded below because it is the more useful finding.
 
-Measurements below were taken 2026-08-16 against the live governance DB unless
-attributed otherwise.
+**Withdrawn: the circularity claim.** §11 is *Go/No-Go for Wave 3 **close***.
+Criteria 2 (21 days of production BEAM traffic), 3 (zero boundary incidents) and
+5 (boundary cost) are **exit** criteria, evaluated after build, shadow soak and
+cutover. Requiring evidence that only a built artifact can produce is what an
+exit criterion is *for*. They are **unmet, not unreachable**, and they are not
+what has kept Wave 3 from starting. A proposal to restate them against the §8
+shadow window was also withdrawn: it would have narrowed 2 to PATH 3 mints
+only, and dropped 5's advisory-lock and saga costs and its sustained-window
+requirement — weaker, not equivalent.
 
-**Already satisfied — no action owed**
+⛔The `0 rows` in criteria 3 and 5 today still means *unmeasured*, not *clean* —
+do not later read those zeros as passes.
 
-| # | Criterion | Evidence |
-|---|---|---|
-| 1 | Wave 2 closed | per Wave 2 handoff 2026-05-08 (cited, not re-verified here) |
-| 4 | (A.1) ODE floor <60% | ODE math measured at 0.8% of `process_agent_update` p99 (artifact 2026-06-03). Does not fire |
-| 7 | (C) MCP SDK spike | run; `hermes_mcp 0.14.1` was stalled and the dependency swapped to `anubis-mcp` v1.6.2. Not production-disqualifying |
+### What actually blocks the start: criteria 8 and 9
 
-**Already fired, and resolved by scope reduction — record it, don't re-run it**
+Both are entry-shaped, both are answerable **without building anything**, and
+neither has been closed.
 
-- **8 — (D) state ownership.** A genuine 9th surface *was* found: the UDS
-  `peer_pid` kernel attestation behind `core.substrate_claims`, absent from
-  §3.1's eight. Per the criterion the gate halts. But the halt was *answered*:
-  the resolution is the HYBRID split — Python permanently owns the identity
-  boundary, and the identity-middleware port leaves Wave 3's scope. This
-  criterion should be marked **closed as won't-port**, which *shrinks* Wave 3
-  rather than blocking it. Leaving it as an open halt is the single biggest
-  reason this RFC reads as stalled.
+- **8 — (D) state ownership. FIRED, and still open.** A genuine 9th surface was
+  found: UDS `peer_pid` kernel attestation behind `core.substrate_claims`,
+  absent from §3.1's eight. Per the criterion the gate halts and the RFC
+  re-opens. The answer that exists — the HYBRID split, Python permanently owning
+  the identity boundary — lives in `beam-wave-3-gamma-hybrid-v0.md` as a
+  **recommendation** (§0a REJECTED / §0c *recommend* SHELVE), and that doc says
+  a rescope needs its own gate. ⛔It is **not** a ratified amendment, and §1 of
+  this RFC still scopes identity middleware to BEAM. So the halt stands until an
+  operator either ratifies the scope reduction or rejects it. Ratifying would
+  *shrink* Wave 3, not block it.
+- **9 — (E) opportunity cost. Artifact never written.** The criterion requires
+  `docs/proposals/wave-3-go-decision-<date>.md` with a §"Calendar reasoning"
+  section. **No such file exists in the repo** (checked 2026-08-16). No
+  acceptance-memo escape is permitted by the criterion's own text, so this is an
+  unsatisfied entry gate with no measurement pending — only a document.
 
-**Structurally unreachable — each needs the built thing to produce its own evidence**
+That is the honest answer to "why has Wave 3 not started": not circularity, and
+not a decision to postpone. Two entry criteria fired or came due and were never
+closed out, and both close with operator judgement rather than engineering.
 
-| # | Criterion | Why it cannot be met | Measured |
-|---|---|---|---|
-| 2 | 21 days of production traffic **on BEAM handlers** | requires the port to be live | — |
-| 3 | zero `coordination_failure.beam_python_boundary.*` over 21d | the channel only receives rows once BEAM handlers run | **0 rows** |
-| 5 | `measurement.beam_python_boundary.*` p50/p99 vs lease-plane Phase A | same: numerator channel is empty | **0 rows** (denominator anchor is fine: Phase A n=107,984, p50 3ms, p99 30ms ⇒ thresholds p50<6ms, p99<90ms) |
+### Already satisfied
 
-A zero in criteria 3 and 5 today means *unmeasured*, not *clean*. Reading it as
-clean is the failure this repo has hit repeatedly on other surfaces.
+| # | Evidence |
+|---|---|
+| 1 | Wave 2 closed per its 2026-05-08 handoff (cited, not re-verified here) |
+| 4 | (A.1) ODE math measured at 0.8% of `process_agent_update` p99 (artifact 2026-06-03) — does not fire |
+| 7 | (C) SDK spike run; `hermes_mcp 0.14.1` stalled, dependency swapped to `anubis-mcp` v1.6.2 — not production-disqualifying |
 
-**Fires on the struck axis**
+### Two criteria worth re-reading before the next gate
 
-- **6 — (A.2) in-place-fix gate.** Halts if a Python fix brought
-  `process_agent_update` p99 under 2.0s. Measured over the trailing 7 days:
-  **p99 = 795ms** (n=6,704, p50 183ms). So this criterion **fires now**, and it
-  fires *because the Python path improved*. Latency was struck as a Wave-3
-  decision axis on 2026-06-24 and again in V0.4; a latency threshold left inside
-  the go/no-go contradicts that and should be retired or demoted to advisory.
-
-**Now pinnable for the first time**
-
+- **6 — (A.2) in-place-fix gate.** Trailing 7 days: `process_agent_update`
+  **p99 = 795ms** (n=6,704, p50 183ms), well under the 2.0s threshold. But the
+  criterion is conditioned on a Python fix shipped *during the implementation
+  window*, and no implementation window ever opened — so it is arguably not yet
+  evaluable rather than firing. Worth an operator ruling either way, because as
+  written it halts *because the Python path improved*, and latency was struck as
+  a Wave-3 decision axis on 2026-06-24 and again in V0.4.
 - **10 — (F) dialectic quality.** The 2026-06-11 pin halted on its own volume
   haltspec (trailing 30d held 1 session, needs ≥30). Trailing 30d now holds
-  **36 sessions**, so a baseline is pinnable. ⛔When pinning it, exclude canary
-  traffic — partition on `core.agents.label LIKE 'canary_dialectic%'` joined via
-  `a.id = d.paused_agent_id`; `trigger_source` is the literal `'manual'` for
-  every row and partitions nothing. A raw resolution rate over the unfiltered 36
-  is wrong.
+  **36**, so a baseline is pinnable for the first time. ⛔Exclude canary traffic
+  when pinning: partition on `core.agents.label LIKE 'canary_dialectic%'` joined
+  `a.id = d.paused_agent_id`. `trigger_source` is the literal `'manual'` for
+  every row and partitions nothing, so a raw rate over the unfiltered 36 is wrong.
 
-### Proposed replacement for 2 / 3 / 5 — gate on the shadow window, which §8 built for exactly this
-
-§8 already specifies a shadow window whose entire purpose is pre-cutover
-evidence: BEAM writes what it *would* write to `core.identities_shadow` /
-`core.agents_shadow`, and the comparator diffs it against canonical. That is the
-pre-build evidence path criteria 2/3/5 should have used, and it is unbuilt —
-both tables hold zero rows, and nothing in `src/`, `governance_core/` or
-`elixir/` writes to them.
-
-Suggested restatement, satisfiable before any cutover:
-
-- **2′** — shadow window open ≥21 continuous days with the BEAM shadow writer
-  producing on every PATH 3 fresh mint.
-- **3′** — zero unexplained divergences over that window per §8.2, with the
-  comparator's `--self-test` green at both ends so a zero is evidence rather
-  than silence.
-- **5′** — boundary cost measured at the *shadow* boundary against the same
-  Phase A anchor, keeping the ×2 / ×3 multipliers.
-
-This changes what counts as evidence, not how strict the gate is: every one of
-2′/3′/5′ can fail and stop the work. What it removes is the circularity.
-
-⛔This section proposes; it does not amend. The exit criteria are the operator's
-gate and only the operator rewrites them.
+⛔This section reports and proposes nothing. The exit criteria are the
+operator's gate; closing 8 and 9 is an operator action.
 
 ---
 
