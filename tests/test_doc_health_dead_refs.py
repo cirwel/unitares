@@ -309,15 +309,28 @@ def test_broken_relative_link_flagged(tmp_path, monkeypatch, doc_health):
     assert len(warnings) == 1 and "UNIFIED_ARCHITECTURE.md" in warnings[0]
 
 
-def test_relative_link_check_skips_proposals(tmp_path, monkeypatch, doc_health):
-    """proposals/ reference paths that don't exist yet by design (skip dir)."""
+def test_relative_link_check_covers_proposals(tmp_path, monkeypatch, doc_health):
+    """REVERSED 2026-08-16. This previously asserted proposals/ was skipped,
+    on the rationale that it "references paths that don't exist yet by design".
+
+    Measurement retired that rationale: across the whole proposals tree the
+    exemption was hiding exactly ONE broken link, and it was not a forward
+    reference — it pointed at an operator-archived doc that will never be in
+    the repo. Against that, the exemption blinded the check across the live RFC
+    thread, which is where records get moved into resolved/ — precisely the
+    operation that breaks sibling links. A deliberately broken link in
+    docs/proposals/beam-wave-3-handler-dispatch.md passed the checker clean.
+
+    A genuine forward reference is still expressible: cite the doc by name
+    without a link, the same convention already used for docs/handoffs/."""
     prop = tmp_path / "docs" / "proposals"
     prop.mkdir(parents=True)
     doc = prop / "path1.md"
     doc.write_text("Companion: [audit](./uuid-leak-audit.md).\n")
 
     monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
-    assert doc_health.check_relative_links([doc]) == []
+    warnings = doc_health.check_relative_links([doc])
+    assert len(warnings) == 1 and "uuid-leak-audit.md" in warnings[0]
 
 
 def test_repo_root_prefixed_links_left_to_dead_ref_check(tmp_path, monkeypatch, doc_health):
@@ -674,3 +687,47 @@ def test_collect_md_files_skips_elixir_deps_and_build_dirs(tmp_path, monkeypatch
     monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
 
     assert doc_health.collect_md_files() == [real_doc]
+
+
+# --- Relative-link checking must NOT skip docs/proposals/ --------------------
+#
+# The two link checks shared one skip set, so exempting `proposals` from
+# bare-filename drift also blinded the *relative link* check across the entire
+# live RFC thread. A broken `[text](path.md)` there went unreported: measured
+# 2026-08-16, a deliberately broken link in
+# docs/proposals/beam-wave-3-handler-dispatch.md passed the checker clean.
+#
+# The rationales differ and so must the skip sets. Bare refs in planning docs
+# drift by design (23 such refs under proposals, e.g. the placeholder migration
+# slot `0NN_identities_shadow.sql`). A broken clickable link to a doc in this
+# repo is not drift — and `docs/proposals/` is where records get moved into
+# `resolved/`, which is exactly the operation that breaks sibling links.
+
+
+def test_dead_ref_check_still_skips_proposals(doc_health):
+    """Bare-filename drift in planning docs stays exempt — 23 legitimate refs."""
+    assert "proposals" in doc_health._DEAD_REF_SKIP_DIRS
+
+
+def test_relative_link_check_does_not_skip_proposals(doc_health):
+    """The live RFC thread must be link-checked."""
+    assert "proposals" not in doc_health._REL_LINK_SKIP_DIRS
+
+
+def test_relative_link_skip_dirs_is_a_strict_subset(doc_health):
+    """Narrower, not merely different — every relative-link exemption must
+    also be a dead-ref exemption, or the two have silently diverged."""
+    assert doc_health._REL_LINK_SKIP_DIRS < doc_health._DEAD_REF_SKIP_DIRS
+
+
+def test_valid_relative_link_under_proposals_is_quiet(doc_health, tmp_path, monkeypatch):
+    """No false positive once the target exists — the resolved/ move case."""
+    repo = tmp_path
+    resolved = repo / "docs" / "proposals" / "resolved"
+    resolved.mkdir(parents=True)
+    (resolved / "moved.md").write_text("# moved\n")
+    doc = repo / "docs" / "proposals" / "some-rfc.md"
+    doc.write_text("See [the record](resolved/moved.md) for detail.\n")
+    monkeypatch.setattr(doc_health, "REPO_ROOT", repo)
+
+    assert doc_health.check_relative_links([doc]) == []

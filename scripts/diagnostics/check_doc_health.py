@@ -75,6 +75,21 @@ _DEAD_REF_SKIP_FILES = {"docs/ontology/plan.md"}
 # planned at proposal time. Same reasoning as `specs`/`handoffs`/`plans`.
 _DEAD_REF_SKIP_DIRS = {"specs", "handoffs", "plans", "proposals"}
 
+# Relative-link checking uses a NARROWER exemption. The rationale above is
+# about *bare filename* refs to implementation that landed under another name
+# or never landed at all -- measured 2026-08-16, including `proposals` in
+# check_dead_refs surfaces 23 such refs, all legitimate drift (e.g. a
+# placeholder migration slot `0NN_identities_shadow.sql`, a planned-but-unbuilt
+# `wave3-capture-goldens.sh`).
+#
+# A broken `[text](path.md)` link is a different animal: the target is a doc in
+# this repo, the link is clickable, and it is broken for a reader today. That
+# is not drift-by-design. `docs/proposals/` in particular is NOT purely
+# historical -- it holds the live RFC thread, and moving a record into
+# `resolved/` is exactly the operation that breaks sibling links. Including it
+# costs one pre-existing finding and zero noise (measured same day: 1 warning).
+_REL_LINK_SKIP_DIRS = {"specs", "handoffs", "plans"}
+
 
 _REVIEW_SUFFIXES = (
     ".code-review.md",
@@ -170,7 +185,7 @@ def check_relative_links(md_files: list[Path]) -> list[str]:
         rel = fpath.relative_to(REPO_ROOT)
         if rel.as_posix() in _DEAD_REF_SKIP_FILES:
             continue
-        if any(d in rel.parts for d in _DEAD_REF_SKIP_DIRS):
+        if any(d in rel.parts for d in _REL_LINK_SKIP_DIRS):
             continue
         if rel.name.endswith(_REVIEW_SUFFIXES):
             continue
