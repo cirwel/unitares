@@ -1,8 +1,30 @@
 # Wave 3 RFC: handler dispatch + identity middleware + dialectic resolution → BEAM
 
-**Status:** ACTIVE — COMMITTED TO IMPLEMENTATION per parent-roadmap **V0.4 RESOLUTION (operator decision, 2026-06-25)**. The v0.3.4 (α) defer is superseded: latency was retired as a Wave 3 *decision* gate (every measured floor resolved Python-side; the gate was structurally undecidable), and Wave 3 is committed to proceed on the coordination/ownership argument. The §14 measurement window (PR #599) it had deferred behind also closed on schedule (~2026-06-24); its data may inform design but no longer gates the decision. The **technical correctness gates remain owed before any cutover merges** — see "Implementation entry + owed council passes" below. Body preserved at v0.3.4 (§11 criterion-10 pin + reassignment event stream, 2026-06-11; v0.3.3 §5.2-audit fold 2026-06-10). Full redraft superseding v0.2 (which superseded v0.1.x). Each prior version is preserved on its branch as a historical record. v0.3 closes the architectural irony the v0.2 council surfaced: cache coherence and feature-flag state move off PostgreSQL into BEAM-native ETS, so the RFC stops piling new PG-coordination load onto the substrate it exists to relieve.
+**Status:** COMMITTED IN PRINCIPLE, NO ACTIVE IMPLEMENTATION. The only implementation shape ever carried forward was **shelved on measurement, 2026-06-28**, and nothing Wave-3-shaped has landed since. Read the **V0.5 STATUS CORRECTION** immediately below before treating anything under "Implementation entry" as work to pick up.
+
+## V0.5 STATUS CORRECTION (2026-08-16) — the port is shelved; the commitment is not retracted
+
+Two things had drifted apart in this file, and a reader arriving at the old header got the wrong posture:
+
+- **The decision** — parent-roadmap **V0.4 RESOLUTION** (operator, 2026-06-25) — committed Wave 3 to proceed on the coordination/ownership argument and retired latency as a decision gate. That stands; only the operator retracts it.
+- **The design** — the (γ) narrow cut, the only shape carried to implementation — was **shelved three days later** on live telemetry, not on preference. Full record: [`beam-wave-3-gamma-hybrid-v0.md`](beam-wave-3-gamma-hybrid-v0.md) §0c.
+
+**Why it was shelved** (`[checkin_phases]`, n=2169 live check-ins). In the slowest 1% of `process_agent_update`, the locked compute the cut would move to BEAM is **~78ms**, while the **~1031ms tail is the enrichment pipeline** — the cut did not target the cost. Three structural blockers stand independently of that number: `run_enrichment_pipeline` reads six-plus in-process singletons and so cannot be a stateless RPC; the atomic seam is inverted (the durable persist already runs outside the lock, the status transition does not), which opens an unsafe-direction crash window with no reconciler; and the `core.agent_states.identity_id` FK forbids cross-runtime atomic identity+state.
+
+**Both Python wins the shelve named are now closed** — neither is outstanding work:
+
+1. *Enrichment tail* — closed by **#1225**, and not by the parallelization §0c suggested. Per-enrichment telemetry isolated `enrich_mirror_signals` as the sole slow stage; the bounded KG-search guard is live (`UNITARES_KG_SEARCH_TIMEOUT_S`, default 0.25s, `src/mcp_handlers/updates/enrichments.py`). The remaining enrichments measure under 16ms mean, so parallelizing them was deliberately not done.
+2. *The 404ms-vs-2751ms event-loop-queue gap* — investigated, **no gap**. It was a stale-window artifact; on matched recent windows `audit.tool_usage` and `[checkin_phases]` p99 agree.
+
+**What this does not cover.** Wave 3a (read-only handlers) is a separate and completed wave — see [`resolved/beam-wave-3a-read-only-handlers.md`](resolved/beam-wave-3a-read-only-handlers.md); its handlers serve only argless/`tool_name`-only calls, arg-bearing calls delegate back to Python by design. Dialectic-on-BEAM shipped as a pure-compute/coordination port and is unaffected. Neither is evidence that this RFC's write-path port advanced.
+
+**Resuming needs a new premise, not a new draft.** This RFC went through four redrafts against an unchanged substrate argument before the measurement settled it. A resumption should state what changed in the measurement; it should not re-argue the destination.
+
+**Historical status line, preserved verbatim (V0.4, 2026-06-25):** ACTIVE — COMMITTED TO IMPLEMENTATION per parent-roadmap **V0.4 RESOLUTION (operator decision, 2026-06-25)**. The v0.3.4 (α) defer is superseded: latency was retired as a Wave 3 *decision* gate (every measured floor resolved Python-side; the gate was structurally undecidable), and Wave 3 is committed to proceed on the coordination/ownership argument. The §14 measurement window (PR #599) it had deferred behind also closed on schedule (~2026-06-24); its data may inform design but no longer gates the decision. The **technical correctness gates remain owed before any cutover merges** — see "Implementation entry + owed council passes" below. Body preserved at v0.3.4 (§11 criterion-10 pin + reassignment event stream, 2026-06-11; v0.3.3 §5.2-audit fold 2026-06-10). Full redraft superseding v0.2 (which superseded v0.1.x). Each prior version is preserved on its branch as a historical record. v0.3 closes the architectural irony the v0.2 council surfaced: cache coherence and feature-flag state move off PostgreSQL into BEAM-native ETS, so the RFC stops piling new PG-coordination load onto the substrate it exists to relieve.
 
 ## Implementation entry + owed council passes (v0.4, 2026-06-26)
+
+> **Superseded by V0.5 above.** The sequencing below was never executed past step 1's measurement channel; the (γ) design it fed was shelved 2026-06-28. Kept as the design record, not as a work queue.
 
 The decision is closed; the design is wide open and adversarially reviewable (parent v0.4 §"honesty guardrail"). Sequencing, safest-first — each runs **alongside** Python and changes nothing user-facing until proven:
 
