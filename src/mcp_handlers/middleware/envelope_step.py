@@ -302,6 +302,20 @@ def build_experience_envelope(
             "Keep working - sync_state again after your next substantial step, "
             "and record_result(...) when an outcome lands."
         )
+        # In-flow review nudge (#1685): the formatter attaches review_suggested
+        # (every response mode) when this check-in reported uncertain ground.
+        nudge = payload.get("review_suggested")
+        if isinstance(nudge, dict):
+            phrase = {
+                "low_confidence": "low confidence",
+                "high_complexity": "high complexity",
+                "guide_verdict": "a guide verdict",
+            }.get(str(nudge.get("trigger")), "uncertain ground")
+            next_action += (
+                f" This check-in carried {phrase} - a reviewer can pressure-test "
+                "it in one call: request_review(issue_description='...', "
+                "reasoning='...')."
+            )
 
     elif canonical_name == "get_governance_metrics":
         # This handler already speaks the friendly dialect - map directly.
