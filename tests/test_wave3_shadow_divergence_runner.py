@@ -121,3 +121,65 @@ def test_missing_row_has_empty_divergent_columns():
     }
     assert runner._divergent_columns(row) == []
     assert runner._row_kind(row) == "shadow_missing"
+
+
+# --- tri-state shadow-window status -------------------------------------
+# The original gate was a bare `count == 0` skip, which rendered two very
+# different situations identically: a window that never started (correct
+# today -- no BEAM shadow writer exists) and a window that started and then
+# stopped (a broken writer). The second read as "nothing to do", which is the
+# failure mode the checker exists to catch.
+
+
+def test_window_status_active_when_rows_present():
+    assert runner._window_status("identities", 5, {}) == "active"
+    # A prior marker does not change an active read.
+    assert (
+        runner._window_status("identities", 5, {"identities": {"ever_active": True}})
+        == "active"
+    )
+
+
+def test_window_status_never_started_when_empty_and_no_marker():
+    assert runner._window_status("identities", 0, {}) == "never_started"
+    assert runner._window_status("agents", 0, {"agents": {}}) == "never_started"
+
+
+def test_window_status_went_dark_when_empty_after_active():
+    """The case the bare count==0 gate could not express."""
+    state = {"identities": {"ever_active": True, "last_count": 42}}
+    assert runner._window_status("identities", 0, state) == "went_dark"
+
+
+def test_window_status_is_per_table_not_global():
+    """One table going dark must not mask the other's real state."""
+    state = {"identities": {"ever_active": True}}
+    assert runner._window_status("identities", 0, state) == "went_dark"
+    assert runner._window_status("agents", 0, state) == "never_started"
+
+
+def test_corrupt_marker_degrades_to_never_started_not_crash(tmp_path, monkeypatch):
+    """A corrupt marker must not take the checker down, but it is a blind
+    spot and the runner says so on stderr rather than failing silently."""
+    bad = tmp_path / "window_state.json"
+    bad.write_text("{not json")
+    monkeypatch.setattr(runner, "WINDOW_STATE_FILE", bad)
+    assert runner._load_window_state() == {}
+
+
+def test_missing_marker_reads_as_empty_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "WINDOW_STATE_FILE", tmp_path / "absent.json")
+    assert runner._load_window_state() == {}
+
+
+def test_window_state_round_trips(tmp_path, monkeypatch):
+    path = tmp_path / "nested" / "window_state.json"
+    monkeypatch.setattr(runner, "WINDOW_STATE_FILE", path)
+    runner._save_window_state({"identities": {"ever_active": True, "last_count": 3}})
+    assert runner._load_window_state()["identities"]["ever_active"] is True
+
+
+def test_self_test_mode_exists():
+    """The comparator must be able to prove it can see; a zero from a normal
+    run is only evidence once this has run green."""
+    assert callable(runner.self_test)
