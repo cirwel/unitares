@@ -731,3 +731,40 @@ def test_valid_relative_link_under_proposals_is_quiet(doc_health, tmp_path, monk
     monkeypatch.setattr(doc_health, "REPO_ROOT", repo)
 
     assert doc_health.check_relative_links([doc]) == []
+
+
+def test_repo_root_link_in_skipped_dir_is_not_dropped(doc_health, tmp_path, monkeypatch):
+    """The delegation hole. check_relative_links hands repo-root-prefixed links
+    to check_dead_refs — but check_dead_refs skips proposals, so a
+    `[x](docs/gone.md)` inside docs/proposals/ was invisible to BOTH checks.
+    Delegate only where the delegate is actually looking."""
+    prop = tmp_path / "docs" / "proposals"
+    prop.mkdir(parents=True)
+    doc = prop / "x.md"
+    doc.write_text("A [missing](docs/definitely-missing.md) link.\n")
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+
+    warnings = doc_health.check_relative_links([doc])
+    assert warnings, "repo-root link in a dead-ref-skipped dir must not be dropped"
+    assert "definitely-missing.md" in warnings[0]
+
+
+def test_repo_root_link_in_skipped_dir_no_false_positive(doc_health, tmp_path, monkeypatch):
+    prop = tmp_path / "docs" / "proposals"
+    prop.mkdir(parents=True)
+    (tmp_path / "docs" / "real.md").write_text("x")
+    doc = prop / "y.md"
+    doc.write_text("A [real](docs/real.md) link.\n")
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    assert doc_health.check_relative_links([doc]) == []
+
+
+def test_repo_root_link_outside_skipped_dir_still_delegates(doc_health, tmp_path, monkeypatch):
+    """Outside a skipped dir the delegation must stand, or the same broken
+    link gets reported twice by two checks."""
+    ops = tmp_path / "docs" / "operations"
+    ops.mkdir(parents=True)
+    doc = ops / "z.md"
+    doc.write_text("A [missing](docs/definitely-missing.md) link.\n")
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    assert doc_health.check_relative_links([doc]) == []
