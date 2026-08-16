@@ -116,6 +116,31 @@ is narrower: calibration consistency cannot distinguish honest low capability
 from capability that is concealed while confidence is reduced to match. Test
 deliberate concealment with an independent, cross-framing capability evaluation.
 
+**A surface the boundaries above do not cover: the governor is authored by the
+governed.** Every threat considered so far is a runtime one — a monitored process
+forging outcomes, shaping its own baseline, or concealing capability inside a
+session. But the agents UNITARES governs are also the agents that write UNITARES.
+Thresholds, suppression windows, corroboration weights, and the tests protecting
+them all arrive through agent-authored diffs. That is a second channel to the same
+effect, and it is cheaper than runtime evasion: a monitored process does not need
+to fool the instrument if it can edit the instrument. The leverage is concrete —
+the `gap_suppress` cadence window downgraded 195 of 218 recorded pauses (89.4%) in
+the 2026-08-06 audit, so widening one constant disarms most of the enforcement
+surface in a one-line diff with a plausible performance rationale. **No instance of
+this is known and nothing here implies intent; the claim is structural.** The
+control today is the human merge gate — every session lands a draft PR and a
+maintainer merges — plus CI gates aimed elsewhere (`unitares_doctor.py` for
+migration drift, `check-repo-scope.sh` for scope leakage). The latter is precedent
+rather than coverage: it exists because agent-authored config once stripped an
+accountability artifact past `.gitignore`, and its own rationale concluded that
+neither memory nor per-vendor instructions reliably prevent that, so CI — not
+instruction — is the layer that catches cloud sessions. No gate is aimed at
+governance-weakening diffs specifically. **This binds hardest on federation.** A
+partner governor calibrating a peer's telemetry has to model who authored that
+peer's thresholds; an operator who cannot answer that is asking to be trusted
+rather than verified, which is the one thing a mutually-distrustful exchange
+cannot supply. Tracked in [#1671](https://github.com/cirwel/unitares/issues/1671).
+
 **The highest-stakes surface: the governed-effect execute plane.** Everything above
 concerns the *signal* and whether an agent can game it. The most security-relevant
 capability is different in kind: an optional **governed-effect execute plane** (BEAM,
