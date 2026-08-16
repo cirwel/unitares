@@ -7,7 +7,7 @@ under STRICT_IDENTITY_REQUIRED, silently auto-minting ghost identities
 before it) and appending test output to the real
 ~/Library/Logs/unitares-watcher.log.
 
-Two seams close both leaks for every test in this directory:
+Three seams close these leaks for every test in this directory:
 
 1. ``urllib.request.urlopen`` is replaced with a hard failure. Both the
    SDK sync client (governance REST) and the agent's Ollama call go
@@ -20,6 +20,11 @@ Two seams close both leaks for every test in this directory:
    needed because several tests load agent.py via
    ``importlib.util.spec_from_file_location`` under ad-hoc names, each
    binding its own copy of the constant.
+
+3. ``UNITARES_WATCHER_DATA_DIR`` and the path-resolution cache point at the
+   test's tmp dir. Cross-process model-slot tests inherit the override, so
+   they contend with their own child processes without touching the live
+   ``~/.unitares/watcher/model_slot.lock``.
 """
 from __future__ import annotations
 
@@ -28,6 +33,8 @@ import urllib.request
 from pathlib import Path
 
 import pytest
+
+from agents.watcher import _util as watcher_util
 
 _REAL_LOG = Path.home() / "Library" / "Logs" / "unitares-watcher.log"
 
@@ -43,6 +50,10 @@ def _watcher_isolation(monkeypatch, tmp_path):
 
     monkeypatch.setattr(urllib.request, "urlopen", _blocked)
 
+    sandbox_state = tmp_path / "watcher-state"
+    monkeypatch.setenv("UNITARES_WATCHER_DATA_DIR", str(sandbox_state))
+    monkeypatch.setattr(watcher_util, "_state_dir_cache", None)
+
     sandbox_log = tmp_path / "unitares-watcher.log"
     for mod in list(sys.modules.values()):
         try:
@@ -50,4 +61,4 @@ def _watcher_isolation(monkeypatch, tmp_path):
                 monkeypatch.setattr(mod, "LOG_FILE", sandbox_log)
         except Exception:
             continue
-    yield
+    yield sandbox_state
