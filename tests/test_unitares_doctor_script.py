@@ -1448,3 +1448,135 @@ def test_checksum_check_fails_loudly_when_state_unknown(doctor, monkeypatch, tmp
     result = doctor.check_migration_checksum_drift("postgresql://x/y", root)
     assert result.status == doctor.Status.FAIL
     assert "UNKNOWN" in result.message
+
+
+# ---------------------------------------------------------------------------
+# resident_checkin_stale — event-driven exemption
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _no_live_residents_probe(monkeypatch, doctor):
+    """Keep the resident checks hermetic.
+
+    `check_resident_checkin_stale` asks the running server which residents are
+    event-driven. Left unpatched, a unit test makes a real call to
+    127.0.0.1:8767 and behaves differently depending on whether a server
+    happens to be up on the developer's machine — passing locally, exercising a
+    different path in CI. Default to the fail-open answer; the tests that care
+    override it.
+    """
+    # Stash the real function first: the tests that exercise IT must not get
+    # the stub. Two of them expect set() and so passed vacuously against the
+    # stub before this was added.
+    monkeypatch.setattr(
+        doctor, "_event_driven_labels_real", doctor._event_driven_labels, raising=False
+    )
+    monkeypatch.setattr(doctor, "_event_driven_labels", lambda *a, **k: set())
+
+
+class TestEventDrivenExemption:
+    """An event-driven resident has no cadence to be stale against.
+
+    Measured 2026-08-15: `/v1/residents` reported Watcher event_driven, healthy,
+    110s silent against a 48h threshold, while this check warned it had been
+    silent 98min — two surfaces disagreeing about one agent at one instant.
+    """
+
+    def _sql(self, doctor, monkeypatch) -> str:
+        captured = {}
+
+        def capture(db_url, sql):
+            captured["sql"] = sql
+            return ("0", "0", "")
+
+        monkeypatch.setattr(doctor, "_psql_row", capture)
+        doctor.check_resident_checkin_stale("postgresql://x/y")
+        return captured["sql"]
+
+    def test_event_driven_label_is_excluded_from_the_stale_predicate(self, doctor, monkeypatch):
+        """Asserted at the SQL level because the gate IS the SQL — a mocked row
+        count would pass whether or not the predicate survived an edit."""
+        monkeypatch.setattr(doctor, "_event_driven_labels", lambda *a, **k: {"Watcher"})
+        assert "AND label NOT IN ('Watcher')" in self._sql(doctor, monkeypatch)
+
+    def test_timer_residents_are_still_judged(self, doctor, monkeypatch):
+        """The founding incident — Sentinel silent 24h, 2026-07-29 — must still
+        fire. An exemption that quietly widened to every resident would remove
+        the only check built to catch a resident hiding behind healthy peers."""
+        monkeypatch.setattr(doctor, "_event_driven_labels", lambda *a, **k: {"Watcher"})
+        sql = self._sql(doctor, monkeypatch)
+        assert "'Sentinel'" not in sql
+        # The envelope predicate itself is untouched.
+        assert "greatest(med_gap * 6, p95_gap * 2, 1800)" in sql
+
+    def test_no_exemption_clause_when_server_reports_none(self, doctor, monkeypatch):
+        monkeypatch.setattr(doctor, "_event_driven_labels", lambda *a, **k: set())
+        assert "NOT IN (" not in self._sql(doctor, monkeypatch)
+
+    def test_labels_are_quoted_against_injection(self, doctor, monkeypatch):
+        """Labels arrive over HTTP and are interpolated into SQL."""
+        monkeypatch.setattr(
+            doctor, "_event_driven_labels", lambda *a, **k: {"O'Brien"}
+        )
+        assert "'O''Brien'" in self._sql(doctor, monkeypatch)
+
+    def test_exemption_is_stated_in_the_message(self, doctor, monkeypatch):
+        """A silent exemption is how a check quietly stops covering something."""
+        monkeypatch.setattr(doctor, "_event_driven_labels", lambda *a, **k: {"Watcher"})
+        monkeypatch.setattr(doctor, "_psql_row", lambda *a: ("5", "0", ""))
+        result = doctor.check_resident_checkin_stale("postgresql://x/y")
+        assert result.status is doctor.Status.PASS
+        assert "1 event-driven, exempt: Watcher" in result.message
+
+
+class TestEventDrivenLabelsFailsOpen:
+    """A doctor that goes quiet because the server it monitors is unreachable
+    would be the worst possible failure mode for this check."""
+
+    def test_unreachable_server_yields_no_exemption(self, doctor, monkeypatch):
+        def boom(*a, **k):
+            raise OSError("connection refused")
+
+        monkeypatch.setattr(doctor.urllib.request, "urlopen", boom)
+        assert doctor._event_driven_labels_real() == set()
+
+    def test_malformed_payload_yields_no_exemption(self, doctor, monkeypatch):
+        class FakeResp:
+            status = 200
+
+            def read(self):
+                return b"not json"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(doctor.urllib.request, "urlopen", lambda *a, **k: FakeResp())
+        assert doctor._event_driven_labels_real() == set()
+
+    def test_only_event_driven_true_is_collected(self, doctor, monkeypatch):
+        payload = {
+            "residents": [
+                {"label": "Watcher", "event_driven": True},
+                {"label": "Sentinel", "event_driven": False},
+                {"label": "Vigil"},
+            ]
+        }
+
+        class FakeResp:
+            status = 200
+
+            def read(self):
+                return json.dumps(payload).encode()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(doctor.urllib.request, "urlopen", lambda *a, **k: FakeResp())
+        assert doctor._event_driven_labels_real() == {"Watcher"}

@@ -134,9 +134,10 @@ This section protects against wasted parallel work across agents, not just mista
 
 ## Git Rules
 
-- Do not force-push
+- **Do not force-push in a way that can lose work.** The rule is about work loss, not about rewriting history as such: amending your own un-merged commit — a message fix, a squash of your own commits — is fine, and must use `--force-with-lease` so the push fails if anyone else has pushed. Never force-push a shared or already-merged branch, never force-push over a commit you did not author, and never use bare `--force`.
 - Do not run destructive git commands without explicit user approval
 - Do not run DROP/TRUNCATE/DELETE on the governance database without explicit user approval
+- **Keep harness session-attribution trailers out of commit messages.** `repo-scope.yml` greps the whole `origin/master..HEAD` range for the session-link trailer, so a later commit cannot clear a bad one — the only repair is an amend. Agent harnesses append this trailer by default; strip it before committing. The exact pattern is defined in `scripts/dev/check-repo-scope.sh` and is deliberately not reproduced here, because writing it out trips the guard on this file.
 
 ## GitHub Workflow Conventions
 
