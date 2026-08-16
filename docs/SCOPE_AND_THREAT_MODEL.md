@@ -97,7 +97,7 @@ has been ad hoc rather than systematic or sustained, and the deployment is
 single-operator. That is the real limitation: a shortfall of *sustained
 adversarial testing*, not of adversarial design.
 
-**A named, demonstrated blind spot: calibrated capability concealment.** The
+**A named, fixture-demonstrated blind spot: calibrated capability concealment.** The
 Integrity (I) signal anchors confidence to outcomes, so it catches an agent that
 *over*-claims — including a sandbagger that suppresses its performance under
 evaluation while still reporting high confidence. It does **not** catch an agent
@@ -109,12 +109,18 @@ that leaves the agent's claims internally consistent leaves no in-band trace. Th
 instrument that catches it is out-of-band — comparing performance across a
 monitored vs. an unmonitored framing — which is a capability-elicitation probe, a
 different tool than this runtime drift signal. An internal model-organism probe
-previously exercised this failure shape, but its implementation was removed as
-out of repository scope (see [`REPO_SCOPE.md`](REPO_SCOPE.md)); it is therefore
-not reproducible evidence for an external evaluator. The load-bearing claim here
-is narrower: calibration consistency cannot distinguish honest low capability
-from capability that is concealed while confidence is reduced to match. Test
-deliberate concealment with an independent, cross-framing capability evaluation.
+previously exercised this failure shape, but its implementation was removed as out
+of repository scope (see [`REPO_SCOPE.md`](REPO_SCOPE.md)). The repository now
+demonstrates the narrower load-bearing claim with [a synthetic twin
+replay](../tests/test_calibrated_capability_concealment.py): an honest 25%-capable
+fixture and a 90%-capable fixture that suppresses performance both expose the same
+25% outcome sequence and report 25% confidence. The deployed tactical-calibration,
+behavioral-sensor, EMA, and assessment path produces identical traces, while an
+overclaiming control that reports 90% confidence produces a 0.65 calibration error
+and lower I. This is reproducible evidence of observational equivalence *given the
+same in-band trace*, not evidence that a real model concealed capability. Testing
+deliberate concealment still requires an independent, cross-framing capability
+evaluation.
 
 **A surface the boundaries above do not cover: the governor is authored by the
 governed.** Every threat considered so far is a runtime one — a monitored process
