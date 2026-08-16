@@ -2,7 +2,7 @@
 Wave 3a §2.6 response-shape parity tests (PR #5+).
 
 Specification:
-    ``docs/proposals/beam-wave-3a-read-only-handlers.md`` v0.2 §2.6
+    ``docs/proposals/resolved/beam-wave-3a-read-only-handlers.md`` v0.2 §2.6
     ("Wave 3a handlers ported to BEAM MUST produce responses byte-
     equivalent to the current Python responses for the same input,
     modulo timestamp masking").

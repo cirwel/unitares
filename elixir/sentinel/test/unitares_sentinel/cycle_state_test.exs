@@ -1,6 +1,6 @@
 defmodule UnitaresSentinel.CycleStateTest do
   @moduledoc """
-  Surface 1 binding spec — see `docs/proposals/beam-wave-1-sentinel.md`
+  Surface 1 binding spec — see `docs/proposals/resolved/beam-wave-1-sentinel.md`
   v0.1.2 amendment block. Path resolution, max-on-boot semantics,
   string-key normalization, isinstance guard, and log-and-continue
   exception contract are all council-folded BLOCKs/CONCERNs. These

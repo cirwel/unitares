@@ -1,6 +1,6 @@
 """Wave 3a §6 Q1 transitive-closure audit — gate tests.
 
-Spec: ``docs/proposals/beam-wave-3a-read-only-handlers.md`` v0.2 §6 Q1.
+Spec: ``docs/proposals/resolved/beam-wave-3a-read-only-handlers.md`` v0.2 §6 Q1.
 The audit script (``scripts/dev/wave3a_transitive_audit.py``) was named as
 a PR #1 deliverable and re-runs as a gate on each handler PR; these tests
 make the gate CI-enforced:

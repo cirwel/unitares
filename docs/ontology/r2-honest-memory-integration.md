@@ -1,6 +1,7 @@
 # R2 — Honest memory integration
 
 **Status:** Design doc v2; Phase 1 runtime implementation shipped 2026-05-05 in #357.
+**Demotion review (2026-08-16):** Retain in ontology because Phase 2 consumers and the telemetry gate remain open; this is the canonical protocol for the live Phase 1 lifecycle.
 **Scope:** Plan row R2 (`docs/ontology/plan.md`). Defines the structural posture: what a fresh process reads when declaring inheritance, what counts as "integration" (vs. mere reference), what behavior change is required before identity-under-the-lineage-chain becomes confirmed.
 **Builds on (design dependency only — see §"Implementation status"):** R1 v3.2 (`r1-verify-lineage-claim.md`) provides the trajectory-similarity gate; R2 specifies the protocol that wraps it.
 

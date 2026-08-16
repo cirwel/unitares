@@ -1,6 +1,6 @@
 defmodule UnitaresSentinel.MixProject do
   @moduledoc """
-  Wave 1 RFC `docs/proposals/beam-wave-1-sentinel.md` bootstrap spec
+  Wave 1 RFC `docs/proposals/resolved/beam-wave-1-sentinel.md` bootstrap spec
   (v0.1.1 B5 reviewer review, with v0.1.2/v0.1.3 amendments).
   Sibling app to `elixir/lease_plane/` —
   flat single-app project, NOT umbrella, matching existing topology

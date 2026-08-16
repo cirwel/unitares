@@ -1,5 +1,8 @@
 # EISV Stage-0 population bridge — half (b): routing external labels to baselined residents
 
+**Status:** Half (a) shipped in PR #1210; half (b) remains an active routing and population specification.
+**Demotion review (2026-08-16):** Retain as active because the shipped snapshot prerequisite and the still-open resident label-routing work are coupled by the same falsifiability gate.
+
 _Companion to `eisv-maths-roadmap-v0.md` (§6.3 falsifiability gate, §7 anchor registry, Appendix B disjointness). Half (a) — snapshot EISV onto outcome rows that arrive without one — shipped in PR #1210. This specs half (b): make **baselined resident** agents actually carry **externally-verified** outcomes, so the residual-vs-Φ test has a non-empty join. L2/L3 — needs a deliberate motion, not a silent edit._
 
 ## Finding: half (b) is partially built, not absent

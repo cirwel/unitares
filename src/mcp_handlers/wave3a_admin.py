@@ -1,6 +1,6 @@
 """Wave 3a admin surface — PR #3 of v0.2 sequencing.
 
-Spec: ``docs/proposals/beam-wave-3a-read-only-handlers.md`` v0.2 §3.1
+Spec: ``docs/proposals/resolved/beam-wave-3a-read-only-handlers.md`` v0.2 §3.1
 (rollback shape). The script at ``scripts/ops/wave-3a-rollback.sh`` is the
 operator-facing surface; this module is the HTTP backend the script calls.
 
