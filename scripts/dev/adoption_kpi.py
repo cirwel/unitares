@@ -143,6 +143,36 @@ def _snapshot_queries() -> dict:
               AND event_type = 'mirror_signal.emit'
               AND payload->'signals' @> '[{"signal_type": "kg_proactive_surface"}]'
         """,
+        "review_nudge": """
+            -- In-flow review nudge (adoption increment 2, #1685): emitted inside
+            -- mirror_signal.emit events as a review_nudge trigger. Same
+            -- surfaced-vs-shadow semantics as the proactive KG surface, except
+            -- the nudge also reaches non-mirror modes via next_action, so
+            -- `fired` is the population that saw it.
+            SELECT count(*) AS fired,
+                   count(DISTINCT agent_id) AS agents
+            FROM audit.events
+            WHERE ts > now() - make_interval(days => %(days)s)
+              AND event_type = 'mirror_signal.emit'
+              AND payload->'signals' @> '[{"signal_type": "review_nudge"}]'
+        """,
+        "review_nudge_conversion": """
+            -- Nudge -> review conversion: distinct nudged agents that opened a
+            -- dialectic session at or after their first nudge in the window.
+            WITH nudges AS (
+                SELECT agent_id, min(ts) AS first_nudge
+                FROM audit.events
+                WHERE ts > now() - make_interval(days => %(days)s)
+                  AND event_type = 'mirror_signal.emit'
+                  AND payload->'signals' @> '[{"signal_type": "review_nudge"}]'
+                GROUP BY agent_id
+            )
+            SELECT count(DISTINCT n.agent_id) AS converted
+            FROM nudges n
+            JOIN core.dialectic_sessions d
+              ON d.paused_agent_id::text = n.agent_id::text
+             AND d.created_at >= n.first_nudge
+        """,
     }
 
 
@@ -221,6 +251,10 @@ def main() -> int:
     pk = snap["proactive_kg_surface"]
     print(f"  proactive KG surface: {pk['surfaced']} seen / {pk['fired']} fired "
           f"by {pk['agents']} agents")
+    rn = snap["review_nudge"]
+    rc = snap["review_nudge_conversion"]
+    print(f"  review nudge (#1685): {rn['fired']} fired for {rn['agents']} agents; "
+          f"{rc['converted']} opened a review after a nudge")
     rm = snap.get("recall_misses") or {}
     print(f"  recall misses (search no-value, #972): {rm.get('total', 0)} total "
           f"{rm.get('by_class', {})}")
