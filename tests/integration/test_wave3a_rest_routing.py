@@ -1,7 +1,7 @@
 """
 Wave 3a REST dispatch-path routing integration tests.
 
-Spec: ``docs/proposals/beam-wave-3a-read-only-handlers.md`` v0.2 §5
+Spec: ``docs/proposals/resolved/beam-wave-3a-read-only-handlers.md`` v0.2 §5
 (Wave 3a cutover sequence) + architect FIND-A4 (dispatch-path question).
 
 Cutover-discovered gap: PR #539 wired the per-tool routing table into the

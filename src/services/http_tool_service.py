@@ -10,7 +10,7 @@ HTTP clients) would bypass BEAM dispatch even when the operator has flipped
 ``WAVE_3A_*_ON_BEAM=true`` and the routing table is populated, because the
 five core tools in ``_DIRECT_HTTP_TOOL_HANDLERS`` short-circuit MCP dispatch.
 
-See ``docs/proposals/beam-wave-3a-read-only-handlers.md`` v0.2 §5 (Wave 3a
+See ``docs/proposals/resolved/beam-wave-3a-read-only-handlers.md`` v0.2 §5 (Wave 3a
 cutover sequence) + architect FIND-A4 (dispatch-path question).
 """
 

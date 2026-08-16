@@ -1,6 +1,7 @@
 # Principal Rollup — counting the integral, not the point-value
 
 **Status:** v0 proposal — measurement shipped (#877, #880); **Move 3 reframed by council 2026-06-18 (see amendment) — derive, do NOT store-at-mint**
+**Demotion review (2026-08-16):** Retain as the current principal-semantics contract because count and mint behavior remains operator-gated and runtime code cites this document.
 **Surface:** identity / onboarding (single-writer; see CLAUDE.md)
 **Relates to:** `docs/ontology/identity.md` research-agenda #3; the
 `participated/never_participated` view (#822); the anon-ghost mint source

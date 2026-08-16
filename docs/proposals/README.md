@@ -12,7 +12,7 @@ Several of these are **single-writer surfaces** (see the shared contract in `AGE
 |---|---|
 | [`plexus-scope.md`](plexus-scope.md) | Active boundary name over the live Surface Lease Plane; Plexus Zero retained as manual fallback |
 | [`surface-lease-plane-v0.md`](surface-lease-plane-v0.md) | The lease-plane RFC, v0.11+. Phase A shipped 2026-05-03 (PR #305); Phase B promotion window opened 2026-05-16; `resident` enforcement shipped (PR #476) |
-| [`surface-lease-plane-phase-a-plan.md`](surface-lease-plane-phase-a-plan.md) | COMPLETE — Phase A execution plan, shipped with PR #305 |
+| [`surface-lease-plane-phase-a-plan.md`](surface-lease-plane-phase-a-plan.md) | COMPLETE — Phase A execution plan, shipped with PR #305; retained here as the current PR-by-PR sequencing ledger cited by the BEAM roadmap and coordination kernel |
 | [`worktree-isolation-vs-lease-default.md`](worktree-isolation-vs-lease-default.md) | v0.2 counter-note / companion to the lease-plane RFC (not a replacement) |
 | [`lease-lifecycle-declaration-v0.md`](lease-lifecycle-declaration-v0.md) | **REFUTED as written.** The permanent-strand diagnosis stands; the proposed TTL-only fix would break execution exclusion. Retained as a negative design record and prerequisite warning for any fence/lifecycle follow-up |
 | [`lease-plane-phase-a-latency-2026-05-20.md`](lease-plane-phase-a-latency-2026-05-20.md) | First latency measurement anchoring the substrate-tax gate from the BEAM roadmap |
@@ -23,9 +23,7 @@ Several of these are **single-writer surfaces** (see the shared contract in `AGE
 |---|---|
 | [`2026-06-24-wave-3-gate-framing.md`](2026-06-24-wave-3-gate-framing.md) | **Read first for the gate.** Framing note (2026-06-22) — two separate decisions: (A) freeze the orchestrator cluster (demand empty) vs (B) Wave-3 dispatch on its own merits. Measured 2026-06-22: p50 floor closed, but p99 coordination tail LIVE (`process_agent_update` p99 4740ms, math ~1.3%) |
 | [`beam-footprint-roadmap-v0.md`](beam-footprint-roadmap-v0.md) | v0.3 — destination A′ committed (operator decision 2026-05-05). Read the V0.3 RESOLUTION block first |
-| [`beam-wave-1-sentinel.md`](beam-wave-1-sentinel.md) | v0.1.3 — Wave 1 Surface 1 cycle worker shipped (PR #376). Read the v0.1.3 amendment first |
 | [`beam-wave-3-handler-dispatch.md`](beam-wave-3-handler-dispatch.md) | v0.3.2 — active redraft; supersedes v0.2/v0.1.x |
-| [`beam-wave-3a-read-only-handlers.md`](beam-wave-3a-read-only-handlers.md) | v0.2 — council-fold complete; operator review pending |
 | [`agent-orchestrator-beam-v0.md`](agent-orchestrator-beam-v0.md) | v0 thin slice — council-reviewed library + smoke, not merged to any running surface |
 | [`beam-governed-effects-dossier-2026-06-18.md`](beam-governed-effects-dossier-2026-06-18.md) | Draft dossier + phased plan — narrows current evidence to BEAM as dual-mode record/execute governed-effect runtime custody, not whole-governance rewrite |
 | [`governed-effect-plane-v0.md`](governed-effect-plane-v0.md) | Draft v0.1 — Phase 2 protocol contract for the dossier (dual `custody_mode`, effect envelope, typed errors, idempotency/custody-TTL/payload holes closed); council-revised, first effect class = both (record_only shadow built in PR #866) |
@@ -72,6 +70,7 @@ The ADR-001 thread: do not enable operator-vision delegation as first proposed; 
 | [`relational-calibration-maturity-capacity-v0.md`](relational-calibration-maturity-capacity-v0.md) | Immutable v0 capacity preregistration, superseded for protocol v0.2; retained as design history and not a current implementation gate |
 | [`relational-calibration-maturity-capacity-v1.md`](relational-calibration-maturity-capacity-v1.md) | Frozen, one-time aggregate instrument-supply read with temporal and same-row consistency gates; process UUID counts explicitly do not establish participant or federation capacity |
 | [`accountable-testbed-metrics-preregistration-v0.md`](accountable-testbed-metrics-preregistration-v0.md) | Frozen evaluation pre-registration for the accountable multi-principal testbed |
+| [`accountable-testbed-metrics-preregistration-v1.md`](accountable-testbed-metrics-preregistration-v1.md) | Frozen v1.1 evaluation contract for future headline, ablation, and scale-sweep runs; the document merge did not execute those runs |
 | [`accountable-testbed-preliminary-trace.md`](accountable-testbed-preliminary-trace.md) | Preliminary deployed-system trace exercising the federation primitives; explicitly not a multi-host or multi-organization result |
 
 ## Resolved — relocated to [`resolved/`](resolved/)
@@ -95,6 +94,8 @@ dead-ref exemption continues to apply to these point-in-time records.)
 | [`eisv-basin-health-gating-v0.md`](resolved/eisv-basin-health-gating-v0.md) | SHIPPED — PR #696 (issue #689), 2026-06-14; absolute-basin-health gating for self-relative risk, refined by #699 |
 | [`dashboard-hero-severity-rollup.md`](resolved/dashboard-hero-severity-rollup.md) | SHIPPED (Phase 1) — PR #875; hero reflects all severity sources + "needs attention" band; `computeFleetSeverity` + 12 tests; verified live 2026-06-22 |
 | [`docs-consolidation-v0.md`](resolved/docs-consolidation-v0.md) | SHIPPED — contested-claim lint, audience-split index, shorter README, and thin compatibility/manual routes landed by 2026-08-11 |
+| [`beam-wave-1-sentinel.md`](resolved/beam-wave-1-sentinel.md) | SHIPPED — Wave 1 executed RFC; active follow-on work belongs to later waves; compatibility stub retained at the old path |
+| [`beam-wave-3a-read-only-handlers.md`](resolved/beam-wave-3a-read-only-handlers.md) | DEPLOYED — Wave 3a read-only listener execution record; compatibility stub retained at the old path |
 
 ### Closed by negative result
 
@@ -102,7 +103,7 @@ dead-ref exemption continues to apply to these point-in-time records.)
 |---|---|
 | [`eisv-distributional-signal-probe-v0.md`](resolved/eisv-distributional-signal-probe-v0.md) | **Probe A run — KILL (2026-06-22).** Cheap falsifiable gate on the "make EISV distributional" work; dispersion shows no lift over the previous-outcome baseline (negative AUC delta), so the larger dynamics change is not greenlit. See the Run result block |
 
-### Dated evaluation / measurement records
+### Dated evaluation / measurement / lifecycle records
 
 Point-in-time records (now under `resolved/`); superseded analysis is preserved
 as-written by design.
@@ -115,3 +116,4 @@ as-written by design.
 | [`ode-profile-decomposition-2026-05-20.md`](resolved/ode-profile-decomposition-2026-05-20.md) | ODE profile decomposition + persistence — the BEAM roadmap's load-bearing unknown |
 | [`wave-1-completion-status-2026-06-14.md`](resolved/wave-1-completion-status-2026-06-14.md) | Read-only status roll-up across the Wave 1 surfaces + four exit conditions, consolidating the close decision into one ledger |
 | [`wave-1-condition-2-alarm-parity-audit-2026-06-14.md`](resolved/wave-1-condition-2-alarm-parity-audit-2026-06-14.md) | Alarm-rule parity audit (BEAM vs Python Sentinel) for Wave 1 exit condition 2 |
+| [`demotion-review-2026-08-16.md`](resolved/demotion-review-2026-08-16.md) | Lifecycle review of all 20 issue #1605 advisory candidates, including explicit reasons for every retained current contract or active proposal |

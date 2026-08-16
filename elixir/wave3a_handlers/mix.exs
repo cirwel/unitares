@@ -1,6 +1,6 @@
 defmodule Wave3aHandlers.MixProject do
   @moduledoc """
-  Wave 3a RFC `docs/proposals/beam-wave-3a-read-only-handlers.md` v0.2 §5
+  Wave 3a RFC `docs/proposals/resolved/beam-wave-3a-read-only-handlers.md` v0.2 §5
   PR #4 — first inbound-HTTP MCP listener on BEAM.
 
   Sibling app to `elixir/lease_plane/` and `elixir/sentinel/` (flat single-app

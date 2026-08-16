@@ -1,6 +1,6 @@
 """Wave 3a BEAM-outbound proxy — PR #3 of v0.2 sequencing.
 
-Spec: ``docs/proposals/beam-wave-3a-read-only-handlers.md`` v0.2 §2.2
+Spec: ``docs/proposals/resolved/beam-wave-3a-read-only-handlers.md`` v0.2 §2.2
 (envelope shape), §3.2 (timeout discipline + Python-fallback semantics),
 §4.2 (stop-sign event taxonomy: ``coordination_failure.wave_3a.{timeout,
 fallback,envelope_invalid}``).

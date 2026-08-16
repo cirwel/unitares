@@ -1,6 +1,6 @@
 -- Migration 041: Wave 3a coordination measurement channel
 --
--- Implements docs/proposals/beam-wave-3a-read-only-handlers.md §4.3:
+-- Implements docs/proposals/resolved/beam-wave-3a-read-only-handlers.md §4.3:
 -- "audit.coordination_measurements ships as PR #2 of this wave, before §4.1
 --  or §4.2 can be evaluated."
 --

@@ -2,7 +2,7 @@ defmodule Wave3aHandlers.HTTPRouter do
   @moduledoc """
   HTTP surface for the Wave 3a BEAM handler app.
 
-  RFC `docs/proposals/beam-wave-3a-read-only-handlers.md` v0.2 §2.2 pins the
+  RFC `docs/proposals/resolved/beam-wave-3a-read-only-handlers.md` v0.2 §2.2 pins the
   envelope shape; §5 PR #4 scopes this PR's routes; §6 Q3 marks the
   separate-app-vs-merge-into-3b decision as deferred to Wave 3b.
 

@@ -2,7 +2,7 @@
 <!--
   launchd manifest for the Wave 3a BEAM handler app (Elixir/OTP, port 8770).
 
-  Per RFC `docs/proposals/beam-wave-3a-read-only-handlers.md` v0.2 §5 PR #4:
+  Per RFC `docs/proposals/resolved/beam-wave-3a-read-only-handlers.md` v0.2 §5 PR #4:
   this template ships in-tree but is NOT loaded by default. The operator
   promotes it (rendering __VARS__ and `launchctl load`-ing) when ready for
   the first handler cutover (PR #5 wires `health_check`).

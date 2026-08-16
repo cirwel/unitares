@@ -531,6 +531,37 @@ _SHIPPED_MARKERS = re.compile(
     r"enforcement shipped|complete[d]?|resolved|done)\b",
     re.IGNORECASE,
 )
+
+# Negated status claims are evidence that a proposal is still active, not that
+# it shipped.  Without stripping these phrases, headers such as "NOT deployed"
+# and "No deployed behaviour" become false positives solely because the broad
+# shipped-marker regex sees the word after the negation.
+_NEGATED_SHIPPED_MARKERS = re.compile(
+    r"\b(?:not|no|never)\s+(?:(?:yet|currently|fully)\s+)?"
+    r"(?:shipped|deployed|landed|merged|in production|live in prod|"
+    r"complete[d]?|resolved|done)\b",
+    re.IGNORECASE,
+)
+
+# Demotion reviews are an explicit escape hatch for load-bearing current
+# contracts that legitimately describe shipped work.  The reason is mandatory:
+# a bare "retain" marker would only silence the inventory without recording the
+# judgment issue #1605 asks maintainers to preserve.
+_DEMOTION_RETAIN_REVIEW = re.compile(
+    r"^\s*(?:>\s*)?(?:\*\*)?demotion review(?:\s*\([^)]*\))?\s*:"
+    r"(?:\*\*)?\s*retain(?:ed)?\b[^\n]{12,}$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Some frozen/current contracts cannot be edited merely to add a lifecycle
+# banner: doing so re-lints their preserved historical body under the repo-scope
+# guard.  A dated lifecycle review in proposals/resolved/ is the sidecar form of
+# the same explicit judgment.  Rows must link to the retained doc, start their
+# decision with "Retain", and include a substantive reason.
+_DEMOTION_REVIEW_ROW = re.compile(
+    r"^\|\s*\[[^]]+\]\(([^)]+)\)\s*\|\s*(Retain[^|]*)\|\s*([^|]+)\|\s*$",
+    re.IGNORECASE,
+)
 # Signals the doc still tracks open work — distinguishes "fully shipped" (move
 # it) from "partially shipped" (split out the done part, keep the open part).
 _ACTIVE_REMAINING = re.compile(
@@ -548,8 +579,87 @@ _ACTIVE_REMAINING = re.compile(
 _DEMOTION_LIVING_REF_THRESHOLD = 10
 
 
+def _demotion_status_region(lines: list[str]) -> str:
+    """Return the document's declared status, falling back to its header.
+
+    Demotion is about a document's *own* lifecycle.  Scanning the entire first
+    15 lines also picked up unrelated dependency notes such as "PR merged" or a
+    link into ``proposals/resolved/``.  Prefer an explicit Markdown/YAML status
+    field and include its wrapped continuation lines; older documents without a
+    status field keep the conservative header fallback.
+    """
+
+    header_lines = lines[:15]
+    for index, line in enumerate(header_lines):
+        normalized = line.strip()
+        if normalized.startswith(">"):
+            normalized = normalized[1:].strip()
+        normalized = normalized.replace("**", "")
+        match = re.match(r"status\s*:\s*(.*)$", normalized, re.IGNORECASE)
+        if not match:
+            continue
+
+        status_lines = [match.group(1)]
+        for continuation in header_lines[index + 1 :]:
+            normalized_continuation = continuation.strip()
+            if normalized_continuation.startswith(">"):
+                normalized_continuation = normalized_continuation[1:].strip()
+            normalized_continuation = normalized_continuation.replace("**", "")
+            if not normalized_continuation or normalized_continuation == "---":
+                break
+            # A new ``Field:`` banner ends a wrapped status value.
+            if re.match(
+                r"[A-Za-z][A-Za-z0-9 _/\-]{0,40}\s*:",
+                normalized_continuation,
+            ):
+                break
+            status_lines.append(normalized_continuation)
+        return "\n".join(status_lines)
+
+    return "\n".join(header_lines)
+
+
+def _has_positive_shipped_marker(text: str) -> bool:
+    """Return whether *text* makes a non-negated shipped-status claim."""
+
+    without_negations = _NEGATED_SHIPPED_MARKERS.sub("", text)
+    return bool(_SHIPPED_MARKERS.search(without_negations))
+
+
+def _load_demotion_retention_reviews() -> dict[str, str]:
+    """Load reasoned retention decisions from dated lifecycle review records."""
+
+    review_dir = REPO_ROOT / "docs" / "proposals" / "resolved"
+    retained: dict[str, str] = {}
+    if not review_dir.is_dir():
+        return retained
+
+    repo_root = REPO_ROOT.resolve()
+    for review in review_dir.glob("demotion-review-*.md"):
+        for line in review.read_text(errors="replace").splitlines():
+            match = _DEMOTION_REVIEW_ROW.match(line)
+            if not match:
+                continue
+            target_text, _decision, reason = match.groups()
+            target_text = target_text.split("#", 1)[0]
+            target = Path(target_text)
+            if target.is_absolute() or "://" in target_text:
+                continue
+            resolved_target = (review.parent / target).resolve()
+            try:
+                relative_target = resolved_target.relative_to(repo_root).as_posix()
+            except ValueError:
+                continue
+            reason = reason.strip()
+            if len(reason) < 20:
+                continue
+            retained[relative_target] = reason
+    return retained
+
+
 def check_demotion_candidates(md_files: list[Path]) -> list[str]:
     refs = _collect_md_basename_refs()
+    reviewed_retentions = _load_demotion_retention_reviews()
     warnings = []
     for fpath in md_files:
         rel = fpath.relative_to(REPO_ROOT)
@@ -579,17 +689,22 @@ def check_demotion_candidates(md_files: list[Path]) -> list[str]:
             continue
         if in_ontology and rel.name in _DEMOTION_SKIP_ONTOLOGY:
             continue
+        if rel.as_posix() in reviewed_retentions:
+            continue
         # Status/header region only: frontmatter + the first prose lines, where
         # docs put **Status:** / **Last Updated:** banners.
         lines = fpath.read_text(errors="replace").splitlines()
         header = "\n".join(lines[:15])
-        if not _SHIPPED_MARKERS.search(header):
+        if _DEMOTION_RETAIN_REVIEW.search(header):
+            continue
+        status = _demotion_status_region(lines)
+        if not _has_positive_shipped_marker(status):
             continue
         # Already honest about being historical → not a stale-plan candidate.
         if _ALREADY_HISTORICAL.search(header):
             continue
         loc = "ontology/ (identity tree)" if in_ontology else "proposals/"
-        if _ACTIVE_REMAINING.search(header):
+        if _ACTIVE_REMAINING.search(status):
             warnings.append(
                 f"  {rel}: partially shipped in {loc} — split the shipped part "
                 f"to resolved/ (or a stub) and keep only the open work forward-looking"
