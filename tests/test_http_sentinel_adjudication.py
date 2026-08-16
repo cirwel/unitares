@@ -87,6 +87,12 @@ class TestAdjudicateRecording:
                   AsyncMock(return_value=set(already))),
             patch("src.http_routes.sentinel._sentinel_substrate_uuid",
                   AsyncMock(return_value=uuid)),
+            # Attribution now resolves the PRODUCER from the finding row.
+            # These cases exercise recording semantics, so stand in as a
+            # Sentinel-slug producer -- the path that still falls back to the
+            # substrate claim, keeping the pre-existing assertions meaningful.
+            patch("src.http_routes.sentinel._finding_producer_uuid",
+                  AsyncMock(return_value=(None, "sentinel"))),
             patch("src.http_routes.sentinel._adjudication_progress",
                   AsyncMock(return_value=dict(PROGRESS))),
             patch("src.mcp_handlers.observability.outcome_events._record_outcome_event_inline",
@@ -94,8 +100,8 @@ class TestAdjudicateRecording:
         )
 
     def test_fp_dismissal_records_bad_label(self, client):
-        p1, p2, p3, rec = self._patches()
-        with p1, p2, p3, rec as recorder:
+        p1, p2, prod, p3, rec = self._patches()
+        with p1, p2, p3, prod, rec as recorder:
             r = client.post("/v1/sentinel/adjudicate",
                             json={"fingerprint": "fp1", "status": "dismissed", "reason": "fp"},
                             headers=_op_headers())
@@ -112,8 +118,8 @@ class TestAdjudicateRecording:
         assert args["detail"]["adjudicated_via"] == "dashboard"
 
     def test_confirmation_is_good_label(self, client):
-        p1, p2, p3, rec = self._patches()
-        with p1, p2, p3, rec as recorder:
+        p1, p2, prod, p3, rec = self._patches()
+        with p1, p2, p3, prod, rec as recorder:
             r = client.post("/v1/sentinel/adjudicate",
                             json={"fingerprint": "fp2", "status": "confirmed"},
                             headers=_op_headers())
@@ -123,8 +129,8 @@ class TestAdjudicateRecording:
         assert recorder.call_args[0][0]["is_bad"] is False
 
     def test_non_fp_dismissal_is_not_bad(self, client):
-        p1, p2, p3, rec = self._patches()
-        with p1, p2, p3, rec:
+        p1, p2, prod, p3, rec = self._patches()
+        with p1, p2, p3, prod, rec:
             r = client.post("/v1/sentinel/adjudicate",
                             json={"fingerprint": "fp3", "status": "dismissed",
                                   "reason": "out_of_scope"},
@@ -133,8 +139,8 @@ class TestAdjudicateRecording:
         assert r.json()["is_bad"] is False
 
     def test_double_adjudication_409(self, client):
-        p1, p2, p3, rec = self._patches(already={"fp1"})
-        with p1, p2, p3, rec as recorder:
+        p1, p2, prod, p3, rec = self._patches(already={"fp1"})
+        with p1, p2, p3, prod, rec as recorder:
             r = client.post("/v1/sentinel/adjudicate",
                             json={"fingerprint": "fp1", "status": "confirmed"},
                             headers=_op_headers())
@@ -142,8 +148,8 @@ class TestAdjudicateRecording:
         recorder.assert_not_called()
 
     def test_missing_substrate_claim_503(self, client):
-        p1, p2, p3, rec = self._patches(uuid=None)
-        with p1, p2, p3, rec as recorder:
+        p1, p2, prod, p3, rec = self._patches(uuid=None)
+        with p1, p2, p3, prod, rec as recorder:
             r = client.post("/v1/sentinel/adjudicate",
                             json={"fingerprint": "fp1", "status": "confirmed"},
                             headers=_op_headers())
@@ -331,3 +337,94 @@ class TestQueueEvidenceEnrichment:
         q = r.json()["queue"]
         assert len(q) == 1
         assert q[0]["evidence"]["assessment"] == "check_error"
+
+
+class TestProducerAttribution:
+    """`build_resolution_outcome_args` states the contract: "agent_uuid must be
+    the resident's own UUID so the handler snapshots that resident's EISV."
+    The endpoint passed Sentinel's UUID unconditionally — correct only while
+    the queue is Sentinel-only, and the landmine under any widening.
+    """
+
+    def _patches(self, producer, uuid=SENTINEL_UUID, already=frozenset()):
+        return (
+            patch("src.http_routes.sentinel._adjudicated_sentinel_fingerprints",
+                  AsyncMock(return_value=set(already))),
+            patch("src.http_routes.sentinel._sentinel_substrate_uuid",
+                  AsyncMock(return_value=uuid)),
+            patch("src.http_routes.sentinel._finding_producer_uuid",
+                  AsyncMock(return_value=producer)),
+            patch("src.http_routes.sentinel._adjudication_progress",
+                  AsyncMock(return_value=dict(PROGRESS))),
+            patch("src.mcp_handlers.observability.outcome_events._record_outcome_event_inline",
+                  AsyncMock(return_value={"success": True})),
+        )
+
+    def test_outcome_is_booked_against_the_producer_not_sentinel(self, client):
+        """The whole point: a Watcher finding must not credit Sentinel."""
+        watcher = "907e3195-c649-49db-b753-1edc1a105f33"
+        p1, p2, prod, p3, rec = self._patches(producer=(watcher, watcher))
+        with p1, p2, prod, p3, rec as recorder:
+            r = client.post("/v1/sentinel/adjudicate",
+                            json={"fingerprint": "fp9", "status": "confirmed"},
+                            headers=_op_headers())
+        assert r.status_code == 200
+        args = recorder.call_args[0][0]
+        assert args["agent_id"] == watcher
+        assert args["agent_id"] != SENTINEL_UUID
+
+    def test_sentinel_slug_still_falls_back_to_the_substrate_claim(self, client):
+        """Sentinel writes the bare slug 'sentinel' on its alarm findings (249
+        rows/14d), so that path must keep working byte-identically."""
+        p1, p2, prod, p3, rec = self._patches(producer=(None, "sentinel"))
+        with p1, p2, prod, p3, rec as recorder:
+            r = client.post("/v1/sentinel/adjudicate",
+                            json={"fingerprint": "fp8", "status": "confirmed"},
+                            headers=_op_headers())
+        assert r.status_code == 200
+        assert recorder.call_args[0][0]["agent_id"] == SENTINEL_UUID
+
+    def test_unattributable_producer_is_refused_not_misbooked(self, client):
+        """A doctor finding has no governance identity. Refusing is correct;
+        booking it against Sentinel would corrupt the anchor channel the
+        falsifiability test depends on."""
+        p1, p2, prod, p3, rec = self._patches(producer=(None, "doctor-findings"))
+        with p1, p2, prod, p3, rec as recorder:
+            r = client.post("/v1/sentinel/adjudicate",
+                            json={"fingerprint": "fp7", "status": "confirmed"},
+                            headers=_op_headers())
+        assert r.status_code == 422
+        assert "doctor-findings" in r.json()["error"]
+        recorder.assert_not_called()
+
+    def test_unknown_fingerprint_is_refused(self, client):
+        p1, p2, prod, p3, rec = self._patches(producer=(None, None))
+        with p1, p2, prod, p3, rec as recorder:
+            r = client.post("/v1/sentinel/adjudicate",
+                            json={"fingerprint": "nope", "status": "confirmed"},
+                            headers=_op_headers())
+        assert r.status_code == 422
+        recorder.assert_not_called()
+
+    def test_producer_ref_is_recorded_for_forensics(self, client):
+        watcher = "907e3195-c649-49db-b753-1edc1a105f33"
+        p1, p2, prod, p3, rec = self._patches(producer=(watcher, watcher))
+        with p1, p2, prod, p3, rec as recorder:
+            client.post("/v1/sentinel/adjudicate",
+                        json={"fingerprint": "fp6", "status": "confirmed"},
+                        headers=_op_headers())
+        assert recorder.call_args[0][0]["detail"]["producer_ref"] == watcher
+
+    def test_outcome_type_is_unchanged_so_dedup_still_matches(self, client):
+        """outcome_type prefixes feed _SENTINEL_ADJUDICATION_OUTCOME_TYPES and
+        _adjudication_progress. Per-producer types must land WITH those
+        filters — changing them here would silently break dedup."""
+        watcher = "907e3195-c649-49db-b753-1edc1a105f33"
+        p1, p2, prod, p3, rec = self._patches(producer=(watcher, watcher))
+        with p1, p2, prod, p3, rec as recorder:
+            r = client.post("/v1/sentinel/adjudicate",
+                            json={"fingerprint": "fp5", "status": "confirmed"},
+                            headers=_op_headers())
+        assert r.json()["outcome_type"] == "sentinel_finding_confirmed"
+        from src.http_routes.sentinel import _SENTINEL_ADJUDICATION_OUTCOME_TYPES
+        assert r.json()["outcome_type"] in _SENTINEL_ADJUDICATION_OUTCOME_TYPES
