@@ -2,7 +2,7 @@
 #
 # wave-3a-rollback.sh — drop entries from the Wave 3a per-tool routing table.
 #
-# Spec: docs/proposals/beam-wave-3a-read-only-handlers.md v0.2 §3.1
+# Spec: docs/proposals/resolved/beam-wave-3a-read-only-handlers.md v0.2 §3.1
 # ("Cutover and rollback shape"). The Wave 3a routing table lives in the
 # Python MCP transport (src/wave3a_routing.py) and is mutated at runtime by
 # this script via the admin endpoint at /v1/admin/wave3a/routing-table.

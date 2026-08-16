@@ -3,7 +3,7 @@
 # wave-3a-pre-cutover-check.sh — generic pre-cutover verification for the
 # Wave 3a §1.1 handlers (PR #6+).
 #
-# Spec: docs/proposals/beam-wave-3a-read-only-handlers.md v0.2 §2.4
+# Spec: docs/proposals/resolved/beam-wave-3a-read-only-handlers.md v0.2 §2.4
 # (identity gate) and §5 ("pre-cutover script: verifies the handler reads
 # `pre_onboard` via `get_tool_identity_requirement`").
 #

@@ -6,6 +6,7 @@ now live-apply behind an explicit second opt-in (this PR). Enabling the feature 
 *defaults to observe*; `UNITARES_COHORT_PRIOR_MODE=apply` is required to seed for real, so
 the "validate calibration lift first" gate is encoded as the default rather than left to
 discipline. Sites A and C remain **reviewed and rejected** as framed.
+**Demotion review (2026-08-16):** Retain as the current contract because the observe-to-apply calibration gate remains open and runtime cohort-prior code cites this document for its semantics.
 
 ## Question
 

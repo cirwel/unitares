@@ -38,7 +38,7 @@ So `r1-verify-lineage-claim.md` resolves row R1 in `plan.md`; `s1-continuity-tok
 
 **Research RFCs** (R-rows, *inventive* primitives):
 - [`r1-verify-lineage-claim.md`](r1-verify-lineage-claim.md) — behavioral-continuity verification (shipped)
-- [`r2-honest-memory-integration.md`](r2-honest-memory-integration.md) — honest memory integration (Phase 1 shipped)
+- [`r2-honest-memory-integration.md`](r2-honest-memory-integration.md) — honest memory integration (Phase 1 shipped; retained as the canonical protocol while Phase 2 and its telemetry gate remain open)
 - [`r6-episode-fork-response-shape.md`](r6-episode-fork-response-shape.md) — R6 sub-item, episode-fork API shape
 
 **System RFCs** (S-rows, *descriptive* cleanups):

@@ -2,7 +2,7 @@
 Wave 3a measurement-channel integration tests (PR #2 of Wave 3a sequencing).
 
 Specification:
-    ``docs/proposals/beam-wave-3a-read-only-handlers.md`` v0.2 §4.3
+    ``docs/proposals/resolved/beam-wave-3a-read-only-handlers.md`` v0.2 §4.3
     (audit.coordination_measurements schema + write path) and §4.2
     (stop-sign event_type wiring for ``coordination_failure.wave_3a.*``).
 

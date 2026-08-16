@@ -9,6 +9,7 @@ tracer, which is mechanism-validation evidence rather than a benchmark run.
 This document supersedes v0 for future evaluation while preserving v0
 unchanged as an auditable registration
 (`accountable-testbed-metrics-preregistration-v0.md`).
+**Demotion review (2026-08-16):** Retain as the active preregistration because this frozen contract governs future evaluation; “merged” records the protocol merge, not completed benchmark runs.
 
 ## Why v1 exists
 

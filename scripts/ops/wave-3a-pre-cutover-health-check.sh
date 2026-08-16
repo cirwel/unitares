@@ -2,7 +2,7 @@
 #
 # wave-3a-pre-cutover-health-check.sh — pre-cutover verification for PR #5.
 #
-# Spec: docs/proposals/beam-wave-3a-read-only-handlers.md v0.2 §2.4
+# Spec: docs/proposals/resolved/beam-wave-3a-read-only-handlers.md v0.2 §2.4
 # (identity gate) and §5 PR #5 ("pre-cutover script: verifies
 # `health_check` reads `pre_onboard` via `get_tool_identity_requirement`").
 #

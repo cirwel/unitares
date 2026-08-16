@@ -53,7 +53,7 @@ The decision is closed; the design is wide open and adversarially reviewable (pa
 - Stop-sign #4 (parent): if the Ports/HTTP boundary accrues >1 distinct workaround pattern, halt — the substrate-tax shape must not replicate one level out.
 
 **Parent:** `docs/proposals/beam-footprint-roadmap-v0.md` v0.4.
-**Sibling, completed:** `docs/proposals/beam-wave-1-sentinel.md` (Surface 1+2 shipped; Surface 3 in flight).
+**Sibling, completed:** `docs/proposals/resolved/beam-wave-1-sentinel.md` (Surface 1+2 shipped; Surface 3 in flight).
 **Sibling, completed:** `docs/proposals/surface-lease-plane-v0.md` Phase A + Wave 2 hardening + resident Phase B + lease RPC recorder/persistence (#412/#414/#417/#418/#419/#476/#480/#481).
 **Wave 0 channel:** `audit.coordination_events` exists with `event_type ~ '^(coordination_failure)(\.[a-z_]+)+$'` CHECK constraint; zero rows as of 2026-05-09. The constraint scopes the table to failure events only — informational latency lives in the parallel channel introduced in §6.
 **Single-writer surface:** Identity / onboarding (per `CLAUDE.md` "Before Starting Work on a Single-Writer Surface") spans this entire RFC plus its prereq PRs. Branch from this RFC's head before any parallel work.
