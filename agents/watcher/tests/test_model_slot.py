@@ -27,6 +27,16 @@ import time
 import pytest
 
 from agents.watcher.agent import ModelBusy, model_slot
+from agents.watcher._util import watcher_state_dir
+
+
+def test_slot_uses_isolated_watcher_state(_watcher_isolation) -> None:
+    """The suite must never acquire the operator's production model lock."""
+    isolated_state = _watcher_isolation
+
+    with model_slot(wait_s=5):
+        assert watcher_state_dir() == isolated_state
+        assert (isolated_state / "model_slot.lock").is_file()
 
 
 def test_slot_is_reentrant_across_sequential_calls() -> None:
