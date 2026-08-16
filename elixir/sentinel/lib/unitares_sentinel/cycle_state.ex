@@ -2,7 +2,7 @@ defmodule UnitaresSentinel.CycleState do
   @moduledoc """
   Cross-cycle state file (the de-dup fence) for Sentinel-on-BEAM.
 
-  Surface 1 of the Wave 1 RFC. See `docs/proposals/beam-wave-1-sentinel.md`
+  Surface 1 of the Wave 1 RFC. See `docs/proposals/resolved/beam-wave-1-sentinel.md`
   v0.1.2 amendment block — that is the binding spec; v0.1.1 §Surface 1
   prose is superseded on every point of conflict.
 

@@ -2,7 +2,7 @@
 Wave 3a per-tool routing table integration tests (PR #3 of Wave 3a sequencing).
 
 Specification:
-    ``docs/proposals/beam-wave-3a-read-only-handlers.md`` v0.2 §3.1
+    ``docs/proposals/resolved/beam-wave-3a-read-only-handlers.md`` v0.2 §3.1
     (rollback shape), §3.2 (500ms timeout discipline + Python-fallback),
     §4.2 (stop-sign event taxonomy), §5 PR #3 (this PR's scope).
 

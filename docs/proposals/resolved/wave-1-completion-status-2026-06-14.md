@@ -157,7 +157,7 @@ but not sufficient.
 
 ## Cross-references
 
-- RFC: `docs/proposals/beam-wave-1-sentinel.md`
+- RFC: `docs/proposals/resolved/beam-wave-1-sentinel.md`
 - Roadmap exit criteria: `docs/proposals/beam-footprint-roadmap-v0.md`
 - §129 track: `docs/proposals/resolved/wave-1-window-evaluation-2026-05-18.md`,
   `wave-1-window-evaluation-T0-2026-05-19.md`,

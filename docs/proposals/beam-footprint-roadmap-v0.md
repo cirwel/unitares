@@ -190,7 +190,7 @@ This amendment does not pick between (1) and (2). The v0.3 RESOLUTION explicitly
 
 - This file: V0.3 RESOLUTION at top, V0.3.1 AMENDMENT (council fold) immediately below, v0.2 / v0.1 / v0 preserved further down.
 - v0.3 amendment commits as part of the migration kickoff — NOT bundled with code; doc-first so future-me reads the rationale before any port code.
-- Wave 1 RFC follows in `docs/proposals/beam-wave-1-sentinel.md` (to be created when Wave 1 implementation starts).
+- The executed Wave 1 RFC is preserved in `docs/proposals/resolved/beam-wave-1-sentinel.md`.
 
 ---
 

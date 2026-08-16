@@ -2,7 +2,7 @@
 Wave 3a env-flag startup-hook tests (PR #5).
 
 Specification:
-    ``docs/proposals/beam-wave-3a-read-only-handlers.md`` v0.2 §3.1 and §5
+    ``docs/proposals/resolved/beam-wave-3a-read-only-handlers.md`` v0.2 §3.1 and §5
     PR #5. ``src/wave3a_routing.py::apply_env_flag_routes`` reads
     ``WAVE_3A_HEALTH_CHECK_ON_BEAM`` (and the analogous flags added by PR
     #6/#7/#8) at MCP startup; truthy → set a routing-table row; falsy/unset

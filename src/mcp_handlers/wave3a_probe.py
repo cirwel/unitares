@@ -2,7 +2,7 @@
 Wave 3a Python probe endpoint surface.
 
 Internal HTTP surface at ``/v1/probe/*`` consumed only by the BEAM-side
-Wave 3a handler listener (see ``docs/proposals/beam-wave-3a-read-only-handlers.md``
+Wave 3a handler listener (see ``docs/proposals/resolved/beam-wave-3a-read-only-handlers.md``
 §2.3). This module is PR #1 of the v0.2 sequencing — scaffolding only; no
 production traffic flows through it until PR #4/PR #5 land.
 

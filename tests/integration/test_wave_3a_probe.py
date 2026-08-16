@@ -2,7 +2,7 @@
 Wave 3a probe-endpoint integration tests (PR #1 of Wave 3a sequencing).
 
 Specification:
-    ``docs/proposals/beam-wave-3a-read-only-handlers.md`` v0.2 §2.2 (envelope),
+    ``docs/proposals/resolved/beam-wave-3a-read-only-handlers.md`` v0.2 §2.2 (envelope),
     §2.3 (endpoint list), §2.5 (bearer auth), §2.6 (timestamp masking).
 
 Test surface:

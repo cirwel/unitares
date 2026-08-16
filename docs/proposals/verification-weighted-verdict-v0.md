@@ -5,6 +5,7 @@ Phase 2 (actuator wiring) have landed, but the wiring is behind a **default-off*
 (`GOVERNANCE_VERIFICATION_FLOOR`). The draft can merge as inert scaffolding; **enabling
 the flag in a live deployment is the council-gated act.** For the Φ→telemetry /
 `resolve_verdict_risk` owners.
+**Demotion review (2026-08-16):** Retain as the current safety contract because enablement remains council-gated and the default-off wiring still depends on this escalation envelope.
 **Author:** follow-up to the self-report-dependence worked example, 2026-06-28.
 **Why now:** the worked example
 ([`docs/operations/self-report-verdict-dependence-2026-06-28.md`](../operations/self-report-verdict-dependence-2026-06-28.md))

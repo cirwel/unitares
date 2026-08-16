@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Wave 3a §6 Q1 — transitive-closure mutation audit for the §1.1 handlers.
 
-Spec: ``docs/proposals/beam-wave-3a-read-only-handlers.md`` v0.2 §6 Q1:
+Spec: ``docs/proposals/resolved/beam-wave-3a-read-only-handlers.md`` v0.2 §6 Q1:
 
     "The audit ships as a mechanical script [...] and re-runs as a gate on
     each handler PR (#5, #6, #7, #8). [...] a script that lists every

@@ -10,6 +10,8 @@ follow_on: docs/proposals/beam-footprint-roadmap-v0.md (Read A — what BEAM doe
 
 # Surface Lease Plane — Phase A Implementation Plan
 
+**Demotion review (2026-08-16):** Retain as the current sequencing ledger because the BEAM roadmap and coordination kernel use its PR-by-PR mapping, and the repository contract treats it as a hot single-writer surface.
+
 The v0.8 RFC names **27 Phase A test gates + 3 v0.7 implementation drift items + 2 migrations (026, 027)**. Landing all of those in one PR would produce an unreviewable blob. This plan groups them into focused PRs so each one has a tight RFC↔code mapping that a reviewer can audit row-by-row.
 
 **Methodology commitment:** every Phase A PR description MUST include the four-column table below — `RFC gate → code surface → test name → status` — for exactly the rows it implements. Other rows must be marked `(deferred to PR N)`. No PR may exceed ~10 rows in this table without operator approval.

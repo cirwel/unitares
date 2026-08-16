@@ -1,6 +1,6 @@
 defmodule UnitaresSentinel do
   @moduledoc """
-  Wave 1 — Sentinel-on-BEAM. Per `docs/proposals/beam-wave-1-sentinel.md`
+  Wave 1 — Sentinel-on-BEAM. Per `docs/proposals/resolved/beam-wave-1-sentinel.md`
   v0.1.3. The v0.1.2 amendment is binding for Surface 1 cycle-state
   path resolution and cutover semantics; v0.1.1 Surface 1 prose is
   historical only.

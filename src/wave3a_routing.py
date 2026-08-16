@@ -1,6 +1,6 @@
 """Wave 3a per-tool routing table — PR #3 of v0.2 sequencing.
 
-Spec: ``docs/proposals/beam-wave-3a-read-only-handlers.md`` v0.2 §3.1
+Spec: ``docs/proposals/resolved/beam-wave-3a-read-only-handlers.md`` v0.2 §3.1
 ("Cutover and rollback shape") and §5 PR #3 ("Python transport per-tool
 routing table and rollback script").
 

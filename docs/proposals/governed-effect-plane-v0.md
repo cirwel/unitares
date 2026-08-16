@@ -2,7 +2,9 @@
 
 > **For Hermes:** this is the Phase 2 deliverable of [`beam-governed-effects-dossier-2026-06-18.md`](beam-governed-effects-dossier-2026-06-18.md). It is **design-only** and **reviewable**, not an implementation order. No `elixir/` execute code lands until (a) this contract passes council review — **v0.3 folds a Phase-4 council pass**, (b) the operator names the first effect class — **closed**, (c) the 2026-06-24 Wave-3 gate read — **done; BEAM-stands**, and (d) **rollback/reversibility specified (§5b)** + **the governance veto endpoint built (§6 — it does not exist yet)**. Read the dossier's Council Amendment first.
 
-**Created:** 2026-06-18 · **Status:** Draft v0.3 — Phase-4 readiness, council-corrected. Adds rollback/reversibility (§5b), execute build sequencing (§12), first-execute-surface revised to `file_write` (§10).
+**Created:** 2026-06-18.
+**Status:** Draft v0.3 current safety contract — the record-only lane is live; execute remains blocked on the veto endpoint and recovery prerequisites.
+**Demotion review (2026-08-16):** Retain as the current safety contract because the shipped record-only lane and still-blocked execute lane share the same envelope, custody, and recovery requirements.
 
 > **What v0.2→v0.3 changes (Phase 4 enablement, 2026-06-25):** §1–§9 of the contract are otherwise as v0.1. The record_only durable-recording path of §8 is now **shipped + live** (#1065 — `audit.events` + `effect_lane`, idempotency). This revision adds the things that gate the *execute* half: a rollback/reversibility contract (§5b, the named-but-unwritten prerequisite of §2), a dry-run-first build sequencing (§12), and an operator revision of the first live-execute surface from `agent_spawn` to `file_write` (§10) on blast-radius grounds.
 

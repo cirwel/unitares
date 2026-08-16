@@ -442,6 +442,73 @@ def test_active_proposal_without_shipped_marker_not_flagged(tmp_path, monkeypatc
     assert warnings == []
 
 
+@pytest.mark.parametrize(
+    "status",
+    [
+        "NOT deployed; design proposal only.",
+        "No deployed behaviour or threshold changes.",
+        "Thin slice only; NOT merged to a running surface.",
+    ],
+)
+def test_negated_shipped_status_not_flagged(
+    tmp_path, monkeypatch, doc_health, status
+):
+    """Negated lifecycle claims must not be read as evidence of shipment."""
+    warnings = _demotion_for(
+        tmp_path,
+        monkeypatch,
+        doc_health,
+        "proposals/active-v0.md",
+        f"# Active\n\n**Status:** {status}\n",
+    )
+    assert warnings == []
+
+
+def test_dependency_status_outside_own_status_not_flagged(
+    tmp_path, monkeypatch, doc_health
+):
+    """Merged dependencies in header metadata do not define this doc's lifecycle."""
+    warnings = _demotion_for(
+        tmp_path,
+        monkeypatch,
+        doc_health,
+        "proposals/draft-v0.md",
+        "# Draft\n\n**Status:** v0 draft, pre-review.\n"
+        "**Related:** dependency merged in PR #12; see proposals/resolved/old.md.\n",
+    )
+    assert warnings == []
+
+
+def test_reasoned_demotion_review_retains_current_contract(
+    tmp_path, monkeypatch, doc_health
+):
+    """A reviewed current contract may stay active when it records why."""
+    warnings = _demotion_for(
+        tmp_path,
+        monkeypatch,
+        doc_health,
+        "proposals/current-contract.md",
+        "# Contract\n\n**Status:** Phase 1 shipped; Phase 2 proposed.\n"
+        "**Demotion review (2026-08-16):** Retain as the current safety contract "
+        "because Phase 2 still consumes its Phase 1 definitions.\n",
+    )
+    assert warnings == []
+
+
+def test_bare_demotion_retain_marker_does_not_silence_candidate(
+    tmp_path, monkeypatch, doc_health
+):
+    """Retention needs a real rationale, not a marker-only suppression."""
+    warnings = _demotion_for(
+        tmp_path,
+        monkeypatch,
+        doc_health,
+        "proposals/unreviewed.md",
+        "# Contract\n\n**Status:** shipped.\n**Demotion review:** Retain.\n",
+    )
+    assert len(warnings) == 1
+
+
 def test_resolved_proposal_not_flagged(tmp_path, monkeypatch, doc_health):
     """Already-demoted docs under proposals/resolved/ are not re-flagged."""
     warnings = _demotion_for(

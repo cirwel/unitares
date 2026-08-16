@@ -95,7 +95,7 @@ Proposals that gate on the orchestrator de-inerting (or are otherwise demand-emp
 | `behavioral-running-hot-detector-v0.md` | "The orchestrator is the consumer the behavioral arm exists to serve." Also blocked on the behavioral-EISV arm emitting signal. |
 | `governed-effect-plane-v0.md` / dossier runtime phases | Reframed to ride the **inert** orchestrator app; `execute`-mode needs a "cheap-but-contended" surface the council says must be *manufactured* to test. |
 | `beam-wave-3-handler-dispatch.md` | The dispatch port itself. **Does *not* belong in this orchestrator-dependent cluster** — it has the live p99-tail argument above; judge it on its own tail-vs-volume merits, separately from the orchestrator question. |
-| `beam-wave-3a-read-only-handlers.md` | Inbound-HTTP infra-first wave; self-states it "adds no evidence" for migration pressure. (Not gated on this read — operator-review only — but same demand question.) |
+| `resolved/beam-wave-3a-read-only-handlers.md` | Inbound-HTTP infra-first wave; self-states it "adds no evidence" for migration pressure. (Not gated on this read — operator-review only — but same demand question.) |
 
 This is the "inventory ahead of demand" pattern at fleet scale: each doc is cheap to write, several can ship inert, and they accrete faster than demand arrives. (`beam-event-adapter-design-v0.md` and `monitor-delegated-liveness-v0.md` are the *healthy* counter-examples — both explicitly parked behind demand-triggers, both cite the #819 "feasible ≠ needed" lesson.)
 
