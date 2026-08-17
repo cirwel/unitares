@@ -62,7 +62,9 @@
     const statuses = ["all"].concat(Object.keys(stats.by_status || {}).sort());
     const groundings = ["all"].concat(Object.keys(stats.by_grounding || {}).sort());
     const areas = ["all"].concat(Object.keys(stats.by_research_area || {}).sort());
-    const sel = (id, value, items) => `<select id="${id}" class="theme-toggle">${items.map((x) => `<option value="${esc(x)}" ${x === value ? "selected" : ""}>${esc(x)}</option>`).join("")}</select>`;
+    // allLabel names the filter in its own "all" option — three bare "all"
+    // dropdowns side by side are indistinguishable.
+    const sel = (id, value, items, allLabel) => `<select id="${id}" class="theme-toggle" title="${esc(allLabel)}">${items.map((x) => `<option value="${esc(x)}" ${x === value ? "selected" : ""}>${x === "all" ? esc("all " + allLabel) : esc(x)}</option>`).join("")}</select>`;
     const warn = (MODEL.warnings || []).map((w) =>
       `<div class="attn-band calm" style="margin-bottom:var(--space-2)"><span class="glyph">-</span><span>${esc(w)}</span></div>`
     ).join("");
@@ -78,9 +80,9 @@
       + `<div style="display:flex;gap:var(--space-3);flex-wrap:wrap;align-items:center;margin-bottom:var(--space-4)">
            <input id="research-q" placeholder="search run / scenario / tag" value="${esc(q)}"
              style="flex:1;min-width:200px;padding:var(--space-2) var(--space-3);font-family:var(--font-sans);font-size:var(--text-sm);background:var(--surface);color:var(--ink);border:var(--hairline) solid var(--line-2);border-radius:var(--radius-sm)" />
-           ${sel("research-status", statusF, statuses)}
-           ${sel("research-grounding", groundingF, groundings)}
-           ${sel("research-area", areaF, areas)}
+           ${sel("research-status", statusF, statuses, "statuses")}
+           ${sel("research-grounding", groundingF, groundings, "grounding")}
+           ${sel("research-area", areaF, areas, "areas")}
            <button id="research-refresh" class="theme-toggle" title="Refresh">refresh</button>
          </div>`
       + (rows.length ? `<table class="tbl"><thead><tr>
@@ -98,7 +100,7 @@
               <td style="font-size:var(--text-sm);color:var(--muted)" title="${esc(r.updated_at)}">${relTime(r.updated_at)}</td>
             </tr>`).join("")
         + `</tbody></table>`
-        : `<p class="empty">No research runs match the current filters.</p>`)
+        : `<p class="empty">${MODEL.runs.length ? "No research runs match the current filters." : "No research runs recorded yet."}</p>`)
       + `<div style="margin-top:var(--space-3);font-size:var(--text-xs);color:var(--faint)">showing ${rows.length} of ${MODEL.runs.length}</div>`;
     wire();
   }

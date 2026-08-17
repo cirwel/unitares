@@ -337,6 +337,15 @@ class CleanupKnowledgeGraphParams(AgentIdentityMixin):
 class KnowledgeParams(AgentIdentityMixin):
     """Parameters for knowledge"""
     action: Literal["store", "search", "get", "list", "update", "details", "note", "cleanup", "synthesize", "stats", "supersede", "audit"] = Field(..., description="Operation to perform")
+    response_mode: Literal["full", "compact", "lean"] = Field(
+        default="full",
+        description=(
+            "Response envelope for read actions search/get/details/stats. "
+            "compact and lean retain the caller UUID plus tier/caller_proven "
+            "assurance while omitting repeated identity_context. The default "
+            "is full; write actions always keep the full attribution envelope."
+        ),
+    )
     query: Optional[str] = Field(None, description="Search query (for action=search)")
     content: Optional[str] = Field(None, description="Extended content/details (for action=store or action=note)")
     details: Optional[str] = Field(None, description="Extended details for discovery (for action=store). Alias: content")
