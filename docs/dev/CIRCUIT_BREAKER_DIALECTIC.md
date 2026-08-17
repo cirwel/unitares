@@ -2,7 +2,7 @@
 
 Status: specialized recovery reference. Use for circuit-breaker and dialectic recovery semantics, not as the general architecture overview.
 
-**Last Updated:** 2026-03-22
+**Last Updated:** 2026-08-16 (full re-verification against master; drift list in #1702)
 
 This system uses a **circuit breaker** to pause agents on risk signals and configured compatibility backstops. One historical backstop is named `coherence`, but its default producer is directional ODE control feedback; crossing it is a policy event, not proof of poor health or fragmented work. Recovery is handled via a **dialectic protocol** that provides a safe path to resume.
 
@@ -12,14 +12,16 @@ This document is the canonical overview for the dialectic flow implemented in `s
 
 ## When the Circuit Breaker Triggers
 
-The governance loop evaluates EISV state, risk, and compatibility gates. If the agent enters a high-risk region or crosses a configured backstop, the system returns a **pause** decision and the agent enters a "paused" or "waiting_input" state. Inspect `coherence_source`, `coherence_role`, `sub_action`, and `nearest_edge` before attributing the cause.
+The governance loop evaluates EISV state, risk, and compatibility gates. If the agent enters a high-risk region or crosses a configured backstop, the system returns a **pause** decision and the agent's status is set to `paused` (the breaker never sets `waiting_input`; that is a separate status, and an agent in it is *skipped* by review requests). Inspect `coherence_source`, `coherence_role`, `sub_action`, and `nearest_edge` before attributing the cause.
 
 Common triggers:
 - A configured legacy control-feedback floor crossing (cause requires provenance; it is not a fragmentation diagnosis)
 - Elevated risk score
 - Persistent valence excursion (energy–integrity imbalance)
 
-The circuit breaker is a **protective pause**, not a failure. It exists to prevent runaway behavior and prompt a structured review.
+The circuit breaker is a **protective pause**, not a failure. It exists to prevent runaway behavior and prompt a structured review. When it trips, the enforcement path also broadcasts `circuit_breaker_trip` and, by default, auto-initiates dialectic recovery (`UNITARES_AUTO_DIALECTIC_RECOVERY`).
+
+For produced-vs-delivered pause provenance against `audit.events`, use `scripts/diagnostics/circuit_breaker_provenance.py`.
 
 ---
 
@@ -31,58 +33,77 @@ Dialectic recovery is a structured review process:
 2. **Antithesis** — counterargument challenging the proposal or highlighting risks
 3. **Synthesis** — resolution merging both perspectives: approve, revise, or keep paused
 
-The protocol is implemented in `src/dialectic_protocol.py` and exposed via MCP handlers in `src/mcp_handlers/dialectic/handlers.py`.
+The protocol is implemented in `src/dialectic_protocol.py` and exposed via the `dialectic` consolidated tool (`src/mcp_handlers/dialectic/handlers.py`).
 
-Phases:
-- `thesis`
-- `antithesis`
-- `synthesis`
-- `resolved` | `escalated` | `failed`
+Phases (`DialecticPhase`): `thesis` → `antithesis` → `synthesis` → `resolved` | `failed`.
+(`escalated` is a session *status*, not a phase; `ESCALATE` is a `ResolutionAction`.)
+
+---
+
+## The Callable Surface
+
+Agents reach the dialectic through **one registered tool** plus its friendly alias:
+
+- `request_review(...)` — the alias agents actually see; resolves to `dialectic(action='request')`
+- `dialectic(action='get'|'list'|'quick'|'request'|'thesis'|'antithesis'|'synthesis'|'reassign')`
+
+The handlers `llm_assisted_dialectic`, `get_dialectic_session`, and
+`list_dialectic_sessions` are `register=False` — internal delegates, not
+directly callable. `dialectic(action='get'|'list')` is how you reach the last
+two; the LLM-assisted path runs internally via
+`dialectic(action='request', reviewer_mode='llm')`.
+
+### One-call review (the normal path)
+
+Passing `reasoning` or `root_cause` with the request runs session creation
+**and** the thesis in the same call, returning a verdict:
+
+~~~python
+request_review(
+    issue_description="Agent memory consumption increasing over time",
+    reasoning="Memory leak suspected in state management",
+)
+# Response includes one_call_review=True, review_verdict, whose_move
+~~~
+
+Timeouts are budgeted for this: the request path's timeout is derived from the
+synthetic-review budget so a one-call review can complete inside it.
 
 ---
 
 ## Recovery Paths
 
-### 1) LLM-Assisted Dialectic (single-agent, recommended)
+### 1) Requested review (peer, synthetic, or LLM reviewer)
 
-**Use when no peer reviewer is available or for structured self-reflection.**
+`request_review` starts a session and tries to assign an **independent
+reviewer**. Assignment is no longer guaranteed: when no eligible independent
+reviewer exists, the slot is deliberately left open and the session is flagged
+`awaiting_facilitation`. Recovery still completes — the in-process **synthetic
+reviewer** (default on, `UNITARES_DIALECTIC_SYNTHETIC_REVIEWER`) drives
+thesis → antithesis → synthesis inside the thesis submission. The clean
+"peer path vs LLM path" split is historical; in practice the peer path degrades
+into the synthetic path when the pool is empty.
 
-The dialectic protocol was designed for multi-agent coordination, but ephemeral agents make synchronous peer review impractical. LLM-assisted dialectic uses a local LLM (Ollama) as a "synthetic reviewer" to provide the antithesis perspective.
+**Governed reviewer spawn:** when an external reviewer process is spawned, the
+spawn routes through the lease plane's effect binding
+(`src/mcp_handlers/dialectic/governed_spawn.py`, flag
+`UNITARES_GOVERNED_EFFECT_BINDING_AGENT_SPAWN`). Spawn outcomes follow a
+four-bucket contract — COMMITTED / REFUSED / UNAVAILABLE / CONFIG_ERROR — which
+decides whether a failure may fall back to a direct orchestrator spawn or must
+degrade to the synthetic reviewer. Modify reviewer dispatch only with that
+contract in view.
 
-Key tool:
-- `llm_assisted_dialectic` — runs full thesis→antithesis→synthesis using local LLM
-
-~~~python
-result = llm_assisted_dialectic(
-    root_cause="Agent memory consumption increasing over time",
-    proposed_conditions=["Run memory profiler", "Check for circular references"],
-    reasoning="Memory leak suspected in state management"
-)
-# Returns: recommendation (RESUME/COOLDOWN/ESCALATE), synthesis, next_steps
-~~~
-
-**Requirements:** Ollama running locally (`ollama serve`)
-
-**How it works:**
-1. You provide thesis (root_cause, proposed_conditions, reasoning)
-2. Local LLM generates antithesis (concerns, counter-reasoning, suggested modifications)
-3. Local LLM synthesizes both perspectives into resolution
-4. Result stored in knowledge graph for learning
-
-### 2) Full Dialectic Review (peer-to-peer)
-
-Use when another agent can serve as reviewer.
-
-Key tools:
-- `request_dialectic_review` — start a review session (assigns reviewer)
-- `get_dialectic_session` — monitor progress by session id or agent id
-
-### 3) Self-Recovery (Tier-1)
+### 2) Self-Recovery (Tier-1)
 
 For simple stuck scenarios (timeouts, trivial stalls) when the state is safe:
 
-- `self_recovery(action="quick")` — checks risk, valence, and the configured legacy compatibility floor before resuming. The floor is a recovery backstop, not a health rating.
-- `self_recovery(action="review", reflection="...")` — reflective recovery for cases that don't meet quick-resume thresholds
+- `self_recovery(action="quick")` — resumes iff `risk_score <= 0.40` and no
+  active void excursion. Legacy coherence is **not** part of this gate: it is
+  carried in the audit payload as a diagnostic but cannot authorize or deny
+  recovery (`src/mcp_handlers/lifecycle/recovery_policy.py`).
+- `self_recovery(action="review", reflection="...")` — reflective recovery for
+  cases above the quick threshold; its own ceiling is
+  `MAX_RISK_FOR_SELF_RECOVERY = 0.65`.
 
 > **Note:** `direct_resume_if_safe` is deprecated. Use `self_recovery` instead.
 
@@ -94,10 +115,10 @@ Recommended conditions:
 
 ## Suggested Workflow
 
-**Paused agent (thesis):**
-1. Inspect state: `get_governance_metrics`
-2. Request review: `request_dialectic_review(reason=...)`
-3. Provide thesis: explain cause, propose constraints (e.g., “cap complexity to 0.4”)
+**Paused agent:**
+1. Inspect state: `check_working_state` (`get_governance_metrics`)
+2. One-call review: `request_review(issue_description=..., reasoning=...)` — creates the session, submits your thesis, and returns a verdict in one call
+3. If the verdict is `resume`, follow its conditions; if the session stays open, read `whose_move`
 
 **Reviewer (antithesis):**
 1. Challenge assumptions
@@ -122,11 +143,11 @@ This provides durability and auditability, enabling post‑hoc review and calibr
 
 ## Related Tools
 
-**Dialectic tools:**
-- `llm_assisted_dialectic` — single-agent dialectic via local LLM (Ollama)
-- `request_dialectic_review` — start peer-to-peer review session
-- `get_dialectic_session` — inspect session state and transcript
-- `list_dialectic_sessions` — list all sessions with optional filters
+**Dialectic surface (registered):**
+- `request_review` / `dialectic(action='request')` — start a review (one-call with `reasoning`)
+- `dialectic(action='get')` — inspect session state and transcript (by session id or agent id)
+- `dialectic(action='list')` — list sessions with optional filters
+- `dialectic(action='quick')` — lightweight structured check without a full session
 
 **Recovery tools:**
 - `self_recovery(action="quick")` — fast path resume when safe (supersedes deprecated `direct_resume_if_safe`)
@@ -135,7 +156,7 @@ This provides durability and auditability, enabling post‑hoc review and calibr
 
 **LLM delegation tools:**
 - `call_model` — direct access to local LLM for custom prompts
-- `backfill_calibration_from_dialectic` — optional calibration based on resolved sessions
+- `calibration(action='backfill')` — optional calibration based on resolved sessions
 
 ---
 
@@ -152,8 +173,9 @@ The system provides internal LLM delegation via `src/mcp_handlers/support/llm_de
 
 **Configuration:**
 - `UNITARES_LLM_MODEL` — override default model (env var)
-- Default: `gemma3:27b` (fast, good quality)
-- Fallback: `llama3:70b` for complex reasoning
+- Default: `gemma4:latest`. There is no model fallback tier; the tunable that
+  exists is the reviewer timeout, `UNITARES_DIALECTIC_REVIEWER_TIMEOUT`
+  (default 120s).
 
 **Model routing via `call_model` tool:**
 - `provider=ollama` — force local Ollama
@@ -181,6 +203,7 @@ This reframes the dialectic protocol: it's not about recovering a persistent age
 The main dialectic protocol is implemented in:
 - `src/dialectic_protocol.py` — core protocol and data structures
 - `src/mcp_handlers/dialectic/handlers.py` — MCP tool handlers
+- `src/mcp_handlers/dialectic/governed_spawn.py` — governed reviewer-spawn effect binding
 - `src/mcp_handlers/support/llm_delegation.py` — LLM-assisted dialectic functions
 - `src/dialectic_db.py` — PostgreSQL persistence
 

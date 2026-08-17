@@ -109,6 +109,24 @@ class TestAuditEntry:
         assert restored["details"]["nested"]["x"] == [1, 2, 3]
 
 
+class TestMirrorSignalAudit:
+    def test_records_resolved_caller_session(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        logger.log_mirror_signal_emit(
+            agent_id="agent-1",
+            session_id="session-1",
+            update_index=4,
+            response_mode="compact",
+            surfaced=False,
+            signals=[{"signal_type": "review_nudge", "fired": True}],
+        )
+
+        [entry] = _read_jsonl(logger.log_file)
+        assert entry["event_type"] == "mirror_signal.emit"
+        assert entry["session_id"] == "session-1"
+        assert entry["details"]["signals"][0]["signal_type"] == "review_nudge"
+
+
 class TestColdStartRiskConfirmationAudit:
     def test_records_shadow_outcome_without_claiming_actuation(self, tmp_path):
         logger = _make_logger(tmp_path)

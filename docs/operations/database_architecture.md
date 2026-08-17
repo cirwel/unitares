@@ -66,4 +66,4 @@ redis-cli PING
 - [OPERATOR_RUNBOOK.md](OPERATOR_RUNBOOK.md): startup, health, triage
 - [../dev/CANONICAL_SOURCES.md](../dev/CANONICAL_SOURCES.md): authority ordering
 
-**Last Updated:** 2026-04-04 (reduced to thin infrastructure reference)
+**Last Updated:** 2026-08-16 (re-verified against current code: `DB_POSTGRES_URL`/`DB_AGE_GRAPH` resolve in `src/db/`, storage model and Redis posture unchanged; thin infrastructure reference since 2026-04-04)
