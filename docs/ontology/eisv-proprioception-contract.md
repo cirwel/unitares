@@ -1,7 +1,7 @@
 # EISV Proprioception Contract
 
 **Created:** June 26, 2026
-**Last Updated:** August 12, 2026
+**Last Updated:** August 17, 2026
 **Status:** Active
 
 ---
@@ -18,6 +18,12 @@ bad-verdict dispenser**. It does not decide whether harm occurred, whether the
 user was wronged, or whether an agent is "guilty." Those judgments require
 external outcome evidence, policy, and review surfaces that are separate from
 the measurement vector.
+
+"Proprioception" here is the anti-verdict claim, and it holds. It is not a claim
+that all four axes share one sensory class: E is externally referenced, I and S
+are interoceptive, and V has no afferent at all. Because those classes imply
+different validation regimes, see **Sensory class split** below before designing
+or scheduling any EISV validation work.
 
 ## Deployed posture — corrected 2026-08-10
 
@@ -324,6 +330,113 @@ verdict. Human-facing docs should name the class whenever possible:
 A normal mistake is usually task-negative feedback. It becomes governance-bad
 only when it is tied to a contract violation, authority overreach, concealment,
 or user harm.
+
+## Sensory class split — which axis needs which validation regime (2026-08-17)
+
+The contract header stays as written. `EISV is proprioception` does load-bearing
+anti-verdict work and is asserted verbatim by
+`tests/test_eisv_semantic_contract.py`, by the README, and by three generated
+report headers. This section refines that claim rather than renaming it, because
+one word is covering two senses whose validation regimes differ, and
+`docs/ontology/paper-positioning.md` already records the honest framing as
+"proprioception/**interoception**" with the interoceptive-inference prior art
+(Seth 2013; Lee/Friston, arXiv 2309.05999; Tschantz/Seth/Pezzulo 2022).
+
+The distinction is operational, not vocabulary:
+
+- **Proprioception has an external referent.** There is a true joint angle, so
+  acuity is scored as error against it. An axis in this class is validated by
+  agreement with something outside itself.
+- **Interoception has no external referent** and is organised around homeostatic
+  setpoints, which is why it is intrinsically valenced. Its standard measurement
+  model (Garfinkel et al. 2015) splits into three dissociable dimensions:
+  **accuracy** (performance against a physiological referent), **sensibility**
+  (self-report), and **awareness** (confidence–accuracy correspondence). An axis
+  in this class is validated by reliability, faithfulness and calibration, never
+  by outcome agreement, because there is no outcome for it to agree with.
+
+This document's prose was already interoceptive throughout — "running hot",
+"running careful", brittle, scattered, residual-from-own-baseline, and
+"deviation inside a healthy basin is room to learn". A basin *is* a homeostatic
+setpoint region; proprioception has no setpoints. Only the label was
+proprioceptive.
+
+### The split, as derived in `src/behavioral_sensor.py`
+
+| Axis | Derivation (weights as coded) | Class | Validation regime | Gated by the 2026-12-01 stop rule? |
+|---|---|---|---|---|
+| **E** | `_compute_E` (:233) — 35% decision success, 25% legacy `C(V)` level, 20% complexity calibration, 20% outcome success (:277); then a 20% continuity blend and 15% `1.0 - tool_error_rate` (:64) | **Externally referenced.** Decision outcomes, tool errors and outcome success are world facts, not self-state | Error against referent | **No** — blocked by a *join*, not by labels |
+| **I** | `_compute_I` (:288) — 50% `1.0 - calibration_error` (:293), 30% legacy coherence trend, 20% outcome consistency (:307) | **Interoceptive — Garfinkel *awareness*.** Its dominant term is confidence-vs-correctness correspondence | Metacognitive calibration (ECE / meta-d′) | **No** |
+| **S** | `_compute_S` (:332) — 40% drift norm, 35% regime instability, 25% complexity divergence (:337-344), plus a tool-velocity term | **Interoceptive — homeostatic/arousal.** How much am I moving and switching; no correct value exists | Test–retest reliability + faithfulness under intervention | **No** |
+| **V** | `_compute_V(E_history, I_history)` (:366) — 60% (E slope − I slope) + 40% instantaneous E−I gap (:382) | **Not a sense.** Takes no exogenous input; a deterministic function of two other axes | None available — see below | n/a |
+
+**E — the referent exists and is not joined.** E already ingests machine-checked
+external signal: `tool_error_rate` at 15% and outcome success at 20%. That makes
+E the one axis with a real external answer to be wrong about. The obstacle is
+neither epistemic nor the stop rule: `docs/EVALUATION_INDEX.md` records that the
+tool-failure population and the EISV-bearing population are **disjoint**. The
+referent exists; the two are not joined. That is plumbing.
+
+**I — the calibration referent is currently circular.** I's dominant term is
+`1.0 - calibration_error`, which is precisely Garfinkel's third dimension. The
+tool that measures it, `scripts/analysis/report_calibration.py`, is flagged
+possibly-stale in the evaluation catalog and carries a second defect: its line 29
+states the target as "Do agents with high confidence end up in **healthy
+states**?" — it calibrates reported confidence against EISV's own health readout.
+The **Validation rule** below already forbids exactly this: never validate EISV
+by letting EISV create its own labels. The repair is to repoint the referent at
+the external signals E already ingests, not to rebuild the script.
+
+**S — validatable today, entirely offline.** Drift norm, regime-transition
+counting and complexity divergence are self-relative dynamics with no correct
+value, which is what makes S a homeostatic reading rather than a positional one.
+That removes outcome agreement from its regime and leaves the two checks the
+interpretability and observability literatures actually use: test–retest
+reliability (same state, same reading) and faithfulness under intervention
+(inject a known regime change; does S respond with the predicted sign and
+magnitude). Both are synthetic. Neither needs labels, independent operators, or
+the stop rule.
+
+**V — condition 2(c) is already answered for the behavioral channel.** The
+V-reintroduction deferral (2026-08-07, dialectic `3e003d82fb2d251e`) binds any
+future V work to condition 2(c): an incremental-information test against E, I and
+S that V must pass to count as an independent axis. For **behavioral** V that
+test is **REFUTED BY CONSTRUCTION** in this ledger's own vocabulary — `_compute_V`
+reads only `E_history` and `I_history`, so it carries no information not already
+present in E and I, and no data is required to establish that. This does not
+disturb the deferral: the deferred object is the *policy-layer EMA over the
+outcome-channel residual*, which does take exogenous input, and roadmap §4d
+already separates the two channels. This record only fixes which channel the
+condition is answered for, so no future session re-runs an unwinnable test on the
+wrong V.
+
+### Dead travel in E and I
+
+E draws 25% of its weight from the legacy `C(V)` level and I draws 30% from its
+trend. The 2026-08-11 record above establishes that scalar is pinned ≈0.49 by
+near-zero ODE V. A pinned input is not noise, it is dead travel: roughly a
+quarter of E's and a third of I's expressible range is currently a constant,
+capping the sensitivity those axes can show before any question of outcome lift
+arises. This is measurable by arithmetic and needs no labels.
+
+Recorded, not repaired. The 2026-08-11 record already rules that removing the
+coupling moves behavioral baselines and verdict inputs, and belongs in the
+prospective deconfounding shadow.
+
+### What this changes
+
+Nothing deployed. No gate, threshold, weight, verdict path or stored field
+changes here; this section classifies what would *count* as validating each axis.
+
+The operational consequence is scheduling. The 2026-12-01 outcome-grounding stop
+rule (#1425) governs **outcome-label discrimination** — whether EISV separates
+good outcomes from bad ones. Three of the four regimes above are not
+outcome-label questions. S's reliability and faithfulness, I's calibration
+referent repair, and E's referent join are unblocked by that stop rule and need
+neither independent operators nor external labels, so they should not sit queued
+behind it. The instrument-frame tooling that has been allowed to rot
+(`report_calibration.py` possibly-stale, `eisv_pca_analysis.py` won't-run) is
+precisely the tooling those three regimes require.
 
 ## Validation rule
 
