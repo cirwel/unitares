@@ -306,9 +306,7 @@ def test_strong_assurance_has_no_strengthen_breadcrumb():
 
 
 def test_weak_server_inferred_assurance_explains_how_to_reach_strong():
-    """The canonical #732 case: weak because server-inferred. Post-#604 the
-    breadcrumb LEADS with continuity_token (works on stateless transports) and
-    still mentions client_session_id for session-maintaining clients."""
+    """A weak server-inferred binding leads with the ordinary session path."""
     context = build_identity_response_context(
         agent_uuid="uuid-w",
         agent_id="agent-w",
@@ -321,9 +319,10 @@ def test_weak_server_inferred_assurance_explains_how_to_reach_strong():
     assert assurance["tier"] == "weak"
     hint = assurance["how_to_strengthen"]
     assert "server-inferred" in hint
-    # #604: continuity_token is the primary proof (works on both transports).
+    assert "client_session_id" in hint
     assert "continuity_token" in hint
-    assert hint.index("continuity_token") < hint.index("client_session_id")
+    assert hint.index("client_session_id") < hint.index("continuity_token")
+    assert "ordinary tool calls" in hint
 
 
 def test_medium_assurance_breadcrumb_points_at_explicit_session():
@@ -337,11 +336,9 @@ def test_medium_assurance_breadcrumb_points_at_explicit_session():
     assurance = context["identity_assurance"]
     assert assurance["tier"] == "medium"
     hint = assurance["how_to_strengthen"]
-    # #604: continuity_token leads; client_session_id remains as the
-    # session-maintaining-client alternative.
     assert "continuity_token" in hint
     assert "client_session_id" in hint
-    assert hint.index("continuity_token") < hint.index("client_session_id")
+    assert hint.index("client_session_id") < hint.index("continuity_token")
 
 
 def test_how_to_strengthen_read_and_write_paths_stay_in_parity():
@@ -362,34 +359,31 @@ def test_how_to_strengthen_read_and_write_paths_stay_in_parity():
         )
 
 
-# ── #604 (dogfood 2026-06-24): credential copy is stateless-transport-safe ──
+# ── #1710: ordinary continuity leads with client_session_id ──
 
 
-def test_onboard_session_continuity_instruction_leads_with_continuity_token():
-    """An agent that follows the onboard session_continuity instruction must be
-    told to echo continuity_token (the proof that resolves on stateless
-    transports), not client_session_id (which resolves to a fresh per-call
-    identity there)."""
+def test_onboard_session_continuity_instruction_leads_with_client_session_id():
+    """Routine calls use the in-session binding; token replay is exceptional."""
     payload = build_onboard_response_data(**_onboard_kwargs())
     instruction = payload["session_continuity"]["instruction"]
+    assert "client_session_id" in instruction
     assert "continuity_token" in instruction
+    assert instruction.index("client_session_id") < instruction.index("continuity_token")
+    assert "do not attach continuity_token" in instruction
     assert payload["session_continuity"]["continuity_token"] == "token-min"
 
 
-def test_onboard_next_calls_thread_continuity_token_as_ownership_proof():
-    """The verbose next_calls templates hand back continuity_token as the
-    ownership proof so an agent copying args_full reaches strong on its 2nd
-    call (P0 acceptance)."""
+def test_onboard_next_calls_thread_client_session_id_not_continuity_token():
+    """Copyable ordinary-call templates never encourage bearer-token replay."""
     payload = build_onboard_response_data(**_onboard_kwargs())
     for call in payload["next_calls"]:
         args_full = call["args_full"]
-        assert args_full.get("continuity_token") == "token-min"
-        assert "client_session_id" not in args_full
+        assert args_full.get("client_session_id") == "sess-min"
+        assert "continuity_token" not in args_full
 
 
 def test_fresh_mint_weak_binding_is_framed_as_baseline_not_deficiency():
-    """P1: a just-minted identity that resolves weakly is relabeled as expected
-    baseline with an actionable path (echo continuity_token), not a scold."""
+    """A fresh weak baseline points to the ordinary session binding first."""
     payload = build_onboard_response_data(
         **_onboard_kwargs(
             is_new=True,
@@ -402,7 +396,11 @@ def test_fresh_mint_weak_binding_is_framed_as_baseline_not_deficiency():
     assert assurance["tier"] != "strong"
     assert assurance["baseline"] == "fresh_identity"
     assert "not a deficiency" in assurance["baseline_note"]
+    assert "client_session_id" in assurance["how_to_strengthen"]
     assert "continuity_token" in assurance["how_to_strengthen"]
+    assert assurance["how_to_strengthen"].index("client_session_id") < (
+        assurance["how_to_strengthen"].index("continuity_token")
+    )
 
 
 # ── #734: onboard response_mode="minimal" lean envelope ──
@@ -443,8 +441,8 @@ def test_onboard_minimal_mode_drops_nested_ontology_and_verbose_extras():
     assert payload["client_session_id"] == "sess-min"
     assert payload["identity_assurance"]["tier"] == "strong"
     assert payload["identity_resolution_outcome"] == "minted_fresh"
-    # next_step is self-sufficient: it names the continuity_token credential so
-    # an agent reading only this hint still presents proof (#604 follow-up).
+    # next_step is self-sufficient and leads with the ordinary session binding.
+    assert "client_session_id" in payload["next_step"]
     assert "continuity_token" in payload["next_step"]
     # Functional fields retained.
     assert payload["continuity_token"] == "token-min"
@@ -458,18 +456,31 @@ def test_onboard_minimal_mode_drops_nested_ontology_and_verbose_extras():
     assert "system_activity" not in payload
 
 
-def test_next_step_names_continuity_token_when_issued():
-    """#604 follow-up: next_step must be self-sufficient. With a token it names
-    continuity_token; without one it falls back to client_session_id — never a
-    bare 'call process_agent_update' that leaves a stateless agent unproven."""
+def test_next_step_prefers_client_session_id_and_scopes_token_to_rebind():
+    """The normal path is stable regardless of whether a rebind token exists."""
     full = build_onboard_response_data(**_onboard_kwargs())
+    assert "client_session_id" in full["next_step"]
     assert "continuity_token" in full["next_step"]
+    assert "identity(agent_uuid=" in full["next_step"]
+    assert full["next_step"].index("client_session_id") < full["next_step"].index(
+        "continuity_token"
+    )
     minimal = build_onboard_response_data(**_onboard_kwargs(response_mode="minimal"))
+    assert "client_session_id" in minimal["next_step"]
     assert "continuity_token" in minimal["next_step"]
-    # No token issued → fall back to client_session_id guidance, not silence.
     no_token = build_onboard_response_data(**_onboard_kwargs(continuity_token=None))
     assert "client_session_id" in no_token["next_step"]
     assert "continuity_token" not in no_token["next_step"]
+
+
+def test_client_session_id_schema_does_not_call_it_a_token():
+    from src.mcp_handlers.schemas.mixins import AgentIdentityMixin
+
+    description = AgentIdentityMixin.model_json_schema()["properties"][
+        "client_session_id"
+    ]["description"]
+    assert "binding identifier" in description
+    assert "not a continuity_token" in description
 
 
 def test_onboard_full_mode_is_unchanged_default():

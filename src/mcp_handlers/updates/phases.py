@@ -91,35 +91,25 @@ def _how_to_strengthen(
     `services.identity_payloads._how_to_strengthen` so the write-path
     assurance block agrees with the identity()/onboard read-path block.
 
-    Leads with `continuity_token` (#604 dogfood 2026-06-24): on stateless
-    transports an echoed `client_session_id` resolves to a fresh per-call
-    identity, so the continuity_token is the proof that works on both
-    stateless and session-maintaining transports. Kept word-identical with
-    `services.identity_payloads._how_to_strengthen`.
+    Leads with the normal active-session / `client_session_id` path and keeps
+    `continuity_token` as an explicit proof-owned rebind fallback. Kept
+    word-identical with `services.identity_payloads._how_to_strengthen`.
     """
     if tier == "strong":
         return None
     if proof_origin == "server_inferred":
-        return (
-            "binding was server-inferred (not caller-proven); echo the "
-            "continuity_token from your onboard response on each call to reach "
-            "strong (it resolves on stateless and session-maintaining "
-            "transports alike). A session-maintaining client may instead pass "
-            "an explicit client_session_id"
-        )
-    if tier == "medium":
-        return (
-            "echo the continuity_token from your onboard response on each call "
-            "to reach strong; a session-maintaining client may instead pass an "
-            "explicit client_session_id"
-        )
-    # weak
+        prefix = "binding was server-inferred (not caller-proven); "
+    elif tier == "medium":
+        prefix = "to strengthen this medium-assurance binding, "
+    else:
+        prefix = "to strengthen this weak binding, "
     return (
-        "echo the continuity_token from your onboard response on each call to "
-        "reach strong — it works on stateless transports (e.g. claude.ai) "
-        "where an echoed client_session_id resolves to a fresh per-call "
-        "identity. A session-maintaining client may instead pass an explicit "
-        "client_session_id"
+        prefix
+        + "pass the client_session_id returned by start_session explicitly on "
+        "the next call; adapters may inject it automatically. If this transport "
+        "cannot retain that binding, use identity(agent_uuid=..., "
+        "continuity_token=..., resume=true) as an explicit same-live-process "
+        "rebind instead of attaching continuity_token to ordinary tool calls"
     )
 
 

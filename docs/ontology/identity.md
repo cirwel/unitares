@@ -59,13 +59,14 @@ resolvers (`src/mcp_handlers/support/agent_auth.py`).
 | `continuity_token` | Advanced **same-live-process** rebind proof (signed, carries the `aid` claim). | Resume-by-proof together with `agent_uuid`, in a still-live process. Not the day-to-day path. | A cross-process or cross-channel identity credential (performative — see "Three stances"). |
 | `thread_id` | Conversation/thread anchor. Short opaque `t-<16hex>` form (`generate_thread_id`, `src/thread_identity.py`) **and** a full-UUID form are both accepted. | Claiming thread membership/position when the caller already knows it. | A substitute for `client_session_id` — a thread groups forks; it is not the per-process write binding. |
 
-> **Agent-facing note — the "echo `continuity_token` to reach strong" guidance (#604).**
-> The onboarding copy returned to agents on stateless transports tells them to
-> echo the `continuity_token` to strengthen their binding. That is the
-> *same-live-process* binding-strength role in the row above — **not** the
-> cross-process resume-credential use marked Performative / "retire or
-> repurpose" below. Echoing the token within the running process proves the
-> current binding; it does not resume identity across process boundaries.
+> **Agent-facing continuity guidance.** Onboarding leads with the ordinary
+> path: use the active transport binding or pass the returned
+> `client_session_id`; adapters should inject it automatically. If a stateless
+> transport cannot retain that binding, the returned `continuity_token` remains
+> available for an explicit same-live-process
+> `identity(agent_uuid=..., continuity_token=..., resume=true)` rebind. It is
+> not a field to persist or attach to every ordinary tool call, and it does not
+> resume identity across process boundaries.
 
 ### Canonical resolution order
 

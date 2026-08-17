@@ -13,7 +13,11 @@ class AgentIdentityMixin(BaseModel):
     )
     client_session_id: Optional[str] = Field(
         default=None,
-        description="Session continuity token from identity(). Include in all calls to maintain identity."
+        description=(
+            "In-session binding identifier from start_session()/identity(). "
+            "Pass it on same-process calls when the adapter does not inject it "
+            "automatically; it is not a continuity_token or cross-process proof."
+        )
     )
     agent_id: Optional[str] = Field(
         default=None,

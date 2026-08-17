@@ -90,6 +90,13 @@ def test_onboard_description_keeps_v2_ontology_framing():
     )
 
 
+def test_process_update_description_distinguishes_session_id_from_token():
+    desc = _load()["process_agent_update"]
+    assert "client_session_id (string): In-session binding identifier" in desc
+    assert "not a continuity_token or cross-process proof" in desc
+    assert "client_session_id (string): Session continuity token" not in desc
+
+
 # -----------------------------------------------------------------------------
 # Served-description guards.
 #

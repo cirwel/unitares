@@ -37,7 +37,9 @@ main check-in loop. A new user message is not a reason to call
 These are the primary workflow tools; raw implementation tools such as
 `onboard(...)` and
 `process_agent_update(...)` remain available for compatibility. The full raw
-payload remains available under `raw_governance`.
+payload remains available under `raw_governance`; the read aliases
+`check_working_state` and `search_shared_memory` default compact and require
+their documented full-mode option to include it.
 
 ## Session Continuity
 

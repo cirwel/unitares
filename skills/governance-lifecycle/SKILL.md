@@ -26,7 +26,7 @@ source_files:
 
 ## Primary Workflow Names
 
-The core lifecycle should use primary task-verb tools. Each is implemented by a raw tool with the same parameters and identity rules, and returns a **normalized envelope**: the operationally useful fields first (`next_action`, `state_summary`, `risk_summary`, `memory_suggestions`, `recovery_hint`), with the full raw payload preserved under `raw_governance`.
+The core lifecycle should use primary task-verb tools. Each is implemented by a raw tool with the same identity rules and returns a **normalized envelope** with the operationally useful fields first (`next_action`, `state_summary`, `risk_summary`, `memory_suggestions`, `recovery_hint`). State-changing aliases preserve the full payload under `raw_governance`; read aliases default compact and explain how to request the full canonical payload.
 
 | Task | Primary workflow tool | Raw implementation tool |
 |------|---------------|----------------|
@@ -110,7 +110,12 @@ primary workflow responses preserve it under `raw_governance`.
 
 ### What You Get Back
 
-A verdict plus current EISV metrics. Read the verdict and act on it.
+A verdict plus current EISV metrics. Read the verdict and act on it. The friendly
+read tools return a normalized envelope: read `next_action` first, then
+`state_summary`, `risk_summary`, `memory_suggestions`, and `recovery_hint` when
+present. `check_working_state()` and `search_shared_memory()` omit the repeated
+canonical payload by default; use `lite=false` or `response_mode="full"`,
+respectively, when you need it under `raw_governance`.
 
 ### Your check-in is one evidence class among several
 

@@ -54,9 +54,10 @@ its own identity, declare the dispatcher as parent with
 | Record an outcome | `record_result(...)` | `outcome_event` |
 | Request review | `request_review(...)` | `dialectic(action="request")` |
 
-The primary tools return a compact agent-facing envelope and preserve the raw
-payload under `raw_governance`. Call `list_tools()` for the current full surface
-rather than relying on a copied catalog in prose.
+The primary tools return a compact agent-facing envelope. State-changing tools
+preserve the raw payload under `raw_governance`; read aliases omit that repeated
+payload by default and expose a full-mode escape hatch. Call `list_tools()` for
+the current full surface rather than relying on a copied catalog in prose.
 
 ## 4.4 Handle the policy response
 
