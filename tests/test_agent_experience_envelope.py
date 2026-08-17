@@ -306,11 +306,40 @@ def test_metrics_envelope_maps_existing_friendly_fields():
         "success": True,
         "verdict": {"verdict": "proceed", "explanation": "stable"},
         "guidance": "keep going",
-        "next_action": {"tool": "process_agent_update", "example": "..."},
+        "next_action": {
+            "tool": "process_agent_update",
+            "example": "process_agent_update(response_text='Starting work')",
+            "note": "get_governance_metrics is read-only",
+        },
+        "status": "healthy",
+        "E": 0.7,
+        "I": 0.8,
+        "S": 0.2,
+        "V": 0.0,
+        "risk_score": 0.1,
     }
     env = build_experience_envelope("check_working_state", "get_governance_metrics", payload)
-    assert env["next_action"] == payload["next_action"]
-    assert env["state_summary"] == payload["verdict"]
+    assert env["next_action"]["tool"] == "sync_state"
+    assert "sync_state(" in env["next_action"]["example"]
+    assert "check_working_state" in env["next_action"]["note"]
+    assert env["state_summary"]["verdict"] == "proceed"
+    assert env["state_summary"]["E"] == 0.7
+    assert env["state_summary"]["risk_score"] == 0.1
+    assert "raw_governance" not in env
+    assert env["raw_governance_available"] is True
+    assert payload["verdict"] == {"verdict": "proceed", "explanation": "stable"}
+
+
+def test_metrics_envelope_full_escape_hatch_preserves_raw_payload():
+    payload = {"success": True, "E": 0.7, "verdict": "proceed"}
+    env = build_experience_envelope(
+        "check_working_state",
+        "get_governance_metrics",
+        payload,
+        {"lite": False},
+    )
+    assert env["raw_governance"] is payload
+    assert "raw_governance_hint" not in env
 
 
 def test_search_envelope_counts_and_suggests():
@@ -321,7 +350,26 @@ def test_search_envelope_counts_and_suggests():
     }
     env = build_experience_envelope("search_shared_memory", "knowledge", payload)
     assert "1 prior discoveries matched" in env["next_action"]
+    assert "store_finding(" in env["next_action"]
     assert env["memory_suggestions"][0]["summary"] == "prior art"
+    assert "raw_governance" not in env
+    assert "response_mode='full'" in env["raw_governance_hint"]
+
+
+def test_search_envelope_full_escape_hatch_preserves_raw_payload():
+    payload = {
+        "success": True,
+        "count": 1,
+        "discoveries": [{"id": "d1", "summary": "prior art"}],
+    }
+    env = build_experience_envelope(
+        "search_shared_memory",
+        "knowledge",
+        payload,
+        {"response_mode": "full"},
+    )
+    assert env["raw_governance"] is payload
+    assert "raw_governance_available" not in env
 
 
 def test_search_envelope_promotes_low_confidence():
