@@ -1,6 +1,6 @@
 # Roadmap
 
-**Last reviewed:** 2026-08-11
+**Last reviewed:** 2026-08-16
 
 This roadmap states priorities, not delivery dates. Deployed behavior is defined
 by releases and canonical documentation, not by this file.
@@ -9,23 +9,25 @@ by releases and canonical documentation, not by this file.
 
 - Run an independent-operator validation cohort with a preregistered protocol
   and publish negative or inconclusive results ([#1607](https://github.com/cirwel/unitares/issues/1607)).
-- Publish the first `unitares-sdk` package after PyPI trusted-publisher setup;
-  retain a version-pinned Git install until that release exists.
-- Publish versioned multi-architecture container images with SBOM and build
-  provenance from the release workflow.
-- Resolve the current documentation archive/split candidates so shipped,
-  proposed, and historical work remain visibly distinct
-  ([#1605](https://github.com/cirwel/unitares/issues/1605)).
+  This item gates everything under "Later".
 
 ## Next — reduce maintenance and integration friction
 
-- Isolate watcher tests from live operator state
-  ([#1608](https://github.com/cirwel/unitares/issues/1608)).
 - Extract a few low-risk package boundaries from the flat `src/` and `tests/`
   layout without a mass rewrite
   ([#1606](https://github.com/cirwel/unitares/issues/1606)).
 - Maintain and test the compatibility map for the server, SDK, governance
   plugin, and host adapters.
+
+## Recently shipped (see releases and the changelog for detail)
+
+- `unitares-sdk` 0.1.0 published to PyPI via trusted publisher.
+- Versioned multi-architecture container images with SBOM and build provenance,
+  published from the release workflow.
+- Documentation lifecycle review: archive/split candidates adjudicated
+  ([#1605](https://github.com/cirwel/unitares/issues/1605)); doc health gate green.
+- Watcher tests isolated from live operator state
+  ([#1608](https://github.com/cirwel/unitares/issues/1608)).
 
 ## Later — only after independent evidence
 

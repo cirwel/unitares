@@ -942,6 +942,18 @@ class TestHasRecentlyReviewed:
         assert call_args[2] == "agent-A"
         assert call_args[3] == 48
 
+    @pytest.mark.asyncio
+    async def test_has_recently_reviewed_checks_both_pair_directions(self, db):
+        """A->B followed by B->A is inside the same reciprocal cooldown."""
+        instance, pool, conn = db
+        conn.fetchrow = AsyncMock(return_value=None)
+
+        await instance.has_recently_reviewed("agent-B", "agent-A")
+
+        sql = " ".join(conn.fetchrow.await_args.args[0].split())
+        assert "reviewer_agent_id = $1 AND paused_agent_id = $2" in sql
+        assert "reviewer_agent_id = $2 AND paused_agent_id = $1" in sql
+
 
 # ============================================================================
 # DialecticDB.get_active_sessions

@@ -954,6 +954,80 @@ class TestHandleSubmitAntithesis:
         assert session.reviewer_agent_id == "agent-reviewer"
         add_message.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_open_slot_rejects_candidate_in_active_session(
+        self, mock_server, mock_context_agent,
+    ):
+        """A first responder cannot claim two active reviewer slots."""
+        from src.mcp_handlers.dialectic.handlers import handle_submit_antithesis
+
+        session = _make_session(
+            reviewer_id=None,
+            phase=DialecticPhase.ANTITHESIS,
+        )
+        active_check = AsyncMock(return_value=True)
+        recent_check = AsyncMock(return_value=False)
+
+        with patch(
+            f"{DIALECTIC}.load_session",
+            new=AsyncMock(return_value=session),
+        ), patch(
+            "src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
+            active_check,
+        ), patch(
+            "src.mcp_handlers.dialectic.reviewer._has_recently_reviewed",
+            recent_check,
+        ), mock_context_agent:
+            result = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-active",
+                "concerns": ["Independent concern"],
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert "already in an active dialectic session" in data["error"]
+        active_check.assert_awaited_once_with("agent-active")
+        recent_check.assert_not_awaited()
+        assert session.reviewer_agent_id is None
+
+    @pytest.mark.asyncio
+    async def test_open_slot_rejects_recent_reciprocal_pair(
+        self, mock_server, mock_context_agent,
+    ):
+        """The handler enforces the reciprocal pair cooldown before a claim."""
+        from src.mcp_handlers.dialectic.handlers import handle_submit_antithesis
+
+        session = _make_session(
+            reviewer_id=None,
+            phase=DialecticPhase.ANTITHESIS,
+        )
+        active_check = AsyncMock(return_value=False)
+        recent_check = AsyncMock(return_value=True)
+
+        with patch(
+            f"{DIALECTIC}.load_session",
+            new=AsyncMock(return_value=session),
+        ), patch(
+            "src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
+            active_check,
+        ), patch(
+            "src.mcp_handlers.dialectic.reviewer._has_recently_reviewed",
+            recent_check,
+        ), mock_context_agent:
+            result = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-active",
+                "concerns": ["Independent concern"],
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert "24h cooldown" in data["error"]
+        active_check.assert_awaited_once_with("agent-active")
+        recent_check.assert_awaited_once_with("agent-active", "agent-paused")
+        assert session.reviewer_agent_id is None
+
 
 # ============================================================================
 # 4. handle_submit_synthesis
