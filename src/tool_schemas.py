@@ -138,6 +138,7 @@ TOOL_ORDER = [
     "list_inference_hosts",
     "describe_inference_host",
     "call_model",
+    "delegate_inference",
     "onboard",
     "identity",
     "bind_session",

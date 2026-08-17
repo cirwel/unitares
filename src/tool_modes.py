@@ -65,6 +65,7 @@ LITE_MODE_TOOLS: Set[str] = {
     "list_inference_hosts",       # Discover inference hosts
     "describe_inference_host",    # Inspect one inference host
     "call_model",                 # LLM access
+    "delegate_inference",         # Strong-model host delegation
 
     # Session hook (required by automation)
     "bind_session",               # Session-start hook for MCP identity sync
@@ -188,6 +189,7 @@ TOOL_TIERS: dict[str, Set[str]] = {
         "list_inference_hosts",
         "describe_inference_host",
         "call_model",
+        "delegate_inference",
     },
     "advanced": {  # Tier 3: Rarely used tools
         "cleanup_stale_locks",
@@ -293,6 +295,7 @@ TOOL_OPERATIONS: dict[str, str] = {
     "list_inference_hosts": "read",       # Discover inference hosts
     "describe_inference_host": "read",    # Inspect one inference host
     "call_model": "read",                 # Advisory inference; returns evidence artifact
+    "delegate_inference": "read",         # Strong advisory inference; returns evidence artifact
 
     # Dialectic
     "request_dialectic_review": "write",  # Create dialectic session
@@ -370,6 +373,7 @@ TOOL_CATEGORIES = {
         "list_inference_hosts",
         "describe_inference_host",
         "call_model",
+        "delegate_inference",
     },
     "dialectic": {
         "request_review",

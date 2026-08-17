@@ -1,6 +1,6 @@
 # Orchestrated Dialectic Reviewer — the agent-orchestrator's first consumer (v0)
 
-- **Status:** Design-first sketch (2026-06-23). No code yet. Proposed as the **first real consumer** that de-inerts the BEAM agent-orchestrator — the answer to the 2026-06-24 gate's "Call A" (see `2026-06-24-wave-3-gate-framing.md`).
+- **Status:** Implemented behind opt-in gates. The standalone reviewer, governed-first spawn path, real disagreeing verdict, local/Codex/Claude backend routing, fallback behavior, and provenance tests are present. Operator rollout remains separate from merge.
 - **Why this one:** it converts a standing governance weakness (rubber-stamp reviews) into a fix using *exactly* what the orchestrator already does (spawn → lease-bind → supervise → capture exit → clean up). It's demand-real, not hypothetical.
 
 ## The problem it fixes
@@ -37,7 +37,7 @@ A standalone process — `unitares.dialectic_reviewer` — that:
 
 1. **Onboards as its own identity** (strict is now live): `start_session(force_new=true, parent_agent_id=<engine/driver uuid>, spawn_reason="dialectic_reviewer")`. No borrowed `api_key`; no `SYNTHETIC_REVIEWER_ID`. The orchestrator already provisions parent-lineage + `server_url` env (#648/#650).
 2. **Reads the thesis** from the session via the existing dialectic read path.
-3. **Calls the heterogeneous local model** (gemma4 via the existing #563 structured-reviewer call — **local Ollama, no paid API**, per the operator constraint) for a *genuine* structured verdict: `{ agrees: bool, root_cause, proposed_conditions, reasoning }`. The model logic already exists; this just runs it in a process and trusts its `agrees`.
+3. **Calls the operator-selected heterogeneous backend** for a *genuine* structured verdict: `{ agrees: bool, root_cause, proposed_conditions, reasoning }`. `UNITARES_DIALECTIC_REVIEWER_HOST` selects `local`/`ollama` (default), `codex`, or `claude`. Local uses `UNITARES_LLM_MODEL` (default `gemma4:latest`). Claude may be pinned with `UNITARES_DIALECTIC_CLAUDE_MODEL`; otherwise its authenticated CLI/operator default selects, and the exact models actually used are read from the CLI's `modelUsage` envelope. Codex currently uses its CLI/operator default and records the family when the CLI does not expose an exact identifier.
 4. **Submits via the dialectic protocol** — `dialectic(action=submit_*)` → `session.submit_synthesis` / `pg_add_message` with the **model-derived `agrees`** (which may be `False`). This is the *same* write path a human reviewer uses (handlers.py:1631–1696); `agrees=False` is already a first-class, supported outcome (line 1657).
 5. **Exits.** The orchestrator reaps it and releases the lease.
 
@@ -47,7 +47,7 @@ A standalone process — `unitares.dialectic_reviewer` — that:
 
 ### 4. Retiring `agrees=True`
 
-- Gate behind `DIALECTIC_REVIEWER_MODE = synthetic | orchestrated` (default `synthetic`; flip per-measurement).
+- Gate process independence behind `UNITARES_DIALECTIC_ORCHESTRATED_REVIEW` (default off) and select the model backend independently with `UNITARES_DIALECTIC_REVIEWER_HOST`.
 - `orchestrated` spawns the real reviewer. The hardcoded-`agrees=True` synthetic path is kept **only as an explicit, labeled fallback** for when the orchestrator or the local model is unavailable — and logged as a degraded "could not obtain an independent verdict," not silently presented as a review.
 - **Falsifiable success metric:** does an orchestrated reviewer *ever* return `agrees=False`? The current path returns `False` exactly zero times by construction. A single genuine disagreement is proof the independence is real, not ceremonial. Measure the `agrees=False` rate over N sessions; if it stays 0, the reviewer model isn't actually adding signal and that's its own finding.
 
@@ -55,18 +55,27 @@ A standalone process — `unitares.dialectic_reviewer` — that:
 
 | Piece | Effort | Notes |
 |---|---|---|
-| `unitares.dialectic_reviewer` runner | **M** | Reuses #563's gemma4 structured-reviewer call; new = onboard + submit-via-protocol + exit |
-| Dialectic→orchestrator spawn call (flagged) | **S** | One HTTP POST at the reviewer-fork; bearer + `cmd_allowlist` |
-| `DIALECTIC_REVIEWER_MODE` flag + `agrees=False`-rate metric | **S** | Default-off; measurement is the gate |
+| `agents.dialectic_reviewer` runner | **done** | Onboards, selects local/Codex/Claude, submits through protocol, records backend/model provenance, exits |
+| Dialectic→orchestrator spawn call (flagged) | **done** | Governed-effect first, direct authenticated orchestrator only for availability/config fallback buckets |
+| Backend selection + `agrees=False` behavior | **done** | Selection is operator config; verdict is model-derived and parse failures conservatively disagree/fallback |
 | Verdict return path | **none** | Already exists (protocol + PG) |
 
-No new BEAM code (the orchestrator is built+proven), no new verdict contract, no paid API.
+No new verdict contract or model API key is required. Codex/Claude use the operator's authenticated subscription CLIs. Provider-reported cost is preserved when available; "subscription-backed" is not represented as "zero cost."
+
+## Selection and audit contract
+
+- **Who reviews:** this is protocol ownership, separate from model choice. Explicit `self` mode assigns the paused agent. `auto` can choose a standing peer only when `UNITARES_AUTOSELECT_REVIEWER=1`; candidates must be active/recent, capable of authoring an antithesis, outside another live session, not the paused agent, and outside the reciprocal 24-hour pair cooldown. Eligible candidates are ranked by authority score and selected with weighted randomness from the top five. Manual/failed-auto leaves the slot open for an explicit assignment or first responder. After a thesis reaches an open slot, `UNITARES_DIALECTIC_ORCHESTRATED_REVIEW=1` summons the independent reviewer process; dispatch/model failure falls back to the labeled in-process synthetic path when enabled.
+- **Which backend reviews:** `UNITARES_DIALECTIC_REVIEWER_HOST` chooses `local`, `codex`, or `claude`. An absent value chooses local Ollama.
+- **Which model:** local is `UNITARES_LLM_MODEL`; Claude is `UNITARES_DIALECTIC_CLAUDE_MODEL` when set and otherwise the CLI/operator default. Claude can report more than one actual model (for example a primary model plus an internal helper); every exact ID is retained and `model_used` is deliberately left unset when the provider reports multiple models. Codex currently records its family unless its output yields an exact identifier.
+- **How failure behaves:** a missing CLI, timeout, nonzero exit, or unparsable host verdict falls back to local Ollama. The fallback source is recorded; no failed external backend silently becomes an approval.
+- **What is durable:** the reviewer identity's `model_type` fingerprints the backend/models and its real governance check-in records backend, host, exact model IDs, fallback source, and provider cost when available. The dialectic verdict itself still flows through the ordinary antithesis/synthesis rows.
+- **Off-record consultation:** `delegate_inference(host_id="claude:host-adapter", ...)` lets an onboarded Codex/other agent ask Claude for attributed tool evidence without opening a dialectic session. It uses safe mode, disables tools and session persistence, and returns hashes, usage/cost, exact model IDs, latency, requester UUID, and orchestrator execution ID.
 
 ## Blast radius / cautions
 
 - **Strict identity is live (2026-06-22).** The reviewer is a tokenless new process until it onboards — it *must* `force_new` + declare lineage + land a real `sync_state`, or strict will (correctly) refuse it. This is the standard subagent-onboarding discipline, not a new risk.
 - **RCE surface:** `cmd_allowlist` must pin the spawnable command to the reviewer runner. Non-negotiable.
-- **Independence is now two-axis, not total:** gemma4 already gives model-heterogeneity; this adds process + identity independence and removes the shared-credential coupling. It does *not* claim adversarial independence — a same-host local model is still a weak reviewer; the value is that it can now *block*, and that its verdict is independently accountable.
+- **Independence is multi-axis, not total:** model, process, and identity can now be heterogeneous and the reviewer can block. A configured subscription CLI still shares the operator/host trust domain, so this does *not* claim adversarial independence.
 
 ## Relationship to the gate
 

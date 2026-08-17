@@ -86,6 +86,54 @@ _IDENTITY_DESCRIPTION_OVERRIDES = {
     ),
 }
 
+_INFERENCE_DESCRIPTION_OVERRIDES = {
+    "list_inference_hosts": (
+        "List known inference hosts and live adapter readiness. Read both "
+        "available (runtime/config readiness) and accepts_host_id_from "
+        "(agent-callable routing). Ollama and Hugging Face route through "
+        "call_model; Claude routes through delegate_inference; the Codex host "
+        "adapter remains registered but unwired. Listing is available before "
+        "onboarding, but inference calls require a bound identity."
+    ),
+    "describe_inference_host": (
+        "Describe one inference host by host_id, including transport, privacy, "
+        "cost/accountability classes, model capabilities, runtime availability, "
+        "implementation status, and the exact tools that accept it. Discovery "
+        "does not invoke the host or validate an answer."
+    ),
+    "call_model": (
+        "Weak/fast synchronous advisory inference through local Ollama or the "
+        "configured Hugging Face router (~30s tool ceiling). It returns tool "
+        "evidence, not a peer-governance record. For a stronger Claude "
+        "consultation use delegate_inference; for an on-record review use "
+        "request_review/dialectic(action='request')."
+    ),
+    "delegate_inference": (
+        "Delegate a bounded advisory task to Claude through the operator's "
+        "authenticated subscription CLI and the agent-orchestrator. This is "
+        "the long-running strong-model lane, separate from call_model. Claude "
+        "runs in safe mode with tools disabled and session persistence off. "
+        "The result includes prompt/response hashes, exact provider-reported "
+        "models_used, usage, cost, latency, requesting identity, and "
+        "orchestrator execution ID. Pass model to request an alias or exact "
+        "model; omit it to use the operator/CLI default. This creates "
+        "attributed evidence but not a dialectic peer-review record. Requires "
+        "UNITARES_HOST_ADAPTER_ENABLED=1, AGENT_ORCHESTRATOR_BEARER_TOKEN, and "
+        "an authenticated Claude CLI discoverable on PATH, ~/.local/bin, or "
+        "UNITARES_CLAUDE_CLI."
+    ),
+    "dialectic": (
+        "Governed review operations: get, list, quick, request, thesis, "
+        "antithesis, synthesis, reassign. A request opens an attributed session "
+        "and the orchestrator assigns an eligible reviewer process. The "
+        "operator selects the synthetic review backend with "
+        "UNITARES_DIALECTIC_REVIEWER_HOST (local, codex, or claude); backend "
+        "failures degrade to local inference and record the fallback. Use "
+        "delegate_inference for off-record Claude advice and call_model for "
+        "weak/fast synchronous advice."
+    ),
+}
+
 _DESCRIPTION_APPENDICES = {
     "health_check": (
         "\n\nRESPONSE WRAPPER FIELDS:\n"
@@ -166,6 +214,7 @@ def _load_descriptions() -> dict:
     # Keep the large legacy JSON stable while overriding fast-moving identity
     # teaching text close to the S1-a implementation.
     descriptions.update(_IDENTITY_DESCRIPTION_OVERRIDES)
+    descriptions.update(_INFERENCE_DESCRIPTION_OVERRIDES)
     for tool_name, appendix in _DESCRIPTION_APPENDICES.items():
         if tool_name in descriptions:
             descriptions[tool_name] = f"{descriptions[tool_name]}{appendix}"
