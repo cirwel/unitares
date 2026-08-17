@@ -37,7 +37,9 @@ Stores ephemeral runtime support data in the production posture:
 - distributed-lock helpers
 - other short-lived cache/coordination entries
 
-If Redis is unavailable, the system falls back gracefully with weaker continuity guarantees.
+If Redis is unavailable, the system starts in degraded local-only mode with
+weaker continuity guarantees. Treat that mode as a demo fallback, not a healthy
+production posture.
 
 ## Required Configuration
 
@@ -56,7 +58,7 @@ psql "$DB_POSTGRES_URL" -c "SELECT 1;"
 # Local health endpoint
 curl http://127.0.0.1:8767/health
 
-# Redis optional cache
+# Redis continuity check (required for the production posture)
 redis-cli PING
 ```
 

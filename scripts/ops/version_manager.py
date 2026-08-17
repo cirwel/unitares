@@ -73,6 +73,10 @@ VERSION_REFERENCES = [
         (r'git clone --branch v([\d.]+) --depth 1',
          r'git clone --branch v{version} --depth 1'),
     ]),
+    ("docs/manual/02-install.md", [
+        (r'git clone --branch v([\d.]+) --depth 1',
+         r'git clone --branch v{version} --depth 1'),
+    ]),
     ("docs/public-site/index.md", [
         (r'\[server v([\d.]+)\]\(https://github.com/cirwel/unitares/releases/tag/v[\d.]+\)',
          r'[server v{version}](https://github.com/cirwel/unitares/releases/tag/v{version})'),

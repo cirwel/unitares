@@ -6,12 +6,17 @@ This chapter is the operator's orientation. The deep, living runbook is [`../ope
 
 ## 6.1 Database ownership
 
-**PostgreSQL + AGE is the single source of truth for all governance data** — identities, agent state, audit events, discoveries, dialectic, calibration, tool usage. There is no SQLite. Redis is a session cache only and the server degrades gracefully without it.
+**PostgreSQL + AGE is the durable system of record for governance data** —
+identity records, agent state, audit events, discoveries, dialectic, calibration,
+and tool usage. There is no SQLite. Redis is currently the de-facto primary
+runtime store for session and identity bindings. The server can start without
+it only in degraded local-only mode, which is suitable for a demo but does not
+provide production continuity.
 
 ```
 PostgreSQL+AGE (5432)            Redis (6379)
-  core.identities                  session cache only
-  core.agent_state                 (optional; graceful fallback)
+  durable identity rows            live session bindings
+  core.agent_state                 identity continuity
   audit.events
   core.discoveries (AGE)
   dialectic.*

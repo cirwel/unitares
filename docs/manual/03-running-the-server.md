@@ -40,7 +40,7 @@ REST call shape (any tool):
 ```bash
 curl -s -X POST http://127.0.0.1:8767/v1/tools/call \
   -H 'Content-Type: application/json' \
-  -d '{"tool":"<tool_name>","arguments":{ ... }}'
+  -d '{"name":"<tool_name>","arguments":{ ... }}'
 ```
 
 Client-specific MCP JSON (Cursor, Claude Code, Claude Desktop) is routed from

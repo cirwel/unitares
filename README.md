@@ -67,6 +67,12 @@ docker compose up -d --wait
 make demo
 ```
 
+This release-tagged Docker Compose flow is the **Tier-1 install contract** for a
+local, single-operator deployment. It brings up PostgreSQL/AGE/pgvector, Redis,
+and the server on loopback without requiring manual database initialization.
+The source-based macOS playbook is an advanced bare-metal path, not a second
+default installer.
+
 `make demo` onboards a fresh process and sends six check-ins over the real API.
 It prints the response shape, decision reason, state detail, and warmup position.
 The demo answers **“is my stack wired?”** It does not establish predictive value.
@@ -221,7 +227,7 @@ suitable for the demo.
 |---|---|
 | Evaluator or grant reviewer | [Reviewer Guide](docs/REVIEWER_GUIDE.md) → [computation](docs/EISV_COMPUTATION.md) → [scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md) |
 | Integrator | [Manual](docs/manual/README.md) → [MCP clients](docs/integration/MCP_CLIENTS.md) |
-| Operator | [Install playbook](docs/install/PLAYBOOK.md) → [operator runbook](docs/operations/OPERATOR_RUNBOOK.md) |
+| Operator | [Docker quickstart](#quickstart) → [operator runbook](docs/operations/OPERATOR_RUNBOOK.md); [bare-metal playbook](docs/install/PLAYBOOK.md) for advanced macOS installs |
 | Contributor | [AGENTS.md](AGENTS.md) → [architecture](docs/UNIFIED_ARCHITECTURE.md) → [canonical sources](docs/dev/CANONICAL_SOURCES.md) |
 | Research/provenance reader | [Evaluation index](docs/EVALUATION_INDEX.md) → [ontology](docs/ontology/README.md) → [proposals](docs/proposals/README.md) |
 
