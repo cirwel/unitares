@@ -4,7 +4,7 @@ description: >
   Use when an agent needs to understand UNITARES governance concepts — EISV state vectors,
   basins, policy actions, coherence, calibration. Reference material for interpreting
   governance metrics as proprioceptive state estimation, not outcome judgment.
-last_verified: "2026-08-11"
+last_verified: "2026-08-17"
 freshness_days: 21
 source_files:
   - unitares/config/governance_config.py
@@ -14,8 +14,10 @@ source_files:
   - unitares/src/behavioral_sensor.py
   - unitares/src/behavioral_assessment.py
   - unitares/src/monitor_decision.py
+  - unitares/src/monitor_metrics.py
   - unitares/src/coherence_provenance.py
   - unitares/src/confidence.py
+  - unitares/src/mcp_handlers/lifecycle/recovery_policy.py
   - unitares/src/mcp_handlers/core.py
 ---
 
@@ -43,10 +45,12 @@ Every agent has four dimensions, updated through check-ins:
 - **S (Entropy / drift)** rises with drift norm, regime instability, and complexity divergence.
 - **V (Valence)** is derived from the E-I imbalance. Positive means running hot (motion outruns integrity); negative means running careful (integrity outruns progress).
 
-The headline math is proprioceptive residuals. In the live behavioral path,
-warmup verdicts fall back to a mostly server-derived cold-start prior (the behavioral track scores against fixed universal thresholds); after warmup, residual-like state comes
-from self-relative z-score deviation against the agent's own Welford baseline,
-with absolute safety floors and basin-health gates always in force.
+The headline math is proprioceptive residuals. The live authority stages are
+explicit: check-ins 1–2 use the mostly server-derived Φ cold-start prior;
+check-ins 3–24 use the behavioral assessment against fixed universal
+thresholds; check-in 25 enables self-relative z-score deviation against the
+agent's Welford baseline. Absolute safety floors and basin-health gates remain
+in force throughout.
 
 Roadmap target semantics for richer cold-start grounding are:
 
@@ -71,7 +75,9 @@ Your state sits in a basin — a region of the EISV space:
 - **Low basin**: Degraded. May need recovery or intervention.
 - **Boundary**: Transitioning between basins. Extra attention from governance. Verdicts may carry `margin: tight`.
 
-Use `get_governance_metrics()` as the source of truth for the current basin/mode labels rather than assuming they are constant across runtime versions.
+Use `check_working_state()` (`get_governance_metrics()` canonically) as the
+source of truth for the current basin/mode labels rather than assuming they are
+constant across runtime versions.
 
 When a response includes `policy_evaluation.inputs.basin`, read it as the
 decision-time policy basin. Agent-facing state fields can be sourced from the
@@ -90,7 +96,20 @@ Governance issues a decision after each check-in. The response's `verdict` field
 | **pause** | `reject` | Risk threshold reached | Stop current work, reflect; dialectic review or human input |
 | **pause** | `void_pause`, `coherence_pause`, `basin_pause`, `risk_pause`, `cirs_block` | A specific subsystem tripped | Read the `reason`/`guidance` fields; consider dialectic review |
 
-Separately, `metrics.verdict` may carry an internal UNITARES verdict such as `safe` / `caution` / `high-risk`. Read it as interpreted state/context, not as moral judgment. In current default posture, behavioral assessment drives the main risk/verdict path: fixed thresholds during warmup, Welford z-score residuals after warmup, with floors and basin gates always in force. Legacy coherence compatibility gates still exist while their replacement is shadow-calibrated; their presence does not make the ODE scalar behavioral evidence. Φ/ODE scoring is telemetry and research lens, not the primary control loop.
+Separately, `metrics.verdict` may carry an internal UNITARES verdict such as
+`safe` / `caution` / `high-risk`. Read it as interpreted state/context, not as
+moral judgment. In the current default posture, the behavioral assessment owns
+the main risk/verdict path after the two-check-in prior window. The configured
+coherence pause, CIRS, basin, and adaptive-governor compatibility backstops still
+actuate inside the check-in policy while their replacement is shadow-calibrated;
+their presence does not turn the legacy ODE scalar into behavioral health
+evidence.
+
+On read-only metrics, headline `risk_score` and `status` use the risk that
+actually produced the last verdict when available. Inspect `risk_score_source`:
+`resolved` means that verdict risk, while `phi_history` is the honest fallback
+before an assessment exists. `current_risk` and `mean_risk` remain smoothed Φ
+telemetry and can legitimately disagree with the headline.
 
 ### Margin
 
@@ -104,7 +123,12 @@ Separately, `metrics.verdict` may carry an internal UNITARES verdict such as `sa
 | `warning` | An edge has just been crossed (less than 0.1 past the threshold) | Stop increasing complexity; reflect before the next step |
 | `critical` | An edge is crossed deeply (0.1 or more past the threshold) | Halt the current approach; recover or escalate |
 
-The actionable levels are `tight`, `warning`, and `critical` — each carries a companion `nearest_edge` field naming which boundary you are closest to (`risk`, `coherence`, or `void`). On `comfortable` and `settling`, `nearest_edge` is `null` (there is no edge to warn about). Prefer the live `margin`/`nearest_edge` values over assuming a fixed enum across runtime versions — `get_governance_metrics()` is the source of truth.
+The actionable levels are `tight`, `warning`, and `critical` — each carries a companion `nearest_edge` field naming which boundary you are closest to (`risk`, `coherence`, or `void`). On `comfortable` and `settling`, `nearest_edge` is `null` (there is no edge to warn about). Prefer the live `margin`/`nearest_edge` values over assuming a fixed enum across runtime versions — `check_working_state()` is the source of truth.
+
+Do not transfer this check-in margin into recovery eligibility. Recovery emits a
+separate `recovery.margin.v2` view whose authoritative inputs are risk and
+`void_active`; legacy coherence is explicitly listed as excluded diagnostic
+context.
 
 The plain-English `mirror` array in your check-in response already summarizes anything actionable (including a tight/warning/critical margin) — read that first. In `mirror` mode `margin`/`nearest_edge` are surfaced **only** when actionable; a `comfortable`/`settling` margin is steady-state and stays out of the response (the mirror's "No actionable signals — steady state" line covers it).
 
@@ -122,6 +146,12 @@ Interpret it only with the accompanying `coherence_source` and `coherence_role`:
 - Full range is [0, 1], but range alone does not establish semantics.
 - Untagged historical rows are `unknown_legacy` unless their producer can be reconstructed deterministically.
 - Existing critical thresholds are compatibility gates, not validated quality grades. Do not recalibrate them merely to force alarm crossings.
+- The check-in actuator still contains those backstops. Outside that migration
+  boundary, recovery eligibility/margin, stuck recovery, dialectic triage,
+  anomaly entropy, peer ranking, and automatic ground-truth fallback no longer
+  treat legacy `C(V)` as authority.
+- New dialectic conditions should not target legacy coherence. Stored
+  unprovenanced `coherence_target` conditions retire without escalating policy.
 - Prefer the behavioral assessment and policy provenance for live interpretation; use legacy ODE values as telemetry/research context.
 
 ## Calibration
@@ -138,7 +168,8 @@ When the numbers look surprising, do not guess first. Use:
 
 - `identity()` to verify who the runtime thinks you are
 - `health_check()` to verify the server and knowledge graph are healthy
-- `get_governance_metrics()` for the current live thresholds and interpreted state
+- `check_working_state()` for the current interpreted state, risk provenance,
+  and compatibility thresholds
 
 ## What NOT to Do
 
