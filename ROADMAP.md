@@ -5,11 +5,31 @@
 This roadmap states priorities, not delivery dates. Deployed behavior is defined
 by releases and canonical documentation, not by this file.
 
-## Now — make the evidence and adoption path independently usable
+## Now — make the evidence path independently interpretable
 
-- Run an independent-operator validation cohort with a preregistered protocol
-  and publish negative or inconclusive results ([#1607](https://github.com/cirwel/unitares/issues/1607)).
-  This item gates everything under "Later".
+- Run a validation cohort of **independent draws** with a preregistered protocol,
+  reporting effective independent clusters rather than nominal agent count, and
+  publish negative or inconclusive results
+  ([#1607](https://github.com/cirwel/unitares/issues/1607)).
+
+  An operator other than the maintainer is **one route to independence, not a
+  precondition**. The 2026-07-30 individuality read failed at effective n=4
+  against a nominal n=7 because three of the eligible "agents" were one
+  replicated Raspberry Pi (E r=0.952, I r=0.932, S r=0.998, byte-identical rows
+  at matched timestamps). That is an independence-accounting problem, and
+  recruiting a stranger does not fix it while the accounting stays wrong.
+  Heterogeneous model families and machine-checked task corpora under this
+  operator supply independent draws; synthetic traffic still does not.
+
+  This item gates **efficacy** claims under "Later". It does not gate the
+  instrument-frame work — reliability, faithfulness under intervention, and
+  calibration — which needs neither external labels nor another operator
+  (see `docs/ontology/eisv-proprioception-contract.md`, "Sensory class split").
+
+- **Multi-principal trust** is a separate claim with its own evidence path:
+  whether identity, attestation, and enforcement survive a principal who does
+  not share this authority. The cohort above does not establish it, and it does
+  not gate the cohort. See [`docs/SCOPE_AND_THREAT_MODEL.md`](docs/SCOPE_AND_THREAT_MODEL.md).
 
 ## Next — reduce maintenance and integration friction
 
