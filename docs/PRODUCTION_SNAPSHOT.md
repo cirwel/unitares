@@ -29,7 +29,6 @@ evaluation path.
 *What these numbers show:* the pipeline has operated under sustained maintainer
 traffic, and the recovery path has been exercised. *What they do not show:*
 product-market traction, independent replications, or improved task outcomes.
-External adoption and efficacy remain open questions.
 
 The headline event count is mostly operational instrumentation, not one row per
 governance decision:

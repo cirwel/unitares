@@ -8,6 +8,7 @@ from unitares_sdk.models import (
     AuditResult,
     CheckinResult,
     CleanupResult,
+    DelegatedInferenceResult,
     IdentityResult,
     InferenceHostResult,
     InferenceHostsResult,
@@ -155,6 +156,32 @@ def test_model_result():
     assert r.inference is not None
     assert r.inference.host_id == "ollama:local"
     assert r.inference.provider_kind == "ollama"
+
+
+def test_delegated_inference_result_preserves_multi_model_provenance():
+    r = DelegatedInferenceResult.model_validate({
+        "success": True,
+        "response": "review",
+        "model_used": None,
+        "models_used": ["claude-haiku-4-5", "claude-opus-5"],
+        "tokens_used": 42,
+        "inference": {
+            "schema": "unitares.inference_result.v0",
+            "host_id": "claude:host-adapter",
+            "models_used": ["claude-haiku-4-5", "claude-opus-5"],
+            "model_requested": "claude-opus-5",
+            "cost_usd": 0.03,
+            "provider_usage": {"output_tokens": 20},
+            "provider_model_usage": {"claude-opus-5": {"outputTokens": 20}},
+            "orchestrator_agent_id": "orch-1",
+        },
+    })
+    assert r.model_used is None
+    assert r.models_used == ["claude-haiku-4-5", "claude-opus-5"]
+    assert r.inference is not None
+    assert r.inference.model_requested == "claude-opus-5"
+    assert r.inference.cost_usd == 0.03
+    assert r.inference.orchestrator_agent_id == "orch-1"
 
 
 def test_inference_hosts_result():

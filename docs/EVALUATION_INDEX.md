@@ -44,15 +44,20 @@ Don't rebuild discrimination analysis — these exist and are current:
   slices with bootstrap CIs, permutation p-values, BEAM-lane exclusion, and a
   `NOISE-LEVEL` label when the selected best candidate does not clear its null.
 
-**Reading either output — three columns decide whether a "lift" is real:**
+**Reading either output:** `AUC delta`, `Null max p95`, and `Selective p`
+decide whether a selected lift clears its matching null. Before making a claim,
+also verify anchor scope and cutoff and report bad rows, permutation blocks, and
+agents.
 
 - `AUC delta` is the **maximum over ~7 candidates**, so its reference is `Null max
-  median`, never zero. The null permutes whole EISV readings between (agent,
-  prior-state snapshot) clusters, leaving labels — and therefore the baseline —
+  median`, never zero. The null permutes whole EISV readings between `(agent,
+  prior-state snapshot)` blocks, leaving labels — and therefore the baseline —
   untouched. A delta below the null median is weaker than noise. `Selective p`
   tests exactly the reported statistic; `Brier perm p` tests only Brier.
-- `Bad clusters`, not `Bad`, is the sample size. Prior state is constant within a
-  cluster, so an edit-test-retry burst of N failures is one event.
+- `Bad clusters` is the count of `(agent, prior-state snapshot)` permutation
+  blocks. Prior state is constant within a block, so an edit-test-retry burst
+  must not be counted as N distinct feature readings. The block count is not
+  proof of independent outcomes; report bad rows and agents with it.
 - A slice whose chronological training half holds **no bad outcomes** reports
   `INCONCLUSIVE` rather than a baseline AUC. An untrained baseline ranks by
   Laplace tie-breaks and reads below chance, which any continuous feature clears.
@@ -63,24 +68,35 @@ retained only to explain earlier reports. Do not cite it.
 
 **Before re-running either script to ask "does EISV predict bad outcomes yet",
 read [`proposals/eisv-outcome-grounding-stop-rule-v0.md`](proposals/eisv-outcome-grounding-stop-rule-v0.md).**
-That question now has a measured bound (any lift is below ≈ 0.05 AUC at ~100
-independent bad clusters) and a pre-registered confirmatory read on 2026-12-01
-with a kill criterion. Ad-hoc reruns between now and then will keep surfacing a
-selected maximum that the null explains. Corpora that might one day answer the
-question better than organic telemetry are recorded under
+That question has a pre-registered confirmatory read on 2026-12-01 with a kill
+criterion. The historical 2026-07-31 `≈ 0.05 AUC` bound is withdrawn for the
+intended claim: it used the contaminated `--anchor-scope all` cohort, and its
+101 "clusters" were prior-state permutation blocks rather than independent
+adjudicated failures. The registered read now fixes `--anchor-scope trusted`
+explicitly, and both prediction scripts now default to the trusted scope so an
+omitted flag cannot silently reproduce the contaminated cohort. Ad-hoc reruns
+between now and then will keep surfacing a selected maximum that the null
+explains. Corpora that might one day answer the question better than organic
+telemetry are recorded under
 [Candidate corpora](#candidate-corpora--not-yet-evaluated) — recorded, not run.
 
 **Current citable read:** the frozen 2026-08-09 trusted-anchor matrix has
-223–227 outcomes, 53 bad rows grouped into 28–29 bad clusters across 16 agents,
-depending on slice. All 12 overall strict/task × 30/90-day × 0/5/30-minute
-slices are `NOISE-LEVEL` after best-candidate selection is included in the null
-(selective p = 0.070–0.567). The removed sandbagging demo and private analysis
-memory are not reproducible evidence from this repository and should not be
-cited for numeric performance.
+223–227 outcomes, 53 bad rows grouped into 28–29 prior-state permutation blocks
+across 16 agents, depending on slice. Those blocks preserve shared-feature
+dependence; they are not an independent-failure count. All 12 overall
+strict/task × 30/90-day × 0/5/30-minute slices are `NOISE-LEVEL` after
+best-candidate selection is included in the null (selective p = 0.070–0.567).
+The removed sandbagging demo and private analysis memory are not reproducible
+evidence from this repository and should not be cited for numeric performance.
+The reproducible boundary is instead the synthetic twin replay documented in
+[`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md): matched-confidence
+concealment is in-band observationally equivalent, while an overclaiming control
+remains visible to Integrity. It is a fixture result, not a real-model
+concealment measurement.
 
 The 2026-08-11 run repeated the already-documented frozen command solely to
-replace stale public wording; it does not alter the 2026-12-01 preregistered
-confirmatory read or its stop rule.
+replace stale public wording. It is a dated descriptive snapshot, not the
+2026-12-01 preregistered confirmatory read and not a standing AUC bound.
 
 Compact run provenance and all 12 overall rows are preserved in
 [`operations/eisv-ablation-frozen-2026-08-09.md`](operations/eisv-ablation-frozen-2026-08-09.md).
@@ -94,6 +110,7 @@ Compact run provenance and all 12 overall rows are preserved in
 | `scripts/analysis/outcome_validation.py` ✓ | Buckets agent-days by legacy→grounded basin-flip; outcome rates per bucket | Console table + `--csv`; tool | current |
 | `scripts/analysis/prospective_prediction_cohort.py` ✓ | Counts registry-bound holdout predictions (plumbing only, no claim) | Markdown cohort summary | current |
 | `scripts/analysis/validate_basin_gate.py` ✓ | Validates #689 basin-health gate never raises risk; healthy wobbles stay safe | Console PASS/FAIL + exit; hardcoded 06-13 Sentinel false-pause fixture | current |
+| `tests/test_calibrated_capability_concealment.py` ✓ | Replays matched-confidence synthetic twins through the deployed calibration/sensor/EMA/assessment path | Fixture-demonstrated in-band observational equivalence; not a real-model concealment eval | current |
 | `scripts/analysis/validate_theoretical_foundations.py` ✓ | Greps `governance_core` source for ODE/coherence terms vs theory doc | Pass/fail console | **⚠ won't run by default** — needs `governance_core/` source symlink; brittle exact-string greps |
 | ~~`demos/frt_autonomy_sandbagging/`~~ (removed) | Historical model-organism probe | Not independently reproducible from this repo; do not cite its numeric result | **removed** as out-of-scope (#1043, see `REPO_SCOPE.md`) |
 | ~~`demos/frt_autonomy_sandbagging/real_llm_probe.py`~~ (removed) | Historical real-LLM extension | Not independently reproducible from this repo; do not cite its numeric result | **removed** with the demo (#1043) |
@@ -117,7 +134,7 @@ claim that it produces lift.
 | Outcome label | External and machine-checked: a numerical correctness gate (`correct` at `rtol=atol=1e-2`) plus continuous `speedup_vs_baseline` against a hardware-verified fp16 matmul baseline |
 | Why a candidate | The outcome is not authored, scored, or observed by the agent that produced the work, and the attempts are independent draws on an identical task. That is the property organic fleet telemetry lacks — there the tool-failure population and the EISV-bearing population are disjoint (see headline above) |
 | Blocking gap | **No paired governance telemetry exists.** The lab's check-in and hypothesis logs are empty scaffolding (0 rows), and the rounds predate the 2026-07-31 instrumentation change, so no server-side state vector was captured for any attempt |
-| Scale | 6 attempts across a single task family — far below the ~100 independent bad clusters at which the ≈ 0.05 AUC bound is measured |
+| Scale | 6 attempts across a single task family; not comparable to the stop rule's prior-state blocks, and insufficiently instrumented to enter its trusted-anchor cohort |
 
 Usable only if re-generated with identities bound at spawn and check-ins landing
 during the attempt. As it stands the corpus supplies outcome labels with nothing

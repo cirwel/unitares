@@ -239,6 +239,41 @@ class TestSyncToolMapping:
         assert result.inference is not None
         assert result.inference.host_id == "ollama:local"
 
+    def test_delegate_inference_maps_tool_and_timeout(self):
+        client = SyncGovernanceClient(transport="rest")
+        captured = {}
+
+        def fake_call(tool_name, arguments, **kwargs):
+            captured.update({
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "timeout": kwargs.get("timeout"),
+            })
+            return {
+                "success": True,
+                "response": "review",
+                "models_used": ["claude-opus-5"],
+                "inference": {
+                    "schema": "unitares.inference_result.v0",
+                    "host_id": "claude:host-adapter",
+                    "models_used": ["claude-opus-5"],
+                },
+            }
+
+        client.call_tool = fake_call
+        result = client.delegate_inference(
+            "review this",
+            model="claude-opus-5",
+            task_type="review",
+            timeout_s=60,
+        )
+
+        assert captured["tool_name"] == "delegate_inference"
+        assert captured["arguments"]["host_id"] == "claude:host-adapter"
+        assert captured["arguments"]["model"] == "claude-opus-5"
+        assert captured["timeout"] == 135.0
+        assert result.models_used == ["claude-opus-5"]
+
     def test_list_inference_hosts_maps_tool(self):
         client = SyncGovernanceClient(transport="rest")
         calls = []

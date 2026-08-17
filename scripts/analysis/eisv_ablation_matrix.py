@@ -6,6 +6,10 @@ of depending on ad-hoc shell loops. It still makes the same limited claim: do
 EISV/prior-state candidates beat the boring previous-outcome baseline on both
 ranking and calibration in each slice?
 
+The default cohort uses trusted external anchors with a joinable prior-state
+snapshot. ``--anchor-scope all`` remains available only for reproducing the
+historical contaminated series.
+
 Because it reports the BEST candidate per slice, the table also reports the null
 distribution of that maximum when EISV readings are permuted between clusters.
 Read `AUC delta` against `Null max median`, never against zero, and read `Bad`
@@ -474,12 +478,13 @@ def qualify_conclusion_with_selective_null(
 
 
 def count_bad_clusters(rows: Sequence[OutcomeRow]) -> tuple[int, int]:
-    """Return (independent bad clusters, distinct bad agents).
+    """Return (bad prior-state permutation blocks, distinct bad agents).
 
     A cluster is one (agent, prior-state snapshot) pair. Prior state is constant
-    within a cluster, so every candidate feature is constant across its rows:
-    N rows sharing a snapshot carry one row's worth of evidence, not N. Reporting
-    `Bad` without this turns an edit-test-retry burst into an apparent sample.
+    within a cluster, so every candidate feature is constant across its rows.
+    Reporting only `Bad` would overcount distinct feature readings in an
+    edit-test-retry burst. The block count does not establish independence of
+    outcomes between clusters.
     """
     clusters: set[tuple[str, int | None]] = set()
     agents: set[str] = set()
@@ -739,8 +744,9 @@ def format_matrix_report(
             "get, so read them together.",
             "",
             "**Read `Bad` against `Bad clusters`.** Features are constant within a "
-            "cluster, so clusters are the independent unit: an edit-test-retry burst "
-            "of N failures is one event, not N.",
+            "cluster, so an edit-test-retry burst does not contribute N distinct "
+            "feature readings. Clusters are permutation blocks, not proof of "
+            "independent outcomes; report bad rows and agents alongside them.",
             "",
             "| " + " | ".join(columns) + " |",
             "|" + "|".join("---" for _ in columns) + "|",
@@ -848,7 +854,7 @@ async def build_matrix_from_db(
     uncertainty_resamples: int = 0,
     uncertainty_seed: int = 0,
     selective_null_resamples: int = 0,
-    anchor_scope: str = "all",
+    anchor_scope: str = "trusted",
     telemetry_strata: Sequence[str] = (),
     as_of: datetime | None = None,
 ) -> list[AblationMatrixRow]:
@@ -972,12 +978,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--anchor-scope",
         choices=("trusted", "soft", "all"),
-        default="all",
+        default="trusted",
         help=(
             "Which outcomes may anchor the slice (src.grounding.outcome_anchors). "
-            "Default 'all' preserves the historical tracked series and is the "
-            "contaminated scope; 'trusted' requires external_signal plus a "
-            "joinable EISV snapshot."
+            "Default 'trusted' requires external_signal plus a joinable EISV "
+            "snapshot; 'all' is the legacy contaminated scope retained only "
+            "for historical reproduction."
         ),
     )
     parser.add_argument(

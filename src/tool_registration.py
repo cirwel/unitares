@@ -429,10 +429,41 @@ ALIAS_SCHEMA_KEEP = {
     }),
 }
 
+# Alias-specific advertised schema overrides. The canonical knowledge router
+# remains full-by-default for compatibility; the task-verb read alias returns
+# its compact experience envelope unless the caller explicitly requests full.
+# FastMCP reconstructs schemas from wrapper signatures, so the override is
+# applied both before wrapper creation and to the registered Tool below.
+ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
+    "search_shared_memory": {
+        "response_mode": {
+            "default": "compact",
+            "description": (
+                "Friendly read-envelope mode. Defaults to compact, which returns "
+                "the top matches and omits the repeated canonical payload. Use "
+                "full to include raw_governance with the complete result set."
+            ),
+        },
+    },
+}
+
 # Auto-injected/plumbing params every alias keeps regardless of its keep-list.
 _ALIAS_ALWAYS_KEEP = frozenset({
     "agent_id", "client_session_id", "continuity_token",
 })
+
+
+def _apply_alias_schema_property_overrides(alias_name: str, schema: dict) -> None:
+    """Apply documented property overrides in place when the property exists."""
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    if not isinstance(properties, dict):
+        return
+    for parameter, updates in ALIAS_SCHEMA_PROPERTY_OVERRIDES.get(
+        alias_name, {}
+    ).items():
+        definition = properties.get(parameter)
+        if isinstance(definition, dict):
+            definition.update(updates)
 
 
 def auto_register_all_tools(mcp):
@@ -593,6 +624,7 @@ def _register_common_aliases(mcp):
                 actual_schema["required"] = [
                     r for r in req if r != "action" and r not in dropped
                 ]
+        _apply_alias_schema_property_overrides(alias_name, actual_schema)
 
         try:
             wrapper = create_typed_wrapper(
@@ -604,13 +636,18 @@ def _register_common_aliases(mcp):
             )
             desc = f"{info.migration_note or f'Alias for {actual}'}"
             mcp.tool(description=desc, structured_output=False)(wrapper)
-            if actual in EXTRA_ARGUMENT_PASSTHROUGH_TOOLS:
-                tool_manager = getattr(mcp, "_tool_manager", None)
-                registered_tool = (
-                    tool_manager.get_tool(alias_name)
-                    if tool_manager and hasattr(tool_manager, "get_tool")
-                    else None
+            tool_manager = getattr(mcp, "_tool_manager", None)
+            registered_tool = (
+                tool_manager.get_tool(alias_name)
+                if tool_manager and hasattr(tool_manager, "get_tool")
+                else None
+            )
+            if registered_tool is not None:
+                _apply_alias_schema_property_overrides(
+                    alias_name,
+                    getattr(registered_tool, "parameters", {}),
                 )
+            if actual in EXTRA_ARGUMENT_PASSTHROUGH_TOOLS:
                 if registered_tool is not None:
                     enable_extra_argument_passthrough(registered_tool)
             count += 1

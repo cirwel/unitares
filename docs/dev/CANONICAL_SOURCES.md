@@ -1,6 +1,6 @@
 # Canonical Sources
 
-**Last Updated:** 2026-08-11 (re-verified: all listed runtime sources and thin-doc targets resolve)
+**Last Updated:** 2026-08-17 (re-verified: all listed runtime sources and thin-doc targets resolve)
 
 Use this page to resolve architecture disputes and doc drift.
 
@@ -26,6 +26,9 @@ and grep all reader-facing docs for the old claim **in the same PR**.
 | Claim | Canonical wording | Owner |
 |-------|-------------------|-------|
 | Redis posture | Redis is the de-facto primary session store; the server boots without it in a degraded local-only mode (fine for the demo; sessions won't persist). It is not "optional" in production. | `docs/UNIFIED_ARCHITECTURE.md` · `docs/proposals/redis-retirement-v0.md` |
+| Database bootstrap | The server refuses an uninitialized database. Docker initializes an empty volume through `db/postgres/docker-initdb.sh`; advanced bare-metal installs and resets run `scripts/install/bootstrap_postgres.sh --apply` before restart. | `src/db/postgres_backend.py` · `db/postgres/docker-initdb.sh` · `scripts/install/bootstrap_postgres.sh` |
+| SDK publication | `unitares-sdk` 0.1.0 is published on PyPI. Use the matching Git tag only for deliberate unreleased-source testing. | `agents/sdk/README.md` · `COMPATIBILITY.md` |
+| REST tool-call envelope | `POST /v1/tools/call` accepts `{"name":"<tool>","arguments":{...}}`; the key is `name`, not `tool`. | `src/http_api.py` · `scripts/unitares` · `tests/test_http_endpoints.py` |
 | Warmup and baselining | Three stages are distinct with the current constants: check-ins 1–2 use the Φ cold-start prior because behavioral confidence is below 0.3; from check-in 3 the behavioral assessment is authoritative but uses fixed universal thresholds; at check-in 25, `baseline_confidence >= 0.8` against the 30-update target enables self-relative z-score scoring. Absolute safety floors and basin gates remain in force. | `docs/EISV_COMPUTATION.md` · `src/behavioral_state.py` · `src/cold_start_risk_confirmation.py` · `src/governance_monitor.py` |
 | Post-warmup verdict authority | Post-warmup the verdict IS the behavioral assessment (z-scores vs the agent's own baseline, absolute floors and basin gates always in force); Φ is telemetry by default. | `docs/EISV_COMPUTATION.md` · `config/governance_config.py` (`phi_telemetry_only`) |
 | Outcome-evidence trust | `record_result()` records an outcome claim and its provenance; it does not make an agent-authored result independently true. CI-, tool-, or operator-authored evidence can be a stronger calibration anchor. If the monitored process controls both confidence and every outcome record, it can forge a consistent story. | `docs/SCOPE_AND_THREAT_MODEL.md` · `src/grounding/outcome_anchors.py` · `src/mcp_handlers/observability/outcome_events.py` |

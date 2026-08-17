@@ -6,9 +6,15 @@
 
 </div>
 
-**Status:** v2.18.0. Sustained operation is documented in one long-running
-maintainer deployment. External adoption remains unvalidated, and the current
-outcome-lift evaluation found no result beyond a selection-aware null.
+**Status:** v2.18.0. Continuously operated since November 2025 under a single
+operator: 4,573,890 audit and telemetry events, 71,141 EISV state observations,
+and six long-running resident agents, one of them on separate hardware.
+
+EISV is proprioceptive state estimation, not an outcome oracle. The 2026-08-09
+outcome-lift evaluation tested the oracle reading and returned a selection-aware
+null; the instrument-frame validation the system does claim — reliability,
+faithfulness under intervention, calibration — is scoped but only partly built.
+[Evidence and limits](#evidence-and-limits) gives the per-number scope.
 
 An agent forty turns into a task reports high confidence while its tests are
 failing. Every individual tool call was allowed, so an action-level guardrail may
@@ -29,8 +35,7 @@ It is a self-hosted MCP/HTTP service, not an agent framework or hosted platform.
 
 **Maintainer dogfood since November 2025 · 4.5M+ recorded audit/telemetry events.**
 
-That count is evidence of sustained operation in one maintainer-run environment,
-not external adoption or governance efficacy.
+Per-number scope and limits: [Evidence and limits](#evidence-and-limits).
 
 [![Quickstart](https://img.shields.io/badge/▶-quickstart-5eead4?style=for-the-badge&labelColor=0f171f)](#quickstart)
 [![Evidence](https://img.shields.io/badge/evidence-check_it-f5a623?style=for-the-badge&labelColor=0f171f)](#evidence-and-limits)
@@ -49,10 +54,22 @@ not external adoption or governance efficacy.
 | **Policy and recovery** | Return a named action, reason, and next step; enforce pauses on governed write surfaces; support a `reflect → validate → resume` path. |
 | **Operator visibility** | Inspect lifecycle, health, state, evidence, and policy history through MCP/HTTP APIs and a self-hosted dashboard. |
 
-The core loop is deliberately small. Optional modules add a provenance-aware
-knowledge graph, structured review, reference resident agents, and Elixir/OTP
-coordination for leases, handoffs, dispatch, and supervision. They can be
-used independently of the basic check-in loop.
+The core loop is deliberately small. Four further surfaces build **on** that
+record rather than beside it. Each is independently usable and none is required
+to run the check-in loop.
+
+| Surface | What it adds |
+|---|---|
+| **Shared knowledge graph** | A provenance-aware store agents search before acting and write findings back to, with tagging, supersede, and archival lifecycle. |
+| **Structured review** | Agents request review of each other's work; theses, disagreement, and resolution are recorded rather than resolved in chat. |
+| **Reference resident agents** | Long-running sweep, audit, triage, and narration agents shipped as working examples, not as a framework to subclass. |
+| **Elixir/OTP coordination** | Leases, handoffs, dispatch, and supervision for agents that outlive a single process. |
+
+The identity binding is what connects them: an accountable write is what makes a
+stored finding, a review, or a held lease attributable to a specific process
+rather than to a label. What the system does **not** currently measure is
+whether the review and coordination surfaces change an agent's subsequent
+behavior; it records that they ran and what they concluded.
 
 The public [`unitares-sdk`](agents/sdk/README.md) handles connection, identity,
 check-ins, heartbeats, and knowledge participation for resident agents. Its
@@ -66,6 +83,12 @@ cd unitares
 docker compose up -d --wait
 make demo
 ```
+
+This release-tagged Docker Compose flow is the **Tier-1 install contract** for a
+local, single-operator deployment. It brings up PostgreSQL/AGE/pgvector, Redis,
+and the server on loopback without requiring manual database initialization.
+The source-based macOS playbook is an advanced bare-metal path, not a second
+default installer.
 
 `make demo` onboards a fresh process and sends six check-ins over the real API.
 It prints the response shape, decision reason, state detail, and warmup position.
@@ -174,8 +197,10 @@ policy decisions with named reasons.
 Future experiments can test whether those records are sufficient for exchanging
 cross-operator attestations without centralizing raw telemetry. Cross-governor
 trust, consensus, and enforcement are not deployed guarantees. Experiments
-between mutually distrustful governors remain gated on independent-operator
-validation in the [roadmap](ROADMAP.md).
+between mutually distrustful governors are gated on the **multi-principal trust**
+track in the [roadmap](ROADMAP.md) — a principal who does not share this
+authority is what that claim requires, and it is a separate evidence path from
+the efficacy cohort.
 
 ## Evidence and limits
 
@@ -221,7 +246,7 @@ suitable for the demo.
 |---|---|
 | Evaluator or grant reviewer | [Reviewer Guide](docs/REVIEWER_GUIDE.md) → [computation](docs/EISV_COMPUTATION.md) → [scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md) |
 | Integrator | [Manual](docs/manual/README.md) → [MCP clients](docs/integration/MCP_CLIENTS.md) |
-| Operator | [Install playbook](docs/install/PLAYBOOK.md) → [operator runbook](docs/operations/OPERATOR_RUNBOOK.md) |
+| Operator | [Docker quickstart](#quickstart) → [operator runbook](docs/operations/OPERATOR_RUNBOOK.md); [bare-metal playbook](docs/install/PLAYBOOK.md) for advanced macOS installs |
 | Contributor | [AGENTS.md](AGENTS.md) → [architecture](docs/UNIFIED_ARCHITECTURE.md) → [canonical sources](docs/dev/CANONICAL_SOURCES.md) |
 | Research/provenance reader | [Evaluation index](docs/EVALUATION_INDEX.md) → [ontology](docs/ontology/README.md) → [proposals](docs/proposals/README.md) |
 

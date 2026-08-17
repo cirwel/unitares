@@ -66,11 +66,10 @@ def test_weak_write_assurance_carries_strengthen_breadcrumb():
     )
     assert a["tier"] == "weak"
     hint = a["how_to_strengthen"]
-    # #604: write-path breadcrumb leads with continuity_token (resolves on
-    # stateless transports) — kept in parity with the read-path block.
     assert "continuity_token" in hint
     assert "client_session_id" in hint
-    assert hint.index("continuity_token") < hint.index("client_session_id")
+    assert hint.index("client_session_id") < hint.index("continuity_token")
+    assert "ordinary tool calls" in hint
 
 
 # ── Gate: strict write precondition ────────────────────────────────────

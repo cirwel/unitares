@@ -249,6 +249,7 @@ async def test_run_submits_disagreement_through_protocol(monkeypatch):
     assert onboard_kw["force_new"] is True
     assert onboard_kw["spawn_reason"] == r.SPAWN_REASON
     assert onboard_kw["parent_agent_id"] == "parent-uuid"
+    assert onboard_kw["model_type"] == f"dialectic_reviewer:{r.DEFAULT_MODEL}"
     # The reviewer submits via the `dialectic` umbrella tool (action=...), not the
     # bare submit_* names (which are register=False on the MCP surface).
     dialectic_calls = [a for n, a in calls if n == "dialectic"]
@@ -271,6 +272,9 @@ async def test_run_submits_disagreement_through_protocol(monkeypatch):
     assert anti[0].get("reasoning"), "the antithesis is where the argument goes"
     assert synth[0]["root_cause"] == "shallow"
     assert synth[0]["proposed_conditions"] == ["real fix"]
+    checkin = next(c[1] for c in calls if c[0] == "checkin")
+    assert "backend=ollama" in checkin["response_text"]
+    assert f"models={r.DEFAULT_MODEL}" in checkin["response_text"]
 
 
 @pytest.mark.asyncio

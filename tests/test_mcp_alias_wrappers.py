@@ -29,6 +29,16 @@ def _run_args(run_method, arguments):
     return (arguments,)
 
 
+def test_search_shared_memory_advertises_compact_default():
+    """The friendly read alias is compact by default; canonical knowledge is not."""
+    import src.mcp_server as mcp_server
+
+    tool = mcp_server.mcp._tool_manager.get_tool("search_shared_memory")
+    response_mode = tool.parameters["properties"]["response_mode"]
+    assert response_mode["default"] == "compact"
+    assert "Defaults to compact" in response_mode["description"]
+
+
 @pytest.mark.asyncio
 async def test_sync_state_mcp_wrapper_uses_alias_middleware(monkeypatch):
     import src.mcp_handlers as handlers

@@ -4,7 +4,7 @@ Status: canonical symptom and recovery guide. The user-manual troubleshooting
 chapter points here instead of maintaining a second copy. Use this for failure
 diagnosis and operator recovery, not as the primary architecture reference.
 
-**Last Updated:** August 11, 2026
+**Last Updated:** August 17, 2026
 
 ---
 
@@ -317,18 +317,33 @@ curl http://localhost:8767/health
 
 ### Database Reset (DANGEROUS)
 
-**WARNING: This will delete all agent data!**
+**WARNING: This deletes all agent data. This procedure is only for the advanced
+bare-metal install.** A Docker operator should restore the named Postgres volume
+from a verified backup instead of mixing host and container database commands.
 
 ```bash
+set -euo pipefail
+
 # Backup first!
-pg_dump "$DB_POSTGRES_URL" > backup_$(date +%Y%m%d).sql
+umask 077
+UNITARES_BACKUP_PATH="backup_$(date +%Y%m%d_%H%M%S).dump"
+pg_dump --format=custom --file "$UNITARES_BACKUP_PATH" "$DB_POSTGRES_URL"
+pg_restore --list "$UNITARES_BACKUP_PATH" >/dev/null
+
+# Stop the server so it cannot reconnect while the database is replaced
+launchctl unload ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
 
 # Reset PostgreSQL (use an admin DB on the same server)
-psql "${DB_POSTGRES_ADMIN_URL:-postgresql://postgres:postgres@localhost:5432/postgres}" -c "DROP DATABASE IF EXISTS governance;"
-psql "${DB_POSTGRES_ADMIN_URL:-postgresql://postgres:postgres@localhost:5432/postgres}" -c "CREATE DATABASE governance;"
+psql "${DB_POSTGRES_ADMIN_URL:-postgresql://localhost:5432/postgres}" -c "DROP DATABASE IF EXISTS governance WITH (FORCE);"
+psql "${DB_POSTGRES_ADMIN_URL:-postgresql://localhost:5432/postgres}" -c "CREATE DATABASE governance;"
 
-# Restart server (schema auto-creates)
-launchctl unload ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
+# Reinitialize explicitly. The server refuses an uninitialized schema; it does
+# not auto-create one.
+export DB_POSTGRES_URL="postgresql://localhost:5432/governance"
+./scripts/install/bootstrap_postgres.sh --apply
+python3 scripts/dev/unitares_doctor.py --mode local --db-url "$DB_POSTGRES_URL"
+
+# Restart only after the bootstrap and doctor succeed
 launchctl load ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
 ```
 
@@ -347,7 +362,3 @@ launchctl load ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
 # MCP health check tool
 curl http://localhost:8767/health | python3 -m json.tool
 ```
-
----
-
-*Last updated: June 2026*

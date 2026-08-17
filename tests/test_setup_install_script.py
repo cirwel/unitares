@@ -72,6 +72,26 @@ def test_run_doctor_parses_pass_payload(setup_mod, monkeypatch):
     assert result["exit_code"] == 0
 
 
+def test_run_doctor_uses_homebrew_trust_dsn_by_default(setup_mod, monkeypatch):
+    captured = {}
+
+    class FakeProc:
+        returncode = 0
+        stdout = '{"mode":"local","results":[],"exit_code":0}'
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return FakeProc()
+
+    monkeypatch.delenv("DB_POSTGRES_URL", raising=False)
+    monkeypatch.setattr(setup_mod.subprocess, "run", fake_run)
+    setup_mod.run_doctor()
+
+    db_arg = captured["cmd"].index("--db-url") + 1
+    assert captured["cmd"][db_arg] == "postgresql://localhost:5432/governance"
+
+
 def test_run_doctor_handles_nonzero_exit_with_valid_json(setup_mod, monkeypatch):
     """Doctor exits 1 when any local check fails; setup must NOT treat that
     as an error — the JSON payload is still complete and is the input to
@@ -124,8 +144,22 @@ def test_remediation_for_postgres_fail(setup_mod):
 def test_remediation_for_pg_extensions_fail(setup_mod):
     payload = _doctor_payload(("pg_extensions", "fail", "missing: age, vector"))
     items = setup_mod.build_remediation(payload)
-    assert "psql -U postgres -d governance" in items[0].command
+    assert "postgresql://localhost:5432/governance" in items[0].command
+    assert "-U postgres" not in items[0].command
     assert "init-extensions.sql" in items[0].command
+
+
+def test_remediation_for_redis_continuity_warning(setup_mod):
+    payload = _doctor_payload(("redis_continuity", "warn", "degraded-local"))
+    items = setup_mod.build_remediation(payload)
+    assert "brew install redis" in items[0].command
+    assert "not production session continuity" in items[0].note
+
+
+def test_schema_remediation_uses_canonical_bootstrap(setup_mod):
+    payload = _doctor_payload(("schema_migrations", "fail", "missing"))
+    items = setup_mod.build_remediation(payload)
+    assert items[0].command == "./scripts/install/bootstrap_postgres.sh --apply"
 
 
 def test_remediation_for_secrets_wrong_mode(setup_mod):

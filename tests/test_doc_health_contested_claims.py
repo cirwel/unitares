@@ -70,6 +70,51 @@ def test_flags_optional_redis_cache_wording(tmp_path, monkeypatch, doc_health):
     assert any("de-facto primary session store" in warning for warning in warnings)
 
 
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "Redis is a session cache only and has a graceful fallback.",
+        "Redis (optional) provides sticky session bindings.",
+        "# Redis optional cache",
+    ],
+)
+def test_flags_other_stale_redis_postures(
+    tmp_path, monkeypatch, doc_health, claim
+):
+    warnings = _warnings(tmp_path, monkeypatch, doc_health, claim)
+    assert any("de-facto primary session store" in warning for warning in warnings)
+
+
+def test_flags_schema_auto_create_recovery(tmp_path, monkeypatch, doc_health):
+    warnings = _warnings(
+        tmp_path,
+        monkeypatch,
+        doc_health,
+        "Restart the server after reset; the schema auto-creates.",
+    )
+    assert any("refuses an uninitialized database" in warning for warning in warnings)
+
+
+def test_flags_pre_pypi_sdk_claim(tmp_path, monkeypatch, doc_health):
+    warnings = _warnings(
+        tmp_path,
+        monkeypatch,
+        doc_health,
+        "Until its first PyPI release, install the SDK from Git.",
+    )
+    assert any("unitares-sdk 0.1.0 is published" in warning for warning in warnings)
+
+
+def test_flags_stale_rest_tool_key(tmp_path, monkeypatch, doc_health):
+    warnings = _warnings(
+        tmp_path,
+        monkeypatch,
+        doc_health,
+        "curl -d '{\"tool\":\"health_check\",\"arguments\":{}}'",
+    )
+    assert any("accepts `name` plus `arguments`" in warning for warning in warnings)
+
+
 def test_flags_unqualified_unforgeable_outcome_claim(tmp_path, monkeypatch, doc_health):
     warnings = _warnings(
         tmp_path,

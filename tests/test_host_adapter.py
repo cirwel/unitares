@@ -30,6 +30,7 @@ def test_available_requires_flag_cli_and_bearer(monkeypatch):
     # cli absent -> unavailable
     monkeypatch.setenv("UNITARES_HOST_ADAPTER_ENABLED", "1")
     monkeypatch.setattr(ha.shutil, "which", lambda c: None)
+    monkeypatch.setattr(ha, "_is_executable", lambda _path: False)
     assert ha.host_adapter_available("codex:host-adapter") is False
 
     # bearer absent -> unavailable
@@ -42,6 +43,25 @@ def test_available_requires_flag_cli_and_bearer(monkeypatch):
     assert ha.host_adapter_available("nope:host-adapter") is False
 
 
+def test_resolve_claude_cli_from_operator_override(monkeypatch):
+    monkeypatch.setenv("UNITARES_CLAUDE_CLI", "/opt/operator/bin/claude")
+    monkeypatch.setattr(
+        ha,
+        "_is_executable",
+        lambda path: path == "/opt/operator/bin/claude",
+    )
+    monkeypatch.setattr(ha.shutil, "which", lambda _cli: None)
+    assert ha.resolve_host_cli("claude:host-adapter") == "/opt/operator/bin/claude"
+
+
+def test_resolve_claude_cli_from_user_local_bin(monkeypatch):
+    monkeypatch.delenv("UNITARES_CLAUDE_CLI", raising=False)
+    monkeypatch.setattr(ha.shutil, "which", lambda _cli: None)
+    expected = str(ha.Path.home() / ".local" / "bin" / "claude")
+    monkeypatch.setattr(ha, "_is_executable", lambda path: path == expected)
+    assert ha.resolve_host_cli("claude:host-adapter") == expected
+
+
 def test_extract_text_codex_strips_marker_and_footer():
     out = ["warning: noise", "codex", "answer line 1", "answer line 2", "tokens used", "1234"]
     assert ha._extract_text(out, family="openai_codex") == "answer line 1\nanswer line 2"
@@ -50,6 +70,37 @@ def test_extract_text_codex_strips_marker_and_footer():
 def test_extract_text_non_codex_passthrough():
     out = ["the claude answer", "second line"]
     assert ha._extract_text(out, family="anthropic_claude") == "the claude answer\nsecond line"
+
+
+def test_extract_claude_json_preserves_exact_models_usage_and_cost():
+    payload = {
+        "subtype": "success",
+        "result": "CLAUDE ANSWER",
+        "total_cost_usd": 0.0318,
+        "duration_api_ms": 923,
+        "usage": {
+            "input_tokens": 4,
+            "output_tokens": 7,
+            "cache_read_input_tokens": 11,
+        },
+        "modelUsage": {
+            "claude-opus-5": {"inputTokens": 4, "outputTokens": 7},
+            "claude-haiku-4-5-20251001": {"inputTokens": 1, "outputTokens": 2},
+        },
+    }
+    text, metadata = ha._extract_cli_result(
+        [json.dumps(payload)],
+        family="anthropic_claude",
+    )
+    assert text == "CLAUDE ANSWER"
+    assert metadata["models_used"] == [
+        "claude-haiku-4-5-20251001",
+        "claude-opus-5",
+    ]
+    assert metadata["model_used"] is None
+    assert metadata["tokens_used"] == 22
+    assert metadata["cost_usd"] == 0.0318
+    assert "multiple models" in metadata["warnings"][0]
 
 
 def test_invoke_disabled(monkeypatch):
@@ -85,7 +136,7 @@ class _FakeResp:
 def _patch_httpx(monkeypatch, responses):
     """Patch httpx.AsyncClient so successive .post() calls (spawn, then await)
     return `responses` in order, across the two AsyncClient instantiations."""
-    state = {"i": 0}
+    state = {"i": 0, "calls": []}
 
     class _Client:
         async def __aenter__(self):
@@ -95,6 +146,7 @@ def _patch_httpx(monkeypatch, responses):
             return False
 
         async def post(self, url, **kw):
+            state["calls"].append((url, kw))
             resp = responses[state["i"]]
             state["i"] += 1
             return resp
@@ -102,6 +154,7 @@ def _patch_httpx(monkeypatch, responses):
     import httpx
 
     monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: _Client())
+    return state
 
 
 def _enable(monkeypatch):
@@ -123,6 +176,70 @@ def test_invoke_happy_path(monkeypatch):
     assert r["exit_status"] == 0
     assert r["provenance"]["model_family"] == "openai_codex"
     assert r["provenance"]["transport"] == "host_adapter"
+
+
+def test_invoke_claude_is_safe_and_model_is_env_quoted(monkeypatch):
+    _enable(monkeypatch)
+    claude_payload = {
+        "subtype": "success",
+        "result": "ANSWER",
+        "usage": {"input_tokens": 2, "output_tokens": 3},
+        "modelUsage": {"claude-sonnet-4-5": {}},
+    }
+    state = _patch_httpx(monkeypatch, [
+        _FakeResp(201, {"ok": True, "agent_id": "ag-claude"}),
+        _FakeResp(200, {
+            "result": {"exit_status": 0, "output": [json.dumps(claude_payload)]},
+        }),
+    ])
+
+    r = _run(ha.invoke_host_adapter(
+        "claude:host-adapter",
+        "review this",
+        timeout_s=5,
+        model="claude-sonnet-4-5",
+    ))
+
+    spawn_spec = state["calls"][0][1]["json"]
+    assert spawn_spec["env"]["HA_PROMPT"] == "review this"
+    assert spawn_spec["env"]["HA_MODEL"] == "claude-sonnet-4-5"
+    assert spawn_spec["env"]["HA_CLI"] == "/usr/bin/claude"
+    shell_command = spawn_spec["args"][1]
+    assert "--safe-mode" in shell_command
+    assert '--tools ""' in shell_command
+    assert "--no-session-persistence" in shell_command
+    assert "--output-format json" in shell_command
+    assert '"$HA_MODEL"' in shell_command
+    assert r["text"] == "ANSWER"
+    assert r["provenance"]["model_used"] == "claude-sonnet-4-5"
+    assert r["provenance"]["models_used"] == ["claude-sonnet-4-5"]
+
+
+def test_invoke_claude_provider_error_is_not_reported_as_success(monkeypatch):
+    _enable(monkeypatch)
+    claude_payload = {
+        "subtype": "error_during_execution",
+        "is_error": True,
+        "result": "provider failed",
+        "usage": {},
+        "modelUsage": {},
+    }
+    _patch_httpx(monkeypatch, [
+        _FakeResp(201, {"ok": True, "agent_id": "ag-claude-error"}),
+        _FakeResp(200, {
+            "result": {"exit_status": 0, "output": [json.dumps(claude_payload)]},
+        }),
+    ])
+
+    r = _run(ha.invoke_host_adapter(
+        "claude:host-adapter",
+        "review this",
+        timeout_s=5,
+    ))
+
+    assert r["ok"] is False
+    assert r["error"] == "Claude CLI reported an error result"
+    assert r["provenance"]["provider_is_error"] is True
 
 
 def test_invoke_still_running_on_await_timeout(monkeypatch):
@@ -169,18 +286,11 @@ def test_registry_reflects_availability(monkeypatch):
     assert hosts2["codex:host-adapter"]["available"] is False
 
 
-def test_host_adapters_accept_no_host_id(monkeypatch):
+def test_only_claude_adapter_is_agent_callable(monkeypatch):
     """Availability is not callability.
 
-    ``invoke_host_adapter()`` has no production caller, so no tool will accept
-    the Codex/Claude adapters as a ``host_id`` — at any flag setting. The
-    registry must say so, or ``list_inference_hosts`` advertises a host nothing
-    can invoke. When a caller lands, update ``accepts_host_id_from`` and
-    ``implementation_status`` in the same change and this test with them.
-
-    The flag is varied deliberately: the whole point is that enabling the opt-in
-    does NOT make these callable, so an implementation that derived the field
-    from ``host_adapter_available()`` would pass the disabled half and fail here.
+    Reachability describes a routing contract and therefore does not flap with
+    runtime readiness. Claude has delegate_inference; Codex remains unwired.
     """
     from src.mcp_handlers.support import inference_registry as reg
 
@@ -190,11 +300,12 @@ def test_host_adapters_accept_no_host_id(monkeypatch):
         else:
             monkeypatch.delenv("UNITARES_HOST_ADAPTER_ENABLED", raising=False)
         hosts = {h["host_id"]: h for h in reg.list_inference_hosts()}
-        for host_id in ("codex:host-adapter", "claude:host-adapter"):
-            assert hosts[host_id]["accepts_host_id_from"] == [], (
-                f"{host_id} claims host_id validity with flag enabled={enabled}"
-            )
-            assert hosts[host_id]["implementation_status"] == "built_unwired"
+        assert hosts["codex:host-adapter"]["accepts_host_id_from"] == []
+        assert hosts["codex:host-adapter"]["implementation_status"] == "built_unwired"
+        assert hosts["claude:host-adapter"]["accepts_host_id_from"] == [
+            "delegate_inference"
+        ]
+        assert hosts["claude:host-adapter"]["implementation_status"] == "active"
 
     # The synchronous hosts are the ones call_model can actually serve.
     hosts = {h["host_id"]: h for h in reg.list_inference_hosts()}
