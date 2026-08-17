@@ -362,6 +362,18 @@ TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
         "related_to": ["get_discovery_details", "search_knowledge_graph"],
         "category": "knowledge"
     },
+    # Intuitive aliases for knowledge (tool_stability); without entries here
+    # list_tools renders them with hint "Tool: <name>" and category null.
+    "store_finding": {
+        "depends_on": [],
+        "related_to": ["knowledge"],
+        "category": "knowledge",
+    },
+    "update_finding": {
+        "depends_on": ["store_finding"],
+        "related_to": ["knowledge"],
+        "category": "knowledge",
+    },
     # Identity Tools - Dec 2025: onboard() is portal, identity() is primary
     "onboard": {
         "depends_on": [],
@@ -605,6 +617,14 @@ TOOL_DESCRIPTION_OVERRIDES: Dict[str, str] = {
         f"{EISV_INLINE_SUMMARY}"
     ),
     "search_shared_memory": "Search shared memory before writing duplicate discoveries",
+    "store_finding": (
+        "Store a structured finding in shared memory; intuitive alias for "
+        "knowledge(action='store')."
+    ),
+    "update_finding": (
+        "Update a stored finding's status or details; intuitive alias for "
+        "knowledge(action='update')."
+    ),
     "record_result": (
         "Record real task/tool/test outcome for calibration. "
         f"{EISV_INLINE_SUMMARY}"
