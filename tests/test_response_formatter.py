@@ -1109,13 +1109,14 @@ class TestEmitMirrorSignalRecords:
         meta.total_updates = 12
         logger_mock = MagicMock()
         with patch("src.audit_log.get_audit_log", return_value=logger_mock):
-            _emit_mirror_signal_records(data, "mirror", meta)
+            _emit_mirror_signal_records(data, "mirror", meta, session_id="session-123")
         logger_mock.log_mirror_signal_emit.assert_called_once()
         kwargs = logger_mock.log_mirror_signal_emit.call_args.kwargs
         assert kwargs["surfaced"] is True
         assert kwargs["response_mode"] == "mirror"
         assert kwargs["update_index"] == 12
         assert kwargs["agent_id"] == "test-agent-123"
+        assert kwargs["session_id"] == "session-123"
         # internal key always consumed
         assert "_mirror_signal_records" not in data
 

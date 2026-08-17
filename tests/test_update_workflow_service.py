@@ -124,7 +124,7 @@ async def test_run_process_update_workflow_happy_path():
         mcp_server=MagicMock(),
         agent_id="agent-123",
         agent_uuid="uuid-123",
-        arguments={},
+        arguments={"client_session_id": "session-123"},
         identity_assurance={"tier": "strong"},
         result={"status": "ok"},
         meta=None,
@@ -144,12 +144,13 @@ async def test_run_process_update_workflow_happy_path():
          patch("src.mcp_handlers.updates.phases.prepare_unlocked_inputs", new=AsyncMock()), \
          patch("src.mcp_handlers.updates.phases.execute_post_update_effects", new=AsyncMock()), \
          patch("src.mcp_handlers.updates.pipeline.run_enrichment_pipeline", new=AsyncMock()), \
-         patch("src.mcp_handlers.response_formatter.format_response", return_value={"status": "formatted"}), \
+         patch("src.mcp_handlers.response_formatter.format_response", return_value={"status": "formatted"}) as mock_format, \
          patch("src.services.update_workflow_service.serialize_process_update_response", return_value=["done"]) as mock_serialize:
         result = await run_process_update_workflow(ctx)
 
     assert result == ["done"]
     mock_serialize.assert_called_once()
+    assert mock_format.call_args.kwargs["session_id"] == "session-123"
     assert ctx.monitor == {"dummy": True}
 
 
