@@ -50,9 +50,11 @@ clears p < 0.05; the smallest selective p is 0.070.
 The frozen rows contain no `eisv.telemetry.v1` envelopes, so the marginal
 source/warmup/enforcement/missingness output is entirely
 `legacy/no-envelope`. The result does not estimate a causal policy effect and
-does not show that any incident was prevented. `Bad clusters`, not raw bad rows,
-are the closer independent unit because multiple outcomes can share one prior
-state snapshot.
+does not show that any incident was prevented. `Bad clusters` counts
+`(agent, prior-state snapshot)` permutation blocks because multiple outcomes can
+share one constant feature reading. It is not proof that outcomes are
+independent between blocks, so the table reports bad rows and agents alongside
+the block count.
 
 The preregistered stop rule and next confirmatory date live in
 [`../proposals/eisv-outcome-grounding-stop-rule-v0.md`](../proposals/eisv-outcome-grounding-stop-rule-v0.md).
