@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Guided UNITARES install wizard.
+"""Advanced bare-metal UNITARES setup assistant.
 
 Runs scripts/dev/unitares_doctor.py for diagnosis, prints remediation commands
 for any failing checks, scaffolds ~/.unitares/ and ~/.config/cirwel/secrets.env
 under --apply, and generates copy-pasteable stdio MCP snippets for detected
 clients (Claude Code, Codex, Gemini CLI, Copilot CLI).
+
+This is not the supported Tier-1 installer. The release-tagged Docker Compose
+quickstart in README.md is the default install path; this helper exists for
+operators who deliberately choose the source-based macOS playbook.
 
 Setup PRINTS commands. It does NOT install postgres, run SQL, invoke brew, or
 modify MCP client config files. The two filesystem mutations under --apply are
@@ -66,15 +70,18 @@ class PlanItem:
 
 
 # Remediation commands keyed by doctor finding name. Lookup misses fall through
-# to a generic "see doctor output" message. The schema-migrations entry is
-# computed at runtime because it depends on which migration files exist.
+# to a generic "see doctor output" message. The schema-migrations entry routes
+# through the canonical bootstrap separately so ordering has one owner.
 _REMEDIATIONS = {
     "postgres_running":
         "brew install postgresql@17 && brew services start postgresql@17",
+    "redis_continuity":
+        "brew install redis && brew services start redis",
     "governance_database":
-        "createdb -h localhost -U postgres governance",
+        "createdb -h localhost governance",
     "pg_extensions":
-        "psql -U postgres -d governance -f db/postgres/init-extensions.sql",
+        "psql \"${DB_POSTGRES_URL:-postgresql://localhost:5432/governance}\" "
+        "-f db/postgres/init-extensions.sql",
     "secrets_file":  # mode-fail variant; the missing-file variant is phase 2
         "chmod 600 ~/.config/cirwel/secrets.env",
     "anchor_directory":
@@ -83,8 +90,12 @@ _REMEDIATIONS = {
 
 _REMEDIATION_NOTES = {
     "pg_extensions":
-        "AGE + pgvector require superuser. The -U postgres is intentional; "
-        "do not substitute -U $USER on a typical local install.",
+        "AGE + pgvector require a database superuser. Homebrew PostgreSQL makes "
+        "the current macOS user the local superuser; it does not create a "
+        "postgres role by default.",
+    "redis_continuity":
+        "The server can boot without Redis only in degraded local-only mode. "
+        "That is suitable for a demo, not production session continuity.",
 }
 
 
@@ -115,19 +126,13 @@ def build_remediation(doctor_payload: dict) -> list[PlanItem]:
 
 
 def _build_migrations_command() -> str:
-    """List the SQL files in db/postgres/migrations/ in lexical order, plus
-    the canonical schema files. The user runs them in order with psql.
+    """Return the canonical fresh-database bootstrap command.
+
+    The bootstrap script owns the non-trivial ordering between base schemas,
+    migrations, partition functions, and the AGE graph. Reconstructing that
+    order here previously created a second, incomplete install path.
     """
-    migrations_dir = REPO_ROOT / "db" / "postgres" / "migrations"
-    pieces = [
-        "psql -U postgres -d governance -f db/postgres/schema.sql",
-        "psql -U postgres -d governance -f db/postgres/knowledge_schema.sql",
-    ]
-    if migrations_dir.is_dir():
-        for sql in sorted(migrations_dir.glob("*.sql")):
-            rel = sql.relative_to(REPO_ROOT)
-            pieces.append(f"psql -U postgres -d governance -f {rel}")
-    return " && \\\n    ".join(pieces)
+    return "./scripts/install/bootstrap_postgres.sh --apply"
 
 
 SECRETS_TEMPLATE = """\
@@ -233,7 +238,7 @@ def detect_clients(home: Path) -> dict[str, dict]:
     return out
 
 
-DEFAULT_DB_URL = "postgresql://postgres:postgres@localhost:5432/governance"
+DEFAULT_DB_URL = "postgresql://localhost:5432/governance"
 
 
 def build_snippet(
@@ -388,7 +393,14 @@ def run_doctor() -> dict:
     payload is still complete. Only invalid JSON raises DoctorError.
     """
     proc = subprocess.run(
-        [sys.executable, str(DOCTOR_SCRIPT), "--json", "--mode=local"],
+        [
+            sys.executable,
+            str(DOCTOR_SCRIPT),
+            "--json",
+            "--mode=local",
+            "--db-url",
+            os.environ.get("DB_POSTGRES_URL", DEFAULT_DB_URL),
+        ],
         capture_output=True,
         text=True,
         timeout=30,
@@ -411,7 +423,10 @@ def render_text(result: dict, use_color: bool) -> str:
         else ("", "", "")
     )
     lines: list[str] = []
-    lines.append("=== UNITARES setup ===")
+    lines.append("=== UNITARES advanced bare-metal setup ===")
+    lines.append(
+        "Tier-1 install: use the release-tagged Docker Compose quickstart in README.md."
+    )
 
     initial = result["doctor_initial"]
     fails = sum(1 for r in initial["results"] if r["status"] == "fail")
@@ -450,10 +465,10 @@ def render_text(result: dict, use_color: bool) -> str:
         lines.append(f"\nFinal doctor: {f_passes} pass · {f_fails} fail")
 
     lines.append("\n--- Next steps ---")
-    lines.append("1. Restart your MCP client(s) to pick up the new mcpServers entry.")
-    lines.append("2. (Optional, operator path) Run `python src/mcp_server.py --port 8767` to start the HTTP server.")
-    lines.append("3. Verify: in Claude Code run a quick onboard(). Logs at ~/Library/Logs/Claude/mcp*.log if it errors.")
-    lines.append("4. Read docs/guides/START_HERE.md for the agent-side workflow.")
+    lines.append("1. Run every Phase 1 command, then re-run this assistant until no checks fail.")
+    lines.append("2. Start the HTTP server with `python src/mcp_server.py --port 8767`.")
+    lines.append("3. Verify with `./scripts/unitares health` and `./scripts/unitares onboard install-smoke`.")
+    lines.append("4. Use docs/integration/MCP_CLIENTS.md as the canonical client configuration source.")
 
     return "\n".join(lines)
 
@@ -482,7 +497,7 @@ def main(argv: list[str] | None = None) -> int:
     bootstrap_check()
 
     parser = argparse.ArgumentParser(
-        description="Guided UNITARES install wizard.",
+        description="Advanced bare-metal UNITARES setup assistant.",
     )
     parser.add_argument("--apply", action="store_true",
                         help="Mutate ~/.unitares/ and ~/.config/cirwel/secrets.env if missing.")

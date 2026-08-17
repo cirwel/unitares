@@ -4,16 +4,16 @@
 
 Choose one path:
 
-- **Docker** is the supported quickstart and brings up PostgreSQL, Redis, and the
-  server together.
-- **Bare metal** is the lower-overhead operator path. The canonical, maintained
+- **Docker** is the Tier-1 install contract and brings up PostgreSQL, Redis, and
+  the server together from a named release.
+- **Bare metal** is the advanced macOS operator path. The canonical, maintained
   instructions live in the [install playbook](../install/PLAYBOOK.md); this
-  chapter does not duplicate them.
+  chapter does not duplicate them or present it as an equivalent default.
 
 ## 2.1 Docker quickstart
 
 ```bash
-git clone https://github.com/cirwel/unitares.git
+git clone --branch v2.18.0 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
 make demo
@@ -42,6 +42,8 @@ UNITARES_DEMO_PORT=18767 make demo
 Follow [`../install/PLAYBOOK.md`](../install/PLAYBOOK.md). It owns the exact
 PostgreSQL/AGE/pgvector versions, schema sequence, Python environment, expected
 outputs, and failure recovery. Do not copy commands from historical proposals.
+The `scripts/install/setup.py` helper only diagnoses and scaffolds this
+advanced path; it is not a replacement for the Docker quickstart or playbook.
 
 The production posture uses Redis as the de-facto session and identity store.
 The server can boot without it in degraded local-only mode, which is adequate

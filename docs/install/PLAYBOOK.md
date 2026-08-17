@@ -1,4 +1,9 @@
-# Unitares Install Playbook (macOS, zero-assumption)
+# UNITARES Advanced Bare-Metal Install Playbook (macOS)
+
+> **Tier-1 installs use the release-tagged Docker Compose quickstart in the
+> repository README.** This playbook is the advanced source-based path for an
+> operator who deliberately wants Homebrew services and a native Python
+> process. It is maintained, but it is not the default installation contract.
 
 **Goal:** take a blank macOS install to a state where the governance MCP server is serving on `http://localhost:8767`, an MCP client can perform a check-in successfully, and the dashboard is reachable.
 
@@ -11,8 +16,9 @@
 ## What you'll have when you're done
 
 - Apache AGE + pgvector running on Homebrew PostgreSQL 17, with a `governance` database initialized.
+- Redis running locally for production-grade session and identity continuity.
 - `python src/mcp_server.py` running on `127.0.0.1:8767`, listening on the MCP transport (`/mcp/`), REST (`/v1/tools/call`), and the dashboard (`/dashboard`).
-- A successful round-trip: `onboard()` → `process_agent_update()` → verdict.
+- A successful round-trip: fresh session → check-in → verdict.
 - (Optional) A LaunchAgent so the server restarts at login.
 
 ---
@@ -34,8 +40,9 @@
 ## Step 1 — Install Homebrew packages
 
 ```bash
-brew install postgresql@17 pgvector python@3.12 git
+brew install postgresql@17 pgvector redis python@3.12 git
 brew services start postgresql@17
+brew services start redis
 ```
 
 **Expected:**
@@ -43,9 +50,17 @@ brew services start postgresql@17
 ```bash
 pg_isready -h localhost -p 5432
 # /tmp:5432 - accepting connections
+
+redis-cli ping
+# PONG
 ```
 
 **If `pg_isready` says "no response":** wait 5 seconds (Postgres takes a moment to start) and retry. If still failing, `brew services list | grep postgresql` should show `started`. If it says `error`, run `brew services restart postgresql@17` and check `~/Library/Logs/Homebrew/postgresql@17/server.log`.
+
+**If `redis-cli ping` does not print `PONG`:** run
+`brew services restart redis` and retry. The server can start without Redis only
+in degraded local-only mode; that is acceptable for a demo, not durable
+operator continuity.
 
 ---
 
@@ -86,12 +101,7 @@ createdb -h localhost -p 5432 governance
 export DB_POSTGRES_URL="postgresql://localhost:5432/governance"
 export DB_AGE_GRAPH=governance_graph
 
-psql "$DB_POSTGRES_URL" -f db/postgres/init-extensions.sql
-psql "$DB_POSTGRES_URL" -f db/postgres/schema.sql
-psql "$DB_POSTGRES_URL" -f db/postgres/partitions.sql
-psql "$DB_POSTGRES_URL" -f db/postgres/knowledge_schema.sql
-psql "$DB_POSTGRES_URL" -f db/postgres/embeddings_schema.sql
-psql "$DB_POSTGRES_URL" -f db/postgres/graph_schema.sql
+./scripts/install/bootstrap_postgres.sh --apply
 ```
 
 **Expected:** each `psql` prints zero errors. Verify:
@@ -101,12 +111,10 @@ psql "$DB_POSTGRES_URL" -c "SELECT extname, extversion FROM pg_extension WHERE e
 #  extname | extversion
 # ---------+-----------
 #  age     | 1.7.0
-#  vector  | 0.7.x
+#  vector  | <installed version>
 ```
 
 **On Homebrew Postgres**, the `postgres` superuser doesn't exist by default — your macOS username is the superuser, and the connection above (no user, no password) uses local trust auth. If you see `role "postgres" does not exist`, that's the reason; the URL above already omits the user/password.
-
-**If you need to share the DB DSN with code that hardcodes `postgres:postgres@`:** create the role explicitly: `createuser -s postgres && psql -c "ALTER USER postgres WITH PASSWORD 'postgres';"`. Cross-machine surface doc explains why this default DSN is duplicated across files.
 
 ---
 
@@ -156,35 +164,30 @@ In a second terminal:
 curl -s http://127.0.0.1:8767/health/live
 # {"status":"alive"}
 
-# Onboard via REST
-curl -s -X POST http://127.0.0.1:8767/v1/tools/call \
-  -H 'Content-Type: application/json' \
-  -d '{"tool":"onboard","arguments":{"purpose":"install verification"}}' \
-  | python3 -m json.tool
-
-# Expect: a JSON response containing "agent_uuid" and an EISV state vector.
+# Exercise the real REST wrapper and preserve its returned session binding
+./scripts/unitares health
+./scripts/unitares onboard install-smoke "bare-metal install verification" force
+./scripts/unitares update "bare-metal install verified" 0.2 0.9
 
 # Dashboard
 open http://127.0.0.1:8767/dashboard
 ```
 
-**You're done when:** the dashboard loads (you'll see fleet metrics, even if zeroed), the `onboard` call returns an `agent_uuid`, and there are no error log lines from the server in your first terminal.
+**You're done when:** the dashboard loads, the CLI prints a UUID and a verdict,
+`redis-cli ping` prints `PONG`, and there are no error log lines from the server
+in your first terminal.
 
 ---
 
 ## Step 7 — (Optional) Connect a Claude Code / Cursor / Claude Desktop client
 
-See `docs/integration/MCP_CLIENTS.md` for client-specific JSON. The short version:
+Follow [`docs/integration/MCP_CLIENTS.md`](../integration/MCP_CLIENTS.md) for the
+current client-specific command or configuration. That document is the one
+canonical source; this playbook intentionally does not duplicate client JSON.
 
-```jsonc
-{
-  "mcpServers": {
-    "unitares": { "url": "http://127.0.0.1:8767/mcp/" }
-  }
-}
-```
-
-Once the client connects, the server's logs will show an `onboard` call from the client's session. That's the full acceptance: stranger box → working governance fleet of one.
+Once the client connects and calls `start_session`, the server logs record that
+fresh process identity. That is the full acceptance: stranger box → working
+governance fleet of one.
 
 ---
 
@@ -224,7 +227,7 @@ export UNITARES_MCP_ALLOWED_ORIGINS="http://<your-lan-ip>:*"
 python src/mcp_server.py --port 8767
 ```
 
-For a Cloudflare tunnel: see `docs/operations/OPERATOR_RUNBOOK.md`. Anything beyond loopback should also have `UNITARES_BEARER_TOKEN` set; otherwise REST is open.
+For a Cloudflare tunnel: see `docs/operations/OPERATOR_RUNBOOK.md`. Anything beyond loopback should also have `UNITARES_MCP_BEARER_TOKENS` set; otherwise REST is open.
 
 ---
 
@@ -233,13 +236,13 @@ For a Cloudflare tunnel: see `docs/operations/OPERATOR_RUNBOOK.md`. Anything bey
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | `pg_isready: no response` | Postgres not started | `brew services restart postgresql@17`, wait, retry |
+| `redis-cli ping` does not return `PONG` | Redis not started | `brew services restart redis`, wait, retry |
 | `make` fails on AGE with `bison` errors | Apple's old bison shadows Homebrew's | `brew install bison && export PATH="$(brew --prefix bison)/bin:$PATH"` |
-| `psql: error: connection to server ... failed: FATAL: role "postgres" does not exist` | Homebrew Postgres uses your username | Drop `postgres:postgres@` from the DSN, or create the role (Step 3) |
-| `pip install unitares-core` fails | Private wheel, no token | Use behavioral-only mode (`UNITARES_DISABLE_ODE=1`) or get token from maintainer (Step 4) |
-| `Address already in use` on port 8767 | Server already running | `lsof -i :8767` — kill it or use `--port 8768` |
-| `relation "agents" does not exist` on first call | Schema not applied | Re-run Step 3 |
+| `psql: error: connection to server ... failed: FATAL: role "postgres" does not exist` | Homebrew Postgres uses your username | Export the trust-auth DSN from Step 3; do not add a synthetic `postgres` role just to satisfy a stale default |
+| `Address already in use` on port 8767 | Server already running | `lsof -i :8767` — stop the duplicate or use `--port 18767` and set `UNITARES_URL=http://127.0.0.1:18767` |
+| `relation "agents" does not exist` on first call | Schema not applied | Re-run `./scripts/install/bootstrap_postgres.sh --apply` from Step 3 |
 | `extension "age" is not available` | AGE built against wrong `pg_config` | Verify `$PG_CONFIG` points to your Homebrew PG 17, rebuild |
-| Dashboard loads but is empty | Expected — no agents yet | Run an `onboard` call (Step 6) |
+| Dashboard loads but is empty | Expected — no agents yet | Run the CLI onboarding commands in Step 6 |
 
 For more, see `docs/guides/TROUBLESHOOTING.md`.
 
@@ -259,11 +262,10 @@ For more, see `docs/guides/TROUBLESHOOTING.md`.
 If you trust the playbook and just want to know it worked:
 
 ```bash
-curl -fs http://127.0.0.1:8767/health/live \
-  && curl -fs -X POST http://127.0.0.1:8767/v1/tools/call \
-       -H 'Content-Type: application/json' \
-       -d '{"tool":"onboard","arguments":{"purpose":"smoke"}}' \
-       | python3 -c 'import sys,json; d=json.load(sys.stdin); assert d.get("agent_uuid"), d; print("OK", d["agent_uuid"])'
+redis-cli ping \
+  && ./scripts/unitares health \
+  && ./scripts/unitares onboard install-smoke "bare-metal smoke" force \
+  && ./scripts/unitares update "bare-metal smoke passed" 0.2 0.9
 ```
 
-If that prints `OK <uuid>`, the install is correct.
+If those commands print `PONG`, a UUID, and a verdict, the install is correct.

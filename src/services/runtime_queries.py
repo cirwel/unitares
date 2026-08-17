@@ -984,7 +984,10 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
     if "primary_db" in failing_checks:
         first_action = "Check PostgreSQL availability and database initialization first."
     elif "redis_cache" in failing_checks:
-        first_action = "Check Redis connectivity or continue in fallback mode if Redis is optional."
+        first_action = (
+            "Restore Redis connectivity; degraded local-only mode is for demos, "
+            "not production identity continuity."
+        )
     elif "knowledge_graph" in failing_checks:
         first_action = "Check knowledge graph backend and embeddings availability."
     elif "pi_connectivity" in degraded_checks or "pi_connectivity" in failing_checks:

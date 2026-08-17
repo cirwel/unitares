@@ -8,9 +8,9 @@ Usage:
     python3 scripts/dev/unitares_doctor.py --json
 
 Modes:
-    local      Checks needed for stdio-only adoption (postgres + schema +
-               anchor dir). Sufficient for a fresh-machine bring-up where the
-               agent client spawns governance directly via stdio.
+    local      Checks needed for local adoption (postgres + schema + Redis
+               continuity + anchor dir). Sufficient for a fresh-machine
+               bring-up where the agent client spawns governance directly.
     operator   Adds HTTP/launchd checks: 8767 listening, PID file, LaunchAgent
                loaded, resident-agent plists, cloudflared sidecar.
     all        local + operator. Default.
@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Callable
 
 DEFAULT_DB_URL = "postgresql://postgres:postgres@localhost:5432/governance"
+DEFAULT_REDIS_URL = "redis://localhost:6379/0"
 REQUIRED_PG_EXTENSIONS = ("age", "pgcrypto", "pg_trgm", "uuid-ossp", "vector")
 RESIDENT_LAUNCHD_SLOTS = (
     ("vigil", ("com.unitares.vigil",)),
@@ -111,6 +112,56 @@ def check_postgres_running(db_url: str) -> CheckResult:
         return CheckResult(name, mode, Status.PASS, f"reachable at {_redact(db_url)}")
     return CheckResult(name, mode, Status.FAIL,
                        f"pg_isready failed (rc={rc}); try `brew services start postgresql@17`")
+
+
+def check_redis_continuity(redis_url: str) -> CheckResult:
+    """Report whether production-grade session continuity is available.
+
+    Redis absence is a warning rather than a hard failure because the server has
+    an explicit degraded local-only mode for demos. The wording must still make
+    clear that this is not the production continuity posture.
+    """
+    name, mode = "redis_continuity", "local"
+    if shutil.which("redis-cli") is None:
+        return CheckResult(
+            name,
+            mode,
+            Status.WARN,
+            "redis-cli not on PATH; install Redis for production session continuity",
+            detail="The server can boot only in degraded local-only mode without Redis.",
+        )
+
+    parsed = urllib.parse.urlsplit(redis_url)
+    host = parsed.hostname or "localhost"
+    host_for_url = f"[{host}]" if ":" in host else host
+    port = parsed.port or 6379
+    safe_url = urllib.parse.urlunsplit(
+        (parsed.scheme or "redis", f"{host_for_url}:{port}", parsed.path or "/0", "", "")
+    )
+    cmd = ["redis-cli", "-u", safe_url, "--no-auth-warning"]
+    if parsed.username:
+        cmd.extend(["--user", urllib.parse.unquote(parsed.username)])
+    cmd.append("ping")
+    env = os.environ.copy()
+    if parsed.password:
+        env["REDISCLI_AUTH"] = urllib.parse.unquote(parsed.password)
+
+    proc = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        env=env,
+    )
+    if proc.returncode == 0 and proc.stdout.strip().upper() == "PONG":
+        return CheckResult(name, mode, Status.PASS, f"reachable at {safe_url}")
+    return CheckResult(
+        name,
+        mode,
+        Status.WARN,
+        "Redis unavailable; identity continuity is degraded local-only",
+        detail=(proc.stderr or proc.stdout).strip(),
+    )
 
 
 def check_governance_database(db_url: str) -> CheckResult:
@@ -2232,7 +2283,11 @@ def check_adjudication_feedstock(db_url: str) -> CheckResult:
     )
 
 
-def build_checks(repo_root: Path, db_url: str) -> list[Check]:
+def build_checks(
+    repo_root: Path,
+    db_url: str,
+    redis_url: str = DEFAULT_REDIS_URL,
+) -> list[Check]:
     loaded_cache: dict[str, set[str]] = {}
 
     def loaded() -> set[str]:
@@ -2243,6 +2298,7 @@ def build_checks(repo_root: Path, db_url: str) -> list[Check]:
     return [
         Check("python_version", "local", check_python_version),
         Check("postgres_running", "local", lambda: check_postgres_running(db_url)),
+        Check("redis_continuity", "local", lambda: check_redis_continuity(redis_url)),
         Check("governance_database", "local", lambda: check_governance_database(db_url)),
         Check("pg_extensions", "local", lambda: check_pg_extensions(db_url)),
         Check("schema_migrations", "local", lambda: check_schema_migrations(db_url, repo_root)),
@@ -2358,6 +2414,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="emit JSON instead of text")
     parser.add_argument("--no-color", action="store_true")
     parser.add_argument("--db-url", default=os.environ.get("DB_POSTGRES_URL", DEFAULT_DB_URL))
+    parser.add_argument("--redis-url", default=os.environ.get("REDIS_URL", DEFAULT_REDIS_URL))
     parser.add_argument(
         "--attest", action="store_true",
         help="emit this database's schema attestation (digest + coverage) as "
@@ -2385,7 +2442,7 @@ def main(argv: list[str] | None = None) -> int:
         ))
         return 0
 
-    checks = build_checks(repo_root, args.db_url)
+    checks = build_checks(repo_root, args.db_url, args.redis_url)
     results = run_checks(checks, args.mode)
 
     if args.json:

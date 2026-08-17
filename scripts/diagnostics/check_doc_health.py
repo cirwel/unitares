@@ -773,9 +773,27 @@ def check_demotion_candidates(md_files: list[Path]) -> list[str]:
 
 _CONTESTED_CLAIMS: list[tuple[re.Pattern, str]] = [
     (
-        re.compile(r"Redis is (?:an? )?optional", re.IGNORECASE),
+        re.compile(
+            r"Redis is (?:an? )?optional|Redis is (?:a )?session cache only|"
+            r"Redis \(optional\)|Redis optional cache",
+            re.IGNORECASE,
+        ),
         "corrected: Redis is the de-facto primary session store (boots degraded "
         "local-only without it) — see UNIFIED_ARCHITECTURE.md and the registry",
+    ),
+    (
+        re.compile(r"schema auto.?creates|schema is auto.?created", re.IGNORECASE),
+        "corrected: the server refuses an uninitialized database; run the "
+        "canonical schema bootstrap before restart",
+    ),
+    (
+        re.compile(r"until (?:its|the) first PyPI release", re.IGNORECASE),
+        "stale release claim: unitares-sdk 0.1.0 is published on PyPI",
+    ),
+    (
+        re.compile(r"-d\s+['\"]?\{\"tool\"\s*:", re.IGNORECASE),
+        "stale REST envelope: /v1/tools/call accepts `name` plus `arguments`, "
+        "not `tool`",
     ),
     (
         re.compile(r"falls back to self-reported signals", re.IGNORECASE),

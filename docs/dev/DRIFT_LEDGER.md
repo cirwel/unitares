@@ -17,10 +17,11 @@ seams stay visible instead of being rediscovered each incident.
          ▼
   ┌──────────────────────┐      asyncpg (ExecutorPool)   ┌─────────────────┐
   │   MCP server (hub)    │ ───────────────────────────▶ │ PostgreSQL+AGE  │  ← source of truth
-  │  dispatch_tool →      │ ◀─────────────────────────── │ (identity,audit,│
-  │  middleware → handler │                              │  KG, sessions)  │
+  │  dispatch_tool →      │ ◀─────────────────────────── │ (ID, audit, KG, │
+  │  middleware → handler │                              │  durable state) │
   └──────────────────────┘                              └─────────────────┘
-     ▲   │  /ws/eisv            Redis (optional, sticky session cache)
+     ▲   │  /ws/eisv            Redis (primary runtime session bindings;
+     │   │                        degraded local-only mode without it)
      │   ▼
   Agents (observers): Watcher · Sentinel · Vigil · Chronicler
      read state via /ws/eisv + REST /v1/tools/call,
@@ -38,7 +39,7 @@ per handler.
 |---|---|---|
 | MCP Streamable HTTP (`:8767`) | clients ↔ hub | tool calls / results |
 | asyncpg via `ExecutorPool` | hub ↔ PostgreSQL+AGE | identity, audit trail, KG |
-| Redis (optional) | hub ↔ cache | sticky client→agent binding, metadata TTL |
+| Redis continuity | hub ↔ runtime store | primary live client→agent/session bindings, metadata TTL; degraded local-only fallback is demo-only |
 | WebSocket `/ws/eisv` | hub → Sentinel | real-time EISV event stream |
 | REST `/v1/tools/call` | agents → hub | check-ins, KG writes |
 | local files (gitignored) | agent ↔ itself | `data/watcher/`, `data/*_state`, `~/.unitares/anchors/` |

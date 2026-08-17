@@ -104,6 +104,54 @@ def test_redact_strips_password(doctor):
     assert "@localhost:5432/governance" in redacted
 
 
+def test_redis_continuity_warns_when_cli_is_missing(doctor, monkeypatch):
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: None)
+    result = doctor.check_redis_continuity("redis://localhost:6379/0")
+    assert result.status == doctor.Status.WARN
+    assert "production session continuity" in result.message
+    assert "degraded local-only" in result.detail
+
+
+def test_redis_continuity_passes_without_exposing_credentials(doctor, monkeypatch):
+    captured = {}
+
+    class Proc:
+        returncode = 0
+        stdout = "PONG\n"
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs["env"]
+        return Proc()
+
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/redis-cli")
+    monkeypatch.setattr(doctor.subprocess, "run", fake_run)
+    result = doctor.check_redis_continuity(
+        "redis://operator:secret-value@cache.example:6380/2"
+    )
+
+    assert result.status == doctor.Status.PASS
+    assert "secret-value" not in " ".join(captured["cmd"])
+    assert captured["env"]["REDISCLI_AUTH"] == "secret-value"
+    assert "secret-value" not in result.message
+    assert "redis://cache.example:6380/2" in result.message
+
+
+def test_redis_continuity_warns_when_ping_fails(doctor, monkeypatch):
+    class Proc:
+        returncode = 1
+        stdout = ""
+        stderr = "connection refused"
+
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/redis-cli")
+    monkeypatch.setattr(doctor.subprocess, "run", lambda *args, **kwargs: Proc())
+    result = doctor.check_redis_continuity("redis://localhost:6379/0")
+    assert result.status == doctor.Status.WARN
+    assert "degraded local-only" in result.message
+    assert "connection refused" in result.detail
+
+
 def test_check_pid_file_warns_on_stale_pid_when_service_active(doctor, monkeypatch, tmp_path):
     root = tmp_path / "repo"
     data_dir = root / "data"
@@ -269,7 +317,9 @@ def test_check_column_drift_skips_when_psql_missing(doctor, monkeypatch, tmp_pat
 def test_main_json_output(doctor, monkeypatch, capsys, tmp_path):
     # Replace build_checks so we don't probe the live system.
     fake_checks = [_fake(doctor, "always_pass", "local", doctor.Status.PASS)]
-    monkeypatch.setattr(doctor, "build_checks", lambda root, url: fake_checks)
+    monkeypatch.setattr(
+        doctor, "build_checks", lambda root, url, redis_url: fake_checks
+    )
 
     rc = doctor.main(["--json", "--mode", "local"])
     assert rc == 0
@@ -283,7 +333,9 @@ def test_main_json_output(doctor, monkeypatch, capsys, tmp_path):
 
 def test_main_returns_failure_when_check_fails(doctor, monkeypatch, capsys):
     fake_checks = [_fake(doctor, "always_fail", "local", doctor.Status.FAIL)]
-    monkeypatch.setattr(doctor, "build_checks", lambda root, url: fake_checks)
+    monkeypatch.setattr(
+        doctor, "build_checks", lambda root, url, redis_url: fake_checks
+    )
 
     rc = doctor.main(["--json", "--no-color"])
     assert rc == 1
@@ -615,6 +667,7 @@ def test_check_class_anchors_fresh_runs_and_classifies(doctor):
 def test_class_anchors_fresh_is_registered(doctor):
     names = {c.name for c in doctor.build_checks(REPO_ROOT, "postgresql://x/y")}
     assert "class_anchors_fresh" in names
+    assert "redis_continuity" in names
 
 
 # --- telemetry-liveness checks ---------------------------------------------
