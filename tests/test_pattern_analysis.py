@@ -467,3 +467,60 @@ class TestFrozenWindowGuardViaMonitor:
         a, b = self._make_monitor(), self._make_monitor()
         assert analyze_agent_patterns(a)["anomalies"][0]["stale"] is False
         assert analyze_agent_patterns(b)["anomalies"][0]["stale"] is False
+
+
+# ─── dogfood 2026-08-16: trend labels carry their magnitude ─────────────────
+
+
+def _magnitude_mock_monitor(risk_history):
+    state = MagicMock()
+    for key, value in {
+        "E": 0.7, "I": 0.8, "S": 0.3, "V": 0.2,
+        "coherence": 0.52, "lambda1": 0.0,
+        "update_count": len(risk_history),
+        "risk_history": risk_history,
+        "coherence_history": [0.5] * len(risk_history),
+        "E_history": [0.7] * len(risk_history),
+        "I_history": [0.8] * len(risk_history),
+        "S_history": [0.3] * len(risk_history),
+        "V_history": [0.2] * len(risk_history),
+        "timestamp_history": [f"t{i}" for i in range(len(risk_history))],
+        "decision_history": ["proceed"] * len(risk_history),
+    }.items():
+        setattr(state, key, value)
+    monitor = MagicMock()
+    monitor.state = state
+    return monitor
+
+
+def test_trend_provenance_carries_risk_change_and_threshold():
+    """A direction label without its size reads alarmist on noise-scale
+    movement; trend_provenance must surface the mean shift and threshold."""
+    from src.pattern_analysis import TREND_THRESHOLD, trend_change
+
+    history = [0.2, 0.2, 0.2, 0.2, 0.2, 0.5, 0.5, 0.5, 0.5, 0.5]
+    monitor = _magnitude_mock_monitor(history)
+    result = analyze_agent_patterns(monitor)
+    prov = result["patterns"]["trend_provenance"]
+    assert prov["threshold"] == TREND_THRESHOLD
+    assert prov["risk_change"] == round(trend_change(history), 4)
+    assert prov["risk_change"] > TREND_THRESHOLD  # this fixture genuinely moved
+
+
+def test_trend_provenance_risk_change_none_on_empty_history():
+    monitor = _magnitude_mock_monitor([])
+    result = analyze_agent_patterns(monitor)
+    assert result["patterns"]["trend_provenance"]["risk_change"] is None
+
+
+def test_trend_change_matches_analyze_trend_threshold_semantics():
+    from src.pattern_analysis import TREND_THRESHOLD, analyze_trend, trend_change
+
+    flat = [0.30, 0.31, 0.30, 0.31, 0.30, 0.31]
+    moved = [0.2, 0.2, 0.2, 0.2, 0.2, 0.5, 0.5, 0.5, 0.5, 0.5]
+    assert abs(trend_change(flat)) < TREND_THRESHOLD
+    assert analyze_trend(flat) == "stable"
+    assert trend_change(moved) > TREND_THRESHOLD
+    assert analyze_trend(moved) == "increasing"
+    assert trend_change([0.5]) is None
+    assert analyze_trend([0.5]) == "stable"
