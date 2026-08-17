@@ -199,5 +199,8 @@ provenance tuple above.
 Instrument fixes: #1422. The withdrawn historical numbers were produced from
 `master` at `5a040940` against the live governance database on 2026-07-31; at
 that commit the command omitted `--anchor-scope` and therefore used the
-contaminated `all` default. The trusted descriptive snapshot is frozen at
-2026-08-09T20:00:00Z and recorded in the operations artifact linked above.
+contaminated `all` default. The analysis tools now default to `trusted`; the
+registered command still names the scope explicitly so its execution contract
+does not depend on a mutable default. The trusted descriptive snapshot is
+frozen at 2026-08-09T20:00:00Z and recorded in the operations artifact linked
+above.
