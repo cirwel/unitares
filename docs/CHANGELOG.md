@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_No unreleased changes yet. New entries accumulate here until the next release bump._
+### Added
+
+- **delivery/operations:** add a report-only-by-default serial merge conductor with opposite-host review, deterministic root-surface escalation, SHA-bound approval status, and an in-place resident migration from the legacy PR babysitter.
 
 ---
 

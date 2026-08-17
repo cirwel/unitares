@@ -1,135 +1,237 @@
-# Merge Automation Plan — branch protection + operator-armed auto-merge
+# Autonomous Merge Conductor
 
-**Status:** plan (not yet applied). Sibling of `ci-issue-surfacing.md`; both are
-steps in a surface → fix → land relay.
+**Status:** implemented, report-only by default. Autonomous execution remains
+flag-gated until the rollout gates below are met.
 
-## Goal and the line we are NOT crossing
+## Outcome
 
-Make a change autonomous up to **"green and ready-for-review,"** then stop. The
-agent surfaces → fixes → gets CI green → marks the draft PR ready → pings the
-operator. **The operator stays the merge gate.** This honors `CLAUDE.md`'s
-delivery contract verbatim ("every session lands its work as a draft PR; the
-operator is the merge gate; no auto-merge by default").
+Routine PRs no longer need a human to click Ready, Update branch, and Merge.
+The author declares its work complete; a separate reviewer process judges the
+exact Git head; deterministic gates enforce repository policy; GitHub performs
+the protected merge. Human attention is reserved for changes that redefine the
+gate or production authority.
 
-What this plan *adds* is a **safe, opt-in way to grant merge-when-green on a
-single PR** — so the operator's merge action can be "arm auto-merge once" at
-review time instead of "watch for green, then click merge." Arming is an
-**operator action**, the same deliberate tier as "mark ready." The agent does
-not arm auto-merge on its own.
+```text
+author -> queued draft -> current branch + CI -> independent review(s)
+       -> SHA-bound agent-review status -> Ready + native auto-merge
 
-```
-agent:    surface ── fix ── CI green ── mark ready ──┐
-                                                     │  (agent stops here)
-operator: review ──────────────────────── arm auto-merge (optional) ── GitHub merges on green
+root/control change ---------------------> operator root approval -> 2 reviews
+conflict / red CI / disagreement --------> hold or escalation
 ```
 
-## Prerequisite: branch protection with required checks
+The implementation is `scripts/ops/merge_conductor.py`. The installed
+`com.unitares.pr-babysitter` LaunchAgent keeps its historical label and filename
+for an in-place upgrade, but `scripts/ops/pr-babysitter.sh` is now only a
+compatibility entrypoint for the conductor. An already-installed plist has no
+conductor flags and therefore selects the safe report-only default as soon as
+the new entrypoint lands.
 
-Auto-merge ("merge when green") is only meaningful if `master` actually
-*requires* the checks. Without required checks, GitHub's auto-merge would merge
-the instant mergeability is satisfiable — i.e. immediately — which is not what
-we want. So branch protection is the load-bearing prerequisite.
+## Trust boundaries
 
-### Required check contexts
+The conductor does not let an authoring model merge its own work.
 
-From the PR-triggered workflows today (`pull_request` → `master`):
+- A `codex/*` branch is reviewed by Claude first.
+- A `claude/*` branch is reviewed by Codex first.
+- The attributable defaults are Claude `opus` and Codex `gpt-5.6-sol`;
+  `UNITARES_MERGE_CLAUDE_MODEL` and `UNITARES_MERGE_CODEX_MODEL` override them.
+  Claude's provider envelope records every routed model (including helper
+  models). Codex currently records the explicit request and emits a provenance
+  warning because its CLI JSON stream does not report the routed model.
+- Low-risk non-runtime changes need one review.
+- Runtime/dependency changes need two fresh review contexts: the opposite host
+  first, then a synthesis/review on the author host.
+- Unknown branch provenance is an escalation, not a guessed identity.
+- Reviewer tools are disabled/read-only. PR prose and patches are explicitly
+  delimited as untrusted evidence with a fresh unpredictable boundary/verdict
+  nonce. This prevents replayed/static patch JSON or a copied terminator from
+  being parsed as the verdict; it does not make a model immune to in-context
+  instruction attack, so unanimous review and deterministic gates still carry
+  the decision.
+- A malformed, inconsistent, unavailable, or incomplete verdict cannot approve.
+- Before any model call, the resident verifies that the installed Claude and
+  Codex CLIs still advertise every isolation flag on which the adapters rely.
 
-| Workflow | Job → check-run context | Required? |
-| --- | --- | --- |
-| Tests | `smoke` | ✅ required |
-| Tests | `test (3.12)` | ✅ required |
-| Documentation Validation | `validate` | ✅ required |
-| Surface Findings (experiment) | `surface` | ❌ advisory — never required |
+This is contextual and procedural separation under the current single-operator
+deployment, not cryptographic separation: author agents and the resident may
+use the same `cirwel` GitHub credential. The SHA-bound status prevents stale
+approval, but a sufficiently privileged process could forge that status.
+Root labels are stricter: the latest label event must carry the configured
+root-approver GitHub App ID; a shared-user event cannot authorize root
+automation. Before treating mutually distrustful ordinary-change authors as in scope,
+run the conductor as a dedicated GitHub App and pin the required check to that
+App ID. That hardening is not required for the repository's documented
+single-operator threat model, but the distinction must remain explicit.
+Within the conductor, a success status is never a review cache for an unarmed
+PR: it always runs a fresh current-process review before arming.
 
-`surface` is intentionally **not** required: findings are advisory and the job
-never `--fail-on`s, so gating merge on it would be a category error.
+Reviewers return one of `approve`, `deny`, `needs_evidence`, or `escalate`.
+Only unanimous `approve` satisfies the gate.
 
-> **Verify the exact context strings before applying.** Matrix and reusable
-> workflows can alter the rendered name (e.g. `test (3.12)` vs `test`). Confirm
-> against a real run:
->
-> ```bash
-> gh api repos/CIRWEL/unitares/commits/<pr-head-sha>/check-runs \
->   --jq '.check_runs[].name'
-> ```
+## Queue intent
 
-### Apply (operator / admin — repo-settings change, not done by the agent)
+Draft still means the author has not granted merge authority by itself. A PR
+enters the conductor only when it contains:
+
+- the marker `<!-- unitares-merge-intent: autonomous -->`, which `ship.sh`
+  adds on its default route; or
+- the `merge:auto` label, useful for web/cloud-agent PRs and existing drafts; or
+- `merge:root-approved`, but only when its latest label event comes from the
+  App ID configured by `UNITARES_MERGE_ROOT_APPROVER_APP_ID`.
+
+`ship.sh --draft-pr` creates an unqueued draft. `merge:hold` overrides every
+other signal and is the per-PR kill switch. `merge:escalate` parks a PR after a
+policy or review refusal.
+
+## Deterministic gates
+
+Before spending a model review or changing PR state, the conductor requires:
+
+1. A user-private non-blocking process lock under `~/.cache/unitares/` prevents
+   overlapping five-minute/manual cycles, and no other PR may be armed. The
+   train is serial, so one merge cannot invalidate a second concurrently
+   approved head.
+2. No active repository surface claim. An unreadable claim registry also
+   blocks; absence is never inferred from a failed probe.
+3. Same-repository PR targeting the configured protected branch, recognized
+   agent branch prefix, and confirmed mergeability (not unknown or conflicting).
+4. Branch current with `master`. A `BEHIND` queued draft cannot use GitHub's
+   armed-PR updater yet, so the conductor requests one update and leaves review
+   for a later cycle. An already-armed PR is first left to GitHub's native
+   updater. If the same head remains behind for 15 minutes, a user-private
+   persistent timer permits one guarded `update-branch` fallback and resets.
+5. All non-review CI checks complete successfully.
+6. All review conversations resolved. More than 100 threads is an explicit
+   partial-read refusal, not a silent zero.
+7. At most 80 changed files, 8,000 changed lines, and a 120 KB review patch.
+   Larger, partial, or binary-only evidence is escalated instead of truncated
+   into a false approval.
+8. Immediately before Ready/arm, the conductor rechecks head and base SHA,
+   intent/hold/root labels, mergeability, CI, review threads, surface claims,
+   review status, and the one-armed invariant. Commit-status lookup paginates
+   rather than treating the first 100 records as complete.
+
+The approval is published as the `agent-review` commit-status context on the
+reviewed SHA. Every execute cycle first verifies that branch protection is
+strict, requires this context, and that repository auto-merge is enabled. If
+GitHub refreshes the branch, the new SHA has no approval and cannot merge until
+the conductor reviews it again.
+
+## Risk policy
+
+| Tier | Examples | Gate |
+|---|---|---|
+| Low | explicitly recognized ordinary documentation | one opposite-host review |
+| Medium | tests, Python/BEAM/dashboard/runtime, scripts/skills, dependencies, and every unclassified path | two reviews |
+| Root/control | migrations, identity/auth, GitHub workflows, repository test/CI configuration, releases, branch protection, delivery contract, conductor and its tests | verified root-approver App label, then two reviews; otherwise manual |
+
+The root path list lives in code and is unit-tested. Adding or weakening an
+exception modifies the conductor itself, so that change is recursively a root
+decision.
+
+## Operating modes
+
+Classification-only shadow is the default and makes no GitHub changes or model
+calls:
 
 ```bash
-gh api -X PUT repos/CIRWEL/unitares/branches/master/protection \
-  --input - <<'JSON'
-{
-  "required_status_checks": {
-    "strict": true,
-    "contexts": ["smoke", "test (3.12)", "validate"]
-  },
-  "enforce_admins": false,
-  "required_pull_request_reviews": null,
-  "restrictions": null,
-  "allow_force_pushes": false,
-  "allow_deletions": false
-}
-JSON
+python3 scripts/ops/merge_conductor.py --json
 ```
 
-- `strict: true` = "branch must be up to date before merging" (forces a rebase
-  on a stale PR — this is what turns a silently-conflicting auto-merge into a
-  re-run). Drop to `false` if the rebase churn outweighs the safety on a
-  low-traffic `master`.
-- `required_pull_request_reviews: null` keeps the *human review* requirement
-  off at the protection layer — the merge gate is enforced socially via the
-  draft-PR contract, not by a required approver count. Set it if you want
-  GitHub to also block merge without an approval.
-- `enforce_admins: false` lets the operator break-glass merge past a stuck
-  check. Flip to `true` for strict parity.
-
-To enable native auto-merge at all, the repo setting must allow it:
+One-shot report-only review invokes models but does not comment, set status,
+ready, or merge:
 
 ```bash
-gh api -X PATCH repos/CIRWEL/unitares --field allow_auto_merge=true
+python3 scripts/ops/merge_conductor.py --pr 123 --review --json
 ```
 
-## Arming auto-merge (operator-invoked, per-PR, opt-in)
+Execution can be requested explicitly after rollout:
 
-Two equivalent paths, both already in the toolbox:
+```bash
+UNITARES_MERGE_CONDUCTOR_EXECUTE=1 \
+  python3 scripts/ops/merge_conductor.py --json
+```
 
-- **`ship.sh --auto-merge`** — documented in `CLAUDE.md` as "only when the
-  operator explicitly asks." This plan does not change that default; it just
-  makes the `--auto-merge` path *safe* by ensuring required checks exist.
-- **GitHub native** — `gh pr merge <n> --auto --squash`, or the MCP
-  `enable_pr_auto_merge` tool. GitHub holds the merge until all required checks
-  pass, then merges; if a check fails or a new commit lands, the merge waits.
+The five-minute LaunchAgent reads the same environment flags. Its template
+ships with both set to `0`; an old installed plist has neither variable and
+therefore gets the same report-only default.
 
-Either way the merge only happens **after** the required contexts are green, and
-only because the operator armed it on that specific PR.
-
-## Interaction with single-writer surfaces — hard rule
-
-Auto-merge must **not** be armed on a PR that touches a single-writer surface
-(migrations, identity/onboarding, `docs/ontology/plan.md`, hot RFC docs, large
-test-layout deletions — see `CLAUDE.md` "Before Starting Work on a Single-Writer
-Surface") without the cross-branch coordination check first. Merge-when-green
-removes the human pause that currently catches a slot/semantic collision at
-merge time. For these surfaces, keep merge fully manual so the operator does the
-`gh pr list --search` collision check at the moment of merge.
-
-A future guard could make this structural: a workflow step that inspects the
-diff's paths and refuses to arm (or posts a "manual-merge-only" label) when a
-single-writer surface is touched. Out of scope for this plan; noted as the
-natural next hardening.
-
-## What stays a human decision
-
-- **Whether a PR should merge at all** — never automated here.
-- **Arming auto-merge** — operator action, per-PR.
-- **Anything touching a single-writer surface** — manual merge, with the
-  collision check.
+`UNITARES_MERGE_ARMED_STALL_S` changes the native-update fallback threshold
+(default 900 seconds). Lock and stall state live under `~/.cache/unitares/` by
+default and are mode `0600`.
 
 ## Rollout
 
-1. Confirm exact check-run contexts on a real PR head (`check-runs` query above).
-2. Apply branch protection + `allow_auto_merge` (operator/admin).
-3. Try the loop on one low-risk PR: let the agent drive to ready-for-review,
-   then operator arms `gh pr merge --auto --squash` and confirms GitHub merges
-   on green.
-4. Only after that burn-in, consider the single-writer-surface arming guard.
+This order is load-bearing:
+
+1. Land the conductor bootstrap through the existing root/human gate. The gate
+   may not authorize its own installation.
+2. Deploy the new script and compatibility entrypoint, leaving execution off.
+   This retires the redundant polling updater; the repository's native
+   auto-update setting continues refreshing already-armed PRs.
+3. Create/update the four labels:
+
+   ```bash
+   python3 scripts/ops/merge_conductor.py --execute --install-labels --no-log
+   ```
+
+   Root/control PRs remain manual unless a separate approval service is
+   installed and its GitHub App ID is set in
+   `UNITARES_MERGE_ROOT_APPROVER_APP_ID`.
+
+4. Run classification-only shadow for at least 24 hours. Compare every
+   `would_review`, wait, hold, and escalation with the actual PR state.
+5. Run a report-only model review on at least one low-risk Codex PR and one
+   low-risk Claude PR if both are available.
+6. Migrate or finish existing open PRs. Installing the status gate while
+   unqueued PRs remain would intentionally block them.
+7. Install the SHA-bound required context:
+
+   ```bash
+   python3 scripts/ops/merge_conductor.py \
+     --execute --install-gate --branch master --no-log
+   ```
+
+8. Install the new plist template, bootout/bootstrap it, and verify a
+   report-only cycle. Then set
+   `UNITARES_MERGE_CONDUCTOR_EXECUTE=1` and reload it. Leave
+   `UNITARES_MERGE_CONDUCTOR_REVIEW=0`; execute mode performs reviews
+   automatically.
+9. Canary one low-risk PR. Confirm the comment, commit status, Ready transition,
+   native auto-merge, post-merge CI, and deployment health before queuing more.
+
+Do not install the required status before the conductor is deployed and able to
+write it. Do not enable execution before the required status exists.
+
+## Rollback and recovery
+
+Fleet stop:
+
+1. Set `UNITARES_MERGE_CONDUCTOR_EXECUTE=0` and reload the LaunchAgent.
+2. Disable any outstanding request with `gh pr merge --disable-auto <n>`.
+3. Add `merge:hold` to PRs that must remain parked.
+
+If an armed PR remains `BEHIND` after both GitHub's native updater and the
+guarded fallback, disable auto-merge, inspect the conflict/check state, run one
+manual `gh pr update-branch <n>` only when mergeable, and requeue it after the
+fresh CI head is visible. The JSONL log records the first-wait duration and the
+fallback request.
+
+A failed review is bound to its head SHA. Correct the patch and push a new
+commit to obtain a fresh review. `--retry-review` exists for a confirmed
+transient reviewer failure on the unchanged SHA; it must not be used to shop
+for a more favorable answer after a substantive disagreement.
+
+The audit trail consists of:
+
+- `data/logs/merge-conductor.jsonl` for each cycle;
+- the SHA-bound GitHub commit status;
+- a structured PR comment containing reviewer/model provenance and findings;
+- GitHub's Ready, auto-merge, and merge events.
+
+## Native merge queue
+
+GitHub's merge queue remains the preferable long-term scheduler, but GitHub
+currently offers it only for organization-owned repositories. `cirwel/unitares`
+is user-owned, so the conductor provides the missing serial queue. If the repo
+moves to an organization, retain the independent `agent-review` gate and replace
+the local serialization/update logic with the native queue after a canary.

@@ -84,7 +84,9 @@ def ship_plan(repo: Path, *options: str) -> dict[str, str]:
     return parsed
 
 
-def write_watcher_finding(findings: Path, repo: Path, relative_path: str, fp: str) -> None:
+def write_watcher_finding(
+    findings: Path, repo: Path, relative_path: str, fp: str
+) -> None:
     findings.parent.mkdir(parents=True, exist_ok=True)
     findings.write_text(
         json.dumps(
@@ -121,6 +123,7 @@ def test_auto_routes_runtime_changes_to_draft_pr_branch(ship_repo: Path) -> None
     assert plan["branch"] == "main"
     assert plan["delivery"] == "draft_pr"
     assert plan["force_auto_branch"] == "1"
+    assert plan["autonomous_queue"] == "1"
 
 
 def test_auto_routes_detached_non_runtime_changes_to_draft_pr(ship_repo: Path) -> None:
@@ -133,6 +136,7 @@ def test_auto_routes_detached_non_runtime_changes_to_draft_pr(ship_repo: Path) -
     assert plan["branch"] == "(detached)"
     assert plan["delivery"] == "draft_pr"
     assert plan["force_auto_branch"] == "1"
+    assert plan["autonomous_queue"] == "1"
 
 
 def test_auto_routes_feature_branch_docs_to_draft_pr(ship_repo: Path) -> None:
@@ -148,6 +152,7 @@ def test_auto_routes_feature_branch_docs_to_draft_pr(ship_repo: Path) -> None:
     assert plan["branch"] == "docs/workflow-note"
     assert plan["delivery"] == "draft_pr"
     assert plan["force_auto_branch"] == "0"
+    assert plan["autonomous_queue"] == "1"
 
 
 def test_explicit_direct_opts_out_on_feature_branch(ship_repo: Path) -> None:
@@ -174,9 +179,66 @@ def test_explicit_draft_pr_uses_current_feature_branch(ship_repo: Path) -> None:
     assert plan["branch"] == "codex/workflow-note"
     assert plan["delivery"] == "draft_pr"
     assert plan["force_auto_branch"] == "0"
+    assert plan["autonomous_queue"] == "0"
 
 
-def test_stage_all_plan_classifies_dirty_worktree_without_staging(ship_repo: Path) -> None:
+def test_auto_merge_flag_is_safe_queued_draft_alias(ship_repo: Path) -> None:
+    run(["git", "checkout", "-q", "-b", "codex/workflow-note"], ship_repo)
+    stage_file(ship_repo, "docs/workflow-note.md")
+
+    plan = ship_plan(ship_repo, "--auto-merge")
+
+    assert plan["mode"] == "auto_merge"
+    assert plan["delivery"] == "draft_pr"
+    assert plan["autonomous_queue"] == "1"
+
+
+@pytest.mark.parametrize(
+    ("option", "expected_gh_flag"),
+    [(None, "--draft"), ("--auto-merge", "--draft")],
+)
+def test_queued_pr_body_declares_autonomous_queue_intent(
+    ship_repo: Path,
+    tmp_path: Path,
+    option: str | None,
+    expected_gh_flag: str,
+) -> None:
+    run(["git", "checkout", "-q", "-b", "codex/workflow-note"], ship_repo)
+    stage_file(ship_repo, "docs/workflow-note.md")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    capture = tmp_path / "gh-args.txt"
+    gh = fake_bin / "gh"
+    gh.write_text(
+        "#!/bin/sh\n"
+        'printf \'%s\\n\' "$@" >> "$GH_CAPTURE"\n'
+        'if [ "$1" = pr ] && [ "$2" = view ]; then exit 1; fi\n'
+        'if [ "$1" = pr ] && [ "$2" = create ]; then '
+        "echo https://github.test/pull/1; exit 0; fi\n"
+        "exit 0\n"
+    )
+    gh.chmod(gh.stat().st_mode | stat.S_IXUSR)
+
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "GH_CAPTURE": str(capture),
+    }
+    command = [str(ship_repo / "scripts" / "dev" / "ship.sh")]
+    if option:
+        command.append(option)
+    command.append("test: queued change")
+    run(command, ship_repo, env=env)
+
+    arguments = capture.read_text()
+    assert expected_gh_flag in arguments
+    assert "<!-- unitares-merge-intent: autonomous -->" in arguments
+
+
+def test_stage_all_plan_classifies_dirty_worktree_without_staging(
+    ship_repo: Path,
+) -> None:
     path = ship_repo / "src" / "mcp_server.py"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("runtime\n")

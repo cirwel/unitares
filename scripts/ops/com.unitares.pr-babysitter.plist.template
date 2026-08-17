@@ -1,12 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-    com.unitares.pr-babysitter - un-strand armed PRs every 5 minutes.
+    com.unitares.pr-babysitter - compatibility label for the serial autonomous
+    merge conductor, evaluated every 5 minutes.
 
-    See scripts/ops/pr-babysitter.sh for what it does and, more importantly,
-    what it deliberately does not do (no readying drafts, no conflict
-    resolution, no arming). It only runs `gh pr update-branch` on PRs that a
-    session already armed and CI already likes.
+    Default posture is report-only. Set UNITARES_MERGE_CONDUCTOR_EXECUTE=1 only
+    after the agent-review required status context is installed and the dry-run
+    soak is accepted. An older installed plist with neither conductor variable
+    receives the same safe default from the shell entrypoint. See
+    docs/operations/merge-automation-plan.md.
 
     PATH must include the Homebrew bin dir: `gh` is /opt/homebrew/bin/gh and
     launchd's minimal PATH omits it. gh auth comes from ~/.config/gh under
@@ -30,6 +32,8 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>UNITARES_MERGE_CONDUCTOR_EXECUTE</key><string>0</string>
+        <key>UNITARES_MERGE_CONDUCTOR_REVIEW</key><string>0</string>
     </dict>
     <key>StartInterval</key><integer>300</integer>
     <key>StandardOutPath</key><string>__UNITARES_ROOT__/data/logs/pr-babysitter.log</string>
