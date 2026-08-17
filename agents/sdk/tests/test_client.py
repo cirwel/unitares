@@ -366,6 +366,39 @@ class TestToolMapping:
         assert result.inference.host_id == "ollama:local"
 
     @pytest.mark.asyncio
+    async def test_delegate_inference_maps_tool_and_timeout(self):
+        session = AsyncMock()
+        session.call_tool = AsyncMock(return_value=make_mcp_result({
+            "success": True,
+            "response": "review",
+            "models_used": ["claude-opus-5"],
+            "inference": {
+                "schema": "unitares.inference_result.v0",
+                "host_id": "claude:host-adapter",
+                "models_used": ["claude-opus-5"],
+                "cost_usd": 0.02,
+            },
+        }))
+        client = make_client_with_session(session)
+
+        result = await client.delegate_inference(
+            "review this",
+            model="claude-opus-5",
+            task_type="review",
+            timeout_s=60,
+        )
+
+        tool_name, args = session.call_tool.call_args[0]
+        assert tool_name == "delegate_inference"
+        assert args["host_id"] == "claude:host-adapter"
+        assert args["model"] == "claude-opus-5"
+        assert args["task_type"] == "review"
+        assert args["timeout_s"] == 60
+        assert result.models_used == ["claude-opus-5"]
+        assert result.inference is not None
+        assert result.inference.cost_usd == 0.02
+
+    @pytest.mark.asyncio
     async def test_list_inference_hosts_maps_tool(self):
         session = AsyncMock()
         session.call_tool = AsyncMock(return_value=make_mcp_result({

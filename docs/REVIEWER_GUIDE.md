@@ -145,20 +145,22 @@ python3 -m pytest tests/test_ablation_negative_controls.py \
 ```
 
 **With a deployment DB** (a real fleet's outcomes via `GOVERNANCE_DATABASE_URL`, or
-the shipped reproducibility kit `CIRWEL/unitares-repro-v6`) — produces the
-baseline-relative numbers you should actually judge:
+the shipped reproducibility kit `CIRWEL/unitares-repro-v6`) — first read the
+[outcome-grounding stop rule](proposals/eisv-outcome-grounding-stop-rule-v0.md).
+Do not turn a live rerun into a new outcome claim before the registered read.
+The frozen commands below reproduce dated evidence without moving its cutoff:
 
 ```bash
 export GOVERNANCE_DATABASE_URL=postgresql://...   # real outcomes, not synthetic
 python3 scripts/analysis/outcome_inventory.py   --window-days 90 --leads 0,5,30
-python3 scripts/analysis/eisv_ablation_matrix.py --scopes strict,task --windows 30,90 --leads 0,5,30
-python3 scripts/analysis/eisv_skeptic_report.py  --window-days 90 --scope task
 ```
 
 For a reproducible provenance-aware read, freeze one cutoff and request marginal
 source/warmup/enforcement/missingness slices. The matrix keeps its overall row,
-uses whole `(agent, prior-state snapshot)` clusters for its selective null, and
-does **not** add provenance or enforcement fields to the predictor set:
+uses whole `(agent, prior-state snapshot)` permutation blocks for its selective
+null, and does **not** add provenance or enforcement fields to the predictor
+set. Blocks preserve shared-feature dependence; they do not prove outcomes are
+independent:
 
 ```bash
 python3 scripts/analysis/eisv_ablation_matrix.py \
@@ -206,7 +208,8 @@ establish predictive lift, prevention, or qualia.
 BEAM harness lane excluded:
 
 - The overall strict/task slices contain 223–227 outcomes, 53 bad rows grouped
-  into 28–29 bad clusters across 16 agents, depending on lead and window.
+  into 28–29 prior-state permutation blocks across 16 agents, depending on lead
+  and window. Report all three counts; blocks are not independent failures.
 - Across both scopes, 30/90-day windows, and 0/5/30-minute leads, **all 12
   overall slices are `NOISE-LEVEL`** after the selected best candidate is
   compared with the matching best-of-candidates permutation null. Selective p
@@ -218,11 +221,11 @@ BEAM harness lane excluded:
   enforcement/missingness strata are `legacy/no-envelope`. **No prevention is
   demonstrated.**
 
-This does not validate EISV, and it does not establish predictive lift. It shows
-that the current organic-fleet sample supports a reproducible negative read once
-best-candidate selection is included in the null. The matrix tests measurable
-signal over a simple previous-outcome baseline; it does not validate the EISV
-ontology or justify load-bearing deployment decisions.
+This does not validate EISV, establish predictive lift, or create a standing AUC
+bound. It is a reproducible dated descriptive snapshot after best-candidate
+selection is included in the null. The matrix tests measurable signal over a
+simple previous-outcome baseline; it does not validate the EISV ontology,
+justify load-bearing deployment decisions, or consume the 2026-12-01 read.
 
 The 12 overall rows and run provenance are preserved in
 [`operations/eisv-ablation-frozen-2026-08-09.md`](operations/eisv-ablation-frozen-2026-08-09.md).
@@ -231,6 +234,14 @@ The 12 overall rows and run provenance are preserved in
 
 The public deployment is intentionally described as single-operator. Treat it
 as evidence that the pipeline has operated under sustained maintainer traffic,
-not as evidence of external product-market pull or efficacy. The next validation
-step is an independent operator running long-lived agents through the same
-check-in and outcome loop.
+not as evidence of external product-market pull or efficacy.
+
+The next validation step is **independent draws with effective-n accounting**,
+not a headcount of operators. The 2026-07-30 individuality read failed at
+effective n=4 against a nominal n=7 because three eligible identities were one
+replicated Raspberry Pi; a second operator would not have repaired that. Report
+effective independent clusters, collapse replicate identities, and prefer
+corpora whose outcome the acting agent neither authors nor observes. An
+independent operator is one route to those draws and is required for the
+separate multi-principal trust claim, but it is not a precondition for efficacy
+evidence.

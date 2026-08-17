@@ -3,18 +3,18 @@
 Exposes what the server can route today: the synchronous local hosts (Ollama, HF
 via ``call_model``) plus the strong-heterogeneous subscription-CLI hosts (Codex,
 Claude) served ASYNCHRONOUSLY via the agent-orchestrator (``host_adapter.py``).
-It does not store credentials; availability is probed live (socket / CLI on PATH /
+It does not store credentials; availability is probed live (socket / resolved CLI /
 opt-in flag). The strong hosts are gated by ``UNITARES_HOST_ADAPTER_ENABLED``.
 
 **Availability is not callability.** ``available`` answers "could this adapter
 run if something invoked it". ``accepts_host_id_from`` answers the question an
 agent actually has: "which tools will accept this host as a ``host_id``
-argument". They diverge today — the Codex/Claude host adapters are built and
-tested, but ``invoke_host_adapter()`` has no production caller, so no agent can
-reach them at any flag setting. A host that advertises itself as usable while
-nothing can call it is a discoverability lie, so those records carry
-``accepts_host_id_from=[]`` and ``implementation_status="built_unwired"`` until a
-consumer lands. Wire a caller -> update both fields in the same change.
+argument". They can diverge: the Codex adapter remains built but unwired, while
+the Claude adapter is reachable through the long-running
+``delegate_inference`` tool. A host that advertises itself as usable while
+nothing can call it is a discoverability lie, so an unwired record carries
+``accepts_host_id_from=[]``. Wire a caller -> update reachability and
+implementation status in the same change.
 
 ``accepts_host_id_from`` is deliberately a claim about *parameter validity*, not
 about traffic. This registry does not see all inference: ``llm_delegation.py``
@@ -179,17 +179,17 @@ def _base_hosts() -> list[InferenceHost]:
             accountability_class="tool_evidence",
             capabilities=["reasoning", "review", "summarize"],
             models=["claude"],
-            implementation_status="built_unwired",
-            accepts_host_id_from=[],
+            implementation_status="active",
+            accepts_host_id_from=["delegate_inference"],
             notes=(
-                "NOT REACHABLE BY AGENTS YET. Subscription-backed Claude "
-                "(`claude -p`) served ASYNC via the agent-orchestrator, not the "
-                "sync call_model path. The adapter is built and tested, but "
-                "invoke_host_adapter() has no production caller, so no tool "
-                "routes here even with UNITARES_HOST_ADAPTER_ENABLED=1 + the "
-                "claude CLI on PATH + AGENT_ORCHESTRATOR_BEARER_TOKEN. "
-                "`available` reports adapter readiness, not callability. "
-                "See support/host_adapter.py."
+                "Agent-callable through delegate_inference. Subscription-backed "
+                "Claude (`claude -p`) runs with safe mode, no tools, and no "
+                "session persistence via the agent-orchestrator; it is not on "
+                "the synchronous call_model path. Requires "
+                "UNITARES_HOST_ADAPTER_ENABLED=1, an authenticated Claude CLI "
+                "(PATH, ~/.local/bin/claude, or UNITARES_CLAUDE_CLI), and "
+                "AGENT_ORCHESTRATOR_BEARER_TOKEN. Exact provider-reported model "
+                "IDs, usage, cost, hashes, and latency are returned as evidence."
             ),
         ),
     ]

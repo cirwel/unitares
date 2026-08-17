@@ -127,8 +127,12 @@ Choosing `k` is a policy call and should be recorded as one.
 ## 5. What this does not claim
 
 - **Not outcome-validated.** No claim that low proprioceptive coherence predicts bad outcomes.
-  The label volume for that test is not available (83 bad-with-EISV rows across 26 independent
-  clusters against a stop rule of >=150) and is not buyable with plumbing.
+  A broad availability census found 83 bad-with-EISV rows across 26 `(agent, session)` groups,
+  but those groups are neither the stop-rule analytic cohort nor independent outcomes and must
+  not be compared with its >=150 prior-state permutation-block eligibility threshold. The
+  frozen trusted matrix instead reports 53 bad rows in 28–29 blocks across 16 agents,
+  depending on slice; it is descriptive, not the registered read. Plumbing alone does not
+  resolve that dependence and eligible-evidence constraint.
 - **The oracle path stays open, deliberately.** Proprioception is the primary justification, not
   a replacement that forecloses outcome validation. Per-agent thresholds *improve* the eventual
   oracle test: they remove between-agent identity variance, which is confound rather than
