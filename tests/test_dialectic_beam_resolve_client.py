@@ -185,3 +185,50 @@ async def test_transport_error_falls_back_to_none(monkeypatch):
     with patch.dict(sys.modules, {"httpx": boom}):
         out = await brc.beam_resolve("s1", "p", "r", {"verdict": "resume"})
     assert out is None
+
+
+# --- synthesis_round on the phase wire (2026-08-16) -------------------------
+#
+# The round was incremented in memory (src/dialectic_protocol.py:705,742) and
+# never persisted: this client sent phase only, and BEAM's update_phase wrote
+# only phase/updated_at. Every row read synthesis_round=0 across all 36 sessions
+# in the trailing 30 days, so the max_synthesis_rounds budget check reset on
+# every rehydration.
+
+
+def test_phase_payload_omits_round_when_absent():
+    """Wire shape must stay byte-identical to the pre-fix request when no round
+    is tracked, so a lease-plane that predates the field is unaffected."""
+    from src.mcp_handlers.dialectic.beam_resolve_client import _phase_payload
+
+    assert _phase_payload("s1", "synthesis", None) == {
+        "session_id": "s1",
+        "phase": "synthesis",
+    }
+
+
+def test_phase_payload_includes_round_when_present():
+    from src.mcp_handlers.dialectic.beam_resolve_client import _phase_payload
+
+    assert _phase_payload("s1", "synthesis", 2) == {
+        "session_id": "s1",
+        "phase": "synthesis",
+        "synthesis_round": 2,
+    }
+
+
+def test_phase_payload_coerces_round_to_int():
+    """A float or numeric string must not reach the wire as a non-int; the BEAM
+    guard requires is_integer/1 and would 422 the whole phase update."""
+    from src.mcp_handlers.dialectic.beam_resolve_client import _phase_payload
+
+    assert _phase_payload("s1", "synthesis", 3.0)["synthesis_round"] == 3
+    assert isinstance(_phase_payload("s1", "synthesis", 3.0)["synthesis_round"], int)
+
+
+def test_phase_payload_keeps_zero_not_dropped():
+    """0 is a real round, not 'absent' — a falsy check here would silently stop
+    persisting the first round."""
+    from src.mcp_handlers.dialectic.beam_resolve_client import _phase_payload
+
+    assert _phase_payload("s1", "thesis", 0)["synthesis_round"] == 0

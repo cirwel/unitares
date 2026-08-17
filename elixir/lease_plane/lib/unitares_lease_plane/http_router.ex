@@ -271,9 +271,12 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   # BEAM sole writer of the session row across the whole lifecycle. Gated
   # Python-side by UNITARES_DIALECTIC_BEAM_RESOLUTION.
   post "/v1/dialectic/phase" do
+    round = Map.get(conn.body_params, "synthesis_round")
+
     with %{"session_id" => sid, "phase" => phase} <- conn.body_params,
-         true <- is_binary(sid) and byte_size(sid) > 0 and is_binary(phase) do
-      case UnitaresLeasePlane.DialecticSaga.update_phase(sid, phase) do
+         true <- is_binary(sid) and byte_size(sid) > 0 and is_binary(phase),
+         true <- is_nil(round) or (is_integer(round) and round >= 0) do
+      case UnitaresLeasePlane.DialecticSaga.update_phase(sid, phase, round) do
         :ok ->
           json(conn, 200, %{ok: true, session_id: sid, phase: phase})
 

@@ -27,6 +27,28 @@ builds on it. All actions route through the consolidated `knowledge(...)` tool
 > If a related entry exists, prefer a linked correction or `supersede` over a
 > fresh note.
 
+## Read response envelope modes
+
+The unified tool keeps its existing full response shape by default. For
+iterative reads, callers may request a lean caller-identity envelope on
+`search`, `get`, `details`, and `stats`:
+
+```text
+knowledge(action="search", query="identity", response_mode="compact")
+knowledge(action="details", discovery_id="...", response_mode="lean")
+```
+
+`compact` and `lean` are aliases. They affect caller identity metadata only:
+`agent_signature` retains `uuid` and an `identity_assurance` summary containing
+`tier` and `caller_proven`; repeated `identity_context` is omitted. Discovery
+content, ranking scores, staleness warnings, writer attribution, and discovery
+provenance are unchanged.
+
+The mode is opt-in. Omitting `response_mode` is equivalent to `full`. Write
+actions ignore compact/lean for envelope shaping and always retain the full
+attribution context. `list` likewise retains its existing full shape because it
+is outside the initial read-mode contract.
+
 ## Write / consistency semantics
 
 The store is **last-write-wins with no optimistic locking** — there is no

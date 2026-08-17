@@ -727,6 +727,8 @@ class TestLoadSessionAsDict:
             "reason": "Circuit breaker pause",
             "trigger_source": "circuit_breaker",
             "awaiting_facilitation": True,
+            "synthesis_round": 3,
+            "max_synthesis_rounds": 5,
         }
 
         mock_msg_rows = [
@@ -767,6 +769,8 @@ class TestLoadSessionAsDict:
         assert result["reason"] == "Circuit breaker pause"
         assert result["trigger_source"] == "circuit_breaker"
         assert result["awaiting_facilitation"] is True
+        assert result["synthesis_round"] == 3
+        assert result["max_synthesis_rounds"] == 5
         assert result["message_count"] == 1
         assert len(result["transcript"]) == 1
         assert result["transcript"][0]["phase"] == "thesis"
@@ -981,6 +985,8 @@ class TestListAllSessions:
                 "created_at": now,
                 "resolution_json": None,
                 "message_count": 2,
+                "synthesis_round": 2,
+                "max_synthesis_rounds": 5,
             },
         ]
 
@@ -1003,6 +1009,8 @@ class TestListAllSessions:
         assert result[0]["session_id"] == "pg_list_1"
         assert result[0]["phase"] == "thesis"
         assert result[0]["message_count"] == 2
+        assert result[0]["synthesis_round"] == 2
+        assert result[0]["max_synthesis_rounds"] == 5
         # Backward-compatible: rows without the column default the flag to False.
         assert result[0]["awaiting_facilitation"] is False
 

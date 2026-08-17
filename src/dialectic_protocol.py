@@ -685,11 +685,12 @@ class DialecticSession:
         # resolved this way, median 2.2 minutes after the rejection — the reviewer's
         # verdict had never once blocked a resumption.
         #
-        # This routes to facilitation rather than resolving. It deliberately does NOT
-        # wait for the reviewer to ratify: the orchestrated reviewer subprocess exits
-        # immediately after posting its verdict, so a "both participants must agree"
-        # rule would strand the session forever — the never-resolve regression the
-        # synthetic-reviewer path was built to kill.
+        # This records the paused agent's response and routes it to independent
+        # ratification rather than resolving. The orchestrated reviewer now remains
+        # alive for a bounded continuation window and may post a later synthesis;
+        # manual/self-review paths retain the facilitation fallback when no reviewer
+        # is available. The paused agent still cannot turn its own acceptance into
+        # authority to resume.
         # NOTE: no reviewer_mode='self' exemption. An earlier revision exempted
         # paused==reviewer on the grounds that there is no independent check to
         # override. The record refutes the premise: 17 self-review verdicts across 10
