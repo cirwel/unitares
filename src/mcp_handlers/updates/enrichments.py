@@ -7,11 +7,13 @@ enrichment failure never crashes the update.
 """
 
 import asyncio
+import hashlib
 import json
 import os
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from config.governance_config import GovernanceConfig
 from src.logging_utils import get_logger
 from src.monitor_result import DIVERGENCE_LINE_THRESHOLD
 from src.thread_identity import (
@@ -67,7 +69,7 @@ _KG_SURFACED_TTL_SECONDS = 86400
 # and fires at most once per agent-session.
 _REVIEW_NUDGE_CONF_CEILING = 0.4
 _REVIEW_NUDGE_COMPLEXITY_FLOOR = 0.8
-_REVIEW_NUDGE_TTL_SECONDS = 86400
+_REVIEW_NUDGE_TTL_SECONDS = GovernanceConfig.SESSION_TTL_SECONDS
 
 # ─── Identity Reminder ─────────────────────────────────────────────────
 
@@ -1746,6 +1748,14 @@ async def _review_nudge_novel(ctx: UpdateContext) -> bool:
     nudge that keeps firing trains the reader to ignore the channel.
     """
     try:
+        session_key = str(ctx.session_key or "").strip()
+        if not session_key:
+            return False
+        # Scope dedup to the resolved session, without placing the session proof
+        # itself in a Redis key. The TTL matches the canonical session binding:
+        # once that binding expires, reusing the same caller token is a new
+        # server-side session for dedup purposes.
+        session_scope = hashlib.sha256(session_key.encode("utf-8")).hexdigest()
         from src.cache.redis_client import get_redis
 
         redis = await get_redis()
@@ -1753,7 +1763,7 @@ async def _review_nudge_novel(ctx: UpdateContext) -> bool:
             return False
         added = await asyncio.wait_for(
             redis.set(
-                f"review_nudge:{ctx.agent_uuid}",
+                f"review_nudge:{ctx.agent_uuid}:{session_scope}",
                 "1",
                 nx=True,
                 ex=_REVIEW_NUDGE_TTL_SECONDS,
