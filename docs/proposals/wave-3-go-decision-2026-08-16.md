@@ -95,9 +95,12 @@ database:
 | **Canary-excluded (2026-08-16)** | — | — | **18** |
 | **Canary-excluded (2026-08-17)** | 9 | 10 | **19** |
 
-Canary is **half the raw rows** (19 of 38). Exclusion is `core.agents.label NOT
-LIKE 'canary_dialectic%'` joined `a.id = d.paused_agent_id`; ⛔`trigger_source`
-is the literal `'manual'` on every row and partitions nothing. The join is clean
+Canary is **exactly half the raw rows** (19 of 38). Exclusion is
+`core.agents.label NOT LIKE 'canary_dialectic%'` joined `a.id = d.paused_agent_id`.
+⛔`trigger_source` cannot substitute: it is the literal `'manual'` on **all 38**
+rows of this cohort. ⚠️Scope that claim correctly — table-wide the column holds
+three values (`manual` 93, NULL 41, `loop_detection` 1), so "trigger_source is
+useless" is true **of this window**, not of the column in general. The join is clean
 — 0 null `paused_agent_id`, 0 orphans, 2 distinct statuses — so the shortfall is
 real, not a join artifact.
 
@@ -108,19 +111,31 @@ figures.
 ⛔**The window slides** — 18 → 19 in one day. Never quote a pinned `n` without its
 as-of date.
 
-⛔**Do not pin across #1705** (OPEN and BEHIND as of 2026-08-17). It persists
-`synthesis_round` and adds a genuine second synthesis round, changing what a
-`failed` row means. A baseline pinned on pre-#1705 semantics cannot support the
-≤5% regression comparison the criterion requires. Re-measure after it deploys and
-stabilises, then pin resolution-rate *and* reassignment mean + σ together.
+⛔**Do not pin across #1705 — and it has now landed.** #1705 **MERGED
+2026-08-17T08:08:53Z** (`f371e51f`, on `master`). It persists `synthesis_round`
+and adds a genuine second synthesis round, changing what a `failed` row means. A
+baseline pinned on pre-#1705 semantics cannot support the ≤5% regression
+comparison the criterion requires. **The clean-cohort clock therefore starts at
+the deploy of `f371e51f`, not at this document's date** — every row in the table
+above predates the merge and none of them may seed the baseline.
 
 ⛔#1689 does **not** report the post-exclusion split; it reports the raw 36. Do
 not cite it for 18.
 
 **Arrival rate**, non-canary, by week: `07-27: 3 · 08-03: 5 · 08-10: 11`. The
-07-06 → 07-20 zeros are the operator-absence window, not a rate. If ~11/wk holds,
-a trailing-30d window clears ≥30 in roughly two to three weeks — but the clean
-window realistically starts only once #1705 has deployed.
+07-06 → 07-20 zeros are the operator-absence window, not a rate.
+
+⛔**Two different questions here; do not conflate them.**
+
+1. *When does the running trailing-30d total reach 30?* At ~11/wk, about **one
+   week** (≈2026-08-24; the oldest row does not age out until 08-26). ⛔**This
+   number is not usable** — it counts pre-#1705 rows.
+2. *When does a semantically clean post-#1705 cohort reach 30 from zero?* At
+   ~11/wk, **≈2.7 weeks after `f371e51f` deploys**. This is the one criterion 10
+   actually needs.
+
+⚠️The weekly series is three points and the 08-10 week includes a five-row
+single-day burst, so treat either date as a band, not a forecast.
 
 ---
 
