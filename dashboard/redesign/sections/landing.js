@@ -144,8 +144,8 @@
     const presenceUnknown = (stats.agentsPresenceUnknown || 0)
       + (stats.agentsPresenceUnavailable || 0);
     const agentSub = hasAgentPresence
-      ? `live binding/lease${presenceUnknown ? ` · ${presenceUnknown} unknown` : ""}`
-      : un(stats.agentsActive) ? "unavailable" : "registry active / total";
+      ? `live binding/lease · 30d window${presenceUnknown ? ` · ${presenceUnknown} presence unknown` : ""}`
+      : un(stats.agentsActive) ? "unavailable" : "registry active / total · 30d window";
     const stuckBody = stuckList.map((s) => {
       const inner = `<span class="name">${esc(s.name || "agent not identified")}</span>`
         + `<span class="reason">${esc(s.reason)}${s.soft ? " · soft" : ""}</span>`;
@@ -158,12 +158,20 @@
         ? `<a href="#agents" class="stuck-more">+${stats.stuck - stuckList.length} more</a>` : "");
     const cards = [
       { h: "Fleet Coherence", id: "fleetcoh", num: num(fleet.coh), sub: fleet.sub, cls: "up", rule: true, href: "#residents" },
-      { h: "Agents", num: un(agentHeadline) ? "—" : agentHeadline, of: un(stats.agentsTotal) ? "" : "/ " + stats.agentsTotal, sub: agentSub, href: "#agents" },
+      // Name the denominator's window: this card reads a 30-day registry
+      // window, the Agents tab a 14-day one, tier_distribution ever-seen —
+      // three honest totals that read as contradictions when unlabelled.
+      { h: "Agents", num: un(agentHeadline) ? "—" : agentHeadline, of: un(stats.agentsTotal) ? "" : "/ " + stats.agentsTotal, sub: agentSub, href: "#agents",
+        title: un(stats.agentsTotal) ? "" : `${agentHeadline} with a live binding/lease right now, of ${stats.agentsTotal} registry identities seen in the last 30 days. The Agents tab reads a 14-day window, so its total is smaller.` },
       { h: "Agent attention", num: un(stats.stuck) ? "—" : stats.stuck, sub: un(stats.stuck) ? "unavailable" : (stats.stuck ? `${stuckHard} stuck · ${stuckSoft} soft silence` : "none flagged"), cls: un(stats.stuck) ? "" : (stuckHard ? "down" : stats.stuck ? "" : "up"),
         body: stuckBody, href: stuckBody ? null : "#agents" },
       { h: "Automations", num: asum.total || 0, sub: autoSub, cls: aWarn ? "down" : "up", href: "#automations" },
       { h: "Discoveries", num: un(stats.discoveries) ? "—" : stats.discoveries.toLocaleString(), sub: un(stats.discoveries) ? "unavailable" : (typeof stats.discoveriesToday === "number" ? "+" + stats.discoveriesToday + " today" : "knowledge graph"), href: "#discoveries" },
-      { h: "Dialectic", num: un(stats.dialectic) ? "—" : stats.dialectic, sub: un(stats.dialectic) ? "unavailable" : (stats.dialectic ? "open sessions" : "no open sessions"), href: "#dialectic" },
+      { h: "Dialectic", num: un(stats.dialectic) ? "—" : stats.dialectic, sub: un(stats.dialectic) ? "unavailable"
+          : (stats.dialectic ? "open sessions"
+            : typeof stats.dialecticRecent === "number" && stats.dialecticRecent
+              ? `none open · ${typeof stats.dialecticFailed === "number" && stats.dialecticFailed ? `${stats.dialecticFailed} of ${stats.dialecticRecent} recent failed` : `${stats.dialecticRecent} recent`}`
+              : "no open sessions"), href: "#dialectic" },
       { h: "System Health", num: un(stats.systemHealth) ? "—" : stats.systemHealth, sub: un(stats.systemHealth) ? "unavailable" : (stats.systemHealthDetail || "db · ws · reaper"), cls: un(stats.systemHealth) ? "" : (stats.systemHealth === "OK" ? "up" : "down"), href: "#residents" },
       { h: "Calibration", num: num(stats.calibration), sub: un(stats.calibration) ? "unavailable" : "trajectory health", cls: stats.calibration >= 0.8 ? "up" : "" },
       { h: "Anomalies", num: un(stats.anomalies) ? "—" : stats.anomalies, sub: un(stats.anomalies) ? "unavailable" : (stats.anomalies ? stats.anomalies + " active" : "clear"), cls: un(stats.anomalies) ? "" : (stats.anomalies ? "down" : "up") },
@@ -196,9 +204,13 @@
         + `<span class="tier-track"><i style="width:${pct}%;min-width:${t.n > 0 ? 3 : 0}px;background:${tierVar(t.tier)}"></i></span>`
         + `<span class="tier-n">${t.n.toLocaleString()}</span></div>`;
     }).join("");
+    // "ever-seen" / "untiered", not "of N · unknown": this denominator is every
+    // identity ever registered (6k+), which reads as a contradiction next to
+    // the Agents card's 30-day total unless the scope is named.
     const tierScope = typeof stats.trustEarned === "number"
-      ? `${stats.trustEarned.toLocaleString()} earned of ${stats.trustFleet.toLocaleString()} · ${(stats.trustUnknown || 0).toLocaleString()} unknown`
+      ? `${stats.trustEarned.toLocaleString()} earned of ${stats.trustFleet.toLocaleString()} ever-seen · ${(stats.trustUnknown || 0).toLocaleString()} untiered`
       : "";
+    const tierScopeTitle = "Tier denominators span every identity ever registered. Tiers are earned by evidence over time, so most one-shot sessions stay untiered.";
 
     const trustBody = stats.trustTiers
       ? `<div class="tier-rows">${tierRows}</div>`
@@ -206,12 +218,13 @@
     $("stats").innerHTML = degradeBanner + cards.map((s) => {
       const tag = s.href ? "a" : "div"; const attr = s.href ? ` href="${s.href}" style="text-decoration:none;color:inherit"` : "";
       const dataAttr = s.id ? ` data-card="${s.id}"` : "";
-      return `<${tag} class="card ${s.rule ? "accent-rule" : ""}"${attr}${dataAttr}><h3>${s.h}</h3>`
+      const titleAttr = s.title ? ` title="${esc(s.title)}"` : "";
+      return `<${tag} class="card ${s.rule ? "accent-rule" : ""}"${attr}${dataAttr}${titleAttr}><h3>${s.h}</h3>`
         + `<div class="num">${s.num}${s.of ? `<span class="of"> ${s.of}</span>` : ""}</div>`
         + `<div class="sub ${s.cls || ""}">${s.sub}</div>`
         + (s.body ? `<div class="card-body">${s.body}</div>` : "") + `</${tag}>`;
     }).join("")
-      + `<div class="card wide"><h3>Trust Tiers ${tierScope ? `<span style="text-transform:none;letter-spacing:0;color:var(--faint);font-weight:400">· ${tierScope}</span>` : ""}</h3>${trustBody}</div>`;
+      + `<div class="card wide"><h3>Trust Tiers ${tierScope ? `<span style="text-transform:none;letter-spacing:0;color:var(--faint);font-weight:400" title="${esc(tierScopeTitle)}">· ${tierScope}</span>` : ""}</h3>${trustBody}</div>`;
   }
 
   function renderPulse(residents) {

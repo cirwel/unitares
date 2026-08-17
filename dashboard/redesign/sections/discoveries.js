@@ -80,12 +80,20 @@
 
     // lifecycle bar
     const bs = MODEL.byStatus || {};
-    const totalS = Object.values(bs).reduce((a, n) => a + n, 0) || 1;
+    const statusSum = Object.values(bs).reduce((a, n) => a + n, 0);
+    // Entries the status breakdown doesn't account for (statuses outside the
+    // lifecycle set, or rows past the stats read). Left implicit, the legend
+    // sums short of the "All N" chip and reads as a counting bug.
+    const other = typeof MODEL.total === "number" && MODEL.total > statusSum ? MODEL.total - statusSum : 0;
+    const totalS = statusSum + other || 1;
     const barOrder = ["open", "resolved", "archived", "superseded", "closed"];
+    const otherTitle = "not in the status breakdown (other statuses, or beyond this stats read)";
     const bar = barOrder.filter((k) => bs[k]).map((k) =>
-      `<div title="${k}: ${bs[k]}" style="width:${(bs[k] / totalS) * 100}%;background:${STATUS_COLOR[k]};height:100%"></div>`).join("");
+      `<div title="${k}: ${bs[k]}" style="width:${(bs[k] / totalS) * 100}%;background:${STATUS_COLOR[k]};height:100%"></div>`).join("")
+      + (other ? `<div title="other: ${other} — ${otherTitle}" style="width:${(other / totalS) * 100}%;background:var(--line-2);height:100%"></div>` : "");
     const barLegend = barOrder.filter((k) => bs[k]).map((k) =>
-      `<span><i style="background:${STATUS_COLOR[k]}"></i>${k} ${bs[k]}</span>`).join("");
+      `<span><i style="background:${STATUS_COLOR[k]}"></i>${k} ${bs[k]}</span>`).join("")
+      + (other ? `<span title="${otherTitle}"><i style="background:var(--line-2)"></i>other ${other}</span>` : "");
 
     // type legend
     const bt = MODEL.byType || {};

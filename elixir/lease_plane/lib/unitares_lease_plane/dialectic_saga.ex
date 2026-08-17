@@ -206,16 +206,33 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   """
   @spec update_phase(String.t(), String.t()) ::
           :ok | {:error, :invalid_phase | :session_not_found | term()}
-  def update_phase(session_id, phase)
-      when is_binary(session_id) and phase in @non_terminal_phases do
+  def update_phase(session_id, phase), do: update_phase(session_id, phase, nil)
+
+  @spec update_phase(String.t(), String.t(), non_neg_integer() | nil) ::
+          :ok | {:error, :invalid_phase | :session_not_found | term()}
+
+  @doc """
+  Advance a non-terminal phase, and the synthesis round when one is supplied.
+
+  `synthesis_round` is COALESCEd, so `nil` leaves the stored value untouched and
+  a caller that predates the field behaves exactly as before. Until 2026-08-16
+  this statement wrote `phase` only while Python incremented the round in
+  memory, so every row read `synthesis_round = 0` no matter how many synthesis
+  messages the session carried.
+  """
+  def update_phase(session_id, phase, synthesis_round)
+      when is_binary(session_id) and phase in @non_terminal_phases and
+             (is_nil(synthesis_round) or (is_integer(synthesis_round) and synthesis_round >= 0)) do
     sql = """
     UPDATE core.dialectic_sessions
-    SET phase = $2, updated_at = now()
+    SET phase = $2,
+        synthesis_round = COALESCE($3, synthesis_round),
+        updated_at = now()
     WHERE session_id = $1 AND status NOT IN ('resolved', 'failed', 'escalated')
     RETURNING session_id
     """
 
-    case Postgrex.query(DB, sql, [session_id, phase]) do
+    case Postgrex.query(DB, sql, [session_id, phase, synthesis_round]) do
       {:ok, %{num_rows: 1}} ->
         :ok
 
@@ -235,7 +252,7 @@ defmodule UnitaresLeasePlane.DialecticSaga do
     end
   end
 
-  def update_phase(_session_id, _phase), do: {:error, :invalid_phase}
+  def update_phase(_session_id, _phase, _synthesis_round), do: {:error, :invalid_phase}
 
   @doc """
   Guarded reviewer assignment/reassignment — the last session-row column written
