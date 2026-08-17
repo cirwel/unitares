@@ -255,6 +255,12 @@ class FleetState:
                 "details": {aid: round(drop, 3) for aid, _, drop in shifted},
                 "coherence_source": source,
                 "coherence_role": role,
+                # One cycle can yield several of these — the loop groups by
+                # (source, role) precisely because a control-feedback drop and a
+                # structural-coherence drop are different claims. Not keyed on
+                # the agent set: membership churns every cycle and would defeat
+                # dedup for a persisting condition.
+                "fingerprint_extra": [source, role],
             })
 
         # --- 2. Fleet entropy anomaly ---
@@ -284,6 +290,11 @@ class FleetState:
                                 "summary": f"{name or aid[:8]} entropy outlier (z={z:.1f}, S={s:.3f})",
                                 "agents": [aid],
                                 "self_observation": is_self,
+                                # Subject agent, not Sentinel. The legacy key
+                                # ended in Sentinel's own uuid, so every outlier
+                                # hashed the same and the 30-min dedup window let
+                                # one agent per half-hour through.
+                                "fingerprint_extra": [aid],
                             })
 
         # --- 3. Verdict distribution shift ---
@@ -322,6 +333,12 @@ class FleetState:
                     "severity": "medium",
                     "summary": f"{len(recent_typed)} governance events in {FLEET_COORDINATED_WINDOW // 60}min: {', '.join(sorted(event_types))}",
                     "details": {"event_types": sorted(event_types), "count": len(recent_typed)},
+                    # The correlation this finding reports IS the event-type set,
+                    # so a burst carrying circuit_breaker_trip must not dedup
+                    # behind a routine knowledge_read/knowledge_write one.
+                    # `count` is excluded on purpose: it moves every cycle and
+                    # would turn dedup off entirely.
+                    "fingerprint_extra": sorted(event_types),
                 })
 
         return findings
@@ -636,13 +653,19 @@ class SentinelAgent(GovernanceAgent):
                     notify("Sentinel", f["summary"])
 
                 # Emit to governance event stream (Phase 1 of findings pipeline).
-                # Fingerprint keys on finding type + violation class + agent so
-                # the same fleet condition re-detected next cycle deduplicates.
+                # Fingerprint keys on finding type + violation class + Sentinel's
+                # own uuid, then any per-finding discriminators. The trailing
+                # `fingerprint_extra` is what separates one SUBJECT from another:
+                # the 4-part prefix names the emitter, so on its own it collapses
+                # every agent's outlier into a single dedup bucket. Mirrors
+                # `UnitaresSentinel.Findings.finding_body/2` — keep the two in
+                # step or the BEAM and Python emitters dedup differently.
                 fp = compute_fingerprint([
                     "sentinel",
                     f.get("type", ""),
                     f.get("violation_class", ""),
                     self.agent_uuid or "",
+                    *f.get("fingerprint_extra", []),
                 ])
                 post_finding(
                     event_type="sentinel_finding",
