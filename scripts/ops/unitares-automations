@@ -452,6 +452,94 @@ def collect_systemd(warnings: list[str]) -> list[Automation]:
     return results
 
 
+def collect_remote_host(warnings: list[str]) -> list[Automation]:
+    """Cron + systemd timers on a remote always-on host (e.g. Lumen's Pi).
+
+    The census was blind to the fleet's one always-on node: the Pi runs its
+    own crontab (wifi watchdog, DB/state backups) and systemd timers
+    (anima-watchdog, lumen-heartbeat) that no local surface records — found
+    during the 2026-08-17 platform-lock review. Opt-in via
+    UNITARES_CENSUS_REMOTE_HOST (an ssh alias) so the tool stays
+    machine-agnostic and CI never attempts ssh. Fail-soft: an unreachable
+    host is one warning and zero items, never a failed census. OS
+    housekeeping timers (apt, logrotate, …) are included deliberately —
+    filtering is the reader's job (--grep/--source), not the collector's.
+    """
+    host = os.getenv("UNITARES_CENSUS_REMOTE_HOST", "").strip()
+    if not host:
+        return []
+    ssh = ["ssh", "-o", "ConnectTimeout=4", "-o", "BatchMode=yes", host]
+    results: list[Automation] = []
+
+    try:
+        out = subprocess.run([*ssh, "crontab -l"], capture_output=True, text=True, timeout=12)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        warnings.append(f"remote {host}: unreachable: {exc}")
+        return []
+    if out.returncode == 0:
+        for idx, line in enumerate(out.stdout.splitlines(), start=1):
+            item = parse_crontab_line(line, idx)
+            if item is None:
+                continue
+            item.id = stable_id(f"remote-cron:{host}", item.command[-1])
+            item.name = f"{host}:{item.name}"
+            item.source = f"remote:{host}"
+            item.scheduler = f"cron ({host})"
+            item.notes = [f"remote crontab on {host}"]
+            results.append(item)
+    else:
+        message = (out.stderr or out.stdout).strip()
+        if message:
+            warnings.append(f"remote {host}: crontab: {message.splitlines()[0]}")
+
+    try:
+        out = subprocess.run(
+            [*ssh, "systemctl list-timers --all --output=json"],
+            capture_output=True,
+            text=True,
+            timeout=12,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        warnings.append(f"remote {host}: systemd: unavailable: {exc}")
+        return results
+    if out.returncode != 0:
+        message = (out.stderr or out.stdout).strip()
+        if message:
+            warnings.append(f"remote {host}: systemd: {message.splitlines()[0]}")
+        return results
+    try:
+        timers = json.loads(out.stdout or "[]")
+    except (ValueError, TypeError) as exc:
+        warnings.append(f"remote {host}: could not parse list-timers json: {exc}")
+        return results
+    if not isinstance(timers, list):
+        return results
+    for timer in timers:
+        if not isinstance(timer, dict):
+            continue
+        unit = timer.get("unit") or timer.get("activates") or ""
+        if not unit:
+            continue
+        activates = timer.get("activates")
+        results.append(
+            Automation(
+                id=stable_id(f"remote-systemd:{host}", unit),
+                name=f"{host}:{unit}",
+                source=f"remote:{host}",
+                kind="cron",
+                scheduler=f"systemd ({host})",
+                runner="systemd",
+                status="active",
+                next_run=_systemd_ts(timer.get("next")),
+                last_run=_systemd_ts(timer.get("last")),
+                command=[f"ssh {host} systemctl start {activates or unit}"],
+                expected_outputs=["status_or_stdout"],
+                notes=[f"systemd timer on {host}" + (f" → {activates}" if activates else "")],
+            )
+        )
+    return results
+
+
 def collect_codex(warnings: list[str]) -> list[Automation]:
     results: list[Automation] = []
     root = HOME / ".codex/automations"
@@ -1078,6 +1166,7 @@ def collect_all(projects_root: Path) -> dict[str, Any]:
         collect_launchd,
         collect_crontab,
         collect_systemd,
+        collect_remote_host,
         collect_codex,
         collect_hermes,
         collect_claude_tasks,

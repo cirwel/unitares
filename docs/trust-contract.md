@@ -1,6 +1,6 @@
 # UNITARES Trust Contract
 
-**Status:** Draft v0.2 — 2026-06-11
+**Status:** Active — promoted from draft 2026-08-16. The contract is enforced in code (`src/trust_contract_lint.py`, `tests/test_trust_contract_lint.py`, `tests/test_zero_observation_honesty.py`) and its grounding log (§9) is maintained, currently through 2026-08-10. Contract text is the v0.2 revision of 2026-06-11 plus the §6 row 8 addition.
 **Provenance:** v0.1 drafted 2026-06-10 by an external claude.ai session reviewing the *live* system through the MCP connector (every §6 row is a value the running server returned, not a code-read). v0.2 grounds each violation against the repo: row statuses, the grounding log (§9), and §7 enforcement statuses added by the in-repo session that shipped the fixes. The contract text itself is otherwise the reviewer's.
 **Scope:** Defines what the system guarantees, what it does not, and what honest failure looks like. Any endpoint behavior that violates this document is a bug, regardless of whether the code "works."
 
