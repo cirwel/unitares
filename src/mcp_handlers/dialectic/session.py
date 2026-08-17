@@ -332,7 +332,8 @@ async def load_session_as_dict(session_id: str) -> Optional[Dict[str, Any]]:
                 SELECT session_id, phase, status, session_type,
                        paused_agent_id, reviewer_agent_id, topic,
                        created_at, resolution_json, reason, trigger_source,
-                       awaiting_facilitation
+                       awaiting_facilitation, synthesis_round,
+                       max_synthesis_rounds
                 FROM core.dialectic_sessions WHERE session_id = $1
             """, session_id)
             if not row:
@@ -358,6 +359,10 @@ async def load_session_as_dict(session_id: str) -> Optional[Dict[str, Any]]:
                 "trigger_source": row.get("trigger_source") or None,
                 "awaiting_facilitation": bool(
                     row.get("awaiting_facilitation", False)
+                ),
+                "synthesis_round": int(row.get("synthesis_round") or 0),
+                "max_synthesis_rounds": int(
+                    row.get("max_synthesis_rounds") or 5
                 ),
                 "message_count": len(msg_rows),
                 "transcript": [],
@@ -459,6 +464,8 @@ async def list_all_sessions(
                     ds.created_at,
                     ds.resolution_json,
                     ds.awaiting_facilitation,
+                    ds.synthesis_round,
+                    ds.max_synthesis_rounds,
                     -- The paused agent's LABEL, not just its uuid. The
                     -- test_/demo_ filter below keys on paused_agent_id, which
                     -- is a uuid, so the scheduled probe families
@@ -523,6 +530,10 @@ async def list_all_sessions(
                     "created": created_at or "",
                     "message_count": row["message_count"] or 0,
                     "awaiting_facilitation": bool(row["awaiting_facilitation"]) if "awaiting_facilitation" in row else False,
+                    "synthesis_round": int(row.get("synthesis_round") or 0),
+                    "max_synthesis_rounds": int(
+                        row.get("max_synthesis_rounds") or 5
+                    ),
                 }
 
                 # Parse resolution if present

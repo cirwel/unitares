@@ -525,6 +525,23 @@ def _reviewer_verdict_pending_in_session_data(session_data: Dict[str, Any]) -> b
     return has_independent_antithesis and not has_independent_verdict
 
 
+def _latest_synthesis_agent_in_session_data(
+    session_data: Dict[str, Any],
+) -> Optional[str]:
+    """Return the author of the latest synthesis message, if any."""
+    transcript = session_data.get("transcript") or session_data.get("messages") or []
+    for message in reversed(transcript):
+        if isinstance(message, dict):
+            phase = message.get("phase") or message.get("message_type") or message.get("role")
+            agent_id = message.get("agent_id")
+        else:
+            phase = getattr(message, "phase", None)
+            agent_id = getattr(message, "agent_id", None)
+        if phase == "synthesis":
+            return agent_id
+    return None
+
+
 def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, Any]:
     """Annotate a session payload with concrete next-action metadata."""
     # Two dict shapes reach this function. `load_session_as_dict`
@@ -551,6 +568,17 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
     )
     independent_reviewer_can_revise = bool(
         reviewer_agent_id and reviewer_agent_id != paused_agent_id
+    )
+    latest_synthesis_agent_id = _latest_synthesis_agent_in_session_data(session_data)
+    paused_response_owed = bool(
+        reviewer_objection_stands
+        and independent_reviewer_can_revise
+        and latest_synthesis_agent_id != paused_agent_id
+    )
+    reviewer_reconsideration_owed = bool(
+        reviewer_objection_stands
+        and independent_reviewer_can_revise
+        and latest_synthesis_agent_id == paused_agent_id
     )
 
     try:
@@ -620,20 +648,33 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
                 "the first synthesis verdict. The paused agent may not agree to "
                 "resume until that verdict is recorded."
             )
+        elif reviewer_objection_stands and paused_response_owed:
+            required_role = "paused_agent"
+            required_agent_id = paused_agent_id
+            required_agent_label = _agent_label(paused_agent_id)
+            allowed_agent_ids = [paused_agent_id] if paused_agent_id else []
+            recommended_action = (
+                "The reviewer's rejection stands, so the paused agent should respond "
+                "once with revised evidence or conditions. An agreeing response is "
+                "recorded but cannot resume the agent until the reviewer independently "
+                "ratifies it."
+            )
+        elif reviewer_objection_stands and reviewer_reconsideration_owed:
+            required_role = "reviewer"
+            required_agent_id = reviewer_agent_id
+            required_agent_label = _agent_label(reviewer_agent_id)
+            allowed_agent_ids = [reviewer_agent_id] if reviewer_agent_id else []
+            recommended_action = (
+                "The paused agent has answered the standing rejection. The same "
+                "independent reviewer should evaluate that response and submit a later "
+                "synthesis that maintains or revises the verdict."
+            )
         elif reviewer_objection_stands:
             required_role = "reviewer_or_facilitator"
-            required_agent_id = reviewer_agent_id if independent_reviewer_can_revise else None
-            required_agent_label = (
-                _agent_label(reviewer_agent_id) if independent_reviewer_can_revise else None
-            )
-            allowed_agent_ids = (
-                [reviewer_agent_id] if independent_reviewer_can_revise else []
-            )
             recommended_action = (
-                "The reviewer's rejection stands. The paused agent must not retry an "
-                "agreeing synthesis. The reviewer may revise its verdict after reviewing "
-                "new evidence; otherwise an operator should reassign the reviewer to "
-                "facilitate the session."
+                "This session has no independent reviewer who can reconsider the "
+                "standing rejection. An operator should assign a facilitator or "
+                "replacement reviewer."
             )
         else:
             required_role = "participant"
@@ -724,8 +765,24 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
             )
         else:
             whose_move = "the reviewer's — their first synthesis verdict is owed"
-    elif phase == "synthesis" and reviewer_objection_stands:
-        if current_agent_role == "reviewer" and independent_reviewer_can_revise:
+    elif phase == "synthesis" and reviewer_objection_stands and paused_response_owed:
+        if current_agent_role == "paused_agent":
+            whose_move = "YOURS — respond once to the reviewer's standing rejection"
+            next_call = (
+                f"dialectic(action='synthesis', session_id='{session_id}', "
+                "agrees=true/false, root_cause='...', reasoning='...', "
+                "proposed_conditions=[...])"
+            )
+        elif current_agent_role == "reviewer":
+            whose_move = "NOT YOURS — wait for the paused agent's response"
+        else:
+            whose_move = "the paused agent's — their response to the rejection is owed"
+    elif (
+        phase == "synthesis"
+        and reviewer_objection_stands
+        and reviewer_reconsideration_owed
+    ):
+        if current_agent_role == "reviewer":
             whose_move = "YOURS — review the new evidence and maintain or revise your verdict"
             next_call = (
                 f"dialectic(action='synthesis', session_id='{session_id}', "
@@ -747,6 +804,17 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
             whose_move = (
                 "an operator's — reassign/facilitate unless the reviewer will revise its verdict"
             )
+    elif phase == "synthesis" and reviewer_objection_stands:
+        if current_agent_role == "operator":
+            whose_move = "YOURS — assign an independent reviewer/facilitator"
+            next_call = (
+                f"dialectic(action='reassign', session_id='{session_id}', "
+                "reason='Facilitate standing reviewer rejection')"
+            )
+        elif current_agent_role == "paused_agent":
+            whose_move = "NOT YOURS — an independent facilitator is required"
+        else:
+            whose_move = "an operator's — an independent facilitator is required"
     elif phase == "synthesis":
         if current_agent_role in {"paused_agent", "reviewer"}:
             whose_move = "YOURS — a converging synthesis is owed (negotiate until agreement)"
