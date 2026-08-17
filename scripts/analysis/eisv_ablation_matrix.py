@@ -474,12 +474,13 @@ def qualify_conclusion_with_selective_null(
 
 
 def count_bad_clusters(rows: Sequence[OutcomeRow]) -> tuple[int, int]:
-    """Return (independent bad clusters, distinct bad agents).
+    """Return (bad prior-state permutation blocks, distinct bad agents).
 
     A cluster is one (agent, prior-state snapshot) pair. Prior state is constant
-    within a cluster, so every candidate feature is constant across its rows:
-    N rows sharing a snapshot carry one row's worth of evidence, not N. Reporting
-    `Bad` without this turns an edit-test-retry burst into an apparent sample.
+    within a cluster, so every candidate feature is constant across its rows.
+    Reporting only `Bad` would overcount distinct feature readings in an
+    edit-test-retry burst. The block count does not establish independence of
+    outcomes between clusters.
     """
     clusters: set[tuple[str, int | None]] = set()
     agents: set[str] = set()
@@ -739,8 +740,9 @@ def format_matrix_report(
             "get, so read them together.",
             "",
             "**Read `Bad` against `Bad clusters`.** Features are constant within a "
-            "cluster, so clusters are the independent unit: an edit-test-retry burst "
-            "of N failures is one event, not N.",
+            "cluster, so an edit-test-retry burst does not contribute N distinct "
+            "feature readings. Clusters are permutation blocks, not proof of "
+            "independent outcomes; report bad rows and agents alongside them.",
             "",
             "| " + " | ".join(columns) + " |",
             "|" + "|".join("---" for _ in columns) + "|",

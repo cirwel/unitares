@@ -376,6 +376,7 @@ def test_format_matrix_report_contains_skeptical_ablation_table():
     assert "Selective p" in report
     assert "Read `AUC delta` against `Null max median`, never against zero." in report
     assert "Read `Bad` against `Bad clusters`." in report
+    assert "Clusters are permutation blocks, not proof of independent outcomes" in report
     assert "| task | 90 | 30 | 120 | 24 | 6 | 4 | 120 | 120 |" in report
     assert "[0.010, 0.050]" in report
     assert "[0.0020, 0.0200]" in report
@@ -493,7 +494,7 @@ def test_cli_help_runs_when_invoked_as_a_file():
 
 
 def test_count_bad_clusters_collapses_a_retry_burst_sharing_one_snapshot():
-    """Rows sharing a prior-state snapshot are one unit of evidence, not N.
+    """Rows sharing a prior-state snapshot are one feature block, not N.
 
     An edit-test-retry burst emits several failures seconds apart, all joining
     the same prior state. Every candidate feature is then identical across them,
@@ -520,7 +521,7 @@ def test_count_bad_clusters_collapses_a_retry_burst_sharing_one_snapshot():
 
     clusters, agents = matrix_module.count_bad_clusters([*burst, other, good])
 
-    assert clusters == 2, "three bursty rows plus one other = two independent events"
+    assert clusters == 2, "three bursty rows plus one other = two feature blocks"
     assert agents == 2
 
 
