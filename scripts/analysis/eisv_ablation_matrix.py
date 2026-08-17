@@ -6,6 +6,10 @@ of depending on ad-hoc shell loops. It still makes the same limited claim: do
 EISV/prior-state candidates beat the boring previous-outcome baseline on both
 ranking and calibration in each slice?
 
+The default cohort uses trusted external anchors with a joinable prior-state
+snapshot. ``--anchor-scope all`` remains available only for reproducing the
+historical contaminated series.
+
 Because it reports the BEST candidate per slice, the table also reports the null
 distribution of that maximum when EISV readings are permuted between clusters.
 Read `AUC delta` against `Null max median`, never against zero, and read `Bad`
@@ -850,7 +854,7 @@ async def build_matrix_from_db(
     uncertainty_resamples: int = 0,
     uncertainty_seed: int = 0,
     selective_null_resamples: int = 0,
-    anchor_scope: str = "all",
+    anchor_scope: str = "trusted",
     telemetry_strata: Sequence[str] = (),
     as_of: datetime | None = None,
 ) -> list[AblationMatrixRow]:
@@ -974,12 +978,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--anchor-scope",
         choices=("trusted", "soft", "all"),
-        default="all",
+        default="trusted",
         help=(
             "Which outcomes may anchor the slice (src.grounding.outcome_anchors). "
-            "Default 'all' preserves the historical tracked series and is the "
-            "contaminated scope; 'trusted' requires external_signal plus a "
-            "joinable EISV snapshot."
+            "Default 'trusted' requires external_signal plus a joinable EISV "
+            "snapshot; 'all' is the legacy contaminated scope retained only "
+            "for historical reproduction."
         ),
     )
     parser.add_argument(

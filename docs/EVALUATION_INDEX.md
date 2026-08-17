@@ -73,9 +73,11 @@ criterion. The historical 2026-07-31 `≈ 0.05 AUC` bound is withdrawn for the
 intended claim: it used the contaminated `--anchor-scope all` cohort, and its
 101 "clusters" were prior-state permutation blocks rather than independent
 adjudicated failures. The registered read now fixes `--anchor-scope trusted`
-explicitly. Ad-hoc reruns between now and then will keep surfacing a selected
-maximum that the null explains. Corpora that might one day answer the question
-better than organic telemetry are recorded under
+explicitly, and both prediction scripts now default to the trusted scope so an
+omitted flag cannot silently reproduce the contaminated cohort. Ad-hoc reruns
+between now and then will keep surfacing a selected maximum that the null
+explains. Corpora that might one day answer the question better than organic
+telemetry are recorded under
 [Candidate corpora](#candidate-corpora--not-yet-evaluated) — recorded, not run.
 
 **Current citable read:** the frozen 2026-08-09 trusted-anchor matrix has
@@ -86,6 +88,11 @@ strict/task × 30/90-day × 0/5/30-minute slices are `NOISE-LEVEL` after
 best-candidate selection is included in the null (selective p = 0.070–0.567).
 The removed sandbagging demo and private analysis memory are not reproducible
 evidence from this repository and should not be cited for numeric performance.
+The reproducible boundary is instead the synthetic twin replay documented in
+[`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md): matched-confidence
+concealment is in-band observationally equivalent, while an overclaiming control
+remains visible to Integrity. It is a fixture result, not a real-model
+concealment measurement.
 
 The 2026-08-11 run repeated the already-documented frozen command solely to
 replace stale public wording. It is a dated descriptive snapshot, not the
@@ -103,6 +110,7 @@ Compact run provenance and all 12 overall rows are preserved in
 | `scripts/analysis/outcome_validation.py` ✓ | Buckets agent-days by legacy→grounded basin-flip; outcome rates per bucket | Console table + `--csv`; tool | current |
 | `scripts/analysis/prospective_prediction_cohort.py` ✓ | Counts registry-bound holdout predictions (plumbing only, no claim) | Markdown cohort summary | current |
 | `scripts/analysis/validate_basin_gate.py` ✓ | Validates #689 basin-health gate never raises risk; healthy wobbles stay safe | Console PASS/FAIL + exit; hardcoded 06-13 Sentinel false-pause fixture | current |
+| `tests/test_calibrated_capability_concealment.py` ✓ | Replays matched-confidence synthetic twins through the deployed calibration/sensor/EMA/assessment path | Fixture-demonstrated in-band observational equivalence; not a real-model concealment eval | current |
 | `scripts/analysis/validate_theoretical_foundations.py` ✓ | Greps `governance_core` source for ODE/coherence terms vs theory doc | Pass/fail console | **⚠ won't run by default** — needs `governance_core/` source symlink; brittle exact-string greps |
 | ~~`demos/frt_autonomy_sandbagging/`~~ (removed) | Historical model-organism probe | Not independently reproducible from this repo; do not cite its numeric result | **removed** as out-of-scope (#1043, see `REPO_SCOPE.md`) |
 | ~~`demos/frt_autonomy_sandbagging/real_llm_probe.py`~~ (removed) | Historical real-LLM extension | Not independently reproducible from this repo; do not cite its numeric result | **removed** with the demo (#1043) |

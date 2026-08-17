@@ -59,6 +59,14 @@ def _row(idx: int, *, bad: bool, risk: float | None, agent: str = "agent-a") -> 
     )
 
 
+def test_parse_args_defaults_to_trusted_anchor_scope():
+    default_args = skeptic_module.parse_args([])
+    legacy_args = skeptic_module.parse_args(["--anchor-scope", "all"])
+
+    assert default_args.anchor_scope == "trusted"
+    assert legacy_args.anchor_scope == "all"
+
+
 def test_auc_handles_ties_with_average_ranks():
     assert auc_score([0, 1, 0, 1], [0.1, 0.2, 0.2, 0.9]) == 0.875
 
