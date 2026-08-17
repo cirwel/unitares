@@ -173,8 +173,23 @@ async def save_session(session: DialecticSession, *, defer_terminal: bool = Fals
     """
     Persist dialectic session to PostgreSQL (upsert) and JSON (snapshot).
 
-    Uses pg_update_phase to sync phase/synthesis_round to PG (not INSERT).
+    Uses pg_update_phase to sync **phase only** to PG (not INSERT).
     The JSON snapshot captures the full in-memory state for offline debugging.
+
+    ⛔``synthesis_round`` is NOT synced, despite what this docstring claimed
+    until 2026-08-16. Both sides drop it: the call below passes only
+    ``session.phase.value``, and the live writer — BEAM's
+    ``DialecticSaga.update_phase`` — sets only ``phase`` and ``updated_at``.
+    So the counter incremented in ``src/dialectic_protocol.py`` (:705, :742)
+    never reaches PG, every row reads ``synthesis_round = 0`` (verified across
+    all 36 sessions in the trailing 30 days), and the ``max_synthesis_rounds``
+    budget check at ``dialectic_protocol.py:609`` compares against a value that
+    resets to 0 on every rehydration. Within a single live process the budget
+    still works; across a process boundary it does not.
+
+    Fixing it is a two-component change (this call site + the BEAM SQL) on the
+    path where BEAM is sole writer, so it needs lease-plane deployed before
+    gov-mcp. Tracked in issue #1689 — do not "fix" the docstring back.
 
     ``defer_terminal`` suppresses the terminal PostgreSQL write (the JSON
     snapshot still happens). Pass it when the caller has just converged but has
