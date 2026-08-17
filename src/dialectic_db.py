@@ -190,15 +190,25 @@ class DialecticDB:
                     sessions.append(session)
             return sessions
 
-    async def update_session_phase(self, session_id: str, phase: str) -> bool:
-        """Update session phase/status."""
+    async def update_session_phase(
+        self, session_id: str, phase: str, synthesis_round: Optional[int] = None
+    ) -> bool:
+        """Update session phase, and the synthesis round when one is supplied.
+
+        ``synthesis_round=None`` leaves the stored value untouched via COALESCE,
+        so callers that do not track rounds are unaffected. Before 2026-08-16
+        this wrote phase only, which is why every row read ``synthesis_round=0``
+        regardless of how many synthesis messages a session actually carried.
+        """
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             result = await conn.execute("""
                 UPDATE core.dialectic_sessions
-                SET phase = $1, updated_at = now()
+                SET phase = $1,
+                    synthesis_round = COALESCE($3, synthesis_round),
+                    updated_at = now()
                 WHERE session_id = $2
-            """, phase, session_id)
+            """, phase, session_id, synthesis_round)
             return "UPDATE 1" in result
 
     async def reopen_session(self, session_id: str, phase: str) -> bool:
@@ -565,9 +575,11 @@ async def add_message_async(**kwargs) -> int:
     return await db.add_message(**kwargs)
 
 
-async def update_session_phase_async(session_id: str, phase: str) -> bool:
+async def update_session_phase_async(
+    session_id: str, phase: str, synthesis_round: Optional[int] = None
+) -> bool:
     db = await get_dialectic_db()
-    return await db.update_session_phase(session_id, phase)
+    return await db.update_session_phase(session_id, phase, synthesis_round)
 
 
 async def reopen_session_async(session_id: str, phase: str) -> bool:

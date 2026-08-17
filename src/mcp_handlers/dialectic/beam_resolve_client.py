@@ -85,11 +85,33 @@ async def beam_create_session(
     return None
 
 
-async def beam_update_phase(session_id: str, phase: Optional[str]) -> Optional[Dict[str, Any]]:
+def _phase_payload(
+    session_id: str, phase: Optional[str], synthesis_round: Optional[int]
+) -> Dict[str, Any]:
+    """Phase-update body. Omits ``synthesis_round`` entirely when it is None so
+    the wire shape is byte-identical to the pre-2026-08-16 request for callers
+    that do not track rounds."""
+    payload: Dict[str, Any] = {"session_id": session_id, "phase": phase}
+    if synthesis_round is not None:
+        payload["synthesis_round"] = int(synthesis_round)
+    return payload
+
+
+async def beam_update_phase(
+    session_id: str,
+    phase: Optional[str],
+    synthesis_round: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
     """Advance a non-terminal dialectic phase via BEAM (sole writer of the session
     row). Returns the BEAM result on success, or ``None`` to fall back to the
     Python `pg_update_phase` path. Never raises. Terminal phases are NOT routed
     here (those go via resolve); BEAM rejects them with 422 -> None -> fallback.
+
+    ``synthesis_round`` is sent only when supplied. Deploy order is safe in both
+    directions: the BEAM router pattern-matches on ``session_id``/``phase``, so a
+    lease-plane that predates this field ignores the extra key and updates phase
+    exactly as before; a lease-plane that has it treats an absent key as "leave
+    the stored round alone".
     """
     if not beam_resolution_enabled():
         return None
@@ -109,7 +131,7 @@ async def beam_update_phase(session_id: str, phase: Optional[str]) -> Optional[D
             resp = client.post(
                 f"{base_url}/v1/dialectic/phase",
                 headers={"Authorization": f"Bearer {bearer}", "Content-Type": "application/json"},
-                json={"session_id": session_id, "phase": phase},
+                json=_phase_payload(session_id, phase, synthesis_round),
             )
             return resp.status_code, (resp.json() if resp.content else {})
 

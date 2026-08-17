@@ -290,6 +290,50 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
       assert {:error, :session_not_found} =
                DialecticSaga.update_phase("test_elixir_nope_phase", "thesis")
     end
+
+    # synthesis_round persistence (2026-08-16). Python incremented the round in
+    # memory while this statement wrote phase/updated_at only, so every row read
+    # synthesis_round = 0 and the max_synthesis_rounds budget reset on every
+    # rehydration. COALESCE keeps a nil caller byte-identical to the old write.
+    test "arity-2 call leaves synthesis_round untouched" do
+      session_id = insert_dialectic_session(phase: "thesis", status: "active")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      assert :ok = DialecticSaga.update_phase(session_id, "antithesis")
+      assert session_round(session_id) == 0
+    end
+
+    test "explicit nil leaves synthesis_round untouched" do
+      session_id = insert_dialectic_session(phase: "thesis", status: "active")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      assert :ok = DialecticSaga.update_phase(session_id, "synthesis", 2)
+      assert session_round(session_id) == 2
+      # A later nil-round update must not reset the stored value to 0.
+      assert :ok = DialecticSaga.update_phase(session_id, "antithesis", nil)
+      assert session_round(session_id) == 2
+    end
+
+    test "persists a supplied synthesis_round" do
+      session_id = insert_dialectic_session(phase: "thesis", status: "active")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      assert :ok = DialecticSaga.update_phase(session_id, "synthesis", 3)
+      assert session_round(session_id) == 3
+    end
+
+    test "round 0 is written, not treated as absent" do
+      session_id = insert_dialectic_session(phase: "thesis", status: "active", synthesis_round: 4)
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      assert :ok = DialecticSaga.update_phase(session_id, "synthesis", 0)
+      assert session_round(session_id) == 0
+    end
+
+    test "rejects a negative round rather than writing it" do
+      assert {:error, :invalid_phase} =
+               DialecticSaga.update_phase("test_elixir_neg_round", "synthesis", -1)
+    end
   end
 
   describe "update_reviewer/2" do
@@ -395,6 +439,17 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
       ])
 
     phase
+  end
+
+  defp session_round(session_id) do
+    %{rows: [[r]]} =
+      Postgrex.query!(
+        DB,
+        "SELECT synthesis_round FROM core.dialectic_sessions WHERE session_id = $1",
+        [session_id]
+      )
+
+    r
   end
 
   defp session_reviewer(session_id) do

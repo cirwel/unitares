@@ -173,23 +173,19 @@ async def save_session(session: DialecticSession, *, defer_terminal: bool = Fals
     """
     Persist dialectic session to PostgreSQL (upsert) and JSON (snapshot).
 
-    Uses pg_update_phase to sync **phase only** to PG (not INSERT).
+    Uses pg_update_phase to sync phase AND synthesis_round to PG (not INSERT).
     The JSON snapshot captures the full in-memory state for offline debugging.
 
-    ⛔``synthesis_round`` is NOT synced, despite what this docstring claimed
-    until 2026-08-16. Both sides drop it: the call below passes only
-    ``session.phase.value``, and the live writer — BEAM's
-    ``DialecticSaga.update_phase`` — sets only ``phase`` and ``updated_at``.
-    So the counter incremented in ``src/dialectic_protocol.py`` (:705, :742)
-    never reaches PG, every row reads ``synthesis_round = 0`` (verified across
-    all 36 sessions in the trailing 30 days), and the ``max_synthesis_rounds``
-    budget check at ``dialectic_protocol.py:609`` compares against a value that
-    resets to 0 on every rehydration. Within a single live process the budget
-    still works; across a process boundary it does not.
+    ⛔The round sync was silently absent from the BEAM cutover until 2026-08-16:
+    this call passed phase only and BEAM's ``DialecticSaga.update_phase`` wrote
+    only ``phase``/``updated_at``, so the counter incremented in
+    ``src/dialectic_protocol.py`` (:705, :742) never reached PG and every row
+    read ``synthesis_round = 0`` — measured across all 36 sessions in the
+    trailing 30 days — leaving the ``max_synthesis_rounds`` budget check at
+    ``dialectic_protocol.py:609`` comparing against a value that reset on every
+    rehydration. Both sides now carry it, COALESCEd so ``None`` leaves the
+    stored value alone.
 
-    Fixing it is a two-component change (this call site + the BEAM SQL) on the
-    path where BEAM is sole writer, so it needs lease-plane deployed before
-    gov-mcp. Tracked in issue #1689 — do not "fix" the docstring back.
 
     ``defer_terminal`` suppresses the terminal PostgreSQL write (the JSON
     snapshot still happens). Pass it when the caller has just converged but has
@@ -235,9 +231,12 @@ async def save_session(session: DialecticSession, *, defer_terminal: bool = Fals
                     status=status,
                 )
         else:
-            beam_ph = await beam_update_phase(session.session_id, session.phase.value)
+            round_ = getattr(session, "synthesis_round", None)
+            beam_ph = await beam_update_phase(
+                session.session_id, session.phase.value, round_
+            )
             if beam_ph is None:
-                await pg_update_phase(session.session_id, session.phase.value)
+                await pg_update_phase(session.session_id, session.phase.value, round_)
         logger.debug(f"Session {session.session_id} synced to PostgreSQL (phase={session.phase.value})")
     except Exception as e:
         logger.error(f"PostgreSQL sync failed for session {session.session_id}: {e}")
