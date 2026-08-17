@@ -28,6 +28,7 @@ from unitares_sdk.models import (
     AuditResult,
     CheckinResult,
     CleanupResult,
+    DelegatedInferenceResult,
     IdentityResult,
     InferenceHostResult,
     InferenceHostsResult,
@@ -700,6 +701,35 @@ class GovernanceClient:
         args.update(kwargs)
         raw = await self.call_tool("call_model", args)
         return ModelResult.model_validate(raw)
+
+    async def delegate_inference(
+        self,
+        prompt: str,
+        host_id: str = "claude:host-adapter",
+        model: str | None = None,
+        task_type: str = "reasoning",
+        timeout_s: int = 240,
+        **kwargs: Any,
+    ) -> DelegatedInferenceResult:
+        """Delegate to a strong host model. Maps to delegate_inference."""
+        args: dict[str, Any] = {
+            "prompt": prompt,
+            "host_id": host_id,
+            "task_type": task_type,
+            "timeout_s": timeout_s,
+        }
+        if model is not None:
+            args["model"] = model
+        args.update(kwargs)
+        raw = await self.call_tool(
+            "delegate_inference",
+            args,
+            # Stay outside the server's await + spawn/backstop budget so the
+            # SDK never retries an expensive delegation while its first call
+            # is still resolving.
+            timeout=float(timeout_s + 75),
+        )
+        return DelegatedInferenceResult.model_validate(raw)
 
     # --- Internal helpers ---
 

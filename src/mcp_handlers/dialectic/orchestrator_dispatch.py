@@ -96,6 +96,26 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
     if parent_agent_id:
         env["UNITARES_PARENT_AGENT_ID"] = parent_agent_id
 
+    # The backend choice belongs to the dispatching governance process, not to
+    # whichever defaults happen to be present in the orchestrator daemon. Pass
+    # only the bounded reviewer configuration — never auth tokens. The Claude
+    # CLI itself inherits operator subscription auth from the child runtime.
+    reviewer_config = (
+        "UNITARES_DIALECTIC_REVIEWER_HOST",
+        "UNITARES_DIALECTIC_CLAUDE_MODEL",
+        "UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S",
+        "UNITARES_DIALECTIC_CODEX_TIMEOUT_S",
+        "UNITARES_DIALECTIC_REVIEW_MAX_TOKENS",
+        "UNITARES_CLAUDE_CLI",
+        "UNITARES_CODEX_CLI",
+        "UNITARES_LLM_MODEL",
+        "UNITARES_OLLAMA_BASE_URL",
+    )
+    for name in reviewer_config:
+        value = os.environ.get(name)
+        if value:
+            env[name] = value
+
     # NB: we deliberately do NOT forward UNITARES_DIALECTIC_BEAM_RESOLUTION into
     # the reviewer's env. The reviewer submits its antithesis/synthesis via the
     # gov-mcp `dialectic` tool (client.call_tool), so those writes EXECUTE IN

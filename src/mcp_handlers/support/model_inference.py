@@ -43,7 +43,7 @@ def _sha256_text(text: str) -> str:
 
 
 def _invocation_gate() -> Dict[str, Any]:
-    """Disclose call_model's identity gate on the two discovery reads.
+    """Disclose inference-call identity gates on the two discovery reads.
 
     Both discovery tools serve ``pre_onboard``; ``call_model`` does not. So an
     unbound caller can enumerate every host and then fail on all of them — the
@@ -57,13 +57,23 @@ def _invocation_gate() -> Dict[str, Any]:
     """
     from ..decorators import get_call_identity_requirement
 
-    requirement = get_call_identity_requirement("call_model", {})
-    gate: Dict[str, Any] = {"tool": "call_model", "requires_identity": requirement}
-    if requirement == "required":
+    call_model_requirement = get_call_identity_requirement("call_model", {})
+    delegate_requirement = get_call_identity_requirement("delegate_inference", {})
+    gate: Dict[str, Any] = {
+        # Preserve the original scalar fields for older clients while exposing
+        # the complete per-tool map for hosts routed outside call_model.
+        "tool": "call_model",
+        "requires_identity": call_model_requirement,
+        "tools": {
+            "call_model": {"requires_identity": call_model_requirement},
+            "delegate_inference": {"requires_identity": delegate_requirement},
+        },
+    }
+    if call_model_requirement == "required" or delegate_requirement == "required":
         gate["note"] = (
             "Listing hosts serves unbound callers; calling one does not. "
-            "Bind first with start_session(force_new=true) — model calls are "
-            "attributed as Energy consumption, which needs an agent to attribute to."
+            "Bind first with start_session(force_new=true) — inference calls "
+            "are attributed as Energy consumption and evidence."
         )
     return gate
 
@@ -206,12 +216,10 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 recovery={
                     "action": (
                         "Pick a host whose accepts_host_id_from includes call_model. "
-                        "Strong-model hosts (codex/claude host adapters) run async "
-                        "through the agent-orchestrator and have no agent-callable "
-                        "entrypoint yet — enabling UNITARES_HOST_ADAPTER_ENABLED "
-                        "does not change that."
+                        "Claude's strong-model host runs through delegate_inference; "
+                        "Codex's host adapter remains unwired."
                     ),
-                    "related_tools": ["list_inference_hosts"],
+                    "related_tools": ["list_inference_hosts", "delegate_inference"],
                 },
             )]
         if not host.get("configured") or not host.get("available"):
