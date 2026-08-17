@@ -4,7 +4,7 @@ description: >
   Use when an agent is interacting with UNITARES governance for the first time, needs to
   onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
   from session start through check-ins to recovery.
-last_verified: "2026-08-09"
+last_verified: "2026-08-16"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -17,12 +17,15 @@ source_files:
   # `confidence` guidance survived several freshness cycles — the field it was
   # wrong about lives in phases.py, which nobody was checking.
   - unitares/src/mcp_handlers/updates/phases.py
+  - unitares/src/mcp_handlers/updates/enrichments.py
   - unitares/src/mcp_handlers/dialectic/handlers.py
+  - unitares/src/mcp_handlers/lifecycle/self_recovery.py
+  - unitares/src/mcp_handlers/lifecycle/recovery_policy.py
 ---
 
 # Agent Lifecycle
 
-**Last Updated:** 2026-08-09
+**Last Updated:** 2026-08-16
 
 ## Primary Workflow Names
 
@@ -36,6 +39,8 @@ The core lifecycle should use primary task-verb tools. Each is implemented by a 
 | Avoid duplicate work | `search_shared_memory(query=...)` | `knowledge(action="search")` |
 | Record what actually happened | `record_result(...)` | `outcome_event` |
 | Ask for a structured review | `request_review(issue_description=...)` | `dialectic(action="request")` |
+| Store a durable finding | `store_finding(summary=..., discovery_type=...)` | `knowledge(action="store")` |
+| Update a durable finding | `update_finding(discovery_id=..., ...)` | `knowledge(action="update")` |
 
 Use the primary workflow tools by default. Use raw implementation names only for older servers, compatibility code, or when you explicitly need the unwrapped handler response. `start_session(force_new=true)` is a process-start operation, not a per-turn continuation primitive. `request_review` also supports a one-call form: pass `reasoning` (and optionally `root_cause`/`proposed_conditions`) and the thesis is submitted in the same call, with the response carrying plain-language `whose_move`/`next_call` guidance on every dialectic session read.
 
@@ -48,11 +53,11 @@ start_session(force_new=true)                                        # one fresh
 start_session(force_new=true, parent_agent_id="<dispatcher-uuid>",
               spawn_reason="subagent")                               # dispatched subagent (usually set automatically by the dispatcher)
 start_session(force_new=true, parent_agent_id="<prior-uuid>",
-              spawn_reason="new_session")                            # handoff from a finished prior session
+              spawn_reason="explicit")                               # deliberate handoff from an exited prior session
 identity(agent_uuid="<uuid>", continuity_token="<token>", resume=true) # same live owner / proof-owned rebind
 ~~~
 
-Declaring a currently-live agent as parent for a succession is rejected (`lineage_coincidental_rejected`): a live agent is then a concurrent sibling, not a predecessor. Registered dispatched-child reasons (`subagent`, internal `dialectic_reviewer`, and `dispatch`) plus the `compaction` continuation are exempt because their parent is legitimately live; unknown reasons receive no exemption. A genuine handoff to an exited predecessor stays provisional until R1 confirms it. Continuing the same still-running process means reusing the active binding or `client_session_id`, not minting another child.
+Declaring a currently-live agent as parent for a succession is rejected (`lineage_coincidental_rejected`): a live agent is then a concurrent sibling, not a predecessor. Registered dispatched-child reasons (`subagent`, internal `dialectic_reviewer`, and `dispatch`) plus the `compaction` continuation are exempt because their parent is legitimately live; unknown reasons receive no exemption. Use `explicit` for a deliberate handoff from an exited predecessor; the older `new_session` reason remains succession-shaped but does not, by itself, prove intentional lineage. A genuine handoff stays provisional until R1 confirms it. Continuing the same still-running process means reusing the active binding or `client_session_id`, not minting another child.
 
 Use raw `onboard(...)` instead when targeting older servers or when you
 need the unwrapped raw response.
@@ -70,7 +75,7 @@ Returns:
 Default rules:
 
 1. Any fresh process: call `start_session(force_new=true)` with no parent. Co-location in a workspace is not lineage.
-2. Declare lineage only for a real causal event — a dispatched subagent (`parent_agent_id="<dispatcher-uuid>", spawn_reason="subagent"`, usually set automatically by the dispatcher) or a handoff from a finished prior session (`parent_agent_id="<prior-uuid>", spawn_reason="new_session"`). Declaring a currently-live agent as parent is rejected.
+2. Declare lineage only for a real causal event — a dispatched subagent (`parent_agent_id="<dispatcher-uuid>", spawn_reason="subagent"`, usually set automatically by the dispatcher) or a deliberate handoff from an exited prior session (`parent_agent_id="<prior-uuid>", spawn_reason="explicit"`). Declaring a currently-live succession parent is rejected.
 3. Same live process or explicit ownership rebind: call `identity(agent_uuid="<uuid>", continuity_token="<token>", resume=true)`.
 4. Ordinary same-process check-ins: rely on the active session binding or `client_session_id`; reserve `continuity_token` for explicit proof-owned rebinds.
 
@@ -110,7 +115,17 @@ primary workflow responses preserve it under `raw_governance`.
 
 ### What You Get Back
 
-A verdict plus current EISV metrics. Read the verdict and act on it.
+The friendly tools return a normalized envelope. Read `next_action` first, then
+`state_summary`, `risk_summary`, `memory_suggestions`, and `recovery_hint` when
+present. The complete canonical response remains under `raw_governance`.
+
+If you supplied a genuine `confidence`, the response may mint a concrete
+`prediction_id`. Preserve that identifier and pass it to
+`record_result(..., prediction_id="...")` when the outcome lands; otherwise the
+outcome may grade an unrelated fallback prediction. When
+`UNITARES_REVIEW_NUDGE` is enabled, a warmed session can also receive a
+once-per-session `review_suggested` nudge for low confidence, high complexity,
+or a guide verdict. It is optional guidance, not a forced review.
 
 ### Your check-in is one evidence class among several
 
@@ -144,10 +159,9 @@ watched less, or from a busy one that you have already reported.
 
 | Verdict | What to Do |
 |---------|-----------|
-| **proceed** | Continue normally |
-| **guide** + guidance text | Read the guidance, adjust your approach, keep going |
-| **pause** | Stop your current task. Reflect on what is flagged. Consider requesting a dialectic review |
-| **reject** | Significant concern. Requires dialectic review or human intervention |
+| **proceed / approve** | Continue normally |
+| **proceed / guide** + guidance text | Read the guidance, adjust your approach, keep going |
+| **pause / reject** | Stop your current task. Reflect on what is flagged. Consider requesting a dialectic review |
 | **margin: tight** | You are near a basin edge. Be more careful with next steps |
 
 A `guide` verdict is an early warning. Ignoring it makes `pause` more likely.
@@ -173,11 +187,17 @@ When you are paused, stuck, or need intervention:
 
 | Situation | Tool | Notes |
 |-----------|------|-------|
-| Stuck or paused, want automatic recovery | `self_recovery()` | Attempts to restore healthy state |
-| Disagree with verdict, want structured review | `request_dialectic_review()` | Starts thesis/antithesis/synthesis process |
-| Manual override needed | `operator_resume_agent()` | Requires human/operator action |
+| Inspect recovery eligibility | `self_recovery(action="check")` | Read-only blockers, thresholds, and recommendations |
+| Clearly safe self-resume | `self_recovery(action="quick")` | Requires low risk and no active void |
+| Moderate state with reflection | `self_recovery(action="review", reflection="...")` | Requires a genuine reflection; may accept conditions |
+| Disagree with verdict, want structured review | `request_review(issue_description="...", reasoning="...")` | One-call request + thesis, or omit thesis fields for the two-call flow |
+| Human/operator override | `agent(action="resume", agent_id="...")` | Privileged lifecycle mutation; not ordinary self-recovery |
 
-Recovery is not a shortcut — `self_recovery()` examines your EISV state and determines if resumption is safe. If your metrics are genuinely degraded, it will not force a resume.
+Recovery is not a shortcut. Its authoritative checks are risk, active void, status,
+ownership, and (for review recovery) reflection/persistence evidence. Legacy
+`C(V)` remains visible with source/role provenance but cannot authorize or deny a
+recovery. If the authoritative inputs are genuinely degraded, self-recovery will
+not force a resume.
 
 ## MCP Tools Reference
 
@@ -189,19 +209,22 @@ Recovery is not a shortcut — `self_recovery()` examines your EISV state and de
 - `identity()` — Confirm who the runtime thinks you are and how continuity was resolved; include `continuity_token` for proof-owned UUID rebinds
 - `health_check()` — Check operator-facing server health when behavior seems odd
 - `search_shared_memory(query=...)` — Find existing knowledge before creating new entries
+- `store_finding(...)` — Store a durable discovery, root cause, or correction
+- `update_finding(discovery_id=..., ...)` — Revise or close an existing finding
 - `knowledge(action="note", ...)` — Quick contribution to the knowledge graph
 
 ### Common (use when needed)
 
-- `knowledge()` — Full knowledge graph CRUD (store, update, details, cleanup)
-- `agent()` — Agent lifecycle (list, archive, get details)
+- `knowledge()` — Full knowledge graph CRUD, search, synthesis, and audit router
+- `agent()` — Agent lifecycle router (list, get, update, archive, resume, delete)
 - `calibration()` — Check or update calibration data
-- `request_dialectic_review()` — Start a dialectic session
+- `dialectic()` — Structured review router (`get`, `list`, `quick`, `request`, `thesis`, `antithesis`, `synthesis`, `reassign`)
+- `self_recovery()` — Recovery router (`check`, `quick`, `review`)
 - `export()` — Export session history
 
 ### Specialized
 
-- `call_model()` — Delegate to a secondary LLM for analysis
-- `detect_stuck_agents()` — Find unresponsive agents
-- `self_recovery()` — Resume from stuck or paused state
-- `submit_thesis()` / `submit_antithesis()` / `submit_synthesis()` — Dialectic participation
+- `call_model()` — Delegate to a configured secondary model for analysis
+- `observe()` — Read governance observations and fleet diagnostics
+- `config()` — Read or change runtime thresholds; writes are privileged
+- `list_tools()` / `describe_tool()` — Inspect the deployed surface instead of guessing an old tool name
