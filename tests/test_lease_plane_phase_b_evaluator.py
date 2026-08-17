@@ -12,6 +12,7 @@ import importlib.util
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -28,7 +29,11 @@ def evaluator():
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module  # required: dataclass module-name lookup
-    spec.loader.exec_module(module)
+    # The production script uses psycopg2, but these unit tests replace every
+    # database interaction. Stub the optional driver locally instead of
+    # depending on an earlier test module to leave one behind in sys.modules.
+    with patch.dict(sys.modules, {"psycopg2": type(sys)("psycopg2")}):
+        spec.loader.exec_module(module)
     return module
 
 
