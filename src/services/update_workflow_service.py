@@ -156,6 +156,12 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
                 key_was_generated=ctx.key_was_generated,
                 api_key_auto_retrieved=ctx.api_key_auto_retrieved,
                 task_type=ctx.task_type,
+                # Match audit.tool_usage's session-id source exactly so the
+                # nudge event can be joined to a later request action without
+                # conflating a server-derived/scoped binding with the caller's
+                # explicit session token. Missing explicit attribution stays
+                # NULL and is reported separately by adoption_kpi.py.
+                session_id=(ctx.arguments or {}).get("client_session_id"),
             )
         except Exception as fmt_err:
             logger.error(f"Response formatting failed: {fmt_err}", exc_info=True)
