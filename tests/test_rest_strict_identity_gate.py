@@ -55,6 +55,10 @@ def test_refusal_payload_carries_the_425_contract_shape():
     assert p["rollout_flag"] == "STRICT_IDENTITY_REQUIRED"
     for key in ("hint", "ontology_ref", "tool_class", "next_step", "safe_options", "do_not"):
         assert p[key]
+    # Pinned to the public ontology doc: this payload reaches external
+    # operators (REST/CLI), so the ref must never regress to an internal
+    # agent-contract file like CLAUDE.md (dogfood finding e113cfb5cb53f553).
+    assert p["ontology_ref"] == "docs/ontology/identity.md#operational-contract"
     assert any("force_new=true" in option["call"] for option in p["safe_options"])
     assert any("bare identity" in warning for warning in p["do_not"])
 
