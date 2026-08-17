@@ -424,3 +424,67 @@ async def test_pipeline_runs_post_execution_steps(monkeypatch):
     data = _parse(out)
     assert data["marker"] == "raw"
     assert data["reshaped"] is True  # raising step skipped, next still ran
+
+
+# ─── dogfood 2026-08-16: recovery-hint honesty + prediction_id threading ────
+
+
+def test_sync_state_envelope_safe_verdict_tight_margin_low_risk_names_margin_not_risk():
+    """Mirror-mode payloads resolve action via the verdict ('safe') and carry a
+    margin flag; with measured risk far below the ceiling the hint must talk
+    about the margin, never claim elevated risk (observed live: risk 0.00
+    rendered 'Risk is elevated')."""
+    payload = {
+        "success": True,
+        "verdict": {"value": "safe"},
+        "margin": "tight",
+        "coherence": 0.48,
+        "risk_score": 0.0,
+    }
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert "recovery_hint" in env
+    assert "Risk is elevated" not in env["recovery_hint"]
+    assert "only if work stalls" in env["recovery_hint"]
+
+
+def test_sync_state_envelope_attention_without_action_low_risk_names_margin():
+    payload = {"success": True, "margin": "boundary", "metrics": {"risk_score": 0.1}}
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert "recovery_hint" in env
+    assert "Risk is elevated" not in env["recovery_hint"]
+    assert "near an edge" in env["recovery_hint"]
+
+
+def test_sync_state_envelope_risky_unresolved_action_keeps_elevated_wording():
+    payload = {"success": True, "metrics": {"risk_score": 0.55}}
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert "Risk is elevated" in env["recovery_hint"]
+
+
+def test_sync_state_envelope_next_action_threads_prediction_id():
+    payload = {
+        "success": True,
+        "decision": {"action": "proceed"},
+        "prediction_id": "abc-123",
+    }
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert "prediction_id='abc-123'" in env["next_action"]
+
+
+def test_sync_state_envelope_next_action_generic_without_prediction_id():
+    payload = {"success": True, "decision": {"action": "proceed"}}
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert "record_result(...)" in env["next_action"]
+    assert "prediction_id" not in env["next_action"]
+
+
+def test_sync_state_envelope_prediction_id_composes_with_review_nudge():
+    payload = {
+        "success": True,
+        "decision": {"action": "proceed"},
+        "prediction_id": "abc-123",
+        "review_suggested": {"trigger": "low_confidence"},
+    }
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert "prediction_id='abc-123'" in env["next_action"]
+    assert "request_review" in env["next_action"]
