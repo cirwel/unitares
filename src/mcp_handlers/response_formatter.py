@@ -5,7 +5,7 @@ Extracted from core.py to reduce its size and make response modes independently 
 """
 
 import os
-from typing import Any
+from typing import Any, Optional
 
 from src.logging_utils import get_logger
 from src.monitor_result import DIVERGENCE_LINE_THRESHOLD
@@ -152,7 +152,12 @@ def _resolve_response_mode(raw_mode: Any, response_data: dict) -> str:
     return "compact"
 
 
-def _emit_mirror_signal_records(response_data: dict, response_mode: str, meta: Any) -> None:
+def _emit_mirror_signal_records(
+    response_data: dict,
+    response_mode: str,
+    meta: Any,
+    session_id: Optional[str] = None,
+) -> None:
     """Phase 0 mirror-effectiveness instrumentation (mirror-effectiveness-measurement-v0).
 
     Logs one ``mirror_signal.emit`` audit event per check-in that fired at least
@@ -170,6 +175,7 @@ def _emit_mirror_signal_records(response_data: dict, response_mode: str, meta: A
         from src.audit_log import get_audit_log
         get_audit_log().log_mirror_signal_emit(
             agent_id=response_data.get("agent_id"),
+            session_id=session_id,
             update_index=getattr(meta, "total_updates", None) if meta else None,
             response_mode=response_mode,
             surfaced=(response_mode == "mirror"),
@@ -188,6 +194,7 @@ def format_response(
     key_was_generated: bool = False,
     api_key_auto_retrieved: bool = False,
     task_type: str = "mixed",
+    session_id: Optional[str] = None,
 ) -> dict:
     """
     Apply response mode filtering to fully-built response_data.
@@ -214,6 +221,7 @@ def format_response(
         key_was_generated: Whether an API key was just generated
         api_key_auto_retrieved: Whether an API key was auto-retrieved
         task_type: Task type for state interpretation
+        session_id: Resolved caller session for audit correlation
 
     Returns:
         Filtered response_data dict
@@ -250,7 +258,12 @@ def format_response(
     # records (every resolved mode) with surfaced = (mode == "mirror"), so the
     # non-mirror population becomes the shadow control. Runs before the full
     # early-return and before stripping; consumes/clears the internal key.
-    _emit_mirror_signal_records(response_data, response_mode, meta)
+    _emit_mirror_signal_records(
+        response_data,
+        response_mode,
+        meta,
+        session_id=session_id,
+    )
 
     # In-flow review nudge (#1685): promote the enrichment marker to a
     # payload-visible key that survives every response mode — the envelope
