@@ -10,36 +10,40 @@ import numpy as np
 from collections import Counter
 
 
+TREND_THRESHOLD = 0.05  # minimum recent-vs-prior mean shift to call a direction
+
+
+def trend_change(values: List[float], window: int = 5) -> Optional[float]:
+    """Mean shift between the recent window and the prior window.
+
+    The quantity analyze_trend thresholds — exposed so trend labels can carry
+    their magnitude. None when fewer than 2 samples.
+    """
+    if len(values) < 2:
+        return None
+
+    if len(values) < window:
+        window = len(values)
+
+    recent = values[-window:]
+    older = values[-window*2:-window] if len(values) >= window*2 else values[:-window]
+
+    if len(older) == 0:
+        return None
+
+    return float(np.mean(recent) - np.mean(older))
+
+
 def analyze_trend(values: List[float], window: int = 5) -> str:
     """
     Analyze trend in a time series.
-    
+
     Returns: "increasing", "decreasing", or "stable"
     """
-    if len(values) < 2:
+    change = trend_change(values, window)
+    if change is None or abs(change) < TREND_THRESHOLD:
         return "stable"
-    
-    if len(values) < window:
-        window = len(values)
-    
-    recent = values[-window:]
-    older = values[-window*2:-window] if len(values) >= window*2 else values[:-window]
-    
-    if len(older) == 0:
-        return "stable"
-    
-    recent_mean = np.mean(recent)
-    older_mean = np.mean(older)
-    
-    change = recent_mean - older_mean
-    threshold = 0.05  # 5% change threshold
-    
-    if abs(change) < threshold:
-        return "stable"
-    elif change > 0:
-        return "increasing"
-    else:
-        return "decreasing"
+    return "increasing" if change > 0 else "decreasing"
 
 
 def _window_advance_key(timestamps: List[str], history: List[float]) -> str:
@@ -303,6 +307,7 @@ def analyze_agent_patterns(
             "decreasing": "improving",
             "increasing": "degrading",
         }.get(patterns.get("risk_trend"), "stable")
+    risk_change = trend_change(state.risk_history)
     patterns["trend_provenance"] = {
         "formula": (
             "risk_plus_behavioral_consistency.v2"
@@ -310,6 +315,10 @@ def analyze_agent_patterns(
             else "risk_trend_only.v2"
         ),
         "legacy_coherence_excluded": not coherence_history_interpretable,
+        # A direction label without its size reads alarmist on noise-scale
+        # movement; surface the mean shift the label was derived from.
+        "risk_change": round(risk_change, 4) if risk_change is not None else None,
+        "threshold": TREND_THRESHOLD,
     }
 
     # Anomaly detection — with the per-monitor freshness guard (#637).

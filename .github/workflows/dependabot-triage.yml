@@ -33,7 +33,11 @@ jobs:
       - name: Triage open Dependabot PRs
         id: triage
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fleet-scoped fine-grained PAT (pull-request read on all target
+          # repos incl. private ones). Falls back to the repo-scoped default
+          # token, under which private targets stay UNREACHABLE and the
+          # coverage gate below keeps the run red — that red is honest.
+          GH_TOKEN: ${{ secrets.DEPENDABOT_TRIAGE_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set +e
           python3 scripts/dev/dependabot_triage.py > triage.md
