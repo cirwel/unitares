@@ -226,6 +226,10 @@ def collect_alerts(
                 "30,90",
                 "--leads",
                 "0,5,30",
+                # This guard must retain snapshot-less controlled harness rows
+                # so it can verify that the normal matrix excludes them.
+                "--anchor-scope",
+                "all",
                 "--selective-null-resamples",
                 "0",
             ),
@@ -252,6 +256,10 @@ def collect_alerts(
                 "90",
                 "--leads",
                 "0,30",
+                # Grouped mode deliberately exposes the controlled lane. This
+                # is a harness-isolation diagnostic, not an inferential read.
+                "--anchor-scope",
+                "all",
                 "--selective-null-resamples",
                 "0",
             ),

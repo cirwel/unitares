@@ -17,6 +17,7 @@ from scripts.analysis.eisv_ablation_matrix import (
     split_rows_by_harness_lane,
 )
 from scripts.analysis.eisv_skeptic_report import ModelScore, OutcomeRow
+from src.grounding.outcome_anchors import anchored_outcomes_predicate
 
 
 def _row(
@@ -158,9 +159,38 @@ def test_parse_args_distinguishes_default_from_explicit_harness_exclusion():
         ["--group-by-harness-lane", "--exclude-harness-lanes", "beam"]
     )
 
+    assert default_args.anchor_scope == "trusted"
     assert default_args.exclude_harness_lanes is None
     assert explicit_args.group_by_harness_lane is True
     assert explicit_args.exclude_harness_lanes == ("beam",)
+
+
+def test_parse_args_retains_explicit_legacy_anchor_scope():
+    args = matrix_module.parse_args(["--anchor-scope", "all"])
+
+    assert args.anchor_scope == "all"
+
+
+def test_build_matrix_defaults_to_trusted_anchor(monkeypatch):
+    observed_predicates = []
+
+    async def fake_fetch_rows(*_args, **kwargs):
+        observed_predicates.append(kwargs["anchor_predicate"])
+        return []
+
+    monkeypatch.setattr(matrix_module, "fetch_rows", fake_fetch_rows)
+    asyncio.run(
+        matrix_module.build_matrix_from_db(
+            "postgresql://unit-test",
+            scopes=["task"],
+            windows=[90],
+            leads=[0],
+        )
+    )
+
+    assert observed_predicates == [
+        anchored_outcomes_predicate(include_soft=False, table_alias="o")
+    ]
 
 
 def test_frozen_matrix_uses_marginal_envelope_strata_and_immutable_metadata(

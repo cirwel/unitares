@@ -5,6 +5,9 @@ This is intentionally a small, falsifiable report rather than a proof of the
 model. It asks whether EISV-adjacent signals available before a trusted outcome
 add predictive lift over boring baselines.
 
+The default cohort uses trusted external anchors with a joinable prior-state
+snapshot. Broader scopes must be selected explicitly.
+
 Usage:
     python3 scripts/analysis/eisv_skeptic_report.py --window-days 365
     python3 scripts/analysis/eisv_skeptic_report.py --scope strict
@@ -1737,13 +1740,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--anchor-scope",
         choices=("trusted", "soft", "all"),
-        default="soft",
+        default="trusted",
         help=(
             "Which outcomes may anchor the falsifiability test (src.grounding.outcome_anchors). "
-            "trusted = external_signal + a joinable EISV snapshot; soft = also agent-self-attested "
-            "(default — more data); all = no anchor filter (legacy/contaminated: includes "
-            "self-referential and snapshot-less synthetic rows). Use 'all' only to reproduce the "
-            "pre-anchor-honesty numbers."
+            "trusted = external_signal + a joinable EISV snapshot (default); "
+            "soft = also agent-self-attested; all = no anchor filter "
+            "(legacy/contaminated: includes self-referential and snapshot-less "
+            "synthetic rows). Use 'all' only to reproduce pre-anchor-honesty numbers."
         ),
     )
     parser.add_argument("--output", help="Optional markdown output path")
