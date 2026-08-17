@@ -67,6 +67,13 @@ Pre-filled from the §11.1 audit in `beam-wave-3-handler-dispatch.md`.
   *recommendation* (`beam-wave-3-gamma-hybrid-v0.md` §0a REJECTED / §0c "recommend
   SHELVE"); §1 of the RFC still scopes identity middleware to BEAM. Ratifying the
   scope reduction would **shrink** Wave 3 and clear this halt.
+  ⛔**This criterion cannot be closed by measurement.** (D) halts if the artifact
+  is missing, **or** any 9th surface surfaces, or any of the eight is not
+  re-derivable. Surface I has surfaced and the RFC's verdict on it is "Likely
+  IRREDUCIBLE", so commissioning `docs/handoffs/wave-3-state-ownership-redteam-<date>.md`
+  would **confirm** the halt, not open the gate. A concrete reduction is now
+  drafted for signature in the RFC's **V0.6 SCOPE REDUCTION** section (identity
+  out; one dialectic slice in) — ⛔unratified until §4 below is signed.
 - **9** — this document.
 
 **Exit criteria, correctly unmet:** 2, 3, 5 are evaluated after build, shadow soak
@@ -77,9 +84,43 @@ and cutover. ⛔Their `0 rows` today means *unmeasured*, not clean.
 yet evaluable — though as written it halts because `process_agent_update` p99
 improved to 795ms, which is the axis struck on 2026-06-24.
 
-**Newly pinnable:** 10 (F) — trailing-30d dialectic volume is 36 (≥30 for the
-first time). ⛔Exclude canary via `core.agents.label LIKE 'canary_dialectic%'`
-joined `a.id = d.paused_agent_id`; `trigger_source` is `'manual'` for every row.
+**NOT pinnable — corrected 2026-08-17.** 10 (F) was recorded here as "newly
+pinnable" on a trailing-30d volume of **36**. That is the **raw** count and
+criterion 10 may not be pinned from it. Measured against the live `governance`
+database:
+
+| Cohort | Resolved | Failed | Total |
+|---|---:|---:|---:|
+| Raw 30d (2026-08-17) | 15 | 23 | 38 |
+| **Canary-excluded (2026-08-16)** | — | — | **18** |
+| **Canary-excluded (2026-08-17)** | 9 | 10 | **19** |
+
+Canary is **half the raw rows** (19 of 38). Exclusion is `core.agents.label NOT
+LIKE 'canary_dialectic%'` joined `a.id = d.paused_agent_id`; ⛔`trigger_source`
+is the literal `'manual'` on every row and partitions nothing. The join is clean
+— 0 null `paused_agent_id`, 0 orphans, 2 distinct statuses — so the shortfall is
+real, not a join artifact.
+
+**19 < 30, so criterion 10 remains halted on its own volume haltspec.** No
+resolution-rate mean or σ may be pinned, and neither may the reviewer-reassignment
+figures.
+
+⛔**The window slides** — 18 → 19 in one day. Never quote a pinned `n` without its
+as-of date.
+
+⛔**Do not pin across #1705** (OPEN and BEHIND as of 2026-08-17). It persists
+`synthesis_round` and adds a genuine second synthesis round, changing what a
+`failed` row means. A baseline pinned on pre-#1705 semantics cannot support the
+≤5% regression comparison the criterion requires. Re-measure after it deploys and
+stabilises, then pin resolution-rate *and* reassignment mean + σ together.
+
+⛔#1689 does **not** report the post-exclusion split; it reports the raw 36. Do
+not cite it for 18.
+
+**Arrival rate**, non-canary, by week: `07-27: 3 · 08-03: 5 · 08-10: 11`. The
+07-06 → 07-20 zeros are the operator-absence window, not a rate. If ~11/wk holds,
+a trailing-30d window clears ≥30 in roughly two to three weeks — but the clean
+window realistically starts only once #1705 has deployed.
 
 ---
 

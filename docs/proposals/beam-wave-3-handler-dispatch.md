@@ -1,6 +1,82 @@
 # Wave 3 RFC: handler dispatch + identity middleware + dialectic resolution → BEAM
 
-**Status:** **COMMITTED AND OPEN — no active implementation.** The commitment to proceed (V0.4, operator, 2026-06-25) stands. What is retired is one *design*: the (γ) narrow cut at `process_agent_update`, set aside 2026-06-28. Nothing Wave-3-shaped has landed since. Read the **V0.5 STATUS CORRECTION** below for what a resumption should and should not carry forward.
+**Status:** **COMMITTED AND OPEN — no active implementation.** The commitment to proceed (V0.4, operator, 2026-06-25) stands. What is retired is one *design*: the (γ) narrow cut at `process_agent_update`, set aside 2026-06-28. Read the **V0.5 STATUS CORRECTION** for what a resumption should and should not carry forward, then **V0.6 SCOPE REDUCTION** for the proposed shape of that resumption. ⛔V0.6 is an **unratified proposal**; the title's three-leg scope is unchanged until the operator signs.
+
+## V0.6 SCOPE REDUCTION (2026-08-17) — PROPOSED, UNRATIFIED
+
+⛔**Nothing here is a decision.** This section proposes the scope reduction that §11 criterion 8
+requires, so the operator has something concrete to accept or reject. Until it is signed in
+`wave-3-go-decision-2026-08-16.md` §4, the RFC's scope remains the three legs in the title.
+
+### Why criterion 8 cannot be closed by measurement
+
+The (D) gate halts if *the artifact is missing, **or** any 9th surface surfaces, **or** any of the
+eight is not re-derivable*. Surface I has surfaced (v0.3.5 fold, §3.1 row I) and this RFC's own
+verdict on it is **"Likely IRREDUCIBLE"**: kernel UDS peer-credential attestation is bound to the
+OS process/socket boundary by construction, so it cannot become a copyable token or a signed
+payload without ceasing to be attestation.
+
+⛔**Therefore commissioning `docs/handoffs/wave-3-state-ownership-redteam-<date>.md` would CONFIRM
+the halt, not clear it.** Anyone reading criterion 8 as "we still owe a red-team artifact" has the
+causality backwards. The artifact is owed, but producing it does not open the gate.
+
+The exit this RFC already names is scope reduction: **remove identity middleware from Wave 3**, at
+which point (D) — a gate about the identity-middleware port — has no subject.
+
+### Proposed reduced scope
+
+**OUT (indefinitely, not deferred):** identity middleware. Python remains sole owner of the whole
+identity-resolution and authorization transaction: UDS peer attestation, `core.substrate_claims`,
+`proof_origin` and assurance derivation, the #802/#945 ordering guards, identity caches and tokens,
+lazy minting, and every identity-bearing PostgreSQL write. ⛔Any future design that gives BEAM
+identity authority, or treats copied attestation as authority, reopens criterion 8 from the start.
+
+**OUT (already settled):** the (γ) handler-dispatch cut, both shapes — wide signed-envelope
+REJECTED, narrow stateless RPC recommended SHELVE (`beam-wave-3-gamma-hybrid-v0.md` §0a/§0c).
+
+**IN:** the dialectic leg only, and within it a single slice (below). ⛔Not all of §5. §5 is 17
+coordination functions and does not fit the criterion-9 cap.
+
+### The proposed slice: stuck-session detection and reassignment decisions
+
+This is chosen because **BEAM already owns the writes** and only the *decision* logic is still
+Python. Verified against `origin/master` 2026-08-17:
+
+| Already on BEAM (`dialectic_saga.ex`) | Still Python (the slice) |
+|---|---|
+| `update_reviewer/2` — the reassignment write | `handlers.py::check_reviewer_stuck` — stuck predicate |
+| `reclaim_all_stale/0` — stale-saga reclaim | `handlers.py::_apply_reviewer_reassignment` — reassign decision |
+| `update_phase/2`, `claim/1`, `resolve/1`, `create_session/1` | `auto_resolve.py::auto_resolve_stuck_sessions` — periodic detection |
+| | `auto_resolve.py::_parse_timestamp`, `dialectic_protocol.py::check_timeout` — timeout arithmetic |
+
+Why this slice and not another:
+
+- **Zero identity coupling.** `auto_resolve.py` contains no identity writes (verified: 0 matches).
+- **Zero signature-parity risk.** Neither slice file references `hmac`, `compute_signature`, or
+  `canonical_payload` (verified: 0 matches each). ⛔The parity-bearing family —
+  `canonical_payload`, `compute_signature`, `Resolution.hash` — is deliberately **excluded**. That
+  family already caused silent corruption once: the bare-`::jsonb` double-encode wrote 90 unreadable
+  rows between 2026-06-28 and 2026-08-10.
+- **It targets the live axis.** Timers, supervision and recovery are the coordination/aliveness
+  argument, not the struck latency axis.
+- **It targets a known live defect** (#1689): reassignment looks for a *replacement* reviewer, never
+  a continuation, and nothing brings the original reviewer back for round 2.
+
+### ⛔Sequencing constraint, and it is load-bearing
+
+Reducing Wave 3 to the dialectic leg makes **§11 criterion 10 the central gate rather than a side
+one** — the slice would change the very subsystem criterion 10 measures. Criterion 10 is not
+pinnable today (see the go-decision doc §3), and **#1705 changes what `failed` means**. Implement
+only after that baseline is pinned; pinning it afterwards measures the change against itself.
+
+### Stale row found while verifying (fix at the gate)
+
+§5.3 attributes behaviour to **`_compare_against_timeout`**. That function **does not exist**
+anywhere in `src/` as of 2026-08-17. §5.1's line map has also drifted
+(`check_reviewer_stuck` is at `handlers.py:211`, not 130-177; `auto_resolve_stuck_sessions` at
+`auto_resolve.py:102`, not 54-220; `check_timeout` at `dialectic_protocol.py:1215`, not 995-1031).
+⛔The (D) criterion requires the eight surfaces to be **re-derivable from live code**; a line map
+this stale cannot support that re-derivation. Refresh before any gate reading.
 
 ## V0.5 STATUS CORRECTION (2026-08-16) — one design retired; the wave stays open
 
