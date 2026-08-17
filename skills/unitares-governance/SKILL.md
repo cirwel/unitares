@@ -4,11 +4,14 @@ description: >
   Compatibility umbrella skill for the UNITARES governance framework. Use this
   as the entrypoint when you need the overall model and route into the split
   governance skills.
-last_verified: "2026-08-09"
+last_verified: "2026-08-16"
 freshness_days: 35
 source_files:
   - unitares/src/mcp_handlers/core.py
   - unitares/src/mcp_handlers/identity/handlers.py
+  - unitares/src/mcp_handlers/tool_stability.py
+  - unitares/src/mcp_handlers/middleware/envelope_step.py
+  - unitares/src/monitor_metrics.py
   - unitares/skills/governance-lifecycle/SKILL.md
   - unitares/skills/governance-fundamentals/SKILL.md
   - unitares/skills/knowledge-graph/SKILL.md
@@ -26,9 +29,15 @@ entrypoint into the UNITARES framework.
 UNITARES evaluates agent state with the **EISV** model:
 
 - `E`: effective energy / execution drive
-- `I`: integrity / coherence of alignment
-- `S`: entropy / disorder / instability
+- `I`: information integrity / calibration
+- `S`: entropy / drift / instability
 - `V`: valence (signed E-I imbalance)
+
+EISV is proprioceptive state estimation, not an outcome oracle. The public
+`coherence` field is producer-dependent; the deployed `legacy_tanh_v` value is
+ODE control feedback. It still participates in configured check-in
+compatibility backstops, but it is not behavioral health evidence and no longer
+authorizes recovery.
 
 Agents typically call `start_session(force_new=true)` once for a fresh process
 identity, then continue that same running process with `sync_state()` as their
@@ -42,8 +51,9 @@ payload remains available under `raw_governance`.
 ## Session Continuity
 
 Use `start_session(force_new=true)` to register a fresh process identity once.
-If the process is a real handoff continuing prior work, declare that with
-`parent_agent_id=<prior uuid>` and `spawn_reason="new_session"`.
+If the process is a deliberate handoff continuing an exited predecessor's work,
+declare that with `parent_agent_id=<prior uuid>` and
+`spawn_reason="explicit"`.
 Use raw `onboard(...)` instead for older servers or raw response shape.
 
 Use `identity(agent_uuid=..., continuity_token=..., resume=true)` only when
@@ -60,15 +70,19 @@ process. Use that for ordinary `sync_state()` / `check_working_state()` calls.
 identity proof on its own. Do not pass `continuity_token` on every call; reserve
 it for explicit same-live-owner `identity(..., resume=true)` rebinds.
 
-Use `sync_state()` after meaningful work to record progress, complexity, and
-confidence, then read the returned governance verdict. Use raw
-`process_agent_update()` when you need the raw handler response.
+Use `sync_state()` after meaningful work to record progress and complexity, then
+read `next_action`, `memory_suggestions`, and `recovery_hint` when present. Pass
+`confidence` only when it is a real forecast; if the response returns a
+`prediction_id`, thread that exact ID into `record_result(...)` when the outcome
+lands. Use raw `process_agent_update()` when you need the unwrapped handler
+response.
 
 ## Knowledge Layer
 
-The governance system is coupled to the **knowledge graph**. Agents should
-search existing knowledge before duplicating work, and contribute discoveries,
-questions, and answers as they learn.
+The governance system is coupled to the **knowledge graph**. Use
+`search_shared_memory()` before duplicating work, `store_finding()` for durable
+discoveries/root causes/corrections, and `update_finding()` to close the loop.
+Task/tool/test outcomes belong in `record_result()`, not in the finding store.
 
 ## Split Skills
 
@@ -79,6 +93,7 @@ The old monolithic skill was split into focused skills:
 - `skills/knowledge-graph/SKILL.md` for knowledge graph search and contribution
 - `skills/dialectic-reasoning/SKILL.md` for thesis/antithesis/synthesis workflows
 - `skills/discord-bridge/SKILL.md` for the Discord governance bridge
+- `skills/unitares-dashboard/SKILL.md` for the buildless operator dashboard
 
 If you need the full mental model, start here. If you know the task shape,
 prefer the focused skill directly.
