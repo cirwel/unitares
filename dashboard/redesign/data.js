@@ -288,6 +288,10 @@
           discoveries: kg && typeof kg.total_discoveries === "number" ? kg.total_discoveries : null,
           discoveriesToday: null, // no honest live "today" delta; show neutral subtitle
           dialectic: dlcSessions ? dlcSessions.filter((s) => !["resolved", "failed"].includes(s.phase || s.status)).length : null,
+          // Recent-outcome context for the card: "0 open" alone reads as
+          // all-quiet even when most recent sessions failed.
+          dialecticRecent: dlcSessions ? dlcSessions.length : null,
+          dialecticFailed: dlcSessions ? dlcSessions.filter((s) => (s.phase || s.status) === "failed").length : null,
           stuck: stuckR ? (stuckR.stuck_agents || []).length : null,
           stuckHard: stuckR ? (stuckR.stuck_agents || []).filter((s) => s.soft !== true).length : null,
           stuckSoft: stuckR ? (stuckR.stuck_agents || []).filter((s) => s.soft === true).length : null,

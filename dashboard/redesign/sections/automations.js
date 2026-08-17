@@ -160,7 +160,7 @@
          </div>`
       + `<div style="display:flex;gap:var(--space-3);flex-wrap:wrap;align-items:center;margin-bottom:var(--space-4);font-size:var(--text-xs)">
            <span style="color:var(--muted)">grounded in truth:</span>
-           ${chip(gc.machine, "var(--ok)", "machine-gated")} ${sep} ${chip(gc.human, "var(--warn)", "human-gated")} ${sep} ${chip(gc.ungated, "var(--danger)", "ungated")} ${sep} <span style="color:var(--faint)">${gc.unclassified} unclassified</span>
+           ${chip(gc.machine, "var(--ok)", "machine-gated")} ${sep} ${chip(gc.human, "var(--warn)", "human-gated")} ${sep} ${chip(gc.ungated, "var(--danger)", "ungated")} ${sep} ${gc.external ? `${chip(gc.external, "var(--faint)", "external")} ${sep} ` : ""}<span style="color:var(--faint)">${gc.unclassified} unclassified</span>
          </div>`
       + `<div style="display:flex;gap:var(--space-3);flex-wrap:wrap;align-items:center;margin-bottom:var(--space-4)">
            <input id="auto-q" placeholder="search name · path · runner" value="${q.replace(/"/g, "&quot;")}"
