@@ -154,23 +154,29 @@ def _recovery_hint(
     # follows the decision and measured risk; the overloaded coherence scalar
     # must not independently become a drift diagnosis.
     del coherence
-    continuing = action in {"proceed", "continue", "approve", "ok", "healthy"}
+    continuing = action in {"proceed", "continue", "approve", "ok", "healthy", "safe"}
+    margin_hint = (
+        "Policy margin is near an edge - keep scope tight, sync_state after "
+        "the next substantial step, and use self_recovery_review(reflection='...') "
+        "only if work stalls."
+    )
     if severe:
         return (
             "Working state looks degraded - pause and call "
             "self_recovery_review(reflection='...') before continuing."
         )
     if attention and continuing:
+        return margin_hint
+    if risky:
         return (
-            "Policy margin is near an edge - keep scope tight, sync_state after "
-            "the next substantial step, and use self_recovery_review(reflection='...') "
-            "only if work stalls."
+            "Risk is elevated - if you feel stuck, quick_resume() applies when "
+            f"risk < {_RECOVERY_RISK_CEILING:.2f} and no void is active; otherwise "
+            "self_recovery_review()."
         )
-    return (
-        "Risk is elevated - if you feel stuck, quick_resume() applies when "
-        f"risk < {_RECOVERY_RISK_CEILING:.2f} and no void is active; otherwise "
-        "self_recovery_review()."
-    )
+    # Attention-only reach (margin/verdict flag while measured risk sits below
+    # the ceiling): never emit wording that contradicts the risk value the same
+    # payload reports.
+    return margin_hint
 
 
 def _verdict_caveat(source_payload: Dict[str, Any]) -> Optional[str]:
@@ -298,10 +304,23 @@ def build_experience_envelope(
             state_summary["coherence"] = coherence
         if risk is not None:
             state_summary["risk_score"] = risk
-        next_action = (
-            "Keep working - sync_state again after your next substantial step, "
-            "and record_result(...) when an outcome lands."
-        )
+        prediction_id = payload.get("prediction_id") or source_payload.get("prediction_id")
+        if isinstance(prediction_id, str) and prediction_id:
+            # The id already sits in the canonical payload; naming it here is
+            # what makes registry-bound record_result discoverable — otherwise
+            # the outcome grades a confidence borrowed from an unrelated
+            # earlier turn (fallback binding dominates calibration rows).
+            next_action = (
+                "Keep working - sync_state again after your next substantial "
+                "step. When an outcome lands, record_result(outcome_type=..., "
+                f"prediction_id='{prediction_id}') so it grades this check-in's "
+                "confidence rather than a fallback."
+            )
+        else:
+            next_action = (
+                "Keep working - sync_state again after your next substantial step, "
+                "and record_result(...) when an outcome lands."
+            )
         # In-flow review nudge (#1685): the formatter attaches review_suggested
         # (every response mode) when this check-in reported uncertain ground.
         nudge = payload.get("review_suggested")

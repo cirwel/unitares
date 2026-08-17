@@ -643,3 +643,18 @@ class TestMistralDogfoodFindings:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_intuitive_alias_findings_have_catalog_metadata():
+    """store_finding/update_finding are intuitive aliases for knowledge; without
+    catalog entries list_tools renders hint 'Tool: <name>' and category null
+    (dogfood 2026-08-16)."""
+    from src.mcp_handlers.introspection.tool_catalog import (
+        TOOL_DESCRIPTION_OVERRIDES,
+        TOOL_RELATIONSHIPS,
+    )
+
+    for name in ("store_finding", "update_finding"):
+        assert name in TOOL_DESCRIPTION_OVERRIDES, name
+        assert "knowledge" in TOOL_DESCRIPTION_OVERRIDES[name]
+        assert TOOL_RELATIONSHIPS[name]["category"] == "knowledge", name
