@@ -1,8 +1,14 @@
-"""
-Dialectic Reviewer Selection
+"""Optional standing-peer selection for dialectic sessions.
 
-Handles selecting appropriate reviewer agents for dialectic sessions.
-Implements collusion prevention and expertise matching.
+This module implements the eligibility filters and expertise ranking used when
+``UNITARES_AUTOSELECT_REVIEWER`` is explicitly enabled.  The flag is off by
+default because a process being present in agent metadata does not prove that
+it can answer a thesis.  The deployed no-peer path is separate: it can summon
+an orchestrated reviewer or fall back to the in-process synthetic reviewer.
+
+The pair cooldown and active-session checks below are safeguards for peer
+selection and first-responder claims.  They are policy mechanics, not evidence
+that a standing peer pool exists or that collusion has occurred in deployment.
 
 NOTE: Cross-process visibility is now provided by PostgreSQL (dialectic_db.py).
 The in-memory ACTIVE_SESSIONS dict is kept for backward compat but PostgreSQL
@@ -100,10 +106,11 @@ def _autoselect_enabled() -> bool:
     )
 
 async def _has_recently_reviewed(reviewer_id: str, paused_agent_id: str, hours: int = 24) -> bool:
-    """
-    Check if reviewer has recently reviewed the paused agent - ASYNC to prevent blocking.
+    """Check whether this agent pair reviewed in either direction recently.
 
-    Prevents collusion by ensuring reviewers don't repeatedly review the same agent.
+    The cooldown is reciprocal: after A reviews B, neither A->B nor B->A is
+    eligible until the window expires.  It bounds repeated pair authorization;
+    it is not, by itself, a collusion detector.
 
     Uses PostgreSQL for cross-process visibility (CLI and SSE can see each other's sessions).
 
@@ -143,8 +150,15 @@ async def _has_recently_reviewed(reviewer_id: str, paused_agent_id: str, hours: 
                     with open(session_file, 'r') as f:
                         session_data = json.load(f)
 
-                    if (session_data.get('reviewer_agent_id') == reviewer_id and
-                        session_data.get('paused_agent_id') == paused_agent_id):
+                    recorded_pair = {
+                        session_data.get('reviewer_agent_id'),
+                        session_data.get('paused_agent_id'),
+                    }
+                    requested_pair = {reviewer_id, paused_agent_id}
+                    if (
+                        None not in recorded_pair
+                        and recorded_pair == requested_pair
+                    ):
                         # Count ALL session outcomes — not just resolved — to prevent
                         # a reviewer from bypassing cooldown by deliberately failing sessions.
                         created_at_str = session_data.get('created_at')
@@ -433,5 +447,4 @@ async def select_reviewer(paused_agent_id: str,
             return agent_id
 
     return top[0][0]
-
 
