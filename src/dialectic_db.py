@@ -413,17 +413,22 @@ class DialecticDB:
         paused_agent_id: str,
         hours: int = 24
     ) -> bool:
-        """Check if reviewer has recently reviewed this agent.
+        """Check whether this reviewer pair appeared in either direction.
 
         Counts ALL session outcomes (resolved, failed, timeout, escalated) to prevent
         a reviewer from bypassing the cooldown by deliberately failing sessions.
+        The direction reversal is load-bearing: after A reviews B, B reviewing
+        A inside the window is the reciprocal pattern this policy forbids.
         """
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow("""
                 SELECT 1 FROM core.dialectic_sessions
-                WHERE reviewer_agent_id = $1
-                AND paused_agent_id = $2
+                WHERE (
+                    (reviewer_agent_id = $1 AND paused_agent_id = $2)
+                    OR
+                    (reviewer_agent_id = $2 AND paused_agent_id = $1)
+                )
                 AND created_at >= now() - interval '1 hour' * $3
                 LIMIT 1
             """, reviewer_id, paused_agent_id, hours)
