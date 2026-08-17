@@ -1032,6 +1032,26 @@ class TestHasRecentlyReviewed:
             result = await _has_recently_reviewed("r1", "p1")
             assert result is False
 
+    @pytest.mark.asyncio
+    async def test_pg_fails_fallback_disk_checks_reverse_pair(self, tmp_path):
+        session_dir = tmp_path / "dialectic_sessions"
+        session_dir.mkdir()
+        (session_dir / "prior.json").write_text(json.dumps({
+            "reviewer_agent_id": "agent-A",
+            "paused_agent_id": "agent-B",
+            "created_at": datetime.now().isoformat(),
+        }))
+
+        with patch(
+            "src.mcp_handlers.dialectic.reviewer.pg_has_recently_reviewed",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("db down"),
+        ), patch(
+            "src.mcp_handlers.dialectic.reviewer.SESSION_STORAGE_DIR",
+            session_dir,
+        ):
+            assert await _has_recently_reviewed("agent-B", "agent-A") is True
+
 
 class TestIsAgentInActiveSession:
     @pytest.mark.asyncio
