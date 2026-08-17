@@ -6,9 +6,15 @@
 
 </div>
 
-**Status:** v2.18.0. Sustained operation is documented in one long-running
-maintainer deployment. External adoption remains unvalidated, and the current
-outcome-lift evaluation found no result beyond a selection-aware null.
+**Status:** v2.18.0. Continuously operated since November 2025 under a single
+operator: 4,573,890 audit and telemetry events, 71,141 EISV state observations,
+and six long-running resident agents, one of them on separate hardware.
+
+EISV is proprioceptive state estimation, not an outcome oracle. The 2026-08-09
+outcome-lift evaluation tested the oracle reading and returned a selection-aware
+null; the instrument-frame validation the system does claim — reliability,
+faithfulness under intervention, calibration — is scoped but only partly built.
+[Evidence and limits](#evidence-and-limits) gives the per-number scope.
 
 An agent forty turns into a task reports high confidence while its tests are
 failing. Every individual tool call was allowed, so an action-level guardrail may
