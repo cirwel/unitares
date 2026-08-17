@@ -62,6 +62,24 @@ def test_build_spec_marshals_thesis_and_paths():
 def test_build_spec_omits_parent_when_absent():
     spec = od._build_spec("s", {"root_cause": "", "proposed_conditions": [], "reasoning": ""}, None)
     assert "UNITARES_PARENT_AGENT_ID" not in spec["env"]
+
+
+def test_build_spec_forwards_bounded_reviewer_backend_config(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_REVIEWER_HOST", "claude")
+    monkeypatch.setenv("UNITARES_DIALECTIC_CLAUDE_MODEL", "claude-opus-5")
+    monkeypatch.setenv("UNITARES_CLAUDE_CLI", "/Users/operator/.local/bin/claude")
+    monkeypatch.setenv("AGENT_ORCHESTRATOR_BEARER_TOKEN", "must-not-forward")
+
+    spec = od._build_spec(
+        "s",
+        {"root_cause": "", "proposed_conditions": [], "reasoning": ""},
+        None,
+    )
+
+    assert spec["env"]["UNITARES_DIALECTIC_REVIEWER_HOST"] == "claude"
+    assert spec["env"]["UNITARES_DIALECTIC_CLAUDE_MODEL"] == "claude-opus-5"
+    assert spec["env"]["UNITARES_CLAUDE_CLI"].endswith("/.local/bin/claude")
+    assert "AGENT_ORCHESTRATOR_BEARER_TOKEN" not in spec["env"]
     assert json.loads(spec["env"]["DIALECTIC_THESIS_CONDITIONS"]) == []
     assert json.loads(spec["env"]["DIALECTIC_PAUSED_AGENT_STATE"]) == {}
 

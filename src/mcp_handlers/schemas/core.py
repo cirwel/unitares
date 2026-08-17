@@ -547,6 +547,41 @@ class CallModelParams(AgentIdentityMixin):
     privacy: Literal["local", "auto", "cloud"] = Field("local", description="Privacy mode. Options: local (Ollama, default), auto (system chooses), cloud (external providers)")
 
 
+class DelegateInferenceParams(AgentIdentityMixin):
+    """Parameters for long-running strong-model delegation."""
+    prompt: str = Field(
+        ...,
+        min_length=1,
+        max_length=100_000,
+        description="Prompt to send to the operator-authorized strong model.",
+    )
+    host_id: Literal["claude:host-adapter"] = Field(
+        "claude:host-adapter",
+        description=(
+            "Long-running host adapter to invoke. Claude is the first enabled "
+            "reciprocal adapter; Codex remains registered but unwired."
+        ),
+    )
+    model: Optional[str] = Field(
+        None,
+        description=(
+            "Optional Claude model alias or exact identifier. When omitted, "
+            "the operator/CLI default selects the model; exact models actually "
+            "used are returned in provenance."
+        ),
+    )
+    task_type: Literal["reasoning", "review", "summarize"] = Field(
+        "reasoning",
+        description="Advisory task classification.",
+    )
+    timeout_s: int = Field(
+        240,
+        ge=5,
+        le=420,
+        description="Maximum seconds to await the delegated CLI result.",
+    )
+
+
 class ListInferenceHostsParams(AgentIdentityMixin):
     """Parameters for list_inference_hosts"""
     include_unconfigured: bool = Field(

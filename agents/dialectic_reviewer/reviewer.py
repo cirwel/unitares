@@ -7,8 +7,9 @@ dialectic session needs a reviewer. Unlike the in-process synthetic path
 paused agent's api_key), this process:
 
   * onboards as its OWN governance identity (strict-identity compliant),
-  * runs a heterogeneous LOCAL model (gemma4 via Ollama — no paid API) IN its own
-    process to form a *genuine* verdict that may DISAGREE,
+  * runs an operator-selected heterogeneous model (local Ollama by default,
+    subscription-auth Codex or Claude when configured) IN its own process to
+    form a *genuine* verdict that may DISAGREE,
   * submits that verdict through the ordinary dialectic protocol tools, and
   * after a disagreement, stays alive for a bounded window to evaluate the
     paused agent's response under the SAME reviewer identity before exiting.
@@ -33,6 +34,8 @@ from typing import Any, Optional
 
 from src.identity.lineage_semantics import LineageSpawnReason
 
+from .host_backends import HostReviewResult, call_claude_backend, resolve_host_cli
+
 # gemma4 hides its answer behind a <think> block under thinking mode; strip it
 # before JSON extraction (mirrors llm_delegation._wants_reasoning_effort_none).
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
@@ -48,6 +51,62 @@ DEFAULT_CONTINUATION_POLL_S = 2.0
 _TERMINAL_PHASES = {"resolved", "failed", "escalated", "quorum_voting"}
 
 logger = logging.getLogger(__name__)
+
+_LAST_REVIEWER_PROVENANCE: dict[str, Any] = {
+    "backend": "unselected",
+    "host_id": None,
+    "model_used": None,
+    "models_used": [],
+    "warnings": [],
+}
+
+
+def reviewer_backend_provenance() -> dict[str, Any]:
+    """Return a copy of the latest backend selection/evidence for this process."""
+    value = dict(_LAST_REVIEWER_PROVENANCE)
+    value["models_used"] = list(value.get("models_used") or [])
+    value["warnings"] = list(value.get("warnings") or [])
+    return value
+
+
+def _record_reviewer_provenance(value: dict[str, Any]) -> None:
+    global _LAST_REVIEWER_PROVENANCE
+    _LAST_REVIEWER_PROVENANCE = {
+        "backend": value.get("backend"),
+        "host_id": value.get("host_id"),
+        "model_requested": value.get("model_requested"),
+        "model_used": value.get("model_used"),
+        "models_used": list(value.get("models_used") or []),
+        "tokens_used": int(value.get("tokens_used") or 0),
+        "cost_usd": value.get("cost_usd"),
+        "latency_ms": value.get("latency_ms"),
+        "finish_reason": value.get("finish_reason"),
+        "fallback_from": value.get("fallback_from"),
+        "warnings": list(value.get("warnings") or []),
+    }
+
+
+def _reviewer_model_type(provenance: dict[str, Any]) -> str:
+    """Derive the identity model fingerprint without guessing an exact model."""
+    models = [str(model) for model in (provenance.get("models_used") or [])]
+    if models:
+        return "dialectic_reviewer:" + "+".join(models)
+    backend = str(provenance.get("backend") or "unknown")
+    return f"dialectic_reviewer:{backend}"
+
+
+def _reviewer_audit_text(provenance: dict[str, Any]) -> str:
+    models = provenance.get("models_used") or ["provider_unreported"]
+    parts = [
+        f"backend={provenance.get('backend') or 'unknown'}",
+        f"host={provenance.get('host_id') or 'unknown'}",
+        f"models={','.join(str(model) for model in models)}",
+    ]
+    if provenance.get("fallback_from"):
+        parts.append(f"fallback_from={provenance['fallback_from']}")
+    if provenance.get("cost_usd") is not None:
+        parts.append(f"provider_cost_usd={provenance['cost_usd']}")
+    return "; ".join(parts)
 
 
 @dataclass
@@ -370,32 +429,54 @@ async def call_codex_reviewer(prompt: str) -> Optional[str]:
     local model, so the no-budget default path is never removed (execution-cost
     policy: subscription CLI is an opt-in backend, never a requirement).
 
-    Spawn recipe mirrors the host adapter's proven one: ``sh -c 'exec codex
-    exec … "$DR_PROMPT" </dev/null'`` — stdin CLOSED (codex blocks reading a
-    non-tty stdin pipe) and the prompt passed via env, never argv-interpolated.
+    Spawn recipe mirrors the host adapter's proven one: ``sh -c 'exec
+    "$DR_CLI" exec … "$DR_PROMPT" </dev/null'`` — stdin CLOSED (codex blocks
+    reading a non-tty stdin pipe) and paths/prompts passed via env, never
+    argv-interpolated.
     """
-    import shutil
-
-    if shutil.which("codex") is None:
+    cli_path = resolve_host_cli("codex:host-adapter")
+    if cli_path is None:
         return None
-    timeout_s = float(os.getenv("UNITARES_DIALECTIC_CODEX_TIMEOUT_S", "420"))
-    proc = await asyncio.create_subprocess_exec(
-        "/bin/sh",
-        "-c",
-        'exec codex exec --sandbox read-only --skip-git-repo-check "$DR_PROMPT" </dev/null',
-        env={**os.environ, "DR_PROMPT": prompt},
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
+    # Read literally (not via _env_float) so scripts/dev/flag_catalog.py's AST
+    # scan still indexes this flag — the catalog only sees direct os.getenv calls.
+    try:
+        timeout_s = float(os.getenv("UNITARES_DIALECTIC_CODEX_TIMEOUT_S", "420"))
+    except (TypeError, ValueError):
+        timeout_s = 420.0
+    timeout_s = max(1.0, timeout_s)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "/bin/sh",
+            "-c",
+            'exec "$DR_CLI" exec --sandbox read-only --skip-git-repo-check '
+            '"$DR_PROMPT" </dev/null',
+            env={**os.environ, "DR_CLI": cli_path, "DR_PROMPT": prompt},
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except Exception:  # noqa: BLE001 - selected-host failure falls back locally
+        return None
     try:
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
     except asyncio.TimeoutError:
         proc.kill()
         await proc.communicate()
         return None
+    except Exception:  # noqa: BLE001 - selected-host failure falls back locally
+        try:
+            proc.kill()
+            await proc.communicate()
+        except Exception:
+            pass
+        return None
     if proc.returncode != 0:
         return None
     return extract_last_json_object(stdout.decode(errors="replace"))
+
+
+async def call_claude_reviewer(prompt: str) -> HostReviewResult:
+    """Run the safe Claude subscription-CLI backend with exact provenance."""
+    return await call_claude_backend(prompt)
 
 
 async def obtain_reviewer_text(prompt: str) -> str:
@@ -403,12 +484,44 @@ async def obtain_reviewer_text(prompt: str) -> str:
     local model. Default (env unset) is byte-identical to the pre-existing
     gemma4 path."""
     host = os.getenv("UNITARES_DIALECTIC_REVIEWER_HOST", "").strip().lower()
-    if host == "codex":
+    fallback_from: Optional[str] = None
+    fallback_warning: Optional[str] = None
+    if host in ("claude", "claude:host-adapter"):
+        result = await call_claude_reviewer(prompt)
+        if result.text is not None:
+            _record_reviewer_provenance(result.provenance())
+            return result.text
+        fallback_from = result.host_id
+        fallback_warning = result.error
+    elif host in ("codex", "codex:host-adapter"):
         text = await call_codex_reviewer(prompt)
         if text is not None:
+            _record_reviewer_provenance({
+                "backend": "codex",
+                "host_id": "codex:host-adapter",
+                "models_used": [],
+                "warnings": ["Codex CLI did not report an exact model identifier"],
+            })
             return text
-        # Codex path failed — degrade to the local default, never harder than today.
-    return await call_reviewer_model(prompt)
+        fallback_from = "codex:host-adapter"
+        fallback_warning = "Codex backend unavailable or returned no verdict"
+    elif host not in ("", "local", "ollama", "ollama:local"):
+        fallback_from = host
+        fallback_warning = f"Unknown reviewer host '{host}'"
+
+    # Any selected-host failure degrades to the local default, never harder
+    # than the pre-existing path.
+    text = await call_reviewer_model(prompt)
+    warnings = [fallback_warning] if fallback_warning else []
+    _record_reviewer_provenance({
+        "backend": "ollama",
+        "host_id": "ollama:local",
+        "model_used": DEFAULT_MODEL,
+        "models_used": [DEFAULT_MODEL],
+        "fallback_from": fallback_from,
+        "warnings": warnings,
+    })
+    return text
 
 
 async def call_reviewer_model(prompt: str, model: str = DEFAULT_MODEL) -> str:
@@ -587,7 +700,9 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
     """Onboard, submit an independent verdict, and continue if it rejects."""
     from unitares_sdk.client import GovernanceClient  # type: ignore
 
-    verdict = parse_reviewer_verdict(await obtain_reviewer_text(build_review_prompt(thesis)))
+    reviewer_text = await obtain_reviewer_text(build_review_prompt(thesis))
+    provenance = reviewer_backend_provenance()
+    verdict = parse_reviewer_verdict(reviewer_text)
 
     client = GovernanceClient(governance_url)
     await client.connect()
@@ -597,6 +712,7 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
             force_new=True,
             parent_agent_id=parent_agent_id,
             spawn_reason=SPAWN_REASON,
+            model_type=_reviewer_model_type(provenance),
         )
         # Claim the open reviewer slot as first-responder. The bare submit_*
         # handlers are register=False; the public MCP surface is the `dialectic`
@@ -635,8 +751,11 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
         # records meaningful work even if the orchestrator later reaps it.
         # SDK checkin() maps to the server's process_agent_update.
         await client.checkin(
-            response_text=f"dialectic review submitted: agrees={verdict.agrees}"
-            + (" (degraded fallback)" if verdict.degraded else ""),
+            response_text=(
+                f"dialectic review submitted: agrees={verdict.agrees}"
+                + (" (degraded fallback)" if verdict.degraded else "")
+                + f"; {_reviewer_audit_text(provenance)}"
+            ),
             complexity=0.4,
             confidence=0.6 if not verdict.degraded else 0.3,
         )
