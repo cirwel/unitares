@@ -170,12 +170,13 @@ def test_search_alias_keeps_every_filter_the_action_uses():
     kept = set((_schema("knowledge").get("properties") or {})) - ALIAS_SCHEMA_DROP[
         "search_shared_memory"
     ]
-    for filter_param in (
+    for search_param in (
         "query", "tags", "status", "discovery_type", "severity",
         "limit", "search_mode", "include_archived", "include_cold",
+        "response_mode",
     ):
-        assert filter_param in kept, (
-            f"{filter_param} is a live search filter but would no longer be "
+        assert search_param in kept, (
+            f"{search_param} is a live search parameter but would no longer be "
             "advertised on search_shared_memory"
         )
 
