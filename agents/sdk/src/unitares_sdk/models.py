@@ -136,6 +136,8 @@ class InferenceProvenance(_GovModel):
     provider_kind: str | None = None
     transport: str | None = None
     model_used: str | None = None
+    models_used: list[str] = Field(default_factory=list)
+    model_requested: str | None = None
     task_type: str | None = None
     privacy_class: str | None = None
     cost_class: str | None = None
@@ -143,11 +145,15 @@ class InferenceProvenance(_GovModel):
     requesting_agent_uuid: str | None = None
     latency_ms: int | None = None
     tokens_used: int | None = None
+    provider_usage: dict = Field(default_factory=dict)
+    provider_model_usage: dict = Field(default_factory=dict)
+    cost_usd: float | None = None
     energy_cost: float | None = None
     prompt_hash: str | None = None
     response_hash: str | None = None
     finish_reason: str | None = None
     configured_by: str | None = None
+    orchestrator_agent_id: str | None = None
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -184,6 +190,18 @@ class ModelResult(_GovModel):
     success: bool
     response: str | None = None
     model_used: str | None = None
+    tokens_used: int | None = None
+    energy_cost: float | None = None
+    routed_via: str | None = None
+    task_type: str | None = None
+    inference: InferenceProvenance | None = None
+
+
+class DelegatedInferenceResult(_GovModel):
+    success: bool
+    response: str | None = None
+    model_used: str | None = None
+    models_used: list[str] = Field(default_factory=list)
     tokens_used: int | None = None
     energy_cost: float | None = None
     routed_via: str | None = None

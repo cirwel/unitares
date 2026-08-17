@@ -81,6 +81,14 @@ defmodule UnitaresSentinel.FleetAnalysis do
               Enum.map(shifted, fn {agent_id, _name, _drop, _source, _role} -> agent_id end),
             coherence_source: source,
             coherence_role: role,
+            # One cycle can yield several coordinated_degradation findings — the
+            # reducer groups by {source, role} precisely because a control-feedback
+            # drop and a structural-coherence drop are different claims. Without
+            # the producer in the key they share one dedup bucket and only the
+            # first group survives the 30-min window. Deliberately NOT keyed on
+            # the agent set: membership churns every cycle, which would defeat
+            # dedup for a persisting condition.
+            fingerprint_extra: [source, role],
             details:
               Map.new(shifted, fn {agent_id, _name, drop, _source, _role} ->
                 {agent_id, Float.round(drop * 1.0, 3)}
@@ -125,7 +133,16 @@ defmodule UnitaresSentinel.FleetAnalysis do
             summary:
               "#{display_name(agent_id, name)} entropy outlier (z=#{format_float(z, 1)}, S=#{format_float(entropy, 3)})",
             agents: [agent_id],
-            self_observation: self_observation?
+            self_observation: self_observation?,
+            # The legacy 4-part key ends in Sentinel's OWN agent_id, so every
+            # outlier agent hashed to one fingerprint and the 30-min window let
+            # exactly one agent per half-hour through — whichever the reducer
+            # happened to emit first. Measured 2026-08-16: 14 days of
+            # entropy_outlier rows spaced 30.0-30.4min apart with the subject
+            # rotating across each boundary. Keying on the SUBJECT agent gives
+            # each one its own bucket; a repeat for the same agent still dedups,
+            # which is the behaviour the window was actually for.
+            fingerprint_extra: [agent_id]
           }
         end)
       else
@@ -192,7 +209,15 @@ defmodule UnitaresSentinel.FleetAnalysis do
             severity: "medium",
             summary:
               "#{length(recent_typed)} governance events in #{div(@coordinated_window_ms, 60_000)}min: #{Enum.join(event_types, ", ")}",
-            details: %{event_types: event_types, count: length(recent_typed)}
+            details: %{event_types: event_types, count: length(recent_typed)},
+            # The correlation this finding reports IS the event-type set, so a
+            # burst carrying circuit_breaker_trip + lifecycle_paused must not
+            # dedup behind a routine knowledge_read/knowledge_write one. Keyed on
+            # the sorted set only: `count` is deliberately excluded because it
+            # moves every cycle and would turn dedup off entirely. Bounded
+            # cardinality — 13 typed families exist, 27 distinct sets observed
+            # over 30d, and the reducer emits at most one per cycle.
+            fingerprint_extra: event_types
           }
         ]
       else

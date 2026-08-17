@@ -152,28 +152,32 @@ So the "anchored-outcome and EISV populations are disjoint" blocker (roadmap
 App. B, "2 of 1,632") is **stale** — it described June. The prerequisite the
 roadmap named is done; **building more label-attachment plumbing is not the lever.**
 
-**The binding constraint moved to label volume and independence, and that is
-structural.** The exogenous, EISV-carrying **bad-label** budget is **83 rows in 26
-independent (agent, session) clusters, 3 agents past the per-agent threshold** —
-against the pre-registered outcome-grounding stop rule's requirement of **≥150
-clusters** (`eisv-outcome-grounding-stop-rule-v0.md`, read wired for 2026-12-01).
-Twenty-six versus one-fifty, heavily autocorrelated. This is not a plumbing gap; it
-is how few *independent* bad outcomes a governance fleet produces, and the
-`project_eisv-validation-gap` analysis argues it is not buyable (CI cannot attribute
-to agents; the clean-label rate has a low ceiling). *(This is a census of label
-availability, not the stop-ruled discrimination read — that read is left for its
-scheduled date.)*
+**The binding constraint moved away from attachment plumbing.** The 2026-08-06
+availability census found **83 exogenous, EISV-carrying bad-label rows in 26
+`(agent, session)` groups, with 3 agents past the per-agent threshold**. This is
+a broad census across outcome types, not the stop-rule analytic cohort, and its
+session groups are not an independent-outcome count. They must not be compared
+with the stop rule's **≥150 prior-state permutation-block** eligibility
+threshold.
 
-**Consequence for the programme.** Outcome-validation of EISV is walking toward the
-stop-rule floor and no engineering removes the wall. The earned claims are all
+The comparable dated analytic description is the frozen 2026-08-09 trusted
+matrix: 53 bad rows in 28–29 prior-state permutation blocks across 16 agents,
+depending on slice. It is descriptive only and none of its 12 overall slices
+clears the selection-aware null. The only confirmatory read remains wired for
+2026-12-01. This is still not a plumbing gap; it is a dependence and eligible
+evidence constraint that plumbing alone does not remove.
+
+**Consequence for the programme.** Outcome-validation of EISV remains unresolved
+under the frozen stop rule. Attachment engineering cannot by itself turn
+dependent observations into eligible support. The earned claims are all
 **label-free**: the verified contraction/proprioception properties above, the
 policy-coherence invariants, and the honest advisory-instrument posture
 (`docs/ontology/eisv-proprioception-contract.md`, "Deployed posture"). **[L3]** The
 positioning decision — commit to UNITARES as an advisory proprioceptive instrument
-with a sound mathematical spine that does **not** claim to be an outcome oracle, and
-retire the outcome-validation ambition — is a value/positioning call for the
-operator. This document makes clear only that the maths and the data both support
-that framing and not the oracle one.
+with a sound mathematical spine that does **not** claim to be an outcome oracle,
+and retire outcome validation as a prerequisite rather than as a future goal — is
+a value/positioning call for the operator. This document makes clear only that the
+current maths and evidence support the instrument framing, not an oracle claim.
 
 ## 6. Open questions & next moves
 
