@@ -397,6 +397,19 @@ grep -q '"dialectic-live|com.unitares.dialectic-live|.*|elixir/dialectic_live|re
   "$(dirname "$LIB")/deploy-status.sh" \
   && ok "deploy-status has a subdir-scoped dialectic-live row" || bad "dialectic-live status row"
 
+# ── deploy-apply dispatches gov-plugin ──
+# The inverse silence: gov-plugin HAD a status row for months and no dispatch
+# entry, so every sweep printed "SKIP ... no deploy script" to stderr and then a
+# reassuring summary. Measured 2026-08-17 at behind=3. Row-without-dispatch is
+# the failure mode, so assert the pair.
+(
+  set -euo pipefail
+  grep -q 'gov-plugin)      echo "$OPS_DIR/deploy-gov-plugin.sh"' \
+    "$(dirname "$LIB")/deploy-apply.sh"
+  [ -x "$(dirname "$LIB")/deploy-gov-plugin.sh" ]
+) && ok "deploy-apply dispatches gov-plugin to an executable script" \
+  || bad "deploy-apply gov-plugin dispatch"
+
 echo; echo "passed=$pass failed=$fail"
 rm -rf "$SB"
 exit "$((fail > 0))"

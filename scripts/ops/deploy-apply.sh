@@ -8,11 +8,14 @@
 # SAFE BY CONSTRUCTION: this never pulls or restarts a service itself. It only
 # dispatches to per-service deploy scripts (deploy-mcp.sh / deploy-gateway.sh /
 # deploy-lease-plane.sh / deploy-sentinel.sh / deploy-wave3a.sh /
-# deploy-orchestrator.sh / deploy-bridge.sh), each of which deploys from a
-# trunk-pinned worktree and REFUSES if its LaunchAgent still
-# loads from the shared dev checkout. Any service NOT in the script_for() table
-# below is REPORTED, never touched — give it a deploy worktree + a deploy script
-# to bring it into the sweep. Keep this list in sync with that table.
+# deploy-orchestrator.sh / deploy-bridge.sh / deploy-gov-plugin.sh). Each of the
+# process-backed ones deploys from a trunk-pinned worktree and REFUSES if its
+# LaunchAgent still loads from the shared dev checkout. deploy-gov-plugin.sh is
+# the exception and says so at length: its target has no worktree and no
+# LaunchAgent, so it pulls the checkout in place behind its own refusal guards.
+# Any service NOT in the script_for() table below is REPORTED, never touched —
+# give it a deploy script to bring it into the sweep. Keep this list in sync
+# with that table.
 #
 # Detection is delegated to deploy-status.sh (single source of truth for "what's
 # live vs on disk"), so this stays a thin, safe orchestrator.
@@ -55,6 +58,11 @@ deploy_script_for() {
     # meant the alarm itself could go stale unnoticed.
     discord-bridge)  echo "$OPS_DIR/deploy-bridge.sh" ;;
     dialectic-live)  echo "$OPS_DIR/deploy-dialectic-live.sh" ;;
+    # The one entry with no worktree and no LaunchAgent: the plugin checkout IS
+    # the deployed artifact, so its script pulls in place and there is nothing
+    # to restart. It was reachable only by hand until 2026-08-17, which meant
+    # `cirwel update` reported it BEHIND and then left it that way.
+    gov-plugin)      echo "$OPS_DIR/deploy-gov-plugin.sh" ;;
     *)               echo "" ;;
   esac
 }
