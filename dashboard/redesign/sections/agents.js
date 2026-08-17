@@ -268,7 +268,9 @@
     else if ((a.updates || 0) > 0 && (st.level === "stale" || st.level === "dead")) out.push(`<span class="tag warn">stale observation</span>`);
     if (a.superseded) out.push(`<span class="tag warn" title="${a.lifecycleReason || "superseded"}">superseded</span>`);
     if (a.parent) out.push(`<span class="tag" title="lineage parent ${a.parent}">↑ lineage</span>`);
-    else if (a.redacted) out.push(`<span class="tag" title="identifiers redacted">redacted</span>`);
+    // No per-row `redacted` chip: redaction applies to nearly every non-verified
+    // row, so as a chip it is uniform noise. The fact survives as a title on the
+    // agent name (see tr()).
     return out.join(" ");
   }
 
@@ -355,7 +357,7 @@
       return `<tr class="ag-row" data-id="${a.agent_id || ""}"${sel}>
         <td><span class="dot-pip" style="background:${presence.color}"></span></td>
         <td><div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
-            <span style="font-weight:500;color:var(--ink)">${name}</span> ${tierBadge(a.tier)} ${rowBadges(a, st)}${pinTag}
+            <span style="font-weight:500;color:var(--ink)"${a.redacted ? ' title="identifiers redacted server-side"' : ""}>${name}</span> ${tierBadge(a.tier)} ${rowBadges(a, st)}${pinTag}
           </div>${a.purpose ? `<div style="font-size:var(--text-xs);color:var(--muted);margin-top:2px">${a.purpose}</div>` : ""}</td>
         <td><span class="tag ${verdictClass(a.metrics.verdict)}">${a.metrics.verdict || "—"}</span></td>
         <td class="mono">${num(a.metrics.coherence)}</td>
@@ -366,7 +368,7 @@
       </tr>`;
     };
     const head = `<thead><tr>
-      <th></th><th>Agent</th><th>Verdict</th><th>Coh</th><th>Risk</th><th>State rows</th><th>Presence</th><th>Last observation</th>
+      <th></th><th>Agent</th><th title="Governance policy verdict at the last check-in — not derived from the raw risk number, so high risk beside 'safe' is expected">Verdict</th><th>Coh</th><th title="Raw risk telemetry (0–1): instrumentation, not a judgment. Verdicts come from policy, so this column deliberately is not colour-coded">Risk</th><th>State rows</th><th>Presence</th><th>Last observation</th>
     </tr></thead>`;
     const sm = MODEL.summary || {};
     const unknownPresence = typeof sm.presenceUnknown === "number" || typeof sm.presenceUnavailable === "number"
@@ -397,12 +399,12 @@
       ? `<span style="color:var(--warn)" title="${esc(MODEL.stuckOmitted)}">⚠ no stuck reasons</span>` : "";
     mount.innerHTML = note +
       `<div style="display:flex;gap:var(--space-5);margin-bottom:var(--space-3);font-size:var(--text-xs);color:var(--muted);align-items:center;flex-wrap:wrap">
-         <span><b style="color:var(--ink)">${sm.total ?? rows.length}</b> total</span>
+         <span title="Registry identities seen in the last 14 days. The Overview's Agents card reads a 30-day window, so its total is larger."><b style="color:var(--ink)">${sm.total ?? rows.length}</b> total</span>
          <span title="Registry lifecycle state; not a process-liveness claim"><b style="color:var(--ink)">${sm.active ?? "—"}</b> registry active</span>
-         <span><b style="color:var(--ink)">${sm.live ?? "—"}</b> live signal</span>
-         <span><b style="color:var(--ink)">${unknownPresence ?? "—"}</b> presence unknown</span>
-         <span><b style="color:var(--ink)">${sm.observed ?? observed.length}</b> observed</span>
-         <span><b style="color:var(--ink)">${sm.archived ?? 0}</b> archived</span>
+         <span title="Currently held session binding or lease heartbeat — a right-now liveness signal. Recently-active rows sort to the top, so the first page can be all-live while most of the fleet has no signal."><b style="color:var(--ink)">${sm.live ?? "—"}</b> live signal</span>
+         <span title="No liveness signal either way — most one-shot sessions end without deregistering"><b style="color:var(--ink)">${unknownPresence ?? "—"}</b> presence unknown</span>
+         <span title="Has at least one measured state row (EISV observation)"><b style="color:var(--ink)">${sm.observed ?? observed.length}</b> observed</span>
+         <span title="Registry lifecycle: archived"><b style="color:var(--ink)">${sm.archived ?? 0}</b> archived</span>
          <span class="src-badge ${MODEL.source}">${MODEL.source}</span>
          <span style="color:var(--faint)" title="This view does not auto-refresh — it is a point-in-time read.">read ${asOf}</span>
          <button id="ag-refresh" class="theme-toggle" title="Re-read the fleet">↻</button>

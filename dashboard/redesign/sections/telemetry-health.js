@@ -81,7 +81,7 @@
     return rows.map((row) => {
       const rate = row.rate == null && total ? Number(row.observations || 0) / total : row.rate;
       return `<div class="th-row">
-        <span class="th-label">${esc(row[labelKey])}</span>
+        <span class="th-label" title="${esc(row[labelKey])}">${esc(row[labelKey])}</span>
         <span class="th-track"><i style="width:${Math.max(0, Math.min(100, Number(rate || 0) * 100))}%"></i></span>
         <span class="th-count">${num(row.observations)} · ${pct(rate)}</span>
       </div>`;
@@ -147,8 +147,9 @@
         .th-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:var(--space-2);margin-bottom:var(--space-4)}
         .th-split{gap:var(--space-3);margin-bottom:var(--space-3);align-items:stretch}
         .th-chart{height:220px}
-        .th-row{display:grid;grid-template-columns:minmax(120px,1fr) minmax(100px,2fr) minmax(96px,auto);gap:var(--space-2);align-items:center;padding:6px 0;border-top:1px solid var(--line-2)}
+        .th-row{display:grid;grid-template-columns:minmax(150px,1fr) minmax(100px,2fr) minmax(96px,auto);gap:var(--space-2);align-items:center;padding:6px 0;border-top:1px solid var(--line-2)}
         .th-label,.th-count{font-family:var(--font-mono);font-size:var(--text-sm)}
+        .th-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .th-count{text-align:right;color:var(--muted)}
         .th-track{height:6px;background:var(--bg-sunken);border-radius:var(--radius-pill);overflow:hidden}.th-track i{display:block;height:100%;background:var(--eisv-c);border-radius:inherit}
         .th-detail-row{display:flex;justify-content:space-between;gap:var(--space-2);padding:7px 0;border-top:1px solid var(--line-2)}
