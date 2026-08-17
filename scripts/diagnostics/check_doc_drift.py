@@ -28,10 +28,7 @@ FRESHNESS_EXEMPT_NAME = re.compile(r"20\d{2}-\d{2}")
 # Known-stale docs with a rewrite tracked in an issue. An entry suppresses the
 # failure (a warning still prints); the rewrite PR removes the entry. An entry
 # whose doc is no longer stale fails the check so the list cannot rot.
-STALE_STAMP_BURNDOWN = {
-    "docs/dev/TOOL_REGISTRATION.md": "#1702",
-    "docs/dev/CIRCUIT_BREAKER_DIALECTIC.md": "#1702",
-}
+STALE_STAMP_BURNDOWN: dict[str, str] = {}
 
 _STAMP_RE = re.compile(
     r"^\**Last (?:Updated|reviewed)[:*]+\s*(?P<stamp>[A-Za-z0-9, -]+)",
