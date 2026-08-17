@@ -10,6 +10,22 @@ from src.services.principal_rollup import lookup as _principal_lookup
 
 S22_IDENTITY_RESPONSE_SCHEMA = "s22.identity_response.v1"
 
+
+def _session_continuity_instruction(*, token_available: bool) -> str:
+    """Describe the ordinary binding first and the proof-owned fallback second."""
+    instruction = (
+        "Use the active transport binding, or pass client_session_id explicitly "
+        "on same-process calls when your adapter does not inject it automatically."
+    )
+    if token_available:
+        instruction += (
+            " If the transport cannot retain that binding, use "
+            "identity(agent_uuid=..., continuity_token=..., resume=true) for an "
+            "explicit same-live-process rebind; do not attach continuity_token "
+            "to ordinary tool calls."
+        )
+    return instruction
+
 _STRONG_IDENTITY_SOURCES = {
     "continuity_token",
     "client_session_id",
@@ -119,23 +135,17 @@ def build_identity_response_data(
         if continuity_token:
             response_data["quick_reference"]["for_path0_ownership_proof"] = continuity_token
 
-        if session_continuity:
-            response_data["session_continuity"] = dict(session_continuity)
-        else:
-            response_data["session_continuity"] = {
-                "client_session_id": client_session_id,
-                "instruction": "Your session is auto-bound. You only need client_session_id if tools don't recognize you.",
-            }
-            if continuity_token:
-                response_data["session_continuity"]["continuity_token"] = continuity_token
-                response_data["session_continuity"]["instruction"] = (
-                    "To prove ownership on later calls, echo this continuity_token "
-                    "— it resolves your identity on stateless transports (e.g. "
-                    "claude.ai) where an echoed client_session_id alone resolves to "
-                    "a fresh per-call identity, and on session-maintaining clients "
-                    "alike. Session-maintaining clients (Claude Code, Claude "
-                    "Desktop) bind client_session_id automatically."
-                )
+        response_data["session_continuity"] = dict(session_continuity or {})
+        response_data["session_continuity"].setdefault(
+            "client_session_id", client_session_id
+        )
+        response_data["session_continuity"]["instruction"] = (
+            _session_continuity_instruction(
+                token_available=bool(continuity_token)
+            )
+        )
+        if continuity_token:
+            response_data["session_continuity"]["continuity_token"] = continuity_token
         response_data["session_continuity"]["resolution_source"] = continuity_source
         response_data["session_continuity"]["token_support"] = continuity_support
 
@@ -315,71 +325,35 @@ def build_onboard_response_data(
         model_type=None,
         proof_origin=proof_origin,
     )
-    # P1 (#604 dogfood 2026-06-24): a freshly minted identity resolves its own
-    # onboard call weakly (there was no prior proof to present), so the assurance
-    # block would otherwise greet a clean onboard with a `weak`/0.35 tier and a
-    # "how_to_strengthen" scold the agent cannot yet act on. Reframe it: this is
-    # the expected baseline at mint, not a deficiency, and the continuity_token
-    # handed back below is the concrete next action that reaches strong. We do
-    # not inflate the tier (the binding genuinely is unproven until the agent
-    # echoes the token) — we relabel it honestly and make the path actionable.
+    # A freshly minted identity resolves its own onboard call weakly because
+    # there was no prior proof to present. Reframe that as the expected baseline
+    # and lead with the normal client_session_id path. The signed token remains
+    # available for an explicit proof-owned rebind, not routine call threading.
     _fresh_mint = bool(is_new or force_new)
-    # Transport-aware clarifier (#604 follow-up / dogfood false-positive fix):
-    # continuity_token is the universal ownership proof, but on session-maintaining
-    # clients (Claude Code/Desktop, Cursor) an echoed client_session_id alone also
-    # reaches strong. Spelling that out stops the dogfood probe from reading the
-    # token recommendation as a wrapper/nested contradiction and re-filing it each
-    # run — the guidance was correct, only its single-credential framing was not.
-    _session_maintaining = (client_hint or "").lower() in {
-        "claude_code", "claude_desktop", "cursor"
-    }
-    _csid_also_ok = (
-        " On this client (session-maintaining) an echoed client_session_id alone "
-        "also reaches strong."
-        if _session_maintaining
-        else ""
-    )
     _assurance = identity_context.get("identity_assurance")
     if _fresh_mint and isinstance(_assurance, dict) and _assurance.get("tier") != "strong":
         _assurance["baseline"] = "fresh_identity"
-        if continuity_token:
-            _assurance["baseline_note"] = (
-                "Expected baseline for a just-minted identity — not a deficiency. "
-                "Echo the continuity_token from this response on your next call to "
-                "reach strong."
-            )
-            _assurance["how_to_strengthen"] = (
-                "echo the continuity_token from this onboard response on your next "
-                "call to reach strong (works on stateless and session-maintaining "
-                "transports alike)" + _csid_also_ok
-            )
-        else:
-            _assurance["baseline_note"] = (
-                "Expected baseline for a just-minted identity — not a deficiency. "
-                "Your binding strengthens as you check in."
-            )
-    # Ownership-proof field for args_full templates. On stateless transports an
-    # echoed client_session_id resolves to a fresh per-call identity (#604
-    # dogfood 2026-06-24), so when a continuity_token was issued we hand it back
-    # as the proof that resolves on both stateless and session-maintaining
-    # transports. Falls back to client_session_id when no token is available.
-    if continuity_token:
-        ownership_proof = {"continuity_token": continuity_token}
-        # next_step must be self-sufficient: an agent that reads only this hint
-        # (and not the welcome / how_to_strengthen / next_calls) still needs to
-        # know which credential to present, otherwise on a stateless transport
-        # it sends no proof and hits identity_required (#604 dogfood follow-up).
-        next_step = (
-            "Call process_agent_update with response_text describing your work — "
-            "echo the continuity_token from this response as your ownership proof "
-            "to reach 'strong' (it resolves on stateless and session-maintaining "
-            "transports alike)." + _csid_also_ok
+        _assurance["baseline_note"] = (
+            "Expected baseline for a just-minted identity — not a deficiency. "
+            "Use the returned client_session_id on the next call; adapters may "
+            "inject it automatically."
         )
-    else:
-        ownership_proof = {"client_session_id": stable_session_id}
-        next_step = (
-            "Call process_agent_update with response_text describing your work; "
-            "pass your client_session_id for attribution."
+        _assurance["how_to_strengthen"] = _how_to_strengthen(
+            _assurance.get("tier", "weak"),
+            str(continuity_source or "unknown"),
+            proof_origin,
+        )
+
+    ownership_proof = {"client_session_id": stable_session_id}
+    next_step = (
+        "Call process_agent_update with response_text describing your work and "
+        "the returned client_session_id; adapters may inject it automatically."
+    )
+    if continuity_token:
+        next_step += (
+            " Reserve continuity_token for an explicit "
+            "identity(agent_uuid=..., continuity_token=..., resume=true) rebind, "
+            "not ordinary tool calls."
         )
     next_calls = [
         {
@@ -432,17 +406,11 @@ def build_onboard_response_data(
             )
         welcome_message = thread_context["honest_message"]
     elif is_new:
-        if continuity_token:
-            welcome = (
-                f"Welcome! Your identity is created (session `{stable_session_id}`). "
-                f"To prove ownership on later calls, echo the continuity_token from "
-                f"this response."
-            )
-        else:
-            welcome = (
-                f"Welcome! Your session ID is `{stable_session_id}`. "
-                f"Pass this as `client_session_id` in all calls."
-            )
+        welcome = (
+            f"Welcome! Your identity is created (session `{stable_session_id}`). "
+            "Use this client_session_id on same-process calls when your adapter "
+            "does not inject it automatically."
+        )
         welcome_message = "Your identity is created. Use the templates below to get started."
     elif was_archived:
         welcome = f"Reactivated '{friendly_name}'. Session: `{stable_session_id}`."
@@ -533,7 +501,9 @@ def build_onboard_response_data(
         result["force_new_applied"] = force_new
         result["session_continuity"] = {
             "client_session_id": stable_session_id,
-            "instruction": "Your session is auto-bound. You only need client_session_id if tools don't recognize you.",
+            "instruction": _session_continuity_instruction(
+                token_available=bool(continuity_token)
+            ),
             "tip": client_tips.get(client_hint, client_tips["unknown"]),
             "resolution_source": continuity_source,
             "token_support": continuity_support,
@@ -554,14 +524,7 @@ def build_onboard_response_data(
         if "session_continuity" in result:
             result["session_continuity"]["continuity_token"] = continuity_token
             result["session_continuity"]["instruction"] = (
-                "To prove ownership on later calls, echo this continuity_token "
-                "— it resolves your identity on stateless transports (e.g. "
-                "claude.ai) where an echoed client_session_id alone resolves to "
-                "a fresh per-call identity, and on session-maintaining clients "
-                "alike. Session-maintaining clients (Claude Code, Claude "
-                "Desktop) bind client_session_id automatically, so you only "
-                "need to thread a credential by hand when tools don't already "
-                "recognize you."
+                _session_continuity_instruction(token_available=True)
             )
 
     if verbose:
@@ -709,47 +672,26 @@ def _how_to_strengthen(
     `mcp_handlers/updates/phases.py` so the read- and write-path assurance
     blocks agree.
 
-    Leads with `continuity_token` as the ownership proof (#604 dogfood
-    2026-06-24): on stateless transports (e.g. claude.ai streamable HTTP,
-    which carries no stable Mcp-Session-Id) an echoed `client_session_id`
-    resolves to a fresh per-call identity, so telling the agent to echo it
-    was the exact failing path. The continuity_token from onboard()/identity()
-    resolves correctly on BOTH stateless and session-maintaining transports,
-    so it is the safe default. Session-maintaining clients (Claude Code's
-    hook chain, Claude Desktop) bind client_session_id automatically and so
-    do not need the agent to thread either field by hand.
-
-    Ontology note (council 2026-06-24): this "echo continuity_token to reach
-    strong" guidance is SAME-LIVE-PROCESS binding strength — the kept role in
-    docs/ontology/identity.md ("`continuity_token` is an advanced same-live-
-    process rebind proof"). It is NOT the cross-process resume-credential use
-    that the ontology marks Performative / "retire or repurpose": echoing the
-    token in the running process strengthens the current binding; it does not
-    resume identity across process boundaries.
+    The normal path is an active transport binding or explicit
+    `client_session_id`; adapters should inject it automatically. A
+    `continuity_token` is mentioned only as an explicit same-live-process
+    identity rebind fallback, never as a field to attach to every tool call.
     """
     if tier == "strong":
         return None
     if proof_origin == "server_inferred":
-        return (
-            "binding was server-inferred (not caller-proven); echo the "
-            "continuity_token from your onboard response on each call to reach "
-            "strong (it resolves on stateless and session-maintaining "
-            "transports alike). A session-maintaining client may instead pass "
-            "an explicit client_session_id"
-        )
-    if tier == "medium":
-        return (
-            "echo the continuity_token from your onboard response on each call "
-            "to reach strong; a session-maintaining client may instead pass an "
-            "explicit client_session_id"
-        )
-    # weak
+        prefix = "binding was server-inferred (not caller-proven); "
+    elif tier == "medium":
+        prefix = "to strengthen this medium-assurance binding, "
+    else:
+        prefix = "to strengthen this weak binding, "
     return (
-        "echo the continuity_token from your onboard response on each call to "
-        "reach strong — it works on stateless transports (e.g. claude.ai) "
-        "where an echoed client_session_id resolves to a fresh per-call "
-        "identity. A session-maintaining client may instead pass an explicit "
-        "client_session_id"
+        prefix
+        + "pass the client_session_id returned by start_session explicitly on "
+        "the next call; adapters may inject it automatically. If this transport "
+        "cannot retain that binding, use identity(agent_uuid=..., "
+        "continuity_token=..., resume=true) as an explicit same-live-process "
+        "rebind instead of attaching continuity_token to ordinary tool calls"
     )
 
 
