@@ -252,6 +252,15 @@ def format_response(
     # early-return and before stripping; consumes/clears the internal key.
     _emit_mirror_signal_records(response_data, response_mode, meta)
 
+    # In-flow review nudge (#1685): promote the enrichment marker to a
+    # payload-visible key that survives every response mode — the envelope
+    # appends it to next_action; mirror mode additionally renders a signal
+    # line. Captured here (modes build fresh dicts) and re-attached at the
+    # common return below.
+    review_nudge = response_data.pop("_review_nudge", None)
+    if review_nudge is not None:
+        response_data["review_suggested"] = review_nudge
+
     # Full mode: no filtering
     if response_mode == "full":
         return response_data
@@ -281,6 +290,11 @@ def format_response(
     # Strip optional context for minimal/compact/mirror (reduce noise for established agents)
     if response_mode in ("minimal", "compact", "mirror"):
         _strip_context(response_data, is_new_agent, key_was_generated, api_key_auto_retrieved)
+
+    # Re-attach the review nudge (#1685): the mode builders return fresh dicts,
+    # so the key promoted above does not survive them on its own.
+    if review_nudge is not None and isinstance(response_data, dict):
+        response_data.setdefault("review_suggested", review_nudge)
 
     return response_data
 
@@ -529,6 +543,14 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
     if reflection is None:
         # Back-compat: older enrichments may still set _mirror_question.
         reflection = response_data.get("_mirror_question", None)
+
+    # In-flow review nudge (#1685): render as a mirror line so the suggestion
+    # is visible in the mode that actionable states resolve to.
+    if response_data.get("review_suggested"):
+        mirror_signals.append(
+            "This turn reads as uncertain ground — a reviewer is one call away: "
+            "request_review(issue_description='...', reasoning='...')"
+        )
 
     result = {
         "success": True,

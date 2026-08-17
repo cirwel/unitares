@@ -55,6 +55,20 @@ _KG_SEARCH_TIMEOUT = float(os.getenv("UNITARES_KG_SEARCH_TIMEOUT_S", "0.25"))
 # Session-scope TTL for the per-agent set of already-surfaced discovery_ids.
 _KG_SURFACED_TTL_SECONDS = 86400
 
+# ─── In-flow review nudge (adoption increment 2, #1685) ─────────────────
+# When a check-in itself reports uncertain ground, suggest the one-call
+# review surface in the same response. The #1387 adjudication confirmed the
+# entry-cost hypothesis (agents do reach for request_review when it works);
+# this closes the discovery gap for agents who don't know the surface exists
+# at the moment it would help. OFF by default (UNITARES_REVIEW_NUDGE unset).
+# Conservative by design — an irrelevant nudge trains agents that the channel
+# is noise (the proactive-KG relevance lesson), so it keys only on what the
+# agent itself reported or the policy's own guide verdict, never on cadence,
+# and fires at most once per agent-session.
+_REVIEW_NUDGE_CONF_CEILING = 0.4
+_REVIEW_NUDGE_COMPLEXITY_FLOOR = 0.8
+_REVIEW_NUDGE_TTL_SECONDS = 86400
+
 # ─── Identity Reminder ─────────────────────────────────────────────────
 
 @enrichment(order=10)
@@ -1439,6 +1453,31 @@ async def enrich_mirror_signals(ctx: UpdateContext) -> None:
                     ],
                 })
 
+        # 3c. In-flow review nudge (adoption increment 2, #1685) — when this
+        #     check-in itself reports uncertain ground, offer the one-call
+        #     review surface in the same response. OFF by default
+        #     (UNITARES_REVIEW_NUDGE unset); at most once per agent-session,
+        #     fail-closed on Redis. Independent of the KG blocks above.
+        nudge_reason = _review_nudge_trigger(ctx)
+        if nudge_reason and await _review_nudge_novel(ctx):
+            ctx.response_data["_review_nudge"] = {"trigger": nudge_reason}
+            signal_records.append({
+                "signal_type": "review_nudge",
+                "metric": "review_nudge_trigger",
+                "value": (
+                    ctx.confidence if nudge_reason == "low_confidence"
+                    else ctx.complexity if nudge_reason == "high_complexity"
+                    else None
+                ),
+                "threshold": (
+                    _REVIEW_NUDGE_CONF_CEILING if nudge_reason == "low_confidence"
+                    else _REVIEW_NUDGE_COMPLEXITY_FLOOR if nudge_reason == "high_complexity"
+                    else None
+                ),
+                "fired": True,
+                "trigger": nudge_reason,
+            })
+
         # Complexity-divergence trigger record — same gate the surfaced line
         # uses (_get_complexity_disagreement honors the >3-update baseline and
         # the novelty gate), so the record fires exactly when the signal does.
@@ -1663,6 +1702,65 @@ def _proactive_kg_due(ctx: UpdateContext) -> bool:
         if total <= 3:  # settling — no proactive nudges during warmup
             return False
         return total % every == 0
+    except Exception:
+        return False
+
+
+def _review_nudge_trigger(ctx: UpdateContext) -> Optional[str]:
+    """Return the trigger reason when an in-flow review nudge is due, else None.
+
+    Triggers, any one sufficient (checked in this order):
+      * the agent reported confidence at or under _REVIEW_NUDGE_CONF_CEILING
+      * the agent reported complexity at or over _REVIEW_NUDGE_COMPLEXITY_FLOOR
+      * the policy decision came back sub_action == "guide"
+
+    Gated by UNITARES_REVIEW_NUDGE (default off) and a >3-update warmup — a
+    settling identity gets onboarding guidance, not review nudges.
+    """
+    try:
+        if os.getenv("UNITARES_REVIEW_NUDGE", "").strip().lower() not in (
+            "1", "true", "yes", "on",
+        ):
+            return None
+        total = getattr(ctx.meta, "total_updates", 0) if ctx.meta else 0
+        if total <= 3:
+            return None
+        if ctx.confidence is not None and ctx.confidence <= _REVIEW_NUDGE_CONF_CEILING:
+            return "low_confidence"
+        if ctx.complexity is not None and ctx.complexity >= _REVIEW_NUDGE_COMPLEXITY_FLOOR:
+            return "high_complexity"
+        decision = ctx.response_data.get("decision")
+        if isinstance(decision, dict) and decision.get("sub_action") == "guide":
+            return "guide_verdict"
+        return None
+    except Exception:
+        return None
+
+
+async def _review_nudge_novel(ctx: UpdateContext) -> bool:
+    """True when this agent has not been nudged this session (Redis SET NX).
+
+    FAIL-CLOSED — no Redis, timeout, or error means no nudge. This deliberately
+    inverts _dedupe_surfaced_kg's fail-open: for a prior discovery, missing a
+    relevant lead is the harm; for a suggestion, repetition is the harm — a
+    nudge that keeps firing trains the reader to ignore the channel.
+    """
+    try:
+        from src.cache.redis_client import get_redis
+
+        redis = await get_redis()
+        if not redis:
+            return False
+        added = await asyncio.wait_for(
+            redis.set(
+                f"review_nudge:{ctx.agent_uuid}",
+                "1",
+                nx=True,
+                ex=_REVIEW_NUDGE_TTL_SECONDS,
+            ),
+            timeout=_REDIS_NOTIF_TIMEOUT,
+        )
+        return bool(added)
     except Exception:
         return False
 

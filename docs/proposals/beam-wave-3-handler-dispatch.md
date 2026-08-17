@@ -908,6 +908,80 @@ Each criterion names its measurement source. If any source is missing at gate, g
 
 ---
 
+## §11.1 Gate audit (2026-08-16) — two entry criteria were never closed out
+
+Every criterion above was re-read against live data. **A first version of this
+audit claimed the gate was "circular" and proposed replacing criteria 2/3/5.
+Adversarial review refuted it and that claim is withdrawn** — the refutation is
+recorded below because it is the more useful finding.
+
+**Withdrawn: the circularity claim.** §11 is *Go/No-Go for Wave 3 **close***.
+Criteria 2 (21 days of production BEAM traffic), 3 (zero boundary incidents) and
+5 (boundary cost) are **exit** criteria, evaluated after build, shadow soak and
+cutover. Requiring evidence that only a built artifact can produce is what an
+exit criterion is *for*. They are **unmet, not unreachable**, and they are not
+what has kept Wave 3 from starting. A proposal to restate them against the §8
+shadow window was also withdrawn: it would have narrowed 2 to PATH 3 mints
+only, and dropped 5's advisory-lock and saga costs and its sustained-window
+requirement — weaker, not equivalent.
+
+⛔The `0 rows` in criteria 3 and 5 today still means *unmeasured*, not *clean* —
+do not later read those zeros as passes.
+
+### What actually blocks the start: criteria 8 and 9
+
+Both are entry-shaped, both are answerable **without building anything**, and
+neither has been closed.
+
+- **8 — (D) state ownership. FIRED, and still open.** A genuine 9th surface was
+  found: UDS `peer_pid` kernel attestation behind `core.substrate_claims`,
+  absent from §3.1's eight. Per the criterion the gate halts and the RFC
+  re-opens. The answer that exists — the HYBRID split, Python permanently owning
+  the identity boundary — lives in `beam-wave-3-gamma-hybrid-v0.md` as a
+  **recommendation** (§0a REJECTED / §0c *recommend* SHELVE), and that doc says
+  a rescope needs its own gate. ⛔It is **not** a ratified amendment, and §1 of
+  this RFC still scopes identity middleware to BEAM. So the halt stands until an
+  operator either ratifies the scope reduction or rejects it. Ratifying would
+  *shrink* Wave 3, not block it.
+- **9 — (E) opportunity cost. Artifact never written.** The criterion requires
+  `docs/proposals/wave-3-go-decision-<date>.md` with a §"Calendar reasoning"
+  section. **No such file exists in the repo** (checked 2026-08-16). No
+  acceptance-memo escape is permitted by the criterion's own text, so this is an
+  unsatisfied entry gate with no measurement pending — only a document.
+
+That is the honest answer to "why has Wave 3 not started": not circularity, and
+not a decision to postpone. Two entry criteria fired or came due and were never
+closed out, and both close with operator judgement rather than engineering.
+
+### Already satisfied
+
+| # | Evidence |
+|---|---|
+| 1 | Wave 2 closed per its 2026-05-08 handoff (cited, not re-verified here) |
+| 4 | (A.1) ODE math measured at 0.8% of `process_agent_update` p99 (artifact 2026-06-03) — does not fire |
+| 7 | (C) SDK spike run; `hermes_mcp 0.14.1` stalled, dependency swapped to `anubis-mcp` v1.6.2 — not production-disqualifying |
+
+### Two criteria worth re-reading before the next gate
+
+- **6 — (A.2) in-place-fix gate.** Trailing 7 days: `process_agent_update`
+  **p99 = 795ms** (n=6,704, p50 183ms), well under the 2.0s threshold. But the
+  criterion is conditioned on a Python fix shipped *during the implementation
+  window*, and no implementation window ever opened — so it is arguably not yet
+  evaluable rather than firing. Worth an operator ruling either way, because as
+  written it halts *because the Python path improved*, and latency was struck as
+  a Wave-3 decision axis on 2026-06-24 and again in V0.4.
+- **10 — (F) dialectic quality.** The 2026-06-11 pin halted on its own volume
+  haltspec (trailing 30d held 1 session, needs ≥30). Trailing 30d now holds
+  **36**, so a baseline is pinnable for the first time. ⛔Exclude canary traffic
+  when pinning: partition on `core.agents.label LIKE 'canary_dialectic%'` joined
+  `a.id = d.paused_agent_id`. `trigger_source` is the literal `'manual'` for
+  every row and partitions nothing, so a raw rate over the unfiltered 36 is wrong.
+
+⛔This section reports and proposes nothing. The exit criteria are the
+operator's gate; closing 8 and 9 is an operator action.
+
+---
+
 ## §12 Stop signs
 
 Inheriting parent roadmap stop signs #1–#4, plus Wave-3-specific:

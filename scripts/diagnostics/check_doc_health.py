@@ -75,6 +75,24 @@ _DEAD_REF_SKIP_FILES = {"docs/ontology/plan.md"}
 # planned at proposal time. Same reasoning as `specs`/`handoffs`/`plans`.
 _DEAD_REF_SKIP_DIRS = {"specs", "handoffs", "plans", "proposals"}
 
+# Relative-link checking uses a NARROWER exemption. The rationale above is
+# about *bare filename* refs to implementation that landed under another name
+# or never landed at all -- measured 2026-08-16, including `proposals` in
+# check_dead_refs surfaces 23 such refs. They are NOT one clean class: some are
+# genuine drift (a placeholder migration slot `0NN_identities_shadow.sql`, a
+# planned-but-unbuilt `wave3-capture-goldens.sh`), others are app-relative
+# shorthand for files that DO exist but not at that path from the repo root
+# (`scripts/live_smoke.exs` lives under elixir/agent_orchestrator/). Either way
+# they are noise against a bare-ref check, which is why the exemption stays.
+#
+# A broken `[text](path.md)` link is a different animal: the target is a doc in
+# this repo, the link is clickable, and it is broken for a reader today. That
+# is not drift-by-design. `docs/proposals/` in particular is NOT purely
+# historical -- it holds the live RFC thread, and moving a record into
+# `resolved/` is exactly the operation that breaks sibling links. Including it
+# costs one pre-existing finding and zero noise (measured same day: 1 warning).
+_REL_LINK_SKIP_DIRS = {"specs", "handoffs", "plans"}
+
 
 _REVIEW_SUFFIXES = (
     ".code-review.md",
@@ -170,7 +188,7 @@ def check_relative_links(md_files: list[Path]) -> list[str]:
         rel = fpath.relative_to(REPO_ROOT)
         if rel.as_posix() in _DEAD_REF_SKIP_FILES:
             continue
-        if any(d in rel.parts for d in _DEAD_REF_SKIP_DIRS):
+        if any(d in rel.parts for d in _REL_LINK_SKIP_DIRS):
             continue
         if rel.name.endswith(_REVIEW_SUFFIXES):
             continue
@@ -185,8 +203,22 @@ def check_relative_links(md_files: list[Path]) -> list[str]:
                 # renders it as the package description, outside the repo.
                 if _ABSOLUTE_URL.match(link):
                     continue
-                # Repo-root-prefixed links are handled by check_dead_refs.
+                # Repo-root-prefixed links are normally handled by
+                # check_dead_refs -- but only if that check actually looks at
+                # this file. When the two skip sets differ, delegating blindly
+                # drops the link on the floor: a `[x](docs/gone.md)` inside
+                # docs/proposals/ was invisible to BOTH checks, since this one
+                # delegated it away and check_dead_refs skips proposals.
+                # So delegate only where the delegate is actually looking.
                 if link.startswith(_REPO_ROOT_PREFIXES):
+                    if not any(d in rel.parts for d in _DEAD_REF_SKIP_DIRS):
+                        continue
+                    # check_dead_refs will not see this file; resolve from the
+                    # repo root ourselves rather than lose the link.
+                    if not (REPO_ROOT / link).exists():
+                        warnings.append(
+                            f"  {rel}:{i}: broken repo-root link `{link}`"
+                        )
                     continue
                 # Operator-local handoffs are gitignored; cited by name as
                 # provenance (same exemption as the dead-ref check).
