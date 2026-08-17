@@ -29,8 +29,7 @@ It is a self-hosted MCP/HTTP service, not an agent framework or hosted platform.
 
 **Maintainer dogfood since November 2025 · 4.5M+ recorded audit/telemetry events.**
 
-That count is evidence of sustained operation in one maintainer-run environment,
-not external adoption or governance efficacy.
+Per-number scope and limits: [Evidence and limits](#evidence-and-limits).
 
 [![Quickstart](https://img.shields.io/badge/▶-quickstart-5eead4?style=for-the-badge&labelColor=0f171f)](#quickstart)
 [![Evidence](https://img.shields.io/badge/evidence-check_it-f5a623?style=for-the-badge&labelColor=0f171f)](#evidence-and-limits)
@@ -174,8 +173,10 @@ policy decisions with named reasons.
 Future experiments can test whether those records are sufficient for exchanging
 cross-operator attestations without centralizing raw telemetry. Cross-governor
 trust, consensus, and enforcement are not deployed guarantees. Experiments
-between mutually distrustful governors remain gated on independent-operator
-validation in the [roadmap](ROADMAP.md).
+between mutually distrustful governors are gated on the **multi-principal trust**
+track in the [roadmap](ROADMAP.md) — a principal who does not share this
+authority is what that claim requires, and it is a separate evidence path from
+the efficacy cohort.
 
 ## Evidence and limits
 
