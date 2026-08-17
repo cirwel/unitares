@@ -2,7 +2,8 @@
 # check-deploy-lib.sh — contract check for the deploy-script library extraction.
 #
 # The per-service deploy scripts (deploy-mcp / gateway / sentinel / lease-plane
-# / wave3a / orchestrator / bridge) share their lock, plist-preflight, and ff blocks via
+# / wave3a / orchestrator / bridge / gov-plugin) share their lock,
+# plist-preflight, and ff blocks via
 # scripts/ops/deploy-lib.sh. Before the extraction those blocks were pasted
 # five times and drifted (stale lock comments; deploy-lease-plane.sh shipped
 # with NO plist preflight at all — the false-success gap the preflight exists
@@ -32,6 +33,11 @@ SERVICE_SCRIPTS=(
   "$OPS/deploy-orchestrator.sh"
   "$OPS/deploy-bridge.sh"
   "$OPS/deploy-dialectic-live.sh"
+  # Sources the lib for the LOCK ONLY — it has no worktree and no LaunchAgent,
+  # so ff_worktree and the plist preflight genuinely do not apply to it. The
+  # contract checked here is "does not re-implement shared machinery", and that
+  # one still binds.
+  "$OPS/deploy-gov-plugin.sh"
 )
 ALL_SCRIPTS=("$LIB" "${SERVICE_SCRIPTS[@]}" "$OPS/deploy-status.sh" "$OPS/deploy-apply.sh" "$OPS/nudge-lease-plane.sh")
 
@@ -71,6 +77,12 @@ done
 # 5. functional sandbox tests (lock semantics, lock-key byte-stability,
 #    preflight policies, ff-worktree, poll) — throwaway fixtures only
 bash "$ROOT/scripts/dev/test-deploy-lib.sh" || err "functional sandbox tests failed (scripts/dev/test-deploy-lib.sh)"
+
+# 5b. deploy-gov-plugin.sh's refusal guards. It deploys by pulling a checkout
+#     the operator WORKS IN, so "refuses and leaves it untouched" is the whole
+#     safety story and is worth a test rather than a review hope.
+bash "$ROOT/scripts/dev/test-deploy-gov-plugin.sh" \
+  || err "gov-plugin deploy guards failed (scripts/dev/test-deploy-gov-plugin.sh)"
 
 # 6. advisory shellcheck (never fails the gate)
 if command -v shellcheck >/dev/null 2>&1; then
