@@ -10,8 +10,10 @@ own-identity, lease-capable reviewer process), not a dependency.
 
 The spawned reviewer (``python3 -m agents.dialectic_reviewer``) onboards with its
 OWN identity, claims the still-open reviewer slot via the multi-agent path
-(submit_antithesis), submits its verdict, and exits — so on successful dispatch
-the handler must NOT also run the in-process review.
+(submit_antithesis), and submits its verdict. After a disagreement it remains
+alive for a bounded response/reconsideration window under that same identity,
+then exits — so on successful dispatch the handler must NOT also run the
+in-process review.
 """
 from __future__ import annotations
 
@@ -93,6 +95,26 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
     }
     if parent_agent_id:
         env["UNITARES_PARENT_AGENT_ID"] = parent_agent_id
+
+    # The backend choice belongs to the dispatching governance process, not to
+    # whichever defaults happen to be present in the orchestrator daemon. Pass
+    # only the bounded reviewer configuration — never auth tokens. The Claude
+    # CLI itself inherits operator subscription auth from the child runtime.
+    reviewer_config = (
+        "UNITARES_DIALECTIC_REVIEWER_HOST",
+        "UNITARES_DIALECTIC_CLAUDE_MODEL",
+        "UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S",
+        "UNITARES_DIALECTIC_CODEX_TIMEOUT_S",
+        "UNITARES_DIALECTIC_REVIEW_MAX_TOKENS",
+        "UNITARES_CLAUDE_CLI",
+        "UNITARES_CODEX_CLI",
+        "UNITARES_LLM_MODEL",
+        "UNITARES_OLLAMA_BASE_URL",
+    )
+    for name in reviewer_config:
+        value = os.environ.get(name)
+        if value:
+            env[name] = value
 
     # NB: we deliberately do NOT forward UNITARES_DIALECTIC_BEAM_RESOLUTION into
     # the reviewer's env. The reviewer submits its antithesis/synthesis via the

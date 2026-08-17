@@ -7,10 +7,12 @@ dialectic session needs a reviewer. Unlike the in-process synthetic path
 paused agent's api_key), this process:
 
   * onboards as its OWN governance identity (strict-identity compliant),
-  * runs a heterogeneous LOCAL model (gemma4 via Ollama — no paid API) IN its own
-    process to form a *genuine* verdict that may DISAGREE,
+  * runs an operator-selected heterogeneous model (local Ollama by default,
+    subscription-auth Codex or Claude when configured) IN its own process to
+    form a *genuine* verdict that may DISAGREE,
   * submits that verdict through the ordinary dialectic protocol tools, and
-  * exits (the orchestrator reaps it and releases its lease).
+  * after a disagreement, stays alive for a bounded window to evaluate the
+    paused agent's response under the SAME reviewer identity before exiting.
 
 Design: docs/proposals/orchestrated-dialectic-reviewer-v0.md
 
@@ -21,13 +23,18 @@ network or a model.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from src.identity.lineage_semantics import LineageSpawnReason
+
+from .host_backends import HostReviewResult, call_claude_backend, resolve_host_cli
 
 # gemma4 hides its answer behind a <think> block under thinking mode; strip it
 # before JSON extraction (mirrors llm_delegation._wants_reasoning_effort_none).
@@ -39,6 +46,67 @@ DEFAULT_MODEL = os.getenv("UNITARES_LLM_MODEL", "gemma4:latest")
 OLLAMA_BASE_URL = os.getenv("UNITARES_OLLAMA_BASE_URL", "http://localhost:11434/v1")
 SPAWN_REASON = LineageSpawnReason.DIALECTIC_REVIEWER.value
 REVIEWER_NAME = "DialecticReviewer"
+DEFAULT_CONTINUATION_WAIT_S = 600.0
+DEFAULT_CONTINUATION_POLL_S = 2.0
+_TERMINAL_PHASES = {"resolved", "failed", "escalated", "quorum_voting"}
+
+logger = logging.getLogger(__name__)
+
+_LAST_REVIEWER_PROVENANCE: dict[str, Any] = {
+    "backend": "unselected",
+    "host_id": None,
+    "model_used": None,
+    "models_used": [],
+    "warnings": [],
+}
+
+
+def reviewer_backend_provenance() -> dict[str, Any]:
+    """Return a copy of the latest backend selection/evidence for this process."""
+    value = dict(_LAST_REVIEWER_PROVENANCE)
+    value["models_used"] = list(value.get("models_used") or [])
+    value["warnings"] = list(value.get("warnings") or [])
+    return value
+
+
+def _record_reviewer_provenance(value: dict[str, Any]) -> None:
+    global _LAST_REVIEWER_PROVENANCE
+    _LAST_REVIEWER_PROVENANCE = {
+        "backend": value.get("backend"),
+        "host_id": value.get("host_id"),
+        "model_requested": value.get("model_requested"),
+        "model_used": value.get("model_used"),
+        "models_used": list(value.get("models_used") or []),
+        "tokens_used": int(value.get("tokens_used") or 0),
+        "cost_usd": value.get("cost_usd"),
+        "latency_ms": value.get("latency_ms"),
+        "finish_reason": value.get("finish_reason"),
+        "fallback_from": value.get("fallback_from"),
+        "warnings": list(value.get("warnings") or []),
+    }
+
+
+def _reviewer_model_type(provenance: dict[str, Any]) -> str:
+    """Derive the identity model fingerprint without guessing an exact model."""
+    models = [str(model) for model in (provenance.get("models_used") or [])]
+    if models:
+        return "dialectic_reviewer:" + "+".join(models)
+    backend = str(provenance.get("backend") or "unknown")
+    return f"dialectic_reviewer:{backend}"
+
+
+def _reviewer_audit_text(provenance: dict[str, Any]) -> str:
+    models = provenance.get("models_used") or ["provider_unreported"]
+    parts = [
+        f"backend={provenance.get('backend') or 'unknown'}",
+        f"host={provenance.get('host_id') or 'unknown'}",
+        f"models={','.join(str(model) for model in models)}",
+    ]
+    if provenance.get("fallback_from"):
+        parts.append(f"fallback_from={provenance['fallback_from']}")
+    if provenance.get("cost_usd") is not None:
+        parts.append(f"provider_cost_usd={provenance['cost_usd']}")
+    return "; ".join(parts)
 
 
 @dataclass
@@ -130,6 +198,54 @@ def build_review_prompt(thesis: Thesis) -> str:
     )
 
 
+def build_continuation_prompt(
+    thesis: Thesis,
+    previous_verdict: Verdict,
+    paused_response: dict[str, Any],
+    synthesis_round: Optional[int] = None,
+) -> str:
+    """Ask the same reviewer to judge a paused-agent response. Pure.
+
+    ``agrees=true`` is deliberately framed as independent ratification, not as
+    an echo of the paused agent's requested outcome. This is the second half of
+    a real synthesis round: objection, response, then reviewer reconsideration.
+    """
+    previous = json.dumps(
+        {
+            "agrees": previous_verdict.agrees,
+            "root_cause": previous_verdict.root_cause,
+            "proposed_conditions": previous_verdict.proposed_conditions,
+            "reasoning": previous_verdict.reasoning,
+        },
+        indent=2,
+        sort_keys=True,
+        default=str,
+    )
+    response = json.dumps(paused_response, indent=2, sort_keys=True, default=str)
+    round_label = str(synthesis_round) if synthesis_round is not None else "unknown"
+    return (
+        "You are the SAME independent reviewer continuing a dialectic governance "
+        "session. You previously rejected the paused agent's proposal. The paused "
+        "agent has now responded. Decide whether that response actually addresses "
+        "your objection. Do not approve merely because the agent says it agrees. "
+        "Set agrees=true only if YOU independently ratify the revised root cause "
+        "and conditions; otherwise keep agrees=false and state what remains.\n\n"
+        f"ORIGINAL ROOT CAUSE CLAIM:\n{thesis.root_cause or '(none)'}\n\n"
+        "ORIGINAL PROPOSED CONDITIONS:\n"
+        f"{json.dumps(thesis.proposed_conditions, indent=2, default=str)}\n\n"
+        f"YOUR PREVIOUS VERDICT:\n{previous}\n\n"
+        f"PAUSED AGENT RESPONSE (synthesis round {round_label}):\n{response}\n\n"
+        "Respond with STRICT JSON only, no prose outside it:\n"
+        "{\n"
+        '  "agrees": true | false,\n'
+        '  "root_cause": "your current assessment",\n'
+        '  "proposed_conditions": ["condition 1", "condition 2"],\n'
+        '  "reasoning": "why the response does or does not satisfy your objection"\n'
+        "}\n"
+        "If agrees=true, proposed_conditions must contain the terms you ratify."
+    )
+
+
 def parse_reviewer_verdict(model_text: str) -> Verdict:
     """Derive a Verdict from raw model output. Pure.
 
@@ -214,9 +330,93 @@ def extract_last_json_object(text: str) -> Optional[str]:
         pos = start + consumed
 
 
+def find_pending_paused_response(
+    session_data: dict[str, Any],
+    *,
+    paused_agent_id: Optional[str] = None,
+    reviewer_agent_id: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    """Return the latest paused-agent synthesis after the reviewer's last one.
+
+    Transcript order is the turn boundary. Looking only for *any* paused-agent
+    synthesis would replay an old response on every poll; looking only at a
+    timestamp would make correctness depend on clock formatting. This scan uses
+    the append-only message order already guaranteed by the session read path.
+    """
+    paused_agent_id = (
+        session_data.get("paused_agent_id")
+        or session_data.get("paused_agent")
+        or paused_agent_id
+    )
+    reviewer_agent_id = (
+        session_data.get("reviewer_agent_id")
+        or session_data.get("reviewer")
+        or reviewer_agent_id
+    )
+    if not paused_agent_id or not reviewer_agent_id:
+        return None
+
+    transcript = session_data.get("transcript") or session_data.get("messages") or []
+    last_reviewer_synthesis = -1
+    for index, message in enumerate(transcript):
+        phase = (
+            message.get("phase") or message.get("message_type") or message.get("role")
+            if isinstance(message, dict)
+            else getattr(message, "phase", None)
+        )
+        agent_id = (
+            message.get("agent_id")
+            if isinstance(message, dict)
+            else getattr(message, "agent_id", None)
+        )
+        if phase == "synthesis" and agent_id == reviewer_agent_id:
+            last_reviewer_synthesis = index
+
+    if last_reviewer_synthesis < 0:
+        return None
+
+    pending: Optional[dict[str, Any]] = None
+    for message in transcript[last_reviewer_synthesis + 1 :]:
+        phase = (
+            message.get("phase") or message.get("message_type") or message.get("role")
+            if isinstance(message, dict)
+            else getattr(message, "phase", None)
+        )
+        agent_id = (
+            message.get("agent_id")
+            if isinstance(message, dict)
+            else getattr(message, "agent_id", None)
+        )
+        if phase != "synthesis" or agent_id != paused_agent_id:
+            continue
+        if isinstance(message, dict):
+            pending = dict(message)
+        else:
+            pending = {
+                key: getattr(message, key, None)
+                for key in (
+                    "agent_id",
+                    "timestamp",
+                    "agrees",
+                    "root_cause",
+                    "proposed_conditions",
+                    "reasoning",
+                    "concerns",
+                )
+            }
+    return pending
+
+
 # --------------------------------------------------------------------------- #
 # Async wiring (the impure shell). Kept thin; the testable logic is above.
 # --------------------------------------------------------------------------- #
+def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
+    try:
+        return max(minimum, float(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
 async def call_codex_reviewer(prompt: str) -> Optional[str]:
     """Run the review on Codex (``codex exec``, ChatGPT-subscription CLI) —
     the capable-heterogeneous reviewer path (2026-07-02 planted-flaw probe:
@@ -229,33 +429,54 @@ async def call_codex_reviewer(prompt: str) -> Optional[str]:
     local model, so the no-budget default path is never removed (execution-cost
     policy: subscription CLI is an opt-in backend, never a requirement).
 
-    Spawn recipe mirrors the host adapter's proven one: ``sh -c 'exec codex
-    exec … "$DR_PROMPT" </dev/null'`` — stdin CLOSED (codex blocks reading a
-    non-tty stdin pipe) and the prompt passed via env, never argv-interpolated.
+    Spawn recipe mirrors the host adapter's proven one: ``sh -c 'exec
+    "$DR_CLI" exec … "$DR_PROMPT" </dev/null'`` — stdin CLOSED (codex blocks
+    reading a non-tty stdin pipe) and paths/prompts passed via env, never
+    argv-interpolated.
     """
-    import asyncio
-    import shutil
-
-    if shutil.which("codex") is None:
+    cli_path = resolve_host_cli("codex:host-adapter")
+    if cli_path is None:
         return None
-    timeout_s = float(os.getenv("UNITARES_DIALECTIC_CODEX_TIMEOUT_S", "420"))
-    proc = await asyncio.create_subprocess_exec(
-        "/bin/sh",
-        "-c",
-        'exec codex exec --sandbox read-only --skip-git-repo-check "$DR_PROMPT" </dev/null',
-        env={**os.environ, "DR_PROMPT": prompt},
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
+    # Read literally (not via _env_float) so scripts/dev/flag_catalog.py's AST
+    # scan still indexes this flag — the catalog only sees direct os.getenv calls.
+    try:
+        timeout_s = float(os.getenv("UNITARES_DIALECTIC_CODEX_TIMEOUT_S", "420"))
+    except (TypeError, ValueError):
+        timeout_s = 420.0
+    timeout_s = max(1.0, timeout_s)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "/bin/sh",
+            "-c",
+            'exec "$DR_CLI" exec --sandbox read-only --skip-git-repo-check '
+            '"$DR_PROMPT" </dev/null',
+            env={**os.environ, "DR_CLI": cli_path, "DR_PROMPT": prompt},
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except Exception:  # noqa: BLE001 - selected-host failure falls back locally
+        return None
     try:
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
     except asyncio.TimeoutError:
         proc.kill()
         await proc.communicate()
         return None
+    except Exception:  # noqa: BLE001 - selected-host failure falls back locally
+        try:
+            proc.kill()
+            await proc.communicate()
+        except Exception:
+            pass
+        return None
     if proc.returncode != 0:
         return None
     return extract_last_json_object(stdout.decode(errors="replace"))
+
+
+async def call_claude_reviewer(prompt: str) -> HostReviewResult:
+    """Run the safe Claude subscription-CLI backend with exact provenance."""
+    return await call_claude_backend(prompt)
 
 
 async def obtain_reviewer_text(prompt: str) -> str:
@@ -263,12 +484,44 @@ async def obtain_reviewer_text(prompt: str) -> str:
     local model. Default (env unset) is byte-identical to the pre-existing
     gemma4 path."""
     host = os.getenv("UNITARES_DIALECTIC_REVIEWER_HOST", "").strip().lower()
-    if host == "codex":
+    fallback_from: Optional[str] = None
+    fallback_warning: Optional[str] = None
+    if host in ("claude", "claude:host-adapter"):
+        result = await call_claude_reviewer(prompt)
+        if result.text is not None:
+            _record_reviewer_provenance(result.provenance())
+            return result.text
+        fallback_from = result.host_id
+        fallback_warning = result.error
+    elif host in ("codex", "codex:host-adapter"):
         text = await call_codex_reviewer(prompt)
         if text is not None:
+            _record_reviewer_provenance({
+                "backend": "codex",
+                "host_id": "codex:host-adapter",
+                "models_used": [],
+                "warnings": ["Codex CLI did not report an exact model identifier"],
+            })
             return text
-        # Codex path failed — degrade to the local default, never harder than today.
-    return await call_reviewer_model(prompt)
+        fallback_from = "codex:host-adapter"
+        fallback_warning = "Codex backend unavailable or returned no verdict"
+    elif host not in ("", "local", "ollama", "ollama:local"):
+        fallback_from = host
+        fallback_warning = f"Unknown reviewer host '{host}'"
+
+    # Any selected-host failure degrades to the local default, never harder
+    # than the pre-existing path.
+    text = await call_reviewer_model(prompt)
+    warnings = [fallback_warning] if fallback_warning else []
+    _record_reviewer_provenance({
+        "backend": "ollama",
+        "host_id": "ollama:local",
+        "model_used": DEFAULT_MODEL,
+        "models_used": [DEFAULT_MODEL],
+        "fallback_from": fallback_from,
+        "warnings": warnings,
+    })
+    return text
 
 
 async def call_reviewer_model(prompt: str, model: str = DEFAULT_MODEL) -> str:
@@ -291,11 +544,165 @@ async def call_reviewer_model(prompt: str, model: str = DEFAULT_MODEL) -> str:
     return resp.choices[0].message.content or ""
 
 
+def _verdict_with_ratified_conditions(
+    verdict: Verdict,
+    paused_response: dict[str, Any],
+    previous_verdict: Verdict,
+) -> Verdict:
+    """Make an approving verdict explicit about which conditions it ratifies.
+
+    Models occasionally emit ``agrees=true`` with an empty condition list. The
+    protocol correctly refuses that shape. If the paused response supplied
+    terms, explicit approval ratifies those terms; otherwise inherit the prior
+    reviewer's terms. With no terms anywhere, degrade to disagreement instead
+    of manufacturing an empty approval.
+    """
+    if not verdict.agrees or verdict.proposed_conditions:
+        return verdict
+
+    inherited = paused_response.get("proposed_conditions") or previous_verdict.proposed_conditions
+    if isinstance(inherited, str):
+        inherited = [inherited] if inherited.strip() else []
+    inherited = [str(item).strip() for item in (inherited or []) if str(item).strip()]
+    if inherited:
+        return Verdict(
+            agrees=True,
+            root_cause=verdict.root_cause,
+            proposed_conditions=inherited,
+            reasoning=verdict.reasoning,
+            degraded=verdict.degraded,
+        )
+    return Verdict(
+        agrees=False,
+        root_cause=verdict.root_cause,
+        proposed_conditions=[],
+        reasoning=(
+            verdict.reasoning
+            + " Approval omitted the conditions being ratified; retaining the objection."
+        ).strip(),
+        degraded=True,
+    )
+
+
+async def continue_after_disagreement(
+    client: Any,
+    thesis: Thesis,
+    initial_verdict: Verdict,
+    *,
+    paused_agent_id: Optional[str],
+    reviewer_agent_id: Optional[str],
+) -> Verdict:
+    """Run bounded objection → response → reconsideration rounds.
+
+    The wall-clock budget includes polling and every follow-up model call. This
+    leaves the orchestrator's process deadline as a separate hard backstop.
+    """
+    wait_s = _env_float(
+        "UNITARES_DIALECTIC_CONTINUATION_WAIT_S", DEFAULT_CONTINUATION_WAIT_S
+    )
+    if wait_s <= 0:
+        return initial_verdict
+    poll_s = _env_float(
+        "UNITARES_DIALECTIC_CONTINUATION_POLL_S",
+        DEFAULT_CONTINUATION_POLL_S,
+        minimum=0.01,
+    )
+    deadline = time.monotonic() + wait_s
+    current_verdict = initial_verdict
+    read_failures = 0
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return current_verdict
+
+        try:
+            session_data = await client.call_tool(
+                "dialectic", {"action": "get", "session_id": thesis.session_id}
+            )
+        except Exception as exc:  # noqa: BLE001 — bounded polling tolerates a transient read
+            read_failures += 1
+            log = logger.warning if read_failures == 1 else logger.debug
+            log("Dialectic continuation read failed: %r", exc)
+            await asyncio.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
+            continue
+
+        if not isinstance(session_data, dict):
+            return current_verdict
+        phase = str(session_data.get("phase") or "").lower()
+        if phase in _TERMINAL_PHASES:
+            return current_verdict
+
+        try:
+            synthesis_round = int(session_data.get("synthesis_round"))
+        except (TypeError, ValueError):
+            synthesis_round = None
+        try:
+            max_rounds = int(session_data.get("max_synthesis_rounds"))
+        except (TypeError, ValueError):
+            max_rounds = None
+        if (
+            synthesis_round is not None
+            and max_rounds is not None
+            and synthesis_round > max_rounds
+        ):
+            return current_verdict
+
+        paused_response = find_pending_paused_response(
+            session_data,
+            paused_agent_id=paused_agent_id,
+            reviewer_agent_id=reviewer_agent_id,
+        )
+        if paused_response is None:
+            await asyncio.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
+            continue
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return current_verdict
+        prompt = build_continuation_prompt(
+            thesis, current_verdict, paused_response, synthesis_round
+        )
+        try:
+            model_text = await asyncio.wait_for(
+                obtain_reviewer_text(prompt), timeout=remaining
+            )
+        except asyncio.TimeoutError:
+            return current_verdict
+        except Exception as exc:  # noqa: BLE001 — preserve the standing rejection
+            logger.warning("Dialectic continuation model failed: %r", exc)
+            return current_verdict
+        next_verdict = _verdict_with_ratified_conditions(
+            parse_reviewer_verdict(model_text), paused_response, current_verdict
+        )
+        result = await client.call_tool(
+            "dialectic",
+            {
+                "action": "synthesis",
+                "session_id": thesis.session_id,
+                "agrees": next_verdict.agrees,
+                "proposed_conditions": next_verdict.proposed_conditions,
+                "root_cause": next_verdict.root_cause,
+                # There is no second antithesis call, so the reconsideration's
+                # rationale belongs on this follow-up synthesis.
+                "reasoning": next_verdict.reasoning,
+            },
+        )
+        if isinstance(result, dict) and result.get("success") is False:
+            logger.warning("Dialectic continuation synthesis was refused: %s", result)
+            return current_verdict
+        current_verdict = next_verdict
+        if next_verdict.agrees:
+            return current_verdict
+
+
 async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str]) -> Verdict:
-    """Onboard → model → claim slot + submit. Returns the Verdict for logging/tests."""
+    """Onboard, submit an independent verdict, and continue if it rejects."""
     from unitares_sdk.client import GovernanceClient  # type: ignore
 
-    verdict = parse_reviewer_verdict(await obtain_reviewer_text(build_review_prompt(thesis)))
+    reviewer_text = await obtain_reviewer_text(build_review_prompt(thesis))
+    provenance = reviewer_backend_provenance()
+    verdict = parse_reviewer_verdict(reviewer_text)
 
     client = GovernanceClient(governance_url)
     await client.connect()
@@ -305,6 +712,7 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
             force_new=True,
             parent_agent_id=parent_agent_id,
             spawn_reason=SPAWN_REASON,
+            model_type=_reviewer_model_type(provenance),
         )
         # Claim the open reviewer slot as first-responder. The bare submit_*
         # handlers are register=False; the public MCP surface is the `dialectic`
@@ -328,7 +736,7 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
         # same agent's antithesis reasoning (dialectic_protocol.reasoning_of);
         # without that fallback this would blank the rationale on every
         # approved resolution, which is why the naive version was reverted.
-        await client.call_tool(
+        synthesis_result = await client.call_tool(
             "dialectic",
             {
                 "action": "synthesis",
@@ -338,14 +746,30 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
                 "root_cause": verdict.root_cause,
             },
         )
-        # A real check-in before exit (subagent-onboarding discipline).
+        # A real check-in after the initial judgment (subagent-onboarding
+        # discipline). On disagreement the process remains alive, but this
+        # records meaningful work even if the orchestrator later reaps it.
         # SDK checkin() maps to the server's process_agent_update.
         await client.checkin(
-            response_text=f"dialectic review complete: agrees={verdict.agrees}"
-            + (" (degraded fallback)" if verdict.degraded else ""),
+            response_text=(
+                f"dialectic review submitted: agrees={verdict.agrees}"
+                + (" (degraded fallback)" if verdict.degraded else "")
+                + f"; {_reviewer_audit_text(provenance)}"
+            ),
             complexity=0.4,
             confidence=0.6 if not verdict.degraded else 0.3,
         )
+        if not verdict.agrees and not (
+            isinstance(synthesis_result, dict)
+            and synthesis_result.get("success") is False
+        ):
+            verdict = await continue_after_disagreement(
+                client,
+                thesis,
+                verdict,
+                paused_agent_id=parent_agent_id,
+                reviewer_agent_id=getattr(client, "agent_uuid", None),
+            )
         return verdict
     finally:
         await client.disconnect()

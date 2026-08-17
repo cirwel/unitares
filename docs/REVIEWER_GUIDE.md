@@ -234,6 +234,14 @@ The 12 overall rows and run provenance are preserved in
 
 The public deployment is intentionally described as single-operator. Treat it
 as evidence that the pipeline has operated under sustained maintainer traffic,
-not as evidence of external product-market pull or efficacy. The next validation
-step is an independent operator running long-lived agents through the same
-check-in and outcome loop.
+not as evidence of external product-market pull or efficacy.
+
+The next validation step is **independent draws with effective-n accounting**,
+not a headcount of operators. The 2026-07-30 individuality read failed at
+effective n=4 against a nominal n=7 because three eligible identities were one
+replicated Raspberry Pi; a second operator would not have repaired that. Report
+effective independent clusters, collapse replicate identities, and prefer
+corpora whose outcome the acting agent neither authors nor observes. An
+independent operator is one route to those draws and is required for the
+separate multi-principal trust claim, but it is not a precondition for efficacy
+evidence.

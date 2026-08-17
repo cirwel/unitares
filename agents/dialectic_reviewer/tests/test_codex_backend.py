@@ -14,6 +14,7 @@ import json
 from unittest.mock import patch
 
 from agents.dialectic_reviewer import reviewer as r
+from agents.dialectic_reviewer.host_backends import HostReviewResult
 
 # Shaped like a real `codex exec` transcript: banner, echoed prompt (whose JSON
 # template is NOT valid JSON — `true | false`), an exec trace containing a
@@ -100,6 +101,83 @@ def test_codex_failure_falls_back_to_local_model():
     assert json.loads(text)["reasoning"] == "fallback"
 
 
+def test_claude_host_uses_claude_verdict_and_records_exact_models():
+    async def fake_claude(prompt):
+        return HostReviewResult(
+            text='{"agrees": false, "reasoning": "claude"}',
+            host_id="claude:host-adapter",
+            model_requested="claude-opus-5",
+            model_used=None,
+            models_used=["claude-haiku-4-5", "claude-opus-5"],
+            tokens_used=55,
+            cost_usd=0.04,
+        )
+
+    with patch.dict("os.environ", {"UNITARES_DIALECTIC_REVIEWER_HOST": "claude"}):
+        with patch.object(r, "call_claude_reviewer", side_effect=fake_claude):
+            with patch.object(r, "call_reviewer_model") as local:
+                text = asyncio.run(r.obtain_reviewer_text("p"))
+
+    assert json.loads(text)["reasoning"] == "claude"
+    assert not local.called
+    provenance = r.reviewer_backend_provenance()
+    assert provenance["backend"] == "claude"
+    assert provenance["models_used"] == ["claude-haiku-4-5", "claude-opus-5"]
+    assert provenance["cost_usd"] == 0.04
+
+
+def test_claude_failure_falls_back_to_local_and_records_fallback():
+    async def fake_claude(prompt):
+        return HostReviewResult(
+            text=None,
+            host_id="claude:host-adapter",
+            error="no parseable verdict",
+        )
+
+    async def fake_local(prompt, model=r.DEFAULT_MODEL):
+        return '{"agrees": false, "reasoning": "local fallback"}'
+
+    with patch.dict("os.environ", {"UNITARES_DIALECTIC_REVIEWER_HOST": "claude"}):
+        with patch.object(r, "call_claude_reviewer", side_effect=fake_claude):
+            with patch.object(r, "call_reviewer_model", side_effect=fake_local):
+                text = asyncio.run(r.obtain_reviewer_text("p"))
+
+    assert json.loads(text)["reasoning"] == "local fallback"
+    provenance = r.reviewer_backend_provenance()
+    assert provenance["backend"] == "ollama"
+    assert provenance["fallback_from"] == "claude:host-adapter"
+    assert provenance["models_used"] == [r.DEFAULT_MODEL]
+
+
 def test_codex_absent_cli_returns_none_without_spawning():
-    with patch("shutil.which", return_value=None):
+    with patch.object(r, "resolve_host_cli", return_value=None):
         assert asyncio.run(r.call_codex_reviewer("p")) is None
+
+
+def test_codex_backend_uses_resolved_cli_and_quoted_prompt():
+    captured = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return TRANSCRIPT.encode(), b""
+
+        def kill(self):
+            raise AssertionError("successful process must not be killed")
+
+    async def fake_spawn(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return FakeProcess()
+
+    with patch.object(r, "resolve_host_cli", return_value="/opt/bin/codex"):
+        with patch("asyncio.create_subprocess_exec", side_effect=fake_spawn):
+            text = asyncio.run(r.call_codex_reviewer("review this"))
+
+    assert text is not None
+    assert json.loads(text)["agrees"] is False
+    assert '"$DR_CLI"' in captured["args"][2]
+    assert '"$DR_PROMPT"' in captured["args"][2]
+    assert captured["kwargs"]["env"]["DR_CLI"] == "/opt/bin/codex"
+    assert captured["kwargs"]["env"]["DR_PROMPT"] == "review this"

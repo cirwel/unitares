@@ -426,12 +426,12 @@ TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
     },
     "list_inference_hosts": {
         "depends_on": [],
-        "related_to": ["describe_inference_host", "call_model"],
+        "related_to": ["describe_inference_host", "call_model", "delegate_inference"],
         "category": "inference",
     },
     "describe_inference_host": {
         "depends_on": ["list_inference_hosts"],
-        "related_to": ["call_model"],
+        "related_to": ["call_model", "delegate_inference"],
         "category": "inference",
     },
     "call_model": {
@@ -443,6 +443,11 @@ TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
             "dialectic",
         ],
         "category": "inference"
+    },
+    "delegate_inference": {
+        "depends_on": ["list_inference_hosts"],
+        "related_to": ["describe_inference_host", "dialectic"],
+        "category": "inference",
     },
     "config": {
         "depends_on": [],

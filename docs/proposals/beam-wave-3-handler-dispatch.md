@@ -1,6 +1,177 @@
 # Wave 3 RFC: handler dispatch + identity middleware + dialectic resolution → BEAM
 
-**Status:** **COMMITTED AND OPEN — no active implementation.** The commitment to proceed (V0.4, operator, 2026-06-25) stands. What is retired is one *design*: the (γ) narrow cut at `process_agent_update`, set aside 2026-06-28. Nothing Wave-3-shaped has landed since. Read the **V0.5 STATUS CORRECTION** below for what a resumption should and should not carry forward.
+**Status:** **COMMITTED AND OPEN — no active implementation.** The commitment to proceed (V0.4, operator, 2026-06-25) stands. What is retired is one *design*: the (γ) narrow cut at `process_agent_update`, set aside 2026-06-28. Read the **V0.5 STATUS CORRECTION** for what a resumption should and should not carry forward, then **V0.6 SCOPE REDUCTION** for the proposed shape of that resumption. ⛔V0.6 is an **unratified proposal**; the title's three-leg scope is unchanged until the operator signs.
+
+## V0.6 SCOPE REDUCTION (2026-08-17) — PROPOSED, UNRATIFIED
+
+⛔**Nothing here is a decision.** This section proposes the scope reduction that §11 criterion 8
+requires, so the operator has something concrete to accept or reject. Until it is signed in
+`wave-3-go-decision-2026-08-16.md` §4, the RFC's scope remains the three legs in the title.
+
+### Why criterion 8 is halted today
+
+The (D) gate halts if *the artifact is missing, **or** any 9th surface surfaces, **or** any of the
+eight is not re-derivable*. **The first clause alone is satisfied right now:** no
+`docs/handoffs/wave-3-*` artifact exists in the repository on any ref (`git log --all` returns
+nothing for that path). That is sufficient for the halt and requires no argument about surface I.
+
+⚠️**Unresolved contradiction, flagged not settled.** `beam-wave-3-gamma-hybrid-v0.md:5-8,225,298`
+cites `docs/handoffs/wave-3-state-ownership-redteam-2026-06-28.md` as an existing artifact from a
+three-lane red-team that enumerated ~11 surfaces and disposed of surface I as "STAY Python;
+socket-coupled". This RFC's v0.3.5 fold instead calls the 2026-06-28 pass **prep**, with "the
+reducibility verdicts and the halt/reopen decision remain the operator-led red-team's". The repo
+asserts both that the red-team ran and that it has not. ⛔Adjudicate this before reading criterion 8
+either way — the cited artifact is in neither `master` nor any branch. RFC `:210` also names an
+off-repo worktree worksheet; **committing it is cheap and would remove one halt clause.**
+
+⚠️**A previous draft of this section claimed that commissioning the artifact "would CONFIRM the
+halt, not clear it." That is withdrawn.** It predicted what an independent lane would conclude by
+reading the very §3.1 the lane exists to check independently — the self-referentiality defect
+§0(D) was rewritten in v0.3.2 specifically to close. Note also that §11 criterion 8's own text is a
+*reducibility* test ("no irreducible per-request semantics beyond the eight"), not a count test;
+§3.1 row I is labelled **"CANDIDATE 9th — pending (D) red-team confirmation"** with a hedged
+"**Likely** IRREDUCIBLE", and its Write column is `n/a (read-gate)`. A red-team could defensibly
+return "eight state surfaces, exhaustive; I is an authz predicate, out of inventory scope." **That
+verdict is the red-team's to reach, not this section's to assume.**
+
+The exit this RFC already names is scope reduction: **remove identity middleware from Wave 3**, at
+which point (D) — a gate about the identity-middleware port — has no subject.
+
+### Proposed reduced scope
+
+**OUT (indefinitely, not deferred):** identity middleware. Python remains sole owner of the whole
+identity-resolution and authorization transaction: UDS peer attestation, `core.substrate_claims`,
+`proof_origin` and assurance derivation, the #802/#945 ordering guards, identity caches and tokens,
+lazy minting, and every identity-bearing PostgreSQL write. ⛔Any future design that gives BEAM
+identity authority, or treats copied attestation as authority, reopens criterion 8 from the start.
+
+**OUT (already settled):** the (γ) handler-dispatch cut, both shapes — wide signed-envelope
+REJECTED, narrow stateless RPC recommended SHELVE (`beam-wave-3-gamma-hybrid-v0.md` §0a/§0c).
+
+**IN:** the dialectic leg only, and within it a single slice (below). ⛔Not all of §5. §5 is 17
+coordination functions and does not fit the criterion-9 cap.
+
+### The proposed slice: stuck-session detection and reassignment decisions
+
+⚠️**Corrected after council review 2026-08-17.** A previous draft justified this slice as *"BEAM
+already owns the writes, only the decision logic is still Python."* **That is false for the very
+function the slice centres on**, and it sized the work as mechanical when it is not. The corrected
+justification is the opposite one, and it is stronger.
+
+**`auto_resolve_stuck_sessions` is a second, unguarded writer.** It does not touch BEAM at all —
+the only `BEAM` tokens in `auto_resolve.py` are three comments. Its writes go straight to
+PostgreSQL, and they lack the guards BEAM's equivalents enforce:
+
+| Write | Path | Guard |
+|---|---|---|
+| reviewer | `auto_resolve.py:197` → `dialectic_db.py::update_session_reviewer` | `WHERE session_id = $2` — **none** |
+| status | `auto_resolve.py:269` → `dialectic_db.py::update_session_status` | `WHERE session_id = $2` — **none**; also writes `status = $1, phase = $1` |
+| reviewer (BEAM) | `dialectic_saga.ex::update_reviewer/2` | `AND status NOT IN ('resolved','failed','escalated')` |
+
+So the Python sweep can overwrite a session BEAM has already resolved. `has_inflight_saga_async`
+(`auto_resolve.py:162`) is checked **once, early**, then `select_reviewer` performs several DB
+round-trips before the unconditional status write — a real TOCTOU window. The other reassignment
+path (`handlers.py:908`) *does* route BEAM-first with Python fallback, gated on
+`UNITARES_DIALECTIC_BEAM_RESOLUTION` (default `0`, set to `1` in the live plist), so the two paths
+disagree about who owns the row.
+
+**That dual-writer hazard is the reason to take this cut** — not its cheapness. It is §4's subject
+("multi-writer enforcement gate during cutover") and it demands §4 enforcement plus the §8 shadow
+comparator.
+
+| Slice member | Location | Note |
+|---|---|---|
+| `auto_resolve_stuck_sessions` | `auto_resolve.py:102` | the unguarded writer; centrepiece |
+| `check_reviewer_stuck` | `handlers.py:211` | stuck predicate |
+| `_apply_reviewer_reassignment` | `handlers.py:865` | ⚠️**3 call sites** (`1508/2250/2832`) — not slice-exclusive; blast radius exceeds "stuck-session" |
+| `check_timeout` | `dialectic_protocol.py:1215` | ⚠️**not** trivial arithmetic — walks `self.transcript` via `get_thesis_timestamp()`/`get_last_update_timestamp()` |
+| `_parse_timestamp` | `auto_resolve.py:32` | genuinely trivial |
+
+⛔**Unscoped dependency that likely breaks the cap.** `auto_resolve.py:186` calls `select_reviewer`
+(`reviewer.py`, ~450 lines: authority scoring, 24h cooldown, capability filtering) which the RFC's
+own §5.1 already lists as coordination belonging to this port. It carries a `contextvars.ContextVar`
+reentrancy guard (`reviewer.py:36-38`) that works **only because everything runs in one Python
+process**. Port the sweeper without it and BEAM calls back into Python per decision; port it with,
+and the guard needs a cross-runtime redesign. Neither is scoped or estimated here.
+
+Standing properties of the slice:
+
+- **No identity *writes*.** Traced transitively: the slice reaches only
+  `core.dialectic_sessions` / `core.dialectic_messages` / `coordination.session_resolution_sagas`,
+  never `core.agents` or `core.agent_states.identity_id`. `execute_resolution` (which does mutate
+  agent status) is called only from `handle_submit_synthesis`, **outside** the slice.
+  ⚠️But it **reads** `mcp_server.agent_metadata` (`auto_resolve.py:179,188`), which is **§3.1
+  surface G**, whose port strategy is §10's BEAM-native ETS cache — and V0.6 scopes §10 out. ⛔Open
+  question: payload, callback, or carry §10. A previous draft's "zero identity coupling" claimed
+  more than the write-only evidence supported.
+- **No signature-parity exposure at the call graph.** `check_timeout` is a `DialecticSession`
+  method with no path into `Resolution`. ⚠️A previous draft said "neither slice file" — there are
+  **three**, and `dialectic_protocol.py` does contain `import hmac` (`:162`),
+  `canonical_payload` (`:335`) and `compute_signature` (`:354`). The claim holds at the call graph,
+  not at the file. ⛔The parity family stays **excluded**; it already wrote 90 unreadable rows via
+  the bare-`::jsonb` double-encode between 2026-06-28 and 2026-08-10.
+- **It targets the live axis.** Timers, supervision and recovery are the coordination/aliveness
+  argument, not the struck latency axis.
+- ⚠️**#1689 does not ask for this.** Its subject is terminal-status *conflation*, and its own
+  preferred direction is "leave the write path alone and fix the readers… much lower blast radius."
+  The observation that reassignment excludes the outgoing reviewer (`auto_resolve.py:189`) is
+  code-accurate, but it is **this RFC's observation, not the issue's ask**. ⛔Fixing the readers is
+  cheaper and unblocks criterion 10 sooner; that alternative is not evaluated here.
+
+### ⛔This rescope still owes its own gate
+
+`beam-wave-3-gamma-hybrid-v0.md` §6 is explicit that a re-scope "**re-opens the disconfirmer gate
+(smaller)**" and "gets its own §11-style gate". **V0.6 does not supply one.** No disconfirmer set,
+no exit criteria, no re-derived (B) boundary budget for the new topology, no stop-sign revision.
+⛔Signing V0.6 authorises the *scope*, not an implementation start; the smaller gate is owed first.
+
+⚠️**§14's prereq lint does not bind this slice.** `scripts/dev/check-wave3-ode-prereq.sh:24-25`
+engages only `if [[ ! -e "$ROOT/elixir/handler_dispatch" ]]`. The slice lands in the **existing**
+`elixir/lease_plane/` tree, so the ten-prereq CI guard never fires for it. Decide deliberately
+whether §14 still binds rather than letting the lint's shape decide.
+
+### ⛔What this slice cannot test
+
+It takes 4 of §5.1's 17 rows, and specifically the ones with the least coordination hazard. It does
+**not** touch `handle_submit_synthesis` (the invariant-5 critical section and the FK
+`FOR KEY SHARE` × `FOR UPDATE` deadlock class), `finalize_resolution`, `execute_resolution`, the
+collusion gate, or the §9 crash-safe saga. Those are where §2/§4/§8/§9 argued BEAM buys something
+structural. If the slice succeeds it evidences "BEAM runs timers well" — which Wave 1, the lease
+plane and the existing `dialectic_saga_reaper` already established. ⛔It also generates **zero rows
+for exit criteria 3 and 5**, so a Wave 3 reduced to this slice cannot *close* on its own exit
+criteria. Treat it as a dual-writer repair with a coordination dividend, not as a test of the wave's
+thesis.
+
+### ⛔Sequencing constraint, and it is load-bearing
+
+Reducing Wave 3 to the dialectic leg makes **§11 criterion 10 the central gate rather than a side
+one** — the slice would change the very subsystem criterion 10 measures. Criterion 10 is not
+pinnable today (see the go-decision doc §3). **#1705 merged 2026-08-17T08:08:53Z (`f371e51f`) and
+changes what `failed` means**, so the clean-cohort clock starts at its deploy: no pre-merge row may
+seed the baseline. Implement only after that baseline is pinned; pinning it afterwards measures the
+change against itself.
+
+### Stale row found while verifying (fix at the gate)
+
+§5.3 attributes behaviour to **`_compare_against_timeout`**. That function **does not exist**
+anywhere in the repository — the only hits are this file and
+`wave-3-section-5-2-boundary-audit-summary.md`, both describing it as a real symbol. It survived a
+v0.3 reclassification, a §5.2 boundary audit and a council pass without ever existing in `src/`.
+
+§5.1's line map has also drifted (`check_reviewer_stuck` is at `handlers.py:211`, not 130-177;
+`auto_resolve_stuck_sessions` at `auto_resolve.py:102`, not 54-220; `check_timeout` at
+`dialectic_protocol.py:1216` on `master`, not 995-1031).
+
+⚠️**Two corrections to a previous draft of this paragraph.** It inferred that stale §5 rows make
+(D)'s re-derivability clause unsupportable — **a category error**: (D)'s eight surfaces are §3.1
+rows A–H (identity middleware), while the stale rows are §5 (dialectic). Different inventories,
+different gates; §5's sign-off is owed under "owed council passes", not under (D). And it stamped
+its line numbers "verified against `origin/master`" when they were read from a branch HEAD three
+commits behind — `check_timeout` is `:1216` on `master`, `:1215` on this branch. In a paragraph
+whose thesis is that stale references invalidate gate readings, that is the same defect it reports.
+
+⛔The live worry survives both corrections, and is larger: **if §5 rotted this badly, §3.1's cites
+deserve the same audit before any (D) reading** — and that audit has not been run.
 
 ## V0.5 STATUS CORRECTION (2026-08-16) — one design retired; the wave stays open
 
