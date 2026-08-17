@@ -13,10 +13,12 @@ Claude Desktop compatible: All operations are async and non-blocking.
 """
 
 from dataclasses import dataclass, field
+from functools import wraps
 from typing import Dict, Any, Sequence, Optional
 from mcp.types import TextContent
 from datetime import datetime, timezone, timedelta
 import hashlib
+import json
 import os
 import re
 import secrets
@@ -89,6 +91,94 @@ logger = get_logger(__name__)
 
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from src.broadcaster import broadcaster_instance
+
+
+def _compact_identity_assurance(assurance: Any) -> Dict[str, Any]:
+    """Return the useful proof summary for a lean read response."""
+    if not isinstance(assurance, dict):
+        return {}
+    return {
+        key: assurance[key]
+        for key in ("tier", "caller_proven")
+        if key in assurance
+    }
+
+
+def _compact_caller_identity_envelope(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Compact caller identity metadata without touching discovery payloads."""
+    compact = dict(payload)
+    compact.pop("identity_context", None)
+
+    if "identity_assurance" in compact:
+        compact["identity_assurance"] = _compact_identity_assurance(
+            compact["identity_assurance"]
+        )
+
+    signature = compact.get("agent_signature")
+    if isinstance(signature, dict):
+        compact_signature = {"uuid": signature.get("uuid")}
+        assurance = _compact_identity_assurance(
+            signature.get("identity_assurance")
+        )
+        if assurance:
+            compact_signature["identity_assurance"] = assurance
+        compact["agent_signature"] = compact_signature
+
+    agent = compact.get("agent")
+    if isinstance(agent, dict):
+        compact_agent = dict(agent)
+        compact_agent.pop("identity_context", None)
+        if "identity_assurance" in compact_agent:
+            compact_agent["identity_assurance"] = _compact_identity_assurance(
+                compact_agent["identity_assurance"]
+            )
+        compact["agent"] = compact_agent
+
+    return compact
+
+
+def _compact_knowledge_read_result(
+    result: Sequence[TextContent],
+) -> Sequence[TextContent]:
+    """Apply lean identity shaping to JSON text blocks, preserving other content."""
+    compacted = []
+    for item in result:
+        if not isinstance(item, TextContent):
+            compacted.append(item)
+            continue
+        try:
+            payload = json.loads(item.text)
+        except (TypeError, ValueError):
+            compacted.append(item)
+            continue
+        if not isinstance(payload, dict):
+            compacted.append(item)
+            continue
+        compacted.append(item.model_copy(update={
+            "text": json.dumps(
+                _compact_caller_identity_envelope(payload),
+                ensure_ascii=False,
+            )
+        }))
+    return compacted
+
+
+def _knowledge_read_response_mode(handler):
+    """Make compact/lean opt-in for a read handler only.
+
+    Write handlers are intentionally undecorated, so their attribution context
+    stays full even when the unified schema carries ``response_mode``.
+    """
+    @wraps(handler)
+    async def wrapped(arguments: Dict[str, Any]) -> Sequence[TextContent]:
+        result = await handler(arguments)
+        mode = str(arguments.get("response_mode") or "full").strip().lower()
+        if mode not in {"compact", "lean"}:
+            return result
+        return _compact_knowledge_read_result(result)
+
+    wrapped._lean_knowledge_read_response = True
+    return wrapped
 
 VALID_DISCOVERY_TYPES = {
     "architectural_decision", "learning", "pattern", "bug_fix",
@@ -2340,6 +2430,7 @@ async def _execute_knowledge_search(state: _KnowledgeSearchState) -> dict[str, A
 
 
 @mcp_tool("search_knowledge_graph", timeout=15.0, requires_identity="pre_onboard")
+@_knowledge_read_response_mode
 async def handle_search_knowledge_graph(
     arguments: Dict[str, Any],
 ) -> Sequence[TextContent]:
@@ -2357,6 +2448,7 @@ async def handle_search_knowledge_graph(
 
 
 @mcp_tool("get_knowledge_graph", timeout=15.0, register=False)
+@_knowledge_read_response_mode
 async def handle_get_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Get agent knowledge or read back a specific discovery.
 
@@ -2919,6 +3011,7 @@ async def handle_update_discovery_status_graph(
 
 
 @mcp_tool("get_discovery_details", timeout=10.0, register=False)
+@_knowledge_read_response_mode
 async def handle_get_discovery_details(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Get full details for a specific discovery with optional pagination and response chain.
 
@@ -3717,6 +3810,7 @@ async def handle_synthesize_knowledge_graph(arguments: Dict[str, Any]) -> Sequen
         return [error_response(f"Failed to synthesize knowledge graph: {str(e)}")]
 
 @mcp_tool("get_lifecycle_stats", timeout=30.0, register=False)
+@_knowledge_read_response_mode
 async def handle_get_lifecycle_stats(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Get knowledge graph lifecycle statistics.
 

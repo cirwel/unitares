@@ -10,8 +10,10 @@ own-identity, lease-capable reviewer process), not a dependency.
 
 The spawned reviewer (``python3 -m agents.dialectic_reviewer``) onboards with its
 OWN identity, claims the still-open reviewer slot via the multi-agent path
-(submit_antithesis), submits its verdict, and exits — so on successful dispatch
-the handler must NOT also run the in-process review.
+(submit_antithesis), and submits its verdict. After a disagreement it remains
+alive for a bounded response/reconsideration window under that same identity,
+then exits — so on successful dispatch the handler must NOT also run the
+in-process review.
 """
 from __future__ import annotations
 

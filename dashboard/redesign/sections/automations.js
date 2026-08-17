@@ -29,6 +29,14 @@
     const h = ms / 3.6e6;
     return h < 1 ? Math.round(ms / 6e4) + "m ago" : h < 48 ? Math.round(h) + "h ago" : Math.round(h / 24) + "d ago";
   }
+  // next_run is a future timestamp; a stale census can leave it in the past,
+  // which must read as overdue — never "next 56d ago".
+  function nextTime(iso) {
+    const ms = Date.parse(iso) - Date.now();
+    if (isNaN(ms)) return "next " + esc(iso);
+    const span = (a) => { const h = a / 3.6e6; return h < 1 ? Math.round(a / 6e4) + "m" : h < 48 ? Math.round(h) + "h" : Math.round(h / 24) + "d"; };
+    return ms >= 0 ? "next in " + span(ms) : "overdue " + span(-ms);
+  }
   function statusClass(s) {
     s = (s || "").toLowerCase();
     if (["active", "completed", "ok", "success", "healthy", "passed"].includes(s)) return "ok";
@@ -152,7 +160,7 @@
          </div>`
       + `<div style="display:flex;gap:var(--space-3);flex-wrap:wrap;align-items:center;margin-bottom:var(--space-4);font-size:var(--text-xs)">
            <span style="color:var(--muted)">grounded in truth:</span>
-           ${chip(gc.machine, "var(--ok)", "machine-gated")} ${sep} ${chip(gc.human, "var(--warn)", "human-gated")} ${sep} ${chip(gc.ungated, "var(--danger)", "ungated")} ${sep} <span style="color:var(--faint)">${gc.unclassified} unclassified</span>
+           ${chip(gc.machine, "var(--ok)", "machine-gated")} ${sep} ${chip(gc.human, "var(--warn)", "human-gated")} ${sep} ${chip(gc.ungated, "var(--danger)", "ungated")} ${sep} ${gc.external ? `${chip(gc.external, "var(--faint)", "external")} ${sep} ` : ""}<span style="color:var(--faint)">${gc.unclassified} unclassified</span>
          </div>`
       + `<div style="display:flex;gap:var(--space-3);flex-wrap:wrap;align-items:center;margin-bottom:var(--space-4)">
            <input id="auto-q" placeholder="search name · path · runner" value="${q.replace(/"/g, "&quot;")}"
@@ -161,7 +169,7 @@
            ${sel("auto-kind", kindF, ["all"].concat(Object.keys(sum.by_kind || {})))}
            <label style="font-size:var(--text-xs);color:var(--muted);display:flex;gap:6px;align-items:center"><input type="checkbox" id="auto-all" ${scope === "all" ? "checked" : ""}/> show all sources</label>
          </div>`
-      + (rows.length ? `<table class="tbl"><thead><tr>
+      + (rows.length ? `<div style="overflow-x:auto"><table class="tbl"><thead><tr>
             <th>Automation</th><th>Gate · verifier</th><th>Source</th><th>Status</th><th>Cadence</th><th>Last run</th><th>Contract</th><th>Where</th></tr></thead><tbody>`
         + rows.map((it) => `<tr>
               <td><div style="font-weight:500;color:var(--ink)">${esc(it.name)}</div>
@@ -170,11 +178,11 @@
               <td>${gateCell(it)}</td>
               <td><span class="tag">${esc(it.source)}</span><div style="font-size:var(--text-xs);color:var(--muted);margin-top:2px">${esc(it.runner || "")}</div></td>
               <td>${statusTag(it.status)}</td>
-              <td style="font-size:var(--text-sm);color:var(--ink-2)">${esc(it.cadence || "—")}${it.next_run ? `<div style="font-size:var(--text-xs);color:var(--muted)">next ${relTime(it.next_run)}</div>` : ""}</td>
+              <td style="font-size:var(--text-sm);color:var(--ink-2)">${esc(it.cadence || "—")}${it.next_run ? `<div style="font-size:var(--text-xs);color:var(--muted)">${nextTime(it.next_run)}</div>` : ""}</td>
               <td style="font-size:var(--text-sm);color:var(--muted)">${relTime(it.last_run)}${it.last_status ? " " + statusTag(it.last_status) : ""}</td>
               <td>${contractCell(it)}</td>
               <td>${pathCell(it)}</td></tr>`).join("")
-        + `</tbody></table>`
+        + `</tbody></table></div>`
         : `<p class="empty">No automations match — ${scope === "local" && sourceF === "all" ? "try “show all sources”." : "adjust the filters."}</p>`)
       + `<div style="margin-top:var(--space-3);font-size:var(--text-xs);color:var(--faint)">showing ${rows.length} of ${MODEL.items.length}${scope === "local" && sourceF === "all" ? " · local + attention (toggle “show all sources” for github-actions)" : ""}</div>`;
     wire();

@@ -12,7 +12,9 @@ import pytest
 from agents.dialectic_reviewer.reviewer import (
     Thesis,
     Verdict,
+    build_continuation_prompt,
     build_review_prompt,
+    find_pending_paused_response,
     parse_reviewer_verdict,
 )
 
@@ -102,6 +104,45 @@ def test_prompt_separates_server_captured_governance_evidence_from_agent_claims(
     assert '"verdict": "high-risk"' in prompt
 
 
+def test_continuation_prompt_requires_independent_ratification():
+    prompt = build_continuation_prompt(
+        Thesis(session_id="s1", root_cause="old", proposed_conditions=["old term"]),
+        Verdict(False, "deeper cause", ["fix it"], "not enough"),
+        {
+            "agent_id": "paused",
+            "agrees": True,
+            "root_cause": "deeper cause",
+            "proposed_conditions": ["fix it"],
+            "reasoning": "new evidence",
+        },
+        synthesis_round=3,
+    )
+    assert "SAME independent reviewer" in prompt
+    assert "independently ratify" in prompt
+    assert "new evidence" in prompt
+    assert "synthesis round 3" in prompt
+
+
+def test_pending_response_must_follow_reviewers_latest_synthesis():
+    session = {
+        "paused_agent": "paused",
+        "reviewer": "reviewer",
+        "transcript": [
+            {"phase": "synthesis", "agent_id": "paused", "reasoning": "old"},
+            {"phase": "synthesis", "agent_id": "reviewer", "agrees": False},
+            {"phase": "synthesis", "agent_id": "paused", "reasoning": "new"},
+        ],
+    }
+    pending = find_pending_paused_response(session)
+    assert pending is not None
+    assert pending["reasoning"] == "new"
+
+    session["transcript"].append(
+        {"phase": "synthesis", "agent_id": "reviewer", "agrees": False}
+    )
+    assert find_pending_paused_response(session) is None
+
+
 # --------------------------- Thesis.from_env --------------------------- #
 def test_thesis_from_env_parses_json_conditions():
     env = {
@@ -147,6 +188,10 @@ def test_runner_only_calls_real_governance_client_methods():
 async def test_run_submits_disagreement_through_protocol(monkeypatch):
     """A disagreeing model must reach submit_synthesis with agrees=False."""
     import agents.dialectic_reviewer.reviewer as r
+
+    # This test isolates the initial judgment; continuation behavior has its own
+    # wiring test below.
+    monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_WAIT_S", "0")
 
     async def fake_model(prompt, model=r.DEFAULT_MODEL):
         return '{"agrees": false, "root_cause": "shallow", "proposed_conditions": ["real fix"], "reasoning": "no"}'
@@ -226,3 +271,145 @@ async def test_run_submits_disagreement_through_protocol(monkeypatch):
     assert anti[0].get("reasoning"), "the antithesis is where the argument goes"
     assert synth[0]["root_cause"] == "shallow"
     assert synth[0]["proposed_conditions"] == ["real fix"]
+
+
+@pytest.mark.asyncio
+async def test_run_reconsiders_paused_response_with_same_reviewer(monkeypatch):
+    """A rejection stays live long enough for the same identity to ratify a fix."""
+    import sys
+    import types
+
+    import agents.dialectic_reviewer.reviewer as r
+    from src.dialectic_protocol import (
+        DialecticMessage,
+        DialecticPhase,
+        DialecticSession,
+    )
+
+    prompts: list[str] = []
+    outputs = iter(
+        [
+            '{"agrees": false, "root_cause": "shallow", '
+            '"proposed_conditions": ["supply evidence"], "reasoning": "missing"}',
+            '{"agrees": true, "root_cause": "verified", '
+            '"proposed_conditions": ["ship the evidence"], "reasoning": "addressed"}',
+        ]
+    )
+
+    async def fake_obtain(prompt):
+        prompts.append(prompt)
+        return next(outputs)
+
+    monkeypatch.setattr(r, "obtain_reviewer_text", fake_obtain)
+    monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_WAIT_S", "1")
+    monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_POLL_S", "0.01")
+
+    calls: list[tuple[str, dict]] = []
+    session = DialecticSession(paused_agent_id="paused-uuid")
+    session.session_id = "sess-rounds"
+    thesis_result = session.submit_thesis(
+        DialecticMessage(
+            phase="thesis",
+            agent_id="paused-uuid",
+            timestamp="2026-08-16T00:00:00+00:00",
+            root_cause="claimed",
+            proposed_conditions=["initial"],
+            reasoning="initial claim",
+        )
+    )
+    assert thesis_result["success"] is True
+
+    class FakeClient:
+        def __init__(self, url):
+            self.url = url
+            self.agent_uuid = "reviewer-uuid"
+            self.paused_response_submitted = False
+
+        async def connect(self):
+            return None
+
+        async def onboard(self, **kw):
+            calls.append(("onboard", kw))
+            return None
+
+        async def call_tool(self, name, args, **kw):
+            calls.append((name, args))
+            if name != "dialectic":
+                return {"success": True}
+            if args.get("action") == "antithesis":
+                return session.submit_antithesis(
+                    DialecticMessage(
+                        phase="antithesis",
+                        agent_id=self.agent_uuid,
+                        timestamp="2026-08-16T00:01:00+00:00",
+                        reasoning=args["reasoning"],
+                    )
+                )
+            if args.get("action") == "synthesis":
+                return session.submit_synthesis(
+                    DialecticMessage(
+                        phase="synthesis",
+                        agent_id=self.agent_uuid,
+                        timestamp="2026-08-16T00:02:00+00:00",
+                        agrees=args["agrees"],
+                        root_cause=args.get("root_cause"),
+                        proposed_conditions=args.get("proposed_conditions"),
+                        reasoning=args.get("reasoning"),
+                    )
+                )
+            if args.get("action") == "get":
+                if not self.paused_response_submitted:
+                    paused_result = session.submit_synthesis(
+                        DialecticMessage(
+                            phase="synthesis",
+                            agent_id="paused-uuid",
+                            timestamp="2026-08-16T00:03:00+00:00",
+                            agrees=True,
+                            root_cause="verified",
+                            proposed_conditions=["ship the evidence"],
+                            reasoning="here is the missing evidence",
+                        )
+                    )
+                    assert paused_result["blocked"] == "reviewer_objection_stands"
+                    self.paused_response_submitted = True
+                return {"success": True, **session.to_dict()}
+            raise AssertionError(f"unexpected action: {args}")
+
+        async def checkin(self, response_text, complexity=0.3, confidence=0.7, **kw):
+            calls.append(("checkin", {"response_text": response_text, **kw}))
+            return None
+
+        async def disconnect(self):
+            return None
+
+    fake_mod = types.ModuleType("unitares_sdk.client")
+    fake_mod.GovernanceClient = FakeClient  # type: ignore[attr-defined]
+    pkg = types.ModuleType("unitares_sdk")
+    monkeypatch.setitem(sys.modules, "unitares_sdk", pkg)
+    monkeypatch.setitem(sys.modules, "unitares_sdk.client", fake_mod)
+
+    verdict = await r.run(
+        Thesis(
+            session_id="sess-rounds",
+            root_cause="claimed",
+            proposed_conditions=["initial"],
+        ),
+        governance_url="http://localhost:8767",
+        parent_agent_id="paused-uuid",
+    )
+
+    assert verdict.agrees is True
+    assert len(prompts) == 2
+    assert "here is the missing evidence" in prompts[1]
+    dialectic_calls = [args for name, args in calls if name == "dialectic"]
+    assert len([call for call in dialectic_calls if call["action"] == "antithesis"]) == 1
+    syntheses = [call for call in dialectic_calls if call["action"] == "synthesis"]
+    assert [call["agrees"] for call in syntheses] == [False, True]
+    assert syntheses[1]["reasoning"] == "addressed"
+    assert session.phase == DialecticPhase.RESOLVED
+    assert session.synthesis_round == 3
+    assert [message.agent_id for message in session.transcript[-3:]] == [
+        "reviewer-uuid",
+        "paused-uuid",
+        "reviewer-uuid",
+    ]

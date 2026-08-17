@@ -6,7 +6,7 @@ description: >
   pattern (window.X = { load }), the live-or-snapshot data seam, theme-aware
   charts via design tokens, and the app.html wiring (nav / pane / lazyLoad /
   RELOAD / retheme). A repo-specific reference — not general dashboard advice.
-last_verified: "2026-07-28"
+last_verified: "2026-08-17"
 freshness_days: 30
 source_files:
   - unitares/dashboard/redesign/app.html
@@ -14,7 +14,11 @@ source_files:
   - unitares/dashboard/redesign/snapshot.js
   - unitares/dashboard/redesign/sections/eisv.js
   - unitares/dashboard/redesign/sections/metrics.js
+  - unitares/dashboard/redesign/sections/adjudication.js
+  - unitares/dashboard/redesign/sections/security.js
   - unitares/src/http_api.py
+  - unitares/src/http_routes/dashboard.py
+  - unitares/src/dashboard_auth.py
 ---
 
 # Adding a Section to the UNITARES Dashboard (redesign)
@@ -22,12 +26,15 @@ source_files:
 ## Orientation
 
 The live dashboard is **`dashboard/redesign/`** — buildless (raw HTML/CSS/JS,
-no framework, no bundle), served by `http_dashboard_redesign` in
-`src/http_api.py` at `/` and `/dashboard`. The classic dashboard and its
-allowlist / script-load-chain / `vite` build were **retired** — ignore any
-older guidance about `index.html`, `allowed_files`, `MetricColors`, or
-`Chart.defaults`. There is **no allowlist** (a directory resolver serves
-`redesign/**`) and **no restart** needed (files are read per request).
+no framework, no bundle). `http_dashboard_redesign` now lives in
+`src/http_routes/dashboard.py`; `src/http_api.py` is the registration/re-export
+facade that maps it to `/`, `/dashboard`, and `/dashboard/redesign/**`. The
+classic dashboard and its allowlist / script-load-chain / `vite` build were
+**retired** — ignore older guidance about `index.html`, `allowed_files`,
+`MetricColors`, or `Chart.defaults`. The redesign resolver constrains paths and
+file types but has no per-asset allowlist, and files are read per request, so a
+restart is not needed for static edits. Entry HTML is `no-store`; relative
+assets receive an mtime version query to prevent stale browser bundles.
 
 A "section" is one nav tab. Each is a self-contained module that renders into
 its own mount and is wired in `app.html`.
@@ -64,7 +71,10 @@ Views never call `fetch` directly. They `await DATA.x()`, which returns
 `{ source: "live" | "snapshot", data }`. The accessor tries the live endpoint
 (`authFetch` for REST, `callTool` for `/v1/tools/call`) and falls back to the
 bundled `SNAPSHOT` on any failure, so the dashboard renders portably (opened as
-a file, cross-origin, or server down). Badge freshness in the view with
+a file, cross-origin, or server down). `authFetch` carries same-origin passkey
+session cookies and the optional bearer token; a browser WebSocket receives the
+same bearer through its query string because it cannot set headers. Badge
+freshness in the view with
 `<span class="src-badge ${source}">${source}</span>`.
 
 ```js
@@ -77,9 +87,11 @@ async metricsCatalog() {
 }
 ```
 
-Returning `null`/empty from `liveFn` triggers the snapshot fallback. For
-headline cards where a stale snapshot under a "live" badge would mislead, prefer
-returning `null` per-field and rendering "—" (see `data.js::stats`).
+Returning `null` from `liveFn` triggers the snapshot fallback. Accessors must
+decide whether an empty array/object is valid live data and map it to `null`
+themselves when it is not. For headline cards where a stale snapshot under a
+"live" badge would mislead, prefer returning `null` per-field and rendering "—"
+(see `data.js::stats`).
 
 ## Theme-aware charts (Item 9) — the real chart trap here
 
@@ -133,18 +145,26 @@ the event doesn't carry. Worked references: `sections/eisv.js::applyEvent`
 (composite status snaps on check-in), `sections/discoveries.js` (`notifyNew`
 badge). The WS plumbing lives in `ws.js`.
 
-## Mostly read-only — one operator write surface
+## Mostly read-only — explicit authenticated write surfaces
 
 The redesign sends the read bearer token everywhere; most sections are
-read-only. The **one wired write surface** is the Adjudication section
-(#1343): `DATA.adjudicate()` POSTs `/v1/sentinel/adjudicate` with the
-`X-Unitares-Operator` header. The operator credential is provisioned once via
-`?operator_token=…` (persisted to localStorage, scrubbed from the URL —
-`DATA.operatorToken()` in `data.js`). Other operator write actions
-(archive/resume agent, request review, discovery status) are still **not**
-wired. Don't assume a section can mutate state; if you add a write surface,
-follow the adjudication pattern deliberately — it's a new capability, not a
-copy-paste.
+read-only. Two areas intentionally mutate state:
+
+- **Adjudication**: `DATA.adjudicate()` POSTs a Sentinel verdict with
+  `X-Unitares-Csrf: 1`; it may use a passkey dashboard session or the
+  `X-Unitares-Operator` credential.
+- **Security**: live-only accessors inspect/logout/revoke dashboard sessions,
+  revoke passkeys, and mint enrollment codes. Session operations require the
+  passkey session plus CSRF; credential revocation and enrollment-code minting
+  require operator authority.
+
+The operator credential can be provisioned once via `?operator_token=…`
+(persisted to localStorage and scrubbed from the URL by
+`DATA.operatorToken()`). These live-only security calls deliberately do not fall
+back to snapshots. Other operator actions such as agent archive/resume, review
+requests, and discovery status changes are still not wired. Treat every new
+write surface as a capability and design its auth/CSRF/failure behavior
+explicitly.
 
 ## Verify before claiming done
 

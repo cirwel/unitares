@@ -197,6 +197,25 @@ class TestPydanticSchemas:
         dumped = model.model_dump()
         assert dumped["tags"] is None
 
+    def test_knowledge_response_mode_is_opt_in_and_validated(self):
+        """Read envelope modes are explicit; the default shape stays full."""
+        from pydantic import ValidationError
+        from src.mcp_handlers.schemas.knowledge import KnowledgeParams
+
+        assert KnowledgeParams(action="search").response_mode == "full"
+        assert (
+            KnowledgeParams(
+                action="details", response_mode="compact"
+            ).response_mode
+            == "compact"
+        )
+        assert (
+            KnowledgeParams(action="get", response_mode="lean").response_mode
+            == "lean"
+        )
+        with pytest.raises(ValidationError):
+            KnowledgeParams(action="stats", response_mode="minimal")
+
     def test_knowledge_exposes_supersession_link_params(self):
         """Unified knowledge() must pass the supersession LINK params through.
 
