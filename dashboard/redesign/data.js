@@ -690,13 +690,21 @@
           items: h.checks || {}, operator: h.operator_summary || {},
           breakers: { governance: (h.circuit_breakers && h.circuit_breakers.governance || {}).trips_24h || 0, redis: (h.circuit_breakers && h.circuit_breakers.redis || {}).trips_24h || 0 },
           calibration: (h.checks && h.checks.calibration || {}).status, redis: h.redis_present, continuity: h.identity_continuity_mode };
-        // Chronicler has no dedicated summary endpoint — pull its live state from
-        // /v1/residents (daily resident; cadence-aware rendering happens in the view).
-        const c = res && res.residents && res.residents.find((r) => r.label === "Chronicler");
-        out.chronicler = c
-          ? { status: c.status, silence: c.silence_seconds, silenceThreshold: c.silence_threshold_seconds,
-              lastCheckin: c.last_checkin_at, eisv: c.eisv, coherence: c.coherence }
-          : S().residentPanels.chronicler;
+        // Chronicler, Steward and Lumen have no dedicated summary endpoints —
+        // pull their live state from /v1/residents (cadence-aware rendering
+        // happens in the view). Without these, the tab showed 4 of the 6
+        // residents the Overview strip lists, and the absent two read as dead.
+        const fromResidents = (label) => {
+          const c = res && res.residents && res.residents.find((r) => r.label === label);
+          return c
+            ? { status: c.status, silence: c.silence_seconds, silenceThreshold: c.silence_threshold_seconds,
+                lastCheckin: c.last_checkin_at, eisv: c.eisv, coherence: c.coherence,
+                writes: c.recent_writes, risk: c.risk_score }
+            : null;
+        };
+        out.chronicler = fromResidents("Chronicler") || S().residentPanels.chronicler;
+        out.steward = fromResidents("Steward") || S().residentPanels.steward;
+        out.lumen = fromResidents("Lumen") || S().residentPanels.lumen;
         return out;
       }, () => S().residentPanels);
     },
