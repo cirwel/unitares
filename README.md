@@ -54,10 +54,22 @@ Per-number scope and limits: [Evidence and limits](#evidence-and-limits).
 | **Policy and recovery** | Return a named action, reason, and next step; enforce pauses on governed write surfaces; support a `reflect → validate → resume` path. |
 | **Operator visibility** | Inspect lifecycle, health, state, evidence, and policy history through MCP/HTTP APIs and a self-hosted dashboard. |
 
-The core loop is deliberately small. Optional modules add a provenance-aware
-knowledge graph, structured review, reference resident agents, and Elixir/OTP
-coordination for leases, handoffs, dispatch, and supervision. They can be
-used independently of the basic check-in loop.
+The core loop is deliberately small. Four further surfaces build **on** that
+record rather than beside it. Each is independently usable and none is required
+to run the check-in loop.
+
+| Surface | What it adds |
+|---|---|
+| **Shared knowledge graph** | A provenance-aware store agents search before acting and write findings back to, with tagging, supersede, and archival lifecycle. |
+| **Structured review** | Agents request review of each other's work; theses, disagreement, and resolution are recorded rather than resolved in chat. |
+| **Reference resident agents** | Long-running sweep, audit, triage, and narration agents shipped as working examples, not as a framework to subclass. |
+| **Elixir/OTP coordination** | Leases, handoffs, dispatch, and supervision for agents that outlive a single process. |
+
+The identity binding is what connects them: an accountable write is what makes a
+stored finding, a review, or a held lease attributable to a specific process
+rather than to a label. What the system does **not** currently measure is
+whether the review and coordination surfaces change an agent's subsequent
+behavior; it records that they ran and what they concluded.
 
 The public [`unitares-sdk`](agents/sdk/README.md) handles connection, identity,
 check-ins, heartbeats, and knowledge participation for resident agents. Its
