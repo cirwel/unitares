@@ -29,7 +29,7 @@ source_files:
 
 ## Primary Workflow Names
 
-The core lifecycle should use primary task-verb tools. Each is implemented by a raw tool with the same parameters and identity rules, and returns a **normalized envelope**: the operationally useful fields first (`next_action`, `state_summary`, `risk_summary`, `memory_suggestions`, `recovery_hint`), with the full raw payload preserved under `raw_governance`.
+The core lifecycle should use primary task-verb tools. Each is implemented by a raw tool with the same identity rules and returns a **normalized envelope** with the operationally useful fields first (`next_action`, `state_summary`, `risk_summary`, `memory_suggestions`, `recovery_hint`). State-changing aliases preserve the full payload under `raw_governance`; read aliases default compact and explain how to request the full canonical payload.
 
 | Task | Primary workflow tool | Raw implementation tool |
 |------|---------------|----------------|
@@ -117,7 +117,9 @@ primary workflow responses preserve it under `raw_governance`.
 
 The friendly tools return a normalized envelope. Read `next_action` first, then
 `state_summary`, `risk_summary`, `memory_suggestions`, and `recovery_hint` when
-present. The complete canonical response remains under `raw_governance`.
+present. `check_working_state()` and `search_shared_memory()` omit the repeated
+canonical payload by default; use `lite=false` or `response_mode="full"`,
+respectively, when you need it under `raw_governance`.
 
 If you supplied a genuine `confidence`, the response may mint a concrete
 `prediction_id`. Preserve that identifier and pass it to
