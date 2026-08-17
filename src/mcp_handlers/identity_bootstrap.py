@@ -100,7 +100,7 @@ def strict_identity_refusal_payload(
             )
         ],
         "do_not": list(do_not if do_not is not None else _DEFAULT_REFUSAL_DO_NOT),
-        "ontology_ref": "CLAUDE.md \"STRICT_IDENTITY_REQUIRED (#425 staged rollout)\"",
+        "ontology_ref": "docs/ontology/identity.md#operational-contract",
         "rollout_flag": "STRICT_IDENTITY_REQUIRED",
     }
     if identity_assurance is not None:
