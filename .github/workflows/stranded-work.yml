@@ -5,7 +5,7 @@ name: Stranded Work Audit
 # the same branch, no surface ever reports the gap; 2026-07-01 a manual sweep
 # found 10 branches carrying real marooned fixes). The audit itself is
 # scripts/dev/stranded_work_audit.py; this workflow is just the schedule plus
-# a deduped GitHub issue when STRANDED branches exist (same pattern as
+# a deduped GitHub issue when STRANDED or DANGLING-REVIEW branches exist (same pattern as
 # surface-findings.yml: hidden fingerprint marker, ci-finding label).
 #
 # GITHUB_TOKEN-only — no metered APIs (execution-cost policy).
@@ -38,12 +38,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 scripts/dev/stranded_work_audit.py --repo "$GITHUB_REPOSITORY" | tee audit.txt
-          count=$(grep -c '^STRANDED' audit.txt || true)
-          echo "stranded=$count" >> "$GITHUB_OUTPUT"
+          count=$(grep -Ec '^(STRANDED|DANGLING-REVIEW)' audit.txt || true)
+          echo "actionable=$count" >> "$GITHUB_OUTPUT"
           { echo '## Stranded-work audit'; echo '```'; cat audit.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Open or update the audit issue (only when STRANDED work exists)
-        if: steps.audit.outputs.stranded != '0'
+      - name: Open or update the audit issue (only when branch work needs review)
+        if: steps.audit.outputs.actionable != '0'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -55,8 +55,9 @@ jobs:
           body_file=$(mktemp)
           {
             echo "$marker"
-            echo "The weekly stranded-work audit found branch work marooned off master."
+            echo "The weekly stranded-work audit found branch work requiring a decision."
             echo "STRANDED = commits pushed after the branch's PR merged, patches not in master — re-land or explicitly discard."
+            echo "DANGLING-REVIEW = recent or deploy-sensitive commits with no open PR — re-land, explicitly discard, or explicitly park."
             echo
             echo '```'
             cat audit.txt
@@ -74,4 +75,17 @@ jobs:
               --title "Stranded post-merge work on branches (weekly audit)" \
               --label ci-finding \
               --body-file "$body_file"
+          fi
+
+      - name: Close a resolved audit issue
+        if: steps.audit.outputs.actionable == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing=$(gh issue list --label ci-finding --state open \
+                       --search 'stranded-work-audit in:body' \
+                       --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" --reason completed \
+              --comment "The weekly audit found no STRANDED or DANGLING-REVIEW branches. Closing this resolved finding."
           fi
