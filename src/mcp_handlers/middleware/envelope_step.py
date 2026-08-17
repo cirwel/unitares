@@ -18,14 +18,16 @@ Envelope shape (friendly fields first, raw payload preserved):
       "risk_summary": ...,          # plain-language risk read
       "memory_suggestions": [...],  # prior discoveries worth reading
       "recovery_hint": ...,         # only when state suggests trouble
-      "raw_governance": {...}       # the full canonical payload
+      "raw_governance": {...}       # full canonical payload when requested
     }
 
 Population is conservative: every field is harvested from values the
 canonical handlers already return — this layer reorders and translates,
 it does not compute new governance signals. Fields with nothing to say
-are omitted. Error payloads (success=False / "error") pass through
-unchanged: the raw error contract carries its own recovery info.
+are omitted. Default read aliases omit the repeated canonical payload and
+advertise an explicit full-response escape hatch; other aliases retain it.
+Error payloads (success=False / "error") pass through unchanged: the raw
+error contract carries its own recovery info.
 
 The step must never break a response: any parse/build failure returns
 the original handler result untouched.
@@ -34,6 +36,7 @@ the original handler result untouched.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, List, Optional
 
 from mcp.types import TextContent
@@ -48,6 +51,11 @@ logger = get_logger(__name__)
 _RECOVERY_RISK_CEILING = 0.40
 
 _MEMORY_SUGGESTION_LIMIT = 3
+
+_COMPACT_READ_ALIASES = frozenset({
+    "check_working_state",
+    "search_shared_memory",
+})
 
 
 def _lift(payload: Dict[str, Any], *keys: str) -> Dict[str, Any]:
@@ -253,10 +261,130 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
     return suggestions or None
 
 
+def _experience_aliases():
+    """Return the live friendly-alias registry without creating an import cycle."""
+    from ..tool_stability import list_all_aliases
+
+    return {
+        name: alias
+        for name, alias in list_all_aliases().items()
+        if alias.experience
+    }
+
+
+def _friendly_hint_text(value: str) -> str:
+    """Translate canonical tool calls in a friendly hint to workflow aliases.
+
+    Canonical payloads remain untouched under ``raw_governance``. This only
+    rewrites the copied agent-facing hint, deriving names from the same alias
+    registry that dispatch uses so response prose cannot drift independently.
+    """
+    aliases = _experience_aliases()
+    result = value
+
+    # Action-injecting aliases need the whole call prefix rewritten. A bare
+    # ``knowledge``/``dialectic`` name is ambiguous and must stay canonical.
+    for friendly_name, alias in aliases.items():
+        if not alias.inject_action:
+            continue
+        canonical = re.escape(alias.new_name)
+        action = re.escape(alias.inject_action)
+        result = re.sub(
+            rf"\b{canonical}\(\s*action\s*=\s*(['\"]){action}\1\s*,\s*",
+            f"{friendly_name}(",
+            result,
+        )
+        result = re.sub(
+            rf"\b{canonical}\(\s*action\s*=\s*(['\"]){action}\1\s*\)",
+            f"{friendly_name}()",
+            result,
+        )
+
+    # Direct aliases have an unambiguous canonical-name replacement.
+    direct = {
+        alias.new_name: friendly_name
+        for friendly_name, alias in aliases.items()
+        if not alias.inject_action
+    }
+    for canonical, friendly_name in sorted(
+        direct.items(), key=lambda item: len(item[0]), reverse=True
+    ):
+        result = re.sub(rf"\b{re.escape(canonical)}\b", friendly_name, result)
+    return result
+
+
+def _friendly_action_hint(value: Any) -> Any:
+    """Recursively translate tool names in an agent-facing action hint."""
+    if isinstance(value, str):
+        return _friendly_hint_text(value)
+    if isinstance(value, list):
+        return [_friendly_action_hint(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_friendly_action_hint(item) for item in value)
+    if not isinstance(value, dict):
+        return value
+
+    friendly = {
+        key: _friendly_action_hint(item)
+        for key, item in value.items()
+    }
+    tool = value.get("tool")
+    action = value.get("action")
+    if isinstance(tool, str):
+        for friendly_name, alias in _experience_aliases().items():
+            if alias.new_name != tool:
+                continue
+            if alias.inject_action is None or alias.inject_action == action:
+                friendly["tool"] = friendly_name
+                break
+    return friendly
+
+
+def _as_bool(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _raw_governance_policy(
+    friendly_name: str,
+    arguments: Optional[Dict[str, Any]],
+) -> tuple[bool, Optional[str]]:
+    """Choose whether a friendly read alias should repeat its canonical payload.
+
+    Canonical tools are unchanged. Read aliases default to their compact
+    experience envelope and retain an explicit full-response escape hatch.
+    """
+    if friendly_name not in _COMPACT_READ_ALIASES:
+        return True, None
+
+    arguments = arguments or {}
+    if friendly_name == "check_working_state":
+        verbosity = str(arguments.get("verbosity") or "").strip().lower()
+        wants_full = (
+            verbosity in {"standard", "full"}
+            or not _as_bool(arguments.get("lite"), default=True)
+            or _as_bool(arguments.get("include_state"), default=False)
+        )
+        return wants_full, (
+            "Re-call check_working_state(lite=false) for the canonical diagnostics."
+        )
+
+    response_mode = str(
+        arguments.get("response_mode") or "compact"
+    ).strip().lower()
+    return response_mode == "full", (
+        "Re-call search_shared_memory(response_mode='full') for the complete result set."
+    )
+
+
 def build_experience_envelope(
     friendly_name: str,
     canonical_name: str,
     payload: Dict[str, Any],
+    arguments: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Reshape a successful canonical payload into the experience envelope.
 
@@ -337,11 +465,29 @@ def build_experience_envelope(
             )
 
     elif canonical_name == "get_governance_metrics":
-        # This handler already speaks the friendly dialect - map directly.
+        # Preserve the essential EISV read at the friendly surface so compact
+        # mode can omit the repeated canonical payload without making the state
+        # tool useless.
         next_action = payload.get("next_action") or payload.get("guidance")
         verdict = payload.get("verdict")
         if verdict is not None:
-            state_summary = verdict if isinstance(verdict, dict) else {"verdict": verdict}
+            state_summary = (
+                dict(verdict) if isinstance(verdict, dict) else {"verdict": verdict}
+            )
+        else:
+            state_summary = {}
+        for key, value in _lift(
+            payload,
+            "status",
+            "primary_eisv_source",
+            "E",
+            "I",
+            "S",
+            "V",
+            "coherence",
+            "risk_score",
+        ).items():
+            state_summary.setdefault(key, value)
 
     elif canonical_name == "knowledge":
         candidates = source_payload.get("results") or source_payload.get("discoveries") or []
@@ -409,7 +555,7 @@ def build_experience_envelope(
         )
 
     if next_action is not None:
-        envelope["next_action"] = next_action
+        envelope["next_action"] = _friendly_action_hint(next_action)
     if state_summary:
         envelope["state_summary"] = state_summary
 
@@ -449,7 +595,13 @@ def build_experience_envelope(
     if hint:
         envelope["recovery_hint"] = hint
 
-    envelope["raw_governance"] = payload
+    include_raw, raw_hint = _raw_governance_policy(friendly_name, arguments)
+    if include_raw:
+        envelope["raw_governance"] = payload
+    else:
+        envelope["raw_governance_available"] = True
+        if raw_hint:
+            envelope["raw_governance_hint"] = raw_hint
     return envelope
 
 
@@ -472,7 +624,7 @@ async def apply_experience_envelope(name: str, arguments: Dict[str, Any], ctx, r
         if payload.get("success") is False or "error" in payload:
             return result  # raw error contract carries its own recovery info
 
-        envelope = build_experience_envelope(invoked, name, payload)
+        envelope = build_experience_envelope(invoked, name, payload, arguments)
         return [TextContent(type="text", text=json.dumps(envelope, ensure_ascii=False))]
     except Exception:
         logger.warning(
