@@ -4,7 +4,7 @@ description: >
   Use when an agent is participating in a UNITARES dialectic session — paused and needs to
   submit a thesis, reviewing another agent's thesis, or synthesizing conditions for resolution.
   Covers structured argumentation and convergence.
-last_verified: "2026-08-16"
+last_verified: "2026-08-17"
 freshness_days: 28
 source_files:
   - unitares/src/mcp_handlers/dialectic/handlers.py
@@ -171,10 +171,11 @@ including one a timeout sweep already marked failed for lack of facilitation.
 - **Propose measurable conditions.** "Entropy below X within Y check-ins" is verifiable. "I will be more careful" is not.
 - **Do not be defensive.** A pause verdict is data, not judgment. Analyze why it happened.
 - **Acknowledge valid concerns.** If the antithesis raises a real issue, say so. Partial agreement strengthens your position.
-- **Look at attributed evidence, not feelings.** Call `check_working_state()` for
-  the current values and inspect `risk_score_source`, policy provenance, and
-  enforcement evidence. EISV is proprioceptive state estimation, not outcome
-  truth; the ODE lens and legacy `C(V)` do not independently validate a claim.
+- **Look at attributed evidence, not feelings.** Call `check_working_state()`
+  (`get_governance_metrics()` canonically) for the current values and inspect
+  `risk_score_source`, policy provenance, and enforcement evidence. EISV is
+  proprioceptive state estimation, not outcome truth; the ODE lens and legacy
+  `C(V)` do not independently validate a claim.
 
 ## Common Mistakes
 
