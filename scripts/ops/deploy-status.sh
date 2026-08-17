@@ -75,7 +75,6 @@ COMPONENTS=(
 "ipv6-loopback-proxy|com.unitares.ipv6-loopback-proxy|$H/projects/unitares-deploy|scripts/ops/ipv6_loopback_proxy.py|restart|"
 "anima-noauth-proxy|com.unitares.anima-noauth-proxy|$H/projects/anima-mcp|scripts/mcp_noauth_proxy.py|restart|"
 "anima-proxy|com.unitares.anima-proxy|$H/projects/anima-mcp|scripts/tcp_proxy.py|restart|"
-"concierge|com.cirwel.concierge|$H/projects/concierge|concierge.py|restart|"
 "pi-plugin||$H/projects/unitares-pi-plugin||pi-deploy|"
 "anima-mcp||$H/projects/anima-mcp||pi-deploy|"
 )
