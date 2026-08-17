@@ -23,12 +23,33 @@ numbers that baseline it:
 
 Usage:
     python3 scripts/dev/adoption_kpi.py [--days 14] [--json]
+        [--nudge-since 2026-08-17T00:00:00Z]
+        [--nudge-until 2026-08-31T00:00:00Z]
+        [--nudge-conversion-minutes 60]
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+from datetime import datetime, timedelta, timezone
+
+
+_REVIEW_NUDGE_CONVERSION_MINUTES = 60
+
+
+def _normalize_utc_bound(value, *, name: str):
+    """Return an aware UTC datetime for a KPI observation bound."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError(f"{name} must be an ISO-8601 timestamp") from exc
+    if not isinstance(value, datetime) or value.tzinfo is None:
+        raise ValueError(f"{name} must include an explicit UTC offset")
+    return value.astimezone(timezone.utc)
 
 
 def connect():
@@ -150,41 +171,103 @@ def _snapshot_queries() -> dict:
             -- the nudge also reaches non-mirror modes via next_action, so
             -- `fired` is the population that saw it.
             SELECT count(*) AS fired,
-                   count(DISTINCT agent_id) AS agents
+                   count(DISTINCT agent_id) AS agents,
+                   count(DISTINCT (agent_id, session_id))
+                       FILTER (WHERE session_id IS NOT NULL) AS sessions,
+                   count(*) FILTER (WHERE session_id IS NULL) AS unattributed_events
             FROM audit.events
-            WHERE ts > now() - make_interval(days => %(days)s)
+            WHERE ts >= %(nudge_since)s
+              AND ts < %(nudge_until)s
               AND event_type = 'mirror_signal.emit'
               AND payload->'signals' @> '[{"signal_type": "review_nudge"}]'
         """,
         "review_nudge_conversion": """
-            -- Nudge -> review conversion: distinct nudged agents that opened a
-            -- dialectic session at or after their first nudge in the window.
+            -- Nudge -> review conversion: a successful request action from the
+            -- same agent AND resolved caller session, within the pre-registered
+            -- post-nudge horizon. This deliberately reads audit.tool_usage,
+            -- where request actions and caller sessions are explicit, rather
+            -- than attributing any later dialectic_sessions row to the nudge.
             WITH nudges AS (
-                SELECT agent_id, min(ts) AS first_nudge
+                SELECT agent_id, session_id, min(ts) AS first_nudge
                 FROM audit.events
-                WHERE ts > now() - make_interval(days => %(days)s)
+                WHERE ts >= %(nudge_since)s
+                  AND ts < %(nudge_until)s
                   AND event_type = 'mirror_signal.emit'
                   AND payload->'signals' @> '[{"signal_type": "review_nudge"}]'
-                GROUP BY agent_id
+                  AND agent_id IS NOT NULL
+                  AND session_id IS NOT NULL
+                GROUP BY agent_id, session_id
+            ), conversions AS (
+                SELECT n.agent_id, n.session_id, min(u.ts) AS converted_at
+                FROM nudges n
+                JOIN audit.tool_usage u
+                  ON u.agent_id = n.agent_id
+                 AND u.session_id = n.session_id
+                 AND u.ts >= n.first_nudge
+                 AND u.ts < LEAST(
+                     n.first_nudge + make_interval(
+                         mins => %(nudge_conversion_minutes)s
+                     ),
+                     %(nudge_until)s
+                 )
+                 AND u.tool_name IN ('request_review', 'dialectic')
+                 AND u.payload->>'action' = 'request'
+                 AND u.success
+                GROUP BY n.agent_id, n.session_id
             )
-            SELECT count(DISTINCT n.agent_id) AS converted
+            SELECT count(*) AS eligible_sessions,
+                   count(c.converted_at) AS converted_sessions,
+                   count(DISTINCT n.agent_id) AS eligible_agents,
+                   count(DISTINCT c.agent_id) AS converted_agents
             FROM nudges n
-            JOIN core.dialectic_sessions d
-              ON d.paused_agent_id::text = n.agent_id::text
-             AND d.created_at >= n.first_nudge
+            LEFT JOIN conversions c
+              ON c.agent_id = n.agent_id
+             AND c.session_id = n.session_id
         """,
     }
 
 
-def snapshot(days: int) -> dict:
+def snapshot(
+    days: int,
+    *,
+    nudge_since=None,
+    nudge_until=None,
+    nudge_conversion_minutes: int = _REVIEW_NUDGE_CONVERSION_MINUTES,
+) -> dict:
     import psycopg2.extras  # type: ignore
 
+    if days <= 0:
+        raise ValueError("days must be positive")
+    if nudge_conversion_minutes <= 0:
+        raise ValueError("nudge_conversion_minutes must be positive")
+    window_end = _normalize_utc_bound(nudge_until, name="nudge_until")
+    if window_end is None:
+        window_end = datetime.now(timezone.utc)
+    window_start = _normalize_utc_bound(nudge_since, name="nudge_since")
+    if window_start is None:
+        window_start = window_end - timedelta(days=days)
+    if window_start >= window_end:
+        raise ValueError("nudge_since must be earlier than nudge_until")
+
     queries = _snapshot_queries()
-    out: dict = {"window_days": days}
+    query_params = {
+        "days": days,
+        "nudge_since": window_start,
+        "nudge_until": window_end,
+        "nudge_conversion_minutes": nudge_conversion_minutes,
+    }
+    out: dict = {
+        "window_days": days,
+        "review_nudge_window": {
+            "since": window_start.isoformat(),
+            "until": window_end.isoformat(),
+            "conversion_minutes": nudge_conversion_minutes,
+        },
+    }
     with connect() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             for key, sql in queries.items():
-                cur.execute(sql, {"days": days})
+                cur.execute(sql, query_params)
                 out[key] = dict(cur.fetchone())
     cc = out["checkin_concentration"]
     cc["top2_share_pct"] = round(100 * cc["top2"] / cc["total"], 1) if cc["total"] else None
@@ -200,6 +283,11 @@ def snapshot(days: int) -> dict:
     oc["did_nothing_pct"] = round(100 * oc["did_nothing"] / oc["minted"], 1) if oc["minted"] else None
     op = out["outcome_pipe_health"]
     op["success_pct"] = round(100 * op["ok"] / op["total"], 1) if op["total"] else None
+    rc = out["review_nudge_conversion"]
+    rc["conversion_pct"] = (
+        round(100 * rc["converted_sessions"] / rc["eligible_sessions"], 1)
+        if rc["eligible_sessions"] else None
+    )
 
     # Recall-miss telemetry (#972): a zero-result / low-confidence search is a
     # no-value interaction — an adoption signal, so it belongs in this snapshot.
@@ -222,10 +310,25 @@ def snapshot(days: int) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--days", type=int, default=14)
+    parser.add_argument("--nudge-since")
+    parser.add_argument("--nudge-until")
+    parser.add_argument(
+        "--nudge-conversion-minutes",
+        type=int,
+        default=_REVIEW_NUDGE_CONVERSION_MINUTES,
+    )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
-    snap = snapshot(args.days)
+    try:
+        snap = snapshot(
+            args.days,
+            nudge_since=args.nudge_since,
+            nudge_until=args.nudge_until,
+            nudge_conversion_minutes=args.nudge_conversion_minutes,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.json:
         print(json.dumps(snap, indent=2, default=str))
         return 0
@@ -253,8 +356,13 @@ def main() -> int:
           f"by {pk['agents']} agents")
     rn = snap["review_nudge"]
     rc = snap["review_nudge_conversion"]
-    print(f"  review nudge (#1685): {rn['fired']} fired for {rn['agents']} agents; "
-          f"{rc['converted']} opened a review after a nudge")
+    rw = snap["review_nudge_window"]
+    print(f"  review nudge (#1685): {rn['fired']} fired for {rn['agents']} agents "
+          f"across {rn['sessions']} attributable sessions; "
+          f"{rn['unattributed_events']} events lacked session attribution")
+    print(f"    same-session request within {rw['conversion_minutes']}m: "
+          f"{rc['converted_sessions']}/{rc['eligible_sessions']} "
+          f"({rc['conversion_pct']}%); window [{rw['since']}, {rw['until']})")
     rm = snap.get("recall_misses") or {}
     print(f"  recall misses (search no-value, #972): {rm.get('total', 0)} total "
           f"{rm.get('by_class', {})}")
