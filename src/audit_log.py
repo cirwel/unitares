@@ -737,6 +737,7 @@ class AuditLogger:
         self,
         *,
         agent_id: Optional[str],
+        session_id: Optional[str] = None,
         update_index: Optional[int],
         response_mode: Optional[str],
         surfaced: bool,
@@ -757,6 +758,7 @@ class AuditLogger:
         entry = AuditEntry(
             timestamp=datetime.now().isoformat(),
             agent_id=agent_id,
+            session_id=session_id,
             event_type="mirror_signal.emit",
             confidence=1.0,
             details={
