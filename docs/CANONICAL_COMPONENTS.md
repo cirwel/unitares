@@ -1,5 +1,7 @@
 # UNITARES — Canonical Components
 
+**Last reviewed:** 2026-08-16
+
 The system as a set of **modules/layers**, bottom-up. This is the orthogonal view to
 [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md), which traces a single check-in through the
 *pipeline*; this doc is the *component* map — what UNITARES is made of, and how mature each part is.
@@ -55,7 +57,7 @@ Retrieval is hybrid (vector + FTS, RRF-fused) and **honestly self-reports low co
 query matches only semantically. Write discipline: search before writing; supersede over duplicate.
 
 - **Modules:** `src/knowledge_graph.py`, `src/storage/knowledge_graph_age.py`, `src/mcp_handlers/knowledge/`.
-- **Maturity: LIVE / strong bones, two named gaps.** Provenance tagging and cross-agent linking are solid and differentiated. (a) Retrieval quality on the **default serving backend** is currently **unmeasured** — the objective eval is broken on it ([issue #1050](https://github.com/cirwel/unitares/issues/1050)); it scores well (nDCG ≈ 0.94) only via the AGE backend on a small distinctive-term corpus. (b) The AGE graph is **live and 1:1-synced** but **advisory** — graph *traversal/reasoning* is dormant; canonical lineage uses a recursive CTE (AGE 1.7 can't express the causal path filter). It is *not* "dormant/off"; it *is* "not canonical."
+- **Maturity: LIVE / strong bones, two named gaps.** Provenance tagging and cross-agent linking are solid and differentiated. (a) The objective retrieval eval now drives the **live serving path** (the same handler `knowledge(action="search")` uses; [issue #1050](https://github.com/cirwel/unitares/issues/1050) closed 2026-06-26), but the committed baselines predate that fix, so no current serving-path score is on record, and the labeled corpus remains small and skewed toward distinctive-term queries. (b) The AGE graph is **live and 1:1-synced** but **advisory** — graph *traversal/reasoning* is dormant; canonical lineage uses a recursive CTE (AGE 1.7 can't express the causal path filter). It is *not* "dormant/off"; it *is* "not canonical."
 
 ## 3. Dialectic Engine — independent reasoning
 
@@ -86,7 +88,7 @@ not** drive verdicts.
 
 | Component | What it is | Key modules | Maturity |
 |---|---|---|---|
-| **Coordination / lease plane** | BEAM (Elixir/OTP) kernel for single-writer coordination + liveness on shared surfaces (Plexus). Port 8788, bearer-gated. | `lease_plane.*`, the `dispatch_beam` client | **PARTIAL** — advisory-first rollout; Wave 3a first cutovers live |
+| **Coordination / lease plane** | BEAM (Elixir/OTP) kernel for single-writer coordination + liveness on shared surfaces (Plexus). Port 8788, bearer-gated. | `lease_plane.*`, the `dispatch_beam` client | **PARTIAL** — advisory-first rollout; Wave 3a read-only cutovers live; Wave 3 proper is committed and open with no active implementation (see [`proposals/beam-wave-3-handler-dispatch.md`](proposals/beam-wave-3-handler-dispatch.md)) |
 | **Resident agents** | Always-on governed agents | Vigil (cron janitorial) · Sentinel (continuous analytical) · Watcher (PostToolUse) · Steward (Pi→Mac) · Chronicler (daily) · Lumen (embodied Pi) | **LIVE** (launchd) |
 | **Substrate** | Durable truth | ONE Postgres = relational + Apache AGE 1.7 + pgvector; Redis = de-facto primary session store (not optional), being migrated to PG-mirror | **MATURE** |
 | **Surfaces** | How agents/humans reach it | MCP `/mcp/` · REST `/v1/tools/call` · Dashboard `/dashboard` · SDK · governance plugin (Claude Code/Codex hooks) · host-adapter | **LIVE** |
@@ -98,10 +100,10 @@ not** drive verdicts.
 | Component | Status | One-line honest read |
 |---|---|---|
 | Identity & Ontology | **Mature** | Load-bearing; strict write gate live; anchors everything |
-| Knowledge Graph | **Live** | Strong provenance + cross-agent linking; serving-path retrieval unmeasured; AGE live-but-advisory |
+| Knowledge Graph | **Live** | Strong provenance + cross-agent linking; serving-path eval fixed, current score not yet on record; AGE live-but-advisory |
 | Dialectic Engine | **In-flight** | Independent reviewer serving live; reviewer-quality is the open frontier |
 | EISV & Governance | **Deployed (bounded)** | Calibration-observability; catches naive overconfidence/drift, not deliberate concealment |
-| Coordination (BEAM) | **Partial** | Advisory-first; first cutovers live |
+| Coordination (BEAM) | **Partial** | Advisory-first; Wave 3a read-only cutovers live; Wave 3 committed, not started |
 | Residents · Substrate · Surfaces | **Live / Mature** | Operational |
 
 **See also:** [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md) (pipeline/flow view) · [`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md) (who it's for, what's unproven) · [`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md) (verify it yourself) · [`EVALUATION_INDEX.md`](EVALUATION_INDEX.md) (the eval surface).
