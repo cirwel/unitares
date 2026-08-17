@@ -6,6 +6,7 @@ trains readers to ignore the channel), the mirror-mode signal line, and the
 envelope's next_action suggestion.
 """
 
+import hashlib
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +20,7 @@ sys.path.insert(0, str(project_root))
 from src.mcp_handlers.updates.enrichments import (
     _REVIEW_NUDGE_CONF_CEILING,
     _REVIEW_NUDGE_COMPLEXITY_FLOOR,
+    _REVIEW_NUDGE_TTL_SECONDS,
     _review_nudge_novel,
     _review_nudge_trigger,
 )
@@ -30,6 +32,7 @@ def _ctx(
     total_updates=10,
     sub_action=None,
     agent_uuid="agent-uuid-1",
+    session_key="session-1",
 ):
     response_data = {}
     if sub_action is not None:
@@ -40,6 +43,7 @@ def _ctx(
         response_data=response_data,
         meta=SimpleNamespace(total_updates=total_updates),
         agent_uuid=agent_uuid,
+        session_key=session_key,
     )
 
 
@@ -93,8 +97,13 @@ async def test_novel_true_on_first_set():
     redis.set = AsyncMock(return_value=True)
     with patch("src.cache.redis_client.get_redis", AsyncMock(return_value=redis)):
         assert await _review_nudge_novel(_ctx()) is True
+    args = redis.set.call_args.args
     kwargs = redis.set.call_args.kwargs
-    assert kwargs.get("nx") is True and kwargs.get("ex")
+    expected_scope = hashlib.sha256(b"session-1").hexdigest()
+    assert args[0] == f"review_nudge:agent-uuid-1:{expected_scope}"
+    assert "session-1" not in args[0]
+    assert kwargs.get("nx") is True
+    assert kwargs.get("ex") == _REVIEW_NUDGE_TTL_SECONDS
 
 
 @pytest.mark.asyncio
@@ -103,6 +112,25 @@ async def test_repeat_in_session_is_suppressed():
     redis.set = AsyncMock(return_value=None)  # NX miss: key already present
     with patch("src.cache.redis_client.get_redis", AsyncMock(return_value=redis)):
         assert await _review_nudge_novel(_ctx()) is False
+
+
+@pytest.mark.asyncio
+async def test_different_sessions_have_distinct_dedup_scopes():
+    redis = AsyncMock()
+    redis.set = AsyncMock(side_effect=[True, True])
+    with patch("src.cache.redis_client.get_redis", AsyncMock(return_value=redis)):
+        assert await _review_nudge_novel(_ctx(session_key="session-1")) is True
+        assert await _review_nudge_novel(_ctx(session_key="session-2")) is True
+    keys = [call.args[0] for call in redis.set.call_args_list]
+    assert keys[0] != keys[1]
+
+
+@pytest.mark.asyncio
+async def test_missing_session_key_fails_closed_before_redis():
+    get_redis = AsyncMock()
+    with patch("src.cache.redis_client.get_redis", get_redis):
+        assert await _review_nudge_novel(_ctx(session_key=None)) is False
+    get_redis.assert_not_awaited()
 
 
 @pytest.mark.asyncio
