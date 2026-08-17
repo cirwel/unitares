@@ -2,8 +2,10 @@
  * Residents section — per-resident detail panels.
  * Consolidates the old watcher.js / sentinel.js / vigil.js / system-health.js
  * panels into one section: Watcher findings funnel, Sentinel findings by
- * severity/class + recent stream, Vigil cycles/writes + EISV, Chronicler
- * silence note, and System Health. Composes kit; reads DATA.residentPanels().
+ * severity/class + recent stream, Vigil cycles/writes + EISV, Steward and
+ * Lumen check-in cards, Chronicler silence note, and System Health — every
+ * resident the Overview fleet strip lists, so a quiet one never reads as
+ * absent. Composes kit; reads DATA.residentPanels().
  */
 (function () {
   "use strict";
@@ -69,6 +71,30 @@
       ${statRow([stat("cycles 24h", v.cycles24h || 0), stat("writes", v.writesWindow || 0), stat("avg coh", (v.avgCoherence || 0).toFixed(2)), stat("verdict", v.lastVerdict || "—", "var(--ok)")])}
       ${e.E != null ? `<div style="margin-top:var(--space-4);display:flex;gap:var(--space-5);font-family:var(--font-mono);font-size:var(--text-sm);color:var(--ink-2)">
         <span>E ${e.E.toFixed(2)}</span><span>I ${e.I.toFixed(2)}</span><span>S ${e.S.toFixed(2)}</span><span>V ${e.V.toFixed(2)}</span></div>` : ""}</div>`;
+  }
+
+  const eisvLine = (e) => e && e.E != null
+    ? `<div style="margin-top:var(--space-4);display:flex;gap:var(--space-5);font-family:var(--font-mono);font-size:var(--text-sm);color:var(--ink-2)">
+         <span>E ${e.E.toFixed(2)}</span><span>I ${e.I.toFixed(2)}</span><span>S ${e.S.toFixed(2)}</span><span>V ${e.V.toFixed(2)}</span></div>` : "";
+
+  // Check-in card for residents whose whole dashboard story is their
+  // /v1/residents row (Steward, Lumen): liveness vs their own cadence
+  // threshold, coherence/writes/risk, EISV line. Same overdue discipline as
+  // Chronicler — silence within threshold is steady-state, not an alarm.
+  function residentCard(name, desc, r) {
+    if (!r) return "";
+    const thr = r.silenceThreshold || 3600;
+    const overdue = typeof r.silence === "number" && r.silence > thr;
+    const timing = typeof r.silence === "number"
+      ? (overdue ? "overdue " + ago(r.silence - thr) : "ran " + ago(r.silence) + " ago") : "—";
+    return `<div class="panel" style="${overdue ? "border-left:2px solid var(--warn)" : ""}">
+      ${head(name, overdue ? "silent" : (r.status || "healthy"), desc + " · " + timing)}
+      ${statRow([
+        stat("coherence", r.coherence != null ? r.coherence.toFixed(2) : "—"),
+        stat("recent writes", r.writes != null ? r.writes : "—"),
+        stat("risk", r.risk != null ? r.risk.toFixed(2) : "—", "var(--muted)"),
+      ])}
+      ${eisvLine(r.eisv)}</div>`;
   }
 
   function chronicler(c) {
@@ -153,6 +179,8 @@
          <span class="eyebrow" style="margin:0">Always-on fleet</span><span class="spring"></span><span class="src-badge ${r.source}">${r.source}</span></div>
        <div class="split-2" style="gap:var(--space-4)">
          ${watcher(d.watcher)}${sentinel(d.sentinel)}${vigil(d.vigil)}${health(d.health)}
+         ${residentCard("Steward", "custodial · 5min in-process cycle · Pi→Mac EISV sync", d.steward)}
+         ${residentCard("Lumen", "embodied · Raspberry Pi", d.lumen)}
        </div>
        <div style="margin-top:var(--space-4)">${chronicler(d.chronicler)}</div>`;
   }

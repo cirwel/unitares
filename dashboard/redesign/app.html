@@ -325,7 +325,9 @@ let wsStatus = "closed";
 function updateLivePill() {
   const auto = isAutoSection(activeSection);
   livePill.classList.toggle("paused", !auto);
-  if (!auto) { liveText.textContent = "manual"; livePill.title = "This view is manual — switch to a monitor view for live updates"; return; }
+  // "static", not "manual": flipping to "manual" as you leave a monitor view
+  // read like the stream kept dropping, when it just describes the section.
+  if (!auto) { liveText.textContent = "static"; livePill.title = "This section refreshes on demand (↻) — monitor views update live"; return; }
   if (wsStatus === "open") { liveText.textContent = "streaming"; livePill.title = "Live event stream (/ws/eisv)"; }
   else { liveText.textContent = "live"; livePill.title = "Auto-refreshing every 10s (stream reconnecting)"; }
 }
