@@ -173,8 +173,19 @@ async def save_session(session: DialecticSession, *, defer_terminal: bool = Fals
     """
     Persist dialectic session to PostgreSQL (upsert) and JSON (snapshot).
 
-    Uses pg_update_phase to sync phase/synthesis_round to PG (not INSERT).
+    Uses pg_update_phase to sync phase AND synthesis_round to PG (not INSERT).
     The JSON snapshot captures the full in-memory state for offline debugging.
+
+    ⛔The round sync was silently absent from the BEAM cutover until 2026-08-16:
+    this call passed phase only and BEAM's ``DialecticSaga.update_phase`` wrote
+    only ``phase``/``updated_at``, so the counter incremented in
+    ``src/dialectic_protocol.py`` (:705, :742) never reached PG and every row
+    read ``synthesis_round = 0`` — measured across all 36 sessions in the
+    trailing 30 days — leaving the ``max_synthesis_rounds`` budget check at
+    ``dialectic_protocol.py:609`` comparing against a value that reset on every
+    rehydration. Both sides now carry it, COALESCEd so ``None`` leaves the
+    stored value alone.
+
 
     ``defer_terminal`` suppresses the terminal PostgreSQL write (the JSON
     snapshot still happens). Pass it when the caller has just converged but has
@@ -220,9 +231,12 @@ async def save_session(session: DialecticSession, *, defer_terminal: bool = Fals
                     status=status,
                 )
         else:
-            beam_ph = await beam_update_phase(session.session_id, session.phase.value)
+            round_ = getattr(session, "synthesis_round", None)
+            beam_ph = await beam_update_phase(
+                session.session_id, session.phase.value, round_
+            )
             if beam_ph is None:
-                await pg_update_phase(session.session_id, session.phase.value)
+                await pg_update_phase(session.session_id, session.phase.value, round_)
         logger.debug(f"Session {session.session_id} synced to PostgreSQL (phase={session.phase.value})")
     except Exception as e:
         logger.error(f"PostgreSQL sync failed for session {session.session_id}: {e}")
@@ -318,7 +332,8 @@ async def load_session_as_dict(session_id: str) -> Optional[Dict[str, Any]]:
                 SELECT session_id, phase, status, session_type,
                        paused_agent_id, reviewer_agent_id, topic,
                        created_at, resolution_json, reason, trigger_source,
-                       awaiting_facilitation
+                       awaiting_facilitation, synthesis_round,
+                       max_synthesis_rounds
                 FROM core.dialectic_sessions WHERE session_id = $1
             """, session_id)
             if not row:
@@ -344,6 +359,10 @@ async def load_session_as_dict(session_id: str) -> Optional[Dict[str, Any]]:
                 "trigger_source": row.get("trigger_source") or None,
                 "awaiting_facilitation": bool(
                     row.get("awaiting_facilitation", False)
+                ),
+                "synthesis_round": int(row.get("synthesis_round") or 0),
+                "max_synthesis_rounds": int(
+                    row.get("max_synthesis_rounds") or 5
                 ),
                 "message_count": len(msg_rows),
                 "transcript": [],
@@ -445,6 +464,8 @@ async def list_all_sessions(
                     ds.created_at,
                     ds.resolution_json,
                     ds.awaiting_facilitation,
+                    ds.synthesis_round,
+                    ds.max_synthesis_rounds,
                     -- The paused agent's LABEL, not just its uuid. The
                     -- test_/demo_ filter below keys on paused_agent_id, which
                     -- is a uuid, so the scheduled probe families
@@ -509,6 +530,10 @@ async def list_all_sessions(
                     "created": created_at or "",
                     "message_count": row["message_count"] or 0,
                     "awaiting_facilitation": bool(row["awaiting_facilitation"]) if "awaiting_facilitation" in row else False,
+                    "synthesis_round": int(row.get("synthesis_round") or 0),
+                    "max_synthesis_rounds": int(
+                        row.get("max_synthesis_rounds") or 5
+                    ),
                 }
 
                 # Parse resolution if present

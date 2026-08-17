@@ -1260,8 +1260,34 @@ class TestConvenienceWrappers:
 
         result = await update_session_phase_async("s1", "antithesis")
 
-        mock_singleton.update_session_phase.assert_awaited_once_with("s1", "antithesis")
+        # synthesis_round defaults to None so the writer COALESCEs and leaves the
+        # stored value alone — callers that do not track rounds are unchanged.
+        mock_singleton.update_session_phase.assert_awaited_once_with(
+            "s1", "antithesis", None
+        )
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_update_session_phase_async_forwards_synthesis_round(
+        self, mock_singleton
+    ):
+        """The round must reach the writer. Before 2026-08-16 it was dropped on
+        both sides, so every row read synthesis_round=0 regardless of how many
+        synthesis messages a session carried."""
+        mock_singleton.update_session_phase = AsyncMock(return_value=True)
+
+        await update_session_phase_async("s1", "synthesis", 2)
+
+        mock_singleton.update_session_phase.assert_awaited_once_with("s1", "synthesis", 2)
+
+    @pytest.mark.asyncio
+    async def test_update_session_phase_async_forwards_round_zero(self, mock_singleton):
+        """0 is a real round, not 'absent'."""
+        mock_singleton.update_session_phase = AsyncMock(return_value=True)
+
+        await update_session_phase_async("s1", "thesis", 0)
+
+        mock_singleton.update_session_phase.assert_awaited_once_with("s1", "thesis", 0)
 
     @pytest.mark.asyncio
     async def test_update_session_reviewer_async(self, mock_singleton):
