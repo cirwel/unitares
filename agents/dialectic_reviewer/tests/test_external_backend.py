@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 from agents.dialectic_reviewer import host_backends as hb
@@ -64,10 +65,16 @@ class _FakeClient:
 
 
 def _patch_openai(client: _FakeClient):
-    """Patch the module the backend imports lazily inside the function body."""
-    import openai
+    """Stub the module the backend imports lazily inside the function body.
 
-    return patch.object(openai, "AsyncOpenAI", lambda **kwargs: client)
+    ``openai`` is a runner-only optional dependency and is NOT installed in CI,
+    so this injects a stub into ``sys.modules`` rather than patching the real
+    package — importing it here would make these tests require a dependency the
+    code under test deliberately imports lazily.
+    """
+    stub = ModuleType("openai")
+    stub.AsyncOpenAI = lambda **kwargs: client  # type: ignore[attr-defined]
+    return patch.dict(sys.modules, {"openai": stub})
 
 
 # --------------------------------------------------------------------------- #
@@ -231,6 +238,18 @@ def test_truncation_is_reported_as_a_budget_problem():
     assert result.text is None
     assert "UNITARES_DIALECTIC_REVIEW_MAX_TOKENS" in (result.error or "")
     assert result.finish_reason == "length"
+
+
+def test_missing_openai_dependency_degrades_instead_of_raising():
+    """``openai`` is a runner-only optional dependency — CI does not install it.
+    Its absence must look like any other backend failure, not an exception."""
+    with patch.dict("os.environ", CONFIGURED, clear=True):
+        with patch.dict(sys.modules, {"openai": None}):
+            result = asyncio.run(hb.call_openai_compat_backend("p"))
+
+    assert result.text is None
+    assert result.backend == "external"
+    assert "call failed" in (result.error or "")
 
 
 def test_default_env_still_routes_to_local_model():
