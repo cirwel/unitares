@@ -174,13 +174,12 @@ It is designed for long-lived coding, research, operations, monitoring, and
 multi-agent processes that can instrument a check-in loop. It is usually not
 worth the overhead for short-lived chat turns.
 
-It answers the state question, not the correctness question: whether an output is
-right or ethical belongs to evals and review, and detecting a process that is
-concealing its behavior requires independent evidence the system does not
-generate on its own. The [scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md)
-draws that boundary precisely. The information-theoretic and ODE formulation in
-the companion paper is a parallel research path, not the deployed policy
-mechanism.
+UNITARES is a state instrument, not an outcome oracle: it
+does not decide whether an output is correct or ethical, and it
+cannot detect deliberate concealment without independent evidence. The
+[scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md) draws that boundary
+precisely. The information-theoretic and ODE formulation in the companion
+paper is a parallel research path, not the deployed policy mechanism.
 
 ## Local control and future federation
 
