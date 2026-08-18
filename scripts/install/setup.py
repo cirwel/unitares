@@ -209,9 +209,14 @@ _CLIENT_TABLE = {
         "config_subpath": ".codex/config.toml",
         "format": "toml",
     },
-    "gemini": {
-        "detect_subpath": ".config/gemini",
-        "config_subpath": ".config/gemini/settings.json",
+    # Google retired the standalone Gemini CLI on 2026-06-18 and moved
+    # individuals onto Antigravity, which keeps its MCP servers in
+    # ~/.gemini/config/mcp_config.json (symlinked from ~/.gemini/antigravity/).
+    # The old ~/.config/gemini path never existed on a real install, so this
+    # entry could not fire; detect the directory Antigravity actually creates.
+    "antigravity": {
+        "detect_subpath": ".gemini/antigravity",
+        "config_subpath": ".gemini/config/mcp_config.json",
         "format": "json",
     },
     "copilot": {
