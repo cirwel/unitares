@@ -8,10 +8,23 @@ numbers that baseline it:
 
   1. Check-in concentration — what share of process_agent_update calls come
      from the top-2 callers (residents). Baseline 2026-06-12: 76%.
-  2. Voluntary KG retrieval — knowledge/search_knowledge_graph calls from
+  2. Agent KG retrieval — knowledge/search_knowledge_graph calls from
      NAMED agents, excluding operator credentials (the dashboard).
-     Baseline: 3 per 14d, and both callers were burn-in probes — real
-     agent-initiated retrieval was zero.
+     Baseline: 3 per 14d, and both callers were burn-in probes.
+
+     WAS "voluntary KG retrieval" and that name was the defect, not the
+     query. "Voluntary" presupposes a baseline in which an agent would-or-
+     would-not call absent context; no such baseline exists, because every
+     call is conditioned on context the operator controls. So a zero here
+     measures what was injected, NOT what agents valued, and reading it as
+     indifference is a category error. (Renamed 2026-08-18, operator-
+     identified. The lever model in the same KG notes already said
+     "hook-initiated, value-sustained - NOT compliance-vs-voluntary"; this
+     metric contradicted it.)
+
+     What the number IS good for: retrieval volume, to size whether a
+     ranking investment has anything to rank. What it CANNOT support: a
+     claim about preference, adoption, or organic use.
   3. Onboard engagement (three honest cuts). `converted` means the agent made
      itself visible through either ceremonial process_agent_update OR the BEAM
      harness's external outcome signal. `ceremonial_converted` preserves the old
@@ -77,7 +90,7 @@ def _snapshot_queries() -> dict:
                        SELECT n FROM calls ORDER BY n DESC LIMIT 2) top2), 0) AS top2
             FROM calls
         """,
-        "voluntary_kg_retrieval": """
+        "agent_kg_retrieval": """
             -- Named agents only; operator credentials (the dashboard) are
             -- operator retrieval, not agent-initiated retrieval.
             SELECT count(*) AS named_searches,
@@ -333,11 +346,11 @@ def main() -> int:
         print(json.dumps(snap, indent=2, default=str))
         return 0
 
-    cc, kg = snap["checkin_concentration"], snap["voluntary_kg_retrieval"]
+    cc, kg = snap["checkin_concentration"], snap["agent_kg_retrieval"]
     oc, op = snap["onboard_conversion"], snap["outcome_pipe_health"]
     print(f"Adoption KPI snapshot — last {args.days}d")
     print(f"  check-ins: {cc['total']} total, top-2 callers {cc['top2_share_pct']}%")
-    print(f"  voluntary KG retrieval (named agents): {kg['named_searches']} calls "
+    print(f"  agent KG retrieval (named agents): {kg['named_searches']} calls "
           f"by {kg['distinct_agents']} agents")
     print(f"  onboard→checkin (process + BEAM external): {oc['converted']}/{oc['minted']} "
           f"({oc['conversion_pct']}%)")

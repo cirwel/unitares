@@ -25,6 +25,52 @@ are interoceptive, and V has no afferent at all. Because those classes imply
 different validation regimes, see **Sensory class split** below before designing
 or scheduling any EISV validation work.
 
+### What the word does NOT claim — added 2026-08-18, operator-identified
+
+The term is retained deliberately: it earns its place as the anti-verdict claim
+above, and the published papers use it. Two things it must never be read as
+asserting.
+
+**1. No interiority.** "Proprioception" names a *self-state estimate*. It is not
+a claim that anything is experienced, felt, or wanted. The system is artificial,
+and that is the category, not a shortfall measured against an organic baseline.
+⛔This matters because borrowed biological vocabulary generates the wrong
+measurements and then the wrong research questions: the retired
+`voluntary_kg_retrieval` KPI presupposed a volition baseline in which an agent
+would-or-would-not call a tool absent context. No such baseline exists — every
+call is conditioned on context the operator controls — so its zero measured what
+was injected, not what agents valued. Renamed to `agent_kg_retrieval` 2026-08-18.
+Before adding any metric, check that its name does not presuppose a state the
+system cannot have.
+
+**2. ⛔The sample is SCHEDULE-selected, not behavior-selected.** Proprioception
+in an organism is continuous and event-driven. Here, *when* an observation exists
+is a property of a plist. Verified 2026-08-18 from `~/Library/LaunchAgents` and
+`core.agent_state`:
+
+| Producer | Cadence | Source |
+|---|---|---|
+| Vigil | `StartInterval=1800` (30 min) | `com.unitares.vigil.plist` |
+| Chronicler | `StartInterval=86400` (daily) | `com.unitares.chronicler.plist` |
+| Sentinel (BEAM) | `KeepAlive=true` (continuous) | `com.unitares.sentinel-beam.plist` |
+| Dialectic canary | `StartCalendarInterval` 08:40 | `com.unitares.dialectic-canary.plist` |
+
+**Scheduled residents emitted 86.8% of all check-ins over the 30 days to
+2026-08-18** (26,333 of 30,331 `core.agent_state` rows — a dated window
+measurement, not a standing total; re-measure before citing). The *content* of
+each check-in is model-authored and does vary; the *existence* of the row is a
+timer firing.
+
+Consequence for validation: any distributional claim over this corpus inherits
+the schedule as a confound. A rate, a base rate, a drift, or an AUC computed on
+it is conditioned on cadence, not on agent behavior, and changing a plist
+interval would move it without anything about agent behavior changing.
+⛔Do not describe such a result as characterizing "the fleet" or "agent
+behavior" without stating the cadence weighting. This is a limitation of the
+sample, not of the instrument, and it is not addressed by measuring harder.
+See also the deployed-vs-target separation below: this is the same discipline
+applied to the sampling frame rather than to enforcement.
+
 ## Deployed posture — corrected 2026-08-10
 
 **As deployed, UNITARES is primarily advisory, but its authenticated circuit
