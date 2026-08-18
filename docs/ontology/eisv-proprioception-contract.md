@@ -55,9 +55,11 @@ is a property of a plist. Verified 2026-08-18 from `~/Library/LaunchAgents` and
 | Sentinel (BEAM) | `KeepAlive=true` (continuous) | `com.unitares.sentinel-beam.plist` |
 | Dialectic canary | `StartCalendarInterval` 08:40 | `com.unitares.dialectic-canary.plist` |
 
-**Scheduled residents emitted 26,333 of 30,331 check-ins over the trailing 30
-days — 86.8% of the corpus.** The *content* of each check-in is model-authored
-and does vary; the *existence* of the row is a timer firing.
+**Scheduled residents emitted 86.8% of all check-ins over the 30 days to
+2026-08-18** (26,333 of 30,331 `core.agent_state` rows — a dated window
+measurement, not a standing total; re-measure before citing). The *content* of
+each check-in is model-authored and does vary; the *existence* of the row is a
+timer firing.
 
 Consequence for validation: any distributional claim over this corpus inherits
 the schedule as a confound. A rate, a base rate, a drift, or an AUC computed on
