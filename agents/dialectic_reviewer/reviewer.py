@@ -114,6 +114,53 @@ def _reviewer_audit_text(provenance: dict[str, Any]) -> str:
     return "; ".join(parts)
 
 
+# Keys worth persisting alongside the verdict. Deliberately an allowlist: the
+# provenance dict is assembled from provider responses, and a denylist would
+# leak any field a future backend adds.
+_PERSISTED_PROVENANCE_KEYS = (
+    "backend",
+    "host_id",
+    "model_requested",
+    "model_used",
+    "models_used",
+    "tokens_used",
+    "cost_usd",
+    "latency_ms",
+    "finish_reason",
+    "fallback_from",
+    "warnings",
+)
+
+
+def _provenance_for_message(provenance: dict[str, Any], *, degraded: bool) -> dict[str, Any]:
+    """Non-secret reviewer provenance to store ON the verdict.
+
+    ``_reviewer_audit_text`` already puts this in the reviewer's check-in
+    ``response_text`` — but response_text is not persisted (3 of 30,063
+    ``agent_state`` rows in 30 days carry it, and 0 of 4.18M audit events carry
+    the reviewer's audit line), so that channel drops the evidence. The
+    ``signature`` column is NOT an alternative: it is the protocol's HMAC
+    attestation (``DialecticMessage.sign`` / ``verify_signatures``).
+
+    ``observed_metrics`` is the surviving persisted slot on the antithesis row.
+    Its readers address named keys (risk_score, coherence, coherence_source,
+    coherence_role), so one namespaced key is inert to them.
+
+    Why it matters: a replay of 14 real theses (2026-08-18) put local-model
+    verdicts 36-50% apart from the deployed codex reviewer's. A verdict from
+    the selected host and a verdict from a degraded fallback are therefore
+    materially different objects, and without this they are indistinguishable
+    in the ledger.
+    """
+    stored = {
+        key: provenance[key]
+        for key in _PERSISTED_PROVENANCE_KEYS
+        if provenance.get(key) is not None
+    }
+    stored["degraded"] = bool(degraded)
+    return stored
+
+
 @dataclass
 class Thesis:
     """Review payload passed at spawn time, including clearly separated paused-
@@ -742,7 +789,19 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
         # umbrella tool (action='antithesis'/'synthesis'). (live-found 2026-06-23)
         await client.call_tool(
             "dialectic",
-            {"action": "antithesis", "session_id": thesis.session_id, "reasoning": verdict.reasoning},
+            {
+                "action": "antithesis",
+                "session_id": thesis.session_id,
+                "reasoning": verdict.reasoning,
+                # Attribution rides the antithesis because it is the reviewer's
+                # own first message and is always written; the synthesis row
+                # joins to it by session_id. See _provenance_for_message.
+                "observed_metrics": {
+                    "reviewer_backend": _provenance_for_message(
+                        provenance, degraded=verdict.degraded
+                    )
+                },
+            },
         )
         # Submit the model-derived verdict — agrees may be False (the whole point).
         #
