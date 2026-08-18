@@ -17,7 +17,7 @@ a four-score state estimate, and returns a policy decision with a named reason.
 It is a self-hosted MCP/HTTP service you run yourself — not an agent framework,
 not a hosted platform.
 
-**Status:** v2.18.0, continuously operated since November 2025 under a single
+**Status:** v2.18.0. Continuously operated since November 2025 under a single
 operator: 4,573,890 audit and telemetry events, 71,141 EISV state observations,
 and six long-running resident agents, one of them on separate hardware.
 [Evidence and limits](#evidence-and-limits) scopes every number on this page.
