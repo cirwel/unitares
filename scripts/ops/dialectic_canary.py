@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
-"""Dialectic one-call canary — the positive control for the #1387 kill-gate read.
+"""Dialectic one-call canary — end-to-end liveness probe for the review surface.
 
-Why this exists: the adoption kill-gate reads "organic request_review usage
-stayed at zero" as a disinterest signal. That zero has now been produced three
+Originally the positive control for the #1387 adoption kill-gate. That gate is
+RETIRED (2026-08-18, operator): a usage count may retire an instrument, never a
+capability, because a zero cannot distinguish never-surfaced from not-reachable
+from not-recorded from genuinely-unused. See "Measurement authority" in
+CLAUDE.md / AGENTS.md.
+
+The probe survives the gate on its own merit, which is the whole reason to keep
+it: it is the only thing that exercises the one-call review path end-to-end on a
+schedule, and it has caught real breakage three times. Its output is telemetry
+about whether the surface works. It carries no authority to remove anything.
+
+The history it was built from: that gate's zero was read as a disinterest signal. That zero has now been produced three
 times by defects in the surface itself, never once by demonstrated disinterest:
 #1414 (auth resolved the public handle, real callers refused), #1424 (the
 /mcp+/sse transport was never instrumented, real usage invisible), #1442 (the
@@ -210,12 +220,12 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
                 "client_session_id": csid,
                 "issue_description": (
                     "Scheduled canary probe: verifying the one-call review "
-                    "surface end-to-end (#1387 positive control)."
+                    "surface end-to-end."
                 ),
                 "reasoning": (
-                    "This is the daily positive control for the adoption "
-                    "kill-gate. A zero organic count is only evidence of "
-                    "disinterest if this exact call path works."
+                    "Daily liveness probe. Establishes that this exact call "
+                    "path works, so that any reading of organic usage "
+                    "counts is not silently measuring broken plumbing."
                 ),
                 "root_cause": "canary probe — no real incident",
                 "proposed_conditions": ["log the probe result", "exit"],
