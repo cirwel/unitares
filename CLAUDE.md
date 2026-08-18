@@ -44,6 +44,55 @@ python3 scripts/dev/session_end_stash.py
 
 <!-- BEGIN SHARED CONTRACT — keep byte-identical across AGENTS.md and CLAUDE.md; scripts/dev/check-shared-contract.sh enforces parity -->
 
+## Measurement authority — what a number may decide
+
+**A usage count may retire an instrument. It may never retire a capability.**
+
+A zero cannot distinguish four states, and only the last is "no value":
+
+1. **Never surfaced** — nothing put it in a caller's context.
+2. **Not reachable** — it errored, or was built and never wired.
+3. **Not recorded** — the instrument was blind to the transport.
+4. Surfaced, reachable, recorded, and genuinely unused.
+
+Operator, 2026-08-01, on the #1387 adoption gate: *"i think our kill criterion
+too aggressive because frequently features are not wired up or buggy … id
+rather work and improve on things rather than killing everything."* That gate's
+zero was produced three times in one month by surface defects — #1414 (auth
+rejected the caller while reporting `tier: strong`), #1424 (`audit.tool_usage`
+never recorded `/mcp` or `/sse` at all), #1442 (timeout) — and never once by
+real disinterest.
+
+**Rules:**
+
+- ⛔ **Never propose removing, deprecating, or "killing" a capability on a usage
+  count.** Report the count as telemetry and say what it does not establish.
+- ⛔ **"Voluntary" / "unprompted" / "organic" usage is not a measurable
+  quantity.** Every tool call is conditioned on context the operator controls,
+  so a zero measures what was injected, not what was valued. A metric whose
+  name presupposes agent volition is measuring a state the system cannot have.
+  See `scripts/dev/adoption_kpi.py` and the *What the word does NOT claim*
+  section of `docs/ontology/eisv-proprioception-contract.md`.
+- **Before citing any zero as evidence, name which of the four states above you
+  ruled out, and how.** "The producer ran and found nothing" and "the producer
+  never ran" are different findings; do not report them with the same sentence.
+- **A measurement whose only purpose is to authorize a kill should be deleted.**
+  A measurement that informs — volume, trend, bounce, concentration — stays, as
+  telemetry, with no removal authority attached to it.
+- **A kill retires the LEVER, not the goal.** A fair zero banks the datum and
+  moves to the next lever; it does not close the track.
+- **State a deciding standard as a choice before applying it, not afterwards as
+  "the method."** If a threshold, control, or noise floor is what turns the data
+  into a verdict, it is a judgement call and belongs to the operator. Choosing
+  it silently and reporting only the conclusion imports an evaluative frame that
+  was never agreed.
+
+**Exempt: pre-registered scientific stop rules.** These constrain the *analyst*
+against selective re-runs, not the feature, and are the opposite of the failure
+above. Do not weaken, re-run, or "refresh" them — see
+`docs/proposals/eisv-outcome-grounding-stop-rule-v0.md` and the individuality-v2
+criterion honoured 2026-07-30.
+
 ## Project
 
 UNITARES governance MCP server. A behavioral governance framework for AI agents (EISV state vectors, coherence tracking, dialectic resolution, knowledge graph). The information-theoretic / free-energy formulation is the research target in Paper v6, not the live decision path — which is behavioral state estimation.

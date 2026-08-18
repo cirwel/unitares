@@ -1,13 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  launchd manifest for the dialectic one-call canary (#1387 positive control).
+  launchd manifest for the dialectic one-call canary (end-to-end liveness probe).
 
   Runs scripts/ops/dialectic_canary.py once a day: onboards a canary_ identity
   over /mcp, exercises one-call request_review end-to-end, ground-truths the
   session + thesis rows in Postgres, appends one JSONL line to
-  data/logs/dialectic_canary.jsonl. The #1387 kill-gate read is only valid when
-  this canary is green through the measurement window (organic zero + red
-  canary = instrument failure, clock restarts; it is not a kill signal).
+  data/logs/dialectic_canary.jsonl. The #1387 kill-gate it was built for is
+  RETIRED (2026-08-18) — a usage count may retire an instrument, never a
+  capability. The probe stays because it is the only scheduled end-to-end
+  exercise of the review path, and a red canary means the surface is broken.
+  It carries no authority to remove anything.
 
   Canary identities are excluded from adoption_kpi.py by the label prefix
   `canary_` — the script asserts the prefix after onboard and fails loudly if
