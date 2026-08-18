@@ -35,6 +35,14 @@ for a in "$@"; do
 done
 
 H="$HOME"
+
+# See the dispatch-beam rows below. Deliberately a fallback rather than a hard
+# path: this table is read by `cirwel status` on every invocation, and a row
+# pointing at a worktree that has not been created yet would report a confident
+# wrong verdict rather than an honest one.
+DISPATCH_TREE="$H/projects/dispatch_beam-deploy"
+[ -d "$DISPATCH_TREE" ] || DISPATCH_TREE="$H/projects/dispatch_beam"
+
 # name | launchd-label | repo_path | subdir | pickup | port
 # label "" = no launchd service. subdir "" = repo root. port "" = no health probe.
 COMPONENTS=(
@@ -59,8 +67,12 @@ COMPONENTS=(
 # no special casing. Pointed here rather than at the dev checkout so the verdict
 # describes what deploy-bridge.sh actually deploys.
 "discord-bridge|com.unitares.discord-bridge|$H/projects/unitares-discord-bridge-deploy||restart|"
-"dispatch-beam|com.cirwel.dispatch-beam|$H/projects/dispatch_beam||restart|"
-"dispatch-beam-codex|com.cirwel.dispatch-beam-codex|$H/projects/dispatch_beam||restart|"
+# Both dispatch bots are the same code under two tokens. They serve from a
+# pinned deploy worktree once migrate-dispatch-beam-deploy.sh has run, and from
+# the dev checkout before that — resolved below so this row never describes a
+# path that does not exist on the machine reading it.
+"dispatch-beam|com.cirwel.dispatch-beam|$DISPATCH_TREE||restart|"
+"dispatch-beam-codex|com.cirwel.dispatch-beam-codex|$DISPATCH_TREE||restart|"
 "gov-plugin||$H/projects/unitares-governance-plugin||live-from-checkout|"
 # Was "library|" — which renders n/a, documented as "no local long-running
 # process". That was FALSE: com.unitares.openai-governance-proxy has run this

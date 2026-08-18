@@ -63,6 +63,13 @@ deploy_script_for() {
     # to restart. It was reachable only by hand until 2026-08-17, which meant
     # `cirwel update` reported it BEHIND and then left it that way.
     gov-plugin)      echo "$OPS_DIR/deploy-gov-plugin.sh" ;;
+    # Two components, ONE script: the claude and codex bots are the same code in
+    # one worktree under two tokens. This loop calls the script once per BEHIND
+    # component, so deploy-dispatch-beam.sh is idempotent per label — the second
+    # invocation finds that instance already running the target SHA and skips
+    # the restart rather than bouncing both bots twice.
+    dispatch-beam|dispatch-beam-codex)
+                     echo "$OPS_DIR/deploy-dispatch-beam.sh" ;;
     *)               echo "" ;;
   esac
 }
