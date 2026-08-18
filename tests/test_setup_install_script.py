@@ -244,7 +244,7 @@ def test_ensure_secrets_file_does_not_overwrite_existing(setup_mod, tmp_path):
 
 
 def test_detect_clients_finds_existing_paths(setup_mod, tmp_path):
-    # Build a fake home with claude_code + codex installed; gemini and
+    # Build a fake home with claude_code + codex installed; antigravity and
     # copilot absent.
     fake_home = tmp_path / "home"
     (fake_home / ".claude").mkdir(parents=True)
@@ -252,8 +252,19 @@ def test_detect_clients_finds_existing_paths(setup_mod, tmp_path):
     detected = setup_mod.detect_clients(fake_home)
     assert "claude_code" in detected
     assert "codex" in detected
-    assert "gemini" not in detected
+    assert "antigravity" not in detected
     assert "copilot" not in detected
+
+
+def test_detect_clients_finds_antigravity_at_its_real_path(setup_mod, tmp_path):
+    """The retired Gemini CLI entry pointed at ~/.config/gemini, which no real
+    install creates, so it could never fire. Antigravity's own directory does."""
+    fake_home = tmp_path / "home"
+    (fake_home / ".gemini" / "antigravity").mkdir(parents=True)
+    detected = setup_mod.detect_clients(fake_home)
+    assert "antigravity" in detected
+    assert detected["antigravity"]["config_path"].endswith(".gemini/config/mcp_config.json")
+    assert detected["antigravity"]["format"] == "json"
 
 
 def test_detect_clients_returns_config_paths(setup_mod, tmp_path):

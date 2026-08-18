@@ -14,7 +14,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**123 flags.**
+**127 flags.**
 
 | Flag | Default | Purpose | Read at |
 |---|---|---|---|
@@ -57,12 +57,16 @@ index; that one is the curated decision record.
 | `UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S` | `'420'` | Run Claude safely and return exact provider-reported model provenance | agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_DIALECTIC_CODEX_TIMEOUT_S` | `'420'` | Run the review on Codex (``codex exec``, ChatGPT-subscription CLI) — the capable-heterogeneous reviewer path (2026-07-02 planted-flaw probe: | agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_DIALECTIC_DISPATCHER_UUID` | `(required)` | The standing dispatcher identity's UUID (operator-provisioned) | src/mcp_handlers/dialectic/governed_spawn.py |
+| `UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV` | `''` | Run the review on an operator-configured OpenAI-compatible endpoint | agents/dialectic_reviewer/host_backends.py |
+| `UNITARES_DIALECTIC_EXTERNAL_BASE_URL` | `''` | Run the review on an operator-configured OpenAI-compatible endpoint | agents/dialectic_reviewer/host_backends.py |
+| `UNITARES_DIALECTIC_EXTERNAL_MODEL` | `''` | Run the review on an operator-configured OpenAI-compatible endpoint | agents/dialectic_reviewer/host_backends.py |
+| `UNITARES_DIALECTIC_EXTERNAL_TIMEOUT_S` | `'180'` | Run the review on an operator-configured OpenAI-compatible endpoint | agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_DIALECTIC_GOVERNED_SPAWN` | `'0'` | Opt-in gate (default OFF) | src/mcp_handlers/dialectic/governed_spawn.py |
 | `UNITARES_DIALECTIC_ORCHESTRATED_REVIEW` | `'0'` | Opt-in gate for routing reviews through the orchestrator (default OFF) | src/mcp_handlers/dialectic/orchestrator_dispatch.py |
 | `UNITARES_DIALECTIC_REVIEWER_HOST` | `''` | Route to the configured reviewer backend, falling back to the free local model | agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_DIALECTIC_REVIEWER_TIMEOUT` | `(required)` | Timeout budget for a structured dialectic reviewer call | src/mcp_handlers/support/llm_delegation.py |
 | `UNITARES_DIALECTIC_REVIEW_BUDGET` | `(required)` | Wall-clock cap for the inline synthetic review (antithesis + synthesis) | src/mcp_handlers/dialectic/handlers.py |
-| `UNITARES_DIALECTIC_REVIEW_MAX_TOKENS` | `'1024'` | Run the local heterogeneous model in THIS process (not via the server's call_model tool, whose 30s timeout is shorter than gemma4's 43–70s b | agents/dialectic_reviewer/reviewer.py |
+| `UNITARES_DIALECTIC_REVIEW_MAX_TOKENS` | `'1024'` | Run the review on an operator-configured OpenAI-compatible endpoint | agents/dialectic_reviewer/host_backends.py, agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_DIALECTIC_SYNTHETIC_REVIEWER` | `'1'` | Whether submit_thesis auto-completes a no-live-reviewer session via the local synthetic reviewer instead of leaving it to hang at awaiting_f | src/mcp_handlers/dialectic/handlers.py |
 | `UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT` | `'1'` | — | src/mcp_handlers/dialectic/session.py |
 | `UNITARES_DISABLE_PLUGINS` | `(required)` | Load every registered ``governance_mcp.plugins`` entry point | src/plugin_loader.py |
