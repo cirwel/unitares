@@ -70,7 +70,7 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `outcome_correlation` | `src/mcp_handlers/observability/outcome_events.py:719 handle_outcome_correlation` | `src/mcp_handlers/schemas/observability.py:87 OutcomeCorrelationParams` | 30s | — |
 | `outcome_event` | `src/mcp_handlers/observability/outcome_events.py:579 handle_outcome_event` | `src/mcp_handlers/schemas/core.py:467 OutcomeEventParams` | 15s | — |
 | `process_agent_update` | `src/mcp_handlers/core.py:436 handle_process_agent_update` | `src/mcp_handlers/schemas/core.py:303 ProcessAgentUpdateParams` | 60s | — |
-| `reassign_reviewer` | `src/mcp_handlers/dialectic/handlers.py:2857 handle_reassign_reviewer` | `src/mcp_handlers/schemas/dialectic.py:149 ReassignReviewerParams` | 15s | — |
+| `reassign_reviewer` | `src/mcp_handlers/dialectic/handlers.py:2882 handle_reassign_reviewer` | `src/mcp_handlers/schemas/dialectic.py:149 ReassignReviewerParams` | 15s | — |
 | `record_progress_pulse` | `src/mcp_handlers/resident_progress.py:20 handle_record_progress_pulse` | — | 5s | — |
 | `request_dialectic_review` | `src/mcp_handlers/dialectic/handlers.py:1127 handle_request_dialectic_review` | `src/mcp_handlers/schemas/dialectic.py:5 RequestDialecticReviewParams` | 105s | — |
 | `research_registry` | `src/mcp_handlers/research_registry.py:66 handle_research_registry` | `src/mcp_handlers/schemas/research.py:13 ResearchRegistryParams` | 15s | — |
@@ -142,7 +142,7 @@ runs (`from→to`, filled only when the destination is absent).
 | `get` | `src/mcp_handlers/dialectic/handlers.py:1496 handle_get_dialectic_session` | — |
 | `list` | `src/mcp_handlers/dialectic/handlers.py:1716 handle_list_dialectic_sessions` | — |
 | `quick` | `src/mcp_handlers/dialectic/handlers.py:333 handle_quick_dialectic` | — |
-| `reassign` | `src/mcp_handlers/dialectic/handlers.py:2857 handle_reassign_reviewer` | — |
+| `reassign` | `src/mcp_handlers/dialectic/handlers.py:2882 handle_reassign_reviewer` | — |
 | `request` | `src/mcp_handlers/dialectic/handlers.py:1127 handle_request_dialectic_review` | — |
 | `synthesis` | `src/mcp_handlers/dialectic/handlers.py:2483 handle_submit_synthesis` | — |
 | `thesis` | `src/mcp_handlers/dialectic/handlers.py:2027 handle_submit_thesis` | — |
