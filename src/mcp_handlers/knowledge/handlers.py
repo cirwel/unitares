@@ -2767,11 +2767,20 @@ def _requested_non_owner_edits(
         }.items()
         if field_value is not None
     ]
-    if (
-        request.resolution_note is not None
-        and request.status not in allowed_statuses
-    ):
-        requested_edits.append("resolution_notes")
+    # resolution_notes is deliberately NOT restricted. It used to be, unless
+    # the same call also moved status into allowed_statuses — so a non-owner
+    # wanting to annotate a high-severity entry had exactly two options: close
+    # it, or leave it wrong. That is a bad trade whenever the entry is still
+    # true as a class record and only its instance lines have gone stale, and
+    # it is a live cause of stale-open entries: two constraint-drift instances
+    # sat marked "STILL OPEN" and "NOT yet applied to prod" for days after both
+    # were repaired, because correcting them would have meant closing a pattern
+    # that remains correct.
+    #
+    # Appends are safe to widen because they are additive, never destructive,
+    # and now carry the writer's id (see _apply_update_text_fields). The fields
+    # that can rewrite the author's meaning — summary, details, severity, type,
+    # tags — stay owner-only.
     return requested_edits
 
 
@@ -2854,6 +2863,8 @@ def _apply_update_text_fields(
     request: _KnowledgeUpdateRequest,
     discovery: DiscoveryNode,
     updates: dict[str, Any],
+    writer_agent_id: Optional[str] = None,
+    writer_is_owner: bool = True,
 ) -> None:
     """Apply summary, details, and resolution-note edits."""
     if request.summary is not None:
@@ -2866,8 +2877,14 @@ def _apply_update_text_fields(
             if request.details is not None
             else (discovery.details or "")
         ).rstrip()
+        # Attribution is what makes a cross-agent append safe. Before this,
+        # every appended note carried a timestamp and nothing else, so a
+        # non-owner's annotation was indistinguishable from the author's own
+        # and a reader had no way to weigh it. Owner writes stay unmarked so
+        # the common case reads unchanged.
+        byline = "" if writer_is_owner else f", by {writer_agent_id}"
         note_block = (
-            f"Resolution notes ({_utc_now_iso()}):\n"
+            f"Resolution notes ({_utc_now_iso()}{byline}):\n"
             f"{request.resolution_note}"
         )
         updates["details"] = (
@@ -2904,7 +2921,9 @@ def _apply_update_metadata_fields(
 
 
 def _build_discovery_updates(
-    request: _KnowledgeUpdateRequest, discovery: DiscoveryNode
+    request: _KnowledgeUpdateRequest,
+    discovery: DiscoveryNode,
+    writer_agent_id: Optional[str] = None,
 ) -> tuple[dict[str, Any], Optional[str]]:
     """Build and validate the backend update payload."""
     updates: dict[str, Any] = {"updated_at": _utc_now_iso()}
@@ -2923,7 +2942,15 @@ def _build_discovery_updates(
         if normalized_status == "resolved":
             updates["resolved_at"] = _utc_now_iso()
 
-    _apply_update_text_fields(request, discovery, updates)
+    _apply_update_text_fields(
+        request,
+        discovery,
+        updates,
+        writer_agent_id=writer_agent_id,
+        writer_is_owner=(
+            writer_agent_id is None or discovery.agent_id == writer_agent_id
+        ),
+    )
     _apply_update_metadata_fields(request, updates)
     return updates, normalized_status
 
@@ -2967,7 +2994,9 @@ async def _execute_discovery_update(
 
     agent_id = _resolve_update_writer(request, discovery)
     _authorize_high_severity_update(request, discovery, agent_id)
-    updates, normalized_status = _build_discovery_updates(request, discovery)
+    updates, normalized_status = _build_discovery_updates(
+        request, discovery, writer_agent_id=agent_id
+    )
 
     updated = await graph.update_discovery(request.discovery_id, updates)
     if not updated:
