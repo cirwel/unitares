@@ -19,6 +19,18 @@ if [ -x scripts/dev/check-repo-scope.sh ]; then
     }
 fi
 
+# Fleet-identity guard — the other neutrality axis: no operator's resident
+# names hardcoded in shipped source (they come from UNITARES_RESIDENTS).
+# Reports the known couplings; fails only on a NEW one.
+if [ -f scripts/dev/check_fleet_identity_leak.py ]; then
+    python3 scripts/dev/check_fleet_identity_leak.py || {
+        echo ""
+        echo "   Read the roster from UNITARES_RESIDENTS instead of naming a resident."
+        echo "   Provenance in a COMMENT is fine and is not flagged."
+        exit 1
+    }
+fi
+
 # HARD LIMIT: Total tracked markdown files.
 # Uses git ls-files so worktrees, caches, and gitignored dirs are
 # automatically excluded — no brittle find-exclusion list needed.

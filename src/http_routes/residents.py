@@ -26,19 +26,40 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 
-# Default silence thresholds in seconds — agents that go longer than this without
-# a check-in are flagged as "silent" on the dashboard. Only used for agents the
-# operator hasn't configured explicitly.
-_DEFAULT_RESIDENT_SILENCE_SECONDS: Dict[str, int] = {
-    # Long cron cadence agents get generous thresholds.
-    "vigil": 40 * 60,      # 30-min cron + buffer
-    "sentinel": 15 * 60,   # 5-min continuous + 10min tolerance
-    "lumen": 10 * 60,      # continuous poll
-    # Event-driven agents may be quiet for a long time and still be healthy.
-    "watcher": 24 * 3600,
-    # Daily scraper — 24hr cadence + 6hr buffer before silence is flagged.
-    "chronicler": 30 * 3600,
-}
+# Per-label silence thresholds in seconds — agents quiet for longer than this
+# are flagged "silent" on the dashboard. DEPLOYMENT CONFIG, empty by default,
+# same contract as UNITARES_RESIDENTS: a fresh install inherits no operator's
+# residents and no operator's cron cadences.
+#
+# Format: ``UNITARES_RESIDENT_SILENCE_SECONDS="vigil=2400,sentinel=900"``
+# (label=seconds, comma-separated, labels matched case-insensitively).
+#
+# This is a FALLBACK and should shrink to nothing. The generic path is a
+# ``cadence.*`` tag on the agent, which drives the threshold with no label
+# lookup at all; this map only covers agents not yet carrying one. Tag the
+# agent instead of adding an entry here.
+_SILENCE_ENV = "UNITARES_RESIDENT_SILENCE_SECONDS"
+
+
+def _load_resident_silence_seconds() -> Dict[str, int]:
+    """Parse ``label=seconds`` pairs from the environment. Bad pairs are skipped."""
+    raw = os.getenv(_SILENCE_ENV, "").strip()
+    if not raw:
+        return {}
+    out: Dict[str, int] = {}
+    for pair in raw.split(","):
+        label, _, value = pair.partition("=")
+        label = label.strip().lower()
+        try:
+            seconds = int(value.strip())
+        except ValueError:
+            continue
+        if label and seconds > 0:
+            out[label] = seconds
+    return out
+
+
+_DEFAULT_RESIDENT_SILENCE_SECONDS: Dict[str, int] = _load_resident_silence_seconds()
 
 
 def _resolve_resident_labels(mcp_server_obj) -> tuple[list[str], str]:
@@ -48,9 +69,20 @@ def _resolve_resident_labels(mcp_server_obj) -> tuple[list[str], str]:
     1. ``UNITARES_RESIDENT_AGENTS`` env var — comma-separated labels  → "env"
     2. Agent metadata with a ``resident`` attribute set to True       → "metadata"
     3. ``KNOWN_RESIDENT_LABELS`` ∩ labels present in agent_metadata   → "known-residents"
-       (the canonical resident list used by grounding/class_indicator
-       is the source of truth; dashboard reuses it rather than re-declaring)
+       (the roster declared in ``UNITARES_RESIDENTS`` is the source of truth;
+       the dashboard reuses it rather than re-declaring it per-surface)
     4. Empty list                                                     → "none"
+
+    Two env vars appear above and they are NOT the same knob:
+
+    * ``UNITARES_RESIDENTS`` is the deployment roster — who the residents are,
+      which calibration class each gets, and (being an ordered list) the order
+      they are presented in. Most deployments set only this.
+    * ``UNITARES_RESIDENT_AGENTS`` is a route-local override for *this*
+      endpoint, for when the dashboard should show a different set than the
+      calibration roster. Leave it unset unless you want them to diverge.
+
+    See docs/operations/resident-roster.md.
 
     Returns ``(labels, source)`` so the caller can label the response without
     re-deriving the precedence state.
@@ -78,11 +110,21 @@ def _resolve_resident_labels(mcp_server_obj) -> tuple[list[str], str]:
         if label and label in KNOWN_RESIDENT_LABELS:
             present.add(label)
     if present:
-        # Canonical order is stable (Vigil, Sentinel, Watcher, Steward,
-        # Chronicler, Lumen) so dashboard layout doesn't jitter when the dict
-        # ordering shifts.
-        canonical_order = ["Vigil", "Sentinel", "Watcher", "Steward", "Chronicler", "Lumen"]
-        ordered = [lbl for lbl in canonical_order if lbl in present]
+        # Order comes from the roster as the deployment DECLARED it in
+        # UNITARES_RESIDENTS, so the dashboard doesn't jitter when dict
+        # ordering shifts and no operator's names are baked in here.
+        #
+        # This used to filter through a hardcoded list of six labels. Any
+        # deployment whose residents were named anything else resolved to an
+        # EMPTY list reported with source "known-residents" — a roster that
+        # silently vanished while the response still read like a success.
+        from src.grounding.class_indicator import KNOWN_RESIDENT_ORDER
+
+        ordered = [lbl for lbl in KNOWN_RESIDENT_ORDER if lbl in present]
+        # Defensive: a label can only reach `present` by being in the roster,
+        # so this should be empty. Append rather than drop if that ever stops
+        # being true — losing a resident must not be the quiet outcome.
+        ordered += sorted(present.difference(ordered))
         return ordered, "known-residents"
 
     return [], "none"
@@ -439,8 +481,8 @@ async def http_residents(request):
                 silence_seconds = max(0.0, now_ts - last_dt.timestamp())
 
             # Prefer tag-driven cadence (generic, label-independent); fall
-            # back to the hardcoded per-label default for agents not yet
-            # migrated to ``cadence.*`` tags.
+            # back to the deployment-declared per-label map for agents not yet
+            # migrated to ``cadence.*`` tags. Both empty => 30 min.
             silence_threshold: int = 30 * 60
             meta_tags = getattr(meta, "tags", None) or []
             from src.background_tasks import cadence_from_tags

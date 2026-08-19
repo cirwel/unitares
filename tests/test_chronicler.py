@@ -1003,8 +1003,38 @@ class TestChroniclerAsKnownResident:
         from src.grounding.class_indicator import KNOWN_RESIDENT_LABELS
         assert "Chronicler" in KNOWN_RESIDENT_LABELS
 
-    def test_chronicler_silence_threshold_configured(self):
-        from src.http_api import _DEFAULT_RESIDENT_SILENCE_SECONDS
-        # Daily cadence → must be at least 24hr so a normal gap doesn't
-        # get flagged as silence.
-        assert _DEFAULT_RESIDENT_SILENCE_SECONDS["chronicler"] >= 24 * 3600
+    def test_daily_cadence_tag_yields_a_generous_silence_threshold(self):
+        # A daily-cadence resident must not be flagged silent for a normal
+        # 24hr gap. The generic, label-independent path is the ``cadence.*``
+        # tag — Chronicler carries ``cadence.24hr`` in production — and the
+        # threshold is 2x cadence, so one missed cycle is tolerated.
+        from src.background_tasks import cadence_from_tags
+
+        cadence = cadence_from_tags(["cadence.24hr"])
+        assert cadence is not None
+        assert cadence * 2 >= 24 * 3600
+
+    def test_declared_silence_override_is_honoured(self, monkeypatch):
+        # Fallback for residents not yet carrying a cadence tag. This map used
+        # to be a hardcoded dict of this operator's five residents in src/;
+        # it is deployment config now, empty by default, so a fresh install
+        # inherits none of them.
+        from src.http_routes.residents import _load_resident_silence_seconds
+
+        monkeypatch.delenv("UNITARES_RESIDENT_SILENCE_SECONDS", raising=False)
+        assert _load_resident_silence_seconds() == {}
+
+        monkeypatch.setenv(
+            "UNITARES_RESIDENT_SILENCE_SECONDS", "chronicler=108000, vigil=2400"
+        )
+        parsed = _load_resident_silence_seconds()
+        assert parsed["chronicler"] >= 24 * 3600
+        assert parsed["vigil"] == 2400
+
+    def test_malformed_silence_pairs_are_skipped_not_fatal(self, monkeypatch):
+        from src.http_routes.residents import _load_resident_silence_seconds
+
+        monkeypatch.setenv(
+            "UNITARES_RESIDENT_SILENCE_SECONDS", "chronicler=abc,,vigil=2400,x=-5"
+        )
+        assert _load_resident_silence_seconds() == {"vigil": 2400}

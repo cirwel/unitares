@@ -83,29 +83,49 @@ class TestResolveResidentLabels:
         assert set(labels) == {"Vigil", "Sentinel"}
         assert source == "known-residents"
 
-    def test_known_residents_preserves_canonical_order(self):
-        # Order should be canonical (Vigil, Sentinel, Watcher, Steward,
-        # Chronicler, Lumen), not metadata-dict insertion order, so the
-        # dashboard layout is stable.
+    def test_order_follows_the_declared_roster(self):
+        # Order is the order the deployment declared in UNITARES_RESIDENTS —
+        # not metadata-dict insertion order (so layout is stable) and not a
+        # hardcoded list of one operator's residents (so every deployment
+        # gets a stable layout, not just this one). conftest declares
+        # "Lumen,Vigil,Sentinel,Watcher,Steward,Chronicler".
         server = SimpleNamespace(agent_metadata={
+            "a3": _meta("Watcher"),
             "a1": _meta("Lumen"),
             "a2": _meta("Vigil"),
-            "a3": _meta("Watcher"),
         })
         labels, source = _resolve_resident_labels(server)
-        assert labels == ["Vigil", "Watcher", "Lumen"]
+        assert labels == ["Lumen", "Vigil", "Watcher"]
         assert source == "known-residents"
 
-    def test_chronicler_sorts_between_steward_and_lumen(self):
-        # Chronicler is a daily scraper resident; it belongs with the other
-        # background residents, before Lumen (which is the embodied agent).
+    def test_order_is_independent_of_metadata_insertion_order(self):
+        # Same roster, different dict order in, same order out.
+        first = SimpleNamespace(agent_metadata={
+            "a1": _meta("Lumen"), "a2": _meta("Chronicler"), "a3": _meta("Steward"),
+        })
+        second = SimpleNamespace(agent_metadata={
+            "a1": _meta("Steward"), "a2": _meta("Lumen"), "a3": _meta("Chronicler"),
+        })
+        assert _resolve_resident_labels(first)[0] == ["Lumen", "Steward", "Chronicler"]
+        assert _resolve_resident_labels(second)[0] == ["Lumen", "Steward", "Chronicler"]
+
+    def test_roster_of_names_this_operator_does_not_use_survives(self, monkeypatch):
+        # REGRESSION. Tier 3 used to filter the roster through a hardcoded
+        # ["Vigil", "Sentinel", "Watcher", "Steward", "Chronicler", "Lumen"],
+        # so a deployment whose residents were named anything else resolved to
+        # an EMPTY list still reported with source "known-residents" — the
+        # roster vanished while the response read like a success. A fresh
+        # adopter's residents must survive intact and in declared order.
+        import src.grounding.class_indicator as ci
+
+        monkeypatch.setattr(ci, "KNOWN_RESIDENT_LABELS", frozenset({"Kestrel", "Aurora", "Tern"}))
+        monkeypatch.setattr(ci, "KNOWN_RESIDENT_ORDER", ("Kestrel", "Aurora", "Tern"))
         server = SimpleNamespace(agent_metadata={
-            "a1": _meta("Lumen"),
-            "a2": _meta("Chronicler"),
-            "a3": _meta("Steward"),
+            "a1": _meta("Tern"),
+            "a2": _meta("Kestrel"),
         })
         labels, source = _resolve_resident_labels(server)
-        assert labels == ["Steward", "Chronicler", "Lumen"]
+        assert labels == ["Kestrel", "Tern"]
         assert source == "known-residents"
 
     def test_empty_when_fleet_has_no_known_residents(self):
