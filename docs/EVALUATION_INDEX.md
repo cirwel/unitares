@@ -121,7 +121,14 @@ Compact run provenance and all 12 overall rows are preserved in
 
 | Artifact | What it labels | Finding | Freshness |
 |---|---|---|---|
-| [`evaluation/dialectic-reviewer-labels.md`](evaluation/dialectic-reviewer-labels.md) ✓ | Every substantive non-canary `antithesis` message (n=97), 5-way: refutes / concurs-with-conditions / ratifies / formulaic / non-verdict | Only **42.3%** substantively refute; **38.1% is templated pseudo-disagreement**; 4 rows are parse failures defaulting to disagreement. Rubber-stamping is 6.2% — the smallest failure mode, not the largest | labelled 2026-08-19 |
+| [`evaluation/dialectic-reviewer-labels.md`](evaluation/dialectic-reviewer-labels.md) ✓ | Every substantive non-canary `antithesis` message (n=97), 5-way: refutes / concurs-with-conditions / ratifies / formulaic / non-verdict | **Split by the 2026-07-02 Codex-reviewer activation.** Pre (n=76): 31.6% refute, **47.4% templated pseudo-disagreement**. Post (n=21): **81.0% refute, 4.8% formulaic**. Rubber-stamping never exceeds 6.6% in either era | labelled 2026-08-19 |
+
+⛔**Never quote the pooled distribution.** It straddles an instrument change —
+`UNITARES_DIALECTIC_REVIEWER_HOST=codex` was activated 2026-07-02 and gemma4
+became the degraded fallback. The pooled "38.1% formulaic" is a **pre-fix**
+figure and must not be reported as current. Post-fix n=21 is small; the split is
+by date as a proxy for backend, since no per-message model attribution existed
+before PR #1725.
 
 ⛔**A naive `agrees=false` read of that corpus is wrong by ~2x.** "Did not agree"
 labels 82 of 97 as disagreement; only 41 engage. `core.dialectic_messages.agrees`

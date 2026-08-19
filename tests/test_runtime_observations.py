@@ -130,19 +130,39 @@ class TestDialecticLabelSetIntegrity:
         for r in self._rows():
             assert r["label"] in allowed, f"undocumented label {r['label']!r}"
 
-    def test_counts_match_the_published_distribution(self):
-        """The doc quotes shares; if the data moves, the doc must move with it."""
+    def test_every_row_records_its_era(self):
+        """The corpus straddles the 2026-07-02 reviewer-backend change.
+
+        Without the era on each row, the only reproducible number is the pooled
+        one, and the pooled one averages two different instruments.
+        """
+        for r in self._rows():
+            assert r["era"] in {"pre_codex_reviewer", "post_codex_reviewer"}
+            assert r["message_date"], f"message {r['message_id']} has no date"
+            expected = (
+                "post_codex_reviewer" if r["message_date"] >= "2026-07-02"
+                else "pre_codex_reviewer"
+            )
+            assert r["era"] == expected, f"message {r['message_id']}: era/date disagree"
+
+    def test_published_split_matches_the_data(self):
+        """The doc quotes per-era counts; if the data moves, the doc must too."""
         from collections import Counter
         from pathlib import Path
 
-        counts = Counter(r["label"] for r in self._rows())
+        rows = self._rows()
+        pre = Counter(r["label"] for r in rows if r["era"] == "pre_codex_reviewer")
+        post = Counter(r["label"] for r in rows if r["era"] == "post_codex_reviewer")
         doc = (
             Path(__file__).resolve().parents[1]
             / "docs/evaluation/dialectic-reviewer-labels.md"
         ).read_text()
 
-        assert f"n={sum(counts.values())}" in doc
-        for label, n in counts.items():
-            assert f"| `{label}` | {n} |" in doc, (
-                f"published distribution is stale for {label}: data says {n}"
+        assert f"pre 07-02 (n={sum(pre.values())})" in doc
+        assert f"on/after 07-02 (n={sum(post.values())})" in doc
+        for label in set(pre) | set(post):
+            assert f"`{label}`" in doc
+            assert f"{pre[label]} — " in doc and f"{post[label]} — " in doc, (
+                f"published split is stale for {label}: "
+                f"data says pre={pre[label]} post={post[label]}"
             )

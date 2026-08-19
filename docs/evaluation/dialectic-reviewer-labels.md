@@ -35,36 +35,63 @@ collapsing them loses the only distinction that matters:
 | `formulaic` | templated critique that does not engage this thesis's specifics |
 | `non_verdict` | no judgment at all — the reviewer model failed to return one |
 
-## Distribution (n=97)
+## ⛔Do not read the pooled distribution — it straddles an instrument change
 
-| label | n | share |
+The reviewer backend changed on **2026-07-02**, when
+`UNITARES_DIALECTIC_REVIEWER_HOST=codex` was activated on the agent-orchestrator
+and the local gemma4 model became the degraded fallback only
+(see the dialectic-rework record). Pooling across that boundary averages two
+different instruments:
+
+| label | pre 07-02 (n=76) | on/after 07-02 (n=21) |
 |---|---|---|
-| `refutes_substantive` | 41 | 42.3% |
-| `formulaic` | 37 | 38.1% |
-| `concurs_with_conditions` | 9 | 9.3% |
-| `ratifies` | 6 | 6.2% |
-| `non_verdict` | 4 | 4.1% |
+| `refutes_substantive` | 24 — 31.6% | **17 — 81.0%** |
+| `formulaic` | **36 — 47.4%** | 1 — 4.8% |
+| `concurs_with_conditions` | 8 — 10.5% | 1 — 4.8% |
+| `ratifies` | 5 — 6.6% | 1 — 4.8% |
+| `non_verdict` | 3 — 3.9% | 1 — 4.8% |
+
+Pooled, for reference only: 41 / 37 / 9 / 6 / 4 out of n=97.
+
+**The templated-critique failure is a pre-fix artefact.** It collapses from
+47.4% to 4.8%, and substantive refutation rises from 31.6% to 81.0%. Quoting
+the pooled 38.1% as the current state would be exactly the stale-baseline error
+the measurement-authority contract exists to prevent.
+
+**Limits on the post-fix number.** n=21 is small, so 81% is encouraging and not
+a strong claim. The split is by DATE as a proxy for backend: no per-message
+model attribution existed until PR #1725 (2026-08-18), so no row here records
+which model actually answered. Every antithesis on/after 07-02 did come through
+the orchestrated reviewer path (43/43), but that path also existed before, on
+gemma4 — the path name is not the discriminator, the activation date is. The
+change is observational, not controlled.
+
+(Aside: the rework record's 2026-07-25 note that there was "exactly 1 dialectic
+session since Jul-02, zero organic use" is itself now stale — 21 labelled
+antithesis messages fall on or after that date.)
 
 ## What this corrects
 
 **⛔A naive `agrees=false` backfill would have been badly wrong.** Taking
 "did not agree" at face value labels 82 of 97 as disagreement — reviewers
-would look 85% adversarial. Only 42% substantively engage. The other 43% is
-boilerplate and parse failure.
+would look 85% adversarial. Pooled, only 42% substantively engage.
 
-**⛔The rubber-stamp worry is the smallest failure mode, not the largest.**
-The standing concern, stated inside the corpus itself, was that reviewers
-"agreed, praised thoroughness, sharpened one condition, surfaced nothing new."
-Measured: `ratifies` is 6 messages, 6.2%. The dominant failure is the opposite
-shape — **templated pseudo-disagreement**. 37 messages apply a stock frame
+**⛔Rubber-stamping was never the dominant failure.** The standing concern,
+stated inside the corpus itself, was reviewers who "agreed, praised
+thoroughness, sharpened one condition, surfaced nothing new." `ratifies` is 6
+messages across the whole corpus and never exceeds 6.6% in either era. The
+failure that actually dominated the pre-fix corpus was the opposite shape —
+**templated pseudo-disagreement**: 36 messages applying a stock frame
 ("the proposed root cause is a symptom, not the systemic failure"; "classic
-rationalization") without engaging what the thesis said. Nearly all come from
-the local-LLM reviewer, and one repeated thesis
+rationalization") without engaging what the thesis said. One repeated thesis
 (*"the plumbing works; the only open question is reviewer quality"*) drew ~24 of
 them in near-identical wording.
 
 Boilerplate disagreement reads as rigour and scores as rigour. It is harder to
-detect than sycophancy, and no count of disagreements will find it.
+detect than sycophancy, and **no count of disagreements will find it** — which
+is why the dialectic-rework record predicted a rubber-stamp would push a
+resolution-rate metric green while quality went to zero. The polarity was
+inverted from the prediction; the mechanism was the one predicted.
 
 **⛔`non_verdict` rows are manufactured disagreement.** Four messages read
 verbatim *"Reviewer model returned no parseable verdict; defaulting to
@@ -79,17 +106,22 @@ computing any rate.
 
 ## Using this as an evaluation set
 
-The usable subset is **41 substantive refutations**, not 97 messages and not
-118 sessions. That is a benchmark, not a training corpus — see the sizing in
-[`dialectic-lessons`](../../README.md) territory: the whole dialectic corpus is
-~100k tokens, three orders of magnitude short of a fine-tuning set and roughly
-the right size for a gold eval.
+**Size first: this is an evaluation set, not training data.** The whole
+dialectic corpus is roughly 100k tokens — three orders of magnitude short of a
+fine-tuning set, and about the right size for a gold eval.
+
+Within it, the usable subset is the **41 substantive refutations**, not 97
+messages and not 118 sessions. And if the question is what the CURRENT reviewer
+does, the relevant subset is the **17 post-07-02 refutations**, which is small
+enough that the honest use is as a seed, not a benchmark.
 
 The strongest single item is the `#1387` measurability session (message 628),
 where the reviewer produced three checkable refutations and the thesis author
 conceded all three, writing *"two of them I could not have reached alone."*
-That is the target behaviour; the 37 formulaic messages are the anti-target,
-and having both labelled in one file is what makes the set discriminative.
+That is the target behaviour; the 37 `formulaic` messages (36 of them pre-fix)
+are the anti-target, and having both labelled in one file is what makes the set
+discriminative — a scorer that cannot separate message 628 from the stock
+"classic rationalization" frame is not measuring review quality.
 
 ## Method and limits
 
