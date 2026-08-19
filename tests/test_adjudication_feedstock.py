@@ -8,9 +8,15 @@ healthy, and contribute nothing, and no liveness signal will say so.
 
 Live state 2026-08-10, which is what prompted the check: 280 findings in 7 days
 across 9 producers, 0 queue-eligible. Sentinel alone emitted 203 of them (136 in
-one day), all `medium`. Its last eligible finding was 2026-08-01 20:20:20 — 31
-seconds after the last real forced lease release, because #1443/#1444/#1459
-removed the condition. The zero is FAIR; the invisibility is the defect.
+one day), all `medium`. The invisibility is the defect.
+
+⛔CORRECTION 2026-08-19: this docstring used to say #1443/#1444/#1459 "removed
+the condition" and that the zero was therefore permanently FAIR. False. A real
+forced release fired 2026-08-10 23:46:25 on `resident:/steward_eisv_sync` and
+was adjudicated 2026-08-13. The fixes made the condition RARE, not absent, so
+the lever stays. Which of the three causes a dry window has — condition gone,
+queue drained, or alarm path broken — is answered by `forced_release_transform`
+(see tests/test_forced_release_transform.py), not by this check.
 """
 
 from __future__ import annotations
