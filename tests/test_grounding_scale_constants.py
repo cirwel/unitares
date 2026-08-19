@@ -187,3 +187,95 @@ def test_engaged_ephemeral_review_cookie_recalibrated():
 def test_delta_norm_max_default_covers_full_state_space_diagonal():
     """Fleet-wide default must allow full diagonal so unclassified agents can hit C=0."""
     assert DELTA_NORM_MAX.value >= math.sqrt(3) - 0.01
+
+
+class TestPopulationScope:
+    """How far a calibration constant's evidence actually reaches.
+
+    corpus_size counts OBSERVATIONS. A class fitted on 12,501 turns from one
+    device is a prior about that device wearing the class's name, and nothing
+    downstream could tell that apart from a broad fit. Under the federation
+    commitment — per-principal governance, no shared administrative root — such
+    a constant shipped as a class-wide norm IS a shared administrative root for
+    what counts as healthy, which is the failure the commitment exists to
+    avoid. So breadth has to be recorded, and quotable range derived from it.
+    """
+
+    def _c(self, **kw):
+        base = dict(
+            name="T", value=1.0, measured_on="2026-08-19", corpus_size=100,
+            percentile=95, provenance="measured",
+        )
+        base.update(kw)
+        return ScaleConstant(**base)
+
+    def test_unrecorded_is_not_a_claim_of_breadth(self):
+        c = self._c()
+        assert c.distinct_agents is None
+        assert c.population_scope == "unrecorded"
+        # Crucially NOT exportable: absence of evidence is not evidence of breadth.
+        assert c.federation_exportable is False
+
+    def test_one_agent_is_a_prior_not_a_population(self):
+        c = self._c(distinct_agents=1)
+        assert c.population_scope == "single_agent"
+        assert c.federation_exportable is False
+
+    def test_zero_agents_is_also_single_agent_scope(self):
+        assert self._c(distinct_agents=0).population_scope == "single_agent"
+
+    def test_several_agents_one_deployment_is_local_only(self):
+        c = self._c(distinct_agents=4)
+        assert c.population_scope == "single_principal"
+        # Usable locally...
+        assert c.federation_exportable is True
+
+    def test_multiple_principals_is_federated(self):
+        c = self._c(distinct_agents=9, distinct_principals=3)
+        assert c.population_scope == "federated"
+        assert c.federation_exportable is True
+
+    def test_principal_count_dominates(self):
+        # More than one principal means the fit crossed a trust boundary, which
+        # is the property federation cares about, whatever the agent count says.
+        assert self._c(distinct_agents=1, distinct_principals=2).population_scope == "federated"
+
+    def test_negative_counts_rejected(self):
+        with pytest.raises(ValueError):
+            self._c(distinct_agents=-1)
+        with pytest.raises(ValueError):
+            self._c(distinct_principals=0)
+
+    def test_embodied_is_declared_single_agent(self):
+        """REGRESSION. The shipped embodied constants come from one device.
+
+        If a future regen widens the class, this assertion should be UPDATED to
+        the new count — not deleted. Deleting it removes the disclosure.
+        """
+        from config.governance_config import DELTA_NORM_MAX_BY_CLASS
+
+        embodied = DELTA_NORM_MAX_BY_CLASS["embodied"]
+        assert embodied.distinct_agents == 1
+        assert embodied.population_scope == "single_agent"
+        assert embodied.federation_exportable is False
+        assert "SINGLE AGENT" in embodied.notes
+
+    def test_no_measured_constant_silently_claims_breadth(self):
+        """A measured constant must either declare its breadth or read as unrecorded.
+
+        The failure being blocked is a constant that LOOKS broad because
+        corpus_size is large. Either it says how many agents, or its scope says
+        it does not know — never a large N standing in for breadth.
+        """
+        from config.governance_config import DELTA_NORM_MAX_BY_CLASS
+
+        for name, sc in DELTA_NORM_MAX_BY_CLASS.items():
+            if sc.provenance != "measured":
+                continue
+            assert sc.population_scope in {
+                "unrecorded", "single_agent", "single_principal", "federated"
+            }
+            if sc.distinct_agents is None:
+                assert sc.federation_exportable is False, (
+                    f"{name}: breadth unrecorded but treated as exportable"
+                )

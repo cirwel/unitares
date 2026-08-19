@@ -71,6 +71,47 @@ sample, not of the instrument, and it is not addressed by measuring harder.
 See also the deployed-vs-target separation below: this is the same discipline
 applied to the sampling frame rather than to enforcement.
 
+**3. ⛔The class constants are AGENT-selected, not just observation-selected.**
+Clause 2 is about which rows exist. This one is about who produced them.
+
+The class-conditional calibration in `config/governance_config.py`
+(`DELTA_NORM_MAX_BY_CLASS`, `HEALTHY_OPERATING_POINT_BY_CLASS`) is keyed on
+generic behaviour classes and was regenerated with an empty roster, so no
+resident is named. But clearing the roster only *renames* the data — it does
+not broaden it. Recounted 2026-08-19 over the original 2026-05-28..06-27
+window:
+
+| class | rows | distinct agents | scope |
+|---|---|---|---|
+| `embodied` | 12501 | **1** | single_agent |
+| `resident_persistent` | 8406 | **4** | single_principal |
+| `engaged_ephemeral` + `ephemeral` | 2392 | 418 (family total, split unattributed) | unrecorded |
+| `default` (fleet fallback) | 2033, measured 2026-04-18 | unknown | unrecorded |
+
+**`embodied` is one device.** Its healthy operating point (E≈0.32) is a
+well-measured fact about that device and a *hypothesis* about the class. The
+prior wording — "embodied/edge agents genuinely run low-energy; that is their
+normal" — stated it as a class property, which is a generalization from n=1.
+
+Note the inversion: the classes with the most rows have the fewest agents, and
+the class thousands of adopter agents actually land in is the thinnest and the
+stalest. A large `corpus_size` is not breadth.
+
+**Federation consequence.** The commitment is per-principal governance with no
+shared administrative root. A constant measured on one deployment and shipped
+as a class-wide norm *is* a shared administrative root for what counts as
+healthy — the homogenization failure one layer up, which is exactly what
+[federation derives from the individuality axiom](../../CLAUDE.md) to prevent.
+So `ScaleConstant` now records `distinct_agents` / `distinct_principals` and
+derives `population_scope`; a `single_agent` constant reports
+`federation_exportable = False`. Unrecorded breadth is also not exportable —
+absence of evidence is not evidence of breadth.
+
+⛔This is a DISCLOSURE change, not a re-measurement. No constant's value moved
+and no class's fallback changed. Re-fitting on a corrected cohort is precisely
+the selective re-run the pre-registered stop rule (#1425) forbids; the numbers
+are not wrong, the claim attached to them was broader than the data.
+
 ## Deployed posture — corrected 2026-08-10
 
 **As deployed, UNITARES is primarily advisory, but its authenticated circuit

@@ -98,3 +98,58 @@ def test_known_residents_override_allowed(calibrate, sample_stats):
     assert '"Lumen": MISSING' not in out
     assert '"Vigil": MISSING' not in out
     assert '"Watcher": MISSING' not in out
+
+
+class TestGeneratorEmitsBreadth:
+    """The regen must carry the agent count forward, or this decays immediately.
+
+    Hand-filled provenance rots at the next regeneration. The generator has the
+    label on every row it reads, so counting distinct agents per class is free
+    — what was missing was emitting it.
+    """
+
+    def test_single_agent_class_is_flagged_in_the_snippet(self, calibrate):
+        ClassStats = calibrate.ClassStats
+        stats = [
+            ClassStats("embodied", n=12501, e_median=0.32, i_median=0.78,
+                       s_median=0.21, e_p90=0.4, i_p90=0.9, s_p90=0.3,
+                       delta_p95=0.1635, n_agents=1),
+        ]
+        out = calibrate.render_python_snippet(stats, "2026-08-19", n_min=30,
+                                              known_residents=set())
+        assert "distinct_agents=1" in out
+        assert "SINGLE AGENT" in out
+        assert "1 agent" in out
+
+    def test_broad_class_carries_the_count_without_a_warning(self, calibrate):
+        ClassStats = calibrate.ClassStats
+        stats = [
+            ClassStats("ephemeral", n=2115, e_median=0.77, i_median=0.69,
+                       s_median=0.35, e_p90=0.9, i_p90=0.8, s_p90=0.5,
+                       delta_p95=0.2952, n_agents=418),
+        ]
+        out = calibrate.render_python_snippet(stats, "2026-08-19", n_min=30,
+                                              known_residents=set())
+        assert "distinct_agents=418" in out
+        assert "SINGLE AGENT" not in out
+        assert "418 agents" in out
+
+    def test_unrecorded_reads_as_unknown_not_as_one(self, calibrate):
+        # 0 must not masquerade as a single-agent fit, and must not look broad.
+        ClassStats = calibrate.ClassStats
+        stats = [
+            ClassStats("legacy", n=500, e_median=0.7, i_median=0.7, s_median=0.2,
+                       e_p90=0.8, i_p90=0.8, s_p90=0.3, delta_p95=0.2),
+        ]
+        out = calibrate.render_python_snippet(stats, "2026-08-19", n_min=30,
+                                              known_residents=set())
+        assert "unrecorded" in out
+        assert "SINGLE AGENT" not in out
+
+    def test_agent_counts_come_from_distinct_labels(self, calibrate):
+        """fetch_class_observations returns (observations, distinct_agents)."""
+        import inspect
+
+        src = inspect.getsource(calibrate.fetch_class_observations)
+        assert "labels_by_class" in src
+        assert "len(labels_by_class" in src

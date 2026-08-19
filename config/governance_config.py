@@ -912,11 +912,64 @@ class ScaleConstant:
     provenance: str           # "placeholder" | "measured" | "derived" | "alias"
     notes: str = ""
 
+    # HOW MANY AGENTS, not how many rows. corpus_size counts observations, and
+    # an observation count says nothing about breadth: DELTA_NORM_MAX[embodied]
+    # is fitted on 12,501 turns produced by exactly ONE device. Read alone,
+    # "corpus_size=12501" reads like a population statistic. It is a prior.
+    #
+    # None = not recorded (most constants predate this field). None is NOT a
+    # claim of breadth — see ``population_scope``.
+    distinct_agents: Optional[int] = None
+    # How many independent PRINCIPALS contributed. Everything measured in this
+    # repo is 1: a single deployment, single administrative root.
+    distinct_principals: int = 1
+
     def __post_init__(self) -> None:
         if self.provenance not in {"placeholder", "measured", "derived", "alias", "overlay"}:
             raise ValueError(f"unknown provenance {self.provenance!r}")
         if self.value <= 0:
             raise ValueError(f"scale constant {self.name} must be positive")
+        if self.distinct_agents is not None and self.distinct_agents < 0:
+            raise ValueError(f"{self.name}: distinct_agents must be >= 0")
+        if self.distinct_principals < 1:
+            raise ValueError(f"{self.name}: distinct_principals must be >= 1")
+
+    @property
+    def population_scope(self) -> str:
+        """How far this constant's evidence actually reaches.
+
+        The federation commitment is per-principal governance with no shared
+        administrative root. A constant measured on one deployment and shipped
+        as a class-wide norm IS a shared administrative root for what counts as
+        healthy — the homogenization failure one layer up. So a constant has to
+        be able to say how far it reaches, and refuse to be quoted past it.
+
+          - ``"unrecorded"``   — breadth unknown. NOT a claim of breadth.
+          - ``"single_agent"`` — one agent produced it. A PRIOR, not a
+            population statistic; must not be presented as a property of the
+            class, and must not be exported to another principal.
+          - ``"single_principal"`` — several agents, one deployment. Sound
+            locally; not federation-quotable, because one operator's fleet is
+            not a sample of fleets.
+          - ``"federated"``    — more than one principal contributed.
+        """
+        if self.distinct_principals > 1:
+            return "federated"
+        if self.distinct_agents is None:
+            return "unrecorded"
+        if self.distinct_agents <= 1:
+            return "single_agent"
+        return "single_principal"
+
+    @property
+    def federation_exportable(self) -> bool:
+        """Whether this may be offered to another principal as evidence.
+
+        Attestation, not authority: a deployment may always publish what it
+        measured, but only a constant drawn from more than one agent is a claim
+        ABOUT A CLASS rather than about one device wearing a class's name.
+        """
+        return self.population_scope in {"single_principal", "federated"}
 
 
 # Phase 1 placeholders — replace with measured values after §3.4 protocol runs.
@@ -1002,19 +1055,33 @@ DELTA_NORM_MAX_BY_CLASS: Dict[str, ScaleConstant] = {
     "embodied": ScaleConstant(
         name="DELTA_NORM_MAX[embodied]", value=0.1635, measured_on="2026-06-27",
         corpus_size=12501, percentile=95, provenance="measured",
-        notes="Class-conditional manifold radius from healthy slice."),
+        distinct_agents=1, distinct_principals=1,
+        notes="Class-conditional manifold radius from healthy slice. "
+              "⛔SINGLE AGENT: all 12,501 turns came from one device (the "
+              "maintainer's Pi resident), counted 2026-08-19 over the original "
+              "2026-05-28..06-27 window. Treat as a prior for embodied agents, "
+              "not as a measured property of the class."),
     "resident_persistent": ScaleConstant(
         name="DELTA_NORM_MAX[resident_persistent]", value=0.1237, measured_on="2026-06-27",
         corpus_size=8406, percentile=95, provenance="measured",
-        notes="Class-conditional manifold radius from healthy slice."),
+        distinct_agents=4, distinct_principals=1,
+        notes="Class-conditional manifold radius from healthy slice. "
+              "4 agents, all on one deployment and all on operator-set cron "
+              "cadences, so the spread is partly a schedule artefact."),
     "engaged_ephemeral": ScaleConstant(
         name="DELTA_NORM_MAX[engaged_ephemeral]", value=0.2952, measured_on="2026-06-27",
         corpus_size=2115, percentile=95, provenance="measured",
-        notes="Class-conditional manifold radius from healthy slice."),
+        distinct_principals=1,
+        notes="Class-conditional manifold radius from healthy slice. "
+              "distinct_agents unrecorded: the ephemeral family drew on 418 "
+              "distinct agents in-window, but the engaged/plain split was not "
+              "attributed. The next regen emits it."),
     "ephemeral": ScaleConstant(
         name="DELTA_NORM_MAX[ephemeral]", value=0.0857, measured_on="2026-06-27",
         corpus_size=277, percentile=95, provenance="measured",
-        notes="Class-conditional manifold radius from healthy slice."),
+        distinct_principals=1,
+        notes="Class-conditional manifold radius from healthy slice. "
+              "distinct_agents unrecorded — see engaged_ephemeral above."),
     "default": ScaleConstant(
         name="DELTA_NORM_MAX[default]", value=0.2018, measured_on="2026-04-18",
         corpus_size=2033, percentile=95, provenance="measured",
@@ -1027,15 +1094,41 @@ DELTA_NORM_MAX_BY_CLASS: Dict[str, ScaleConstant] = {
 # classes only (measured 2026-06-27, empty-roster generator). Named residents
 # come from the UNITARES_CLASS_CALIBRATION overlay, deployment-local.
 #
-# NOTE: `embodied` healthy E is ~0.32 — embodied/edge agents (e.g. a Pi
-# resident) genuinely run low-energy; that is their normal, not degradation (the
-# individuality axiom). healthy_S also feeds get_s_setpoint (live when
-# UNITARES_S_SETPOINT is on), so these are live-affecting, not shadow-only.
+# ⛔READ THE AGENT COUNTS, NOT THE ROW COUNTS. The two narrow classes below are
+# narrow in AGENTS while being the largest in ROWS, and the comment that used to
+# sit here made a class-wide claim from a sample of one:
+#
+#   "`embodied` healthy E is ~0.32 — embodied/edge agents (e.g. a Pi resident)
+#    genuinely run low-energy; that is their normal, not degradation (the
+#    individuality axiom)."
+#
+# Every one of those 12,501 turns came from ONE device. That E≈0.32 is a
+# well-measured fact about that device and a hypothesis about the class. A
+# different robot, with different sensors and a different duty cycle, inherits
+# it as the definition of its own health. Under the federation commitment that
+# is the failure to avoid: one deployment's calibration acting as a shared
+# administrative root for what counts as healthy.
+#
+# The inversion is the thing to notice — the classes with the most data have the
+# fewest agents, and the class thousands of adopter agents actually land in
+# (`default`) is the thinnest:
+#
+#     class                rows    agents   scope
+#     embodied            12501         1   single_agent      ⛔ a prior
+#     resident_persistent  8406         4   single_principal
+#     engaged_ephemeral    2115       418*  unrecorded        (*family total)
+#     ephemeral             277       418*  unrecorded
+#     default              2033   unknown   unrecorded        stale: 2026-04-18
+#
+# Agent counts recounted 2026-08-19 over the original 2026-05-28..06-27 window.
+# healthy_S also feeds get_s_setpoint (live when UNITARES_S_SETPOINT is on), so
+# these are live-affecting, not shadow-only — which is exactly why the breadth
+# has to be stated rather than inferred from N.
 HEALTHY_OPERATING_POINT_BY_CLASS: Dict[str, Tuple[float, float, float]] = {
-    "embodied":            (0.3159, 0.7824, 0.2104),  # N=12501
-    "resident_persistent": (0.7804, 0.6855, 0.2185),  # N=8406
-    "engaged_ephemeral":   (0.7685, 0.6918, 0.3536),  # N=2115
-    "ephemeral":           (0.7032, 0.7995, 0.1898),  # N=277
+    "embodied":            (0.3159, 0.7824, 0.2104),  # N=12501 rows / 1 agent  ⛔single_agent
+    "resident_persistent": (0.7804, 0.6855, 0.2185),  # N=8406 rows / 4 agents
+    "engaged_ephemeral":   (0.7685, 0.6918, 0.3536),  # N=2115 rows / agents unrecorded
+    "ephemeral":           (0.7032, 0.7995, 0.1898),  # N=277 rows / agents unrecorded
     "default":             (0.7264, 0.7934, 0.2364),  # fleet fallback (N=16 in 06-27 window)
 }
 
