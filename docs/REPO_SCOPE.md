@@ -42,9 +42,8 @@ agent (or no agent) against it.
   body, and **the PR's commit messages** — a trailer stripped from one still
   fails on another. Fixing the PR body needs a fresh `pull_request` event
   (close/reopen or push); a rerun replays the body GitHub snapshotted at trigger
-  time. Caveat: `<!-- scope-guard: allow-register -->` currently short-circuits
-  the whole PR-body step, so it exempts this check and the local-path check as
-  well as the register check it is named for.
+  time. `<!-- scope-guard: allow-register -->` exempts the register check only —
+  this check and the operator-local-path check always run, on every PR.
 
 ## Metered model-cloud dependencies
 
