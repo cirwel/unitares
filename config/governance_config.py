@@ -1252,9 +1252,13 @@ _apply_class_calibration_overlay()
 # `-μ(S - σ)`. Choosing σ = healthy_S − S_SETPOINT_DRIVER_OFFSET lands the S
 # equilibrium on the measured healthy S (since S* = σ + drivers/μ).
 #
-# OFF BY DEFAULT (UNITARES_S_SETPOINT). When disabled, get_s_setpoint() returns
-# 0.0 and the dynamics are byte-identical to historical behavior. Enabling is
-# gated on red-team validation against the real agent_state corpus.
+# ON BY DEFAULT (UNITARES_S_SETPOINT defaults to "1"; see s_setpoint_enabled()
+# below, and test_get_s_setpoint_on_by_default). Set the flag to a falsey value
+# to disable, in which case get_s_setpoint() returns 0.0 and the dynamics are
+# byte-identical to historical behavior. This comment said OFF BY DEFAULT until
+# 2026-08-19, four lines above the code that enables it — corrected because the
+# consequence is load-bearing: HEALTHY_OPERATING_POINT_BY_CLASS reaches live ODE
+# behavior through this path, so its calibration breadth is not shadow-only.
 #
 # S_SETPOINT_DRIVER_OFFSET is the baseline driver contribution to S* at
 # complexity=0.5, measured 2026-06-24 via scripts/analysis/eisv_equilibrium_gap.py

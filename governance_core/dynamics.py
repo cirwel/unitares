@@ -130,8 +130,9 @@ def _derivatives(
         s_setpoint: Class-conditional rest target for S. Default 0.0 makes the
             S decay term ``-μS`` (historical behavior). When non-zero the term
             becomes ``-μ(S - s_setpoint)``, shifting the S equilibrium toward a
-            measured-healthy operating point (see config.get_s_setpoint). Off by
-            default; gated by UNITARES_S_SETPOINT at the call site.
+            measured-healthy operating point (see config.get_s_setpoint).
+            Gated by UNITARES_S_SETPOINT at the call site, which defaults ON;
+            this signature's 0.0 is the disabled-path value, not the deployed one.
 
     Returns:
         (dE_dt, dI_dt, dS_dt, dV_dt) tuple
