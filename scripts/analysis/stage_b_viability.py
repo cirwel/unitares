@@ -74,6 +74,84 @@ WHERE e.verification_source = 'external_signal'
 CHANNELS = ("E", "I", "S", "V")
 
 
+# Outcome-label classes from docs/ontology/eisv-proprioception-contract.md.
+# The contract distinguishes these deliberately and says task-negative is
+# "not automatically governance-bad" — only contract/process violation and
+# authority/harm are the governance classes. A single pooled `is_bad` erases
+# that distinction, so the probe names the class rather than implying one.
+#
+# ⛔ This maps existing outcome types onto the contract's vocabulary. It does
+# NOT widen or narrow what counts as bad — the stop rule forbids that, and the
+# rows entering the AUC are unchanged. Unrecognised types deliberately fall to
+# `unknown/unmeasured`, never to a governance class: a new outcome type must be
+# classified on purpose, not promoted by default.
+TASK_NEGATIVE = "task-negative"
+CONTRACT_VIOLATION = "contract/process violation"
+AUTHORITY_HARM = "authority/harm"
+SYNTHETIC_FIXTURE = "synthetic red-team fixture"
+UNKNOWN_CLASS = "unknown/unmeasured"
+
+OUTCOME_LABEL_CLASS = {
+    # "CI failed, test failed, command exit nonzero, answer was corrected"
+    "test_failed": TASK_NEGATIVE,
+    "task_failed": TASK_NEGATIVE,
+    # A dismissed finding is its emitter's answer being corrected. Note the row
+    # is booked against the EMITTER's own agent_id, so this is self-consistent:
+    # the emitter's prior state against the emitter's own false positive.
+    "watcher_finding_dismissed": TASK_NEGATIVE,
+}
+
+
+def label_class(outcome_type: str) -> str:
+    """Contract class for an outcome type; unrecognised types are unknown."""
+    return OUTCOME_LABEL_CLASS.get(outcome_type, UNKNOWN_CLASS)
+
+
+GOVERNANCE_CLASSES = frozenset({CONTRACT_VIOLATION, AUTHORITY_HARM})
+
+
+def bad_label_classes(channels: list[str], labels: list[bool]) -> dict:
+    """Which contract classes the BAD labels belong to, and what may be claimed.
+
+    Returns `classes` (class -> count over positives) and `supports_governance_claim`,
+    which is True only when a governance class is actually present. It is a
+    statement about which labels exist, not about the AUC's value.
+    """
+    classes: dict[str, int] = {}
+    for ch, is_bad in zip(channels, labels):
+        if is_bad:
+            cls = label_class(ch)
+            classes[cls] = classes.get(cls, 0) + 1
+    return {
+        "classes": classes,
+        "supports_governance_claim": bool(GOVERNANCE_CLASSES & set(classes)),
+        "is_pooled": len(classes) > 1,
+    }
+
+
+def format_label_classes(summary: dict) -> list[str]:
+    """Operator-facing lines stating what this AUC may and may not be read as."""
+    classes = summary["classes"]
+    if not classes:
+        return ["  No bad labels — nothing to characterise."]
+    parts = ", ".join(
+        f"{cls}={n}" for cls, n in sorted(classes.items(), key=lambda kv: (-kv[1], kv[0]))
+    )
+    out = [f"  Bad-label class (per the proprioception contract): {parts}"]
+    if summary["supports_governance_claim"]:
+        out.append("  A governance class IS present — read the pooling warning below.")
+    else:
+        out.append("  NO contract-violation or authority-harm labels are present, so this")
+        out.append("  AUC speaks to REWORK PREDICTION only. It is not evidence that EISV")
+        out.append("  detects governance-bad behaviour, and must never be quoted as such.")
+        out.append("  That is a class-absence limit, not a sample-size one: more rows of")
+        out.append("  the same kind cannot lift it.")
+    if summary["is_pooled"]:
+        out.append("  ⚠️POOLED: the bad labels span classes the contract distinguishes, so")
+        out.append("  one number is averaging questions that are not the same question.")
+    return out
+
+
 def label_composition(channels: list[str], labels: list[bool]) -> dict:
     """Derive which outcome channels supplied the labels, and which the BAD ones.
 
@@ -212,6 +290,8 @@ def emit_auc(conn) -> None:
     print("  permutation p above ignores that clustering (anti-conservative).")
     print(f"  Label channels (DERIVED from this deployment's rows, not assumed): "
           f"{format_composition(composition)}")
+    for line in format_label_classes(bad_label_classes(channels, labels)):
+        print(line)
     if len(composition["bad_by_channel"]) <= 1:
         print("  Bad labels come from ONE channel — effectively single-agent.")
     print("  This is an instrument check, not a verdict on B — the gate needs")
