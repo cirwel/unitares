@@ -163,16 +163,52 @@ defmodule UnitaresLeasePlane.DialecticLiveness do
   defp fail_stuck(state, info) do
     awaiting = Map.get(info, :awaiting_facilitation, false)
 
+    verdict_clause =
+      case Map.get(info, :standing_verdict, "none") do
+        "reject" ->
+          " A reviewer rejection was standing when the sweep ran (acceptance: " <>
+            "#{Map.get(info, :verdict_acceptance, "unknown")}); read it in the transcript."
+
+        _ ->
+          ""
+      end
+
     note =
       if awaiting do
         "Swept while awaiting human facilitation; no operator acted. " <>
           "A sweep outcome, NOT a reviewer verdict, and not evidence that " <>
-          "the paused agent abandoned the session."
+          "the paused agent abandoned the session." <> verdict_clause
       else
         "Swept for inactivity. A sweep outcome, NOT a reviewer verdict — " <>
-          "read the last synthesis for the position standing when it ran."
+          "read the last synthesis for the position standing when it ran." <>
+          verdict_clause
       end
 
+    # standing_verdict / verdict_message_id / verdict_acceptance are CARRIED from
+    # core.dialectic_messages, never formed here. termination_basis names what
+    # actually ended the session, which is always the sweep — recording a
+    # verdict alongside it must not read as the verdict having terminated it.
+    #
+    # Deliberately NOT done: terminating on a standing rejection. That was the
+    # original proposal and it was withdrawn under review, because acceptance
+    # would be inferred from silence.
+    #
+    # An earlier draft of this comment justified that with "silence means the
+    # agent's session ended before the verdict landed". That was wrong, and the
+    # correction makes the point stronger. Of the 20 rejected-then-swept
+    # sessions whose agent never replied, 14 are scheduled `canary_dialectic*`
+    # probes that were never going to answer, and of the 6 real agents, SIX OF
+    # SIX were still issuing governance calls after the rejection — thousands
+    # apiece. They were not gone. They kept working.
+    #
+    # They could: a dialectic "paused agent" is a protocol ROLE, not a state.
+    # Every one of the 42 sessions in this window has its paused agent at
+    # status='active'. Nothing holds an agent while it is under review, so a
+    # rejection it declines to answer costs it nothing.
+    #
+    # So silence is not assent, and is not absence either — it is an agent
+    # continuing past a verdict that has no grip on it. Terminating on it needs
+    # verdict_acceptance to become a real protocol transition first.
     payload = %{
       "action" => "failed",
       "reason" => "liveness_timeout",
@@ -180,6 +216,10 @@ defmodule UnitaresLeasePlane.DialecticLiveness do
       "phase" => Map.get(info, :phase),
       "awaiting_facilitation" => awaiting,
       "inactive_seconds" => info.inactive_seconds,
+      "standing_verdict" => Map.get(info, :standing_verdict, "none"),
+      "verdict_message_id" => Map.get(info, :verdict_message_id),
+      "verdict_acceptance" => Map.get(info, :verdict_acceptance, "not_applicable"),
+      "termination_basis" => "liveness_sweep",
       "note" => note
     }
 

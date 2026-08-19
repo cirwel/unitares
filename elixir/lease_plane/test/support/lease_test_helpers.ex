@@ -109,6 +109,19 @@ defmodule LeaseTestHelpers do
     session_id
   end
 
+  @doc "Insert a dialectic message. `agrees: false` from the reviewer is a standing rejection."
+  def insert_dialectic_message(session_id, agent_id, message_type, opts \\ []) do
+    agrees = Keyword.get(opts, :agrees)
+
+    Postgrex.query!(
+      DB,
+      "INSERT INTO core.dialectic_messages (session_id, agent_id, message_type, agrees) VALUES ($1, $2, $3, $4)",
+      [session_id, agent_id, message_type, agrees]
+    )
+
+    :ok
+  end
+
   @doc "Cleanup hook — DELETE sagas then the session row for a fixture session_id."
   def cleanup_dialectic_session(session_id) when is_binary(session_id) do
     Postgrex.query!(
@@ -116,6 +129,8 @@ defmodule LeaseTestHelpers do
       "DELETE FROM coordination.session_resolution_sagas WHERE session_id = $1",
       [session_id]
     )
+
+    Postgrex.query!(DB, "DELETE FROM core.dialectic_messages WHERE session_id = $1", [session_id])
 
     Postgrex.query!(DB, "DELETE FROM core.dialectic_sessions WHERE session_id = $1", [session_id])
     :ok

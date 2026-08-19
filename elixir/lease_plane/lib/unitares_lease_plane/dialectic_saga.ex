@@ -447,15 +447,57 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   """
   @spec get_session_liveness(String.t()) :: {:ok, map() | nil} | {:error, term()}
   def get_session_liveness(session_id) when is_binary(session_id) do
+    # The standing-verdict block is READ, never derived. A dialectic outcome is
+    # decided in core.dialectic_messages; the sweeper's job is to carry that
+    # forward into the row it writes, not to form a judgment of its own. So:
+    #
+    #   standing_verdict     -- the reviewer's last agrees=false, or none
+    #   verdict_message_id   -- which message it was, so the claim is checkable
+    #   verdict_acceptance   -- accepted | contested | no_reply, from whether the
+    #                           paused agent posted after that verdict, and how
+    #
+    # `verdict_acceptance` is an OBSERVATION of the transcript, not a protocol
+    # transition. Nothing may terminate a session on it. That distinction is the
+    # condition this came from: inferring acceptance from silence is unsound
+    # even when the record contains no counterexample, and at the time of
+    # writing it contains none — 0 of 25 rejected-then-swept sessions had the
+    # paused agent still contesting; 20 never replied and 5 replied agreeing.
     sql = """
-    SELECT status, paused_agent_id, reviewer_agent_id,
-           EXTRACT(EPOCH FROM (now() - updated_at))::bigint AS inactive_s,
-           phase, awaiting_facilitation
-    FROM core.dialectic_sessions WHERE session_id = $1
+    WITH v AS (
+      SELECT m.message_id, m.timestamp
+      FROM core.dialectic_messages m
+      JOIN core.dialectic_sessions ds ON ds.session_id = m.session_id
+      WHERE m.session_id = $1
+        AND m.agent_id = ds.reviewer_agent_id
+        AND m.agrees IS FALSE
+      ORDER BY m.timestamp DESC
+      LIMIT 1
+    ),
+    reply AS (
+      SELECT bool_or(m.agrees IS TRUE) AS agreed, count(*) AS n
+      FROM core.dialectic_messages m
+      JOIN core.dialectic_sessions ds ON ds.session_id = m.session_id
+      CROSS JOIN v
+      WHERE m.session_id = $1
+        AND m.agent_id = ds.paused_agent_id
+        AND m.timestamp > v.timestamp
+    )
+    SELECT d.status, d.paused_agent_id, d.reviewer_agent_id,
+           EXTRACT(EPOCH FROM (now() - d.updated_at))::bigint AS inactive_s,
+           d.phase, d.awaiting_facilitation,
+           (SELECT message_id FROM v) AS verdict_message_id,
+           (SELECT n FROM reply) AS replies_after_verdict,
+           (SELECT agreed FROM reply) AS reply_agreed
+    FROM core.dialectic_sessions d WHERE d.session_id = $1
     """
 
     case Postgrex.query(DB, sql, [session_id]) do
-      {:ok, %{rows: [[status, paused, reviewer, inactive_s, phase, awaiting]]}} ->
+      {:ok,
+       %{
+         rows: [
+           [status, paused, reviewer, inactive_s, phase, awaiting, verdict_msg, replies, agreed]
+         ]
+       }} ->
         {:ok,
          %{
            status: status,
@@ -466,7 +508,10 @@ defmodule UnitaresLeasePlane.DialecticSaga do
            # these the sweeper writes a verdict-free row and every reader
            # reconstructs "the agent walked away" — see fail_stuck/2.
            phase: phase,
-           awaiting_facilitation: awaiting == true
+           awaiting_facilitation: awaiting == true,
+           standing_verdict: if(is_nil(verdict_msg), do: "none", else: "reject"),
+           verdict_message_id: verdict_msg,
+           verdict_acceptance: verdict_acceptance(verdict_msg, replies, agreed)
          }}
 
       {:ok, %{rows: []}} ->
@@ -586,4 +631,17 @@ defmodule UnitaresLeasePlane.DialecticSaga do
 
   defp canonical(list) when is_list(list), do: Enum.map(list, &canonical/1)
   defp canonical(other), do: other
+
+  # accepted   -- the paused agent posted after the verdict and agreed
+  # contested  -- it posted after the verdict and did not agree
+  # no_reply   -- it never posted after the verdict
+  # not_applicable -- no standing rejection to accept or contest
+  #
+  # Descriptive only. `no_reply` in particular must NOT be read as acceptance:
+  # the common cause is that the agent's session had already ended, not that it
+  # assented. Nothing may terminate on this field.
+  defp verdict_acceptance(nil, _replies, _agreed), do: "not_applicable"
+  defp verdict_acceptance(_msg, replies, _agreed) when replies in [nil, 0], do: "no_reply"
+  defp verdict_acceptance(_msg, _replies, true), do: "accepted"
+  defp verdict_acceptance(_msg, _replies, _agreed), do: "contested"
 end

@@ -177,4 +177,88 @@ defmodule UnitaresLeasePlane.DialecticLivenessTest do
     refute res["note"] =~ "awaiting human facilitation"
     assert res["note"] =~ "NOT a reviewer verdict"
   end
+
+  # The condition this came from: a sweeper may CARRY a verdict already recorded
+  # in the transcript, never form one. And it may not terminate on it — silence
+  # after a rejection usually means the agent's session ended, not that it
+  # assented.
+  test "a reap carries a standing reviewer rejection without terminating on it" do
+    Application.put_env(:lease_plane, :dialectic_beam_liveness, true)
+
+    session_id =
+      insert_dialectic_session(reviewer_agent_id: "rev-1", awaiting_facilitation: true)
+
+    on_exit(fn -> cleanup_dialectic_session(session_id) end)
+    insert_dialectic_message(session_id, "rev-1", "synthesis", agrees: false)
+
+    :started =
+      DialecticLivenessSupervisor.ensure_started(session_id,
+        hard_timeout_s: 0,
+        initial_check_ms: 0,
+        check_interval_ms: 50
+      )
+
+    assert :ok = wait_until(fn -> session_status(session_id) == "failed" end)
+
+    res = resolution(session_id)
+    assert res["standing_verdict"] == "reject"
+    assert is_integer(res["verdict_message_id"])
+    # nobody replied after the rejection — must NOT be recorded as acceptance
+    assert res["verdict_acceptance"] == "no_reply"
+    # the sweep ended it, not the verdict
+    assert res["termination_basis"] == "liveness_sweep"
+    assert res["reason"] == "liveness_timeout"
+    assert res["note"] =~ "rejection was standing"
+  end
+
+  test "a paused-agent reply after the rejection is recorded as accepted or contested" do
+    Application.put_env(:lease_plane, :dialectic_beam_liveness, true)
+
+    session_id =
+      insert_dialectic_session(
+        paused_agent_id: "paused-1",
+        reviewer_agent_id: "rev-1",
+        awaiting_facilitation: true
+      )
+
+    on_exit(fn -> cleanup_dialectic_session(session_id) end)
+    insert_dialectic_message(session_id, "rev-1", "synthesis", agrees: false)
+    insert_dialectic_message(session_id, "paused-1", "synthesis", agrees: true)
+
+    :started =
+      DialecticLivenessSupervisor.ensure_started(session_id,
+        hard_timeout_s: 0,
+        initial_check_ms: 0,
+        check_interval_ms: 50
+      )
+
+    assert :ok = wait_until(fn -> session_status(session_id) == "failed" end)
+
+    res = resolution(session_id)
+    assert res["standing_verdict"] == "reject"
+    assert res["verdict_acceptance"] == "accepted"
+    # accepted is an OBSERVATION; it still must not resolve the session
+    assert res["action"] == "failed"
+  end
+
+  test "a session with no rejection records no verdict to carry" do
+    Application.put_env(:lease_plane, :dialectic_beam_liveness, true)
+    session_id = insert_dialectic_session(reviewer_agent_id: "rev-1")
+    on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+    :started =
+      DialecticLivenessSupervisor.ensure_started(session_id,
+        hard_timeout_s: 0,
+        initial_check_ms: 0,
+        check_interval_ms: 50
+      )
+
+    assert :ok = wait_until(fn -> session_status(session_id) == "failed" end)
+
+    res = resolution(session_id)
+    assert res["standing_verdict"] == "none"
+    assert res["verdict_message_id"] == nil
+    assert res["verdict_acceptance"] == "not_applicable"
+    refute res["note"] =~ "rejection was standing"
+  end
 end
