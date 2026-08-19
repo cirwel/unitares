@@ -90,13 +90,23 @@ class ClassStats:
     i_p90: float
     s_p90: float
     delta_p95: float
+    # Distinct agents behind those n observations. n alone cannot distinguish
+    # "a class" from "one device that ran for a month": on 2026-06-27 the
+    # embodied class had n=12501 and exactly ONE agent. 0 = unrecorded, which
+    # is NOT the same claim as 1.
+    n_agents: int = 0
 
 
 def fetch_class_observations(
     conn,
     window_days: int,
 ) -> Dict[str, List[Tuple[float, float, float]]]:
-    """Return {class_name: [(E, I, S), ...]} for healthy turns in the window."""
+    """Return {class_name: ([(E, I, S), ...], distinct_agent_count)}.
+
+    The agent count is carried alongside the observations because a class
+    constant fitted on one agent is a prior, not a population statistic, and
+    nothing downstream can tell the difference from ``n`` alone.
+    """
     sql = """
         SELECT
           i.metadata->>'label'                AS label,
@@ -114,6 +124,7 @@ def fetch_class_observations(
           AND COALESCE(s.synthetic, false) = false
     """
     by_class: Dict[str, List[Tuple[float, float, float]]] = {}
+    labels_by_class: Dict[str, set] = {}
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(sql, (window_days, list(HEALTHY_REGIMES)))
         for row in cur:
@@ -149,7 +160,11 @@ def fetch_class_observations(
 
             cls = classify_from_db_row(label, tags)
             by_class.setdefault(cls, []).append((e, i_val, s_val))
-    return by_class
+            labels_by_class.setdefault(cls, set()).add(label)
+    return {
+        cls: (obs, len(labels_by_class.get(cls, ())))
+        for cls, obs in by_class.items()
+    }
 
 
 def percentile(xs: List[float], p: float) -> float:
@@ -168,6 +183,7 @@ def percentile(xs: List[float], p: float) -> float:
 def compute_class_stats(
     name: str,
     obs: List[Tuple[float, float, float]],
+    n_agents: int = 0,
 ) -> ClassStats:
     es = [t[0] for t in obs]
     is_ = [t[1] for t in obs]
@@ -185,6 +201,7 @@ def compute_class_stats(
     return ClassStats(
         name=name,
         n=len(obs),
+        n_agents=n_agents,
         e_median=e_med,
         i_median=i_med,
         s_median=s_med,
@@ -193,6 +210,24 @@ def compute_class_stats(
         s_p90=percentile(ss, 90),
         delta_p95=percentile(deltas, 95),
     )
+
+
+def _scope_warning(st: "ClassStats") -> str:
+    """Append an in-band warning when a class rests on a single agent.
+
+    A one-agent fit is a prior about that agent, not a measurement of the
+    class, and it must not be exported to another principal as evidence about
+    the class. Emitting the caveat into the generated snippet means the next
+    person to paste it sees the limitation without going back to the DB.
+    """
+    if st.n_agents == 1:
+        return (
+            " ⛔SINGLE AGENT: every observation came from one agent. A prior "
+            "for this class, not a measured property of it."
+        )
+    if st.n_agents == 0:
+        return " (distinct_agents unrecorded — breadth of this fit is unknown)"
+    return ""
 
 
 def render_python_snippet(
@@ -232,7 +267,9 @@ def render_python_snippet(
             f'name="DELTA_NORM_MAX[{st.name}]", value={st.delta_p95:.4f}, '
             f'measured_on="{measured_on}", corpus_size={st.n}, '
             f'percentile=95, provenance="measured", '
-            f'notes="Class-conditional manifold radius from healthy slice."),'
+            f'distinct_agents={st.n_agents}, distinct_principals=1, '
+            f'notes="Class-conditional manifold radius from healthy slice."'
+            f'{_scope_warning(st)}),'
         )
     for resident in residents_missing:
         lines.append(
@@ -251,7 +288,10 @@ def render_python_snippet(
         if st.n < n_min:
             continue
         lines.append(
-            f'    "{st.name}": ({st.e_median:.4f}, {st.i_median:.4f}, {st.s_median:.4f}),  # N={st.n}'
+            f'    "{st.name}": ({st.e_median:.4f}, {st.i_median:.4f}, {st.s_median:.4f}),'
+            f'  # N={st.n} rows / '
+            f'{"agents unrecorded" if st.n_agents == 0 else f"{st.n_agents} agent" + ("" if st.n_agents == 1 else "s")}'
+            f'{"  SINGLE-AGENT: a prior, not a class property" if st.n_agents == 1 else ""}'
         )
     for resident in residents_missing:
         lines.append(
@@ -296,7 +336,10 @@ def main() -> int:
     for cls, obs in sorted(by_class.items(), key=lambda kv: -len(kv[1])):
         print(f"  {cls:<24} N={len(obs)}", file=sys.stderr)
 
-    stats = [compute_class_stats(cls, obs) for cls, obs in by_class.items()]
+    stats = [
+        compute_class_stats(cls, obs, n_agents)
+        for cls, (obs, n_agents) in by_class.items()
+    ]
     stats.sort(key=lambda s: -s.n)
 
     snippet = render_python_snippet(stats, measured_on, args.n_min)
