@@ -334,6 +334,12 @@ jobs:
     # Build the non-editable distribution and keep the checkout off sys.path.
     # Setuptools otherwise treats `src/` as a layout root, flattens the literal
     # `src` package, and silently drops the top-level governance_core package.
+    #
+    # This job existed before 2026-08-19 but only imported `src`, `governance_core`
+    # and `src.versioning` — none of which import `config`. So it passed green
+    # while the wheel raised ModuleNotFoundError on the 67 modules that do. The
+    # import list below is therefore deliberately module-level and config-bound:
+    # a package that builds but cannot import its own server is not packaged.
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
@@ -370,6 +376,25 @@ jobs:
         assert files("src").joinpath("tool_descriptions.json").is_file()
         assert files("src").joinpath("violation_taxonomy.yaml").is_file()
         print("installed server packages and metadata verified")
+        PY
+
+    - name: Standalone import smoke (no repo on path)
+      run: |
+        cd /tmp
+        python - <<'PY'
+        # Every import here is module-level and reaches `config`, which is the
+        # regression this guards. Kept to the CORE dependency set on purpose:
+        # src.mcp_server pulls prometheus_client from the `full` extra, so
+        # importing it would test the extra rather than the package layout.
+        import config.governance_config
+        import src.temporal
+        import src.confidence
+        import src.monitor_result
+        import src.mcp_server_std
+
+        from config.governance_config import GovernanceConfig
+        assert GovernanceConfig is not None
+        print("standalone import OK — config resolves from the installed wheel")
         PY
 
   sdk-package:

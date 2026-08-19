@@ -83,9 +83,25 @@ Changelog = "https://github.com/cirwel/unitares/blob/master/docs/CHANGELOG.md"
 # The repository intentionally has a Python package literally named `src`.
 # Implicit src-layout discovery flattens that package and omits governance_core,
 # producing a wheel that cannot satisfy the imports used by the checkout.
+#
+# `config` is in this list for the same reason and was missed until 2026-08-19:
+# 67 module-level `from config.governance_config import ...` statements in src/
+# meant the built wheel raised ModuleNotFoundError on first import. Nothing
+# caught it because nothing consumes the wheel — the Dockerfile copies the
+# source trees and runs from /app, and `pip install -e .` puts the repo root on
+# sys.path, so `config` resolves in every path the project actually uses. The
+# wheel-standalone-import job in tests.yml now builds and imports it so this
+# cannot regress silently again.
+#
+# NOT YET PUBLISHABLE. This distribution claims the top-level import names
+# `src` and `config`, which are far too generic to own on PyPI — installing it
+# alongside any other package using either name would break both. Publishing
+# requires re-homing these under a single `unitares/` namespace first. Until
+# then the install contract is the Docker Compose flow in README.md, and this
+# metadata exists so the tree is a coherent, testable package.
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["src", "src.*", "governance_core", "governance_core.*"]
+include = ["src", "src.*", "governance_core", "governance_core.*", "config", "config.*"]
 
 [tool.setuptools.package-data]
 src = ["*.json", "*.yaml"]
