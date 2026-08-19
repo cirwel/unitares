@@ -98,11 +98,12 @@ defmodule LeaseTestHelpers do
     phase = Keyword.get(opts, :phase, "synthesis")
     status = Keyword.get(opts, :status, "active")
     synthesis_round = Keyword.get(opts, :synthesis_round, 0)
+    awaiting = Keyword.get(opts, :awaiting_facilitation, false)
 
     Postgrex.query!(
       DB,
-      "INSERT INTO core.dialectic_sessions (session_id, paused_agent_id, reviewer_agent_id, phase, status, synthesis_round) VALUES ($1, $2, $3, $4, $5, $6)",
-      [session_id, paused, reviewer, phase, status, synthesis_round]
+      "INSERT INTO core.dialectic_sessions (session_id, paused_agent_id, reviewer_agent_id, phase, status, synthesis_round, awaiting_facilitation) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+      [session_id, paused, reviewer, phase, status, synthesis_round, awaiting]
     )
 
     session_id
