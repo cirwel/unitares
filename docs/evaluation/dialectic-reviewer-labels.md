@@ -58,13 +58,36 @@ Pooled, for reference only: 41 / 37 / 9 / 6 / 4 out of n=97.
 the pooled 38.1% as the current state would be exactly the stale-baseline error
 the measurement-authority contract exists to prevent.
 
-**Limits on the post-fix number.** n=21 is small, so 81% is encouraging and not
-a strong claim. The split is by DATE as a proxy for backend: no per-message
-model attribution existed until PR #1725 (2026-08-18), so no row here records
-which model actually answered. Every antithesis on/after 07-02 did come through
-the orchestrated reviewer path (43/43), but that path also existed before, on
-gemma4 — the path name is not the discriminator, the activation date is. The
-change is observational, not controlled.
+**⛔The improvement is NOT cleanly attributable to the backend change.** The
+post-07-02 population is not a random sample of the pre-07-02 one: there are far
+fewer sessions and they skew toward deliberate operator-posed theses, whereas
+the pre-fix corpus is dominated by one repeated automated thesis that alone drew
+~24 near-identical stock frames. **The theses changed, not only the reviewer.**
+Separating the two needs a matched control or random assignment across hosts;
+this data has neither, so the honest reading of the collapse from 47.4% to 4.8%
+is "some mixture of a better reviewer and an easier, smaller, differently-shaped
+question set", with the split between them unmeasured.
+
+That objection was raised by the orchestrated Codex reviewer itself in dialectic
+session `def32eb2b4b2ce93` (2026-08-19), an adversarial self-test in which this
+document's own claim was submitted as a thesis. It was deliberately withheld
+from the thesis as an answer key and the reviewer found it unprompted.
+
+**Further limits.** n=21 is small, so 81% carries a wide interval and the 4.8%
+formulaic figure is literally one message. The split is by DATE as a proxy for
+backend: no per-message model attribution existed until PR #1725 (2026-08-18),
+so no row here records which model actually answered. Every antithesis on/after
+07-02 did come through the orchestrated reviewer path (43/43), but that path also
+existed before, on gemma4 — the path name is not the discriminator, the
+activation date is.
+
+**These labels are single-labeller, unblinded, and authored by the same party
+that argued from them.** No second pass, no inter-annotator agreement. The
+boundary the claim rests on — `refutes_substantive` versus `formulaic` — is the
+one the labeller most controls. Any closure decision needs blind double-labelling
+with reported agreement, and `non_verdict` carried as an explicit denominator
+category so a refutation rate cannot drift upward without someone choosing to
+move it.
 
 (Aside: the rework record's 2026-07-25 note that there was "exactly 1 dialectic
 session since Jul-02, zero organic use" is itself now stale — 21 labelled
