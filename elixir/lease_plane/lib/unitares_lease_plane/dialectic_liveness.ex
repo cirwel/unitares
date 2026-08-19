@@ -190,11 +190,25 @@ defmodule UnitaresLeasePlane.DialecticLiveness do
     # verdict alongside it must not read as the verdict having terminated it.
     #
     # Deliberately NOT done: terminating on a standing rejection. That was the
-    # original proposal and it was withdrawn under review. Acceptance would be
-    # inferred from silence, and silence here usually means the agent's session
-    # ended before the verdict landed (20 of 25 cases) rather than assent.
-    # Terminating on it needs verdict_acceptance to become a real protocol
-    # transition first.
+    # original proposal and it was withdrawn under review, because acceptance
+    # would be inferred from silence.
+    #
+    # An earlier draft of this comment justified that with "silence means the
+    # agent's session ended before the verdict landed". That was wrong, and the
+    # correction makes the point stronger. Of the 20 rejected-then-swept
+    # sessions whose agent never replied, 14 are scheduled `canary_dialectic*`
+    # probes that were never going to answer, and of the 6 real agents, SIX OF
+    # SIX were still issuing governance calls after the rejection — thousands
+    # apiece. They were not gone. They kept working.
+    #
+    # They could: a dialectic "paused agent" is a protocol ROLE, not a state.
+    # Every one of the 42 sessions in this window has its paused agent at
+    # status='active'. Nothing holds an agent while it is under review, so a
+    # rejection it declines to answer costs it nothing.
+    #
+    # So silence is not assent, and is not absence either — it is an agent
+    # continuing past a verdict that has no grip on it. Terminating on it needs
+    # verdict_acceptance to become a real protocol transition first.
     payload = %{
       "action" => "failed",
       "reason" => "liveness_timeout",
