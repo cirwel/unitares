@@ -96,18 +96,24 @@ class AuditMixin:
                 logger.error(f"append_audit_event failed for agent={event.agent_id} type={event.event_type}: {e}")
                 return False
 
-    async def query_audit_events(
-        self,
+    @staticmethod
+    def _audit_event_filters(
         agent_id: Optional[str] = None,
         event_type: Optional[str] = None,
         event_types: Optional[List[str]] = None,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
-        limit: int = 1000,
-        order: str = "asc",
-    ) -> List[AuditEvent]:
+    ) -> tuple[str, list, int]:
+        """Build the WHERE clause shared by the row query and the aggregate.
+
+        Factored out deliberately: if the two filtered differently, the summary
+        would describe a different set of events than the ones returned beside
+        it, and nothing in the response would reveal the mismatch.
+
+        Returns (where_clause, params, next_param_idx).
+        """
         conditions = []
-        params = []
+        params: list = []
         param_idx = 1
 
         if agent_id:
@@ -132,6 +138,72 @@ class AuditMixin:
             param_idx += 1
 
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        return where_clause, params, param_idx
+
+    async def aggregate_audit_events(
+        self,
+        agent_id: Optional[str] = None,
+        event_type: Optional[str] = None,
+        event_types: Optional[List[str]] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+    ) -> List[Dict[str, Any]]:
+        """Aggregate matching audit events over the WHOLE window, no LIMIT.
+
+        Callers summarising a window must not compute their totals by iterating
+        a LIMIT-ed page: a small limit then yields a total that is really a page
+        size, and -- because rows come back in ts order -- a "last" timestamp
+        that is actually the oldest row in the window.
+
+        Grouping keeps the result small regardless of how many rows match: one
+        row per (agent_id, event_type) pair, not per event.
+        """
+        where_clause, params, _ = self._audit_event_filters(
+            agent_id, event_type, event_types, start_time, end_time
+        )
+
+        async with self.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT
+                    agent_id,
+                    event_type,
+                    COUNT(*)  AS cnt,
+                    MIN(ts)   AS first_ts,
+                    MAX(ts)   AS last_ts
+                FROM audit.events
+                {where_clause}
+                GROUP BY agent_id, event_type
+                """,
+                *params,
+            )
+            # first_ts/last_ts stay as datetimes. Callers combine group bounds
+            # to get the window bounds, and comparing ISO strings would be
+            # wrong the moment two rows carry different UTC offsets.
+            return [
+                {
+                    "agent_id": r["agent_id"],
+                    "event_type": r["event_type"],
+                    "count": int(r["cnt"]),
+                    "first_ts": r["first_ts"],
+                    "last_ts": r["last_ts"],
+                }
+                for r in rows
+            ]
+
+    async def query_audit_events(
+        self,
+        agent_id: Optional[str] = None,
+        event_type: Optional[str] = None,
+        event_types: Optional[List[str]] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        limit: int = 1000,
+        order: str = "asc",
+    ) -> List[AuditEvent]:
+        where_clause, params, param_idx = self._audit_event_filters(
+            agent_id, event_type, event_types, start_time, end_time
+        )
         order_clause = "ASC" if order.lower() == "asc" else "DESC"
 
         params.append(limit)
