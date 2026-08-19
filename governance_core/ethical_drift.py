@@ -397,8 +397,9 @@ def compute_ethical_drift(
         complexity_dev *= 0.5
 
     # State velocity floor: EISV state changes inject signal even when EMA baselines
-    # track tightly. This prevents signal starvation for non-Lumen agents whose
-    # drift vectors would otherwise flatline at [0,0,0,0].
+    # track tightly. This prevents signal starvation for agents WITHOUT a
+    # physical sensor, whose drift vectors would otherwise flatline at
+    # [0,0,0,0] — the sensor-bearing case was the one already covered.
     if state_velocity is not None and state_velocity > 0.01:
         velocity_signal = min(0.5, state_velocity)
         coherence_dev = max(coherence_dev, velocity_signal * 0.5)

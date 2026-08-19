@@ -49,7 +49,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # Directories whose contents SHIP or run as the server. Ops scripts, docs,
 # tests, dashboards and plist templates are deliberately excluded: a deploy
 # script for this operator's fleet is supposed to name this operator's fleet.
-DEFAULT_PATHS = ("src", "agents/sdk/src")
+#
+# This list must track ``[tool.setuptools.packages.find].include`` in
+# pyproject.toml, which is ``src`` + ``governance_core``. governance_core was
+# missing from the first version of this guard — half the shipped artifact,
+# and the half most obliged to be agnostic, since it is the pure-Python core
+# every deployment imports. It passes, but it was not being checked.
+# agents/sdk/src ships separately as the unitares-sdk PyPI package; config/ is
+# imported by src at runtime.
+DEFAULT_PATHS = ("src", "governance_core", "config", "agents/sdk/src")
 
 # The operator fleet identities that must not appear in shipped source. This
 # list is the guard's own configuration — it is the single sanctioned mention.

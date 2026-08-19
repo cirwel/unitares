@@ -126,7 +126,7 @@ class DialecticParams(AgentIdentityMixin):
     session_id: Optional[str] = Field(None, description="Dialectic session ID")
     agent_id: Optional[str] = Field(None, description="Filter by agent (for action=get or list)")
     status: Optional[str] = Field(None, description="Filter by phase (for action=list)")
-    limit: Optional[int] = Field(None, description="Max sessions to return (for action=list, default 50)")
+    limit: Optional[int] = Field(None, description="Max sessions to return (for action=list, default 50, min 1, values above 200 are capped)")
     include_transcript: Optional[bool] = Field(None, description="Include full transcript (for action=list, default false)")
     check_timeout: Optional[bool] = Field(None, description="Check reviewer/session timeouts for action=get")
     # Write action fields

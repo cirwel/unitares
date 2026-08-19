@@ -75,6 +75,20 @@ def connect():
     return psycopg2.connect(dsn)
 
 
+# A gap this wide between two elective calls is the proxy for "the agent went
+# and did other work, then came back". Governance cannot see non-governance
+# work, so the gap is the only available stand-in — state it, do not hide it.
+_RETURN_GAP_SECONDS = 60
+
+# Callers whose governance calls are scheduled or harness-wired rather than
+# elected. Kept as one regex so the continuation metric and the retrieval
+# composition line cannot drift apart.
+_SCHEDULED_LABEL_RE = (
+    r"^(Vigil|Sentinel|Watcher|Steward|Chronicler|Lumen"
+    r"|memory-kg-sync|kg-gardener|kg-sweep|canary_|Hermes Agent)"
+)
+
+
 def _snapshot_queries() -> dict:
     return {
         "checkin_concentration": """
@@ -93,15 +107,93 @@ def _snapshot_queries() -> dict:
         "agent_kg_retrieval": """
             -- Named agents only; operator credentials (the dashboard) are
             -- operator retrieval, not agent-initiated retrieval.
-            SELECT count(*) AS named_searches,
-                   count(DISTINCT u.agent_id) AS distinct_agents
+            --
+            -- RETRIEVAL means action IN ('search','details'). Corrected
+            -- 2026-08-18: the query counted EVERY `knowledge` action, so KG
+            -- housekeeping landed in a number labelled retrieval — over one
+            -- 14d window that was 1,704 `audit` + 562 `cleanup` + 367
+            -- `update`/`store` from the resident sweep against 225 real
+            -- queries. Expect a step-change DOWN in the checkpoint log at
+            -- this date; it is the metric being fixed, not usage falling.
+            -- `all_action_calls` keeps the old broad count for continuity.
+            --
+            -- Tool list also corrected: `search_knowledge_graph` is dead (0
+            -- rows in 30d); the live alias is `search_shared_memory`.
+            SELECT count(*) FILTER (WHERE u.payload->>'action' IN ('search', 'details'))
+                       AS named_searches,
+                   count(DISTINCT u.agent_id) FILTER (WHERE u.payload->>'action' IN ('search', 'details'))
+                       AS distinct_agents,
+                   count(*) AS all_action_calls,
+                   count(*) FILTER (WHERE u.payload->>'action' IN ('search', 'details')
+                                      AND a.label ~* %(scheduled_re)s)
+                       AS scheduled_searches
             FROM audit.tool_usage u
             LEFT JOIN core.agents a ON a.id::text = u.agent_id
             WHERE u.ts > now() - make_interval(days => %(days)s)
-              AND u.tool_name IN ('knowledge', 'search_knowledge_graph')
+              AND u.tool_name IN ('knowledge', 'search_shared_memory')
               AND u.agent_id IS NOT NULL
               AND coalesce(a.label, '') NOT LIKE 'operator\\_%%'
               AND coalesce(a.label, '') NOT LIKE 'canary\\_%%'
+        """,
+        # Continuation, not counts. An operator prompt can license call 1
+        # ("use the tools on your own accord"); it does not license call 2.
+        # So the adoption question that survives not knowing the prompt is:
+        # given an agent elected a governance call, did it come BACK to that
+        # surface later, after a gap wide enough to mean it did other work?
+        #
+        # Matches the lever model's own inertia finding (call 1 predicts
+        # calls 2..n) — the CONDITIONAL rate is what a payload lever should
+        # move; raw volume never was.
+        #
+        # Elective excludes: lifecycle ceremony (hook-emitted), the polling
+        # surfaces (get_governance_metrics ~991k/14d, list_agents = the
+        # Discord bridge), lease substrate, KG housekeeping, dialectic
+        # dashboard reads, and the scheduled cohort (residents, KG jobs,
+        # canaries, and the hermes harness loop, which calls record_result
+        # as part of its turn rather than electing it).
+        "elective_continuation": """
+            WITH elective AS (
+                SELECT u.ts, u.agent_id,
+                       CASE WHEN u.tool_name IN ('knowledge', 'search_shared_memory')
+                                THEN 'kg'
+                            WHEN u.tool_name IN ('dialectic', 'request_review')
+                                THEN 'dialectic'
+                            ELSE 'other' END AS surface
+                FROM audit.tool_usage u
+                JOIN core.agents a ON a.id::text = u.agent_id
+                WHERE u.ts > now() - make_interval(days => %(days)s)
+                  AND a.label !~* %(scheduled_re)s
+                  AND (
+                        (u.tool_name IN ('knowledge', 'search_shared_memory')
+                         AND u.payload->>'action' IN ('search', 'details'))
+                     OR (u.tool_name IN ('dialectic', 'request_review')
+                         AND coalesce(u.payload->>'action', 'request')
+                             NOT IN ('get', 'list'))
+                     OR u.tool_name IN ('observe', 'check_working_state',
+                                        'self_recovery', 'store_finding',
+                                        'leave_note', 'export', 'calibration')
+                  )
+            ),
+            gaps AS (
+                SELECT *, lag(ts) OVER (PARTITION BY agent_id ORDER BY ts) AS prev_any,
+                          lag(ts) OVER (PARTITION BY agent_id, surface ORDER BY ts) AS prev_surface
+                FROM elective
+            ),
+            per_agent AS (
+                SELECT agent_id,
+                       count(*) AS calls,
+                       max(EXTRACT(epoch FROM ts) - EXTRACT(epoch FROM prev_any)) AS max_gap_s,
+                       count(*) FILTER (WHERE surface = 'kg') AS kg_calls,
+                       max(EXTRACT(epoch FROM ts) - EXTRACT(epoch FROM prev_surface))
+                           FILTER (WHERE surface = 'kg') AS kg_gap_s
+                FROM gaps GROUP BY 1
+            )
+            SELECT count(*) AS agents_elected,
+                   sum(calls) AS elective_calls,
+                   count(*) FILTER (WHERE max_gap_s >= %(return_gap_s)s) AS agents_returned,
+                   count(*) FILTER (WHERE kg_calls > 0) AS kg_agents,
+                   count(*) FILTER (WHERE kg_gap_s >= %(return_gap_s)s) AS kg_returned
+            FROM per_agent
         """,
         # Onboard engagement. `converted` used to mean process_agent_update only,
         # which made BEAM-dispatch harness identities look like permanent
@@ -265,6 +357,10 @@ def snapshot(
     queries = _snapshot_queries()
     query_params = {
         "days": days,
+        # Scheduled/wired callers: residents on timers, KG maintenance jobs,
+        # dialectic canaries, and the hermes harness loop. Not elections.
+        "scheduled_re": _SCHEDULED_LABEL_RE,
+        "return_gap_s": _RETURN_GAP_SECONDS,
         "nudge_since": window_start,
         "nudge_until": window_end,
         "nudge_conversion_minutes": nudge_conversion_minutes,
@@ -284,6 +380,14 @@ def snapshot(
                 out[key] = dict(cur.fetchone())
     cc = out["checkin_concentration"]
     cc["top2_share_pct"] = round(100 * cc["top2"] / cc["total"], 1) if cc["total"] else None
+    ec = out["elective_continuation"]
+    ec["returned_pct"] = (
+        round(100 * ec["agents_returned"] / ec["agents_elected"], 1)
+        if ec["agents_elected"] else None
+    )
+    ec["kg_returned_pct"] = (
+        round(100 * ec["kg_returned"] / ec["kg_agents"], 1) if ec["kg_agents"] else None
+    )
     oc = out["onboard_conversion"]
     oc["conversion_pct"] = round(100 * oc["converted"] / oc["minted"], 1) if oc["minted"] else None
     oc["ceremonial_conversion_pct"] = (
@@ -350,8 +454,16 @@ def main() -> int:
     oc, op = snap["onboard_conversion"], snap["outcome_pipe_health"]
     print(f"Adoption KPI snapshot — last {args.days}d")
     print(f"  check-ins: {cc['total']} total, top-2 callers {cc['top2_share_pct']}%")
-    print(f"  agent KG retrieval (named agents): {kg['named_searches']} calls "
-          f"by {kg['distinct_agents']} agents")
+    print(f"  agent KG retrieval (named agents): {kg['named_searches']} search/details calls "
+          f"by {kg['distinct_agents']} agents "
+          f"({kg['scheduled_searches']} of them scheduled; "
+          f"{kg['all_action_calls']} knowledge calls of ALL actions)")
+    ec = snap["elective_continuation"]
+    print(f"  elective continuation: {ec['agents_returned']}/{ec['agents_elected']} agents "
+          f"({ec['returned_pct']}%) came back to a governance surface after a "
+          f"{_RETURN_GAP_SECONDS}s+ gap — {ec['elective_calls']} elective calls")
+    print(f"    KG surface alone: {ec['kg_returned']}/{ec['kg_agents']} "
+          f"({ec['kg_returned_pct']}%) searched again later")
     print(f"  onboard→checkin (process + BEAM external): {oc['converted']}/{oc['minted']} "
           f"({oc['conversion_pct']}%)")
     print(f"    ceremonial-only: {oc['ceremonial_converted']}/{oc['minted']} "
