@@ -108,9 +108,34 @@ derives `population_scope`; a `single_agent` constant reports
 absence of evidence is not evidence of breadth.
 
 ⛔This is a DISCLOSURE change, not a re-measurement. No constant's value moved
-and no class's fallback changed. Re-fitting on a corrected cohort is precisely
-the selective re-run the pre-registered stop rule (#1425) forbids; the numbers
-are not wrong, the claim attached to them was broader than the data.
+and no class's fallback changed; the numbers are not wrong, the claim attached to
+them was broader than the data.
+
+**Corrected citation.** An earlier revision of this paragraph named the
+pre-registered outcome-grounding stop rule (#1425) as forbidding the re-fit. That
+citation is withdrawn. #1425
+([stop rule](../proposals/eisv-outcome-grounding-stop-rule-v0.md)) is scoped to
+outcome-label discrimination — whether EISV separates good outcomes from bad — and
+constrains re-runs of the ablation probe. These anchors are fitted on a label-free
+slice: a median and a p95 over `HEALTHY_REGIMES`, consuming no outcome label. *What
+this changes*, below, already states that scope correctly; this paragraph did not.
+The two now agree.
+
+Two grounds do hold, on their own terms:
+
+1. **Methodological, and currently unregistered.** Re-fitting a constant *because*
+   its narrowness was just discovered chooses the analysis after seeing the data.
+   That is the discipline #1425 encodes, applied to a different object — which makes
+   it an analogous rule, not that rule. It needs its own registration rather than
+   #1425's authority.
+2. **Empirical, and decisive for the thin classes.** `default` cannot be re-fit at
+   any staleness threshold: its 2026-06-27 slice held N=16 against the generator's
+   own `--n-min 30` (recorded on `DELTA_NORM_MAX[default]` in
+   `config/governance_config.py`). Sub-threshold classes are emitted as a comment,
+   so re-running the generator would *remove* `default` and route every
+   unclassified agent to the `DELTA_NORM_MAX_DEFAULT` placeholder — a value tuned
+   for a geometric property, not measured. Here re-measurement is not available;
+   it is a deletion.
 
 ## Deployed posture — corrected 2026-08-10
 

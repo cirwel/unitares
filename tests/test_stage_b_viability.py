@@ -7,7 +7,11 @@ exercised by running the probe against a live governance DB, not here.
 import math
 
 from scripts.analysis.stage_b_viability import (
+    OUTCOME_LABEL_CLASS,
     auc,
+    bad_label_classes,
+    format_label_classes,
+    label_class,
     format_composition,
     label_composition,
     permutation_p,
@@ -145,3 +149,66 @@ def test_composition_is_ordered_largest_first():
     comp = label_composition(channels, [True] * 16)
     rendered = format_composition(comp)
     assert rendered.index("b=9") < rendered.index("c=5") < rendered.index("a=2")
+
+
+# --- the AUC must say which label class it scored ---
+#
+# The contract distinguishes task-negative from contract-violation and
+# authority-harm, and says task-negative is "not automatically governance-bad".
+# A single pooled is_bad erases that, so the probe names the class. These tests
+# assert the naming; they do not change which rows enter the AUC.
+
+def test_task_negative_sample_forbids_a_governance_reading():
+    """Every bad label the fleet has ever anchored is task-negative."""
+    channels = ["test_failed"] * 15 + ["watcher_finding_dismissed"] * 8
+    summary = bad_label_classes(channels, [True] * 23)
+    assert summary["classes"] == {"task-negative": 23}
+    assert summary["supports_governance_claim"] is False
+    assert summary["is_pooled"] is False
+    text = "\n".join(format_label_classes(summary))
+    assert "REWORK PREDICTION only" in text
+    assert "class-absence limit, not a sample-size one" in text
+
+
+def test_unrecognised_outcome_type_is_unknown_not_governance():
+    """A new outcome type must be classified on purpose. Defaulting it into a
+    governance class would let the strongest claim appear by accident."""
+    assert label_class("some_future_outcome") == "unknown/unmeasured"
+    summary = bad_label_classes(["some_future_outcome"], [True])
+    assert summary["supports_governance_claim"] is False
+
+
+def test_governance_class_is_recognised_when_present():
+    channels = ["test_failed", "contract_violation_recorded"]
+    OUTCOME_LABEL_CLASS["contract_violation_recorded"] = "contract/process violation"
+    try:
+        summary = bad_label_classes(channels, [True, True])
+        assert summary["supports_governance_claim"] is True
+        assert summary["is_pooled"] is True
+        text = "\n".join(format_label_classes(summary))
+        assert "POOLED" in text
+    finally:
+        del OUTCOME_LABEL_CLASS["contract_violation_recorded"]
+
+
+def test_pooling_is_flagged_because_the_questions_differ():
+    """Harmless today only because every positive is one class. The moment a
+    governance label lands it would otherwise be averaged with test failures."""
+    OUTCOME_LABEL_CLASS["harm_event"] = "authority/harm"
+    try:
+        summary = bad_label_classes(["test_failed", "harm_event"], [True, True])
+        assert summary["is_pooled"] is True
+        assert "not the same question" in "\n".join(format_label_classes(summary))
+    finally:
+        del OUTCOME_LABEL_CLASS["harm_event"]
+
+
+def test_good_rows_never_contribute_a_bad_class():
+    summary = bad_label_classes(["test_passed", "test_failed"], [False, True])
+    assert summary["classes"] == {"task-negative": 1}
+
+
+def test_no_bad_labels_says_so():
+    summary = bad_label_classes(["sentinel_finding_confirmed"] * 17, [False] * 17)
+    assert summary["classes"] == {}
+    assert "nothing to characterise" in "\n".join(format_label_classes(summary))
