@@ -15,8 +15,12 @@ stale matched pair. Rejected in dialectic ce6f53ad3e0f404e (2026-08-19).
 Live evidence behind the design (verified 2026-08-19 against `governance`):
 a real forced release fired 2026-08-10 23:46:25 on `resident:/steward_eisv_sync`
 (held_x_ttl 87.6, holder_pid_null true), alarmed 28.5s later, and was
-adjudicated 2026-08-13. Backtest over 60 days: 128 real forced releases, 128
-alarmed, 0 unmatched, 0 false positives.
+adjudicated 2026-08-13. Backtest over 90 days, genuinely-real surfaces only:
+n=21, 21 alarmed, 0 unmatched, 0 false positives, p50 latency 26.7s.
+
+⚠️An earlier draft of this file cited 128/128 over 60 days. That filter excluded
+only "td:/test/" and so counted 100 legacy pre-#1102 fixtures as real forced
+releases — see test_suppression_mirror_matches_the_producer.
 """
 
 from __future__ import annotations
@@ -78,10 +82,9 @@ def test_fingerprint_prefix_matches_both_producers(doctor):
     )
 
 
-def test_query_excludes_reserved_test_surfaces(doctor, monkeypatch):
-    """The daily td:/test/force-release-contract-* fixtures are suppressed before
-    the alarm, so counting them would manufacture unmatched rows and FAIL
-    permanently."""
+def test_query_excludes_every_suppressed_test_surface(doctor, monkeypatch):
+    """Fixtures are suppressed before the alarm, so counting them manufactures
+    unmatched rows and FAILs permanently."""
     seen = {}
 
     def capture(_db, sql, **_k):
@@ -90,8 +93,54 @@ def test_query_excludes_reserved_test_surfaces(doctor, monkeypatch):
 
     monkeypatch.setattr(doctor, "_psql_rows", capture)
     doctor.check_forced_release_transform("postgresql:///x")
-    assert "td:/test/%" in seen["sql"]
-    assert "NOT LIKE" in seen["sql"]
+    for prefix in doctor.FORCED_TRANSFORM_TEST_SURFACE_PREFIXES:
+        assert f"NOT LIKE '{prefix}%'" in seen["sql"], (
+            f"suppressed prefix {prefix!r} missing from the query"
+        )
+
+
+def test_suppression_mirror_matches_the_producer(doctor):
+    """Regression, caught 2026-08-19. The producer suppresses the legacy
+    pre-#1102 naming as well as the reserved namespace, and the governance DB
+    forbids DELETE so those rows are permanent (257 of them, 2026-06-03 to
+    06-27). The first version of this check excluded only "td:/test/", which
+    counted 100 of them as real forced releases inside a 60-day backtest and
+    would FAIL on all 257 the moment the lookback widened past ~53 days."""
+    sys.path.insert(0, str(REPO_ROOT))
+    from agents.sentinel.forced_release_alarm import (
+        _SUPPRESSED_TEST_SURFACE_PREFIXES,
+    )
+
+    assert set(doctor.FORCED_TRANSFORM_TEST_SURFACE_PREFIXES) == set(
+        _SUPPRESSED_TEST_SURFACE_PREFIXES
+    ), (
+        "the producer's suppression contract changed but the doctor mirror did "
+        f"not: producer={_SUPPRESSED_TEST_SURFACE_PREFIXES}, "
+        f"doctor={doctor.FORCED_TRANSFORM_TEST_SURFACE_PREFIXES}"
+    )
+
+
+def test_prefix_is_a_real_prefix_of_producer_output(doctor):
+    """Stronger than matching the source text: build an actual alarm and assert
+    the doctor's join constant really prefixes what ships."""
+    sys.path.insert(0, str(REPO_ROOT))
+    from datetime import datetime, timezone
+
+    from agents.sentinel.forced_release_alarm import _ad_hoc_alarm
+
+    alarm = _ad_hoc_alarm({
+        "event_id": "729c94db-3c92-42ff-b4e7-1c1b027e3c20",
+        "lease_id": "l1",
+        "surface_id": "resident:/steward_eisv_sync",
+        "surface_kind": "resident",
+        "ts": datetime(2026, 8, 10, 23, 45, 57, tzinfo=timezone.utc),
+    })
+    assert alarm.fingerprint.startswith(doctor.FORCED_TRANSFORM_FINGERPRINT_PREFIX)
+    # ...and the suffix is the lease UUID the doctor joins on, not anything else.
+    assert alarm.fingerprint == (
+        doctor.FORCED_TRANSFORM_FINGERPRINT_PREFIX
+        + "729c94db-3c92-42ff-b4e7-1c1b027e3c20"
+    )
 
 
 def test_query_gives_fresh_events_time_to_alarm(doctor, monkeypatch):
@@ -199,9 +248,9 @@ def test_latency_window_is_narrower_than_the_absence_window(doctor):
 
 
 def test_latency_threshold_clears_observed_normal(doctor):
-    """Measured normal is 24.9-35.5s across 60 days. The threshold must sit well
-    above that and well below the 26,581s excursion it is meant to catch."""
-    assert doctor.FORCED_TRANSFORM_LATENCY_WARN_S > 35.5 * 10
+    """Measured p50 is 26.7s (n=21, 90d). The threshold must sit well above
+    that and well below the 26,581s excursion it is meant to catch."""
+    assert doctor.FORCED_TRANSFORM_LATENCY_WARN_S > 26.7 * 10
     assert doctor.FORCED_TRANSFORM_LATENCY_WARN_S < 26581
 
 

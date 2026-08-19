@@ -2313,14 +2313,39 @@ def check_adjudication_feedstock(db_url: str) -> CheckResult:
 # producer and the audit row overwrites it; that mechanism was NOT traced, and
 # it does not need to be — the lesson is only that the payload field is not
 # trustworthy as a key. Join on the FINGERPRINT, whose UUID suffix is written
-# identically by both producers and is verified to match 128/128 over 60 days.
+# identically by both producers and is verified to match 21/21 over 90 days.
 # Joining on the payload integer matches nothing, silently, forever — the same
 # failure class as the emitter-keyed dedup fingerprint fixed in #1708.
 FORCED_TRANSFORM_FINGERPRINT_PREFIX = "forced_release:ad_hoc:"
+
+# Mirrored from agents/sentinel/forced_release_alarm.py
+# (_SUPPRESSED_TEST_SURFACE_PREFIXES). Duplicated for the same reason as the
+# queue definition above: the doctor runs against a DEPLOYED database from a
+# checkout that may not be the deployed tree.
+#
+# ⛔ BOTH prefixes are load-bearing. The producer suppresses the legacy
+# pre-#1102 naming as well as the reserved namespace, and the governance DB
+# forbids DELETE so those rows are permanent: 257 of them, 2026-06-03 to
+# 06-27. Excluding only "td:/test/" counts every one of them as a real forced
+# release that never alarmed, i.e. 257 false FAILs — this check reporting a
+# broken transform while the transform is fine, which is the exact failure it
+# exists to prevent.
+FORCED_TRANSFORM_TEST_SURFACE_PREFIXES = (
+    "td:/test/",
+    "td:/force-release-contract-test-",
+)
 FORCED_TRANSFORM_DAYS = 30        # lookback for the ABSENCE arm
 FORCED_TRANSFORM_LATENCY_DAYS = 7  # lookback for the LATENCY arm (see docstring)
 FORCED_TRANSFORM_SETTLE_S = 300   # too fresh to have alarmed yet; do not judge
 FORCED_TRANSFORM_LATENCY_WARN_S = 900  # normal is 25-36s; see docstring
+
+
+def _forced_transform_surface_filter() -> str:
+    """SQL excluding every suppressed test-surface prefix, from the one tuple."""
+    return " AND ".join(
+        f"surface_id NOT LIKE '{prefix}%'"
+        for prefix in FORCED_TRANSFORM_TEST_SURFACE_PREFIXES
+    )
 
 
 def check_forced_release_transform(db_url: str) -> CheckResult:
@@ -2340,8 +2365,11 @@ def check_forced_release_transform(db_url: str) -> CheckResult:
     then 9.1 days (08-01 -> 08-10). Any 7d window over that process reads dry
     most of the time in perfect health.
 
-    Backtest at introduction (60d, non-test surfaces): 128 real forced
-    releases, 128 alarmed, 0 unmatched, 0 false positives.
+    Backtest at introduction (90d, genuinely-real surfaces only): n=21, 21
+    alarmed, 0 unmatched, 0 false positives. ⚠️An earlier version of this
+    number said 128/128 over 60d; that filtered only "td:/test/" and so counted
+    100 legacy fixtures as real forced releases. Corrected 2026-08-19 — the
+    real n is 21, and it is small because genuine forced releases are rare.
 
     Two arms, because presence alone is not enough:
 
@@ -2355,11 +2383,14 @@ def check_forced_release_transform(db_url: str) -> CheckResult:
        resolved 2026-07-30 degradation for ten consecutive days — "an open
        finding nobody closes is how a detector decays into noise."
        Measured transform latency is tightly
-       clustered at 24.9-35.5s across all 60 days EXCEPT 2026-07-30, where it
-       reached 26,581s (7.4h) during the late-July Sentinel degradation. Those
-       events DID eventually match, so an absence-only check reads green over a
-       real outage. WARN above ``FORCED_TRANSFORM_LATENCY_WARN_S`` (900s: ~25x
-       the observed normal ceiling, ~30x below the known excursion).
+       n=21 over 90d with p50 26.7s and min 0.6s. Two of those 21 sit at
+       26,581s (7.4h) — both the same 2026-07-30 23:53:47 incident, on
+       `resident:/steward` and `resident:/steward_eisv_sync`. They DID
+       eventually match, so an absence-only check reads green over a real
+       outage. WARN above ``FORCED_TRANSFORM_LATENCY_WARN_S`` (900s: ~34x p50,
+       ~30x below the known excursion). ⚠️n is small — treat 900s as a
+       separating value between two well-clustered groups, not as a fitted
+       percentile.
        ⚠️Known confound: if the host slept between the lease event and the
        alarm, the delay is real but is not Sentinel's fault (see
        ``_host_awake_s`` and the 2026-08-03 mobile/sleep class). That is why
@@ -2381,7 +2412,7 @@ def check_forced_release_transform(db_url: str) -> CheckResult:
         "  SELECT event_id, ts, surface_id"
         "  FROM lease_plane.lease_plane_events"
         "  WHERE event_type = 'forced'"
-        "    AND surface_id NOT LIKE 'td:/test/%'"
+        f"   AND {_forced_transform_surface_filter()}"
         f"   AND ts > now() - interval '{FORCED_TRANSFORM_DAYS} days'"
         f"   AND ts < now() - interval '{FORCED_TRANSFORM_SETTLE_S} seconds'"
         "), alarms AS ("
@@ -2410,9 +2441,10 @@ def check_forced_release_transform(db_url: str) -> CheckResult:
             name, mode, Status.SKIP,
             f"no real forced releases in {FORCED_TRANSFORM_DAYS}d — invariant "
             "vacuously satisfied, nothing to assert",
-            detail=("Test-surface fixtures (td:/test/) are excluded by design: "
-                    "they are suppressed before the alarm, so they exercise the "
-                    "lease plane and prove nothing about alarm->queue."),
+            detail=("Test-surface fixtures are excluded by design (both the "
+                    "reserved and the legacy pre-#1102 prefix): they are "
+                    "suppressed before the alarm, so they exercise the lease "
+                    "plane and prove nothing about alarm->queue."),
         )
 
     unmatched = [r for r in rows if len(r) > 2 and r[2] not in ("t", "true")]
