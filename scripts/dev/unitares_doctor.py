@@ -2194,12 +2194,26 @@ def check_adjudication_feedstock(db_url: str) -> CheckResult:
 
     That is the live state as of 2026-08-10 and the reason this check exists.
     Sentinel emitted 201 findings in 7 days — 136 on one day — and **not one**
-    was queue-eligible: all `medium`. Its last high was 2026-08-01 20:20:20,
-    31 seconds after the last real forced lease release, because the lease
-    fixes (#1443/#1444/#1459) removed the condition that produced them. The
-    zero is FAIR — the detector is correct and there is genuinely nothing to
-    report. But the queue had been dry for nine days and nothing said so,
-    because an empty queue and a healthy queue are the same observation.
+    was queue-eligible: all `medium`. An empty queue and a healthy queue are
+    the same observation, and the queue had been dry for nine days with nothing
+    saying so.
+
+    ⛔CORRECTION 2026-08-19: this docstring used to conclude the lease fixes
+    (#1443/#1444/#1459) had REMOVED the producing condition, making the zero
+    permanently fair and the lever retirable. That is FALSE. A real forced
+    release fired 2026-08-10 23:46:25 on `resident:/steward_eisv_sync`
+    (held_x_ttl 87.6, holder_pid_null true, non-test surface), alarmed 28.5s
+    later, and was adjudicated 2026-08-13 via the dashboard. The fixes made the
+    condition RARE, not absent. "Removed" would justify retiring the lever;
+    "rare" justifies keeping it.
+
+    So a dry window here has three causes, not two, and this check alone cannot
+    tell them apart: (a) condition genuinely gone, (b) queue DRAINED — the last
+    eligible finding was adjudicated and none has arrived since, (c) alarm path
+    BROKEN. ⛔Do NOT "fix" this by passing when the newest eligible finding has
+    a newer adjudication: that shortcut lets case (c) go green forever against
+    a stale matched pair. The separation is `forced_release_transform`, which
+    asserts the upstream invariant; this check stays WARN by design.
 
     Federation note, and the reason this reports PER PRODUCER rather than a
     single boolean: 8 of 10 finding producers are structurally unadjudicatable
@@ -2275,11 +2289,194 @@ def check_adjudication_feedstock(db_url: str) -> CheckResult:
             "nothing while every liveness check stays green. This is not "
             "automatically a defect — the producing condition may have been "
             "genuinely fixed, in which case the honest response is to retire "
-            "the lever rather than restore the alarm. ⛔Do NOT widen the queue "
+            "the lever rather than restore the alarm. Read "
+            "forced_release_transform before deciding which: it asserts the "
+            "upstream invariant and is what separates a DRAINED queue from a "
+            "DEAD one. ⛔Do NOT widen the queue "
             "to clear this warning: adjudication attributes the outcome to the "
             "sentinel substrate uuid, so admitting another producer's finding "
             "books it against Sentinel's EISV. Fix attribution first."
         ),
+    )
+
+
+# The transform this check asserts: every real (non-test) forced lease release
+# MUST become a queue-admissible sentinel finding. Sentinel builds the finding's
+# fingerprint as "forced_release:ad_hoc:{lease_plane_events.event_id}", so the
+# two substrates join deterministically on that UUID.
+#
+# ⛔ The finding PAYLOAD also carries a key named `event_id`, and it is NOT the
+# join key. Both producers (agents/sentinel/forced_release_alarm.py:220 and
+# elixir/.../forced_release_poller/logic.ex:98) write the lease UUID into
+# `extra.event_id`, yet the rows that actually landed in audit.events carry a
+# small integer there instead (47, 62, 58, 24 ...). Something between the
+# producer and the audit row overwrites it; that mechanism was NOT traced, and
+# it does not need to be — the lesson is only that the payload field is not
+# trustworthy as a key. Join on the FINGERPRINT, whose UUID suffix is written
+# identically by both producers and is verified to match 128/128 over 60 days.
+# Joining on the payload integer matches nothing, silently, forever — the same
+# failure class as the emitter-keyed dedup fingerprint fixed in #1708.
+FORCED_TRANSFORM_FINGERPRINT_PREFIX = "forced_release:ad_hoc:"
+FORCED_TRANSFORM_DAYS = 30        # lookback for the ABSENCE arm
+FORCED_TRANSFORM_LATENCY_DAYS = 7  # lookback for the LATENCY arm (see docstring)
+FORCED_TRANSFORM_SETTLE_S = 300   # too fresh to have alarmed yet; do not judge
+FORCED_TRANSFORM_LATENCY_WARN_S = 900  # normal is 25-36s; see docstring
+
+
+def check_forced_release_transform(db_url: str) -> CheckResult:
+    """FAIL when a real forced lease release produced no queue-admissible finding.
+
+    ``adjudication_feedstock`` reasons only from downstream ``audit.events``, so
+    it cannot tell a DRAINED queue (last eligible finding was adjudicated,
+    healthy) from a DEAD one (the alarm path broke and no finding will ever
+    arrive again). Both look like zero. This check supplies the orthogonal
+    signal it lacks: it reads the UPSTREAM substrate and asserts the transform.
+
+    Deliberately a CONDITIONAL INVARIANT, not a heartbeat. When no real forced
+    release happened it is vacuously satisfied and SKIPs — that is correct, not
+    a blind spot, and it is why this cannot be folded into a fixed-window
+    "has anything arrived lately" test. Real forced releases are bursty and
+    rare: measured over 60 days there is a 33-day gap (2026-06-27 -> 07-30),
+    then 9.1 days (08-01 -> 08-10). Any 7d window over that process reads dry
+    most of the time in perfect health.
+
+    Backtest at introduction (60d, non-test surfaces): 128 real forced
+    releases, 128 alarmed, 0 unmatched, 0 false positives.
+
+    Two arms, because presence alone is not enough:
+
+    1. ABSENCE — an unmatched non-test forced release means the transform is
+       broken. FAIL.
+    2. LATENCY — matched, but slow, scoped to the last
+       ``FORCED_TRANSFORM_LATENCY_DAYS`` days. The two arms need different
+       windows: absence is a permanently lost adjudication and stays worth
+       surfacing across the sparse event process, but a latency excursion is a
+       statement about health NOW. Scoped to 30d this arm re-reported the
+       resolved 2026-07-30 degradation for ten consecutive days — "an open
+       finding nobody closes is how a detector decays into noise."
+       Measured transform latency is tightly
+       clustered at 24.9-35.5s across all 60 days EXCEPT 2026-07-30, where it
+       reached 26,581s (7.4h) during the late-July Sentinel degradation. Those
+       events DID eventually match, so an absence-only check reads green over a
+       real outage. WARN above ``FORCED_TRANSFORM_LATENCY_WARN_S`` (900s: ~25x
+       the observed normal ceiling, ~30x below the known excursion).
+       ⚠️Known confound: if the host slept between the lease event and the
+       alarm, the delay is real but is not Sentinel's fault (see
+       ``_host_awake_s`` and the 2026-08-03 mobile/sleep class). That is why
+       this arm is WARN and names sleep in its detail rather than FAILing.
+
+    Events newer than ``FORCED_TRANSFORM_SETTLE_S`` are excluded: at ~28s
+    typical latency, judging a 10-second-old event would flap.
+
+    Reads two tables and writes nothing. It mints no identity and emits no
+    finding, so unlike a synthetic canary it books nothing against Sentinel's
+    EISV — which is why it, and not a canary, is the primary control here
+    (dialectic ce6f53ad3e0f404e, 2026-08-19).
+    """
+    name, mode = "forced_release_transform", "operator"
+    prefix = FORCED_TRANSFORM_FINGERPRINT_PREFIX
+
+    rows = _psql_rows(db_url, (
+        "WITH real_forced AS ("
+        "  SELECT event_id, ts, surface_id"
+        "  FROM lease_plane.lease_plane_events"
+        "  WHERE event_type = 'forced'"
+        "    AND surface_id NOT LIKE 'td:/test/%'"
+        f"   AND ts > now() - interval '{FORCED_TRANSFORM_DAYS} days'"
+        f"   AND ts < now() - interval '{FORCED_TRANSFORM_SETTLE_S} seconds'"
+        "), alarms AS ("
+        "  SELECT payload->>'fingerprint' AS fp, ts AS alarm_ts"
+        "  FROM audit.events"
+        "  WHERE event_type IN ('sentinel_finding', 'sentinel_alarm_finding')"
+        f"   AND ts > now() - interval '{FORCED_TRANSFORM_DAYS + 1} days'"
+        ") "
+        "SELECT r.surface_id,"
+        "       to_char(r.ts, 'YYYY-MM-DD HH24:MI:SS'),"
+        "       (a.fp IS NOT NULL),"
+        "       coalesce(round(extract(epoch FROM (a.alarm_ts - r.ts))::numeric, 1), -1),"
+        f"      (r.ts > now() - interval '{FORCED_TRANSFORM_LATENCY_DAYS} days') "
+        "FROM real_forced r "
+        f"LEFT JOIN alarms a ON a.fp = '{prefix}' || r.event_id::text "
+        "ORDER BY r.ts DESC"
+    ))
+    if rows is None:
+        return CheckResult(name, mode, Status.SKIP,
+                           "lease_plane.lease_plane_events not queryable")
+    if not rows:
+        # Vacuously satisfied. The invariant has nothing to say, and saying
+        # nothing is the honest result — see the docstring on why this is not
+        # a heartbeat.
+        return CheckResult(
+            name, mode, Status.SKIP,
+            f"no real forced releases in {FORCED_TRANSFORM_DAYS}d — invariant "
+            "vacuously satisfied, nothing to assert",
+            detail=("Test-surface fixtures (td:/test/) are excluded by design: "
+                    "they are suppressed before the alarm, so they exercise the "
+                    "lease plane and prove nothing about alarm->queue."),
+        )
+
+    unmatched = [r for r in rows if len(r) > 2 and r[2] not in ("t", "true")]
+    matched = [r for r in rows if len(r) > 2 and r[2] in ("t", "true")]
+
+    if unmatched:
+        worst = ", ".join(f"{r[0]} @ {r[1]}" for r in unmatched[:4])
+        return CheckResult(
+            name, mode, Status.FAIL,
+            f"{len(unmatched)} of {len(rows)} real forced release(s) in "
+            f"{FORCED_TRANSFORM_DAYS}d produced NO sentinel finding",
+            detail=(
+                f"unmatched: {worst}"
+                f"{' ...' if len(unmatched) > 4 else ''}. The forced-release "
+                "alarm path is not transforming lease events into "
+                "queue-admissible findings, so the adjudication queue is DEAD, "
+                "not drained — and adjudication_feedstock cannot tell the "
+                "difference on its own. Check the Sentinel forced-release "
+                "poller and agents/sentinel/forced_release_alarm.py. Join key "
+                f"is '{prefix}' || lease_plane_events.event_id (UUID) — NOT the "
+                "finding payload's integer event_id field."
+            ),
+        )
+
+    # Recency is decided by Postgres (column 5), not by parsing the rendered
+    # timestamp here — the doctor and the DB have disagreed about timezone
+    # before, and a retention/window compare is exactly where that bites.
+    recent = [r for r in matched
+              if len(r) > 4 and r[4] in ("t", "true") and float(r[3]) >= 0]
+    latencies = [float(r[3]) for r in recent]
+    slow = [r for r in recent
+            if float(r[3]) > FORCED_TRANSFORM_LATENCY_WARN_S]
+    worst_s = max(latencies) if latencies else 0.0
+
+    if slow:
+        return CheckResult(
+            name, mode, Status.WARN,
+            f"transform is intact but SLOW: {len(slow)} of {len(rows)} forced "
+            f"release(s) alarmed later than {FORCED_TRANSFORM_LATENCY_WARN_S}s "
+            f"(worst {worst_s:.0f}s)",
+            detail=(
+                f"slowest: {slow[0][0]} @ {slow[0][1]} took {float(slow[0][3]):.0f}s. "
+                "Every event matched, so an absence-only check reads green here; "
+                "normal transform latency is 25-36s. ⚠️Confound: if the host "
+                "slept between the lease event and the alarm the delay is real "
+                "but not Sentinel's fault — check pmset -g log before treating "
+                "this as a Sentinel defect."
+            ),
+        )
+
+    if recent:
+        latency_note = (f"worst latency {worst_s:.0f}s over {len(recent)} "
+                        f"event(s) in {FORCED_TRANSFORM_LATENCY_DAYS}d")
+    else:
+        latency_note = (f"no forced releases in the last "
+                        f"{FORCED_TRANSFORM_LATENCY_DAYS}d, so latency is "
+                        "unjudged this window")
+    return CheckResult(
+        name, mode, Status.PASS,
+        f"{len(matched)}/{len(rows)} real forced release(s) in "
+        f"{FORCED_TRANSFORM_DAYS}d each produced a sentinel finding "
+        f"({latency_note})",
+        detail=("Transform invariant holds, so a dry adjudication queue is "
+                "DRAINED, not dead."),
     )
 
 
@@ -2354,6 +2551,13 @@ def build_checks(
         # state and is invisible to every liveness signal.
         Check("adjudication_feedstock", "operator",
               lambda: check_adjudication_feedstock(db_url)),
+        # The orthogonal signal the one above lacks. adjudication_feedstock
+        # reasons only from downstream audit.events, so a DRAINED queue and a
+        # DEAD one are the same observation to it. This reads the UPSTREAM
+        # substrate and asserts the transform, which is the only thing that
+        # separates them.
+        Check("forced_release_transform", "operator",
+              lambda: check_forced_release_transform(db_url)),
     ]
 
 
