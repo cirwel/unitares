@@ -117,6 +117,25 @@ Compact run provenance and all 12 overall rows are preserved in
 | `~/.unitares/analysis/eisv-validation-2026-06-13_0900.md` ✓ | Historical operator-local cohort comparison | **BROKEN JOIN — not citable evidence** | retire/repoint |
 | (removed scratchpad) `eisv_validation/leadtime_probe.py` | Historical lead-time probe | Not reproducible from this repo; do not cite its numeric result | superseded by `eisv_skeptic_report` |
 
+## Labelled sets
+
+| Artifact | What it labels | Finding | Freshness |
+|---|---|---|---|
+| [`evaluation/dialectic-reviewer-labels.md`](evaluation/dialectic-reviewer-labels.md) ✓ | Every substantive non-canary `antithesis` message (n=97), 5-way: refutes / concurs-with-conditions / ratifies / formulaic / non-verdict | **Split by the 2026-07-02 Codex-reviewer activation.** Pre (n=76): 31.6% refute, **47.4% templated pseudo-disagreement**. Post (n=21): **81.0% refute, 4.8% formulaic**. Rubber-stamping never exceeds 6.6% in either era | labelled 2026-08-19 |
+
+⛔**Never quote the pooled distribution.** It straddles an instrument change —
+`UNITARES_DIALECTIC_REVIEWER_HOST=codex` was activated 2026-07-02 and gemma4
+became the degraded fallback. The pooled "38.1% formulaic" is a **pre-fix**
+figure and must not be reported as current. Post-fix n=21 is small; the split is
+by date as a proxy for backend, since no per-message model attribution existed
+before PR #1725.
+
+⛔**A naive `agrees=false` read of that corpus is wrong by ~2x.** "Did not agree"
+labels 82 of 97 as disagreement; only 41 engage. `core.dialectic_messages.agrees`
+remains NULL by design — the labels are a derived artifact with
+`source_of_truth: false`, never a backfill, because an inferred label written
+into a reviewer's column is indistinguishable from a reviewer's verdict.
+
 ## Candidate corpora — not yet evaluated
 
 Entries here are **candidates only**. None has been run against the

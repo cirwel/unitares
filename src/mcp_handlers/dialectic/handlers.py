@@ -2128,6 +2128,62 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                     dispatch_orchestrated_review,
                     reviewer_crashed_fast,
                 )
+                from .recusal import detect_subject_matter_conflict, recusal_mode
+
+                # RECUSAL, before any reviewer sees the thesis. A thesis whose
+                # subject is the review system must not be auto-assigned to the
+                # review system — the reviewer would be an interested party, and
+                # asking it to notice that itself is the one thing self-review
+                # reliably fails at (session def32eb2b4b2ce93, 2026-08-19).
+                # Checked here rather than inside the reviewer for exactly that
+                # reason: a routing rule runs before the conflict can bite.
+                _recusal = detect_subject_matter_conflict(
+                    arguments.get("reasoning"),
+                    arguments.get("root_cause"),
+                    getattr(session, "topic", None),
+                    getattr(session, "reason", None),
+                )
+                if _recusal is not None:
+                    result["recusal"] = _recusal.as_dict()
+                    logger.info(
+                        "dialectic recusal (%s): session=%s reason=%s",
+                        recusal_mode(), session_id, _recusal.reason,
+                    )
+                    try:
+                        from src.audit_db import append_audit_event_async
+                        await append_audit_event_async({
+                            "event_type": "dialectic_recusal",
+                            "session_id": session_id,
+                            "agent_id": session.paused_agent_id,
+                            "details": {
+                                **_recusal.as_dict(),
+                                "mode": recusal_mode(),
+                            },
+                        })
+                    except Exception as _e:  # never let the record break the flow
+                        logger.warning("could not record recusal: %s", _e)
+
+                if _recusal is not None and recusal_mode() == "enforce":
+                    # Leave the thesis recorded and the slot open. A human, or a
+                    # reviewer without a stake, decides. Deliberately does NOT
+                    # fall through to the in-process synthetic reviewer — that is
+                    # the same interested party by another route.
+                    session.awaiting_facilitation = True
+                    try:
+                        await pg_update_awaiting_facilitation(session_id, True)
+                    except Exception as _e:
+                        logger.warning("could not persist facilitation flag: %s", _e)
+                    result["awaiting_facilitation"] = True
+                    result["note"] = (
+                        "RECUSED: this thesis is about the review system, so the "
+                        "review system is an interested party and was not "
+                        "auto-assigned. The thesis is recorded and the reviewer "
+                        "slot is open. Assign an uninvolved reviewer with "
+                        "dialectic(action='reassign'), or facilitate as operator. "
+                        f"Set {'UNITARES_DIALECTIC_RECUSAL'}=flag to review anyway."
+                    )
+                    return success_response(result)
+
                 if orchestrated_review_enabled():
                     situation_parts = []
                     if getattr(session, "topic", None):

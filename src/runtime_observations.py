@@ -4,7 +4,12 @@ This module stores factual host evidence such as a completed-tool rollup or a
 hook-parent-process heartbeat.  These observations are deliberately written to
 the audit plane, never ``core.agent_state``: neither a hook receipt nor a live
 shared host PID proves that a Codex agent is continuously running.  They must
-not synthesize EISV, progress, intent, or an agent-authored check-in.
+not synthesize EISV, progress, intent, or a check-in whose text the agent
+process did not compose.
+
+⛔Note the ceiling on what ANY class here can establish: ``epistemic_class``
+records who composed a row's text, never whether the row was chosen.  See
+``build_runtime_activity`` for the measured split.
 """
 
 from __future__ import annotations
@@ -208,11 +213,37 @@ def summarize_runtime_activity(
     """Build the dashboard's host-evidence/check-in read model honestly.
 
     Host observations remain audit evidence.  ``agent_report`` rows are the
-    only agent-authored check-ins; substrate interpretations, initialization
-    rows, and historical unclassified check-ins remain separately exposed.
-    In particular, a heartbeat can prove only that the hook's parent PID was
-    alive.  Codex desktop may share that PID across chats, so it never promotes
-    a slot into "active agent" state.
+    check-ins whose TEXT WAS COMPOSED BY THE AGENT PROCESS; substrate
+    interpretations, initialization rows, and historical unclassified check-ins
+    remain separately exposed.  In particular, a heartbeat can prove only that
+    the hook's parent PID was alive.  Codex desktop may share that PID across
+    chats, so it never promotes a slot into "active agent" state.
+
+    ⛔``agent_report`` IS NOT "the agent chose to check in".  It says who
+    composed the text, not what caused the row to exist, and those two come
+    apart almost completely.  Measured over the 30 days to 2026-08-19:
+
+        producer              agent_report   substrate_interpretation
+        scheduled residents         22057                          0
+        session agents                341                       3791
+
+    So 98.5% of ``agent_report`` is a timer firing into a script that composes
+    its own status line, and ~92% of live reasoning-agent activity is NOT in
+    it, because a session's check-in is composed by the plugin's post-stop
+    hook.  Both classifications are correct on their own terms.  What is wrong
+    is reading this class as agent ACTIVITY or as volition: filtering on it to
+    answer "what did the agents do" returns almost exclusively cron output and
+    excludes almost all of the work.
+
+    The prior wording here ("the only agent-authored check-ins") invited that
+    reading.  The axis consumers usually want — was this row's existence
+    scheduled or chosen — is not recorded anywhere yet; do not infer it from
+    this field.  ``reflection_*`` locals below name the epistemic class, not an
+    act of reflecting.
+
+    (The cold-start authority guard in ``cold_start_risk_confirmation`` uses the
+    same class correctly: it asks whether the SUBSTRATE composed the content,
+    which is exactly what the class means, and fails closed on unknowns.)
     """
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     reflections: dict[str, dict[str, Any]] = {}
