@@ -44,7 +44,7 @@ class DynamicsParams:
     kappa: float = 0.3           # (E-I) → V coupling
     delta: float = 0.4           # V decay rate (reverted from 0.25 — caused coherence spiral)
 
-    # Sensor anchoring (for agents with physical sensors, e.g. Lumen)
+    # Sensor anchoring (for agents that publish a physical sensor reading)
     k_anchor: float = 0.1        # Spring coupling to sensor-derived EISV (0 = no anchoring)
 
     # Coherence parameters
@@ -165,7 +165,7 @@ def sensor_coupling_enabled() -> bool:
     Whether sensor-derived EISV spring-couples into the ODE.
 
     Default ON — preserves current production behavior. This is a fleet-wide
-    switch, NOT Lumen-only: when an agent publishes no physical sensor, a
+    switch, NOT limited to embodied agents: when an agent publishes no physical sensor, a
     behavioral sensor EISV (derived from governance observables) is injected and
     also spring-coupled (see src/mcp_handlers/updates/phases.py). Flipping the
     default therefore changes the dynamics for every agent with ≥3 check-ins.
@@ -191,9 +191,12 @@ def sensor_coupling_mode() -> str:
 
       - 'on'              (default; any truthy / unset)  — couple every sensor source
       - 'off'             ({0,false,off,no})             — couple nothing
-      - 'behavioral_only' — couple the behavioral sensor, NOT physical (cuts an
-                            embodied agent's spring while leaving the disembodied
-                            fleet anchored — the Lumen-only cut)
+      - 'behavioral_only' — couple the behavioral sensor, NOT physical: cuts
+                            every embodied agent's spring while leaving the
+                            disembodied fleet anchored. Scales to any number
+                            of embodied agents; on a fleet with exactly one it
+                            reads as a cut aimed at that agent, but the mode
+                            selects on sensor type, never on who.
       - 'physical_only'   — couple physical sensors, NOT the behavioral sensor
 
     'behavioral_only'/'physical_only' read as truthy to the coarse
