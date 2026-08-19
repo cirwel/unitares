@@ -127,3 +127,62 @@ class TestFindingShape:
         )
         assert finding is not None
         assert set(finding.matched) >= {"dialectic session", "reviewer verdict"}
+
+
+class TestSelfClearRefusalTellsTheTruth:
+    """A refusal envelope must not understate what the system did.
+
+    On 2026-08-19 (session def32eb2b4b2ce93) a paused agent conceded to a
+    standing rejection, received SELF_CLEAR_REFUSED, read "do not retry — repeat
+    attempts are refused without being recorded", and reported the concession as
+    lost. It was not lost: the submission had been persisted before that branch
+    ran, and the reviewer answered it point by point in the next message.
+
+    The appeal loop worked; the message describing it did not. An error envelope
+    that understates what happened is the same defect as a success envelope that
+    overstates it — both leave the caller with a false model.
+    """
+
+    def _recovery_text(self):
+        from pathlib import Path
+
+        src = (
+            Path(__file__).resolve().parents[1]
+            / "src/mcp_handlers/dialectic/handlers.py"
+        ).read_text()
+        start = src.index('error_code="SELF_CLEAR_REFUSED"')
+        return src[start : start + 2200]
+
+    def test_refusal_states_the_submission_was_recorded(self):
+        text = self._recovery_text()
+        assert "WAS recorded" in text, (
+            "the refusal must tell the caller its response was persisted; "
+            "omitting that makes an agent believe its work was discarded"
+        )
+
+    def test_refusal_scopes_what_is_actually_refused(self):
+        text = self._recovery_text()
+        assert "refused is resolving" in text or "refused is the RESOLUTION" in text, (
+            "the refusal must say that resolution is refused, not the submission"
+        )
+
+    def test_refusal_still_forbids_retrying(self):
+        # The original guard is load-bearing: unbounded retries starved the
+        # auto-resolve sweeper. Clarifying the message must not soften that.
+        text = self._recovery_text()
+        assert "Do not retry" in text
+        assert "refused before persistence" in text
+
+    def test_refusal_points_at_polling_not_resubmission(self):
+        text = self._recovery_text()
+        assert "action='get'" in text
+
+    def test_concession_and_contest_are_described_as_equivalent(self):
+        """Neither resumes the agent, and both are recorded the same way.
+
+        The protocol has one call for both, which is why the guard that blocks
+        self-clearing also catches conceding. Saying so plainly is what stops
+        the next agent inferring that conceding is impossible.
+        """
+        text = self._recovery_text()
+        assert "Conceding is recorded" in text
