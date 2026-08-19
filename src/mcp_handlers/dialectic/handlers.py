@@ -21,7 +21,7 @@ from src.dialectic_protocol import (
 from src.coherence_provenance import coherence_role_for_source
 from ..utils import success_response, error_response, require_registered_agent
 from ..decorators import mcp_tool
-from ..support.coerce import coerce_bool, resolve_agent_uuid
+from ..support.coerce import LimitError, coerce_bool, parse_limit, resolve_agent_uuid
 from .auth import resolve_dialectic_agent_id
 from .responses import (
     default_cooldown_steps,
@@ -1724,7 +1724,9 @@ async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[
     Args:
         agent_id: Filter by agent (either requestor or reviewer) - optional
         status: Filter by phase (e.g., 'resolved', 'failed', 'thesis') - optional
-        limit: Max sessions to return (default 50, max 200)
+        limit: Max sessions to return (default 50, capped at 200). Must be
+            >= 1; a non-positive or non-numeric limit is rejected rather than
+            silently substituted.
         include_transcript: Include full transcript in results (default False)
 
     Returns:
@@ -1733,8 +1735,22 @@ async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[
     try:
         agent_id = arguments.get('agent_id')
         status = arguments.get('status')
-        limit = min(int(arguments.get('limit', 50) or 50), 200)
-        include_transcript = bool(arguments.get('include_transcript', False))
+        try:
+            limit = parse_limit(arguments.get('limit'), default=50, maximum=200)
+        except LimitError as exc:
+            return [error_response(
+                str(exc),
+                recovery={
+                    "action": (
+                        "Retry with limit between 1 and 200, "
+                        "or omit limit to use the default of 50"
+                    ),
+                    "related_tools": ["dialectic"],
+                },
+            )]
+        include_transcript = coerce_bool(
+            arguments.get('include_transcript'), default=False
+        )
 
         sessions = await list_all_sessions(
             agent_id=agent_id,
@@ -1751,7 +1767,8 @@ async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[
                 "filters_applied": {
                     "agent_id": agent_id,
                     "status": status,
-                    "limit": limit
+                    "limit": limit,
+                    "include_transcript": include_transcript
                 },
                 "tip": "Use dialectic(action='list') with no filters to see all sessions"
             })
