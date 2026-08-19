@@ -31,6 +31,13 @@ UNITARES_RESIDENTS=Vigil,Sentinel,Watcher,Chronicler
 
 Unset or empty ⇒ no named residents.
 
+**Order matters.** The roster is an ordered list, and `/v1/residents` presents
+residents in the order declared here. Declare them in the order you want the
+dashboard to render. (Before 2026-08-18 presentation order came from a
+hardcoded list of this operator's six residents, so any other deployment's
+roster ordered to an empty list while the response still reported
+`source: "known-residents"`.)
+
 ## Where to set it
 
 The value **must be consistent** across the processes that classify or emit for
@@ -45,6 +52,38 @@ residents:
 The checked-in plist + templates under `scripts/ops/` set the canonical fleet
 (`Lumen,Vigil,Sentinel,Watcher,Steward,Chronicler`). A different deployment
 edits these to its own roster, or clears them for a residentless install.
+
+## Two neighbouring env vars that are NOT this one
+
+- **`UNITARES_RESIDENT_AGENTS`** — a route-local override for `/v1/residents`
+  only, for when the dashboard should show a different set than the calibration
+  roster. It takes precedence over everything else on that endpoint and affects
+  nothing else. Most deployments leave it unset; `UNITARES_RESIDENTS` is the
+  knob you want.
+- **`UNITARES_RESIDENT_SILENCE_SECONDS`** — per-label dashboard silence
+  thresholds, `label=seconds` comma-separated
+  (e.g. `vigil=2400,sentinel=900,lumen=600,watcher=86400,chronicler=108000`).
+  Empty by default. This is a **fallback that should shrink to nothing**: the
+  generic path is a `cadence.*` tag on the agent, which sets the threshold with
+  no label lookup at all. Tag the agent rather than adding an entry here. Both
+  unset ⇒ 30 minutes.
+
+## Keeping shipped source roster-neutral
+
+`scripts/dev/check_fleet_identity_leak.py` (wired into pre-commit and the
+`Repo Scope Guard` workflow) fails the build if a resident name appears as a
+string literal in `src/` or `agents/sdk/src/`. Read the roster instead.
+
+Provenance in a **comment** is deliberately not flagged — a note explaining that
+a threshold has its value because of what a particular resident did on a
+particular date is the reason the constant is what it is, and deleting it would
+make the code less honest without making it more portable.
+
+The guard also prints the couplings that already exist and have not been fixed
+(currently `src/agent_lifecycle.py` and `src/http_routes/vigil.py`) on every
+run, passing or failing. It does not silence them: a guard that reported
+"clean" over known coupling would be the same instrument-optimism failure it
+exists to catch.
 
 ## Calibration note
 

@@ -64,6 +64,17 @@
              Example (the maintainer's fleet): Lumen,Vigil,Sentinel,Watcher,Steward,Chronicler -->
         <key>UNITARES_RESIDENTS</key>
         <string></string>
+        <!-- ORDER MATTERS: /v1/residents presents residents in the order
+             declared above. -->
+        <!-- Per-label dashboard silence thresholds, label=seconds
+             comma-separated. Empty (the default) means every resident falls
+             to 30 min unless it carries a cadence.* tag, which is the generic
+             path and the one to prefer — tag the agent instead of adding an
+             entry here.
+             Example (the maintainer's fleet, for residents not yet tagged):
+             vigil=2400,sentinel=900,lumen=600,watcher=86400,chronicler=108000 -->
+        <key>UNITARES_RESIDENT_SILENCE_SECONDS</key>
+        <string></string>
         <!-- Resident-progress probe manifest (JSON). Points at the shipped
              canonical fleet; copy + edit for a different deployment, or omit
              for a user-agnostic install that probes no residents. -->
