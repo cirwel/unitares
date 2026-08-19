@@ -110,9 +110,14 @@ jobs:
           # Escape hatch for PRs that legitimately discuss these patterns (this
           # guard, register cleanups, meta-docs): add the HTML comment
           # <!-- scope-guard: allow-register --> to the PR body. Rare by design.
+          # It exempts the REGISTER check only. An operator-local path and a
+          # session-attribution link are never in scope for a meta-doc PR, and
+          # exempting them here is how a session link reached public history
+          # once already — so those two checks always run.
+          allow_register=0
           if printf '%s' "$PR_BODY" | grep -q 'scope-guard: allow-register'; then
-            echo "PR body register: allow-register marker present — skipping."
-            exit 0
+            echo "PR body register: allow-register marker present — register check skipped."
+            allow_register=1
           fi
           failures=0
           bad_paths=$(printf '%s' "$PR_BODY" | grep -niE '/Users/cirwel' || true)
@@ -122,7 +127,10 @@ jobs:
             failures=1
           fi
 
-          bad_register=$(printf '%s' "$PR_BODY" | grep -niE 'per your guidance|your overlay|you flagged|questions for [Kk]enny|live-verifier|council pass|council fold' || true)
+          bad_register=""
+          if [ "$allow_register" -eq 0 ]; then
+            bad_register=$(printf '%s' "$PR_BODY" | grep -niE 'per your guidance|your overlay|you flagged|questions for [Kk]enny|live-verifier|council pass|council fold' || true)
+          fi
           if [ -n "$bad_register" ]; then
             echo "::error::PR body reads like a personal chat session. Rewrite third-person/imperative; move working notes out of the public record."
             printf '%s\n' "$bad_register"

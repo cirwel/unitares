@@ -33,6 +33,17 @@ agent (or no agent) against it.
   `~/projects/_notes-archive/<repo>/`; ship clean docs. A PR that legitimately
   discusses these patterns (this guard, a register cleanup, meta-docs) can opt
   the PR-body lint out with the HTML comment `<!-- scope-guard: allow-register -->`.
+- **Session-attribution links** — `claude.ai/code/session` URLs and the
+  `Claude-Session:` trailer. The Claude Code harness appends these to commit
+  messages and PR bodies by default, but they tie the public repo to a private
+  session, signal AI authorship, and are dead links to anyone but the operator
+  (the commit-level analogue of `Co-Authored-By`, which this repo also omits).
+  The guard checks three places, in three separate steps: changed files, the PR
+  body, and **the PR's commit messages** — a trailer stripped from one still
+  fails on another. Fixing the PR body needs a fresh `pull_request` event
+  (close/reopen or push); a rerun replays the body GitHub snapshotted at trigger
+  time. `<!-- scope-guard: allow-register -->` exempts the register check only —
+  this check and the operator-local-path check always run, on every PR.
 
 ## Metered model-cloud dependencies
 
