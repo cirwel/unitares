@@ -39,6 +39,26 @@ def parse_resident_roster(raw: Optional[str]) -> frozenset[str]:
     return frozenset(part.strip() for part in raw.split(",") if part.strip())
 
 
+def parse_resident_roster_order(raw: Optional[str]) -> tuple[str, ...]:
+    """Parse the roster preserving *declared* order, de-duplicated.
+
+    The set form above answers "is this label a resident". This answers "in
+    what order should residents be presented", which is the same deployment
+    decision and must come from the same place. Presentation order used to be
+    a hardcoded list of one operator's six residents, so any other
+    deployment's roster ordered to nothing (see
+    tests/test_http_residents_resolve.py).
+    """
+    if not raw:
+        return ()
+    seen: list[str] = []
+    for part in raw.split(","):
+        label = part.strip()
+        if label and label not in seen:
+            seen.append(label)
+    return tuple(seen)
+
+
 def load_resident_labels() -> frozenset[str]:
     """Resident labels for this deployment, from ``UNITARES_RESIDENTS``.
 
@@ -53,6 +73,13 @@ def load_resident_labels() -> frozenset[str]:
 # calibration class because population N=1 means class==agent in practice.
 # Empty by default; populated from UNITARES_RESIDENTS — see above.
 KNOWN_RESIDENT_LABELS = load_resident_labels()
+
+# Same roster, declaration order preserved, for anything that has to *present*
+# residents rather than test membership. Read at import alongside the set so
+# the two can never disagree.
+KNOWN_RESIDENT_ORDER = parse_resident_roster_order(
+    os.environ.get(RESIDENT_ROSTER_ENV)
+)
 
 # Tag-derived class names.
 CLASS_EMBODIED = "embodied"
