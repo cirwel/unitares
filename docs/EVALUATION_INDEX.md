@@ -117,6 +117,18 @@ Compact run provenance and all 12 overall rows are preserved in
 | `~/.unitares/analysis/eisv-validation-2026-06-13_0900.md` ✓ | Historical operator-local cohort comparison | **BROKEN JOIN — not citable evidence** | retire/repoint |
 | (removed scratchpad) `eisv_validation/leadtime_probe.py` | Historical lead-time probe | Not reproducible from this repo; do not cite its numeric result | superseded by `eisv_skeptic_report` |
 
+## Labelled sets
+
+| Artifact | What it labels | Finding | Freshness |
+|---|---|---|---|
+| [`evaluation/dialectic-reviewer-labels.md`](evaluation/dialectic-reviewer-labels.md) ✓ | Every substantive non-canary `antithesis` message (n=97), 5-way: refutes / concurs-with-conditions / ratifies / formulaic / non-verdict | Only **42.3%** substantively refute; **38.1% is templated pseudo-disagreement**; 4 rows are parse failures defaulting to disagreement. Rubber-stamping is 6.2% — the smallest failure mode, not the largest | labelled 2026-08-19 |
+
+⛔**A naive `agrees=false` read of that corpus is wrong by ~2x.** "Did not agree"
+labels 82 of 97 as disagreement; only 41 engage. `core.dialectic_messages.agrees`
+remains NULL by design — the labels are a derived artifact with
+`source_of_truth: false`, never a backfill, because an inferred label written
+into a reviewer's column is indistinguishable from a reviewer's verdict.
+
 ## Candidate corpora — not yet evaluated
 
 Entries here are **candidates only**. None has been run against the
