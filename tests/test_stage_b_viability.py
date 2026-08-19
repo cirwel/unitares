@@ -6,7 +6,13 @@ exercised by running the probe against a live governance DB, not here.
 """
 import math
 
-from scripts.analysis.stage_b_viability import auc, permutation_p, residual_z_norm
+from scripts.analysis.stage_b_viability import (
+    auc,
+    format_composition,
+    label_composition,
+    permutation_p,
+    residual_z_norm,
+)
 
 
 def _beh(values: dict, mean: float, var: float, count: int = 100) -> dict:
@@ -89,3 +95,53 @@ def test_permutation_p_null_is_large_for_random_scores():
     labels = [True, False, True, False]  # observed AUC = 0.5
     p = permutation_p(scores, labels, auc(scores, labels), n_perm=500, seed=1)
     assert p > 0.3
+
+
+# --- label composition is DERIVED, never asserted (federation) ---
+#
+# The probe used to print a hardcoded sentence naming the label channel. That is
+# a claim about one deployment's data on one date, so it is wrong for every other
+# principal by construction — and it went stale here inside sixteen days.
+
+def test_composition_names_every_bad_channel():
+    channels = ["test_failed", "watcher_finding_dismissed", "test_passed",
+                "sentinel_finding_confirmed", "test_failed"]
+    labels = [True, True, False, False, True]
+    comp = label_composition(channels, labels)
+    assert comp["bad_by_channel"] == {"test_failed": 2, "watcher_finding_dismissed": 1}
+    # Channels that never carry a bad label are counted but not credited as one.
+    assert comp["by_channel"]["test_passed"] == 1
+    assert "test_passed" not in comp["bad_by_channel"]
+    assert "sentinel_finding_confirmed" not in comp["bad_by_channel"]
+
+
+def test_composition_would_have_caught_the_stale_caveat():
+    """The shape that made the hardcoded claim false: the majority of bad labels
+    were `test_failed`, while the printed sentence still said Watcher-only."""
+    channels = ["test_failed"] * 15 + ["watcher_finding_dismissed"] * 8
+    labels = [True] * 23
+    rendered = format_composition(label_composition(channels, labels))
+    assert "2 channel(s)" in rendered
+    assert "test_failed=15 (65%)" in rendered
+    assert "watcher_finding_dismissed=8 (35%)" in rendered
+
+
+def test_single_bad_channel_is_reported_as_such():
+    comp = label_composition(["watcher_finding_dismissed"] * 8, [True] * 8)
+    assert len(comp["bad_by_channel"]) == 1
+    assert "1 channel(s) carrying 8 bad label(s)" in format_composition(comp)
+
+
+def test_composition_handles_no_bad_labels():
+    """A sentinel-only sample: findings that assert a database fact rather than
+    an inference cannot be false positives, so they never carry a bad label."""
+    comp = label_composition(["sentinel_finding_confirmed"] * 17, [False] * 17)
+    assert comp["bad_by_channel"] == {}
+    assert format_composition(comp) == "no bad labels in the joined sample"
+
+
+def test_composition_is_ordered_largest_first():
+    channels = ["a"] * 2 + ["b"] * 9 + ["c"] * 5
+    comp = label_composition(channels, [True] * 16)
+    rendered = format_composition(comp)
+    assert rendered.index("b=9") < rendered.index("c=5") < rendered.index("a=2")
