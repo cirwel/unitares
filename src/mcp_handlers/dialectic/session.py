@@ -430,11 +430,16 @@ async def list_all_sessions(
     Args:
         agent_id: Filter by agent (requestor or reviewer)
         status: Filter by phase (e.g., 'resolved', 'failed', 'pending')
-        limit: Max sessions to return (default 50)
+        limit: Max sessions to return (default 50). Must be a positive int;
+            callers are expected to have validated it (see parse_limit).
         include_transcript: Include full transcript (default False for performance)
 
     Returns:
         List of session summaries
+
+    Raises:
+        Exception: propagated from the backend. Deliberately not degraded to an
+            empty list -- see the except block at the end of this function.
     """
     # Primary: Query PostgreSQL
     try:
@@ -596,5 +601,9 @@ async def list_all_sessions(
         logger.debug(f"Listed {len(result)} sessions from PostgreSQL")
         return result
     except Exception as e:
-        logger.warning(f"PostgreSQL list_sessions failed: {e}")
-        return []
+        # Do NOT degrade this to an empty list. The caller renders [] as
+        # "No dialectic sessions found matching criteria" with success=true,
+        # which makes a database outage or a malformed query indistinguishable
+        # from a genuinely empty result set. Raise, and let the handler say so.
+        logger.error(f"PostgreSQL list_sessions failed: {e}", exc_info=True)
+        raise

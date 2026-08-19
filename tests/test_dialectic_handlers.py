@@ -1749,6 +1749,95 @@ class TestHandleListDialecticSessions:
 # 6. handle_get_dialectic_session
 # ============================================================================
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad_limit", [0, -1, -50, "all"])
+    async def test_non_positive_limit_is_rejected(self, mock_context_agent, bad_limit):
+        """A non-positive limit must not reach the backend.
+
+        Regression: limit=0 silently became the default 50, and limit=-1
+        reached PostgreSQL as `LIMIT -1`, whose error the session backend
+        rendered as an empty list -- so the caller got success=true and
+        "No dialectic sessions found" while 50 sessions existed.
+        """
+        from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
+
+        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+                   return_value=[]) as mock_list, \
+             mock_context_agent:
+            result = await handle_list_dialectic_sessions({"limit": bad_limit})
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert "limit" in data["error"]
+        # The backend must never have been consulted with a bad limit.
+        mock_list.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_rejected_limit_reports_validation_error_code(self, mock_context_agent):
+        """The rejection is a caller-argument problem, not a server fault."""
+        from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
+
+        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+                   return_value=[]), \
+             mock_context_agent:
+            result = await handle_list_dialectic_sessions({"limit": -1})
+
+        data = parse_result(result)
+        assert data["error_code"] == "INVALID_PARAM"
+        assert data["error_category"] == "validation_error"
+        assert "1" in data["recovery"]["action"] and "200" in data["recovery"]["action"]
+
+    @pytest.mark.asyncio
+    async def test_limit_one_is_accepted(self, mock_context_agent):
+        """1 is a legitimate limit and must not be swept up by the guard."""
+        from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
+
+        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+                   return_value=[]) as mock_list, \
+             mock_context_agent:
+            await handle_list_dialectic_sessions({"limit": 1})
+
+        assert mock_list.call_args.kwargs["limit"] == 1
+
+    @pytest.mark.asyncio
+    async def test_numeric_string_limit_is_accepted(self, mock_context_agent):
+        """MCP transport can deliver ints as strings."""
+        from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
+
+        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+                   return_value=[]) as mock_list, \
+             mock_context_agent:
+            await handle_list_dialectic_sessions({"limit": "25"})
+
+        assert mock_list.call_args.kwargs["limit"] == 25
+
+    @pytest.mark.asyncio
+    async def test_include_transcript_string_false_is_false(self, mock_context_agent):
+        """bool("false") is True. Transport sends strings, so coerce properly --
+        otherwise a caller opting out silently opts in to every transcript."""
+        from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
+
+        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+                   return_value=[]) as mock_list, \
+             mock_context_agent:
+            await handle_list_dialectic_sessions({"include_transcript": "false"})
+
+        assert mock_list.call_args.kwargs["include_transcript"] is False
+
+    @pytest.mark.asyncio
+    async def test_empty_result_reports_include_transcript(self, mock_context_agent):
+        """filters_applied is the same shape whether or not rows came back."""
+        from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
+
+        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+                   return_value=[]), \
+             mock_context_agent:
+            result = await handle_list_dialectic_sessions({})
+
+        data = parse_result(result)
+        assert data["filters_applied"]["include_transcript"] is False
+
+
 class TestHandleGetDialecticSession:
     """Tests for handle_get_dialectic_session handler."""
 

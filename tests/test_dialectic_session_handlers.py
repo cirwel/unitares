@@ -1338,6 +1338,46 @@ class TestListAllSessions:
         call_args = mock_conn.fetch.call_args
         assert "%resolved%" in call_args[0]
 
+    @pytest.mark.asyncio
+    async def test_backend_failure_raises_instead_of_returning_empty(self):
+        """A failed query must not read as 'no sessions'.
+
+        list_all_sessions used to catch every exception and return [], which
+        the handler renders as "No dialectic sessions found matching criteria"
+        with success=true. That made a database outage, a malformed LIMIT, and
+        a genuinely empty table indistinguishable to the caller.
+        """
+        from src.mcp_handlers.dialectic.session import list_all_sessions
+
+        with patch("src.dialectic_db.get_dialectic_db", new_callable=AsyncMock,
+                   side_effect=Exception("connection refused")):
+            with pytest.raises(Exception, match="connection refused"):
+                await list_all_sessions()
+
+    @pytest.mark.asyncio
+    async def test_query_failure_raises(self):
+        """Same guarantee when the pool is healthy but the query itself fails."""
+        from src.mcp_handlers.dialectic.session import list_all_sessions
+
+        mock_conn = AsyncMock()
+        mock_conn.fetch = AsyncMock(side_effect=Exception("syntax error at or near \"-\""))
+
+        mock_pool = AsyncMock()
+        mock_pool.acquire = MagicMock()
+        mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        mock_db = AsyncMock()
+        mock_db._pool = mock_pool
+        mock_db._ensure_pool = AsyncMock()
+
+        with patch("src.dialectic_db.get_dialectic_db", new_callable=AsyncMock,
+                   return_value=mock_db):
+            with pytest.raises(Exception, match="syntax error"):
+                await list_all_sessions()
+
+
+
 
 # ---------------------------------------------------------------------------
 # Tests: ACTIVE_SESSIONS module-level state
