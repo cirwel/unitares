@@ -120,6 +120,56 @@ above. Do not weaken, re-run, or "refresh" them — see
 `docs/proposals/eisv-outcome-grounding-stop-rule-v0.md` and the individuality-v2
 criterion honoured 2026-07-30.
 
+## Fleet neutrality — what a resident name may decide
+
+**A resident name may be read from config and displayed. It may never be branched on.**
+
+UNITARES installs into deployments that run their own residents, or none.
+Which residents exist is deployment configuration (`UNITARES_RESIDENTS`, empty
+by default), and shipped source must read that roster rather than naming
+anybody. A name has exactly two legitimate jobs:
+
+1. **Display** — dashboard labels, and presentation order, which is the order
+   the roster declares.
+2. **N=1 calibration partitioning** — each named resident is its own class, so
+   the name is a partition key for a scale constant.
+
+Note that the second is a *statistical* key, not a dispatch key: the name
+selects a constant, never a code path. A name used as a third thing is the
+defect. The discriminator for behavior is always a capability — `embodied`,
+`persistent`, `protected`, `cadence.*`, physical-vs-behavioral sensor — never
+who the agent is.
+
+**Rules:**
+
+- ⛔ **Never branch on a resident name.** No `if label == "Lumen"`, no dict
+  keyed by label, no list of names filtering a roster. Use the tag that
+  expresses the property you actually need, and add one if it does not exist.
+- ⛔ **Never hardcode a roster.** `scripts/dev/check_fleet_identity_leak.py`
+  (pre-commit + the `Repo Scope Guard` workflow) fails on a resident name
+  appearing as a string literal anywhere in the shipped artifact — `src/`,
+  `governance_core/`, `config/`, `agents/sdk/src/`. Its scope must track
+  `[tool.setuptools.packages.find]` in `pyproject.toml`.
+- **Provenance in a comment is fine and is deliberately not flagged.** A note
+  saying a threshold has its value because of what a resident did on a date is
+  the reason the constant is what it is; deleting it makes the code less
+  honest without making it more portable.
+- **Lead with the definition, keep the origin as a footnote.** A docstring that
+  explains a general mechanism by naming the agent it was derived from taxes
+  every future reader with a device they do not have. Say what the thing is,
+  then say where it came from.
+- **The residentless install is the default, so it is the case to test.**
+  `tests/conftest.py` declares a roster for the suite, which means nearly every
+  test runs in a fleet-present world. New behavior that depends on the roster
+  needs a companion assertion in `tests/test_residentless_install.py` for what
+  happens when it is empty. That path is what every adopter runs and it is the
+  one nothing else exercises.
+
+`agents/` (the reference residents) and `scripts/ops/` (this operator's fleet
+control plane) are deliberately NOT agnostic and are outside the guard: a
+deploy script for a specific fleet is supposed to name it. The boundary is the
+shipped artifact, not the repo.
+
 ## Project
 
 UNITARES governance MCP server. A behavioral governance framework for AI agents (EISV state vectors, coherence tracking, dialectic resolution, knowledge graph). The information-theoretic / free-energy formulation is the research target in Paper v6, not the live decision path — which is behavioral state estimation.

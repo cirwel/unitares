@@ -21,10 +21,12 @@ where:
     V: E-I imbalance integral (damped accumulator, like Helmholtz free energy) [-2,2]
         V > 0: energy surplus (running hot), V < 0: integrity surplus (running careful)
         Feeds a directional controller: C(V,Θ) = Cmax · 0.5 · (1 + tanh(C₁·V))
-        Note: "Void" is a legacy name from an early Lumen mapping,
-        V=(1-presence)*0.3, retired in anima-mcp #164. Lumen now submits a
-        signed E-I imbalance in the same sense as this axis; the ODE still
-        evolves V as an accumulator, so the ranges differ but the sign does not.
+        An embodied agent's sensor layer submits a signed E-I imbalance in the
+        same sense as this axis; the ODE still evolves V as an accumulator, so
+        the ranges differ but the sign does not.
+        Origin of the legacy name: "Void" comes from an early sensor mapping,
+        V=(1-presence)*0.3, retired in anima-mcp #164. The name outlived the
+        quantity — V has not meant "void" since.
     C(V,Θ): Legacy-named directional control-feedback function
     ‖Δη‖: Ethical drift norm
     C: Task complexity [0,1] - increases entropy S
@@ -51,7 +53,8 @@ class State:
         I: Information integrity [0, 1]
         S: Semantic uncertainty / disorder [0, 2]
         V: E-I imbalance integral [-2, 2]. Positive=energy surplus, negative=integrity surplus.
-           Drives directional control feedback. Named "Void" in Lumen's observation layer.
+           Drives directional control feedback. (Legacy name "Void" in some
+           sensor layers — see the EISVState docstring above.)
     """
     E: float
     I: float
@@ -83,12 +86,14 @@ def eisv_divergence(sensor_eisv: State, ode_state: State) -> dict:
 
     The values are in each axis's NATIVE units and are not comparable across
     axes: the ODE's V is a signed E-I-imbalance accumulator in [-2, 2], whereas
-    a sensor layer reports an instantaneous readout over its own range. Lumen's
-    Pi submits V = clamp(E - I, -1, 1) — the same quantity and sign as this
-    axis, undamped, so ``dV`` is dominated by the ODE's accumulation rather than
-    by a units mismatch. (It previously mapped V=(1-presence)*0.3, a different
-    quantity entirely; retired in anima-mcp #164.) Read the axes individually;
-    treat ``magnitude`` as a coarse "how far apart" scalar only.
+    a sensor layer reports an instantaneous readout over its own range. A
+    physical sensor is expected to submit V = clamp(E - I, -1, 1) — the same
+    quantity and sign as this axis, undamped, so ``dV`` is dominated by the
+    ODE's accumulation rather than by a units mismatch. Read the axes
+    individually; treat ``magnitude`` as a coarse "how far apart" scalar only.
+    (Reference implementation: the maintainer's Pi-based embodied agent, which
+    previously mapped V=(1-presence)*0.3 — a different quantity entirely,
+    retired in anima-mcp #164.)
     """
     dE = sensor_eisv.E - ode_state.E
     dI = sensor_eisv.I - ode_state.I
@@ -315,7 +320,7 @@ def compute_dynamics(
         dt: Time step for integration
         noise_S: Optional noise term for S dynamics
         complexity: Task complexity [0, 1] - increases entropy S (default: 0.5)
-        sensor_eisv: Optional sensor-derived EISV state (e.g. from Lumen's Pi, or
+        sensor_eisv: Optional sensor-derived EISV state (from a physical sensor, or
             the behavioral sensor for non-embodied agents). When coupling is
             enabled (default; UNITARES_SENSOR_COUPLING), it adds a spring term
             k_anchor*(sensor - state) to each derivative. When disabled, the ODE
