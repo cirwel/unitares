@@ -80,20 +80,25 @@ def test_kg_retrieval_counts_only_retrieval_actions():
     assert "scheduled_searches" in sql
 
 
-def test_elective_continuation_excludes_hook_poll_and_scheduled_callers():
-    """Continuation is only meaningful over calls an agent could have skipped."""
+def test_surface_return_rate_excludes_hook_poll_and_scheduled_callers():
+    """Continuation is only meaningful over calls outside the ceremony path.
+
+    Named for the observation, not the motive: the repo forbids a metric name
+    that presupposes agent volition, and the first version of this one
+    ("elective") did exactly that.
+    """
     from scripts.dev import adoption_kpi
 
-    sql = adoption_kpi._snapshot_queries()["elective_continuation"]
+    sql = adoption_kpi._snapshot_queries()["surface_return_rate"]
 
-    # lifecycle ceremony and the polling surfaces are not elections
-    for not_elective in (
+    # lifecycle ceremony and the polling surfaces are not the thing measured
+    for excluded in (
         "process_agent_update",
         "get_governance_metrics",
         "list_agents",
         "onboard",
     ):
-        assert not_elective not in sql, f"{not_elective} must not count as elective"
+        assert excluded not in sql, f"{excluded} must not be counted"
     # dashboard reads of the dialectic are not participation
     assert "NOT IN ('get', 'list')" in sql
     # scheduled/harness-wired callers are filtered by the shared regex
@@ -107,6 +112,6 @@ def test_scheduled_label_regex_is_shared_by_both_metrics():
 
     queries = adoption_kpi._snapshot_queries()
     assert "%(scheduled_re)s" in queries["agent_kg_retrieval"]
-    assert "%(scheduled_re)s" in queries["elective_continuation"]
+    assert "%(scheduled_re)s" in queries["surface_return_rate"]
     for expected in ("Vigil", "Hermes Agent", "canary_", "kg-sweep"):
         assert expected in adoption_kpi._SCHEDULED_LABEL_RE

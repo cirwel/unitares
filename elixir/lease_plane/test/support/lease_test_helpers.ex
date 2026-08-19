@@ -98,14 +98,28 @@ defmodule LeaseTestHelpers do
     phase = Keyword.get(opts, :phase, "synthesis")
     status = Keyword.get(opts, :status, "active")
     synthesis_round = Keyword.get(opts, :synthesis_round, 0)
+    awaiting = Keyword.get(opts, :awaiting_facilitation, false)
 
     Postgrex.query!(
       DB,
-      "INSERT INTO core.dialectic_sessions (session_id, paused_agent_id, reviewer_agent_id, phase, status, synthesis_round) VALUES ($1, $2, $3, $4, $5, $6)",
-      [session_id, paused, reviewer, phase, status, synthesis_round]
+      "INSERT INTO core.dialectic_sessions (session_id, paused_agent_id, reviewer_agent_id, phase, status, synthesis_round, awaiting_facilitation) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+      [session_id, paused, reviewer, phase, status, synthesis_round, awaiting]
     )
 
     session_id
+  end
+
+  @doc "Insert a dialectic message. `agrees: false` from the reviewer is a standing rejection."
+  def insert_dialectic_message(session_id, agent_id, message_type, opts \\ []) do
+    agrees = Keyword.get(opts, :agrees)
+
+    Postgrex.query!(
+      DB,
+      "INSERT INTO core.dialectic_messages (session_id, agent_id, message_type, agrees) VALUES ($1, $2, $3, $4)",
+      [session_id, agent_id, message_type, agrees]
+    )
+
+    :ok
   end
 
   @doc "Cleanup hook — DELETE sagas then the session row for a fixture session_id."
@@ -115,6 +129,8 @@ defmodule LeaseTestHelpers do
       "DELETE FROM coordination.session_resolution_sagas WHERE session_id = $1",
       [session_id]
     )
+
+    Postgrex.query!(DB, "DELETE FROM core.dialectic_messages WHERE session_id = $1", [session_id])
 
     Postgrex.query!(DB, "DELETE FROM core.dialectic_sessions WHERE session_id = $1", [session_id])
     :ok

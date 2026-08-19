@@ -142,8 +142,86 @@ defmodule UnitaresLeasePlane.DialecticLiveness do
     end
   end
 
+  # The payload was `%{"action" => "failed", "reason" => "liveness_timeout"}` and
+  # nothing else. That row is the only artifact that outlives the session, and a
+  # reader who has it reconstructs "the agent opened a session and walked away".
+  # The record says otherwise: over 2026-07-28..08-18, 25 of 26 swept sessions
+  # carried a standing REVIEWER REJECTION and every one of them was sitting in
+  # `awaiting_facilitation` — the paused agent came back, was correctly refused
+  # by the self-clear guard, and no operator arrived. The protocol ran; the
+  # human step did not.
+  #
+  # The Python sweeper learned this and writes `_describe_reap/1`
+  # (`src/mcp_handlers/dialectic/auto_resolve.py`) explaining the distinction.
+  # This sweeper acts first — 30s cadence against a 10-minute sweep — so it
+  # wins the race and that description is never the one that lands. Same
+  # discipline here: report what was OBSERVED, claim no verdict. The sweeper
+  # does not read the transcript, so it must not assert why the parties stopped.
+  #
+  # `action` and `reason` keep their exact prior values; everything else is
+  # additive, so existing readers are untouched.
   defp fail_stuck(state, info) do
-    payload = %{"action" => "failed", "reason" => "liveness_timeout"}
+    awaiting = Map.get(info, :awaiting_facilitation, false)
+
+    verdict_clause =
+      case Map.get(info, :standing_verdict, "none") do
+        "reject" ->
+          " A reviewer rejection was standing when the sweep ran (acceptance: " <>
+            "#{Map.get(info, :verdict_acceptance, "unknown")}); read it in the transcript."
+
+        _ ->
+          ""
+      end
+
+    note =
+      if awaiting do
+        "Swept while awaiting human facilitation; no operator acted. " <>
+          "A sweep outcome, NOT a reviewer verdict, and not evidence that " <>
+          "the paused agent abandoned the session." <> verdict_clause
+      else
+        "Swept for inactivity. A sweep outcome, NOT a reviewer verdict — " <>
+          "read the last synthesis for the position standing when it ran." <>
+          verdict_clause
+      end
+
+    # standing_verdict / verdict_message_id / verdict_acceptance are CARRIED from
+    # core.dialectic_messages, never formed here. termination_basis names what
+    # actually ended the session, which is always the sweep — recording a
+    # verdict alongside it must not read as the verdict having terminated it.
+    #
+    # Deliberately NOT done: terminating on a standing rejection. That was the
+    # original proposal and it was withdrawn under review, because acceptance
+    # would be inferred from silence.
+    #
+    # An earlier draft of this comment justified that with "silence means the
+    # agent's session ended before the verdict landed". That was wrong, and the
+    # correction makes the point stronger. Of the 20 rejected-then-swept
+    # sessions whose agent never replied, 14 are scheduled `canary_dialectic*`
+    # probes that were never going to answer, and of the 6 real agents, SIX OF
+    # SIX were still issuing governance calls after the rejection — thousands
+    # apiece. They were not gone. They kept working.
+    #
+    # They could: a dialectic "paused agent" is a protocol ROLE, not a state.
+    # Every one of the 42 sessions in this window has its paused agent at
+    # status='active'. Nothing holds an agent while it is under review, so a
+    # rejection it declines to answer costs it nothing.
+    #
+    # So silence is not assent, and is not absence either — it is an agent
+    # continuing past a verdict that has no grip on it. Terminating on it needs
+    # verdict_acceptance to become a real protocol transition first.
+    payload = %{
+      "action" => "failed",
+      "reason" => "liveness_timeout",
+      "swept_by" => "beam_liveness",
+      "phase" => Map.get(info, :phase),
+      "awaiting_facilitation" => awaiting,
+      "inactive_seconds" => info.inactive_seconds,
+      "standing_verdict" => Map.get(info, :standing_verdict, "none"),
+      "verdict_message_id" => Map.get(info, :verdict_message_id),
+      "verdict_acceptance" => Map.get(info, :verdict_acceptance, "not_applicable"),
+      "termination_basis" => "liveness_sweep",
+      "note" => note
+    }
 
     result =
       DialecticSaga.resolve(%{
