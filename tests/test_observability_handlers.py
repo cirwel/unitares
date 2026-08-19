@@ -1825,6 +1825,30 @@ class TestHandleAuditEvents:
             "event_id": f"evt-{ts}-{agent_id}",
         }
 
+    @staticmethod
+    def _fake_groups(events):
+        """Derive the window aggregate the DB would return for these events.
+
+        The handler now summarises the window via aggregate_audit_events_async
+        instead of iterating the LIMIT-ed page, so tests must supply both. Pass
+        a SMALLER event list than the group counts to simulate a truncated page
+        -- that divergence is the bug these aggregates exist to prevent.
+        """
+        groups: dict = {}
+        for e in events:
+            key = (e["agent_id"], e["event_type"])
+            g = groups.setdefault(key, {
+                "agent_id": e["agent_id"],
+                "event_type": e["event_type"],
+                "count": 0,
+                "first_ts": e["timestamp"],
+                "last_ts": e["timestamp"],
+            })
+            g["count"] += 1
+            g["first_ts"] = min(g["first_ts"], e["timestamp"])
+            g["last_ts"] = max(g["last_ts"], e["timestamp"])
+        return list(groups.values())
+
     @pytest.mark.asyncio
     async def test_missing_event_type_returns_error(self):
         from src.mcp_handlers.observability.handlers import handle_audit_events
@@ -1845,7 +1869,11 @@ class TestHandleAuditEvents:
             captured.update(kwargs)
             return []
 
-        with patch("src.audit_db.query_audit_events_async", new=fake_query):
+        async def fake_aggregate(**kwargs):
+            return self._fake_groups(await fake_query())
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query), \
+             patch("src.audit_db.aggregate_audit_events_async", new=fake_aggregate):
             from src.mcp_handlers.observability.handlers import handle_audit_events
             result = await handle_audit_events({
                 "event_type": "continuity_token_deprecated_accept",
@@ -1881,7 +1909,11 @@ class TestHandleAuditEvents:
             captured.update(kwargs)
             return []
 
-        with patch("src.audit_db.query_audit_events_async", new=fake_query):
+        async def fake_aggregate(**kwargs):
+            return self._fake_groups(await fake_query())
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query), \
+             patch("src.audit_db.aggregate_audit_events_async", new=fake_aggregate):
             from src.mcp_handlers.observability.handlers import handle_audit_events
             result = await handle_audit_events({"event_type": "x"})
 
@@ -1905,7 +1937,11 @@ class TestHandleAuditEvents:
             captured.update(kwargs)
             return []
 
-        with patch("src.audit_db.query_audit_events_async", new=fake_query):
+        async def fake_aggregate(**kwargs):
+            return self._fake_groups(await fake_query())
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query), \
+             patch("src.audit_db.aggregate_audit_events_async", new=fake_aggregate):
             from src.mcp_handlers.observability.handlers import handle_audit_events
             result = await handle_audit_events({
                 "event_type": "foo",
@@ -1930,7 +1966,11 @@ class TestHandleAuditEvents:
         async def fake_query(**kwargs):
             return events
 
-        with patch("src.audit_db.query_audit_events_async", new=fake_query):
+        async def fake_aggregate(**kwargs):
+            return self._fake_groups(await fake_query())
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query), \
+             patch("src.audit_db.aggregate_audit_events_async", new=fake_aggregate):
             from src.mcp_handlers.observability.handlers import handle_audit_events
             result = await handle_audit_events({
                 "event_type": "continuity_token_deprecated_accept",
@@ -1960,7 +2000,11 @@ class TestHandleAuditEvents:
         async def fake_query(**kwargs):
             return events
 
-        with patch("src.audit_db.query_audit_events_async", new=fake_query):
+        async def fake_aggregate(**kwargs):
+            return self._fake_groups(await fake_query())
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query), \
+             patch("src.audit_db.aggregate_audit_events_async", new=fake_aggregate):
             from src.mcp_handlers.observability.handlers import handle_audit_events
             result = await handle_audit_events({
                 "event_type": "continuity_token_deprecated_accept",
@@ -1982,7 +2026,11 @@ class TestHandleAuditEvents:
         async def fake_query(**kwargs):
             return events
 
-        with patch("src.audit_db.query_audit_events_async", new=fake_query):
+        async def fake_aggregate(**kwargs):
+            return self._fake_groups(await fake_query())
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query), \
+             patch("src.audit_db.aggregate_audit_events_async", new=fake_aggregate):
             from src.mcp_handlers.observability.handlers import handle_audit_events
             result = await handle_audit_events({
                 "event_type": "continuity_token_deprecated_accept",
@@ -2004,7 +2052,11 @@ class TestHandleAuditEvents:
             captured.update(kwargs)
             return []
 
-        with patch("src.audit_db.query_audit_events_async", new=fake_query):
+        async def fake_aggregate(**kwargs):
+            return self._fake_groups(await fake_query())
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query), \
+             patch("src.audit_db.aggregate_audit_events_async", new=fake_aggregate):
             from src.mcp_handlers.observability.handlers import handle_audit_events
             await handle_audit_events({
                 "event_type": "x",
@@ -2024,7 +2076,11 @@ class TestHandleAuditEvents:
             captured.update(kwargs)
             return []
 
-        with patch("src.audit_db.query_audit_events_async", new=fake_query):
+        async def fake_aggregate(**kwargs):
+            return self._fake_groups(await fake_query())
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query), \
+             patch("src.audit_db.aggregate_audit_events_async", new=fake_aggregate):
             from src.mcp_handlers.observability.handlers import handle_audit_events
             await handle_audit_events({"event_type": "x", "limit": 99999})
 
@@ -2036,7 +2092,11 @@ class TestHandleAuditEvents:
         async def fake_query(**kwargs):
             return [self._fake_event("2026-05-19T10:00:00+00:00", "agent-1")]
 
-        with patch("src.audit_db.query_audit_events_async", new=fake_query):
+        async def fake_aggregate(**kwargs):
+            return self._fake_groups(await fake_query())
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query), \
+             patch("src.audit_db.aggregate_audit_events_async", new=fake_aggregate):
             from src.mcp_handlers.consolidated import handle_observe
             with patch(
                 "src.mcp_handlers.context.get_context_agent_id",
@@ -2072,7 +2132,11 @@ class TestHandleAuditEvents:
             captured.update(kwargs)
             return []
 
-        with patch("src.audit_db.query_audit_events_async", new=fake_query):
+        async def fake_aggregate(**kwargs):
+            return self._fake_groups(await fake_query())
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query), \
+             patch("src.audit_db.aggregate_audit_events_async", new=fake_aggregate):
             from src.mcp_handlers.observability.handlers import handle_audit_events
             await handle_audit_events({
                 "event_type": "cross_device_call",
@@ -2093,7 +2157,11 @@ class TestHandleAuditEvents:
             captured.update(kwargs)
             return []
 
-        with patch("src.audit_db.query_audit_events_async", new=fake_query):
+        async def fake_aggregate(**kwargs):
+            return self._fake_groups(await fake_query())
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query), \
+             patch("src.audit_db.aggregate_audit_events_async", new=fake_aggregate):
             from src.mcp_handlers.observability.handlers import handle_audit_events
             await handle_audit_events({
                 "event_type": "cross_device_call",
@@ -2109,6 +2177,158 @@ class TestHandleAuditEvents:
 # ---------------------------------------------------------------------------
 # Outcome evidence diagnostics
 # ---------------------------------------------------------------------------
+
+    # ---- window-vs-page aggregates (regression: page-local aggregates) ----
+    #
+    # Aggregates used to be computed by iterating the LIMIT-ed event page. With
+    # rows arriving in ascending ts order, observe(audit_events, limit=1) then
+    # reported total_emits=1 and a last_ts that was the OLDEST event in the
+    # window -- 24 days stale on the live server, under field names that promise
+    # window-wide totals. These tests pin the page and the window apart.
+
+    @staticmethod
+    def _truncated_page_and_window():
+        """One-row page (the oldest event) against a 19-row, 2-agent window."""
+        page = [
+            TestHandleAuditEvents._fake_event(
+                "2026-07-24T20:02:24+00:00", "cron-unitares-dogfood-pulse"
+            )
+        ]
+        window = [
+            {
+                "agent_id": "cron-unitares-dogfood-pulse",
+                "event_type": "continuity_token_deprecated_accept",
+                "count": 18,
+                "first_ts": "2026-07-24T20:02:24+00:00",
+                "last_ts": "2026-08-17T02:03:35+00:00",
+            },
+            {
+                "agent_id": "cron-unitares-ablation-watchdog",
+                "event_type": "continuity_token_deprecated_accept",
+                "count": 1,
+                "first_ts": "2026-08-01T00:00:00+00:00",
+                "last_ts": "2026-08-01T00:00:00+00:00",
+            },
+        ]
+        return page, window
+
+    async def _run_truncated(self, **extra):
+        page, window = self._truncated_page_and_window()
+
+        async def fake_query(**kwargs):
+            return page
+
+        async def fake_aggregate(**kwargs):
+            return window
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query), \
+             patch("src.audit_db.aggregate_audit_events_async", new=fake_aggregate):
+            from src.mcp_handlers.observability.handlers import handle_audit_events
+            args = {
+                "event_type": "continuity_token_deprecated_accept",
+                "since": "30d",
+                "limit": 1,
+            }
+            args.update(extra)
+            result = await handle_audit_events(args)
+        return parse_result(result)
+
+    @pytest.mark.asyncio
+    async def test_total_counts_the_window_not_the_page(self):
+        data = await self._run_truncated()
+        assert data["total_emits"] == 19       # was 1: the page size
+        assert data["raw_row_count"] == 19
+
+    @pytest.mark.asyncio
+    async def test_last_ts_is_newest_in_window_not_oldest_in_page(self):
+        """The sharpest edge of the bug: ascending order made last_ts the
+        oldest row, so a caller polling for recency got a stale answer that
+        looked authoritative."""
+        data = await self._run_truncated()
+        assert data["last_ts"] == "2026-08-17T02:03:35+00:00"
+        assert data["first_ts"] == "2026-07-24T20:02:24+00:00"
+        assert data["last_ts"] != data["first_ts"]
+
+    @pytest.mark.asyncio
+    async def test_by_agent_id_does_not_lose_agents_outside_the_page(self):
+        data = await self._run_truncated()
+        assert data["by_agent_id"] == {
+            "cron-unitares-dogfood-pulse": 18,
+            "cron-unitares-ablation-watchdog": 1,
+        }
+
+    @pytest.mark.asyncio
+    async def test_limit_reached_compares_window_to_limit(self):
+        data = await self._run_truncated()
+        assert data["limit_reached"] is True
+
+    @pytest.mark.asyncio
+    async def test_returned_event_count_stays_page_local(self):
+        """The one field that should still describe the page."""
+        data = await self._run_truncated()
+        assert data["returned_event_count"] == 1
+        assert data["total_emits"] == 19
+
+    @pytest.mark.asyncio
+    async def test_limit_not_reached_when_window_fits(self):
+        page, window = self._truncated_page_and_window()
+
+        async def fake_query(**kwargs):
+            return page
+
+        async def fake_aggregate(**kwargs):
+            return window
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query), \
+             patch("src.audit_db.aggregate_audit_events_async", new=fake_aggregate):
+            from src.mcp_handlers.observability.handlers import handle_audit_events
+            result = await handle_audit_events({
+                "event_type": "continuity_token_deprecated_accept",
+                "since": "30d",
+                "limit": 200,
+            })
+        assert parse_result(result)["limit_reached"] is False
+
+    @pytest.mark.asyncio
+    async def test_fixture_exclusion_applies_window_wide(self):
+        """Fixtures outside the page must still be excluded from the total."""
+        async def fake_query(**kwargs):
+            return [self._fake_event("2026-05-19T10:00:00+00:00", "real-agent-1")]
+
+        async def fake_aggregate(**kwargs):
+            return [
+                {
+                    "agent_id": "real-agent-1",
+                    "event_type": "continuity_token_deprecated_accept",
+                    "count": 5,
+                    "first_ts": "2026-05-19T10:00:00+00:00",
+                    "last_ts": "2026-05-20T10:00:00+00:00",
+                },
+                {
+                    "agent_id": "Test_Agent_S9",
+                    "event_type": "continuity_token_deprecated_accept",
+                    "count": 7,
+                    "first_ts": "2026-05-19T09:00:00+00:00",
+                    "last_ts": "2026-05-21T10:00:00+00:00",
+                },
+            ]
+
+        with patch("src.audit_db.query_audit_events_async", new=fake_query), \
+             patch("src.audit_db.aggregate_audit_events_async", new=fake_aggregate):
+            from src.mcp_handlers.observability.handlers import handle_audit_events
+            result = await handle_audit_events({
+                "event_type": "continuity_token_deprecated_accept",
+                "since": "7d",
+                "limit": 1,
+                "include_test_fixtures": False,
+            })
+
+        data = parse_result(result)
+        assert data["total_emits"] == 5          # fixtures removed window-wide
+        assert data["test_fixture_emits"] == 7
+        assert data["raw_row_count"] == 12       # before fixture filtering
+        assert "Test_Agent_S9" not in data["by_agent_id"]
+
 
 class _FakeOutcomeAcquire:
     def __init__(self, conn):

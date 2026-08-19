@@ -179,7 +179,7 @@ runs (`from→to`, filled only when the destination is absent).
 | `aggregate` | `src/mcp_handlers/observability/handlers.py:885 handle_aggregate_metrics` | — |
 | `anomalies` | `src/mcp_handlers/observability/handlers.py:711 handle_detect_anomalies` | — |
 | `audit_events` | `src/mcp_handlers/observability/handlers.py:1380 handle_audit_events` | — |
-| `bridge` | `src/mcp_handlers/observability/handlers.py:1557 handle_bridge_summary` | — |
+| `bridge` | `src/mcp_handlers/observability/handlers.py:1584 handle_bridge_summary` | — |
 | `compare` | `src/mcp_handlers/observability/handlers.py:243 handle_compare_agents` | — |
 | `outcome_evidence` | `src/mcp_handlers/observability/handlers.py:1147 handle_outcome_evidence` | — |
 | `similar` | `src/mcp_handlers/observability/handlers.py:412 handle_compare_me_to_similar` | — |

@@ -372,6 +372,23 @@ class DatabaseBackend(ABC):
         pass
 
     @abstractmethod
+    async def aggregate_audit_events(
+        self,
+        agent_id: Optional[str] = None,
+        event_type: Optional[str] = None,
+        event_types: Optional[List[str]] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+    ) -> List[Dict[str, Any]]:
+        """Aggregate matching audit events over the whole window, with no LIMIT.
+
+        One row per (agent_id, event_type) with count/first_ts/last_ts. Use this
+        rather than summarising a LIMIT-ed page, which yields a total that is
+        really a page size and a "last" timestamp that is really the oldest row.
+        """
+        pass
+
+    @abstractmethod
     async def search_audit_events(
         self,
         query: str,

@@ -125,6 +125,37 @@ async def query_audit_events_async(
     ]
 
 
+async def aggregate_audit_events_async(
+    agent_id: Optional[str] = None,
+    event_type: Optional[str] = None,
+    event_types: Optional[List[str]] = None,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Window-wide audit aggregates, independent of any row limit.
+
+    Companion to query_audit_events_async: that one returns a bounded page of
+    events, this one describes the whole matching set. Summaries built from the
+    page misreport totals and timestamps whenever the page is smaller than the
+    window.
+    """
+    from src.db import get_db
+    db = get_db()
+    if not hasattr(db, '_pool') or db._pool is None:
+        await db.init()
+
+    start_dt = datetime.fromisoformat(start_time) if start_time else None
+    end_dt = datetime.fromisoformat(end_time) if end_time else None
+
+    return await db.aggregate_audit_events(
+        agent_id=agent_id,
+        event_type=event_type,
+        event_types=event_types,
+        start_time=start_dt,
+        end_time=end_dt,
+    )
+
+
 async def append_tool_usage_async(
     agent_id: Optional[str],
     tool_name: str,

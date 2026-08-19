@@ -1408,7 +1408,7 @@ async def handle_audit_events(arguments: Dict[str, Any]) -> Sequence[TextContent
     Always reports test-fixture totals separately so the caller decides whether
     to discount them.
     """
-    from src.audit_db import query_audit_events_async
+    from src.audit_db import aggregate_audit_events_async, query_audit_events_async
 
     event_type = arguments.get("event_type")
     event_types_arg = arguments.get("event_types")
@@ -1506,26 +1506,50 @@ async def handle_audit_events(arguments: Dict[str, Any]) -> Sequence[TextContent
         # variants the issue comment names.
         return isinstance(aid, str) and aid.lower().startswith("test_")
 
-    test_fixture_count = sum(1 for e in events if _is_test_fixture(e.get("agent_id")))
     visible_events = events if include_test_fixtures else [
         e for e in events if not _is_test_fixture(e.get("agent_id"))
     ]
+
+    # Summarise the WINDOW, not the page. These fields were previously derived
+    # by iterating `events`, which is LIMIT-ed -- so `total_emits` reported the
+    # page size and, because rows arrive in ascending ts order, `last_ts`
+    # reported the OLDEST event in the window. observe(audit_events, limit=1)
+    # answered with a total of 1 and a last_ts 24 days stale, under field names
+    # that promise window-wide aggregates and with nothing but `limit_reached`
+    # to hint otherwise.
+    groups = await aggregate_audit_events_async(
+        agent_id=agent_id,
+        event_type=effective_event_type,
+        event_types=effective_event_types,
+        start_time=start_dt.isoformat(),
+        end_time=end_dt.isoformat() if end_dt else None,
+    )
 
     by_agent: Dict[str, int] = {}
     by_event_type: Dict[str, int] = {}
     first_ts: str | None = None
     last_ts: str | None = None
-    for e in visible_events:
-        aid = e.get("agent_id") or "<unknown>"
-        by_agent[aid] = by_agent.get(aid, 0) + 1
-        et = e.get("event_type") or "<unknown>"
-        by_event_type[et] = by_event_type.get(et, 0) + 1
-        ts = e.get("timestamp")
-        if ts:
-            if first_ts is None or ts < first_ts:
-                first_ts = ts
-            if last_ts is None or ts > last_ts:
-                last_ts = ts
+    window_total = 0
+    test_fixture_count = 0
+    for g in groups:
+        count = g["count"]
+        window_total += count
+        aid = g["agent_id"] or "<unknown>"
+        if _is_test_fixture(g["agent_id"]):
+            test_fixture_count += count
+            if not include_test_fixtures:
+                continue
+        by_agent[aid] = by_agent.get(aid, 0) + count
+        et = g["event_type"] or "<unknown>"
+        by_event_type[et] = by_event_type.get(et, 0) + count
+        if g["first_ts"] and (first_ts is None or g["first_ts"] < first_ts):
+            first_ts = g["first_ts"]
+        if g["last_ts"] and (last_ts is None or g["last_ts"] > last_ts):
+            last_ts = g["last_ts"]
+
+    visible_total = (
+        window_total if include_test_fixtures else window_total - test_fixture_count
+    )
 
     payload: Dict[str, Any] = {
         # Echo the EFFECTIVE filter that was applied to the DB query, not the
@@ -1538,14 +1562,17 @@ async def handle_audit_events(arguments: Dict[str, Any]) -> Sequence[TextContent
             "until": end_dt.isoformat() if end_dt else None,
             "defaulted": window_defaulted,
         },
-        "total_emits": len(visible_events),
+        # Window-wide, independent of `limit`.
+        "total_emits": visible_total,
         "test_fixture_emits": test_fixture_count,
-        "raw_row_count": len(events),
+        "raw_row_count": window_total,
         "by_agent_id": by_agent,
         "by_event_type": by_event_type,
         "first_ts": first_ts,
         "last_ts": last_ts,
-        "limit_reached": len(events) >= limit,
+        # Page-local: describes the `events` array, not the window above.
+        "returned_event_count": len(visible_events),
+        "limit_reached": window_total > limit,
         "include_test_fixtures": include_test_fixtures,
     }
     if include_events:
