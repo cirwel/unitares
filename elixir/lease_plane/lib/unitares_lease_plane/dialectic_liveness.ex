@@ -163,16 +163,38 @@ defmodule UnitaresLeasePlane.DialecticLiveness do
   defp fail_stuck(state, info) do
     awaiting = Map.get(info, :awaiting_facilitation, false)
 
+    verdict_clause =
+      case Map.get(info, :standing_verdict, "none") do
+        "reject" ->
+          " A reviewer rejection was standing when the sweep ran (acceptance: " <>
+            "#{Map.get(info, :verdict_acceptance, "unknown")}); read it in the transcript."
+
+        _ ->
+          ""
+      end
+
     note =
       if awaiting do
         "Swept while awaiting human facilitation; no operator acted. " <>
           "A sweep outcome, NOT a reviewer verdict, and not evidence that " <>
-          "the paused agent abandoned the session."
+          "the paused agent abandoned the session." <> verdict_clause
       else
         "Swept for inactivity. A sweep outcome, NOT a reviewer verdict — " <>
-          "read the last synthesis for the position standing when it ran."
+          "read the last synthesis for the position standing when it ran." <>
+          verdict_clause
       end
 
+    # standing_verdict / verdict_message_id / verdict_acceptance are CARRIED from
+    # core.dialectic_messages, never formed here. termination_basis names what
+    # actually ended the session, which is always the sweep — recording a
+    # verdict alongside it must not read as the verdict having terminated it.
+    #
+    # Deliberately NOT done: terminating on a standing rejection. That was the
+    # original proposal and it was withdrawn under review. Acceptance would be
+    # inferred from silence, and silence here usually means the agent's session
+    # ended before the verdict landed (20 of 25 cases) rather than assent.
+    # Terminating on it needs verdict_acceptance to become a real protocol
+    # transition first.
     payload = %{
       "action" => "failed",
       "reason" => "liveness_timeout",
@@ -180,6 +202,10 @@ defmodule UnitaresLeasePlane.DialecticLiveness do
       "phase" => Map.get(info, :phase),
       "awaiting_facilitation" => awaiting,
       "inactive_seconds" => info.inactive_seconds,
+      "standing_verdict" => Map.get(info, :standing_verdict, "none"),
+      "verdict_message_id" => Map.get(info, :verdict_message_id),
+      "verdict_acceptance" => Map.get(info, :verdict_acceptance, "not_applicable"),
+      "termination_basis" => "liveness_sweep",
       "note" => note
     }
 
