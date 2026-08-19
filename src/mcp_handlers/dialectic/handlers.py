@@ -2824,6 +2824,19 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                     "new_reviewer_id='<agent_id>', "
                     "reason='Facilitate standing reviewer rejection')"
                 )
+                # ⛔What is refused is the RESOLUTION, not the message. This
+                # submission was persisted to the transcript just above, before
+                # this branch ran, and the reviewer can read and answer it. Only
+                # a REPEAT attempt is refused before persistence.
+                #
+                # Saying only "refused" made a caller conclude its response was
+                # discarded — that happened on 2026-08-19 in session
+                # def32eb2b4b2ce93, where a paused agent conceded, was told
+                # "do not retry ... without being recorded", reported the
+                # concession as lost, and was wrong: the reviewer had already
+                # answered it point by point. An error envelope that understates
+                # what happened is the same defect class as a success envelope
+                # that overstates it.
                 return [error_response(
                     result.get("reason") or result.get("error")
                     or "Refused: the reviewer's standing verdict is a rejection.",
@@ -2831,17 +2844,29 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                     error_category="governance_refusal",
                     recovery={
                         "action": (
-                            "The paused agent cannot resolve its own session over the "
-                            "reviewer's standing rejection. Do not retry — repeat "
-                            "attempts are refused without being recorded."
+                            "Your response WAS recorded in the transcript and the "
+                            "reviewer can answer it. What is refused is resolving "
+                            "the session over the reviewer's standing rejection — "
+                            "not the submission itself. Do not retry: a repeat "
+                            "attempt IS refused before persistence, and it also "
+                            "resets nothing in your favour."
+                        ),
+                        "what_was_recorded": (
+                            "This synthesis is now in the transcript under your "
+                            "agent_id. Conceding is recorded the same way a "
+                            "contest is; neither resumes you on its own."
                         ),
                         "what_you_can_do": [
                             (
-                                "Reviewer: submit a later synthesis to maintain or revise "
-                                "the verdict after reviewing new evidence."
+                                "Reviewer: read the newly recorded synthesis and submit a "
+                                "later one to maintain or revise the verdict."
                             ),
                             f"Operator: assign a facilitator/replacement reviewer with {operator_next_call}",
-                            "Paused agent: wait for reviewer or operator action; do not retry agrees=true.",
+                            (
+                                "Paused agent: your position is on the record — poll "
+                                "dialectic(action='get') for the reviewer's answer rather "
+                                "than resubmitting."
+                            ),
                         ],
                         "operator_next_call": operator_next_call,
                         "related_tools": ["dialectic", "agent"],
