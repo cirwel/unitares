@@ -142,8 +142,46 @@ defmodule UnitaresLeasePlane.DialecticLiveness do
     end
   end
 
+  # The payload was `%{"action" => "failed", "reason" => "liveness_timeout"}` and
+  # nothing else. That row is the only artifact that outlives the session, and a
+  # reader who has it reconstructs "the agent opened a session and walked away".
+  # The record says otherwise: over 2026-07-28..08-18, 25 of 26 swept sessions
+  # carried a standing REVIEWER REJECTION and every one of them was sitting in
+  # `awaiting_facilitation` — the paused agent came back, was correctly refused
+  # by the self-clear guard, and no operator arrived. The protocol ran; the
+  # human step did not.
+  #
+  # The Python sweeper learned this and writes `_describe_reap/1`
+  # (`src/mcp_handlers/dialectic/auto_resolve.py`) explaining the distinction.
+  # This sweeper acts first — 30s cadence against a 10-minute sweep — so it
+  # wins the race and that description is never the one that lands. Same
+  # discipline here: report what was OBSERVED, claim no verdict. The sweeper
+  # does not read the transcript, so it must not assert why the parties stopped.
+  #
+  # `action` and `reason` keep their exact prior values; everything else is
+  # additive, so existing readers are untouched.
   defp fail_stuck(state, info) do
-    payload = %{"action" => "failed", "reason" => "liveness_timeout"}
+    awaiting = Map.get(info, :awaiting_facilitation, false)
+
+    note =
+      if awaiting do
+        "Swept while awaiting human facilitation; no operator acted. " <>
+          "A sweep outcome, NOT a reviewer verdict, and not evidence that " <>
+          "the paused agent abandoned the session."
+      else
+        "Swept for inactivity. A sweep outcome, NOT a reviewer verdict — " <>
+          "read the last synthesis for the position standing when it ran."
+      end
+
+    payload = %{
+      "action" => "failed",
+      "reason" => "liveness_timeout",
+      "swept_by" => "beam_liveness",
+      "phase" => Map.get(info, :phase),
+      "awaiting_facilitation" => awaiting,
+      "inactive_seconds" => info.inactive_seconds,
+      "note" => note
+    }
 
     result =
       DialecticSaga.resolve(%{

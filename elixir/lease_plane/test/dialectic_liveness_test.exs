@@ -31,6 +31,17 @@ defmodule UnitaresLeasePlane.DialecticLivenessTest do
     status
   end
 
+  defp resolution(session_id) do
+    %{rows: [[json]]} =
+      Postgrex.query!(
+        DB,
+        "SELECT resolution_json FROM core.dialectic_sessions WHERE session_id = $1",
+        [session_id]
+      )
+
+    json
+  end
+
   defp wait_until(fun, tries \\ 50) do
     cond do
       fun.() ->
@@ -107,5 +118,63 @@ defmodule UnitaresLeasePlane.DialecticLivenessTest do
     assert :ok = wait_until(fn -> DialecticLiveness.snapshot(session_id) == :gone end)
     # Untouched: it was already resolved before the watcher ran.
     assert session_status(session_id) == "resolved"
+  end
+
+  # The reap row is the only artifact that outlives the session. When it said
+  # only `liveness_timeout`, every reader reconstructed "the agent walked away"
+  # — while the record showed 25 of 26 swept sessions carrying a standing
+  # reviewer rejection, all of them stalled on a human step that never came.
+  test "a facilitation reap records that it was awaiting a human, and claims no verdict" do
+    Application.put_env(:lease_plane, :dialectic_beam_liveness, true)
+
+    session_id =
+      insert_dialectic_session(reviewer_agent_id: "rev-1", awaiting_facilitation: true)
+
+    on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+    :started =
+      DialecticLivenessSupervisor.ensure_started(session_id,
+        hard_timeout_s: 0,
+        initial_check_ms: 0,
+        check_interval_ms: 50
+      )
+
+    assert :ok = wait_until(fn -> session_status(session_id) == "failed" end)
+
+    res = resolution(session_id)
+    # unchanged for existing readers
+    assert res["action"] == "failed"
+    assert res["reason"] == "liveness_timeout"
+    # additive context
+    assert res["awaiting_facilitation"] == true
+    assert res["swept_by"] == "beam_liveness"
+    assert res["phase"] == "synthesis"
+    assert is_integer(res["inactive_seconds"])
+    assert res["note"] =~ "awaiting human facilitation"
+    # the sweeper does not read the transcript, so it must not assert a verdict
+    assert res["note"] =~ "NOT a reviewer verdict"
+  end
+
+  test "an ordinary inactivity reap is distinguishable from a facilitation reap" do
+    Application.put_env(:lease_plane, :dialectic_beam_liveness, true)
+
+    session_id =
+      insert_dialectic_session(reviewer_agent_id: "rev-1", awaiting_facilitation: false)
+
+    on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+    :started =
+      DialecticLivenessSupervisor.ensure_started(session_id,
+        hard_timeout_s: 0,
+        initial_check_ms: 0,
+        check_interval_ms: 50
+      )
+
+    assert :ok = wait_until(fn -> session_status(session_id) == "failed" end)
+
+    res = resolution(session_id)
+    assert res["awaiting_facilitation"] == false
+    refute res["note"] =~ "awaiting human facilitation"
+    assert res["note"] =~ "NOT a reviewer verdict"
   end
 end

@@ -449,18 +449,24 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   def get_session_liveness(session_id) when is_binary(session_id) do
     sql = """
     SELECT status, paused_agent_id, reviewer_agent_id,
-           EXTRACT(EPOCH FROM (now() - updated_at))::bigint AS inactive_s
+           EXTRACT(EPOCH FROM (now() - updated_at))::bigint AS inactive_s,
+           phase, awaiting_facilitation
     FROM core.dialectic_sessions WHERE session_id = $1
     """
 
     case Postgrex.query(DB, sql, [session_id]) do
-      {:ok, %{rows: [[status, paused, reviewer, inactive_s]]}} ->
+      {:ok, %{rows: [[status, paused, reviewer, inactive_s, phase, awaiting]]}} ->
         {:ok,
          %{
            status: status,
            paused_agent_id: paused,
            reviewer_agent_id: reviewer,
-           inactive_seconds: inactive_s
+           inactive_seconds: inactive_s,
+           # Carried so a reap can say WHICH kind of stall it ended. Without
+           # these the sweeper writes a verdict-free row and every reader
+           # reconstructs "the agent walked away" — see fail_stuck/2.
+           phase: phase,
+           awaiting_facilitation: awaiting == true
          }}
 
       {:ok, %{rows: []}} ->
