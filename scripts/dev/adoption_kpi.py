@@ -75,7 +75,7 @@ def connect():
     return psycopg2.connect(dsn)
 
 
-# A gap this wide between two elective calls is the proxy for "the agent went
+# A gap this wide between two non-ceremony calls is the proxy for "the agent went
 # and did other work, then came back". Governance cannot see non-governance
 # work, so the gap is the only available stand-in — state it, do not hide it.
 _RETURN_GAP_SECONDS = 60
@@ -137,22 +137,29 @@ def _snapshot_queries() -> dict:
         """,
         # Continuation, not counts. An operator prompt can license call 1
         # ("use the tools on your own accord"); it does not license call 2.
+        #
+        # Named for what is OBSERVED, not for why. This metric shipped hours
+        # earlier as `elective_continuation`, which breaks this repo's own rule
+        # that a metric name must not presuppose agent volition — "elective"
+        # asserts a choice the data cannot show. The observation is narrower and
+        # survives: a second call to the same surface followed a first one,
+        # after a gap. Whether that was chosen is not in the row.
         # So the adoption question that survives not knowing the prompt is:
-        # given an agent elected a governance call, did it come BACK to that
+        # after a first non-ceremony call, did another follow to that
         # surface later, after a gap wide enough to mean it did other work?
         #
         # Matches the lever model's own inertia finding (call 1 predicts
         # calls 2..n) — the CONDITIONAL rate is what a payload lever should
         # move; raw volume never was.
         #
-        # Elective excludes: lifecycle ceremony (hook-emitted), the polling
+        # Non-ceremony excludes: lifecycle ceremony (hook-emitted), the polling
         # surfaces (get_governance_metrics ~991k/14d, list_agents = the
         # Discord bridge), lease substrate, KG housekeeping, dialectic
         # dashboard reads, and the scheduled cohort (residents, KG jobs,
         # canaries, and the hermes harness loop, which calls record_result
         # as part of its turn rather than electing it).
-        "elective_continuation": """
-            WITH elective AS (
+        "surface_return_rate": """
+            WITH non_ceremony AS (
                 SELECT u.ts, u.agent_id,
                        CASE WHEN u.tool_name IN ('knowledge', 'search_shared_memory')
                                 THEN 'kg'
@@ -177,7 +184,7 @@ def _snapshot_queries() -> dict:
             gaps AS (
                 SELECT *, lag(ts) OVER (PARTITION BY agent_id ORDER BY ts) AS prev_any,
                           lag(ts) OVER (PARTITION BY agent_id, surface ORDER BY ts) AS prev_surface
-                FROM elective
+                FROM non_ceremony
             ),
             per_agent AS (
                 SELECT agent_id,
@@ -188,8 +195,8 @@ def _snapshot_queries() -> dict:
                            FILTER (WHERE surface = 'kg') AS kg_gap_s
                 FROM gaps GROUP BY 1
             )
-            SELECT count(*) AS agents_elected,
-                   sum(calls) AS elective_calls,
+            SELECT count(*) AS agents_with_calls,
+                   sum(calls) AS surface_calls,
                    count(*) FILTER (WHERE max_gap_s >= %(return_gap_s)s) AS agents_returned,
                    count(*) FILTER (WHERE kg_calls > 0) AS kg_agents,
                    count(*) FILTER (WHERE kg_gap_s >= %(return_gap_s)s) AS kg_returned
@@ -380,10 +387,10 @@ def snapshot(
                 out[key] = dict(cur.fetchone())
     cc = out["checkin_concentration"]
     cc["top2_share_pct"] = round(100 * cc["top2"] / cc["total"], 1) if cc["total"] else None
-    ec = out["elective_continuation"]
+    ec = out["surface_return_rate"]
     ec["returned_pct"] = (
-        round(100 * ec["agents_returned"] / ec["agents_elected"], 1)
-        if ec["agents_elected"] else None
+        round(100 * ec["agents_returned"] / ec["agents_with_calls"], 1)
+        if ec["agents_with_calls"] else None
     )
     ec["kg_returned_pct"] = (
         round(100 * ec["kg_returned"] / ec["kg_agents"], 1) if ec["kg_agents"] else None
@@ -458,10 +465,10 @@ def main() -> int:
           f"by {kg['distinct_agents']} agents "
           f"({kg['scheduled_searches']} of them scheduled; "
           f"{kg['all_action_calls']} knowledge calls of ALL actions)")
-    ec = snap["elective_continuation"]
-    print(f"  elective continuation: {ec['agents_returned']}/{ec['agents_elected']} agents "
+    ec = snap["surface_return_rate"]
+    print(f"  surface return rate: {ec['agents_returned']}/{ec['agents_with_calls']} agents "
           f"({ec['returned_pct']}%) came back to a governance surface after a "
-          f"{_RETURN_GAP_SECONDS}s+ gap — {ec['elective_calls']} elective calls")
+          f"{_RETURN_GAP_SECONDS}s+ gap — {ec['surface_calls']} non-ceremony calls")
     print(f"    KG surface alone: {ec['kg_returned']}/{ec['kg_agents']} "
           f"({ec['kg_returned_pct']}%) searched again later")
     print(f"  onboard→checkin (process + BEAM external): {oc['converted']}/{oc['minted']} "
