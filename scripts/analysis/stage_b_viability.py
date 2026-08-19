@@ -12,6 +12,14 @@ outcomes carry no EISV and come from agents with no baseline, while EISV-rich
 residents receive only self-referential outcomes (Invariant-4 excluded). So B is
 not yet falsifiable for a data reason, not a thin-label reason. This probe is the
 regression guard: when the overlap appears, it starts emitting the AUC.
+
+Update (2026-08-19): **the overlap has appeared** — the populations are no longer
+disjoint, so the paragraph above is history, not current state. The dominant
+filter is now BASELINING rather than absent EISV: the `DIAG` rows below measure
+it, and it is severe (a channel can lose ~90% of its rows there), because a
+baseline needs ~25 check-ins and short-lived agents never reach one. The joined
+sample therefore skews toward long-lived agents. That is a selection effect on
+every reading this probe emits; it is not corrected for.
 """
 from __future__ import annotations
 
@@ -50,7 +58,7 @@ DIAG = {
 # One row per anchored outcome, joined to the LAST baselined state at-or-before
 # the outcome timestamp (the residual's information set — no lookahead).
 JOIN_SQL = """
-SELECT e.is_bad, e.eisv_phi, s.beh, s.state_ts
+SELECT e.is_bad, e.eisv_phi, s.beh, s.state_ts, e.outcome_type
 FROM audit.outcome_events e
 JOIN core.identities i ON i.agent_id = e.agent_id
 JOIN LATERAL (
@@ -64,6 +72,38 @@ WHERE e.verification_source = 'external_signal'
 """
 
 CHANNELS = ("E", "I", "S", "V")
+
+
+def label_composition(channels: list[str], labels: list[bool]) -> dict:
+    """Derive which outcome channels supplied the labels, and which the BAD ones.
+
+    Federation note: this is DERIVED, never asserted. A hardcoded sentence about
+    which channel carries the labels is a claim about one deployment's data on
+    one date — it is wrong for every other principal by construction, and it went
+    stale here within sixteen days (the "single-channel (Watcher adjudications)"
+    line landed 2026-07-02; `test_failed` had been arriving as external_signal
+    since 2026-06-16, and now supplies the majority of bad labels).
+    """
+    by_channel: dict[str, int] = {}
+    bad_by_channel: dict[str, int] = {}
+    for ch, is_bad in zip(channels, labels):
+        by_channel[ch] = by_channel.get(ch, 0) + 1
+        if is_bad:
+            bad_by_channel[ch] = bad_by_channel.get(ch, 0) + 1
+    return {"by_channel": by_channel, "bad_by_channel": bad_by_channel}
+
+
+def format_composition(composition: dict) -> str:
+    """One-line rendering of the bad-label channels, largest first."""
+    bad = composition["bad_by_channel"]
+    if not bad:
+        return "no bad labels in the joined sample"
+    total = sum(bad.values())
+    parts = [
+        f"{ch}={n} ({100.0 * n / total:.0f}%)"
+        for ch, n in sorted(bad.items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
+    return f"{len(bad)} channel(s) carrying {total} bad label(s): " + ", ".join(parts)
 
 
 def residual_z_norm(beh: dict) -> float | None:
@@ -130,9 +170,9 @@ def emit_auc(conn) -> None:
         cur.execute(JOIN_SQL)
         rows = cur.fetchall()
 
-    residuals, phis, labels, clusters = [], [], [], []
+    residuals, phis, labels, clusters, channels = [], [], [], [], []
     skipped = 0
-    for is_bad, phi, beh, state_ts in rows:
+    for is_bad, phi, beh, state_ts, outcome_type in rows:
         if isinstance(beh, str):
             beh = json.loads(beh)
         r = residual_z_norm(beh or {})
@@ -143,8 +183,10 @@ def emit_auc(conn) -> None:
         phis.append(float(phi))
         labels.append(bool(is_bad))
         clusters.append(state_ts)
+        channels.append(str(outcome_type))
 
     n, n_bad = len(labels), sum(labels)
+    composition = label_composition(channels, labels)
     n_clusters = len(set(clusters))
     bad_clusters = len({c for c, is_bad in zip(clusters, labels) if is_bad})
     print()
@@ -168,10 +210,13 @@ def emit_auc(conn) -> None:
     print(f"  so the effective sample is ~{n_clusters} clusters (bad labels in "
           f"{bad_clusters}), and the")
     print("  permutation p above ignores that clustering (anti-conservative).")
-    print("  Labels are single-channel (Watcher adjudications), effectively")
-    print("  single-agent. This is an instrument check, not a verdict on B —")
-    print("  the gate needs breadth (more residents, channels, and adjudication")
-    print("  batches) before either direction is claimable.")
+    print(f"  Label channels (DERIVED from this deployment's rows, not assumed): "
+          f"{format_composition(composition)}")
+    if len(composition["bad_by_channel"]) <= 1:
+        print("  Bad labels come from ONE channel — effectively single-agent.")
+    print("  This is an instrument check, not a verdict on B — the gate needs")
+    print("  breadth (more residents, channels, and adjudication batches)")
+    print("  before either direction is claimable.")
 
 
 def main():
