@@ -6,25 +6,21 @@
 
 </div>
 
-**Status:** v2.18.0. Continuously operated since November 2025 under a single
-operator: 4,573,890 audit and telemetry events, 71,141 EISV state observations,
-and six long-running resident agents, one of them on separate hardware.
-
-EISV is proprioceptive state estimation, not an outcome oracle. The 2026-08-09
-outcome-lift evaluation tested the oracle reading and returned a selection-aware
-null; the instrument-frame validation the system does claim — reliability,
-faithfulness under intervention, calibration — is scoped but only partly built.
-[Evidence and limits](#evidence-and-limits) gives the per-number scope.
-
 An agent forty turns into a task reports high confidence while its tests are
-failing. Every individual tool call was allowed, so an action-level guardrail may
-have nothing to object to. What is missing is a longitudinal record that compares
-what the agent claims with what actually happened.
+failing. Every individual tool call was allowed, so an action-level guardrail has
+nothing to object to. What is missing is a longitudinal record that compares what
+the agent claims with what actually happened.
 
 **UNITARES keeps that record.** Agents check in after meaningful units of work.
 The server binds writes to a process identity, stores claims and outcomes, derives
 a four-score state estimate, and returns a policy decision with a named reason.
-It is a self-hosted MCP/HTTP service, not an agent framework or hosted platform.
+It is a self-hosted MCP/HTTP service you run yourself — not an agent framework,
+not a hosted platform.
+
+**Status:** v2.18.0. Continuously operated since November 2025 under a single
+operator: 4,573,890 audit and telemetry events, 71,141 EISV state observations,
+and six long-running resident agents, one of them on separate hardware.
+[Evidence and limits](#evidence-and-limits) scopes every number on this page.
 
 <div align="center">
 
@@ -34,8 +30,6 @@ It is a self-hosted MCP/HTTP service, not an agent framework or hosted platform.
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19647159.svg)](https://doi.org/10.5281/zenodo.19647159)
 
 **Maintainer dogfood since November 2025 · 4.5M+ recorded audit/telemetry events.**
-
-Per-number scope and limits: [Evidence and limits](#evidence-and-limits).
 
 [![Quickstart](https://img.shields.io/badge/▶-quickstart-5eead4?style=for-the-badge&labelColor=0f171f)](#quickstart)
 [![Evidence](https://img.shields.io/badge/evidence-check_it-f5a623?style=for-the-badge&labelColor=0f171f)](#evidence-and-limits)
@@ -67,9 +61,7 @@ to run the check-in loop.
 
 The identity binding is what connects them: an accountable write is what makes a
 stored finding, a review, or a held lease attributable to a specific process
-rather than to a label. What the system does **not** currently measure is
-whether the review and coordination surfaces change an agent's subsequent
-behavior; it records that they ran and what they concluded.
+rather than to a label.
 
 The public [`unitares-sdk`](agents/sdk/README.md) handles connection, identity,
 check-ins, heartbeats, and knowledge participation for resident agents. Its
@@ -90,9 +82,9 @@ and the server on loopback without requiring manual database initialization.
 The source-based macOS playbook is an advanced bare-metal path, not a second
 default installer.
 
-`make demo` onboards a fresh process and sends six check-ins over the real API.
-It prints the response shape, decision reason, state detail, and warmup position.
-The demo answers **“is my stack wired?”** It does not establish predictive value.
+`make demo` onboards a fresh process and sends six check-ins over the real API,
+printing the response shape, decision reason, state detail, and warmup position.
+In about a minute you have the full loop running against your own stack.
 
 The dashboard is at `http://localhost:8767/dashboard`; MCP clients connect to
 `http://localhost:8767/mcp/`.
@@ -100,7 +92,8 @@ The dashboard is at `http://localhost:8767/dashboard`; MCP clients connect to
 Use the surface that matches the question:
 
 - **Does the signal beat a simple baseline?** Run the
-  [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc).
+  [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc)
+  against your own data — the demo shows the loop works, not that the signal predicts.
 - **What does sustained operation look like?** Read the
   [maintainer-deployment snapshot](docs/PRODUCTION_SNAPSHOT.md) and its
   [data caveat](docs/operations/DEPLOYMENT_DATA_CAVEAT.md).
@@ -158,12 +151,13 @@ for the response.
 
 Clients can treat the policy action, reason, and next step as the stable
 contract. Operators can optionally inspect four EISV coordinates covering work
-progress, evidence alignment, behavioral drift, and their balance. These are
-auditable heuristics, not literal thermodynamic quantities or universal labels.
-The [computation reference](docs/EISV_COMPUTATION.md) documents formulas,
-warmup, thresholds, and source code; the
+progress, evidence alignment, behavioral drift, and their balance. EISV is
+proprioceptive state estimation — a read of how the process is working, drawn
+from auditable heuristics rather than literal thermodynamic quantities. The
+[computation reference](docs/EISV_COMPUTATION.md) documents formulas, warmup,
+thresholds, and source code; the
 [interpretation contract](docs/ontology/eisv-proprioception-contract.md) records
-permitted readings, refuted claims, and open evaluation gaps.
+which readings are supported and which are not.
 
 ## Where it fits
 
@@ -180,32 +174,34 @@ It is designed for long-lived coding, research, operations, monitoring, and
 multi-agent processes that can instrument a check-in loop. It is usually not
 worth the overhead for short-lived chat turns.
 
-It is not an outcome oracle: it does not decide whether an output is correct or
-ethical, and it cannot detect deliberate concealment without independent
-evidence. The information-theoretic and ODE formulation in the companion paper
-remains a research target and parallel diagnostic path, not the deployed policy
-mechanism.
+UNITARES is a state instrument, not an outcome oracle: it
+does not decide whether an output is correct or ethical, and it
+cannot detect deliberate concealment without independent evidence. The
+[scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md) draws that boundary
+precisely. The information-theoretic and ODE formulation in the companion
+paper is a parallel research path, not the deployed policy mechanism.
 
 ## Local control and future federation
 
-UNITARES starts as a self-hosted governor under one operator's control. The
-architecture exposes the seams that later federation experiments would need:
-process-bound identity, evidence provenance, a
-[versioned telemetry envelope](docs/ontology/eisv-telemetry-envelope-v1.md), and
-policy decisions with named reasons.
+UNITARES is self-hosted and single-operator by design: identity, telemetry,
+evidence, and policy history stay on infrastructure you control, with no
+outbound dependency on a vendor service.
 
-Future experiments can test whether those records are sufficient for exchanging
-cross-operator attestations without centralizing raw telemetry. Cross-governor
-trust, consensus, and enforcement are not deployed guarantees. Experiments
-between mutually distrustful governors are gated on the **multi-principal trust**
-track in the [roadmap](ROADMAP.md) — a principal who does not share this
-authority is what that claim requires, and it is a separate evidence path from
-the efficacy cohort.
+The architecture also exposes the seams a later federation experiment would
+need: process-bound identity, evidence provenance, a
+[versioned telemetry envelope](docs/ontology/eisv-telemetry-envelope-v1.md), and
+policy decisions with named reasons. Whether those records suffice to exchange
+cross-operator attestations without centralizing raw telemetry is an open
+question on the **multi-principal trust** track in the [roadmap](ROADMAP.md);
+cross-governor trust, consensus, and enforcement are not deployed guarantees
+today.
 
 ## Evidence and limits
 
-At the [2026-08-11 frozen snapshot](docs/PRODUCTION_SNAPSHOT.md), the maintainer
-deployment provided operational evidence, not an independent efficacy study:
+Everything above is scoped by what has actually been measured. At the
+[2026-08-11 frozen snapshot](docs/PRODUCTION_SNAPSHOT.md), the maintainer
+deployment provided operational evidence — the system runs, at length, under
+real load — not an independent efficacy study:
 
 | Evidence | Scope |
 |---|---|
@@ -219,19 +215,25 @@ agents governed by the system are also building the system. Read
 [`DEPLOYMENT_DATA_CAVEAT.md`](docs/operations/DEPLOYMENT_DATA_CAVEAT.md) before
 citing a fleet number.
 
-The frozen 2026-08-09 outcome-lift evaluation is a negative result: after model
-selection, no overall slice separated from the permutation null (selective
-p = 0.070–0.567). Some unadjusted metrics improved, but none cleared the
-selection-aware threshold. There is **no demonstrated prevention**. The
-[Reviewer Guide](docs/REVIEWER_GUIDE.md) gives the frozen command and
-interpretation; compact output is preserved in the
-[dated ablation snapshot](docs/operations/eisv-ablation-frozen-2026-08-09.md).
+What is not yet established:
 
-Robustness against a motivated attacker optimizing the monitored proxy remains
-unproven. Calibrated capability concealment is a documented structural blind
-spot. See the [scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md).
+- **Predictive lift.** The frozen 2026-08-09 outcome-lift evaluation is a
+  negative result: after model selection, no overall slice separated from the
+  permutation null (selective p = 0.070–0.567). Some unadjusted metrics improved,
+  but none cleared the selection-aware threshold. There is no demonstrated
+  prevention. The [Reviewer Guide](docs/REVIEWER_GUIDE.md) gives the frozen
+  command and interpretation; compact output is preserved in the
+  [dated ablation snapshot](docs/operations/eisv-ablation-frozen-2026-08-09.md).
+- **Behavior change from review and coordination.** The system records that the
+  review and coordination surfaces ran and what they concluded; whether they
+  change an agent's subsequent behavior is unmeasured.
+- **Robustness against a motivated attacker** optimizing the monitored proxy.
+  Calibrated capability concealment is a documented structural blind spot — see
+  the [scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md).
 
-The companion DOI identifies a
+The instrument-frame validation the system does claim — reliability,
+faithfulness under intervention, calibration — is scoped and partly built; the
+[roadmap](ROADMAP.md) tracks it. The companion DOI identifies a
 [public preprint](https://doi.org/10.5281/zenodo.19647159), not peer-reviewed
 validation.
 
