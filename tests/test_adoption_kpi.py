@@ -58,3 +58,55 @@ def test_normalize_utc_bound_requires_timezone_and_normalizes():
             "2026-08-17T01:30:00",
             name="nudge_since",
         )
+
+
+def test_kg_retrieval_counts_only_retrieval_actions():
+    """The metric is named retrieval; housekeeping must not land in it.
+
+    Before 2026-08-18 this query counted every `knowledge` action, so a
+    resident's audit/cleanup/update sweep was reported as agent retrieval.
+    """
+    from scripts.dev import adoption_kpi
+
+    sql = adoption_kpi._snapshot_queries()["agent_kg_retrieval"]
+
+    assert "u.payload->>'action' IN ('search', 'details')" in sql
+    # assert the tool LIST, not substring-absence — the query comment
+    # explains why search_knowledge_graph was dropped, so it still appears
+    assert "u.tool_name IN ('knowledge', 'search_shared_memory')" in sql
+    # the broad count stays available so the checkpoint log's step-change
+    # at the correction date is explainable rather than mysterious
+    assert "all_action_calls" in sql
+    assert "scheduled_searches" in sql
+
+
+def test_elective_continuation_excludes_hook_poll_and_scheduled_callers():
+    """Continuation is only meaningful over calls an agent could have skipped."""
+    from scripts.dev import adoption_kpi
+
+    sql = adoption_kpi._snapshot_queries()["elective_continuation"]
+
+    # lifecycle ceremony and the polling surfaces are not elections
+    for not_elective in (
+        "process_agent_update",
+        "get_governance_metrics",
+        "list_agents",
+        "onboard",
+    ):
+        assert not_elective not in sql, f"{not_elective} must not count as elective"
+    # dashboard reads of the dialectic are not participation
+    assert "NOT IN ('get', 'list')" in sql
+    # scheduled/harness-wired callers are filtered by the shared regex
+    assert "a.label !~* %(scheduled_re)s" in sql
+    assert "%(return_gap_s)s" in sql
+
+
+def test_scheduled_label_regex_is_shared_by_both_metrics():
+    """One regex, so composition and continuation cannot drift apart."""
+    from scripts.dev import adoption_kpi
+
+    queries = adoption_kpi._snapshot_queries()
+    assert "%(scheduled_re)s" in queries["agent_kg_retrieval"]
+    assert "%(scheduled_re)s" in queries["elective_continuation"]
+    for expected in ("Vigil", "Hermes Agent", "canary_", "kg-sweep"):
+        assert expected in adoption_kpi._SCHEDULED_LABEL_RE
