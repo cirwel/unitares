@@ -40,6 +40,23 @@ _RESPONSE_MODE_ALIASES = {
 _ACTIONABLE_HEALTH_STATUSES = frozenset({"at_risk", "critical"})
 
 
+def normalize_discovery_list(value: Any) -> list:
+    """Return the discovery dicts inside a `relevant_discoveries` value.
+
+    The enrichment that produces this key emits the agent-facing shape
+    `{"message": ..., "discoveries": [...]}`, while both downstream readers
+    were written against a bare list and dropped the dict on an isinstance
+    check — so surfaced discoveries never reached `memory_suggestions` or the
+    mirror. Accept both shapes here rather than changing the wire format,
+    which callers outside this process already read.
+    """
+    if isinstance(value, dict):
+        value = value.get("discoveries")
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
 def _policy_evaluation(response_data: dict) -> dict:
     policy = response_data.get("policy_evaluation")
     return policy if isinstance(policy, dict) else {}
@@ -377,7 +394,19 @@ def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any 
     _copy_passthrough_fields(
         response_data,
         result,
-        ("prediction_id", "warnings", "policy_evaluation", "enforcement", "evidence_status"),
+        (
+            "prediction_id",
+            "warnings",
+            "policy_evaluation",
+            "enforcement",
+            "evidence_status",
+            # Orphaned by the allowlist refactor: the enrichment writes this into
+            # response_data but every formatter rebuilds `result` from scratch,
+            # so it never reached a response and `memory_suggestions` could not
+            # see it. Kept out of `minimal`, which is deliberately bare.
+            "relevant_discoveries",
+            "knowledge_surfacing_degraded",
+        ),
     )
     return result
 
@@ -535,11 +564,8 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
     relevant_prior = []
     kg_results = response_data.get("_mirror_kg_results", [])
     # Also pull from existing relevant_discoveries enrichment
-    existing_discoveries = response_data.get("relevant_discoveries", [])
-    if isinstance(existing_discoveries, list):
-        for disc in existing_discoveries:
-            if isinstance(disc, dict):
-                kg_results.append(disc)
+    for disc in normalize_discovery_list(response_data.get("relevant_discoveries")):
+        kg_results.append(disc)
     for disc in kg_results[:5]:
         entry = {
             "summary": disc.get("summary", "")[:200],
@@ -630,7 +656,19 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
     _copy_passthrough_fields(
         response_data,
         result,
-        ("prediction_id", "warnings", "policy_evaluation", "enforcement", "evidence_status"),
+        (
+            "prediction_id",
+            "warnings",
+            "policy_evaluation",
+            "enforcement",
+            "evidence_status",
+            # Orphaned by the allowlist refactor: the enrichment writes this into
+            # response_data but every formatter rebuilds `result` from scratch,
+            # so it never reached a response and `memory_suggestions` could not
+            # see it. Kept out of `minimal`, which is deliberately bare.
+            "relevant_discoveries",
+            "knowledge_surfacing_degraded",
+        ),
     )
     return result
 
@@ -779,7 +817,19 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
     _copy_passthrough_fields(
         response_data,
         result,
-        ("prediction_id", "warnings", "policy_evaluation", "enforcement", "evidence_status"),
+        (
+            "prediction_id",
+            "warnings",
+            "policy_evaluation",
+            "enforcement",
+            "evidence_status",
+            # Orphaned by the allowlist refactor: the enrichment writes this into
+            # response_data but every formatter rebuilds `result` from scratch,
+            # so it never reached a response and `memory_suggestions` could not
+            # see it. Kept out of `minimal`, which is deliberately bare.
+            "relevant_discoveries",
+            "knowledge_surfacing_degraded",
+        ),
     )
     return result
 
@@ -802,7 +852,12 @@ def _strip_context(response_data: dict, is_new_agent: bool, key_was_generated: b
 
     if not is_new_agent:
         response_data.pop("learning_context", None)
-        response_data.pop("relevant_discoveries", None)
+        # `relevant_discoveries` is deliberately NOT stripped here. It was
+        # grouped with the onboarding fields when it carried generic tag
+        # matches, which were noise for an established agent. It is now seeded
+        # from the caller's own check-in text and capped at 3 summary-only
+        # entries, so it is task-scoped retrieval — and an established agent
+        # mid-task is precisely who benefits from prior work on that task.
         response_data.pop("onboarding", None)
         response_data.pop("welcome", None)
 
