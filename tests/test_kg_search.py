@@ -390,6 +390,113 @@ class TestSearchKnowledgeGraph:
         assert "confidence_note" not in data
 
     @pytest.mark.asyncio
+    async def test_verbatim_hit_without_fts_anchor_is_not_low_confidence(self, patch_common):
+        """Issue #1711: the note must not disavow a literal match.
+
+        PostgreSQL indexes some spans whole (`cirwel/unitares-paper-v7` is one
+        `file` lexeme), so a result can carry the caller's exact query string
+        and still anchor nothing in the FTS arm. The old code read "no lexical
+        anchor" as "no lexical match" and told the caller to treat a
+        lexically-perfect rank-1 hit as exploratory.
+        """
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        disc = make_discovery(
+            id="path-swallowed",
+            summary="v7 paper skeleton LIVE in private repo cirwel/unitares-paper-v7",
+        )
+        mock_graph.semantic_search = AsyncMock(return_value=[(disc, 0.36)])
+        mock_graph.full_text_search = AsyncMock(return_value=[])
+
+        result = await handle_search_knowledge_graph({
+            "query": "unitares-paper-v7",
+            "search_mode": "hybrid",
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data.get("low_confidence") is not True
+        assert "confidence_note" not in data
+        assert "lexical_index_note" in data
+        mock_mcp_server.recall_event_recorder.assert_called_once_with(
+            "lexical_index_miss",
+            "unitares-paper-v7",
+            query_terms=1,
+            search_mode="hybrid_rrf",
+            detail={"verbatim_results": 1, "returned": 1},
+        )
+
+    @pytest.mark.asyncio
+    async def test_verbatim_check_matches_details_and_tags(self, patch_common):
+        """The verbatim probe reads the whole document, not just the summary."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        disc = make_discovery(
+            id="in-tags",
+            summary="unrelated heading",
+            details="see docs/ontology/identity.md",
+            tags=["slug-paper-v7-skeleton"],
+        )
+        mock_graph.semantic_search = AsyncMock(return_value=[(disc, 0.36)])
+        mock_graph.full_text_search = AsyncMock(return_value=[])
+
+        result = await handle_search_knowledge_graph({
+            "query": "identity.md slug-paper-v7-skeleton",
+            "search_mode": "hybrid",
+        })
+
+        data = parse_result(result)
+        assert data.get("low_confidence") is not True
+        assert "lexical_index_note" in data
+
+    @pytest.mark.asyncio
+    async def test_partial_verbatim_match_still_low_confidence(self, patch_common):
+        """One term present is not "the caller's terms are here".
+
+        The suppression must require EVERY probe term, or it becomes a blanket
+        opt-out of the low-confidence signal the 2026-06-20 probes justified.
+        """
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        disc = make_discovery(id="partial", summary="sourdough only", details="")
+        mock_graph.semantic_search = AsyncMock(return_value=[(disc, 0.36)])
+        mock_graph.full_text_search = AsyncMock(return_value=[])
+
+        result = await handle_search_knowledge_graph({
+            "query": "sourdough rye starter",
+            "search_mode": "hybrid",
+        })
+
+        data = parse_result(result)
+        assert data.get("low_confidence") is True
+        assert "confidence_note" in data
+        assert "lexical_index_note" not in data
+
+    @pytest.mark.asyncio
+    async def test_negated_term_is_not_probed_verbatim(self, patch_common):
+        """A leading '-' asks for ABSENCE; demanding it verbatim inverts intent."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        disc = make_discovery(id="negation", summary="anima-mcp broker notes", details="")
+        mock_graph.semantic_search = AsyncMock(return_value=[(disc, 0.36)])
+        mock_graph.full_text_search = AsyncMock(return_value=[])
+
+        result = await handle_search_knowledge_graph({
+            "query": "anima-mcp -sensors",
+            "search_mode": "hybrid",
+        })
+
+        data = parse_result(result)
+        # 'anima-mcp' is present and '-sensors' is an exclusion, not a
+        # requirement, so this is a verbatim match, not a low-confidence one.
+        assert data.get("low_confidence") is not True
+        assert "lexical_index_note" in data
+
+    @pytest.mark.asyncio
     async def test_long_query_gets_or_recall_fallback(self, patch_common):
         """Recall floor (2026-06-20): a long natural-language query whose
         AND-FTS misses must still get the OR-recall fallback.

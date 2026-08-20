@@ -25,6 +25,10 @@ _lock = threading.Lock()
 
 ZERO_RESULT = "zero_result"
 LOW_CONFIDENCE = "low_confidence"
+# The FTS arm anchored nothing, yet a returned result carries the caller's
+# terms verbatim. That is an indexing gap, not a recall miss, and it is the
+# signal that would have surfaced issue #1711 without a human noticing.
+LEXICAL_INDEX_MISS = "lexical_index_miss"
 
 
 def _telemetry_file() -> Path:

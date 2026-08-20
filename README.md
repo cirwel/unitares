@@ -11,11 +11,14 @@ failing. Every individual tool call was allowed, so an action-level guardrail ha
 nothing to object to. What is missing is a longitudinal record that compares what
 the agent claims with what actually happened.
 
-**UNITARES keeps that record.** Agents check in after meaningful units of work.
-The server binds writes to a process identity, stores claims and outcomes, derives
-a four-score state estimate, and returns a policy decision with a named reason.
-It is a self-hosted MCP/HTTP service you run yourself — not an agent framework,
-not a hosted platform.
+**UNITARES is that record, with a circuit breaker attached.** Agents check in
+after meaningful units of work; the server keeps a longitudinal score of whether
+each agent's claims match its recorded results, pauses an agent whose behavior
+drifts, requires a written reflection before it resumes, and leaves an audit
+trail plus a shared memory every other agent can search. Four verbs: **record,
+score, interrupt, remember** — the plain-language version is one page,
+[What UNITARES is](docs/PRODUCT_DEFINITION.md). It is a self-hosted MCP/HTTP
+service you run yourself — not an agent framework, not a hosted platform.
 
 **Status:** v2.18.0. Continuously operated since November 2025 under a single
 operator: 4,573,890 audit and telemetry events, 71,141 EISV state observations,
@@ -41,12 +44,36 @@ and six long-running resident agents, one of them on separate hardware.
 
 ## What it does
 
+One governed incident, end to end — every step is deployed behavior:
+
+1. An agent **onboards** and gets a process identity; every later write is
+   attributable to that specific process.
+2. It **checks in** after each unit of work with what it did and its stated
+   confidence; recorded outcomes (tests, exit codes, reviews) are compared
+   against that claim.
+3. The server **scores** the check-in into four state coordinates and runs a
+   decision ladder that returns **proceed, guide, or pause** — always with a
+   named reason and a next step.
+4. A paused agent's further check-ins are **refused** until it submits a real
+   reflection, optionally reviewed by another healthy agent whose resolution
+   can impose conditions on its next hours.
+5. The finding lands in **shared memory** with writer attribution, where the
+   next agent searches before repeating the mistake. The whole chain is
+   replayable from the audit trail.
+
+The surfaces below are that chain broken into its parts:
+
 | Core surface | What the operator gets |
 |---|---|
 | **Accountable identity** | Bind writes to a process instance and retain what it did, claimed, and observed. Reads can remain open; writes are attributable. |
 | **Evidence-linked calibration** | Compare stated confidence with tests, exit codes, tool results, review labels, and other recorded outcomes. |
 | **Policy and recovery** | Return a named action, reason, and next step; enforce pauses on governed write surfaces; support a `reflect → validate → resume` path. |
 | **Operator visibility** | Inspect lifecycle, health, state, evidence, and policy history through MCP/HTTP APIs and a self-hosted dashboard. |
+
+Every emitted value carries a lint-enforced provenance label — `measured`,
+`derived`, `prior`, or `unknown` — so a number can be wrong but cannot silently
+pretend to be a measurement. That guarantee is the
+[trust contract](docs/trust-contract.md).
 
 The core loop is deliberately small. Four further surfaces build **on** that
 record rather than beside it. Each is independently usable and none is required
