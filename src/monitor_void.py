@@ -35,6 +35,13 @@ def check_void_state(state, agent_class: str | None = None) -> bool:
 
     void_active = bool(abs(state.V) > threshold)
     state.void_active = void_active
+    # Publish the threshold this decision was actually taken against. The
+    # proprioceptive margin reporter used to measure the void edge against the
+    # static VOID_THRESHOLD_INITIAL while the gate here is adaptive and
+    # class-overridden, so the two could disagree about the same agent on the
+    # same tick. Recording it lets the reporter quote the gate instead of
+    # inventing a second answer.
+    state.void_threshold_effective = float(threshold)
 
     return void_active
 

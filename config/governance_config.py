@@ -507,6 +507,7 @@ class GovernanceConfig:
         coherence_history: Optional[List[float]] = None,
         coherence_role: Optional[str] = None,
         coherence_history_role: Optional[str] = None,
+        void_threshold: Optional[float] = None,
     ) -> Dict[str, any]:
         """
         Compute proprioceptive margin - how close agent is to decision boundaries.
@@ -547,7 +548,27 @@ class GovernanceConfig:
         risk_revise = GovernanceConfig.RISK_REVISE_THRESHOLD    # 0.70
         risk_reject = GovernanceConfig.RISK_REJECT_THRESHOLD    # 0.80
         coherence_critical = GovernanceConfig.COHERENCE_CRITICAL_THRESHOLD  # 0.40
-        void_threshold = GovernanceConfig.VOID_THRESHOLD_INITIAL  # 0.15
+        # Quote the gate, do not invent a second answer. check_void_state decides
+        # void_active against an ADAPTIVE (mean+2sigma, clamped to [0.10, 0.30])
+        # or CLASS-OVERRIDDEN threshold -- 0.30 for embodied and
+        # resident_persistent agents, whose substrate-state asymmetry puts their
+        # steady-state |V| past 0.15 by construction (the 2026-05-01 Steward
+        # incident is why that override exists). Measuring the margin against the
+        # static VOID_THRESHOLD_INITIAL made the reporter contradict the gate on
+        # the same agent on the same tick: over 7 days, 5,160 of 10,093
+        # non-synthetic rows sat past 0.15, and ALL 5,160 carry verdict "safe".
+        #
+        # Using the gate's own threshold also makes the two agree by
+        # CONSTRUCTION rather than by tuning: void_active is `|V| > threshold`,
+        # so void_active=False now implies void_margin >= 0 and the reporter can
+        # no longer call an agent critical on an edge the gate just cleared.
+        #
+        # This is not uniformly a relaxation. For agents whose |V| sits near zero
+        # the adaptive threshold clamps to VOID_THRESHOLD_MIN = 0.10, which is
+        # STRICTER than the old static 0.15 -- there the reporter was too
+        # lenient. Falls back to the static value only when the gate has not run.
+        void_threshold = (GovernanceConfig.VOID_THRESHOLD_INITIAL
+                          if void_threshold is None else float(void_threshold))
         
         # Compute margins (distance to thresholds)
         # For risk: lower is better, so margin = threshold - current
@@ -647,7 +668,9 @@ class GovernanceConfig:
         # would be a claim this metric cannot support.
         edge_thresholds = {
             'risk': GovernanceConfig.RISK_REVISE_THRESHOLD * GovernanceConfig.TIGHT_BAND_FRACTION,
-            'void': GovernanceConfig.VOID_THRESHOLD_INITIAL * GovernanceConfig.TIGHT_BAND_FRACTION,
+            # Band off the SAME threshold, so the void edge's attainable range and
+            # its band stay proportional whichever threshold the gate applied.
+            'void': void_threshold * GovernanceConfig.TIGHT_BAND_FRACTION,
         }
         if coherence_measurable:
             edge_thresholds['coherence'] = coherence_tight_threshold
@@ -678,6 +701,7 @@ class GovernanceConfig:
                 'coherence_tight_threshold': coherence_tight_threshold,
                 'coherence_role': coherence_role,
                 'coherence_history_role': coherence_history_role,
+                'void_threshold': void_threshold,
             }
         }
     
@@ -688,7 +712,8 @@ class GovernanceConfig:
                      void_value: float = 0.0,
                      coherence_history: Optional[List[float]] = None,
                      coherence_role: Optional[str] = None,
-                     coherence_history_role: Optional[str] = None) -> Dict[str, any]:
+                     coherence_history_role: Optional[str] = None,
+                     void_threshold: Optional[float] = None) -> Dict[str, any]:
         """
         Computes a two-tier governance verdict: proceed/pause.
 
@@ -732,6 +757,7 @@ class GovernanceConfig:
             coherence_history=coherence_history,
             coherence_role=coherence_role,
             coherence_history_role=coherence_history_role,
+            void_threshold=void_threshold,
         )
         
         # Critical safety checks first - always pause
