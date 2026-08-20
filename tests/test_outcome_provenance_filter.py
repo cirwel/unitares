@@ -89,8 +89,21 @@ class TestProvenanceFilterApplied:
         assert "verification_source" not in conn.sql.split("WHERE")[1]
 
     def test_default_is_off(self):
-        """Rollout plan is merge-disabled-then-flip; the default must not
-        change behaviour at deploy."""
+        """The default is off because the flip is WRONG, not because a rollout
+        is pending.
+
+        The earlier framing here ("merge-disabled-then-flip") read as an
+        unfinished task and nearly produced the flip. Measured 2026-08-20, over
+        14 days: the standing residents hold ~12,400 outcome rows and 15
+        ``external_signal`` ones (Lumen 6218/0, Vigil 575/0), so turning this on
+        strips the outcome term from the governed population permanently -- and
+        because the fallback re-weights rather than merely dropping the term, it
+        raises ``decision_e`` (the verdict path's own prior verdicts) from 0.35
+        to 0.40. That makes E *more* loop-derived in the name of Invariant 4.
+
+        Falsify the premise rather than re-arguing it: wire a real exogenous
+        observer to the residents. See get_recent_outcomes' docstring and KG
+        ``2026-08-20T19:54:02.173817+00:00``."""
         conn = _FakeConn()
         env = {k: v for k, v in os.environ.items()
                if k != "UNITARES_OUTCOME_PROVENANCE_FILTER"}
@@ -139,6 +152,41 @@ class TestProvenanceFilterApplied:
         with patch.dict(os.environ, {"UNITARES_OUTCOME_PROVENANCE_FILTER": "off"}):
             _run(_Backend(conn).get_recent_outcomes(agent_id="a"))
         assert "verification_source" not in conn.sql.split("FROM")[0]
+
+
+class TestFlipPremiseIsRecorded:
+    """Guard the *reason*, not just the default.
+
+    A bare `default is off` assertion is satisfied by anyone who deletes the
+    rationale and keeps the line. These pin the two facts a future reader needs
+    in order to disagree with the decision on evidence instead of re-deriving
+    it: that the docstring records why, and that it names how to falsify it.
+    Deliberately a text assertion -- the alternative is a live-DB query, which
+    does not belong in CI and would fail for reasons unrelated to the claim.
+    """
+
+    def _doc(self):
+        from src.db.mixins.tool_usage import ToolUsageMixin
+        return ToolUsageMixin.get_recent_outcomes.__doc__ or ""
+
+    def test_docstring_does_not_invite_the_flip(self):
+        doc = self._doc()
+        # Guard the IMPERATIVE, not the historical mention -- the docstring
+        # deliberately quotes the old rollout phrasing to explain what went
+        # wrong, so a bare substring test on that phrase fails on its own fix.
+        assert "=on`` to enable" not in doc, (
+            "the 'set it to on to enable' instruction is what invited the "
+            "flip; if it is being restored, read the three kills first"
+        )
+        assert "not pending a flip" in doc
+
+    def test_docstring_records_the_falsifier(self):
+        doc = self._doc()
+        # A block with no exit condition is a lever nobody can retire.
+        assert "exogenous observer" in doc, (
+            "the guard must say what would make the flip reasonable again, or "
+            "it is an unfalsifiable block rather than a recorded decision"
+        )
 
 
 class TestServerDerivedProvenance:
