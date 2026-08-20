@@ -517,6 +517,7 @@ class TestLegacyProprioceptiveMargin:
             # The adaptive band is the interpretable-producer branch;
             # name that precondition rather than relying on a default.
             coherence_role=GovernanceConfig.COHERENCE_INTERPRETABLE_ROLE,
+            coherence_history_role=GovernanceConfig.COHERENCE_INTERPRETABLE_ROLE,
         )
         # absolute_margin = 0.49 - 0.40 = 0.09
         # baseline = 0.49, tight_threshold = max(0.049, 0.03) = 0.049
@@ -537,6 +538,7 @@ class TestLegacyProprioceptiveMargin:
             # The adaptive band is the interpretable-producer branch;
             # name that precondition rather than relying on a default.
             coherence_role=GovernanceConfig.COHERENCE_INTERPRETABLE_ROLE,
+            coherence_history_role=GovernanceConfig.COHERENCE_INTERPRETABLE_ROLE,
         )
         # absolute_margin = 0.44 - 0.40 = 0.04
         # baseline = 0.80, tight_threshold = max(0.08, 0.03) = 0.08
@@ -603,6 +605,7 @@ class TestLegacyProprioceptiveMargin:
             # The adaptive band is the interpretable-producer branch;
             # name that precondition rather than relying on a default.
             coherence_role=GovernanceConfig.COHERENCE_INTERPRETABLE_ROLE,
+            coherence_history_role=GovernanceConfig.COHERENCE_INTERPRETABLE_ROLE,
         )
         # baseline = 0.20, 10% = 0.02, floor = 0.03
         assert result["details"]["coherence_tight_threshold"] == 0.03

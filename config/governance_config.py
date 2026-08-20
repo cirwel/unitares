@@ -395,13 +395,14 @@ class GovernanceConfig:
     # Its whole substantive effect is giving void a band proportional to its own
     # scale (~0.032) instead of one equal to its entire range.
     #
-    # Honest limit: reproducing the risk band constrains less than it looks.
-    # Under raw-distance selection risk was only ever chosen once its margin fell
-    # below the coherence margin (~0.073), already deep inside 0.15, so the risk
-    # band never acted as a discriminator. The void band is therefore a derived
-    # choice, not an evidenced one -- it is the least-inventive value available,
-    # and it is required because the coherence fix would otherwise relocate the
-    # unconditional "tight" from the coherence edge onto the void edge.
+    # ⚠ POLICY CHOICE, NOT A DERIVED CONSTANT -- requires operator ratification.
+    # Reproducing the risk band constrains less than it looks: under raw-distance
+    # selection risk was only ever chosen once its margin fell below the coherence
+    # margin (~0.073), already deep inside 0.15, so the risk band never acted as a
+    # discriminator. Nothing in the evidence fixes the value for VOID. It is the
+    # least-inventive number available and it is required (without it the
+    # coherence fix relocates the unconditional "tight" onto the void edge), but
+    # it is chosen, not measured -- do not describe it as evidenced.
     _HISTORICAL_TIGHT_BAND = 0.15
     TIGHT_BAND_FRACTION = _HISTORICAL_TIGHT_BAND / RISK_REVISE_THRESHOLD
 
@@ -505,6 +506,7 @@ class GovernanceConfig:
         void_value: float = 0.0,
         coherence_history: Optional[List[float]] = None,
         coherence_role: Optional[str] = None,
+        coherence_history_role: Optional[str] = None,
     ) -> Dict[str, any]:
         """
         Compute proprioceptive margin - how close agent is to decision boundaries.
@@ -619,15 +621,25 @@ class GovernanceConfig:
         # returns by itself once coherence is re-sourced -- a history-length gate
         # would have retired it permanently. Unknown provenance counts as
         # unmeasurable: fail toward "unknown", never toward "fine".
-        coherence_measurable = coherence_role == GovernanceConfig.COHERENCE_INTERPRETABLE_ROLE
-        if coherence_measurable and len(coherence_history) >= 10:
+        # A role string alone is not enough to re-admit a BASELINE-relative edge.
+        # coherence_history is untagged and, across a producer change, will hold a
+        # mix of legacy and replacement samples -- so the baseline would be
+        # computed from the very metric that was ruled ineligible, and legacy
+        # values would bootstrap the band for its replacement. The window must be
+        # known to be same-provenance, which the caller asserts by passing
+        # coherence_history_role. Absent that assertion this fails closed: the
+        # edge stays unmeasurable until the producer both re-sources the metric
+        # AND resets or partitions the history on role change.
+        role_ok = coherence_role == GovernanceConfig.COHERENCE_INTERPRETABLE_ROLE
+        history_ok = coherence_history_role == coherence_role
+        coherence_measurable = role_ok and history_ok and len(coherence_history) >= 10
+        if coherence_measurable:
             # Baseline-relative band: first half of the window is the baseline so
             # a slow decline is caught (averaging the whole window would let the
             # baseline track the decline).
             mid = len(coherence_history) // 2
             coherence_tight_threshold = max(sum(coherence_history[:mid]) / mid * 0.10, 0.03)
         else:
-            coherence_measurable = False
             coherence_tight_threshold = None
 
         # Per-edge bands. Only edges with a band are judged; an unmeasurable edge
@@ -665,6 +677,7 @@ class GovernanceConfig:
                 'void_margin': void_margin,
                 'coherence_tight_threshold': coherence_tight_threshold,
                 'coherence_role': coherence_role,
+                'coherence_history_role': coherence_history_role,
             }
         }
     
@@ -673,7 +686,9 @@ class GovernanceConfig:
                      coherence: float,
                      void_active: bool,
                      void_value: float = 0.0,
-                     coherence_history: Optional[List[float]] = None) -> Dict[str, any]:
+                     coherence_history: Optional[List[float]] = None,
+                     coherence_role: Optional[str] = None,
+                     coherence_history_role: Optional[str] = None) -> Dict[str, any]:
         """
         Computes a two-tier governance verdict: proceed/pause.
 
@@ -715,6 +730,8 @@ class GovernanceConfig:
             void_active=void_active,
             void_value=void_value,
             coherence_history=coherence_history,
+            coherence_role=coherence_role,
+            coherence_history_role=coherence_history_role,
         )
         
         # Critical safety checks first - always pause

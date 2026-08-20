@@ -64,9 +64,10 @@ def test_age_does_not_change_the_verdict_on_unchanged_state():
 
 def test_repaired_provenance_re_admits_the_coherence_edge():
     """The canary. A history-length gate would have retired this lever
-    permanently; a provenance gate returns it the moment coherence is
-    re-sourced, with no code change and nobody having to remember."""
-    r = margin(coherence_history=[HEALTHY_COH] * 12, coherence_role=REPAIRED)
+    permanently; a provenance gate returns it once coherence is re-sourced AND
+    the history window is known to be same-provenance."""
+    r = margin(coherence_history=[HEALTHY_COH] * 12, coherence_role=REPAIRED,
+               coherence_history_role=REPAIRED)
     assert r["unmeasurable_edges"] == []
     assert r["details"]["coherence_tight_threshold"] == pytest.approx(
         max(HEALTHY_COH * 0.10, 0.03)
@@ -75,7 +76,7 @@ def test_repaired_provenance_re_admits_the_coherence_edge():
 
 def test_repaired_coherence_still_catches_decline_against_own_baseline():
     r = margin(coherence=0.435, coherence_history=[0.52] * 6 + [0.44] * 6,
-               coherence_role=REPAIRED)
+               coherence_role=REPAIRED, coherence_history_role=REPAIRED)
     assert r["nearest_edge"] == "coherence"
     assert r["margin"] == "tight"
 
@@ -141,3 +142,19 @@ def test_risk_band_is_byte_unchanged_by_the_per_edge_rule():
     # the boundary the rounding would have moved
     assert margin(risk_score=0.551, coherence_history=[HEALTHY_COH] * 5,
                   coherence_role=LEGACY)["nearest_edge"] == "risk"
+
+
+def test_repaired_role_with_legacy_history_still_fails_closed():
+    """A role string alone must not re-admit a BASELINE-relative edge. Across a
+    producer change the untagged window holds legacy samples, so the baseline
+    would be computed from the very metric ruled ineligible -- legacy values
+    bootstrapping the band for their own replacement. Fail closed until the
+    producer resets or partitions history on role change."""
+    r = margin(coherence_history=[HEALTHY_COH] * 12, coherence_role=REPAIRED,
+               coherence_history_role=LEGACY)
+    assert r["unmeasurable_edges"] == ["coherence"]
+    assert r["details"]["coherence_tight_threshold"] is None
+
+    untagged = margin(coherence_history=[HEALTHY_COH] * 12, coherence_role=REPAIRED,
+                      coherence_history_role=None)
+    assert untagged["unmeasurable_edges"] == ["coherence"]

@@ -74,6 +74,10 @@ def make_decision(
         # correct answer while coherence_role is 'ode_control_feedback'
         # fleet-wide, and self-corrects when the producer wires it through.
         coherence_role=getattr(state, 'coherence_role', None),
+        # Same-provenance assertion for the history window. Untagged today, so
+        # this reads None and the adaptive band stays closed -- correct while the
+        # producer has not yet reset history on a role change.
+        coherence_history_role=getattr(state, 'coherence_history_role', None),
     )
 
     basin = classify_basin(
