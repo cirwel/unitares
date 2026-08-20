@@ -534,17 +534,25 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
     # 5. Surface relevant KG discoveries — from mirror enrichment AND from existing enrichments
     relevant_prior = []
     kg_results = response_data.get("_mirror_kg_results", [])
-    # Also pull from existing relevant_discoveries enrichment
-    existing_discoveries = response_data.get("relevant_discoveries", [])
-    if isinstance(existing_discoveries, list):
-        for disc in existing_discoveries:
-            if isinstance(disc, dict):
-                kg_results.append(disc)
+    # Also pull from existing relevant_discoveries enrichment. That enrichment
+    # emits {"message": ..., "discoveries": [...]}, so the bare isinstance-list
+    # check this used to do discarded it every time.
+    existing = response_data.get("relevant_discoveries")
+    if isinstance(existing, dict):
+        existing = existing.get("discoveries")
+    if isinstance(existing, list):
+        kg_results.extend(d for d in existing if isinstance(d, dict))
     for disc in kg_results[:5]:
         entry = {
             "summary": disc.get("summary", "")[:200],
             "by": disc.get("agent_id", "unknown"),
         }
+        # Without an id the reader can see a summary but cannot open it —
+        # knowledge(action='details', discovery_id=...) is the only way through,
+        # and the producers already carry one.
+        discovery_id = disc.get("discovery_id") or disc.get("id")
+        if discovery_id:
+            entry["discovery_id"] = discovery_id
         relevance = disc.get("relevance", disc.get("score", 0))
         if relevance:
             entry["relevance"] = relevance
