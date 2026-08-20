@@ -1,4 +1,4 @@
-from typing import Optional, Union, Literal, List, Any, get_args
+from typing import Optional, Union, Literal, List, Any, Dict, get_args
 from pydantic import Field, model_validator
 from .mixins import AgentIdentityMixin
 
@@ -366,6 +366,26 @@ class KnowledgeParams(AgentIdentityMixin):
     discovery_id: Optional[str] = Field(None, description="Discovery ID (for action=get/details, update; the NEW discovery for action=supersede)")
     status: Optional[str] = Field(None, description="Status filter/update value (open, resolved, archived, superseded)")
     resolution_notes: Optional[str] = Field(None, description="Rationale to append when closing or updating a discovery")
+    # Closure CLASS params. Without these declared here the unified tool's
+    # validator strips them and the closure standard is never recorded — the
+    # same silent-strip shape as the supersession-link finding below.
+    closure_class: Optional[str] = Field(
+        None,
+        description=(
+            "By what standard this was closed (for action=update with a closing "
+            "status): fix_verified | unobserved | not_reproducible | obsolete | "
+            "duplicate. 'fix_verified' means a change is deployed AND its effect "
+            "was positively observed — the old symptom merely being absent is "
+            "'unobserved', not 'fix_verified'."
+        ),
+    )
+    closure_evidence: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "Evidence for closure_class. Required keys: fix_verified needs "
+            "{deployed, observed}; unobserved needs {window, instrument_check}."
+        ),
+    )
     # Supersession LINK params. Without these declared here the unified tool's
     # validator silently strips them, so the directed link is never recorded —
     # the 2026-06-21 finding (status='superseded' set, but 0 SUPERSEDES edges).
