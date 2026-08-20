@@ -10,7 +10,7 @@ an analogy or proposal is not mistaken for a deployed contract.
 
 | You are… | Read in this order |
 |---|---|
-| **A reviewer / first-time visitor** | [repo README](../README.md) → [`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md) → [`EISV_COMPUTATION.md`](EISV_COMPUTATION.md) → [`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md) → [`PRODUCTION_SNAPSHOT.md`](PRODUCTION_SNAPSHOT.md) |
+| **A reviewer / first-time visitor** | [repo README](../README.md) → [`PRODUCT_DEFINITION.md`](PRODUCT_DEFINITION.md) → [`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md) → [`EISV_COMPUTATION.md`](EISV_COMPUTATION.md) → [`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md) → [`PRODUCTION_SNAPSHOT.md`](PRODUCTION_SNAPSHOT.md) |
 | **Integrating an MCP client** | [`manual/04-integrating-agents.md`](manual/04-integrating-agents.md) → [`integration/MCP_CLIENTS.md`](integration/MCP_CLIENTS.md) → [`guides/TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) |
 | **Installing / deploying** | [`manual/02-install.md`](manual/02-install.md) → [`install/PLAYBOOK.md`](install/PLAYBOOK.md) → [`operations/OPERATOR_RUNBOOK.md`](operations/OPERATOR_RUNBOOK.md) |
 | **Contributing to the identity layer** | [`../AGENTS.md`](../AGENTS.md) → [`ontology/README.md`](ontology/README.md) → [`ontology/identity.md`](ontology/identity.md) → [`ontology/plan.md`](ontology/plan.md) |
@@ -31,6 +31,7 @@ A cohesive, multi-chapter front door for operators and integrators. Thin chapter
 
 ### Canonical reference
 
+- **[`PRODUCT_DEFINITION.md`](PRODUCT_DEFINITION.md)** — what UNITARES is, in plain language: the one-sentence product, the record/score/interrupt/remember loop, one governed incident end to end, and the honest limits. Start here when the architecture nouns aren't landing.
 - **[`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md)** — the canonical architecture doc. End-to-end picture of the server, state model, transports, and storage.
 - **[`CANONICAL_COMPONENTS.md`](CANONICAL_COMPONENTS.md)** — component/layer map, orthogonal to the check-in pipeline view in `UNIFIED_ARCHITECTURE.md`.
 - **[`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md)** — guided tour for reviewers evaluating the project.
