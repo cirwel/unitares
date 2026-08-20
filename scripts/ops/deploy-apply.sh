@@ -20,6 +20,19 @@
 # Detection is delegated to deploy-status.sh (single source of truth for "what's
 # live vs on disk"), so this stays a thin, safe orchestrator.
 #
+# ONE TREE, MANY SERVICES: seven services deploy from the SAME worktree
+# ($HOME/projects/unitares-deploy). Each per-service script fast-forwards that
+# shared tree before restarting its own process. So when one of them REFUSES and
+# rolls the tree back -- deploy-mcp.sh does exactly this on a migration gap, to
+# keep disk from sitting ahead of a running process -- the next service in this
+# loop immediately fast-forwards the same tree again and the rollback is undone.
+# Measured 2026-08-20 in the deploy tree's reflog: rollback at 02:38:03, undone
+# by the following deploy in the SAME second, and the same pair at 02:09:24/25.
+# The guarantee deploy-mcp.sh prints is therefore not held once the sweep moves
+# on. So: a failure HOLDS that service's checkout for the rest of the run, and
+# any later service sharing it is reported, not deployed. This stays true to
+# "never touches a tree itself" -- holding is a decision NOT to dispatch.
+#
 # Flags:
 #   --dry-run   show what would be deployed; run nothing
 #   --no-fetch  use cached remotes (default refreshes them for accurate verdicts)
@@ -77,20 +90,24 @@ deploy_script_for() {
 status_args="--json"
 [ "$FETCH" = 1 ] && status_args="$status_args --fetch"
 
-echo "[apply] reading deploy-status.sh (${FETCH:+fetch }verdicts) ..."
+# ${FETCH:+...} expands whenever FETCH is SET, and FETCH=0 is set — so this
+# line claimed "fetch verdicts" even under --no-fetch. Test the value.
+echo "[apply] reading deploy-status.sh ($([ "$FETCH" = 1 ] && echo fetched || echo cached) verdicts) ..."
 # shellcheck disable=SC2086
 status_json="$("$STATUS" $status_args)" || { echo "[apply] deploy-status.sh failed" >&2; exit 1; }
 
-# Emit one TAB-separated "name<TAB>verdict" line per STALE/BEHIND service.
-# deploy-status.sh --json is valid JSON; parse it with python3 (tolerant of the
-# verdict's optional " [DEV]" suffix).
+# Emit one TAB-separated "name<TAB>verdict<TAB>checkout" line per STALE/BEHIND
+# service. deploy-status.sh --json is valid JSON; parse it with python3
+# (tolerant of the verdict's optional " [DEV]" suffix). `checkout` is the git
+# worktree the service's deploy script fast-forwards -- the field the shared-tree
+# hold below is keyed on.
 needs="$(
   printf '%s' "$status_json" | python3 -c '
 import json, sys
 for svc in json.load(sys.stdin):
     v = svc.get("verdict", "")
     if v.startswith("STALE") or v.startswith("BEHIND"):
-        print("%s\t%s" % (svc.get("name", ""), v))
+        print("%s\t%s\t%s" % (svc.get("name", ""), v, svc.get("checkout", "")))
 '
 )" || { echo "[apply] could not parse deploy-status --json" >&2; exit 1; }
 
@@ -99,10 +116,26 @@ if [ -z "$needs" ]; then
   exit 0
 fi
 
-deployed=""; skipped=""; failed=""
-while IFS=$'\t' read -r name verdict; do
+deployed=""; skipped=""; failed=""; held=""
+# Checkouts a failed deploy has pinned. Newline-delimited and matched whole-line:
+# a substring test would let /a/b hold /a/b-two, which is a different tree.
+held_trees=""
+tree_is_held() {
+  [ -n "$1" ] || return 1
+  printf '%s\n' "$held_trees" | grep -qxF "$1"
+}
+
+while IFS=$'\t' read -r name verdict checkout; do
   [ -z "$name" ] && continue
   script="$(deploy_script_for "$name")"
+
+  # Ordering is not a fix here. Whichever service comes second inherits the
+  # problem, so the hold is on the TREE, not on a position in the list.
+  if tree_is_held "$checkout"; then
+    echo "[apply] HOLD  $name ($verdict) — an earlier deploy from $checkout refused and rolled it back; not advancing that tree again this run" >&2
+    held="$held $name"
+    continue
+  fi
 
   if [ -z "$script" ]; then
     echo "[apply] SKIP  $name ($verdict) — no deploy script (still restart-DEV?); migrate it to a worktree first" >&2
@@ -126,6 +159,14 @@ while IFS=$'\t' read -r name verdict; do
   else
     echo "[apply] FAILED $name — see output above" >&2
     failed="$failed $name"
+    # A refusal may have left the tree deliberately rolled back. Whether it did
+    # is not observable from here, and guessing the wrong way re-creates the
+    # exact defect -- so hold unconditionally. The cost of a needless hold is a
+    # deploy deferred to the next run; the cost of a missed one is a live
+    # process running against a schema that is not there.
+    if [ -n "$checkout" ]; then
+      held_trees="$(printf '%s\n%s' "$held_trees" "$checkout")"
+    fi
   fi
 done <<EOF
 $needs
@@ -135,7 +176,9 @@ echo
 echo "[apply] summary:"
 echo "  deployed:${deployed:-  none}"
 echo "  skipped: ${skipped:-  none}"
+echo "  held:    ${held:-  none}"
 echo "  failed:  ${failed:-  none}"
+[ -n "$held" ] && echo "  (held = not attempted: shares a checkout with a failed deploy. Fix that failure, then re-run.)"
 
 # Non-zero if anything failed, so callers/CI can gate on it.
 [ -z "$failed" ]
