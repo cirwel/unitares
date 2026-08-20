@@ -240,20 +240,43 @@ def _reflection(source_payload: Dict[str, Any]) -> Optional[str]:
 
 
 def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
-    """Surface prior discoveries the canonical payload already carries."""
+    """Surface prior discoveries the canonical payload already carries.
+
+    `relevant_prior_work` is the check-in path's contribution: the formatter
+    already builds it from the mirror's KG lookup and puts it in the response,
+    but nothing read it here, so `memory_suggestions` stayed empty on the one
+    tool that had prior work to offer.
+
+    `relevant_discoveries` arrives as {"message": ..., "discoveries": [...]}
+    rather than a bare list, which the previous isinstance check discarded.
+    """
     payload = _harvest_payload(payload)
-    candidates = (
-        payload.get("relevant_discoveries")
-        or payload.get("results")
-        or payload.get("discoveries")
-    )
+    candidates = payload.get("relevant_discoveries")
+    if isinstance(candidates, dict):
+        candidates = candidates.get("discoveries")
+    if not candidates:
+        candidates = (
+            payload.get("relevant_prior_work")
+            or payload.get("results")
+            or payload.get("discoveries")
+        )
     if not isinstance(candidates, list) or not candidates:
         return None
     suggestions = []
     for item in candidates[:_MEMORY_SUGGESTION_LIMIT]:
         if isinstance(item, dict):
             suggestions.append(
-                _lift(item, "discovery_id", "id", "summary", "title", "similarity")
+                _lift(
+                    item,
+                    "discovery_id",
+                    "id",
+                    "summary",
+                    "title",
+                    "similarity",
+                    # the mirror path scores its hits as `relevance`; without it
+                    # a suggestion arrives with no indication of match strength
+                    "relevance",
+                )
                 or item
             )
         else:
