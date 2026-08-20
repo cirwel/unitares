@@ -431,17 +431,31 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
                     "low_confidence_trajectory_health",
                     cal.get("low_confidence_accuracy", "?"),
                 )
-                # Only surface the fleet number when it is actually informative —
-                # i.e. when fleet trajectory health is degrading. At steady-high
-                # (~0.99 on every check-in) it is a constant dashboard stat with
-                # zero per-turn signal that reads as a non-sequitur in a per-agent
-                # mirror. The INVERTED case above still fires regardless.
+                # 0.95 is a surfacing threshold, not an observed level: when
+                # fleet health sits near its usual high value the line is a
+                # constant dashboard stat with zero per-turn signal and reads as
+                # a non-sequitur in a per-agent mirror. Do not describe 0.95 in
+                # the emitted string as though it were a measured steady state —
+                # naming a threshold as a level is the same error this rewording
+                # exists to remove. The INVERTED case above still fires regardless.
+                #
+                # Wording, 2026-08-20: this line used to open "Fleet calibration
+                # degrading", which said two things the numbers do not support.
+                # (1) trajectory_health is a LEVEL, not calibration — calibration
+                # is whether confidence TRACKS health, and the enclosing block is
+                # only attached when that tracking was already judged (its own
+                # insight string at |high-low| < 0.1 is literally "Well
+                # calibrated"). Observed 0.78/0.78/0.78: a mirror line reading
+                # "calibration degrading" over a payload saying "well calibrated".
+                # (2) "degrading" asserts a trend, but nothing here measures one —
+                # it is a single threshold comparison against 0.95. Name the level,
+                # let `insight` speak for the calibration, and claim no trend.
                 if isinstance(trajectory_health, (int, float)) and trajectory_health < 0.95:
                     mirror_signals.append(
-                        f"Fleet calibration degrading: {trajectory_health:.0%} trajectory health over "
+                        f"Fleet trajectory health {trajectory_health:.0%} over "
                         f"{cal['total_decisions']} fleet-wide decisions "
-                        f"(high-conf health: {high_conf_health}, "
-                        f"low-conf health: {low_conf_health})"
+                        f"(high-conf: {high_conf_health}, low-conf: {low_conf_health}) — "
+                        f"a fleet level, not a reading of your own work"
                     )
 
     # 3. Complexity divergence — suppress on first few check-ins (no baseline)

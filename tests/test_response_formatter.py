@@ -708,12 +708,19 @@ class TestFormatMirror:
             }
         }
         result = _format_mirror(data, saved_trust_tier=None)
-        signal = next(s for s in result["mirror"] if "fleet calibration" in s.lower())
+        signal = next(s for s in result["mirror"] if "trajectory health" in s.lower())
         assert "82%" in signal
         assert "trajectory health" in signal.lower()
-        assert "high-conf health" in signal.lower()
-        assert "low-conf health" in signal.lower()
+        assert "high-conf" in signal.lower()
+        assert "low-conf" in signal.lower()
         assert "accuracy" not in signal.lower()
+        # The line reports a LEVEL. It must not call that level "calibration"
+        # (calibration is whether confidence tracks health -- a different
+        # quantity, already judged in `insight`, here literally "Well
+        # calibrated"), and it must not assert a trend from one threshold
+        # comparison. 2026-08-20.
+        assert "calibration" not in signal.lower()
+        assert "degrading" not in signal.lower()
         # Same scope concern as the inverted case — the 20 decisions are
         # fleet-wide, not per-agent. Label must match the dashboard, which
         # renders the same singleton under a "Fleet-wide" header.

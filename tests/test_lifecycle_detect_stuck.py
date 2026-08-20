@@ -514,6 +514,10 @@ class TestLegacyProprioceptiveMargin:
             void_active=False,
             void_value=0.0,
             coherence_history=history,
+            # The adaptive band is the interpretable-producer branch;
+            # name that precondition rather than relying on a default.
+            coherence_role=GovernanceConfig.COHERENCE_INTERPRETABLE_ROLE,
+            coherence_history_role=GovernanceConfig.COHERENCE_INTERPRETABLE_ROLE,
         )
         # absolute_margin = 0.49 - 0.40 = 0.09
         # baseline = 0.49, tight_threshold = max(0.049, 0.03) = 0.049
@@ -531,6 +535,10 @@ class TestLegacyProprioceptiveMargin:
             void_active=False,
             void_value=0.0,
             coherence_history=history,
+            # The adaptive band is the interpretable-producer branch;
+            # name that precondition rather than relying on a default.
+            coherence_role=GovernanceConfig.COHERENCE_INTERPRETABLE_ROLE,
+            coherence_history_role=GovernanceConfig.COHERENCE_INTERPRETABLE_ROLE,
         )
         # absolute_margin = 0.44 - 0.40 = 0.04
         # baseline = 0.80, tight_threshold = max(0.08, 0.03) = 0.08
@@ -553,8 +561,19 @@ class TestLegacyProprioceptiveMargin:
         assert result["margin"] == "settling"
         assert result["nearest_edge"] is None
 
-    def test_short_history_falls_back_to_fixed(self):
-        """With < 10 history entries, uses fixed 0.15 threshold."""
+    def test_short_history_leaves_the_coherence_edge_unjudged(self):
+        """With < 10 history entries there is no band for the coherence edge.
+
+        This test previously asserted the opposite -- that a 0.15 fixed band was
+        used, and that a healthy agent therefore read "tight". That assertion
+        pinned the defect rather than a requirement: clearing a 0.15 band means
+        `coherence > 0.55`, which none of the 1,674 rows across the 173
+        non-resident identities reached in 7 days. It made "tight" unconditional
+        for every agent between its 3rd and 10th check-in, and the identical
+        state flipped to "comfortable" on the 10th. The gate is now provenance,
+        not history length. See
+        tests/test_proprioceptive_margin_coherence_band.py for the full cover.
+        """
         from config.governance_config import GovernanceConfig
         history = [0.49] * 5
         result = GovernanceConfig.compute_proprioceptive_margin(
@@ -563,9 +582,15 @@ class TestLegacyProprioceptiveMargin:
             void_active=False,
             void_value=0.0,
             coherence_history=history,
+            coherence_role="ode_control_feedback",
         )
-        assert result["margin"] == "tight"
-        assert result["details"]["coherence_tight_threshold"] == 0.15
+        assert result["unmeasurable_edges"] == ["coherence"]
+        assert result["details"]["coherence_tight_threshold"] is None
+        # Assert the exclusion positively. `nearest_edge != "coherence"` would
+        # pass vacuously here, because nearest_edge is None on every comfortable
+        # result -- it would still pass if the edge were deleted outright.
+        assert result["details"]["coherence_margin"] == pytest.approx(0.09)
+        assert result["margin"] == "comfortable"
 
     def test_threshold_floor_at_003(self):
         """Adaptive threshold has a floor of 0.03 even with very low baseline."""
@@ -577,6 +602,10 @@ class TestLegacyProprioceptiveMargin:
             void_active=False,
             void_value=0.0,
             coherence_history=history,
+            # The adaptive band is the interpretable-producer branch;
+            # name that precondition rather than relying on a default.
+            coherence_role=GovernanceConfig.COHERENCE_INTERPRETABLE_ROLE,
+            coherence_history_role=GovernanceConfig.COHERENCE_INTERPRETABLE_ROLE,
         )
         # baseline = 0.20, 10% = 0.02, floor = 0.03
         assert result["details"]["coherence_tight_threshold"] == 0.03
