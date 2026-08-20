@@ -236,6 +236,7 @@ def make_decision(
             'margin': margin_info['margin'],
             'nearest_edge': margin_info['nearest_edge'],
             'unmeasurable_edges': margin_info.get('unmeasurable_edges', []),
+            'margin_scope': margin_info.get('margin_scope', 'all_edges'),
         }
 
     # --- Priority 6: BOUNDARY basin → proceed with guide, tight margin ---
@@ -251,6 +252,7 @@ def make_decision(
             'margin': 'tight',
             'nearest_edge': margin_info.get('nearest_edge'),
             'unmeasurable_edges': margin_info.get('unmeasurable_edges', []),
+            'margin_scope': margin_info.get('margin_scope', 'all_edges'),
         }
 
     # --- Priority 7: HIGH basin → standard verdict-driven logic ---
@@ -266,6 +268,7 @@ def make_decision(
             'margin': margin_info['margin'],
             'nearest_edge': margin_info['nearest_edge'],
             'unmeasurable_edges': margin_info.get('unmeasurable_edges', []),
+            'margin_scope': margin_info.get('margin_scope', 'all_edges'),
         }
 
     # HIGH basin + safe/no verdict → approve via standard config decision
