@@ -78,6 +78,8 @@ def make_decision(
         # this reads None and the adaptive band stays closed -- correct while the
         # producer has not yet reset history on a role change.
         coherence_history_role=getattr(state, 'coherence_history_role', None),
+        # The threshold check_void_state actually decided void_active against.
+        void_threshold=getattr(state, 'void_threshold_effective', None),
     )
 
     basin = classify_basin(
