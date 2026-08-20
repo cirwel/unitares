@@ -496,6 +496,71 @@ class DialecticDB:
 
             return stats
 
+    async def get_outcome_breakdown(
+        self,
+        window_days: int = 30,
+        min_volume: int = 30,
+    ) -> Dict[str, Any]:
+        """Terminal-outcome breakdown that does not read `status` as quality.
+
+        Issue #1689. A raw resolution rate off `status` counts two things as
+        failures that are not: canary probes, which end `failed` by design, and
+        sessions holding a standing reviewer objection that nobody facilitated,
+        which is the dialectic working. This is the reader every rate should go
+        through -- see src/dialectic_outcomes.py for why.
+
+        `sufficient_volume` is reported rather than assumed. Excluding canary
+        and unresolved sessions shrinks the denominator sharply, and a rate
+        pinned below the volume floor is a number with no power behind it.
+        """
+        from src.dialectic_outcomes import (
+            CANARY,
+            FAILED,
+            OPEN,
+            RESOLVED,
+            UNRESOLVED_AWAITING_FACILITATION,
+            classify_outcome,
+            resolution_rate,
+        )
+
+        await self._ensure_pool()
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT s.status,
+                       coalesce(s.awaiting_facilitation, false) AS awaiting_facilitation,
+                       a.label AS paused_agent_label
+                FROM core.dialectic_sessions s
+                LEFT JOIN core.agents a ON a.id = s.paused_agent_id
+                WHERE s.created_at >= now() - interval '1 day' * $1
+            """, window_days)
+
+        counts: Dict[str, int] = {
+            RESOLVED: 0,
+            UNRESOLVED_AWAITING_FACILITATION: 0,
+            FAILED: 0,
+            CANARY: 0,
+            OPEN: 0,
+        }
+        for row in rows:
+            outcome = classify_outcome(
+                row["status"],
+                row["awaiting_facilitation"],
+                row["paused_agent_label"],
+            )
+            counts[outcome] = counts.get(outcome, 0) + 1
+
+        rate = resolution_rate(counts)
+        denominator = counts[RESOLVED] + counts[FAILED]
+        return {
+            "window_days": window_days,
+            "total_sessions": len(rows),
+            "counts": counts,
+            "resolution_rate": rate,
+            "resolution_rate_denominator": denominator,
+            "sufficient_volume": denominator >= min_volume,
+            "min_volume": min_volume,
+        }
+
     async def health_check(self) -> Dict[str, Any]:
         """Database health check."""
         await self._ensure_pool()
