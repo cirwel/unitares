@@ -757,15 +757,25 @@ async def update_current_signature(
                 trust_tier = await resolve_trust_tier(agent_id, metadata)
         except Exception as e:
             # This fallthrough used to recompute — and persist — a possibly
-            # LOWER tier whenever the resolver raised. At the saturated lineage
-            # floor (~0.633, below `lin_2`) that lands a substrate-earned
-            # resident at tier <= 1, which opens the genesis-reseed gate below
-            # and disarms `store_genesis_signature`'s value guard, because
-            # `lineage_low = similarity < 0.7` is permanently true once the
-            # metric is a constant. The next check-in then overwrites Σ₀.
-            # It also logged at debug under a default INFO logger, so the whole
-            # path emitted nothing and zero log hits could not be read as
-            # evidence it had not fired. See issue #1407.
+            # LOWER tier whenever the resolver raised. That lands a
+            # substrate-earned resident at tier <= 1, which opens the
+            # genesis-reseed gate below and disarms `store_genesis_signature`'s
+            # value guard, so the next check-in overwrites Σ₀. It also logged at
+            # debug under a default INFO logger, so the whole path emitted
+            # nothing and zero log hits could not be read as evidence it had not
+            # fired. See issue #1407.
+            #
+            # ⛔ `lineage_similarity` is an AGE ATTRACTOR, not the fleet
+            # constant #1407 originally described. Measured over all 369
+            # identities carrying genesis+current: range 0.2734–1.0000, median
+            # 0.9803, and `lineage_low` effective on only 12 of them. Binned by
+            # observation count: <20 obs -> median 0.9957; >=1000 -> 0.6311.
+            # Identities DECAY into the ~0.633 floor rather than sitting on it,
+            # so the value guard is dead exactly where genesis is most valuable
+            # (mature, drifted) and alive where it is nearly worthless (young).
+            # Do not "fix" it by moving the 0.7 cut — that calibrates against
+            # the eps saturation rather than the guard's semantics, which are
+            # an open operator decision, not a patch.
             stored_tier = metadata.get("trust_tier")
             if isinstance(stored_tier, dict) and stored_tier.get("tier") is not None:
                 # Fail SAFE, not down. An exception here means the *resolver*
