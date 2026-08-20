@@ -59,11 +59,13 @@ CREATE TABLE IF NOT EXISTS knowledge.discoveries (
     -- under R1 v3.3-F.)
     epoch               INTEGER NOT NULL DEFAULT 1,
 
-    -- Full-text search vector (auto-generated)
-    search_vector       TSVECTOR GENERATED ALWAYS AS (
-        setweight(to_tsvector('english', coalesce(summary, '')), 'A') ||
-        setweight(to_tsvector('english', coalesce(details, '')), 'B')
-    ) STORED
+    -- Full-text search vector. Maintained by the discoveries_search_update
+    -- trigger below, NOT by a GENERATED expression: it has to call
+    -- knowledge.split_path_tokens(), and it has to index tags, neither of which
+    -- the generated-column form here ever did. See migration 065 -- until then
+    -- this file and the live database disagreed, and a database built from this
+    -- file indexed no tags at all.
+    search_vector       TSVECTOR
 );
 
 -- Indexes for common query patterns
@@ -82,6 +84,50 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_discoveries_fts ON knowledge.discoverie
 CREATE TRIGGER trg_knowledge_discoveries_updated_at
     BEFORE UPDATE ON knowledge.discoveries
     FOR EACH ROW EXECUTE FUNCTION core.update_timestamp();
+
+-- -----------------------------------------------------------------------------
+-- Full-text search vector maintenance (issue #1711)
+--
+-- PostgreSQL's parser emits a slash-joined span as ONE undecomposed lexeme:
+-- `cirwel/unitares-paper-v7` indexes whole, so no query for the repo name can
+-- reach it. split_path_tokens re-emits those spans with the separators as
+-- spaces, and the vector indexes both forms. Hyphens need no such help --
+-- `unitares-paper-v7` standing alone already decomposes -- so this deliberately
+-- does not touch them.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION knowledge.split_path_tokens(txt text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $fn$
+    SELECT coalesce(string_agg(replace(m[1], '/', ' '), ' '), '')
+    FROM regexp_matches(
+        coalesce(txt, ''),
+        '[A-Za-z0-9_.@+-]+(?:/[A-Za-z0-9_.@+-]+)+',
+        'g'
+    ) AS m;
+$fn$;
+
+CREATE OR REPLACE FUNCTION knowledge.update_search_vector()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $fn$
+BEGIN
+    NEW.search_vector :=
+        setweight(to_tsvector('english', coalesce(NEW.summary, '')), 'A') ||
+        setweight(to_tsvector('english', knowledge.split_path_tokens(NEW.summary)), 'A') ||
+        setweight(to_tsvector('english', coalesce(NEW.details, '')), 'B') ||
+        setweight(to_tsvector('english', knowledge.split_path_tokens(NEW.details)), 'B') ||
+        setweight(to_tsvector('english', coalesce(array_to_string(NEW.tags, ' '), '')), 'C') ||
+        setweight(to_tsvector('english', knowledge.split_path_tokens(array_to_string(NEW.tags, ' '))), 'C');
+    RETURN NEW;
+END;
+$fn$;
+
+CREATE OR REPLACE TRIGGER discoveries_search_update
+    BEFORE INSERT OR UPDATE ON knowledge.discoveries
+    FOR EACH ROW EXECUTE FUNCTION knowledge.update_search_vector();
 
 -- -----------------------------------------------------------------------------
 -- Discovery Tags (normalized many-to-many, kept for complex tag queries)
