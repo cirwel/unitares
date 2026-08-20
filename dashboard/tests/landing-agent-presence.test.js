@@ -58,8 +58,10 @@ describe("landing agent presence", () => {
     expect(card).toBeTruthy();
     expect(card.querySelector(".num").textContent).toContain("2");
     expect(card.querySelector(".of").textContent).toContain("/ 10");
+    // Denominator labeling landed in #1707: the card now names the window it
+    // counts over and says "presence unknown" rather than a bare "unknown".
     expect(card.querySelector(".sub").textContent).toBe(
-      "live binding/lease · 8 unknown",
+      "live binding/lease · 30d window · 8 presence unknown",
     );
     expect(card.textContent).not.toContain("active / total");
   });

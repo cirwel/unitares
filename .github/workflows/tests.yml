@@ -324,11 +324,20 @@ jobs:
       run: npm ci
 
     # The dashboard is buildless (redesign serves raw HTML/CSS/JS; /phase is a
-    # standalone D3 page). The classic dashboard and its vite/vitest build+test
-    # harness were retired, so lint over the redesign + phase.js is the gate.
+    # standalone D3 page). The classic dashboard and its vite BUILD were
+    # retired, so there is nothing to compile — but the jsdom test suite that
+    # replaced it is a real gate and was never wired in. Six spec files added
+    # in Aug 2026 ran nowhere, and landing-agent-presence went red on #1707
+    # (2026-08-17) without anyone noticing, because the copy it asserts on
+    # changed and only lint was enforced. Lint cannot catch a section that
+    # renders the wrong value; these tests can.
     - name: Lint
       working-directory: dashboard
       run: npm run lint
+
+    - name: Test
+      working-directory: dashboard
+      run: npm test
 
   server-package:
     # Build the non-editable distribution and keep the checkout off sys.path.
