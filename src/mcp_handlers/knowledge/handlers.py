@@ -83,7 +83,12 @@ from src.coherence_provenance import (
     coherence_role_for_source,
 )
 from src.perf_monitor import record_ms
-from src.recall_telemetry import LOW_CONFIDENCE, ZERO_RESULT, record_recall_event
+from src.recall_telemetry import (
+    LEXICAL_INDEX_MISS,
+    LOW_CONFIDENCE,
+    ZERO_RESULT,
+    record_recall_event,
+)
 from ..support.llm_delegation import synthesize_results
 from ..support.tool_hints import KNOWLEDGE_SEARCH_TOOL
 
@@ -2261,6 +2266,38 @@ def _attach_score_map(
         response[key] = visible
 
 
+def _verbatim_probe_terms(terms: list[str]) -> list[str]:
+    """Query terms whose literal presence in a result is meaningful.
+
+    Drops websearch control tokens: bare boolean operators, and negated terms,
+    where a leading '-' asks for ABSENCE so demanding the literal would invert
+    the caller's intent. Phrase quotes are stripped so a quoted phrase is
+    probed as its own text.
+    """
+    probes: list[str] = []
+    for term in terms:
+        if term in ("OR", "AND") or term.startswith("-"):
+            continue
+        cleaned = term.strip('"').lower()
+        if cleaned:
+            probes.append(cleaned)
+    return probes
+
+
+def _contains_all_terms(document: Any, probes: list[str]) -> bool:
+    """True when every probe term appears verbatim in the document's own text."""
+    if not probes:
+        return False
+    haystack = " ".join(
+        (
+            getattr(document, "summary", "") or "",
+            getattr(document, "details", "") or "",
+            " ".join(getattr(document, "tags", None) or []),
+        )
+    ).lower()
+    return all(probe in haystack for probe in probes)
+
+
 def _attach_search_scores_and_confidence(
     response: dict[str, Any],
     state: _KnowledgeSearchState,
@@ -2293,6 +2330,32 @@ def _attach_search_scores_and_confidence(
     lexical_hits = sum(1 for document in state.results if document.id in state.fts_anchor_ids)
     if lexical_hits:
         return
+
+    # An unanchored FTS arm is a fact about the index, not about the results.
+    # PostgreSQL's parser emits some spans as one undecomposed lexeme -- paths,
+    # urls, emails -- so a result can carry the caller's terms verbatim and
+    # still anchor nothing. Issue #1711: this note fired on a rank-1 hit whose
+    # summary contained the query string exactly, and told the caller to treat
+    # it as "exploratory rather than authoritative". Read the text before
+    # making a claim about the text.
+    probes = _verbatim_probe_terms(request.query_terms)
+    verbatim = [document for document in state.results if _contains_all_terms(document, probes)]
+    if verbatim:
+        record_recall_event(
+            LEXICAL_INDEX_MISS,
+            request.query_text,
+            query_terms=request.query_term_count,
+            search_mode=state.search_mode,
+            detail={"verbatim_results": len(verbatim), "returned": len(state.results)},
+        )
+        response["lexical_index_note"] = (
+            f"{len(verbatim)} of {len(state.results)} results contain every query "
+            "term verbatim but were not anchored by the full-text index, which "
+            "indexes some spans (paths, urls, emails) whole. Those results are "
+            "literal matches; rank them accordingly."
+        )
+        return
+
     response["low_confidence"] = True
     record_recall_event(
         LOW_CONFIDENCE,
