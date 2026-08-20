@@ -83,7 +83,12 @@ from src.coherence_provenance import (
     coherence_role_for_source,
 )
 from src.perf_monitor import record_ms
-from src.recall_telemetry import LOW_CONFIDENCE, ZERO_RESULT, record_recall_event
+from src.recall_telemetry import (
+    LEXICAL_INDEX_MISS,
+    LOW_CONFIDENCE,
+    ZERO_RESULT,
+    record_recall_event,
+)
 from ..support.llm_delegation import synthesize_results
 from ..support.tool_hints import KNOWLEDGE_SEARCH_TOOL
 
@@ -2261,6 +2266,38 @@ def _attach_score_map(
         response[key] = visible
 
 
+def _verbatim_probe_terms(terms: list[str]) -> list[str]:
+    """Query terms whose literal presence in a result is meaningful.
+
+    Drops websearch control tokens: bare boolean operators, and negated terms,
+    where a leading '-' asks for ABSENCE so demanding the literal would invert
+    the caller's intent. Phrase quotes are stripped so a quoted phrase is
+    probed as its own text.
+    """
+    probes: list[str] = []
+    for term in terms:
+        if term in ("OR", "AND") or term.startswith("-"):
+            continue
+        cleaned = term.strip('"').lower()
+        if cleaned:
+            probes.append(cleaned)
+    return probes
+
+
+def _contains_all_terms(document: Any, probes: list[str]) -> bool:
+    """True when every probe term appears verbatim in the document's own text."""
+    if not probes:
+        return False
+    haystack = " ".join(
+        (
+            getattr(document, "summary", "") or "",
+            getattr(document, "details", "") or "",
+            " ".join(getattr(document, "tags", None) or []),
+        )
+    ).lower()
+    return all(probe in haystack for probe in probes)
+
+
 def _attach_search_scores_and_confidence(
     response: dict[str, Any],
     state: _KnowledgeSearchState,
@@ -2293,6 +2330,32 @@ def _attach_search_scores_and_confidence(
     lexical_hits = sum(1 for document in state.results if document.id in state.fts_anchor_ids)
     if lexical_hits:
         return
+
+    # An unanchored FTS arm is a fact about the index, not about the results.
+    # PostgreSQL's parser emits some spans as one undecomposed lexeme -- paths,
+    # urls, emails -- so a result can carry the caller's terms verbatim and
+    # still anchor nothing. Issue #1711: this note fired on a rank-1 hit whose
+    # summary contained the query string exactly, and told the caller to treat
+    # it as "exploratory rather than authoritative". Read the text before
+    # making a claim about the text.
+    probes = _verbatim_probe_terms(request.query_terms)
+    verbatim = [document for document in state.results if _contains_all_terms(document, probes)]
+    if verbatim:
+        record_recall_event(
+            LEXICAL_INDEX_MISS,
+            request.query_text,
+            query_terms=request.query_term_count,
+            search_mode=state.search_mode,
+            detail={"verbatim_results": len(verbatim), "returned": len(state.results)},
+        )
+        response["lexical_index_note"] = (
+            f"{len(verbatim)} of {len(state.results)} results contain every query "
+            "term verbatim but were not anchored by the full-text index, which "
+            "indexes some spans (paths, urls, emails) whole. Those results are "
+            "literal matches; rank them accordingly."
+        )
+        return
+
     response["low_confidence"] = True
     record_recall_event(
         LOW_CONFIDENCE,
@@ -2622,6 +2685,8 @@ class _KnowledgeUpdateRequest:
     discovery_type: Any
     tags: Any
     superseded_by: Any
+    closure_class: Optional[str] = None
+    closure_evidence: Any = None
 
 
 class _UpdateResponseError(Exception):
@@ -2662,6 +2727,12 @@ def _parse_knowledge_update_request(
         discovery_type=arguments.get("discovery_type"),
         tags=arguments.get("tags"),
         superseded_by=arguments.get("superseded_by"),
+        closure_class=(
+            str(arguments["closure_class"]).strip().lower()
+            if arguments.get("closure_class") is not None
+            else None
+        ),
+        closure_evidence=arguments.get("closure_evidence"),
     )
     leaked_marker = _detect_toolcall_markup_leak(
         request.summary, request.details, request.resolution_note
@@ -2903,6 +2974,129 @@ def _apply_update_metadata_fields(
         updates["tags"] = request.tags
 
 
+# By what standard was this closed. `status` alone is two-valued over a
+# three-valued world — the state a reconciler keeps meeting is "not currently
+# observed, cause unknown", and forced to pick, everyone picks the one that
+# shortens the queue. Recording the standard keeps a weak closure attached to
+# its own row instead of diluting what "resolved" means graph-wide.
+CLOSURE_CLASSES = {
+    "fix_verified",
+    "unobserved",
+    "not_reproducible",
+    "obsolete",
+    "duplicate",
+}
+
+_CLOSING_STATUSES = {"resolved", "closed", "wont_fix", "superseded"}
+
+# Evidence each class must actually carry. These two encode the specific ways a
+# closure went wrong on 2026-08-19 and are not generic diligence prompts.
+#
+#   fix_verified requires `observed` because the failure was claiming a verified
+#   fix on evidence that the OLD SYMPTOM WAS GONE. Absence of the symptom is not
+#   observation of the fix: the subject-keying half of one dedup repair had never
+#   been exercised live, and the closure said it was working.
+#
+#   unobserved requires `instrument_check` because the failure was concluding a
+#   condition had ceased from a sibling signal still being written. Siblings
+#   share the sink, not the emitter, so that check carries no information about
+#   whether THIS condition would still be recorded.
+_CLOSURE_EVIDENCE_REQUIRED = {
+    "fix_verified": ("deployed", "observed"),
+    "unobserved": ("window", "instrument_check"),
+}
+
+
+def _validate_closure_class(
+    request: _KnowledgeUpdateRequest, normalized_status: Optional[str]
+) -> None:
+    """Reject an ill-formed or contradictory closure class."""
+    if request.closure_class is None:
+        return
+
+    if request.closure_class not in CLOSURE_CLASSES:
+        raise _UpdateResponseError(
+            error_response(
+                f"Invalid closure_class '{request.closure_class}'. "
+                f"Valid: {sorted(CLOSURE_CLASSES)}",
+                error_code="INVALID_PARAM",
+                error_category="validation_error",
+                recovery={
+                    "action": (
+                        "Pick the class describing what you actually had. "
+                        "'unobserved' is the honest label for closing because "
+                        "the condition stopped occurring without an established "
+                        "cause — prefer it over 'fix_verified' when the evidence "
+                        "is that a symptom is absent."
+                    ),
+                    "related_tools": ["knowledge"],
+                },
+            )
+        )
+
+    # A standard for a closure that is not happening. The DB rejects this too;
+    # failing here gives the caller a usable message instead of a constraint.
+    if normalized_status is not None and normalized_status not in _CLOSING_STATUSES:
+        raise _UpdateResponseError(
+            error_response(
+                f"closure_class is only meaningful on a closing status; "
+                f"got status='{normalized_status}'. "
+                f"Closing statuses: {sorted(_CLOSING_STATUSES)}",
+                error_code="INVALID_PARAM",
+                error_category="validation_error",
+            )
+        )
+
+    required = _CLOSURE_EVIDENCE_REQUIRED.get(request.closure_class)
+    if not required:
+        return
+
+    evidence = request.closure_evidence
+    if not isinstance(evidence, dict):
+        raise _UpdateResponseError(
+            error_response(
+                f"closure_class='{request.closure_class}' requires "
+                f"closure_evidence as an object with keys {list(required)}.",
+                error_code="INVALID_PARAM",
+                error_category="validation_error",
+                recovery={"action": _closure_evidence_hint(request.closure_class)},
+            )
+        )
+
+    missing = [
+        key
+        for key in required
+        if not str(evidence.get(key) or "").strip()
+    ]
+    if missing:
+        raise _UpdateResponseError(
+            error_response(
+                f"closure_class='{request.closure_class}' is missing required "
+                f"closure_evidence: {missing}.",
+                error_code="INVALID_PARAM",
+                error_category="validation_error",
+                recovery={"action": _closure_evidence_hint(request.closure_class)},
+            )
+        )
+
+
+def _closure_evidence_hint(closure_class: str) -> str:
+    if closure_class == "fix_verified":
+        return (
+            "deployed: what shipped and how you confirmed it is in the RUNNING "
+            "build (compare build_sha, not a cached status line). "
+            "observed: the new behaviour you saw. The old symptom being absent "
+            "is not an observation of the fix — if that is all you have, the "
+            "class is 'unobserved'."
+        )
+    return (
+        "window: the period over which the condition did not occur. "
+        "instrument_check: how you established the recorder for THIS condition "
+        "is still live. A sibling signal still arriving does not establish it; "
+        "siblings share the sink, not the emitter."
+    )
+
+
 def _build_discovery_updates(
     request: _KnowledgeUpdateRequest, discovery: DiscoveryNode
 ) -> tuple[dict[str, Any], Optional[str]]:
@@ -2922,6 +3116,12 @@ def _build_discovery_updates(
         updates["status"] = normalized_status
         if normalized_status == "resolved":
             updates["resolved_at"] = _utc_now_iso()
+
+    _validate_closure_class(request, normalized_status)
+    if request.closure_class is not None:
+        updates["closure_class"] = request.closure_class
+        if isinstance(request.closure_evidence, dict):
+            updates["closure_evidence"] = request.closure_evidence
 
     _apply_update_text_fields(request, discovery, updates)
     _apply_update_metadata_fields(request, updates)
@@ -2952,6 +3152,22 @@ def _build_update_response(
         payload["superseded_by"] = str(request.superseded_by)
         if supersession_warning:
             payload["supersession_warning"] = supersession_warning
+
+    if request.closure_class is not None:
+        payload["closure_class"] = request.closure_class
+    elif normalized_status in _CLOSING_STATUSES:
+        # Non-breaking on purpose: a required field would break the KG
+        # gardener's mechanical auto-resolve on its next run. But a silent
+        # accept is how the graph got here, so say it at the moment of closing
+        # rather than leaving the reader to discover it later.
+        payload["closure_class"] = None
+        payload["closure_class_note"] = (
+            "This closure declares no standard and will read as unclassified. "
+            "A later reader cannot tell it from a closure resting on a deployed "
+            "fix with positively observed effect. Pass closure_class="
+            f"{sorted(CLOSURE_CLASSES)} — 'unobserved' is the honest label when "
+            "the evidence is that a symptom stopped appearing."
+        )
     return success_response(payload, arguments=request.arguments)
 
 

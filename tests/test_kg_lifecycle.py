@@ -1256,6 +1256,86 @@ class TestUpdateDiscoveryExtended:
         assert "Fixed by current KG UX pass." in updates["details"]
 
     @pytest.mark.asyncio
+    async def test_update_persists_closure_class_through_the_real_handler(
+        self, patch_common, registered_agent
+    ):
+        """End-to-end: the class and its evidence must reach the update payload.
+
+        The unified tool's validator silently strips params it does not declare
+        — the shape that lost the supersession links in 2026-06-21. Exercising
+        only the private validator would not catch that.
+        """
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_update_discovery_status_graph
+
+        discovery = make_discovery(id="disc-cc", severity="low", details="body")
+        mock_graph.get_discovery = AsyncMock(side_effect=[discovery, discovery])
+
+        result = await handle_update_discovery_status_graph({
+            "agent_id": registered_agent,
+            "discovery_id": "disc-cc",
+            "status": "resolved",
+            "closure_class": "unobserved",
+            "closure_evidence": {
+                "window": "zero rows since week of 2026-07-06",
+                "instrument_check": "total volume dropped with it, not relabelled",
+            },
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["closure_class"] == "unobserved"
+        updates = mock_graph.update_discovery.call_args[0][1]
+        assert updates["closure_class"] == "unobserved"
+        assert updates["closure_evidence"]["instrument_check"]
+
+    @pytest.mark.asyncio
+    async def test_closing_without_a_class_says_so_in_the_response(
+        self, patch_common, registered_agent
+    ):
+        """Non-breaking, but not silent — silence is how the graph got here."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_update_discovery_status_graph
+
+        discovery = make_discovery(id="disc-nc", severity="low", details="body")
+        mock_graph.get_discovery = AsyncMock(side_effect=[discovery, discovery])
+
+        result = await handle_update_discovery_status_graph({
+            "agent_id": registered_agent,
+            "discovery_id": "disc-nc",
+            "status": "resolved",
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["closure_class"] is None
+        assert "unclassified" in data["closure_class_note"]
+        # and it must NOT have invented one
+        updates = mock_graph.update_discovery.call_args[0][1]
+        assert "closure_class" not in updates
+
+    @pytest.mark.asyncio
+    async def test_a_non_closing_update_gets_no_closure_nudge(
+        self, patch_common, registered_agent
+    ):
+        """The nudge belongs at the moment of closing, nowhere else."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_update_discovery_status_graph
+
+        discovery = make_discovery(id="disc-open", severity="low", details="body")
+        mock_graph.get_discovery = AsyncMock(side_effect=[discovery, discovery])
+
+        result = await handle_update_discovery_status_graph({
+            "agent_id": registered_agent,
+            "discovery_id": "disc-open",
+            "resolution_notes": "still working this",
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert "closure_class_note" not in data
+
+    @pytest.mark.asyncio
     async def test_update_rejects_blank_resolution_notes_as_only_update(self, patch_common, registered_agent):
         """Blank resolution_notes should not create an empty update."""
         mock_mcp_server, mock_graph = patch_common
