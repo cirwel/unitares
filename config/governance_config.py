@@ -379,6 +379,39 @@ class GovernanceConfig:
     # feedback, not health; retain this backstop until a validated replacement
     # completes prospective shadowing. Do not recalibrate it as a health gate.
     COHERENCE_CRITICAL_THRESHOLD = 0.40
+
+    # Width of the "tight" band around an edge, as a fraction of that edge's own
+    # attainable margin.
+    #
+    # One shared absolute band used to be applied to quantities with different
+    # ranges: risk_margin tops out at 0.70, void_margin at
+    # VOID_THRESHOLD_INITIAL = 0.15. A band equal to the whole attainable range
+    # partitions nothing -- a completely inactive void scores exactly 0.15, and
+    # `0.15 > 0.15` is False, so "comfortable" was unreachable on the void edge.
+    #
+    # The fraction is the historical band divided by the risk gate EXACTLY, not
+    # rounded: risk's band then evaluates to 0.15 identically and the risk edge
+    # is byte-unchanged, so this constant introduces no behaviour change there.
+    # Its whole substantive effect is giving void a band proportional to its own
+    # scale (~0.032) instead of one equal to its entire range.
+    #
+    # ⚠ POLICY CHOICE, NOT A DERIVED CONSTANT -- requires operator ratification.
+    # Reproducing the risk band constrains less than it looks: under raw-distance
+    # selection risk was only ever chosen once its margin fell below the coherence
+    # margin (~0.073), already deep inside 0.15, so the risk band never acted as a
+    # discriminator. Nothing in the evidence fixes the value for VOID. It is the
+    # least-inventive number available and it is required (without it the
+    # coherence fix relocates the unconditional "tight" onto the void edge), but
+    # it is chosen, not measured -- do not describe it as evidenced.
+    _HISTORICAL_TIGHT_BAND = 0.15
+    TIGHT_BAND_FRACTION = _HISTORICAL_TIGHT_BAND / RISK_REVISE_THRESHOLD
+
+    # The coherence edge is judged only when its value carries this provenance.
+    # Mirrors src/pattern_analysis.py, which already gates coherence
+    # interpretability on the same role; keeping ONE predicate means the edge
+    # re-admits itself when the metric is re-sourced, instead of needing someone
+    # to remember. The legacy value is "ode_control_feedback".
+    COHERENCE_INTERPRETABLE_ROLE = "behavioral_update_consistency"
     
     # =================================================================
     # Significance Detection Thresholds
@@ -472,6 +505,8 @@ class GovernanceConfig:
         void_active: bool,
         void_value: float = 0.0,
         coherence_history: Optional[List[float]] = None,
+        coherence_role: Optional[str] = None,
+        coherence_history_role: Optional[str] = None,
     ) -> Dict[str, any]:
         """
         Compute proprioceptive margin - how close agent is to decision boundaries.
@@ -558,45 +593,91 @@ class GovernanceConfig:
                 }
             }
 
-        # All margins positive - find nearest edge we haven't crossed
-        nearest_edge = min(valid_margins.items(), key=lambda x: x[1])[0]
-        distance_to_edge = valid_margins[nearest_edge]
-
-        # Baseline-relative tight threshold for coherence.
-        # Uses first half of history as baseline so slow decline is caught
-        # (if we averaged the whole window, baseline would track the decline).
-        # "tight" = within 10% of the agent's established baseline.
-        if coherence_history and len(coherence_history) >= 10:
-            mid = len(coherence_history) // 2
-            baseline = sum(coherence_history[:mid]) / mid
-            coherence_tight_threshold = max(baseline * 0.10, 0.03)
-        elif not coherence_history or len(coherence_history) < 3:
+        if not coherence_history or len(coherence_history) < 3:
             # Warmup: not enough data to judge margin
             return {
                 'margin': 'settling',
                 'nearest_edge': None,
                 'distance_to_edge': None,
+                'unmeasurable_edges': [],
                 'details': {'note': 'Warming up — margin calculated after 3+ check-ins'}
             }
-        else:
-            coherence_tight_threshold = 0.15
 
-        # For coherence edge, use adaptive threshold; others use fixed 0.15
-        edge_threshold = coherence_tight_threshold if nearest_edge == 'coherence' else 0.15
-        if distance_to_edge > edge_threshold:
-            margin_level = 'comfortable'
+        # Is the coherence edge measurable at all?
+        #
+        # Coherence is computed from the ODE V that 69ee5a79 demoted and never
+        # re-sourced, so it rests in roughly [0.455, 0.504] for every agent. Its
+        # margin above the 0.40 gate is therefore a near-constant ~0.08, and no
+        # band separates "near the floor" from "normal" -- because normal IS near
+        # the floor. Concretely: the old fixed 0.15 fallback required
+        # coherence > 0.55 to read "comfortable", which 0 of 1,674 rows across
+        # the 173 non-resident identities reached in 7 days (nor any of the
+        # 10,071 rows fleet-wide, though 83% of those are four resident agents,
+        # so the tail is the honest population). Replaying real check-ins through
+        # the adaptive branch shows it firing zero times over the same week.
+        #
+        # So the edge is not mis-tuned, it is unmeasurable with this producer.
+        # Gate on PROVENANCE, matching src/pattern_analysis.py, so that the edge
+        # returns by itself once coherence is re-sourced -- a history-length gate
+        # would have retired it permanently. Unknown provenance counts as
+        # unmeasurable: fail toward "unknown", never toward "fine".
+        # A role string alone is not enough to re-admit a BASELINE-relative edge.
+        # coherence_history is untagged and, across a producer change, will hold a
+        # mix of legacy and replacement samples -- so the baseline would be
+        # computed from the very metric that was ruled ineligible, and legacy
+        # values would bootstrap the band for its replacement. The window must be
+        # known to be same-provenance, which the caller asserts by passing
+        # coherence_history_role. Absent that assertion this fails closed: the
+        # edge stays unmeasurable until the producer both re-sources the metric
+        # AND resets or partitions the history on role change.
+        role_ok = coherence_role == GovernanceConfig.COHERENCE_INTERPRETABLE_ROLE
+        history_ok = coherence_history_role == coherence_role
+        coherence_measurable = role_ok and history_ok and len(coherence_history) >= 10
+        if coherence_measurable:
+            # Baseline-relative band: first half of the window is the baseline so
+            # a slow decline is caught (averaging the whole window would let the
+            # baseline track the decline).
+            mid = len(coherence_history) // 2
+            coherence_tight_threshold = max(sum(coherence_history[:mid]) / mid * 0.10, 0.03)
         else:
-            margin_level = 'tight'
+            coherence_tight_threshold = None
+
+        # Per-edge bands. Only edges with a band are judged; an unmeasurable edge
+        # is REPORTED as such rather than silently dropped, because "comfortable"
+        # would be a claim this metric cannot support.
+        edge_thresholds = {
+            'risk': GovernanceConfig.RISK_REVISE_THRESHOLD * GovernanceConfig.TIGHT_BAND_FRACTION,
+            'void': GovernanceConfig.VOID_THRESHOLD_INITIAL * GovernanceConfig.TIGHT_BAND_FRACTION,
+        }
+        if coherence_measurable:
+            edge_thresholds['coherence'] = coherence_tight_threshold
+        unmeasurable = sorted(set(valid_margins) - set(edge_thresholds))
+
+        # Nearest edge, by raw distance, among the edges we can judge. Raw
+        # distance is kept deliberately: a band-relative ranking was tried and
+        # replay over 10,073 real check-ins produced zero additional risk
+        # reports, so it changed the rule for every check-in to buy nothing.
+        judgeable = {k: v for k, v in valid_margins.items() if k in edge_thresholds}
+        nearest_edge = min(judgeable.items(), key=lambda x: x[1])[0]
+        distance_to_edge = judgeable[nearest_edge]
+
+        margin_level = 'comfortable' if distance_to_edge > edge_thresholds[nearest_edge] else 'tight'
 
         return {
             'margin': margin_level,
             'nearest_edge': nearest_edge if margin_level != 'comfortable' else None,
             'distance_to_edge': distance_to_edge,
+            # Top level, not `details`: the envelope strips `details` before it
+            # reaches an agent, so a diagnostic buried there is a comment, not a
+            # report.
+            'unmeasurable_edges': unmeasurable,
             'details': {
                 'risk_margin': risk_margin,
                 'coherence_margin': coherence_margin,
                 'void_margin': void_margin,
                 'coherence_tight_threshold': coherence_tight_threshold,
+                'coherence_role': coherence_role,
+                'coherence_history_role': coherence_history_role,
             }
         }
     
@@ -605,7 +686,9 @@ class GovernanceConfig:
                      coherence: float,
                      void_active: bool,
                      void_value: float = 0.0,
-                     coherence_history: Optional[List[float]] = None) -> Dict[str, any]:
+                     coherence_history: Optional[List[float]] = None,
+                     coherence_role: Optional[str] = None,
+                     coherence_history_role: Optional[str] = None) -> Dict[str, any]:
         """
         Computes a two-tier governance verdict: proceed/pause.
 
@@ -647,6 +730,8 @@ class GovernanceConfig:
             void_active=void_active,
             void_value=void_value,
             coherence_history=coherence_history,
+            coherence_role=coherence_role,
+            coherence_history_role=coherence_history_role,
         )
         
         # Critical safety checks first - always pause

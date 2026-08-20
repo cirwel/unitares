@@ -410,6 +410,61 @@ grep -q '"dialectic-live|com.unitares.dialectic-live|.*|elixir/dialectic_live|re
 ) && ok "deploy-apply dispatches gov-plugin to an executable script" \
   || bad "deploy-apply gov-plugin dispatch"
 
+# ── deploy-apply holds a shared checkout after a refusal ──
+# Seven services deploy from ONE worktree. deploy-mcp.sh refuses on a migration
+# gap and rolls that tree back so disk does not sit ahead of a running process --
+# and before this guard the very next service in the sweep fast-forwarded the
+# same tree again, undoing the rollback. Observed in the deploy tree's reflog on
+# 2026-08-20: rollback 02:38:03, undone in the SAME second, and again 02:09:24/25.
+# Runs the real deploy-apply.sh against a sandboxed ops dir: fake status, one
+# failing service, two more on its tree, one on a tree of its own.
+(
+  set -euo pipefail
+  AP="$SB/apply-ops"; mkdir -p "$AP"
+  cp "$(dirname "$LIB")/deploy-apply.sh" "$AP/"
+  cat > "$AP/deploy-status.sh" <<'EOS'
+#!/usr/bin/env bash
+cat <<'J'
+[{"name":"governance-mcp","verdict":"BEHIND(3)","branch":"master","commit":"a","behind":"3","pid":"1","pickup":"restart","checkout":"/tmp/shared","health":""},
+ {"name":"gateway-mcp","verdict":"BEHIND(3)","branch":"master","commit":"a","behind":"3","pid":"2","pickup":"restart","checkout":"/tmp/shared","health":""},
+ {"name":"sentinel-beam","verdict":"STALE(1)","branch":"master","commit":"a","behind":"1","pid":"3","pickup":"restart","checkout":"/tmp/shared","health":""},
+ {"name":"discord-bridge","verdict":"BEHIND(1)","branch":"main","commit":"b","behind":"1","pid":"4","pickup":"restart","checkout":"/tmp/own","health":""}]
+J
+EOS
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$AP/deploy-mcp.sh"
+  for f in deploy-gateway.sh deploy-sentinel.sh deploy-bridge.sh; do
+    printf '#!/usr/bin/env bash\necho ran-%s\n' "$f" > "$AP/$f"
+  done
+  chmod +x "$AP"/*.sh
+  out="$(bash "$AP/deploy-apply.sh" --no-fetch 2>&1)" || true
+
+  # the two siblings on the failed tree must NOT have run. `if`, not
+  # `grep && exit`: under set -e a non-matching grep at the end of an && list
+  # exits the subshell itself, which reads as a failed assertion.
+  if printf '%s' "$out" | grep -q 'ran-deploy-gateway.sh';  then exit 21; fi
+  if printf '%s' "$out" | grep -q 'ran-deploy-sentinel.sh'; then exit 22; fi
+  # ... and must be reported as held, not silently dropped ...
+  printf '%s' "$out" | grep -q 'HOLD  gateway-mcp'  || exit 23
+  printf '%s' "$out" | grep -q 'HOLD  sentinel-beam' || exit 24
+  # ... while an unrelated tree still deploys (a hold, not a stop-the-world) ...
+  printf '%s' "$out" | grep -q 'ran-deploy-bridge.sh' || exit 25
+  # ... and the summary still names the real failure (spacing is cosmetic).
+  printf '%s' "$out" | grep -qE 'failed: +governance-mcp' || exit 26
+) && ok "deploy-apply holds a shared checkout after a refusal (rollback survives)" \
+  || bad "deploy-apply shared-checkout hold"
+
+# ── deploy-status --json publishes the checkout deploy-apply keys the hold on ──
+# The hold is only as good as the field it reads: if --json stops carrying
+# `checkout`, every service reads "" and the hold silently never fires.
+(
+  set -euo pipefail
+  DS="$(dirname "$LIB")/deploy-status.sh"
+  grep -q '"checkout":"%s"' "$DS"
+  grep -q 'read -r name verdict br sha behindf pidf pickup checkout hz' "$DS"
+  grep -q 'svc.get("checkout", "")' "$(dirname "$LIB")/deploy-apply.sh"
+) && ok "[guard] deploy-status --json carries checkout; deploy-apply reads it" \
+  || bad "deploy-status/deploy-apply checkout field contract"
+
 echo; echo "passed=$pass failed=$fail"
 rm -rf "$SB"
 exit "$((fail > 0))"
