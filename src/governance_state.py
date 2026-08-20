@@ -35,6 +35,10 @@ class GovernanceState:
     # Derived metrics (computed from UNITARES state)
     coherence: float = 0.5      # Computed from UNITARES coherence function (midpoint default)
     void_active: bool = False     # Whether E-I imbalance exceeds threshold (|V| > threshold)
+    # The threshold `void_active` was actually decided against, published by
+    # check_void_state. Adaptive (mean+2sigma, clamped) or class-overridden, so
+    # it is NOT generally VOID_THRESHOLD_INITIAL. None until the gate has run.
+    void_threshold_effective: Optional[float] = None
     
     # History tracking
     time: float = 0.0
