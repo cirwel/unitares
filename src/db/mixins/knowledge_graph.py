@@ -198,10 +198,18 @@ class KnowledgeGraphMixin:
         """
         # Use ts_rank_cd (cover density) — considers term proximity and is
         # generally better than vanilla ts_rank on short structured docs.
+        #
+        # Normalization flag 32 maps the raw rank to rank/(rank+1), i.e. [0, 1).
+        # Raw ts_rank_cd on this corpus runs 0.2 .. 33.4 (p50 1.2), which is a
+        # different scale from the semantic path's blended [0, 1] similarity —
+        # so a consumer applying one relevance floor to both would either pass
+        # everything or would have to know which producer it was reading. The
+        # bounded form makes the two comparable. Ordering is unaffected:
+        # rank/(rank+1) is monotonic in rank.
         ts_query = _apply_operator(query, operator=operator)
         async with self.acquire() as conn:
             rows = await conn.fetch("""
-                SELECT *, ts_rank_cd(search_vector, websearch_to_tsquery('english', $1)) as rank
+                SELECT *, ts_rank_cd(search_vector, websearch_to_tsquery('english', $1), 32) as rank
                 FROM knowledge.discoveries
                 WHERE search_vector @@ websearch_to_tsquery('english', $1)
                 ORDER BY rank DESC, created_at DESC
