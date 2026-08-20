@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional
 from mcp.types import TextContent
 
 from src.logging_utils import get_logger
+from src.mcp_handlers.response_formatter import normalize_discovery_list
 
 logger = get_logger(__name__)
 
@@ -242,10 +243,11 @@ def _reflection(source_payload: Dict[str, Any]) -> Optional[str]:
 def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """Surface prior discoveries the canonical payload already carries."""
     payload = _harvest_payload(payload)
-    candidates = (
-        payload.get("relevant_discoveries")
-        or payload.get("results")
-        or payload.get("discoveries")
+    # `relevant_discoveries` arrives as {"message": ..., "discoveries": [...]},
+    # so a bare isinstance-list check discarded every surfaced discovery and
+    # this field was unreachable from its only producer.
+    candidates = normalize_discovery_list(payload.get("relevant_discoveries")) or (
+        payload.get("results") or payload.get("discoveries")
     )
     if not isinstance(candidates, list) or not candidates:
         return None

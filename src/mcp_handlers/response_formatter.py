@@ -40,6 +40,23 @@ _RESPONSE_MODE_ALIASES = {
 _ACTIONABLE_HEALTH_STATUSES = frozenset({"at_risk", "critical"})
 
 
+def normalize_discovery_list(value: Any) -> list:
+    """Return the discovery dicts inside a `relevant_discoveries` value.
+
+    The enrichment that produces this key emits the agent-facing shape
+    `{"message": ..., "discoveries": [...]}`, while both downstream readers
+    were written against a bare list and dropped the dict on an isinstance
+    check — so surfaced discoveries never reached `memory_suggestions` or the
+    mirror. Accept both shapes here rather than changing the wire format,
+    which callers outside this process already read.
+    """
+    if isinstance(value, dict):
+        value = value.get("discoveries")
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
 def _policy_evaluation(response_data: dict) -> dict:
     policy = response_data.get("policy_evaluation")
     return policy if isinstance(policy, dict) else {}
@@ -535,11 +552,8 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
     relevant_prior = []
     kg_results = response_data.get("_mirror_kg_results", [])
     # Also pull from existing relevant_discoveries enrichment
-    existing_discoveries = response_data.get("relevant_discoveries", [])
-    if isinstance(existing_discoveries, list):
-        for disc in existing_discoveries:
-            if isinstance(disc, dict):
-                kg_results.append(disc)
+    for disc in normalize_discovery_list(response_data.get("relevant_discoveries")):
+        kg_results.append(disc)
     for disc in kg_results[:5]:
         entry = {
             "summary": disc.get("summary", "")[:200],

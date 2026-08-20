@@ -541,36 +541,98 @@ def enrich_detected_patterns(ctx: UpdateContext) -> None:
 
 # ─── Knowledge Surfacing ───────────────────────────────────────────────
 
+_QUERY_STOPWORDS = frozenset({
+    "about", "after", "again", "against", "because", "been", "before", "being",
+    "below", "between", "both", "could", "does", "doing", "down", "during",
+    "each", "from", "further", "have", "having", "here", "into", "just", "more",
+    "most", "once", "only", "other", "over", "same", "should", "some", "such",
+    "than", "that", "their", "them", "then", "there", "these", "they", "this",
+    "those", "through", "under", "until", "very", "were", "what", "when",
+    "where", "which", "while", "with", "would", "your",
+})
+_MAX_QUERY_TERMS = 8
+_MIN_TERM_LEN = 4
+
+
+def _distinctive_terms(text: str, limit: int = _MAX_QUERY_TERMS) -> list:
+    """Pick a bounded set of salient terms from free text for a KG lookup.
+
+    Bounded because `websearch_to_tsquery` ANDs bare terms: handing it a whole
+    check-in matches nothing, and OR-ing a whole check-in matches everything.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return []
+    seen: list = []
+    for token in re.findall(r"[A-Za-z][A-Za-z0-9_-]+", text.lower()):
+        if len(token) < _MIN_TERM_LEN or token in _QUERY_STOPWORDS:
+            continue
+        if token not in seen:
+            seen.append(token)
+        if len(seen) >= limit:
+            break
+    return seen
+
+
 @enrichment(order=130, lite_safe=True)
 async def enrich_knowledge_surfacing(ctx: UpdateContext) -> None:
-    """Surface top 3 relevant discoveries based on agent tags."""
+    """Surface up to 3 prior discoveries relevant to this check-in.
+
+    Retrieval is seeded from the agent's own check-in text, because the tag
+    intersection this used to rely on cannot match: agent tags are lifecycle
+    values (`ephemeral`, `engaged_ephemeral`) while discovery tags are topical,
+    so the two vocabularies overlap on a single token fleet-wide. Tag overlap
+    is kept as a fallback for callers that do carry topical tags.
+    """
     try:
-        agent_tags = ctx.meta.tags if ctx.meta and ctx.meta.tags else []
+        from src.knowledge_graph import get_knowledge_graph
+        graph = await get_knowledge_graph()
 
-        if agent_tags:
-            from src.knowledge_graph import get_knowledge_graph
-            graph = await get_knowledge_graph()
+        matches: list = []
+        match_basis = ""
 
-            tag_matches = await graph.query(tags=agent_tags, status="open", limit=10)
+        terms = _distinctive_terms(ctx.response_text)
+        if terms:
+            query = " ".join(terms)
+            # AND first, OR as the recall fallback — the convention
+            # kg_full_text_search documents for paraphrased queries.
+            matches = await graph.full_text_search(query, limit=10, operator="AND")
+            if not matches:
+                matches = await graph.full_text_search(query, limit=10, operator="OR")
+            matches = [d for d in matches if getattr(d, "status", "open") == "open"]
+            if matches:
+                match_basis = "your check-in text"
 
-            scored = []
-            agent_tags_set = set(agent_tags)
-            for disc in tag_matches:
-                disc_tags_set = set(disc.tags)
-                overlap = len(agent_tags_set & disc_tags_set)
-                if overlap > 0:
-                    scored.append((overlap, disc))
+        if not matches:
+            agent_tags = ctx.meta.tags if ctx.meta and ctx.meta.tags else []
+            if agent_tags:
+                tag_matches = await graph.query(tags=agent_tags, status="open", limit=10)
+                agent_tags_set = set(agent_tags)
+                scored = [
+                    (len(agent_tags_set & set(d.tags)), d)
+                    for d in tag_matches
+                    if agent_tags_set & set(d.tags)
+                ]
+                scored.sort(reverse=True, key=lambda x: x[0])
+                matches = [d for _, d in scored]
+                if matches:
+                    match_basis = "your tags"
 
-            scored.sort(reverse=True, key=lambda x: x[0])
-            relevant_discoveries = [disc.to_dict(include_details=False) for _, disc in scored[:3]]
+        relevant_discoveries = [d.to_dict(include_details=False) for d in matches[:3]]
 
-            if relevant_discoveries:
-                ctx.response_data["relevant_discoveries"] = {
-                    "message": f"Found {len(relevant_discoveries)} relevant discovery/discoveries matching your tags",
-                    "discoveries": relevant_discoveries
-                }
+        if relevant_discoveries:
+            ctx.response_data["relevant_discoveries"] = {
+                "message": (
+                    f"Found {len(relevant_discoveries)} relevant "
+                    f"discovery/discoveries matching {match_basis}"
+                ),
+                "discoveries": relevant_discoveries,
+                "match_basis": match_basis,
+            }
     except Exception as e:
-        logger.debug(f"Could not surface relevant discoveries: {e}")
+        # Was logger.debug, which made a broken lookup indistinguishable from
+        # "nothing relevant" — the field is simply absent either way.
+        logger.warning(f"Knowledge surfacing failed: {e}")
+        ctx.response_data["knowledge_surfacing_degraded"] = True
 
 # ─── Onboarding Info ───────────────────────────────────────────────────
 
