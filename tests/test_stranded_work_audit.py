@@ -1,5 +1,7 @@
 """Regression tests for scripts/dev/stranded_work_audit.py."""
 
+import pytest
+
 from scripts.dev import stranded_work_audit as audit
 
 
@@ -68,3 +70,79 @@ def test_missing_historical_match_keeps_stranded_alarm(monkeypatch):
     monkeypatch.setattr(audit, "succeeds", lambda *cmd: False)
 
     assert audit._end_state_differs("topic", ["post-merge-commit"]) is True
+
+
+def test_absent_merged_head_is_indeterminate_not_stranded(monkeypatch):
+    """The false-alarm mechanism behind the 2026-08-19 audit run.
+
+    GitHub deletes the head branch on merge, and the workflow fetches only
+    `refs/heads/*`, so a merged PR's head object is absent in CI. The old code
+    then dropped the `since` limit and compared the WHOLE branch, so every
+    commit the PR squashed reported as unlanded and the branch read STRANDED.
+    All five STRANDED entries in the 2026-08-19 issue were this.
+
+    A false STRANDED tells the reader to re-land landed work, which means
+    branch surgery on a merged-PR branch — the operation that lost two pushed
+    commits that same day. When the head cannot be fetched the honest answer is
+    "cannot tell", not the alarm.
+    """
+    monkeypatch.setattr(audit, "run", lambda *cmd: "branch-sha\n")
+    monkeypatch.setattr(audit, "remote_branches", lambda: ["topic"])
+    monkeypatch.setattr(
+        audit,
+        "newest_pr",
+        lambda repo, branch: {
+            "number": 1498,
+            "state": "MERGED",
+            "headRefOid": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+        },
+    )
+    monkeypatch.setattr(audit, "tip_age_days", lambda branch: 30)
+    # The head cannot be resolved even after a fetch attempt.
+    monkeypatch.setattr(audit, "resolve_merged_head", lambda sha, pr: None)
+    # If the limit were dropped, this would fire and report STRANDED.
+    monkeypatch.setattr(
+        audit,
+        "unmerged_patch_commits",
+        lambda branch, since=None: ["squashed-commit"],
+    )
+    monkeypatch.setattr(audit, "_end_state_differs", lambda branch, commits: True)
+
+    findings = audit.audit("cirwel/unitares", 7, 14)
+
+    assert len(findings) == 1
+    assert findings[0]["class"] == "INDETERMINATE"
+    assert findings[0]["class"] != "STRANDED"
+    assert "could not be fetched" in findings[0]["detail"]
+
+
+def test_resolve_merged_head_fetches_the_pull_ref_before_giving_up(monkeypatch):
+    """`refs/pull/N/head` outlives the deleted branch; a bare-sha fetch may not."""
+    attempted = []
+    present = {"value": False}
+
+    monkeypatch.setattr(audit, "_known_object", lambda sha: present["value"])
+
+    def fake_succeeds(*cmd):
+        attempted.append(cmd)
+        if cmd[-1] == "refs/pull/1498/head":
+            present["value"] = True
+            return True
+        return False
+
+    monkeypatch.setattr(audit, "succeeds", fake_succeeds)
+
+    assert audit.resolve_merged_head("abc123", 1498) == "abc123"
+    assert attempted[0][-1] == "refs/pull/1498/head"
+
+
+def test_resolve_merged_head_short_circuits_when_already_present(monkeypatch):
+    """No network call when the object is already local."""
+    monkeypatch.setattr(audit, "_known_object", lambda sha: True)
+    monkeypatch.setattr(
+        audit,
+        "succeeds",
+        lambda *cmd: pytest.fail("should not fetch an object we already have"),
+    )
+
+    assert audit.resolve_merged_head("abc123", 1498) == "abc123"

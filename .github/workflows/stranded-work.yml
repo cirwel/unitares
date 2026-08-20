@@ -38,7 +38,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 scripts/dev/stranded_work_audit.py --repo "$GITHUB_REPOSITORY" | tee audit.txt
-          count=$(grep -Ec '^(STRANDED|DANGLING-REVIEW)' audit.txt || true)
+          # INDETERMINATE counts as actionable: it means the audit could not
+          # do its job for that branch, and a degraded audit that reports
+          # nothing is this repo's named recurring failure mode — instrumentation
+          # that fails toward "healthy".
+          count=$(grep -Ec '^(STRANDED|DANGLING-REVIEW|INDETERMINATE)' audit.txt || true)
           echo "actionable=$count" >> "$GITHUB_OUTPUT"
           { echo '## Stranded-work audit'; echo '```'; cat audit.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
@@ -58,6 +62,7 @@ jobs:
             echo "The weekly stranded-work audit found branch work requiring a decision."
             echo "STRANDED = commits pushed after the branch's PR merged, patches not in master — re-land or explicitly discard."
             echo "DANGLING-REVIEW = recent or deploy-sensitive commits with no open PR — re-land, explicitly discard, or explicitly park."
+            echo "INDETERMINATE = the merged PR head could not be fetched, so landed and stranded are indistinguishable — do NOT re-land on this alone."
             echo
             echo '```'
             cat audit.txt
