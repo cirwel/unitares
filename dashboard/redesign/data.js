@@ -694,17 +694,40 @@
         // pull their live state from /v1/residents (cadence-aware rendering
         // happens in the view). Without these, the tab showed 4 of the 6
         // residents the Overview strip lists, and the absent two read as dead.
+        //
+        // `recent_writes` is an ARRAY of write rows (server-capped at 5), not a
+        // count. Mapping it onto a numeric `writes` field rendered the literal
+        // "[object Object]" for a resident with writes and an empty cell for one
+        // without, while the snapshot's numeric `writes` made the same card look
+        // correct offline. Keep the rows under `recent` and take the count from
+        // `total_updates`, which is durable and uncapped.
         const fromResidents = (label) => {
           const c = res && res.residents && res.residents.find((r) => r.label === label);
-          return c
-            ? { status: c.status, silence: c.silence_seconds, silenceThreshold: c.silence_threshold_seconds,
-                lastCheckin: c.last_checkin_at, eisv: c.eisv, coherence: c.coherence,
-                writes: c.recent_writes, risk: c.risk_score }
-            : null;
+          if (!c) return null;
+          return {
+            status: c.status, silence: c.silence_seconds, silenceThreshold: c.silence_threshold_seconds,
+            lastCheckin: c.last_checkin_at, checkinSource: c.last_checkin_source,
+            eisv: c.eisv, coherence: c.coherence, risk: c.risk_score, verdict: c.verdict,
+            updates: c.total_updates,
+            recent: Array.isArray(c.recent_writes) ? c.recent_writes : [],
+          };
         };
-        out.chronicler = fromResidents("Chronicler") || S().residentPanels.chronicler;
-        out.steward = fromResidents("Steward") || S().residentPanels.steward;
-        out.lumen = fromResidents("Lumen") || S().residentPanels.lumen;
+        // No snapshot fallback per resident on the live path: a stale fixture
+        // under a "live" badge is worse than a card that renders "—". If
+        // /v1/residents itself is down, withFallback drops the whole pane to
+        // the snapshot and the badge says so.
+        out.chronicler = fromResidents("Chronicler");
+        out.steward = fromResidents("Steward");
+        out.lumen = fromResidents("Lumen");
+        // Watcher, Sentinel and Vigil build from their own summary endpoints,
+        // which carry findings but no liveness — so their status pip was a
+        // hardcoded "healthy". Attach the same /v1/residents row the Overview
+        // strip reads so the pip means something, and so Vigil has a durable
+        // source for the fields its ring-derived stats leave null.
+        [["watcher", "Watcher"], ["sentinel", "Sentinel"], ["vigil", "Vigil"]].forEach(([key, label]) => {
+          const row = fromResidents(label);
+          if (row && out[key]) out[key].resident = row;
+        });
         return out;
       }, () => S().residentPanels);
     },
