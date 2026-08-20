@@ -21,6 +21,12 @@ Classification per remote branch (skips master/main, archive/*, backup/*):
             unique commits but no PR route (no PR ever, or newest PR CLOSED
             unmerged), with a recent tip or a deploy-sensitive path. Requires
             an explicit re-land/discard/park decision. THE SECOND ALARM CLASS.
+  INDETERMINATE
+            newest PR is MERGED and the branch advanced past it, but the merged
+            head could not be fetched, so landed work and stranded work cannot
+            be told apart. NOT an instruction to re-land — see
+            `resolve_merged_head` for why this is its own class rather than a
+            fallback to STRANDED.
   DANGLING-STALE
             older unique commits with no PR route and no deploy-sensitive path.
             Preserved as parked/abandoned work; informational only.
@@ -144,7 +150,22 @@ def audit(repo: str, active_days: int, review_days: int = 14) -> list[dict]:
                 )
                 continue
             # Branch advanced past the merged head — is the advance in master?
-            since = merged_head if _known_object(merged_head) else None
+            since = resolve_merged_head(merged_head, pr["number"])
+            if since is None:
+                # Comparing the whole branch here is what manufactured the
+                # false alarms: without the limit `git cherry` reports every
+                # commit the PR squashed. Say "cannot tell" instead of "real
+                # work is marooned"; the two call for opposite actions.
+                findings.append(
+                    {
+                        "branch": branch,
+                        "class": "INDETERMINATE",
+                        "detail": f"PR #{pr['number']} merged, branch advanced "
+                        f"past head {merged_head[:8]}, but that head could not "
+                        "be fetched — cannot distinguish landed from stranded",
+                    }
+                )
+                continue
             unmerged = unmerged_patch_commits(branch, since)
             if unmerged and _end_state_differs(branch, unmerged):
                 findings.append(
@@ -276,6 +297,35 @@ def _known_object(sha: str) -> bool:
     )
 
 
+def resolve_merged_head(sha: str, pr_number: int) -> str | None:
+    """Make the merged head available locally, fetching it if necessary.
+
+    GitHub deletes the head branch on merge, so its commit object survives in a
+    local clone only if that clone happened to fetch it before the delete. This
+    script fetches nothing, so on any machine that did not, `sha` is simply
+    absent -- and the caller then compared the WHOLE branch instead of the
+    post-merge advance. Every commit the PR squashed reads as unlanded and the
+    branch is reported STRANDED.
+
+    That is not a cosmetic defect. A false STRANDED entry instructs the reader
+    to re-land work that is already in master, which means branch surgery on a
+    merged-PR branch -- the operation that lost two pushed commits on
+    2026-08-19. The alarm class has to be right in the direction that provokes
+    action.
+
+    `refs/pull/N/head` is the durable route: GitHub keeps it after the branch
+    is deleted, and it does not depend on the server allowing bare-SHA fetches.
+    Returns the sha when it is (now) present locally, else None.
+    """
+    if _known_object(sha):
+        return sha
+    for ref in (f"refs/pull/{pr_number}/head", sha):
+        if succeeds("git", "fetch", "--quiet", "--no-tags", "origin", ref):
+            if _known_object(sha):
+                return sha
+    return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--repo", default="cirwel/unitares")
@@ -302,7 +352,13 @@ def main() -> int:
         ap.error("--review-days must be greater than or equal to --active-days")
 
     findings = audit(args.repo, args.active_days, args.review_days)
-    order = {"STRANDED": 0, "DANGLING-REVIEW": 1, "DANGLING-STALE": 2, "PRUNABLE": 3}
+    order = {
+        "STRANDED": 0,
+        "INDETERMINATE": 1,
+        "DANGLING-REVIEW": 2,
+        "DANGLING-STALE": 3,
+        "PRUNABLE": 4,
+    }
     findings.sort(key=lambda f: (order[f["class"]], f["branch"]))
 
     if args.as_json:
@@ -316,7 +372,15 @@ def main() -> int:
             print(f"{f['class']:<{class_width}} {f['branch']:<{width}}  {f['detail']}")
 
     stranded = sum(1 for f in findings if f["class"] == "STRANDED")
+    indeterminate = sum(1 for f in findings if f["class"] == "INDETERMINATE")
     dangling_review = sum(1 for f in findings if f["class"] == "DANGLING-REVIEW")
+    if indeterminate:
+        print(
+            f"\n{indeterminate} INDETERMINATE branch(es) — the merged head could "
+            "not be fetched, so landed and stranded are indistinguishable. Fetch "
+            "the PR head and re-run before acting; do NOT re-land on this alone.",
+            file=sys.stderr,
+        )
     if stranded:
         print(
             f"\n{stranded} STRANDED branch(es) — real work marooned off master; "

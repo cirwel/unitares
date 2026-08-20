@@ -178,10 +178,10 @@ runs (`from→to`, filled only when the destination is absent).
 | `agent` | `src/mcp_handlers/observability/handlers.py:59 handle_observe_agent` | — |
 | `aggregate` | `src/mcp_handlers/observability/handlers.py:885 handle_aggregate_metrics` | — |
 | `anomalies` | `src/mcp_handlers/observability/handlers.py:711 handle_detect_anomalies` | — |
-| `audit_events` | `src/mcp_handlers/observability/handlers.py:1380 handle_audit_events` | — |
-| `bridge` | `src/mcp_handlers/observability/handlers.py:1591 handle_bridge_summary` | — |
+| `audit_events` | `src/mcp_handlers/observability/handlers.py:1454 handle_audit_events` | — |
+| `bridge` | `src/mcp_handlers/observability/handlers.py:1665 handle_bridge_summary` | — |
 | `compare` | `src/mcp_handlers/observability/handlers.py:243 handle_compare_agents` | — |
-| `outcome_evidence` | `src/mcp_handlers/observability/handlers.py:1147 handle_outcome_evidence` | — |
+| `outcome_evidence` | `src/mcp_handlers/observability/handlers.py:1162 handle_outcome_evidence` | — |
 | `similar` | `src/mcp_handlers/observability/handlers.py:412 handle_compare_me_to_similar` | — |
 | `telemetry` | `src/mcp_handlers/admin/handlers.py:403 handle_get_telemetry_metrics` | — |
 

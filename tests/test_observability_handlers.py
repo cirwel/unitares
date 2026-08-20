@@ -2381,14 +2381,47 @@ class _FakeOutcomeAcquire:
 
 
 class _FakeOutcomeEvidenceDB:
-    def __init__(self, rows):
+    """Serves the page query and the aggregate walk separately.
+
+    handle_outcome_evidence issues two different queries: a LIMIT-ed page for
+    the returned events, and a keyset-paginated walk for the window
+    aggregates. Pass `window_rows` to make them diverge -- that divergence is
+    the bug the aggregates exist to prevent. Defaults to the same rows for
+    both, which is what a small window looks like.
+    """
+
+    def __init__(self, rows, window_rows=None):
         self.rows = rows
+        self.window_rows = rows if window_rows is None else window_rows
         self.captured = {}
+        self.aggregate_fetches = 0
 
     def acquire(self):
         return _FakeOutcomeAcquire(self)
 
+    @staticmethod
+    def _is_aggregate_query(sql):
+        return "outcome_id) <" in sql
+
     async def fetch(self, sql, *args):
+        if self._is_aggregate_query(sql):
+            self.aggregate_fetches += 1
+            self.captured["aggregate_sql"] = sql
+            # Honour the keyset cursor and the requested LIMIT the way the real
+            # query does, so the walk's cursor advance and its termination
+            # condition are genuinely exercised rather than short-circuited.
+            cursor_ts, cursor_id, requested = args[4], args[5], args[6]
+            ordered = sorted(
+                self.window_rows,
+                key=lambda r: (r["ts"], r["outcome_id"]),
+                reverse=True,
+            )
+            if cursor_ts is not None:
+                ordered = [
+                    r for r in ordered
+                    if (r["ts"], r["outcome_id"]) < (cursor_ts, cursor_id)
+                ]
+            return ordered[:requested]
         self.captured["sql"] = sql
         self.captured["args"] = args
         return self.rows
@@ -2546,3 +2579,153 @@ class TestHandleOutcomeEvidence:
         data = parse_result(result)
         assert data["success"] is True
         assert data["events"][0]["outcome_id"] == "claim-1"
+
+    # ---- window-vs-page aggregates (regression) ----
+    #
+    # by_grade and the per-agent stats used to be derived from the LIMIT-ed
+    # page, so they were a function of `limit`: raising it changed the reported
+    # corroboration profile of the fleet, and low_corroboration flags fired or
+    # not depending on how many rows a caller happened to ask for.
+
+    def _window(self, n_claim, n_verified, agent="agent-w"):
+        rows = []
+        for i in range(n_claim):
+            rows.append(self._row(
+                outcome_id=f"claim-{i:03d}", agent_id=agent,
+                detail={"summary": "Completed the task."},
+            ))
+        for i in range(n_verified):
+            rows.append(self._row(
+                outcome_id=f"refs-{i:03d}", agent_id=agent,
+                detail={"pr": 661, "commit_sha": "abc123"},
+            ))
+        return rows
+
+    @pytest.mark.asyncio
+    async def test_by_grade_counts_window_not_page(self):
+        page = self._window(1, 0)               # one row visible
+        window = self._window(8, 4)             # twelve in the window
+        db = _FakeOutcomeEvidenceDB(page, window_rows=window)
+
+        with patch("src.db.get_db", return_value=db):
+            from src.mcp_handlers.observability.handlers import handle_outcome_evidence
+            result = await handle_outcome_evidence({
+                "diagnostic": "agent_summary", "since": "7d", "limit": 1,
+            })
+
+        data = parse_result(result)
+        assert data["raw_row_count"] == 12          # was 1: the page size
+        assert sum(data["by_grade"].values()) == 12
+        assert data["by_grade"]["claim_only"] == 8
+
+    @pytest.mark.asyncio
+    async def test_agent_stats_count_window_not_page(self):
+        page = self._window(1, 0)
+        window = self._window(8, 4)
+        db = _FakeOutcomeEvidenceDB(page, window_rows=window)
+
+        with patch("src.db.get_db", return_value=db):
+            from src.mcp_handlers.observability.handlers import handle_outcome_evidence
+            result = await handle_outcome_evidence({
+                "diagnostic": "agent_summary", "since": "7d", "limit": 1,
+            })
+
+        agents = {a["agent_id"]: a for a in parse_result(result)["agents"]}
+        assert agents["agent-w"]["total_events"] == 12
+        assert agents["agent-w"]["claim_only_task_completed"] == 8
+
+    @pytest.mark.asyncio
+    async def test_low_corroboration_flag_does_not_depend_on_limit(self):
+        """The sharpest consequence: a fleet-health flag that flipped with the
+        caller's page size. Same window, two limits, same verdict."""
+        window = self._window(9, 1)   # 90% claim_only -> low_corroboration
+
+        verdicts = []
+        for limit in (1, 500):
+            page = window[:limit]
+            db = _FakeOutcomeEvidenceDB(page, window_rows=window)
+            with patch("src.db.get_db", return_value=db):
+                from src.mcp_handlers.observability.handlers import handle_outcome_evidence
+                result = await handle_outcome_evidence({
+                    "diagnostic": "agent_summary", "since": "7d", "limit": limit,
+                })
+            data = parse_result(result)
+            verdicts.append((
+                data["raw_row_count"],
+                [a["agent_id"] for a in data["low_corroboration_agents"]],
+                data["agents"][0]["avg_evidence_weight"],
+            ))
+
+        assert verdicts[0] == verdicts[1], (
+            f"limit changed the fleet verdict: {verdicts[0]} vs {verdicts[1]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_returned_event_count_stays_page_local(self):
+        page = self._window(2, 0)
+        window = self._window(8, 4)
+        db = _FakeOutcomeEvidenceDB(page, window_rows=window)
+
+        with patch("src.db.get_db", return_value=db):
+            from src.mcp_handlers.observability.handlers import handle_outcome_evidence
+            result = await handle_outcome_evidence({
+                "diagnostic": "claim_only_task_completed", "since": "7d", "limit": 2,
+            })
+
+        data = parse_result(result)
+        assert data["returned_event_count"] == 2   # the page
+        assert data["raw_row_count"] == 12         # the window
+        assert data["limit_reached"] is True
+
+    @pytest.mark.asyncio
+    async def test_limit_reached_false_when_window_fits(self):
+        window = self._window(3, 1)
+        db = _FakeOutcomeEvidenceDB(window, window_rows=window)
+
+        with patch("src.db.get_db", return_value=db):
+            from src.mcp_handlers.observability.handlers import handle_outcome_evidence
+            result = await handle_outcome_evidence({
+                "diagnostic": "agent_summary", "since": "7d", "limit": 500,
+            })
+
+        assert parse_result(result)["limit_reached"] is False
+
+    @pytest.mark.asyncio
+    async def test_keyset_walk_pages_through_the_whole_window(self):
+        """Exercises the cursor advance and termination with a batch size
+        smaller than the window, so a broken cursor would loop or truncate."""
+        window = self._window(30, 15)          # 45 rows
+        db = _FakeOutcomeEvidenceDB(window[:1], window_rows=window)
+
+        with patch("src.db.get_db", return_value=db), \
+             patch(
+                 "src.mcp_handlers.observability.handlers._OUTCOME_AGGREGATE_BATCH",
+                 7,
+             ):
+            from src.mcp_handlers.observability.handlers import handle_outcome_evidence
+            result = await handle_outcome_evidence({
+                "diagnostic": "agent_summary", "since": "7d", "limit": 1,
+            })
+
+        data = parse_result(result)
+        assert data["raw_row_count"] == 45
+        assert data["by_grade"]["claim_only"] == 30
+        assert db.aggregate_fetches >= 7        # 45/7 -> multiple round trips
+
+    @pytest.mark.asyncio
+    async def test_until_is_pinned_so_both_queries_see_one_snapshot(self):
+        """With `until` unset the upper bound used to mean 'now', evaluated
+        separately per query -- rows landing mid-call would be counted by one
+        and not the other."""
+        window = self._window(4, 2)
+        db = _FakeOutcomeEvidenceDB(window, window_rows=window)
+
+        with patch("src.db.get_db", return_value=db):
+            from src.mcp_handlers.observability.handlers import handle_outcome_evidence
+            await handle_outcome_evidence({
+                "diagnostic": "agent_summary", "since": "7d",
+            })
+
+        page_until = db.captured["args"][1]
+        assert page_until is not None, "upper bound must be pinned, not left as NULL/now()"
+

@@ -1144,10 +1144,27 @@ def _parse_window_arg(value: Any, default_hours: float = 24.0) -> "datetime":
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+# Rows per round trip on the outcome_evidence aggregate walk. The walk is
+# keyset-paginated so memory stays flat however wide the window is; this only
+# trades round trips against per-batch size. Module-level so tests can shrink
+# it and exercise multi-batch paging without building a 2000-row fixture.
+#
+# Budget, measured 2026-08-19 against the live governance DB: the worst case a
+# caller can ask for is the whole table with no window bound -- 126,993 rows,
+# 64 round trips, 2.84s against this handler's 15s timeout, so ~5x headroom.
+# Grading is not the cost (~68k rows/s); fetch and JSON decode are. If the
+# table outgrows that headroom the call fails loudly on the timeout rather than
+# returning a truncated number, which is the behaviour this whole change exists
+# to establish.
+_OUTCOME_AGGREGATE_BATCH = 2000
+
+
 @mcp_tool("outcome_evidence_query", timeout=15.0, register=False)
 async def handle_outcome_evidence(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Audit outcome_events by corroboration grade and claim-field verification."""
     import json
+    from datetime import datetime, timezone
+
     from src.db import get_db
     from src.outcome_corroboration import assess_outcome_corroboration
 
@@ -1214,6 +1231,12 @@ async def handle_outcome_evidence(arguments: Dict[str, Any]) -> Sequence[TextCon
         outcome_type = outcome_type or "task_completed"
         grade_filter = grade_filter or "claim_only"
 
+    # Pin the upper bound. With `until` unset this used to mean "now", which
+    # drifts between the page query and the aggregate walk below and would let
+    # rows arrive mid-call -- counted in one and not the other.
+    if end_dt is None:
+        end_dt = datetime.now(timezone.utc)
+
     db = get_db()
     async with db.acquire() as conn:
         rows = await conn.fetch(
@@ -1230,7 +1253,7 @@ async def handle_outcome_evidence(arguments: Dict[str, Any]) -> Sequence[TextCon
               detail
             FROM audit.outcome_events
             WHERE ts >= $1
-              AND ($2::timestamptz IS NULL OR ts <= $2)
+              AND ts <= $2
               AND ($3::text IS NULL OR agent_id = $3)
               AND ($4::text IS NULL OR outcome_type = $4)
             ORDER BY ts DESC
@@ -1254,38 +1277,87 @@ async def handle_outcome_evidence(arguments: Dict[str, Any]) -> Sequence[TextCon
                 return {}
         return {}
 
+    def _grade(row) -> tuple[Dict[str, Any], Dict[str, Any], Any]:
+        """Detail -> corroboration metadata. The grading lives in Python
+        (assess_outcome_corroboration inspects the JSON detail), which is why
+        the aggregate below walks rows instead of being a GROUP BY: expressing
+        this in SQL would fork the grading rules into a second implementation."""
+        detail = _row_detail(row["detail"])
+        verification_source = row["verification_source"] or detail.get("verification_source")
+        metadata = assess_outcome_corroboration(
+            outcome_type=row["outcome_type"],
+            detail=detail,
+            verification_source=verification_source,
+        ).as_metadata()
+        return detail, metadata, verification_source
+
     by_grade: Dict[str, int] = {}
     agent_stats: Dict[str, Dict[str, Any]] = {}
     events: list[Dict[str, Any]] = []
 
-    for row in rows:
-        detail = _row_detail(row["detail"])
-        verification_source = row["verification_source"] or detail.get("verification_source")
-        assessment = assess_outcome_corroboration(
-            outcome_type=row["outcome_type"],
-            detail=detail,
-            verification_source=verification_source,
-        )
-        metadata = assessment.as_metadata()
-        grade = metadata["corroboration_grade"]
-        by_grade[grade] = by_grade.get(grade, 0) + 1
+    # --- window aggregates -------------------------------------------------
+    # by_grade and the per-agent stats describe the WHOLE window, not the page.
+    # Derived from the LIMIT-ed page they were a function of `limit`: raising it
+    # changed the reported corroboration profile of the fleet, and
+    # low_corroboration flags fired or not depending on how many rows a caller
+    # happened to ask for. The walk is keyset-paginated on the (ts, outcome_id)
+    # primary key so memory stays flat however wide the window is.
+    batch_size = _OUTCOME_AGGREGATE_BATCH
+    window_total = 0
+    cursor_ts = None
+    cursor_id = None
+    async with db.acquire() as conn:
+        while True:
+            batch = await conn.fetch(
+                """
+                SELECT ts, outcome_id, agent_id, outcome_type,
+                       verification_source, detail
+                FROM audit.outcome_events
+                WHERE ts >= $1
+                  AND ts <= $2
+                  AND ($3::text IS NULL OR agent_id = $3)
+                  AND ($4::text IS NULL OR outcome_type = $4)
+                  AND ($5::timestamptz IS NULL
+                       OR (ts, outcome_id) < ($5::timestamptz, $6::uuid))
+                ORDER BY ts DESC, outcome_id DESC
+                LIMIT $7
+                """,
+                start_dt, end_dt, target_agent_id, outcome_type,
+                cursor_ts, cursor_id, batch_size,
+            )
+            if not batch:
+                break
+            for row in batch:
+                _, metadata, _vs = _grade(row)
+                grade = metadata["corroboration_grade"]
+                by_grade[grade] = by_grade.get(grade, 0) + 1
+                window_total += 1
 
-        aid = row["agent_id"] or "<unknown>"
-        stats = agent_stats.setdefault(aid, {
-            "agent_id": aid,
-            "total_events": 0,
-            "task_completed": 0,
-            "claim_only_task_completed": 0,
-            "total_evidence_weight": 0.0,
-            "by_grade": {},
-        })
-        stats["total_events"] += 1
-        stats["total_evidence_weight"] += float(metadata["evidence_weight"])
-        stats["by_grade"][grade] = stats["by_grade"].get(grade, 0) + 1
-        if row["outcome_type"] == "task_completed":
-            stats["task_completed"] += 1
-            if grade == "claim_only":
-                stats["claim_only_task_completed"] += 1
+                aid = row["agent_id"] or "<unknown>"
+                stats = agent_stats.setdefault(aid, {
+                    "agent_id": aid,
+                    "total_events": 0,
+                    "task_completed": 0,
+                    "claim_only_task_completed": 0,
+                    "total_evidence_weight": 0.0,
+                    "by_grade": {},
+                })
+                stats["total_events"] += 1
+                stats["total_evidence_weight"] += float(metadata["evidence_weight"])
+                stats["by_grade"][grade] = stats["by_grade"].get(grade, 0) + 1
+                if row["outcome_type"] == "task_completed":
+                    stats["task_completed"] += 1
+                    if grade == "claim_only":
+                        stats["claim_only_task_completed"] += 1
+            if len(batch) < batch_size:
+                break
+            cursor_ts = batch[-1]["ts"]
+            cursor_id = batch[-1]["outcome_id"]
+
+    # --- returned events (page-local by design) ----------------------------
+    for row in rows:
+        detail, metadata, verification_source = _grade(row)
+        grade = metadata["corroboration_grade"]
 
         include_row = True
         if grade_filter and grade != str(grade_filter):
@@ -1364,12 +1436,14 @@ async def handle_outcome_evidence(arguments: Dict[str, Any]) -> Sequence[TextCon
             "min_completions": min_completions,
             "low_weight_threshold": low_weight_threshold,
         },
-        "raw_row_count": len(rows),
-        "returned_event_count": len(events),
+        # Window-wide, independent of `limit`.
+        "raw_row_count": window_total,
         "by_grade": by_grade,
         "agents": agents,
         "low_corroboration_agents": low_agents,
-        "limit_reached": len(rows) >= limit,
+        # Page-local: describes the `events` array above.
+        "returned_event_count": len(events),
+        "limit_reached": window_total > limit,
     }
     if include_events:
         payload["events"] = events

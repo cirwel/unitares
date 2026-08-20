@@ -1,8 +1,11 @@
 """Stage A — per-class S setpoint (EISV fixed-point calibration).
 
 Guards two contracts:
-  1. OFF by default: s_setpoint=0.0 reproduces the historical `-μS` equilibrium
-     (S* ≈ 0.091) exactly — merging the change is a no-op until enabled.
+  1. WHEN DISABLED: s_setpoint=0.0 reproduces the historical `-μS` equilibrium
+     (S* ≈ 0.091) exactly. Note the flag defaults ON — see
+     test_get_s_setpoint_on_by_default below; this docstring claimed "OFF by
+     default ... a no-op until enabled" until 2026-08-19, contradicting that
+     test in its own file.
   2. ON: decaying toward σ shifts S* to σ + driver-offset, so a per-class σ =
      healthy_S − offset lands the equilibrium on measured-healthy S and lifts the
      manifold readout above the 0.40 critical threshold.
