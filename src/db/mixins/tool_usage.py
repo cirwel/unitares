@@ -225,9 +225,49 @@ class ToolUsageMixin:
         (contribution scaled by corroboration grade rather than filtered) can be
         built without another schema archaeology pass.
 
-        Default OFF. Set ``UNITARES_OUTCOME_PROVENANCE_FILTER=on`` to enable;
-        the rollout plan is merge-disabled-then-flip, so the default must not
-        change behaviour at deploy.
+        Default OFF, and **it is not pending a flip**. This docstring used to
+        read "the rollout plan is merge-disabled-then-flip", which invites the
+        next reader to finish the job by setting it to ``on``. Measured
+        2026-08-20, that flip is wrong three separate ways:
+
+        1. **It amputates the governed population.** Over 14 days the standing
+           residents carry ~12,400 outcome rows and 15 ``external_signal`` ones
+           (Lumen 6218/**0**, Vigil 575/**0**, Sentinel 3762/5, Watcher 1864/10).
+           Nothing exogenous observes them and no producer would. They fall below
+           ``_compute_E``'s ``>= 3`` gate always, not usually -- 244 of 301
+           agent-windows lose the term. The population that keeps it is transient
+           interactive sessions, which is the inverse of the intended selection.
+        2. **The fallback is a different formula, and every surviving term is
+           loop-derived.** ``E`` goes from ``.35d + .25c + .20k + .20*outcome``
+           to ``.40d + .30c + .30k``, raising ``decision_e`` -- which is the
+           verdict path's own prior verdicts (``governance_monitor.py``) -- from
+           0.35 to 0.40. So the flip takes residents from ~80% to 100%
+           loop-derived *in the name of* Invariant 4. ``decision_e`` is the real
+           violation; this filter is not the lever for it.
+        3. **It would contaminate the pre-registered 2026-12-01 read.**
+           ``scripts/analysis/eisv_skeptic_report.py`` features come from the
+           persisted ``eisv_e``/``eisv_i`` on outcome rows and its default
+           ``--anchor-scope trusted`` is this same predicate. Since
+           ``external_signal.outcome_score`` is exactly ``1 - is_bad`` (2 distinct
+           values fleet-wide), 20% of E would become a 24h moving mean of that
+           read's own target. Its leak guard is temporal and cannot see this.
+
+        The measured effect is also small and two-sided -- median dE -0.0145,
+        p05 -0.0325 / p95 +0.0275 -- so there is no urgency argument either.
+
+        **What this flag is actually for:** it is the *seam*, not the answer. As
+        the module note in ``grounding/outcome_anchors.py`` puts it, a consumer
+        that wants soft evidence "must weight by corroboration grade, not merely
+        admit it". ``verification_source`` is returned above so that weighted
+        version can be built. The ``>= 3`` cliff is the defect to fix -- replace
+        the if/else with continuous shrinkage on evidence mass -- not the
+        provenance mix.
+
+        **What would make the flip reasonable again** (falsify the premise, do
+        not just re-argue it): a genuine exogenous observer wired to the resident
+        agents, such that they clear the gate on rows that are not an in-tree
+        self-re-check. Until then this stays off. Full evidence, including the
+        queries: KG discovery ``2026-08-20T19:54:02.173817+00:00``.
         """
         from src.grounding.outcome_anchors import EXOGENOUS_OUTCOMES_SQL
 
