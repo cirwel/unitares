@@ -68,6 +68,12 @@ def make_decision(
         void_active=state.void_active,
         void_value=state.V,
         coherence_history=state.coherence_history,
+        # Provenance decides whether the coherence edge is measurable at all.
+        # Absent on the state today (the producer emits it alongside the metric),
+        # so this reads None and the edge reports as unmeasurable -- which is the
+        # correct answer while coherence_role is 'ode_control_feedback'
+        # fleet-wide, and self-corrects when the producer wires it through.
+        coherence_role=getattr(state, 'coherence_role', None),
     )
 
     basin = classify_basin(
@@ -223,6 +229,7 @@ def make_decision(
             'basin': basin,
             'margin': margin_info['margin'],
             'nearest_edge': margin_info['nearest_edge'],
+            'unmeasurable_edges': margin_info.get('unmeasurable_edges', []),
         }
 
     # --- Priority 6: BOUNDARY basin → proceed with guide, tight margin ---
@@ -237,6 +244,7 @@ def make_decision(
             'basin': basin,
             'margin': 'tight',
             'nearest_edge': margin_info.get('nearest_edge'),
+            'unmeasurable_edges': margin_info.get('unmeasurable_edges', []),
         }
 
     # --- Priority 7: HIGH basin → standard verdict-driven logic ---
@@ -251,6 +259,7 @@ def make_decision(
             'basin': basin,
             'margin': margin_info['margin'],
             'nearest_edge': margin_info['nearest_edge'],
+            'unmeasurable_edges': margin_info.get('unmeasurable_edges', []),
         }
 
     # HIGH basin + safe/no verdict → approve via standard config decision
