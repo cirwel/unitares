@@ -2346,6 +2346,12 @@ class KnowledgeGraphAGE:
         for row in rows:
             doc = await self.get_discovery(row["id"])
             if doc is not None:
+                # Carry the query rank across the re-hydration, which otherwise
+                # discards the row it came from. Same contract as the Postgres
+                # backend: consumers read `.relevance` off a returned node.
+                rank = row.get("rank")
+                if isinstance(rank, (int, float)):
+                    doc.relevance = float(rank)
                 results.append(doc)
         return results
 

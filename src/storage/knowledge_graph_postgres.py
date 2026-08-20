@@ -111,10 +111,26 @@ class KnowledgeGraphPostgres:
     async def full_text_search(
         self, query: str, limit: int = 20, operator: str = "AND",
     ) -> List[DiscoveryNode]:
-        """Full-text search using PostgreSQL tsvector. Defaults to AND (#165)."""
+        """Full-text search using PostgreSQL tsvector. Defaults to AND (#165).
+
+        Each returned node carries the query's normalized rank as `.relevance`.
+        The SQL already computes it and `_row_to_discovery_dict` already passes
+        it through, but `_dict_to_discovery` builds from named fields and so
+        dropped it — leaving consumers that read a relevance off these nodes to
+        see 0 for every hit. Attached rather than added to the dataclass so the
+        wire shape of `to_dict()` is unchanged; consumers already read it
+        defensively (`getattr(disc, 'relevance', 0)`).
+        """
         db = await self._get_db()
         rows = await db.kg_full_text_search(query, limit, operator=operator)
-        return [self._dict_to_discovery(r) for r in rows]
+        discoveries = []
+        for row in rows:
+            node = self._dict_to_discovery(row)
+            rank = row.get("rank")
+            if isinstance(rank, (int, float)):
+                node.relevance = float(rank)
+            discoveries.append(node)
+        return discoveries
 
     async def find_similar(self, discovery: DiscoveryNode, limit: int = 10) -> List[DiscoveryNode]:
         """Find similar discoveries by tag overlap."""
