@@ -251,7 +251,12 @@ for c in "${COMPONENTS[@]}"; do
 
   hz=""; [ -n "$pid" ] && hz=$(health "$port")
 
-  rows+=("$name|$verdict$devflag|$br|$sha|behind=$behind|pid=${pid:--}|$pickup|$hz")
+  # $repo, not $dir: this field names the git worktree a deploy fast-forwards.
+  # Several services share ONE tree, and a consumer that cannot see the
+  # sharing will advance a tree that another service just refused to advance.
+  # Kept BEFORE $hz so health remains the greedy tail of every `read` below —
+  # a health body containing "|" must not shift a real field.
+  rows+=("$name|$verdict$devflag|$br|$sha|behind=$behind|pid=${pid:--}|$pickup|$repo|$hz")
 done
 
 # --- derivation: an unregistered service must be LOUD, not absent -----------
@@ -292,7 +297,7 @@ ungoverned_rows() {
     path=$(grep -o "$HOME/projects/[A-Za-z0-9_.-]*" "$HOME/Library/LaunchAgents/$label.plist" 2>/dev/null | head -1)
     [ -n "$path" ] || continue
     git -C "$path" rev-parse --git-dir >/dev/null 2>&1 || continue
-    rows+=("${label#com.*.}|UNGOVERNED|$(git_branch "$path")|$(git_short "$path")|behind=?|pid=$pid|unregistered|no deploy script")
+    rows+=("${label#com.*.}|UNGOVERNED|$(git_branch "$path")|$(git_short "$path")|behind=?|pid=$pid|unregistered|$path|no deploy script")
   done < <(eval "$LAUNCHCTL_LIST_CMD" 2>/dev/null)
 }
 ungoverned_rows
@@ -302,13 +307,13 @@ if [ "$JSON" = 1 ]; then
   printf '['
   first=1
   for r in "${rows[@]}"; do
-    IFS='|' read -r name verdict br sha behindf pidf pickup hz <<< "$r"
+    IFS='|' read -r name verdict br sha behindf pidf pickup checkout hz <<< "$r"
     [ "$first" = 1 ] || printf ','; first=0
     # behindf/pidf carry "behind=N"/"pid=X"; strip the prefixes so the JSON has
     # real keys (the previous form emitted keyless values → invalid JSON, which
     # broke any agent trying to parse --json as the header promises).
-    printf '{"name":"%s","verdict":"%s","branch":"%s","commit":"%s","behind":"%s","pid":"%s","pickup":"%s","health":"%s"}' \
-      "$name" "$verdict" "$br" "$sha" "${behindf#behind=}" "${pidf#pid=}" "$pickup" "$(echo "$hz" | tr -d '"\\')"
+    printf '{"name":"%s","verdict":"%s","branch":"%s","commit":"%s","behind":"%s","pid":"%s","pickup":"%s","checkout":"%s","health":"%s"}' \
+      "$name" "$verdict" "$br" "$sha" "${behindf#behind=}" "${pidf#pid=}" "$pickup" "$checkout" "$(echo "$hz" | tr -d '"\\')"
   done
   printf ']\n'
 else
@@ -316,7 +321,7 @@ else
   printf '  %-20s %-16s %-34s %-9s %s\n' "SERVICE" "VERDICT" "BRANCH@COMMIT" "PID" "PICKUP / health"
   printf '  %s\n' "$(printf '%.0s-' {1..96})"
   for r in "${rows[@]}"; do
-    IFS='|' read -r name verdict br sha behindf pidf pickup hz <<< "$r"
+    IFS='|' read -r name verdict br sha behindf pidf pickup checkout hz <<< "$r"
     printf '  %-20s %-16s %-34s %-9s %s %s\n' \
       "$name" "$verdict" "$(echo "$br@$sha" | cut -c1-34)" "${pidf#pid=}" "$pickup" "$hz"
   done
