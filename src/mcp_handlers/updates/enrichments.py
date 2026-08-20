@@ -585,28 +585,27 @@ async def enrich_knowledge_surfacing(ctx: UpdateContext) -> None:
     is kept as a fallback for callers that do carry topical tags.
     """
     try:
-        from src.knowledge_graph import get_knowledge_graph
-        graph = await get_knowledge_graph()
-
-        matches: list = []
+        relevant_discoveries: list = []
         match_basis = ""
 
-        terms = _distinctive_terms(ctx.response_text)
-        if terms:
-            query = " ".join(terms)
-            # AND first, OR as the recall fallback — the convention
-            # kg_full_text_search documents for paraphrased queries.
-            matches = await graph.full_text_search(query, limit=10, operator="AND")
-            if not matches:
-                matches = await graph.full_text_search(query, limit=10, operator="OR")
-            matches = [d for d in matches if getattr(d, "status", "open") == "open"]
-            if matches:
-                match_basis = "your check-in text"
+        # Reuse the shared check-in-text search rather than issuing our own:
+        # it is semantic-first with a full-text fallback, applies the relevance
+        # floor, and — the part that matters on this path — wraps every KG call
+        # in _KG_SEARCH_TIMEOUT. Measured tail for one such call is p99 281ms /
+        # max 2624ms, so an unbudgeted search here would hang the check-in.
+        relevant_discoveries = await _search_kg_by_checkin_text(ctx)
+        if relevant_discoveries:
+            match_basis = "your check-in text"
 
-        if not matches:
+        if not relevant_discoveries:
             agent_tags = ctx.meta.tags if ctx.meta and ctx.meta.tags else []
             if agent_tags:
-                tag_matches = await graph.query(tags=agent_tags, status="open", limit=10)
+                from src.knowledge_graph import get_knowledge_graph
+                graph = await get_knowledge_graph()
+                tag_matches = await asyncio.wait_for(
+                    graph.query(tags=agent_tags, status="open", limit=10),
+                    timeout=_KG_SEARCH_TIMEOUT,
+                )
                 agent_tags_set = set(agent_tags)
                 scored = [
                     (len(agent_tags_set & set(d.tags)), d)
@@ -614,11 +613,13 @@ async def enrich_knowledge_surfacing(ctx: UpdateContext) -> None:
                     if agent_tags_set & set(d.tags)
                 ]
                 scored.sort(reverse=True, key=lambda x: x[0])
-                matches = [d for _, d in scored]
-                if matches:
+                relevant_discoveries = [
+                    d.to_dict(include_details=False) for _, d in scored
+                ]
+                if relevant_discoveries:
                     match_basis = "your tags"
 
-        relevant_discoveries = [d.to_dict(include_details=False) for d in matches[:3]]
+        relevant_discoveries = relevant_discoveries[:3]
 
         if relevant_discoveries:
             ctx.response_data["relevant_discoveries"] = {
@@ -1662,6 +1663,19 @@ def _detect_gaming(ctx: UpdateContext, records: list | None = None) -> list:
     return signals
 
 
+def _mark_surfacing_degraded(ctx: UpdateContext) -> None:
+    """Record that a KG lookup degraded rather than finding nothing.
+
+    Without this the two outcomes are indistinguishable downstream: both leave
+    the surfacing key absent, so a broken or timing-out search reads to the
+    agent exactly like "no prior work exists".
+    """
+    try:
+        ctx.response_data["knowledge_surfacing_degraded"] = True
+    except Exception:  # response_data shape is not worth failing a check-in over
+        pass
+
+
 async def _search_kg_by_checkin_text(
     ctx: UpdateContext, floor: float = _RELATED_DISCOVERY_RELEVANCE_FLOOR
 ) -> list:
@@ -1690,14 +1704,24 @@ async def _search_kg_by_checkin_text(
             )
         except asyncio.TimeoutError:
             logger.debug("KG semantic_search exceeded %.0fms budget; skipping surfacing", _KG_SEARCH_TIMEOUT * 1000)
+            _mark_surfacing_degraded(ctx)
             return []
         except (AttributeError, NotImplementedError):
             try:
                 results = await asyncio.wait_for(
-                    graph.full_text_search(response_text, limit=3), timeout=_KG_SEARCH_TIMEOUT
+                    # Bounded terms, not the raw check-in: kg_full_text_search
+                    # AND-joins every token it is handed, so a paragraph of
+                    # prose matches nothing. This fallback is the live path on
+                    # the Postgres backend, which has no semantic_search.
+                    graph.full_text_search(
+                        " ".join(_distinctive_terms(response_text)) or response_text,
+                        limit=3,
+                    ),
+                    timeout=_KG_SEARCH_TIMEOUT,
                 )
             except asyncio.TimeoutError:
                 logger.debug("KG full_text_search exceeded %.0fms budget; skipping surfacing", _KG_SEARCH_TIMEOUT * 1000)
+                _mark_surfacing_degraded(ctx)
                 return []
             except (AttributeError, NotImplementedError):
                 pass
@@ -1742,7 +1766,8 @@ async def _search_kg_by_checkin_text(
             kg_results.append(entry)
         return kg_results
     except Exception as e:
-        logger.debug(f"KG text search failed: {e}")
+        logger.warning(f"KG text search failed: {e}")
+        _mark_surfacing_degraded(ctx)
         return []
 
 
