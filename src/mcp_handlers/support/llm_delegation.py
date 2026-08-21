@@ -1,9 +1,15 @@
 """
 Internal LLM Delegation - Handler-to-handler model inference.
 
-Provides internal interface for handlers to delegate reasoning tasks
-to local/cloud LLMs via call_model infrastructure. Non-blocking and
-graceful-failure by design.
+Provides internal interface for handlers to delegate reasoning tasks to the
+LOCAL model. It does not route through the ``call_model`` tool handler — an
+internal call must not consume the target agent's Energy or wear its
+attribution (same boundary as the #1424 fix's ``audit_only``: instrumenting a
+surface must not enrol it in a behavioral feed nobody measured). It DOES share
+the local-inference plane with ``call_model`` via ``inference_registry``: one
+base URL (``UNITARES_OLLAMA_BASE``), one default model
+(``UNITARES_LLM_MODEL``), one cached availability probe, one provenance hash.
+Non-blocking and graceful-failure by design.
 
 Use cases:
 - Knowledge synthesis (summarizing many discoveries)
@@ -27,6 +33,13 @@ import json
 from src.logging_utils import get_logger
 logger = get_logger(__name__)
 
+from .inference_registry import (
+    _ollama_available,
+    default_local_model,
+    ollama_base_url,
+    sha256_text,
+)
+
 # Check if OpenAI SDK available
 try:
     from openai import OpenAI
@@ -40,24 +53,18 @@ def _get_ollama_client() -> Optional[Any]:
         return None
 
     try:
-        # Ollama's OpenAI-compatible API
+        # Ollama's OpenAI-compatible API, same base as call_model's local route
         return OpenAI(
-            base_url="http://localhost:11434/v1",
+            base_url=ollama_base_url() + "/v1",
             api_key="ollama"  # Required by SDK but ignored by Ollama
         )
     except Exception as e:
         logger.debug(f"Ollama client not available: {e}")
         return None
 
-def _get_default_model() -> str:
-    """Get default model for local inference."""
-    # Check environment for override
-    env_model = os.getenv("UNITARES_LLM_MODEL")
-    if env_model:
-        return env_model
-
-    # gemma4 for governance coaching — needs real reasoning
-    return "gemma4:latest"
+# gemma4 default for governance coaching — needs real reasoning. Resolution is
+# the registry's, so call_model and the internal lane cannot drift apart.
+_get_default_model = default_local_model
 
 
 def _reviewer_timeout(default: float = 120.0) -> float:
@@ -129,9 +136,11 @@ async def call_local_llm(
 
     try:
         import asyncio
+        import time
 
         # Run synchronous OpenAI call in executor to avoid blocking
         loop = asyncio.get_running_loop()
+        started = time.monotonic()
 
         def _call_sync():
             response = client.chat.completions.create(
@@ -149,7 +158,17 @@ async def call_local_llm(
             timeout=timeout + 5  # Extra buffer for executor overhead
         )
 
-        logger.info(f"Local LLM call successful: model={model}, tokens≤{max_tokens}")
+        # Same provenance fields call_model records, so internal traffic is
+        # visible in logs. Deliberately NO EISV/energy attribution: an internal
+        # call made ABOUT an agent is not work done BY that agent.
+        logger.info(
+            "internal inference: model=%s latency_ms=%d structured=false "
+            "prompt=%s response=%s",
+            model,
+            int((time.monotonic() - started) * 1000),
+            sha256_text(prompt),
+            sha256_text(result or ""),
+        )
         return result
 
     except asyncio.TimeoutError:
@@ -164,9 +183,8 @@ def _ollama_native_url() -> str:
     """Native Ollama /api/chat endpoint (supports JSON-schema-constrained output
     via the `format` field). Distinct from the OpenAI-compat /v1 base used by
     call_local_llm; the native endpoint is what was validated for structured
-    dialectic output."""
-    base = os.getenv("UNITARES_OLLAMA_BASE", "http://localhost:11434").rstrip("/")
-    return base + "/api/chat"
+    dialectic output. Same host as every other local route (registry base)."""
+    return ollama_base_url() + "/api/chat"
 
 
 async def call_local_llm_structured(
@@ -215,7 +233,10 @@ async def call_local_llm_structured(
         return resp.get("message", {}).get("content")
 
     try:
+        import time
+
         loop = asyncio.get_running_loop()
+        started = time.monotonic()
         content = await asyncio.wait_for(
             loop.run_in_executor(None, _call_sync),
             timeout=timeout + 5,
@@ -224,7 +245,14 @@ async def call_local_llm_structured(
             logger.warning(f"Structured LLM returned empty content (model={model})")
             return None
         parsed = json.loads(content)
-        logger.info(f"Structured LLM call successful: model={model}")
+        logger.info(
+            "internal inference: model=%s latency_ms=%d structured=true "
+            "prompt=%s response=%s",
+            model,
+            int((time.monotonic() - started) * 1000),
+            sha256_text(json.dumps(messages)),
+            sha256_text(content),
+        )
         return parsed if isinstance(parsed, dict) else None
     except asyncio.TimeoutError:
         logger.warning(f"Structured LLM timed out after {timeout}s (model={model})")
@@ -729,28 +757,14 @@ async def run_full_dialectic(
     return result
 
 async def is_llm_available() -> bool:
-    """Check if local LLM is available for delegation."""
+    """Check if local LLM is available for delegation.
+
+    Uses the registry's TTL-cached socket probe — the same availability source
+    call_model's auto-routing consults — instead of a per-call models.list ping
+    that re-opened a connection on every check.
+    """
     if not OPENAI_AVAILABLE:
         return False
-
-    client = _get_ollama_client()
-    if not client:
-        return False
-
-    # Quick ping test
-    try:
-        import asyncio
-        loop = asyncio.get_running_loop()
-
-        def _ping():
-            # List models endpoint is quick
-            client.models.list()
-            return True
-
-        result = await asyncio.wait_for(
-            loop.run_in_executor(None, _ping),
-            timeout=2.0
-        )
-        return result
-    except Exception:
-        return False
+    import asyncio
+    # The cache-priming probe is a blocking socket connect; keep it off the loop.
+    return await asyncio.to_thread(_ollama_available)
