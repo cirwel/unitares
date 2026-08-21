@@ -736,3 +736,83 @@ class TestToolUsageBlending:
         assert 0.0 <= r["I"] <= 1.0
         assert 0.05 <= r["S"] <= 1.5  # S can go above 1.0 with velocity addition
         assert -1.0 <= r["V"] <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# decision_e self-loop ablation
+# ---------------------------------------------------------------------------
+# decision_history is populated solely from governance_monitor's own verdicts,
+# and decision_e is the largest term in E (0.35 with outcomes, 0.40 without),
+# so E -> basin -> guide -> decision_e -> E closes. Two readings fit and they
+# prescribe opposite actions: a pinned-per-agent constant is a CALIBRATION
+# defect (rescale _DECISION_SCORES); a delta tracking the agent's own
+# trajectory is a STRUCTURAL loop. Only the shape of the per-check-in delta
+# separates them, which is what this ablation exists to emit.
+
+
+def _shadow_inputs(decision_history):
+    return dict(
+        decision_history=decision_history,
+        coherence_history=[0.5] * 10,
+        regime_history=["EXPLORATION"] * 10,
+        E_history=[0.6] * 10,
+        I_history=[0.6] * 10,
+        S_history=[0.3] * 10,
+        V_history=[0.0] * 10,
+    )
+
+
+class TestDecisionSelfLoopShadow:
+    def test_measurement_only_and_never_applied(self):
+        from src.behavioral_sensor import compute_decision_self_loop_shadow
+        r = compute_decision_self_loop_shadow(**_shadow_inputs(["guide"] * 10))
+        assert r["mode"] == "measurement_only"
+        assert r["policy_applied"] is False
+
+    def test_does_not_mutate_the_deployed_observation(self):
+        """The whole contract: the live reading must be untouched."""
+        from src.behavioral_sensor import (
+            compute_behavioral_sensor_eisv, compute_decision_self_loop_shadow,
+        )
+        inputs = _shadow_inputs(["guide"] * 10)
+        deployed = compute_behavioral_sensor_eisv(**inputs)
+        before = dict(deployed)
+        compute_decision_self_loop_shadow(**inputs, deployed_observation=deployed)
+        assert deployed == before
+
+    def test_touches_E_and_leaves_I_alone(self):
+        """decision_e enters _compute_E only. A non-zero dI would mean the
+        intervention leaked into a term it does not belong to."""
+        from src.behavioral_sensor import compute_decision_self_loop_shadow
+        r = compute_decision_self_loop_shadow(**_shadow_inputs(["guide"] * 10))
+        assert r["candidate_minus_deployed"]["I"] == 0.0
+        assert r["candidate_minus_deployed"]["E"] != 0.0
+
+    def test_delta_sign_follows_the_pinned_tier(self):
+        """A guide-pinned agent (0.7) is scored BELOW the fleet level, so
+        neutralizing raises its E; an approve-pinned agent (1.0) is above it,
+        so neutralizing lowers E. Opposite signs from the same mechanism is
+        what makes this a calibration question rather than noise."""
+        from src.behavioral_sensor import compute_decision_self_loop_shadow
+        guide = compute_decision_self_loop_shadow(
+            **_shadow_inputs(["guide"] * 10))["candidate_minus_deployed"]["E"]
+        approve = compute_decision_self_loop_shadow(
+            **_shadow_inputs(["approve"] * 10))["candidate_minus_deployed"]["E"]
+        assert guide > 0 > approve, (guide, approve)
+
+    def test_short_history_is_ineligible_not_zero(self):
+        """Ineligible must be distinguishable from 'measured no effect' — the
+        failure mode where an ablation reports 0.0 because it never ran."""
+        from src.behavioral_sensor import compute_decision_self_loop_shadow
+        r = compute_decision_self_loop_shadow(**_shadow_inputs(["guide"]))
+        assert r["eligible"] is False
+        assert r["eligibility_reason"] == "insufficient_decision_history"
+        assert r["candidate_minus_deployed"] is None
+
+    def test_neutral_sentinel_is_never_a_real_verdict(self):
+        """The sentinel rides the same string-lookup path as real decisions, so
+        it must not collide with anything monitor_decision.py can emit."""
+        from src.behavioral_sensor import _DECISION_NEUTRAL_KEY, _DECISION_SCORES
+        assert _DECISION_NEUTRAL_KEY.startswith("__")
+        real = {k for k in _DECISION_SCORES if not k.startswith("__")}
+        assert _DECISION_NEUTRAL_KEY not in real
