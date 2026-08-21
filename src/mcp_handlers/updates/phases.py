@@ -904,6 +904,7 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
             if monitor and len(getattr(monitor.state, 'decision_history', [])) >= 3:
                 from src.behavioral_sensor import (
                     compute_behavioral_sensor_eisv,
+                    compute_decision_self_loop_shadow,
                     compute_legacy_coherence_dependency_shadow,
                 )
                 from src.coherence_provenance import (
@@ -1014,10 +1015,23 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                     **behavioral_sensor_inputs,
                     deployed_observation=behavioral_eisv,
                 )
+                # Sibling ablation: decision_e is the LARGEST term in E (0.35
+                # with outcomes, 0.40 without) and reads governance_monitor's
+                # own prior verdicts, so E -> basin -> guide -> decision_e -> E
+                # closes. Whether that is a bias or a live loop is the open
+                # question, and only the SHAPE of the per-check-in delta answers
+                # it. Measurement-only, same contract as the sibling above.
+                decision_shadow = compute_decision_self_loop_shadow(
+                    **behavioral_sensor_inputs,
+                    deployed_observation=behavioral_eisv,
+                )
                 ctx.agent_state["_eisv_shadow_ablations"] = {
                     "legacy_coherence_neutralized": {
                         "behavioral_sensor": behavioral_shadow,
-                    }
+                    },
+                    "decision_self_loop_neutralized": {
+                        "behavioral_sensor": decision_shadow,
+                    },
                 }
                 ctx.agent_state["_eisv_derivation"] = build_behavioral_derivation(
                     decision_history=decision_history,

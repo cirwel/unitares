@@ -17,6 +17,16 @@ LEGACY_COHERENCE_ABLATION_SCHEMA = "legacy_coherence_dependency_ablation.v1"
 LEGACY_COHERENCE_NEUTRAL_VALUE = 0.5
 LEGACY_COHERENCE_NEUTRAL_COMPONENT = 0.6
 
+DECISION_SELF_LOOP_ABLATION_SCHEMA = "decision_self_loop_ablation.v1"
+# The neutral stand-in is the OBSERVED level, not the score table's midpoint.
+# Measured 2026-08-20 over 30d (n=33,379 non-synthetic): guide 52.7% -> 0.7,
+# approve 47.2% -> 1.0, and the 0.0-scored pause vocabulary is 0.12% of rows.
+# So the fleet's realised decision_e sits near 0.84. Using the table midpoint
+# instead would inject a level shift of its own and make the ablation's delta
+# unreadable -- the question here is whether decision_e carries INFORMATION,
+# not what happens if you move everyone's level.
+DECISION_NEUTRAL_SCORE = 0.84
+
 
 def compute_behavioral_sensor_eisv(
     decision_history: list,
@@ -200,6 +210,143 @@ def compute_legacy_coherence_dependency_shadow(
     }
 
 
+def compute_decision_self_loop_shadow(
+    decision_history: list,
+    coherence_history: list,
+    regime_history: list,
+    E_history: list,
+    I_history: list,
+    S_history: list,
+    V_history: list,
+    calibration_error: float | None = None,
+    drift_norm: float | None = None,
+    complexity_divergence: float | None = None,
+    continuity_E_input: float | None = None,
+    continuity_I_input: float | None = None,
+    continuity_S_input: float | None = None,
+    outcome_history: list | None = None,
+    tool_error_rate: float | None = None,
+    tool_call_velocity: float | None = None,
+    unique_tools_ratio: float | None = None,
+    deployed_observation: dict | None = None,
+) -> dict:
+    """Shadow the behavioral E/I reading with ``decision_e`` neutralized.
+
+    THE QUESTION THIS SETTLES. ``decision_history`` is populated solely from
+    ``governance_monitor``'s own verdicts, and ``decision_e`` is the largest
+    single term in E (0.35 with outcomes, 0.40 without). That is a closed cycle:
+    E -> basin -> guide -> decision_e -> E. Two readings fit the same mechanism
+    and they prescribe opposite actions:
+
+      * BIAS -- decision_e is effectively pinned per agent (measured: p50 of 1
+        distinct value per agent over 30d, p95 of 2), so it contributes a
+        near-constant offset and no information. The fix is calibration.
+      * LIVE LOOP -- it tracks E's own movement, so the estimate partly reports
+        its own history. The fix is structural.
+
+    The discriminator is the SHAPE of ``candidate_minus_deployed`` across
+    check-ins, not its size. A near-constant delta with small residual spread is
+    a bias; a delta that co-varies with the agent's own trajectory is a loop.
+    One number cannot tell them apart, which is why this emits per-check-in
+    deltas rather than a summary.
+
+    Measurement-only, exactly like the legacy-coherence sibling: the live
+    observation is never modified and no policy reads this. Stops at the raw
+    behavioral E/I observation for the same reason -- replaying recursive E/I
+    history, the EMA, V, or policy needs a longitudinal simulator this is not.
+
+    ``DECISION_NEUTRAL_SCORE`` is the observed fleet level rather than the score
+    table's midpoint, so the delta reads as "what does removing the information
+    do" and not "what does moving everyone's level do".
+    """
+    base = {
+        "schema": DECISION_SELF_LOOP_ABLATION_SCHEMA,
+        "mode": "measurement_only",
+        "policy_applied": False,
+        "intervention": {
+            "field": "decision_history",
+            "source": "governance_monitor.decision_history",
+            "role": "observer_own_prior_verdicts",
+            "operation": "replace_with_observed_fleet_level",
+            "replacement_value": DECISION_NEUTRAL_SCORE,
+            "deployed_weight_with_outcomes": 0.35,
+            "deployed_weight_without_outcomes": 0.40,
+        },
+        "not_modeled": [
+            "recursive_E_I_history_replay",
+            "behavioral_ema_replay",
+            "V_counterfactual",
+            "policy_effect",
+            "future_outcomes",
+        ],
+        "interpretation": (
+            "near-constant delta with small residual spread => bias (fix "
+            "_DECISION_SCORES calibration); delta co-varying with the agent's "
+            "own trajectory => live self-loop (structural)"
+        ),
+    }
+    if len(decision_history) < 3:
+        return {
+            **base,
+            "eligible": False,
+            "eligibility_reason": "insufficient_decision_history",
+            "deployed": None,
+            "candidate": None,
+            "candidate_minus_deployed": None,
+        }
+
+    shared = dict(
+        coherence_history=coherence_history,
+        regime_history=regime_history,
+        E_history=E_history,
+        I_history=I_history,
+        S_history=S_history,
+        V_history=V_history,
+        calibration_error=calibration_error,
+        drift_norm=drift_norm,
+        complexity_divergence=complexity_divergence,
+        continuity_E_input=continuity_E_input,
+        continuity_I_input=continuity_I_input,
+        continuity_S_input=continuity_S_input,
+        outcome_history=outcome_history,
+        tool_error_rate=tool_error_rate,
+        tool_call_velocity=tool_call_velocity,
+        unique_tools_ratio=unique_tools_ratio,
+    )
+    deployed = deployed_observation or compute_behavioral_sensor_eisv(
+        decision_history=decision_history, **shared
+    )
+    # A sentinel the score table maps to DECISION_NEUTRAL_SCORE, so the EWA sees
+    # a flat series. Substituting the numeric score directly would not work:
+    # _compute_E looks decisions up by string.
+    neutral_history = [_DECISION_NEUTRAL_KEY] * min(len(decision_history), 10)
+    candidate = compute_behavioral_sensor_eisv(
+        decision_history=neutral_history, **shared
+    )
+    if deployed is None or candidate is None:
+        return {
+            **base,
+            "eligible": False,
+            "eligibility_reason": "behavioral_sensor_unavailable",
+            "deployed": None,
+            "candidate": None,
+            "candidate_minus_deployed": None,
+        }
+
+    deployed_ei = {key: float(deployed[key]) for key in ("E", "I")}
+    candidate_ei = {key: float(candidate[key]) for key in ("E", "I")}
+    return {
+        **base,
+        "eligible": True,
+        "eligibility_reason": None,
+        "deployed": deployed_ei,
+        "candidate": candidate_ei,
+        "candidate_minus_deployed": {
+            key: candidate_ei[key] - deployed_ei[key] for key in ("E", "I")
+        },
+    }
+
+
 # --- E: Decision success rate, exponentially weighted ---
 
 # What actually lands in ``decision_history`` is the SUB-action when one exists:
@@ -215,7 +362,13 @@ def compute_legacy_coherence_dependency_shadow(
 # Keep this table in sync with the ``'sub_action':`` literals in
 # monitor_decision.py — tests/test_behavioral_sensor_decision_coverage.py fails
 # if a new one is added without a score here.
+# Ablation-only sentinel. Never emitted by monitor_decision.py; it exists so
+# compute_decision_self_loop_shadow can feed _compute_E a flat decision series
+# through the same string-lookup path the real vocabulary uses.
+_DECISION_NEUTRAL_KEY = "__ablation_neutral__"
+
 _DECISION_SCORES = {
+    _DECISION_NEUTRAL_KEY: DECISION_NEUTRAL_SCORE,
     # coarse actions (still used when a decision carries no sub_action)
     "proceed": 1.0, "approve": 1.0,
     "guide": 0.7,
