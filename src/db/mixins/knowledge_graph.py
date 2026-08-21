@@ -517,6 +517,10 @@ class KnowledgeGraphMixin:
         if d.get('provenance_chain') and isinstance(d['provenance_chain'], str):
             d['provenance_chain'] = json.loads(d['provenance_chain'])
         d.pop('search_vector', None)
-        d.pop('rank', None)
+        # 'rank' is deliberately NOT popped. Only kg_full_text_search's SQL
+        # emits it (no other caller's SELECT produces the column), and both
+        # storage backends read it off these dicts to set node.relevance —
+        # the pop that used to live here is what made the #1759 rank-carry
+        # inert in production while every mocked test stayed green.
         d.pop('overlap', None)
         return d
