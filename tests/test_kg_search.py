@@ -2256,3 +2256,92 @@ class TestIssue165Provenance:
             )
 
         mock_graph.add_discovery.assert_not_awaited()
+
+
+class TestSearchLimitValidation:
+    """knowledge(action='search') non-positive limits — same defect class as
+    dialectic #1733: limit=0 silently became the default via a falsy `or`,
+    and a negative limit reached PostgreSQL as a malformed LIMIT, surfacing
+    as a generic failure. Both must be rejected up front; there is no
+    substitute number that answers what the caller asked."""
+
+    @pytest.mark.asyncio
+    async def test_limit_zero_is_rejected_not_defaulted(self, patch_common):
+        _mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        result = await handle_search_knowledge_graph({"query": "coherence", "limit": 0})
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert "at least 1" in data["error"]
+        mock_graph.query.assert_not_awaited()
+        mock_graph.full_text_search.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_negative_limit_is_rejected(self, patch_common):
+        _mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        result = await handle_search_knowledge_graph({"query": "coherence", "limit": -1})
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert "at least 1" in data["error"]
+        mock_graph.full_text_search.assert_not_awaited()
+
+    def test_absent_limit_takes_config_default(self):
+        from config.governance_config import config
+        from src.mcp_handlers.knowledge.handlers import _parse_knowledge_search_request
+
+        request = _parse_knowledge_search_request({"query": "coherence"})
+        assert request.limit == config.KNOWLEDGE_QUERY_DEFAULT_LIMIT
+
+    def test_over_asking_clamps_to_the_advertised_max(self):
+        """The _more_available hint has said "max 100" since it shipped; the
+        parse now enforces it — and records what was asked, because a silent
+        clamp is indistinguishable from "that was everything"."""
+        from src.mcp_handlers.knowledge.handlers import _parse_knowledge_search_request
+
+        request = _parse_knowledge_search_request({"query": "coherence", "limit": 250})
+        assert request.limit == 100
+        assert request.limit_clamped_from == 250
+
+    def test_valid_limit_passes_through(self):
+        from src.mcp_handlers.knowledge.handlers import _parse_knowledge_search_request
+
+        request = _parse_knowledge_search_request({"query": "coherence", "limit": 5})
+        assert request.limit == 5
+        assert request.limit_clamped_from is None
+
+    @pytest.mark.asyncio
+    async def test_clamp_is_disclosed_in_the_response(self, patch_common):
+        """A clamped caller sees limit_clamped_from, so truncation is
+        distinguishable from a genuinely small result set."""
+        _mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        mock_graph.full_text_search = AsyncMock(return_value=[])
+        if hasattr(mock_graph, "semantic_search"):
+            del mock_graph.semantic_search
+
+        result = await handle_search_knowledge_graph({"query": "coherence", "limit": 250})
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["limit_clamped_from"] == 250
+
+    @pytest.mark.asyncio
+    async def test_unparseable_string_limit_is_rejected_not_substituted(self, patch_common):
+        """The legacy schema used to swallow limit="all" into 10 before the
+        handler could reject it; the schema now passes it through and
+        parse_limit answers with the accepted range."""
+        _mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        result = await handle_search_knowledge_graph({"query": "coherence", "limit": "all"})
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert "must be an integer" in data["error"]
+        mock_graph.full_text_search.assert_not_awaited()
