@@ -834,6 +834,37 @@ def test_signal_degeneracy_warns_on_collapsed_dispersion(doctor, monkeypatch):
     assert "effective sample size" in result.detail
 
 
+def test_signal_degeneracy_excludes_synthetic_bootstrap_rows(doctor, monkeypatch):
+    """Server-authored bootstrap rows are not measurements and must not count.
+
+    2026-08-21: ONE synthetic row carrying coherence=1.0000 moved the reported
+    range from [0.4659, 0.5039] to [0.4659, 1.0000] and sd from 0.006818 to
+    0.008601 over n=9930 — a dynamic-range check reporting 14x the range its
+    consumers actually see, erring toward "healthy". The onboarding contract
+    already excludes `synthetic` rows from calibration, outcome correlation and
+    trust-tier counts, and `resident_checkin_stale` filters them too; this
+    check did not.
+
+    The mock returns a fixed row, so the assertion is on the QUERY — that is
+    where the defect lived.
+    """
+    captured = {}
+
+    def _capture(*args, **kwargs):
+        captured["sql"] = args[1] if len(args) > 1 else kwargs.get("sql", "")
+        return None
+
+    monkeypatch.setattr(doctor, "_psql_row", _capture)
+    doctor.check_signal_degeneracy("postgresql://x/y")
+
+    sql = captured["sql"]
+    assert "core.agent_state" in sql
+    assert "synthetic IS NOT TRUE" in sql, (
+        "signal_degeneracy must exclude synthetic bootstrap rows; without this "
+        "one non-measurement can dominate the range it reports"
+    )
+
+
 def test_signal_degeneracy_passes_when_all_metrics_vary(doctor, monkeypatch):
     _mock_psql(doctor, monkeypatch, _degeneracy_row(
         (0.0217, 5000, 6232, 0.35, 0.66), *_HEALTHY))

@@ -78,6 +78,16 @@ class SubmitAntithesisParams(AgentIdentityMixin):
     observed_metrics: dict = Field(..., description="Metrics observed about paused agent")
     concerns: List[str] = Field(..., description="List of concerns")
     reasoning: Optional[str] = Field(default=None, description="Natural language explanation")
+    reviewer_provenance: Optional[dict] = Field(
+        default=None,
+        description=(
+            "Optional reviewer/model provenance persisted with this verdict: "
+            "reviewer_kind (agent_submitted|external_consult|orchestrated), "
+            "backend, model_used, consult_source, degraded, etc. Use "
+            "reviewer_kind='external_consult' to file a verdict obtained from a "
+            "model consulted outside the server. Descriptive, not identity proof."
+        ),
+    )
     take_over_if_requested: Union[bool, str, None] = Field(
         default=False,
         description="If true, let a credentialed operator move reviewer ownership to the bound candidate before submitting"
@@ -101,6 +111,14 @@ class SubmitSynthesisParams(AgentIdentityMixin):
     proposed_conditions: List[str] = Field(..., description="Proposed resumption conditions")
     reasoning: Optional[str] = Field(default=None, description="Natural language explanation")
     agrees: Union[bool, str, None] = Field(default=None, description="Whether this agent agrees with current proposal")
+    reviewer_provenance: Optional[dict] = Field(
+        default=None,
+        description=(
+            "Optional reviewer/model provenance persisted with this verdict "
+            "(see antithesis); reviewer_kind='external_consult' files an "
+            "outside-model consult as a governed record."
+        ),
+    )
     
     @model_validator(mode='after')
     def coerce_types(self):
@@ -137,6 +155,7 @@ class DialecticParams(AgentIdentityMixin):
     proposed_conditions: Optional[List[str]] = Field(None, description="Conditions for resumption (for action=thesis/synthesis)")
     reasoning: Optional[str] = Field(None, description="Explanation/reasoning")
     observed_metrics: Optional[dict] = Field(None, description="Observed metrics (for action=antithesis)")
+    reviewer_provenance: Optional[dict] = Field(None, description="Reviewer/model provenance for the verdict (for action=antithesis/synthesis); reviewer_kind='external_consult' files an outside-model consult as a governed record")
     concerns: Optional[List[str]] = Field(None, description="Concerns (for action=antithesis)")
     take_over_if_requested: Optional[bool] = Field(None, description="Let a credentialed operator move reviewer ownership to the bound agent before antithesis")
     takeover_reason: Optional[str] = Field(None, description="Reason for reviewer takeover during antithesis")
