@@ -669,8 +669,31 @@ class TestUpdateSessionReviewer:
         """update_session_reviewer returns False when session not found."""
         instance, pool, conn = db
         conn.execute = AsyncMock(return_value="UPDATE 0")
+        conn.fetchrow = AsyncMock(return_value=None)
 
         result = await instance.update_session_reviewer("sess-nope", "reviewer-B")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_update_session_reviewer_sql_has_terminal_guard(self, db):
+        """The reviewer UPDATE must refuse terminal rows in SQL (dual-writer TOCTOU)."""
+        instance, pool, conn = db
+        conn.execute = AsyncMock(return_value="UPDATE 1")
+
+        await instance.update_session_reviewer("sess-001", "reviewer-B")
+        sql = conn.execute.call_args[0][0]
+        assert "NOT IN" in sql
+        for terminal in instance.TERMINAL_STATUSES:
+            assert terminal in sql
+
+    @pytest.mark.asyncio
+    async def test_update_session_reviewer_refused_on_terminal(self, db):
+        """A session that resolved mid-sweep must not get a reviewer write."""
+        instance, pool, conn = db
+        conn.execute = AsyncMock(return_value="UPDATE 0")
+        conn.fetchrow = AsyncMock(return_value={"status": "resolved"})
+
+        result = await instance.update_session_reviewer("sess-001", "reviewer-B")
         assert result is False
 
 
@@ -697,9 +720,43 @@ class TestUpdateSessionStatus:
         """update_session_status returns False when session not found."""
         instance, pool, conn = db
         conn.execute = AsyncMock(return_value="UPDATE 0")
+        conn.fetchrow = AsyncMock(return_value=None)
 
         result = await instance.update_session_status("sess-gone", "failed")
         assert result is False
+
+    @pytest.mark.asyncio
+    async def test_update_session_status_sql_has_terminal_guard(self, db):
+        """The status UPDATE must refuse terminal rows in SQL (dual-writer TOCTOU)."""
+        instance, pool, conn = db
+        conn.execute = AsyncMock(return_value="UPDATE 1")
+
+        await instance.update_session_status("sess-001", "failed")
+        sql = conn.execute.call_args[0][0]
+        assert "NOT IN" in sql
+        for terminal in instance.TERMINAL_STATUSES:
+            assert terminal in sql
+
+    @pytest.mark.asyncio
+    async def test_update_session_status_refused_overwrite_of_resolved(self, db):
+        """The sweeper must not clobber a session another writer resolved."""
+        instance, pool, conn = db
+        conn.execute = AsyncMock(return_value="UPDATE 0")
+        conn.fetchrow = AsyncMock(return_value={"status": "resolved"})
+
+        result = await instance.update_session_status("sess-001", "failed")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_update_session_status_idempotent_replay(self, db):
+        """Re-requesting the state the row already holds is a True no-op
+        (mirrors resolve_session's B-4 semantics)."""
+        instance, pool, conn = db
+        conn.execute = AsyncMock(return_value="UPDATE 0")
+        conn.fetchrow = AsyncMock(return_value={"status": "failed"})
+
+        result = await instance.update_session_status("sess-001", "failed")
+        assert result is True
 
 
 # ============================================================================

@@ -194,7 +194,16 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
 
                     if new_reviewer:
                         try:
-                            await update_session_reviewer_async(session_id, new_reviewer)
+                            if not await update_session_reviewer_async(session_id, new_reviewer):
+                                # Session reached a terminal state during
+                                # reviewer selection (dual-writer TOCTOU);
+                                # nothing was written, so don't narrate a
+                                # reassignment that never happened.
+                                logger.info(
+                                    f"Session {session_id[:16]} went terminal mid-sweep; "
+                                    "reviewer reassignment skipped"
+                                )
+                                continue
                             await add_message_async(
                                 session_id=session_id,
                                 agent_id="system",
@@ -266,7 +275,14 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
 
             # Fall through: mark as FAILED (session too old or non-reassignable phase)
             try:
-                await update_session_status_async(session_id, "failed")
+                if not await update_session_status_async(session_id, "failed"):
+                    # Another writer finished this session after our early
+                    # saga/staleness checks; the guarded UPDATE refused the
+                    # overwrite. Skip the failure message and the count.
+                    logger.info(
+                        f"Session {session_id[:16]} went terminal mid-sweep; reap skipped"
+                    )
+                    continue
                 failure_reason = _describe_reap(
                     phase=phase,
                     awaiting_facilitation=awaiting_facilitation,
