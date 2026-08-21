@@ -29,12 +29,43 @@ would answer a question no caller of this registry is asking.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
+import hashlib
 import os
 import socket
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 from .host_adapter import host_adapter_available, host_adapter_enabled
+
+
+# ---------------------------------------------------------------------------
+# Shared local-inference primitives. Every code path that reaches the local
+# Ollama endpoint — call_model, delegate_inference evidence hashing, and the
+# internal llm_delegation lane (dialectic synthetic reviewer, knowledge
+# synthesis, check-in coaching) — resolves the base URL, default model, and
+# availability through these, so UNITARES_OLLAMA_BASE / UNITARES_LLM_MODEL
+# cannot split the plane between two hosts or two defaults.
+# ---------------------------------------------------------------------------
+
+def ollama_base_url() -> str:
+    """Base URL of the local Ollama endpoint (no trailing slash)."""
+    return os.getenv("UNITARES_OLLAMA_BASE", "http://localhost:11434").rstrip("/")
+
+
+def default_local_model() -> str:
+    """Default model for local inference (UNITARES_LLM_MODEL override)."""
+    return os.getenv("UNITARES_LLM_MODEL", "gemma4:latest")
+
+
+def sha256_text(text: str) -> str:
+    """Provenance hash used for prompt/response evidence fields."""
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _ollama_host_port() -> tuple[str, int]:
+    parsed = urlparse(ollama_base_url())
+    return parsed.hostname or "localhost", parsed.port or 11434
 
 
 @dataclass(frozen=True)
@@ -69,7 +100,7 @@ def _probe_ollama_socket() -> bool:
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(0.5)
-        result = sock.connect_ex(("localhost", 11434))
+        result = sock.connect_ex(_ollama_host_port())
         sock.close()
         return result == 0
     except Exception:
@@ -104,7 +135,7 @@ def _hf_token_present() -> bool:
 
 
 def _base_hosts() -> list[InferenceHost]:
-    ollama_model = os.getenv("UNITARES_LLM_MODEL", "gemma4:latest")
+    ollama_model = default_local_model()
     hf_configured = _hf_token_present()
     return [
         InferenceHost(

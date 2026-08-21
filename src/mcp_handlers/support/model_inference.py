@@ -13,7 +13,6 @@ Usage tracked in EISV (Energy consumption) for self-regulation.
 from typing import Dict, Any, Sequence
 from mcp.types import TextContent
 import asyncio
-import hashlib
 import os
 import time
 
@@ -21,9 +20,12 @@ from ..utils import success_response, error_response, require_argument
 from ..decorators import mcp_tool
 from .inference_registry import (
     _ollama_available,
+    default_local_model,
     get_inference_host,
     host_for_routed_provider,
     list_inference_hosts,
+    ollama_base_url,
+    sha256_text as _sha256_text,
 )
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
@@ -36,10 +38,6 @@ try:
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
-
-
-def _sha256_text(text: str) -> str:
-    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _invocation_gate() -> Dict[str, Any]:
@@ -263,9 +261,9 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         # Route to Ollama (local). Model names pass through verbatim so
         # callers get a clean 404 if the model isn't pulled — no silent
         # aliasing to a model that may also be absent.
-        base_url = "http://localhost:11434/v1"  # Ollama OpenAI-compatible API
+        base_url = ollama_base_url() + "/v1"  # Ollama OpenAI-compatible API
         if model == "auto":
-            model = os.getenv("UNITARES_LLM_MODEL", "gemma4:latest")
+            model = default_local_model()
         api_key = "ollama"  # Dummy key - Ollama ignores it but OpenAI SDK requires non-None
         provider = "ollama"
         logger.info(f"Privacy mode: local - routing to Ollama with model {model}")
@@ -301,6 +299,7 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         # Use HF model with :fastest or :cheapest suffix for auto-selection (if not already present)
         elif ":" not in model:
             model = f"{model}:fastest"  # Auto-select fastest provider
+        provider = "hf"  # may arrive as "auto" via model-prefix detection
         logger.info(f"Using Hugging Face Inference Providers: {model}")
     elif provider == "auto":
         # Auto-select: Try Ollama first (local, free), then Gemini, then HF.
@@ -310,9 +309,9 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 
         if ollama_available:
             # Prefer Ollama (local, free, no token needed)
-            base_url = "http://localhost:11434/v1"
+            base_url = ollama_base_url() + "/v1"
             api_key = "ollama"
-            model = os.getenv("UNITARES_LLM_MODEL", "gemma4:latest") if model == "auto" else model
+            model = default_local_model() if model == "auto" else model
             provider = "ollama"
             logger.info(f"Auto-selected Ollama (local): {model}")
         else:
@@ -440,10 +439,12 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         else:
             logger.debug("No agent_id available for Energy tracking (model inference still successful)")
         
-        # Determine routing method
-        if "router.huggingface.co" in base_url:
+        # Determine routing method by the resolved provider, not by substring
+        # matching on the URL — UNITARES_OLLAMA_BASE may point at a non-local
+        # host and the route is still Ollama.
+        if provider == "hf":
             routed_via = "huggingface"
-        elif "localhost" in base_url or "127.0.0.1" in base_url:
+        elif provider == "ollama":
             routed_via = "ollama"
         else:
             routed_via = "direct"
@@ -499,7 +500,7 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             error_code = "RATE_LIMIT_EXCEEDED"
             recovery_hint = "Wait a moment and retry, or use a different model"
         elif (
-            ("localhost" in base_url or "127.0.0.1" in base_url)
+            provider == "ollama"
             and any(marker in error_msg.lower() for marker in ("connection refused", "connection error", "failed to establish", "connect"))
         ):
             error_code = "MODEL_PROVIDER_UNAVAILABLE"
@@ -509,7 +510,7 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             )
         elif "not found" in error_msg.lower() or "invalid" in error_msg.lower():
             error_code = "MODEL_NOT_AVAILABLE"
-            if "localhost" in base_url or "127.0.0.1" in base_url:
+            if provider == "ollama":
                 recovery_hint = (
                     f"Model '{model}' is not pulled on this host. "
                     f"Run `ollama list` to see available models, `ollama pull {model}` to fetch it, "
