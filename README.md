@@ -14,14 +14,14 @@ the agent claims with what actually happened.
 **UNITARES is that record, with a circuit breaker attached.** Agents check in
 after meaningful units of work; the server keeps a longitudinal score of whether
 each agent's claims match its recorded results, pauses an agent whose behavior
-drifts, requires a written reflection before it resumes, and leaves an audit
+drifts, gates resumption on a recovery step, and leaves an audit
 trail plus a shared memory every other agent can search. Four verbs: **record,
 score, interrupt, remember** — the plain-language version is one page,
 [What UNITARES is](docs/PRODUCT_DEFINITION.md). It is a self-hosted MCP/HTTP
 service you run yourself — not an agent framework, not a hosted platform.
 
 **Status:** v2.18.0. Continuously operated since November 2025 under a single
-operator: 4,573,890 audit and telemetry events, 71,141 EISV state observations,
+operator: 4,573,890 audit and telemetry events, 71,141 stored EISV state rows,
 and six long-running resident agents, one of them on separate hardware.
 [Evidence and limits](#evidence-and-limits) scopes every number on this page.
 
@@ -54,11 +54,13 @@ One governed incident, end to end — every step is deployed behavior:
 3. The server **scores** the check-in into four state coordinates and runs a
    decision ladder that returns **proceed, guide, or pause** — always with a
    named reason and a next step.
-4. A paused agent's further check-ins are **refused** until it submits a real
-   reflection, optionally reviewed by another healthy agent whose resolution
-   can impose conditions on its next hours.
-5. The finding lands in **shared memory** with writer attribution, where the
-   next agent searches before repeating the mistake. The whole chain is
+4. A paused agent's further check-ins are **refused** until it recovers: a
+   written reflection while its state remains unhealthy, or a quick resume
+   once the state has settled back to safe. A reflection can be reviewed by
+   another healthy agent whose resolution can attach conditions to its next
+   check-ins; stale pauses expire rather than wedging an abandoned agent.
+5. The recovering agent stores the finding in **shared memory** with writer
+   attribution, where the next agent searches before repeating the mistake. The whole chain is
    replayable from the audit trail.
 
 The surfaces below are that chain broken into its parts:
@@ -70,9 +72,10 @@ The surfaces below are that chain broken into its parts:
 | **Policy and recovery** | Return a named action, reason, and next step; enforce pauses on governed write surfaces; support a `reflect → validate → resume` path. |
 | **Operator visibility** | Inspect lifecycle, health, state, evidence, and policy history through MCP/HTTP APIs and a self-hosted dashboard. |
 
-Every emitted value carries a lint-enforced provenance label — `measured`,
-`derived`, `prior`, or `unknown` — so a number can be wrong but cannot silently
-pretend to be a measurement. That guarantee is the
+State values carry a provenance label: `measured`, `derived`, `prior`, or
+`unknown`. A number can be wrong, but it cannot silently pretend to be a
+measurement; a mechanical lint enforces the labels on the metrics read
+surface, with wider coverage tracked in the
 [trust contract](docs/trust-contract.md).
 
 The core loop is deliberately small. Four further surfaces build **on** that
@@ -103,7 +106,7 @@ docker compose up -d --wait
 make demo
 ```
 
-This release-tagged Docker Compose flow is the **Tier-1 install contract** for a
+This release-tagged Docker Compose flow is the supported install path for a
 local, single-operator deployment. It brings up PostgreSQL/AGE/pgvector, Redis,
 and the server on loopback without requiring manual database initialization.
 The source-based macOS playbook is an advanced bare-metal path, not a second
@@ -143,8 +146,9 @@ result = sync_state(
     client_session_id=session["client_session_id"],
 )
 
-action = result.get("state_summary", {}).get("action")
-if action in ("pause", "reject"):
+if result.get("success") is False:  # refused write, e.g. the agent is paused
+    return_to_operator(result.get("recovery"))
+elif result.get("state_summary", {}).get("action") == "pause":
     return_to_operator(result.get("next_action"))  # application-defined boundary
 ```
 
@@ -160,8 +164,12 @@ possible:
 | Request structured review | `request_review(issue_description=...)` |
 | Read state without writing | `check_working_state()` |
 
-`list_tools()` enumerates the complete live surface and `describe_tool(name)`
-explains any one tool. MCP, REST, the SDK, and host adapters use the same server;
+When recording an outcome for a specific check-in, pass the `prediction_id`
+from that check-in's response so the outcome grades that claim rather than an
+unrelated earlier one.
+
+`list_tools()` enumerates the complete live surface and
+`describe_tool(tool_name=...)` explains any one tool. MCP, REST, the SDK, and host adapters use the same server;
 Claude Code and Codex are supported clients, not server-side assumptions.
 
 ## How the runtime loop works
@@ -180,7 +188,7 @@ Clients can treat the policy action, reason, and next step as the stable
 contract. Operators can optionally inspect four EISV coordinates covering work
 progress, evidence alignment, behavioral drift, and their balance. EISV is
 proprioceptive state estimation: a read of how the process is working, drawn
-from auditable, published heuristics rather than a physical model. The
+from auditable, published heuristics. The
 [computation reference](docs/EISV_COMPUTATION.md) documents formulas, warmup,
 thresholds, and source code; the
 [interpretation contract](docs/ontology/eisv-proprioception-contract.md) records
@@ -232,11 +240,11 @@ real load — not an independent efficacy study:
 
 | Evidence | Scope |
 |---|---|
-| **4,573,890 audit/telemetry events** | Continuous maintainer-run operation since 2025-11-28. Session-resolution observations and cross-device-call records make up 91.4%; this is infrastructure/load evidence, not 4.6M independent policy decisions. |
+| **4,573,890 audit/telemetry events** | Continuous maintainer-run operation since 2025-11-28, the first identity record. Session-resolution observations and cross-device-call records make up 91.4%; this is infrastructure/load evidence, not 4.6M independent policy decisions. |
 | **71,141 stored EISV state rows** | Longitudinal state observations in `core.agent_state`; rows are not independent agents or trials. |
 | **15 recorded self-recovery events** | Of 21 canonical, non-automatic lifecycle-resume records. Shows the path was exercised; not 15 independent trials or proof that pauses improved outcomes. |
 | **32,181 labeled EISV windows** | [20,655 overlapping real windows from one 39-day Raspberry Pi run plus 11,526 synthetic windows](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories). These are windows, not independent agents or customer trajectories. |
-| **6 long-running resident agents** | Operated continuously in the maintainer deployment; one runs on separate hardware (the Raspberry Pi testbed). The same single-operator fleet as every number above, not external adopters. |
+| **6 long-running resident agents** | Configured and operating in the maintainer deployment at the snapshot date; one runs on separate hardware, the same Raspberry Pi that produced the labeled-window dataset. The same single-operator fleet as every number above, not external adopters. |
 
 The maintainer deployment is **single-operator and co-development dogfood**: most
 agents governed by the system are also building the system. Read
@@ -247,7 +255,8 @@ What is not yet established:
 
 - **Predictive lift.** The frozen 2026-08-09 outcome-lift evaluation is a
   negative result: after model selection, no overall slice separated from the
-  permutation null (selective p = 0.070–0.567). Some unadjusted metrics improved,
+  permutation null (selective p = 0.070–0.567, none at or below the 0.05
+  threshold). Some unadjusted metrics improved,
   but none cleared the selection-aware threshold. There is no demonstrated
   prevention. The [Reviewer Guide](docs/REVIEWER_GUIDE.md) gives the frozen
   command and interpretation; compact output is preserved in the
@@ -258,6 +267,8 @@ What is not yet established:
 - **Robustness against a motivated attacker** optimizing the monitored proxy.
   Calibrated capability concealment is a documented structural blind spot — see
   the [scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md).
+- **Benefit from pausing.** The pause and recovery path runs and is recorded;
+  whether pausing improved any outcome is unmeasured.
 
 The instrument-frame validation the system does claim — reliability,
 faithfulness under intervention, calibration — is scoped and partly built; the
@@ -268,9 +279,9 @@ validation.
 ## Architecture, setup, and documentation
 
 **Python 3.12+ · PostgreSQL + AGE + pgvector · Redis · optional Elixir/OTP
-coordination.** Redis is the de-facto session store in the long-running
-maintainer deployment; without it the server starts in degraded local-only mode
-suitable for the demo.
+coordination.** Redis holds session and identity state, and the Docker
+quickstart brings it up. The server starts without it in a degraded local-only
+mode, which is not the supported path.
 
 | Reader | Start here |
 |---|---|

@@ -281,7 +281,7 @@ def main() -> int:
     print(f"   client_session   = {session}")
     print(f"   thread           = {onboard.get('welcome', '').rsplit(' ', 1)[-1]}")
 
-    banner("2. seven check-ins (clean → drift → confusion)")
+    banner("2. six check-ins (clean → drift → confusion)")
     for i, (text, complexity, confidence) in enumerate(TRAJECTORY, 1):
         r = call(
             "process_agent_update",
@@ -341,7 +341,7 @@ def main() -> int:
     banner("done")
     print("  • Every number above came from check-in responses — no DB queries.")
     print("  • Open http://localhost:8767/dashboard to see the same state visually.")
-    print("  • Integrate this in your own agent loop: 5 lines, see README §Quick Start.")
+    print("  • Integrate this in your own agent loop: 5 lines, see README §Integrate an MCP client.")
     return 0
 
 
