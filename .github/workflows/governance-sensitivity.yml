@@ -1,0 +1,78 @@
+name: Governance Sensitivity Advisory
+
+# Advisory-only (unitares #1671): the agents governed by UNITARES also author
+# it, so a one-line constant change can move the deployed enforcement posture
+# more than any runtime gaming could. This workflow makes such a diff
+# conspicuous — label + one upserted comment naming the touched entries — and
+# then exits green. It never blocks: a gate that fights the maintainer gets
+# routed around, which reproduces the problem one layer up. The inventory
+# lives in scripts/dev/governance_sensitivity_manifest.tsv and is documented
+# in docs/dev/GOVERNANCE_SENSITIVITY.md.
+
+on:
+  pull_request:
+    branches: [ master, main ]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  sensitivity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history for diff base)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Manifest paths still exist
+        run: bash scripts/dev/check_governance_sensitivity.sh --check
+
+      - name: Detect sensitive entries in this diff
+        id: detect
+        run: |
+          hits="$(bash scripts/dev/check_governance_sensitivity.sh --diff "origin/${{ github.base_ref }}")"
+          {
+            echo "hits<<EOF"
+            echo "$hits"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          if [ -n "$hits" ]; then
+            echo "any=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::This PR touches governance-sensitive surfaces (advisory, not a block):"
+            printf '%s\n' "$hits"
+          else
+            echo "any=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Label and upsert advisory comment
+        if: steps.detect.outputs.any == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HITS: ${{ steps.detect.outputs.hits }}
+          PR: ${{ github.event.pull_request.number }}
+        # Fork PRs carry a read-only token; the annotation above already
+        # surfaced the advisory, so API failures here are tolerated.
+        run: |
+          gh label create governance-sensitive \
+            --description "Touches enforcement-posture constants or anti-gaming tests (#1671)" \
+            --color B60205 --force 2>/dev/null || true
+          gh pr edit "$PR" --add-label governance-sensitive || true
+
+          marker="<!-- governance-sensitivity-advisory -->"
+          body="$(printf '%s\n\n**Advisory (not a block): this diff touches governance-sensitive surfaces.**\n\nPer the threat model'\''s "the governor is authored by the governed" subsection, please state in the PR body the expected effect on pause/verdict rates (or say "none intended" and why).\n\n| Surface | Why it is sensitive |\n|---|---|\n' "$marker")"
+          while IFS=$'\t' read -r path why; do
+            [ -n "$path" ] || continue
+            body="$body$(printf '| `%s` | %s |\n' "$path" "$why")"$'\n'
+          done <<< "$HITS"
+
+          existing="$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
+            --jq '.[] | select(.body | startswith("<!-- governance-sensitivity-advisory -->")) | .id' | head -1 || true)"
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$existing" \
+              -f body="$body" >/dev/null || true
+          else
+            gh pr comment "$PR" --body "$body" || true
+          fi

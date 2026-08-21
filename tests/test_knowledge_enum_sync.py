@@ -55,6 +55,30 @@ def test_response_type_literal_matches_valid_set():
     assert frozenset(get_args(ResponseType)) == VALID_RESPONSE_TYPES
 
 
+def test_response_type_aliases_normalize_onto_canonical_vocabulary():
+    """Conjugation variants fold onto canonical values; storage never widens.
+
+    The canonical set mixes bare verbs ("extend") with one conjugated form
+    ("supersedes"), so writers reliably type the other conjugation
+    ("extends" — dogfood 2026-08-20). Every alias must land INSIDE the
+    canonical set so the SQL CHECK constraints stay authoritative.
+    """
+    from src.knowledge_graph import _RESPONSE_TYPE_ALIASES, normalize_response_type
+
+    for alias, canonical in _RESPONSE_TYPE_ALIASES.items():
+        assert canonical in VALID_RESPONSE_TYPES, (alias, canonical)
+        assert alias not in VALID_RESPONSE_TYPES, alias
+        assert normalize_response_type(alias) == canonical
+
+    # Canonical values pass through untouched; unknowns are preserved so the
+    # membership check still rejects them with the canonical error.
+    for canonical in VALID_RESPONSE_TYPES:
+        assert normalize_response_type(canonical) == canonical
+    assert normalize_response_type("EXTENDS") == "extend"
+    assert normalize_response_type(" extend ") == "extend"
+    assert normalize_response_type("bogus") == "bogus"
+
+
 def test_handlers_use_shared_severities():
     """handlers.VALID_SEVERITIES is the shared constant, not a local copy."""
     from src.mcp_handlers.knowledge import handlers
