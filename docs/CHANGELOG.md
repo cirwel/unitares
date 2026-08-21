@@ -27,6 +27,7 @@ _Notable changes merged between 2.18.0 (2026-08-12) and this release — respons
 - **inference:** reciprocal Claude delegation and one shared local-inference plane behind every route (#1713, #1773)
 - **eisv and integrity:** shadow ablation of `decision_e` to separate a calibration bias from a live self-loop, and a governance-sensitivity inventory with advisory CI (#1777, #1780)
 - **census:** opt-in remote-host collector for the always-on Pi (#1697)
+- **dogfood:** link friction findings to the cron episodes that produced them (#1786)
 
 ### Changed
 
