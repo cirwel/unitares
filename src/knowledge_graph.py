@@ -97,6 +97,38 @@ ResponseType = Literal[
 ]
 VALID_RESPONSE_TYPES = frozenset(get_args(ResponseType))
 
+# Input-normalization aliases for the vocabulary above. The canonical set
+# mixes bare verbs ("extend") with one conjugated form ("supersedes"), so
+# writers reliably type the other conjugation ("extends" — dogfood
+# 2026-08-20). Accept the obvious variants at the handler boundary and store
+# only canonical values; the SQL CHECK constraints and the Literal are
+# unchanged.
+_RESPONSE_TYPE_ALIASES = {
+    "extends": "extend",
+    "questions": "question",
+    "disagrees": "disagree",
+    "supports": "support",
+    "answers": "answer",
+    "follows_up": "follow_up",
+    "followup": "follow_up",
+    "follow-up": "follow_up",
+    "corrects": "correction",
+    "elaborates": "elaboration",
+    "supersede": "supersedes",
+}
+
+
+def normalize_response_type(value: object) -> str:
+    """Map a caller-supplied response_type onto the canonical vocabulary.
+
+    Lowercases, strips, and folds common conjugation variants ("extends" →
+    "extend"). Unknown values pass through unchanged so the caller's
+    membership check against VALID_RESPONSE_TYPES still rejects them with
+    the canonical valid-values list.
+    """
+    text = str(value).strip().lower()
+    return _RESPONSE_TYPE_ALIASES.get(text, text)
+
 VALID_DISCOVERY_STATUSES = frozenset({
     "open", "resolved", "archived", "disputed", "closed", "wont_fix",
     "superseded", "cold",

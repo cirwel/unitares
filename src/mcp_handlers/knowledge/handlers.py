@@ -72,6 +72,7 @@ from ..decorators import mcp_tool
 from ..validators import apply_param_aliases
 from src.knowledge_graph import (
     get_knowledge_graph, DiscoveryNode, ResponseTo, normalize_tags,
+    normalize_response_type,
     VALID_RESPONSE_TYPES, VALID_DISCOVERY_STATUSES,
     VALID_SEVERITIES as _SHARED_VALID_SEVERITIES,
 )
@@ -1082,10 +1083,10 @@ def _parse_store_response_to(arguments: Dict[str, Any]) -> Optional[ResponseTo]:
     parent_id = str(response_data["discovery_id"]).strip()
     if not parent_id:
         raise _StoreResponseError(error_response("Invalid response_to.discovery_id (empty)"))
-    response_type = response_data["response_type"]
+    response_type = normalize_response_type(response_data["response_type"])
     if response_type not in VALID_RESPONSE_TYPES:
         raise _StoreResponseError(
-            error_response(f"Invalid response_type '{response_type}'. Valid: {sorted(VALID_RESPONSE_TYPES)}")
+            error_response(f"Invalid response_type '{response_data['response_type']}'. Valid: {sorted(VALID_RESPONSE_TYPES)}")
         )
     return ResponseTo(discovery_id=parent_id, response_type=response_type)
 
@@ -3418,7 +3419,7 @@ def _parse_batch_response_to(
     if not parent_id:
         raise _BatchItemError("Invalid response_to.discovery_id (empty)")
 
-    response_type = response_data["response_type"]
+    response_type = normalize_response_type(response_data["response_type"])
     if response_type not in VALID_RESPONSE_TYPES:
         return None
     return ResponseTo(
@@ -3714,11 +3715,11 @@ def _parse_note_response_to(
             error_response("Invalid response_to.discovery_id (empty)")
         )
 
-    response_type = response_data["response_type"]
+    response_type = normalize_response_type(response_data["response_type"])
     if response_type not in VALID_RESPONSE_TYPES:
         raise _NoteResponseError(
             error_response(
-                f"Invalid response_type '{response_type}'. "
+                f"Invalid response_type '{response_data['response_type']}'. "
                 f"Valid: {sorted(VALID_RESPONSE_TYPES)}"
             )
         )
