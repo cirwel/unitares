@@ -168,13 +168,27 @@ def _recovery_hint(
         "the next substantial step, and use self_recovery_review(reflection='...') "
         "only if work stalls."
     )
+    # _needs_attention fires on EITHER an advisory verdict (guide/pause/reject)
+    # OR a near-edge margin, but both used to return the margin-worded hint. So
+    # an agent with a comfortable margin and a `guide` verdict was told "policy
+    # margin is near an edge" -- a threshold claim standing in for a verdict
+    # condition, and unfalsifiable from the agent's side because no edge is
+    # named. Say which one actually fired.
+    verdict_hint = (
+        "Verdict is advisory rather than a threshold warning - read the guidance "
+        "text, sync_state after the next substantial step, and use "
+        "self_recovery_review(reflection='...') only if work stalls."
+    )
+    margin_is_near_edge = str(payload.get("margin", "")).lower() in {
+        "tight", "boundary", "near_edge"
+    }
     if severe:
         return (
             "Working state looks degraded - pause and call "
             "self_recovery_review(reflection='...') before continuing."
         )
     if attention and continuing:
-        return margin_hint
+        return margin_hint if margin_is_near_edge else verdict_hint
     if risky:
         return (
             "Risk is elevated - if you feel stuck, quick_resume() applies when "
