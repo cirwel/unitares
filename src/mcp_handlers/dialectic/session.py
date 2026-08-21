@@ -581,6 +581,9 @@ async def list_all_sessions(
                         if msg_row["concerns"]:
                             val = msg_row["concerns"]
                             msg["concerns"] = val if isinstance(val, (list, dict)) else json.loads(val)
+                        if msg_row["observed_metrics"]:
+                            val = msg_row["observed_metrics"]
+                            msg["observed_metrics"] = val if isinstance(val, dict) else json.loads(val)
                         if msg_row["agrees"] is not None:
                             msg["agrees"] = bool(msg_row["agrees"])
                         messages.append(msg)
