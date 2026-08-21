@@ -6,6 +6,7 @@ cannot drift independently.
 """
 
 import datetime as _dt
+import os
 import subprocess
 from importlib.metadata import PackageNotFoundError, version as distribution_version
 from pathlib import Path
@@ -80,8 +81,12 @@ def load_build_sha_from_repo(project_root: Path) -> str:
 
     This is the precise answer to "what code is live" — unlike the hand-typed
     semver, it can't drift, so observability can key on it instead of the
-    version string. Returns ``"unknown"`` when ``.git`` is absent (sdist/wheel
-    install) or git is unavailable; never raises.
+    version string. When ``.git`` is absent (sdist/wheel install, the Docker
+    image) or git is unavailable, falls back to the operator-supplied
+    ``UNITARES_BUILD_SHA`` env var (#1792 — forwarded by docker-compose so a
+    containerized deployment can still self-report), then ``"unknown"``.
+    Git wins when present because it cannot drift; the env var can.
+    Never raises.
     """
     try:
         out = subprocess.run(
@@ -95,5 +100,9 @@ def load_build_sha_from_repo(project_root: Path) -> str:
             return sha
     except Exception:
         pass
+
+    env_sha = os.environ.get("UNITARES_BUILD_SHA", "").strip()
+    if env_sha:
+        return env_sha
 
     return DEFAULT_BUILD_SHA_FALLBACK

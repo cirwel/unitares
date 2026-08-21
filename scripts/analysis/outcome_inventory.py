@@ -658,13 +658,35 @@ def _row_from_record(
     )
 
 
+def _fixture_only_because_calibration_excluded(detail: Mapping[str, Any]) -> bool:
+    """True when the ONLY thing making this row a 'fixture' is the flag.
+
+    ``calibration_excluded`` is server-stamped whenever the confidence was
+    scraped rather than caller-supplied (#1790). That is a calibration-channel
+    exclusion, but the fixture classifiers also read it as fixture traffic and
+    drop the row from all validation inventory. This helper separates that
+    population from genuinely marked fixtures so the attrition is reportable.
+    """
+    stripped = dict(_normalized_detail(detail))
+    stripped.pop("calibration_excluded", None)
+    return not is_controlled_validation_fixture(stripped)
+
+
 async def fetch_rows(
     db_url: str,
     *,
     window_days: int,
     lead_minutes: Sequence[float],
+    attrition: dict[str, int] | None = None,
 ) -> list[OutcomeInventoryRow]:
-    """Fetch outcome inventory rows from PostgreSQL without mutating state."""
+    """Fetch outcome inventory rows from PostgreSQL without mutating state.
+
+    ``attrition``, when provided, is populated in place with counts of rows
+    the fixture filter removed: ``fixture_rows_excluded`` (all removed rows)
+    and ``calibration_excluded_only`` (the #1790 population — rows that would
+    have been visible but for the server-stamped ``calibration_excluded``
+    flag). Row selection itself is unchanged.
+    """
     try:
         asyncpg = importlib.import_module("asyncpg")
     except ImportError:
@@ -680,13 +702,21 @@ async def fetch_rows(
         records = await conn.fetch(_build_fetch_query(leads), window_days, *leads)
     finally:
         await conn.close()
-    return [
-        row
-        for record in records
-        if not is_controlled_validation_fixture(
-            (row := _row_from_record(record, leads)).detail
-        )
-    ]
+    kept: list[OutcomeInventoryRow] = []
+    excluded_total = 0
+    excluded_calibration_only = 0
+    for record in records:
+        row = _row_from_record(record, leads)
+        if is_controlled_validation_fixture(row.detail):
+            excluded_total += 1
+            if _fixture_only_because_calibration_excluded(row.detail):
+                excluded_calibration_only += 1
+            continue
+        kept.append(row)
+    if attrition is not None:
+        attrition["fixture_rows_excluded"] = excluded_total
+        attrition["calibration_excluded_only"] = excluded_calibration_only
+    return kept
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -701,10 +731,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 async def main_async(args: argparse.Namespace) -> int:
     """Run the inventory query and print or write the report."""
+    attrition: dict[str, int] = {}
     rows = await fetch_rows(
         args.db_url,
         window_days=args.window_days,
         lead_minutes=args.leads,
+        attrition=attrition,
     )
     inventory = build_inventory(rows, lead_minutes=args.leads)
     report = format_inventory_report(
@@ -712,6 +744,14 @@ async def main_async(args: argparse.Namespace) -> int:
         window_days=args.window_days,
         lead_minutes=args.leads,
     )
+    if attrition.get("fixture_rows_excluded"):
+        report += (
+            f"\nfixture_rows_excluded: {attrition['fixture_rows_excluded']}"
+            f"\ncalibration_excluded_only: {attrition['calibration_excluded_only']}"
+            "\n  (calibration_excluded_only = rows invisible to validation solely"
+            " because the server scraped their confidence — see #1790; supply"
+            " `confidence` or a registry-bound prediction_id at the producer.)"
+        )
     if args.output:
         output_path = Path(args.output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
