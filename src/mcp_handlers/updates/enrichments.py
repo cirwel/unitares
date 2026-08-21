@@ -1917,13 +1917,28 @@ def _generate_mirror_reflection(ctx: UpdateContext, signals: list) -> str | None
         if isinstance(restorative, dict) and restorative.get("needs_restoration"):
             return "Your recent pace is above the cooldown threshold."
 
-        if _has_tight_margin(response_data) or (isinstance(state, dict) and state.get("borderline")):
+        # `borderline` is a BASIN property -- where the EISV state sits in
+        # state-space -- while margin/nearest_edge describe distance to a
+        # decision THRESHOLD. ORing them together meant a boundary-basin agent
+        # with a comfortable margin was told "You're close to a governance
+        # edge" while `nearest_edge` was None: edge proximity asserted with no
+        # edge to name, and nothing the agent could check. Same conflation
+        # fixed in monitor_decision (#1774) and the recovery hint (#1776); this
+        # was the third surface carrying it.
+        if _has_tight_margin(response_data):
             nearest_edge = decision.get("nearest_edge")
             if nearest_edge == "coherence":
                 return "You're close to a coherence edge."
             if nearest_edge in ("risk", "risk_threshold"):
                 return "You're close to a risk edge."
-            return "You're close to a governance edge."
+            if nearest_edge:
+                return f"You're close to a {nearest_edge} edge."
+            # An actionable margin that names no edge should be unreachable
+            # after #1774. Report the margin rather than inventing an edge.
+            return "Your policy margin is tight."
+
+        if isinstance(state, dict) and state.get("borderline"):
+            return "Your state sits near a basin boundary."
 
         # Complexity divergence is surfaced as a neutral, recorded signal line
         # in the mirror (response_formatter._format_mirror), NOT as an
