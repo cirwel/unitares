@@ -72,10 +72,21 @@ def test_operator_surfaces_do_not_demote_redis_to_optional_cache() -> None:
             assert phrase not in content, f"{relative} contains stale phrase {phrase!r}"
 
 
+def _sdk_version() -> str:
+    import tomllib
+
+    with (REPO_ROOT / "agents/sdk/pyproject.toml").open("rb") as handle:
+        return tomllib.load(handle)["project"]["version"]
+
+
 def test_published_sdk_and_rest_envelope_are_current() -> None:
     compatibility = _read("COMPATIBILITY.md")
     manual = _read("docs/manual/03-running-the-server.md")
-    assert "pip install unitares-sdk==0.1.0" in compatibility
+    # Derived from the SDK's own version series, not a frozen literal. The
+    # server VERSION and the SDK version bump independently, so hard-coding
+    # either one here turns an unrelated release red. What must hold is that
+    # the compatibility table advertises the version the repo would publish.
+    assert f"pip install unitares-sdk=={_sdk_version()}" in compatibility
     assert "Until its first PyPI release" not in compatibility
     assert "-d '{\"name\":\"<tool_name>\"" in manual
     assert "-d '{\"tool\":\"<tool_name>\"" not in manual

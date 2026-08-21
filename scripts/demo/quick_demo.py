@@ -62,6 +62,21 @@ def _rest_url() -> str:
     return f"http://127.0.0.1:{port}/v1/tools/call"
 
 
+def _dashboard_url() -> str:
+    """Dashboard URL on the same resolved host port as the API calls.
+
+    The closing copy used to hardcode :8767, which on a port-overridden
+    install (the exact case GOVERNANCE_HOST_PORT exists for) pointed at
+    whatever else was on 8767 (#1792).
+    """
+    port = (
+        os.environ.get("UNITARES_DEMO_PORT")
+        or os.environ.get("GOVERNANCE_HOST_PORT")
+        or "8767"
+    )
+    return f"http://localhost:{port}/dashboard"
+
+
 REST = _rest_url()
 
 # Check-ins required before `is_baselined` flips and scoring switches from
@@ -340,7 +355,7 @@ def main() -> int:
 
     banner("done")
     print("  • Every number above came from check-in responses — no DB queries.")
-    print("  • Open http://localhost:8767/dashboard to see the same state visually.")
+    print(f"  • Open {_dashboard_url()} to see the same state visually.")
     print("  • Integrate this in your own agent loop: 5 lines, see README §Integrate an MCP client.")
     return 0
 
