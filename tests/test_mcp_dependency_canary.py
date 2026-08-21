@@ -9,16 +9,16 @@ hand-built mock instead of the library. Two contract changes shipped in
 1. `streamable_http_client` yields (read, write) instead of
    (read, write, get_session_id) — a loud ValueError at real connect.
 2. The transport was rewritten against `httpx2` (`client.sse(...)`,
-   `httpx2.StreamError`), so injecting the `httpx` 0.x client we pass at
-   five call sites kills the server-push GET stream SILENTLY — the
+   `httpx2.StreamError`), so the `httpx` 0.x clients we inject via
+   `http_client=` kill the server-push GET stream SILENTLY — the
    AttributeError is swallowed by the transport's retry loop while POST
    round-trips keep working, so a naive connect test passes.
 
 This file is the tripwire for both classes: a mock-free connect through
 the real transport against a real in-process server, plus an import-surface
 check on the seam the silent failure hides behind. If a resolved `mcp`
-version fails here, the fix is a port (see mcp_compat.py and the SDK's
-pin rationale in agents/sdk/pyproject.toml), never a mock adjustment.
+version fails here, the fix is a port (see mcp_compat.py and the bump
+procedure in constraints.txt), never a mock adjustment.
 """
 
 import asyncio
@@ -35,9 +35,9 @@ import pytest
 
 
 def test_transport_accepts_injected_http_client():
-    """The five real call sites all pass http_client=; losing the parameter
-    breaks the UDS substrate-attestation path, which has no other way to
-    route MCP traffic over a Unix socket."""
+    """The production client call sites pass http_client=; losing the
+    parameter breaks the UDS substrate-attestation path, which has no other
+    way to route MCP traffic over a Unix socket."""
     from mcp.client.streamable_http import streamable_http_client
 
     sig = inspect.signature(streamable_http_client)
@@ -62,17 +62,21 @@ def test_transport_is_written_against_the_injected_client_library():
 
     assert not hasattr(transport, "httpx2"), (
         "The installed mcp transport is written against httpx2, but the "
-        "repo injects httpx 0.x AsyncClient at five call sites (SDK "
-        "connect(), mcp_server_std.py stdio proxy, dialectic_canary, "
-        "mcp_agent, calibration harness). Under this mcp version the "
-        "server-push GET stream fails SILENTLY. Port the client injection "
-        "to httpx2 (including the UDS transport equivalent) before "
-        "allowing this mcp version; do not widen any pin past it."
+        "repo injects httpx 0.x AsyncClient at its client call sites "
+        "(grep for http_client= : SDK connect(), mcp_server_std.py stdio "
+        "proxy, dialectic_canary, mcp_agent, calibration harness). Under "
+        "this mcp version the server-push GET stream fails SILENTLY. Port "
+        "the client injection to httpx2 (including the UDS transport "
+        "equivalent) before allowing this mcp version; do not widen any "
+        "pin past it."
     )
-    assert hasattr(transport, "httpx"), (
-        "The mcp transport module no longer imports httpx at module level; "
-        "the import-surface heuristic in this canary needs re-basing "
-        "against the new transport implementation before trusting green."
+    # Identity, not just presence: `import httpx2 as httpx` would satisfy a
+    # bare hasattr while still being the incompatible library.
+    assert hasattr(transport, "httpx") and transport.httpx.__name__ == "httpx", (
+        "The mcp transport module no longer imports httpx at module level "
+        "under its own name; the import-surface heuristic in this canary "
+        "needs re-basing against the new transport implementation before "
+        "trusting green."
     )
 
 
@@ -126,8 +130,10 @@ def canary_server_url():
 
 def test_real_connect_and_tool_call_through_installed_transport(canary_server_url):
     """Real streamable_http_client + injected httpx client, exactly as the
-    five production call sites do. Catches yield-arity and signature
-    changes that mocked transports hide."""
+    production call sites do. Catches signature and handshake changes that
+    mocked transports hide. The unpack here is deliberately index-based
+    (the post-#1800 production form), so yield-arity enforcement lives in
+    the SDK connect test below, whose code is what actually ships."""
     from mcp.client.session import ClientSession
     from mcp.client.streamable_http import streamable_http_client
 
@@ -148,11 +154,16 @@ def test_real_connect_and_tool_call_through_installed_transport(canary_server_ur
     assert asyncio.run(run()) == "canary"
 
 
-def test_sdk_client_real_connect(canary_server_url):
+def test_sdk_client_real_connect(canary_server_url, monkeypatch):
     """The resident-critical path: GovernanceClient.connect() with no mocks.
     Vigil and Chronicler run this exact code on the production interpreter;
     a transport contract change that breaks it takes residents dark."""
     from unitares_sdk.client import GovernanceClient
+
+    # Without this, a host that exports UNITARES_UDS_SOCKET (resident hosts,
+    # the operator Mac) would route this connect to the PRODUCTION governance
+    # socket instead of the canary server.
+    monkeypatch.delenv("UNITARES_UDS_SOCKET", raising=False)
 
     async def run() -> None:
         client = GovernanceClient(mcp_url=canary_server_url, connect_retries=0)
