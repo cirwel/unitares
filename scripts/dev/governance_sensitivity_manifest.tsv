@@ -1,0 +1,28 @@
+# Governance-sensitivity manifest (unitares #1671).
+# One entry per line: path<TAB>symbol_regex<TAB>why
+# - path: repo-relative file. A diff touching the file is a candidate.
+# - symbol_regex: extended regex matched against the diff's added/removed
+#   lines for that file. A literal `-` marks the whole file as sensitive
+#   (used for the anti-gaming test class, where deletion or skipping is the
+#   concern). Never leave the field empty: bash `read` with tab IFS
+#   collapses consecutive tabs, which would shift the columns.
+# - why: one line, shown in the advisory comment.
+# Consumed by scripts/dev/check_governance_sensitivity.sh; documented in
+# docs/dev/GOVERNANCE_SENSITIVITY.md. Keep the three in sync — the checker's
+# --check mode verifies every path here still exists.
+config/governance_config.py	GAP_RECOVERY_CYCLES|DT_MAX	gap_suppress window: the 2026-08-06 audit measured 195/218 recorded pauses (89.4%) downgraded once inter-check-in gaps crossed 150s; widening this is the highest-leverage single-constant change
+config/governance_config.py	RISK_APPROVE_THRESHOLD|RISK_REVISE_THRESHOLD	the two risk decision lines (proceed/guide edge, pause line); also surfaced to agents as thresholds
+config/governance_config.py	COHERENCE_CRITICAL_THRESHOLD	coherence critical line consumed by decision and agent-facing threshold hints
+src/governance_monitor.py	_maybe_gap_suppress|_gap_recovery_cycles_remaining	the pause-downgrade mechanism itself (not just its window)
+src/outcome_corroboration.py	GRADE_WEIGHTS	evidence weights by corroboration grade; scaling these re-weights every outcome-grounded signal
+src/mcp_handlers/observability/outcome_events.py	_MIN_TACTICAL_EVIDENCE_WEIGHT	floor below which a tactical outcome carries no evidence; derived from GRADE_WEIGHTS, so its derivation moving is the signal
+src/knowledge_graph_lifecycle.py	EPHEMERAL_TAGS	membership changes silently re-scope what the KG lifecycle may expire
+governance_core/verification.py	_CATEGORY_SPECS	the deterministic verification floor's category/weight/pattern table; the model backend can only add recall on top of this
+tests/test_outcome_corroboration.py	-	anti-gaming test class: deleting or skipping is conspicuous by policy
+tests/test_verification_harm_confession.py	-	anti-gaming test class: deleting or skipping is conspicuous by policy
+tests/test_dialectic_attestation.py	-	anti-gaming test class: deleting or skipping is conspicuous by policy
+tests/test_ethical_drift_signals.py	-	anti-gaming test class: deleting or skipping is conspicuous by policy
+tests/test_calibrated_capability_concealment.py	-	anti-gaming test class: the threat model's fixture-demonstrated blind-spot evidence lives here
+scripts/dev/governance_sensitivity_manifest.tsv	-	the advisory's own inventory: removing an entry is itself a governance-posture change
+scripts/dev/check_governance_sensitivity.sh	-	the advisory's own detector: weakening it silently detaches the inventory from CI
+.github/workflows/governance-sensitivity.yml	-	the advisory's own CI wiring: disabling it is itself a governance-posture change
