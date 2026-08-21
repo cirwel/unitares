@@ -239,9 +239,25 @@ def make_decision(
             'margin_scope': margin_info.get('margin_scope', 'all_edges'),
         }
 
-    # --- Priority 6: BOUNDARY basin → proceed with guide, tight margin ---
+    # --- Priority 6: BOUNDARY basin → proceed with guide ---
     if basin == "boundary":
-        # In the boundary region, always guide regardless of verdict
+        # In the boundary region, always guide regardless of verdict.
+        #
+        # `basin` and `margin` are two DIFFERENT notions of "edge" and this
+        # branch used to collapse them: it hardcoded margin='tight' because the
+        # EISV state sits near a BASIN boundary, then reported nearest_edge from
+        # margin_info, which is None whenever the threshold margin is
+        # comfortable. The result said "you are near an edge" while being unable
+        # to name one -- and it violated this module's own documented contract,
+        # that only tight/warning/critical carry a non-null nearest_edge
+        # (see _ACTIONABLE_MARGINS in response_formatter). Because "tight" is in
+        # that actionable set, a comfortable agent was surfaced as needing
+        # attention on an unnameable edge.
+        #
+        # The boundary condition is not lost by reporting the real margin: it is
+        # already carried by `basin`, by sub_action='guide', and by the reason
+        # and guidance strings. Margin goes back to meaning one thing --
+        # distance to a decision threshold.
         return {
             'action': 'proceed',
             'sub_action': 'guide',
@@ -249,8 +265,8 @@ def make_decision(
             'guidance': 'Operating near basin boundary. Maintain current approach; avoid increasing complexity.',
             'critical': False,
             'basin': basin,
-            'margin': 'tight',
-            'nearest_edge': margin_info.get('nearest_edge'),
+            'margin': margin_info['margin'],
+            'nearest_edge': margin_info['nearest_edge'],
             'unmeasurable_edges': margin_info.get('unmeasurable_edges', []),
             'margin_scope': margin_info.get('margin_scope', 'all_edges'),
         }
