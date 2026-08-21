@@ -59,7 +59,16 @@ def main(argv: list[str] | None = None) -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true",
                     help="actually mint. Without it, report and change nothing.")
+    # The usage block documents --dry-run and argparse did not define it, so
+    # the FIRST documented step exited 2. Accepted explicitly (and as the
+    # default behaviour) rather than dropped from the docs: an operator who
+    # types the documented command must not get a usage error.
+    ap.add_argument("--dry-run", action="store_true", default=False,
+                    help="explicit no-op form of the default; changes nothing.")
     args = ap.parse_args(argv)
+    if args.dry_run and args.apply:
+        print("--dry-run and --apply are contradictory; refusing.", file=sys.stderr)
+        return 2
     token = os.environ.get("UNITARES_HTTP_API_TOKEN")
 
     if ANCHOR.exists():
