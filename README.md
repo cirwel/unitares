@@ -179,8 +179,8 @@ for the response.
 Clients can treat the policy action, reason, and next step as the stable
 contract. Operators can optionally inspect four EISV coordinates covering work
 progress, evidence alignment, behavioral drift, and their balance. EISV is
-proprioceptive state estimation — a read of how the process is working, drawn
-from auditable heuristics rather than literal thermodynamic quantities. The
+proprioceptive state estimation: a read of how the process is working, drawn
+from auditable, published heuristics rather than a physical model. The
 [computation reference](docs/EISV_COMPUTATION.md) documents formulas, warmup,
 thresholds, and source code; the
 [interpretation contract](docs/ontology/eisv-proprioception-contract.md) records
@@ -205,8 +205,8 @@ UNITARES is a state instrument, not an outcome oracle: it
 does not decide whether an output is correct or ethical, and it
 cannot detect deliberate concealment without independent evidence. The
 [scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md) draws that boundary
-precisely. The information-theoretic and ODE formulation in the companion
-paper is a parallel research path, not the deployed policy mechanism.
+precisely. The mathematical formulation in the companion paper is a parallel
+research path, not the deployed policy mechanism.
 
 ## Local control and future federation
 
@@ -236,6 +236,7 @@ real load — not an independent efficacy study:
 | **71,141 stored EISV state rows** | Longitudinal state observations in `core.agent_state`; rows are not independent agents or trials. |
 | **15 recorded self-recovery events** | Of 21 canonical, non-automatic lifecycle-resume records. Shows the path was exercised; not 15 independent trials or proof that pauses improved outcomes. |
 | **32,181 labeled EISV windows** | [20,655 overlapping real windows from one 39-day Raspberry Pi run plus 11,526 synthetic windows](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories). These are windows, not independent agents or customer trajectories. |
+| **6 long-running resident agents** | Operated continuously in the maintainer deployment; one runs on separate hardware (the Raspberry Pi testbed). The same single-operator fleet as every number above, not external adopters. |
 
 The maintainer deployment is **single-operator and co-development dogfood**: most
 agents governed by the system are also building the system. Read
@@ -285,6 +286,7 @@ analogies and philosophical readings are isolated under
 
 Project operation is explicit: see the [roadmap](ROADMAP.md),
 [compatibility and naming map](COMPATIBILITY.md), [governance](GOVERNANCE.md),
+[contributing guide](CONTRIBUTING.md), [security policy](SECURITY.md),
 [support policy](SUPPORT.md), and [release process](docs/operations/RELEASE_PROCESS.md).
 
 ## Ecosystem repositories
