@@ -27,9 +27,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python deps first for better layer caching.
-COPY requirements-docker.txt .
-RUN pip install --no-cache-dir -r requirements-docker.txt
+# Install Python deps first for better layer caching. constraints.txt pins
+# drift-bitten deps to the production resolution so published images cannot
+# silently pick up a newer release than the fleet runs.
+COPY requirements-docker.txt constraints.txt ./
+RUN pip install --no-cache-dir -r requirements-docker.txt -c constraints.txt
 
 # Copy application code. governance_core/ was folded back into this repo
 # in 2026-04-24 (was previously a separate compiled wheel) — no wheel install.

@@ -1,0 +1,19 @@
+# Pip constraints applied to CI installs and the Docker image so the tested
+# and shipped dependency resolution matches what production actually runs.
+#
+# Why this file exists: the ranges in requirements-*.txt float, so "what CI
+# tests" silently changes whenever a new release appears on PyPI. That is how
+# mcp 2.0.0 became CI's de-facto tested version in August 2026 with no commit
+# and no decision, while production stayed on 1.x — and 2.0.0 carries client
+# breaks the mocked test suite cannot see (see tests/test_mcp_dependency_canary.py).
+#
+# Policy: pin here only dependencies where CI/production drift has actually
+# bitten. Bump a pin deliberately, in the same PR that prepares the production
+# move (and deploy the interpreter bump with it). The `mcp-newest` advisory CI
+# job tests the newest in-range resolution WITHOUT these constraints, so
+# coverage of upcoming versions is a deliberate lane, not an accident.
+#
+# mcp 2.x gate: the transport is written against httpx2; our five client-side
+# call sites inject httpx 0.x (required by the UDS attestation path). Port the
+# injection before moving this pin to 2.x.
+mcp==1.29.0

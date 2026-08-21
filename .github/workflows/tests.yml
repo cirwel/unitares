@@ -30,12 +30,16 @@ jobs:
       with:
         python-version: '3.12'
         cache: 'pip'
-        cache-dependency-path: requirements-full.txt
+        cache-dependency-path: |
+          requirements-full.txt
+          constraints.txt
 
     - name: Install dependencies
+      # -c constraints.txt pins drift-bitten deps to the production resolution;
+      # the mcp-newest advisory job covers the unconstrained resolution.
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements-full.txt
+        pip install -r requirements-full.txt -c constraints.txt
 
     - name: Validate CI/Python version sync
       run: |
@@ -182,12 +186,16 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
         cache: 'pip'
-        cache-dependency-path: requirements-full.txt
+        cache-dependency-path: |
+          requirements-full.txt
+          constraints.txt
 
     - name: Install dependencies
+      # -c constraints.txt pins drift-bitten deps to the production resolution;
+      # the mcp-newest advisory job covers the unconstrained resolution.
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements-full.txt
+        pip install -r requirements-full.txt -c constraints.txt
 
     - name: Create test database
       env:
@@ -365,7 +373,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip build
         python -m build
-        pip install dist/governance_mcp-*.whl
+        pip install dist/governance_mcp-*.whl -c constraints.txt
 
     - name: Verify installed package layout and metadata
       run: |
@@ -438,7 +446,7 @@ jobs:
       # back on the path and this job would prove nothing.
       run: |
         python -m pip install --upgrade pip
-        pip install ./agents/sdk
+        pip install ./agents/sdk -c constraints.txt
         pip install pytest pytest-asyncio
 
     - name: Import it with the repo off the path
@@ -469,3 +477,35 @@ jobs:
       # `-o pythonpath=` overrides the repo pyproject's injection. Tests run in
       # place so their fixture paths still resolve; only the import source moves.
       run: python -m pytest agents/sdk/tests -q -o pythonpath=
+
+  mcp-newest:
+    # Advisory lane: tests the NEWEST in-range mcp resolution, deliberately
+    # without constraints.txt. This is where "does the next mcp version work"
+    # is answered on purpose — the blocking jobs pin to the production
+    # resolution, so a new PyPI release can no longer silently become the
+    # tested configuration. Red here means the newest allowed mcp breaks a
+    # real client seam (see tests/test_mcp_dependency_canary.py); it blocks
+    # nothing, but green is the precondition for bumping constraints.txt.
+    name: mcp-newest (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+      with:
+        python-version: '3.12'
+
+    - name: Install newest in-range dependencies (no constraints, on purpose)
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements-full.txt
+        pip install --upgrade "mcp>=1.26.0,<3.0.0"
+        python -c "import importlib.metadata as m; print('resolved mcp', m.version('mcp'))"
+
+    - name: Run the mcp dependency canary under the newest resolution
+      run: python -m pytest tests/test_mcp_dependency_canary.py -q
