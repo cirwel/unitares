@@ -14,7 +14,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**127 flags.**
+**128 flags.**
 
 | Flag | Default | Purpose | Read at |
 |---|---|---|---|
@@ -70,6 +70,7 @@ index; that one is the curated decision record.
 | `UNITARES_DIALECTIC_SYNTHETIC_REVIEWER` | `'1'` | Whether submit_thesis auto-completes a no-live-reviewer session via the local synthetic reviewer instead of leaving it to hang at awaiting_f | src/mcp_handlers/dialectic/handlers.py |
 | `UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT` | `'1'` | — | src/mcp_handlers/dialectic/session.py |
 | `UNITARES_DISABLE_PLUGINS` | `(required)` | Load every registered ``governance_mcp.plugins`` entry point | src/plugin_loader.py |
+| `UNITARES_DOCTOR_ANCHOR` | `str(Path.home() / '.unitares'…` | — | agents/common/findings.py |
 | `UNITARES_EMBEDDING_MODEL` | `'minilm'` | Derive a config tag matching baseline filename suffix from env vars | src/embeddings.py, agents/vigil/agent.py |
 | `UNITARES_ENABLE_GRAPH_EXPANSION` | `''` | Derive a config tag matching baseline filename suffix from env vars | agents/vigil/agent.py |
 | `UNITARES_ENABLE_HYBRID` | `''` | Derive a config tag matching baseline filename suffix from env vars | agents/vigil/agent.py |
