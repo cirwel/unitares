@@ -1800,6 +1800,104 @@ async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[
 # handle_llm_assisted_dialectic so transcripts/calibration treat both the same.
 SYNTHETIC_REVIEWER_ID = "llm-synthetic-reviewer"
 
+# Reviewer/model provenance persisted with a verdict, riding the namespaced
+# observed_metrics["reviewer_backend"] key the orchestrated reviewer already
+# writes (agents/dialectic_reviewer/reviewer.py:_provenance_for_message — see
+# its docstring for why observed_metrics is the surviving persisted slot).
+# Allowlist, not denylist: the dict is assembled from provider responses and
+# caller input, and a denylist would leak whatever a future backend adds.
+# Motivation: the 2026-08-18 replay put reviewer verdicts 36-50% apart by
+# capability tier while 0 of 194 live verdicts recorded which model produced
+# them or whether a fallback fired.
+_REVIEWER_PROVENANCE_KEYS = (
+    "backend",
+    "host_id",
+    "model_requested",
+    "model_used",
+    "models_used",
+    "tokens_used",
+    "cost_usd",
+    "latency_ms",
+    "finish_reason",
+    "fallback_from",
+    "warnings",
+    "source",
+    "structured",
+    "note",
+    "consult_source",
+    "consulted_at",
+)
+_REVIEWER_KINDS = {
+    "in_process_synthetic",
+    "orchestrated",
+    "agent_submitted",
+    "external_consult",
+}
+_PROVENANCE_STR_MAX = 200
+
+
+def _reviewer_provenance_stamp(
+    supplied: Optional[Dict[str, Any]],
+    *,
+    kind: str,
+    degraded: bool = False,
+) -> Dict[str, Any]:
+    """Build the persisted reviewer_backend stamp. Descriptive provenance,
+    not identity proof — same posture as provenance_context on check-ins."""
+    stamp: Dict[str, Any] = {}
+    if isinstance(supplied, dict):
+        for key in _REVIEWER_PROVENANCE_KEYS:
+            value = supplied.get(key)
+            if value is None:
+                continue
+            if isinstance(value, str):
+                value = value[:_PROVENANCE_STR_MAX]
+            stamp[key] = value
+    stamp["reviewer_kind"] = kind if kind in _REVIEWER_KINDS else "agent_submitted"
+    stamp["degraded"] = bool(degraded)
+    return stamp
+
+
+def _synthetic_reviewer_provenance(llm_result: Dict[str, Any]) -> Dict[str, Any]:
+    """Stamp for verdicts produced by the in-process synthetic reviewer."""
+    from ..support.inference_registry import default_local_model
+
+    return _reviewer_provenance_stamp(
+        {
+            "backend": "local_ollama",
+            "model_used": default_local_model(),
+            "source": llm_result.get("source"),
+            "structured": llm_result.get("_structured"),
+            "note": llm_result.get("_note"),
+        },
+        kind="in_process_synthetic",
+        degraded=bool(llm_result.get("_degraded")),
+    )
+
+
+def _merge_caller_reviewer_provenance(
+    observed_metrics: Optional[Dict[str, Any]],
+    reviewer_provenance: Any,
+) -> Dict[str, Any]:
+    """Fold an explicit reviewer_provenance argument into observed_metrics.
+
+    An orchestrated reviewer that already writes observed_metrics["reviewer_backend"]
+    directly is passed through untouched; an explicit reviewer_provenance argument
+    wins over both. This is how an agent files a verdict it obtained OUTSIDE the
+    server (a Codex/other-model consult) as a governed record:
+    reviewer_provenance={"reviewer_kind": "external_consult", "backend": "codex-cli",
+    "model_used": ..., "consult_source": ...}.
+    """
+    merged = dict(observed_metrics or {})
+    if isinstance(reviewer_provenance, dict) and reviewer_provenance:
+        kind = str(reviewer_provenance.get("reviewer_kind", "agent_submitted"))
+        merged["reviewer_backend"] = _reviewer_provenance_stamp(
+            reviewer_provenance,
+            kind=kind,
+            degraded=bool(reviewer_provenance.get("degraded")),
+        )
+    return merged
+
 
 def _synthetic_review_approves(
     synthesis: Dict[str, Any],
@@ -1953,6 +2051,9 @@ async def _run_synthetic_review(
         message_type="antithesis",
         reasoning=anti_reasoning,
         concerns=anti_concerns or None,
+        observed_metrics={
+            "reviewer_backend": _synthetic_reviewer_provenance(antithesis)
+        },
     )
     await pg_update_phase(session.session_id, session.phase.value)
 
@@ -1992,6 +2093,9 @@ async def _run_synthetic_review(
         proposed_conditions=synth_conditions or None,
         reasoning=synthesis.get("reasoning", ""),
         agrees=synth_agrees,
+        observed_metrics={
+            "reviewer_backend": _synthetic_reviewer_provenance(synthesis)
+        },
     )
 
     resolved = False
@@ -2417,12 +2521,18 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
             except Exception as e:
                 logger.warning(f"First-responder eligibility check failed (proceeding): {e}")
 
-        # Create antithesis message
+        # Create antithesis message. An explicit reviewer_provenance argument
+        # (e.g. an external Codex/other-model consult being filed as a governed
+        # verdict) is folded into observed_metrics["reviewer_backend"].
+        anti_observed_metrics = _merge_caller_reviewer_provenance(
+            arguments.get('observed_metrics'),
+            arguments.get('reviewer_provenance'),
+        )
         message = DialecticMessage(
             phase="antithesis",
             agent_id=agent_id,
             timestamp=datetime.now(timezone.utc).isoformat(),
-            observed_metrics=arguments.get('observed_metrics', {}),
+            observed_metrics=anti_observed_metrics,
             concerns=arguments.get('concerns', []),
             reasoning=arguments.get('reasoning')
         )
@@ -2455,7 +2565,7 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
                     session_id=session_id,
                     agent_id=agent_id,
                     message_type="antithesis",
-                    observed_metrics=arguments.get('observed_metrics', {}),
+                    observed_metrics=anti_observed_metrics,
                     concerns=arguments.get('concerns', []),
                     reasoning=arguments.get('reasoning'),
                 )
@@ -2643,6 +2753,12 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                 # NOTE: Defer phase update for converged sessions until after finalize_resolution
                 # succeeds, to avoid "resolved" phase in PG without a resolution if finalize fails.
                 try:
+                    # The synthesis row previously persisted no observed_metrics
+                    # at all, leaving zero provenance surface on the verdict that
+                    # actually decides the session — stamp it when supplied.
+                    synth_observed_metrics = _merge_caller_reviewer_provenance(
+                        None, arguments.get('reviewer_provenance')
+                    )
                     await pg_add_message(
                         session_id=session_id,
                         agent_id=agent_id,
@@ -2651,6 +2767,7 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                         proposed_conditions=proposed_conditions,
                         reasoning=arguments.get('reasoning'),
                         agrees=agrees,
+                        observed_metrics=synth_observed_metrics or None,
                     )
                     _blocked = result.get("blocked") == "reviewer_objection_stands"
                     # Skip the phase write when blocked: the phase has not changed (it
