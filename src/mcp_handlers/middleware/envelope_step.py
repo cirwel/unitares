@@ -198,7 +198,14 @@ def _recovery_hint(
     # Attention-only reach (margin/verdict flag while measured risk sits below
     # the ceiling): never emit wording that contradicts the risk value the same
     # payload reports.
-    return margin_hint
+    #
+    # This is the branch a `guide` verdict actually lands in: `continuing` is
+    # False for "guide" (it is not in the proceed/approve/ok set), so the
+    # attention+continuing case above is NOT reached. #1775 branched only that
+    # earlier case and left this one returning the margin wording
+    # unconditionally, which is why a comfortable margin still reported "policy
+    # margin is near an edge" after that change deployed.
+    return margin_hint if margin_is_near_edge else verdict_hint
 
 
 def _verdict_caveat(source_payload: Dict[str, Any]) -> Optional[str]:
