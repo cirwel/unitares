@@ -6,7 +6,7 @@ with named reasons. It complements evals, guardrails, and sandboxes; it does not
 replace them.
 
 **Current public releases:** [server v2.19.0](https://github.com/cirwel/unitares/releases/tag/v2.19.0)
-· [Python SDK 0.1.0](https://pypi.org/project/unitares-sdk/)
+· [Python SDK 0.2.0](https://pypi.org/project/unitares-sdk/)
 · [multi-architecture container](https://github.com/cirwel/unitares/pkgs/container/unitares)
 · Apache-2.0
 
@@ -45,7 +45,7 @@ make demo
 Install the resident-agent SDK from PyPI:
 
 ```bash
-python -m pip install unitares-sdk==0.1.0
+python -m pip install unitares-sdk==0.2.0
 ```
 
 Or inspect the signed multi-architecture server image:
