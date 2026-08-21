@@ -27,7 +27,7 @@ def test_tier_one_quickstart_is_release_pinned_and_redis_complete() -> None:
     # quickstart names a release tag at all, never `master`.
     pin = f"git clone --branch v{_current_version()} --depth 1"
 
-    assert "**Tier-1 install contract**" in readme
+    assert "the supported install path" in readme
     assert pin in readme
     assert pin in manual
     assert "depends_on:" in compose

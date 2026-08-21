@@ -28,8 +28,8 @@ returned.
 | Operator visibility | Inspect lifecycle, state, evidence, and decision history through MCP, HTTP, and a self-hosted dashboard. |
 
 The deployed policy path uses auditable behavioral state estimation. The
-information-theoretic and ODE formulation remains a research target and parallel
-diagnostic path, not the live decision mechanism.
+mathematical formulation in the companion paper remains a research target and
+parallel diagnostic path, not the live decision mechanism.
 
 ## Try the released surfaces
 

@@ -871,6 +871,61 @@ def check_contested_claims(md_files: list[Path]) -> list[str]:
     return warnings
 
 
+# --- Check 7: Pitch-surface vocabulary (retired framing terms) ---
+#
+# Cross-surface framing rule for the storefront surfaces an evaluator lands on
+# first: the root README, the product definition, and the published landing
+# pages describe the deployed mechanism in behavioral terms. Two
+# research-lineage adjectives are retired from these surfaces because they
+# promise physics the deployed path does not compute: "thermodynamic" (in any
+# construction, including negations — planting the word invites the reading
+# the sentence denies), and "information-theoretic" outside the verbatim
+# companion-paper title. The rule has regressed before on sibling surfaces
+# after section rewrites, which is why it is a lint and not a review note.
+# Deep docs, essays, proposals, and code keep their vocabulary; only the pitch
+# surfaces are in scope.
+
+_PAPER_TITLE = "Information-Theoretic Governance of Heterogeneous Agent Fleets"
+
+_PITCH_VOCABULARY: list[tuple[re.Pattern, str]] = [
+    (
+        re.compile(r"thermodynamic", re.IGNORECASE),
+        "retired pitch vocabulary: describe the deployed mechanism "
+        "(auditable behavioral state estimation), not physics framing — "
+        "retired even inside a negation",
+    ),
+    (
+        re.compile(r"information[- ]theoretic", re.IGNORECASE),
+        "reserved pitch vocabulary: 'information-theoretic' appears on pitch "
+        "surfaces only inside the verbatim companion-paper title",
+    ),
+]
+
+
+def _is_pitch_surface(rel: Path) -> bool:
+    rel_str = rel.as_posix()
+    if rel_str in ("README.md", "docs/PRODUCT_DEFINITION.md"):
+        return True
+    return rel_str.startswith("docs/public-site/")
+
+
+def check_pitch_vocabulary(md_files: list[Path]) -> list[str]:
+    warnings = []
+    for fpath in md_files:
+        rel = fpath.relative_to(REPO_ROOT)
+        if not _is_pitch_surface(rel):
+            continue
+        for i, line in enumerate(fpath.read_text(errors="replace").splitlines(), 1):
+            # Neutralize verbatim citations of the companion-paper title, then
+            # lint what remains: a line may cite the title AND separately use a
+            # retired term, and the citation must not shield the term.
+            checked = line.replace(_PAPER_TITLE, "")
+            for pattern, reason in _PITCH_VOCABULARY:
+                if pattern.search(checked):
+                    warnings.append(f"  {rel}:{i}: {reason}")
+    return warnings
+
+
 def collect_md_files() -> list[Path]:
     md_files = []
     for root, dirs, files in os.walk(REPO_ROOT):
@@ -917,6 +972,12 @@ def main():
     if contested:
         all_warnings.append(
             ("Contested claims (corrected facts reappearing)", contested)
+        )
+
+    vocab = check_pitch_vocabulary(md_files)
+    if vocab:
+        all_warnings.append(
+            ("Pitch-surface vocabulary (retired framing terms)", vocab)
         )
 
     # Advisory: surfaced only when requested, never gates the exit code
