@@ -638,6 +638,18 @@ class TestUpdateSessionPhase:
         assert call_args[2] == "sess-001"
 
     @pytest.mark.asyncio
+    async def test_update_session_phase_sql_has_terminal_guard(self, db):
+        """Phase syncs must not stamp a terminal-status row (a phase write
+        racing a concurrent resolution used to leave status='resolved',
+        phase='failed'; rehydration trusts phase)."""
+        instance, pool, conn = db
+        conn.execute = AsyncMock(return_value="UPDATE 1")
+
+        await instance.update_session_phase("sess-001", "failed")
+        sql = conn.execute.call_args[0][0]
+        assert "NOT IN ('resolved', 'failed')" in sql
+
+    @pytest.mark.asyncio
     async def test_update_session_phase_not_found(self, db):
         """update_session_phase returns False when no rows updated."""
         instance, pool, conn = db
@@ -676,15 +688,19 @@ class TestUpdateSessionReviewer:
 
     @pytest.mark.asyncio
     async def test_update_session_reviewer_sql_has_terminal_guard(self, db):
-        """The reviewer UPDATE must refuse terminal rows in SQL (dual-writer TOCTOU)."""
+        """The reviewer UPDATE must refuse terminal rows in SQL (dual-writer
+        TOCTOU). Exact-clause assert: the guard set is pinned to precisely
+        ('resolved','failed') — the storable terminal values under
+        dialectic_sessions_status_check and DialecticSaga's commit guard.
+        Broadening it (e.g. adding 'active' or the unstorable
+        'timeout'/'abandoned') breaks this test on purpose."""
         instance, pool, conn = db
         conn.execute = AsyncMock(return_value="UPDATE 1")
 
         await instance.update_session_reviewer("sess-001", "reviewer-B")
         sql = conn.execute.call_args[0][0]
-        assert "NOT IN" in sql
-        for terminal in instance.TERMINAL_STATUSES:
-            assert terminal in sql
+        assert "NOT IN ('resolved', 'failed')" in sql
+        assert instance.TERMINAL_WRITE_GUARD == ("resolved", "failed")
 
     @pytest.mark.asyncio
     async def test_update_session_reviewer_refused_on_terminal(self, db):
@@ -727,15 +743,14 @@ class TestUpdateSessionStatus:
 
     @pytest.mark.asyncio
     async def test_update_session_status_sql_has_terminal_guard(self, db):
-        """The status UPDATE must refuse terminal rows in SQL (dual-writer TOCTOU)."""
+        """The status UPDATE must refuse terminal rows in SQL (dual-writer
+        TOCTOU). Exact clause pinned — see the reviewer-guard test."""
         instance, pool, conn = db
         conn.execute = AsyncMock(return_value="UPDATE 1")
 
         await instance.update_session_status("sess-001", "failed")
         sql = conn.execute.call_args[0][0]
-        assert "NOT IN" in sql
-        for terminal in instance.TERMINAL_STATUSES:
-            assert terminal in sql
+        assert "NOT IN ('resolved', 'failed')" in sql
 
     @pytest.mark.asyncio
     async def test_update_session_status_refused_overwrite_of_resolved(self, db):
@@ -748,15 +763,17 @@ class TestUpdateSessionStatus:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_update_session_status_idempotent_replay(self, db):
-        """Re-requesting the state the row already holds is a True no-op
-        (mirrors resolve_session's B-4 semantics)."""
+    async def test_update_session_status_same_state_is_not_this_callers_win(self, db):
+        """No-write returns False even when the row already holds the
+        requested status: another writer produced that outcome (BEAM
+        liveness also writes 'failed'); the caller must not narrate it as
+        its own. Idempotent-replay callers use resolve_session instead."""
         instance, pool, conn = db
         conn.execute = AsyncMock(return_value="UPDATE 0")
         conn.fetchrow = AsyncMock(return_value={"status": "failed"})
 
         result = await instance.update_session_status("sess-001", "failed")
-        assert result is True
+        assert result is False
 
 
 # ============================================================================

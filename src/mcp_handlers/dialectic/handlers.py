@@ -972,16 +972,29 @@ async def _apply_reviewer_reassignment(
     session.transcript.append(reassign_msg)
 
     try:
+        # ORDER MATTERS (council 2026-08-21). Reopen FIRST: its SQL matches
+        # only `status='failed' AND awaiting_facilitation=true`, so it must
+        # run before the flag is cleared (the old order cleared the flag one
+        # statement earlier, welding the revival path shut), and it must run
+        # before the reviewer write, whose terminal-state guard would refuse
+        # the still-`failed` row.
+        if revived:
+            if not await pg_reopen_session(session_id, session.phase.value):
+                raise RuntimeError(
+                    f"reopen refused for {session_id[:16]} — row not in the "
+                    "revivable state (failed + awaiting facilitation)"
+                )
         # BEAM owns the reviewer write when flagged; else Python. (Slice 2.3)
         if await beam_update_reviewer(session_id, new_reviewer_id) is None:
-            await pg_update_reviewer(session_id, new_reviewer_id)
+            if not await pg_update_reviewer(session_id, new_reviewer_id):
+                # The guarded UPDATE refused (row terminal or missing) — the
+                # reassignment did NOT persist; do not report success on it.
+                raise RuntimeError(
+                    f"reviewer write refused for {session_id[:16]} — "
+                    "session is terminal or missing"
+                )
         # A reassigned reviewer clears the stuck/facilitation state (#1167 Ask 2).
         await pg_update_awaiting_facilitation(session_id, False)
-        # Persist the revival. `update_session_phase` refuses terminal values
-        # but accepts non-terminal ones, and the row's status must come back to
-        # `active` or the sweeper immediately re-terminates it.
-        if revived:
-            await pg_reopen_session(session_id, session.phase.value)
         await pg_add_message(
             session_id=session_id,
             agent_id="system",
@@ -2547,10 +2560,20 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
             # If reviewer was auto-assigned (first-responder pattern), persist to PG
             if original_reviewer_id is None and session.reviewer_agent_id == agent_id:
                 try:
+                    persisted = True
                     if await beam_update_reviewer(session_id, agent_id) is None:
-                        await pg_update_reviewer(session_id, agent_id)
-                    result["reviewer_auto_assigned"] = True
-                    logger.info("Reviewer auto-assigned for dialectic session")
+                        persisted = await pg_update_reviewer(session_id, agent_id)
+                    if persisted:
+                        result["reviewer_auto_assigned"] = True
+                        logger.info("Reviewer auto-assigned for dialectic session")
+                    else:
+                        # Guarded UPDATE refused — the session went terminal
+                        # concurrently; don't claim an assignment the row
+                        # doesn't carry.
+                        logger.warning(
+                            "Reviewer auto-assign refused (session terminal); "
+                            "not persisted"
+                        )
                 except Exception as e:
                     logger.warning(
                         "Could not persist reviewer assignment to PostgreSQL: %s",

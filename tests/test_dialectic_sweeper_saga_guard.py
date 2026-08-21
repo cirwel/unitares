@@ -117,3 +117,7 @@ async def test_sweeper_refused_reap_posts_no_failure_message():
     mock_update.assert_called_once_with("won-by-other-writer-1", "failed")
     mock_add_msg.assert_not_called()
     assert result["resolved_count"] == 0
+    assert result["skipped_count"] == 1, (
+        "a refused write must be counted, not vanish — the skipped bucket is "
+        "the durable evidence the dual-writer race fires"
+    )

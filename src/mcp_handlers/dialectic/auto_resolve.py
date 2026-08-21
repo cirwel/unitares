@@ -142,6 +142,7 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
         resolved_count = 0
         reassigned_count = 0
         facilitation_count = 0
+        skipped_count = 0
         details = []
 
         for session in stuck_sessions:
@@ -195,14 +196,21 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
                     if new_reviewer:
                         try:
                             if not await update_session_reviewer_async(session_id, new_reviewer):
-                                # Session reached a terminal state during
-                                # reviewer selection (dual-writer TOCTOU);
-                                # nothing was written, so don't narrate a
+                                # The guarded UPDATE wrote nothing — the row
+                                # is terminal (dual-writer TOCTOU during
+                                # reviewer selection) or gone; the DB-layer
+                                # log distinguishes which. Don't narrate a
                                 # reassignment that never happened.
                                 logger.info(
-                                    f"Session {session_id[:16]} went terminal mid-sweep; "
-                                    "reviewer reassignment skipped"
+                                    f"Session {session_id[:16]} reviewer write refused "
+                                    "(row terminal or missing); reassignment skipped"
                                 )
+                                skipped_count += 1
+                                details.append({
+                                    "session_id": session_id,
+                                    "action": "write_refused",
+                                    "attempted": "reviewer_reassignment",
+                                })
                                 continue
                             await add_message_async(
                                 session_id=session_id,
@@ -276,12 +284,22 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
             # Fall through: mark as FAILED (session too old or non-reassignable phase)
             try:
                 if not await update_session_status_async(session_id, "failed"):
-                    # Another writer finished this session after our early
-                    # saga/staleness checks; the guarded UPDATE refused the
-                    # overwrite. Skip the failure message and the count.
+                    # The guarded UPDATE wrote nothing: another writer
+                    # finished this session after our early saga/staleness
+                    # checks (even one that also wrote 'failed' — that
+                    # outcome is theirs, with their resolution payload), or
+                    # the row is gone. The DB-layer log distinguishes which.
+                    # Skip the failure narrative and the count.
                     logger.info(
-                        f"Session {session_id[:16]} went terminal mid-sweep; reap skipped"
+                        f"Session {session_id[:16]} status write refused "
+                        "(row terminal or missing); reap skipped"
                     )
+                    skipped_count += 1
+                    details.append({
+                        "session_id": session_id,
+                        "action": "write_refused",
+                        "attempted": "reap_failed",
+                    })
                     continue
                 failure_reason = _describe_reap(
                     phase=phase,
@@ -315,11 +333,12 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
             "resolved_count": resolved_count,
             "reassigned_count": reassigned_count,
             "facilitation_count": facilitation_count,
+            "skipped_count": skipped_count,
             "details": details,
             "message": (
                 f"Processed {len(stuck_sessions)} stuck session(s): "
                 f"{reassigned_count} reassigned, {facilitation_count} awaiting facilitation, "
-                f"{resolved_count} failed"
+                f"{resolved_count} failed, {skipped_count} skipped (write refused)"
             ),
         }
 
