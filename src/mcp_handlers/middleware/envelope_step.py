@@ -450,7 +450,13 @@ def build_experience_envelope(
     elif canonical_name == "process_agent_update":
         decision = payload.get("decision") if isinstance(payload.get("decision"), dict) else {}
         state_summary = _lift(payload, "status", "health_status")
-        state_summary.update(_lift(decision, "action", "margin", "nearest_edge"))
+        # margin_scope and unmeasurable_edges ride WITH margin: a bare
+        # "comfortable" would otherwise read as "no limit is near" when an edge
+        # was never assessed at all. Lifting them here is what makes the
+        # unmeasurable state agent-visible rather than a comment in `details`,
+        # which this envelope strips.
+        state_summary.update(_lift(decision, "action", "margin", "nearest_edge",
+                                   "margin_scope", "unmeasurable_edges"))
         if coherence is not None:
             state_summary["coherence"] = coherence
         if risk is not None:
