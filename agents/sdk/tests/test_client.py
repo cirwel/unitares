@@ -893,3 +893,44 @@ class TestConnectFailureCleanup:
         assert client._http_client is None
         # Transport CM never registered on _cm_stack (its __aenter__ raised), so no __aexit__.
         http_client_mock.aclose.assert_called_once()
+
+
+# --- Transport yield arity (mcp 1.x vs 2.x) ---
+
+
+class TestTransportYieldArity:
+    """mcp 1.x's streamable_http_client yields (read, write, get_session_id);
+    mcp 2.x yields (read, write). connect() must accept both shapes."""
+
+    @pytest.mark.parametrize("arity", [2, 3])
+    @pytest.mark.asyncio
+    async def test_connect_accepts_both_yield_arities(self, arity):
+        client = GovernanceClient(connect_retries=0)
+
+        read_mock, write_mock = MagicMock(), MagicMock()
+        yielded = (read_mock, write_mock, MagicMock())[:arity]
+        entered_cm = AsyncMock()
+        entered_cm.__aenter__ = AsyncMock(return_value=yielded)
+        entered_cm.__aexit__ = AsyncMock(return_value=None)
+
+        entered_session_cm = AsyncMock()
+        session_mock = AsyncMock()
+        session_mock.initialize = AsyncMock()
+        entered_session_cm.__aenter__ = AsyncMock(return_value=session_mock)
+        entered_session_cm.__aexit__ = AsyncMock(return_value=None)
+
+        http_client_mock = MagicMock()
+        http_client_mock.aclose = AsyncMock()
+
+        session_cls_mock = MagicMock(return_value=entered_session_cm)
+        with (
+            patch("unitares_sdk.client.httpx.AsyncClient", return_value=http_client_mock),
+            patch("unitares_sdk.client.streamable_http_client", return_value=entered_cm),
+            patch("unitares_sdk.client.ClientSession", session_cls_mock),
+        ):
+            await client.connect()
+            try:
+                session_cls_mock.assert_called_once_with(read_mock, write_mock)
+                assert client._session is session_mock
+            finally:
+                await client.disconnect()
