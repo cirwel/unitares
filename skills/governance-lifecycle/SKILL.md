@@ -4,7 +4,7 @@ description: >
   Use when an agent is interacting with UNITARES governance for the first time, needs to
   onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
   from session start through check-ins to recovery.
-last_verified: "2026-08-17"
+last_verified: "2026-08-21"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -164,7 +164,7 @@ watched less, or from a busy one that you have already reported.
 | **proceed / approve** | Continue normally |
 | **proceed / guide** + guidance text | Read the guidance, adjust your approach, keep going |
 | **pause / reject** | Stop your current task. Reflect on what is flagged. Consider requesting a dialectic review |
-| **margin: tight** | You are near a basin edge. Be more careful with next steps |
+| **margin: tight** | You are inside the band around a decision threshold — `nearest_edge` names which. This is a threshold distance, not a basin position. Be more careful with next steps |
 
 A `guide` verdict is an early warning. Ignoring it makes `pause` more likely.
 

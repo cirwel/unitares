@@ -94,14 +94,20 @@ VERSION_REFERENCES = [
     ("COMPATIBILITY.md", [
         (r'\| UNITARES server \| `v([\d.]+)`',
          r'| UNITARES server | `v{version}`'),
-        # Tracks the plugin row's server pin. The wording deliberately says
-        # "compatible with", not "aligned with": v0.4.13 is package-compatible
-        # with the server but its tagged skill bundle predates plugin PR #116,
-        # and the 2.18.0 errata exists precisely because "aligned" overclaimed
-        # that. Keep the pattern on the weaker word — if a future edit restores
-        # an alignment claim, this check should fail rather than bless it.
-        (r'compatible with server `v([\d.]+)`',
-         r'compatible with server `v{version}`'),
+        # Tracks the plugin row's server pin. This pattern carried the weaker
+        # word "compatible with" from 2.18.0 to 2.19.0, because the 2.18.0
+        # errata exists precisely because "aligned" overclaimed: v0.4.13's
+        # tagged skill bundle predated plugin PR #116.
+        #
+        # Plugin v0.4.14 (2026-08-21) earns the stronger word. Its bundle is a
+        # byte-identical mirror of this repo's skills/ at v2.19.0, verified
+        # file-by-file and against the published SKILLS_MANIFEST.sha256, and it
+        # carries both #116 and the v2.19.0 margin-semantics correction. The
+        # pattern moves with the claim, so a future edit that weakens the row
+        # back to "compatible with" fails this check rather than passing
+        # silently — the guard still works, in the other direction.
+        (r'aligned with server `v([\d.]+)`',
+         r'aligned with server `v{version}`'),
     ]),
 ]
 
