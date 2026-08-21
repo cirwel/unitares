@@ -184,3 +184,39 @@ class TestRecording:
             r = client.post("/v1/harness/outcome", json=_body(), headers=_op_headers())
         assert r.status_code == 500
         assert r.json()["success"] is False
+
+
+class TestValidationVisibility:
+    """#1790: a calibration_excluded row is invisible to validation inventory;
+    the endpoint must say so at write time instead of returning a bare success."""
+
+    def test_scraped_confidence_row_carries_visibility_warning(self, client):
+        payload = dict(
+            RECORDER_OK,
+            calibration_excluded=True,
+            prediction_source="audit_trail_fallback",
+        )
+        with _recorder(payload):
+            r = client.post("/v1/harness/outcome", json=_body(), headers=_op_headers())
+        assert r.status_code == 200
+        body = r.json()
+        assert body["success"] is True
+        assert body["calibration_excluded"] is True
+        assert "confidence" in body["validation_visibility"]
+        assert "audit_trail_fallback" in body["validation_visibility"]
+
+    def test_fixture_marked_row_carries_generic_warning(self, client):
+        payload = dict(RECORDER_OK, calibration_excluded=True, prediction_source="argument")
+        with _recorder(payload):
+            r = client.post("/v1/harness/outcome", json=_body(), headers=_op_headers())
+        body = r.json()
+        assert body["calibration_excluded"] is True
+        assert "fixture" in body["validation_visibility"]
+
+    def test_visible_row_has_no_warning_keys(self, client):
+        payload = dict(RECORDER_OK, calibration_excluded=False, prediction_source="argument")
+        with _recorder(payload):
+            r = client.post("/v1/harness/outcome", json=_body(confidence=0.7), headers=_op_headers())
+        body = r.json()
+        assert "calibration_excluded" not in body
+        assert "validation_visibility" not in body

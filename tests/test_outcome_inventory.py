@@ -363,3 +363,26 @@ def test_declared_purpose_clause_is_gateable_for_validation_slices():
     assert is_controlled_validation_fixture(
         {"synthetic_calibration_fixture": True}, include_declared_purpose=False
     )
+
+
+def test_calibration_excluded_only_is_separable_from_real_fixtures():
+    """#1790: the server-stamped scraped-confidence flag must be attributable
+    as its own attrition class, not folded silently into fixture traffic."""
+    from scripts.analysis.outcome_inventory import (
+        _fixture_only_because_calibration_excluded,
+        is_controlled_validation_fixture,
+    )
+
+    scraped_only = {"calibration_excluded": True, "producer": "ci"}
+    assert is_controlled_validation_fixture(scraped_only) is True
+    assert _fixture_only_because_calibration_excluded(scraped_only) is True
+
+    real_fixture = {
+        "calibration_excluded": True,
+        "synthetic_calibration_fixture": True,
+    }
+    assert is_controlled_validation_fixture(real_fixture) is True
+    assert _fixture_only_because_calibration_excluded(real_fixture) is False
+
+    visible = {"producer": "ci", "calibration_excluded": False}
+    assert is_controlled_validation_fixture(visible) is False

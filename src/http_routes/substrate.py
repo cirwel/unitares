@@ -294,6 +294,13 @@ async def http_harness_outcome(request):
     /v1/sentinel/adjudicate. Attribution is operator-asserted: the server
     records the row against ``agent_uuid`` as given and does not attempt
     session resolution, so the caller owns pointing at the right identity.
+
+    Validation visibility (#1790): supply ``confidence`` (or a registry-bound
+    ``prediction_id``) on every POST. Without it the server scrapes a
+    confidence, stamps the row ``calibration_excluded``, and the fixture
+    classifiers drop it from ALL validation inventory — the write still
+    succeeds. The response carries ``calibration_excluded`` and a
+    ``validation_visibility`` warning when this happens.
     """
     signals = access._build_http_session_signals(request)
     from src.mcp_handlers.identity.operator import is_operator_caller
@@ -389,7 +396,7 @@ async def http_harness_outcome(request):
             return JSONResponse(
                 {"success": False, "error": payload["error"]}, status_code=500
             )
-        return JSONResponse({
+        resp = {
             "success": True,
             "outcome_id": payload.get("outcome_id"),
             "outcome_type": outcome_type,
@@ -398,7 +405,31 @@ async def http_harness_outcome(request):
             "corroboration_grade": payload.get("corroboration_grade"),
             "evidence_weight": payload.get("evidence_weight"),
             "agent_state_found": payload.get("eisv_snapshot") is not None,
-        })
+        }
+        # #1790: recording succeeds either way, but a calibration_excluded row
+        # is invisible to the validation inventory (the fixture classifiers
+        # treat the flag as fixture traffic). A producer wired without a
+        # caller-supplied confidence would silently accumulate rows that no
+        # analysis surface can see — warn at the only moment the caller is
+        # listening.
+        if payload.get("calibration_excluded"):
+            resp["calibration_excluded"] = True
+            if payload.get("prediction_source") in (
+                "prev_confidence_fallback", "audit_trail_fallback",
+            ):
+                resp["validation_visibility"] = (
+                    "excluded from validation inventory: no caller-supplied "
+                    "confidence, so the server scraped one "
+                    f"({payload.get('prediction_source')}). Supply `confidence` "
+                    "(or a registry-bound `prediction_id`) to record "
+                    "validation-visible rows."
+                )
+            else:
+                resp["validation_visibility"] = (
+                    "excluded from validation inventory: the row carries a "
+                    "fixture/shadow marker (see detail.calibration_excluded)."
+                )
+        return JSONResponse(resp)
     except Exception as e:
         logger.error(f"Error recording harness outcome for {agent_uuid}: {e}")
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)

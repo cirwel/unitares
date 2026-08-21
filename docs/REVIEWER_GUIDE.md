@@ -172,6 +172,15 @@ python3 scripts/analysis/eisv_skeptic_report.py \
   --as-of 2026-08-09T20:00:00Z
 ```
 
+Wiring your own outcome producers (CI, test runners) through the
+operator-gated `/v1/harness/outcome` endpoint: supply `confidence` (or a
+registry-bound `prediction_id`) on every POST. Without it the server scrapes a
+confidence, stamps the row `calibration_excluded`, and the fixture filters
+drop it from every table above even though the write succeeds — the response
+carries a `validation_visibility` warning when this happens, and
+`outcome_inventory.py` reports the dropped count as `calibration_excluded_only`
+(#1790).
+
 Envelope telemetry is future-only: rows written before
 `eisv.telemetry.v1` appear as `legacy/no-envelope` and are never assigned an
 inferred source; outcomes with no joinable prior state appear separately as
