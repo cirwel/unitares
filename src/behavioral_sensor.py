@@ -232,23 +232,31 @@ def compute_decision_self_loop_shadow(
 ) -> dict:
     """Shadow the behavioral E/I reading with ``decision_e`` neutralized.
 
-    THE QUESTION THIS SETTLES. ``decision_history`` is populated solely from
-    ``governance_monitor``'s own verdicts, and ``decision_e`` is the largest
-    single term in E (0.35 with outcomes, 0.40 without). That is a closed cycle:
-    E -> basin -> guide -> decision_e -> E. Two readings fit the same mechanism
-    and they prescribe opposite actions:
+    ``decision_history`` is populated solely from ``governance_monitor``'s own
+    verdicts, and ``decision_e`` is the largest single term in E (0.35 with
+    outcomes, 0.40 without). The source-level cycle is real:
+    E -> basin -> guide -> decision_e -> E.
 
-      * BIAS -- decision_e is effectively pinned per agent (measured: p50 of 1
-        distinct value per agent over 30d, p95 of 2), so it contributes a
-        near-constant offset and no information. The fix is calibration.
-      * LIVE LOOP -- it tracks E's own movement, so the estimate partly reports
-        its own history. The fix is structural.
+    ⛔WHAT THIS CANNOT ANSWER, stated first because the original version of this
+    docstring claimed otherwise. It does NOT measure closed-loop gain.
+    0.35/0.40 are MIXTURE WEIGHTS, not a gain. This function deliberately
+    excludes EMA replay, V, policy effects and future outcomes (see
+    ``not_modeled``), so by construction it produces a ONE-STEP LEVEL DELTA.
+    And because the decision vocabulary is categorical, local gain is zero away
+    from the score thresholds and discontinuous at them, so a single scalar
+    "gain" is the wrong object regardless of how it is estimated. ⛔Do not quote
+    any number derived from this as a loop gain, and note that a sub-unity gain
+    would describe ordinary stable recurrence rather than a defect anyway.
 
-    The discriminator is the SHAPE of ``candidate_minus_deployed`` across
-    check-ins, not its size. A near-constant delta with small residual spread is
-    a bias; a delta that co-varies with the agent's own trajectory is a loop.
-    One number cannot tell them apart, which is why this emits per-check-in
-    deltas rather than a summary.
+    WHAT IT DOES ANSWER: whether the channel is EXCITED. Measured over 30d, the
+    per-agent decision vocabulary has p50 of 1 distinct value and p95 of 2 (408
+    of 613 agents carry exactly one), so for most agents the term is an
+    intercept -- topologically present, empirically unexcited. A near-constant
+    ``candidate_minus_deployed`` with small residual spread confirms that
+    reading and points at calibration; a delta that moves with the agent's own
+    trajectory shows the channel is at least transmitting, which is a
+    precondition for any structural claim but not evidence of one. That is why
+    this emits per-check-in deltas rather than a summary.
 
     Measurement-only, exactly like the legacy-coherence sibling: the live
     observation is never modified and no policy reads this. Stops at the raw
@@ -280,10 +288,17 @@ def compute_decision_self_loop_shadow(
             "future_outcomes",
         ],
         "interpretation": (
-            "near-constant delta with small residual spread => bias (fix "
-            "_DECISION_SCORES calibration); delta co-varying with the agent's "
-            "own trajectory => live self-loop (structural)"
+            "one-step level delta, NOT loop gain. near-constant with small "
+            "residual spread => the channel is an unexcited intercept (points "
+            "at _DECISION_SCORES calibration); delta moving with the agent's "
+            "trajectory => the channel transmits, which is a precondition for "
+            "a structural claim and not evidence of one"
         ),
+        "cannot_measure": [
+            "closed_loop_gain",
+            "cross_checkin_propagation",
+            "basin_boundary_flip_counterfactual",
+        ],
     }
     if len(decision_history) < 3:
         return {

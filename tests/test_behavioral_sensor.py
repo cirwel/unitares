@@ -809,6 +809,30 @@ class TestDecisionSelfLoopShadow:
         assert r["eligibility_reason"] == "insufficient_decision_history"
         assert r["candidate_minus_deployed"] is None
 
+    def test_declares_what_it_cannot_measure(self):
+        """The payload must carry its own limits.
+
+        The first version of this ablation's docstring said it "settles"
+        whether decision_e is a bias or a live loop. Independent review
+        established it cannot: 0.35/0.40 are mixture weights rather than a
+        gain, the function excludes EMA/V/policy replay by construction, and a
+        categorical decision vocabulary makes local gain zero away from the
+        score thresholds and discontinuous at them. A consumer reading only the
+        payload would otherwise repeat the overclaim.
+        """
+        from src.behavioral_sensor import compute_decision_self_loop_shadow
+        r = compute_decision_self_loop_shadow(**_shadow_inputs(["guide"] * 10))
+        assert "closed_loop_gain" in r["cannot_measure"]
+        assert "NOT loop gain" in r["interpretation"]
+
+    def test_ineligible_result_still_declares_its_limits(self):
+        """The limits must ride the ineligible payload too — that is exactly
+        the path where a reader is most likely to mistake absence for zero."""
+        from src.behavioral_sensor import compute_decision_self_loop_shadow
+        r = compute_decision_self_loop_shadow(**_shadow_inputs(["guide"]))
+        assert r["eligible"] is False
+        assert "closed_loop_gain" in r["cannot_measure"]
+
     def test_neutral_sentinel_is_never_a_real_verdict(self):
         """The sentinel rides the same string-lookup path as real decisions, so
         it must not collide with anything monitor_decision.py can emit."""
