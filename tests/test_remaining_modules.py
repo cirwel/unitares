@@ -864,26 +864,20 @@ class TestIsLLMAvailable:
         with patch("src.mcp_handlers.support.llm_delegation.OPENAI_AVAILABLE", False):
             assert await is_llm_available() is False
 
-    @pytest.mark.asyncio
-    async def test_not_available_no_client(self):
-        with patch("src.mcp_handlers.support.llm_delegation.OPENAI_AVAILABLE", True), \
-             patch("src.mcp_handlers.support.llm_delegation._get_ollama_client", return_value=None):
-            assert await is_llm_available() is False
+    # Availability now comes from the registry's TTL-cached socket probe (the
+    # same source call_model's auto-routing uses), not a per-call models.list
+    # ping — so the seam to patch is _ollama_available.
 
     @pytest.mark.asyncio
     async def test_available(self):
-        mock_client = MagicMock()
-        mock_client.models.list.return_value = []
         with patch("src.mcp_handlers.support.llm_delegation.OPENAI_AVAILABLE", True), \
-             patch("src.mcp_handlers.support.llm_delegation._get_ollama_client", return_value=mock_client):
+             patch("src.mcp_handlers.support.llm_delegation._ollama_available", return_value=True):
             assert await is_llm_available() is True
 
     @pytest.mark.asyncio
-    async def test_ping_fails(self):
-        mock_client = MagicMock()
-        mock_client.models.list.side_effect = RuntimeError("down")
+    async def test_probe_down(self):
         with patch("src.mcp_handlers.support.llm_delegation.OPENAI_AVAILABLE", True), \
-             patch("src.mcp_handlers.support.llm_delegation._get_ollama_client", return_value=mock_client):
+             patch("src.mcp_handlers.support.llm_delegation._ollama_available", return_value=False):
             assert await is_llm_available() is False
 
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 from typing import Any, Dict, Sequence
 
 from mcp.types import TextContent
@@ -15,13 +14,9 @@ from ..context import get_context_agent_id
 from ..decorators import mcp_tool
 from ..utils import error_response, require_argument, success_response
 from .host_adapter import invoke_host_adapter
-from .inference_registry import get_inference_host
+from .inference_registry import get_inference_host, sha256_text as _sha256_text
 
 logger = get_logger(__name__)
-
-
-def _sha256_text(text: str) -> str:
-    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 async def _track_energy(
