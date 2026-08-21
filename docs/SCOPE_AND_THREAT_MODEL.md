@@ -140,8 +140,13 @@ migration drift, `check-repo-scope.sh` for scope leakage). The latter is precede
 rather than coverage: it exists because agent-authored config once stripped an
 accountability artifact past `.gitignore`, and its own rationale concluded that
 neither memory nor per-vendor instructions reliably prevent that, so CI — not
-instruction — is the layer that catches cloud sessions. No gate is aimed at
-governance-weakening diffs specifically. **This binds hardest on federation.** A
+instruction — is the layer that catches cloud sessions. One advisory is now
+aimed at this channel specifically: the [governance-sensitivity
+inventory](dev/GOVERNANCE_SENSITIVITY.md) enumerates the constants and
+anti-gaming tests whose movement materially changes enforcement, and CI labels
+any PR touching them and asks for the expected effect on pause/verdict rates —
+conspicuousness, deliberately not a block, so the human merge gate stays the
+control rather than being routed around. **This binds hardest on federation.** A
 partner governor calibrating a peer's telemetry has to model who authored that
 peer's thresholds; an operator who cannot answer that is asking to be trusted
 rather than verified, which is the one thing a mutually-distrustful exchange
