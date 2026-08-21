@@ -1961,9 +1961,21 @@ def check_signal_degeneracy(db_url: str) -> CheckResult:
         f"stddev({m}::numeric), count(DISTINCT {m}), count({m}), "
         f"min({m}::numeric), max({m}::numeric)" for m in DEGENERACY_METRICS
     )
+    # Exclude server-authored bootstrap rows. They are labelled `synthetic`
+    # precisely because they are not measurements — the onboarding contract
+    # already excludes them from calibration, outcome correlation, trust-tier
+    # observation counts and real-check-in counts, and `resident_checkin_stale`
+    # above filters them for the same reason. This check did not, and one row
+    # is enough to wreck the statistic it exists to compute: on 2026-08-21 a
+    # single synthetic row carrying coherence=1.0000 moved the reported range
+    # from [0.4659, 0.5039] to [0.4659, 1.0000] and sd from 0.006818 to
+    # 0.008601 over n=9930. A dynamic-range check that counts non-measurements
+    # reports 14x the range the consumers actually see, and it errs toward
+    # "healthy" — the direction that retires an alarm that should stand.
     row = _psql_row(db_url, (
         f"SELECT {cols} FROM core.agent_state "
-        "WHERE recorded_at > now() - interval '7 days'"
+        "WHERE recorded_at > now() - interval '7 days' "
+        "AND synthetic IS NOT TRUE"
     ), timeout=30)
     if row is None or len(row) < DEGENERACY_FIELDS_PER_METRIC * len(DEGENERACY_METRICS):
         return CheckResult(name, mode, Status.SKIP, "core.agent_state not queryable")
