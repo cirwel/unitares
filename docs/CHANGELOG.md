@@ -13,6 +13,53 @@ _No unreleased changes yet. New entries accumulate here until the next release b
 
 ---
 
+## [2.19.0] - 2026-08-21
+
+_Notable changes merged between 2.18.0 (2026-08-12) and this release — response-envelope honesty, doctor-layer consolidation, a fleet-wide deploy sweep, dialectic reviewer provenance, knowledge-graph retrieval repair, and a CI gate that runs against a real database. `pyproject.toml`/`VERSION` bumped to 2.19.0; the live `build_sha` remains the deploy-identity signal._
+
+### Added
+
+- **doctor layer:** one shared governance identity across the doctor layer with five preserved outcome types, a `constraint_drift` check that catches enforcement rules missing from the database, and a drained-versus-dead reading of the adjudication queue (#1741, #1772)
+- **deploy sweep:** bring agent-orchestrator, the Discord bridge, Dialectic Live with its own `/health`, both dispatch bots, and the governance plugin into the unified deploy sweep (#1638, #1649, #1658, #1723, #1726, #1729)
+- **dialectic:** operator-configured OpenAI-compatible reviewer host, reviewer and model provenance on verdict records, and external consults filed as governed rows (#1724, #1725, #1782)
+- **knowledge:** lean read envelopes, a recorded standard for how a discovery was closed, and a per-run Chronicler digest naming what moved (#1662, #1704, #1752)
+- **adoption and audit:** in-flow review nudge in the check-in `next_action`, continuation measurement, detection of labels that cannot discriminate what their name promises, and a falsifier that names the label class it scored (#1686, #1735, #1740, #1747)
+- **inference:** reciprocal Claude delegation and one shared local-inference plane behind every route (#1713, #1773)
+- **eisv and integrity:** shadow ablation of `decision_e` to separate a calibration bias from a live self-loop, and a governance-sensitivity inventory with advisory CI (#1777, #1780)
+- **census:** opt-in remote-host collector for the always-on Pi (#1697)
+
+### Changed
+
+- **http surface:** split the `http_api` monolith into `src/http_routes` domain modules (#1652)
+- **schema:** admit `TRANSITION` into regime, move the coercion sink to `unknown`, and anchor the schema registry to file content (#1653)
+- **ci:** give CI a real pgvector-backed database, shard the pytest gate, run the dashboard suite, and add deterministic glossary and documentation-freshness drift checks (#1639, #1703, #1721, #1761)
+- **policy and config:** a usage count may retire an instrument, never a capability; report which thresholds an operator actually set (#1642, #1727)
+- **residents:** roster order is deployment configuration, not one operator's six names (#1730, #1734)
+- **dependencies:** refresh the Python base image and dashboard development dependencies, and unretire `plug` 1.20.3 (#1656, #1693, #1694)
+
+### Fixed
+
+- **response envelopes:** stop the recovery hint, margin, and reflection surfaces from claiming more than they measured — name the condition that actually fired, gate the coherence edge on provenance, quote the gate's own threshold on the void edge, keep the `BOUNDARY` basin from fabricating a tight margin, report a basin fact as a basin fact, populate `memory_suggestions` from work already in the response, and trim compact and lite response bloat (#1746, #1760, #1763, #1766, #1770, #1774, #1775, #1776, #1779, #1781)
+- **metrics and risk:** the read path reports the risk the verdict was made from, and a dry run cannot become the agent's authoritative risk (#1646, #1651)
+- **dialectic:** enforce reciprocal reviewer cooldown, persist and complete independent synthesis rounds, make a liveness reap say which stall it ended without acting on the standing verdict, stop reading `status` as a quality signal, and reject non-positive list limits instead of answering a different question (#1691, #1705, #1733, #1737, #1739, #1755)
+- **knowledge graph:** carry the full-text rank so the relevance floor stops discarding everything, index slash-joined tokens so repository and path identifiers are searchable, key the staleness warning on last write, and reject a blank search query (#1667, #1682, #1754, #1759)
+- **observe and audit:** `audit_events` and `outcome_evidence` aggregates describe the window rather than the page, adjudication books the outcome against the producer instead of Sentinel, lifecycle `agent_id` is clamped to a joinable key or NULL, and Watcher findings carry Watcher's UUID so they can be adjudicated (#1674, #1744, #1751, #1771)
+- **persistence and migrations:** write the transients the load path already restores, stop silently destroying out-of-set regime values, order mixed-type cluster keys instead of crashing on them, register the previously inert migration 063, and repair the partially applied lease-plane sensor `CHECK` (#1643, #1650, #1665, #1666)
+- **packaging:** ship `config/` in the wheel and deepen the import guard that missed it (#1745)
+- **operations:** hold a shared deploy checkout after a refusal instead of undoing its rollback, and report when a pinned deploy falls behind a version (#1762)
+- **dashboard:** residents widgets read live state instead of nulls and literals, with a dogfood pass on mechanical fixes and denominator labeling (#1707, #1753)
+- **identity:** align the read-path and write-path assurance source sets, and point the refusal `ontology_ref` at the public ontology document (#1701, #1769)
+
+### Documentation
+
+- **public framing:** lead the README with what the operator gets, state the product in plain language, and make governance the headline noun on the Pages landing (#1648, #1728, #1758)
+- **eisv contract:** split the contract by sensory class and validation regime, correct Lumen's V contract to signed E−I rather than inverse presence, and publish the general solution of the reduced three-state core (#1645, #1718)
+- **evidence integrity:** withdraw the #1425 citation on the anchor re-fit decision, correct the falsified lineage-constant claim, and record why the outcome provenance filter stays off with a guard on the reason (#1748, #1756, #1765)
+- **wave 3 and proposals:** close out the §11 criteria audit, add the criterion-9 go-decision artifact as an unsigned skeleton, draft the criterion-8 scope reduction, and file Cedar delegation authorization v0 as design only (#1684, #1690, #1717, #1778)
+- **evaluation:** pre-register the independent-operator cohort protocol, and retire outside operators as a precondition for efficacy evidence (#1719, #1785)
+
+---
+
 ## [2.18.0] - 2026-08-12
 
 _Notable changes merged between 2.17.0 (2026-08-11) and this release — dialectic review hardening, coherence provenance cleanup, evaluator-facing release surfaces, and operational telemetry corrections. `pyproject.toml`/`VERSION` bumped to 2.18.0; the live `build_sha` remains the deploy-identity signal._
