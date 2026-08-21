@@ -40,7 +40,7 @@ _REAL_LOG = Path.home() / "Library" / "Logs" / "unitares-watcher.log"
 
 
 @pytest.fixture(autouse=True)
-def _watcher_isolation(monkeypatch, tmp_path):
+def _watcher_isolation(monkeypatch, tmp_path, request):
     def _blocked(*args, **kwargs):
         raise RuntimeError(
             "watcher tests must not perform real network I/O (#652) — "
@@ -53,6 +53,31 @@ def _watcher_isolation(monkeypatch, tmp_path):
     sandbox_state = tmp_path / "watcher-state"
     monkeypatch.setenv("UNITARES_WATCHER_DATA_DIR", str(sandbox_state))
     monkeypatch.setattr(watcher_util, "_state_dir_cache", None)
+
+    # The identity anchor is NOT under UNITARES_WATCHER_DATA_DIR: agent.py
+    # computes SESSION_FILE from Path.home() at import time, so the env var
+    # above does not move it. Two consequences, both real:
+    #   - reads leak. Any code path that resolves Watcher's UUID picks up the
+    #     developer's actual identity, so the suite passes on CI (no anchor)
+    #     and fails locally, or vice versa.
+    #   - writes are worse. _save_session() would overwrite the real anchor,
+    #     which carries a LIVE continuity token at 0600.
+    # Sandbox both so tests can never touch it.
+    # Opt-out for the two tests whose whole subject IS the real anchor path
+    # (TestSessionAnchor). Marker rather than a name check so the exemption is
+    # declared at the test, not guessed here.
+    if "real_session_anchor" not in request.keywords:
+        sandbox_anchor = tmp_path / "anchors" / "watcher.json"
+        sandbox_anchor.parent.mkdir(parents=True, exist_ok=True)
+        for mod in list(sys.modules.values()):
+            try:
+                if getattr(mod, "SESSION_FILE", None) is not None:
+                    monkeypatch.setattr(mod, "SESSION_FILE", sandbox_anchor, raising=False)
+                if getattr(mod, "LEGACY_SESSION_FILE", None) is not None:
+                    monkeypatch.setattr(mod, "LEGACY_SESSION_FILE",
+                                        tmp_path / ".watcher_session", raising=False)
+            except Exception:
+                continue
 
     sandbox_log = tmp_path / "unitares-watcher.log"
     for mod in list(sys.modules.values()):
