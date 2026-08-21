@@ -564,10 +564,18 @@ class TestGetGovernanceMetrics:
             assert v_value == round(0.000123, 6)
             assert data["V"]["label"] == "Valence"
             assert data["V"]["range"] == "[-1, 1]"
-            assert "positive" in data["V"]["description"].lower()
-            assert "negative" in data["V"]["description"].lower()
+            # Lite is numbers + one-liners (dogfood 2026-08-20): a single
+            # `note` line carries the sign semantics; the full per-field
+            # ontology (description/user_friendly) is lite=false territory,
+            # with the complete contract in one in-band `eisv_contract` line.
+            assert "positive" in data["V"]["note"].lower()
+            assert "negative" in data["V"]["note"].lower()
             assert "ideal" not in data["V"]
+            assert "description" not in data["V"]
+            assert "user_friendly" not in data["V"]
             assert "Void" not in data["V"]["note"]
+            assert set(data["V"].keys()) == {"value", "label", "range", "note"}
+            assert "Valence" in data["eisv_contract"]
 
     @pytest.mark.asyncio
     async def test_interpret_state_failure_handled_gracefully(self, mock_server):

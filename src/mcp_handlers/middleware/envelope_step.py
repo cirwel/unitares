@@ -600,7 +600,11 @@ def build_experience_envelope(
     if next_action is not None:
         envelope["next_action"] = _friendly_action_hint(next_action)
     if state_summary:
-        envelope["state_summary"] = state_summary
+        # state_summary can carry glossary coaching (e.g. an uninitialized
+        # verdict's "Submit one process_agent_update...") — translate it like
+        # next_action so canonical names don't leak through the friendly
+        # surface (dogfood 2026-08-20 register-mismatch report).
+        envelope["state_summary"] = _friendly_action_hint(state_summary)
 
     risk_text = _risk_summary(coherence, risk)
     if risk_text:

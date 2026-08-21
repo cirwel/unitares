@@ -330,6 +330,32 @@ def test_metrics_envelope_maps_existing_friendly_fields():
     assert payload["verdict"] == {"verdict": "proceed", "explanation": "stable"}
 
 
+def test_metrics_envelope_translates_state_summary_coaching():
+    """Glossary coaching lifted into state_summary speaks the friendly register.
+
+    An uninitialized verdict's next_action names process_agent_update (the
+    canonical tool); at the friendly surface that read as a register mismatch
+    (dogfood 2026-08-20). state_summary now runs through the same alias
+    translation as next_action; scalar fields pass through untouched.
+    """
+    payload = {
+        "success": True,
+        "verdict": {
+            "verdict": "uninitialized",
+            "meaning": "Agent has no recorded state yet.",
+            "next_action": "Submit one process_agent_update to activate governance.",
+        },
+        "status": "uninitialized",
+        "E": 0.5,
+    }
+    env = build_experience_envelope("check_working_state", "get_governance_metrics", payload)
+    assert "sync_state" in env["state_summary"]["next_action"]
+    assert "process_agent_update" not in env["state_summary"]["next_action"]
+    assert env["state_summary"]["E"] == 0.5
+    # the source payload keeps its canonical wording
+    assert "process_agent_update" in payload["verdict"]["next_action"]
+
+
 def test_metrics_envelope_full_escape_hatch_preserves_raw_payload():
     payload = {"success": True, "E": 0.7, "verdict": "proceed"}
     env = build_experience_envelope(

@@ -1325,6 +1325,42 @@ class TestFormatCompactPreservesPredictionId:
         result = _format_compact(response_data, using_default_mode=False, saved_trust_tier=None)
         assert "prediction_id" not in result
 
+    def test_identical_gates_deduplicated_without_mutating_source(self):
+        # Dogfood 2026-08-20: monitor_result embeds the same gate dict in both
+        # policy_evaluation and enforcement; compact replaces the enforcement
+        # copy with a pointer. The source dicts (shared with the persisted
+        # result/telemetry envelope) must stay intact.
+        from src.mcp_handlers.response_formatter import _format_compact
+        gate = {"schema": "eisv.cold-start-confirmation.v1", "outcome": "ineligible"}
+        epistemic = {"schema": "x.v1", "deferred": False}
+        response_data = {
+            "decision": {"action": "proceed"},
+            "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
+            "policy_evaluation": {"policy_name": "monitor_decision",
+                                  "maturity_gate": gate, "epistemic_gate": epistemic},
+            "enforcement": {"requested": False, "basis": "advisory_policy",
+                            "maturity_gate": gate, "epistemic_gate": epistemic},
+        }
+        result = _format_compact(response_data, using_default_mode=False, saved_trust_tier=None)
+        assert result["policy_evaluation"]["maturity_gate"] == gate
+        assert "policy_evaluation.maturity_gate" in result["enforcement"]["maturity_gate"]
+        assert "policy_evaluation.epistemic_gate" in result["enforcement"]["epistemic_gate"]
+        # basis (the load-bearing derivative) survives the dedupe
+        assert result["enforcement"]["basis"] == "advisory_policy"
+        # copy-on-write: the shared source dict still carries the full gate
+        assert response_data["enforcement"]["maturity_gate"] == gate
+
+    def test_differing_gates_not_deduplicated(self):
+        from src.mcp_handlers.response_formatter import _format_compact
+        response_data = {
+            "decision": {"action": "proceed"},
+            "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
+            "policy_evaluation": {"maturity_gate": {"outcome": "ineligible"}},
+            "enforcement": {"maturity_gate": {"outcome": "shadow_confirmed"}},
+        }
+        result = _format_compact(response_data, using_default_mode=False, saved_trust_tier=None)
+        assert result["enforcement"]["maturity_gate"] == {"outcome": "shadow_confirmed"}
+
 
 class TestFormatMinimalStripsPredictionIdButPreservesWarnings:
     def test_minimal_does_not_include_prediction_id(self):
