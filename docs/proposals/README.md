@@ -37,6 +37,7 @@ The ADR-001 thread: do not enable operator-vision delegation as first proposed; 
 | Doc | Status |
 |---|---|
 | [`ADR-001-operator-vision-delegation.md`](ADR-001-operator-vision-delegation.md) | Accepted (2026-06-16) — do not enable as proposed; pursue Track A + Track B |
+| [`cedar-delegation-authz-v0.md`](cedar-delegation-authz-v0.md) | Draft v0 (2026-08-21) — decision pending, deferred-by-default. Cedar as the family's shared policy engine (pre-dispatch authorize step + the governed-effect plane's unbuilt §6 veto), principals from explicit delegation carriers only (operator token, vouched bindings — never lineage), #1387 `(tool, action)` as the action vocabulary, `stakes_table.py` as seed policy, shadow-mode first |
 | [`track-a-strict-identity-hardening-runbook.md`](track-a-strict-identity-hardening-runbook.md) | Ready to execute — close the fingerprint-pin resume hole; prerequisite for any delegation |
 | [`track-b-operator-delegate-design.md`](track-b-operator-delegate-design.md) | Proposal (design-first) — scoped `operator_delegate` read-only disclosure; do not implement before Track A is enforced |
 | [`track-b-implementation-blueprint.md`](track-b-implementation-blueprint.md) | Ready to apply once Track A is enforced — implementation blueprint for the `operator_delegate` scope |
