@@ -84,6 +84,20 @@ def test_allows_verbatim_paper_title_citation(tmp_path, monkeypatch, doc_health)
     assert warnings == []
 
 
+def test_title_citation_does_not_shield_banned_terms(
+    tmp_path, monkeypatch, doc_health
+):
+    warnings = _warnings(
+        tmp_path,
+        monkeypatch,
+        doc_health,
+        "README.md",
+        'See "Information-Theoretic Governance of Heterogeneous Agent Fleets"; '
+        "the deployed system remains thermodynamic in spirit.",
+    )
+    assert any("retired pitch vocabulary" in warning for warning in warnings)
+
+
 def test_flags_product_definition_surface(tmp_path, monkeypatch, doc_health):
     warnings = _warnings(
         tmp_path,

@@ -916,10 +916,12 @@ def check_pitch_vocabulary(md_files: list[Path]) -> list[str]:
         if not _is_pitch_surface(rel):
             continue
         for i, line in enumerate(fpath.read_text(errors="replace").splitlines(), 1):
-            if _PAPER_TITLE in line:
-                continue  # verbatim citation of the companion-paper title
+            # Neutralize verbatim citations of the companion-paper title, then
+            # lint what remains: a line may cite the title AND separately use a
+            # retired term, and the citation must not shield the term.
+            checked = line.replace(_PAPER_TITLE, "")
             for pattern, reason in _PITCH_VOCABULARY:
-                if pattern.search(line):
+                if pattern.search(checked):
                     warnings.append(f"  {rel}:{i}: {reason}")
     return warnings
 
