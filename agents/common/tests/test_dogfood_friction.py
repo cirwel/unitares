@@ -127,3 +127,52 @@ def test_script_post_mode_calls_post_helper(monkeypatch, capsys):
     assert rc == 0
     assert calls == [{"payload": BASE_FRICTION, "agent_id": "ci-dogfood", "agent_name": "CI Dogfood"}]
     assert json.loads(capsys.readouterr().out) == {"posted": True}
+
+
+def test_episode_metadata_preserves_fingerprint_and_changes_evidence():
+    from agents.common.dogfood_friction import build_dogfood_friction_event
+
+    first = build_dogfood_friction_event({
+        **BASE_FRICTION,
+        "episode_id": "exec-1",
+        "automation_id": "job-1",
+        "episode_source": "hermes_cron",
+    })
+    second = build_dogfood_friction_event({
+        **BASE_FRICTION,
+        "episode_id": "exec-2",
+        "automation_id": "job-1",
+        "episode_source": "hermes_cron",
+    })
+
+    assert first["fingerprint"] == second["fingerprint"]
+    assert first["change_token"] != second["change_token"]
+    assert first["extra"]["episode_id"] == "exec-1"
+    assert first["extra"]["automation_id"] == "job-1"
+    assert first["extra"]["episode_source"] == "hermes_cron"
+
+
+def test_runtime_episode_metadata_prefers_explicit_payload(monkeypatch):
+    module_path = Path(__file__).resolve().parents[3] / "scripts" / "diagnostics" / "dogfood_friction_finding.py"
+    spec = importlib.util.spec_from_file_location("dogfood_friction_finding_cli_episode", module_path)
+    assert spec and spec.loader
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+
+    monkeypatch.setenv("HERMES_CRON_EXECUTION_ID", "exec-env")
+    monkeypatch.setenv("HERMES_CRON_JOB_ID", "job-env")
+
+    inferred = cli._attach_runtime_episode(dict(BASE_FRICTION))
+    explicit = cli._attach_runtime_episode({
+        **BASE_FRICTION,
+        "episode_id": "exec-explicit",
+        "automation_id": "job-explicit",
+        "episode_source": "manual",
+    })
+
+    assert inferred["episode_id"] == "exec-env"
+    assert inferred["automation_id"] == "job-env"
+    assert inferred["episode_source"] == "hermes_cron"
+    assert explicit["episode_id"] == "exec-explicit"
+    assert explicit["automation_id"] == "job-explicit"
+    assert explicit["episode_source"] == "manual"

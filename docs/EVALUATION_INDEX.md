@@ -105,6 +105,7 @@ Compact run provenance and all 12 overall rows are preserved in
 
 | Artifact | What it does | Output / finding | Freshness |
 |---|---|---|---|
+| `docs/proposals/independent-operator-cohort-preregistration-v0.md` | Protocol for an external-operator deployment: usability lane (primary), predictive-validity lane via the shipped harness on the operator's own labels (gated), causal lane explicitly out of scope | DRAFT — registers at its PR merge; per-operator freeze at dated enrollment (#1607) | awaiting recruitment |
 | `scripts/analysis/eisv_skeptic_report.py` ✓ | AUC/Brier lift of EISV vs previous-outcome baseline; runtime verdict | Markdown report; KILL of EISV-distributional came from it | current (live PG) |
 | `scripts/analysis/eisv_ablation_matrix.py` ✓ | Same vs-baseline across scope/window/lead; bootstrap CI, permutation p | Markdown matrix; no hardcoded verdict | current |
 | `scripts/analysis/outcome_validation.py` ✓ | Buckets agent-days by legacy→grounded basin-flip; outcome rates per bucket | Console table + `--csv`; tool | current |
