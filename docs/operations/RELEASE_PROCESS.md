@@ -49,20 +49,33 @@ be wrong or incomplete, correct the prose and leave the tag alone.
 3. Never move, delete, or re-cut a published tag to absorb a correction. If code
    must change, cut a patch release.
 
-Prevention is cheaper than errata. Before tagging, check that the changelog
-entry actually covers the merge range:
+Prevention is cheaper than errata, and both preventive checks now run in CI as
+the **Release Seams** workflow. Run them locally before opening the release PR:
 
 ```bash
-git log --no-merges --format='%s' vLAST..origin/master \
-  | grep -oE '\(#[0-9]+\)$' | tr -d '(#)' | sort -u > /tmp/merged
-sed -n '/## \[NEW\]/,/## \[LAST\]/p' docs/CHANGELOG.md \
-  | grep -oE '#[0-9]+' | tr -d '#' | sort -u > /tmp/cited
-comm -23 /tmp/merged /tmp/cited
+python scripts/ci/changelog_coverage.py     # entry vs the merge range
+python scripts/ci/release_series_drift.py   # SDK and skills vs their own tags
+```
+
+Both stand down unless the tree is a release — `VERSION` names a version with no
+tag yet — so they cost ordinary PRs nothing.
+
+`changelog_coverage.py` lists every merged pull request the entry does not name.
+Fold each in, or declare it deliberately inside the entry:
+
+```markdown
+<!-- changelog-coverage-exempt: 1788, 1789 -->
 ```
 
 The omissions that matter most are the ones that qualify a claim the entry
 already makes. An entry that cites a new capability but not the change that
 bounds it reads as a stronger claim than the code supports.
+
+`release_series_drift.py` covers the series `VERSION` does not reach: the SDK
+under `agents/sdk/` with its own `sdk-v*` tags, and `skills/`, which is mirrored
+into the separately tagged plugin. It blocks when a series has moved but its
+version has not, because that is the shape where a consumer cannot reach the
+change at all.
 
 ## SDK release
 
