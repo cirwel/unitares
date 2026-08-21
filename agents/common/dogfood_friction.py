@@ -98,6 +98,9 @@ def normalize_dogfood_friction(payload: Mapping[str, Any]) -> dict[str, Any]:
             "policy_question": _clean_bool(payload.get("policy_question"), default=False),
             "proposed_action": _clean_text(payload.get("proposed_action")).lower(),
             "source": _clean_text(payload.get("source") or "dogfood"),
+            "episode_id": _clean_text(payload.get("episode_id")),
+            "automation_id": _clean_text(payload.get("automation_id")),
+            "episode_source": _clean_text(payload.get("episode_source")),
         }
     )
     normalized["routes"] = route_dogfood_friction(normalized)
