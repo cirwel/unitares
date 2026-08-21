@@ -225,6 +225,51 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
     return fresh
 
 
+def _watcher_agent_id() -> str:
+    """Watcher's governance UUID for finding attribution, or the legacy slug.
+
+    Why this exists: ``audit.events.agent_id`` is what
+    ``http_sentinel_adjudicate`` resolves through ``_finding_producer_uuid`` to
+    decide **whose** EISV an adjudicated outcome is booked against. Measured
+    2026-08-20 over 30d, ``watcher_finding`` wrote the bare slug on 17 of 17
+    rows while ``watcher_resolution_finding`` — the same agent, a different
+    function — wrote a real UUID on 7 of 7. Slug rows are unadjudicatable: the
+    endpoint returns 422 rather than book the outcome against the wrong
+    resident. So they are refutable claims that can never become anchors.
+
+    Deliberately does NOT call governance. ``persist_finding`` runs on the
+    PostToolUse hook path, on every edit, and adding a network round-trip there
+    is the substrate-tax bug class. Both sources are free: the in-process
+    identity when the agent resolved one this cycle, else the on-disk anchor
+    ``_load_session`` already maintains.
+
+    Falls back to the slug rather than skipping the post. A finding that is
+    merely unattributable is worth strictly more than one that was never
+    surfaced — this path also feeds the Discord bridge and the SessionStart
+    summary. Degrading keeps today's behaviour exactly when identity is
+    unavailable.
+    """
+    # Function-local imports: agent.py imports this module, so top-level would
+    # be circular. Matches the existing deferred-import pattern below.
+    try:
+        from agents.watcher.agent import get_watcher_identity
+
+        identity = get_watcher_identity()
+        if identity and identity.get("agent_uuid"):
+            return identity["agent_uuid"]
+    except Exception:
+        pass
+    try:
+        from agents.watcher.agent import _load_session
+
+        uuid = (_load_session() or {}).get("agent_uuid")
+        if uuid:
+            return uuid
+    except Exception:
+        pass
+    return "watcher"
+
+
 def persist_finding(finding: Finding) -> None:
     """Append a new finding to findings.jsonl and, for high/critical severity,
     mirror it into the governance event stream so the Discord bridge surfaces it.
@@ -244,7 +289,7 @@ def persist_finding(finding: Finding) -> None:
             event_type="watcher_finding",
             severity=finding.severity,
             message=f"[{finding.pattern}] {finding.file}:{finding.line} — {finding.hint}",
-            agent_id="watcher",
+            agent_id=_watcher_agent_id(),
             agent_name="Watcher",
             fingerprint=finding.fingerprint,
             extra={

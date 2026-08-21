@@ -333,6 +333,107 @@ def test_write_findings_atomic_crash_leaves_previous_file_intact(
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# watcher_finding attribution — the row must name a resident, not a slug
+# ---------------------------------------------------------------------------
+# `audit.events.agent_id` is what http_sentinel_adjudicate resolves through
+# _finding_producer_uuid to decide whose EISV an adjudicated outcome is booked
+# against. A slug is unadjudicatable (the endpoint 422s rather than mis-book),
+# so a slug row is a refutable claim that can never become an anchor. Measured
+# 2026-08-20 over 30d: watcher_finding wrote the slug on 17/17 rows while
+# watcher_resolution_finding wrote a real UUID on 7/7.
+
+
+def _high_finding(watcher_module):
+    return watcher_module.Finding(
+        pattern="P001",
+        file="/tmp/attribution.py",
+        line=1,
+        hint="h",
+        severity="high",
+        detected_at=_iso(datetime.now(timezone.utc)),
+        model_used="test",
+        fingerprint="fp-attribution",
+        violation_class="test",
+    )
+
+
+def test_persist_finding_attributes_to_in_process_uuid(monkeypatch, watcher_module):
+    """The common case: the agent resolved identity this cycle."""
+    calls = []
+    _mock_post_finding(monkeypatch, watcher_module, lambda **kw: calls.append(kw) or True)
+    _mock_watcher_identity(monkeypatch, watcher_module,
+                           {"agent_uuid": "11111111-2222-3333-4444-555555555555"})
+
+    from agents.watcher import findings as watcher_findings
+    watcher_findings.persist_finding(_high_finding(watcher_module))
+
+    assert len(calls) == 1
+    assert calls[0]["agent_id"] == "11111111-2222-3333-4444-555555555555"
+
+
+def test_persist_finding_falls_back_to_the_on_disk_anchor(monkeypatch, watcher_module):
+    """No in-process identity, but the anchor _load_session maintains has one.
+
+    Reads a local file, never governance: persist_finding runs on the
+    PostToolUse hook path on every edit, so a network round-trip here is the
+    substrate-tax bug class.
+    """
+    calls = []
+    _mock_post_finding(monkeypatch, watcher_module, lambda **kw: calls.append(kw) or True)
+    _mock_watcher_identity(monkeypatch, watcher_module, None)
+
+    from agents.watcher import agent as watcher
+    monkeypatch.setattr(
+        watcher, "_load_session",
+        lambda: {"agent_uuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"})
+
+    from agents.watcher import findings as watcher_findings
+    watcher_findings.persist_finding(_high_finding(watcher_module))
+
+    assert len(calls) == 1
+    assert calls[0]["agent_id"] == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+
+def test_persist_finding_degrades_to_slug_rather_than_dropping(monkeypatch, watcher_module):
+    """No identity anywhere: post the finding with the legacy slug.
+
+    Skipping instead would lose the finding from the Discord bridge and the
+    SessionStart summary. An unattributable finding is worth strictly more
+    than one that was never surfaced, so this path must degrade, not refuse.
+    """
+    calls = []
+    _mock_post_finding(monkeypatch, watcher_module, lambda **kw: calls.append(kw) or True)
+    _mock_watcher_identity(monkeypatch, watcher_module, None)
+
+    from agents.watcher import agent as watcher
+    monkeypatch.setattr(watcher, "_load_session", lambda: {})
+
+    from agents.watcher import findings as watcher_findings
+    watcher_findings.persist_finding(_high_finding(watcher_module))
+
+    assert len(calls) == 1, "the finding must still be posted"
+    assert calls[0]["agent_id"] == "watcher"
+
+
+def test_persist_finding_never_calls_governance(monkeypatch, watcher_module):
+    """Guard the hook-path constraint itself: resolving the id must not open a
+    client. If this starts failing, someone made every edit pay a round-trip."""
+    _mock_post_finding(monkeypatch, watcher_module, lambda **kw: True)
+    _mock_watcher_identity(monkeypatch, watcher_module, None)
+
+    from agents.watcher import agent as watcher
+
+    def _boom():
+        raise AssertionError("persist_finding must not build a governance client")
+
+    monkeypatch.setattr(watcher, "_make_identity_client", _boom)
+    monkeypatch.setattr(watcher, "_load_session", lambda: {})
+
+    from agents.watcher import findings as watcher_findings
+    watcher_findings.persist_finding(_high_finding(watcher_module))
+
+
 # persist_findings — end-to-end dedup with TTL enforcement
 # ---------------------------------------------------------------------------
 
@@ -2992,11 +3093,13 @@ class TestSessionAnchor:
     across all worktrees.
     """
 
+    @pytest.mark.real_session_anchor
     def test_default_session_file_is_home_anchor(self, watcher_module):
         """Default SESSION_FILE is ~/.unitares/anchors/watcher.json, not PROJECT_ROOT-scoped."""
         expected = Path.home() / ".unitares" / "anchors" / "watcher.json"
         assert watcher_module.SESSION_FILE == expected
 
+    @pytest.mark.real_session_anchor
     def test_legacy_session_file_is_project_root(self, watcher_module):
         """LEGACY_SESSION_FILE still resolves to the old per-worktree path for migration."""
         assert watcher_module.LEGACY_SESSION_FILE.name == ".watcher_session"
