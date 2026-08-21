@@ -12,11 +12,65 @@ import json
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any, Iterable, Optional
 
 import httpx
 
 log = logging.getLogger(__name__)
+
+# --- the doctor layer's shared governance identity --------------------------
+#
+# The five doctor producers (doctor_findings, deploy_drift_doctor,
+# lumen_checkin_doctor, bridge_liveness_watchdog, dogfood_friction) each wrote a
+# bare slug into ``audit.events.agent_id``. Slug rows are unadjudicatable:
+# ``http_sentinel_adjudicate`` resolves the producer through
+# ``_finding_producer_uuid`` and returns 422 rather than book an outcome against
+# the wrong resident. So every doctor finding was a refutable claim that could
+# never become an anchor -- 272 of them in 30 days.
+#
+# ONE identity for all five, not five. The doctors are one layer
+# (diagnose -> bounded-heal -> verify -> escalate), so a shared trajectory is
+# the honest unit, and it is one addition to the calibration population instead
+# of five.
+#
+# ⛔But the outcome_type must STAY per-family. Pooling identities is survivable;
+# pooling the outcome label is not. These detectors have very different
+# precision and very different volume (doctor_check 136, bridge 61, drift 24,
+# dogfood 19, lumen_checkin 15 per 30d), so a single label would move with the
+# VOLUME MIX rather than with any detector's quality -- the same confound that
+# made the pooled dialectic-reviewer number describe neither instrument. Keeping
+# ``deploy_drift_finding_confirmed`` distinct from ``lumen_checkin_finding_*``
+# is what lets a structurally-broken check (immortal_lease is a known false
+# positive for every ``resident:/dispatch/<thread>`` lease) show up as one bad
+# detector instead of quietly dragging the whole layer's trajectory down.
+DOCTOR_ANCHOR = os.environ.get(
+    "UNITARES_DOCTOR_ANCHOR",
+    str(Path.home() / ".unitares" / "anchors" / "doctor.json"),
+)
+
+
+def doctor_layer_agent_id(fallback: str) -> str:
+    """Shared doctor-layer UUID, or ``fallback`` when it is not provisioned.
+
+    Local file read, never a governance call: these run on cron ticks and
+    watchdog paths where a network round-trip is a hazard, not a cost.
+
+    Degrades to the caller's slug rather than raising or skipping. An
+    unattributable finding is worth strictly more than one nobody was told --
+    the same call made for ``persist_finding``. Provision with
+    ``scripts/ops/provision_doctor_identity.py``; until then every producer
+    behaves exactly as it does today.
+    """
+    try:
+        with open(DOCTOR_ANCHOR) as fh:
+            uuid = (json.load(fh) or {}).get("agent_uuid")
+        if isinstance(uuid, str) and uuid:
+            return uuid
+    except Exception:
+        pass
+    return fallback
+
 
 DEFAULT_URL = os.environ.get(
     "UNITARES_FINDINGS_URL", "http://localhost:8767/api/findings"

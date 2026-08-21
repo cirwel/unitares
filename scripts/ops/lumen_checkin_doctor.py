@@ -68,6 +68,12 @@ import subprocess
 import sys
 import time
 import urllib.error
+
+try:  # pragma: no cover - same bare-interpreter guard as the sibling doctors
+    from agents.common.findings import doctor_layer_agent_id
+except Exception:
+    def doctor_layer_agent_id(fallback: str) -> str:  # type: ignore[misc]
+        return fallback
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -304,7 +310,8 @@ def io_post_finding(severity: str, fingerprint: str, message: str, token: str) -
         _http_json(
             f"{GOV_URL}/api/findings",
             {"type": "lumen_checkin_finding", "severity": severity,
-             "message": message, "agent_id": "lumen-checkin-doctor",
+             "message": message,
+             "agent_id": doctor_layer_agent_id("lumen-checkin-doctor"),
              "agent_name": "lumen-checkin-doctor", "fingerprint": fingerprint},
             headers={"Authorization": f"Bearer {token}"} if token else {},
         )
