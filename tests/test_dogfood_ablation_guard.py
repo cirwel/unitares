@@ -1,5 +1,7 @@
 from scripts.diagnostics.dogfood_ablation_guard import (
     collect_alerts,
+    dogfood_response_alerts,
+    extract_dogfood_response,
     identity_neutrality_alert,
     inventory_lane_alert,
     matrix_exclusion_alert,
@@ -7,6 +9,38 @@ from scripts.diagnostics.dogfood_ablation_guard import (
     parse_inventory_counts,
     render_alert_report,
 )
+
+
+def test_dogfood_response_guard_flags_observed_contract_violations():
+    output = """injected prompt text containing [SILENT]
+## Response
+**Selected surfaces tested this pulse:**
+- Surface 9
+- Surface 1
+
+No actionable friction found. The system is healthy.
+**KG Note Created:** `/Users/example/verify_delivery.py`
+[SILENT]
+"""
+
+    assert extract_dogfood_response(output).startswith("**Selected surfaces")
+    assert dogfood_response_alerts(output) == [
+        "dogfood response combines [SILENT] with substantive content",
+        "dogfood response declares multiple primary surfaces",
+        "dogfood all-clear omits the required open-findings query",
+        "dogfood response labels a local file as a KG note",
+    ]
+
+
+def test_dogfood_response_guard_accepts_one_surface_and_named_query():
+    output = """## Response
+**Selected Surface:** #4
+
+Open findings query: `knowledge(action="search", query="dogfood friction", status="open")`.
+No actionable friction found after the query and edge-case probe.
+"""
+
+    assert dogfood_response_alerts(output) == []
 
 
 def test_identity_neutrality_accepts_unbound_no_session_metrics():
@@ -77,6 +111,16 @@ Harness lane mode: grouped
 
 def test_collect_alerts_runs_grouped_matrix_for_beam_visibility(monkeypatch, tmp_path):
     calls = []
+    dogfood_output_dir = tmp_path / "dogfood-output"
+    dogfood_output_dir.mkdir()
+    (dogfood_output_dir / "2026-08-20_00-00-00.md").write_text(
+        """## Response
+**Selected Surface:** #4
+Open findings query: `knowledge(action="search", query="dogfood friction")`.
+No actionable friction found after the query and edge-case probe.
+""",
+        encoding="utf-8",
+    )
 
     def fake_call_tool_no_session(http_url, name, arguments):
         return {"status": "⚪ unbound", "agent_signature": {"uuid": None}}
@@ -103,6 +147,7 @@ def test_collect_alerts_runs_grouped_matrix_for_beam_visibility(monkeypatch, tmp
         repo=tmp_path,
         python="python3",
         timeout_seconds=1,
+        dogfood_output_dir=dogfood_output_dir,
     )
 
     assert alerts == []
