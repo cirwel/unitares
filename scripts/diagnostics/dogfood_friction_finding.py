@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Sequence
@@ -28,6 +29,24 @@ from agents.common.dogfood_friction import (  # noqa: E402
 )
 
 
+def _attach_runtime_episode(payload: dict[str, Any]) -> dict[str, Any]:
+    """Attach Hermes cron provenance without overriding explicit evidence."""
+    enriched = dict(payload)
+    runtime_fields = (
+        ("episode_id", "HERMES_CRON_EXECUTION_ID"),
+        ("automation_id", "HERMES_CRON_JOB_ID"),
+    )
+    runtime_context_present = False
+    for field, env_name in runtime_fields:
+        env_value = os.environ.get(env_name, "").strip()
+        if env_value:
+            runtime_context_present = True
+            enriched.setdefault(field, env_value)
+    if runtime_context_present:
+        enriched.setdefault("episode_source", "hermes_cron")
+    return enriched
+
+
 def _load_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Load the input JSON payload from an arg string, a file, or stdin."""
     if args.input_json:
@@ -43,7 +62,7 @@ def _load_payload(args: argparse.Namespace) -> dict[str, Any]:
         raise DogfoodFrictionValidationError(f"invalid JSON input: {exc}") from exc
     if not isinstance(data, dict):
         raise DogfoodFrictionValidationError("dogfood friction input must be a JSON object")
-    return data
+    return _attach_runtime_episode(data)
 
 
 def _parser() -> argparse.ArgumentParser:
