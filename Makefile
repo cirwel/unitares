@@ -80,7 +80,7 @@ uninstall-hooks: ## Remove git pre-commit hooks
 
 # ── Demo ─────────────────────────────────────────────────
 
-demo: ## Run a 60-second governance trajectory against a live server on :8767
+demo: ## Onboard an agent and run six governed check-ins against a live server (default :8767)
 	@python3 scripts/demo/quick_demo.py
 
 # ── Cleanup ──────────────────────────────────────────────
