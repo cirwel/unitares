@@ -49,13 +49,22 @@ sys.path.insert(0, str(REPO_ROOT))
 
 try:  # pragma: no cover - exercised by the very failure it guards against
     from agents.common.findings import (
-        DEDUPED, DELIVERED, FAILED, REACHED_GOVERNANCE,
+        DEDUPED, DELIVERED, FAILED, REACHED_GOVERNANCE, doctor_layer_agent_id,
     )
 except Exception:
     # Guarded for the same reason as in deploy_drift_doctor: the escalation
     # module is precisely what is missing when this runs under an interpreter
     # lacking the project's deps. Keep in sync with agents/common/findings.py.
     DELIVERED, DEDUPED, FAILED = "delivered", "deduped", "failed"
+
+    def doctor_layer_agent_id(fallback: str) -> str:  # type: ignore[misc]
+        """Same contract as the real one: degrade to the caller's slug.
+
+        Reached only when agents.common.findings is unimportable, which is the
+        bare-interpreter case this whole block exists for. Attribution is lost
+        in that case, exactly as it is today — never the finding.
+        """
+        return fallback
     REACHED_GOVERNANCE = frozenset({DELIVERED, DEDUPED})
 
 FINDING_KIND = "doctor_check_finding"
@@ -258,7 +267,9 @@ class DoctorFindings:
             "severity": severity_for(r.status.value),
             "message": f"{r.name}: {message}",
             "fingerprint": fp,
-            "agent_id": PRODUCER,
+            # Shared doctor-layer identity; PRODUCER stays the fallback and
+            # the event_type below stays per-family (see findings.py note).
+            "agent_id": doctor_layer_agent_id(PRODUCER),
             "agent_name": PRODUCER,
             # post_finding_result flattens extra fields into the persisted
             # event payload. Keep the check queryable without parsing message.
