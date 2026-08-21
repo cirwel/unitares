@@ -68,7 +68,7 @@ if str(REPO_ROOT) not in sys.path:
 
 try:  # pragma: no cover - exercised by the very failure it guards against
     from agents.common.findings import (
-        DEDUPED, DELIVERED, FAILED, REACHED_GOVERNANCE,
+        DEDUPED, DELIVERED, FAILED, REACHED_GOVERNANCE, doctor_layer_agent_id,
     )
 except Exception:
     # The escalation module is exactly what goes missing when this doctor is
@@ -77,6 +77,15 @@ except Exception:
     # sync with agents/common/findings.py, so a missing escalation path still
     # reports FAILED loudly instead of exploding at import time.
     DELIVERED, DEDUPED, FAILED = "delivered", "deduped", "failed"
+
+    def doctor_layer_agent_id(fallback: str) -> str:  # type: ignore[misc]
+        """Same contract as the real one: degrade to the caller's slug.
+
+        Reached only when agents.common.findings is unimportable, which is the
+        bare-interpreter case this whole block exists for. Attribution is lost
+        in that case, exactly as it is today — never the finding.
+        """
+        return fallback
     REACHED_GOVERNANCE = frozenset({DELIVERED, DEDUPED})
 
 STATE_FILE = os.path.expanduser(
@@ -486,7 +495,7 @@ class Doctor:
             "message": (f"{d.surface}: {d.detail}. Deploy is a human action — "
                         f"pull and restart deliberately; this doctor never heals."),
             "fingerprint": fp,
-            "agent_id": "deploy-drift-doctor",
+            "agent_id": doctor_layer_agent_id("deploy-drift-doctor"),
             "agent_name": "deploy-drift-doctor",
         })
         # Record the alert ONLY if governance actually holds the finding.

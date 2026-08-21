@@ -68,12 +68,25 @@ alert() { echo "[$(ts)] ALERT: $1" | tee -a "$ALERT_LOG" >&2; }
 HTTP_API_TOKEN="$( ( [ -f "$SECRETS_FILE" ] && set -a && . "$SECRETS_FILE" >/dev/null 2>&1; printf '%s' "${UNITARES_HTTP_API_TOKEN:-}" ) || true )"
 post_finding() {
   local severity="$1" fingerprint="$2" message="$3" payload
+  # agent_id resolves to the shared doctor-layer UUID so the finding is
+  # adjudicatable; the slug stays the fallback, and "type" stays per-family so
+  # this detector's precision remains separable from the other doctors'.
+  # Inlined rather than importing agents.common.findings: this watchdog runs
+  # under whatever python3 is on PATH, with no project deps guaranteed.
   payload=$(python3 -c '
-import json,sys
+import json,os,sys
+slug = "bridge-liveness-watchdog"
+agent_id = slug
+try:
+    with open(os.environ.get("UNITARES_DOCTOR_ANCHOR",
+              os.path.expanduser("~/.unitares/anchors/doctor.json"))) as fh:
+        agent_id = (json.load(fh) or {}).get("agent_uuid") or slug
+except Exception:
+    pass
 print(json.dumps({
   "type": "bridge_liveness_finding",
   "severity": sys.argv[1], "message": sys.argv[2],
-  "agent_id": "bridge-liveness-watchdog", "agent_name": "bridge-liveness-watchdog",
+  "agent_id": agent_id, "agent_name": slug,
   "fingerprint": sys.argv[3],
 }))' "$severity" "$message" "$fingerprint" 2>/dev/null) || return 0
   curl -s --max-time "$TIMEOUT_S" -o /dev/null \
