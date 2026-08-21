@@ -17,7 +17,7 @@ def test_tier_one_quickstart_is_release_pinned_and_redis_complete() -> None:
     manual = _read("docs/manual/02-install.md")
     compose = _read("docker-compose.yml")
 
-    assert "**Tier-1 install contract**" in readme
+    assert "the supported install path" in readme
     assert "git clone --branch v2.18.0 --depth 1" in readme
     assert "git clone --branch v2.18.0 --depth 1" in manual
     assert "depends_on:" in compose
