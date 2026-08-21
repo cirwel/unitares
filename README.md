@@ -20,7 +20,7 @@ score, interrupt, remember** — the plain-language version is one page,
 [What UNITARES is](docs/PRODUCT_DEFINITION.md). It is a self-hosted MCP/HTTP
 service you run yourself — not an agent framework, not a hosted platform.
 
-**Status:** v2.18.0. Continuously operated since November 2025 under a single
+**Status:** v2.19.0. Continuously operated since November 2025 under a single
 operator: 4,573,890 audit and telemetry events, 71,141 stored EISV state rows,
 and six long-running resident agents, one of them on separate hardware.
 [Evidence and limits](#evidence-and-limits) scopes every number on this page.
@@ -100,7 +100,7 @@ README carries the current install command and server compatibility guidance.
 ## Quickstart
 
 ```bash
-git clone --branch v2.18.0 --depth 1 https://github.com/cirwel/unitares.git
+git clone --branch v2.19.0 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
 make demo

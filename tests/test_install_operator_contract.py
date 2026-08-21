@@ -12,14 +12,24 @@ def _read(relative: str) -> str:
     return (REPO_ROOT / relative).read_text()
 
 
+def _current_version() -> str:
+    return _read("VERSION").strip()
+
+
 def test_tier_one_quickstart_is_release_pinned_and_redis_complete() -> None:
     readme = _read("README.md")
     manual = _read("docs/manual/02-install.md")
     compose = _read("docker-compose.yml")
 
+    # Pinned to the release VERSION, not a frozen literal: version_manager
+    # rewrites both files on every bump, so a literal here only ever reports
+    # that a release happened. The contract being guarded is that the
+    # quickstart names a release tag at all, never `master`.
+    pin = f"git clone --branch v{_current_version()} --depth 1"
+
     assert "the supported install path" in readme
-    assert "git clone --branch v2.18.0 --depth 1" in readme
-    assert "git clone --branch v2.18.0 --depth 1" in manual
+    assert pin in readme
+    assert pin in manual
     assert "depends_on:" in compose
     assert "redis:" in compose
     assert "condition: service_healthy" in compose
