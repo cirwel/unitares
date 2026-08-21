@@ -39,6 +39,7 @@ _ALLOWED_EPISTEMIC_CLASSES = {
 
 _STRONG_IDENTITY_SOURCES = {
     "continuity_token",
+    "client_session_id",
     "explicit_client_session_id",
     "explicit_client_session_id_scoped",
     "mcp_session_id",
@@ -48,6 +49,13 @@ _STRONG_IDENTITY_SOURCES = {
     # on every call (#425 dashboard-identity decision) — per-call proof,
     # stronger than the stable-header sources above.
     "operator_token",
+    # Identity PATH 0 proof-owned UUID rebind: requires a signed
+    # continuity_token whose `aid` matches the UUID, or an S19
+    # kernel-attested substrate peer. Without these entries the
+    # require_strong_identity refusal recommended this exact path in its
+    # hint and then scored it weak (#1768).
+    "agent_uuid_direct",
+    "agent_uuid_direct_fastpath",
 }
 
 _MEDIUM_IDENTITY_SOURCES = {

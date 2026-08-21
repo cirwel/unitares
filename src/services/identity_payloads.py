@@ -36,6 +36,11 @@ _STRONG_IDENTITY_SOURCES = {
     "oauth_client_id",
     "agent_uuid_direct",
     "agent_uuid_direct_fastpath",
+    # X-Unitares-Operator bearer token, validated against the env allowlist
+    # on every call (#425) — per-call proof; without this entry the read
+    # path reported an operator-bound caller weak, with a how_to_strengthen
+    # breadcrumb, while the write path scored the same binding strong (#1768).
+    "operator_token",
 }
 
 _MEDIUM_IDENTITY_SOURCES = {
