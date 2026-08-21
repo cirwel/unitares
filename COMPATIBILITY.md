@@ -10,7 +10,7 @@ artifact in another.
 |---|---:|---|
 | UNITARES server | `v2.19.0` | Current supported runtime and canonical API behavior. |
 | `unitares-governance` plugin | `v0.4.13` | Claude Code/Codex package release compatible with server `v2.19.0`; its tagged skill bundle predates the post-2.17 coherence-semantics synchronization merged in plugin PR #116. Use a later tagged plugin release for semantic alignment once published. Tested with Claude Code 2.1.220+ and Codex CLI 0.146.0+. |
-| `unitares-sdk` | `0.1.0` | Published Python client for resident and custom integrations. Install the public release with `pip install unitares-sdk==0.1.0`; use the server's matching Git tag only when deliberately testing unreleased SDK changes. |
+| `unitares-sdk` | `0.2.0` | Published Python client for resident and custom integrations. Adds `delegate_inference` and the `DelegatedInferenceResult` model; additive only, so `0.1.0` callers keep working. Install the public release with `pip install unitares-sdk==0.2.0`; use the server's matching Git tag only when deliberately testing unreleased SDK changes. |
 | `unitares-host-adapter` | `0.2` alpha | Separately released host bindings; capabilities vary by host and remain pre-stable. |
 | Paper / reproducibility kit | paper `v6.9.1`, kit `v6.8.1-repro` | Research and evaluation artifacts, not runtime dependencies or server compatibility numbers. |
 
