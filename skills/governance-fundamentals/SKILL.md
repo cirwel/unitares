@@ -4,7 +4,7 @@ description: >
   Use when an agent needs to understand UNITARES governance concepts — EISV state vectors,
   basins, policy actions, coherence, calibration. Reference material for interpreting
   governance metrics as proprioceptive state estimation, not outcome judgment.
-last_verified: "2026-08-17"
+last_verified: "2026-08-21"
 freshness_days: 21
 source_files:
   - unitares/config/governance_config.py
@@ -73,7 +73,10 @@ Your state sits in a basin — a region of the EISV space:
 
 - **High basin**: Healthy. E and I are high, S and V are low. Normal operating range.
 - **Low basin**: Degraded. May need recovery or intervention.
-- **Boundary**: Transitioning between basins. Extra attention from governance. Verdicts may carry `margin: tight`.
+- **Boundary**: Transitioning between basins. Extra attention from governance — the verdict's
+  sub-action is `guide` regardless of the headline. The basin does **not** force `margin: tight`:
+  `basin` and `margin` are two different notions of "edge", and the boundary condition is carried
+  by `basin`, the `guide` sub-action, and the guidance text, not by the margin enum.
 
 Use `check_working_state()` (`get_governance_metrics()` canonically) as the
 source of truth for the current basin/mode labels rather than assuming they are
@@ -118,12 +121,21 @@ telemetry and can legitimately disagree with the headline.
 | `margin` | Meaning | What to do |
 |----------|---------|------------|
 | `settling` | Warmup — fewer than 3 check-ins, so there is not enough history to judge headroom yet | Keep checking in; a real margin appears after 3+ check-ins |
-| `comfortable` | Clear of every edge by a healthy distance | Proceed normally |
-| `tight` | Within the edge threshold of the nearest boundary (or in the boundary basin) | Be more careful with next steps; avoid increasing complexity |
+| `comfortable` | Clear of every edge that could be measured, by a healthy distance. Read `margin_scope` before treating it as "nothing is near" | Proceed normally |
+| `tight` | Within the band around the nearest decision threshold | Be more careful with next steps; avoid increasing complexity |
 | `warning` | An edge has just been crossed (less than 0.1 past the threshold) | Stop increasing complexity; reflect before the next step |
 | `critical` | An edge is crossed deeply (0.1 or more past the threshold) | Halt the current approach; recover or escalate |
 
-The actionable levels are `tight`, `warning`, and `critical` — each carries a companion `nearest_edge` field naming which boundary you are closest to (`risk`, `coherence`, or `void`). On `comfortable` and `settling`, `nearest_edge` is `null` (there is no edge to warn about). Prefer the live `margin`/`nearest_edge` values over assuming a fixed enum across runtime versions — `check_working_state()` is the source of truth.
+The actionable levels are `tight`, `warning`, and `critical` — each carries a companion `nearest_edge` field naming which boundary you are closest to (`risk`, `coherence`, or `void`). On `comfortable` and `settling`, `nearest_edge` is `null`.
+
+`margin` is distance to a **decision threshold**, not a basin position. Two fields ride beside it and qualify what a `comfortable` reading actually covers:
+
+| Field | Values | Meaning |
+|---|---|---|
+| `margin_scope` | `all_edges`, `measured_edges_only` | Whether every edge was judged, or only some of them |
+| `unmeasurable_edges` | list of edge names | The edges that had no band to judge against, so they were not assessed at all |
+
+An edge is unmeasurable when it has no threshold band for this agent — coherence is the usual case, since its band is baseline-relative and needs history. `comfortable` with `margin_scope: measured_edges_only` means "clear of the edges we could judge", not "nothing is near": read `unmeasurable_edges` for what was never assessed. Prefer the live values over assuming a fixed enum across runtime versions — `check_working_state()` is the source of truth.
 
 Do not transfer this check-in margin into recovery eligibility. Recovery emits a
 separate `recovery.margin.v2` view whose authoritative inputs are risk and

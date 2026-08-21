@@ -13,8 +13,11 @@ package reached a registry.
    [`CITATION.cff`](../../CITATION.cff), then review every generated version
    change. `VERSION` remains the authority.
 3. Run `./scripts/dev/test-cache.sh` and `make validate`. When container build
-   inputs changed, also run the documented Docker quickstart on a Docker-capable
-   host and record the command/result in the release PR. Delegating this check
+   inputs changed **anywhere in the release range** (`vLAST..master`), not merely
+   in the release PR's own diff, also run the documented Docker quickstart on a
+   Docker-capable host and record the command/result in the release PR. Check
+   the range with
+   `git log --oneline vLAST..origin/master -- Dockerfile 'requirements*.txt' docker-compose.yml db/postgres scripts/demo/quick_demo.py`. Delegating this check
    to CI counts only when the required CI workflow actually contains and passes
    that quickstart; a green Python/package test job is not equivalent evidence.
 4. Merge the release PR only after required CI is green and every applicable
@@ -29,6 +32,37 @@ package reached a registry.
    created before that workflow existed, dispatch it manually with the existing
    release tag. Leave `publish_latest` off when backfilling an older release.
 8. Verify the release page, container digest, attestation, and clean closeout.
+
+## Correcting a published release
+
+A tag is immutable; a release body is not. When a published release is found to
+be wrong or incomplete, correct the prose and leave the tag alone.
+
+1. Record the correction in `docs/releases/<version>-errata.md`: what was
+   omitted, what was miscited, what was overstated, and what evidence has since
+   been recorded. See [`2.18.0-errata.md`](../releases/2.18.0-errata.md).
+2. Update the release body in place with `gh release edit vX.Y.Z --notes-file`.
+   Append the correction under an `## Errata (recorded YYYY-MM-DD)` heading and
+   leave the original text above it unchanged — the value of an errata is the
+   difference between what was claimed and what is true, and overwriting the
+   body destroys that.
+3. Never move, delete, or re-cut a published tag to absorb a correction. If code
+   must change, cut a patch release.
+
+Prevention is cheaper than errata. Before tagging, check that the changelog
+entry actually covers the merge range:
+
+```bash
+git log --no-merges --format='%s' vLAST..origin/master \
+  | grep -oE '\(#[0-9]+\)$' | tr -d '(#)' | sort -u > /tmp/merged
+sed -n '/## \[NEW\]/,/## \[LAST\]/p' docs/CHANGELOG.md \
+  | grep -oE '#[0-9]+' | tr -d '#' | sort -u > /tmp/cited
+comm -23 /tmp/merged /tmp/cited
+```
+
+The omissions that matter most are the ones that qualify a claim the entry
+already makes. An entry that cites a new capability but not the change that
+bounds it reads as a stronger claim than the code supports.
 
 ## SDK release
 
