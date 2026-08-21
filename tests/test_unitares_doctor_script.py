@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -1841,16 +1842,42 @@ def test_guidance_does_not_import_dismissal_evidence_from_another_channel():
     assert "does not transfer" in body or "DIFFERENT population" in body
 
 
-def test_provisioning_script_it_points_at_actually_exists_and_runs():
-    """Assert the FILE, not the filename string. A substring check cannot tell
-    a live pointer from a decorative one — delete the script and it passes."""
+def test_provisioning_script_it_points_at_actually_exists_and_runs(tmp_path):
+    """Assert the FILE, not the filename string, and run it HERMETICALLY.
+
+    Two hazards in the obvious version of this test, both real:
+
+    - Inheriting the ambient environment means an EXISTING anchor short-circuits
+      to exit 0 before the dry-run branch is reached, so the test can pass
+      without exercising what it claims to. Point UNITARES_DOCTOR_ANCHOR at
+      tmp_path so the absent-anchor path is the one under test.
+    - If --dry-run ever regresses to the apply path, an ambient run would
+      contact the live governance service and WRITE THE REAL ANCHOR — a test
+      that mints a fleet identity. The tmp anchor plus an unroutable URL make
+      that impossible rather than unlikely.
+
+    Asserts on OUTPUT, not just exit status: exit 0 is what a short-circuit and
+    a real dry run have in common.
+    """
     import subprocess
     root = Path(__file__).resolve().parents[1]
     script = root / "scripts" / "ops" / "provision_doctor_identity.py"
     assert script.exists(), "guidance points at a script that does not exist"
+
+    env = dict(os.environ)
+    env["UNITARES_DOCTOR_ANCHOR"] = str(tmp_path / "doctor.json")
+    env["UNITARES_GOV_URL"] = "http://127.0.0.1:9"  # discard port; nothing listens
+    env.pop("UNITARES_HTTP_API_TOKEN", None)
+
     r = subprocess.run([sys.executable, str(script), "--dry-run"],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True, timeout=60, env=env)
     assert r.returncode == 0, (
-        "the documented first step fails: "
-        f"{(r.stderr or r.stdout).strip()[:200]}"
+        f"the documented first step fails: {(r.stderr or r.stdout).strip()[:200]}"
+    )
+    assert "Dry run" in r.stdout, (
+        "exited 0 without reaching the dry-run branch — a short-circuit and a "
+        f"real dry run are indistinguishable by exit code alone. stdout={r.stdout!r}"
+    )
+    assert not (tmp_path / "doctor.json").exists(), (
+        "--dry-run wrote an anchor; it must change nothing"
     )

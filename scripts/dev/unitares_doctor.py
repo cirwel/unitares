@@ -2324,6 +2324,13 @@ def check_adjudication_feedstock(db_url: str) -> CheckResult:
     the Sentinel substrate uuid ONLY for Sentinel's own families, and otherwise
     returns 422 rather than mis-booking against the wrong resident.
 
+    ⛔Read that narrowly. ``event_type_is_sentinel_family`` is named for the
+    family but implemented as ``producer_ref == "sentinel"`` — a check on the
+    raw ``audit.events.agent_id`` slug, not the event type. So the fallback is
+    slug-scoped: any producer that writes the literal slug ``sentinel`` still
+    books against Sentinel. Narrower than the name promises, and worth fixing
+    before widening admits a producer that could collide with it.
+
     ⛔That removes ONE blocker, not the gate. Widening still faces TWO
     independent gates, both necessary, and this check measures only the first:
 
@@ -2333,21 +2340,28 @@ def check_adjudication_feedstock(db_url: str) -> CheckResult:
         still cannot enter the queue.
       * ATTRIBUTION CONFORMANCE — a producer writing a bare slug into
         ``audit.events.agent_id`` has no identity to attribute to, so it 422s.
-        Fail-closed and correct, but it yields no anchor. Only
-        ``sentinel_finding`` and Watcher's resolution/capability families
-        resolve today; every other producer writes a slug. (Deliberately no
-        "N of M" ratio: at roughly 24 findings/day it is wrong within a day,
-        and shipping a stale number is the defect this paragraph fixes.
-        Re-derive with a LEFT JOIN from ``audit.events`` to ``core.agents``.)
+        Fail-closed and correct, but it yields no anchor. ⛔Do NOT trust any
+        list of which producers conform, including one written here: this is
+        actively changing. ``agents/watcher/findings.py`` now resolves
+        Watcher's UUID and ``agents/common/findings.py`` gives the doctor layer
+        ``doctor_layer_agent_id``, so a census written a week ago is already
+        wrong — as an earlier draft of this very paragraph was. Derive it when
+        you need it, with a LEFT JOIN from ``audit.events`` to ``core.agents``
+        over the window you care about. (And no "N of M" ratio: at roughly 24
+        findings/day that decays within a day.)
 
     ⛔Before widening anything, resolve the harder question this check cannot
-    answer: the in-queue record is 17 adjudications, 100% confirmed, ZERO
-    dismissals ever, and NO tooling in ``scripts/ops`` or ``scripts/dev``
-    measures dismissal rate. Dismissal evidence from other channels
-    (``watcher_finding_dismissed``) is a DIFFERENT population adjudicated by a
-    different path and does not transfer. A family that can only confirm is the
-    all-positive generator Invariant 4 exists to exclude, so decide how a false
-    positive would be detected before admitting one.
+    answer. The MECHANISM for a false positive exists — the dashboard offers a
+    "False positive" dismissal and the endpoint records it as a bad outcome
+    (``reason="fp"``), so this is not a channel that structurally cannot
+    dismiss. What is missing is MEASUREMENT: no report in ``scripts/ops`` or
+    ``scripts/dev`` computes dismissal rate per family, and the in-queue record
+    to date is 17 adjudications, all confirmed. ⛔Dismissal evidence from other
+    channels (``watcher_finding_dismissed``) is a different population on a
+    different path and does not transfer. Decide how a false positive would be
+    OBSERVED for a family before admitting it — an unmeasured channel becomes
+    the all-positive generator Invariant 4 exists to exclude, whether or not
+    the button exists.
 
     WARN, not FAIL. A dry queue is a real condition to surface, not a broken
     install, and the correct response is sometimes "nothing is wrong, the
