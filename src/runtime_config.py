@@ -32,6 +32,13 @@ OVERRIDABLE_THRESHOLDS: Dict[str, tuple] = {
     # Note: reject threshold is implicit (risk > revise_threshold triggers reject)
     "coherence_critical_threshold": ("COHERENCE_CRITICAL_THRESHOLD", (0.0, 1.0)),
     "void_threshold_initial": ("VOID_THRESHOLD_INITIAL", (0.0, 1.0)),
+    # Width of the "tight" band around a decision edge, as a fraction of that
+    # edge's own attainable margin. Overridable BECAUSE it is a policy choice,
+    # not a measured constant: the shipped value reproduces the historical fixed
+    # risk band exactly, but nothing in the evidence fixes it for the void edge.
+    # Surfacing it here means describe_thresholds reports it as `class_default`
+    # until an operator sets it — an un-ratified value that says so.
+    "tight_band_fraction": ("TIGHT_BAND_FRACTION", (0.0, 1.0)),
 }
 
 
@@ -164,6 +171,8 @@ def get_effective_threshold(threshold_name: str, default: Optional[float] = None
         return _runtime_overrides.get("coherence_critical_threshold", config.COHERENCE_CRITICAL_THRESHOLD)
     elif threshold_name == "void_threshold_initial":
         return _runtime_overrides.get("void_threshold_initial", config.VOID_THRESHOLD_INITIAL)
+    elif threshold_name == "tight_band_fraction":
+        return _runtime_overrides.get("tight_band_fraction", config.TIGHT_BAND_FRACTION)
     else:
         if default is not None:
             return default

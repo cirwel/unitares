@@ -395,7 +395,10 @@ class GovernanceConfig:
     # Its whole substantive effect is giving void a band proportional to its own
     # scale (~0.032) instead of one equal to its entire range.
     #
-    # ⚠ POLICY CHOICE, NOT A DERIVED CONSTANT -- requires operator ratification.
+    # ⚠ POLICY CHOICE, NOT A DERIVED CONSTANT. Operator-settable at runtime as
+    # `tight_band_fraction` (see runtime_config.OVERRIDABLE_THRESHOLDS);
+    # describe_thresholds reports it as `class_default` until an operator sets
+    # it, so an un-ratified value announces itself instead of hiding in source.
     # Reproducing the risk band constrains less than it looks: under raw-distance
     # selection risk was only ever chosen once its margin fell below the coherence
     # margin (~0.073), already deep inside 0.15, so the risk band never acted as a
@@ -666,11 +669,18 @@ class GovernanceConfig:
         # Per-edge bands. Only edges with a band are judged; an unmeasurable edge
         # is REPORTED as such rather than silently dropped, because "comfortable"
         # would be a claim this metric cannot support.
+        # Read the EFFECTIVE fraction, not the class constant: this is a policy
+        # choice an operator can set (runtime_config OVERRIDABLE_THRESHOLDS), and
+        # describe_thresholds reports it as `class_default` until they do -- so an
+        # un-ratified value is visible as un-ratified rather than silently
+        # embedded. Function-local import: runtime_config imports this module.
+        from src.runtime_config import get_effective_threshold
+        band_fraction = get_effective_threshold("tight_band_fraction")
         edge_thresholds = {
-            'risk': GovernanceConfig.RISK_REVISE_THRESHOLD * GovernanceConfig.TIGHT_BAND_FRACTION,
+            'risk': GovernanceConfig.RISK_REVISE_THRESHOLD * band_fraction,
             # Band off the SAME threshold, so the void edge's attainable range and
             # its band stay proportional whichever threshold the gate applied.
-            'void': void_threshold * GovernanceConfig.TIGHT_BAND_FRACTION,
+            'void': void_threshold * band_fraction,
         }
         if coherence_measurable:
             edge_thresholds['coherence'] = coherence_tight_threshold

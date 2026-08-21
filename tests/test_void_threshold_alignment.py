@@ -173,3 +173,48 @@ def test_qualification_survives_the_real_decision_path_end_to_end():
     assert d["margin"] == "comfortable"
     assert d["margin_scope"] == "measured_edges_only"
     assert d["unmeasurable_edges"] == ["coherence"]
+
+
+# --- dialectic condition 7: the band is a policy choice, so make it one -------
+
+def test_band_fraction_is_operator_settable_and_reports_its_provenance():
+    """Condition 7 asked that this be treated as a policy choice requiring
+    ratification rather than a derived constant. Registering it in
+    OVERRIDABLE_THRESHOLDS makes describe_thresholds report `class_default`
+    until an operator sets it -- an un-ratified value that announces itself,
+    instead of an assertion buried in source."""
+    from src.runtime_config import describe_thresholds, set_thresholds
+
+    d = describe_thresholds()["tight_band_fraction"]
+    assert d["settable"] is True
+    assert d["source"] == "class_default"
+    assert d["value"] == pytest.approx(G.TIGHT_BAND_FRACTION)
+
+    assert set_thresholds({"tight_band_fraction": 0.30})["success"]
+    after = describe_thresholds()["tight_band_fraction"]
+    assert after["source"] == "runtime_override"
+    assert after["value"] == pytest.approx(0.30)
+    assert after["class_default"] == pytest.approx(G.TIGHT_BAND_FRACTION)
+    set_thresholds({"tight_band_fraction": G.TIGHT_BAND_FRACTION})
+
+
+def test_override_actually_changes_the_reported_margin():
+    """A knob that reports itself but does not act is worse than none."""
+    from src.runtime_config import set_thresholds
+
+    def probe():
+        return margin(void_active=False, void_value=0.20, void_threshold=0.30)["margin"]
+
+    try:
+        set_thresholds({"tight_band_fraction": G.TIGHT_BAND_FRACTION})
+        assert probe() == "comfortable"          # band 0.064, distance 0.10
+        set_thresholds({"tight_band_fraction": 0.5})
+        assert probe() == "tight"                # band 0.15, distance 0.10
+    finally:
+        set_thresholds({"tight_band_fraction": G.TIGHT_BAND_FRACTION})
+
+
+def test_shipped_default_still_leaves_the_risk_band_at_its_historical_value():
+    from src.runtime_config import get_effective_threshold
+    assert (G.RISK_REVISE_THRESHOLD
+            * get_effective_threshold("tight_band_fraction")) == pytest.approx(0.15)
