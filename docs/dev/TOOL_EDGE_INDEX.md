@@ -70,9 +70,9 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `outcome_correlation` | `src/mcp_handlers/observability/outcome_events.py:725 handle_outcome_correlation` | `src/mcp_handlers/schemas/observability.py:87 OutcomeCorrelationParams` | 30s | — |
 | `outcome_event` | `src/mcp_handlers/observability/outcome_events.py:585 handle_outcome_event` | `src/mcp_handlers/schemas/core.py:467 OutcomeEventParams` | 15s | — |
 | `process_agent_update` | `src/mcp_handlers/core.py:436 handle_process_agent_update` | `src/mcp_handlers/schemas/core.py:303 ProcessAgentUpdateParams` | 60s | — |
-| `reassign_reviewer` | `src/mcp_handlers/dialectic/handlers.py:2999 handle_reassign_reviewer` | `src/mcp_handlers/schemas/dialectic.py:168 ReassignReviewerParams` | 15s | — |
+| `reassign_reviewer` | `src/mcp_handlers/dialectic/handlers.py:3022 handle_reassign_reviewer` | `src/mcp_handlers/schemas/dialectic.py:168 ReassignReviewerParams` | 15s | — |
 | `record_progress_pulse` | `src/mcp_handlers/resident_progress.py:20 handle_record_progress_pulse` | — | 5s | — |
-| `request_dialectic_review` | `src/mcp_handlers/dialectic/handlers.py:1127 handle_request_dialectic_review` | `src/mcp_handlers/schemas/dialectic.py:5 RequestDialecticReviewParams` | 105s | — |
+| `request_dialectic_review` | `src/mcp_handlers/dialectic/handlers.py:1140 handle_request_dialectic_review` | `src/mcp_handlers/schemas/dialectic.py:5 RequestDialecticReviewParams` | 105s | — |
 | `research_registry` | `src/mcp_handlers/research_registry.py:66 handle_research_registry` | `src/mcp_handlers/schemas/research.py:13 ResearchRegistryParams` | 15s | — |
 | `reset_monitor` | `src/mcp_handlers/admin/handlers.py:462 handle_reset_monitor` | `src/mcp_handlers/schemas/admin.py:110 ResetMonitorParams` | 10s | — |
 | `search_knowledge_graph` | `src/mcp_handlers/knowledge/handlers.py:2496 handle_search_knowledge_graph` | `src/mcp_handlers/schemas/knowledge.py:80 SearchKnowledgeGraphParams` | 15s | identity=pre_onboard |
@@ -80,9 +80,9 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `set_thresholds` | `src/mcp_handlers/admin/config.py:45 handle_set_thresholds` | `src/mcp_handlers/schemas/admin.py:119 SetThresholdsParams` | 15s | — |
 | `simulate_update` | `src/mcp_handlers/core.py:266 handle_simulate_update` | `src/mcp_handlers/schemas/core.py:195 SimulateUpdateParams` | 30s | — |
 | `skills` | `src/mcp_handlers/introspection/skills.py:193 handle_skills` | `src/mcp_handlers/schemas/skills.py:15 SkillsParams` | 10s | identity=pre_onboard |
-| `submit_antithesis` | `src/mcp_handlers/dialectic/handlers.py:2395 handle_submit_antithesis` | `src/mcp_handlers/schemas/dialectic.py:73 SubmitAntithesisParams` | 10s | — |
-| `submit_synthesis` | `src/mcp_handlers/dialectic/handlers.py:2593 handle_submit_synthesis` | `src/mcp_handlers/schemas/dialectic.py:106 SubmitSynthesisParams` | 15s | — |
-| `submit_thesis` | `src/mcp_handlers/dialectic/handlers.py:2131 handle_submit_thesis` | `src/mcp_handlers/schemas/dialectic.py:64 SubmitThesisParams` | 90s | — |
+| `submit_antithesis` | `src/mcp_handlers/dialectic/handlers.py:2408 handle_submit_antithesis` | `src/mcp_handlers/schemas/dialectic.py:73 SubmitAntithesisParams` | 10s | — |
+| `submit_synthesis` | `src/mcp_handlers/dialectic/handlers.py:2616 handle_submit_synthesis` | `src/mcp_handlers/schemas/dialectic.py:106 SubmitSynthesisParams` | 15s | — |
+| `submit_thesis` | `src/mcp_handlers/dialectic/handlers.py:2144 handle_submit_thesis` | `src/mcp_handlers/schemas/dialectic.py:64 SubmitThesisParams` | 90s | — |
 | `validate_file_path` | `src/mcp_handlers/admin/handlers.py:631 handle_validate_file_path` | `src/mcp_handlers/schemas/core.py:522 ValidateFilePathParams` | 5s | — |
 | `verify_trajectory_identity` | `src/mcp_handlers/identity/handlers.py:2742 handle_verify_trajectory_identity` | `src/mcp_handlers/schemas/identity.py:206 VerifyTrajectoryIdentityParams` | 10s | — |
 
@@ -138,14 +138,14 @@ runs (`from→to`, filled only when the destination is absent).
 
 | Action | Delegate | Remaps |
 |---|---|---|
-| `antithesis` | `src/mcp_handlers/dialectic/handlers.py:2395 handle_submit_antithesis` | — |
-| `get` | `src/mcp_handlers/dialectic/handlers.py:1496 handle_get_dialectic_session` | — |
-| `list` | `src/mcp_handlers/dialectic/handlers.py:1716 handle_list_dialectic_sessions` | — |
+| `antithesis` | `src/mcp_handlers/dialectic/handlers.py:2408 handle_submit_antithesis` | — |
+| `get` | `src/mcp_handlers/dialectic/handlers.py:1509 handle_get_dialectic_session` | — |
+| `list` | `src/mcp_handlers/dialectic/handlers.py:1729 handle_list_dialectic_sessions` | — |
 | `quick` | `src/mcp_handlers/dialectic/handlers.py:333 handle_quick_dialectic` | — |
-| `reassign` | `src/mcp_handlers/dialectic/handlers.py:2999 handle_reassign_reviewer` | — |
-| `request` | `src/mcp_handlers/dialectic/handlers.py:1127 handle_request_dialectic_review` | — |
-| `synthesis` | `src/mcp_handlers/dialectic/handlers.py:2593 handle_submit_synthesis` | — |
-| `thesis` | `src/mcp_handlers/dialectic/handlers.py:2131 handle_submit_thesis` | — |
+| `reassign` | `src/mcp_handlers/dialectic/handlers.py:3022 handle_reassign_reviewer` | — |
+| `request` | `src/mcp_handlers/dialectic/handlers.py:1140 handle_request_dialectic_review` | — |
+| `synthesis` | `src/mcp_handlers/dialectic/handlers.py:2616 handle_submit_synthesis` | — |
+| `thesis` | `src/mcp_handlers/dialectic/handlers.py:2144 handle_submit_thesis` | — |
 
 ### `export` · default `history`
 
