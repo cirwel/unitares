@@ -510,10 +510,20 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
 
         def _lite_eisv_value(dimension: str, value: Any) -> Dict[str, Any]:
             wrapped = describe_eisv_value(dimension, value)
-            # Preserve the existing `note` convenience field while sourcing it
-            # from the same contract as label/range/sign semantics.
-            wrapped["note"] = wrapped["description"]
-            return wrapped
+            if "label" not in wrapped:
+                return wrapped
+            # Lite is numbers plus one-liners (dogfood 2026-08-20): the full
+            # per-field ontology (description + user_friendly + a note that
+            # duplicated the description) repeated the same contract four
+            # times per response. Keep value/label/range and ONE prose line;
+            # the complete per-dimension contract rides once per response in
+            # `eisv_contract`, and lite=false keeps the full glossary.
+            return {
+                "value": wrapped.get("value"),
+                "label": wrapped.get("label"),
+                "range": wrapped.get("range"),
+                "note": wrapped.get("user_friendly") or wrapped.get("description"),
+            }
 
         lite_metrics = {
             "agent_id": public_agent_id,
@@ -580,6 +590,10 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
             "risk_high": GovernanceConfig.RISK_REVISE_THRESHOLD,
             "target_coherence": GovernanceConfig.TARGET_COHERENCE,
         }
+        # One in-band contract line covers what the per-field prose used to
+        # repeat — same pattern as the filtered check-in responses.
+        from src.governance_glossary import EISV_INLINE_SUMMARY
+        lite_metrics["eisv_contract"] = EISV_INLINE_SUMMARY
         lite_metrics["_note"] = "Use lite=false for full diagnostics"
         return lite_metrics
 

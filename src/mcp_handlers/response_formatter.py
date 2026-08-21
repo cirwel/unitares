@@ -803,6 +803,30 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
         result,
         ("prediction_id", "warnings", "policy_evaluation", "enforcement", "evidence_status"),
     )
+
+    # monitor_result embeds the same maturity/epistemic gate dict in BOTH
+    # policy_evaluation and enforcement so each persisted envelope is
+    # self-contained. On the compact wire that self-containment is ~1.5KB of
+    # verbatim duplication per check-in (dogfood 2026-08-20); replace the
+    # enforcement copy with a pointer. enforcement.basis — the load-bearing
+    # derivative — stays. Full/mirror/standard keep both copies. Copy-on-write:
+    # response_data's dicts are shared with the persisted result.
+    policy_eval = result.get("policy_evaluation")
+    enforcement = result.get("enforcement")
+    if isinstance(policy_eval, dict) and isinstance(enforcement, dict):
+        deduped = None
+        for gate_key in ("maturity_gate", "epistemic_gate"):
+            gate = enforcement.get(gate_key)
+            if isinstance(gate, dict) and gate == policy_eval.get(gate_key):
+                if deduped is None:
+                    deduped = dict(enforcement)
+                deduped[gate_key] = (
+                    f"identical to policy_evaluation.{gate_key} "
+                    "(deduplicated in compact mode)"
+                )
+        if deduped is not None:
+            result["enforcement"] = deduped
+
     return result
 
 def _strip_context(response_data: dict, is_new_agent: bool, key_was_generated: bool, api_key_auto_retrieved: bool):

@@ -166,9 +166,9 @@ async def write_bootstrap(
             "written": True,
             "state_id": state_id,
             "next_step": (
-                "Call process_agent_update with real measurements when you "
-                "have any — bootstrap is provisional and excluded from "
-                "calibration."
+                "Check in with sync_state (canonical: process_agent_update) "
+                "with real measurements when you have any — bootstrap is "
+                "provisional and excluded from calibration."
             ),
         }
 
