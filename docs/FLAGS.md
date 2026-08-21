@@ -96,7 +96,7 @@ index; that one is the curated decision record.
 | `UNITARES_KNOWLEDGE_BACKEND` | `'auto'` | Get global knowledge graph instance (singleton) | src/knowledge_graph.py |
 | `UNITARES_LEASE_PLANE_URL` | `'http://127.0.0.1:8788'` | read by _lease_plane_url() | src/mcp_handlers/dialectic/governed_spawn.py |
 | `UNITARES_LINEAGE_TRANSITIVE_ARCHIVAL` | `(required)` | Whether transitive succession-reachability DRIVES archival (vs shadow) | src/mcp_handlers/lifecycle/stuck.py |
-| `UNITARES_LLM_MODEL` | `'gemma4:latest'` | read by _base_hosts() | src/mcp_handlers/support/inference_registry.py, src/mcp_handlers/support/llm_delegation.py (+3 more) |
+| `UNITARES_LLM_MODEL` | `'gemma4:latest'` | Default model for local inference | src/mcp_handlers/support/inference_registry.py, agents/dialectic_reviewer/reviewer.py, agents/local_resident/runner.py |
 | `UNITARES_MCP_DNS_REBIND_PROTECTION` | `''` | Whether Host/Origin validation is enforced on the MCP transports | src/mcp_listen_config.py |
 | `UNITARES_MCP_HOST` | `''` | Return the default socket bind address | src/mcp_listen_config.py |
 | `UNITARES_METADATA_BACKEND` | `'postgres'` | — | src/agent_metadata_persistence.py |
@@ -108,7 +108,7 @@ index; that one is the curated decision record.
 | `UNITARES_OAUTH_ISSUER_URL` | `(required)` | — | src/mcp_server.py |
 | `UNITARES_OAUTH_RESOURCE_URL` | `(required)` | — | src/mcp_server.py |
 | `UNITARES_OAUTH_SECRET` | `(required)` | — | src/mcp_server.py |
-| `UNITARES_OLLAMA_BASE` | `'http://localhost:11434'` | Native Ollama /api/chat endpoint (supports JSON-schema-constrained output via the `format` field) | src/mcp_handlers/support/llm_delegation.py |
+| `UNITARES_OLLAMA_BASE` | `'http://localhost:11434'` | Base URL of the local Ollama endpoint | src/mcp_handlers/support/inference_registry.py |
 | `UNITARES_OLLAMA_BASE_URL` | `'http://localhost:11434/v1'` | — | agents/dialectic_reviewer/reviewer.py, agents/local_resident/runner.py |
 | `UNITARES_OPERATOR_TOKEN` | `''` | POST a resolution outcome to the operator-gated harness endpoint | agents/watcher/agent.py |
 | `UNITARES_OUTCOME_PROVENANCE_FILTER` | `'off'` | Fetch recent outcome events for an agent | src/db/mixins/tool_usage.py |
