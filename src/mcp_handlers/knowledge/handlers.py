@@ -90,6 +90,7 @@ from src.recall_telemetry import (
     ZERO_RESULT,
     record_recall_event,
 )
+from ..support.coerce import LimitError, parse_limit
 from ..support.llm_delegation import synthesize_results
 from ..support.tool_hints import KNOWLEDGE_SEARCH_TOOL
 
@@ -1455,6 +1456,9 @@ class _KnowledgeSearchRequest:
     status: Any
     include_archived: bool
     include_cold: bool
+    # Set when the caller over-asked and the limit was clamped down — surfaced
+    # in the response so truncation is distinguishable from "that was all".
+    limit_clamped_from: Optional[int] = None
 
     @property
     def query_terms(self) -> list[str]:
@@ -1586,9 +1590,34 @@ def _parse_knowledge_search_request(
     if isinstance(status, str) and status.lower() == "active":
         status = "open"
 
+    # Same defect class dialectic fixed in #1733: the old falsy `or` turned
+    # limit=0 into the default, and a negative limit reached PostgreSQL as a
+    # malformed LIMIT, surfacing as a generic failure — neither answered the
+    # question the caller asked. The 100 ceiling is NEW behavior (the old
+    # code had no upper bound; only the _more_available hint claimed one), so
+    # a clamp is disclosed via limit_clamped_from rather than applied silently.
+    try:
+        limit = parse_limit(
+            arguments.get("limit"),
+            default=config.KNOWLEDGE_QUERY_DEFAULT_LIMIT,
+            maximum=100,
+        )
+    except LimitError as exc:
+        raise _SearchParameterError(str(exc)) from None
+    try:
+        requested_limit = int(arguments.get("limit"))
+    except (TypeError, ValueError):
+        requested_limit = None
+    limit_clamped_from = (
+        requested_limit
+        if requested_limit is not None and requested_limit > limit
+        else None
+    )
+
     return _KnowledgeSearchRequest(
         arguments=arguments,
-        limit=arguments.get("limit") or config.KNOWLEDGE_QUERY_DEFAULT_LIMIT,
+        limit=limit,
+        limit_clamped_from=limit_clamped_from,
         include_details=_optional_flag(arguments.get("include_details")),
         include_provenance=arguments.get("include_provenance", False),
         synthesize=arguments.get("synthesize", False),
@@ -2394,7 +2423,18 @@ def _attach_search_usage_hints(
         response["_tip"] = (
             "Add include_details=true to expand all results inline (knowledge(action='search', include_details=true))"
         )
-    if len(state.results) == request.limit:
+    if request.limit_clamped_from is not None:
+        # A clamped caller must be able to tell truncation from "that was
+        # all" — and must not be advised to raise a limit that is already
+        # at the ceiling.
+        response["limit_clamped_from"] = request.limit_clamped_from
+        if len(state.results) == request.limit:
+            response["_more_available"] = (
+                f"You asked for {request.limit_clamped_from} results; the "
+                f"server maximum is {request.limit}, so results were "
+                f"truncated there. Narrow the query to see the rest."
+            )
+    elif len(state.results) == request.limit:
         response["_more_available"] = f"Results may be limited to {request.limit}. Use limit=N (max 100) to get more."
     if state.search_mode == "substring_scan" and not state.results and request.query_text:
         response["search_hint"] = (

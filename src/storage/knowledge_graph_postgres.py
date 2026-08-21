@@ -114,12 +114,14 @@ class KnowledgeGraphPostgres:
         """Full-text search using PostgreSQL tsvector. Defaults to AND (#165).
 
         Each returned node carries the query's normalized rank as `.relevance`.
-        The SQL already computes it and `_row_to_discovery_dict` already passes
-        it through, but `_dict_to_discovery` builds from named fields and so
-        dropped it — leaving consumers that read a relevance off these nodes to
-        see 0 for every hit. Attached rather than added to the dataclass so the
-        wire shape of `to_dict()` is unchanged; consumers already read it
-        defensively (`getattr(disc, 'relevance', 0)`).
+        The rank travels SQL → `kg_full_text_search` row dict → here; every
+        matched row has one (`ts_rank_cd` is non-NULL for a row that matched
+        `@@`), so a missing rank means a layer between the SQL and this read
+        started stripping it again — which is exactly how the original #1759
+        carry went inert for a day while its mocked tests stayed green, hence
+        the warning instead of a silent skip. Attached rather than added to the
+        dataclass so the wire shape of `to_dict()` is unchanged; consumers
+        already read it defensively (`getattr(disc, 'relevance', 0)`).
         """
         db = await self._get_db()
         rows = await db.kg_full_text_search(query, limit, operator=operator)
@@ -129,6 +131,12 @@ class KnowledgeGraphPostgres:
             rank = row.get("rank")
             if isinstance(rank, (int, float)):
                 node.relevance = float(rank)
+            else:
+                logger.warning(
+                    "full_text_search row %s has no numeric rank — relevance "
+                    "pipeline is being stripped upstream again",
+                    row.get("id"),
+                )
             discoveries.append(node)
         return discoveries
 
