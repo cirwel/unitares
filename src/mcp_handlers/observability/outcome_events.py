@@ -552,6 +552,12 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
         "claimed_fields": detail.get("claimed_fields"),
         "verified_fields": detail.get("verified_fields"),
         "unverified_fields": detail.get("unverified_fields"),
+        # #1790: a row stamped calibration_excluded is also dropped from the
+        # validation inventory by the fixture classifiers, so a caller that
+        # never sees the flag cannot know its evidence went nowhere. Surface
+        # it (with the source of the confidence) at every recording surface.
+        "calibration_excluded": calibration_excluded,
+        "prediction_source": prediction_source,
     }
 
 
