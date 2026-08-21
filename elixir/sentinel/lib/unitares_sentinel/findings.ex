@@ -106,7 +106,9 @@ defmodule UnitaresSentinel.Findings do
       "agent_id" => agent_id(opts),
       "agent_name" => agent_name(opts),
       "fingerprint" => Map.fetch!(alarm, :fingerprint),
-      "alarm_kind" => Map.fetch!(alarm, :kind)
+      "alarm_kind" => Map.fetch!(alarm, :kind),
+      "record_kind" => Map.get(alarm, :record_kind, "finding"),
+      "requires_adjudication" => Map.get(alarm, :requires_adjudication, true)
     }
 
     alarm

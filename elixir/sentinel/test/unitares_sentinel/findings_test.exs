@@ -9,6 +9,8 @@ defmodule UnitaresSentinel.FindingsTest do
       severity: "high",
       summary: "forced release: dialectic:/x (lease lease-1)",
       fingerprint: "forced_release:ad_hoc:event-1",
+      record_kind: "action_receipt",
+      requires_adjudication: false,
       extra: %{
         event_id: "event-1",
         ts: "2026-05-06T00:00:00Z",
@@ -30,6 +32,8 @@ defmodule UnitaresSentinel.FindingsTest do
     assert body["agent_name"] == "Sentinel"
     assert body["fingerprint"] == "forced_release:ad_hoc:event-1"
     assert body["alarm_kind"] == "ad_hoc"
+    assert body["record_kind"] == "action_receipt"
+    assert body["requires_adjudication"] == false
     assert body["event_id"] == "event-1"
     assert body["surface_kind"] == "dialectic"
   end
