@@ -23,10 +23,17 @@ DEFAULT_HTTP_URL = "http://127.0.0.1:8767"
 DEFAULT_REPO = Path(__file__).resolve().parents[2]
 DEFAULT_PYTHON = "/usr/local/bin/python3"
 DEFAULT_TIMEOUT_SECONDS = 120
+DEFAULT_DOGFOOD_OUTPUT_DIR = (
+    Path.home() / ".hermes" / "cron" / "output" / "ea2e3655cee4"
+)
 IDENTITY_ALERT = "no-session get_governance_metrics is not identity-neutral"
 INVENTORY_ALERT = "outcome inventory no longer exposes BEAM/substrate eprocess lanes"
 MATRIX_ALERT = "ablation matrix default no longer excludes BEAM harness lane"
 GROUPED_MATRIX_ALERT = "ablation matrix grouped mode no longer exposes BEAM harness lane"
+DOGFOOD_SILENT_ALERT = "dogfood response combines [SILENT] with substantive content"
+DOGFOOD_SURFACE_ALERT = "dogfood response declares multiple primary surfaces"
+DOGFOOD_ALL_CLEAR_ALERT = "dogfood all-clear omits the required open-findings query"
+DOGFOOD_KG_NOTE_ALERT = "dogfood response labels a local file as a KG note"
 
 
 def identity_neutrality_alert(metrics: dict[str, Any]) -> str | None:
@@ -91,6 +98,75 @@ def matrix_grouped_lane_alert(text: str) -> str | None:
     if not re.search(r"(?im)^\|\s*beam\s*\|", text):
         return GROUPED_MATRIX_ALERT
     return None
+
+
+def extract_dogfood_response(text: str) -> str | None:
+    """Return the final Hermes response without treating injected prompt text as output."""
+
+    markers = list(re.finditer(r"(?m)^## Response\s*$", text))
+    if not markers:
+        return None
+    return text[markers[-1].end() :].strip()
+
+
+def dogfood_response_alerts(text: str) -> list[str]:
+    """Return machine-testable contract violations from a dogfood run artifact."""
+
+    response = extract_dogfood_response(text)
+    if response is None:
+        return ["dogfood output has no final response marker"]
+
+    alerts: list[str] = []
+    lines = [line.strip() for line in response.splitlines() if line.strip()]
+    silent_lines = [line for line in lines if line.strip("*_ ") == "[SILENT]"]
+    substantive_lines = [line for line in lines if line.strip("*_ ") != "[SILENT]"]
+    if silent_lines and substantive_lines:
+        alerts.append(DOGFOOD_SILENT_ALERT)
+
+    plural_selection = re.search(
+        r"(?im)^\s*[*_#\s-]*selected surfaces\b", response
+    )
+    all_surfaces = re.search(r"(?i)\ball surfaces tested this pulse\b", response)
+    singular_selections = set(
+        re.findall(
+            r"(?im)^\s*[*_#\s-]*selected surface\s*:\s*[*_]*#?\s*(\d+)",
+            response,
+        )
+    )
+    if plural_selection or all_surfaces or len(singular_selections) > 1:
+        alerts.append(DOGFOOD_SURFACE_ALERT)
+
+    all_clear = re.search(
+        r"(?i)\b(?:no actionable friction(?: found)?|system (?:is )?healthy|"
+        r"no (?:concrete )?prior finding)\b",
+        response,
+    )
+    named_open_findings_query = re.search(
+        r"(?is)knowledge\s*\([^)]*action\s*=\s*['\"]search['\"]",
+        response,
+    )
+    if all_clear and not named_open_findings_query:
+        alerts.append(DOGFOOD_ALL_CLEAR_ALERT)
+
+    local_kg_note = any(
+        re.search(r"(?i)\bKG\s+Note\b", line)
+        and re.search(r"(?:/Users/|~/|\.py\b)", line)
+        for line in lines
+    )
+    if local_kg_note:
+        alerts.append(DOGFOOD_KG_NOTE_ALERT)
+
+    return alerts
+
+
+def read_latest_dogfood_output(output_dir: Path) -> tuple[Path, str] | None:
+    """Read the newest timestamp-named dogfood Markdown artifact."""
+
+    outputs = sorted(output_dir.glob("*.md"))
+    if not outputs:
+        return None
+    latest = outputs[-1]
+    return latest, latest.read_text(encoding="utf-8", errors="replace")
 
 
 def render_alert_report(alerts: Sequence[str], evidence: Sequence[str]) -> str:
@@ -165,11 +241,28 @@ def collect_alerts(
     repo: Path,
     python: str,
     timeout_seconds: int,
+    dogfood_output_dir: Path = DEFAULT_DOGFOOD_OUTPUT_DIR,
 ) -> tuple[list[str], list[str]]:
     """Collect guard alerts and compact evidence from live/local checks."""
 
     alerts: list[str] = []
     evidence: list[str] = []
+
+    try:
+        latest_output = read_latest_dogfood_output(dogfood_output_dir)
+        if latest_output is None:
+            alerts.append("dogfood response protocol check found no output")
+            evidence.append(f"dogfood_output_dir={dogfood_output_dir}")
+        else:
+            output_path, output_text = latest_output
+            protocol_alerts = dogfood_response_alerts(output_text)
+            alerts.extend(protocol_alerts)
+            evidence.append(
+                f"dogfood_output={output_path}, protocol_alerts={len(protocol_alerts)}"
+            )
+    except OSError as exc:
+        alerts.append("dogfood response protocol check failed to run")
+        evidence.append(f"dogfood_protocol_error={type(exc).__name__}: {exc}")
 
     try:
         metrics = call_tool_no_session(http_url, "get_governance_metrics", {"lite": True})
@@ -284,6 +377,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--repo", type=Path, default=Path(os.environ.get("UNITARES_REPO", DEFAULT_REPO)))
     parser.add_argument("--python", default=os.environ.get("UNITARES_PYTHON", DEFAULT_PYTHON))
     parser.add_argument(
+        "--dogfood-output-dir",
+        type=Path,
+        default=Path(
+            os.environ.get("UNITARES_DOGFOOD_OUTPUT_DIR", str(DEFAULT_DOGFOOD_OUTPUT_DIR))
+        ),
+    )
+    parser.add_argument(
         "--timeout-seconds",
         type=int,
         default=int(os.environ.get("UNITARES_GUARD_TIMEOUT", str(DEFAULT_TIMEOUT_SECONDS))),
@@ -300,6 +400,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         repo=args.repo,
         python=args.python,
         timeout_seconds=args.timeout_seconds,
+        dogfood_output_dir=args.dogfood_output_dir,
     )
     report = render_alert_report(alerts, evidence)
     if report:
