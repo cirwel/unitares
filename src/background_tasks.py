@@ -438,6 +438,7 @@ async def _run_dialectic_auto_resolve_cycle() -> dict[str, int]:
         "failed": int(result.get("resolved_count", 0) or 0),
         "reassigned": int(result.get("reassigned_count", 0) or 0),
         "facilitation": int(result.get("facilitation_count", 0) or 0),
+        "skipped": int(result.get("skipped_count", 0) or 0),
     }
 
 
