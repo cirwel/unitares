@@ -302,6 +302,41 @@ class TestVerdict:
         gov = AdaptiveGovernor()
         assert gov.make_verdict(coherence=0.70, risk=0.85) == Verdict.HARD_BLOCK
 
+    def test_update_records_exact_hard_stop_thresholds_and_triggers(self):
+        gov = AdaptiveGovernor()
+        result = gov.update(
+            coherence=0.70,
+            risk=0.85,
+            verdict="high-risk",
+            **_stable_histories(),
+        )
+
+        provenance = result["hard_stop_provenance"]
+        assert result["verdict"] == Verdict.HARD_BLOCK
+        assert provenance == {
+            "schema": "cirs.hard-stop-provenance.v1",
+            "complete": True,
+            "mode": "adaptive_v2",
+            "observed": {
+                "coherence": 0.70,
+                "risk_score": 0.85,
+                "oscillation_index": result["oi"],
+                "flips": result["flips"],
+            },
+            "thresholds": {
+                "coherence_floor": 0.25,
+                "risk_ceiling": 0.80,
+                "oscillation_index": 2.5,
+                "flips": 4,
+            },
+            "conditions": {
+                "coherence_floor": False,
+                "risk_ceiling": True,
+                "resonance": result["resonant"],
+            },
+            "satisfied": ["risk_ceiling"],
+        }
+
     def test_adaptive_threshold_changes_verdict(self):
         """Lowering tau makes marginal coherence safe."""
         gov = AdaptiveGovernor()
@@ -603,5 +638,3 @@ class TestClamp:
     def test_clamp_at_boundary(self):
         assert _clamp(0.0, 0.0, 1.0) == 0.0
         assert _clamp(1.0, 0.0, 1.0) == 1.0
-
-
