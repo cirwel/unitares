@@ -24,18 +24,17 @@ defmodule AgentOrchestrator.LeasePlaneClient do
       ttl_s: ttl_s
     }
 
+    # Reply-reading is SDK-owned (UnitaresSdk.LeasePlaneEnvelope) so this
+    # decoder cannot drift from dispatch_beam's; transport stays :httpc here.
+    # The envelope's held_by_other carries the full payload for reclaim-style
+    # callers; this behaviour's contract predates that, so it stays 2-tuple.
     case post("/v1/lease/acquire", body) do
-      {:ok, 200, %{"ok" => true, "lease" => %{"lease_id" => lease_id}}} ->
-        {:ok, lease_id}
-
-      {:ok, 409, %{"error" => "held_by_other"} = info} ->
-        {:error, {:held_by_other, Map.get(info, "held_by_uuid")}}
-
-      {:ok, status, %{"error" => err} = info} ->
-        {:error, {:lease_plane_error, status, err, Map.get(info, "reason") || Map.get(info, "detail")}}
-
-      {:ok, status, _body} ->
-        {:error, {:lease_plane_unexpected, status}}
+      {:ok, status, payload} ->
+        case UnitaresSdk.LeasePlaneEnvelope.classify_acquire(status, payload) do
+          {:ok, lease_id} -> {:ok, lease_id}
+          {:error, {:held_by_other, uuid, _payload}} -> {:error, {:held_by_other, uuid}}
+          {:error, other} -> {:error, other}
+        end
 
       {:error, reason} ->
         {:error, reason}
@@ -45,10 +44,11 @@ defmodule AgentOrchestrator.LeasePlaneClient do
   @impl true
   def release(lease_id, reason) do
     case post("/v1/lease/release", %{lease_id: lease_id, release_reason: reason}) do
-      {:ok, 200, %{"ok" => true}} -> :ok
-      {:ok, 404, _} -> :ok
-      {:ok, status, body} -> {:error, {:release_failed, status, body}}
-      {:error, reason} -> {:error, reason}
+      {:ok, status, payload} ->
+        UnitaresSdk.LeasePlaneEnvelope.classify_release(status, payload)
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

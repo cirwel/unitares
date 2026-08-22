@@ -28,24 +28,21 @@ defmodule UnitaresLeasePlane.OrchestratorClient do
       request = {url, headers, ~c"application/json", Jason.encode!(spec)}
       http_opts = [timeout: timeout_ms(), connect_timeout: 2_000]
 
+      # Reply-reading is SDK-owned (UnitaresSdk.OrchestratorEnvelope) so this
+      # decoder cannot drift from dispatch_beam's; transport stays :httpc.
       case :httpc.request(:post, request, http_opts, body_format: :binary) do
-        {:ok, {{_v, 201, _r}, _h, resp}} ->
-          parse_agent_id(resp)
-
         {:ok, {{_v, status, _r}, _h, resp}} ->
-          {:error, {:orchestrator_status, status, truncate(resp)}}
+          case Jason.decode(resp) do
+            {:ok, payload} ->
+              UnitaresSdk.OrchestratorEnvelope.classify_spawn(status, payload)
+
+            {:error, _} ->
+              {:error, {:orchestrator_bad_json, status, truncate(resp)}}
+          end
 
         {:error, reason} ->
           {:error, {:orchestrator_unreachable, reason}}
       end
-    end
-  end
-
-  defp parse_agent_id(resp) do
-    case Jason.decode(resp) do
-      {:ok, %{"ok" => true, "agent_id" => id}} when is_binary(id) -> {:ok, id}
-      {:ok, other} -> {:error, {:orchestrator_bad_body, other}}
-      {:error, _} -> {:error, :orchestrator_bad_json}
     end
   end
 
