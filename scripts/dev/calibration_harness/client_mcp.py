@@ -35,15 +35,17 @@ class MCPGovernanceClient:
         return asyncio.run(self._call_once(name, arguments or {}))
 
     async def _call_once(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        import httpx
         from mcp import ClientSession
         from mcp.client.streamable_http import streamable_http_client
 
+        from src.mcp_compat import mcp_httpx
+
         # The legacy streamablehttp_client alias (removed in mcp 2.0) took
         # headers= directly; the modern entry point carries them on an
-        # injected httpx client instead.
+        # injected client instead — built from mcp_httpx() so it is the
+        # library this mcp's transport actually calls methods on.
         headers = {"Authorization": f"Bearer {self.t.token}"} if self.t.token else None
-        async with httpx.AsyncClient(headers=headers) as http_client:
+        async with mcp_httpx().AsyncClient(headers=headers) as http_client:
             async with streamable_http_client(self._mcp_url(), http_client=http_client) as streams:
                 # mcp 1.x yields (read, write, get_session_id); 2.x drops the third.
                 read, write = streams[0], streams[1]

@@ -1,7 +1,7 @@
 # EISV Proprioception Contract
 
 **Created:** June 26, 2026
-**Last Updated:** August 17, 2026
+**Last Updated:** August 21, 2026
 **Status:** Active
 
 ---
@@ -1222,6 +1222,21 @@ it). **Correction:** a governed fallback-owned `risk_pause` was delivered on
   and every resonance tick is persisted as a server-authored `is_bad` label that
   re-enters the sensor (row 33, armed-but-dormant).
 
+
+### Decision self-loop at the basin — 2026-08-21
+
+Added 2026-08-21 from an operator question: does the standing guide penalty on
+behavioral E ever push an agent across the conjunctive `E ≥ 0.6` HIGH-basin
+bound and hold it there (guide → lower E → BOUNDARY → guide)? Read script:
+`scripts/analysis/basin_conjunct_binding_read.py` (reads the inputs the deployed
+classifier actually saw; no counterfactual simulation). Guard:
+`tests/test_basin_verdict_path_reads_ode_state.py`.
+
+**45.** "The guide self-loop can flip an agent across the `E ≥ 0.6` basin bound and hold it there." — **REFUTED** as deployed (2026-08-21 snapshot over the whole persisted telemetry record, 2026-08-10 → 08-21; adequate power), with the arming condition named. The cycle is real at source level: BOUNDARY returns `sub_action='guide'` unconditionally (`src/monitor_decision.py:242-263`); that string lands in `decision_history` and scores 0.7 against 1.0 for proceed (`src/behavioral_sensor.py:385-398`); `decision_e` is 0.35 of behavioral E with outcomes, 0.40 without — a standing penalty of 0.105 / 0.12 on a guide-pinned agent. It does not close because the verdict path classifies the basin from the ODE `GovernanceState` (`src/governance_monitor.py:993` hands `self.state` to `make_decision`; `src/monitor_decision.py:85-88` reads `state.E/I/S/V`), and the behavioral reading reaches that state only through the `k_anchor=0.1` spring (`governance_core/dynamics.py:188`). Live read, n=13,927 telemetry rows (`eisv_telemetry` has persisted only since 2026-08-10, so this is the full record, 12 days): recomputing the basin from `eisv_telemetry.measurement.ode.values` reproduces the persisted basin on **12,628/12,628** BOUNDARY rows (97% overall). In those rows the verdict-path E is **min 0.618, p05 0.630, p50 0.657 — zero E-conjunct failures**. BOUNDARY is held by S > 0.25 (99.9% of rows) and I < 0.7 (75%): failing sets I+S n=9,510 (66 agents, p50 E 0.631), S alone n=3,104 (124 agents, p50 E 0.698), risk n=10, I n=3, S+risk n=1. Guide is 99.5% BOUNDARY-driven (12,628 of 12,697 guide rows); the caution path produced 29 guide rows in HIGH over the record. The behavioral-risk door (`low_E` gate, `src/behavioral_assessment.py:145`) is self-limiting: it multiplies self-relative z-scores, so a *standing* penalty is absorbed into the agent's own baseline. What is true: the agent-visible primary E (`state_json.E`) carries the penalty — 45.7% of BOUNDARY rows (5,769/12,628) showed primary E < 0.6 while the deciding ODE E stayed ≥ 0.6 in every one of them. Agents are shown a depressed E that never decides anything. Instrumentation note: the #1777 `decision_self_loop_neutralized` shadow began persisting 2026-08-21 00:52 local and has run continuously since (654 rows by 20:47 the same day) and its contract lists `basin_boundary_flip_counterfactual` under `cannot_measure`; this row rests on the persisted classifier inputs, not on the shadow.
+
+**Sequencing rule (same shape as the coherence-unfreeze rule above).** Any change that feeds behavioral/primary EISV to `classify_basin` on the verdict path — or otherwise lets `decision_e` reach a basin or verdict input — must neutralize or re-score `decision_e` in the SAME change. Otherwise the `E ≥ 0.6` conjunct starts binding on a signal that contains the classifier's own prior verdicts, and roughly half the BOUNDARY population crosses on day one and is held there by its own verdicts. The guard test fails on the repoint with this rule in its message.
+
+**Parked, with its wake.** Re-scoring `guide` (or removing `decision_e` from E) is the obvious repair for the agent-visible penalty, but E's composition is a predictor in the 2026-12-01 pre-registered outcome read (`docs/proposals/eisv-outcome-grounding-stop-rule-v0.md`); changing it before that read contaminates the tracked series. Wake: the 12-01 read has run, AND the #1777 shadow has enough rows (weeks, not the one day it has at this entry) to separate a calibration intercept from a transmitting channel. Relates to the "pause-scores-0.5" do-not above: both are verdict→`decision_e` feedback paths and both want one deliberate decision rather than two patches.
 
 ## Preferred wording
 

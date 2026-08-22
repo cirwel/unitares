@@ -13,10 +13,16 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
 import pytest
 
+from unitares_sdk._mcp_httpx import mcp_httpx
 from unitares_sdk.client import GovernanceClient
+
+# Transient-classification is type-based, so the error this test raises must
+# come from the same library the client builds its retry tuple from — httpx
+# 0.x on mcp 1.x, httpx2 on 2.x. A hardcoded ``import httpx`` here would stop
+# matching under mcp 2.x and assert the opposite of the intended behavior.
+httpx = mcp_httpx()
 
 
 # --- config plumbing -------------------------------------------------------
