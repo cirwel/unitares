@@ -43,6 +43,26 @@ H="$HOME"
 DISPATCH_TREE="$H/projects/dispatch_beam-deploy"
 [ -d "$DISPATCH_TREE" ] || DISPATCH_TREE="$H/projects/dispatch_beam"
 
+# The OpenAI proxy is migrating from a development checkout to a dedicated
+# deploy worktree. Follow the installed plist, not mere directory existence: a
+# prepared deploy tree is not live until launchd has actually been repointed.
+HOST_ADAPTER_DEV="$H/projects/unitares-host-adapter"
+HOST_ADAPTER_DEPLOY="$H/projects/unitares-host-adapter-deploy"
+HOST_ADAPTER_TREE="$HOST_ADAPTER_DEV"
+HOST_ADAPTER_PICKUP="restart-DEV"
+OPENAI_PROXY_PLIST="$H/Library/LaunchAgents/com.unitares.openai-governance-proxy.plist"
+OPENAI_PROXY_LOADED="$(launchctl print "gui/$(id -u)/com.unitares.openai-governance-proxy" 2>/dev/null || true)"
+if [[ "$OPENAI_PROXY_LOADED" == *"$HOST_ADAPTER_DEPLOY"* ]]; then
+  HOST_ADAPTER_TREE="$HOST_ADAPTER_DEPLOY"
+  HOST_ADAPTER_PICKUP="restart"
+elif [ -z "$OPENAI_PROXY_LOADED" ] && [ -f "$OPENAI_PROXY_PLIST" ] \
+  && grep -qF "$HOST_ADAPTER_DEPLOY" "$OPENAI_PROXY_PLIST"; then
+  # No loaded job to inspect (usually the service is intentionally stopped), so
+  # the on-disk plist is the best available statement of the next boot target.
+  HOST_ADAPTER_TREE="$HOST_ADAPTER_DEPLOY"
+  HOST_ADAPTER_PICKUP="restart"
+fi
+
 # name | launchd-label | repo_path | subdir | pickup | port
 # label "" = no launchd service. subdir "" = repo root. port "" = no health probe.
 COMPONENTS=(
@@ -74,11 +94,12 @@ COMPONENTS=(
 "dispatch-beam|com.cirwel.dispatch-beam|$DISPATCH_TREE||restart|"
 "dispatch-beam-codex|com.cirwel.dispatch-beam-codex|$DISPATCH_TREE||restart|"
 "gov-plugin||$H/projects/unitares-governance-plugin||live-from-checkout|"
-# Was "library|" — which renders n/a, documented as "no local long-running
-# process". That was FALSE: com.unitares.openai-governance-proxy has run this
-# tree for weeks on the :8767 path. A blank row invites a look; a confident
-# n/a closes the question, so this was worse than an omission.
-"openai-gov-proxy|com.unitares.openai-governance-proxy|$H/projects/unitares-host-adapter|src|restart|"
+# Follow the plist-selected tree during the one-time migration window. Before
+# migration this truthfully prints [DEV] and deploy-openai-gov-proxy.sh refuses;
+# afterward it reports and deploys the isolated worktree. No health port here:
+# non-chat routes are passthrough, so an HTTP probe would certify Ollama, not
+# the proxy process. The deploy script verifies socket ownership instead.
+"openai-gov-proxy|com.unitares.openai-governance-proxy|$HOST_ADAPTER_TREE|src|$HOST_ADAPTER_PICKUP|"
 # Serves from the SHARED deploy worktree that every deploy fast-forwards —
 # the same hazard dialectic_live had, found by an adversarial review AFTER
 # that one was "fixed". Scoped to the single file it runs. No port: it proxies
