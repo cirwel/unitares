@@ -41,7 +41,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # scripts/ops/hot-reload.sh -> lease_plane root is two levels up
 LEASE_PLANE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SECRETS_FILE="$HOME/.config/cirwel/secrets.env"
-EBIN="$LEASE_PLANE_DIR/_build/dev/lib/lease_plane/ebin"
+# Colon-separated: the SDK path dep (unitares_sdk) compiles into its own ebin
+# in this _build — a changed SDK classifier must be scannable or --changed
+# silently skips it and the node keeps the stale module.
+EBIN="$LEASE_PLANE_DIR/_build/dev/lib/lease_plane/ebin:$LEASE_PLANE_DIR/_build/dev/lib/unitares_sdk/ebin"
 
 if [[ -f "$SECRETS_FILE" ]]; then
     # shellcheck disable=SC1090
@@ -89,9 +92,10 @@ mods =
       # Ground truth: a module needs reloading iff the md5 the node is
       # RUNNING differs from the md5 of the beam ON DISK. Immune to who
       # compiled the tree, and when.
-      ebin = System.get_env("HR_EBIN")
+      ebins = System.get_env("HR_EBIN") |> String.split(":", trim: true)
 
-      Path.wildcard(Path.join(ebin, "*.beam"))
+      ebins
+      |> Enum.flat_map(&Path.wildcard(Path.join(&1, "*.beam")))
       |> Enum.flat_map(fn beam ->
         with {:ok, {mod, disk_md5}} <- :beam_lib.md5(String.to_charlist(beam)),
              {:file, _} <- :rpc.call(node, :code, :is_loaded, [mod]),

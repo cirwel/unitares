@@ -39,6 +39,11 @@ costs an outage:
 - identity: onboard arguments, the lineage anchor file
 - config: the opt-in gate that keeps dev shells off the live substrate
 - backoff: onboard retry and breaker policy
+- reply classification for two more fleet envelopes, added when each reached
+  two independent decoders across repos: the lease plane's
+  (`LeasePlaneEnvelope`) and the agent orchestrator's
+  (`OrchestratorEnvelope`). Classifiers only — decoded terms in, typed
+  results out; each consumer keeps its own transport and JSON library.
 
 **Does not own** — these genuinely differ per consumer and centralising them
 would be false economy:
@@ -47,6 +52,9 @@ would be false economy:
 - EISV mapping
 - outcome-event vocabulary
 - supervision shape
+- transport for the lease-plane/orchestrator classifiers (same rule as the
+  governance envelope: what clients get wrong is reading the reply, never
+  making the call)
 
 ## Use
 
