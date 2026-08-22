@@ -52,8 +52,9 @@ One governed incident, end to end — every step is deployed behavior:
    confidence; recorded outcomes (tests, exit codes, reviews) are compared
    against that claim.
 3. The server **scores** the check-in into four state coordinates and runs a
-   decision ladder that returns **proceed, guide, or pause** — always with a
-   named reason and a next step.
+   decision ladder that returns **proceed or pause** — with graduated `guide`
+   sub-actions on the proceed side — always with a named reason and a next
+   step.
 4. A paused agent's further check-ins are **refused** until it recovers: a
    written reflection while its state remains unhealthy, or a quick resume
    once the state has settled back to safe. A reflection can be reviewed by
@@ -67,16 +68,16 @@ The surfaces below are that chain broken into its parts:
 
 | Core surface | What the operator gets |
 |---|---|
-| **Accountable identity** | Bind writes to a process instance and retain what it did, claimed, and observed. Reads can remain open; writes are attributable. |
+| **Accountable identity** | Bind writes to a process instance and retain what it did, claimed, and observed. Reads can remain open; every write is bound to an agent identity — strictly proof-carrying when `STRICT_IDENTITY_REQUIRED` is set, auto-minted otherwise (see the [trust contract](docs/trust-contract.md)). |
 | **Evidence-linked calibration** | Compare stated confidence with tests, exit codes, tool results, review labels, and other recorded outcomes. |
 | **Policy and recovery** | Return a named action, reason, and next step; enforce pauses on governed write surfaces; support a `reflect → validate → resume` path. |
 | **Operator visibility** | Inspect lifecycle, health, state, evidence, and policy history through MCP/HTTP APIs and a self-hosted dashboard. |
 
-State values carry a provenance label: `measured`, `derived`, `prior`, or
-`unknown`. A number can be wrong, but it cannot silently pretend to be a
-measurement; a mechanical lint enforces the labels on the metrics read
-surface, with wider coverage tracked in the
-[trust contract](docs/trust-contract.md).
+Selected state values carry an explicit provenance label, so a number can be
+wrong but cannot silently pretend to be a measurement. A mechanical lint
+enforces label presence on the metrics read surface today; the full
+`measured` / `derived` / `prior` / `unknown` vocabulary and wider coverage are
+the staged target tracked in the [trust contract](docs/trust-contract.md).
 
 The core loop is deliberately small. Four further surfaces build **on** that
 record rather than beside it. Each is independently usable and none is required
@@ -243,7 +244,7 @@ real load — not an independent efficacy study:
 | **4,573,890 audit/telemetry events** | Continuous maintainer-run operation since 2025-11-28, the first identity record. Session-resolution observations and cross-device-call records make up 91.4%; this is infrastructure/load evidence, not 4.6M independent policy decisions. |
 | **71,141 stored EISV state rows** | Longitudinal state observations in `core.agent_state`; rows are not independent agents or trials. |
 | **15 recorded self-recovery events** | Of 21 canonical, non-automatic lifecycle-resume records. Shows the path was exercised; not 15 independent trials or proof that pauses improved outcomes. |
-| **32,181 labeled EISV windows** | [20,655 overlapping real windows from one 39-day Raspberry Pi run plus 11,526 synthetic windows](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories). These are windows, not independent agents or customer trajectories. |
+| **32,181 labeled EISV windows** | [20,655 overlapping real windows from one 39-day Raspberry Pi run plus 11,526 synthetic windows](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories). Window parameters, the real/synthetic split (a per-row `provenance` column), and the generating pipeline are documented on the dataset card and indexed in the [evaluation catalog](docs/EVALUATION_INDEX.md#labelled-sets). These are windows, not independent agents or customer trajectories. |
 | **6 long-running resident agents** | Configured and operating in the maintainer deployment at the snapshot date; one runs on separate hardware, the same Raspberry Pi that produced the labeled-window dataset. The same single-operator fleet as every number above, not external adopters. |
 
 The maintainer deployment is **single-operator and co-development dogfood**: most
