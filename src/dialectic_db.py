@@ -199,6 +199,13 @@ class DialecticDB:
         so callers that do not track rounds are unaffected. Before 2026-08-16
         this wrote phase only, which is why every row read ``synthesis_round=0``
         regardless of how many synthesis messages a session actually carried.
+
+        Carries the same TERMINAL_WRITE_GUARD as the status/reviewer writers:
+        a phase sync racing a concurrent resolution used to stamp e.g.
+        ``phase='failed'`` onto a ``status='resolved'`` row, and rehydration
+        trusts ``phase``. A refused sync returns False; every caller is a
+        best-effort mirror of in-memory state, so skipping on a terminal row
+        is the correct outcome, not an error.
         """
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
@@ -208,8 +215,15 @@ class DialecticDB:
                     synthesis_round = COALESCE($3, synthesis_round),
                     updated_at = now()
                 WHERE session_id = $2
+                  AND status NOT IN ('resolved', 'failed')
             """, phase, session_id, synthesis_round)
-            return "UPDATE 1" in result
+            if "UPDATE 1" in result:
+                return True
+            logger.info(
+                f"update_session_phase: {session_id[:16]}... phase sync skipped "
+                "(row terminal or missing)"
+            )
+            return False
 
     async def reopen_session(self, session_id: str, phase: str) -> bool:
         """Return a swept session to `active` at a workable phase.
@@ -239,27 +253,93 @@ class DialecticDB:
             """, phase, session_id)
             return "UPDATE 1" in result
 
+    # Row-statuses no in-place writer may modify. Exactly the set
+    # `resolve_session` and DialecticSaga.commit_session_row (dialectic_saga.ex
+    # "BEAM is the sole writer for both terminal transitions") already guard,
+    # and the only two values the live `dialectic_sessions_status_check`
+    # CHECK constraint permits that are terminal: 'timeout'/'abandoned' are
+    # not storable at all, and 'escalated' is storable but council-retired
+    # with zero writers — deliberately NOT guarded so a stray escalated row
+    # stays reapable by the sweeper instead of becoming immortal.
+    # Named distinctly from dialectic_outcomes.TERMINAL_STATUSES, which is an
+    # analytics classifier with different membership, not a write gate.
+    # `reopen_session` is the only sanctioned path out of a terminal state.
+    TERMINAL_WRITE_GUARD = ("resolved", "failed")
+
     async def update_session_reviewer(self, session_id: str, reviewer_agent_id: str) -> bool:
-        """Assign reviewer to session."""
+        """Assign reviewer to session.
+
+        Refuses terminal sessions: the sweeper picks a replacement reviewer
+        across several DB round-trips, and the session can resolve (e.g. via
+        the BEAM saga) inside that window. Without the guard the write lands
+        on a resolved row. Returns False when refused or missing.
+        """
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             result = await conn.execute("""
                 UPDATE core.dialectic_sessions
                 SET reviewer_agent_id = $1, updated_at = now()
                 WHERE session_id = $2
+                  AND status NOT IN ('resolved', 'failed')
             """, reviewer_agent_id, session_id)
-            return "UPDATE 1" in result
+            if "UPDATE 1" in result:
+                return True
+            existing = await conn.fetchrow(
+                "SELECT status FROM core.dialectic_sessions WHERE session_id = $1",
+                session_id,
+            )
+            if existing is None:
+                logger.warning(f"update_session_reviewer: {session_id[:16]}... not found")
+            else:
+                logger.warning(
+                    f"update_session_reviewer: {session_id[:16]}... is terminal as "
+                    f"{existing['status']!r}; reviewer write refused"
+                )
+            return False
 
     async def update_session_status(self, session_id: str, status: str) -> bool:
-        """Update session status (e.g., to 'failed' for auto-resolve)."""
+        """Update session status (e.g., to 'failed' for auto-resolve).
+
+        Same cross-process defense as ``resolve_session``: a bare
+        ``WHERE session_id`` let the sweeper overwrite a session another
+        writer (the BEAM saga, a concurrent resolve) had already finished —
+        the in-process lock in ``session.py`` cannot see other processes.
+
+        Returns True ONLY when this call performed the transition. A no-op
+        returns False even when the row already holds the requested status:
+        "another writer got there first with the same value" is still their
+        outcome, not this caller's — the sweeper must not narrate a reap it
+        did not perform (BEAM liveness also writes 'failed', with its own
+        resolution payload). Callers that want idempotent-replay semantics
+        use ``resolve_session``.
+        """
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             result = await conn.execute("""
                 UPDATE core.dialectic_sessions
                 SET status = $1, phase = $1, updated_at = now()
                 WHERE session_id = $2
+                  AND status NOT IN ('resolved', 'failed')
             """, status, session_id)
-            return "UPDATE 1" in result
+            if "UPDATE 1" in result:
+                return True
+            existing = await conn.fetchrow(
+                "SELECT status FROM core.dialectic_sessions WHERE session_id = $1",
+                session_id,
+            )
+            if existing is None:
+                logger.warning(f"update_session_status: {session_id[:16]}... not found")
+            elif existing["status"] == status:
+                logger.info(
+                    f"update_session_status: {session_id[:16]}... already {status} "
+                    "(another writer won; not this caller's transition)"
+                )
+            else:
+                logger.warning(
+                    f"update_session_status: {session_id[:16]}... already terminal as "
+                    f"{existing['status']!r}; refused overwrite to {status!r}"
+                )
+            return False
 
     async def update_session_awaiting_facilitation(self, session_id: str, awaiting: bool) -> bool:
         """Persist the awaiting_facilitation flag (#1167 Ask 2).
