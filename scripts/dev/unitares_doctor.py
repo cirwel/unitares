@@ -2313,10 +2313,55 @@ def check_adjudication_feedstock(db_url: str) -> CheckResult:
     — wrong event_type, wrong severity, or both — so the entire falsifiability
     anchor rests on one producer's output. When that producer legitimately goes
     quiet there is no second source, and the coverage table below is the
-    measurement any fix to that has to be designed against. Do NOT respond to
-    this warning by widening the queue: ``http_sentinel_adjudicate`` attributes
-    outcomes to the sentinel substrate uuid, so admitting a doctor finding
-    today books it against SENTINEL's EISV. Attribution comes first.
+    measurement any fix to that has to be designed against.
+
+    ⛔The attribution objection this text used to raise is STALE and was
+    blocking correct work. It said adjudicating a doctor finding would book the
+    outcome against SENTINEL's EISV, so attribution had to come first.
+    Attribution now comes first by construction:
+    ``http_sentinel_adjudicate`` resolves the producer via
+    ``_finding_producer_uuid`` (``src/http_routes/sentinel.py``), falls back to
+    the Sentinel substrate uuid ONLY for Sentinel's own families, and otherwise
+    returns 422 rather than mis-booking against the wrong resident.
+
+    ⛔Read that narrowly. ``event_type_is_sentinel_family`` is named for the
+    family but implemented as ``producer_ref == "sentinel"`` — a check on the
+    raw ``audit.events.agent_id`` slug, not the event type. So the fallback is
+    slug-scoped: any producer that writes the literal slug ``sentinel`` still
+    books against Sentinel. Narrower than the name promises, and worth fixing
+    before widening admits a producer that could collide with it.
+
+    ⛔That removes ONE blocker, not the gate. Widening still faces TWO
+    independent gates, both necessary, and this check measures only the first:
+
+      * ELIGIBILITY — ``ADJUDICABLE_EVENT_TYPES`` at ``ADJUDICABLE_SEVERITIES``.
+        This is what the coverage table below counts. Attribution work does not
+        move it: a fully conformant producer emitting medium-severity findings
+        still cannot enter the queue.
+      * ATTRIBUTION CONFORMANCE — a producer writing a bare slug into
+        ``audit.events.agent_id`` has no identity to attribute to, so it 422s.
+        Fail-closed and correct, but it yields no anchor. ⛔Do NOT trust any
+        list of which producers conform, including one written here: this is
+        actively changing. ``agents/watcher/findings.py`` now resolves
+        Watcher's UUID and ``agents/common/findings.py`` gives the doctor layer
+        ``doctor_layer_agent_id``, so a census written a week ago is already
+        wrong — as an earlier draft of this very paragraph was. Derive it when
+        you need it, with a LEFT JOIN from ``audit.events`` to ``core.agents``
+        over the window you care about. (And no "N of M" ratio: at roughly 24
+        findings/day that decays within a day.)
+
+    ⛔Before widening anything, resolve the harder question this check cannot
+    answer. The MECHANISM for a false positive exists — the dashboard offers a
+    "False positive" dismissal and the endpoint records it as a bad outcome
+    (``reason="fp"``), so this is not a channel that structurally cannot
+    dismiss. What is missing is MEASUREMENT: no report in ``scripts/ops`` or
+    ``scripts/dev`` computes dismissal rate per family, and the in-queue record
+    to date is 17 adjudications, all confirmed. ⛔Dismissal evidence from other
+    channels (``watcher_finding_dismissed``) is a different population on a
+    different path and does not transfer. Decide how a false positive would be
+    OBSERVED for a family before admitting it — an unmeasured channel becomes
+    the all-positive generator Invariant 4 exists to exclude, whether or not
+    the button exists.
 
     WARN, not FAIL. A dry queue is a real condition to surface, not a broken
     install, and the correct response is sometimes "nothing is wrong, the
@@ -2392,10 +2437,21 @@ def check_adjudication_feedstock(db_url: str) -> CheckResult:
             "the lever rather than restore the alarm. Read "
             "forced_release_transform before deciding which: it asserts the "
             "upstream invariant and is what separates a DRAINED queue from a "
-            "DEAD one. ⛔Do NOT widen the queue "
-            "to clear this warning: adjudication attributes the outcome to the "
-            "sentinel substrate uuid, so admitting another producer's finding "
-            "books it against Sentinel's EISV. Fix attribution first."
+            "DEAD one. On widening: the old ATTRIBUTION objection here is "
+            "resolved — adjudication now resolves the finding's own producer "
+            "and returns 422 rather than booking against another resident. "
+            "But that removes one blocker, not the gate. TWO independent gates "
+            f"remain, both necessary: ELIGIBILITY ({ADJUDICABLE_EVENT_TYPES} at "
+            f"{ADJUDICABLE_SEVERITIES} — what the coverage table above actually "
+            "measures) and ATTRIBUTION CONFORMANCE (a producer writing a bare "
+            "slug has no identity, so it 422s). Closing conformance does NOT "
+            "open the queue; a conformant producer emitting medium-severity "
+            "findings still cannot enter. ⛔And note what the in-queue record "
+            "says: 17 adjudications, 100% confirmed, ZERO dismissals ever. No "
+            "tooling in scripts/ops or scripts/dev measures dismissal rate. So "
+            "before widening anything, decide how a false positive would be "
+            "detected at all — a family that can only confirm is the "
+            "all-positive generator Invariant 4 exists to exclude."
         ),
     )
 

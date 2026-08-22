@@ -223,8 +223,9 @@ async def _proxy_list_tools() -> list[Tool]:
         import httpx
         from mcp.client.streamable_http import streamable_http_client
         async with httpx.AsyncClient(http2=False, timeout=15) as http_client:
-            async with streamable_http_client(STDIO_PROXY_URL, http_client=http_client) as (read, write, _):
-                async with ClientSession(read, write) as session:
+            # mcp 1.x yields (read, write, get_session_id); 2.x drops the third.
+            async with streamable_http_client(STDIO_PROXY_URL, http_client=http_client) as streams:
+                async with ClientSession(streams[0], streams[1]) as session:
                     await session.initialize()
                     res = await session.list_tools()
                     return res.tools
@@ -246,8 +247,9 @@ async def _proxy_call_tool(name: str, arguments: dict[str, Any]) -> Sequence[Tex
         import httpx
         from mcp.client.streamable_http import streamable_http_client
         async with httpx.AsyncClient(http2=False, timeout=15) as http_client:
-            async with streamable_http_client(STDIO_PROXY_URL, http_client=http_client) as (read, write, _):
-                async with ClientSession(read, write) as session:
+            # mcp 1.x yields (read, write, get_session_id); 2.x drops the third.
+            async with streamable_http_client(STDIO_PROXY_URL, http_client=http_client) as streams:
+                async with ClientSession(streams[0], streams[1]) as session:
                     await session.initialize()
                     res = await session.call_tool(name, arguments)
                     return res.content
