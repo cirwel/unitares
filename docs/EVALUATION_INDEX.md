@@ -124,6 +124,7 @@ Compact run provenance and all 12 overall rows are preserved in
 | Artifact | What it labels | Finding | Freshness |
 |---|---|---|---|
 | [`evaluation/dialectic-reviewer-labels.md`](evaluation/dialectic-reviewer-labels.md) ✓ | Every substantive non-canary `antithesis` message (n=97), 5-way: refutes / concurs-with-conditions / ratifies / formulaic / non-verdict | **Split by the 2026-07-02 Codex-reviewer activation.** Pre (n=76): 31.6% refute, **47.4% templated pseudo-disagreement**. Post (n=21): **81.0% refute, 4.8% formulaic**. Rubber-stamping never exceeds 6.6% in either era | labelled 2026-08-19 |
+| [`hikewa/unitares-eisv-trajectories`](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories) (Hugging Face) | 32,181 twenty-step EISV windows (stride 10), 9 dynamical-shape classes: 20,655 real from one Raspberry Pi agent's 39-day run (2026-01-11 → 2026-02-19) + 11,526 synthetic (per-row `provenance` column separates them; `drift_dissonance` is synthetic-only) | Real corpus is 88% `settled_presence`/`convergence`; shape rules, window-length sensitivity, and counts are on the dataset card. Generating pipeline: [CIRWEL/eisv-lumen](https://github.com/CIRWEL/eisv-lumen). Trajectory-shape substrate, **not** an outcome-lift evaluation | dataset revision of 2026-06-20; regenerated as the agent accumulates state — pin the Hub revision when citing |
 
 ⛔**Never quote the pooled distribution.** It straddles an instrument change —
 `UNITARES_DIALECTIC_REVIEWER_HOST=codex` was activated 2026-07-02 and gemma4
