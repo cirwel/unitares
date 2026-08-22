@@ -1,0 +1,60 @@
+name: Release Seams
+
+# Every check this repository had compared an artifact to itself: version_manager
+# checks VERSION against seven files, doc_health checks docs against docs. The
+# failures that produced docs/releases/2.18.0-errata.md all lived in a seam
+# instead — between a merge range and the entry describing it, and between a
+# directory and a release tag outside VERSION's reach. Nothing owned a seam, so
+# nothing reported one.
+#
+# The two release gates stand down unless the tree is a release (VERSION not yet
+# tagged), so ordinary PRs see them only as a quiet pass. The published-claims
+# check runs every time, because a public page can begin advertising an
+# unpublished version at any merge — and did, on 2026-08-21.
+
+# Deliberately NOT path-filtered. A filtered-out job never reports, and under
+# `strict` branch protection a required check that never reports leaves the PR
+# waiting forever — so a path-filtered job cannot be a required check at all.
+# The first version of this workflow was filtered, which made `seams` optional
+# and merge-past-able: an advisory wearing a gate's name. The scripts already
+# stand down in milliseconds off a release tree, so the filter bought nothing
+# and cost enforceability.
+on:
+  merge_group:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+permissions:
+  contents: read
+
+jobs:
+  seams:
+    runs-on: ubuntu-latest
+    steps:
+      # Full history and tags: both gates measure a range that starts at the
+      # previous release tag, and a shallow clone reports an empty range as
+      # "nothing to cover" — a false pass, which is the one outcome a gate
+      # written for this failure must never produce.
+      - name: Checkout with full history and tags
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+
+      - name: Changelog covers the merge range
+        run: python scripts/ci/changelog_coverage.py
+
+      - name: Independently versioned series are level with their consumers
+        run: python scripts/ci/release_series_drift.py
+
+      # Runs on every PR, not only a release tree: a public page can start
+      # advertising an unpublished version at any merge, and did.
+      - name: Public claims name published artifacts
+        run: python scripts/ci/published_claims.py

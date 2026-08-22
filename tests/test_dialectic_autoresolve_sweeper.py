@@ -18,11 +18,16 @@ async def test_cycle_maps_autoresolve_keys():
     """resolved_count -> failed, reassigned_count -> reassigned, facilitation."""
     from src.background_tasks import _run_dialectic_auto_resolve_cycle
 
-    fake = {"resolved_count": 2, "reassigned_count": 1, "facilitation_count": 3}
+    fake = {
+        "resolved_count": 2,
+        "reassigned_count": 1,
+        "facilitation_count": 3,
+        "skipped_count": 1,
+    }
     with patch(AR, new=AsyncMock(return_value=fake)):
         summary = await _run_dialectic_auto_resolve_cycle()
 
-    assert summary == {"failed": 2, "reassigned": 1, "facilitation": 3}
+    assert summary == {"failed": 2, "reassigned": 1, "facilitation": 3, "skipped": 1}
 
 
 @pytest.mark.asyncio
@@ -33,7 +38,7 @@ async def test_cycle_handles_missing_keys():
     with patch(AR, new=AsyncMock(return_value={"error": "boom"})):
         summary = await _run_dialectic_auto_resolve_cycle()
 
-    assert summary == {"failed": 0, "reassigned": 0, "facilitation": 0}
+    assert summary == {"failed": 0, "reassigned": 0, "facilitation": 0, "skipped": 0}
 
 
 @pytest.mark.asyncio

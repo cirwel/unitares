@@ -150,11 +150,10 @@ async def call_tool(tool_name: str, arguments: Dict[str, Any], url: str) -> Dict
             transport_context = sse_client(url)
 
         async with transport_context as streams:
-            # Streamable HTTP returns (read, write, messages) tuple, SSE returns (read, write)
-            if is_streamable:
-                read, write, _ = streams
-            else:
-                read, write = streams
+            # Streamable HTTP yields (read, write, get_session_id) on mcp 1.x
+            # and (read, write) on 2.x; SSE yields (read, write). Index-based
+            # unpack covers all three shapes.
+            read, write = streams[0], streams[1]
 
             async with ClientSession(read, write) as session:
                 await session.initialize()

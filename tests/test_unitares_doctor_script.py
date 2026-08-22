@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import re
 import sys
 from pathlib import Path
 
@@ -1751,3 +1753,131 @@ def test_class_anchors_fresh_ignores_non_measured_provenance(doctor, anchor_tabl
     anchor_tables({"embodied": _anchor(_today_minus(900), provenance="alias")})
     r = doctor.check_class_anchors_fresh(REPO_ROOT)
     assert r.status is doctor.Status.PASS
+
+
+# ---------------------------------------------------------------------------
+# Operator guidance must not re-assert a repaired blocker
+# ---------------------------------------------------------------------------
+# This text reaches HUMANS running the doctor, not just agents reading memory.
+# It told operators that adjudicating a doctor finding would book the outcome
+# against Sentinel's EISV, so attribution had to come first. Attribution was
+# repaired — http_sentinel_adjudicate resolves the producer and 422s rather
+# than mis-booking — but the warning kept shipping, telling people not to do
+# work that was already unblocked. Found by an audit that measured 70 stale
+# invariants across 343 examined; this was the one with a human audience.
+
+
+def _doctor_source() -> str:
+    return (Path(__file__).resolve().parents[1]
+            / "scripts" / "dev" / "unitares_doctor.py").read_text(encoding="utf-8")
+
+
+# Match the CLAIM, not one phrasing of it. The first version of this guard
+# asserted only `"Attribution comes first" not in src` — and passed while the
+# stale claim was still live two dozen lines away as "Fix attribution first."
+# in the operator-visible detail string. A guard keyed to one wording is
+# indistinguishable from no guard.
+#
+# Scoped to check_adjudication_feedstock, not the whole 2400-line script: a
+# global phrase ban would fail a future unrelated check that legitimately
+# needs these words, under a test named for this queue.
+_STALE_ATTRIBUTION_CLAIM = re.compile(
+    r"fix\s+attribution\s+first"
+    r"|attribution\s+comes\s+first"
+    r"|books?\s+it\s+against\s+SENTINEL"
+    r"|attributes?\s+the\s+outcome\s+to\s+the\s+sentinel\s+substrate",
+    re.I,
+)
+
+
+def _feedstock_check_source() -> str:
+    """Just check_adjudication_feedstock — docstring AND detail string."""
+    src = _doctor_source()
+    body = src.split("def check_adjudication_feedstock", 1)[1]
+    nxt = re.search(r"\ndef \w+", body)
+    return body[: nxt.start()] if nxt else body
+
+
+def test_queue_guidance_does_not_reassert_the_repaired_attribution_blocker():
+    """No phrasing of the repaired blocker, in EITHER surface.
+
+    The docstring is read by developers; the CheckResult detail is what
+    render_text() prints to an operator. Fixing only the first is worse than
+    fixing neither — the two then contradict each other and the reader cannot
+    tell which was maintained.
+    """
+    hits = _STALE_ATTRIBUTION_CLAIM.findall(_feedstock_check_source())
+    assert not hits, (
+        f"stale attribution blocker present as {hits!r}. Attribution resolves "
+        "the producer and 422s rather than mis-booking — verify "
+        "src/http_routes/sentinel.py before restoring."
+    )
+
+
+def test_corrected_guidance_reaches_the_OPERATOR_surface_not_just_the_docstring():
+    """A docstring-only fix leaves render_text() printing the old claim."""
+    body = _feedstock_check_source()
+    after_docstring = body.split('"""', 2)[-1]
+    assert "ATTRIBUTION CONFORMANCE" in after_docstring, (
+        "corrected guidance is in the docstring but not in the detail string "
+        "operators actually see"
+    )
+
+
+def test_guidance_does_not_claim_conformance_alone_opens_the_queue():
+    """Eligibility (event_type + severity) and attribution conformance are TWO
+    independent gates. An earlier draft said conformance was "what actually
+    gates widening", which would send an operator to provision an identity and
+    expect a queue that cannot open — this check measures eligibility."""
+    body = _feedstock_check_source()
+    assert "ELIGIBILITY" in body and "ADJUDICABLE_EVENT_TYPES" in body
+
+
+def test_guidance_does_not_import_dismissal_evidence_from_another_channel():
+    """The in-queue population has never produced a dismissal. Borrowing
+    watcher_finding_dismissed as reassurance is a different population on a
+    different path."""
+    body = _feedstock_check_source()
+    assert "ZERO dismissals ever" in body
+    assert "does not transfer" in body or "DIFFERENT population" in body
+
+
+def test_provisioning_script_it_points_at_actually_exists_and_runs(tmp_path):
+    """Assert the FILE, not the filename string, and run it HERMETICALLY.
+
+    Two hazards in the obvious version of this test, both real:
+
+    - Inheriting the ambient environment means an EXISTING anchor short-circuits
+      to exit 0 before the dry-run branch is reached, so the test can pass
+      without exercising what it claims to. Point UNITARES_DOCTOR_ANCHOR at
+      tmp_path so the absent-anchor path is the one under test.
+    - If --dry-run ever regresses to the apply path, an ambient run would
+      contact the live governance service and WRITE THE REAL ANCHOR — a test
+      that mints a fleet identity. The tmp anchor plus an unroutable URL make
+      that impossible rather than unlikely.
+
+    Asserts on OUTPUT, not just exit status: exit 0 is what a short-circuit and
+    a real dry run have in common.
+    """
+    import subprocess
+    root = Path(__file__).resolve().parents[1]
+    script = root / "scripts" / "ops" / "provision_doctor_identity.py"
+    assert script.exists(), "guidance points at a script that does not exist"
+
+    env = dict(os.environ)
+    env["UNITARES_DOCTOR_ANCHOR"] = str(tmp_path / "doctor.json")
+    env["UNITARES_GOV_URL"] = "http://127.0.0.1:9"  # discard port; nothing listens
+    env.pop("UNITARES_HTTP_API_TOKEN", None)
+
+    r = subprocess.run([sys.executable, str(script), "--dry-run"],
+                       capture_output=True, text=True, timeout=60, env=env)
+    assert r.returncode == 0, (
+        f"the documented first step fails: {(r.stderr or r.stdout).strip()[:200]}"
+    )
+    assert "Dry run" in r.stdout, (
+        "exited 0 without reaching the dry-run branch — a short-circuit and a "
+        f"real dry run are indistinguishable by exit code alone. stdout={r.stdout!r}"
+    )
+    assert not (tmp_path / "doctor.json").exists(), (
+        "--dry-run wrote an anchor; it must change nothing"
+    )
