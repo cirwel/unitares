@@ -77,6 +77,9 @@ def _build_policy_evaluation(decision: Dict, metrics: Dict,
         "inputs": inputs,
         "measurement_role": "EISV/risk/coherence are policy inputs, not the actuator itself.",
     }
+    hard_stop_provenance = decision.get("hard_stop_provenance")
+    if isinstance(hard_stop_provenance, dict):
+        evaluation["hard_stop_provenance"] = hard_stop_provenance
     if metrics.get("primary_eisv_source") and metrics.get("primary_eisv_source") != "ode_fallback":
         evaluation["state_source_note"] = (
             "policy_evaluation.inputs.basin is the decision-time policy basin; "

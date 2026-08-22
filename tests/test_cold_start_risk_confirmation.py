@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
+from governance_core.adaptive_governor import AdaptiveGovernor
+from src.cirs import OscillationState
 from src.cold_start_risk_confirmation import (
     COLD_START_CONFIRMATION_ACTUATION_SCOPE,
     NON_AUTHORED_COLD_START_ENFORCEMENT_BASIS,
@@ -16,6 +19,86 @@ from src.cold_start_risk_confirmation import (
     evaluate_cold_start_risk_confirmation,
     evaluate_non_authored_cold_start_trap,
 )
+from src.monitor_decision import HARD_STOP_PROVENANCE_SCHEMA, make_decision
+
+
+def _risk_only_hard_stop_provenance(*, sub_action, nearest_edge, cirs=False):
+    risk_score = 0.85 if cirs else 0.80
+    risk_hard_stops = (
+        ["cirs_risk_ceiling", "high_risk_verdict", "basin_risk_floor"]
+        if cirs
+        else ["high_risk_verdict", "basin_risk_floor"]
+    )
+    return {
+        "schema": HARD_STOP_PROVENANCE_SCHEMA,
+        "complete": True,
+        "risk_only": True,
+        "risk_hard_stops": risk_hard_stops,
+        "independent_hard_stops": [],
+        "cirs": {
+            "mode": "adaptive_v2" if cirs else "not_supplied",
+            "response_tier": "hard_block" if cirs else None,
+            "provenance_complete": True,
+            "observed": {
+                "coherence": 0.6,
+                "risk_score": risk_score,
+                "oscillation_index": 0.0 if cirs else None,
+                "flips": 0 if cirs else None,
+            },
+            "thresholds": {
+                "coherence_floor": 0.25 if cirs else None,
+                "risk_ceiling": 0.80 if cirs else None,
+                "oscillation_index": 2.5 if cirs else None,
+                "flips": 4 if cirs else None,
+            },
+            "conditions": {
+                "coherence_floor": False,
+                "risk_ceiling": cirs,
+                "resonance": False,
+                "unclassified_hard_block": False,
+            },
+        },
+        "policy": {
+            "observed": {
+                "E": 0.8,
+                "I": 0.8,
+                "S": 0.1,
+                "V": 0.0,
+                "coherence": 0.6,
+                "risk_score": risk_score,
+                "void_active": False,
+                "verdict": "high-risk",
+                "basin": "low",
+            },
+            "thresholds": {
+                "coherence_critical": 0.4,
+                "basin_low_I": 0.5,
+                "basin_low_coherence": 0.4,
+                "basin_low_abs_V": 0.3,
+                "basin_low_risk": 0.7,
+            },
+            "conditions": {
+                "void_active": False,
+                "coherence_floor": False,
+                "high_risk_verdict": True,
+                "low_basin": True,
+                "basin_low_integrity": False,
+                "basin_low_coherence": False,
+                "basin_high_abs_valence": False,
+                "basin_risk_floor": True,
+                "independent_low_basin": False,
+            },
+            "risk_neutral_counterfactual": {
+                "risk_score": 0.0,
+                "basin": "high",
+            },
+        },
+        "selected_decision": {
+            "action": "pause",
+            "sub_action": sub_action,
+            "nearest_edge": nearest_edge,
+        },
+    }
 
 
 def _risk_pause():
@@ -23,6 +106,11 @@ def _risk_pause():
         "action": "pause",
         "sub_action": "risk_pause",
         "reason": "UNITARES high-risk verdict",
+        "nearest_edge": "risk",
+        "hard_stop_provenance": _risk_only_hard_stop_provenance(
+            sub_action="risk_pause",
+            nearest_edge="risk",
+        ),
     }
 
 
@@ -33,7 +121,67 @@ def _cirs_block(nearest_edge="risk"):
         "reason": "CIRS risk ceiling breached",
         "guidance": "Pause to investigate the risk spike.",
         "nearest_edge": nearest_edge,
+        "hard_stop_provenance": _risk_only_hard_stop_provenance(
+            sub_action="cirs_block",
+            nearest_edge=nearest_edge,
+            cirs=True,
+        ),
     }
+
+
+def _full_stack_cirs_risk_decision(
+    *,
+    risk_score=0.85,
+    coherence=0.6,
+    integrity=0.8,
+    void_active=False,
+    resonant=False,
+    omit_cirs_provenance=False,
+):
+    state = SimpleNamespace(
+        E=0.8,
+        I=integrity,
+        S=0.1,
+        V=0.0,
+        coherence=coherence,
+        void_active=void_active,
+        coherence_history=[],
+        risk_history=[],
+    )
+    governor = AdaptiveGovernor()
+    cirs_result = governor.update(
+        coherence=coherence,
+        risk=risk_score,
+        verdict="high-risk",
+        E_history=[0.8] * 6,
+        I_history=[integrity] * 6,
+        S_history=[0.1] * 6,
+        complexity_history=[0.3] * 6,
+        V_history=[0.0] * 6,
+    )
+    if resonant:
+        cirs_result["oi"] = 2.5
+        cirs_result["resonant"] = True
+        cirs_result["trigger"] = "oi"
+        cirs_provenance = cirs_result["hard_stop_provenance"]
+        cirs_provenance["observed"]["oscillation_index"] = 2.5
+        cirs_provenance["conditions"]["resonance"] = True
+    if omit_cirs_provenance:
+        cirs_result.pop("hard_stop_provenance")
+    oscillation = OscillationState(
+        oi=cirs_result["oi"],
+        flips=cirs_result["flips"],
+        resonant=cirs_result["resonant"],
+        trigger=cirs_result["trigger"],
+    )
+    return make_decision(
+        state,
+        risk_score,
+        unitares_verdict="high-risk",
+        response_tier=cirs_result["verdict"],
+        oscillation_state=oscillation,
+        cirs_result=cirs_result,
+    )
 
 
 def _evaluate(*, decision=None, previous=None, cycle=1, **overrides):
@@ -41,6 +189,7 @@ def _evaluate(*, decision=None, previous=None, cycle=1, **overrides):
         "behavioral_confidence": 0.1,
         "is_baselined": False,
         "primary_driver": "phi_cold_start",
+        "primary_eisv_source": "ode_fallback",
         "process_cycle": cycle,
         "monitor_lineage": "lineage-a",
         "lineage_status": "identity_genesis",
@@ -80,9 +229,13 @@ def _legacy_trap_record(
                 "policy_evaluation": {
                     "action": "pause",
                     "sub_action": "risk_pause",
+                    "hard_stop_provenance": maturity_gate[
+                        "hard_stop_provenance"
+                    ],
                     "inputs": {
                         "verdict_source": "phi_cold_start",
                         "primary_eisv_source": "ode_fallback",
+                        "nearest_edge": "risk",
                     },
                     "maturity_gate": maturity_gate,
                 },
@@ -113,11 +266,12 @@ def test_first_fallback_risk_pause_is_shadow_would_defer_only():
     assert gate["actuation_scope"] == COLD_START_CONFIRMATION_ACTUATION_SCOPE
     assert gate["actuation_applied"] is False
     assert "runtime circuit breaker" in gate["note"]
-    assert gate["original_decision"] == {
-        "action": "pause",
-        "sub_action": "risk_pause",
-        "reason": "UNITARES high-risk verdict",
-    }
+    original = gate["original_decision"]
+    assert original["action"] == "pause"
+    assert original["sub_action"] == "risk_pause"
+    assert original["reason"] == "UNITARES high-risk verdict"
+    assert original["nearest_edge"] == "risk"
+    assert original["hard_stop_provenance"]["risk_only"] is True
 
 
 def test_risk_attributed_cirs_block_is_the_same_fallback_risk_candidate():
@@ -127,12 +281,12 @@ def test_risk_attributed_cirs_block_is_the_same_fallback_risk_candidate():
     assert gate["eligible"] is True
     assert gate["would_defer"] is True
     assert gate["enforcement_basis"] == "phi_cold_start_unconfirmed_shadow"
-    assert gate["original_decision"] == {
-        "action": "pause",
-        "sub_action": "cirs_block",
-        "reason": "CIRS risk ceiling breached",
-        "nearest_edge": "risk",
-    }
+    original = gate["original_decision"]
+    assert original["action"] == "pause"
+    assert original["sub_action"] == "cirs_block"
+    assert original["reason"] == "CIRS risk ceiling breached"
+    assert original["nearest_edge"] == "risk"
+    assert original["hard_stop_provenance"]["risk_only"] is True
 
 
 @pytest.mark.parametrize(
@@ -169,6 +323,380 @@ def test_fallback_risk_candidate_truth_table(decision, expected_candidate):
     if not expected_candidate:
         assert gate["ineligibility_reason"] == "policy_not_risk_pause"
         assert gate["eligible"] is False
+
+
+@pytest.mark.parametrize(
+    ("decision", "sub_action", "nearest_edge"),
+    [
+        (_risk_pause(), "cirs_block", "risk"),
+        (_cirs_block(), "risk_pause", "risk"),
+        (_risk_pause(), "risk_pause", "coherence"),
+    ],
+)
+def test_impossible_route_fails_closed_even_when_record_is_self_consistent(
+    decision,
+    sub_action,
+    nearest_edge,
+):
+    decision = deepcopy(decision)
+    decision["sub_action"] = sub_action
+    decision["nearest_edge"] = nearest_edge
+    selected = decision["hard_stop_provenance"]["selected_decision"]
+    selected["sub_action"] = sub_action
+    selected["nearest_edge"] = nearest_edge
+
+    gate = _evaluate(decision=decision)
+    decision["cold_start_confirmation"] = gate
+    guarded = apply_non_authored_cold_start_guard(
+        decision,
+        epistemic_class="substrate_interpretation",
+        enabled=True,
+    )
+
+    assert gate["policy_candidate"] is False
+    assert guarded["action"] == "pause"
+    assert guarded.get("cold_start_epistemic_deferred") is not True
+    if "cold_start_epistemic_gate" in guarded:
+        assert guarded["cold_start_epistemic_gate"]["applied"] is False
+
+
+def test_live_adaptive_cirs_risk_ceiling_records_exact_risk_only_provenance():
+    decision = _full_stack_cirs_risk_decision()
+    provenance = decision["hard_stop_provenance"]
+
+    assert decision["sub_action"] == "cirs_block"
+    assert decision["nearest_edge"] == "risk"
+    assert "> 0.80" in decision["reason"]
+    assert provenance["complete"] is True
+    assert provenance["risk_only"] is True
+    assert provenance["risk_hard_stops"] == [
+        "cirs_risk_ceiling",
+        "high_risk_verdict",
+        "basin_risk_floor",
+    ]
+    assert provenance["independent_hard_stops"] == []
+    assert provenance["cirs"]["thresholds"] == {
+        "coherence_floor": 0.25,
+        "risk_ceiling": 0.8,
+        "oscillation_index": 2.5,
+        "flips": 4,
+    }
+    assert provenance["policy"]["risk_neutral_counterfactual"] == {
+        "risk_score": 0.0,
+        "basin": "high",
+    }
+    assert _evaluate(decision=decision)["policy_candidate"] is True
+
+
+def test_live_adaptive_non_blocking_tier_can_reach_direct_risk_pause_safely():
+    decision = _full_stack_cirs_risk_decision(risk_score=0.75)
+    provenance = decision["hard_stop_provenance"]
+
+    assert decision["sub_action"] == "risk_pause"
+    assert provenance["cirs"]["response_tier"] == "high-risk"
+    assert provenance["cirs"]["conditions"] == {
+        "coherence_floor": False,
+        "risk_ceiling": False,
+        "resonance": False,
+        "unclassified_hard_block": False,
+    }
+    assert provenance["risk_only"] is True
+    assert _evaluate(decision=decision)["policy_candidate"] is True
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_independent_stop"),
+    [
+        ({"resonant": True}, "cirs_resonance"),
+        ({"coherence": 0.2}, "cirs_coherence_floor"),
+        ({"void_active": True}, "void_active"),
+        ({"integrity": 0.4}, "independent_low_basin"),
+        ({"omit_cirs_provenance": True}, "cirs_unclassified_hard_block"),
+    ],
+)
+def test_simultaneous_or_unclassified_hard_stops_never_defer(
+    overrides,
+    expected_independent_stop,
+):
+    decision = _full_stack_cirs_risk_decision(**overrides)
+    provenance = decision["hard_stop_provenance"]
+    gate = _evaluate(decision=decision)
+    decision["cold_start_confirmation"] = gate
+
+    guarded = apply_non_authored_cold_start_guard(
+        decision,
+        epistemic_class="substrate_interpretation",
+        enabled=True,
+    )
+
+    assert expected_independent_stop in provenance["independent_hard_stops"]
+    assert provenance["risk_only"] is False
+    assert gate["policy_candidate"] is False
+    assert guarded["action"] == "pause"
+    assert guarded["sub_action"] == decision["sub_action"]
+
+
+def test_missing_hard_stop_provenance_fails_closed():
+    decision = _risk_pause()
+    decision.pop("hard_stop_provenance")
+
+    gate = _evaluate(decision=decision)
+    decision["cold_start_confirmation"] = gate
+    guarded = apply_non_authored_cold_start_guard(
+        decision,
+        epistemic_class="substrate_interpretation",
+        enabled=True,
+    )
+
+    assert gate["policy_candidate"] is False
+    assert gate["ineligibility_reason"] == (
+        "hard_stop_provenance_missing_or_not_risk_only"
+    )
+    assert guarded["action"] == "pause"
+    assert guarded["cold_start_epistemic_gate"]["applied"] is False
+    assert guarded["cold_start_epistemic_gate"]["ineligibility_reason"] == (
+        "hard_stop_provenance_missing_or_not_risk_only"
+    )
+
+
+def test_primary_eisv_source_and_operator_override_are_exact_fail_closed_gates():
+    wrong_source = _evaluate(primary_eisv_source="behavioral")
+    operator_override = _evaluate(independent_override="operator_override")
+    already_baselined = _evaluate(is_baselined=True)
+
+    assert wrong_source["eligible"] is False
+    assert wrong_source["ineligibility_reason"] == "eisv_source_not_ode_fallback"
+    assert operator_override["eligible"] is False
+    assert operator_override["ineligibility_reason"] == "independent_override"
+    assert already_baselined["eligible"] is False
+    assert already_baselined["ineligibility_reason"] == "behavioral_baseline_present"
+
+
+_HARD_STOP_FAIL_CLOSED_MUTATIONS = [
+    (("schema",), "unknown"),
+    (("complete",), False),
+    (("risk_only",), False),
+    (("risk_hard_stops",), []),
+    (("independent_hard_stops",), ["void_active"]),
+    (("selected_decision", "action"), "proceed"),
+    (("selected_decision", "sub_action"), "guide"),
+    (("selected_decision", "nearest_edge"), None),
+    (("cirs", "provenance_complete"), False),
+    (("cirs", "mode"), "unknown"),
+    (("cirs", "conditions", "coherence_floor"), None),
+    (("cirs", "conditions", "risk_ceiling"), None),
+    (("cirs", "conditions", "resonance"), None),
+    (("cirs", "conditions", "unclassified_hard_block"), None),
+] + [
+    (("policy", "observed", field), None)
+    for field in (
+        "E",
+        "I",
+        "S",
+        "V",
+        "coherence",
+        "risk_score",
+        "void_active",
+        "verdict",
+        "basin",
+    )
+] + [
+    (("policy", "thresholds", field), None)
+    for field in (
+        "coherence_critical",
+        "basin_low_I",
+        "basin_low_coherence",
+        "basin_low_abs_V",
+        "basin_low_risk",
+    )
+] + [
+    (("policy", "conditions", field), None)
+    for field in (
+        "void_active",
+        "coherence_floor",
+        "high_risk_verdict",
+        "low_basin",
+        "basin_low_integrity",
+        "basin_low_coherence",
+        "basin_high_abs_valence",
+        "basin_risk_floor",
+        "independent_low_basin",
+    )
+] + [
+    (("policy", "risk_neutral_counterfactual", "risk_score"), None),
+    (("policy", "risk_neutral_counterfactual", "basin"), None),
+]
+
+_CIRS_FAIL_CLOSED_MUTATIONS = [
+    (("cirs", "response_tier"), "unknown"),
+] + [
+    (("cirs", "observed", field), None)
+    for field in (
+        "coherence",
+        "risk_score",
+        "oscillation_index",
+        "flips",
+    )
+] + [
+    (("cirs", "thresholds", field), None)
+    for field in (
+        "coherence_floor",
+        "risk_ceiling",
+        "oscillation_index",
+        "flips",
+    )
+]
+
+
+@pytest.mark.parametrize(("path", "replacement"), _HARD_STOP_FAIL_CLOSED_MUTATIONS)
+def test_each_hard_stop_provenance_field_fails_closed_when_contradictory(
+    path,
+    replacement,
+):
+    decision = _decision_with_gate()
+    mutated = deepcopy(decision["hard_stop_provenance"])
+    target = mutated
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = replacement
+    decision["hard_stop_provenance"] = mutated
+    decision["cold_start_confirmation"]["hard_stop_provenance"] = deepcopy(
+        mutated
+    )
+
+    guarded = apply_non_authored_cold_start_guard(
+        decision,
+        epistemic_class="substrate_interpretation",
+        enabled=True,
+    )
+
+    assert guarded["action"] == "pause"
+    assert guarded["sub_action"] == "risk_pause"
+    assert guarded["cold_start_epistemic_gate"]["applied"] is False
+
+
+@pytest.mark.parametrize(("path", "replacement"), _CIRS_FAIL_CLOSED_MUTATIONS)
+def test_each_cirs_provenance_field_fails_closed_when_missing_or_unknown(
+    path,
+    replacement,
+):
+    decision = _decision_with_gate(_cirs_block())
+    mutated = deepcopy(decision["hard_stop_provenance"])
+    target = mutated
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = replacement
+    decision["hard_stop_provenance"] = mutated
+    decision["cold_start_confirmation"]["hard_stop_provenance"] = deepcopy(
+        mutated
+    )
+
+    guarded = apply_non_authored_cold_start_guard(
+        decision,
+        epistemic_class="substrate_interpretation",
+        enabled=True,
+    )
+
+    assert guarded["action"] == "pause"
+    assert guarded["sub_action"] == "cirs_block"
+    assert guarded["cold_start_epistemic_gate"]["applied"] is False
+
+
+@pytest.mark.parametrize(
+    ("threshold", "replacement"),
+    [
+        ("coherence_floor", 0.31),
+        ("risk_ceiling", 0.71),
+        ("oscillation_index", 3.1),
+        ("flips", 4),
+    ],
+)
+def test_legacy_cirs_fixed_thresholds_reject_coherent_relabeling(
+    threshold,
+    replacement,
+):
+    state = SimpleNamespace(
+        E=0.8,
+        I=0.8,
+        S=0.1,
+        V=0.0,
+        coherence=0.6,
+        void_active=False,
+        coherence_history=[],
+        risk_history=[],
+    )
+    decision = make_decision(
+        state,
+        risk_score=0.75,
+        unitares_verdict="high-risk",
+        response_tier="hard_block",
+        oscillation_state=OscillationState(),
+    )
+    assert _evaluate(decision=decision)["policy_candidate"] is True
+    decision = _decision_with_gate(decision)
+    mutated = deepcopy(decision["hard_stop_provenance"])
+    mutated["cirs"]["thresholds"][threshold] = replacement
+    decision["hard_stop_provenance"] = mutated
+    decision["cold_start_confirmation"]["hard_stop_provenance"] = deepcopy(
+        mutated
+    )
+
+    guarded = apply_non_authored_cold_start_guard(
+        decision,
+        epistemic_class="substrate_interpretation",
+        enabled=True,
+    )
+
+    assert guarded["action"] == "pause"
+    assert guarded["cold_start_epistemic_gate"]["applied"] is False
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    [
+        "schema",
+        "policy_candidate",
+        "provenance_complete",
+        "hard_stop_provenance",
+        "primary_driver",
+        "primary_eisv_source",
+        "measurement_ready",
+        "is_baselined",
+        "behavioral_confidence",
+        "independent_override",
+    ],
+)
+def test_each_missing_maturity_authority_field_fails_closed(missing_field):
+    decision = _decision_with_gate()
+    decision["cold_start_confirmation"].pop(missing_field)
+
+    guarded = apply_non_authored_cold_start_guard(
+        decision,
+        epistemic_class="substrate_interpretation",
+        enabled=True,
+    )
+
+    assert guarded["action"] == "pause"
+    assert guarded["cold_start_epistemic_gate"]["applied"] is False
+    assert guarded["cold_start_epistemic_gate"]["ineligibility_reason"] == (
+        "maturity_provenance_incomplete"
+    )
+
+
+def test_guard_is_a_pure_transition_and_never_mutates_original_pause():
+    decision = _decision_with_gate()
+    original = deepcopy(decision)
+
+    guarded = apply_non_authored_cold_start_guard(
+        decision,
+        epistemic_class="substrate_interpretation",
+        enabled=True,
+    )
+
+    assert decision == original
+    assert decision["action"] == "pause"
+    assert guarded["action"] == "proceed"
+    assert guarded["original_action"] == "pause"
 
 
 def test_second_adjacent_fallback_risk_pause_is_shadow_confirmed():
@@ -227,6 +755,7 @@ def test_missing_original_reason_is_incomplete_provenance():
         behavioral_confidence=0.1,
         is_baselined=False,
         primary_driver="phi_cold_start",
+        primary_eisv_source="ode_fallback",
         process_cycle=1,
         monitor_lineage="lineage-a",
         lineage_status="identity_genesis",
@@ -259,6 +788,7 @@ def test_non_risk_pause_and_disabled_shadow_are_inert():
         behavioral_confidence=0.1,
         is_baselined=False,
         primary_driver="phi_cold_start",
+        primary_eisv_source="ode_fallback",
         process_cycle=1,
         monitor_lineage="lineage-a",
         lineage_status="identity_genesis",
@@ -318,13 +848,13 @@ def test_non_authored_phi_cold_start_cirs_risk_block_becomes_guidance():
     assert guarded["original_sub_action"] == "cirs_block"
     assert guarded["nearest_edge"] == "risk"
     assert guarded["cold_start_epistemic_gate"]["applied"] is True
-    assert guarded["cold_start_epistemic_gate"]["original_decision"] == {
-        "action": "pause",
-        "sub_action": "cirs_block",
-        "reason": "CIRS risk ceiling breached",
-        "guidance": "Pause to investigate the risk spike.",
-        "nearest_edge": "risk",
-    }
+    original = guarded["cold_start_epistemic_gate"]["original_decision"]
+    assert original["action"] == "pause"
+    assert original["sub_action"] == "cirs_block"
+    assert original["reason"] == "CIRS risk ceiling breached"
+    assert original["guidance"] == "Pause to investigate the risk spike."
+    assert original["nearest_edge"] == "risk"
+    assert original["hard_stop_provenance"]["risk_only"] is True
 
 
 def test_epistemic_guard_preserves_authoritative_or_uncertain_pauses():
@@ -484,6 +1014,21 @@ def test_reviewed_recovery_recognizes_only_exact_persisted_legacy_trap():
     assert wrong_basis["observed_enforcement"]["circuit_breaker_applied"] is True
     assert missing["eligible"] is False
     assert "state_record_present" in missing["failed_requirements"]
+
+
+def test_reviewed_recovery_does_not_reconstruct_missing_historical_inputs():
+    record = _legacy_trap_record()
+    policy = record.state_json["eisv_telemetry"]["policy_evaluation"]
+    policy.pop("hard_stop_provenance")
+    policy["maturity_gate"].pop("hard_stop_provenance")
+
+    observed = evaluate_non_authored_cold_start_trap(record, enabled=True)
+
+    assert observed["eligible"] is False
+    assert "risk_only_hard_stop_provenance_exact" in observed[
+        "failed_requirements"
+    ]
+    assert observed["observed_enforcement"]["circuit_breaker_applied"] is True
 
 
 def test_reviewed_recovery_does_not_reinterpret_historical_cirs_risk_blocks():

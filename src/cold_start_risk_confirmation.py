@@ -1,16 +1,17 @@
 """Observational maturity gate for fallback-owned cold-start risk pauses.
 
 The deployed monitor can express the same risk-driven pause as ``risk_pause``
-or as a CIRS ``cirs_block`` whose ``nearest_edge`` is ``risk``.  Either can
-occur while behavioral confidence is below its authority threshold.  In that
-window the verdict is owned by the Phi cold-start prior, which the result
-envelope already labels non-discriminative.
+or as a CIRS ``cirs_block``.  A selected ``nearest_edge`` cannot establish that
+risk was the sole effective cause: the priority stack can mask simultaneous
+resonance, coherence, void, or basin hard stops.  Eligibility therefore
+requires the decision producer's complete versioned hard-stop provenance.
 
-This module does not actuate.  It evaluates, in shadow, whether a pause would be
-the first or second adjacent fallback-owned observation and returns a fully
-serializable provenance record.  Actuation remains fail-closed until the
-confirmation state can be durably and atomically persisted across the policy to
-runtime boundary.
+The two-observation confirmation policy in this module does not actuate: it
+evaluates, in shadow, whether a pause would be the first or second adjacent
+fallback-owned observation and returns a fully serializable provenance record.
+A separate stateless epistemic-authority guard can turn one exact non-authored
+cold-start pause into guidance.  That transition is fail-closed and does not
+promote the dormant confirmation policy.
 """
 
 from __future__ import annotations
@@ -19,6 +20,16 @@ from collections.abc import Mapping
 import math
 from numbers import Real
 from typing import Any
+
+from config.governance_config import (
+    BASIN_LOW_COHERENCE_CEIL,
+    BASIN_LOW_I_CEIL,
+    BASIN_LOW_RISK_FLOOR,
+    BASIN_LOW_V_ABS_FLOOR,
+    classify_basin,
+)
+from src.cirs import CIRS_DEFAULTS
+from src.monitor_decision import HARD_STOP_PROVENANCE_SCHEMA
 
 
 BEHAVIORAL_AUTHORITY_THRESHOLD = 0.3
@@ -42,19 +53,319 @@ NON_AUTHORED_COLD_START_RECOVERY_BASIS = (
 COLD_START_CONFIRMATION_ACTUATION_SCOPE = "fallback_risk_pause_deferral"
 
 
-def _is_fallback_risk_policy_candidate(decision: Mapping[str, Any]) -> bool:
-    """Match only policy decisions whose authority comes from fallback risk.
-
-    ``risk_pause`` is the direct verdict path.  CIRS can route the same risk
-    score through ``cirs_block``; ``nearest_edge='risk'`` is the decision
-    producer's exact trigger attribution.  Every other CIRS edge stays outside
-    this authority guard and therefore fails closed.
-    """
-    if decision.get("action") != "pause":
+def _is_risk_routed_pause(decision: Mapping[str, Any]) -> bool:
+    """Match the two policy routes that may represent fallback-owned risk."""
+    if (
+        decision.get("action") != "pause"
+        or decision.get("nearest_edge") != "risk"
+    ):
         return False
     sub_action = decision.get("sub_action")
-    return sub_action == "risk_pause" or (
-        sub_action == "cirs_block" and decision.get("nearest_edge") == "risk"
+    return sub_action in {"risk_pause", "cirs_block"}
+
+
+def _validated_risk_only_hard_stop_provenance(
+    decision: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    """Return exact, internally consistent risk-only provenance or ``None``.
+
+    The aggregate ``risk_only`` bit is not trusted by itself.  This validator
+    recomputes every condition from the recorded decision-time inputs and
+    thresholds, checks the risk-neutral basin counterfactual, and verifies the
+    complete trigger lists.  Missing or contradictory fields fail closed.
+    """
+    provenance = decision.get("hard_stop_provenance")
+    if not isinstance(provenance, Mapping):
+        return None
+    selected = provenance.get("selected_decision")
+    selected = selected if isinstance(selected, Mapping) else {}
+    cirs = provenance.get("cirs")
+    cirs = cirs if isinstance(cirs, Mapping) else {}
+    cirs_observed = cirs.get("observed")
+    cirs_observed = cirs_observed if isinstance(cirs_observed, Mapping) else {}
+    cirs_thresholds = cirs.get("thresholds")
+    cirs_thresholds = (
+        cirs_thresholds if isinstance(cirs_thresholds, Mapping) else {}
+    )
+    cirs_conditions = cirs.get("conditions")
+    cirs_conditions = (
+        cirs_conditions if isinstance(cirs_conditions, Mapping) else {}
+    )
+    policy = provenance.get("policy")
+    policy = policy if isinstance(policy, Mapping) else {}
+    observed = policy.get("observed")
+    observed = observed if isinstance(observed, Mapping) else {}
+    policy_thresholds = policy.get("thresholds")
+    policy_thresholds = (
+        policy_thresholds if isinstance(policy_thresholds, Mapping) else {}
+    )
+    policy_conditions = policy.get("conditions")
+    policy_conditions = (
+        policy_conditions if isinstance(policy_conditions, Mapping) else {}
+    )
+    counterfactual = policy.get("risk_neutral_counterfactual")
+    counterfactual = (
+        counterfactual if isinstance(counterfactual, Mapping) else {}
+    )
+
+    observed_values = {
+        name: _finite_number(observed.get(name))
+        for name in ("E", "I", "S", "V", "coherence", "risk_score")
+    }
+    policy_threshold_values = {
+        name: _finite_number(policy_thresholds.get(name))
+        for name in (
+            "coherence_critical",
+            "basin_low_I",
+            "basin_low_coherence",
+            "basin_low_abs_V",
+            "basin_low_risk",
+        )
+    }
+    required_cirs_conditions = {
+        name: cirs_conditions.get(name)
+        for name in (
+            "coherence_floor",
+            "risk_ceiling",
+            "resonance",
+            "unclassified_hard_block",
+        )
+    }
+    required_policy_conditions = {
+        name: policy_conditions.get(name)
+        for name in (
+            "void_active",
+            "coherence_floor",
+            "high_risk_verdict",
+            "low_basin",
+            "basin_low_integrity",
+            "basin_low_coherence",
+            "basin_high_abs_valence",
+            "basin_risk_floor",
+            "independent_low_basin",
+        )
+    }
+    if (
+        provenance.get("schema") != HARD_STOP_PROVENANCE_SCHEMA
+        or provenance.get("complete") is not True
+        or provenance.get("risk_only") is not True
+        or not all(value is not None for value in observed_values.values())
+        or not all(value is not None for value in policy_threshold_values.values())
+        or not all(
+            isinstance(value, bool)
+            for value in required_cirs_conditions.values()
+        )
+        or not all(
+            isinstance(value, bool)
+            for value in required_policy_conditions.values()
+        )
+        or not isinstance(observed.get("void_active"), bool)
+        or not isinstance(observed.get("verdict"), str)
+        or observed.get("basin") not in {"high", "boundary", "low"}
+        or cirs.get("provenance_complete") is not True
+        or cirs.get("mode") not in {
+            "not_supplied",
+            "legacy_v0_1",
+            "adaptive_v2",
+        }
+        or selected.get("action") != decision.get("action")
+        or selected.get("sub_action") != decision.get("sub_action")
+        or selected.get("nearest_edge") != decision.get("nearest_edge")
+    ):
+        return None
+
+    E = observed_values["E"]
+    I = observed_values["I"]
+    S = observed_values["S"]
+    V = observed_values["V"]
+    coherence = observed_values["coherence"]
+    risk = observed_values["risk_score"]
+    coherence_critical = policy_threshold_values["coherence_critical"]
+    basin_risk_floor = policy_threshold_values["basin_low_risk"]
+    counterfactual_risk = _finite_number(counterfactual.get("risk_score"))
+    if counterfactual_risk != 0.0:
+        return None
+    if (
+        policy_threshold_values["basin_low_I"] != BASIN_LOW_I_CEIL
+        or policy_threshold_values["basin_low_coherence"]
+        != BASIN_LOW_COHERENCE_CEIL
+        or policy_threshold_values["basin_low_abs_V"]
+        != BASIN_LOW_V_ABS_FLOOR
+        or policy_threshold_values["basin_low_risk"]
+        != BASIN_LOW_RISK_FLOOR
+    ):
+        return None
+    recomputed_basin = classify_basin(
+        E=E,
+        I=I,
+        S=S,
+        V=V,
+        coherence=coherence,
+        risk_score=risk,
+    )
+    recomputed_counterfactual_basin = classify_basin(
+        E=E,
+        I=I,
+        S=S,
+        V=V,
+        coherence=coherence,
+        risk_score=counterfactual_risk,
+    )
+    expected_policy_conditions = {
+        "void_active": observed.get("void_active") is True,
+        "coherence_floor": coherence < coherence_critical,
+        "high_risk_verdict": observed.get("verdict") == "high-risk",
+        "low_basin": recomputed_basin == "low",
+        "basin_low_integrity": I < BASIN_LOW_I_CEIL,
+        "basin_low_coherence": coherence < BASIN_LOW_COHERENCE_CEIL,
+        "basin_high_abs_valence": abs(V) > BASIN_LOW_V_ABS_FLOOR,
+        "basin_risk_floor": risk >= basin_risk_floor,
+        "independent_low_basin": recomputed_counterfactual_basin == "low",
+    }
+    if (
+        required_policy_conditions != expected_policy_conditions
+        or observed.get("basin") != recomputed_basin
+        or counterfactual.get("basin") != recomputed_counterfactual_basin
+    ):
+        return None
+
+    cirs_floor = _finite_number(cirs_thresholds.get("coherence_floor"))
+    cirs_ceiling = _finite_number(cirs_thresholds.get("risk_ceiling"))
+    cirs_oi_threshold = _finite_number(
+        cirs_thresholds.get("oscillation_index")
+    )
+    cirs_flip_threshold = cirs_thresholds.get("flips")
+    cirs_observed_coherence = _finite_number(cirs_observed.get("coherence"))
+    cirs_observed_risk = _finite_number(cirs_observed.get("risk_score"))
+    cirs_observed_oi = _finite_number(cirs_observed.get("oscillation_index"))
+    cirs_observed_flips = cirs_observed.get("flips")
+    response_tier = cirs.get("response_tier")
+    cirs_mode = cirs.get("mode")
+    # Match the producer's priority semantics, not merely a record that agrees
+    # with itself.  A CIRS hard block always selects ``cirs_block`` before the
+    # direct verdict route; conversely ``cirs_block`` cannot exist without that
+    # tier.  Coherently relabeling both the decision and its embedded selected
+    # route must therefore still fail closed.
+    if (
+        decision.get("sub_action") == "cirs_block"
+        and response_tier != "hard_block"
+    ) or (
+        decision.get("sub_action") == "risk_pause"
+        and response_tier == "hard_block"
+    ):
+        return None
+    if cirs_mode == "not_supplied":
+        if (
+            response_tier is not None
+            or cirs_observed_coherence != coherence
+            or cirs_observed_risk != risk
+            or cirs_observed_oi is not None
+            or cirs_observed_flips is not None
+            or cirs_floor is not None
+            or cirs_ceiling is not None
+            or cirs_oi_threshold is not None
+            or cirs_flip_threshold is not None
+            or any(required_cirs_conditions.values())
+        ):
+            return None
+    else:
+        allowed_tiers = (
+            {"hard_block", "soft_dampen", "proceed"}
+            if cirs_mode == "legacy_v0_1"
+            else {"hard_block", "safe", "caution", "high-risk"}
+        )
+        if (
+            cirs_mode not in {"legacy_v0_1", "adaptive_v2"}
+            or response_tier not in allowed_tiers
+            or cirs_floor is None
+            or cirs_ceiling is None
+            or cirs_oi_threshold is None
+            or not isinstance(cirs_flip_threshold, int)
+            or isinstance(cirs_flip_threshold, bool)
+            or cirs_observed_coherence != coherence
+            or cirs_observed_risk != risk
+            or cirs_observed_oi is None
+            or not isinstance(cirs_observed_flips, int)
+            or isinstance(cirs_observed_flips, bool)
+            or required_cirs_conditions["coherence_floor"]
+            != (coherence < cirs_floor)
+            or required_cirs_conditions["risk_ceiling"]
+            != (risk > cirs_ceiling)
+            or required_cirs_conditions["resonance"]
+            != (
+                abs(cirs_observed_oi) >= cirs_oi_threshold
+                or cirs_observed_flips >= cirs_flip_threshold
+            )
+        ):
+            return None
+        if cirs_mode == "legacy_v0_1" and (
+            cirs_floor != CIRS_DEFAULTS["tau_low"]
+            or cirs_ceiling != CIRS_DEFAULTS["beta_high"]
+            or cirs_oi_threshold != CIRS_DEFAULTS["oi_threshold"]
+            or cirs_flip_threshold != CIRS_DEFAULTS["flip_threshold"]
+        ):
+            return None
+        absolute_stop = (
+            required_cirs_conditions["coherence_floor"]
+            or required_cirs_conditions["risk_ceiling"]
+        )
+        if (
+            response_tier == "hard_block"
+            and not (
+                absolute_stop
+                or (
+                    cirs_mode == "legacy_v0_1"
+                    and required_cirs_conditions["resonance"]
+                )
+            )
+        ) or (response_tier != "hard_block" and absolute_stop):
+            return None
+
+    expected_risk_hard_stops = [
+        name
+        for name, active in (
+            ("cirs_risk_ceiling", required_cirs_conditions["risk_ceiling"]),
+            ("high_risk_verdict", required_policy_conditions["high_risk_verdict"]),
+            ("basin_risk_floor", required_policy_conditions["basin_risk_floor"]),
+        )
+        if active
+    ]
+    expected_independent_hard_stops = [
+        name
+        for name, active in (
+            ("cirs_resonance", required_cirs_conditions["resonance"]),
+            ("cirs_coherence_floor", required_cirs_conditions["coherence_floor"]),
+            (
+                "cirs_unclassified_hard_block",
+                required_cirs_conditions["unclassified_hard_block"],
+            ),
+            ("void_active", required_policy_conditions["void_active"]),
+            (
+                "policy_coherence_floor",
+                required_policy_conditions["coherence_floor"],
+            ),
+            (
+                "independent_low_basin",
+                required_policy_conditions["independent_low_basin"],
+            ),
+        )
+        if active
+    ]
+    if (
+        not expected_risk_hard_stops
+        or expected_independent_hard_stops
+        or provenance.get("risk_hard_stops") != expected_risk_hard_stops
+        or provenance.get("independent_hard_stops") != []
+    ):
+        return None
+    return provenance
+
+
+def _is_fallback_risk_policy_candidate(decision: Mapping[str, Any]) -> bool:
+    """Match only a risk route with complete risk-only trigger provenance."""
+    return (
+        _is_risk_routed_pause(decision)
+        and _validated_risk_only_hard_stop_provenance(decision) is not None
     )
 
 
@@ -87,6 +398,7 @@ def evaluate_cold_start_risk_confirmation(
     behavioral_confidence: Any,
     is_baselined: bool,
     primary_driver: Any,
+    primary_eisv_source: Any,
     process_cycle: int,
     monitor_lineage: str,
     lineage_status: str,
@@ -108,7 +420,9 @@ def evaluate_cold_start_risk_confirmation(
     sub_action = decision.get("sub_action")
     reason = decision.get("reason")
     nearest_edge = decision.get("nearest_edge")
-    policy_candidate = _is_fallback_risk_policy_candidate(decision)
+    risk_routed_pause = _is_risk_routed_pause(decision)
+    hard_stop_provenance = _validated_risk_only_hard_stop_provenance(decision)
+    policy_candidate = risk_routed_pause and hard_stop_provenance is not None
     measurement_ready = (
         confidence is not None
         and confidence >= BEHAVIORAL_AUTHORITY_THRESHOLD
@@ -118,12 +432,23 @@ def evaluate_cold_start_risk_confirmation(
         confidence is not None
         and isinstance(primary_driver, str)
         and bool(primary_driver)
+        and isinstance(primary_eisv_source, str)
+        and bool(primary_eisv_source)
         and isinstance(action, str)
         and bool(action.strip())
         and isinstance(sub_action, str)
         and bool(sub_action.strip())
         and isinstance(reason, str)
         and bool(reason.strip())
+        and isinstance(is_baselined, bool)
+        and (
+            independent_override is None
+            or (
+                isinstance(independent_override, str)
+                and bool(independent_override.strip())
+            )
+        )
+        and isinstance(history_gap, bool)
         and isinstance(monitor_lineage, str)
         and bool(monitor_lineage.strip())
         and isinstance(lineage_status, str)
@@ -136,16 +461,22 @@ def evaluate_cold_start_risk_confirmation(
     ineligibility_reason = None
     if not enabled:
         ineligibility_reason = "gate_disabled"
-    elif not policy_candidate:
+    elif not risk_routed_pause:
         ineligibility_reason = "policy_not_risk_pause"
+    elif hard_stop_provenance is None:
+        ineligibility_reason = "hard_stop_provenance_missing_or_not_risk_only"
     elif not provenance_complete:
         ineligibility_reason = "provenance_incomplete"
     elif independent_override:
         ineligibility_reason = "independent_override"
     elif measurement_ready:
         ineligibility_reason = "behavioral_measurement_ready"
+    elif is_baselined:
+        ineligibility_reason = "behavioral_baseline_present"
     elif primary_driver != "phi_cold_start":
         ineligibility_reason = "verdict_source_not_phi_cold_start"
+    elif primary_eisv_source != "ode_fallback":
+        ineligibility_reason = "eisv_source_not_ode_fallback"
     elif history_gap:
         ineligibility_reason = "history_gap"
     elif lineage_status != "identity_genesis":
@@ -159,6 +490,7 @@ def evaluate_cold_start_risk_confirmation(
         and previous.get("monitor_lineage") == monitor_lineage
         and previous.get("process_cycle") == process_cycle - 1
         and previous.get("primary_driver") == "phi_cold_start"
+        and previous.get("primary_eisv_source") == "ode_fallback"
         and previous.get("policy_candidate") is True
     )
     confirmation_count = (
@@ -236,7 +568,13 @@ def evaluate_cold_start_risk_confirmation(
         "behavioral_authority_threshold": BEHAVIORAL_AUTHORITY_THRESHOLD,
         "is_baselined": bool(is_baselined),
         "primary_driver": primary_driver,
+        "primary_eisv_source": primary_eisv_source,
         "policy_candidate": policy_candidate,
+        "hard_stop_provenance": (
+            dict(hard_stop_provenance)
+            if isinstance(hard_stop_provenance, Mapping)
+            else None
+        ),
         "provenance_complete": provenance_complete,
         "eligible": eligible,
         "ineligibility_reason": ineligibility_reason,
@@ -255,11 +593,13 @@ def evaluate_cold_start_risk_confirmation(
             "action": action,
             "sub_action": sub_action,
             "reason": reason,
+            "guidance": decision.get("guidance"),
             **(
                 {"nearest_edge": nearest_edge}
                 if "nearest_edge" in decision
                 else {}
             ),
+            "hard_stop_provenance": decision.get("hard_stop_provenance"),
         },
         "note": (
             "Shadow evaluation only: the original policy decision is unchanged. "
@@ -288,21 +628,36 @@ def apply_non_authored_cold_start_guard(
 
     Unknown or incomplete provenance fails closed and leaves the pause intact.
     Agent-authored reports, behaviorally ready rows, independent verification,
-    and every policy path other than direct ``risk_pause`` or risk-attributed
-    CIRS ``cirs_block`` are also untouched.
+    incomplete hard-stop provenance, and any simultaneous non-risk hard stop are
+    also untouched.
     """
     guarded = dict(decision)
     action = guarded.get("action")
     sub_action = guarded.get("sub_action")
-    if not _is_fallback_risk_policy_candidate(guarded):
+    if not _is_risk_routed_pause(guarded):
         return guarded
 
+    hard_stop_provenance = _validated_risk_only_hard_stop_provenance(guarded)
     maturity_gate = guarded.get("cold_start_confirmation")
     maturity_gate = maturity_gate if isinstance(maturity_gate, Mapping) else {}
     confidence = _finite_number(maturity_gate.get("behavioral_confidence"))
     primary_driver = maturity_gate.get("primary_driver")
+    primary_eisv_source = maturity_gate.get("primary_eisv_source")
     measurement_ready = maturity_gate.get("measurement_ready")
+    is_baselined = maturity_gate.get("is_baselined")
     independent_override = maturity_gate.get("independent_override")
+    required_maturity_fields = {
+        "schema",
+        "policy_candidate",
+        "provenance_complete",
+        "hard_stop_provenance",
+        "primary_driver",
+        "primary_eisv_source",
+        "measurement_ready",
+        "is_baselined",
+        "behavioral_confidence",
+        "independent_override",
+    }
     epistemic_class_known = (
         isinstance(epistemic_class, str)
         and epistemic_class in _KNOWN_EPISTEMIC_CLASSES
@@ -317,10 +672,24 @@ def apply_non_authored_cold_start_guard(
         ineligibility_reason = "agent_authored_report"
     elif not maturity_gate:
         ineligibility_reason = "maturity_provenance_missing"
-    elif independent_override:
+    elif not required_maturity_fields.issubset(maturity_gate):
+        ineligibility_reason = "maturity_provenance_incomplete"
+    elif maturity_gate.get("schema") != "eisv.cold-start-confirmation.v1":
+        ineligibility_reason = "maturity_schema_unknown"
+    elif hard_stop_provenance is None:
+        ineligibility_reason = "hard_stop_provenance_missing_or_not_risk_only"
+    elif maturity_gate.get("policy_candidate") is not True:
+        ineligibility_reason = "maturity_policy_not_risk_only"
+    elif maturity_gate.get("hard_stop_provenance") != hard_stop_provenance:
+        ineligibility_reason = "hard_stop_provenance_mismatch"
+    elif maturity_gate.get("provenance_complete") is not True:
+        ineligibility_reason = "maturity_provenance_incomplete"
+    elif independent_override is not None:
         ineligibility_reason = "independent_override"
     elif primary_driver != "phi_cold_start":
         ineligibility_reason = "verdict_source_not_phi_cold_start"
+    elif primary_eisv_source != "ode_fallback":
+        ineligibility_reason = "eisv_source_not_ode_fallback"
     elif confidence is None:
         ineligibility_reason = "behavioral_confidence_missing"
     elif measurement_ready is not False:
@@ -328,6 +697,12 @@ def apply_non_authored_cold_start_guard(
             "behavioral_measurement_ready"
             if measurement_ready is True
             else "measurement_readiness_missing"
+        )
+    elif is_baselined is not False:
+        ineligibility_reason = (
+            "behavioral_baseline_present"
+            if is_baselined is True
+            else "baseline_status_missing"
         )
     elif confidence >= BEHAVIORAL_AUTHORITY_THRESHOLD:
         ineligibility_reason = "behavioral_measurement_ready"
@@ -345,10 +720,17 @@ def apply_non_authored_cold_start_guard(
         "agent_authored": epistemic_class == "agent_report",
         "non_authoring": non_authoring,
         "primary_driver": primary_driver,
+        "primary_eisv_source": primary_eisv_source,
         "measurement_ready": measurement_ready,
+        "is_baselined": is_baselined,
         "behavioral_confidence": confidence,
         "behavioral_authority_threshold": BEHAVIORAL_AUTHORITY_THRESHOLD,
         "independent_override": independent_override,
+        "hard_stop_provenance": (
+            dict(hard_stop_provenance)
+            if isinstance(hard_stop_provenance, Mapping)
+            else None
+        ),
         "enforcement_basis": (
             NON_AUTHORED_COLD_START_ENFORCEMENT_BASIS if applied else None
         ),
@@ -362,6 +744,7 @@ def apply_non_authored_cold_start_guard(
                 if "nearest_edge" in guarded
                 else {}
             ),
+            "hard_stop_provenance": guarded.get("hard_stop_provenance"),
         },
         "note": (
             "A non-agent-authored Phi cold-start fallback is advisory until "
@@ -418,6 +801,16 @@ def evaluate_non_authored_cold_start_trap(
     policy_inputs = policy_inputs if isinstance(policy_inputs, Mapping) else {}
     maturity_gate = policy.get("maturity_gate")
     maturity_gate = maturity_gate if isinstance(maturity_gate, Mapping) else {}
+    policy_hard_stop_provenance = policy.get("hard_stop_provenance")
+    persisted_decision = {
+        "action": policy.get("action"),
+        "sub_action": policy.get("sub_action"),
+        "nearest_edge": policy_inputs.get("nearest_edge"),
+        "hard_stop_provenance": policy_hard_stop_provenance,
+    }
+    validated_hard_stop_provenance = (
+        _validated_risk_only_hard_stop_provenance(persisted_decision)
+    )
     enforcement = telemetry.get("enforcement")
     enforcement = enforcement if isinstance(enforcement, Mapping) else {}
     confidence = _finite_number(maturity_gate.get("behavioral_confidence"))
@@ -453,6 +846,11 @@ def evaluate_non_authored_cold_start_trap(
             policy_inputs.get("verdict_source") == "phi_cold_start"
             and policy_inputs.get("primary_eisv_source") == "ode_fallback"
         ),
+        "risk_only_hard_stop_provenance_exact": (
+            validated_hard_stop_provenance is not None
+            and maturity_gate.get("hard_stop_provenance")
+            == validated_hard_stop_provenance
+        ),
         "maturity_gate_exact": (
             maturity_gate.get("schema") == "eisv.cold-start-confirmation.v1"
             and maturity_gate.get("outcome") == "shadow_would_defer"
@@ -462,8 +860,10 @@ def evaluate_non_authored_cold_start_trap(
             and maturity_gate.get("confirmation_count") == 1
             and maturity_gate.get("confirmations_required") == 2
             and maturity_gate.get("primary_driver") == "phi_cold_start"
+            and maturity_gate.get("primary_eisv_source") == "ode_fallback"
             and maturity_gate.get("measurement_ready") is False
-            and maturity_gate.get("independent_override") in (None, "")
+            and maturity_gate.get("is_baselined") is False
+            and maturity_gate.get("independent_override") is None
             and maturity_gate.get("lineage_status") == "identity_genesis"
             and confidence is not None
             and confidence < BEHAVIORAL_AUTHORITY_THRESHOLD
