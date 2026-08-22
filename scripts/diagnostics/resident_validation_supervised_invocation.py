@@ -19,13 +19,13 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.resident_validation import ResidentProfile  # noqa: E402
-from src.resident_validation_invocation import (  # noqa: E402
+from src.evaluation.resident_validation.invocation import (  # noqa: E402
     INVOCATION_EVENT_TYPE,
     InvocationLockHeld,
     SupervisedInvocationPlan,
     run_supervised_canary_invocation,
 )
+from src.evaluation.resident_validation.model import ResidentProfile  # noqa: E402
 
 
 def _parse_observed_at(value: str | None) -> datetime | None:
