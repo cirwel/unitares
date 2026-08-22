@@ -7,31 +7,24 @@ name: Release Seams
 # directory and a release tag outside VERSION's reach. Nothing owned a seam, so
 # nothing reported one.
 #
-# Both gates stand down unless the tree is a release (VERSION not yet tagged),
-# so ordinary PRs see them only as a quiet pass.
+# The two release gates stand down unless the tree is a release (VERSION not yet
+# tagged), so ordinary PRs see them only as a quiet pass. The published-claims
+# check runs every time, because a public page can begin advertising an
+# unpublished version at any merge — and did, on 2026-08-21.
 
+# Deliberately NOT path-filtered. A filtered-out job never reports, and under
+# `strict` branch protection a required check that never reports leaves the PR
+# waiting forever — so a path-filtered job cannot be a required check at all.
+# The first version of this workflow was filtered, which made `seams` optional
+# and merge-past-able: an advisory wearing a gate's name. The scripts already
+# stand down in milliseconds off a release tree, so the filter bought nothing
+# and cost enforceability.
 on:
   merge_group:
   push:
     branches: [ master, main ]
-    paths:
-      - 'VERSION'
-      - 'docs/CHANGELOG.md'
-      - 'agents/sdk/**'
-      - 'skills/**'
-      - 'scripts/ci/changelog_coverage.py'
-      - 'scripts/ci/release_series_drift.py'
-      - '.github/workflows/release-seams.yml'
   pull_request:
     branches: [ master, main ]
-    paths:
-      - 'VERSION'
-      - 'docs/CHANGELOG.md'
-      - 'agents/sdk/**'
-      - 'skills/**'
-      - 'scripts/ci/changelog_coverage.py'
-      - 'scripts/ci/release_series_drift.py'
-      - '.github/workflows/release-seams.yml'
 
 permissions:
   contents: read
@@ -60,3 +53,8 @@ jobs:
 
       - name: Independently versioned series are level with their consumers
         run: python scripts/ci/release_series_drift.py
+
+      # Runs on every PR, not only a release tree: a public page can start
+      # advertising an unpublished version at any merge, and did.
+      - name: Public claims name published artifacts
+        run: python scripts/ci/published_claims.py

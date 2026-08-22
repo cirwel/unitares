@@ -169,3 +169,79 @@ async def test_reassign_does_not_resurrect_an_ordinary_failed_session():
 
     assert session.phase == DialecticPhase.FAILED
     assert reopened == []
+
+
+@pytest.mark.asyncio
+async def test_revival_persistence_order_reopen_first():
+    """Council 2026-08-21: the revival writes must run reopen -> reviewer ->
+    clear-awaiting. The old order (reviewer, clear, reopen) both welded the
+    reopen shut (its SQL requires awaiting_facilitation=true, already
+    cleared) and hit the reviewer terminal-guard on the still-failed row."""
+    from src.mcp_handlers.dialectic.handlers import _apply_reviewer_reassignment
+
+    session = DialecticSession(
+        paused_agent_id="agent-paused",
+        reviewer_agent_id=None,
+        dispute_type="verification",
+    )
+    session.phase = DialecticPhase.FAILED
+    session.awaiting_facilitation = True
+    session.transcript.append(DialecticMessage(
+        phase="thesis", agent_id="agent-paused",
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        reasoning="my case", root_cause="rc",
+    ))
+
+    calls: list[str] = []
+
+    async def _reopen(session_id, phase):
+        calls.append("reopen")
+        return True
+
+    async def _reviewer(session_id, reviewer_id):
+        calls.append("reviewer")
+        return True
+
+    async def _awaiting(session_id, awaiting):
+        calls.append("awaiting")
+        return True
+
+    D = "src.mcp_handlers.dialectic.handlers"
+    with patch(f"{D}.beam_update_reviewer", new_callable=AsyncMock, return_value=None), \
+         patch(f"{D}.pg_update_reviewer", new=_reviewer), \
+         patch(f"{D}.pg_update_awaiting_facilitation", new=_awaiting), \
+         patch(f"{D}.pg_reopen_session", new=_reopen), \
+         patch(f"{D}.pg_add_message", new_callable=AsyncMock):
+        await _apply_reviewer_reassignment(
+            "sess-order", session, "new-reviewer", reason="operator facilitation",
+        )
+
+    assert calls == ["reopen", "reviewer", "awaiting"], (
+        f"revival persistence order regressed: {calls}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_revival_refused_reviewer_write_raises_under_strict():
+    """A refused reviewer write (row terminal/missing) must surface as a
+    failure under strict_persistence, never as a silent 'Reviewer
+    reassigned' success."""
+    from src.mcp_handlers.dialectic.handlers import _apply_reviewer_reassignment
+
+    session = DialecticSession(
+        paused_agent_id="agent-paused",
+        reviewer_agent_id="old-reviewer",
+        dispute_type="verification",
+    )
+
+    D = "src.mcp_handlers.dialectic.handlers"
+    with patch(f"{D}.beam_update_reviewer", new_callable=AsyncMock, return_value=None), \
+         patch(f"{D}.pg_update_reviewer", new_callable=AsyncMock, return_value=False), \
+         patch(f"{D}.pg_update_awaiting_facilitation", new_callable=AsyncMock), \
+         patch(f"{D}.pg_reopen_session", new_callable=AsyncMock, return_value=True), \
+         patch(f"{D}.pg_add_message", new_callable=AsyncMock):
+        with pytest.raises(RuntimeError):
+            await _apply_reviewer_reassignment(
+                "sess-refused", session, "new-reviewer",
+                reason="race", strict_persistence=True,
+            )

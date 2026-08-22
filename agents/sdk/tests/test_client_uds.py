@@ -82,7 +82,8 @@ async def test_connect_builds_uds_transport_when_uds_path_set(
 
     # Stub out the MCP transport setup; we only care that the httpx config
     # was right at construction time. The streamable_http_client returns
-    # a context manager whose __aenter__ returns (read, write, _).
+    # a context manager whose __aenter__ returns (read, write, _) on mcp 1.x
+    # and (read, write) on 2.x.
     mock_cm = AsyncMock()
     mock_cm.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock(), None))
     mock_cm.__aexit__ = AsyncMock(return_value=False)

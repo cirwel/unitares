@@ -35,17 +35,24 @@ class MCPGovernanceClient:
         return asyncio.run(self._call_once(name, arguments or {}))
 
     async def _call_once(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        import httpx
         from mcp import ClientSession
-        from mcp.client.streamable_http import streamablehttp_client
+        from mcp.client.streamable_http import streamable_http_client
 
+        # The legacy streamablehttp_client alias (removed in mcp 2.0) took
+        # headers= directly; the modern entry point carries them on an
+        # injected httpx client instead.
         headers = {"Authorization": f"Bearer {self.t.token}"} if self.t.token else None
-        async with streamablehttp_client(self._mcp_url(), headers=headers) as (read, write, _):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                res = await session.call_tool(name, arguments)
-                for c in res.content:
-                    if getattr(c, "type", None) == "text":
-                        return json.loads(c.text)
+        async with httpx.AsyncClient(headers=headers) as http_client:
+            async with streamable_http_client(self._mcp_url(), http_client=http_client) as streams:
+                # mcp 1.x yields (read, write, get_session_id); 2.x drops the third.
+                read, write = streams[0], streams[1]
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    res = await session.call_tool(name, arguments)
+                    for c in res.content:
+                        if getattr(c, "type", None) == "text":
+                            return json.loads(c.text)
         raise GovernanceError(f"{name}: no text content in MCP result")
 
     # --- governance verbs (continuity_token threaded for strong tier) ----

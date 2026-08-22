@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -72,21 +73,47 @@ def test_operator_surfaces_do_not_demote_redis_to_optional_cache() -> None:
             assert phrase not in content, f"{relative} contains stale phrase {phrase!r}"
 
 
-def _sdk_version() -> str:
-    import tomllib
+def _advertised_sdk_versions() -> dict[str, str]:
+    """Every SDK version this repository advertises to the public, by surface."""
+    surfaces = {
+        "COMPATIBILITY.md": r"pip install unitares-sdk==([\d.]+)",
+        "docs/public-site/index.md": r"pip install unitares-sdk==([\d.]+)",
+    }
+    found = {}
+    for relative, pattern in surfaces.items():
+        match = re.search(pattern, _read(relative))
+        assert match, f"{relative} advertises no unitares-sdk install command"
+        found[relative] = match.group(1)
+    return found
 
-    with (REPO_ROOT / "agents/sdk/pyproject.toml").open("rb") as handle:
-        return tomllib.load(handle)["project"]["version"]
+
+def test_public_sdk_install_commands_agree() -> None:
+    """Every public surface must name the same SDK version.
+
+    This deliberately does NOT read agents/sdk/pyproject.toml. An earlier
+    version of this test did, with the comment "the compatibility table
+    advertises the version the repo *would* publish" — and would is not does.
+    When #1800 bumped the declared version to 0.2.1, this test then *required*
+    COMPATIBILITY.md to advertise `pip install unitares-sdk==0.2.1` while PyPI
+    served 0.2.0, so a required test was holding a broken install command in
+    place on a public page and reporting green.
+
+    A public claim must be checked against the published artifact, never
+    against repo intent. That check needs git tags, which this job's shallow
+    checkout does not have, so it lives in scripts/ci/published_claims.py under
+    the Release Seams workflow. What belongs here is the part that needs no
+    network and no tags: the surfaces must not disagree with each other.
+    """
+    advertised = _advertised_sdk_versions()
+    assert len(set(advertised.values())) == 1, (
+        f"public surfaces advertise different SDK versions: {advertised}"
+    )
 
 
 def test_published_sdk_and_rest_envelope_are_current() -> None:
     compatibility = _read("COMPATIBILITY.md")
     manual = _read("docs/manual/03-running-the-server.md")
-    # Derived from the SDK's own version series, not a frozen literal. The
-    # server VERSION and the SDK version bump independently, so hard-coding
-    # either one here turns an unrelated release red. What must hold is that
-    # the compatibility table advertises the version the repo would publish.
-    assert f"pip install unitares-sdk=={_sdk_version()}" in compatibility
+    assert "pip install unitares-sdk==" in compatibility
     assert "Until its first PyPI release" not in compatibility
     assert "-d '{\"name\":\"<tool_name>\"" in manual
     assert "-d '{\"tool\":\"<tool_name>\"" not in manual
