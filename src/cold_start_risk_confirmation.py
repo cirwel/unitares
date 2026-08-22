@@ -1,8 +1,10 @@
 """Observational maturity gate for fallback-owned cold-start risk pauses.
 
-The deployed monitor can produce ``risk_pause`` while behavioral confidence is
-below its authority threshold.  In that window the verdict is owned by the Phi
-cold-start prior, which the result envelope already labels non-discriminative.
+The deployed monitor can express the same risk-driven pause as ``risk_pause``
+or as a CIRS ``cirs_block`` whose ``nearest_edge`` is ``risk``.  Either can
+occur while behavioral confidence is below its authority threshold.  In that
+window the verdict is owned by the Phi cold-start prior, which the result
+envelope already labels non-discriminative.
 
 This module does not actuate.  It evaluates, in shadow, whether a pause would be
 the first or second adjacent fallback-owned observation and returns a fully
@@ -38,6 +40,22 @@ NON_AUTHORED_COLD_START_RECOVERY_BASIS = (
     "non_authored_phi_cold_start_trap"
 )
 COLD_START_CONFIRMATION_ACTUATION_SCOPE = "fallback_risk_pause_deferral"
+
+
+def _is_fallback_risk_policy_candidate(decision: Mapping[str, Any]) -> bool:
+    """Match only policy decisions whose authority comes from fallback risk.
+
+    ``risk_pause`` is the direct verdict path.  CIRS can route the same risk
+    score through ``cirs_block``; ``nearest_edge='risk'`` is the decision
+    producer's exact trigger attribution.  Every other CIRS edge stays outside
+    this authority guard and therefore fails closed.
+    """
+    if decision.get("action") != "pause":
+        return False
+    sub_action = decision.get("sub_action")
+    return sub_action == "risk_pause" or (
+        sub_action == "cirs_block" and decision.get("nearest_edge") == "risk"
+    )
 
 
 def classify_verdict_driver(
@@ -89,7 +107,8 @@ def evaluate_cold_start_risk_confirmation(
     action = decision.get("action")
     sub_action = decision.get("sub_action")
     reason = decision.get("reason")
-    policy_candidate = action == "pause" and sub_action == "risk_pause"
+    nearest_edge = decision.get("nearest_edge")
+    policy_candidate = _is_fallback_risk_policy_candidate(decision)
     measurement_ready = (
         confidence is not None
         and confidence >= BEHAVIORAL_AUTHORITY_THRESHOLD
@@ -236,6 +255,11 @@ def evaluate_cold_start_risk_confirmation(
             "action": action,
             "sub_action": sub_action,
             "reason": reason,
+            **(
+                {"nearest_edge": nearest_edge}
+                if "nearest_edge" in decision
+                else {}
+            ),
         },
         "note": (
             "Shadow evaluation only: the original policy decision is unchanged. "
@@ -264,12 +288,13 @@ def apply_non_authored_cold_start_guard(
 
     Unknown or incomplete provenance fails closed and leaves the pause intact.
     Agent-authored reports, behaviorally ready rows, independent verification,
-    and every non-``risk_pause`` policy path are also untouched.
+    and every policy path other than direct ``risk_pause`` or risk-attributed
+    CIRS ``cirs_block`` are also untouched.
     """
     guarded = dict(decision)
     action = guarded.get("action")
     sub_action = guarded.get("sub_action")
-    if action != "pause" or sub_action != "risk_pause":
+    if not _is_fallback_risk_policy_candidate(guarded):
         return guarded
 
     maturity_gate = guarded.get("cold_start_confirmation")
@@ -332,6 +357,11 @@ def apply_non_authored_cold_start_guard(
             "sub_action": sub_action,
             "reason": original_reason,
             "guidance": guarded.get("guidance"),
+            **(
+                {"nearest_edge": guarded.get("nearest_edge")}
+                if "nearest_edge" in guarded
+                else {}
+            ),
         },
         "note": (
             "A non-agent-authored Phi cold-start fallback is advisory until "

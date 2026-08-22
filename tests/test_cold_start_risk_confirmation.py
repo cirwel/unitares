@@ -5,6 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from src.cold_start_risk_confirmation import (
     COLD_START_CONFIRMATION_ACTUATION_SCOPE,
     NON_AUTHORED_COLD_START_ENFORCEMENT_BASIS,
@@ -24,7 +26,17 @@ def _risk_pause():
     }
 
 
-def _evaluate(*, previous=None, cycle=1, **overrides):
+def _cirs_block(nearest_edge="risk"):
+    return {
+        "action": "pause",
+        "sub_action": "cirs_block",
+        "reason": "CIRS risk ceiling breached",
+        "guidance": "Pause to investigate the risk spike.",
+        "nearest_edge": nearest_edge,
+    }
+
+
+def _evaluate(*, decision=None, previous=None, cycle=1, **overrides):
     arguments = {
         "behavioral_confidence": 0.1,
         "is_baselined": False,
@@ -39,13 +51,17 @@ def _evaluate(*, previous=None, cycle=1, **overrides):
         "actuation_enabled": False,
     }
     arguments.update(overrides)
-    return evaluate_cold_start_risk_confirmation(_risk_pause(), **arguments)
+    evaluated_decision = _risk_pause() if decision is None else decision
+    return evaluate_cold_start_risk_confirmation(evaluated_decision, **arguments)
 
 
-def _decision_with_gate(**gate_overrides):
-    decision = _risk_pause()
-    decision["cold_start_confirmation"] = _evaluate(**gate_overrides)
-    return decision
+def _decision_with_gate(decision=None, **gate_overrides):
+    guarded_decision = dict(_risk_pause() if decision is None else decision)
+    guarded_decision["cold_start_confirmation"] = _evaluate(
+        decision=guarded_decision,
+        **gate_overrides,
+    )
+    return guarded_decision
 
 
 def _legacy_trap_record(
@@ -102,6 +118,57 @@ def test_first_fallback_risk_pause_is_shadow_would_defer_only():
         "sub_action": "risk_pause",
         "reason": "UNITARES high-risk verdict",
     }
+
+
+def test_risk_attributed_cirs_block_is_the_same_fallback_risk_candidate():
+    gate = _evaluate(decision=_cirs_block())
+
+    assert gate["policy_candidate"] is True
+    assert gate["eligible"] is True
+    assert gate["would_defer"] is True
+    assert gate["enforcement_basis"] == "phi_cold_start_unconfirmed_shadow"
+    assert gate["original_decision"] == {
+        "action": "pause",
+        "sub_action": "cirs_block",
+        "reason": "CIRS risk ceiling breached",
+        "nearest_edge": "risk",
+    }
+
+
+@pytest.mark.parametrize(
+    ("decision", "expected_candidate"),
+    [
+        (_risk_pause(), True),
+        (_cirs_block("risk"), True),
+        (_cirs_block("oscillation"), False),
+        (_cirs_block("coherence"), False),
+        (_cirs_block(None), False),
+        (_cirs_block("unclassified"), False),
+        (
+            {
+                "action": "pause",
+                "sub_action": "system_maintenance",
+                "reason": "maintenance window",
+            },
+            False,
+        ),
+        (
+            {
+                "action": "proceed",
+                "sub_action": "risk_pause",
+                "reason": "not a pause",
+            },
+            False,
+        ),
+    ],
+)
+def test_fallback_risk_candidate_truth_table(decision, expected_candidate):
+    gate = _evaluate(decision=decision)
+
+    assert gate["policy_candidate"] is expected_candidate
+    if not expected_candidate:
+        assert gate["ineligibility_reason"] == "policy_not_risk_pause"
+        assert gate["eligible"] is False
 
 
 def test_second_adjacent_fallback_risk_pause_is_shadow_confirmed():
@@ -238,6 +305,28 @@ def test_non_authored_phi_cold_start_pause_becomes_advisory_guidance():
     )
 
 
+def test_non_authored_phi_cold_start_cirs_risk_block_becomes_guidance():
+    guarded = apply_non_authored_cold_start_guard(
+        _decision_with_gate(_cirs_block()),
+        epistemic_class="substrate_interpretation",
+        enabled=True,
+    )
+
+    assert guarded["action"] == "proceed"
+    assert guarded["sub_action"] == "guide"
+    assert guarded["original_action"] == "pause"
+    assert guarded["original_sub_action"] == "cirs_block"
+    assert guarded["nearest_edge"] == "risk"
+    assert guarded["cold_start_epistemic_gate"]["applied"] is True
+    assert guarded["cold_start_epistemic_gate"]["original_decision"] == {
+        "action": "pause",
+        "sub_action": "cirs_block",
+        "reason": "CIRS risk ceiling breached",
+        "guidance": "Pause to investigate the risk spike.",
+        "nearest_edge": "risk",
+    }
+
+
 def test_epistemic_guard_preserves_authoritative_or_uncertain_pauses():
     agent_report = apply_non_authored_cold_start_guard(
         _decision_with_gate(),
@@ -295,6 +384,35 @@ def test_epistemic_guard_preserves_authoritative_or_uncertain_pauses():
     )
 
 
+def test_cirs_risk_guard_preserves_agent_authored_and_behaviorally_ready_pauses():
+    agent_report = apply_non_authored_cold_start_guard(
+        _decision_with_gate(_cirs_block()),
+        epistemic_class="agent_report",
+        enabled=True,
+    )
+    behavioral_ready = apply_non_authored_cold_start_guard(
+        _decision_with_gate(
+            _cirs_block(),
+            behavioral_confidence=0.3,
+            primary_driver="behavioral_assessment",
+        ),
+        epistemic_class="substrate_interpretation",
+        enabled=True,
+    )
+
+    for decision in (agent_report, behavioral_ready):
+        assert decision["action"] == "pause"
+        assert decision["sub_action"] == "cirs_block"
+        assert decision["nearest_edge"] == "risk"
+        assert decision["cold_start_epistemic_gate"]["applied"] is False
+    assert agent_report["cold_start_epistemic_gate"]["ineligibility_reason"] == (
+        "agent_authored_report"
+    )
+    assert behavioral_ready["cold_start_epistemic_gate"][
+        "ineligibility_reason"
+    ] == "verdict_source_not_phi_cold_start"
+
+
 def test_epistemic_guard_never_changes_non_risk_pause():
     decision = {
         "action": "pause",
@@ -302,6 +420,32 @@ def test_epistemic_guard_never_changes_non_risk_pause():
         "reason": "void active",
         "cold_start_confirmation": _evaluate(),
     }
+
+    guarded = apply_non_authored_cold_start_guard(
+        decision,
+        epistemic_class="substrate_interpretation",
+        enabled=True,
+    )
+
+    assert guarded == decision
+
+
+@pytest.mark.parametrize(
+    "decision",
+    [
+        _cirs_block("oscillation"),
+        _cirs_block("coherence"),
+        _cirs_block(None),
+        _cirs_block("unclassified"),
+        {
+            "action": "pause",
+            "sub_action": "system_maintenance",
+            "reason": "maintenance window",
+        },
+    ],
+)
+def test_epistemic_guard_never_changes_other_pause_paths(decision):
+    decision = _decision_with_gate(decision)
 
     guarded = apply_non_authored_cold_start_guard(
         decision,
@@ -340,6 +484,28 @@ def test_reviewed_recovery_recognizes_only_exact_persisted_legacy_trap():
     assert wrong_basis["observed_enforcement"]["circuit_breaker_applied"] is True
     assert missing["eligible"] is False
     assert "state_record_present" in missing["failed_requirements"]
+
+
+def test_reviewed_recovery_does_not_reinterpret_historical_cirs_risk_blocks():
+    record = _legacy_trap_record(enforcement_basis="non_cold_start_policy")
+    policy = record.state_json["eisv_telemetry"]["policy_evaluation"]
+    policy["sub_action"] = "cirs_block"
+    policy["inputs"]["nearest_edge"] = "risk"
+    policy["maturity_gate"] = {
+        **_evaluate(decision=_cirs_block()),
+        "outcome": "ineligible",
+        "eligible": False,
+        "would_defer": False,
+        "policy_candidate": False,
+    }
+
+    observed = evaluate_non_authored_cold_start_trap(record, enabled=True)
+
+    assert observed["eligible"] is False
+    assert "policy_was_risk_pause" in observed["failed_requirements"]
+    assert "maturity_gate_exact" in observed["failed_requirements"]
+    assert "legacy_enforcement_basis_exact" in observed["failed_requirements"]
+    assert observed["observed_enforcement"]["circuit_breaker_applied"] is True
 
 
 def test_recovery_reports_confirmed_agent_report_actuation_without_granting_exception():
@@ -464,6 +630,52 @@ def test_monitor_path_defers_non_authored_phi_cold_start_from_runtime_actuator()
         "cold_start_epistemic_deferred": True,
     }
     assert result["policy_evaluation"]["epistemic_gate"]["applied"] is True
+    assert result["enforcement"]["requested"] is False
+    assert result["enforcement"]["applied"] is False
+    assert (
+        result["enforcement"]["basis"]
+        == NON_AUTHORED_COLD_START_ENFORCEMENT_BASIS
+    )
+
+
+def test_monitor_path_defers_non_authored_cold_start_cirs_risk_block():
+    from src.governance_monitor import UNITARESMonitor
+
+    monitor = UNITARESMonitor("cold-start-cirs-risk-guard", load_state=False)
+    monitor._cold_start_confirmation_lineage_status = "identity_genesis"
+    agent_state = {
+        "parameters": [0.1, 0.2],
+        "ethical_drift": [0.0, 0.0, 0.0],
+        "response_text": "Automatic stop-hook substrate interpretation.",
+        "complexity": 0.4,
+        "task_type": "mixed",
+        "epistemic_class": "substrate_interpretation",
+    }
+
+    with (
+        patch.object(
+            monitor,
+            "make_decision",
+            return_value=_cirs_block(),
+        ),
+        patch("src.governance_monitor.audit_logger._write_entry"),
+    ):
+        result = monitor.process_update(agent_state, confidence=0.5)
+
+    assert result["decision"]["action"] == "proceed"
+    assert result["decision"]["sub_action"] == "guide"
+    assert result["decision"]["nearest_edge"] == "risk"
+    assert result["policy_evaluation"]["suppression"] == {
+        "original_action": "pause",
+        "original_sub_action": "cirs_block",
+        "cold_start_epistemic_deferred": True,
+    }
+    maturity_gate = result["policy_evaluation"]["maturity_gate"]
+    assert maturity_gate["policy_candidate"] is True
+    assert maturity_gate["original_decision"]["nearest_edge"] == "risk"
+    epistemic_gate = result["policy_evaluation"]["epistemic_gate"]
+    assert epistemic_gate["applied"] is True
+    assert epistemic_gate["original_decision"]["nearest_edge"] == "risk"
     assert result["enforcement"]["requested"] is False
     assert result["enforcement"]["applied"] is False
     assert (

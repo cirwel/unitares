@@ -287,7 +287,8 @@ as if they were the same switch:
   **confirmation deferral** that could convert a first fallback-owned pause into
   guidance. Its scope is now emitted as `fallback_risk_pause_deferral`.
 - `enforcement.*` describes the existing authenticated **runtime circuit
-  breaker**. An underlying `risk_pause` can therefore have confirmation
+  breaker**. An underlying fallback-risk pause (`risk_pause`, or a `cirs_block`
+  attributed exactly to `nearest_edge=risk`) can therefore have confirmation
   `actuation_applied=false` while runtime `enforcement.applied=true`; that means
   the shadow did not alter the policy and the pre-existing pause was delivered.
 
@@ -298,7 +299,8 @@ facts separately from whether they match a narrow recovery exception. A failed
 exception predicate must never be presented as evidence that actuation did not
 occur.
 
-## Decision record — non-authored cold-start authority guard (2026-08-10)
+## Decision record — non-authored cold-start authority guard (2026-08-10;
+amended 2026-08-22)
 
 Prospective evidence after the confirmation shadow shipped exposed a narrower
 fault than the dormant two-observation proposal addresses. The first three
@@ -315,21 +317,40 @@ The deployed correction is an epistemic-authority rule, not promotion of the
 confirmation actuator:
 
 1. With `GOVERNANCE_NON_AUTHORED_COLD_START_GUARD=true` (default), downgrade only
-   an original `pause/risk_pause` whose row is non-agent-authored, verdict source
-   is exactly `phi_cold_start`, behavioral confidence is below 0.3, readiness is
-   explicitly false, and no independent verification override fired.
+   an original fallback-risk pause: either `pause/risk_pause`, or
+   `pause/cirs_block` with `nearest_edge=risk`. Its row must be non-agent-authored,
+   verdict source exactly `phi_cold_start`, behavioral confidence below 0.3,
+   readiness explicitly false, and free of an independent verification override.
 2. Preserve the original pause and reason in decision history, audit, and the
    versioned `epistemic_gate`; send `proceed/guide` with
    `enforcement.requested=false` to the authenticated runtime boundary.
 3. Leave agent-authored reports, behaviorally ready evidence, independent
-   verification, void/coherence/basin/CIRS gates, loop detection, and every other
-   pause source unchanged. Missing or contradictory provenance fails closed.
+   verification, void/coherence/basin gates, CIRS oscillation/coherence/unknown
+   edges, loop detection, and every other pause source unchanged. Missing or
+   contradictory provenance fails closed.
 4. For identities already trapped by the legacy behavior, reviewed recovery may
    discount the frozen risk check only when the latest persisted telemetry proves
    the exact non-authored `shadow_would_defer` circuit breaker. Ownership,
    reflection, no-void, and persistence checks still apply. Legacy `C(V)` is
    diagnostic context, not recovery authority. Quick recovery retains its
    stricter risk/no-void contract and cannot use the cold-start risk exception.
+
+The policy-vocabulary boundary is exhaustive:
+
+| Action | Sub-action | `nearest_edge` | Fallback-risk candidate |
+|---|---|---|---|
+| `pause` | `risk_pause` | any or absent | yes |
+| `pause` | `cirs_block` | exactly `risk` | yes |
+| `pause` | `cirs_block` | `oscillation`, `coherence`, absent, or any other value | no |
+| `pause` | anything else | any | no |
+| anything else | any | any | no |
+
+The 2026-08-22 amendment closes a vocabulary bypass found in #1817: CIRS derives
+its risk-attributed block from the same fallback-owned risk score, so that label
+does not add independent authority. It is prospective only. Historical recovery
+remains the exact `risk_pause`/`shadow_would_defer` exception above; this change
+does not reinterpret old `cirs_block` rows whose recorded enforcement basis was
+`non_cold_start_policy`.
 
 The separate two-confirmation actuator remains dormant under dialectic decision
 `8539c516649a08af`. The new guard has no counter, does not trust a second fallback

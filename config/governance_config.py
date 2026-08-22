@@ -456,10 +456,12 @@ class GovernanceConfig:
     VERIFICATION_FLOOR_SHADOW = os.environ.get('GOVERNANCE_VERIFICATION_FLOOR_SHADOW', 'true').lower() == 'true'
 
     # Cold-start risk confirmation telemetry.  The shadow evaluator records
-    # whether a fallback-owned (phi_cold_start) risk_pause is the first or a
-    # repeated adjacent observation.  It never changes the decision.  Default
-    # ON because it is observational and is the evidence gate for any future
-    # policy proposal.  Roll back by setting the env flag false and restarting.
+    # whether a fallback-owned (phi_cold_start) risk pause is the first or a
+    # repeated adjacent observation.  That pause may use the direct risk_pause
+    # path or the exact CIRS cirs_block/nearest_edge=risk vocabulary.  It never
+    # changes the decision.  Default ON because it is observational and is the
+    # evidence gate for any future policy proposal.  Roll back by setting the
+    # env flag false and restarting.
     COLD_START_RISK_CONFIRMATION_SHADOW = (
         os.environ.get(
             'GOVERNANCE_COLD_START_RISK_CONFIRMATION_SHADOW', 'true'
@@ -480,10 +482,12 @@ class GovernanceConfig:
     # Epistemic-authority guard for pre-authored cold starts.  A non-agent-
     # authored row (substrate observation/interpretation or prediction) cannot
     # hard-pause an identity when the verdict is still owned solely by the Phi
-    # fallback below behavioral authority.  This is a stateless provenance rule,
-    # not promotion of the dormant two-confirmation actuator above.  It also
-    # enables the exact-provenance reviewed-recovery escape for identities trapped
-    # by the legacy behavior.  Default ON; set false for an immediate rollback.
+    # fallback below behavioral authority.  The same rule applies when CIRS
+    # attributes its block exactly to the risk edge; all other CIRS blocks remain
+    # fail-closed.  This is a stateless provenance rule, not promotion of the
+    # dormant two-confirmation actuator above.  It also enables the exact-
+    # provenance reviewed-recovery escape for identities trapped by the legacy
+    # risk_pause behavior.  Default ON; set false for an immediate rollback.
     NON_AUTHORED_COLD_START_GUARD_ENABLED = (
         os.environ.get(
             'GOVERNANCE_NON_AUTHORED_COLD_START_GUARD', 'true'
