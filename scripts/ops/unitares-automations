@@ -9,6 +9,7 @@ ingest later.
 from __future__ import annotations
 
 import argparse
+import glob as glob_module
 import json
 import os
 import plistlib
@@ -972,9 +973,25 @@ def _settings_hook_sources() -> list[tuple[Path, str | None]]:
                     roots.append(Path(path))
         except Exception:  # noqa: BLE001 - best effort; absence is not an error
             pass
+    # Cached (marketplace-installed) plugins nest hooks.json/codex-hooks.json
+    # at `cache/<marketplace>/<plugin>/<version>/hooks/...` -- three levels
+    # under `cache/`, not directly inside it. `cache.iterdir()` treated each
+    # marketplace directory itself as a plugin root and never found a hooks
+    # declaration there, so every cached (non-directory-source) plugin's
+    # hooks were invisible to the census, not merely orphaned or missing --
+    # verified 2026-08-22 against the live cache: `hookify` declares hooks.json
+    # in three installed locations and none reached this collector. Walking
+    # for the declaration files directly is depth-agnostic, so it survives
+    # a marketplace changing its own nesting.
     cache = HOME / ".claude/plugins/cache"
     if cache.is_dir():
-        roots.extend(p for p in cache.iterdir() if p.is_dir())
+        seen_cache_roots: set[Path] = set()
+        for declaration in ("hooks/hooks.json", "hooks/codex-hooks.json"):
+            for hit in cache.rglob(declaration):
+                plugin_root = hit.parent.parent
+                if plugin_root not in seen_cache_roots:
+                    seen_cache_roots.add(plugin_root)
+                    roots.append(plugin_root)
     for root in roots:
         # A plugin declares hooks per HOST, in separate files. Reading only
         # hooks.json (the Claude contract) reports every Codex-only hook as
@@ -1009,25 +1026,45 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
 
     unitares-governance-plugin#122 wrapped that invocation in a shell
     fallback (`_unitares_runner="<path>"; if [ ! -f "$_unitares_runner" ];
-    then ...; fi; "$_unitares_runner" <name> --host <host>`) so the plugin
-    survives a plugin-cache directory rollover. Assignment prefixes and
-    trailing `;` would otherwise fuse to the path and make it unresolvable,
-    and shell keywords in the conditional would otherwise be mistaken for
-    the dispatched hook name.
+    then for _unitares_candidate in "${PLUGIN_ROOT%/*}"/*/hooks/run-hook.cmd;
+    ...; fi; "$_unitares_runner" <name> --host <host>`) so the plugin
+    survives a plugin-cache directory rollover: if the direct path is gone,
+    it globs for a sibling version directory that still has the dispatcher.
+    Assignment prefixes and trailing `;` would otherwise fuse to the path
+    and make it unresolvable, shell keywords in the conditional would
+    otherwise be mistaken for the dispatched hook name, and the `%/*}`
+    parameter expansion in the fallback glob is not a plain placeholder --
+    it strips the trailing path segment (bash's suffix-removal operator),
+    so it needs its own expansion before the glob can be walked.
     """
     # hooks.json uses ${CLAUDE_PLUGIN_ROOT}; codex-hooks.json uses
-    # ${PLUGIN_ROOT}. Expand both, longest token first so the CLAUDE_ form
-    # is not left with a dangling "CLAUDE_" prefix.
+    # ${PLUGIN_ROOT}, and its own #122 fallback separately uses
+    # ${PLUGIN_ROOT%/*} (bash suffix-removal: strips the trailing path
+    # segment, i.e. the plugin's dirname). `str.replace` only matches an
+    # exact contiguous substring, so `${PLUGIN_ROOT%/*}` is never mistaken
+    # for `${PLUGIN_ROOT}` (the `%` breaks the match) regardless of order
+    # -- listed first anyway so a reader doesn't have to reason about that.
     text = command
-    for placeholder in (
-        "${CLAUDE_PLUGIN_ROOT}", "$CLAUDE_PLUGIN_ROOT",
-        "${PLUGIN_ROOT}", "$PLUGIN_ROOT",
+    plugin_dirname = str(Path(plugin_root).parent) if plugin_root else ""
+    for placeholder, replacement in (
+        ("${CLAUDE_PLUGIN_ROOT}", plugin_root or ""),
+        ("$CLAUDE_PLUGIN_ROOT", plugin_root or ""),
+        ("${PLUGIN_ROOT%/*}", plugin_dirname),
+        ("${PLUGIN_ROOT}", plugin_root or ""),
+        ("$PLUGIN_ROOT", plugin_root or ""),
     ):
-        text = text.replace(placeholder, plugin_root or "")
+        text = text.replace(placeholder, replacement)
     # Drop a `name=` assignment prefix immediately before a quote so the
     # quoted path tokenizes bare instead of fused to its variable name.
     text = re.sub(r"\b\w+=(?=[\"'])", "", text)
-    tokens = [t.strip("\"';,") for t in text.split()]
+    # A quoted prefix directly concatenated with an unquoted glob suffix
+    # (`"<dir>"/*/hooks/run-hook.cmd`, valid shell word-concatenation) is
+    # one whitespace token with an embedded quote the edge-only `.strip()`
+    # below cannot reach. Every quote in these commands exists purely for
+    # shell-safety of a variable expansion, never as a literal path
+    # character, so dropping them all is safe.
+    text = text.replace('"', "").replace("'", "")
+    tokens = [t.strip(";,") for t in text.split()]
     found: list[str] = []
     dispatcher_idx: int | None = None
     dispatcher_path: Path | None = None
@@ -1035,9 +1072,25 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
         if "/" not in tok:
             continue
         expanded = os.path.expanduser(tok)
-        if not Path(expanded).exists():
-            continue
-        resolved = Path(expanded).resolve()
+        if any(ch in expanded for ch in "*?["):
+            # `${PLUGIN_ROOT%/*}"/*/hooks/run-hook.cmd` -- a real glob
+            # pattern once `%/*` is expanded, not a literal path. Resolve
+            # it against the filesystem rather than treating the `*` as a
+            # dead end, so a genuine plugin-cache rollover (the direct
+            # path gone, a sibling version directory still holding the
+            # dispatcher) reports "wired," not a false "no resolvable
+            # script." Sorted so which candidate wins is deterministic;
+            # the bash loop this mirrors keeps the *last* match, but for
+            # "does at least one exist" the choice of candidate doesn't
+            # matter.
+            matches = sorted(glob_module.glob(expanded))
+            if not matches:
+                continue
+            resolved = Path(matches[0]).resolve()
+        else:
+            if not Path(expanded).exists():
+                continue
+            resolved = Path(expanded).resolve()
         found.append(str(resolved))
         if resolved.name in DISPATCHER_NAMES and dispatcher_idx is None:
             dispatcher_idx = idx
