@@ -573,6 +573,7 @@ def build_experience_envelope(
             "operator_used",
             "low_confidence",
             "search_degraded",
+            "tag_filter_dropped",
         )
         note = source_payload.get("confidence_note")
         if note:

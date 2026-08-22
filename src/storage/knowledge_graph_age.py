@@ -2039,6 +2039,7 @@ class KnowledgeGraphAGE:
         limit: int,
         min_similarity: float,
         agent_id: Optional[str] = None,
+        tags: Optional[List[str]] = None,
     ) -> List[tuple[str, float]]:
         """
         Search using pgvector's HNSW index.
@@ -2052,32 +2053,33 @@ class KnowledgeGraphAGE:
         # Convert list to pgvector string format: '[0.1, 0.2, ...]'
         embedding_str = '[' + ','.join(str(x) for x in query_embedding) + ']'
 
+        # agent_id is filtered by the caller after the fetch, so over-fetch for it.
+        params: List[Any] = [embedding_str, min_similarity]
+        tag_join = ""
+        if tags:
+            from src.knowledge_graph import normalize_tags
+            params.append(normalize_tags(tags))
+            tag_join = f"JOIN knowledge.discoveries d ON d.id = de.discovery_id AND d.tags && ${len(params)}"
+        params.append(limit * 3 if agent_id else limit)
+        sql = f"""
+            SELECT de.discovery_id, (1 - (de.embedding <=> $1::vector)) AS similarity
+            FROM {table} de
+            {tag_join}
+            WHERE de.embedding IS NOT NULL
+              AND (1 - (de.embedding <=> $1::vector)) >= $2
+            ORDER BY de.embedding <=> $1::vector
+            LIMIT ${len(params)}
+        """
+
         async with db.acquire() as conn:
-            if agent_id:
-                # Hybrid query: pgvector for similarity, later filter by agent via AGE
-                rows = await conn.fetch(
-                    f"""
-                    SELECT de.discovery_id, (1 - (de.embedding <=> $1::vector)) AS similarity
-                    FROM {table} de
-                    WHERE de.embedding IS NOT NULL
-                      AND (1 - (de.embedding <=> $1::vector)) >= $2
-                    ORDER BY de.embedding <=> $1::vector
-                    LIMIT $3
-                    """,
-                    embedding_str, min_similarity, limit * 3,
-                )
+            if tags:
+                # A filtered HNSW scan otherwise stops after ef_search (40)
+                # candidates, so a sparse tag returns fewer rows than exist.
+                async with conn.transaction():
+                    await conn.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
+                    rows = await conn.fetch(sql, *params)
             else:
-                rows = await conn.fetch(
-                    f"""
-                    SELECT discovery_id, (1 - (embedding <=> $1::vector)) AS similarity
-                    FROM {table}
-                    WHERE embedding IS NOT NULL
-                      AND (1 - (embedding <=> $1::vector)) >= $2
-                    ORDER BY embedding <=> $1::vector
-                    LIMIT $3
-                    """,
-                    embedding_str, min_similarity, limit,
-                )
+                rows = await conn.fetch(sql, *params)
 
             return [(row['discovery_id'], float(row['similarity'])) for row in rows]
 
@@ -2328,6 +2330,7 @@ class KnowledgeGraphAGE:
         query: str,
         limit: int = 20,
         operator: str = "AND",
+        tags: Optional[List[str]] = None,
     ) -> List[DiscoveryNode]:
         """Full-text search using PostgreSQL tsvector (ts_rank_cd ranking).
 
@@ -2339,7 +2342,7 @@ class KnowledgeGraphAGE:
         pass operator="OR".
         """
         db = await self._get_db()
-        rows = await db.kg_full_text_search(query, limit, operator=operator)
+        rows = await db.kg_full_text_search(query, limit, operator=operator, tags=tags)
         # Hydrate via get_discovery so edge/response metadata is consistent
         # with what the rest of AGE returns. Row count is small (<= limit).
         results: List[DiscoveryNode] = []
@@ -2366,6 +2369,7 @@ class KnowledgeGraphAGE:
         temporal_decay: bool = True,
         half_life_days: float = 90.0,
         status_weight: bool = True,
+        tags: Optional[List[str]] = None,
     ) -> List[tuple[DiscoveryNode, float]]:
         """
         Semantic search using sentence-transformer embeddings.
@@ -2435,6 +2439,7 @@ class KnowledgeGraphAGE:
                 limit=limit,
                 min_similarity=min_similarity,
                 agent_id=agent_id,
+                tags=tags,
             )
             
             if scored_ids:
@@ -2497,9 +2502,10 @@ class KnowledgeGraphAGE:
         # Get candidate discoveries
         candidates = await self.query(
             agent_id=agent_id,
+            tags=tags,
             limit=limit * 5,
         )
-        
+
         if not candidates:
             return []
         

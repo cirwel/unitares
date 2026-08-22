@@ -87,7 +87,10 @@ class SearchKnowledgeGraphParams(AgentIdentityMixin):
     )
     tags: Optional[List[str]] = Field(
         default_factory=list,
-        description="Filter by exact tags"
+        description=(
+            "Exact tag filter, applied in every search mode: a discovery matches "
+            "when it carries any of the given tags (normalized the same way as on store)"
+        )
     )
     created_after: Optional[str] = Field(
         default=None,
@@ -356,7 +359,13 @@ class KnowledgeParams(AgentIdentityMixin):
     summary: Optional[str] = Field(None, description="Discovery summary (for action=store)")
     discovery_type: Optional[str] = Field(None, description="Required for action=store. One of: " + ", ".join(get_args(DiscoveryType)) + ".")
     response_to: Optional[dict] = Field(None, description="Typed response link {discovery_id, response_type} for threaded store/note writes")
-    tags: Optional[List[str]] = Field(None, description="Tags for discovery (for action=store, search, note)")
+    tags: Optional[List[str]] = Field(
+        None,
+        description=(
+            "Tags for the discovery (action=store, note). For action=search: an exact "
+            "filter in every search mode, matching any of the given tags (normalized)"
+        ),
+    )
     severity: Optional[str] = Field(None, description="Severity: low, medium, high, critical (for action=store or action=update)")
     related_files: Optional[List[str]] = Field(None, description="File paths referenced by this discovery (for action=store)")
     auto_link_related: Union[bool, str, None] = Field(None, description="If false, skip automatic similar-discovery linking for action=store")

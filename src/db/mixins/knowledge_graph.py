@@ -186,6 +186,7 @@ class KnowledgeGraphMixin:
         query: str,
         limit: int = 20,
         operator: str = "AND",
+        tags: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Full-text search using PostgreSQL tsvector.
 
@@ -207,14 +208,24 @@ class KnowledgeGraphMixin:
         # bounded form makes the two comparable. Ordering is unaffected:
         # rank/(rank+1) is monotonic in rank.
         ts_query = _apply_operator(query, operator=operator)
+        # The tag predicate has to sit inside the ranked query: filtering the
+        # top-N afterwards drops every tagged row that ranked below N.
+        params: List[Any] = [ts_query]
+        tag_clause = ""
+        if tags:
+            from src.knowledge_graph import normalize_tags
+            params.append(normalize_tags(tags))
+            tag_clause = f"AND tags && ${len(params)}"
+        params.append(limit)
         async with self.acquire() as conn:
-            rows = await conn.fetch("""
+            rows = await conn.fetch(f"""
                 SELECT *, ts_rank_cd(search_vector, websearch_to_tsquery('english', $1), 32) as rank
                 FROM knowledge.discoveries
                 WHERE search_vector @@ websearch_to_tsquery('english', $1)
+                  {tag_clause}
                 ORDER BY rank DESC, created_at DESC
-                LIMIT $2
-            """, ts_query, limit)
+                LIMIT ${len(params)}
+            """, *params)
 
             return [self._row_to_discovery_dict(row) for row in rows]
 
