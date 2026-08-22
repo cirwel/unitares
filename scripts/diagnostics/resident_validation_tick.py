@@ -18,7 +18,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.resident_validation import (  # noqa: E402
+from src.evaluation.resident_validation.model import (  # noqa: E402
     ResidentProfile,
     build_process_update_kwargs,
     build_tick_envelope,

@@ -1,4 +1,4 @@
-"""Resident validation cohort protocol tests."""
+"""Resident-validation model contract tests."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from src.resident_validation import (
+from src.evaluation.resident_validation.model import (
     ResidentProfile,
     build_process_update_kwargs,
     build_tick_envelope,
@@ -148,7 +148,7 @@ def test_cli_emits_json_and_appends_state(tmp_path: Path) -> None:
             "--state-path",
             str(state_path),
         ],
-        cwd=Path(__file__).resolve().parents[1],
+        cwd=Path(__file__).resolve().parents[3],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

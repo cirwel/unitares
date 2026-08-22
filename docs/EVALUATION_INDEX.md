@@ -190,7 +190,7 @@ UNITARES writes, nothing scheduled) — a measurement harness, not a live subsys
 
 | Artifact | What it does | Freshness |
 |---|---|---|
-| `src/resident_validation.py` / `_runner.py` / `_invocation.py` ✓ | Build deterministic low-authority tick envelopes; canary runner; lock + tick-cap + local audit | current (pure libs) |
+| `src/evaluation/resident_validation/{model,runner,invocation}.py` ✓ (legacy `src/resident_validation*.py` shims retained) | Build deterministic low-authority tick envelopes; canary runner; lock + tick-cap + local audit | current (pure libs) |
 | `scripts/diagnostics/resident_validation_{supervised_invocation,tick,canary}.py` ✓ | CLIs over the above; only side effect is `data/resident_validation/` JSONL | current |
 | `docs/operations/resident-validation-{cohort,supervised-invocation}.md` ✓ | v0 cohort + supervised-invocation design; matches code | current (Experimental) |
 

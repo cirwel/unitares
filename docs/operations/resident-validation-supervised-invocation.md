@@ -1,7 +1,7 @@
 # Resident Validation Supervised Invocation
 
 **Created:** June 14, 2026
-**Last Updated:** June 14, 2026
+**Last Updated:** August 22, 2026
 **Status:** Experimental
 
 ---
@@ -28,7 +28,7 @@ This is the layer between:
 
 - a local lock file so overlapping invocations do not run concurrently,
 - a per-run maximum tick count,
-- local tick JSONL append through `resident_validation_runner`,
+- local tick JSONL append through `src.evaluation.resident_validation.runner`,
 - a local invocation audit JSONL row,
 - a privacy-safe stdout acknowledgement for scheduler logs.
 

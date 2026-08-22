@@ -7,8 +7,8 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.resident_validation import ResidentProfile
-from src.resident_validation_runner import build_canary_ticks, next_tick_index
+from src.evaluation.resident_validation.model import ResidentProfile
+from src.evaluation.resident_validation.runner import build_canary_ticks, next_tick_index
 
 
 NOW = datetime(2026, 6, 14, 20, 5, tzinfo=timezone.utc)
@@ -117,7 +117,7 @@ def test_cli_summary_avoids_echoing_private_tick_content(tmp_path: Path) -> None
             "--count",
             "2",
         ],
-        cwd=Path(__file__).resolve().parents[1],
+        cwd=Path(__file__).resolve().parents[3],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
