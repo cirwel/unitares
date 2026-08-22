@@ -1,17 +1,27 @@
 name: dependabot-triage
 
 # Weekly Dependabot triage across the CIRWEL fleet. REPORT ONLY — this never
-# merges. It replaces a claude.ai cloud routine whose merge policy lived in a
-# web form, unversioned and unreviewable; the policy now lives in
-# scripts/dev/dependabot_triage.py where it can be diffed and tested.
+# merges. The merge/triage policy lives in scripts/dev/dependabot_triage.py
+# where it can be diffed and tested.
 #
-# Runs an hour before the cloud routine so a week of output can be compared
-# side by side before anything is granted merge rights.
+# Coverage posture (2026-08-21): the default GITHUB_TOKEN cannot read the
+# private fleet target, and no fleet PAT exists by operator policy (no
+# operator-held tokens when local keychain auth can carry the job — the
+# authoritative fleet-wide run is launchd com.cirwel.dependabot-triage,
+# Mon 08:00 America/Denver). Until 2026-08-21 that made every scheduled run
+# here red BY DESIGN, which trained everyone to ignore this workflow. The
+# gate now distinguishes the two honest states: unreachability confined to
+# the declared allowlist below is partial-by-policy (green, with an explicit
+# caveat in the report), while ANY other unreachable repo still fails the
+# run. Providing a valid fleet-scoped DEPENDABOT_TRIAGE_TOKEN with access to
+# every target turns the run fully green (an expired or under-scoped token
+# still reds).
 
 on:
   schedule:
-    # Mondays 14:00 UTC == 08:00 America/Denver (MDT). The cloud routine it
-    # shadows runs at 09:00 MDT.
+    # Mondays 14:00 UTC — aligned with the local launchd job's Monday-morning
+    # run (08:00 MDT / 07:00 MST). This leg is the public record + weekly
+    # smoke test of the triage script; the local leg is the fleet-complete one.
     - cron: "0 14 * * 1"
   workflow_dispatch:
 
@@ -38,19 +48,26 @@ jobs:
           # token, under which private targets stay UNREACHABLE and the
           # coverage gate below keeps the run red — that red is honest.
           GH_TOKEN: ${{ secrets.DEPENDABOT_TRIAGE_TOKEN || secrets.GITHUB_TOKEN }}
+          HAS_FLEET_TOKEN: ${{ secrets.DEPENDABOT_TRIAGE_TOKEN }}
         run: |
           set +e
-          python3 scripts/dev/dependabot_triage.py > triage.md
+          # The private-repo allowlist applies ONLY on the default token.
+          # With a fleet token provided, the private repo must be readable —
+          # an under-scoped or expired token must red the run, not ride the
+          # allowlist to green.
+          ALLOW=""
+          if [ -z "$HAS_FLEET_TOKEN" ]; then
+            ALLOW="--allow-unreachable CIRWEL/unitares-pi-plugin"
+          fi
+          python3 scripts/dev/dependabot_triage.py $ALLOW > triage.md
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
           cat triage.md >> "$GITHUB_STEP_SUMMARY"
           cat triage.md
 
-      - name: Fail if fleet coverage was incomplete
+      - name: Fail if fleet coverage was unexpectedly incomplete
         if: steps.triage.outputs.exit_code != '0'
         run: |
-          echo "::error::Dependabot triage could not read every target repo." \
-               "The report above is not fleet-wide. See the UNREACHABLE section."
-          echo "GITHUB_TOKEN is scoped to this repository. Private repos in the" \
-               "target list (currently CIRWEL/unitares-pi-plugin) need a token" \
-               "with access before coverage can be complete."
+          echo "::error::Dependabot triage could not read a repo OUTSIDE the" \
+               "declared allowlist. The report above is not fleet-wide and this" \
+               "is not the known private-repo gap. See the UNREACHABLE section."
           exit 1
