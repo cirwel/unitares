@@ -5,7 +5,8 @@ Tests cover:
 - Explicit ``uds_path=`` parameter: UDS transport selected.
 - ``UNITARES_UDS_SOCKET`` env var: UDS transport selected.
 - Explicit ``uds_path=`` overrides the env var (so tests / config can pin).
-- Connect path actually constructs ``httpx.AsyncHTTPTransport(uds=...)``.
+- Connect path actually constructs ``AsyncHTTPTransport(uds=...)`` from the
+  library the installed mcp transport expects (``httpx2`` on mcp 2.x).
 
 Connection-establishment paths are not exercised end-to-end here (would
 require a running governance MCP). The focus is the transport-selection
@@ -17,10 +18,17 @@ from __future__ import annotations
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
 
+from unitares_sdk._mcp_httpx import mcp_httpx
 from unitares_sdk.client import GovernanceClient
+
+# The client library the installed mcp transport expects — httpx 0.x on mcp
+# 1.x, httpx2 on 2.x. Asserting against this rather than a hardcoded ``httpx``
+# keeps the UDS guard meaningful on both lines: the point is that the
+# substrate-attestation path builds a UDS transport from whichever library is
+# actually being injected.
+httpx = mcp_httpx()
 
 
 # =============================================================================
@@ -62,7 +70,7 @@ def test_empty_env_var_treated_as_unset(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 # =============================================================================
-# Connect path constructs httpx.AsyncHTTPTransport(uds=...)
+# Connect path constructs AsyncHTTPTransport(uds=...)
 # =============================================================================
 
 
@@ -70,7 +78,7 @@ def test_empty_env_var_treated_as_unset(monkeypatch: pytest.MonkeyPatch) -> None
 async def test_connect_builds_uds_transport_when_uds_path_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When uds_path is set, connect() constructs httpx with UDS transport."""
+    """When uds_path is set, connect() constructs the client with a UDS transport."""
     captured: dict[str, object] = {}
 
     real_async_client = httpx.AsyncClient
@@ -80,9 +88,10 @@ async def test_connect_builds_uds_transport_when_uds_path_set(
         captured["http2"] = kwargs.get("http2")
         return real_async_client(*args, **kwargs)
 
-    # Stub out the MCP transport setup; we only care that the httpx config
+    # Stub out the MCP transport setup; we only care that the client config
     # was right at construction time. The streamable_http_client returns
-    # a context manager whose __aenter__ returns (read, write, _).
+    # a context manager whose __aenter__ returns (read, write, _) on mcp 1.x
+    # and (read, write) on 2.x.
     mock_cm = AsyncMock()
     mock_cm.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock(), None))
     mock_cm.__aexit__ = AsyncMock(return_value=False)
@@ -92,7 +101,7 @@ async def test_connect_builds_uds_transport_when_uds_path_set(
     mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session_cm.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("unitares_sdk.client.httpx.AsyncClient", side_effect=capturing_client), \
+    with patch("unitares_sdk.client._httpx.AsyncClient", side_effect=capturing_client), \
          patch("unitares_sdk.client.streamable_http_client", return_value=mock_cm), \
          patch("unitares_sdk.client.ClientSession", return_value=mock_session_cm):
         client = GovernanceClient(uds_path="/tmp/test-s19.sock")
@@ -110,7 +119,7 @@ async def test_connect_builds_uds_transport_when_uds_path_set(
 async def test_connect_skips_uds_transport_when_no_uds_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When uds_path is None, connect() builds the default httpx client
+    """When uds_path is None, connect() builds the default client
     without the explicit transport= kwarg (matches pre-PR5 behavior)."""
     monkeypatch.delenv("UNITARES_UDS_SOCKET", raising=False)
     captured: dict[str, object] = {"transport_set": False}
@@ -130,7 +139,7 @@ async def test_connect_skips_uds_transport_when_no_uds_path(
     mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session_cm.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("unitares_sdk.client.httpx.AsyncClient", side_effect=capturing_client), \
+    with patch("unitares_sdk.client._httpx.AsyncClient", side_effect=capturing_client), \
          patch("unitares_sdk.client.streamable_http_client", return_value=mock_cm), \
          patch("unitares_sdk.client.ClientSession", return_value=mock_session_cm):
         client = GovernanceClient()

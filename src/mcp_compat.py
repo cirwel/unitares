@@ -1,9 +1,9 @@
 """Compatibility shim spanning the ``mcp`` SDK 1.x and 2.x lines.
 
 Dependabot #1393 widened the ``mcp`` requirement to ``>=1.26.0,<3.0.0``, which
-admits the 2.x major. 2.x is a ground-up rewrite of the SDK, but only two of its
-breaking changes reach this codebase. This module resolves both so call sites
-stay version-agnostic:
+admits the 2.x major. 2.x is a ground-up rewrite of the SDK, but only three of
+its breaking changes reach this codebase. This module resolves all three so call
+sites stay version-agnostic:
 
 1. **The high-level server moved and was renamed.**
    - 1.x: ``mcp.server.fastmcp.FastMCP`` and ``mcp.server.fastmcp.Context``
@@ -25,6 +25,12 @@ stay version-agnostic:
    ``populate_by_name=True``, so *constructing* a ``Tool(inputSchema=...)`` still
    works on both lines — only *attribute access* changed. Read/write the schema
    through :func:`get_tool_input_schema` / :func:`set_tool_input_schema`.
+
+3. **The client transport moved from ``httpx`` to ``httpx2``.**
+   Anything injected via ``http_client=`` / ``httpx_client_factory=`` must be
+   built from the library the installed transport actually calls methods on.
+   Ask :func:`mcp_httpx` rather than importing ``httpx`` directly — an
+   `httpx` 0.x client under a 2.x transport fails *silently*, not loudly.
 """
 
 from __future__ import annotations
@@ -69,6 +75,7 @@ __all__ = [
     "set_tool_input_schema",
     "lowlevel_server",
     "make_lowlevel_server",
+    "mcp_httpx",
 ]
 
 
@@ -201,3 +208,70 @@ def make_lowlevel_server(
     server.list_tools()(list_tools)
     server.call_tool()(call_tool)
     return server
+
+
+# ---------------------------------------------------------------------------
+# 3. The client transport's HTTP library changed: httpx -> httpx2.
+# ---------------------------------------------------------------------------
+#
+# mcp 2.x rewrote ``mcp.client.streamable_http`` against ``httpx2``: it calls
+# ``client.sse(...)`` on whatever is passed to ``http_client=`` and catches
+# ``httpx2.StreamError``. An ``httpx`` 0.x client has no ``.sse()``, and the
+# resulting AttributeError is swallowed by the transport's retry loop — POST
+# round-trips keep working while the server-push GET stream dies SILENTLY.
+# That failure mode is why this seam gets a resolver instead of a version
+# check: call sites ask the installed transport which library it wants and
+# hand it exactly that.
+
+
+_MCP_HTTPX: Any = None
+
+
+def mcp_httpx() -> Any:
+    """Return the HTTP client library the installed ``mcp`` transport expects.
+
+    Resolved from the transport module's own import surface, not from
+    :data:`MCP_MAJOR` — the seam is "what does this transport call methods on",
+    and reading it directly stays correct if a future ``mcp`` switches back or
+    switches again. Result is cached; the answer cannot change within a process.
+
+    Use it wherever a client is injected via ``http_client=`` or
+    ``httpx_client_factory=``, and for the exception types raised by that
+    client::
+
+        httpx = mcp_httpx()
+        async with httpx.AsyncClient(http2=False, timeout=15) as client:
+            ...
+
+    Raises:
+        ImportError: the transport exposes neither ``httpx2`` nor ``httpx``
+            under its own name, so which library it wants cannot be read off
+            it. Guessing here would re-open the silent-failure path above, so
+            this fails loudly instead — see
+            ``tests/test_mcp_dependency_canary.py``, whose import-surface check
+            needs re-basing against the new transport at the same time.
+    """
+    global _MCP_HTTPX
+    if _MCP_HTTPX is None:
+        _MCP_HTTPX = _resolve_mcp_httpx()
+    return _MCP_HTTPX
+
+
+def _resolve_mcp_httpx() -> Any:
+    import mcp.client.streamable_http as transport
+
+    for name in ("httpx2", "httpx"):
+        mod = getattr(transport, name, None)
+        # Identity, not just presence: ``import httpx2 as httpx`` would satisfy
+        # a bare getattr while being the other library.
+        if mod is not None and getattr(mod, "__name__", None) == name:
+            return mod
+
+    raise ImportError(
+        "Cannot determine which HTTP client library mcp.client.streamable_http "
+        "is written against: it exposes neither 'httpx2' nor 'httpx' at module "
+        "level under its own name. Injecting the wrong one kills the "
+        "server-push GET stream silently, so this refuses to guess. Re-base "
+        "this resolver and the import-surface check in "
+        "tests/test_mcp_dependency_canary.py against the new transport."
+    )

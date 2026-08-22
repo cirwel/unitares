@@ -10,10 +10,10 @@ import logging
 import os
 from typing import Any
 
-import httpx
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+from unitares_sdk._mcp_httpx import mcp_httpx
 from unitares_sdk.errors import (
     GovernanceConnectionError,
     GovernanceTimeoutError,
@@ -46,12 +46,17 @@ logger = logging.getLogger(__name__)
 # initialize()) and connection-level transients. Auth/protocol errors are NOT
 # here — they are deterministic and must surface immediately, not burn retries.
 # asyncio.wait_for raises asyncio.TimeoutError (== builtin TimeoutError on 3.11+).
+# The httpx entries must come from the library the installed mcp transport
+# uses (httpx2 on mcp 2.x): the exception classes are distinct types per
+# library, so a tuple built from the wrong one silently stops matching and
+# every transient becomes a hard connect failure.
+_httpx = mcp_httpx()
 _CONNECT_RETRYABLE = (
     asyncio.TimeoutError,
-    httpx.ConnectError,
-    httpx.ConnectTimeout,
-    httpx.ReadTimeout,
-    httpx.RemoteProtocolError,
+    _httpx.ConnectError,
+    _httpx.ConnectTimeout,
+    _httpx.ReadTimeout,
+    _httpx.RemoteProtocolError,
     ConnectionError,
 )
 
@@ -127,7 +132,7 @@ class GovernanceClient:
 
         # MCP transport state
         self._session: ClientSession | None = None
-        self._http_client: httpx.AsyncClient | None = None
+        self._http_client: Any | None = None  # _httpx.AsyncClient
         self._cm_stack: list = []
 
     # --- Connection lifecycle ---
@@ -193,13 +198,17 @@ class GovernanceClient:
         is left for connect()'s disconnect() to unwind.
         """
         # S19: when uds_path is set, route the underlying HTTP requests over
-        # a Unix-domain socket via httpx.AsyncHTTPTransport(uds=...). The MCP
+        # a Unix-domain socket via AsyncHTTPTransport(uds=...). The MCP
         # client still speaks HTTP semantically; only the network boundary
         # changes. The Host header in mcp_url is informational under UDS
         # (the kernel resolves the connection via the socket file path).
+        # Both classes come from _httpx (the mcp_httpx() seam) so the injected
+        # client is the type this mcp's transport calls .sse() on — httpx2
+        # carries uds= on AsyncHTTPTransport just as httpx 0.x does, so the
+        # UDS boundary is unchanged by the move.
         if self.uds_path:
-            transport = httpx.AsyncHTTPTransport(uds=self.uds_path)
-            self._http_client = httpx.AsyncClient(
+            transport = _httpx.AsyncHTTPTransport(uds=self.uds_path)
+            self._http_client = _httpx.AsyncClient(
                 http2=False, timeout=self.timeout, transport=transport,
             )
             logger.info(
@@ -207,10 +216,13 @@ class GovernanceClient:
                 self.uds_path,
             )
         else:
-            self._http_client = httpx.AsyncClient(http2=False, timeout=self.timeout)
+            self._http_client = _httpx.AsyncClient(http2=False, timeout=self.timeout)
 
         cm = streamable_http_client(self.mcp_url, http_client=self._http_client)
-        read, write, _ = await cm.__aenter__()
+        # mcp 1.x yields (read, write, get_session_id); 2.x drops the third
+        # element, so unpack by index rather than arity.
+        streams = await cm.__aenter__()
+        read, write = streams[0], streams[1]
         self._cm_stack.append(cm)
 
         session_cm = ClientSession(read, write)
@@ -315,7 +327,7 @@ class GovernanceClient:
                     logger.warning("Timeout on %s, retrying in %.1fs", tool_name, self.retry_delay)
                     await asyncio.sleep(self.retry_delay)
                     continue
-            except httpx.HTTPStatusError as e:
+            except _httpx.HTTPStatusError as e:
                 # §3.2 cutover 503 surfacing at the HTTP layer instead of as a
                 # parsed tool payload. Honor Retry-After; other statuses keep
                 # the pre-existing connection-error treatment.
@@ -344,7 +356,7 @@ class GovernanceClient:
                     if attempt == 0:
                         await asyncio.sleep(self.retry_delay)
                         continue
-            except (httpx.ConnectError, httpx.TimeoutException, ConnectionError, OSError) as e:
+            except (_httpx.ConnectError, _httpx.TimeoutException, ConnectionError, OSError) as e:
                 last_error = GovernanceConnectionError(str(e))
                 if attempt == 0:
                     logger.warning(

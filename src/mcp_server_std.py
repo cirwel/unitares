@@ -54,8 +54,10 @@ try:
     from mcp.server.stdio import stdio_server
     from mcp.types import Tool, TextContent
     # make_lowlevel_server builds the low-level Server with request handlers on
-    # both mcp 1.x (decorator API) and 2.x (on_* constructor callbacks).
-    from src.mcp_compat import make_lowlevel_server
+    # both mcp 1.x (decorator API) and 2.x (on_* constructor callbacks);
+    # mcp_httpx resolves which HTTP client library this mcp's client transport
+    # expects, for the proxy paths below that inject one.
+    from src.mcp_compat import make_lowlevel_server, mcp_httpx
 except ImportError as e:
     print(f"Error: MCP SDK not available: {e}", file=sys.stderr)
     print(f"Install with: pip install mcp", file=sys.stderr)
@@ -207,8 +209,15 @@ async def _proxy_http_call_tool(name: str, arguments: dict[str, Any]) -> Sequenc
 
 
 def _create_http1_only_client_factory():
-    """Create httpx client factory that forces HTTP/1.1 only (fixes reverse proxy 421 errors)."""
-    import httpx
+    """Create an HTTP/1.1-only client factory for sse_client (fixes reverse proxy 421 errors).
+
+    Built from mcp_httpx() rather than a direct ``import httpx``: mcp 2.x's
+    sse_client types httpx_client_factory as returning an ``httpx2`` client and
+    its auth objects as ``httpx2.Auth``, so a factory that hands back an httpx
+    0.x client injects the wrong library into the same seam the streamable
+    transport has.
+    """
+    httpx = mcp_httpx()
     def http1_client_factory(**kwargs):
         return httpx.AsyncClient(http2=False, **kwargs)
     return http1_client_factory
@@ -220,11 +229,11 @@ async def _proxy_list_tools() -> list[Tool]:
     http1_factory = _create_http1_only_client_factory()
 
     if "/mcp" in STDIO_PROXY_URL:
-        import httpx
         from mcp.client.streamable_http import streamable_http_client
-        async with httpx.AsyncClient(http2=False, timeout=15) as http_client:
-            async with streamable_http_client(STDIO_PROXY_URL, http_client=http_client) as (read, write, _):
-                async with ClientSession(read, write) as session:
+        async with mcp_httpx().AsyncClient(http2=False, timeout=15) as http_client:
+            # mcp 1.x yields (read, write, get_session_id); 2.x drops the third.
+            async with streamable_http_client(STDIO_PROXY_URL, http_client=http_client) as streams:
+                async with ClientSession(streams[0], streams[1]) as session:
                     await session.initialize()
                     res = await session.list_tools()
                     return res.tools
@@ -243,11 +252,11 @@ async def _proxy_call_tool(name: str, arguments: dict[str, Any]) -> Sequence[Tex
     http1_factory = _create_http1_only_client_factory()
 
     if "/mcp" in STDIO_PROXY_URL:
-        import httpx
         from mcp.client.streamable_http import streamable_http_client
-        async with httpx.AsyncClient(http2=False, timeout=15) as http_client:
-            async with streamable_http_client(STDIO_PROXY_URL, http_client=http_client) as (read, write, _):
-                async with ClientSession(read, write) as session:
+        async with mcp_httpx().AsyncClient(http2=False, timeout=15) as http_client:
+            # mcp 1.x yields (read, write, get_session_id); 2.x drops the third.
+            async with streamable_http_client(STDIO_PROXY_URL, http_client=http_client) as streams:
+                async with ClientSession(streams[0], streams[1]) as session:
                     await session.initialize()
                     res = await session.call_tool(name, arguments)
                     return res.content

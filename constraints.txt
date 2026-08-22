@@ -1,0 +1,32 @@
+# Pip constraints applied to CI installs and the Docker image so the tested
+# and shipped dependency resolution matches what production actually runs.
+#
+# Why this file exists: the ranges in requirements-*.txt float, so "what CI
+# tests" silently changes whenever a new release appears on PyPI. That is how
+# mcp 2.0.0 became CI's de-facto tested version in August 2026 with no commit
+# and no decision, while production stayed on 1.x — and 2.0.0 carries client
+# breaks the mocked test suite cannot see (see tests/test_mcp_dependency_canary.py).
+#
+# Policy: pin here only dependencies where CI/production drift has actually
+# bitten. Bump a pin deliberately, in the same PR that prepares the production
+# move (and deploy the interpreter bump with it). The `mcp-newest` advisory CI
+# job tests the newest in-range resolution WITHOUT these constraints, so
+# coverage of upcoming versions is a deliberate lane, not an accident.
+#
+# mcp 2.x gate. The transport is written against httpx2 while our client-side
+# call sites injected httpx 0.x, which killed the server-push GET stream
+# SILENTLY. Moving this pin to 2.x needs ALL of:
+#
+#   [done] the httpx2 injection port — call sites now build their injected
+#          client from `mcp_httpx()` (src/mcp_compat.py, and the SDK's own
+#          copy in unitares_sdk/_mcp_httpx.py), which reads the library off
+#          the installed transport instead of hardcoding one.
+#   [done] a widened `mcp` pin in agents/sdk/pyproject.toml (otherwise the
+#          constrained sdk-package install hard-errors on the conflict).
+#   [done] a green mcp-newest lane — the advisory job resolves mcp 2.x and
+#          tests/test_mcp_dependency_canary.py passes against it.
+#   [    ] the production interpreter bump, deployed alongside the flip.
+#
+# The pin stays at 1.29.0 until that last item is an operator decision made
+# with a deploy, not a merge: bumping it here changes what production installs.
+mcp==1.29.0
