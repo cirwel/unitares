@@ -8,11 +8,12 @@
 # SAFE BY CONSTRUCTION: this never pulls or restarts a service itself. It only
 # dispatches to per-service deploy scripts (deploy-mcp.sh / deploy-gateway.sh /
 # deploy-lease-plane.sh / deploy-sentinel.sh / deploy-wave3a.sh /
-# deploy-orchestrator.sh / deploy-bridge.sh / deploy-gov-plugin.sh). Each of the
-# process-backed ones deploys from a trunk-pinned worktree and REFUSES if its
-# LaunchAgent still loads from the shared dev checkout. deploy-gov-plugin.sh is
-# the exception and says so at length: its target has no worktree and no
-# LaunchAgent, so it pulls the checkout in place behind its own refusal guards.
+# deploy-orchestrator.sh / deploy-bridge.sh / deploy-openai-gov-proxy.sh /
+# deploy-gov-plugin.sh). Each of the process-backed ones deploys from a
+# trunk-pinned worktree and REFUSES if its LaunchAgent still loads from a shared
+# dev checkout. deploy-gov-plugin.sh is the exception and says so at length: its
+# target has no worktree and no LaunchAgent, so it pulls the checkout in place
+# behind its own refusal guards.
 # Any service NOT in the script_for() table below is REPORTED, never touched —
 # give it a deploy script to bring it into the sweep. Keep this list in sync
 # with that table.
@@ -71,6 +72,10 @@ deploy_script_for() {
     # meant the alarm itself could go stale unnoticed.
     discord-bridge)  echo "$OPS_DIR/deploy-bridge.sh" ;;
     dialectic-live)  echo "$OPS_DIR/deploy-dialectic-live.sh" ;;
+    # Different repo (cirwel/unitares-host-adapter). Its LaunchAgent used to
+    # import directly from the development checkout, so the deploy script
+    # refuses until migrate-openai-gov-proxy.sh moves it to its own worktree.
+    openai-gov-proxy) echo "$OPS_DIR/deploy-openai-gov-proxy.sh" ;;
     # The one entry with no worktree and no LaunchAgent: the plugin checkout IS
     # the deployed artifact, so its script pulls in place and there is nothing
     # to restart. It was reachable only by hand until 2026-08-17, which meant
@@ -96,7 +101,7 @@ echo "[apply] reading deploy-status.sh ($([ "$FETCH" = 1 ] && echo fetched || ec
 # shellcheck disable=SC2086
 status_json="$("$STATUS" $status_args)" || { echo "[apply] deploy-status.sh failed" >&2; exit 1; }
 
-# Emit one TAB-separated "name<TAB>verdict<TAB>checkout" line per STALE/BEHIND
+# Emit one TAB-separated "name<TAB>verdict<TAB>checkout<TAB>pickup" line per STALE/BEHIND
 # service. deploy-status.sh --json is valid JSON; parse it with python3
 # (tolerant of the verdict's optional " [DEV]" suffix). `checkout` is the git
 # worktree the service's deploy script fast-forwards -- the field the shared-tree
@@ -107,7 +112,10 @@ import json, sys
 for svc in json.load(sys.stdin):
     v = svc.get("verdict", "")
     if v.startswith("STALE") or v.startswith("BEHIND"):
-        print("%s\t%s\t%s" % (svc.get("name", ""), v, svc.get("checkout", "")))
+        print("%s\t%s\t%s\t%s" % (
+            svc.get("name", ""), v, svc.get("checkout", ""),
+            svc.get("pickup", "unknown"),
+        ))
 '
 )" || { echo "[apply] could not parse deploy-status --json" >&2; exit 1; }
 
@@ -125,7 +133,7 @@ tree_is_held() {
   printf '%s\n' "$held_trees" | grep -qxF "$1"
 }
 
-while IFS=$'\t' read -r name verdict checkout; do
+while IFS=$'\t' read -r name verdict checkout pickup; do
   [ -z "$name" ] && continue
   script="$(deploy_script_for "$name")"
 
@@ -138,7 +146,8 @@ while IFS=$'\t' read -r name verdict checkout; do
   fi
 
   if [ -z "$script" ]; then
-    echo "[apply] SKIP  $name ($verdict) — no deploy script (still restart-DEV?); migrate it to a worktree first" >&2
+    echo "[apply] SKIP  $name ($verdict) — no deploy automation registered (pickup=$pickup; checkout=${checkout:-unknown})" >&2
+    echo "[apply]       live process and checkout were left unchanged" >&2
     skipped="$skipped $name"
     continue
   fi
@@ -179,6 +188,7 @@ echo "  skipped: ${skipped:-  none}"
 echo "  held:    ${held:-  none}"
 echo "  failed:  ${failed:-  none}"
 [ -n "$held" ] && echo "  (held = not attempted: shares a checkout with a failed deploy. Fix that failure, then re-run.)"
+[ -n "$skipped" ] && echo "  (skipped = drift remains; no deploy automation ran for those services.)"
 
 # Non-zero if anything failed, so callers/CI can gate on it.
 [ -z "$failed" ]
