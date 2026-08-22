@@ -110,6 +110,7 @@ class KnowledgeGraphPostgres:
 
     async def full_text_search(
         self, query: str, limit: int = 20, operator: str = "AND",
+        tags: Optional[List[str]] = None,
     ) -> List[DiscoveryNode]:
         """Full-text search using PostgreSQL tsvector. Defaults to AND (#165).
 
@@ -124,7 +125,7 @@ class KnowledgeGraphPostgres:
         already read it defensively (`getattr(disc, 'relevance', 0)`).
         """
         db = await self._get_db()
-        rows = await db.kg_full_text_search(query, limit, operator=operator)
+        rows = await db.kg_full_text_search(query, limit, operator=operator, tags=tags)
         discoveries = []
         for row in rows:
             node = self._dict_to_discovery(row)

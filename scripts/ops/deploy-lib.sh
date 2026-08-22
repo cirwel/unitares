@@ -82,14 +82,18 @@ deploy_lib_release_lock() {
 #                      (default: no escape hatch — hard refuse on mismatch)
 #   --recipe TEXT      extra stderr guidance printed on refusal (the service's
 #                      one-time migration recipe)
+#   --recipe-handles-reload
+#                      the recipe is a self-contained migration command; do not
+#                      append the generic unload/load command after it
 deploy_lib_require_plist_target() {
   local tag="$1" plist="$2" needle="$3"; shift 3
-  local require_exists=0 allow_env="" recipe=""
+  local require_exists=0 allow_env="" recipe="" recipe_handles_reload=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --require-exists) require_exists=1; shift ;;
       --allow-env) allow_env="$2"; shift 2 ;;
       --recipe) recipe="$2"; shift 2 ;;
+      --recipe-handles-reload) recipe_handles_reload=1; shift ;;
       *) echo "[$tag] deploy_lib_require_plist_target: unknown option $1" >&2; exit 2 ;;
     esac
   done
@@ -110,7 +114,9 @@ deploy_lib_require_plist_target() {
   if [[ -n "$recipe" ]]; then
     printf '%s\n' "$recipe" >&2
   fi
-  echo "[$tag]   launchctl unload \"$plist\" && launchctl load \"$plist\"" >&2
+  if [[ "$recipe_handles_reload" != 1 ]]; then
+    echo "[$tag]   launchctl unload \"$plist\" && launchctl load \"$plist\"" >&2
+  fi
   if [[ -n "$allow_env" ]]; then
     if [[ "${!allow_env:-0}" == "1" ]]; then
       echo "[$tag] WARNING: $allow_env=1 set — restarting the dev checkout anyway (this deploy will NOT take effect on the deploy worktree)." >&2

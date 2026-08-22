@@ -58,6 +58,17 @@ echo "<string>/dev/checkout/prog.py</string>" > "$P"
   && bad "mismatched plist refuses when allow-env unset" || ok "mismatched plist refuses when allow-env unset"
 ( set -euo pipefail; export MY_ALLOW=1; . "$LIB"; deploy_lib_require_plist_target t "$P" "/needle" --allow-env MY_ALLOW ) >/dev/null 2>&1 \
   && ok "mismatched plist passes with allow-env=1" || bad "mismatched plist passes with allow-env=1"
+preflight_out="$(
+  set +e
+  ( set -euo pipefail; . "$LIB"; deploy_lib_require_plist_target t "$P" "/needle" \
+      --recipe '[t]   migrate-service.sh' --recipe-handles-reload ) 2>&1
+)"
+if printf '%s' "$preflight_out" | grep -q 'migrate-service.sh' \
+  && ! printf '%s' "$preflight_out" | grep -q 'launchctl unload'; then
+  ok "self-contained migration recipe suppresses duplicate reload command"
+else
+  bad "self-contained migration recipe output"
+fi
 
 # ── ff_worktree: create-if-missing, then ff on an advanced origin ──
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
@@ -410,6 +421,51 @@ grep -q '"dialectic-live|com.unitares.dialectic-live|.*|elixir/dialectic_live|re
 ) && ok "deploy-apply dispatches gov-plugin to an executable script" \
   || bad "deploy-apply gov-plugin dispatch"
 
+# ── deploy-apply dispatches the OpenAI governance proxy ──
+# This service had a status row but no dispatch entry: every `cirwel update`
+# reported BEHIND, printed a speculative restart-DEV question, and left the
+# live checkout unchanged. Guard both the mapping and the executable target.
+(
+  set -euo pipefail
+  grep -q 'openai-gov-proxy) echo "$OPS_DIR/deploy-openai-gov-proxy.sh"' \
+    "$(dirname "$LIB")/deploy-apply.sh"
+  [ -x "$(dirname "$LIB")/deploy-openai-gov-proxy.sh" ]
+) && ok "deploy-apply dispatches openai-gov-proxy to an executable script" \
+  || bad "deploy-apply openai-gov-proxy dispatch"
+
+# Before the one-time plist migration, status must name the development
+# checkout honestly. After migration it must follow the deploy worktree. A
+# directory-exists heuristic is insufficient because preparing a worktree does
+# not change what the already-loaded LaunchAgent serves.
+(
+  set -euo pipefail
+  ds="$(dirname "$LIB")/deploy-status.sh"
+  grep -q 'HOST_ADAPTER_PICKUP="restart-DEV"' "$ds"
+  grep -q 'OPENAI_PROXY_LOADED=.*launchctl print' "$ds"
+  grep -q '\[ -z "$OPENAI_PROXY_LOADED" \].*\[ -f "$OPENAI_PROXY_PLIST" \]' "$ds"
+  grep -q 'openai-gov-proxy|com.unitares.openai-governance-proxy|$HOST_ADAPTER_TREE|src|$HOST_ADAPTER_PICKUP|' "$ds"
+) && ok "deploy-status follows the proxy plist and labels pre-migration DEV" \
+  || bad "deploy-status OpenAI proxy topology selection"
+
+# Unknown automation stays non-fatal for compatibility, but the operator must
+# be told exactly what was not changed. The old "still restart-DEV?" text was
+# speculative and omitted the checkout even though JSON already carried both.
+(
+  set -euo pipefail
+  AP="$SB/apply-skip"; mkdir -p "$AP"
+  cp "$(dirname "$LIB")/deploy-apply.sh" "$AP/"
+  cat > "$AP/deploy-status.sh" <<'EOS'
+#!/usr/bin/env bash
+printf '[{"name":"mystery","verdict":"BEHIND(2)","checkout":"/tmp/mystery","pickup":"restart-DEV"}]\n'
+EOS
+  chmod +x "$AP/deploy-status.sh"
+  out="$(bash "$AP/deploy-apply.sh" --no-fetch 2>&1)"
+  printf '%s' "$out" | grep -q 'no deploy automation registered (pickup=restart-DEV; checkout=/tmp/mystery)'
+  printf '%s' "$out" | grep -q 'live process and checkout were left unchanged'
+  printf '%s' "$out" | grep -q 'skipped = drift remains; no deploy automation ran'
+) && ok "deploy-apply explains an unautomated skip without speculation" \
+  || bad "deploy-apply unautomated skip explanation"
+
 # ── deploy-apply holds a shared checkout after a refusal ──
 # Seven services deploy from ONE worktree. deploy-mcp.sh refuses on a migration
 # gap and rolls that tree back so disk does not sit ahead of a running process --
@@ -462,6 +518,7 @@ EOS
   grep -q '"checkout":"%s"' "$DS"
   grep -q 'read -r name verdict br sha behindf pidf pickup checkout hz' "$DS"
   grep -q 'svc.get("checkout", "")' "$(dirname "$LIB")/deploy-apply.sh"
+  grep -q 'svc.get("pickup", "unknown")' "$(dirname "$LIB")/deploy-apply.sh"
 ) && ok "[guard] deploy-status --json carries checkout; deploy-apply reads it" \
   || bad "deploy-status/deploy-apply checkout field contract"
 
