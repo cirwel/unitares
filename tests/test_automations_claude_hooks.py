@@ -233,6 +233,38 @@ def test_codex_only_hook_is_wired_not_orphaned(census_mod, fake_home):
     assert wired[0].cadence == "on:PostToolUse"
 
 
+def test_cache_rollover_fallback_wrapper_is_wired(census_mod, fake_home):
+    """unitares-governance-plugin#122 wraps the dispatch in a shell fallback
+    (`_unitares_runner="<path>"; if [ ! -f ... ]; then ...; fi;
+    "$_unitares_runner" <name> --host <host>`) so a plugin-cache rollover
+    doesn't strand the hook. The assignment prefix and trailing `;` must
+    not fuse to the path and make it unresolvable, and the conditional's
+    shell keywords must not be mistaken for the dispatched hook name."""
+    settings = fake_home / "plugins/demo-plugin/hooks/codex-hooks.json"
+    settings.write_text(json.dumps({
+        "hooks": {
+            "PostToolUse": [{
+                "matcher": "Edit",
+                "hooks": [{
+                    "type": "command",
+                    "command": (
+                        '_unitares_runner="${PLUGIN_ROOT}/hooks/run-hook.cmd"; '
+                        'if [ ! -f "$_unitares_runner" ]; then '
+                        'for _unitares_candidate in "${PLUGIN_ROOT%/*}"/*/hooks/run-hook.cmd; do '
+                        '[ -f "$_unitares_candidate" ] && _unitares_runner="$_unitares_candidate"; '
+                        'done; fi; "$_unitares_runner" post-activity --host codex'
+                    ),
+                }],
+            }]
+        }
+    }))
+    items, warnings = _collect(census_mod)
+    assert not any("no resolvable script" in w for w in warnings), warnings
+    wired = [i for i in items if i.status == "wired" and "post-activity" in i.name]
+    assert len(wired) == 1, [(i.name, i.status) for i in items]
+    assert "run-hook.cmd" not in wired[0].name
+
+
 def test_plugin_root_placeholder_is_expanded(census_mod, fake_home):
     """codex-hooks.json uses ${PLUGIN_ROOT}; hooks.json uses
     ${CLAUDE_PLUGIN_ROOT}. Both must resolve, and expanding the shorter

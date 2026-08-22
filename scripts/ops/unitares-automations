@@ -992,6 +992,13 @@ DISPATCHER_NAMES = {"run-hook.cmd", "run-hook", "run-hook.sh"}
 NON_HOOK_SUFFIXES = (".bak", ".orig", ".disabled", ".sample", "~")
 
 
+_SHELL_KEYWORDS = {
+    "if", "then", "else", "elif", "fi", "for", "do", "done", "in", "while",
+    "until", "case", "esac",
+}
+_BARE_WORD = re.compile(r"^[a-z][a-z0-9-]*$")
+
+
 def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
     """Resolve filesystem paths a hook command actually invokes.
 
@@ -999,6 +1006,14 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
     as `run-hook.cmd <name> --host <host>`, so the script that actually runs
     is an ARGUMENT, not the command. Resolving only the command would report
     every real plugin hook (post-edit, session-start, ...) as orphaned.
+
+    unitares-governance-plugin#122 wrapped that invocation in a shell
+    fallback (`_unitares_runner="<path>"; if [ ! -f "$_unitares_runner" ];
+    then ...; fi; "$_unitares_runner" <name> --host <host>`) so the plugin
+    survives a plugin-cache directory rollover. Assignment prefixes and
+    trailing `;` would otherwise fuse to the path and make it unresolvable,
+    and shell keywords in the conditional would otherwise be mistaken for
+    the dispatched hook name.
     """
     # hooks.json uses ${CLAUDE_PLUGIN_ROOT}; codex-hooks.json uses
     # ${PLUGIN_ROOT}. Expand both, longest token first so the CLAUDE_ form
@@ -1009,8 +1024,13 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
         "${PLUGIN_ROOT}", "$PLUGIN_ROOT",
     ):
         text = text.replace(placeholder, plugin_root or "")
-    tokens = [t.strip("\"'") for t in text.split()]
+    # Drop a `name=` assignment prefix immediately before a quote so the
+    # quoted path tokenizes bare instead of fused to its variable name.
+    text = re.sub(r"\b\w+=(?=[\"'])", "", text)
+    tokens = [t.strip("\"';,") for t in text.split()]
     found: list[str] = []
+    dispatcher_idx: int | None = None
+    dispatcher_path: Path | None = None
     for idx, tok in enumerate(tokens):
         if "/" not in tok:
             continue
@@ -1019,13 +1039,22 @@ def _hook_script_paths(command: str, plugin_root: str | None) -> list[str]:
             continue
         resolved = Path(expanded).resolve()
         found.append(str(resolved))
-        if resolved.name in DISPATCHER_NAMES:
-            for nxt in tokens[idx + 1:]:
-                if nxt.startswith("-"):
-                    continue
-                target = resolved.parent / nxt
-                if target.exists():
-                    found.append(str(target.resolve()))
+        if resolved.name in DISPATCHER_NAMES and dispatcher_idx is None:
+            dispatcher_idx = idx
+            dispatcher_path = resolved
+    if dispatcher_idx is not None and dispatcher_path is not None:
+        # Keep scanning candidates until one actually exists, rather than
+        # stopping at the first syntactically-plausible word. A wrapper
+        # that names a non-hook bare word before the real hook name (a
+        # shell builtin outside `_SHELL_KEYWORDS`, a `local` declaration,
+        # ...) would otherwise land on garbage and never recover.
+        for tok in tokens[dispatcher_idx + 1:]:
+            bare = tok.strip("$")
+            if not _BARE_WORD.match(bare) or bare in _SHELL_KEYWORDS:
+                continue
+            target = dispatcher_path.parent / bare
+            if target.exists():
+                found.append(str(target.resolve()))
                 break
     return found
 
