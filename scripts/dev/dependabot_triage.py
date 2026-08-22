@@ -205,7 +205,23 @@ def triage_repo(repo: str, report: Report) -> None:
         )
 
 
-def render_markdown(report: Report) -> str:
+def coverage_exit_code(unreachable: list[dict[str, str]], allow: set[str]) -> int:
+    """Coverage gate: 0 only when every unreachable repo is expected.
+
+    The honesty contract stands — an unreachable repo is always REPORTED —
+    but an unreachable set that is exactly a subset of the declared
+    allowlist (repos known to be unreadable by policy, e.g. a private repo
+    with no fleet token) is partial-by-policy, not a coverage failure.
+    Any repo outside the allowlist keeps the run red.
+    """
+    # GitHub repo names are case-insensitive; the caller's spelling and the
+    # target list's spelling must not decide the verdict.
+    allow_folded = {a.casefold() for a in allow}
+    unexpected = [u for u in unreachable if u["repo"].casefold() not in allow_folded]
+    return 1 if unexpected else 0
+
+
+def render_markdown(report: Report, *, allowed_partial: bool = False) -> str:
     lines = ["# Dependabot triage (report only — nothing was merged)", ""]
     buckets = [MERGE, HOLD, WAIT, BLOCKED, UNCLASSIFIED]
     counts = {b: sum(1 for v in report.verdicts if v.verdict == b) for b in buckets}
@@ -238,6 +254,15 @@ def render_markdown(report: Report) -> str:
             "> A repo listed here contributed **zero** rows above because it could not be read, "
             "not because it is clean. Do not read this report as fleet-wide until this list is empty."
         )
+        if allowed_partial:
+            # Neutral wording on purpose: the gate matches repo NAMES only —
+            # it cannot distinguish the expected cause (no fleet token) from a
+            # rate limit or permission regression on the same repo.
+            lines.append(
+                "> Partial-by-policy: every repo above is on the caller-supplied "
+                "known-unreachable allowlist, so this run exits green-with-caveat. "
+                "Unreachability of any repo NOT on that list would have failed the run."
+            )
         lines.append("")
     else:
         lines.append("_All target repos were read successfully._")
@@ -249,25 +274,43 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--repos", help="comma-separated owner/name list (default: the CIRWEL fleet)")
     ap.add_argument("--json", action="store_true", help="emit JSON instead of markdown")
+    ap.add_argument(
+        "--allow-unreachable",
+        default="",
+        help="comma-separated repos whose unreachability is expected (partial-"
+             "by-policy: still reported, but does not fail the run; any OTHER "
+             "unreachable repo still exits 1)",
+    )
     args = ap.parse_args()
 
     repos = [r.strip() for r in args.repos.split(",")] if args.repos else DEFAULT_REPOS
+    allow = {r.strip() for r in args.allow_unreachable.split(",") if r.strip()}
     report = Report()
     for repo in repos:
         triage_repo(repo, report)
 
+    exit_code = coverage_exit_code(report.unreachable, allow)
+    allowed_partial = bool(report.unreachable) and exit_code == 0
+
     if args.json:
-        print(json.dumps({
+        payload = {
             "verdicts": [asdict(v) for v in report.verdicts],
             "unreachable": report.unreachable,
             "repos_scanned": report.repos_scanned,
-        }, indent=2))
+        }
+        if allow:
+            # Only callers who opted into the allowlist see the new key —
+            # without the flag the JSON schema is byte-identical to before.
+            payload["allowed_partial"] = allowed_partial
+        print(json.dumps(payload, indent=2))
     else:
-        print(render_markdown(report))
+        print(render_markdown(report, allowed_partial=allowed_partial))
 
-    # Report-only: an unreadable repo is a coverage failure worth a nonzero exit,
-    # so a scheduled run cannot look green while silently covering less than asked.
-    return 1 if report.unreachable else 0
+    # Report-only: an UNEXPECTED unreadable repo is a coverage failure worth a
+    # nonzero exit, so a scheduled run cannot look green while silently
+    # covering less than asked. Allowlisted unreachability is partial-by-policy
+    # and is still printed in the UNREACHABLE section above.
+    return exit_code
 
 
 if __name__ == "__main__":
