@@ -17,11 +17,16 @@ hand-built mock instead of the library. Two contract changes shipped in
 (2) is resolved by the `mcp_httpx()` resolvers — `src/mcp_compat.py` for the
 server tree, `unitares_sdk/_mcp_httpx.py` for the SDK — which read the
 library off the installed transport's own import surface and hand call sites
-exactly that. Because the failure is silent, structural checks carry the
-weight here: the resolvers must agree with the transport, and no call site
-may build its injected client outside them. The end-to-end tests below
-deliberately pass under the silent failure, which is why they cannot be the
-only coverage.
+exactly that.
+
+The silent failure IS observable end-to-end, contrary to what this file used
+to claim: the server-push stream is an HTTP GET, so counting the methods a
+real server receives separates a working stream from a dead one even though
+both spell identical tool results.
+`test_server_push_stream_opens_with_the_injected_client` is that check and is
+the primary coverage. The structural checks around it cover what one
+connect cannot: that both distributions' resolvers agree with the transport,
+and that no OTHER call site builds its client outside them.
 
 If a resolved `mcp` version fails here, the fix is a port (see mcp_compat.py
 and the bump procedure in constraints.txt), never a mock adjustment.
@@ -256,3 +261,106 @@ def test_sdk_client_real_connect(canary_server_url, monkeypatch):
             await client.disconnect()
 
     asyncio.run(run())
+
+
+# --- the silent failure, caught behaviorally ---------------------------------
+
+
+@pytest.fixture(scope="module")
+def push_stream_server():
+    """A STATEFUL MCP server plus a record of the HTTP methods it received.
+
+    Stateful on purpose: with ``stateless_http=True`` there is no server-push
+    stream to open, so the fixture above cannot observe this. Yields
+    ``(url, methods)`` where ``methods`` accumulates live.
+    """
+    import uvicorn
+
+    from src.mcp_compat import FastMCP
+
+    canary = FastMCP("push-stream-canary")
+
+    @canary.tool()
+    def echo(text: str) -> str:
+        return text
+
+    app = canary.streamable_http_app()
+    methods: list[str] = []
+
+    async def recording_app(scope, receive, send):
+        if scope["type"] == "http":
+            methods.append(scope["method"])
+        await app(scope, receive, send)
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    server = uvicorn.Server(
+        uvicorn.Config(
+            recording_app, host="127.0.0.1", port=port, log_level="warning"
+        )
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 15
+    while not server.started:
+        if time.monotonic() > deadline:
+            raise RuntimeError("push-stream canary uvicorn did not start within 15s")
+        time.sleep(0.05)
+
+    yield f"http://127.0.0.1:{port}/mcp", methods
+
+    server.should_exit = True
+    thread.join(timeout=10)
+
+
+def test_server_push_stream_opens_with_the_injected_client(push_stream_server):
+    """The failure this whole file exists for, observed directly.
+
+    mcp 2.x's transport opens the server-push stream by calling
+    ``client.sse(...)``. With the wrong client library that call raises
+    AttributeError, the transport's retry loop swallows it, and the GET is
+    never issued — while POSTs keep succeeding. So a tool call completing
+    proves nothing; the server receiving a GET is the observable that
+    separates a working stream from a dead one.
+
+    Measured against mcp 2.0.0, identical tool results either way::
+
+        httpx2 (resolved)  tools=['echo'] echo='x'  GET=1
+        httpx  0.x         tools=['echo'] echo='x'  GET=0
+
+    and mcp 1.29.0 + httpx gives GET=1, so the assertion holds on both lines
+    whenever the injected client matches the transport.
+    """
+    from mcp.client.session import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+
+    from src.mcp_compat import mcp_httpx
+
+    url, methods = push_stream_server
+    methods.clear()
+
+    async def run() -> str:
+        async with mcp_httpx().AsyncClient(http2=False, timeout=15) as http_client:
+            async with streamable_http_client(url, http_client=http_client) as streams:
+                async with ClientSession(streams[0], streams[1]) as session:
+                    await session.initialize()
+                    res = await session.call_tool("echo", {"text": "canary"})
+                    # The GET is opened by a background task after the
+                    # handshake, so poll rather than sleeping a fixed amount.
+                    deadline = time.monotonic() + 10
+                    while "GET" not in methods and time.monotonic() < deadline:
+                        await asyncio.sleep(0.05)
+                    return res.content[0].text
+
+    echoed = asyncio.run(run())
+
+    assert echoed == "canary"  # POST path works -- it works under the bug too
+    assert "GET" in methods, (
+        "The server never received the server-push GET stream, though tool "
+        "calls succeeded over POST. That is exactly the silent failure this "
+        "file guards: the injected client is not the library the installed "
+        "transport calls .sse() on, so the stream died without raising. "
+        f"Methods the server saw: {methods}"
+    )
