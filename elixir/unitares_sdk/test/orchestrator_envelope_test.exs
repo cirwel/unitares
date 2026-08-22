@@ -33,8 +33,8 @@ defmodule UnitaresSdk.OrchestratorEnvelopeTest do
 
       # The trap this module closes: the top-level payload does NOT carry
       # "running". A consumer reading it flat gets nil and concludes the
-      # agent finished (misread twice on 2026-08-21). The classifier hands
-      # back only the map where the fields actually are.
+      # agent finished (a session-side poller did exactly that, 2026-08-21).
+      # The classifier hands back only the map where the fields actually are.
       refute Map.has_key?(payload, "running")
     end
 
@@ -43,20 +43,38 @@ defmodule UnitaresSdk.OrchestratorEnvelopeTest do
                Env.classify_result(200, %{"ok" => true, "running" => false})
     end
 
+    test "504 await_timeout is a CONTROL signal, not a generic error" do
+      # The router keeps 504 distinct from not_found so callers re-await
+      # instead of reaping; dispatch_beam's council loop depends on this —
+      # a generic-error reading would reap every healthy long-running lane.
+      assert {:error, :await_timeout} =
+               Env.classify_result(504, %{"ok" => false, "error" => "await_timeout"})
+    end
+
     test "404 is :not_found" do
       assert {:error, :not_found} = Env.classify_result(404, %{"error" => "not_found"})
+    end
+
+    test "other error-keyed bodies stay typed" do
+      assert {:error, {:orchestrator_error, 503, "service_unavailable", _}} =
+               Env.classify_result(503, %{"ok" => false, "error" => "service_unavailable"})
     end
   end
 
   describe "classify_stop/2" do
-    test "200 and 404 both mean gone" do
+    test "200 requires ok:true; 404 means already gone" do
       assert :ok = Env.classify_stop(200, %{"ok" => true})
       assert :ok = Env.classify_stop(404, %{"error" => "not_found"})
     end
 
-    test "other statuses are typed errors" do
-      assert {:error, {:orchestrator_error, 500, nil, _}} =
-               Env.classify_stop(500, %{"boom" => true})
+    test "a 200 without ok:true is not silent success" do
+      assert {:error, {:orchestrator_unexpected, 200, _}} =
+               Env.classify_stop(200, %{"weird" => true})
+    end
+
+    test "error envelopes surface their error name — same reading as spawn/result" do
+      assert {:error, {:orchestrator_error, 403, "permission_denied", _}} =
+               Env.classify_stop(403, %{"ok" => false, "error" => "permission_denied"})
     end
   end
 end

@@ -24,17 +24,15 @@ defmodule AgentOrchestrator.LeasePlaneClient do
       ttl_s: ttl_s
     }
 
-    # Reply-reading is SDK-owned (UnitaresSdk.LeasePlaneEnvelope) so this
-    # decoder cannot drift from dispatch_beam's; transport stays :httpc here.
-    # The envelope's held_by_other carries the full payload for reclaim-style
-    # callers; this behaviour's contract predates that, so it stays 2-tuple.
+    # Reply-reading is SDK-owned (UnitaresSdk.LeasePlaneEnvelope): one
+    # authoritative decode, eligible to stop drifting from dispatch_beam's
+    # once that repo's pinned SDK ref moves past this commit. Transport stays
+    # :httpc here. SDK error terms pass through UNCHANGED — held_by_other is
+    # a 3-tuple whose payload carries retry_after_hint_ms/blocking_lease_id;
+    # AgentRunner treats reasons opaquely, so no re-narrowing adapter.
     case post("/v1/lease/acquire", body) do
       {:ok, status, payload} ->
-        case UnitaresSdk.LeasePlaneEnvelope.classify_acquire(status, payload) do
-          {:ok, lease_id} -> {:ok, lease_id}
-          {:error, {:held_by_other, uuid, _payload}} -> {:error, {:held_by_other, uuid}}
-          {:error, other} -> {:error, other}
-        end
+        UnitaresSdk.LeasePlaneEnvelope.classify_acquire(status, payload)
 
       {:error, reason} ->
         {:error, reason}
@@ -43,6 +41,14 @@ defmodule AgentOrchestrator.LeasePlaneClient do
 
   @impl true
   def release(lease_id, reason) do
+    # `release_reason` is a CLOSED server-side enum (http_router.ex release
+    # handler): normal | down_local | reaped_after_supervisor_failed |
+    # reaped_local_ttl | reaped_remote_ttl | handoff | reclaimed_lost_acquire
+    # ("forced" is rejected here — use /v1/lease/force-release). An ad-hoc
+    # reason gets 422 schema_invalid, classifies as {:release_refused, ...},
+    # and the lease STAYS HELD (live-verified 2026-08-22). Deliberately not
+    # allowlisted client-side: a stale copy of the enum on this fail path
+    # would refuse valid reasons after a server addition.
     case post("/v1/lease/release", %{lease_id: lease_id, release_reason: reason}) do
       {:ok, status, payload} ->
         UnitaresSdk.LeasePlaneEnvelope.classify_release(status, payload)

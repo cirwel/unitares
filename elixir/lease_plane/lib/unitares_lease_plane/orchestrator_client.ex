@@ -28,8 +28,10 @@ defmodule UnitaresLeasePlane.OrchestratorClient do
       request = {url, headers, ~c"application/json", Jason.encode!(spec)}
       http_opts = [timeout: timeout_ms(), connect_timeout: 2_000]
 
-      # Reply-reading is SDK-owned (UnitaresSdk.OrchestratorEnvelope) so this
-      # decoder cannot drift from dispatch_beam's; transport stays :httpc.
+      # Reply-reading is SDK-owned (UnitaresSdk.OrchestratorEnvelope): one
+      # authoritative decode, eligible to stop drifting from dispatch_beam's
+      # once that repo's pinned SDK ref moves past this commit. Transport
+      # stays :httpc.
       case :httpc.request(:post, request, http_opts, body_format: :binary) do
         {:ok, {{_v, status, _r}, _h, resp}} ->
           case Jason.decode(resp) do
