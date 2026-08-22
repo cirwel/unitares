@@ -61,11 +61,23 @@ Both stand down unless the tree is a release — `VERSION` names a version with 
 tag yet — so they cost ordinary PRs nothing.
 
 `changelog_coverage.py` lists every merged pull request the entry does not name.
-Fold each in, or declare it deliberately inside the entry:
+It reads the first-parent walk and accepts both a squash subject's trailing
+`(#N)` and a merge commit's `Merge pull request #N`, and it **fails** when any
+first-parent change carries neither rather than measuring the smaller set it can
+parse. It prints provenance rather than a ratio, because the previous version's
+ratio was copied verbatim onto an immutable release page and was wrong.
+
+Fold each listed change into the entry. If one genuinely does not belong, declare
+it inside the entry, one per line, with a reason from a closed set
+(`release-chore`, `superseded`, `no-user-effect`, `covered-elsewhere`):
 
 ```markdown
-<!-- changelog-coverage-exempt: 1788, 1789 -->
+<!-- changelog-coverage-exempt: #1788 release-chore -->
 ```
+
+Exemptions live in the entry the release ships, so they are reviewable in the
+diff and expire with it. The script does not print a paste-ready declaration:
+that made declaring one feel like satisfying the tool rather than making a claim.
 
 The omissions that matter most are the ones that qualify a claim the entry
 already makes. An entry that cites a new capability but not the change that
@@ -73,9 +85,22 @@ bounds it reads as a stronger claim than the code supports.
 
 `release_series_drift.py` covers the series `VERSION` does not reach: the SDK
 under `agents/sdk/` with its own `sdk-v*` tags, and `skills/`, which is mirrored
-into the separately tagged plugin. It blocks when a series has moved but its
-version has not, because that is the shape where a consumer cannot reach the
-change at all.
+into the separately tagged plugin. It blocks unless the declared version is
+demonstrably **newer** than the published one — equal, older, malformed, and
+unreadable all leave a consumer unable to reach the change. Because it cannot
+see the plugin's tags, the skills series clears on a declaration in the entry:
+
+```markdown
+<!-- plugin-bundle-recut: v0.4.14 -->
+```
+
+`published_claims.py` runs on every pull request, not only a release. It checks
+that a version a public page advertises has a tag that publishes it. On
+2026-08-21 `COMPATIBILITY.md` advertised `pip install unitares-sdk==0.2.1` under
+a column reading "Published Python client" while PyPI served 0.2.0, held there by
+a required test that compared the page to `agents/sdk/pyproject.toml`. A guard
+must resolve the same referent the reader will resolve; repo-internal artifacts
+are a model of it, never the thing itself.
 
 ## SDK release
 
