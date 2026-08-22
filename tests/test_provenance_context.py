@@ -85,6 +85,51 @@ def test_build_s22_write_context_empty_without_signals_or_explicit_fields():
     assert context == {}
 
 
+def test_process_write_runtime_capture_persists_explicit_missingness():
+    context = build_s22_write_context(
+        {"task_type": "bugfix"},
+        context_source="process_agent_update",
+        include_runtime_provenance=True,
+    )
+
+    assert context["task_type"] == "bugfix"
+    assert context["runtime_provenance"]["schema"] == "s22.runtime_provenance.v1"
+    assert context["runtime_provenance"]["model"]["identifier"] is None
+    assert context["runtime_provenance"]["model"]["missing_reason"] == "not_exposed"
+
+
+def test_process_write_prefers_transport_runtime_headers_over_flat_claims():
+    token = set_session_signals(
+        SessionSignals(
+            reported_model="gpt-5.6-sol",
+            model_provider="openai",
+            model_provenance_source="provider_reported",
+            reported_harness_type="codex-cli",
+            harness_version="0.115.0",
+            harness_provenance_source="harness_reported",
+            transport="mcp",
+        )
+    )
+    try:
+        context = build_s22_write_context(
+            {
+                "provenance_context": {
+                    "model": "display-name-proxy",
+                    "harness_type": "unknown-proxy",
+                }
+            },
+            context_source="process_agent_update",
+            include_runtime_provenance=True,
+        )
+    finally:
+        reset_session_signals(token)
+
+    assert context["model"] == "gpt-5.6-sol"
+    assert context["model_source"] == "provider_reported"
+    assert context["harness_type"] == "codex-cli"
+    assert context["harness_version"] == "0.115.0"
+
+
 def test_build_s22_write_context_reads_public_provenance_context_object():
     """LLM-facing callers need one visible slot for S22 situating metadata."""
     context = build_s22_write_context(

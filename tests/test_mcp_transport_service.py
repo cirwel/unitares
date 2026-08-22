@@ -38,6 +38,11 @@ def test_capture_transport_context_sets_and_resets_all_compatibility_contexts():
         (b"mcp-session-id", b"mcp-123"),
         (b"x-session-id", b"client-123"),
         (b"user-agent", b"Codex/CLI"),
+        (b"x-unitares-model", b"gpt-5.6-sol"),
+        (b"x-unitares-model-provider", b"openai"),
+        (b"x-unitares-model-source", b"provider_reported"),
+        (b"x-unitares-harness-type", b"codex-cli"),
+        (b"x-unitares-harness-version", b"0.115.0"),
         (b"x-agent-name", b"Refactor Agent"),
         (b"x-unitares-operator", b"operator-token"),
         peer_pid=4321,
@@ -53,6 +58,11 @@ def test_capture_transport_context_sets_and_resets_all_compatibility_contexts():
     assert signals.transport == "uds"
     assert signals.peer_pid == 4321
     assert signals.unitares_operator_token == "operator-token"
+    assert signals.reported_model == "gpt-5.6-sol"
+    assert signals.model_provider == "openai"
+    assert signals.model_provenance_source == "provider_reported"
+    assert signals.reported_harness_type == "codex-cli"
+    assert signals.harness_version == "0.115.0"
     assert get_mcp_session_id() == "mcp-123"
     assert get_context_client_session_id() == "client-123"
     assert get_context_session_key().startswith("127.0.0.1:")

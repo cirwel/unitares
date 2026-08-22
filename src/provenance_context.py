@@ -15,6 +15,7 @@ SCHEMA_VERSION = "s22.write_context.v1"
 _STRING_FIELDS: dict[str, tuple[str, ...]] = {
     "harness_id": ("harness_id",),
     "harness_type": ("harness_type", "harness"),
+    "harness_version": ("harness_version",),
     "process_instance_id": ("process_instance_id",),
     "transport": ("transport",),
     "thread_id": ("thread_id",),
@@ -23,12 +24,14 @@ _STRING_FIELDS: dict[str, tuple[str, ...]] = {
     "invocation_id": ("invocation_id",),
     "model_provider": ("model_provider",),
     "model": ("model", "model_type"),
+    "model_source": ("model_source",),
     "memory_context": ("memory_context",),
     "governance_mode": ("governance_mode",),
     "verification_source": ("verification_source",),
     "comparison_key": ("comparison_key",),
     "task_label": ("task_label", "task"),
     "task_outcome": ("task_outcome", "outcome"),
+    "task_type": ("task_type",),
     "parent_agent_id": ("parent_agent_id",),
     "spawn_reason": ("spawn_reason",),
 }
@@ -47,7 +50,13 @@ _MAPPING_FIELDS = {
 
 _S22_PROVENANCE_KEYS = (
     set(_MAPPING_FIELDS)
-    | {"tool_surface", "identity_lineage_fork", "provenance_context"}
+    | {
+        "tool_surface",
+        "identity_lineage_fork",
+        "provenance_context",
+        "runtime_provenance",
+        "model_provenance",
+    }
     | {alias for aliases in _STRING_FIELDS.values() for alias in aliases}
 )
 _MANGLED_PROVENANCE_WARNING = (
@@ -198,6 +207,7 @@ def build_s22_write_context(
     default_governance_mode: Optional[str] = None,
     episode_fork_kind: Optional[str] = None,
     identity_lineage_fork: Optional[bool] = None,
+    include_runtime_provenance: bool = False,
 ) -> dict[str, Any]:
     """Build a compact S22 context from explicit args plus request contextvars.
 
@@ -241,6 +251,33 @@ def build_s22_write_context(
     _merge_meta_defaults(context, meta)
     _merge_request_context_defaults(context)
 
+    if include_runtime_provenance:
+        from src.model_harness_provenance import build_runtime_provenance
+
+        try:
+            from src.mcp_handlers.context import get_session_signals
+
+            signals = get_session_signals()
+        except Exception:
+            signals = None
+        runtime_provenance = build_runtime_provenance(arguments, signals=signals)
+        context["runtime_provenance"] = runtime_provenance
+
+        # Preserve the established flat read seam for older census/reporting
+        # consumers, but make the versioned envelope the attribution authority.
+        # Missing values remain absent here and explicit inside the envelope.
+        model = runtime_provenance["model"]
+        harness = runtime_provenance["harness"]
+        if model["identifier"]:
+            context["model"] = model["identifier"]
+            context["model_source"] = model["source"]
+        if model["provider"]:
+            context["model_provider"] = model["provider"]
+        if harness["type"]:
+            context["harness_type"] = harness["type"]
+        if harness["version"]:
+            context["harness_version"] = harness["version"]
+
     recovered_context = arguments.get("_recovered_s22_context")
     if (
         default_governance_mode
@@ -250,8 +287,9 @@ def build_s22_write_context(
         context["governance_mode"] = default_governance_mode
     _merge_recovered_context_defaults(context, recovered_context)
 
-    # Do not persist an envelope containing only bookkeeping. The helper is
-    # optional by design and should not create noisy empty context records.
+    # Do not persist an envelope containing only bookkeeping. Runtime capture
+    # is the intentional exception: its explicit unavailable values delimit the
+    # prospective era and prevent later code from backfilling historical nulls.
     if not context:
         return {}
 

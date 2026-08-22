@@ -408,7 +408,10 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
             "object for situating metadata such as harness_type, model_provider, "
             "model, transport, tool_surface, governance_mode, verification_source, "
             "locus, and session-resolution fields. Do not put these fields in "
-            "recent_tool_results. Descriptive only, not identity proof."
+            "recent_tool_results. Harness adapters may add the versioned "
+            "runtime_provenance object with separately sourced exact model, "
+            "harness type/version, and adapter version. Descriptive only: never "
+            "identity proof, verdict authority, or a policy dispatch key."
         ),
     )
     # S22 provenance — compact top-level subset retained for older callers and

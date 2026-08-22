@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from collections.abc import Mapping
 from typing import Any, Dict, Optional
 
 from src.services.principal_rollup import lookup as _principal_lookup
@@ -303,6 +304,8 @@ def build_onboard_response_data(
     provisional_lineage: bool = False,
     proof_origin: Optional[str] = None,
     response_mode: str = "full",
+    model_type: Optional[str] = None,
+    runtime_provenance: Optional[Mapping[str, Any]] = None,
 ) -> dict:
     """Build the onboard() response payload.
 
@@ -327,7 +330,8 @@ def build_onboard_response_data(
         identity_status=identity_status,
         identity_resolution_outcome=identity_resolution_outcome,
         client_hint=client_hint,
-        model_type=None,
+        model_type=model_type,
+        runtime_provenance=runtime_provenance,
         proof_origin=proof_origin,
     )
     # A freshly minted identity resolves its own onboard call weakly because
@@ -591,6 +595,7 @@ def build_identity_response_context(
     identity_resolution_outcome: Optional[str] = None,
     client_hint: Optional[str] = None,
     model_type: Optional[str] = None,
+    runtime_provenance: Optional[Mapping[str, Any]] = None,
     proof_origin: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build S22 response annotation for identity/onboard payloads.
@@ -608,6 +613,27 @@ def build_identity_response_context(
         identity_status=identity_status,
         identity_resolution_outcome=identity_resolution_outcome,
     )
+
+    from src.model_harness_provenance import (
+        build_runtime_provenance_from_values,
+        normalize_persisted_runtime_provenance,
+    )
+
+    if isinstance(runtime_provenance, Mapping):
+        runtime_context = normalize_persisted_runtime_provenance(runtime_provenance)
+    else:
+        runtime_context = build_runtime_provenance_from_values(
+            model_identifier=model_type,
+            model_source="caller_declared" if model_type else "unavailable",
+            model_exact=False,
+            model_channel="identity_argument" if model_type else "none",
+            harness_type=client_hint,
+            harness_type_source=(
+                "caller_declared" if client_hint else "unavailable"
+            ),
+        )
+    model_context = runtime_context["model"]
+    harness_context = runtime_context["harness"]
 
     context = {
         "schema": S22_IDENTITY_RESPONSE_SCHEMA,
@@ -633,10 +659,15 @@ def build_identity_response_context(
             "is_identity_key": False,
         },
         "harness_context": {
-            "harness_type": _normalize_optional_text(client_hint) or "unknown",
-            "model": _normalize_optional_text(model_type),
+            "harness_type": harness_context["type"] or "unknown",
+            "harness_version": harness_context["version"],
+            "model": model_context["identifier"],
+            "model_provider": model_context["provider"],
+            "runtime_provenance": runtime_context,
             "role": "descriptive_context",
             "is_identity_proof": False,
+            "is_verdict_authority": False,
+            "is_policy_dispatch_key": False,
         },
     }
     if identity_status:
