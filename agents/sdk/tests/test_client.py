@@ -853,7 +853,7 @@ class TestConnectFailureCleanup:
         http_client_mock.aclose = AsyncMock()
 
         with (
-            patch("unitares_sdk.client.httpx.AsyncClient", return_value=http_client_mock),
+            patch("unitares_sdk.client._httpx.AsyncClient", return_value=http_client_mock),
             patch("unitares_sdk.client.streamable_http_client", return_value=entered_cm),
             patch("unitares_sdk.client.ClientSession", return_value=entered_session_cm),
         ):
@@ -883,7 +883,7 @@ class TestConnectFailureCleanup:
         http_client_mock.aclose = AsyncMock()
 
         with (
-            patch("unitares_sdk.client.httpx.AsyncClient", return_value=http_client_mock),
+            patch("unitares_sdk.client._httpx.AsyncClient", return_value=http_client_mock),
             patch("unitares_sdk.client.streamable_http_client", return_value=failing_cm),
         ):
             with pytest.raises(ConnectionError, match="transport refused"):
@@ -924,7 +924,7 @@ class TestTransportYieldArity:
 
         session_cls_mock = MagicMock(return_value=entered_session_cm)
         with (
-            patch("unitares_sdk.client.httpx.AsyncClient", return_value=http_client_mock),
+            patch("unitares_sdk.client._httpx.AsyncClient", return_value=http_client_mock),
             patch("unitares_sdk.client.streamable_http_client", return_value=entered_cm),
             patch("unitares_sdk.client.ClientSession", session_cls_mock),
         ):

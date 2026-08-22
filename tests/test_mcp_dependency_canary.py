@@ -9,25 +9,31 @@ hand-built mock instead of the library. Two contract changes shipped in
 1. `streamable_http_client` yields (read, write) instead of
    (read, write, get_session_id) — a loud ValueError at real connect.
 2. The transport was rewritten against `httpx2` (`client.sse(...)`,
-   `httpx2.StreamError`), so the `httpx` 0.x clients we inject via
-   `http_client=` kill the server-push GET stream SILENTLY — the
+   `httpx2.StreamError`), so an `httpx` 0.x client injected via
+   `http_client=` kills the server-push GET stream SILENTLY — the
    AttributeError is swallowed by the transport's retry loop while POST
    round-trips keep working, so a naive connect test passes.
 
-This file is the tripwire for both classes: a mock-free connect through
-the real transport against a real in-process server, plus an import-surface
-check on the seam the silent failure hides behind. If a resolved `mcp`
-version fails here, the fix is a port (see mcp_compat.py and the bump
-procedure in constraints.txt), never a mock adjustment.
+(2) is resolved by the `mcp_httpx()` resolvers — `src/mcp_compat.py` for the
+server tree, `unitares_sdk/_mcp_httpx.py` for the SDK — which read the
+library off the installed transport's own import surface and hand call sites
+exactly that. Because the failure is silent, structural checks carry the
+weight here: the resolvers must agree with the transport, and no call site
+may build its injected client outside them. The end-to-end tests below
+deliberately pass under the silent failure, which is why they cannot be the
+only coverage.
+
+If a resolved `mcp` version fails here, the fix is a port (see mcp_compat.py
+and the bump procedure in constraints.txt), never a mock adjustment.
 """
 
 import asyncio
 import inspect
+import pathlib
 import socket
 import threading
 import time
 
-import httpx
 import pytest
 
 
@@ -49,34 +55,108 @@ def test_transport_accepts_injected_http_client():
     )
 
 
-def test_transport_is_written_against_the_injected_client_library():
-    """Heuristic on the transport module's import surface: we inject
-    `httpx` clients, so the transport must be written against `httpx` —
-    not a successor library. mcp 2.0.0 imports `httpx2` and calls
-    `client.sse(...)` on whatever is injected; with an httpx 0.x client
-    that AttributeError is swallowed by the transport's retry loop and
-    the server-push stream dies silently, so no end-to-end connect test
-    can catch it. This import check is the loud version of that failure.
+def test_resolver_agrees_with_the_transports_client_library():
+    """The seam: whatever library the transport is written against is the one
+    our resolvers hand to call sites.
+
+    mcp 2.x rewrote the transport against ``httpx2`` — it calls
+    ``client.sse(...)`` and catches ``httpx2.StreamError``. An ``httpx`` 0.x
+    client has no ``.sse()``, and the AttributeError is swallowed by the
+    transport's retry loop: POST round-trips keep working while the
+    server-push GET stream dies SILENTLY. The end-to-end tests below pass
+    under that failure, which is why this structural check exists.
+
+    Both resolvers are checked because they are separate distributions with
+    duplicated logic (``unitares-sdk`` cannot import from the server tree),
+    and a drift between them is invisible at runtime until a resident goes
+    dark.
     """
     import mcp.client.streamable_http as transport
 
-    assert not hasattr(transport, "httpx2"), (
-        "The installed mcp transport is written against httpx2, but the "
-        "repo injects httpx 0.x AsyncClient at its client call sites "
-        "(grep for http_client= : SDK connect(), mcp_server_std.py stdio "
-        "proxy, dialectic_canary, mcp_agent, calibration harness). Under "
-        "this mcp version the server-push GET stream fails SILENTLY. Port "
-        "the client injection to httpx2 (including the UDS transport "
-        "equivalent) before allowing this mcp version; do not widen any "
-        "pin past it."
+    from src.mcp_compat import mcp_httpx as server_resolver
+    from unitares_sdk._mcp_httpx import mcp_httpx as sdk_resolver
+
+    exposed = [
+        name
+        for name in ("httpx2", "httpx")
+        if getattr(getattr(transport, name, None), "__name__", None) == name
+    ]
+    assert exposed, (
+        "mcp.client.streamable_http exposes neither 'httpx2' nor 'httpx' at "
+        "module level under its own name, so which client library it expects "
+        "cannot be read off it. Both resolvers raise ImportError in this "
+        "state rather than guess. Re-base them and this check against the "
+        "new transport implementation before trusting green."
     )
-    # Identity, not just presence: `import httpx2 as httpx` would satisfy a
-    # bare hasattr while still being the incompatible library.
-    assert hasattr(transport, "httpx") and transport.httpx.__name__ == "httpx", (
-        "The mcp transport module no longer imports httpx at module level "
-        "under its own name; the import-surface heuristic in this canary "
-        "needs re-basing against the new transport implementation before "
-        "trusting green."
+    expected = exposed[0]
+
+    for label, resolver in (("server", server_resolver), ("sdk", sdk_resolver)):
+        assert resolver().__name__ == expected, (
+            f"The {label} resolver hands call sites "
+            f"'{resolver().__name__}' but the installed mcp transport is "
+            f"written against '{expected}'. Injecting the wrong library kills "
+            "the server-push GET stream silently."
+        )
+
+
+# Production call sites that inject an HTTP client into mcp. Every one of them
+# must build that client from the resolver, never from a bare ``import httpx``
+# — that bare import is precisely the pre-port defect, and it fails silently.
+_INJECTION_CALL_SITES = (
+    "agents/sdk/src/unitares_sdk/client.py",
+    "src/mcp_server_std.py",
+    "scripts/ops/mcp_agent.py",
+    "scripts/ops/dialectic_canary.py",
+    "scripts/dev/calibration_harness/client_mcp.py",
+)
+
+
+def test_no_call_site_builds_its_injected_client_outside_the_resolver():
+    """Source guard: the resolver is only worth having if it is not bypassed.
+
+    A new call site that reaches for ``httpx.AsyncClient`` directly re-opens
+    the silent failure at that one site while every other test stays green, so
+    the bypass is caught here rather than in production. Keep
+    ``_INJECTION_CALL_SITES`` in step with ``grep -rn 'http_client=' `` and
+    ``grep -rn 'httpx_client_factory='``.
+    """
+    import ast
+
+    repo_root = pathlib.Path(__file__).resolve().parents[1]
+    offenders = []
+
+    for rel in _INJECTION_CALL_SITES:
+        path = repo_root / rel
+        assert path.exists(), f"{rel} moved; update _INJECTION_CALL_SITES"
+        tree = ast.parse(path.read_text(), filename=str(path))
+
+        resolver_used = False
+        for node in ast.walk(tree):
+            # `import httpx` / `from httpx import ...`, at any scope.
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.split(".")[0] in ("httpx", "httpx2"):
+                        offenders.append(f"{rel}:{node.lineno} import {alias.name}")
+            elif isinstance(node, ast.ImportFrom):
+                root = (node.module or "").split(".")[0]
+                if root in ("httpx", "httpx2"):
+                    offenders.append(f"{rel}:{node.lineno} from {node.module} import ...")
+                elif "mcp_httpx" in (node.module or "") or any(
+                    a.name == "mcp_httpx" for a in node.names
+                ):
+                    resolver_used = True
+
+        assert resolver_used, (
+            f"{rel} injects an HTTP client into mcp but never imports the "
+            "mcp_httpx resolver. It must build that client from the library "
+            "the installed transport expects."
+        )
+
+    assert not offenders, (
+        "These files inject an HTTP client into mcp and also import a client "
+        "library directly; build the client from mcp_httpx() instead, so the "
+        "injected type follows the installed transport:\n  "
+        + "\n  ".join(offenders)
     )
 
 
@@ -137,8 +217,10 @@ def test_real_connect_and_tool_call_through_installed_transport(canary_server_ur
     from mcp.client.session import ClientSession
     from mcp.client.streamable_http import streamable_http_client
 
+    from src.mcp_compat import mcp_httpx
+
     async def run() -> str:
-        async with httpx.AsyncClient(http2=False, timeout=15) as http_client:
+        async with mcp_httpx().AsyncClient(http2=False, timeout=15) as http_client:
             async with streamable_http_client(
                 canary_server_url, http_client=http_client
             ) as streams:

@@ -62,6 +62,8 @@ from pathlib import Path
 from typing import Any, Dict, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 DEFAULT_LOG = REPO_ROOT / "data" / "logs" / "dialectic_canary.jsonl"
 DEFAULT_URL = os.environ.get("UNITARES_MCP_URL", "http://127.0.0.1:8767/mcp/")
 CANARY_NAME = "canary_dialectic"
@@ -86,11 +88,14 @@ async def call_tool(
     #1442) and turn every canary run into a false red. Identity continuity
     across the two calls rides on client_session_id, not the transport.
     """
-    import httpx
     from mcp.client.session import ClientSession
     from mcp.client.streamable_http import streamable_http_client
 
-    http_client = httpx.AsyncClient(timeout=timeout_s)
+    from src.mcp_compat import mcp_httpx
+
+    # mcp 2.x's transport calls .sse() on the injected client and is written
+    # against httpx2; mcp_httpx() hands back whichever library this mcp wants.
+    http_client = mcp_httpx().AsyncClient(timeout=timeout_s)
     async with streamable_http_client(url, http_client=http_client) as streams:
         # mcp 1.x yields (read, write, get_session_id); 2.x drops the third.
         read, write = streams[0], streams[1]
