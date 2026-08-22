@@ -31,6 +31,7 @@ on:
       - 'elixir/sentinel/**'
       - 'elixir/lease_plane/**'
       - 'elixir/unitares_sdk/**'
+      - 'elixir/agent_orchestrator/**'
       - 'elixir/dialectic_live/**'
       - 'db/postgres/**'
       - '.github/workflows/elixir-tests.yml'
@@ -40,6 +41,7 @@ on:
       - 'elixir/sentinel/**'
       - 'elixir/lease_plane/**'
       - 'elixir/unitares_sdk/**'
+      - 'elixir/agent_orchestrator/**'
       - 'elixir/dialectic_live/**'
       - 'db/postgres/**'
       - '.github/workflows/elixir-tests.yml'
@@ -92,6 +94,36 @@ jobs:
     - name: Check formatting
       if: matrix.elixir == '1.19'
       run: mix format --check-formatted
+
+  # agent_orchestrator consumes unitares_sdk (LeasePlaneEnvelope only — its
+  # transport stays :httpc). It was CI-blind until 2026-08-22: no job compiled
+  # or tested it, so a compile-time break in its lease client could merge
+  # unseen. Its suite is self-contained (spawns /bin/echo-class processes,
+  # no DB), so a plain mix test job closes the gap.
+  agent_orchestrator:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: elixir/agent_orchestrator
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
+
+    - name: Set up Elixir / OTP
+      uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+      with:
+        otp-version: '27'
+        elixir-version: '1.19'
+
+    - name: Fetch dependencies
+      run: mix deps.get
+
+    - name: Run tests
+      run: mix test
 
   # dialectic_live consumes unitares_sdk (Envelope only — its transport stays
   # Req). It had no job before; it also had no governance tests before, so
