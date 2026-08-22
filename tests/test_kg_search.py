@@ -334,6 +334,7 @@ class TestSearchKnowledgeGraph:
         assert kwargs["detail"] == {
             "hybrid_skipped": False,
             "fts_or_fallback_skipped": False,
+            "tags_present": False,
         }
 
     @pytest.mark.asyncio
@@ -426,6 +427,227 @@ class TestSearchKnowledgeGraph:
             search_mode="hybrid_rrf",
             detail={"verbatim_results": 1, "returned": 1},
         )
+
+    @pytest.mark.asyncio
+    async def test_hybrid_nonexistent_tag_returns_zero(self, patch_common):
+        """Dogfood finding bdb18ee4e52ee7d6: `tags` is an exact filter in hybrid too.
+
+        Phase 4 (#62) applied tags as an RRF boost on the hybrid path and
+        skipped the exact post-filter, while the schema kept saying "Filter by
+        exact tags". A tag nobody used returned five results in auto mode and
+        zero in forced fts. No document carries the tag, so the response must
+        be empty regardless of how well the text matched.
+        """
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        disc = make_discovery(id="text-match", summary="open finding about search", tags=["python"])
+        mock_graph.semantic_search = AsyncMock(return_value=[(disc, 0.8)])
+        mock_graph.full_text_search = AsyncMock(return_value=[disc])
+
+        result = await handle_search_knowledge_graph({
+            "query": "open finding",
+            "search_mode": "hybrid",
+            "tags": ["__probe_tag_missing__"],
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["count"] == 0
+        assert data["search_mode_used"] == "hybrid_rrf"
+        # The backend mock ignored the predicate, so the post-filter backstop
+        # did the work and says so.
+        assert data["tag_filter_dropped"] == 1
+        assert mock_graph.semantic_search.await_args.kwargs["tags"] == ["probe-tag-missing"]
+        assert mock_graph.full_text_search.await_args.kwargs["tags"] == ["probe-tag-missing"]
+
+    @pytest.mark.asyncio
+    async def test_hybrid_tag_filter_keeps_only_tagged_documents(self, patch_common):
+        """A stronger text match without the tag must not outrank a tagged one — it must be absent."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        tagged = make_discovery(id="tagged", summary="search finding", tags=["kg-search"])
+        untagged = make_discovery(id="untagged", summary="search finding too", tags=["other"])
+        mock_graph.semantic_search = AsyncMock(return_value=[(untagged, 0.9), (tagged, 0.5)])
+        mock_graph.full_text_search = AsyncMock(return_value=[untagged, tagged])
+
+        result = await handle_search_knowledge_graph({
+            "query": "search finding",
+            "search_mode": "hybrid",
+            "tags": ["KG Search"],  # normalize_tags folds this to kg-search, as the store path does
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["count"] == 1
+        assert data["discoveries"][0]["id"] == "tagged"
+        assert data["tag_filter_dropped"] == 1
+        assert mock_graph.full_text_search.await_args.kwargs["tags"] == ["kg-search"]
+
+    @pytest.mark.asyncio
+    async def test_hybrid_pushes_tag_predicate_into_both_arms(self, patch_common):
+        """The predicate rides inside both ranked backend queries, so a tagged
+        row that ranks below the first-stage limit is still retrieved. With
+        the backends honoring it, the post-filter has nothing to drop."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        tagged = make_discovery(id="tagged", summary="search finding", tags=["kg-search"])
+        mock_graph.semantic_search = AsyncMock(return_value=[(tagged, 0.5)])
+        mock_graph.full_text_search = AsyncMock(return_value=[tagged])
+
+        result = await handle_search_knowledge_graph({
+            "query": "search finding",
+            "search_mode": "hybrid",
+            "tags": ["kg-search"],
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert [d["id"] for d in data["discoveries"]] == ["tagged"]
+        assert "tag_filter_dropped" not in data
+        assert mock_graph.semantic_search.await_args.kwargs["tags"] == ["kg-search"]
+        assert mock_graph.full_text_search.await_args.kwargs["tags"] == ["kg-search"]
+        mock_graph.query.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_fts_and_semantic_modes_push_tag_predicate(self, patch_common):
+        """Same contract in the single-arm modes: the predicate reaches the backend."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        tagged = make_discovery(id="tagged", summary="search finding", tags=["kg-search"])
+        mock_graph.semantic_search = AsyncMock(return_value=[(tagged, 0.5)])
+        mock_graph.full_text_search = AsyncMock(return_value=[tagged])
+
+        fts = parse_result(await handle_search_knowledge_graph({
+            "query": "search finding",
+            "search_mode": "fts",
+            "tags": ["kg-search"],
+        }))
+        assert fts["search_mode_used"] == "fts"
+        assert fts["count"] == 1
+        assert mock_graph.full_text_search.await_args.kwargs["tags"] == ["kg-search"]
+
+        semantic = parse_result(await handle_search_knowledge_graph({
+            "query": "search finding",
+            "search_mode": "semantic",
+            "tags": ["kg-search"],
+        }))
+        assert semantic["search_mode_used"] == "semantic"
+        assert semantic["count"] == 1
+        assert mock_graph.semantic_search.await_args.kwargs["tags"] == ["kg-search"]
+
+    @pytest.mark.asyncio
+    async def test_supplied_tags_that_normalize_to_nothing_are_rejected(self, patch_common):
+        """A filter the caller wrote must not silently become no filter."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        disc = make_discovery(id="d-1", summary="search finding", tags=["other"])
+        mock_graph.semantic_search = AsyncMock(return_value=[(disc, 0.8)])
+        mock_graph.full_text_search = AsyncMock(return_value=[disc])
+
+        result = await handle_search_knowledge_graph({
+            "query": "search finding",
+            "search_mode": "hybrid",
+            "tags": ["++"],
+        })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert "normalize" in data["error"]
+        mock_graph.semantic_search.assert_not_awaited()
+        mock_graph.full_text_search.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_semantic_to_fts_fallback_counts_tag_filter_drops(self, patch_common):
+        """The fallback path has its own filter loop; its drops must be disclosed too."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        untagged = make_discovery(id="untagged", summary="search finding", tags=["other"])
+        mock_graph.semantic_search = AsyncMock(return_value=[])
+        mock_graph.full_text_search = AsyncMock(return_value=[untagged])
+
+        result = await handle_search_knowledge_graph({
+            "query": "search finding",
+            "search_mode": "semantic",
+            "tags": ["kg-search"],
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["count"] == 0
+        assert data["tag_filter_dropped"] == 1
+        assert mock_graph.full_text_search.await_args.kwargs["tags"] == ["kg-search"]
+
+    @pytest.mark.asyncio
+    async def test_hybrid_without_tags_sends_no_tag_kwarg(self, patch_common):
+        """Untagged searches must reach the backends exactly as before."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        disc = make_discovery(id="d-1", summary="anything at all")
+        mock_graph.semantic_search = AsyncMock(return_value=[(disc, 0.8)])
+        mock_graph.full_text_search = AsyncMock(return_value=[disc])
+
+        result = await handle_search_knowledge_graph({"query": "anything", "search_mode": "hybrid"})
+
+        data = parse_result(result)
+        assert data["count"] == 1
+        assert "tag_filter_dropped" not in data
+        assert "tags" not in mock_graph.semantic_search.await_args.kwargs
+        assert "tags" not in mock_graph.full_text_search.await_args.kwargs
+        mock_graph.query.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_auto_mode_hybrid_honors_tag_filter(self, patch_common, monkeypatch):
+        """The probe ran in auto mode; the contract must hold there, not only when hybrid is forced."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        monkeypatch.setenv("UNITARES_ENABLE_HYBRID", "1")
+        disc = make_discovery(id="text-match", summary="open finding about search", tags=["python"])
+        mock_graph.semantic_search = AsyncMock(return_value=[(disc, 0.8)])
+        mock_graph.full_text_search = AsyncMock(return_value=[disc])
+
+        result = await handle_search_knowledge_graph({
+            "query": "open finding",
+            "tags": ["__probe_tag_missing__"],
+        })
+
+        data = parse_result(result)
+        assert data["search_mode_used"] == "hybrid_rrf"
+        assert data["count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_hybrid_graph_expansion_neighbors_obey_tag_filter(self, patch_common, monkeypatch):
+        """A 1-hop neighbor pulled in by graph expansion is still subject to the
+        filter: expansion widens the candidate pool, not the contract."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        monkeypatch.setenv("UNITARES_ENABLE_GRAPH_EXPANSION", "1")
+        seed = make_discovery(id="seed", summary="search finding", tags=["kg-search"])
+        seed.related_to = ["neighbor"]
+        neighbor = make_discovery(id="neighbor", summary="linked but untagged", tags=["other"])
+        mock_graph.semantic_search = AsyncMock(return_value=[(seed, 0.9)])
+        mock_graph.full_text_search = AsyncMock(return_value=[seed])
+        mock_graph.get_discovery = AsyncMock(return_value=neighbor)
+
+        result = await handle_search_knowledge_graph({
+            "query": "search finding",
+            "search_mode": "hybrid",
+            "tags": ["kg-search"],
+        })
+
+        data = parse_result(result)
+        assert data["search_mode_used"] == "hybrid_rrf_graph"
+        assert [d["id"] for d in data["discoveries"]] == ["seed"]
+        assert data["tag_filter_dropped"] == 1
+        mock_graph.get_discovery.assert_awaited()
 
     @pytest.mark.asyncio
     async def test_verbatim_check_matches_details_and_tags(self, patch_common):

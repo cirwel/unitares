@@ -14,9 +14,13 @@ Usage:
 the live numbers move every day, so a hard gate would always be red. Run it before a
 release or when an external evaluation is imminent.
 
-DB-derived rows come from audit.events / core.agents / knowledge.discoveries. The two
-non-DB rows ("V operating range", "Tests") are left untouched by --write and emitted from
-constants by the print path.
+Row formats here must mirror docs/PRODUCTION_SNAPSHOT.md — --check compares rendered
+rows byte-for-byte against the doc, so a format drift between the two reads as
+permanent staleness. When the doc's wording changes, change db_rows() with it.
+
+DB-derived rows come from audit.events / core.agents / core.agent_state /
+knowledge.discoveries. The two non-DB rows ("V operating range", "Tests") are left
+untouched by --write and emitted from constants by the print path.
 
 Connection: GOVERNANCE_DATABASE_URL (same env the analysis scripts use), default local.
 """
@@ -49,11 +53,13 @@ def _cov_fail_under(default: int = 75) -> int:
 
 
 # Non-DB rows: preserved as-is by --write, emitted verbatim by the print path.
+# The test count is a manually maintained floor (last confirmed 2026-08-22 from a
+# full-gate run of 13,454; refresh with `pytest --collect-only -q | tail -1`).
 STATIC_ROWS = [
     ("V operating range", "Active agents often within [-0.1, 0.1]"),
     (
         "Tests",
-        f"12,500+ collected · smoke/pre-push subset plus {_cov_fail_under()}% min coverage gate",
+        f"13,400+ collected · smoke/pre-push subset plus {_cov_fail_under()}% min coverage gate",
     ),
 ]
 
@@ -65,54 +71,51 @@ class Snapshot:
     agents_total: int
     distinct_21d: int
     distinct_7d: int
+    state_rows: int
+    non_auto_resumes: int
+    self_recoveries: int
     kg_discoveries: int
 
 
-def humanize(n: int) -> str:
-    """Compact human form: 3,748,915 -> '3.7M', 713,540 -> '714K'."""
-    if n >= 1_000_000:
-        return f"{n / 1_000_000:.1f}M"
-    if n >= 1_000:
-        return f"{round(n / 1_000)}K"
-    return str(n)
-
-
-def floor_thousands(n: int) -> str:
-    """Conservative '+' floor: 3,748,915 -> '3,748,000'."""
-    return f"{(n // 1000) * 1000:,}"
-
-
 def headline(snap: Snapshot, date_str: str) -> str:
-    events = humanize(snap.events_total)
-    last7 = humanize(snap.events_7d)
     return (
-        f"Frozen public snapshot from {date_str} (single-operator deployment — "
-        f"the author's own traffic, not external adoption). Headline: "
-        f"**{events}+ audit/telemetry events recorded · ≈{last7} in the prior 7 days**."
+        f"Frozen at **{date_str}** from a single-operator deployment: the\n"
+        f"author's own traffic, not external adoption. Headline: "
+        f"**{snap.events_total:,} audit and\n"
+        f"telemetry events recorded · {snap.events_7d:,} in the prior 7 days**."
     )
 
 
 def db_rows(snap: Snapshot) -> list[tuple[str, str]]:
-    """The DB-derived (metric, value) rows, in README order."""
-    last7 = humanize(snap.events_7d)
+    """The DB-derived (metric, value) rows, in PRODUCTION_SNAPSHOT.md order and format."""
     return [
         (
             "Agents onboarded",
             f"{snap.agents_total:,} total process-instances — overwhelmingly ephemeral "
-            "CLI sessions from one operator's workstation plus a handful of long-running "
-            "resident agents (launchd crons)",
+            "CLI sessions from one operator's workstation plus a handful of "
+            "long-running resident agents",
         ),
         (
             "Distinct event-emitting identities (prior 21 days)",
-            f"{snap.distinct_21d:,}; mostly ephemeral local CLI sessions, not external adoption",
+            f"{snap.distinct_21d:,}; mostly ephemeral local CLI sessions, not external adopters",
         ),
         (
             "Distinct event-emitting identities (prior 7 days)",
-            f"{snap.distinct_7d:,} distinct event emitters",
+            f"{snap.distinct_7d:,}",
         ),
         (
             "Audit/telemetry events recorded",
-            f"{floor_thousands(snap.events_total)}+ (≈{last7} in the prior 7 days)",
+            f"{snap.events_total:,} total; {snap.events_7d:,} in the prior 7 days",
+        ),
+        (
+            "Stored EISV state rows",
+            f"{snap.state_rows:,} observations; not independent agents or trials",
+        ),
+        (
+            "Canonical non-automatic lifecycle resumes",
+            f"{snap.non_auto_resumes}, including {snap.self_recoveries} recorded "
+            "self-recoveries (reason begins `Self-recovery`); requiring a `type` "
+            "field excludes legacy dual-written rows",
         ),
         ("Knowledge graph discoveries", f"{snap.kg_discoveries:,}"),
     ]
@@ -132,8 +135,9 @@ def _row_re(metric: str) -> re.Pattern[str]:
 
 
 _HEADLINE_RE = re.compile(
-    r"^Frozen public snapshot from .*? in the prior 7 days\*\*\.\s*$",
-    re.MULTILINE,
+    r"Frozen at \*\*.+?\*\* from a single-operator deployment:.*?"
+    r"in the prior 7 days\*\*\.",
+    re.DOTALL,
 )
 
 
@@ -181,6 +185,11 @@ async def fetch_snapshot(db_url: str) -> Snapshot:
     conn = await asyncpg.connect(db_url)
     try:
         scalar = conn.fetchval
+        # The resume predicates mirror the frozen SQL in PRODUCTION_SNAPSHOT.md,
+        # with one deliberate widening: reasons are matched with
+        # LIKE 'Self-recovery%' so both the legacy 'Self-recovery: ...' and the
+        # current 'Self-recovery (<basis>): ...' formats
+        # (src/mcp_handlers/lifecycle/operations.py) are counted.
         return Snapshot(
             events_total=await scalar("SELECT count(*) FROM audit.events"),
             events_7d=await scalar(
@@ -194,6 +203,17 @@ async def fetch_snapshot(db_url: str) -> Snapshot:
             distinct_7d=await scalar(
                 "SELECT count(DISTINCT agent_id) FROM audit.events "
                 "WHERE ts > now() - interval '7 days'"
+            ),
+            state_rows=await scalar("SELECT count(*) FROM core.agent_state"),
+            non_auto_resumes=await scalar(
+                "SELECT count(*) FROM audit.events "
+                "WHERE event_type = 'lifecycle_resumed' AND payload ? 'type' "
+                "AND payload->>'reason' NOT LIKE 'Auto-resumed%'"
+            ),
+            self_recoveries=await scalar(
+                "SELECT count(*) FROM audit.events "
+                "WHERE event_type = 'lifecycle_resumed' AND payload ? 'type' "
+                "AND payload->>'reason' LIKE 'Self-recovery%'"
             ),
             kg_discoveries=await scalar("SELECT count(*) FROM knowledge.discoveries"),
         )

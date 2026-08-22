@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_No unreleased changes yet. New entries accumulate here until the next release bump._
+### Fixed
+
+- **knowledge:** `tags` is an exact filter in hybrid search too. Phase 4 (#62) made it a rank boost on the hybrid path while the schema kept saying "Filter by exact tags", so the default `auto` mode returned untagged results for a tag nobody used. The predicate now rides inside both backend queries (`tags && $n` on the FTS arm; a join with `hnsw.iterative_scan` on the pgvector arm) so a tagged row that ranks below the first-stage limit is still retrieved, and the post-filter stays as a backstop; candidates it removes are disclosed as `tag_filter_dropped`. A supplied tag that normalizes to nothing is now rejected instead of silently disabling the filter. The schema and tool description state the contract: any of the given tags, normalized, in every mode; the description previously claimed AND semantics (dogfood finding `bdb18ee4e52ee7d6`)
 
 ---
 

@@ -91,6 +91,31 @@ GROUP BY event_type
 ORDER BY count(*) DESC;
 ```
 
+## Notes for the next refresh (recorded 2026-08-22)
+
+The frozen block above is a record of what the frozen query returned at the
+cutoff and is not edited retroactively. Three provenance gaps found in an
+audit of the README's claims are queued for the next refresh:
+
+1. **Self-recovery reason-format drift.** The frozen predicate
+   `payload->>'reason' LIKE 'Self-recovery:%'` matches the legacy reason
+   format only. Current code emits `Self-recovery (<recovery_basis>): ...`
+   (`src/mcp_handlers/lifecycle/operations.py`), which that predicate does not
+   match, so a re-run at a later cutoff would undercount. The next refresh
+   must broaden the predicate to `LIKE 'Self-recovery%'` (covers both
+   formats) and reword the table row accordingly.
+2. **First-identity-record anchor.** The README dates continuous operation
+   from 2025-11-28, "the first identity record". That date has no recorded
+   query behind it. The next refresh should add
+   `(SELECT min(created_at) FROM core.agents)` to the frozen SQL block and
+   record the result.
+3. **Headline-composition rollup.** The README's "91.4%" (share of the
+   headline count that is session-resolution observations plus
+   cross-device-call records) is derived from the composition table above:
+   (3,440,358 + 738,728) / 4,573,890 = 91.37%. The next refresh should carry
+   the rolled-up figure in this document so the README's number traces to a
+   stated line rather than to reader arithmetic.
+
 ## Dashboard views
 
 <p align="center">
