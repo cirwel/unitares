@@ -599,7 +599,6 @@ def evaluate_cold_start_risk_confirmation(
                 if "nearest_edge" in decision
                 else {}
             ),
-            "hard_stop_provenance": decision.get("hard_stop_provenance"),
         },
         "note": (
             "Shadow evaluation only: the original policy decision is unchanged. "
@@ -744,7 +743,6 @@ def apply_non_authored_cold_start_guard(
                 if "nearest_edge" in guarded
                 else {}
             ),
-            "hard_stop_provenance": guarded.get("hard_stop_provenance"),
         },
         "note": (
             "A non-agent-authored Phi cold-start fallback is advisory until "

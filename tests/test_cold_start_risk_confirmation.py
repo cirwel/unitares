@@ -271,7 +271,8 @@ def test_first_fallback_risk_pause_is_shadow_would_defer_only():
     assert original["sub_action"] == "risk_pause"
     assert original["reason"] == "UNITARES high-risk verdict"
     assert original["nearest_edge"] == "risk"
-    assert original["hard_stop_provenance"]["risk_only"] is True
+    assert "hard_stop_provenance" not in original
+    assert gate["hard_stop_provenance"]["risk_only"] is True
 
 
 def test_risk_attributed_cirs_block_is_the_same_fallback_risk_candidate():
@@ -286,7 +287,8 @@ def test_risk_attributed_cirs_block_is_the_same_fallback_risk_candidate():
     assert original["sub_action"] == "cirs_block"
     assert original["reason"] == "CIRS risk ceiling breached"
     assert original["nearest_edge"] == "risk"
-    assert original["hard_stop_provenance"]["risk_only"] is True
+    assert "hard_stop_provenance" not in original
+    assert gate["hard_stop_provenance"]["risk_only"] is True
 
 
 @pytest.mark.parametrize(
@@ -854,7 +856,83 @@ def test_non_authored_phi_cold_start_cirs_risk_block_becomes_guidance():
     assert original["reason"] == "CIRS risk ceiling breached"
     assert original["guidance"] == "Pause to investigate the risk spike."
     assert original["nearest_edge"] == "risk"
-    assert original["hard_stop_provenance"]["risk_only"] is True
+    assert "hard_stop_provenance" not in original
+    assert (
+        guarded["cold_start_epistemic_gate"]["hard_stop_provenance"]["risk_only"]
+        is True
+    )
+
+
+def _state(coherence=0.6, **overrides):
+    """Minimal monitor state for a direct ``make_decision`` call."""
+    fields = dict(
+        E=0.8,
+        I=0.8,
+        S=0.1,
+        V=0.0,
+        coherence=coherence,
+        void_active=False,
+        coherence_history=[],
+        risk_history=[],
+    )
+    fields.update(overrides)
+    return SimpleNamespace(**fields)
+
+
+def test_hard_block_without_oscillation_state_keeps_exact_attribution():
+    """An absent oscillation state must not erase a threshold the inputs prove.
+
+    ``make_decision`` is public and defaults ``oscillation_state`` to None.
+    Unknown resonance has to leave the record incomplete -- so the authority
+    guard fails closed -- without demoting a reproducible risk-ceiling breach
+    to "cause unclassified".
+    """
+    decision = make_decision(
+        _state(coherence=0.60),
+        risk_score=0.95,
+        unitares_verdict="high-risk",
+        response_tier="hard_block",
+        oscillation_state=None,
+    )
+
+    assert decision["nearest_edge"] == "risk"
+    assert "CIRS risk ceiling breached" in decision["reason"]
+
+    provenance = decision["hard_stop_provenance"]
+    assert provenance["cirs"]["conditions"]["risk_ceiling"] is True
+    # Fail-closed: resonance was unobservable, so nothing may be downgraded.
+    assert provenance["cirs"]["provenance_complete"] is False
+    assert provenance["complete"] is False
+    assert provenance["risk_only"] is False
+    assert "cirs_unclassified_hard_block" in provenance["independent_hard_stops"]
+
+
+def test_hard_block_coherence_floor_without_oscillation_state_attributes_coherence():
+    decision = make_decision(
+        _state(coherence=0.20),
+        risk_score=0.10,
+        unitares_verdict="safe",
+        response_tier="hard_block",
+        oscillation_state=None,
+    )
+
+    assert decision["nearest_edge"] == "coherence"
+    assert "control-feedback floor crossed" in decision["reason"]
+    assert decision["hard_stop_provenance"]["risk_only"] is False
+
+
+def test_non_pause_routes_carry_no_hard_stop_provenance():
+    """``risk_only`` is meaningless on a route that stopped nothing."""
+    approve = make_decision(
+        _state(), risk_score=0.10, unitares_verdict="safe",
+        response_tier="proceed",
+        oscillation_state=OscillationState(
+            oi=0.0, flips=0, resonant=False, trigger=None
+        ),
+    )
+
+    assert approve["action"] == "proceed"
+    assert "hard_stop_provenance" not in approve
 
 
 def test_epistemic_guard_preserves_authoritative_or_uncertain_pauses():

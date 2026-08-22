@@ -175,10 +175,6 @@ def _build_hard_stop_provenance(
             and isinstance(result_resonant, bool)
             and tier_known
             and cirs_result.get("verdict") == response_tier
-            and resonance_known
-            and bool(oscillation_state.resonant) == result_resonant
-            and _finite_number(oscillation_state.oi) == observed_oi
-            and oscillation_state.flips == observed_flips
             and coherence is not None
             and risk is not None
             and floor_condition == (coherence < floor)
@@ -202,9 +198,18 @@ def _build_hard_stop_provenance(
             "oscillation_index": observed_oi,
             "flips": observed_flips,
         }
+        # Producer-recorded absolute conditions are already recomputed against
+        # the recorded thresholds above; adopt them before folding in the
+        # oscillation cross-check, for the same reason as the legacy branch.
         if cirs_complete:
             cirs_coherence_floor = floor_condition
             cirs_risk_ceiling = ceiling_condition
+        cirs_complete = cirs_complete and (
+            resonance_known
+            and bool(oscillation_state.resonant) == result_resonant
+            and _finite_number(oscillation_state.oi) == observed_oi
+            and oscillation_state.flips == observed_flips
+        )
     elif response_tier is not None:
         # The legacy monitor path has fixed absolute thresholds and returns no
         # CIRS result envelope.  Those exact values are therefore reproducible
@@ -232,29 +237,31 @@ def _build_hard_stop_provenance(
             "oscillation_index": observed_oi,
             "flips": observed_flips,
         }
-        cirs_complete = (
+        # The two absolute thresholds are reproducible from coherence/risk alone.
+        # Resonance needs an observed oscillation state, which a direct caller
+        # may not supply.  Keep the two apart: an unknown resonance must leave
+        # the record incomplete (so the authority guard fails closed) without
+        # also erasing an attribution the inputs already prove.
+        cirs_absolute_known = (
             coherence is not None
             and risk is not None
             and floor is not None
             and ceiling is not None
             and response_tier in {"hard_block", "soft_dampen", "proceed"}
-            and (
-                response_tier is None
-                or (
-                    observed_oi is not None
-                    and isinstance(observed_flips, int)
-                    and not isinstance(observed_flips, bool)
-                    and resonant
-                    == (
-                        abs(observed_oi) >= CIRS_DEFAULTS["oi_threshold"]
-                        or observed_flips >= CIRS_DEFAULTS["flip_threshold"]
-                    )
-                )
-            )
         )
-        if cirs_complete:
+        if cirs_absolute_known:
             cirs_coherence_floor = coherence < floor
             cirs_risk_ceiling = risk > ceiling
+        cirs_complete = cirs_absolute_known and (
+            observed_oi is not None
+            and isinstance(observed_flips, int)
+            and not isinstance(observed_flips, bool)
+            and resonant
+            == (
+                abs(observed_oi) >= CIRS_DEFAULTS["oi_threshold"]
+                or observed_flips >= CIRS_DEFAULTS["flip_threshold"]
+            )
+        )
 
     # A hard block without a reproducible absolute trigger or an observed
     # resonance is explicitly unclassified.  Inconsistency between a supplied
@@ -382,7 +389,18 @@ def _with_hard_stop_provenance(
     decision: Dict[str, Any],
     provenance: Mapping[str, Any],
 ) -> Dict[str, Any]:
-    """Attach the selected policy route without discarding the full trigger set."""
+    """Attach the selected policy route without discarding the full trigger set.
+
+    Only a ``pause`` carries the record.  Every consumer -- the authority
+    guard, the maturity shadow, and historical recovery -- reads it solely to
+    decide whether a *hard stop* was risk-only, and ``risk_only`` is
+    meaningless on a route that did not stop anything.  Attaching it to
+    approve/guide put ~1.3KB of inert JSON into every check-in response and
+    every appended ``core.agent_state`` row.  A pause that the guard later
+    downgrades keeps the record: the guard copies the decision it was handed.
+    """
+    if decision.get("action") != "pause":
+        return dict(decision)
     result = dict(decision)
     selected = {
         "action": result.get("action"),
