@@ -2103,6 +2103,9 @@ async def _apply_semantic_fts_fallback(state: _KnowledgeSearchState) -> None:
                 )
 
         for document in candidates:
+            if request.tags and not _matches_tags(document, request.tags):
+                state.tag_filter_dropped += 1
+                continue
             if not _candidate_matches_semantic_fallback(document, request):
                 continue
             state.results.append(document)

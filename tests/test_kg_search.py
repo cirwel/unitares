@@ -562,6 +562,28 @@ class TestSearchKnowledgeGraph:
         mock_graph.full_text_search.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_semantic_to_fts_fallback_counts_tag_filter_drops(self, patch_common):
+        """The fallback path has its own filter loop; its drops must be disclosed too."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        untagged = make_discovery(id="untagged", summary="search finding", tags=["other"])
+        mock_graph.semantic_search = AsyncMock(return_value=[])
+        mock_graph.full_text_search = AsyncMock(return_value=[untagged])
+
+        result = await handle_search_knowledge_graph({
+            "query": "search finding",
+            "search_mode": "semantic",
+            "tags": ["kg-search"],
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["count"] == 0
+        assert data["tag_filter_dropped"] == 1
+        assert mock_graph.full_text_search.await_args.kwargs["tags"] == ["kg-search"]
+
+    @pytest.mark.asyncio
     async def test_hybrid_without_tags_sends_no_tag_kwarg(self, patch_common):
         """Untagged searches must reach the backends exactly as before."""
         mock_mcp_server, mock_graph = patch_common
