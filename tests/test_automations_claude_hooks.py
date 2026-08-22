@@ -277,3 +277,70 @@ def test_plugin_root_placeholder_is_expanded(census_mod, fake_home):
     labels = {i.name for i in wired}
     assert any("post-edit" in n for n in labels), labels
     assert any("post-activity" in n for n in labels), labels
+
+
+def test_cache_installed_plugin_hooks_are_discovered(census_mod, tmp_path, monkeypatch):
+    """Cached (marketplace-installed, non-directory-source) plugins nest
+    hooks.json three levels under `cache/`:
+    `cache/<marketplace>/<plugin>/<version>/hooks/hooks.json`. Treating
+    each top-level `cache/` entry as a plugin root itself (the old
+    `cache.iterdir()`) never finds a declaration there, so every such
+    plugin's hooks were invisible to the census -- not orphaned, not
+    missing, simply never enumerated. Verified against the real
+    ~/.claude/plugins/cache layout on 2026-08-22: `hookify`, installed
+    from a github-source marketplace, has this exact shape and zero of
+    its hooks reached the collector before this fix. No entry is
+    registered for this plugin in known_marketplaces.json (a github
+    source has no "path" field to contribute), so this can only be
+    found through the cache walk, not the marketplace-roots branch.
+    """
+    home = tmp_path / "home"
+    plugin_root = home / ".claude/plugins/cache/some-marketplace/demo-cached-plugin/1.2.3"
+    _exe(plugin_root / "hooks/run-hook.cmd")
+    _exe(plugin_root / "hooks/post-edit")
+    (plugin_root / "hooks/hooks.json").write_text(json.dumps({
+        "hooks": {
+            "PostToolUse": [{
+                "matcher": "Edit",
+                "hooks": [{
+                    "type": "command",
+                    "command": '"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd" post-edit --host claude',
+                }],
+            }]
+        }
+    }))
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(census_mod, "HOME", home)
+    items, _ = _collect(census_mod)
+    wired = [i for i in items if i.status == "wired" and "post-edit" in i.name]
+    assert len(wired) == 1, [(i.name, i.status) for i in items]
+    assert "run-hook.cmd" not in wired[0].name
+
+
+def test_true_cache_rollover_glob_fallback_resolves(census_mod, tmp_path):
+    """Unit-tests `_hook_script_paths` directly against a genuine rollover:
+    the direct `${PLUGIN_ROOT}/hooks/run-hook.cmd` path does NOT exist (a
+    stale `plugin_root`, simulating the plugin cache having moved on to a
+    newer version since this caller last resolved it) but a sibling
+    version directory -- reachable only through the `${PLUGIN_ROOT%/*}`
+    glob fallback -- does. This is the scenario unitares-governance-plugin
+    #122 exists to survive; the parser must not regress to the pre-#122
+    "no resolvable script" false positive here."""
+    plugin_family = tmp_path / "plugins/cache/some-marketplace/demo-cached-plugin"
+    stale_root = plugin_family / "0.4.11"  # does not exist on disk
+    current_root = plugin_family / "0.4.12"
+    _exe(current_root / "hooks/run-hook.cmd")
+    _exe(current_root / "hooks/post-checkin")
+    command = (
+        '_unitares_runner="${PLUGIN_ROOT}/hooks/run-hook.cmd"; '
+        'if [ ! -f "$_unitares_runner" ]; then '
+        'for _unitares_candidate in "${PLUGIN_ROOT%/*}"/*/hooks/run-hook.cmd; do '
+        '[ -f "$_unitares_candidate" ] && _unitares_runner="$_unitares_candidate"; '
+        'done; fi; "$_unitares_runner" post-checkin --host codex'
+    )
+    scripts = census_mod._hook_script_paths(command, str(stale_root))
+    assert scripts, "expected the glob fallback to resolve a sibling version directory"
+    resolved_names = {Path(p).name for p in scripts}
+    assert "run-hook.cmd" in resolved_names
+    assert "post-checkin" in resolved_names
+    assert all(str(current_root.resolve()) in p for p in scripts), scripts
