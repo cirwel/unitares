@@ -32,7 +32,9 @@ jobs:
           python-version: "3.12"
 
       - name: Install SDK with dev extras
-        run: pip install -e "agents/sdk[dev]"
+        # -c pins the release-gating tests to the production resolution;
+        # constraints do not leak into the built wheel's metadata.
+        run: pip install -e "agents/sdk[dev]" -c constraints.txt
 
       - name: Run SDK test suite
         run: pytest agents/sdk/tests -q
