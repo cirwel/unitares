@@ -34,9 +34,14 @@ import sys
 import json
 import asyncio
 import argparse
-import httpx
 from pathlib import Path
 from typing import Dict, Any, Optional
+
+# src.mcp_compat is imported lazily at the call site below; this only makes it
+# reachable when the script is run directly from a checkout.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 # Session file to persist client_session_id
 SESSION_FILE = Path(".mcp_session")
@@ -142,8 +147,13 @@ async def call_tool(tool_name: str, arguments: Dict[str, Any], url: str) -> Dict
         
         if is_streamable:
             from mcp.client.streamable_http import streamable_http_client
-            # Use httpx with http2 for Streamable HTTP
-            http_client = httpx.AsyncClient(http2=True, timeout=30.0)
+
+            from src.mcp_compat import mcp_httpx
+
+            # mcp_httpx() resolves which client library this mcp's transport
+            # expects (httpx2 on 2.x); injecting the other one kills the
+            # server-push stream silently.
+            http_client = mcp_httpx().AsyncClient(http2=True, timeout=30.0)
             transport_context = streamable_http_client(url, http_client=http_client)
         else:
             from mcp.client.sse import sse_client

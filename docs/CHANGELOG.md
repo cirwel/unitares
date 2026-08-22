@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.19.0] - 2026-08-21
 
-_Notable changes merged between 2.18.0 (2026-08-12) and this release — response-envelope honesty, doctor-layer consolidation, a fleet-wide deploy sweep, dialectic reviewer provenance, knowledge-graph retrieval repair, and a CI gate that runs against a real database. `pyproject.toml`/`VERSION` bumped to 2.19.0; the live `build_sha` remains the deploy-identity signal._
+_Corrected 2026-08-21: thirteen pull requests merged as merge commits were omitted from the published entry — see [2.19.0-errata.md](releases/2.19.0-errata.md). Notable changes merged between 2.18.0 (2026-08-12) and this release — response-envelope honesty, doctor-layer consolidation, a fleet-wide deploy sweep, dialectic reviewer provenance, knowledge-graph retrieval repair, and a CI gate that runs against a real database. `pyproject.toml`/`VERSION` bumped to 2.19.0; the live `build_sha` remains the deploy-identity signal._
 
 ### Added
 
@@ -27,7 +27,7 @@ _Notable changes merged between 2.18.0 (2026-08-12) and this release — respons
 - **knowledge:** lean read envelopes, a recorded standard for how a discovery was closed, and a per-run Chronicler digest naming what moved (#1662, #1704, #1752)
 - **adoption and audit:** in-flow review nudge in the check-in `next_action`, continuation measurement, detection of labels that cannot discriminate what their name promises, and a falsifier that names the label class it scored (#1686, #1735, #1740, #1747)
 - **inference:** reciprocal Claude delegation and one shared local-inference plane behind every route (#1713, #1773)
-- **eisv and integrity:** shadow ablation of `decision_e` to separate a calibration bias from a live self-loop, a soak reader and positive control for the coherence-gate shadow, and a governance-sensitivity inventory with advisory CI (#1640, #1777, #1780)
+- **eisv and integrity:** shadow ablation of `decision_e` to separate a calibration bias from a live self-loop, a soak reader and positive control for the coherence-gate shadow, a re-landed call-gate disclosure on the inference-host discovery reads that #1610 dropped, and a governance-sensitivity inventory with advisory CI (#1627, #1640, #1777, #1780)
 - **calibration:** record how many agents a class constant rests on, not only how many rows (#1736)
 - **census:** opt-in remote-host collector for the always-on Pi (#1697)
 - **dogfood:** link friction findings to the cron episodes that produced them (#1786)
@@ -35,9 +35,10 @@ _Notable changes merged between 2.18.0 (2026-08-12) and this release — respons
 ### Changed
 
 - **http surface:** split the `http_api` monolith into `src/http_routes` domain modules, and break the `runtime_queries` to `outcome_events` import cycle (#1641, #1652)
-- **schema:** admit `TRANSITION` into regime, move the coercion sink to `unknown`, and anchor the schema registry to file content (#1653)
-- **ci:** give CI a real pgvector-backed database, shard the pytest gate, run the dashboard suite, add deterministic glossary and documentation-freshness drift checks, link-check `docs/proposals/`, force decisions for dangling branch work, and let dependabot triage use a fleet-scoped token when provided (#1639, #1683, #1687, #1695, #1703, #1721, #1761)
+- **schema:** admit `TRANSITION` into regime, move the coercion sink to `unknown`, and anchor the schema registry to file content (#1635, #1653)
+- **ci:** give CI a real pgvector-backed database and stop the test schema drifting from production, shard the pytest gate, run the dashboard suite, add deterministic glossary and documentation-freshness drift checks, link-check `docs/proposals/`, force decisions for dangling branch work, let dependabot triage use a fleet-scoped token when provided, and auto-remove the harness attribution footer instead of failing the scope check on it (#1625, #1637, #1639, #1683, #1687, #1695, #1703, #1721, #1761)
 - **test surface:** make the edge-index freshness gate pollution-invariant, isolate Watcher model-slot state, demonstrate the calibrated concealment boundary, restore the Elixir-side IR conformance guard, and pin the cross-transport instrumentation contract (#1654, #1677, #1681, #1731, #1764)
+- **governance:** retire legacy coherence as a governance authority (#1626)
 - **policy and config:** a usage count may retire an instrument, never a capability; stop `config_manager` recursing and retire caller counts as evidence; report which thresholds an operator actually set (#1642, #1647, #1727)
 - **residents:** roster order is deployment configuration, not one operator's six names (#1730, #1734)
 - **operations:** retire the dead PR-queue workflow and the Concierge inventory entry, and align the operator setup contract with what install actually does (#1664, #1706, #1720)
@@ -49,12 +50,12 @@ _Notable changes merged between 2.18.0 (2026-08-12) and this release — respons
 
 - **response envelopes:** stop the recovery hint, margin, and reflection surfaces from claiming more than they measured — name the condition that actually fired, gate the coherence edge on provenance, quote the gate's own threshold on the void edge, keep the `BOUNDARY` basin from fabricating a tight margin, report a basin fact as a basin fact, populate `memory_suggestions` from work already in the response, surface `prediction_id` and alias metadata with honest trend magnitude, and trim compact and lite response bloat (#1696, #1746, #1760, #1763, #1766, #1770, #1774, #1775, #1776, #1779, #1781)
 - **metrics and risk:** the read path reports the risk the verdict was made from, and a dry run cannot become the agent's authoritative risk (#1646, #1651)
-- **dialectic:** enforce reciprocal reviewer cooldown, persist and complete independent synthesis rounds, make a liveness reap say which stall it ended without acting on the standing verdict, stop reading `status` as a quality signal, and reject non-positive list limits instead of answering a different question (#1691, #1705, #1733, #1737, #1739, #1755)
-- **doctor layer:** stop the dry-queue warning overstating what a dry queue means, keep `signal_degeneracy` from counting synthetic bootstrap rows, cover the live anchor table rather than only the shadow one, and exempt event-driven residents from check-in staleness (#1672, #1742, #1749, #1783)
+- **dialectic:** enforce reciprocal reviewer cooldown, persist and complete independent synthesis rounds, make the sweeper's failure reason describe the sweep, make a liveness reap say which stall it ended without acting on the standing verdict, stop reading `status` as a quality signal, and reject non-positive list limits instead of answering a different question (#1629, #1691, #1705, #1733, #1737, #1739, #1755)
+- **doctor layer:** stop the dry-queue warning overstating what a dry queue means, keep `signal_degeneracy` from counting synthetic bootstrap rows, cover the live anchor table rather than only the shadow one, report when a pinned deploy falls behind a version, and exempt event-driven residents from check-in staleness (#1630, #1672, #1742, #1749, #1783)
 - **evidence semantics:** correct outcome-evidence scope and defaults, derive the falsifier's label channels instead of asserting them, and say in the payload that the decision ablation cannot measure loop gain (#1714, #1743, #1784)
 - **knowledge graph:** carry the full-text rank so the relevance floor stops discarding everything, index slash-joined tokens so repository and path identifiers are searchable, key the staleness warning on last write, and reject a blank search query (#1667, #1682, #1754, #1759)
-- **observe and audit:** `audit_events` and `outcome_evidence` aggregates describe the window rather than the page, adjudication books the outcome against the producer instead of Sentinel, lifecycle `agent_id` is clamped to a joinable key or NULL, fleet finding fingerprints key on the subject rather than the emitter, the merged PR head is fetched instead of alarming when it is missing, and Watcher findings carry Watcher's UUID so they can be adjudicated (#1674, #1708, #1744, #1751, #1757, #1771)
-- **persistence and migrations:** write the transients the load path already restores, stop silently destroying out-of-set regime values, order mixed-type cluster keys instead of crashing on them, register the previously inert migration 063, and repair the partially applied lease-plane sensor `CHECK` (#1643, #1650, #1665, #1666)
+- **observe and audit:** `audit_events` and `outcome_evidence` aggregates describe the window rather than the page, adjudication books the outcome against the producer instead of Sentinel, lifecycle `agent_id` is clamped to a joinable key or NULL, fleet finding fingerprints key on the subject rather than the emitter, the merged PR head is fetched instead of alarming when it is missing, a Watcher finding outlives the file it was found in, and Watcher findings carry Watcher's UUID so they can be adjudicated (#1631, #1632, #1674, #1708, #1744, #1751, #1757, #1771)
+- **persistence and migrations:** write the transients the load path already restores, stop silently destroying out-of-set regime values, order mixed-type cluster keys instead of crashing on them, register the previously inert migration 063, and repair the partially applied lease-plane sensor `CHECK` (#1633, #1643, #1650, #1665, #1666)
 - **packaging:** ship `config/` in the wheel and deepen the import guard that missed it (#1745)
 - **operations:** hold a shared deploy checkout after a refusal instead of undoing its rollback, report when a pinned deploy falls behind a version, correct what `--force-with-lease` actually guarantees, and fail closed on dogfood pulse contract violations (#1676, #1762, #1767)
 - **wave 3:** correct the RFC status, and make the shadow comparator able to report "broken" (#1678)
@@ -63,16 +64,18 @@ _Notable changes merged between 2.18.0 (2026-08-12) and this release — respons
 - **dashboard:** residents widgets read live state instead of nulls and literals, with a dogfood pass on mechanical fixes and denominator labeling (#1707, #1753)
 - **identity:** align the read-path and write-path assurance source sets, and point the refusal `ontology_ref` at the public ontology document (#1701, #1769)
 - **ux:** align governance workflow guidance across surfaces (#1715)
+- **triage-scribe:** read the fields `observe` actually returns (#1628)
 
 ### Documentation
 
 - **public framing:** lead the README with what the operator gets, state the product in plain language, scope the resident count and pitch-surface vocabulary behind a doc-health guard, and make governance the headline noun on the Pages landing (#1648, #1728, #1758, #1787)
-- **eisv contract:** split the contract by sensory class and validation regime, correct Lumen's V contract to signed E−I rather than inverse presence, frame the v7 empirical section as the observer's undeclared self-loop, and publish the general solution of the reduced three-state core (#1645, #1655, #1718)
+- **eisv contract:** split the contract by sensory class and validation regime, correct Lumen's V contract to signed E−I rather than inverse presence, frame the v7 empirical section as the observer's undeclared self-loop, and publish the general solution of the reduced three-state core (#1636, #1645, #1655, #1718)
 - **evidence integrity:** withdraw the #1425 citation on the anchor re-fit decision, correct the falsified lineage-constant claim, record that `agent_report` names who composed a check-in rather than who chose it, and record why the outcome provenance filter stays off with a guard on the reason (#1738, #1748, #1756, #1765)
 - **release record:** correct the v2.18.0 release record, including the omitted merged changes, the overstated plugin compatibility wording, and the unverified Docker quickstart (#1663)
 - **wave 3 and proposals:** close out the §11 criteria audit, relink the Wave-3a record now that it lives under `resolved/`, add the criterion-9 go-decision artifact as an unsigned skeleton, draft the criterion-8 scope reduction, and file Cedar delegation authorization v0 as design only (#1680, #1684, #1690, #1717, #1778)
 - **project state:** prune shipped roadmap items, re-verify component maturity, promote the trust contract to Active, resolve the doc-health demotion backlog, name the commit-time surface, record the merge-queue blocker behind PR-queue babysitting, and add the circuit-breaker provenance diagnostic (#1661, #1673, #1679, #1692)
 - **skills:** refresh the bundled UNITARES runtime guidance and document the compact read envelopes (#1712, #1716)
+- **dev:** generate the tool edge index from the live registries (#1634)
 - **evaluation:** pre-register the independent-operator cohort protocol, and retire outside operators as a precondition for efficacy evidence (#1719, #1785)
 
 ---

@@ -30,6 +30,10 @@ import sys
 import tomllib
 from pathlib import Path
 
+SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+# Declared by the release entry once the plugin carrying this bundle is cut.
+RECUT = re.compile(r"<!--\s*plugin-bundle-recut:\s*(v[\d.]+)\s*-->")
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 VERSION_FILE = REPO_ROOT / "VERSION"
 
@@ -85,20 +89,77 @@ def latest_tag(glob: str, pattern: str) -> str | None:
 
 
 def declared_version(relative: str | None) -> str | None:
+    """The version the series declares, or None when it cannot be read.
+
+    None is an indeterminate result, not a benign one. A missing or malformed
+    version file used to fall through to "not blocking", so deleting the file
+    cleared the gate.
+    """
     if relative is None:
         return None
     path = REPO_ROOT / relative
     if not path.exists():
         return None
-    with path.open("rb") as handle:
-        return tomllib.load(handle)["project"]["version"]
+    try:
+        with path.open("rb") as handle:
+            return tomllib.load(handle)["project"]["version"]
+    except (tomllib.TOMLDecodeError, KeyError):
+        return None
+
+
+def _parts(version: str | None) -> tuple[int, int, int] | None:
+    if version is None:
+        return None
+    match = SEMVER.match(version.strip())
+    return tuple(int(g) for g in match.groups()) if match else None
+
+
+def is_forward_bump(declared: str | None, tagged: str | None) -> bool | None:
+    """True when declared is strictly newer than tagged; None when unknowable.
+
+    This was raw string inequality, so `0.1` and `0.1.0.0` (equal to `0.1.0`),
+    the downgrade `0.0.9`, and the literal `banana` all read as "already
+    bumped". A version that is merely DIFFERENT does not mean a consumer can
+    reach the change.
+    """
+    left, right = _parts(declared), _parts(tagged)
+    if left is None or right is None:
+        return None
+    return left > right
+
+
+def recut_declared() -> str | None:
+    """The plugin release the changelog entry says carries this bundle."""
+    changelog = REPO_ROOT / "docs" / "CHANGELOG.md"
+    version = VERSION_FILE.read_text(encoding="utf-8").strip()
+    if not changelog.exists():
+        return None
+    text = changelog.read_text(encoding="utf-8")
+    start = text.find(f"## [{version}]")
+    if start == -1:
+        return None
+    nxt = text.find("\n## [", start + 1)
+    section = text[start:] if nxt == -1 else text[start:nxt]
+    match = RECUT.search(section)
+    return match.group(1) if match else None
 
 
 def is_release_tree() -> bool:
-    """True when VERSION names a release that has not been tagged yet."""
+    """True when VERSION names a release this tree has not actually shipped.
+
+    Membership by NAME is not enough: a tag with the right name on a commit this
+    tree never saw is an abandoned tagging attempt, and standing the gate down on
+    it would let an operator mistake switch the check off.
+    """
     version = VERSION_FILE.read_text(encoding="utf-8").strip()
     tags = _git("for-each-ref", "--format=%(refname:short)", "refs/tags/v*").splitlines()
-    return f"v{version}" not in tags
+    if f"v{version}" not in tags:
+        return True
+    commit = _git("rev-list", "-n", "1", f"v{version}")
+    return subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "merge-base", "--is-ancestor", commit, "HEAD"],
+        capture_output=True,
+    ).returncode != 0
 
 
 def inspect(series: dict) -> dict | None:
@@ -113,17 +174,20 @@ def inspect(series: dict) -> dict | None:
 
     declared = declared_version(series["version_file"])
     tagged = tag[len(series["tag_prefix"]):] if series["version_file"] else None
+    forward = is_forward_bump(declared, tagged) if series["version_file"] else None
 
     return {
         "series": series,
         "tag": tag,
         "commits": commits,
         "declared": declared,
-        # A declared version still equal to the published tag is the blocking
-        # shape: the code moved and the number did not, so consumers cannot
-        # reach the change at all. A version already bumped is just waiting for
-        # its tag, which is the normal mid-release state.
-        "unreachable": declared is not None and declared == tagged,
+        "tagged": tagged,
+        # Blocking unless the declared version is demonstrably NEWER than the
+        # published one. "Not provably forward" covers equal, older, malformed,
+        # and unreadable — every one of which leaves a consumer unable to reach
+        # the change, and every one of which used to pass.
+        "unreachable": series["version_file"] is not None and forward is not True,
+        "indeterminate": series["version_file"] is not None and forward is None,
     }
 
 
@@ -131,7 +195,23 @@ def main() -> int:
     list_only = "--list" in sys.argv
     release = is_release_tree()
 
-    findings = [f for f in (inspect(s) for s in SERIES) if f]
+    # No tags for a series is "cannot measure", not "nothing to report". The
+    # previous version returned the same clean exit for a repository with tags
+    # fetched and one without.
+    # A series whose paths do not exist here is not applicable; a series whose
+    # paths DO exist but has no visible tag is unmeasurable, which is different
+    # from clean.
+    present = [s for s in SERIES
+               if any((REPO_ROOT / path).exists() for path in s["paths"])]
+    missing = [s["name"] for s in present
+               if latest_tag(s["tag_glob"], s["tag_pattern"]) is None]
+    if missing:
+        print(f"[series-drift] no tags visible for: {', '.join(missing)} — the "
+              "baseline cannot be established. Check out with fetch-depth: 0.",
+              file=sys.stderr)
+        return 0 if list_only else 1
+
+    findings = [f for f in (inspect(s) for s in present) if f]
     if not findings:
         print("[series-drift] every tracked series is level with its tag")
         return 0
@@ -144,19 +224,35 @@ def main() -> int:
               f"commit(s) since {finding['tag']}")
         for line in finding["commits"]:
             print(f"    {line}")
-        if finding["declared"] is not None:
-            state = "UNCHANGED" if finding["unreachable"] else "already bumped"
+        if series["version_file"] is not None:
+            if finding["indeterminate"]:
+                state = "unreadable or not a semantic version"
+            elif finding["unreachable"]:
+                state = f"not newer than the published {finding['tagged']}"
+            else:
+                state = f"newer than the published {finding['tagged']}"
             print(f"    declared version: {finding['declared']} ({state})")
+
         if finding["unreachable"]:
-            print(f"    {series['consumer']} cannot reach these changes: the "
-                  f"version has not moved")
+            print(f"    {series['consumer']} cannot reach these changes")
             print(f"    resolution: {series['resolution']}")
             blocking += 1
         elif series["version_file"] is None:
-            print(f"    this tree ships a different bundle than {finding['tag']} did — "
-                  f"confirm {series['consumer']} was re-cut after these commits")
-            print(f"    resolution: {series['resolution']}")
-            blocking += 1
+            # This script cannot see the plugin's tags, so it cannot observe the
+            # re-cut. It reads a declaration instead — which is the only kind of
+            # clearance available for a fact that lives in another repository.
+            # Without one the gate was unsatisfiable: the printed remediation
+            # said "record the decision in the release notes" and nothing read
+            # any such record, so a correctly-mirrored release stayed red.
+            recut = recut_declared()
+            if recut:
+                print(f"    declared as carried by plugin {recut}")
+            else:
+                print(f"    this tree ships a different bundle than {finding['tag']} did")
+                print(f"    resolution: {series['resolution']}, then declare it "
+                      f"in the release entry:")
+                print(f"        <!-- plugin-bundle-recut: vX.Y.Z -->")
+                blocking += 1
 
     print()
     if not blocking:
@@ -171,8 +267,7 @@ def main() -> int:
 
     print(f"[series-drift] {blocking} series needs a decision before this "
           "release is tagged.")
-    print("Resolve it, or record the decision in the release notes so the gap "
-          "ships as a stated known limit rather than as a surprise.")
+    print("Resolve it, or declare the resolution where the script can read it.")
     return 0 if list_only else 1
 
 

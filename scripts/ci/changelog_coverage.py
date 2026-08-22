@@ -25,6 +25,25 @@ Exemptions are listed in the diff, in the file the release ships, next to the
 entry they justify -- which is the point. A silent allowance would reproduce
 the failure one layer up.
 
+The denominator comes from `git log --first-parent`, matching either a squash
+subject's trailing `(#N)` or a merge commit's `Merge pull request #N`. The first
+version of this script used `git log --no-merges` and the trailing form only.
+That silently dropped every pull request merged as a merge commit: thirteen of
+them in v2.19.0, and *all twenty-one* in v2.18.0, where the method was 100%
+merge commits. The gate reported "covers 131/131" on an entry missing thirteen
+merges, and that ratio was copied onto the immutable release page as
+"cites 133 of the 134 merged pull requests". See docs/releases/2.19.0-errata.md.
+
+This still cannot see a rebase merge or a direct push, whose commits carry no
+reference at all. So it does not assume: it counts first-parent commits, counts
+the ones it could attribute, and **fails when any are unattributed** rather than
+quietly measuring a smaller set. A denominator a merge-method choice can shrink
+is not a denominator.
+
+For the same reason it prints provenance, not a ratio. A bare "133/134" is a
+claim, and a claim from a method that cannot vouch for its own denominator will
+be quoted somewhere immutable. It was.
+
 Usage:
     python scripts/ci/changelog_coverage.py            # check, exit 1 on gaps
     python scripts/ci/changelog_coverage.py --list     # report, always exit 0
@@ -46,8 +65,21 @@ VERSION_FILE = REPO_ROOT / "VERSION"
 RELEASE_CHORE = re.compile(r"^(chore|docs)\(release\)")
 
 TRAILING_PR = re.compile(r"\(#(\d+)\)$")
+MERGE_PR = re.compile(r"^Merge pull request #(\d+)\b")
+
+# A reason must come from a closed set. Free prose is unreviewable at write time
+# and unsearchable afterwards, and an over-used category is only visible as a
+# pattern if the categories are finite.
+EXEMPT_REASONS = {
+    "release-chore",      # this release's own bookkeeping
+    "superseded",         # the change was reverted or replaced before shipping
+    "no-user-effect",     # internal only, nothing an operator or agent can observe
+    "covered-elsewhere",  # described under another entry's bullet
+}
 PR_REF = re.compile(r"#(\d+)")
-EXEMPT_LINE = re.compile(r"<!--\s*changelog-coverage-exempt:\s*([0-9,\s#]*)-->")
+EXEMPT_LINE = re.compile(
+    r"<!--\s*changelog-coverage-exempt:\s*#?(\d+)\s+([a-z-]+)\s*-->"
+)
 
 
 def _git(*args: str) -> str:
@@ -78,96 +110,195 @@ def entry_section(version: str) -> str | None:
     return text[start:] if nxt == -1 else text[start:nxt]
 
 
-def merged_prs(since_tag: str) -> dict[int, str]:
-    """PR number -> subject, for every non-merge commit since `since_tag`.
+def merged_prs(since_tag: str) -> tuple[dict[int, str], list[str]]:
+    """(PR number -> subject, unattributed subjects) over the first-parent walk.
 
-    Keyed on the trailing `(#N)`, which is the squash-merge reference. A subject
-    carrying two refs (`(#1607) (#1785)`) names an issue and then its PR; the
-    trailing one is the merge.
+    First-parent is the list of changes that landed on this branch, one entry per
+    merge, whatever method was used. Two subject shapes carry a reference:
+    a squash's trailing `(#N)` and a merge commit's `Merge pull request #N`.
+    A subject with two refs (`(#1607) (#1785)`) names an issue and then its PR;
+    the trailing one is the merge.
+
+    Anything else -- a rebase merge, a direct push -- is returned as
+    unattributed rather than dropped. The caller fails on a non-empty list.
+    Silently narrowing the denominator to what the parser happens to recognise
+    is the defect this function was rewritten to remove.
     """
-    out = _git("log", "--no-merges", "--format=%s", f"{since_tag}..HEAD")
+    out = _git("log", "--first-parent", "--format=%H\t%s", f"{since_tag}..HEAD")
+    # Commits on the release branch itself have not been merged yet, so they
+    # carry no reference and never will until this PR lands. Only a commit that
+    # is ALREADY on the base branch without a reference indicates a real gap.
+    base = _base_branch()
     found: dict[int, str] = {}
-    for subject in out.splitlines():
-        m = TRAILING_PR.search(subject)
-        if m:
-            found[int(m.group(1))] = subject
-    return found
+    unattributed: list[str] = []
+    for line in out.splitlines():
+        sha, _, subject = line.partition("\t")
+        match = MERGE_PR.match(subject) or TRAILING_PR.search(subject)
+        if match:
+            found[int(match.group(1))] = subject
+        elif RELEASE_CHORE.match(subject):
+            continue
+        elif base and not is_ancestor(sha, base):
+            continue
+        else:
+            unattributed.append(subject)
+    return found, unattributed
+
+
+def _base_branch() -> str | None:
+    """The upstream default branch, if this checkout can see it."""
+    for ref in ("origin/master", "origin/main"):
+        if subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "--verify", "-q", ref],
+            capture_output=True,
+        ).returncode == 0:
+            return ref
+    return None
+
+
+def is_shallow() -> bool:
+    return _git("rev-parse", "--is-shallow-repository") == "true"
+
+
+def tag_commit(tag: str) -> str:
+    return _git("rev-list", "-n", "1", tag)
+
+
+def is_ancestor(commit: str, of: str) -> bool:
+    return subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "merge-base", "--is-ancestor", commit, of],
+        capture_output=True,
+    ).returncode == 0
 
 
 def cited_prs(section: str) -> set[int]:
     return {int(n) for n in PR_REF.findall(section)}
 
 
-def exempt_prs(section: str) -> set[int]:
-    out: set[int] = set()
-    for raw in EXEMPT_LINE.findall(section):
-        out |= {int(n) for n in re.findall(r"\d+", raw)}
-    return out
+def exempt_prs(section: str) -> tuple[dict[int, str], list[str]]:
+    """(PR number -> reason, complaints) from one-per-line exemption comments.
+
+    One declaration per pull request, each carrying a reason from a closed set.
+    The earlier form accepted a comma-separated list of bare numbers and the
+    script printed a ready-to-paste line containing every missing one, which
+    made declaring an exemption feel like satisfying the tool rather than making
+    a claim. It no longer prints one.
+    """
+    declared: dict[int, str] = {}
+    complaints: list[str] = []
+    for number, reason in EXEMPT_LINE.findall(section):
+        if reason not in EXEMPT_REASONS:
+            complaints.append(
+                f"#{number} declares reason {reason!r}, which is not one of: "
+                f"{', '.join(sorted(EXEMPT_REASONS))}"
+            )
+            continue
+        declared[int(number)] = reason
+    return declared, complaints
 
 
 def main() -> int:
     list_only = "--list" in sys.argv
     version = current_version()
+    tags = release_tags()
 
-    if f"v{version}" in release_tags():
-        print(f"[changelog-coverage] v{version} is already tagged — not a release tree, skipping")
-        return 0
+    # --- stand-down, and the two conditions that must not be confused with it
+    if f"v{version}" in tags:
+        tagged = tag_commit(f"v{version}")
+        if is_ancestor(tagged, "HEAD"):
+            print(f"[changelog-coverage] v{version} is already tagged — not a "
+                  "release tree, skipping")
+            return 0
+        # A tag with the right name on a commit this tree never saw is an
+        # abandoned or mistaken tagging attempt, not evidence of a release.
+        # Standing down on the name alone would let it switch the gate off.
+        print(f"[changelog-coverage] v{version} exists but is not an ancestor of "
+              f"HEAD ({tagged[:8]}) — treating this as an unreleased tree",
+              file=sys.stderr)
 
     section = entry_section(version)
     if section is None:
-        print(f"[changelog-coverage] no `## [{version}]` entry yet — not a release PR, skipping")
-        return 0
+        print(f"[changelog-coverage] VERSION is {version}, it has no tag, and "
+              f"docs/CHANGELOG.md has no `## [{version}]` entry. A release tree "
+              "must carry its entry.", file=sys.stderr)
+        return 0 if list_only else 1
 
-    tags = release_tags()
-    if not tags:
-        print("[changelog-coverage] no prior release tag to compare against, skipping")
-        return 0
-    previous = tags[0]
+    # --- preconditions. "I could not measure" must not exit like "it is fine".
+    if is_shallow():
+        print("[changelog-coverage] shallow repository — the merge range cannot "
+              "be measured. Check out with fetch-depth: 0.", file=sys.stderr)
+        return 0 if list_only else 1
 
-    merged = merged_prs(previous)
-    if not merged:
-        print(f"[changelog-coverage] no merged pull requests since {previous}, nothing to cover")
-        return 0
+    previous = next((t for t in tags if t != f"v{version}"), None)
+    if previous is None:
+        print("[changelog-coverage] no prior release tag — cannot establish a "
+              "baseline. This is a genuine first release only if the tag list is "
+              "genuinely empty; verify tags were fetched.", file=sys.stderr)
+        return 0 if list_only else 1
 
+    if not is_ancestor(tag_commit(previous), "HEAD"):
+        print(f"[changelog-coverage] {previous} is not an ancestor of HEAD — the "
+              "range would be meaningless.", file=sys.stderr)
+        return 0 if list_only else 1
+
+    merged, unattributed = merged_prs(previous)
+
+    considered = {n: subj for n, subj in merged.items() if not RELEASE_CHORE.match(subj)}
     cited = cited_prs(section)
-    exempt = exempt_prs(section)
+    exempt, complaints = exempt_prs(section)
+    missing = {n: subj for n, subj in considered.items()
+               if n not in cited and n not in exempt}
 
-    # Release bookkeeping is out of scope entirely rather than counted as
-    # covered: reporting "2/2" for one real change and one chore(release)
-    # overstates what the entry actually accounts for.
-    considered = {
-        num: subject for num, subject in merged.items()
-        if not RELEASE_CHORE.match(subject)
-    }
-    missing = {
-        num: subject for num, subject in considered.items()
-        if num not in cited and num not in exempt
-    }
+    # Provenance, not a ratio. A bare "133/134" is a claim, and the release body
+    # copied the last one verbatim onto an immutable page.
+    by_merge = sum(1 for s in merged.values() if MERGE_PR.match(s))
+    print(f"[changelog-coverage] {version} since {previous}: "
+          f"{len(merged) + len(unattributed)} first-parent changes, "
+          f"{len(merged)} attributed ({by_merge} merge-commit, "
+          f"{len(merged) - by_merge} squash), {len(unattributed)} unattributed")
+    print(f"[changelog-coverage] {len(considered) - len(missing)} of "
+          f"{len(considered)} cited in the entry "
+          f"({len(merged) - len(considered)} release-chore excluded, "
+          f"{len(exempt)} declared exempt)")
 
-    covered = len(considered) - len(missing)
-    print(f"[changelog-coverage] {version} covers {covered}/{len(considered)} "
-          f"merged pull requests since {previous}")
-    if exempt:
-        print(f"[changelog-coverage] exempted by declaration: "
-              f"{', '.join(f'#{n}' for n in sorted(exempt))}")
+    failed = False
 
-    if not missing:
+    if unattributed:
+        failed = True
+        print()
+        print(f"[changelog-coverage] {len(unattributed)} change(s) carry no pull "
+              "request reference, so the denominator is incomplete:")
+        for subject in unattributed[:20]:
+            print(f"  {subject}")
+        print("A rebase merge or a direct push lands this way. Until each is "
+              "attributable, coverage cannot be established.")
+
+    if complaints:
+        failed = True
+        print()
+        for complaint in complaints:
+            print(f"[changelog-coverage] {complaint}")
+
+    if missing:
+        failed = True
+        print()
+        print(f"[changelog-coverage] {len(missing)} merged change(s) are not "
+              "named in the entry:")
+        for num in sorted(missing):
+            print(f"  #{num}  {missing[num]}")
+        print()
+        print("Fold each into the entry. If one genuinely does not belong there,")
+        print(f"declare it inside the `## [{version}]` section, one per line,")
+        print("with a reason from: " + ", ".join(sorted(EXEMPT_REASONS)) + ".")
+        print("The declaration form is:")
+        print("    <!-- changelog-coverage-exempt: #NNNN reason -->")
+        print()
+        print("The omissions that matter most are the ones that qualify a claim")
+        print("the entry already makes: citing a capability without the change")
+        print("that bounds it reads as a stronger claim than the code supports.")
+
+    if not failed:
         return 0
-
-    print()
-    print(f"[changelog-coverage] {len(missing)} merged change(s) are not named in the entry:")
-    for num in sorted(missing):
-        print(f"  #{num}  {missing[num]}")
-    print()
-    print("Fold each into the entry, or declare it deliberately inside the")
-    print(f"`## [{version}]` section:")
-    print()
-    print(f"    <!-- changelog-coverage-exempt: {', '.join(str(n) for n in sorted(missing))} -->")
-    print()
-    print("The omissions that matter most are the ones that qualify a claim the")
-    print("entry already makes: citing a capability without the change that")
-    print("bounds it reads as a stronger claim than the code supports.")
-
     return 0 if list_only else 1
 
 

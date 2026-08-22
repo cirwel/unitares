@@ -51,7 +51,7 @@
   const isOverdue = (r) => !!(r && typeof r.silence === "number" && r.silence > (r.silenceThreshold || 3600));
   // The server already emits "silent" past threshold; recomputing here keeps a
   // stale row from reading green while its own numbers say otherwise.
-  const statusOf = (r) => (r ? (isOverdue(r) ? "silent" : (r.status || "unknown")) : "healthy");
+  const statusOf = (r) => (r ? (isOverdue(r) ? "silent" : (r.status || "unknown")) : "unknown");
   // Silence inside a resident's own threshold is steady-state, not an alarm —
   // Chronicler is daily and Watcher is event-driven with a 48h threshold.
   function timingOf(r, fallback) {
