@@ -112,13 +112,15 @@ class TestEndToEndWiring:
         gate = result["policy_evaluation"]["maturity_gate"]
         assert gate["primary_driver"] == "independent_verification_floor"
         assert gate["independent_override"] == "independent_verification_floor"
-        # The live priority stack maps this high score to a non-risk structural
-        # pause before the risk_pause branch.  Either way, the cold-start
-        # confirmation shadow is not eligible and cannot soften the decision.
-        assert gate["policy_candidate"] is False
-        assert gate["ineligibility_reason"] == "policy_not_risk_pause"
+        # The live priority stack maps this high score to a risk-attributed CIRS
+        # block before the direct risk_pause branch.  It is the same risk-policy
+        # candidate, but the independent verification override keeps the cold-
+        # start gate ineligible and prevents it from softening the decision.
+        assert gate["policy_candidate"] is True
+        assert gate["eligible"] is False
+        assert gate["ineligibility_reason"] == "independent_override"
         assert gate["would_defer"] is False
-        assert result["enforcement"]["basis"] == "non_cold_start_policy"
+        assert result["enforcement"]["basis"] == "independent_override"
 
     def test_flag_on_benign_still_proceeds(self, monkeypatch):
         # The floor must not introduce a false pause on clean work.

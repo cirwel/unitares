@@ -456,10 +456,14 @@ class GovernanceConfig:
     VERIFICATION_FLOOR_SHADOW = os.environ.get('GOVERNANCE_VERIFICATION_FLOOR_SHADOW', 'true').lower() == 'true'
 
     # Cold-start risk confirmation telemetry.  The shadow evaluator records
-    # whether a fallback-owned (phi_cold_start) risk_pause is the first or a
-    # repeated adjacent observation.  It never changes the decision.  Default
-    # ON because it is observational and is the evidence gate for any future
-    # policy proposal.  Roll back by setting the env flag false and restarting.
+    # whether a fallback-owned (phi_cold_start) risk pause is the first or a
+    # repeated adjacent observation.  That pause may use the direct risk_pause
+    # path or a CIRS cirs_block, but only when complete decision-time provenance
+    # proves fallback risk was the sole effective hard stop.  A selected
+    # nearest_edge is not authority evidence.  The shadow never changes the
+    # decision.  Default ON because it is observational and is the evidence gate
+    # for any future policy proposal.  Roll back by setting the env flag false
+    # and restarting.
     COLD_START_RISK_CONFIRMATION_SHADOW = (
         os.environ.get(
             'GOVERNANCE_COLD_START_RISK_CONFIRMATION_SHADOW', 'true'
@@ -480,10 +484,14 @@ class GovernanceConfig:
     # Epistemic-authority guard for pre-authored cold starts.  A non-agent-
     # authored row (substrate observation/interpretation or prediction) cannot
     # hard-pause an identity when the verdict is still owned solely by the Phi
-    # fallback below behavioral authority.  This is a stateless provenance rule,
-    # not promotion of the dormant two-confirmation actuator above.  It also
-    # enables the exact-provenance reviewed-recovery escape for identities trapped
-    # by the legacy behavior.  Default ON; set false for an immediate rollback.
+    # fallback below behavioral authority.  The same rule applies to a CIRS
+    # risk block only when a versioned hard-stop record proves there was no
+    # simultaneous resonance, coherence, void, independent low basin, override,
+    # or unclassified cause.  Missing provenance remains fail-closed.  This is a
+    # stateless provenance rule, not promotion of the dormant two-confirmation
+    # actuator above.  It also enables an exact-provenance reviewed-recovery
+    # escape for persisted risk-only legacy traps.  Default ON; set false for an
+    # immediate rollback.
     NON_AUTHORED_COLD_START_GUARD_ENABLED = (
         os.environ.get(
             'GOVERNANCE_NON_AUTHORED_COLD_START_GUARD', 'true'
