@@ -92,7 +92,8 @@ async def call_tool(
 
     http_client = httpx.AsyncClient(timeout=timeout_s)
     async with streamable_http_client(url, http_client=http_client) as streams:
-        read, write, _ = streams
+        # mcp 1.x yields (read, write, get_session_id); 2.x drops the third.
+        read, write = streams[0], streams[1]
         async with ClientSession(read, write) as session:
             await session.initialize()
             result = await session.call_tool(tool_name, arguments)

@@ -210,7 +210,10 @@ class GovernanceClient:
             self._http_client = httpx.AsyncClient(http2=False, timeout=self.timeout)
 
         cm = streamable_http_client(self.mcp_url, http_client=self._http_client)
-        read, write, _ = await cm.__aenter__()
+        # mcp 1.x yields (read, write, get_session_id); 2.x drops the third
+        # element, so unpack by index rather than arity.
+        streams = await cm.__aenter__()
+        read, write = streams[0], streams[1]
         self._cm_stack.append(cm)
 
         session_cm = ClientSession(read, write)
