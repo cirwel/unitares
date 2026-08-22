@@ -44,8 +44,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ ${#CHECK_RANGE[@]} -eq 2 ]]; then
-  if git -C "$DEPLOY" diff --quiet "${CHECK_RANGE[0]}" "${CHECK_RANGE[1]}" -- elixir/lease_plane 2>/dev/null; then
-    echo "[nudge-lease-plane] elixir/lease_plane unchanged ${CHECK_RANGE[0]:0:8}..${CHECK_RANGE[1]:0:8} — no restart needed"
+  # elixir/unitares_sdk is a path dep compiled into the lease plane — an
+  # SDK-only change must still trigger the restart or the node runs stale.
+  if git -C "$DEPLOY" diff --quiet "${CHECK_RANGE[0]}" "${CHECK_RANGE[1]}" -- elixir/lease_plane elixir/unitares_sdk 2>/dev/null; then
+    echo "[nudge-lease-plane] elixir/lease_plane + unitares_sdk unchanged ${CHECK_RANGE[0]:0:8}..${CHECK_RANGE[1]:0:8} — no restart needed"
     exit 0
   fi
 fi

@@ -26,6 +26,8 @@ defmodule UnitaresLeasePlane.MixProject do
     [
       {:postgrex, "~> 0.20"},
       {:jason, "~> 1.4"},
+      # Envelope classifiers only (OrchestratorEnvelope); transport stays :httpc.
+      {:unitares_sdk, path: "../unitares_sdk"},
       # Plug 1.18+ — depends on the Plug.Parsers.ParseError shape that
       # SafeParsers / HTTPRouter both rely on (PR #253 council).
       {:plug, "~> 1.18"},

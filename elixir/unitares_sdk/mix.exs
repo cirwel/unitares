@@ -17,7 +17,9 @@ defmodule UnitaresSdk.MixProject do
       deps: deps(),
       description:
         "Elixir client contract for the UNITARES governance tool bridge " <>
-          "(POST /v1/tools/call) — transport, envelope, identity, backoff.",
+          "(POST /v1/tools/call) — transport, envelope, identity, backoff — " <>
+          "plus reply classifiers for the fleet's lease-plane and " <>
+          "agent-orchestrator envelopes.",
       package: package(),
       docs: [main: "UnitaresSdk"]
     ]
