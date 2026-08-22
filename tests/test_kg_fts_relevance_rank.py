@@ -122,6 +122,34 @@ def _pg_row(did: str = "d1", rank=0.5455):
     }
 
 
+class TestMixinPushesTagPredicateIntoRankedQuery:
+    """The tag filter has to live inside the ranked query: filtering the top-N
+    afterwards drops every tagged row that ranked below N. These run the real
+    SQL builder, so an unfiltered query body fails them even if its signature
+    accepts the kwarg."""
+
+    @pytest.mark.asyncio
+    async def test_tags_add_predicate_and_renumber_limit(self):
+        conn = MagicMock()
+        conn.fetch = AsyncMock(return_value=[_pg_row()])
+        await _FakeDb(conn).kg_full_text_search("coherence gate", 7, tags=["KG Search", "governance"])
+        sql, *params = conn.fetch.await_args.args
+        assert "AND tags && $2" in sql
+        assert "LIMIT $3" in sql
+        assert params[1] == ["kg-search", "governance"]  # normalized exactly as the store path does
+        assert params[2] == 7
+
+    @pytest.mark.asyncio
+    async def test_without_tags_the_query_is_unchanged(self):
+        conn = MagicMock()
+        conn.fetch = AsyncMock(return_value=[_pg_row()])
+        await _FakeDb(conn).kg_full_text_search("coherence gate", 7)
+        sql, *params = conn.fetch.await_args.args
+        assert "tags &&" not in sql
+        assert "LIMIT $2" in sql
+        assert params[1] == 7
+
+
 class TestMixinKeepsRankThroughRowConversion:
     """The layer the #1759 tests skipped: `_row_to_discovery_dict` used to pop
     rank, silently severing the SQL→storage carry. These run the real

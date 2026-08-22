@@ -1482,6 +1482,7 @@ class _KnowledgeSearchState:
     rerank_scores: dict[str, float] = field(default_factory=dict)
     rrf_scores: dict[str, float] = field(default_factory=dict)
     fts_anchor_ids: Optional[set[str]] = None
+    tag_filter_dropped: int = 0
     search_degraded_warning: Optional[str] = None
     semantic_skipped_reason: Optional[str] = None
     hybrid_skipped_reason: Optional[str] = None
@@ -1614,6 +1615,15 @@ def _parse_knowledge_search_request(
         else None
     )
 
+    raw_tags = arguments.get("tags", [])
+    tags = normalize_tags(raw_tags) or None
+    tags_supplied = bool(raw_tags) and not (isinstance(raw_tags, str) and raw_tags.strip() in ("", "[]"))
+    if tags_supplied and not tags:
+        # A filter the caller wrote must not silently become no filter.
+        raise _SearchParameterError(
+            f"tags {raw_tags!r} normalize to nothing; pass at least one tag containing a letter or digit."
+        )
+
     return _KnowledgeSearchRequest(
         arguments=arguments,
         limit=limit,
@@ -1626,7 +1636,7 @@ def _parse_knowledge_search_request(
         search_mode_requested=search_mode,
         operator_forced=operator_forced,
         exclude_labels=exclude_labels,
-        tags=normalize_tags(arguments.get("tags", [])) or None,
+        tags=tags,
         discovery_type=arguments.get("discovery_type"),
         severity=arguments.get("severity"),
         status=status,
@@ -1773,16 +1783,19 @@ async def _retrieve_hybrid_candidates(
     state.min_similarity = 0.3 if min_similarity is None else min_similarity
     fetch_limit = max(state.first_stage_limit, 50)
     fts_operator = request.operator_forced or "AND"
+    tag_kwargs = _tag_kwargs(request)
     semantic_raw, fts_raw = await _asyncio.gather(
         state.graph.semantic_search(
             str(request.query_text),
             limit=fetch_limit,
             min_similarity=state.min_similarity,
+            **tag_kwargs,
         ),
         state.graph.full_text_search(
             str(request.query_text),
             limit=fetch_limit,
             operator=fts_operator,
+            **tag_kwargs,
         ),
     )
     state.fts_operator_used = fts_operator
@@ -1831,6 +1844,7 @@ async def _retrieve_semantic_candidates(state: _KnowledgeSearchState) -> None:
         str(request.query_text),
         limit=state.first_stage_limit,
         min_similarity=state.min_similarity,
+        **_tag_kwargs(request),
     )
     if isinstance(semantic_results, tuple) and len(semantic_results) == 2 and isinstance(semantic_results[1], dict):
         state.search_degraded_warning = (
@@ -1856,6 +1870,7 @@ async def _retrieve_fts_candidates(state: _KnowledgeSearchState) -> None:
         str(request.query_text),
         limit=candidate_limit,
         operator=primary_operator,
+        **_tag_kwargs(request),
     )
     state.fts_operator_used = primary_operator
 
@@ -1870,6 +1885,7 @@ async def _retrieve_fts_candidates(state: _KnowledgeSearchState) -> None:
                 str(request.query_text),
                 limit=candidate_limit,
                 operator="OR",
+                **_tag_kwargs(request),
             )
             if state.candidates:
                 state.fts_operator_used = "OR"
@@ -1907,10 +1923,21 @@ def _candidate_matches_search(
         return False
     if not _candidate_status_visible(document, request):
         return False
-    if request.tags and not state.search_mode.startswith("hybrid_rrf"):
-        if not any(tag in set(document.tags or []) for tag in request.tags):
-            return False
+    if request.tags and not _matches_tags(document, request.tags):
+        return False
     return True
+
+
+def _matches_tags(document: Any, tags: list[str]) -> bool:
+    stored = set(document.tags or [])
+    return any(tag in stored for tag in tags)
+
+
+def _tag_kwargs(request: _KnowledgeSearchRequest) -> dict[str, Any]:
+    # The predicate rides inside the backend's ranked query, so a tagged row
+    # that ranks below the first-stage limit is still retrieved. Untagged
+    # searches send nothing and their backend calls are unchanged.
+    return {"tags": request.tags} if request.tags else {}
 
 
 def _candidate_status_visible(
@@ -1929,6 +1956,9 @@ async def _filter_and_rerank_candidates(state: _KnowledgeSearchState) -> None:
     filter_cap = state.rerank_pool_size if state.rerank_on else (50 if state.hybrid_on else request.limit)
     filtered = []
     for document in state.candidates:
+        if request.tags and not _matches_tags(document, request.tags):
+            state.tag_filter_dropped += 1
+            continue
         if _candidate_matches_search(document, state, substring_terms):
             filtered.append(document)
             if len(filtered) >= filter_cap:
@@ -2046,6 +2076,7 @@ async def _apply_semantic_fts_fallback(state: _KnowledgeSearchState) -> None:
             str(request.query_text),
             limit=request.limit * 2,
             operator=primary_operator,
+            **_tag_kwargs(request),
         )
         fallback_operator = primary_operator
         used_or_retry = False
@@ -2060,6 +2091,7 @@ async def _apply_semantic_fts_fallback(state: _KnowledgeSearchState) -> None:
                     str(request.query_text),
                     limit=request.limit * 2,
                     operator="OR",
+                    **_tag_kwargs(request),
                 )
                 if candidates:
                     fallback_operator = "OR"
@@ -2071,6 +2103,9 @@ async def _apply_semantic_fts_fallback(state: _KnowledgeSearchState) -> None:
                 )
 
         for document in candidates:
+            if request.tags and not _matches_tags(document, request.tags):
+                state.tag_filter_dropped += 1
+                continue
             if not _candidate_matches_semantic_fallback(document, request):
                 continue
             state.results.append(document)
@@ -2212,6 +2247,8 @@ def _attach_search_diagnostics(
         response["hybrid_skipped_reason"] = state.hybrid_skipped_reason
     if state.fts_fallback_skipped_reason:
         response["fts_fallback_skipped_reason"] = state.fts_fallback_skipped_reason
+    if state.tag_filter_dropped:
+        response["tag_filter_dropped"] = state.tag_filter_dropped
     if state.fallback_used:
         response["fallback_used"] = True
         response["fallback_message"] = state.fallback_explanation or (
@@ -2272,6 +2309,7 @@ def _attach_empty_search_guidance(
             detail={
                 "hybrid_skipped": bool(state.hybrid_skipped_reason),
                 "fts_or_fallback_skipped": bool(state.fts_fallback_skipped_reason),
+                "tags_present": bool(request.tags),
             },
         )
     hints = _empty_search_hints(request)

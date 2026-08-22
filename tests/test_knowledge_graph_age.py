@@ -1621,6 +1621,49 @@ class TestPgvectorSearch:
 
         mock_conn.fetch.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_tags_join_predicate_runs_under_iterative_scan(self):
+        """The tag filter rides inside the ranked query, and a filtered HNSW
+        scan runs under iterative_scan so it is not truncated at ef_search.
+        Runs the real SQL builder: an unfiltered query body fails this even
+        if its signature accepts the kwarg."""
+        kg, mock_db = make_kg_with_mock_db()
+        mock_conn = mock_db._mock_conn
+        mock_conn.fetch.return_value = [{"discovery_id": "d1", "similarity": 0.9}]
+        mock_conn.transaction = MagicMock(return_value=_AsyncContextManager(None))
+
+        result = await kg._pgvector_search(
+            query_embedding=[0.1, 0.2],
+            limit=5,
+            min_similarity=0.3,
+            tags=["KG Search"],
+        )
+
+        assert result == [("d1", 0.9)]
+        mock_conn.transaction.assert_called_once()
+        mock_conn.execute.assert_awaited_once_with("SET LOCAL hnsw.iterative_scan = relaxed_order")
+        sql, *params = mock_conn.fetch.await_args.args
+        assert "JOIN knowledge.discoveries d ON d.id = de.discovery_id AND d.tags && $3" in sql
+        assert "LIMIT $4" in sql
+        assert params[2] == ["kg-search"]
+        assert params[3] == 5
+
+    @pytest.mark.asyncio
+    async def test_without_tags_no_join_and_no_transaction(self):
+        kg, mock_db = make_kg_with_mock_db()
+        mock_conn = mock_db._mock_conn
+        mock_conn.fetch.return_value = []
+        mock_conn.transaction = MagicMock(return_value=_AsyncContextManager(None))
+
+        await kg._pgvector_search(query_embedding=[0.1, 0.2], limit=5, min_similarity=0.3)
+
+        sql, *params = mock_conn.fetch.await_args.args
+        assert "JOIN" not in sql
+        assert "LIMIT $3" in sql
+        assert params[2] == 5
+        mock_conn.execute.assert_not_awaited()
+        mock_conn.transaction.assert_not_called()
+
 
 # ============================================================================
 # _store_embedding
