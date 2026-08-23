@@ -23,6 +23,7 @@ from ..utils import success_response, error_response, require_registered_agent
 from ..decorators import mcp_tool
 from ..support.coerce import LimitError, coerce_bool, parse_limit, resolve_agent_uuid
 from .auth import resolve_dialectic_agent_id
+from .events import emit_reviewer_reassigned
 from .responses import (
     default_cooldown_steps,
     default_escalate_steps,
@@ -971,6 +972,15 @@ async def _apply_reviewer_reassignment(
     )
     session.transcript.append(reassign_msg)
 
+    # ⛔`persisted` gates the (F) emission below. It must NOT be conditioned on
+    # `strict_persistence` (default False): when persistence raises and strict is
+    # off, the except swallows and execution falls through, so an unconditional
+    # emit would record a reassignment that never happened. That inflates the
+    # numerator of the very metric this emission exists to make measurable, and
+    # it contradicts the "do not report success on it" guard below. Found in
+    # review 2026-08-22; the live caller at handle_get_dialectic_session's
+    # check_timeout branch uses the default.
+    persisted = False
     try:
         # ORDER MATTERS (council 2026-08-21). Reopen FIRST: its SQL matches
         # only `status='failed' AND awaiting_facilitation=true`, so it must
@@ -1001,6 +1011,7 @@ async def _apply_reviewer_reassignment(
             message_type="system",
             reasoning=reasoning,
         )
+        persisted = True
     except Exception as e:
         logger.error(f"Failed to persist reviewer reassignment: {e}")
         if strict_persistence:
@@ -1009,32 +1020,23 @@ async def _apply_reviewer_reassignment(
     # Wave-3 prereq PR #9 finding: disconfirmer (F)'s reassignment-rate
     # metric had NO event-stream source — reassignments lived only in
     # session transcripts (zero %reassign% rows in audit.events,
-    # all-time). This single chokepoint covers both the explicit
-    # `dialectic(reassign)` tool and the stuck-reviewer auto path, so
-    # one emission makes the (F) threshold settable. Fail-soft: the
-    # reassignment has already committed; only observability is at
-    # risk.
-    try:
-        from src.audit_db import append_audit_event_async
-        await append_audit_event_async({
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "event_type": "dialectic_reviewer_reassigned",
-            "agent_id": new_reviewer_id,
-            # Top-level session_id populates the indexed audit.events
-            # column (review fold — nested-only would land the column
-            # NULL); duplicated in details for payload self-containment.
-            "session_id": session_id,
-            "details": {
-                "session_id": session_id,
-                "old_reviewer_id": old_reviewer_id,
-                "new_reviewer_id": new_reviewer_id,
-                "reason": reason,
-            },
-        })
-    except Exception as exc:
-        logger.warning(
-            "dialectic_reviewer_reassigned audit emit failed: session=%s err=%s",
-            session_id, exc,
+    # all-time).
+    #
+    # ⛔This is NOT the single chokepoint, and a comment here claimed it
+    # was until 2026-08-22. `auto_resolve_stuck_sessions` writes reviewer
+    # changes directly and never calls this function, so an auto-path
+    # reassignment would never reach the (F) stream. Both *reassignment*
+    # producers now emit through `events.emit_reviewer_reassigned`, tagged by
+    # `source`. ⛔First-responder initial assignment (`handle_submit_antithesis`)
+    # is a third writer of this column and deliberately does not emit — see the
+    # scope boundary in `events.py`.
+    if persisted:
+        await emit_reviewer_reassigned(
+            session_id=session_id,
+            old_reviewer_id=old_reviewer_id,
+            new_reviewer_id=new_reviewer_id,
+            reason=reason,
+            source="request",
         )
 
     return {

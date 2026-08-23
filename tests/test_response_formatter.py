@@ -339,9 +339,21 @@ class TestStripContext:
         data = _sample_response()
         _strip_context(data, is_new_agent=False, key_was_generated=False, api_key_auto_retrieved=False)
         assert "learning_context" not in data
-        assert "relevant_discoveries" not in data
         assert "onboarding" not in data
         assert "welcome" not in data
+
+    def test_retains_relevant_discoveries_for_established(self):
+        """Task-scoped retrieval is kept for established agents.
+
+        It used to be stripped alongside the onboarding fields, which made the
+        surfaced discoveries unreachable for exactly the population that has
+        prior work to reuse. Now that retrieval is seeded from the caller's own
+        check-in text (capped at 3 summary-only entries) it is signal, not
+        onboarding bloat.
+        """
+        data = _sample_response()
+        _strip_context(data, is_new_agent=False, key_was_generated=False, api_key_auto_retrieved=False)
+        assert "relevant_discoveries" in data
 
     def test_strips_enrichment_bloat_for_established(self):
         data = _sample_response()
