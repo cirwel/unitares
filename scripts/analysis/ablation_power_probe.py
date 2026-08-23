@@ -2,7 +2,7 @@
 """Measure what the EISV ablation harness could have detected.
 
 `eisv_ablation_matrix.py` answers "did the selected candidate separate from its
-best-of-candidates null?" A `NOISE-LEVEL` answer has two very different causes,
+best-of-candidates null?" A `NON_DETECTION` answer has two very different causes,
 and the matrix cannot tell them apart:
 
 * there is no association between prior state and outcome, or
@@ -171,12 +171,15 @@ def measure_power(
     trials: int,
     resamples: int,
     rows: int,
+    bad: int,
     clusters: int,
     agents: int,
     alpha: float,
     seed: int,
 ) -> PowerRow | None:
     """Run `trials` synthetic cohorts at one effect size through the real harness."""
+    if not 0 < bad < rows:
+        raise ValueError("bad must be greater than 0 and smaller than rows")
     ps: list[float] = []
     aucs: list[float] = []
     baselines: list[float] = []
@@ -187,7 +190,12 @@ def measure_power(
     for trial in range(trials):
         rng = random.Random((seed, beta, trial).__hash__() & 0xFFFFFFFF)
         cohort = synthesize_cohort(
-            rng, beta=beta, rows=rows, clusters=clusters, agents=agents
+            rng,
+            beta=beta,
+            rows=rows,
+            clusters=clusters,
+            agents=agents,
+            bad_rate=bad / rows,
         )
         realised = planted_auc(cohort)
         row = build_matrix_row(
@@ -235,13 +243,16 @@ def format_report(
     trials: int,
     resamples: int,
     rows: int,
+    bad: int,
     clusters: int,
+    agents: int,
     alpha: float,
 ) -> str:
     header = [
         "# EISV ablation harness — measured power",
         "",
-        f"Synthetic cohorts of {rows} rows in {clusters} permutable clusters, "
+        f"Synthetic cohorts of {rows} rows ({bad} expected bad) in {clusters} "
+        f"permutable clusters across {agents} agents, "
         f"{trials} trials per effect size, {resamples} permutations per trial, "
         f"alpha = {alpha}.",
         "",
@@ -269,14 +280,24 @@ def format_report(
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--trials", type=int, default=25, help="Cohorts per effect size.")
+    parser.add_argument(
+        "--trials", type=int, default=25, help="Cohorts per effect size."
+    )
     parser.add_argument(
         "--resamples",
         type=int,
         default=200,
         help="Permutations per cohort; 200 matches the frozen 2026-08-09 run.",
     )
-    parser.add_argument("--rows", type=int, default=FROZEN_ROWS, help="Rows per cohort.")
+    parser.add_argument(
+        "--rows", type=int, default=FROZEN_ROWS, help="Rows per cohort."
+    )
+    parser.add_argument(
+        "--bad",
+        type=int,
+        default=FROZEN_BAD,
+        help="Expected bad-class rows; sets the simulated class balance.",
+    )
     parser.add_argument(
         "--clusters",
         type=int,
@@ -287,8 +308,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "reported power stays an upper bound."
         ),
     )
-    parser.add_argument("--agents", type=int, default=FROZEN_AGENTS, help="Distinct agents.")
-    parser.add_argument("--alpha", type=float, default=0.05, help="Significance threshold.")
+    parser.add_argument(
+        "--agents", type=int, default=FROZEN_AGENTS, help="Distinct agents."
+    )
+    parser.add_argument(
+        "--alpha", type=float, default=0.05, help="Significance threshold."
+    )
     parser.add_argument("--seed", type=int, default=0, help="Deterministic seed.")
     parser.add_argument(
         "--betas",
@@ -302,29 +327,36 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    results = [
-        result
-        for beta in args.betas
-        if (
-            result := measure_power(
-                beta=beta,
-                trials=args.trials,
-                resamples=args.resamples,
-                rows=args.rows,
-                clusters=args.clusters,
-                agents=args.agents,
-                alpha=args.alpha,
-                seed=args.seed,
+    try:
+        results = [
+            result
+            for beta in args.betas
+            if (
+                result := measure_power(
+                    beta=beta,
+                    trials=args.trials,
+                    resamples=args.resamples,
+                    rows=args.rows,
+                    bad=args.bad,
+                    clusters=args.clusters,
+                    agents=args.agents,
+                    alpha=args.alpha,
+                    seed=args.seed,
+                )
             )
-        )
-        is not None
-    ]
+            is not None
+        ]
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     report = format_report(
         results,
         trials=args.trials,
         resamples=args.resamples,
         rows=args.rows,
+        bad=args.bad,
         clusters=args.clusters,
+        agents=args.agents,
         alpha=args.alpha,
     )
     if args.output:

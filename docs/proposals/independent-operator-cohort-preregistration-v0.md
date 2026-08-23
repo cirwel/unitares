@@ -13,12 +13,12 @@ Tracks [#1607](https://github.com/cirwel/unitares/issues/1607).
 ## Why this exists
 
 The public evidence base is one maintainer-operated deployment. The frozen
-2026-08-09 trusted-anchor matrix (PR #1603) labels all 12 overall slices
-`NOISE-LEVEL` after selection adjustment — useful negative evidence, but it
-establishes nothing about external adoption, nothing about behavior under an
-operator who does not share the maintainer's habits or database, and nothing
-causal. This protocol defines what one external deployment can and cannot
-establish, before any outcome is read.
+2026-08-09 trusted-anchor matrix (PR #1603) classifies all 12 overall slices
+`NON_DETECTION` after selection adjustment — a descriptive non-detection, not a
+negative result or refutation. It establishes nothing about external adoption,
+nothing about behavior under an operator who does not share the maintainer's
+habits or database, and nothing causal. This protocol defines what one external
+deployment can and cannot establish, before any outcome is read.
 
 **Relationship to the outcome-grounding stop rule** (#1425,
 `eisv-outcome-grounding-stop-rule-v0.md`): that rule owns the outcome
@@ -195,11 +195,19 @@ database with `--as-of` set to the day-58 instant, at three seeds:
 
 ```bash
 python3 scripts/analysis/eisv_ablation_matrix.py \
+  --read-protocol registered \
+  --read-id operator-<participant>-day58-seed-<s> \
+  --not-before <day-58 UTC instant> \
   --scopes task --windows 58 --leads 0,30 \
   --anchor-scope trusted --as-of <day-58 UTC instant> \
   --selective-null-resamples 400 --uncertainty-resamples 2000 \
   --uncertainty-seed <s>        # s in {0, 1, 2}
 ```
+
+Each seed has its own predeclared read ID and atomic receipt. The not-before and
+as-of instants are identical. Reusing an ID or moving either boundary after an
+access is a protocol deviation that must be disclosed; the three registered
+seeds are planned reads, not permission for additional exploratory slices.
 
 The primary slice is **scope=task, window=58, lead=30** (the temporally
 separated one); the lead-0 slice is reported as contemporaneous context.

@@ -20,7 +20,7 @@ it FAILs, at what power did it fail.
 ## Why this exists
 
 `eisv_ablation_matrix.py` answers one question: did the selected candidate
-separate from its best-of-candidates null? When the answer is `NOISE-LEVEL`, two
+separate from its best-of-candidates null? When the answer is `NON_DETECTION`, two
 very different worlds produce that same word:
 
 1. prior state carries no association with outcome, or
@@ -53,7 +53,7 @@ association can only live at cluster granularity.
 
 ```bash
 python3 scripts/analysis/ablation_power_probe.py \
-  --trials 30 --resamples 200 --rows 224 --clusters 70
+  --trials 30 --resamples 200 --rows 224 --bad 53 --clusters 70 --agents 16
 ```
 
 ## Results
@@ -80,7 +80,7 @@ the selective null.
 
 - **Against a weak signal (AUC ≈ 0.57) the harness has ~3% power.** It is not
   merely underpowered; it is blind. A real weak effect of that size would have
-  produced `NOISE-LEVEL` essentially every time.
+  produced `NON_DETECTION` essentially every time.
 - **80% power needs roughly AUC ≈ 0.82.** The instrument can reliably detect
   only a near-strong predictor.
 - **These are upper bounds.** The synthetic cohort is deliberately generous:
@@ -150,7 +150,7 @@ bound". The storefront had gone past all three, and a lint enforced it:
 |---|---|---|
 | `README.md` | "found no predictive lift … that **bounds** the EISV score's forecasting power"; "**is a negative result**" | non-detection; unresolved; links this audit |
 | `docs/PRODUCT_DEFINITION.md` | "**is a negative result** — no demonstrated predictive lift" | detected no lift; unresolved rather than ruled out |
-| `check_doc_health.py` contested claims | flagged only the optimistic phrasing ("weak early signal"), citing `NOISE-LEVEL` as having **superseded** it | symmetric: flags unsupported claims in both directions, and the stated reason is now "unresolved", not "superseded" |
+| `check_doc_health.py` contested claims | flagged only the optimistic phrasing ("weak early signal"), treating the former matrix label as having **superseded** it | symmetric: flags unsupported claims in both directions, and the stated reason is now "unresolved", not "superseded" |
 
 ## This is directional, not drift
 
