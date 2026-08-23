@@ -1556,3 +1556,45 @@ class TestEventLoopNonBlocking:
             "chat.completions.create ran ON the event loop thread — the sync "
             "OpenAI client must be dispatched via run_in_executor"
         )
+
+
+class TestCallModelTimeoutInvariant:
+    """The 30s cap this tool shipped with sat BELOW the latency of the only
+    model it routes to by default. Same drift shape as #1442 (dialectic), so
+    the same remedy: lock the ORDERING against the measured budget rather than
+    re-asserting a constant that the next retune would silently invalidate.
+    """
+
+    def test_cap_clears_the_local_reviewer_budget(self):
+        from src.mcp_handlers.support.model_inference import handle_call_model
+        from src.mcp_handlers.support.llm_delegation import _reviewer_timeout
+
+        # Both lanes call the SAME local model via the same registry; the
+        # reviewer budget is the measured floor (gemma4 43-70s warm). call_model
+        # additionally absorbs cold model loads, so it can never be the tighter
+        # of the two — that is exactly the state that produced 731 timeouts.
+        assert handle_call_model._mcp_timeout >= _reviewer_timeout()
+
+    def test_cap_absorbs_a_cold_model_load(self):
+        from src.mcp_handlers.support.model_inference import handle_call_model
+
+        # Live incident 2026-07-28: Ollama cold-loading gemma4 held the call
+        # for 2-3 minutes. A cap under that cannot distinguish "model is
+        # loading" from "model is wedged", and reports the former as the latter.
+        assert handle_call_model._mcp_timeout >= 180.0
+
+    def test_env_override_rejects_junk_instead_of_crashing_import(self):
+        import importlib
+        from src.mcp_handlers.support import model_inference as mi
+
+        for bad in ("not-a-number", "0", "-5"):
+            with patch.dict(os.environ, {"UNITARES_CALL_MODEL_TIMEOUT": bad}):
+                assert mi._call_model_timeout() == 240.0, (
+                    f"{bad!r} should fall back to the default, not propagate"
+                )
+
+    def test_env_override_applies_when_valid(self):
+        from src.mcp_handlers.support import model_inference as mi
+
+        with patch.dict(os.environ, {"UNITARES_CALL_MODEL_TIMEOUT": "90"}):
+            assert mi._call_model_timeout() == 90.0
