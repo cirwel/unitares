@@ -157,8 +157,14 @@ def build_report(db: dict, reverts, prs, repo: str, gh_repo: str) -> str:
              "1–3 committing agents does not create balanced agents.")
     a.append("- the uncaptured proxies need a commit→agent attribution map that does not exist "
              "(CI/git authorship ≠ governance agent_id).")
-    a.append("- the autocorrelation baseline (~0.94, unpinnable) is unbeatable on outcomes — "
-             "see eisv_label_power.py. More labels do not lower that bar.")
+    # "unbeatable on outcomes" and "more labels do not lower that bar" were both
+    # fixed claims no input could move, and the second is false as stated: more
+    # bad labels DO narrow the one-sample MDE — that is precisely what
+    # eisv_label_power.py computes. What labels cannot fix is the baseline's own
+    # instability, which is a different obstacle and the one that actually bites.
+    a.append("- the autocorrelation baseline (~0.94) is unstable across slices (0.61–0.94), "
+             "so more labels narrow the MDE without pinning the target — "
+             "see eisv_label_power.py, which computes both from the same counts.")
 
     a.append("\n## Verdict")
     vol_pass = trusted_eligible_q >= FLOOR_PER_QTR
@@ -196,7 +202,9 @@ def build_report(db: dict, reverts, prs, repo: str, gh_repo: str) -> str:
          "so raw capture volume is binding too, on top of the constraints below") +
         ": the trustworthy slice is tiny, it concentrates on a handful of committing "
         f"agents ({bal} balanced), the proxies lack agent attribution, and the "
-        "autocorrelation baseline is unbeatable regardless. This refines Milestone 1: "
+        "comparison against the autocorrelation baseline is separately underpowered at "
+        "this label supply (see `eisv_label_power.py`, which computes it from the same "
+        "counts rather than asserting it). This refines Milestone 1: "
         "the gate is not volume but TRUSTED + per-agent-balanced volume, which is not "
         "closed by building capture plumbing. It pushes toward the preserved dissent: "
         "EISV may be unfalsifiable-on-outcomes for structural reasons, and the grounding "

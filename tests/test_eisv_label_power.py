@@ -1,5 +1,11 @@
 """Sanity checks for the label power / MDE calc (Hanley-McNeil)."""
-from scripts.analysis.eisv_label_power import auc_se, mde_over_chance, n_bad_for_lift
+from scripts.analysis.eisv_label_power import (
+    N_BAD_APPROX_INVALID,
+    N_BAD_OUT_OF_DOMAIN,
+    auc_se,
+    mde_over_chance,
+    n_bad_for_lift,
+)
 
 
 def test_se_positive_and_shrinks_with_more_labels():
@@ -30,6 +36,12 @@ def test_n_bad_for_lift_monotone_in_target():
 
 
 def test_n_bad_for_lift_rejects_a_target_at_or_above_auc_one():
-    """baseline + lift >= 1.0 is undefined, not cheap. -1 is the sentinel."""
-    assert n_bad_for_lift(0.06, 2287, 0.94) == -1   # exactly 1.00
-    assert n_bad_for_lift(0.10, 2287, 0.94) == -1   # 1.04, the case above
+    """Neither boundary is cheap — but they are not the same failure.
+
+    Above 1.0 there is no such AUC. AT 1.0 there is: the Hanley-McNeil variance
+    just collapses to 0 for every n, so the search would return its floor of 2.
+    Both used to return the shared -1; they now carry distinct statuses so a
+    reader can tell "no such AUC" from "cannot be costed".
+    """
+    assert n_bad_for_lift(0.06, 2287, 0.94) == N_BAD_APPROX_INVALID   # exactly 1.00
+    assert n_bad_for_lift(0.10, 2287, 0.94) == N_BAD_OUT_OF_DOMAIN    # 1.04
