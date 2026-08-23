@@ -13,10 +13,14 @@ Envelope shape (friendly fields first, raw payload preserved):
       "tool": "<friendly name as invoked>",
       "agent_uuid": ...,            # lifted when present
       "client_session_id": ...,     # lifted when present
+      "action_summary": {...},      # action/reason/risk/evidence at a glance
       "next_action": ...,           # what to do next, concretely
       "state_summary": {...},       # compact working state
       "risk_summary": ...,          # plain-language risk read
+      "legacy_diagnostics": {...},  # non-behavioral compatibility telemetry
       "memory_suggestions": [...],  # prior discoveries worth reading
+      "response_options": {...},    # which response mode fits which task
+      "_response_size": {...},      # approximate serialized size + reduction hint
       "recovery_hint": ...,         # only when state suggests trouble
       "raw_governance": {...}       # full canonical payload when requested
     }
@@ -42,7 +46,10 @@ from typing import Any, Dict, List, Optional
 from mcp.types import TextContent
 
 from src.logging_utils import get_logger
-from src.mcp_handlers.response_formatter import normalize_discovery_list
+from src.mcp_handlers.response_formatter import (
+    canonical_response_mode,
+    normalize_discovery_list,
+)
 
 logger = get_logger(__name__)
 
@@ -52,6 +59,20 @@ logger = get_logger(__name__)
 _RECOVERY_RISK_CEILING = 0.40
 
 _MEMORY_SUGGESTION_LIMIT = 3
+
+_ACTION_ALIASES = {
+    "approve": ("proceed", None),
+    "continue": ("proceed", None),
+    "healthy": ("proceed", None),
+    "ok": ("proceed", None),
+    "safe": ("proceed", None),
+    "caution": ("proceed", "guide"),
+    "guide": ("proceed", "guide"),
+    "block": ("pause", "block"),
+    "high-risk": ("pause", "high-risk"),
+    "reject": ("pause", "reject"),
+    "stop": ("pause", "stop"),
+}
 
 _COMPACT_READ_ALIASES = frozenset({
     "check_working_state",
@@ -103,12 +124,16 @@ def _risk_summary(coherence: Optional[float], risk: Optional[float]) -> Optional
 
 
 def _verdict_value(payload: Dict[str, Any]) -> Optional[str]:
-    verdict = payload.get("verdict")
-    if isinstance(verdict, dict):
-        value = verdict.get("value") or verdict.get("action") or verdict.get("verdict")
-    else:
-        value = verdict
-    return str(value).lower() if value is not None else None
+    metrics = payload.get("metrics")
+    metrics = metrics if isinstance(metrics, dict) else {}
+    for verdict in (payload.get("verdict"), metrics.get("verdict")):
+        if isinstance(verdict, dict):
+            value = verdict.get("value") or verdict.get("action") or verdict.get("verdict")
+        else:
+            value = verdict
+        if value is not None:
+            return str(value).lower()
+    return None
 
 
 def _decision_action(payload: Dict[str, Any]) -> Optional[str]:
@@ -118,6 +143,156 @@ def _decision_action(payload: Dict[str, Any]) -> Optional[str]:
         value = container.get("action") or container.get("value") or container.get("verdict")
         if value is not None:
             return str(value).lower()
+    return None
+
+
+def _verdict_evidence(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the first wrapped verdict-evidence block in a response.
+
+    Compact check-ins put cold-start provenance under
+    ``metrics.verdict.evidence``; read APIs may expose it under the top-level
+    wrapped ``verdict``. The full response instead carries ``risk_attribution``.
+    Reading both shapes is what keeps the action-first envelope honest in every
+    response mode.
+    """
+    metrics = payload.get("metrics")
+    metrics = metrics if isinstance(metrics, dict) else {}
+    for verdict in (payload.get("verdict"), metrics.get("verdict")):
+        if not isinstance(verdict, dict):
+            continue
+        evidence = verdict.get("evidence")
+        if isinstance(evidence, dict):
+            return evidence
+    return {}
+
+
+def _verdict_assurance(payload: Dict[str, Any]) -> tuple[str, Optional[str]]:
+    """Describe verdict maturity without inventing a confidence probability."""
+    attribution = payload.get("risk_attribution")
+    attribution = attribution if isinstance(attribution, dict) else {}
+    discriminability = attribution.get("discriminability")
+    discriminability = discriminability if isinstance(discriminability, dict) else {}
+    evidence = _verdict_evidence(payload)
+
+    driver = attribution.get("primary_driver")
+    basis = evidence.get("basis") or driver
+    grade = str(evidence.get("grade") or "").strip().lower()
+    cold_start = driver == "phi_cold_start" or basis in {
+        "ode_fallback",
+        "phi_cold_start",
+    }
+    non_discriminative = discriminability.get("non_discriminative") is True
+    if grade == "provisional" or cold_start or non_discriminative:
+        return "provisional", str(basis or "non_discriminative_cold_start")
+
+    metrics = payload.get("metrics")
+    metrics = metrics if isinstance(metrics, dict) else {}
+    primary_source = metrics.get("primary_eisv_source") or payload.get(
+        "primary_eisv_source"
+    )
+    if driver == "behavioral_assessment" or primary_source == "behavioral":
+        return "non_provisional", str(driver or primary_source)
+    if driver == "independent_verification_floor":
+        return "non_provisional", str(driver)
+    return "unspecified", str(basis) if basis is not None else None
+
+
+def _one_line(value: Any, *, limit: int = 240) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    compact = " ".join(value.split())
+    if not compact:
+        return None
+    return compact if len(compact) <= limit else compact[: limit - 3].rstrip() + "..."
+
+
+def _action_summary(
+    payload: Dict[str, Any],
+    risk: Optional[float],
+) -> Optional[Dict[str, Any]]:
+    """Build the small, stable block an agent can read before anything else."""
+    decision = payload.get("decision")
+    decision = decision if isinstance(decision, dict) else {}
+    policy = payload.get("policy_evaluation")
+    policy = policy if isinstance(policy, dict) else {}
+    metrics = payload.get("metrics")
+    metrics = metrics if isinstance(metrics, dict) else {}
+
+    raw_action = decision.get("action") or _decision_action(payload)
+    raw_action = str(raw_action).strip().lower() if raw_action is not None else None
+    inferred_action, inferred_sub_action = _ACTION_ALIASES.get(
+        raw_action,
+        (raw_action, None),
+    )
+    sub_action = decision.get("sub_action") or policy.get("sub_action") or inferred_sub_action
+
+    verdict_obj = payload.get("verdict")
+    if not isinstance(verdict_obj, dict):
+        verdict_obj = metrics.get("verdict")
+    verdict_obj = verdict_obj if isinstance(verdict_obj, dict) else {}
+    reason = next(
+        (
+            text
+            for text in (
+                _one_line(decision.get("reason")),
+                _one_line(decision.get("guidance")),
+                _one_line(policy.get("reason")),
+                _one_line(policy.get("guidance")),
+                _one_line(verdict_obj.get("meaning")),
+                _one_line(payload.get("health_message")),
+            )
+            if text
+        ),
+        None,
+    )
+    verdict_confidence, evidence_basis = _verdict_assurance(payload)
+
+    summary: Dict[str, Any] = {}
+    if inferred_action:
+        summary["action"] = inferred_action
+    if sub_action:
+        summary["sub_action"] = sub_action
+    verdict = _verdict_value(payload)
+    if verdict:
+        summary["verdict"] = verdict
+    if reason:
+        summary["reason"] = reason
+    if risk is not None:
+        summary["risk_score"] = risk
+    summary["verdict_confidence"] = verdict_confidence
+    if evidence_basis:
+        summary["evidence_basis"] = evidence_basis
+    return summary or None
+
+
+def _legacy_diagnostics(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Separate legacy ODE controller telemetry from behavioral verdict evidence."""
+    metrics = payload.get("metrics")
+    current_state = payload.get("current_state")
+    for container in (
+        metrics if isinstance(metrics, dict) else {},
+        current_state if isinstance(current_state, dict) else {},
+        payload,
+    ):
+        source = container.get("coherence_source") or container.get("source")
+        role = container.get("coherence_role") or container.get("role")
+        if source != "legacy_tanh_v" and role != "ode_control_feedback":
+            continue
+        coherence = container.get("coherence")
+        if isinstance(coherence, dict):
+            coherence = coherence.get("value")
+        result: Dict[str, Any] = {
+            "source": source or "legacy_tanh_v",
+            "role": role or "ode_control_feedback",
+            "health_evidence": False,
+            "interpretation": (
+                "Compatibility ODE controller feedback; diagnostic context, "
+                "not a behavioral health score."
+            ),
+        }
+        if coherence is not None:
+            result["coherence"] = coherence
+        return result
     return None
 
 
@@ -222,27 +397,32 @@ def _verdict_caveat(source_payload: Dict[str, Any]) -> Optional[str]:
     This re-exposes it where the skimmer actually looks; it computes no new
     signal. Returns None when the verdict is NOT provisional (baseline warm).
     """
-    attribution = source_payload.get("risk_attribution")
-    if not isinstance(attribution, dict):
+    verdict_confidence, evidence_basis = _verdict_assurance(source_payload)
+    if verdict_confidence != "provisional":
         return None
+    attribution = source_payload.get("risk_attribution")
+    attribution = attribution if isinstance(attribution, dict) else {}
     primary_driver = attribution.get("primary_driver")
     discriminability = attribution.get("discriminability")
     discriminability = discriminability if isinstance(discriminability, dict) else {}
     cold_start = primary_driver == "phi_cold_start"
     non_discriminative = discriminability.get("non_discriminative") is True
-    if not (cold_start or non_discriminative):
-        return None
     until = discriminability.get("updates_until_baseline")
     tail = ""
     if isinstance(until, int) and until > 0:
         tail = f" ~{until} more check-in(s) until the behavioral signal is weighted."
+    evidence_path = (
+        "raw_governance.risk_attribution"
+        if cold_start or non_discriminative
+        else "raw_governance.metrics.verdict.evidence"
+    )
     return (
         "Verdict is provisional: the behavioral baseline isn't warm yet, so it "
         "runs on the cold-start prior and risk_score is non-discriminative "
         "during bootstrap. A 'safe'/'proceed' here means 'no evidence of trouble "
         "yet', not a validated all-clear — don't read it as vindication of a high "
-        "self-reported drift. See raw_governance.risk_attribution for the full "
-        "provenance." + tail
+        f"self-reported drift. Evidence basis: {evidence_basis or 'cold-start prior'}. "
+        f"See {evidence_path} for the full provenance." + tail
     )
 
 
@@ -292,10 +472,27 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
                     "id",
                     "summary",
                     "title",
+                    "type",
+                    "status",
+                    "severity",
+                    "tags",
+                    "by",
+                    "agent_id",
+                    "created_at",
+                    "updated_at",
+                    "superseded",
+                    "superseded_by",
+                    "staleness_warning",
+                    "has_details",
+                    "details_preview",
+                    "details_length",
+                    "has_more_details",
                     "similarity",
                     # the mirror path scores its hits as `relevance`; without it
                     # a suggestion arrives with no indication of match strength
                     "relevance",
+                    "score",
+                    "rrf_score",
                 )
                 or item
             )
@@ -453,6 +650,92 @@ def _raw_governance_policy(
     )
 
 
+def _response_options(
+    friendly_name: str,
+    payload: Dict[str, Any],
+    arguments: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Put mode selection guidance beside the response it controls."""
+    arguments = arguments or {}
+    if friendly_name == "sync_state":
+        current = payload.get("_mode") or canonical_response_mode(
+            arguments.get("response_mode") or "auto"
+        )
+        return {
+            "current": current,
+            "routine": "compact",
+            "actionable_diagnostics": "mirror",
+            "complete_audit": "full",
+            "compatibility_aliases": (
+                "lite=compact; verbose=full; interpreted=standard; "
+                "minimal/standard are legacy explicit shapes"
+            ),
+        }
+    if friendly_name == "search_shared_memory":
+        current = str(arguments.get("response_mode") or "compact").strip().lower()
+        return {
+            "current": current,
+            "digest": "compact",
+            "complete_result_set": "full",
+        }
+    if friendly_name == "check_working_state":
+        current = "full" if not _as_bool(arguments.get("lite"), default=True) else "lite"
+        return {
+            "current": current,
+            "routine": "lite=true",
+            "complete_diagnostics": "lite=false",
+        }
+    return None
+
+
+def _attach_response_size(
+    envelope: Dict[str, Any],
+    friendly_name: str,
+) -> None:
+    """Expose response cost before callers discover it through context pressure.
+
+    The byte count intentionally excludes this metadata field, avoiding a
+    self-referential size calculation while staying within a few dozen bytes of
+    the final serialized payload.
+    """
+    measured_bytes = len(
+        json.dumps(envelope, ensure_ascii=False).encode("utf-8")
+    )
+    size_class = (
+        "small" if measured_bytes < 4_000
+        else "medium" if measured_bytes < 12_000
+        else "large"
+    )
+    metadata: Dict[str, Any] = {
+        "approx_bytes": measured_bytes,
+        "approx_kb": round(measured_bytes / 1_000, 1),
+        "size_class": size_class,
+        "measured_without_self": True,
+    }
+    if measured_bytes >= 4_000:
+        current = envelope.get("response_options", {}).get("current")
+        if friendly_name == "search_shared_memory":
+            metadata["reduce_with"] = (
+                "Use include_details=false and response_mode='compact'; open one "
+                "discovery with knowledge(action='details', discovery_id='...')."
+            )
+        elif friendly_name == "sync_state" and current == "full":
+            metadata["reduce_with"] = (
+                "Use response_mode='compact' for routine check-ins or 'mirror' "
+                "for actionable diagnostics."
+            )
+        elif friendly_name == "sync_state":
+            metadata["reduce_with"] = (
+                "Use response_mode='minimal' only when the bare action/EISV "
+                "snapshot is sufficient."
+            )
+        elif friendly_name == "start_session":
+            metadata["reduce_with"] = "Use response_mode='minimal'."
+        elif friendly_name == "check_working_state":
+            metadata["reduce_with"] = "Use lite=true."
+    envelope["_response_size"] = metadata
+
+
 def build_experience_envelope(
     friendly_name: str,
     canonical_name: str,
@@ -474,6 +757,18 @@ def build_experience_envelope(
 
     source_payload = _harvest_payload(payload)
     coherence, risk = _coherence_and_risk(source_payload)
+
+    if canonical_name in {"process_agent_update", "get_governance_metrics"}:
+        summary = _action_summary(source_payload, risk)
+        if summary:
+            envelope["action_summary"] = summary
+        legacy = _legacy_diagnostics(source_payload)
+        if legacy:
+            envelope["legacy_diagnostics"] = legacy
+
+    options = _response_options(friendly_name, source_payload, arguments)
+    if options:
+        envelope["response_options"] = options
 
     next_action: Any = None
     state_summary: Optional[Dict[str, Any]] = None
@@ -717,6 +1012,11 @@ def build_experience_envelope(
     suggestions = _memory_suggestions(payload)
     if suggestions:
         envelope["memory_suggestions"] = suggestions
+    retrieval_options = source_payload.get("discovery_retrieval_options")
+    if isinstance(retrieval_options, dict):
+        envelope["discovery_retrieval_options"] = _friendly_action_hint(
+            retrieval_options
+        )
     for key in (
         "low_confidence",
         "confidence_note",
@@ -738,6 +1038,7 @@ def build_experience_envelope(
         envelope["raw_governance_available"] = True
         if raw_hint:
             envelope["raw_governance_hint"] = raw_hint
+    _attach_response_size(envelope, friendly_name)
     return envelope
 
 

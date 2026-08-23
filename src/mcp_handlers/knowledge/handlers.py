@@ -2179,15 +2179,28 @@ def _serialize_search_discoveries(
             item["session_id_at_write"] = session_at_write
 
         serialized = document.to_dict(include_details=include_details)
-        item.update(
-            {
-                "id": serialized.get("id"),
-                "type": serialized.get("type"),
-                "status": serialized.get("status"),
-                "tags": serialized.get("tags", []),
-                "created_at": serialized.get("created_at"),
-            }
-        )
+        # Summary-mode serialization already computes lifecycle metadata and a
+        # bounded details preview. Keep those fields on the wire instead of
+        # collapsing the result to id/type/status/tags: the intermediate digest
+        # tier should let a caller choose one record to open without first
+        # expanding every discovery inline.
+        for key in (
+            "id",
+            "type",
+            "status",
+            "severity",
+            "tags",
+            "created_at",
+            "updated_at",
+            "superseded_by",
+            "has_details",
+            "details_preview",
+            "details_length",
+            "has_more_details",
+        ):
+            value = serialized.get(key)
+            if value is not None:
+                item[key] = value
         if include_details and serialized.get("details"):
             item["details"] = serialized.get("details")
         item["_agent_id"] = document.agent_id
@@ -2443,6 +2456,7 @@ def _attach_search_usage_hints(
     response: dict[str, Any],
     state: _KnowledgeSearchState,
     *,
+    auto_details: bool,
     include_details: bool,
 ) -> None:
     request = state.request
@@ -2457,9 +2471,23 @@ def _attach_search_usage_hints(
             response["operator_note"] = (
                 "Semantic search considers all terms together (conceptual similarity, not keyword matching)."
             )
+    response["discovery_retrieval_options"] = {
+        "current_tier": (
+            "full_inline_auto"
+            if auto_details
+            else "full_inline"
+            if include_details
+            else "digest"
+        ),
+        "digest": "include_details=false",
+        "open_one": "knowledge(action='details', discovery_id='...')",
+        "all_inline": "include_details=true (can be large for multi-result searches)",
+    }
     if not include_details:
         response["_tip"] = (
-            "Add include_details=true to expand all results inline (knowledge(action='search', include_details=true))"
+            "Results include bounded previews. Open one with knowledge(action='details', "
+            "discovery_id='...'); use include_details=true only when every result "
+            "is needed inline."
         )
     if request.limit_clamped_from is not None:
         # A clamped caller must be able to tell truncation from "that was
@@ -2541,7 +2569,12 @@ async def _execute_knowledge_search(state: _KnowledgeSearchState) -> dict[str, A
     )
     _attach_search_diagnostics(response, state)
     _attach_empty_search_guidance(response, state)
-    _attach_search_usage_hints(response, state, include_details=include_details)
+    _attach_search_usage_hints(
+        response,
+        state,
+        auto_details=auto_details,
+        include_details=include_details,
+    )
     _attach_search_scores_and_confidence(response, state)
     await _attach_search_synthesis(response, state, discoveries)
 
