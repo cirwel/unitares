@@ -131,7 +131,41 @@ async def handle_describe_inference_host(arguments: Dict[str, Any]) -> Sequence[
     }, agent_id=arguments.get("agent_id"), arguments=arguments)
 
 
-@mcp_tool("call_model", timeout=30.0)
+def _call_model_timeout(default: float = 240.0) -> float:
+    """Wall-clock budget for one call_model round-trip. The 30s this tool
+    shipped with on 2026-01-13 was never tuned against a real local model:
+    gemma4 measures 43-70s warm (see llm_delegation._reviewer_timeout) and
+    2-3 minutes cold-loading, so a cold call could not fit inside the cap
+    even in principle. Until 2026-07-28 the mismatch was masked — the sync
+    OpenAI client blocked the event loop, which disarmed the asyncio.wait_for
+    timer that was supposed to fire. Moving that call to an executor thread
+    (below) armed the timer, and the cap then began cutting local inference
+    off at exactly 30.00s: 731 of the 786 mcp_handler_timeout events in the
+    30 days to 2026-08-23 were this tool, every one of them landing within
+    15ms of the cap. 240s matches the delegated-inference lane's default
+    (support/delegated_inference.py) so the two inference paths cannot drift
+    apart. Tunable via UNITARES_CALL_MODEL_TIMEOUT."""
+    raw = os.getenv("UNITARES_CALL_MODEL_TIMEOUT")
+    if raw:
+        try:
+            parsed = float(raw)
+        except ValueError:
+            logger.warning(
+                "UNITARES_CALL_MODEL_TIMEOUT=%r is not a number; "
+                "falling back to %ss", raw, default,
+            )
+            return default
+        if parsed <= 0:
+            logger.warning(
+                "UNITARES_CALL_MODEL_TIMEOUT=%r is not positive; "
+                "falling back to %ss", raw, default,
+            )
+            return default
+        return parsed
+    return default
+
+
+@mcp_tool("call_model", timeout=_call_model_timeout())
 async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Call a free/low-cost LLM for reasoning, generation, or analysis.
