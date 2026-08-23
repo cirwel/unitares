@@ -614,11 +614,19 @@ to line. Statuses are deliberately distinct:
 
 | Status | Meaning |
 |---|---|
-| `EARNED` | pre-registered test passed |
-| `REFUTED` | tested with adequate power, failed |
-| `REFUTED BY CONSTRUCTION` | the code makes the claim arithmetically impossible; no data required |
+| `EARNED` | a pre-registered test of the stated estimand passed its predeclared standard |
+| `REFUTED` | a pre-registered, adequately powered test of the stated estimand failed its predeclared standard |
+| `NARROWLY REFUTED` | a bounded mechanism or direct path was excluded; broader causal or dynamic claims remain open |
+| `INCONCLUSIVE` | a usable test ran but its interval, support, or decision standard did not resolve the claim |
+| `UNIDENTIFIED` | the design cannot estimate the target claim because the counterfactual, independence, or causal/predictive identification is absent |
+| `WITHDRAWN` | an earlier inference was invalidated by a scope, provenance, dependence, or instrument defect |
+| `REFUTED BY CONSTRUCTION` | direct code proof makes the exact claim impossible; endogeneity, a missing direct edge, or no observed crossing is insufficient |
 | `UNTESTED AS DEPLOYED` | a test ran and returned a negative, but the instrument had no usable power against the claim |
 | `LABEL-BLOCKED` | not testable at current external-label supply |
+
+The authoritative 2026-08-22 correction and its five reclassified claims are
+recorded in
+[`falsification-inference-containment-2026-08-22.md`](falsification-inference-containment-2026-08-22.md).
 
 **1. Individuality axiom** — *"each agent's raw behavioral EISV series has an
 agent-specific, temporally stable operating level."* → **UNTESTED AS DEPLOYED.**
@@ -715,20 +723,29 @@ the licence key, and an overstated measurement defect is an inflated licence. An
 agent-scoped calibration feature remains a legitimate qualifying change; it should
 be justified on its actual merits, not on a refutation that the data do not support.
 
-**3. The per-agent reference does useful work** → **REFUTED as deployed.** Leg C
-compares the runtime-form EMA reference against last-value persistence at moved
+**3. The per-agent reference does useful work** → **NARROWLY REFUTED for the
+cold-start reconstruction; UNIDENTIFIED for the warmed deployed EMA.** Leg C
+compares a runtime-form EMA mirror against last-value persistence at moved
 observations: 0/7 streams beat persistence on 2026-07-29 (win rates 0.32–0.48);
-1/7 did at the interim (Sentinel 0.52, p=0.031). Caveats that must travel with
-the number, both spec-disclosed: leg C scores a *cold-started reconstruction* of
-the reference rather than the deployed EMA, and the pooled cross-dim binomial is
-anti-conservative. The honest reading is that the reference is not currently
-earning its description — not that a correctly-warmed reference could not.
+1/7 did at the interim (Sentinel 0.52, p=0.031). The spec-disclosed design
+cold-starts the mirror at the registration boundary rather than restoring the
+deployed EMA's earlier history, so it does not test the already-warm reference
+whose deployed utility the broader claim names. Three of the seven nominal
+agents also replicate one Raspberry Pi, and the pooled cross-dimension binomial
+is anti-conservative. The exact frozen reconstruction did not earn its
+description. Whether the warmed deployed reference helps, harms, or needs
+retuning remains unidentified by this instrument.
 
-**4. Outcome validity** → **LABEL-BLOCKED, and negative where measurable.** The
-tracked weekly ablation (`~/.unitares/analysis/eisv-skeptic-trend.tsv`) has
-lead-30 `auc_delta` = −0.181 against a previous-outcome baseline: adding
-EISV/prior-state makes prospective prediction *worse*, not merely no better.
-Never quote an EISV outcome-AUC as validation.
+**4. Outcome validity** → **WITHDRAWN FOR TARGET INFERENCE; unresolved pending
+the registered trusted-anchor read.** The historical weekly ablation used the
+contaminated `--anchor-scope all` cohort, and its `(agent, prior-state snapshot)`
+permutation blocks were not independent adjudicated failures. Its negative
+`auc_delta` is therefore historical provenance, not evidence that adding EISV
+makes prospective prediction worse. The recurring trend was paused on
+2026-08-22 because its TSV did not record anchor scope and would mix that
+withdrawn cohort with the current trusted default. The single 2026-12-01 read
+defined in `docs/proposals/eisv-outcome-grounding-stop-rule-v0.md` is the only
+confirmatory outcome read. Until then, the question is unresolved, not negative.
 
 **5. "Bounded and mean-reverting, not a random walk"** → **partly TRUE BY
 CONSTRUCTION.** E/I/S are hard-clipped in `src/behavioral_state.py` and S is
@@ -1270,11 +1287,51 @@ bound and hold it there (guide → lower E → BOUNDARY → guide)? Read script:
 classifier actually saw; no counterfactual simulation). Guard:
 `tests/test_basin_verdict_path_reads_ode_state.py`.
 
-**45.** "The guide self-loop can flip an agent across the `E ≥ 0.6` basin bound and hold it there." — **REFUTED** as deployed (2026-08-21 snapshot over the whole persisted telemetry record, 2026-08-10 → 08-21; adequate power), with the arming condition named. The cycle is real at source level: BOUNDARY returns `sub_action='guide'` unconditionally (`src/monitor_decision.py:242-263`); that string lands in `decision_history` and scores 0.7 against 1.0 for proceed (`src/behavioral_sensor.py:385-398`); `decision_e` is 0.35 of behavioral E with outcomes, 0.40 without — a standing penalty of 0.105 / 0.12 on a guide-pinned agent. It does not close because the verdict path classifies the basin from the ODE `GovernanceState` (`src/governance_monitor.py:993` hands `self.state` to `make_decision`; `src/monitor_decision.py:85-88` reads `state.E/I/S/V`), and the behavioral reading reaches that state only through the `k_anchor=0.1` spring (`governance_core/dynamics.py:188`). Live read, n=13,927 telemetry rows (`eisv_telemetry` has persisted only since 2026-08-10, so this is the full record, 12 days): recomputing the basin from `eisv_telemetry.measurement.ode.values` reproduces the persisted basin on **12,628/12,628** BOUNDARY rows (97% overall). In those rows the verdict-path E is **min 0.618, p05 0.630, p50 0.657 — zero E-conjunct failures**. BOUNDARY is held by S > 0.25 (99.9% of rows) and I < 0.7 (75%): failing sets I+S n=9,510 (66 agents, p50 E 0.631), S alone n=3,104 (124 agents, p50 E 0.698), risk n=10, I n=3, S+risk n=1. Guide is 99.5% BOUNDARY-driven (12,628 of 12,697 guide rows); the caution path produced 29 guide rows in HIGH over the record. The behavioral-risk door (`low_E` gate, `src/behavioral_assessment.py:145`) is self-limiting: it multiplies self-relative z-scores, so a *standing* penalty is absorbed into the agent's own baseline. What is true: the agent-visible primary E (`state_json.E`) carries the penalty — 45.7% of BOUNDARY rows (5,769/12,628) showed primary E < 0.6 while the deciding ODE E stayed ≥ 0.6 in every one of them. Agents are shown a depressed E that never decides anything. Instrumentation note: the #1777 `decision_self_loop_neutralized` shadow began persisting 2026-08-21 00:52 local and has run continuously since (654 rows by 20:47 the same day) and its contract lists `basin_boundary_flip_counterfactual` under `cannot_measure`; this row rests on the persisted classifier inputs, not on the shadow.
+**45.** "The guide self-loop can flip an agent across the `E ≥ 0.6` basin
+bound and hold it there." — **NARROWLY REFUTED for the direct same-check-in
+path; the recursive dynamic counterfactual is UNIDENTIFIED.** The source guard
+proves that the verdict path is handed the ODE `GovernanceState`, rather than
+behavioral E directly (`src/governance_monitor.py:993`;
+`src/monitor_decision.py:85-88`). The 2026-08-21 descriptive read found no
+observed BOUNDARY row whose deciding ODE E failed the 0.6 conjunct. That is an
+earned data-path and observed-margin result.
 
-**Sequencing rule (same shape as the coherence-unfreeze rule above).** Any change that feeds behavioral/primary EISV to `classify_basin` on the verdict path — or otherwise lets `decision_e` reach a basin or verdict input — must neutralize or re-score `decision_e` in the SAME change. Otherwise the `E ≥ 0.6` conjunct starts binding on a signal that contains the classifier's own prior verdicts, and roughly half the BOUNDARY population crosses on day one and is held there by its own verdicts. The guard test fails on the repoint with this rule in its message.
+It is not a proof that the loop cannot close over later check-ins. Behavioral
+EISV spring-couples into the ODE by default through `k_anchor=0.1`
+(`governance_core/dynamics.py:188`), so the indirect dynamic path is present.
+The read did not recursively replay ODE, EMA, policy, outcome, and decision
+history with `decision_e` neutralized, and repeated telemetry rows are not
+independent counterfactual units. The original "adequate power" and "cannot
+flip and hold" interpretations are withdrawn.
 
-**Parked, with its wake.** Re-scoring `guide` (or removing `decision_e` from E) is the obvious repair for the agent-visible penalty, but E's composition is a predictor in the 2026-12-01 pre-registered outcome read (`docs/proposals/eisv-outcome-grounding-stop-rule-v0.md`); changing it before that read contaminates the tracked series. Wake: the 12-01 read has run, AND the #1777 shadow has enough rows (weeks, not the one day it has at this entry) to separate a calibration intercept from a transmitting channel. Relates to the "pause-scores-0.5" do-not above: both are verdict→`decision_e` feedback paths and both want one deliberate decision rather than two patches.
+The old provenance denominator was also incomplete: its `valid` predicate did
+not require I, S, V, or coherence. In the dated 2026-08-22 audit, 2,124 of
+13,772 BOUNDARY rows (15.4%) had missing coherence and reached the SQL
+`ELSE 'boundary'` branch through three-valued logic. The corrected read reports
+missingness and excludes incomplete classifier inputs before recomputation.
+What remains descriptively true is that behavioral E carries a 0.105 / 0.12
+guide-versus-approve level difference at the configured mixture weights, while
+the deployed classifier consumes ODE E on the same check-in. The #1777 shadow
+correctly lists `basin_boundary_flip_counterfactual` under `cannot_measure`.
+
+**Sequencing rule (same shape as the coherence-unfreeze rule above).** Any
+change that feeds behavioral/primary EISV directly to `classify_basin` on the
+verdict path must neutralize or re-score `decision_e` in the SAME change, or
+ship behind a preregistered recursive shadow. Otherwise the `E ≥ 0.6` conjunct
+would directly consume a signal containing the classifier's own prior verdicts.
+That arms an endogenous path; it does not, by itself, prove how many agents
+would cross or whether any would be held there. The guard test fails on a
+direct repoint with this narrower rule in its message.
+
+**Parked, with its wake.** Re-scoring `guide` (or removing `decision_e` from E)
+would change a predictor in the 2026-12-01 pre-registered outcome read
+(`docs/proposals/eisv-outcome-grounding-stop-rule-v0.md`); changing it before
+that read contaminates the registered series. Wake: the 12-01 read has run, AND
+a separately preregistered recursive replay or prospective shadow exists. More
+rows from #1777's one-step shadow cannot identify closed-loop gain or basin
+counterfactuals. Relates to the "pause-scores-0.5" do-not above: both are
+verdict→`decision_e` feedback paths and both want one deliberate decision rather
+than two patches.
 
 ## Preferred wording
 

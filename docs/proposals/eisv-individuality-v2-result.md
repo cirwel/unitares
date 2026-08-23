@@ -1,6 +1,6 @@
 # EISV individuality v2 — final read result
 
-**Verdict: FAIL.** The kill criterion in
+**Registered verdict: FAIL. Inference status: UNTESTED AS DEPLOYED.** The kill criterion in
 [`eisv-individuality-v2-preregistration.md`](eisv-individuality-v2-preregistration.md)
 executed on schedule: the individuality axiom is **retired for raw behavioral
 EISV as currently measured**. No v3 against this measurement process; a further
@@ -98,6 +98,12 @@ and a ~10-day fleet outage sits inside a window whose legs count steps, not
 wall-clock). The honest status is **untested as deployed**. Honouring a stopping
 rule and being refuted are different acts, and the public record should not
 conflate them.
+
+Leg C has a separate, narrower reading. Its frozen cold-start reconstruction
+failed the registered persistence benchmark, so that reconstruction is
+`NARROWLY REFUTED`. It did not restore the deployed EMA's pre-window history and
+therefore does not identify the usefulness of the already-warm deployed
+reference. That broader claim remains `UNIDENTIFIED`, not refuted as deployed.
 
 This file exists to publish the instrument's **verbatim output** next to the
 pre-registration that specified it, so the result can be checked rather than taken

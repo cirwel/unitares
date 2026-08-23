@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **eisv inference:** separate negative observations from earned refutations across the outcome/AUC, basin-intervention, guide-loop, distributional-probe, and EMA-reference surfaces; the categorical claims are now `WITHDRAWN`, `UNIDENTIFIED`, `INCONCLUSIVE`, or narrowly scoped, and the recurring historical-scope trend is no longer a live inference source.
 - **knowledge:** `tags` is an exact filter in hybrid search too. Phase 4 (#62) made it a rank boost on the hybrid path while the schema kept saying "Filter by exact tags", so the default `auto` mode returned untagged results for a tag nobody used. The predicate now rides inside both backend queries (`tags && $n` on the FTS arm; a join with `hnsw.iterative_scan` on the pgvector arm) so a tagged row that ranks below the first-stage limit is still retrieved, and the post-filter stays as a backstop; candidates it removes are disclosed as `tag_filter_dropped`. A supplied tag that normalizes to nothing is now rejected instead of silently disabling the filter. The schema and tool description state the contract: any of the given tags, normalized, in every mode; the description previously claimed AND semantics (dogfood finding `bdb18ee4e52ee7d6`)
 
 ---
@@ -224,7 +225,7 @@ _Notable changes merged between 2.14.0 (2026-06-28) and this release. `pyproject
 
 ### Documentation
 
-- **eisv:** pre-registered individuality-test v2 final read — FAIL, kill criterion honored; outcome-grounding stop rule pre-registered (#1400, #1402, #1406, #1408, #1412, #1419, #1425)
+- **eisv:** pre-registered individuality-test v2 final read — operational FAIL and kill criterion honored, but later classified `UNTESTED AS DEPLOYED` because the gating instrument had no usable power against the axiom; outcome-grounding stop rule pre-registered (#1400, #1402, #1406, #1408, #1412, #1419, #1425)
 - **readme:** publish the falsifiability result, not just the harness (#1491); federation research-direction section (#1347); competitive analysis vs MI9 and Auton (#1287)
 - **proposals:** bridge→dispatch v0 — operator on-the-loop, not in-the-loop (#1450); uuid-keyed-identity-migration council synthesis (#1310); redis-retirement Phase 1 plan (#1328)
 - **docs-consolidation:** Phase 0 — contested-claims registry + lint, stale-copy sweep (#1348)

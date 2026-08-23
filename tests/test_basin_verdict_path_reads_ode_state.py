@@ -1,5 +1,5 @@
-"""The verdict-path basin must read ODE state, never the behavioral E that
-contains the classifier's own prior verdicts.
+"""The direct verdict-path basin reads ODE state, not behavioral E on the same
+check-in.
 
 2026-08-21. The source-level cycle E -> basin -> guide -> decision_e -> E is
 real: BOUNDARY returns sub_action='guide' unconditionally
@@ -8,21 +8,21 @@ scores 0.7 against 1.0 for proceed (behavioral_sensor._DECISION_SCORES), and
 decision_e is the largest single term in behavioral E (0.35 with outcomes,
 0.40 without) -- a standing penalty of 0.105 / 0.12 on a guide-pinned agent.
 
-It does not close today for one structural reason: the verdict path classifies
-the basin from the ODE GovernanceState (governance_monitor.make_decision hands
-`self.state` to monitor_decision.make_decision, which calls classify_basin on
-state.E/I/S/V). The behavioral reading reaches that state only through the
-k_anchor spring. A read over the whole persisted telemetry record (2026-08-10 ->
-2026-08-21, n=12,628 BOUNDARY rows) found ODE E min 0.618 -- zero E-conjunct
-failures; BOUNDARY is held by S and I.
+The verdict path classifies the basin from the ODE GovernanceState
+(governance_monitor.make_decision hands `self.state` to
+monitor_decision.make_decision, which calls classify_basin on state.E/I/S/V).
+This excludes a direct same-check-in behavioral-E edge. It does not exclude a
+dynamic path: the behavioral reading reaches later ODE states through the
+default-on k_anchor spring. The recursive decision-channel-neutralized
+counterfactual remains unmeasured.
 
 SEQUENCING RULE this file enforces: any change that feeds behavioral/primary
-EISV to classify_basin on the verdict path must neutralize or re-score
-decision_e in the SAME change. Otherwise the E >= 0.6 conjunct starts binding
-on a signal that contains the classifier's own prior verdicts, and roughly half
-the BOUNDARY population (primary E < 0.6 in 46% of those rows) crosses on day
-one and is held there by its own verdicts. See the contract's tested-claims
-ledger, "Decision self-loop at the basin".
+EISV directly to classify_basin on the verdict path must neutralize or re-score
+decision_e in the SAME change, or ship behind a preregistered recursive shadow.
+Otherwise the threshold directly consumes the classifier's own prior verdicts.
+That arms an endogenous path; this test makes no claim about how many agents
+would cross or remain there. See the contract's tested-claims ledger,
+"Decision self-loop at the basin".
 """
 import pytest
 
@@ -36,7 +36,8 @@ _REPOINT_MESSAGE = (
     "decision_e (behavioral_sensor._compute_E) must be neutralized or "
     "re-scored in the SAME change -- behavioral E contains the classifier's "
     "own prior verdicts (guide scores 0.7), and the E >= 0.6 conjunct would "
-    "start binding on them. Sequencing rule: contract ledger, 'Decision "
+    "directly consume that endogenous signal. This guard does not estimate a "
+    "recursive flip-and-hold counterfactual. Sequencing rule: contract ledger, 'Decision "
     "self-loop at the basin' (2026-08-21)."
 )
 
