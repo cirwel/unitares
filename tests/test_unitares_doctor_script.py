@@ -1063,6 +1063,51 @@ def test_resident_checkin_stale_requires_multi_day_activity(doctor, monkeypatch)
     assert f"count(*) >= {doctor.RESIDENT_MIN_CHECKINS}" in sql
 
 
+def test_resident_checkin_stale_requires_a_real_span_not_just_calendar_dates(doctor, monkeypatch):
+    """Distinct calendar dates are not a duration, and counting them in UTC
+    inflates evening work by one.
+
+    Measured 2026-08-23: `opus_1a0de9ed` (purpose='deployment', 36 check-ins)
+    worked the afternoon of Aug 20 and the evening of Aug 21 — TWO days — but
+    Denver evening is next-day UTC, so it registered THREE UTC dates
+    (08-20/21/22), cleared RESIDENT_MIN_ACTIVE_DAYS by exactly one, and was
+    scored as a resident. It warned forever after, which is the exact
+    permanent-false-warning class the day gate exists to prevent: the gate was
+    the right idea in a unit that a timezone can shift.
+
+    Span is the timezone-independent form of the same intent, and separates the
+    populations far more widely than the day count does — that task agent
+    spanned 1.32 days against every real resident at 6.98-7.00.
+
+    Asserted at the SQL level because the gate IS the SQL.
+    """
+    captured = {}
+
+    def capture_psql_row(db_url, sql):
+        captured["sql"] = sql
+        return ("0", "0", "")
+
+    monkeypatch.setattr(doctor, "_psql_row", capture_psql_row)
+    doctor.check_resident_checkin_stale("postgresql://x/y")
+    sql = captured["sql"]
+    # ⛔Bind the OPERATOR, not just the substrings either side of it. An
+    # earlier draft asserted the two halves separately, so flipping `>=` to
+    # `<=` — which re-admits every short burst the gate exists to exclude —
+    # left both assertions passing. Caught in review 2026-08-23.
+    assert "max(recorded_at) - min(recorded_at)" in sql
+    assert f">= interval '{doctor.RESIDENT_MIN_ACTIVE_SPAN_DAYS} days'" in " ".join(sql.split())
+    # ⛔Both conditions, not one. Days alone admits a long-running burst;
+    # span alone admits an agent that checked in twice a week apart.
+    assert "count(DISTINCT (recorded_at AT TIME ZONE 'UTC')::date)" in sql
+
+
+def test_resident_span_gate_sits_in_the_measured_gap(doctor):
+    """Measured 2026-08-23: the one false positive spanned 1.32 days, every
+    real resident spanned 6.98-7.00. A threshold outside that band would either
+    re-admit the burst or start dropping residents on a slow week."""
+    assert 1.32 < doctor.RESIDENT_MIN_ACTIVE_SPAN_DAYS < 6.98
+
+
 def test_resident_day_gate_sits_in_the_measured_gap(doctor):
     """The threshold is only defensible if it separates the two populations
     measured on 2026-08-02: task bursts at 1-2 active days, real residents at
