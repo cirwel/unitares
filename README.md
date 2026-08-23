@@ -40,50 +40,6 @@ evidence class.
 
 ---
 
-## What it does
-
-UNITARES sits at checkpoints in a longer-running process. The deployed contract
-at each stage is explicit:
-
-| Stage | Deployed contract |
-|---|---|
-| **Identity** | `start_session` binds later writes to a process instance. Reads can remain open; writes are proof-carrying when `STRICT_IDENTITY_REQUIRED` is set and auto-bound otherwise. See the [trust contract](docs/trust-contract.md). |
-| **Claim and evidence** | `sync_state` records what the process says it did and its stated confidence. Tests, exit codes, reviews, and other outcome records can be associated with that claim, with their producer and provenance retained. |
-| **State and policy** | The server updates longitudinal state and returns an action, reason, next step, and enforcement record. Graduated `guide` actions sit on the proceed side of the policy ladder. |
-| **Enforcement and recovery** | A policy pause and an applied pause are separate facts. When a pause is applied on a governed write surface, later check-ins are refused until recovery succeeds; actions outside that surface remain the host's responsibility. |
-| **Audit, memory, and review** | The process can store an attributed finding, request structured review, and leave the claim, evidence, policy, and recovery chain available for replay. |
-
-The stable integration boundary is the returned policy action, reason, next
-step, and enforcement record. EISV coordinates are diagnostic state estimates,
-not an independent correctness verdict. A recorded pause proves neither that it
-reached every host surface nor that pausing improved the eventual outcome.
-
-Selected state values carry an explicit provenance label, so a number can be
-wrong but cannot silently pretend to be a measurement. A mechanical lint
-enforces label presence on the metrics read surface today; the full
-`measured` / `derived` / `prior` / `unknown` vocabulary and wider coverage are
-the staged target tracked in the [trust contract](docs/trust-contract.md).
-
-The checkpoint loop is deliberately small. Four further surfaces build **on**
-its attributable record. Each is independently usable and none is required to
-run the loop.
-
-| Surface | What it adds |
-|---|---|
-| **Shared knowledge graph** | A provenance-aware store agents search before acting and write findings back to, with tagging, supersede, and archival lifecycle. |
-| **Structured review** | Agents request review of each other's work; theses, disagreement, and resolution are recorded rather than resolved in chat. |
-| **Reference resident agents** | Long-running sweep, audit, triage, and narration agents shipped as working examples, not as a framework to subclass. |
-| **Elixir/OTP coordination** | Leases, handoffs, dispatch, and supervision for agents that outlive a single process. |
-
-Identity binding connects them: an accountable write makes a stored finding, a
-review, or a held lease attributable to a process rather than to a display
-label. Operators can inspect lifecycle, state, evidence, and policy history
-through MCP/HTTP APIs and the self-hosted dashboard.
-
-The public [`unitares-sdk`](agents/sdk/README.md) handles connection, identity,
-check-ins, heartbeats, and knowledge participation for resident agents. Its
-README carries the current install command and server compatibility guidance.
-
 ## Quickstart
 
 ```bash
@@ -95,33 +51,55 @@ make demo
 
 This release-tagged Docker Compose flow is the supported install path for a
 local, single-operator deployment. It brings up PostgreSQL/AGE/pgvector, Redis,
-and the server on loopback without requiring manual database initialization.
-The source-based macOS playbook is an advanced bare-metal path, not a second
-default installer.
+and the server on loopback without manual database initialization.
 
 `make demo` onboards a fresh process and sends six check-ins over the real API,
 printing the response shape, decision reason, state detail, and warmup position.
-In about a minute you have the full loop running against your own stack.
+In about a minute the checkpoint loop is running against your own stack.
 
 The dashboard is at `http://localhost:8767/dashboard`; MCP clients connect to
 `http://localhost:8767/mcp/`.
 
-Use the surface that matches the question:
+Evaluating rather than installing? Start with [Evidence and limits](#evidence-and-limits)
+and the [Reviewer Guide](docs/REVIEWER_GUIDE.md). For deployment and integration,
+use the [user manual](docs/manual/README.md).
 
-- **What does the current evidence support?** Start with
-  [Evidence and limits](#evidence-and-limits), then inspect the frozen
-  [outcome-lift artifact](docs/operations/eisv-ablation-frozen-2026-08-09.md)
-  and its [power audit](docs/operations/falsifiability-power-audit-2026-08-23.md).
-  The demo exercises the protocol; it does not establish predictive lift.
-- **How should I evaluate my own deployment?** Use the
-  [Reviewer Guide](docs/REVIEWER_GUIDE.md) and predeclare the target,
-  independent unit, minimum relevant effect, decision rule, and read protocol
-  before inspecting outcomes.
-- **What does sustained operation look like?** Read the
-  [maintainer-deployment snapshot](docs/PRODUCTION_SNAPSHOT.md) and its
-  [data caveat](docs/operations/DEPLOYMENT_DATA_CAVEAT.md).
-- **How do I operate or integrate it?** Follow the
-  [user manual](docs/manual/README.md).
+## What it does
+
+At each checkpoint, UNITARES performs a small, explicit loop:
+
+| Stage | Deployed contract |
+|---|---|
+| **Identity** | `start_session` binds later writes to a process instance. Reads can remain open; writes are proof-carrying when `STRICT_IDENTITY_REQUIRED` is set and auto-bound otherwise. See the [trust contract](docs/trust-contract.md). |
+| **Claim and evidence** | `sync_state` records what the process says it did and its stated confidence. Tests, exit codes, reviews, and other outcome records can be associated with that claim, with their producer and provenance retained. |
+| **State and policy** | The server updates longitudinal state and returns an action, reason, next step, and enforcement record. Graduated `guide` actions sit on the proceed side of the policy ladder. |
+| **Enforcement and recovery** | A policy pause and an applied pause are separate facts. When a pause is applied on a governed write surface, later check-ins are refused until recovery succeeds; actions outside that surface remain the host's responsibility. |
+| **Audit, memory, and review** | The process can store an attributed finding, request structured review, and leave the claim, evidence, policy, and recovery chain available for replay. |
+
+The returned policy action, reason, next step, and enforcement record are the
+stable integration boundary. EISV coordinates are diagnostic state estimates,
+not an independent correctness verdict. A recorded pause proves neither that it
+reached every host surface nor that pausing improved the eventual outcome.
+
+Selected state values carry provenance labels. The metrics read surface enforces
+label presence today; the full `measured` / `derived` / `prior` / `unknown`
+vocabulary and wider coverage remain staged in the
+[trust contract](docs/trust-contract.md).
+
+Four optional surfaces build on the checkpoint record:
+
+| Surface | What it adds |
+|---|---|
+| **Shared knowledge graph** | A provenance-aware store agents search before acting and write findings back to, with tagging, supersede, and archival lifecycle. |
+| **Structured review** | Agents request review of each other's work; theses, disagreement, and resolution are recorded rather than resolved in chat. |
+| **Reference resident agents** | Long-running sweep, audit, triage, and narration agents shipped as working examples, not as a framework to subclass. |
+| **Elixir/OTP coordination** | Leases, handoffs, dispatch, and supervision for agents that outlive a single process. |
+
+Identity binding makes stored findings, reviews, and leases attributable to a
+process rather than a display label. Operators can inspect lifecycle, state,
+evidence, and policy history through MCP/HTTP APIs and the self-hosted dashboard.
+The public [`unitares-sdk`](agents/sdk/README.md) handles connection, identity,
+check-ins, heartbeats, and knowledge participation for resident agents.
 
 ## Integrate an MCP client
 
