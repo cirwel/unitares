@@ -91,6 +91,53 @@ class TestConfidenceVariance:
             f"per-agent offset moved with PYTHONHASHSEED: {outs[0]} vs {outs[1]}"
         )
 
+    @patch('src.tool_usage_tracker.get_tool_usage_tracker')
+    def test_metadata_names_the_offset_scheme(self, mock_tracker):
+        """Telemetry must say WHICH offset formula produced the value.
+
+        Every agent's offset moves exactly once, at this change's rollout.
+        Without a marker, a later calibration analysis sees a one-time step in
+        every agent at the same instant and cannot distinguish that formula
+        migration from a real change in agent state.
+        """
+        mock_tracker.return_value.get_usage_stats.return_value = {'total_calls': 0}
+
+        from src.confidence import AGENT_OFFSET_SCHEME, derive_confidence
+        state = self._make_state()
+
+        _, meta = derive_confidence(state, agent_id="agent-aaa-111")
+        assert meta['agent_offset_scheme'] == AGENT_OFFSET_SCHEME
+
+        # Emitted for the no-agent_id case too, so a consumer never has to infer
+        # the formula from a record's timestamp.
+        _, meta_none = derive_confidence(state)
+        assert meta_none['agent_offset'] == 0.0
+        assert meta_none['agent_offset_scheme'] == AGENT_OFFSET_SCHEME
+
+    def test_the_scheme_marker_names_the_actual_formula(self):
+        """A version string that outlives its formula is worse than none.
+
+        Pins the marker to the digest it describes: changing the hash without
+        bumping the string would silently republish old-scheme telemetry under
+        a name that no longer matches.
+        """
+        import hashlib
+
+        from src.confidence import (
+            AGENT_OFFSET_BUCKETS,
+            AGENT_OFFSET_HALF_WIDTH,
+            AGENT_OFFSET_SCHEME,
+            stable_agent_offset,
+        )
+
+        assert AGENT_OFFSET_SCHEME == "blake2b-v1"
+
+        digest = hashlib.blake2b(b"agent-aaa-111", digest_size=8).digest()
+        bucket = int.from_bytes(digest, "big") % AGENT_OFFSET_BUCKETS
+        quantum = 2 * AGENT_OFFSET_HALF_WIDTH / AGENT_OFFSET_BUCKETS
+        assert stable_agent_offset("agent-aaa-111") == (
+            bucket - AGENT_OFFSET_BUCKETS / 2) * quantum
+
     def test_agent_offset_stays_in_band(self):
         """Offset is bounded to ±0.01 for any input, including empty/unicode."""
         from src.confidence import AGENT_OFFSET_HALF_WIDTH, stable_agent_offset

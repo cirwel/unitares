@@ -13,6 +13,15 @@ The dependency is surfaced in returned metadata so a prospective deconfounding
 experiment can measure the distributional/calibration shift before changing the
 live formula. Do not silently reweight this path: its output feeds calibration
 history and can later affect the entropy penalty.
+
+Second un-validated term: the per-agent offset (``stable_agent_offset``).
+Making it reproducible across restarts fixed a defect in HOW the term is
+computed. It established nothing about WHETHER agent-ID-derived jitter belongs
+in a confidence estimate at all. A stable +/-0.01 nudge keyed on an identifier
+is not outcome-grounded signal, and nothing here shows it improves anything; it
+exists to stop identical-EISV agents reporting one identical number. Treat it as
+a prospective ablation candidate alongside the coherence dependency above, and
+do not cite its determinism as evidence for it.
 """
 
 import hashlib
@@ -34,6 +43,14 @@ LEGACY_COHERENCE_CONFIDENCE_NEUTRAL_VALUE = 0.5
 # spread. 1000 buckets over +/-0.01 -> a 2e-5 quantum per bucket.
 AGENT_OFFSET_BUCKETS = 1000
 AGENT_OFFSET_HALF_WIDTH = 0.01
+
+# Machine-readable marker for WHICH offset formula produced a stored value.
+# Every agent's offset moves exactly once, at the rollout of this change. Without
+# a marker in the telemetry, a later calibration analysis sees a one-time step in
+# every agent at the same instant and cannot tell that formula migration from a
+# real change in agent state. Bump this string on any future change to the
+# scheme; do not reuse a version across two formulas.
+AGENT_OFFSET_SCHEME = "blake2b-v1"
 
 
 def stable_agent_offset(agent_id: str) -> float:
@@ -270,6 +287,10 @@ def derive_confidence(
         agent_offset = stable_agent_offset(agent_id)
         final_confidence += agent_offset
     metadata['agent_offset'] = float(agent_offset)
+    # Emitted unconditionally, including for the agent_id-absent 0.0 case, so a
+    # consumer can always tell which formula produced the value it is reading
+    # rather than having to infer it from the record's timestamp.
+    metadata['agent_offset_scheme'] = AGENT_OFFSET_SCHEME
 
     # Tool stats still recorded for transparency
     if metadata.get('tool_stats'):
