@@ -102,7 +102,7 @@ dead-ref exemption continues to apply to these point-in-time records.)
 
 | Doc | Resolution |
 |---|---|
-| [`eisv-distributional-signal-probe-v0.md`](resolved/eisv-distributional-signal-probe-v0.md) | **Probe A run — KILL (2026-06-22).** Cheap falsifiable gate on the "make EISV distributional" work; dispersion shows no lift over the previous-outcome baseline (negative AUC delta), so the larger dynamics change is not greenlit. See the Run result block |
+| [`eisv-distributional-signal-probe-v0.md`](resolved/eisv-distributional-signal-probe-v0.md) | **Probe A did not greenlight the build (2026-06-22); KILL inference withdrawn 2026-08-22.** The objective scope could not exercise the probe and the task-scope point estimate does not identify the observation-versus-representation bottleneck. See the correction and Run result blocks. |
 
 ### Dated evaluation / measurement / lifecycle records
 

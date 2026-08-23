@@ -2,34 +2,39 @@
 """Which HIGH-basin conjunct actually binds a BOUNDARY classification, and how
 close the verdict-path E ever comes to its 0.6 bound.
 
-Read-only. Answers the question the #1777 decision-self-loop shadow declares it
-cannot (``basin_boundary_flip_counterfactual``): not by simulating a
-counterfactual, but by reading the inputs the deployed classifier actually saw.
-The verdict path classifies the basin from the ODE GovernanceState
+Read-only and descriptive. It does **not** answer the question the #1777
+decision-self-loop shadow declares it cannot
+(``basin_boundary_flip_counterfactual``). It reads the inputs the deployed
+classifier actually saw, which can exclude a direct same-check-in data path and
+measure observed margins, but cannot estimate a recursive counterfactual. The
+verdict path classifies the basin from the ODE GovernanceState
 (``monitor_decision.make_decision`` -> ``classify_basin(state.E, ...)``), which
 ``eisv_telemetry.measurement.ode.values`` records per check-in; the persisted
 basin is ``eisv_telemetry.policy_evaluation.inputs.basin``.
 
 What it prints (Markdown):
-  1. Agreement between the persisted basin and the basin recomputed from the
+  1. Missingness in the recorded classifier inputs. Incomplete rows are excluded
+     from every recomputation rather than falling through SQL CASE to BOUNDARY.
+  2. Agreement between the persisted basin and the basin recomputed from the
      recorded ODE inputs -- the provenance check. If this is not ~100% on
      BOUNDARY rows the rest of the read is not about the deployed classifier.
-  2. Per-basin distribution of the verdict-path E (min / p05 / p50): the margin
+  3. Per-basin distribution of the verdict-path E (min / p05 / p50): the margin
      to the E >= 0.6 conjunct.
-  3. For BOUNDARY rows, the exact set of failing HIGH conjuncts, with agent
-     count and p50 E per set. An "E"-only set is the guide self-loop binding.
-  4. sub_action by basin (how much guide is BOUNDARY-driven).
-  5. Share of BOUNDARY rows whose agent-visible primary E sits below 0.6 while
+  4. For BOUNDARY rows, the exact set of failing HIGH conjuncts, with agent
+     count and p50 E per set. An "E" entry describes an observed binding
+     conjunct; it does not attribute that row to the guide self-loop.
+  5. sub_action by basin (how much guide is BOUNDARY-driven).
+  6. Share of BOUNDARY rows whose agent-visible primary E sits below 0.6 while
      the deciding ODE E does not -- the penalty that is shown but never decides.
 
 Usage:
   python3 scripts/analysis/basin_conjunct_binding_read.py --window-days 60
   GOVERNANCE_DATABASE_URL=postgresql://... python3 scripts/analysis/basin_conjunct_binding_read.py
 
-Reference read (2026-08-21; `eisv_telemetry` has persisted since 2026-08-10, so
-any --window-days above 12 reads the same 12 days): BOUNDARY agreement
-12,628/12,628; ODE E in BOUNDARY min 0.618 / p05 0.630 / p50 0.657; failing
-sets I+S 9,510, S 3,104, risk 10, I 3, S+risk 1; E-only 0. Contract ledger: "Decision self-loop at the basin".
+Historical reference read (2026-08-21): the old completeness predicate admitted
+rows with missing I/S/V/coherence. Its printed BOUNDARY agreement and "adequate
+power" interpretation are withdrawn. See the contract ledger, "Decision
+self-loop at the basin", and the 2026-08-22 containment note.
 """
 from __future__ import annotations
 
@@ -65,8 +70,11 @@ WITH rows AS (
   WHERE s.recorded_at >= now() - ($1::int * INTERVAL '1 day')
     AND s.synthetic = false
     AND s.state_json ? 'eisv_telemetry'
-), valid AS (
+), eligible AS (
   SELECT * FROM rows WHERE e IS NOT NULL AND basin IS NOT NULL AND risk IS NOT NULL
+), complete AS (
+  SELECT * FROM eligible
+  WHERE i IS NOT NULL AND st IS NOT NULL AND v IS NOT NULL AND coh IS NOT NULL
 )
 """
 
@@ -89,28 +97,42 @@ _FAILING_SET = f"""
     CASE WHEN risk >= {HIGH_RISK_MAX} THEN 'risk' END)
 """
 
+Q_COMPLETENESS = _ROWS_CTE + """
+SELECT basin,
+  count(*) AS eligible_rows,
+  count(*) FILTER (
+    WHERE i IS NULL OR st IS NULL OR v IS NULL OR coh IS NULL
+  ) AS incomplete_rows,
+  count(*) FILTER (WHERE i IS NULL) AS missing_i,
+  count(*) FILTER (WHERE st IS NULL) AS missing_s,
+  count(*) FILTER (WHERE v IS NULL) AS missing_v,
+  count(*) FILTER (WHERE coh IS NULL) AS missing_coherence
+FROM eligible GROUP BY 1 ORDER BY 2 DESC
+"""
+
 Q_AGREEMENT = _ROWS_CTE + f"""
 SELECT basin, {_RECOMP} AS recomputed, count(*) AS n
-FROM valid GROUP BY 1, 2 ORDER BY 3 DESC
+FROM complete GROUP BY 1, 2 ORDER BY 3 DESC
 """
 
 Q_E_MARGIN = _ROWS_CTE + """
 SELECT basin, count(*) AS n,
+  count(DISTINCT identity_id) AS agents,
   min(e) AS min_e,
   percentile_cont(0.05) WITHIN GROUP (ORDER BY e) AS p05_e,
   percentile_cont(0.5)  WITHIN GROUP (ORDER BY e) AS p50_e
-FROM valid GROUP BY 1 ORDER BY 2 DESC
+FROM complete GROUP BY 1 ORDER BY 2 DESC
 """
 
 Q_FAILING_SETS = _ROWS_CTE + f"""
 SELECT {_FAILING_SET} AS failing_set,
   count(*) AS n, count(DISTINCT identity_id) AS agents,
   percentile_cont(0.5) WITHIN GROUP (ORDER BY e) AS p50_e
-FROM valid WHERE basin = 'boundary' GROUP BY 1 ORDER BY 2 DESC
+FROM complete WHERE basin = 'boundary' GROUP BY 1 ORDER BY 2 DESC
 """
 
 Q_SUB_BY_BASIN = _ROWS_CTE + """
-SELECT sub, basin, count(*) AS n FROM valid
+SELECT sub, basin, count(*) AS n FROM complete
 WHERE sub IS NOT NULL GROUP BY 1, 2 ORDER BY 3 DESC
 """
 
@@ -118,7 +140,7 @@ Q_SHOWN_NOT_DECIDING = _ROWS_CTE + f"""
 SELECT count(*) AS boundary_rows,
   count(*) FILTER (WHERE primary_e < {HIGH_E_MIN}) AS primary_e_below,
   count(*) FILTER (WHERE primary_e < {HIGH_E_MIN} AND e >= {HIGH_E_MIN}) AS shown_not_deciding
-FROM valid WHERE basin = 'boundary' AND primary_e IS NOT NULL
+FROM complete WHERE basin = 'boundary' AND primary_e IS NOT NULL
 """
 
 
@@ -140,6 +162,7 @@ def _table(headers, rows) -> str:
 async def run(db_url: str, window_days: int) -> int:
     conn = await asyncpg.connect(db_url)
     try:
+        completeness = await conn.fetch(Q_COMPLETENESS, window_days)
         agreement = await conn.fetch(Q_AGREEMENT, window_days)
         margin = await conn.fetch(Q_E_MARGIN, window_days)
         failing = await conn.fetch(Q_FAILING_SETS, window_days)
@@ -152,8 +175,20 @@ async def run(db_url: str, window_days: int) -> int:
     print("Verdict-path inputs = `eisv_telemetry.measurement.ode.values` + "
           "`measurement.coherence.value` + `policy_evaluation.inputs.risk_score`; "
           "persisted basin = `policy_evaluation.inputs.basin`.\n")
+    print("This is an observed-input audit, not a decision-channel-neutralized "
+          "recursive replay. Rows are repeated telemetry, not independent "
+          "counterfactual units.\n")
 
-    print("## 1. Provenance: persisted basin vs recomputed from recorded inputs\n")
+    print("## 1. Recorded-input completeness\n")
+    print(_table(
+        ["basin", "eligible", "incomplete", "missing I", "missing S",
+         "missing V", "missing coherence"],
+        [(r["basin"], r["eligible_rows"], r["incomplete_rows"],
+          r["missing_i"], r["missing_s"], r["missing_v"],
+          r["missing_coherence"]) for r in completeness],
+    ))
+
+    print("\n## 2. Provenance: persisted basin vs recomputed from complete inputs\n")
     print(_table(["persisted", "recomputed", "n"],
                  [(r["basin"], r["recomputed"], r["n"]) for r in agreement]))
     bnd_total = sum(r["n"] for r in agreement if r["basin"] == "boundary")
@@ -163,25 +198,25 @@ async def run(db_url: str, window_days: int) -> int:
           + ("" if bnd_agree == bnd_total else
              "  <-- NOT exact; the inputs are not the classifier's, stop here"))
 
-    print("\n## 2. Verdict-path E by basin (margin to the E >= 0.6 conjunct)\n")
-    print(_table(["basin", "n", "min E", "p05 E", "p50 E"],
-                 [(r["basin"], r["n"], r["min_e"], r["p05_e"], r["p50_e"])
+    print("\n## 3. Verdict-path E by basin (margin to the E >= 0.6 conjunct)\n")
+    print(_table(["basin", "n", "agents", "min E", "p05 E", "p50 E"],
+                 [(r["basin"], r["n"], r["agents"], r["min_e"], r["p05_e"], r["p50_e"])
                   for r in margin]))
 
-    print("\n## 3. BOUNDARY rows: exact failing HIGH-conjunct sets\n")
+    print("\n## 4. BOUNDARY rows: exact failing HIGH-conjunct sets\n")
     print(_table(["failing set", "n", "agents", "p50 E"],
                  [(r["failing_set"] or "(none)", r["n"], r["agents"], r["p50_e"])
                   for r in failing]))
     e_only = sum(r["n"] for r in failing if r["failing_set"] == "E")
     e_any = sum(r["n"] for r in failing if "E" in (r["failing_set"] or "").split("+"))
-    print(f"\nE-only (the guide self-loop binding alone): {e_only}. "
-          f"E in any failing set: {e_any}.")
+    print(f"\nE-only observed binding set: {e_only}. "
+          f"E in any failing set: {e_any}. This does not attribute cause.")
 
-    print("\n## 4. sub_action by basin\n")
+    print("\n## 5. sub_action by basin\n")
     print(_table(["sub_action", "basin", "n"],
                  [(r["sub"], r["basin"], r["n"]) for r in sub]))
 
-    print("\n## 5. Shown but never deciding\n")
+    print("\n## 6. Shown but never deciding on the same check-in\n")
     if shown and shown["boundary_rows"]:
         print(f"BOUNDARY rows with agent-visible primary E < 0.6: "
               f"{shown['primary_e_below']}/{shown['boundary_rows']} "

@@ -128,7 +128,7 @@ The gate read should **state both axes accurately**: the p50 floor is closed, th
 - **Decision A: name the first consumer and de-inert** (corrected 2026-06-23 — see Decision A's bias note). Orchestration is a real demand and the capability is built+proven; "freeze" was migration-resistance. Lead consumer: the **independent dialectic reviewer**. Don't deploy the supervisor bare with no caller, but don't sit on a finished, demanded capability either.
 - **Decision B: genuinely open — operator's call on tail-vs-volume.** I won't push it either way; my substrate-migration biases cut in both directions and the evidence is mixed (real tail, low volume). My only ask is that it be decided on the *measured* tradeoff, not on the dead-floor framing my first draft mistakenly supplied.
 
-Proposals **outside** this cluster are healthy and proceed independently of the read (Track A strict-identity flip, dashboard-hero rollup, the eisv-probe KILL already recorded, the reversible identity micro-steps). This note is only about the BEAM-forward cluster.
+Proposals **outside** this cluster are healthy and proceed independently of the read (Track A strict-identity flip, dashboard-hero rollup, the historical EISV-probe non-greenlight whose stronger `KILL` inference was withdrawn on 2026-08-22, the reversible identity micro-steps). This note is only about the BEAM-forward cluster.
 
 ## Council review (2026-06-22) — the binary collapses; the decision is cheaper
 

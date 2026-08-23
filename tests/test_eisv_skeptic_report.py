@@ -179,6 +179,20 @@ def test_summarize_conclusion_prefers_candidates_that_beat_both_metrics():
     assert "do not beat" not in conclusion
 
 
+def test_summarize_conclusion_does_not_promote_a_negative_split_to_refutation():
+    rows = [_row(idx, bad=idx % 5 == 0, risk=0.5) for idx in range(120)]
+    scores = [
+        ModelScore("previous_outcome_bad", 84, 36, 36, auc=0.70, brier=0.10),
+        ModelScore("prior_risk_binned", 84, 36, 36, auc=0.60, brier=0.12),
+    ]
+
+    conclusion = summarize_conclusion(rows, scores)
+
+    assert conclusion.startswith("DESCRIPTIVE ONLY")
+    assert "does not establish harm or refutation" in conclusion
+    assert "SKEPTICAL" not in conclusion
+
+
 def _with_dispersion(row: OutcomeRow, disp: float | None, n: int) -> OutcomeRow:
     return dataclasses.replace(row, prior_s_disp=disp, n_prior_snapshots=n)
 

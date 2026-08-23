@@ -675,11 +675,11 @@ def test_conclusion_is_downgraded_when_the_selective_null_is_not_cleared():
 def test_conclusion_is_untouched_when_no_selective_null_was_computed():
     assert (
         matrix_module.qualify_conclusion_with_selective_null(
-            "SKEPTICAL: nothing here",
+            "DESCRIPTIVE ONLY: nothing here",
             best_auc_delta=0.01,
             selective_null=None,
         )
-        == "SKEPTICAL: nothing here"
+        == "DESCRIPTIVE ONLY: nothing here"
     )
 
 
