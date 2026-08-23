@@ -176,8 +176,8 @@ def test_weak_signal_rule_no_longer_claims_the_frozen_read_superseded_it(
 ):
     """The rule stands; its justification was wrong and must stay corrected.
 
-    A run with ~3% power against a weak effect cannot supersede a weak-signal
-    read — it is simply silent about it. See
+    A non-detection whose read-specific power is unknown cannot supersede a
+    weak-signal read — it is simply silent about it. See
     docs/operations/falsifiability-power-audit-2026-08-23.md.
     """
     warnings = _warnings(

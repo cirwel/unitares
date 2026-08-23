@@ -1,21 +1,27 @@
 # What the falsifiability harness could have detected — 2026-08-23
 
-**Status:** Instrument characterisation. Measures the *harness*, not the
-deployment. No production data was read and no database was queried.
+**Status:** Corrected instrument characterisation. Measures the *harness*, not
+the deployment. No production data was read and no database was queried. The
+power table originally published here is **withdrawn**: the synthetic producer
+reused cluster IDs as outcome row IDs, corrupting candidate/baseline pairing,
+and did not hold expected class balance fixed as planted strength changed.
 
 **Governing framework:** inference status for EISV falsification claims is set
 by [`../ontology/falsification-inference-containment-2026-08-22.md`](../ontology/falsification-inference-containment-2026-08-22.md),
 which requires four questions answered before any test may earn `REFUTED`. This
-audit is the evidence for its question 3 — *did the observed sample have
-independent units and adequate power?* — on the frozen 2026-08-09 read. The
-answer is no, which is why that read is a non-detection rather than a refutation.
+audit concerns its question 3 — *did the observed sample have independent units
+and adequate power?* — on the frozen 2026-08-09 read. The frozen transcription
+omitted the total permutation-cluster count and this audit's first power probe
+was defective, so that question cannot be answered from the preserved evidence.
+That is sufficient to keep the read a non-detection rather than a refutation.
 
 **Scope guard:** this changes nothing about the pre-registered 2026-12-01
 confirmatory read in
 [`../proposals/eisv-outcome-grounding-stop-rule-v0.md`](../proposals/eisv-outcome-grounding-stop-rule-v0.md)
 — not its date, its cutoff, its four PASS conditions, or its kill criterion. It
-supplies the one number that read will need in order to be reported honestly: if
-it FAILs, at what power did it fail.
+supplies a corrected procedure that read will need in order to be reported
+honestly. It does not supply a valid historical power number for the frozen
+slice.
 
 ## Why this exists
 
@@ -33,7 +39,7 @@ and it was **withdrawn** on 2026-08-17 for using the contaminated
 audit, every published statement about EISV's predictive lift rested on a
 non-detection whose power was unmeasured.
 
-That gap has a direction. It is the mirror image of the failure `CLAUDE.md`
+That gap has a direction. It is the mirror image of the failure `AGENTS.md`
 already forbids under *Measurement authority* — there, a zero must not retire a
 capability; here, a non-rejection must not become a ceiling. Both mistake "we
 did not see it" for "it is not there".
@@ -41,82 +47,104 @@ did not see it" for "it is not there".
 ## Method
 
 `scripts/analysis/ablation_power_probe.py` plants an association of known
-strength into synthetic cohorts shaped like the frozen 2026-08-09 slice (224
-rows, 53 bad, 16 agents), then runs **the same** `build_matrix_row` /
-`estimate_selective_null` machinery the frozen run used, with the same 200
-permutations. Power is the fraction of trials reaching `selective p <= 0.05` on
-a cohort that genuinely contained the effect.
+strength into synthetic cohorts with requested row, expected class balance,
+cluster, and agent counts, then runs **the same** `build_matrix_row` /
+`estimate_selective_null` machinery the frozen run used. Power is the fraction
+of all requested trials reaching `selective p <= 0.05`; an unscorable trial is a
+failed detection and remains in the denominator.
 
-The latent is drawn per `(agent, prior-state snapshot)` cluster, matching the
-real dependence structure — prior state is constant within a cluster, so the
-association can only live at cluster granularity.
+The latent is drawn per `(agent, prior-state snapshot)` cluster, preserving the
+important fact that prior state is constant inside a cluster. The simulation
+calibrates its intercept separately for each generated cohort, so increasing the
+planted effect does not also change the expected bad-outcome rate. Realised
+counts still vary under Bernoulli sampling. The simulation
+does **not** recover the real cluster-size distribution. Most prior-state
+candidates receive the same clean signal, with no measurement noise,
+missingness, provenance drift, enforcement effects, or alternative outcome
+causes. Treat it as an optimistic scenario, not a theorem-level upper bound.
+
+The original producer set `row_key=f"cluster-{cluster_id}"`. Production rows set
+`row_key` from unique `outcome_id`. The paired scorer indexes the baseline by
+`row_key`, so duplicate synthetic keys overwrote rows and mismatched or dropped
+candidate/baseline pairs. The corrected producer keeps cluster identity in
+`prior_measurement_id` and gives every synthetic outcome a unique row key.
 
 ```bash
 python3 scripts/analysis/ablation_power_probe.py \
   --trials 30 --resamples 200 --rows 224 --bad 53 --clusters 70 --agents 16
 ```
 
+The `70` cluster count above is the assumption used by the original audit, not a
+recovered property of the frozen read. The frozen transcription preserved 28–29
+*bad* clusters but omitted total `Null clusters`; those are different counts.
+The CLI now requires all four shape arguments so an unknown count cannot be
+silently inherited as a default.
+
 ## Results
 
-30 trials per effect size, 200 permutations per trial, alpha = 0.05. At 30
-trials the standard error on each power figure is roughly 9 percentage points;
-read the shape, not the third digit.
+This is the corrected re-run of the same **assumed 70-cluster scenario**: 30
+trials per effect size, 200 permutations per trial, alpha = 0.05. All 30 trials
+were scorable at every effect. Wilson intervals are reported because 30 trials
+cannot support precise power claims.
 
-| Planted beta | True AUC | Baseline AUC | Median AUC delta | Null max median | Null max p95 | Median selective p | **Power** |
-|---:|---:|---:|---:|---:|---:|---:|---:|
-| 0.00 | 0.510 | 0.515 | 0.065 | 0.062 | 0.334 | 0.654 | **0.07** |
-| 0.25 | 0.568 | 0.514 | 0.107 | 0.019 | 0.242 | 0.291 | **0.03** |
-| 0.50 | 0.636 | 0.507 | 0.095 | 0.045 | 0.273 | 0.100 | **0.27** |
-| 0.75 | 0.707 | 0.512 | 0.149 | -0.021 | 0.199 | 0.062 | **0.47** |
-| 1.00 | 0.737 | 0.535 | 0.146 | -0.086 | 0.109 | 0.037 | **0.63** |
-| 1.50 | 0.821 | 0.635 | 0.120 | -0.121 | 0.030 | 0.010 | **0.80** |
+| Planted beta | Scorable / requested | Detections / requested | True AUC | Baseline AUC | Median AUC delta | Null max median | Null max p95 | Median selective p | **Power (95% Wilson CI)** |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0.00 | 30 / 30 | 1 / 30 | 0.494 | 0.499 | 0.054 | 0.025 | 0.145 | 0.520 | **0.03 [0.01, 0.17]** |
+| 0.25 | 30 / 30 | 4 / 30 | 0.566 | 0.518 | 0.048 | 0.014 | 0.134 | 0.284 | **0.13 [0.05, 0.30]** |
+| 0.50 | 30 / 30 | 7 / 30 | 0.630 | 0.509 | 0.078 | 0.017 | 0.140 | 0.209 | **0.23 [0.12, 0.41]** |
+| 0.75 | 30 / 30 | 11 / 30 | 0.673 | 0.503 | 0.142 | 0.030 | 0.163 | 0.104 | **0.37 [0.22, 0.54]** |
+| 1.00 | 30 / 30 | 20 / 30 | 0.736 | 0.553 | 0.164 | 0.004 | 0.135 | 0.015 | **0.67 [0.49, 0.81]** |
+| 1.50 | 30 / 30 | 28 / 30 | 0.824 | 0.591 | 0.210 | 0.001 | 0.105 | 0.005 | **0.93 [0.79, 0.98]** |
 
-The `beta = 0` row is the type-I check. Power there is 0.07 against a nominal
-0.05, within sampling error of the target: **the null is calibrated and the
-harness is not statistically broken.** Whatever is wrong here is not a bug in
-the selective null.
+The `beta = 0` interval includes the nominal 0.05 rate. That is compatible with
+the type-I target in this small simulation; it is not enough to certify the
+selective null across other cohort geometries or data-generating processes.
 
 ## What the numbers say
 
-- **Against a weak signal (AUC ≈ 0.57) the harness has ~3% power.** It is not
-  merely underpowered; it is blind. A real weak effect of that size would have
-  produced `NON_DETECTION` essentially every time.
-- **80% power needs roughly AUC ≈ 0.82.** The instrument can reliably detect
-  only a near-strong predictor.
-- **These are upper bounds.** The synthetic cohort is deliberately generous:
-  every prior-state feature carries the planted signal cleanly, the outcome
-  depends on prior state alone, and there is no measurement noise, missingness,
-  or provenance drift. The checkable proof of the bound is the null width — the
-  synthetic null max median runs 0.02–0.06 here, against **0.144–0.177** in the
-  frozen run. A wider null is strictly less power, so the real slice's power is
-  at most what this table shows.
+- In this assumed geometry, the weak planted signal (median AUC ≈ 0.57) was
+  detected in 4 of 30 trials: 0.13 power, with a wide 0.05–0.30 interval. That
+  remains inadequate for a strong negative inference, but the prior 0.03/"blind"
+  claim was an artifact of corrupted pairing.
+- The AUC ≈ 0.67 and AUC ≈ 0.74 scenarios produced 0.37 and 0.67 power,
+  respectively. The AUC ≈ 0.82 scenario produced 0.93 power, interval
+  0.79–0.98. This grid and trial count do not identify a precise 80% minimum
+  detectable effect.
+- These figures are not bounds on the frozen cohort. A wider null median is
+  diagnostically concerning, but a single quantile does not establish
+  stochastic dominance or a strict ordering of power.
 
-**Therefore: the frozen 2026-08-09 evaluation was never capable of establishing
-that EISV lacks predictive lift.** It could only ever have detected a strong
-predictor. It did not find one. That is the whole of what it shows.
+**Therefore: the frozen 2026-08-09 evaluation still does not establish that EISV
+lacks predictive lift, but this audit also cannot quantify what it could have
+detected.** Its exact cluster geometry is missing, the relevant effect was never
+predeclared, and the first power figures were invalid.
 
-## An observation the December read should test, not a finding
+## Withdrawn post-hoc comparison
 
-The frozen run's selective p-values (0.070–0.567, with the four 30-minute-lead
-slices at 0.070–0.085) sit well below this simulation's no-effect median of
-0.654, and near the medians for planted effects around AUC 0.64–0.71 (0.100 and
-0.062).
+The original audit compared frozen selective p-values with medians from the
+defective simulation and suggested which planted-AUC rows they resembled. That
+comparison is withdrawn, not updated. The simulations do not share the frozen
+cluster geometry or null distribution, and the frozen p-values were selected
+post hoc. No positive or negative evidence follows from putting the two tables
+side by side.
 
-**This is not a test and must not be cited as evidence of a positive effect.**
-The comparison is confounded exactly where it matters: the frozen run's null is
-two to seven times wider than the simulation's, which shifts the whole p-value
-distribution, and the frozen p-values were themselves selected post hoc. It is
-recorded here only because it points the same way as the power result — toward
-*unresolved* rather than *negative* — and suppressing it would repeat the error
-this audit is about. The registered read is the next fixed decision point; its
-read-specific power will determine what scientific conclusion it can support.
+## Defects found while measuring this
 
-## Two harness defects found while measuring this
+The first two are validity defects in this power audit. The latter two do not
+alter the selective p-values already computed for the frozen production rows.
 
-Both are reporting defects, not validity defects. The selective p-values in the
-frozen table remain correct as computed.
+1. **Synthetic row identity corrupted model pairing.** Multiple outcomes in a
+   cluster shared one `row_key`, while production uses unique `outcome_id`.
+   Baseline indexing silently overwrote duplicates. The published power figures
+   and every inference drawn specifically from them are withdrawn.
 
-1. **The frozen record dropped the columns needed to read it.** The harness
+2. **Planted strength changed the simulated class balance.** The producer used
+   `logit(target_bad_rate)` as a fixed intercept. That only preserves the target
+   marginal rate when `beta = 0`; stronger effects also shifted prevalence and
+   confounded sensitivity with class balance. The corrected producer calibrates
+   the intercept against every generated cohort's weighted cluster latents.
+
+3. **The frozen record dropped the columns needed to read it.** The harness
    emits `Null max p95` and `Null clusters`; the transcription in
    [`eisv-ablation-frozen-2026-08-09.md`](eisv-ablation-frozen-2026-08-09.md)
    kept neither, while keeping `Selective p`. The harness's own output text says
@@ -127,17 +155,16 @@ frozen table remain correct as computed.
    `--as-of` cutoff; do not perform one solely to repair a historical
    transcription. An errata note records the gap.
 
-2. **The baseline reads below chance and nothing flags it.** The frozen slices
+4. **The baseline reads below chance and nothing flags it.** The frozen slices
    report baseline AUC 0.427–0.435 — the `previous_outcome_bad` reference is
    anti-predictive. `summarize_conclusion` guards only the extreme case where
    the training split holds *no* bad outcomes; a baseline that trained and still
    lands under 0.5 passes silently. This is worth fixing beyond tidiness: a
-   degenerate baseline is a **power sink**. Every candidate beats it by some
-   random margin, so the max-over-seven-candidates null inflates — which is
-   consistent with the frozen null max median (0.144–0.177) sitting far above
-   this simulation's (0.02–0.06) at a healthy baseline. Narrowing that null by
-   fixing or replacing the reference model would raise the instrument's power
-   before December, at no cost to its validity.
+   below-chance reference can change both observed deltas and the
+   max-over-candidates null. The frozen null max median (0.144–0.177) sits far
+   above this corrected simulation's (0.001–0.030), but that contrast does not
+   identify the cause. Whether repairing or replacing the reference narrows the
+   null and improves power must itself be tested prospectively.
 
 ## Consequences for what the project says
 
@@ -158,9 +185,11 @@ An earlier version of this document called the above "drift". That was the wrong
 word and it let the finding off too lightly. Drift is undirected. Every
 deviation found here points the same way, and they compound into a structure:
 
-**1. The tested thing is overclaimed negative.** A non-detection at ~3% power
-became "bounds the EISV score's forecasting power" — while three documents in
-the same repository said it bounds nothing.
+**1. The tested thing is overclaimed negative.** A non-detection with unknown
+read-specific power became "bounds the EISV score's forecasting power" — while
+three documents in the same repository said it bounds nothing. The first attempt
+to repair that gap then understated simulated power because its pairing keys
+were defective, reinforcing the same direction of conclusion.
 
 **2. The evidence that would reveal the weakness was dropped.** The frozen
 transcription kept `Selective p` and dropped exactly `Null max p95` and `Null
@@ -218,6 +247,12 @@ negative-direction patterns.
 
 ## Not fixed here
 
+- **The frozen cohort's total cluster geometry.** `Null clusters` and the
+  cluster-size distribution were not preserved. The corrected 70-cluster run is
+  a hypothetical sensitivity scenario, not a reconstruction.
+- **The smallest relevant effect.** The stop rule requires power at a
+  predeclared relevant effect, but no beta, AUC delta, or equivalent effect size
+  currently fills that slot. The simulation must not choose it after the read.
 - **The dropped columns.** They remain missing. Recovery would require a live
   re-run at the same `--as-of` cutoff, which is not justified solely to repair
   a historical transcription before the registered decision read.
