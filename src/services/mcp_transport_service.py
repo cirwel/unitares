@@ -172,6 +172,9 @@ def capture_transport_context(
         x_session_id = headers.get("x-session-id")
         x_client_id = headers.get("x-client-id") or headers.get("x-mcp-client-id")
         detected_client = detect_client_from_user_agent(user_agent)
+        from src.model_harness_provenance import runtime_signal_fields_from_headers
+
+        runtime_fields = runtime_signal_fields_from_headers(headers)
         ip_ua_fingerprint = f"{client_ip}:{ua_fingerprint}"
         peer_pid = scope.get("unitares_peer_pid")
 
@@ -183,6 +186,7 @@ def capture_transport_context(
             ip_ua_fingerprint=ip_ua_fingerprint,
             user_agent=user_agent,
             client_hint=detected_client,
+            **runtime_fields,
             x_agent_name=headers.get("x-agent-name"),
             x_agent_id=headers.get("x-agent-id"),
             transport="uds" if peer_pid is not None else "mcp",

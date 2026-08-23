@@ -73,7 +73,7 @@ FLEET_IDENTITIES = (
 # Homonyms and protocol values — NOT agent-label dispatch. Exempt, with the
 # reason, because the word is doing a different job in these files.
 NOT_IDENTITIES: dict[str, str] = {
-    "src/resident_validation.py":
+    "src/evaluation/resident_validation/model.py":
         '"steward" is a ROLE in VALID_ROLES (dogfood_probe/steward/builder/'
         'reviewer), unrelated to the agent of that name',
     "src/coordination_events.py":

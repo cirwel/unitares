@@ -10,13 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from src.resident_validation import ResidentProfile
-from src.resident_validation_invocation import (
+from src.evaluation.resident_validation.invocation import (
     InvocationLockHeld,
     SupervisedInvocationPlan,
     acquire_invocation_lock,
     run_supervised_canary_invocation,
 )
+from src.evaluation.resident_validation.model import ResidentProfile
 
 
 def _profile() -> ResidentProfile:
@@ -176,7 +176,7 @@ def test_supervised_invocation_cli_stdout_is_constant_and_non_sensitive(
             "--max-ticks-per-run",
             "2",
         ],
-        cwd=Path(__file__).resolve().parents[1],
+        cwd=Path(__file__).resolve().parents[3],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

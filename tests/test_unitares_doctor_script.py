@@ -8,11 +8,14 @@ by mode, sets exit codes, and renders output — using fake checks.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
+import inspect
 import json
 import os
 import re
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -1881,3 +1884,60 @@ def test_provisioning_script_it_points_at_actually_exists_and_runs(tmp_path):
     assert not (tmp_path / "doctor.json").exists(), (
         "--dry-run wrote an anchor; it must change nothing"
     )
+
+
+# --- cold_start_pause_canary -------------------------------------------------
+# The point of this check is that a zero must be earned. Each branch is pinned
+# so a later refactor cannot quietly turn "nothing observed" into "all clear".
+
+
+def test_cold_start_canary_warns_when_a_cold_start_pause_fires(doctor, monkeypatch):
+    monkeypatch.setattr(doctor, "_psql_row", lambda *a, **k: ["340", "3"])
+    result = doctor.check_cold_start_pause_canary("postgresql:///x")
+    assert result.status is doctor.Status.WARN
+    assert "3 phi_cold_start pause(s)" in result.message
+    # Deployment is the first thing to rule out: merged is not deployed.
+    assert "DEPLOYED" in result.message
+
+
+def test_cold_start_canary_skips_when_no_cold_starts_happened(doctor, monkeypatch):
+    """An empty population must never read as a clean bill of health."""
+    monkeypatch.setattr(doctor, "_psql_row", lambda *a, **k: ["0", "0"])
+    result = doctor.check_cold_start_pause_canary("postgresql:///x")
+    assert result.status is doctor.Status.SKIP
+    assert result.status is not doctor.Status.PASS
+    assert "nothing to observe" in result.message
+
+
+def test_cold_start_canary_passes_only_with_a_live_denominator(doctor, monkeypatch):
+    monkeypatch.setattr(doctor, "_psql_row", lambda *a, **k: ["340", "0"])
+    result = doctor.check_cold_start_pause_canary("postgresql:///x")
+    assert result.status is doctor.Status.PASS
+    assert "0 pauses across 340 cold-start decisions" in result.message
+
+
+def test_cold_start_canary_skips_when_db_unreachable(doctor, monkeypatch):
+    monkeypatch.setattr(doctor, "_psql_row", lambda *a, **k: None)
+    assert (
+        doctor.check_cold_start_pause_canary("postgresql:///x").status
+        is doctor.Status.SKIP
+    )
+
+
+def test_cold_start_canary_is_detection_only(doctor):
+    """Invariant 4: a doctor must not anchor the loop on its own re-check."""
+    fn = doctor.check_cold_start_pause_canary
+    # The docstring names the invariant on purpose; check the code, not the prose.
+    tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    func = tree.body[0]
+    if (
+        func.body
+        and isinstance(func.body[0], ast.Expr)
+        and isinstance(func.body[0].value, ast.Constant)
+        and isinstance(func.body[0].value.value, str)
+    ):
+        func.body = func.body[1:]
+    body = ast.unparse(func)
+    assert "external_signal" not in body
+    assert "post_outcome" not in body
+    assert "outcome_events" not in body

@@ -22,6 +22,14 @@ defmodule UnitaresLeasePlane.GovernanceVetoClient do
   `{:error, _}` / `{:blocked, _}`, and `GovernedEffect` treats anything that is
   not `:allow` as `governance_blocked` — an effect is not committed unless
   governance affirmatively cleared it.
+
+  DELIBERATELY NOT migrated to `UnitaresSdk.Envelope` (2026-08-22): this is
+  not the tool-bridge envelope — `/v1/effect-veto` speaks a bespoke
+  `{vetoed: bool}` contract whose only safe reading is the explicit-false
+  branch above, and the payload hash is already vector-pinned to the Python
+  SDK's canonical form. Routing it through a general classifier adds
+  interpretation to an RCE-gating fail-closed path for zero gain — the same
+  verdict as anima_broker's client.
   """
 
   require Logger

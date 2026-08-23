@@ -24,18 +24,15 @@ defmodule AgentOrchestrator.LeasePlaneClient do
       ttl_s: ttl_s
     }
 
+    # Reply-reading is SDK-owned (UnitaresSdk.LeasePlaneEnvelope): one
+    # authoritative decode, eligible to stop drifting from dispatch_beam's
+    # once that repo's pinned SDK ref moves past this commit. Transport stays
+    # :httpc here. SDK error terms pass through UNCHANGED — held_by_other is
+    # a 3-tuple whose payload carries retry_after_hint_ms/blocking_lease_id;
+    # AgentRunner treats reasons opaquely, so no re-narrowing adapter.
     case post("/v1/lease/acquire", body) do
-      {:ok, 200, %{"ok" => true, "lease" => %{"lease_id" => lease_id}}} ->
-        {:ok, lease_id}
-
-      {:ok, 409, %{"error" => "held_by_other"} = info} ->
-        {:error, {:held_by_other, Map.get(info, "held_by_uuid")}}
-
-      {:ok, status, %{"error" => err} = info} ->
-        {:error, {:lease_plane_error, status, err, Map.get(info, "reason") || Map.get(info, "detail")}}
-
-      {:ok, status, _body} ->
-        {:error, {:lease_plane_unexpected, status}}
+      {:ok, status, payload} ->
+        UnitaresSdk.LeasePlaneEnvelope.classify_acquire(status, payload)
 
       {:error, reason} ->
         {:error, reason}
@@ -44,11 +41,20 @@ defmodule AgentOrchestrator.LeasePlaneClient do
 
   @impl true
   def release(lease_id, reason) do
+    # `release_reason` is a CLOSED server-side enum (http_router.ex release
+    # handler): normal | down_local | reaped_after_supervisor_failed |
+    # reaped_local_ttl | reaped_remote_ttl | handoff | reclaimed_lost_acquire
+    # ("forced" is rejected here — use /v1/lease/force-release). An ad-hoc
+    # reason gets 422 schema_invalid, classifies as {:release_refused, ...},
+    # and the lease STAYS HELD (live-verified 2026-08-22). Deliberately not
+    # allowlisted client-side: a stale copy of the enum on this fail path
+    # would refuse valid reasons after a server addition.
     case post("/v1/lease/release", %{lease_id: lease_id, release_reason: reason}) do
-      {:ok, 200, %{"ok" => true}} -> :ok
-      {:ok, 404, _} -> :ok
-      {:ok, status, body} -> {:error, {:release_failed, status, body}}
-      {:error, reason} -> {:error, reason}
+      {:ok, status, payload} ->
+        UnitaresSdk.LeasePlaneEnvelope.classify_release(status, payload)
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

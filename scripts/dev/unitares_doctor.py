@@ -1858,6 +1858,64 @@ def check_grounding_stage_live(db_url: str) -> CheckResult:
                        f"{day} grounding_shadow events in 24h")
 
 
+def check_cold_start_pause_canary(db_url: str) -> CheckResult:
+    """WARN if a non-authored Phi cold-start pause fires again after #1819.
+
+    A brand-new identity has no behavioral evidence, so the verdict is owned by
+    the Phi cold-start prior, which the result envelope itself labels
+    non-discriminative. Before #1819 that prior could still deliver a
+    circuit-breaker pause on an agent's first or second turn -- 15 of them
+    across 14 identities in the 12 days to 2026-08-22, 7 of which were that
+    session's last recorded act. #1819 downgrades a *proven* risk-only
+    cold-start hard stop to guidance, so the expected steady state is zero.
+
+    Zero is also what this check sees when nothing is looking, which is the
+    whole reason it exists. The denominator is cold-start *decisions* of any
+    action: if no identity has been through cold start at all in the window,
+    the population is empty and the check SKIPs rather than reporting a clean
+    zero. A pass therefore means "cold starts happened and none of them
+    paused", never "no evidence either way".
+
+    Detection only -- it reports a finding and stops. It must never re-check
+    itself and post an outcome: `build_resolution_outcome_args` hardcodes
+    `verification_source='external_signal'`, which tiers TRUSTED_EXTERNAL, and
+    a signal derived from the loop cannot anchor the loop (Invariant 4).
+    """
+    name, mode = "cold_start_pause_canary", "operator"
+    row = _psql_row(db_url, (
+        "WITH d AS ("
+        "  SELECT state_json->'eisv_telemetry'#>>'{policy_evaluation,action}' AS act,"
+        "         state_json->'eisv_telemetry'#>>'{policy_evaluation,inputs,verdict_source}' AS vsrc"
+        "  FROM core.agent_state"
+        "  WHERE recorded_at > now() - interval '7 days'"
+        "    AND state_json ? 'eisv_telemetry')"
+        "SELECT count(*) FILTER (WHERE vsrc = 'phi_cold_start'),"
+        "       count(*) FILTER (WHERE vsrc = 'phi_cold_start' AND act = 'pause')"
+        " FROM d"
+    ))
+    if row is None or len(row) < 2:
+        return CheckResult(name, mode, Status.SKIP, "core.agent_state not queryable")
+    cold_starts, pauses = int(row[0]), int(row[1])
+    if cold_starts == 0:
+        return CheckResult(
+            name, mode, Status.SKIP,
+            "no phi_cold_start decisions in 7d — nothing to observe, so a zero "
+            "here would not mean the guard is working",
+        )
+    if pauses:
+        return CheckResult(
+            name, mode, Status.WARN,
+            f"{pauses} phi_cold_start pause(s) in 7d across {cold_starts} "
+            "cold-start decisions — #1819 downgrades a proven risk-only cold "
+            "start to guidance, so check in order: is #1819 actually DEPLOYED "
+            "(compare the running build_sha, not master), is "
+            "GOVERNANCE_NON_AUTHORED_COLD_START_GUARD on, and did an "
+            "independent hard stop legitimately fire",
+        )
+    return CheckResult(name, mode, Status.PASS,
+                       f"0 pauses across {cold_starts} cold-start decisions in 7d")
+
+
 def check_label_join_overlap(db_url: str) -> CheckResult:
     """WARN if the failure-labeled and check-in populations are fully disjoint.
 
@@ -2724,6 +2782,8 @@ def build_checks(
         Check("resident_checkin_stale", "operator", lambda: check_resident_checkin_stale(db_url)),
         Check("immortal_lease", "operator", lambda: check_immortal_lease(db_url)),
         Check("grounding_stage_live", "operator", lambda: check_grounding_stage_live(db_url)),
+        Check("cold_start_pause_canary", "operator",
+              lambda: check_cold_start_pause_canary(db_url)),
         Check("label_join_overlap", "operator", lambda: check_label_join_overlap(db_url)),
         Check("signal_degeneracy", "operator", lambda: check_signal_degeneracy(db_url)),
         Check("finding_producer_live", "operator",

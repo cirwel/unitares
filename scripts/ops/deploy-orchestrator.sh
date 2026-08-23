@@ -81,9 +81,11 @@ PREV="$DEPLOY_LIB_PREV"
 NOW="$(git -C "$DEPLOY" rev-parse HEAD)"
 
 # Did the orchestrator's OWN code move? Empty diff => the running node is
-# already on this code and a restart buys nothing but risk.
+# already on this code and a restart buys nothing but risk. The SDK path dep
+# (elixir/unitares_sdk, mix.exs) compiles INTO this node — an SDK-only
+# classifier fix without it here would leave the live service on stale code.
 CODE_CHANGED=0
-if [ "$PREV" != "$NOW" ] && [ -n "$(git -C "$DEPLOY" diff --name-only "$PREV" "$NOW" -- "$APP_SUBDIR" 2>/dev/null)" ]; then
+if [ "$PREV" != "$NOW" ] && [ -n "$(git -C "$DEPLOY" diff --name-only "$PREV" "$NOW" -- "$APP_SUBDIR" elixir/unitares_sdk 2>/dev/null)" ]; then
   CODE_CHANGED=1
 fi
 

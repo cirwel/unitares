@@ -29,6 +29,8 @@ defmodule AgentOrchestrator.MixProject do
   defp deps do
     [
       {:jason, "~> 1.4"},
+      # Envelope classifiers only (LeasePlaneEnvelope); transport stays :httpc.
+      {:unitares_sdk, path: "../unitares_sdk"},
       # Control surface (lib/agent_orchestrator/http_router.ex). Plug 1.18+ for
       # the Plug.Parsers.ParseError shape the router's error handler matches;
       # Bandit is the localhost listener. Same stack as the lease plane.

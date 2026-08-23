@@ -2641,6 +2641,20 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         client_hint=client_hint,
     )
 
+    from src.model_harness_provenance import build_runtime_provenance
+
+    runtime_provenance = build_runtime_provenance(
+        arguments,
+        signals=signals,
+        fallback_model_identifier=model_type,
+        fallback_model_source=(
+            "caller_declared"
+            if arguments.get("model_type")
+            else "transport_inferred"
+        ),
+        fallback_harness_type=client_hint,
+    )
+
     response_agent_id = _resolve_response_agent_id(agent_uuid, agent_id)
     identity_resolution_outcome = _derive_identity_resolution_outcome(
         identity, is_new, force_new, _spawn_reason
@@ -2673,6 +2687,8 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         provisional_lineage=_r2_provisional_lineage,
         proof_origin=proof_origin,
         response_mode=response_mode,
+        model_type=model_type,
+        runtime_provenance=runtime_provenance,
     )
 
     await _maybe_write_bootstrap_checkin(arguments, agent_uuid, client_hint, result)

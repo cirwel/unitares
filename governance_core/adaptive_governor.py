@@ -389,7 +389,11 @@ class AdaptiveGovernor:
         # 10. Make verdict using adaptive thresholds
         verdict_result = self.make_verdict(coherence, risk)
 
-        return self._build_result(verdict_result)
+        return self._build_result(
+            verdict_result,
+            coherence=coherence,
+            risk=risk,
+        )
 
     def make_verdict(self, coherence: float, risk: float) -> str:
         """Make governance verdict using ADAPTIVE thresholds.
@@ -487,8 +491,16 @@ class AdaptiveGovernor:
             self.state.resonant = True
             self.state.trigger = "flips"
 
-    def _build_result(self, verdict: str) -> Dict:
-        """Build observability result dict."""
+    def _build_result(
+        self,
+        verdict: str,
+        *,
+        coherence: float,
+        risk: float,
+    ) -> Dict:
+        """Build observability result dict with exact hard-stop provenance."""
+        coherence_floor = coherence < self.config.tau_floor
+        risk_ceiling = risk > self.config.beta_ceiling
         return {
             "verdict": verdict,
             "tau": self.state.tau,
@@ -509,6 +521,36 @@ class AdaptiveGovernor:
             "resonant": self.state.resonant,
             "trigger": self.state.trigger,
             "response_tier": verdict,  # Backward compat key
+            "hard_stop_provenance": {
+                "schema": "cirs.hard-stop-provenance.v1",
+                "complete": True,
+                "mode": "adaptive_v2",
+                "observed": {
+                    "coherence": coherence,
+                    "risk_score": risk,
+                    "oscillation_index": self.state.oi,
+                    "flips": self.state.flips,
+                },
+                "thresholds": {
+                    "coherence_floor": self.config.tau_floor,
+                    "risk_ceiling": self.config.beta_ceiling,
+                    "oscillation_index": self.config.oi_threshold,
+                    "flips": self.config.flip_threshold,
+                },
+                "conditions": {
+                    "coherence_floor": coherence_floor,
+                    "risk_ceiling": risk_ceiling,
+                    "resonance": self.state.resonant,
+                },
+                "satisfied": [
+                    name
+                    for name, active in (
+                        ("coherence_floor", coherence_floor),
+                        ("risk_ceiling", risk_ceiling),
+                    )
+                    if active
+                ],
+            },
             "delta": self.state.delta,
             "v_variance_ema": self.state.v_variance_ema,
         }
