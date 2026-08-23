@@ -50,6 +50,8 @@ or [User Manual](../manual/README.md).
 
 ## Validation and evidence records
 
+- [`model-harness-risk-cohorts.md`](model-harness-risk-cohorts.md) — prospective,
+  descriptive model/harness provenance and like-for-like cohort reporting.
 - [`ablation-negative-controls.md`](ablation-negative-controls.md) — synthetic
   negative controls for the ablation plumbing.
 - [`eisv-ablation-frozen-2026-08-09.md`](eisv-ablation-frozen-2026-08-09.md) —

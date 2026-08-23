@@ -37,9 +37,11 @@ def _build_http_session_signals(request):
     Only a positive, non-bool integer is accepted.  Request headers never
     participate in this decision; ordinary TCP HTTP remains ``rest``.
     """
-    from src.mcp_handlers.context import SessionSignals
+    from src.mcp_handlers.context import SessionSignals, detect_client_from_user_agent
+    from src.model_harness_provenance import runtime_signal_fields_from_headers
 
     ua = request.headers.get("user-agent", "")
+    runtime_fields = runtime_signal_fields_from_headers(request.headers)
     x_session_id = request.headers.get("X-Session-ID") or request.headers.get("x-session-id")
     peer_pid = getattr(request, "scope", {}).get("unitares_peer_pid")
     if isinstance(peer_pid, bool) or not isinstance(peer_pid, int) or peer_pid <= 0:
@@ -61,6 +63,8 @@ def _build_http_session_signals(request):
         x_client_id=request.headers.get("x-client-id") or request.headers.get("x-mcp-client-id"),
         ip_ua_fingerprint=ip_ua_fp,
         user_agent=ua,
+        client_hint=detect_client_from_user_agent(ua),
+        **runtime_fields,
         x_agent_name=request.headers.get("x-agent-name"),
         x_agent_id=request.headers.get("x-agent-id"),
         transport="uds" if peer_pid is not None else "rest",

@@ -35,14 +35,14 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `archive_orphan_agents` | `src/mcp_handlers/lifecycle/operations.py:726 handle_archive_orphan_agents` | `src/mcp_handlers/schemas/lifecycle.py:215 ArchiveOrphanAgentsParams` | 30s | — |
 | `bind_session` | `src/mcp_handlers/identity/handlers.py:1500 handle_bind_session` | `src/mcp_handlers/schemas/identity.py:210 BindSessionParams` | 5s | identity=pre_onboard |
 | `calibration` | `src/mcp_handlers/consolidated.py:245 action_router` | `src/mcp_handlers/schemas/calibration.py:67 CalibrationParams` | 60s | — |
-| `call_model` | `src/mcp_handlers/support/model_inference.py:134 handle_call_model` | `src/mcp_handlers/schemas/core.py:532 CallModelParams` | 30s | — |
-| `cirs_protocol` | `src/mcp_handlers/cirs/protocol.py:124 handle_cirs_protocol` | `src/mcp_handlers/schemas/core.py:504 CirsProtocolParams` | 15s | — |
+| `call_model` | `src/mcp_handlers/support/model_inference.py:134 handle_call_model` | `src/mcp_handlers/schemas/core.py:535 CallModelParams` | 30s | — |
+| `cirs_protocol` | `src/mcp_handlers/cirs/protocol.py:124 handle_cirs_protocol` | `src/mcp_handlers/schemas/core.py:507 CirsProtocolParams` | 15s | — |
 | `cleanup_stale_locks` | `src/mcp_handlers/admin/handlers.py:481 handle_cleanup_stale_locks` | `src/mcp_handlers/schemas/admin.py:133 CleanupStaleLocksParams` | 15s | — |
 | `config` | `src/mcp_handlers/consolidated.py:270 action_router` | `src/mcp_handlers/schemas/admin.py:148 ConfigParams` | 15s | — |
 | `dashboard` | `src/mcp_handlers/admin/dashboard.py:44 handle_dashboard` | `src/mcp_handlers/schemas/dashboard.py:6 DashboardParams` | 15s | — |
 | `debug_request_context` | `src/mcp_handlers/admin/handlers.py:525 handle_debug_request_context` | `src/mcp_handlers/schemas/admin.py:144 DebugRequestContextParams` | 5s | — |
-| `delegate_inference` | `src/mcp_handlers/support/delegated_inference.py:51 handle_delegate_inference` | `src/mcp_handlers/schemas/core.py:550 DelegateInferenceParams` | 480s | — |
-| `describe_inference_host` | `src/mcp_handlers/support/model_inference.py:105 handle_describe_inference_host` | `src/mcp_handlers/schemas/core.py:603 DescribeInferenceHostParams` | 5s | identity=pre_onboard |
+| `delegate_inference` | `src/mcp_handlers/support/delegated_inference.py:51 handle_delegate_inference` | `src/mcp_handlers/schemas/core.py:553 DelegateInferenceParams` | 480s | — |
+| `describe_inference_host` | `src/mcp_handlers/support/model_inference.py:105 handle_describe_inference_host` | `src/mcp_handlers/schemas/core.py:606 DescribeInferenceHostParams` | 5s | identity=pre_onboard |
 | `describe_tool` | `src/mcp_handlers/introspection/tool_introspection.py:664 handle_describe_tool` | `src/mcp_handlers/schemas/admin.py:42 DescribeToolParams` | 10s | identity=pre_onboard |
 | `detect_stuck_agents` | `src/mcp_handlers/lifecycle/stuck.py:905 handle_detect_stuck_agents` | `src/mcp_handlers/schemas/lifecycle.py:275 DetectStuckAgentsParams` | 15s | identity=pre_onboard |
 | `dialectic` | `src/mcp_handlers/consolidated.py:388 action_router` | `src/mcp_handlers/schemas/dialectic.py:137 DialecticParams` | 115s | — |
@@ -54,13 +54,13 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `get_telemetry_metrics` | `src/mcp_handlers/admin/handlers.py:403 handle_get_telemetry_metrics` | `src/mcp_handlers/schemas/admin.py:91 GetTelemetryMetricsParams` | 15s | — |
 | `get_thresholds` | `src/mcp_handlers/admin/config.py:16 handle_get_thresholds` | `src/mcp_handlers/schemas/admin.py:115 GetThresholdsParams` | 10s | — |
 | `get_tool_usage_stats` | `src/mcp_handlers/admin/handlers.py:260 handle_get_tool_usage_stats` | `src/mcp_handlers/schemas/admin.py:98 GetToolUsageStatsParams` | 15s | — |
-| `get_trajectory_status` | `src/mcp_handlers/identity/handlers.py:2801 handle_get_trajectory_status` | `src/mcp_handlers/schemas/identity.py:202 GetTrajectoryStatusParams` | 10s | — |
-| `get_workspace_health` | `src/mcp_handlers/admin/handlers.py:506 handle_get_workspace_health` | `src/mcp_handlers/schemas/core.py:527 GetWorkspaceHealthParams` | 20s | — |
+| `get_trajectory_status` | `src/mcp_handlers/identity/handlers.py:2817 handle_get_trajectory_status` | `src/mcp_handlers/schemas/identity.py:202 GetTrajectoryStatusParams` | 10s | — |
+| `get_workspace_health` | `src/mcp_handlers/admin/handlers.py:506 handle_get_workspace_health` | `src/mcp_handlers/schemas/core.py:530 GetWorkspaceHealthParams` | 20s | — |
 | `health_check` | `src/mcp_handlers/admin/handlers.py:332 handle_health_check` | `src/mcp_handlers/schemas/admin.py:85 HealthCheckParams` | 5s | identity=pre_onboard |
 | `identity` | `src/mcp_handlers/identity/handlers.py:1102 handle_identity_adapter` | `src/mcp_handlers/schemas/identity.py:6 IdentityParams` | 10s | identity=pre_onboard |
 | `knowledge` | `src/mcp_handlers/consolidated.py:175 action_router` | `src/mcp_handlers/schemas/knowledge.py:344 KnowledgeParams` | 120s | — |
 | `leave_note` | `src/mcp_handlers/knowledge/handlers.py:3986 handle_leave_note` | `src/mcp_handlers/schemas/knowledge.py:308 LeaveNoteParams` | 10s | deprecated→`knowledge` |
-| `list_inference_hosts` | `src/mcp_handlers/support/model_inference.py:79 handle_list_inference_hosts` | `src/mcp_handlers/schemas/core.py:585 ListInferenceHostsParams` | 5s | identity=pre_onboard |
+| `list_inference_hosts` | `src/mcp_handlers/support/model_inference.py:79 handle_list_inference_hosts` | `src/mcp_handlers/schemas/core.py:588 ListInferenceHostsParams` | 5s | identity=pre_onboard |
 | `list_process_bindings` | `src/mcp_handlers/identity/process_binding_handler.py:26 handle_list_process_bindings` | — | 10s | — |
 | `list_tools` | `src/mcp_handlers/introspection/tool_introspection.py:100 handle_list_tools` | `src/mcp_handlers/schemas/admin.py:5 ListToolsParams` | 10s | identity=pre_onboard |
 | `mark_response_complete` | `src/mcp_handlers/lifecycle/operations.py:109 handle_mark_response_complete` | `src/mcp_handlers/schemas/lifecycle.py:251 MarkResponseCompleteParams` | 5s | — |
@@ -68,7 +68,7 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `onboard` | `src/mcp_handlers/identity/handlers.py:1994 handle_onboard_v2` | `src/mcp_handlers/schemas/identity.py:45 OnboardParams` | 15s | identity=pre_onboard |
 | `operator_resume_agent` | `src/mcp_handlers/lifecycle/self_recovery.py:526 handle_operator_resume_agent` | `src/mcp_handlers/schemas/lifecycle.py:327 OperatorResumeAgentParams` | 15s | — |
 | `outcome_correlation` | `src/mcp_handlers/observability/outcome_events.py:725 handle_outcome_correlation` | `src/mcp_handlers/schemas/observability.py:87 OutcomeCorrelationParams` | 30s | — |
-| `outcome_event` | `src/mcp_handlers/observability/outcome_events.py:585 handle_outcome_event` | `src/mcp_handlers/schemas/core.py:467 OutcomeEventParams` | 15s | — |
+| `outcome_event` | `src/mcp_handlers/observability/outcome_events.py:585 handle_outcome_event` | `src/mcp_handlers/schemas/core.py:470 OutcomeEventParams` | 15s | — |
 | `process_agent_update` | `src/mcp_handlers/core.py:436 handle_process_agent_update` | `src/mcp_handlers/schemas/core.py:303 ProcessAgentUpdateParams` | 60s | — |
 | `reassign_reviewer` | `src/mcp_handlers/dialectic/handlers.py:3022 handle_reassign_reviewer` | `src/mcp_handlers/schemas/dialectic.py:168 ReassignReviewerParams` | 15s | — |
 | `record_progress_pulse` | `src/mcp_handlers/resident_progress.py:20 handle_record_progress_pulse` | — | 5s | — |
@@ -83,8 +83,8 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `submit_antithesis` | `src/mcp_handlers/dialectic/handlers.py:2408 handle_submit_antithesis` | `src/mcp_handlers/schemas/dialectic.py:73 SubmitAntithesisParams` | 10s | — |
 | `submit_synthesis` | `src/mcp_handlers/dialectic/handlers.py:2616 handle_submit_synthesis` | `src/mcp_handlers/schemas/dialectic.py:106 SubmitSynthesisParams` | 15s | — |
 | `submit_thesis` | `src/mcp_handlers/dialectic/handlers.py:2144 handle_submit_thesis` | `src/mcp_handlers/schemas/dialectic.py:64 SubmitThesisParams` | 90s | — |
-| `validate_file_path` | `src/mcp_handlers/admin/handlers.py:631 handle_validate_file_path` | `src/mcp_handlers/schemas/core.py:522 ValidateFilePathParams` | 5s | — |
-| `verify_trajectory_identity` | `src/mcp_handlers/identity/handlers.py:2742 handle_verify_trajectory_identity` | `src/mcp_handlers/schemas/identity.py:206 VerifyTrajectoryIdentityParams` | 10s | — |
+| `validate_file_path` | `src/mcp_handlers/admin/handlers.py:631 handle_validate_file_path` | `src/mcp_handlers/schemas/core.py:525 ValidateFilePathParams` | 5s | — |
+| `verify_trajectory_identity` | `src/mcp_handlers/identity/handlers.py:2758 handle_verify_trajectory_identity` | `src/mcp_handlers/schemas/identity.py:206 VerifyTrajectoryIdentityParams` | 10s | — |
 
 ## Action routing
 

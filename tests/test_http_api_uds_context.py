@@ -36,6 +36,27 @@ def test_http_session_signals_leave_plain_http_unattested() -> None:
     assert signals.peer_pid is None
 
 
+def test_http_session_signals_capture_descriptive_runtime_headers() -> None:
+    signals = _build_http_session_signals(
+        _request(
+            headers=[
+                (b"user-agent", b"claude-code/1.0.83"),
+                (b"x-unitares-model", b"claude-opus-4-1-20250805"),
+                (b"x-unitares-model-provider", b"anthropic"),
+                (b"x-unitares-model-source", b"provider_reported"),
+                (b"x-unitares-harness-type", b"claude-code"),
+                (b"x-unitares-harness-version", b"1.0.83"),
+            ]
+        )
+    )
+
+    assert signals.reported_model == "claude-opus-4-1-20250805"
+    assert signals.model_provider == "anthropic"
+    assert signals.model_provenance_source == "provider_reported"
+    assert signals.reported_harness_type == "claude-code"
+    assert signals.harness_version == "1.0.83"
+
+
 @pytest.mark.parametrize("invalid_peer_pid", [True, 0, -1, "4321"])
 def test_http_session_signals_reject_invalid_scope_peer_pid(invalid_peer_pid) -> None:
     signals = _build_http_session_signals(_request(peer_pid=invalid_peer_pid))
