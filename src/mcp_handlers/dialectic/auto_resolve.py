@@ -11,6 +11,7 @@ from typing import Dict, Any
 
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
+from .events import emit_reviewer_reassigned
 from src.dialectic_db import (
     get_active_sessions_async,
     update_session_status_async,
@@ -212,12 +213,45 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
                                     "attempted": "reviewer_reassignment",
                                 })
                                 continue
-                            await add_message_async(
+                            # ⛔EMIT IMMEDIATELY AFTER THE WRITE COMMITS, and
+                            # before the transcript append. The (F)
+                            # reassignment-rate baseline is computed from this
+                            # stream, and until 2026-08-22 the auto path
+                            # emitted nothing at all while a comment in
+                            # handlers.py called the other producer "the single
+                            # chokepoint".
+                            #
+                            # ⛔Order is load-bearing (review 2026-08-22). An
+                            # earlier draft emitted after `add_message_async`,
+                            # inside the same try — so a transcript failure on
+                            # an ALREADY-COMMITTED reassignment unwound to the
+                            # except, which has no `continue`, and fell through
+                            # to the facilitation branch below: no event, no
+                            # count, and a facilitation message naming the
+                            # stale reviewer. `persisted ⇒ recorded` is the
+                            # direction this metric needs; the converse is
+                            # already guaranteed by the refusal check above.
+                            await emit_reviewer_reassigned(
                                 session_id=session_id,
-                                agent_id="system",
-                                message_type="system",
-                                reasoning=f"Reviewer auto-reassigned: {reviewer_agent_id} -> {new_reviewer} (previous reviewer unresponsive)",
+                                old_reviewer_id=reviewer_agent_id,
+                                new_reviewer_id=new_reviewer,
+                                reason="reviewer_unresponsive",
+                                source="sweeper",
                             )
+                            try:
+                                await add_message_async(
+                                    session_id=session_id,
+                                    agent_id="system",
+                                    message_type="system",
+                                    reasoning=f"Reviewer auto-reassigned: {reviewer_agent_id} -> {new_reviewer} (previous reviewer unresponsive)",
+                                )
+                            except Exception as msg_exc:
+                                # Narration only. The reassignment is committed
+                                # and recorded; do not unwind it.
+                                logger.warning(
+                                    f"Reassignment transcript append failed for "
+                                    f"{session_id[:16]}: {msg_exc}"
+                                )
                             reassigned_count += 1
                             details.append({
                                 "session_id": session_id,

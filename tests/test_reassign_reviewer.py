@@ -484,8 +484,15 @@ def test_get_awaiting_facilitation_recovery():
 # ============================================================================
 # dialectic_reviewer_reassigned audit emission (Wave-3 prereq PR #9):
 # disconfirmer (F)'s reassignment-rate metric had NO event-stream source
-# (transcript-only, zero %reassign% audit rows all-time). The single
-# chokepoint _apply_reviewer_reassignment now emits it.
+# (transcript-only, zero %reassign% audit rows all-time).
+#
+# ⛔CORRECTED 2026-08-22: _apply_reviewer_reassignment is NOT "the single
+# chokepoint" — this comment said so until today, matching the same false
+# claim in handlers.py. auto_resolve_stuck_sessions writes reviewers directly
+# and emitted nothing. There are TWO producers; both now route through
+# events.emit_reviewer_reassigned, tagged source="request" / source="sweeper".
+# ⛔The emission is gated on persistence actually succeeding — see
+# test_no_emission_when_persistence_fails_non_strict.
 # ============================================================================
 
 
@@ -512,6 +519,48 @@ async def test_reassignment_emits_audit_event():
     assert event["details"]["old_reviewer_id"] == "agent-reviewer"
     assert event["details"]["new_reviewer_id"] == "agent-new"
     assert event["details"]["reason"] == "stuck reviewer"
+
+
+@pytest.mark.asyncio
+async def test_reassignment_emits_source_discriminator():
+    """`source` tells the (F) reader which producer ran, without re-deriving it."""
+    session = _make_session()
+    emit = AsyncMock(return_value=True)
+    with patch(f"{DIALECTIC}.pg_update_reviewer", new_callable=AsyncMock), \
+         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+         patch("src.audit_db.append_audit_event_async", emit):
+        from src.mcp_handlers.dialectic.handlers import _apply_reviewer_reassignment
+        await _apply_reviewer_reassignment(
+            session.session_id, session, "agent-new", reason="r",
+        )
+
+    assert emit.await_args.args[0]["details"]["source"] == "request"
+
+
+@pytest.mark.asyncio
+async def test_no_emission_when_persistence_fails_non_strict():
+    """⛔A failed write must NOT produce a reassignment event.
+
+    Regression for a 2026-08-22 review finding. `strict_persistence` defaults to
+    False, the except swallows and falls through, and the emit sat outside the
+    try — so a refused write recorded a reassignment that never happened,
+    inflating the numerator of the very metric the emission exists to make
+    measurable. The live caller at `handle_get_dialectic_session`'s
+    `check_timeout` branch uses the default, so this was reachable by any bound
+    agent.
+    """
+    session = _make_session()
+    emit = AsyncMock(return_value=True)
+    with patch(f"{DIALECTIC}.pg_update_reviewer",
+               new_callable=AsyncMock, return_value=False), \
+         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+         patch("src.audit_db.append_audit_event_async", emit):
+        from src.mcp_handlers.dialectic.handlers import _apply_reviewer_reassignment
+        await _apply_reviewer_reassignment(
+            session.session_id, session, "agent-new", reason="r",
+        )  # non-strict: the RuntimeError is swallowed, not raised
+
+    emit.assert_not_awaited()
 
 
 @pytest.mark.asyncio

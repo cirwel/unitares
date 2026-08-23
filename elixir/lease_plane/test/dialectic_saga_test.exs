@@ -353,6 +353,35 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
       assert {:error, :session_not_found} =
                DialecticSaga.update_reviewer("test_elixir_nope_rev", "rev-1")
     end
+
+    # ⛔Regression for a 2026-08-22 review finding. The guarded UPDATE excludes
+    # terminal rows, and this branch used to fall back to "does the session
+    # exist?" and return :ok on a hit -- reporting a successful reviewer write
+    # when NOTHING was written. Python treats ok:true as persisted and emits
+    # `dialectic_reviewer_reassigned` on it, so a terminal row inflated the
+    # criterion-10 reassignment count with reassignments that never happened.
+    # Existence is not a write.
+    for status <- ["resolved", "failed", "escalated"] do
+      test "terminal session (#{status}) -> :session_terminal, and does not write" do
+        status = unquote(status)
+        session_id = insert_dialectic_session(phase: "antithesis", status: "active")
+        on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+        assert :ok = DialecticSaga.update_reviewer(session_id, "rev-before")
+        {:ok, _} =
+          Postgrex.query(
+            UnitaresLeasePlane.DB,
+            "UPDATE core.dialectic_sessions SET status = $2 WHERE session_id = $1",
+            [session_id, status]
+          )
+
+        assert {:error, :session_terminal} =
+                 DialecticSaga.update_reviewer(session_id, "rev-after")
+
+        assert session_reviewer(session_id) == "rev-before",
+               "a terminal row must keep its reviewer -- the guarded UPDATE wrote nothing"
+      end
+    end
   end
 
   describe "create_session/1" do

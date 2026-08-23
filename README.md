@@ -19,26 +19,14 @@ can search — record, score, interrupt, remember. Plain-language version:
 [What UNITARES is](docs/PRODUCT_DEFINITION.md). It is a self-hosted MCP/HTTP
 service you run yourself — not an agent framework, not a hosted platform.
 
-**Status:** v2.19.0. Continuously operated since November 2025 under a single
-operator: 71,141 stored EISV state rows and six long-running resident agents,
-one of them on separate hardware. 4,573,890 audit/telemetry events were logged
-over the same period, but 91.4% of those are session-resolution and
-cross-device-call records, not independent policy decisions. A frozen
-falsifiability eval against a permutation null did **not detect** predictive
-lift (selective p = 0.070–0.567). Read that as a non-detection on a 224-row
-cohort, not as a measured ceiling: on a cohort of that shape the harness cannot
-resolve a weak effect, which the
-[power audit](docs/operations/falsifiability-power-audit-2026-08-23.md)
-quantifies. Either way it says nothing about the accountability mechanism the
-score sits inside: identity-bound writes, claim-vs-recorded-evidence
-comparison, and an enforced pause until recovery all run independent of it —
-and that mechanism carries its own, separately scoped limits, so read the
-non-detection as bearing on neither. The defensible claim today is an
-accountability instrument whose circuit breaker demonstrably **actuates**; that
-it *protects* is untested, and at the last audit a cadence window suppressed
-delivery of 89.4% of recorded pauses.
-[Evidence and limits](#evidence-and-limits) scopes every number on this page,
-including both of those.
+**Status:** v2.19.0. Continuously operated since November 2025 — 71,141 stored
+EISV state rows and six long-running resident agents, one on separate hardware.
+This is a single-operator deployment whose governed agents are largely the ones
+building it: evidence that the system runs at length under real load, not an
+efficacy study. Two things it does *not* establish — a falsifiability eval that
+detected no predictive lift, and a circuit breaker that actuates but is not
+shown to protect — are scoped, with every other number on this page, in
+[Evidence and limits](#evidence-and-limits).
 
 <div align="center">
 
@@ -50,8 +38,6 @@ including both of those.
 [![Quickstart](https://img.shields.io/badge/▶-quickstart-5eead4?style=for-the-badge&labelColor=0f171f)](#quickstart)
 [![Evidence](https://img.shields.io/badge/evidence-check_it-f5a623?style=for-the-badge&labelColor=0f171f)](#evidence-and-limits)
 [![Docs](https://img.shields.io/badge/docs-read-7d8f97?style=for-the-badge&labelColor=0f171f)](docs/README.md)
-
-*The DOI above identifies a public preprint, not peer-reviewed validation.*
 
 </div>
 
@@ -269,22 +255,18 @@ citing a fleet number.
 
 What is not yet established:
 
-- **Predictive lift.** Unresolved — not demonstrated, and not disproved. In
-  the frozen 2026-08-09 outcome-lift evaluation no overall slice separated from
-  the permutation null after model selection (selective p = 0.070–0.567, none
-  at or below the 0.05 threshold); some unadjusted metrics improved, none
-  cleared the selection-aware threshold. That is a non-detection. Its power was
-  unmeasured until the
-  [power audit](docs/operations/falsifiability-power-audit-2026-08-23.md),
-  which finds the instrument cannot resolve a weak effect on a cohort of this
-  shape — so the snapshot sets no ceiling on EISV's forecasting power, as the
-  [Reviewer Guide](docs/REVIEWER_GUIDE.md) and the
-  [stop rule](docs/proposals/eisv-outcome-grounding-stop-rule-v0.md) both
-  already stated. The question is settled by the pre-registered 2026-12-01
-  read, not by this snapshot. There is no demonstrated prevention. The Reviewer
-  Guide gives the frozen command and interpretation; compact output is
-  preserved in the
-  [dated ablation snapshot](docs/operations/eisv-ablation-frozen-2026-08-09.md).
+- **Incident prevention.** No incident has been shown to be prevented. The
+  system records, scores, interrupts, and remembers; that a governed run went
+  better than an ungoverned one is unmeasured.
+- **Predictive lift — unresolved.** The frozen 2026-08-09 evaluation detected
+  no lift over a previous-outcome baseline (selective p = 0.070–0.567, none
+  clearing 0.05). That is a non-detection, not a ceiling: the
+  [power audit](docs/operations/falsifiability-power-audit-2026-08-23.md)
+  measures roughly 3% power against a weak effect on a cohort of that shape.
+  The pre-registered
+  [2026-12-01 read](docs/proposals/eisv-outcome-grounding-stop-rule-v0.md)
+  settles it. Command and rows: [Reviewer Guide](docs/REVIEWER_GUIDE.md),
+  [ablation snapshot](docs/operations/eisv-ablation-frozen-2026-08-09.md).
 - **Behavior change from review and coordination.** The system records that the
   review and coordination surfaces ran and what they concluded; whether they
   change an agent's subsequent behavior is unmeasured.
@@ -296,16 +278,10 @@ What is not yet established:
 - **Pause delivery.** Producing a pause and delivering it are separate events.
   At the 2026-08-06 audit a `gap_suppress` cadence window downgraded 195 of 218
   recorded pauses (89.4%) before they reached the agent. Delivery is live — a
-  governed `lifecycle_paused` event landed 2026-08-09 — but the current
-  suppression rate has not been re-measured since, and no surface should be
-  read as claiming the breaker protects the fleet. The project's own contract
-  ledger records "enforcement is currently protecting the fleet" as **untested**
-  and "the enforcement path working live" as **refuted** for the one event that
-  was cited for it (rows 24, 27, 28 of
-  [the proprioception contract](docs/ontology/eisv-proprioception-contract.md));
-  the earned claim is that the breaker *can actuate*. See the
-  [scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md) for how narrow that
-  surface is.
+  governed pause landed 2026-08-09 — but the rate has not been re-measured. The
+  contract ledger records fleet protection as untested; the earned claim is
+  that the breaker *can actuate*
+  ([rows 24, 27, 28](docs/ontology/eisv-proprioception-contract.md)).
 
 The instrument-frame validation the system does claim — reliability,
 faithfulness under intervention, calibration — is scoped and partly built; the
