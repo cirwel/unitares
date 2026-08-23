@@ -14,7 +14,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**129 flags.**
+**130 flags.**
 
 | Flag | Default | Purpose | Read at |
 |---|---|---|---|
@@ -42,6 +42,7 @@ index; that one is the curated decision record.
 | `UNITARES_BUILD_SHA` | `''` | Best-effort short commit SHA of the running build (``git rev-parse``) | src/versioning.py |
 | `UNITARES_CALIBRATION_ALLOW_SCRAPED_CONFIDENCE` | `''` | Shared body for outcome_event recording | src/mcp_handlers/observability/outcome_events.py |
 | `UNITARES_CALIBRATION_BACKEND` | `'postgres'` | Initialize calibration checker with confidence bins | src/calibration.py |
+| `UNITARES_CALL_MODEL_TIMEOUT` | `(required)` | Wall-clock budget for one call_model round-trip | src/mcp_handlers/support/model_inference.py |
 | `UNITARES_CLASS_CALIBRATION` | `''` | Merge a deployment-local per-class calibration overlay into the class-keyed dicts, if ``UNITARES_CLASS_CALIBRATION`` names a JSON file | config/governance_config.py |
 | `UNITARES_CLAUDE_CLI` | `''` | Return the operator-pinned CLI path for a known adapter, if any. | src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_CODEX_CLI` | `''` | Return the operator-pinned CLI path for a known adapter, if any. | src/mcp_handlers/support/host_adapter.py |

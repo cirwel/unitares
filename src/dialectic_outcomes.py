@@ -38,6 +38,24 @@ CANARY = "canary"
 OPEN = "open"
 
 # Statuses that mean the session has stopped, whatever the reason.
+#
+# ⛔TWO OF THESE FOUR ARE UNSTORABLE, and that is not a defect to "fix".
+# `dialectic_sessions_status_check` permits only
+# {active, resolved, escalated, failed, quorum_voting}, so `timeout` and
+# `abandoned` are rejected by Postgres with 23514 and have never existed. They
+# are listed here defensively: this is an analytics classifier, and a status it
+# does not know reads as OPEN, so dropping them would silently misclassify if
+# the CHECK is ever widened. See `test_terminal_statuses_vs_schema_domain`.
+#
+# ⛔DO NOT propagate this set into write guards. It is not a write gate, and
+# `DialecticDB.TERMINAL_WRITE_GUARD` deliberately differs — read the rationale
+# there before changing either. On 2026-08-23 a session read the difference
+# between the two as five drifted lists and "reconciled" them: widening the
+# guards to include `escalated` made a stray escalated row IMMORTAL (the
+# sweeper's reader still returns it as live, every write is then refused, and
+# `reopen_session` only accepts `failed`), which is exactly the outcome
+# `TERMINAL_WRITE_GUARD`'s comment says it exists to prevent. The two sets look
+# inconsistent and are not.
 TERMINAL_STATUSES = frozenset({"resolved", "failed", "timeout", "abandoned"})
 
 CANARY_LABEL_PREFIX = "canary_dialectic"
