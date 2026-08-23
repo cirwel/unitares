@@ -1241,9 +1241,38 @@ def collect_claude_hooks(warnings: list[str]) -> list[Automation]:
     return results
 
 
+def check_own_install_health(warnings: list[str]) -> None:
+    """This tool's own PATH entrypoint must stay a symlink to its canonical
+    source (this operator's `unitares-ops` checkout), never a hand-installed
+    copy. A copy silently drifts behind every fix landed here -- found
+    2026-08-22 at three commits / 89 changed lines behind, undetected for
+    days, with no measured symptom to trigger anyone noticing. A symlink
+    cannot drift the same way, so this is a one-time self-check rather than
+    a new watchdog: the census already runs on its own schedule and already
+    has a warnings channel, so a second automation to police this one would
+    be automating-about-automation for a problem the symlink itself
+    eliminates as long as it stays a symlink.
+    """
+    installed = HOME / ".local/bin/unitares-automations"
+    if not installed.exists():
+        return
+    canonical = HOME / ".local/share/cirwel/unitares-ops/scripts/ops/unitares-automations"
+    if not installed.is_symlink():
+        warnings.append(
+            f"self: {short_path(installed)} is a hand-installed copy, not a symlink -- "
+            f"re-point with `ln -sfn {canonical} {installed}`"
+        )
+    elif installed.resolve() != canonical.resolve():
+        warnings.append(
+            f"self: {short_path(installed)} symlinks to {installed.resolve()}, "
+            f"not the canonical {short_path(canonical)}"
+        )
+
+
 def collect_all(projects_root: Path) -> dict[str, Any]:
     warnings: list[str] = []
     items: list[Automation] = []
+    check_own_install_health(warnings)
     collectors = [
         collect_launchd,
         collect_crontab,
