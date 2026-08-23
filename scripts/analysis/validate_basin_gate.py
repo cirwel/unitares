@@ -332,8 +332,16 @@ def main() -> int:
     live_skipped: Optional[str] = None
     if args.db:
         import asyncio
-        live_ok, _examined, live_skipped = asyncio.run(run_live(args.dsn, args.limit))
+        live_ok, live_examined, live_skipped = asyncio.run(run_live(args.dsn, args.limit))
         ok &= live_ok
+        if live_ok and live_examined == 0 and not live_skipped:
+            # Belt and braces. Today every skip path in `run_live` populates the
+            # reason string, so this is unreachable -- but the count is the
+            # ground truth and the string is a report of it. Deriving the
+            # verdict from the count means a future skip path that forgets the
+            # string still cannot be read as a pass: nothing examined is nothing
+            # established, whatever anyone remembered to say about it.
+            live_skipped = "live arm examined 0 rows"
 
     if not ok:
         print("\nFAIL — see above")
