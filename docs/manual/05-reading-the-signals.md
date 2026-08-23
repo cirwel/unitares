@@ -101,8 +101,11 @@ best of several candidates. In the frozen 2026-08-09 trusted-anchor matrix,
 every overall scope/window/lead slice is `NOISE-LEVEL` against the
 best-of-candidates null (selective p = 0.070–0.567). Unadjusted lift sometimes
 appears, usually in `prior_risk`, `prior_s`, or dispersion, but none clears
-p < 0.05 after that correction. There is **no demonstrated prevention**. Run it
-yourself before treating EISV as load-bearing.
+p < 0.05 after that correction. There is **no demonstrated prevention**. A
+`NOISE-LEVEL` slice does not separate "no association" from "too small a cohort
+to see one"; the
+[power audit](../operations/falsifiability-power-audit-2026-08-23.md) measures
+which applies here. Run both yourself before treating EISV as load-bearing.
 
 For optional intuition (not a spec),
 [`../essays/tonality-metaphor.md`](../essays/tonality-metaphor.md) uses a bounded

@@ -17,8 +17,12 @@ python3 scripts/analysis/eisv_ablation_matrix.py \
   --telemetry-strata source,warmup,enforcement,missingness
 ```
 
-The default selection-aware null uses 200 whole-cluster label permutations with
-seed 0. `trusted` requires an `external_signal` anchor and a joinable prior EISV
+The default selection-aware null uses 200 whole-cluster permutations with seed
+0. Those permutations reassign whole EISV readings between `(agent, prior-state
+snapshot)` clusters and hold the **labels fixed**, so the previous-outcome
+baseline is identical in every resample. (This sentence previously said "label
+permutations", copying a since-corrected `--selective-null-resamples` help
+string; the null never shuffled labels, and no row below changes.) `trusted` requires an `external_signal` anchor and a joinable prior EISV
 snapshot. The BEAM harness lane is excluded by default. No uncertainty bootstrap
 was requested for this documentation audit.
 
@@ -38,6 +42,31 @@ was requested for this documentation audit.
 | task | 90d | 0m | 227 | 53 | 29 | 16 | 227 | 0.435 | 0.1669 | `prior_risk_binned` | 0.147 | 0.144 | 0.488 | 0.0037 | `NOISE-LEVEL` |
 | task | 90d | 5m | 227 | 53 | 28 | 16 | 221 | 0.435 | 0.1669 | `prior_risk_binned` | 0.232 | 0.149 | 0.159 | 0.0126 | `NOISE-LEVEL` |
 | task | 90d | 30m | 227 | 53 | 28 | 16 | 191 | 0.435 | 0.1669 | `prior_s_binned` | 0.343 | 0.167 | 0.085 | 0.0101 | `NOISE-LEVEL` |
+
+## Errata — what this transcription dropped (added 2026-08-23)
+
+The rows above are a **partial** transcription of the harness output. Two
+columns the harness emits, and its own reading instructions require, are
+missing and were never recorded elsewhere:
+
+- **`Null max p95`** — the decision threshold. `Selective p` alone does not show
+  how large a lift this cohort would have needed. The pre-registered stop rule
+  makes `AUC delta > Null max p95` a separate PASS condition, so the column is
+  load-bearing, not decorative.
+- **`Null clusters`** — the total number of permutable units. The harness prints
+  "few clusters bound how small `Selective p` can get, so read them together",
+  and every downstream citation quotes the p-values without it. `Bad clusters`
+  (28–29) is a different count and is not a substitute.
+
+Also dropped: `Prior risk`, `Envelope`, `AUC delta 95% CI`, `Brier improvement
+95% CI`, `Brier perm p`, and `Beats both?`.
+
+Recovering these requires re-running the frozen command against the deployment
+database at the same `--as-of` cutoff. Until that happens, cite the p-values in
+this table **only** alongside the power characterisation in
+[`falsifiability-power-audit-2026-08-23.md`](falsifiability-power-audit-2026-08-23.md),
+which measures what this instrument could have detected on a cohort of this
+shape. The rows themselves are unchanged.
 
 ## Interpretation
 
