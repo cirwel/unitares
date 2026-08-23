@@ -51,11 +51,14 @@ The structural verifier drops any P001 finding whose flagged line matches
 `name = ...create_task(...)` — the assignment is sufficient evidence that
 the ref is stored. See `_P001_TASK_ASSIGNMENT` in `agent.py`.
 
-The verifier also drops findings on `create_tracked_task(...)` call sites:
-that helper is the project's blessed wrapper which stores the task ref in
-a tracked set by construction. False-positive sweep 2026-04-17: flagged
-two sites in `mcp_server_std.py:511,551` (both `create_tracked_task(...)`
-calls). See `_P001_TRACKED_HELPER` in `agent.py`.
+The verifier also drops findings on `create_tracked_task(...)` and
+`_supervised_create_task(...)`: they are the project's public/private pair of
+blessed wrappers and store the task ref in the supervisor registry by
+construction. False-positive sweep 2026-04-17 flagged two public-alias sites
+in `mcp_server_std.py:511,551`. False-positive sweep 2026-08-23 flagged the
+private helper's definition plus 11 call sites in `background_tasks.py`, even
+though `_supervised_tasks.append(task)` and done-callback cleanup were present.
+See `_P001_TRACKED_HELPER` in `agent.py`.
 
 **Hint template:** `fire-and-forget task — store ref or use TaskGroup`
 
@@ -422,6 +425,15 @@ The `src_line` storage fix from the 2026-05-04 note remains separately
 useful for line-drift FPs and is tracked outside this rule. Move-to-
 experimental stays off the table as long as the structural-verifier path
 keeps closing new shapes.
+
+False-positive sweep 2026-08-23: `_capture_identity` in the async SDK was
+flagged at its defensive `if raw.get("success") is False: return` guard. The
+helper receives the already-unwrapped flat tool payload: the SDK call path first
+runs `_parse_mcp_result()` (which raises on MCP `isError`) and then
+`_raise_for_tool_failure()` (which raises on tool-level failure). The guard is
+defense in depth for direct helper callers, not a one-legged envelope parser.
+The structural helper verifier now recognizes `_capture_identity` alongside
+the existing `_raise_for_*` family.
 
 **Why this is in the active library and not experimental:** the shape is
 reasonably lexical — the model can spot a conditional on one success flag

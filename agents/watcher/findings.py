@@ -850,8 +850,15 @@ def _format_findings_block(
         fp = str(f.get("fingerprint", ""))[:8]
         status = f.get("status", "open")
         marker = "" if status == "open" else f" ({status})"
+        if f.get("path_gone"):
+            marker += " (path gone; snapshot retained)"
         cls_tag = f"[{vcls}] " if vcls else ""
         lines.append(f"  [{sev}] {cls_tag}{pat} {file}:{line_no} — {hint}  (#{fp}){marker}")
+        if f.get("path_gone") and f.get("line_content"):
+            # JSON quoting keeps a retained source line visibly data-shaped and
+            # escapes control characters before it enters an agent's context.
+            snapshot = str(f["line_content"]).strip()[:240]
+            lines.append(f"    retained source line: {json.dumps(snapshot)}")
     lines.append("")
     lines.append(f"Total unresolved: {len(findings)} (showing {len(shown)})")
     if out_of_scope_total:
@@ -973,12 +980,18 @@ def print_unresolved(scope_root: Path | None = None) -> int:
     if scope_root is None:
         scope_root = _resolve_session_scope_root()
 
-    findings = [
-        f
-        for f in _iter_findings_raw()
-        if f.get("status", "open") in ("open", "surfaced")
-        and _finding_target_exists(f)
-    ]
+    findings: list[dict[str, Any]] = []
+    for finding in _iter_findings_raw():
+        if finding.get("status", "open") not in ("open", "surfaced"):
+            continue
+        if _finding_target_exists(finding):
+            findings.append(finding)
+            continue
+        if finding.get("line_content"):
+            # A retained snapshot is still adjudicable after its worktree is
+            # removed. Mark only the display copy so SessionStart remains
+            # strictly read-only; the next lifecycle sweep persists path_gone.
+            findings.append({**finding, "path_gone": True})
     in_scope, out_groups = _partition_findings_by_scope(findings, scope_root)
 
     block, _shown = _format_findings_block(
