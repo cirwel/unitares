@@ -16,10 +16,11 @@ scientific falsifications of UNITARES.
 
 The outcome-lift evidence is a non-detection whose read-specific power is
 unknown. The frozen record omitted total permutation-cluster geometry, and the
-first simulation reused cluster IDs as outcome pairing IDs, invalidating its 3%
-and 80%-power characterisation. A corrected run of the same hypothetical
-70-cluster scenario estimates 17% power [95% Wilson CI 7%–34%] at median AUC
-about 0.57, but it is not a bound on the frozen cohort. The individuality test
+first simulation reused cluster IDs as outcome pairing IDs and let planted
+strength change expected class balance, invalidating its 3% and 80%-power
+characterisation. A corrected run of the same hypothetical 70-cluster scenario
+estimates 13% power [95% Wilson CI 5%–30%] at median AUC about 0.57, but it is
+not a bound on the frozen cohort. The individuality test
 had an autocorrelation-hostile veto, effective independent n=4, replicated host
 identities, and a long wall-clock outage treated as adjacent observations. The
 basin and observer-loop reads did not run the required counterfactual.

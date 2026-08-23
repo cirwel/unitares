@@ -40,50 +40,6 @@ evidence class.
 
 ---
 
-## What it does
-
-UNITARES sits at checkpoints in a longer-running process. The deployed contract
-at each stage is explicit:
-
-| Stage | Deployed contract |
-|---|---|
-| **Identity** | `start_session` binds later writes to a process instance. Reads can remain open; writes are proof-carrying when `STRICT_IDENTITY_REQUIRED` is set and auto-bound otherwise. See the [trust contract](docs/trust-contract.md). |
-| **Claim and evidence** | `sync_state` records what the process says it did and its stated confidence. Tests, exit codes, reviews, and other outcome records can be associated with that claim, with their producer and provenance retained. |
-| **State and policy** | The server updates longitudinal state and returns an action, reason, next step, and enforcement record. Graduated `guide` actions sit on the proceed side of the policy ladder. |
-| **Enforcement and recovery** | A policy pause and an applied pause are separate facts. When a pause is applied on a governed write surface, later check-ins are refused until recovery succeeds; actions outside that surface remain the host's responsibility. |
-| **Audit, memory, and review** | The process can store an attributed finding, request structured review, and leave the claim, evidence, policy, and recovery chain available for replay. |
-
-The stable integration boundary is the returned policy action, reason, next
-step, and enforcement record. EISV coordinates are diagnostic state estimates,
-not an independent correctness verdict. A recorded pause proves neither that it
-reached every host surface nor that pausing improved the eventual outcome.
-
-Selected state values carry an explicit provenance label, so a number can be
-wrong but cannot silently pretend to be a measurement. A mechanical lint
-enforces label presence on the metrics read surface today; the full
-`measured` / `derived` / `prior` / `unknown` vocabulary and wider coverage are
-the staged target tracked in the [trust contract](docs/trust-contract.md).
-
-The checkpoint loop is deliberately small. Four further surfaces build **on**
-its attributable record. Each is independently usable and none is required to
-run the loop.
-
-| Surface | What it adds |
-|---|---|
-| **Shared knowledge graph** | A provenance-aware store agents search before acting and write findings back to, with tagging, supersede, and archival lifecycle. |
-| **Structured review** | Agents request review of each other's work; theses, disagreement, and resolution are recorded rather than resolved in chat. |
-| **Reference resident agents** | Long-running sweep, audit, triage, and narration agents shipped as working examples, not as a framework to subclass. |
-| **Elixir/OTP coordination** | Leases, handoffs, dispatch, and supervision for agents that outlive a single process. |
-
-Identity binding connects them: an accountable write makes a stored finding, a
-review, or a held lease attributable to a process rather than to a display
-label. Operators can inspect lifecycle, state, evidence, and policy history
-through MCP/HTTP APIs and the self-hosted dashboard.
-
-The public [`unitares-sdk`](agents/sdk/README.md) handles connection, identity,
-check-ins, heartbeats, and knowledge participation for resident agents. Its
-README carries the current install command and server compatibility guidance.
-
 ## Quickstart
 
 ```bash
@@ -95,33 +51,55 @@ make demo
 
 This release-tagged Docker Compose flow is the supported install path for a
 local, single-operator deployment. It brings up PostgreSQL/AGE/pgvector, Redis,
-and the server on loopback without requiring manual database initialization.
-The source-based macOS playbook is an advanced bare-metal path, not a second
-default installer.
+and the server on loopback without manual database initialization.
 
 `make demo` onboards a fresh process and sends six check-ins over the real API,
 printing the response shape, decision reason, state detail, and warmup position.
-In about a minute you have the full loop running against your own stack.
+In about a minute the checkpoint loop is running against your own stack.
 
 The dashboard is at `http://localhost:8767/dashboard`; MCP clients connect to
 `http://localhost:8767/mcp/`.
 
-Use the surface that matches the question:
+Evaluating rather than installing? Start with [Evidence and limits](#evidence-and-limits)
+and the [Reviewer Guide](docs/REVIEWER_GUIDE.md). For deployment and integration,
+use the [user manual](docs/manual/README.md).
 
-- **What does the current evidence support?** Start with
-  [Evidence and limits](#evidence-and-limits), then inspect the frozen
-  [outcome-lift artifact](docs/operations/eisv-ablation-frozen-2026-08-09.md)
-  and its [power audit](docs/operations/falsifiability-power-audit-2026-08-23.md).
-  The demo exercises the protocol; it does not establish predictive lift.
-- **How should I evaluate my own deployment?** Use the
-  [Reviewer Guide](docs/REVIEWER_GUIDE.md) and predeclare the target,
-  independent unit, minimum relevant effect, decision rule, and read protocol
-  before inspecting outcomes.
-- **What does sustained operation look like?** Read the
-  [maintainer-deployment snapshot](docs/PRODUCTION_SNAPSHOT.md) and its
-  [data caveat](docs/operations/DEPLOYMENT_DATA_CAVEAT.md).
-- **How do I operate or integrate it?** Follow the
-  [user manual](docs/manual/README.md).
+## What it does
+
+At each checkpoint, UNITARES performs a small, explicit loop:
+
+| Stage | Deployed contract |
+|---|---|
+| **Identity** | `start_session` binds later writes to a process instance. Reads can remain open; writes are proof-carrying when `STRICT_IDENTITY_REQUIRED` is set and auto-bound otherwise. See the [trust contract](docs/trust-contract.md). |
+| **Claim and evidence** | `sync_state` records what the process says it did and its stated confidence. Tests, exit codes, reviews, and other outcome records can be associated with that claim, with their producer and provenance retained. |
+| **State and policy** | The server updates longitudinal state and returns an action, reason, next step, and enforcement record. Graduated `guide` actions sit on the proceed side of the policy ladder. |
+| **Enforcement and recovery** | A policy pause and an applied pause are separate facts. When a pause is applied on a governed write surface, later check-ins are refused until recovery succeeds; actions outside that surface remain the host's responsibility. |
+| **Audit, memory, and review** | The process can store an attributed finding, request structured review, and leave the claim, evidence, policy, and recovery chain available for replay. |
+
+The returned policy action, reason, next step, and enforcement record are the
+stable integration boundary. EISV coordinates are diagnostic state estimates,
+not an independent correctness verdict. A recorded pause proves neither that it
+reached every host surface nor that pausing improved the eventual outcome.
+
+Selected state values carry provenance labels. The metrics read surface enforces
+label presence today; the full `measured` / `derived` / `prior` / `unknown`
+vocabulary and wider coverage remain staged in the
+[trust contract](docs/trust-contract.md).
+
+Four optional surfaces build on the checkpoint record:
+
+| Surface | What it adds |
+|---|---|
+| **Shared knowledge graph** | A provenance-aware store agents search before acting and write findings back to, with tagging, supersede, and archival lifecycle. |
+| **Structured review** | Agents request review of each other's work; theses, disagreement, and resolution are recorded rather than resolved in chat. |
+| **Reference resident agents** | Long-running sweep, audit, triage, and narration agents shipped as working examples, not as a framework to subclass. |
+| **Elixir/OTP coordination** | Leases, handoffs, dispatch, and supervision for agents that outlive a single process. |
+
+Identity binding makes stored findings, reviews, and leases attributable to a
+process rather than a display label. Operators can inspect lifecycle, state,
+evidence, and policy history through MCP/HTTP APIs and the self-hosted dashboard.
+The public [`unitares-sdk`](agents/sdk/README.md) handles connection, identity,
+check-ins, heartbeats, and knowledge participation for resident agents.
 
 ## Integrate an MCP client
 
@@ -275,7 +253,7 @@ citing a fleet number.
 | Sustained operation | **Operational observation** | The maintainer deployment has run continuously under real load. The counts above are rows, events, and configured residents. |
 | Identity and audit trail | **Exercised path** | Process-bound writes, evidence records, policy responses, and replayable audit history are deployed. This establishes mechanism execution. |
 | Pause actuation and delivery | **Event reconciled; protection untested** | A governed pause landed on 2026-08-09. At the 2026-08-06 audit, a cadence window had downgraded 195 of 218 recorded pauses (89.4%) before delivery; the current rate has not been re-measured. See [ledger rows 24, 27, and 28](docs/ontology/eisv-proprioception-contract.md). |
-| Predictive lift | **Non-detection; inconclusive for weak effects** | In the frozen 2026-08-09 cohort, no slice cleared the selection-aware null (selective p = 0.070–0.567). The [power audit](docs/operations/falsifiability-power-audit-2026-08-23.md) estimates roughly 3% power against a weak effect on a cohort of that shape, so the result sets no standing AUC ceiling. |
+| Predictive lift | **Non-detection; inconclusive for weak effects** | In the frozen 2026-08-09 cohort, no slice cleared the selection-aware null (selective p = 0.070–0.567). Its first power characterisation was withdrawn for corrupted synthetic pairing and uncontrolled class-balance drift, and the preserved record omits the total cluster geometry needed to reconstruct read-specific power. The corrected [power audit](docs/operations/falsifiability-power-audit-2026-08-23.md) therefore sets no standing AUC ceiling. |
 | Incident prevention or benefit from pausing | **Untested** | No governed-versus-ungoverned comparison has shown an incident prevented or an outcome improved by pausing. |
 | Behavior change from review and coordination | **Untested** | The system records that review and coordination ran and what they concluded; downstream behavioral effect has not been measured. |
 | Robustness to a motivated attacker | **Structural limit** | A capable process can optimize or conceal behavior outside the monitored proxy; independent evidence remains necessary. See the [scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md). |

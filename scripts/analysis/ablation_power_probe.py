@@ -72,7 +72,55 @@ _EPOCH = datetime(2026, 5, 1, tzinfo=timezone.utc)
 
 
 def _sigmoid(x: float) -> float:
-    return 1.0 / (1.0 + math.exp(-x))
+    if x >= 0.0:
+        exp_neg = math.exp(-x)
+        return 1.0 / (1.0 + exp_neg)
+    exp_pos = math.exp(x)
+    return exp_pos / (1.0 + exp_pos)
+
+
+def _calibrate_intercept(
+    *,
+    beta: float,
+    latents: Sequence[float],
+    sizes: Sequence[int],
+    target_bad_rate: float,
+) -> float:
+    """Match the conditional expected row-level class balance.
+
+    ``logit(target_bad_rate)`` is only the right intercept when ``beta == 0``.
+    With a non-zero planted effect, integrating the logistic curve over the
+    cluster latents shifts the marginal bad rate. Calibrate against each
+    generated cohort so effect strength is not confounded with class balance.
+    """
+    if not math.isfinite(beta):
+        raise ValueError("beta must be finite")
+    if not latents or len(latents) != len(sizes) or any(size <= 0 for size in sizes):
+        raise ValueError("latents and positive cluster sizes must align")
+    if not 0.0 < target_bad_rate < 1.0:
+        raise ValueError("target bad rate must be strictly between 0 and 1")
+
+    shifts = [beta * latent for latent in latents]
+    total_rows = sum(sizes)
+
+    def expected_bad_rate(intercept: float) -> float:
+        return sum(
+            size * _sigmoid(intercept + shift)
+            for size, shift in zip(sizes, shifts, strict=True)
+        ) / total_rows
+
+    # These bounds put every cluster at least 50 logits below/above its
+    # transition point. Bisection is deterministic and ample precision for a
+    # Monte Carlo probe.
+    lower = -50.0 - max(shifts)
+    upper = 50.0 - min(shifts)
+    for _ in range(80):
+        midpoint = (lower + upper) / 2.0
+        if expected_bad_rate(midpoint) < target_bad_rate:
+            lower = midpoint
+        else:
+            upper = midpoint
+    return (lower + upper) / 2.0
 
 
 @dataclass(frozen=True)
@@ -161,11 +209,16 @@ def synthesize_cohort(
     for _ in range(max(0, rows - clusters)):
         sizes[rng.randrange(clusters)] += 1
 
-    alpha = math.log(bad_rate / (1.0 - bad_rate))
+    latents = [rng.gauss(0.0, 1.0) for _ in sizes]
+    alpha = _calibrate_intercept(
+        beta=beta,
+        latents=latents,
+        sizes=sizes,
+        target_bad_rate=bad_rate,
+    )
     out: list[OutcomeRow] = []
     stamp = _EPOCH
-    for cluster_id, size in enumerate(sizes):
-        latent = rng.gauss(0.0, 1.0)
+    for cluster_id, (size, latent) in enumerate(zip(sizes, latents, strict=True)):
         risk = _sigmoid(latent)
         p_bad = _sigmoid(alpha + beta * latent)
         agent = f"agent-{cluster_id % agents}"
@@ -315,6 +368,18 @@ def _fmt(value: float | None, digits: int = 3) -> str:
     return "-" if value is None else f"{value:.{digits}f}"
 
 
+def _parse_betas(raw: str) -> tuple[float, ...]:
+    try:
+        values = tuple(float(part) for part in raw.split(",") if part.strip())
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("betas must be comma-separated numbers") from exc
+    if not values:
+        raise argparse.ArgumentTypeError("at least one planted beta is required")
+    if any(not math.isfinite(value) for value in values):
+        raise argparse.ArgumentTypeError("betas must be finite")
+    return values
+
+
 def format_report(
     results: Sequence[PowerRow],
     *,
@@ -398,7 +463,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=0, help="Deterministic seed.")
     parser.add_argument(
         "--betas",
-        type=lambda raw: tuple(float(part) for part in raw.split(",") if part.strip()),
+        type=_parse_betas,
         default=DEFAULT_BETAS,
         help="Comma-separated cluster-level log-odds effect sizes to sweep.",
     )

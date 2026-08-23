@@ -53,8 +53,46 @@ def test_planted_effect_is_actually_present_at_the_requested_strength():
     assert sum(strong) / len(strong) > 0.70
 
 
+@pytest.mark.parametrize("beta", [0.0, 0.75, 1.5, -1.5])
+def test_intercept_calibration_preserves_expected_class_balance(beta):
+    """Changing effect strength must not silently change outcome prevalence."""
+    import scripts.analysis.ablation_power_probe as probe
+
+    latents = [-1.8, -0.4, 0.2, 1.3]
+    sizes = [3, 11, 5, 8]
+    target = 0.237
+    intercept = probe._calibrate_intercept(
+        beta=beta,
+        latents=latents,
+        sizes=sizes,
+        target_bad_rate=target,
+    )
+    realised_expectation = sum(
+        size * probe._sigmoid(intercept + beta * latent)
+        for size, latent in zip(sizes, latents, strict=True)
+    ) / sum(sizes)
+
+    assert realised_expectation == pytest.approx(target, abs=1e-12)
+
+
+def test_synthetic_cohort_keeps_prevalence_fixed_at_a_strong_effect():
+    """Integration guard: the calibrated intercept must be wired into generation."""
+    target = FROZEN_BAD / FROZEN_ROWS
+    rows = synthesize_cohort(
+        random.Random(17),
+        beta=3.0,
+        rows=20_000,
+        clusters=500,
+        agents=16,
+        bad_rate=target,
+    )
+
+    observed = sum(row.is_bad for row in rows) / len(rows)
+    assert observed == pytest.approx(target, abs=0.015)
+
+
 def test_probe_does_not_invent_signal_when_none_was_planted():
-    """Type-I check: the harness must not clear its own null on pure noise."""
+    """A small null run must remain compatible with the nominal type-I rate."""
     result = measure_power(
         beta=0.0,
         trials=6,
@@ -67,7 +105,8 @@ def test_probe_does_not_invent_signal_when_none_was_planted():
         seed=3,
     )
     assert result is not None
-    assert result.power == 0.0
+    assert result.true_auc == pytest.approx(0.5, abs=0.08)
+    assert result.power_ci_low <= 0.05 <= result.power_ci_high
 
 
 def test_probe_recovers_a_strong_planted_effect():
@@ -207,6 +246,13 @@ def test_parse_args_requires_the_observed_shape():
     """Unknown cluster geometry must not silently inherit a frozen default."""
     with pytest.raises(SystemExit):
         parse_args([])
+
+
+@pytest.mark.parametrize("raw", ["", "nan", "inf", "nope"])
+def test_parse_args_rejects_an_empty_or_nonfinite_effect_sweep(raw):
+    shape = ["--rows", "80", "--bad", "20", "--clusters", "40", "--agents", "8"]
+    with pytest.raises(SystemExit):
+        parse_args([*shape, "--betas", raw])
 
 
 @pytest.mark.parametrize(
