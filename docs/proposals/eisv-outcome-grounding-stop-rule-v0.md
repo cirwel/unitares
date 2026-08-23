@@ -8,8 +8,10 @@ would change our mind".
 
 ## Summary
 
-The single 2026-12-01 confirmatory read and its kill criterion remain in force.
-The 2026-07-31 numeric bound does not.
+The fixed 2026-12-01 final decision read and its operational kill criterion
+remain in force. It may no longer be described as the only post-registration
+outcome read or as unqualified analysis-blind. The 2026-07-31 numeric bound does
+not remain in force.
 
 The historical read used the ablation script's default `--anchor-scope all`.
 That scope deliberately preserves a contaminated tracked series: it admits rows
@@ -107,10 +109,33 @@ Its frozen command and rows are recorded in
 `../operations/eisv-ablation-frozen-2026-08-09.md`. No new discrimination read
 was run for the 2026-08-17 correction.
 
+## Protocol deviation — disclosed 2026-08-23
+
+The instruction below said not to rerun the probe ad hoc. Automation nevertheless
+exposed live discrimination results every six hours after the frozen cutoff:
+
+- the UNITARES ablation watchdog ran 51 times, completing 42 runs that invoked
+  the outcome inventory and two selection-aware matrices; and
+- the UNITARES dogfood/ablation guard ran 52 times, completing 43 runs that
+  invoked the inventory and two matrices with null resampling disabled to check
+  harness-lane hygiene.
+
+Both jobs were paused on 2026-08-22. The guard is being converted to synthetic
+contract tests, and the watchdog fails closed before data access without an
+explicit protocol-contamination override. The full audit is
+[`../ontology/falsification-design-system-audit-2026-08-23.md`](../ontology/falsification-design-system-audit-2026-08-23.md).
+
+This deviation does not change the fixed date, cohort, thresholds, four PASS
+conditions, or operational closure commitment. It changes the epistemic claim:
+the December report must disclose the interim accesses, identify any analysis,
+label, scope, collection, or narrative choices they affected, and include a
+read-specific power analysis. It may not claim clean single-read blinding.
+
 ## Pre-registered gate
 
-**One confirmatory read, 2026-12-01.** Before querying, record one UTC cutoff and
-use it for `READ_CUTOFF` below. Do not move the cutoff after seeing output.
+**One fixed final decision read, 2026-12-01.** Before querying, record one UTC
+cutoff and use it for `READ_CUTOFF` below. Do not move the cutoff after seeing
+output.
 This correction changes neither the date nor the four PASS conditions; it makes
 the intended cohort executable and prevents an unsupported bound from being
 published automatically after a FAIL.
@@ -151,8 +176,11 @@ The report must name the failed conditions. If condition 3 fails, describe the
 result as closure for insufficient eligible evidence, not as a measured null or
 as disproof. If the support condition passes but a signal condition fails, any
 published bound is recomputed from that read and reported with anchor scope,
-cutoff, bad rows, permutation blocks, agents, selected delta, null p95, and
-selective p. The withdrawn `0.05` value never fills this slot automatically.
+cutoff, bad rows, permutation blocks, agents, selected delta, null p95,
+selective p, and read-specific power against a predeclared smallest relevant
+effect. A support-qualified non-detection is `INCONCLUSIVE`, not `REFUTED`, if
+that power is inadequate. The withdrawn `0.05` value never fills this slot
+automatically.
 
 Do not adjust these thresholds after seeing the read. The point of writing them
 down now is that they were chosen before the data existed.
@@ -169,9 +197,11 @@ unaffected and is where the earned claims live:
 
 The public statement after a FAIL is conditional on which gate failed. A
 support-only failure says the registered question closed without enough
-eligible evidence and remains untested, not disproved. A support-qualified null
-may report only the bound computed at the confirmatory read, with the full
-provenance tuple above.
+eligible evidence and remains untested, not disproved. A support-qualified
+non-detection may report a bound only if the read has adequate predeclared power
+for that bound, with the full provenance tuple above. The operational `FAIL`
+closes scheduled work; it does not automatically earn a scientific `REFUTED`
+status.
 
 ## Do not
 

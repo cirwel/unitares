@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -541,36 +542,122 @@ def enrich_detected_patterns(ctx: UpdateContext) -> None:
 
 # ─── Knowledge Surfacing ───────────────────────────────────────────────
 
+_QUERY_STOPWORDS = frozenset({
+    "about", "after", "again", "against", "because", "been", "before", "being",
+    "below", "between", "both", "could", "does", "doing", "down", "during",
+    "each", "from", "further", "have", "having", "here", "into", "just", "more",
+    "most", "once", "only", "other", "over", "same", "should", "some", "such",
+    "than", "that", "their", "them", "then", "there", "these", "they", "this",
+    "those", "through", "under", "until", "very", "were", "what", "when",
+    "where", "which", "while", "with", "would", "your",
+})
+_MAX_QUERY_TERMS = 8
+_MIN_TERM_LEN = 4
+_NON_TOPICAL_AGENT_TAGS = frozenset({
+    "autonomous",
+    "embodied",
+    "engaged_ephemeral",
+    "ephemeral",
+    "persistent",
+    "pioneer",
+    "protected",
+    "session_like",
+})
+
+
+def _distinctive_terms(text: str, limit: int = _MAX_QUERY_TERMS) -> list:
+    """Pick a bounded set of salient terms from free text for a KG lookup.
+
+    Bounded because `websearch_to_tsquery` ANDs bare terms: handing it a whole
+    check-in matches nothing, and OR-ing a whole check-in matches everything.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return []
+    seen: list = []
+    for token in re.findall(r"[A-Za-z][A-Za-z0-9_-]+", text.lower()):
+        if len(token) < _MIN_TERM_LEN or token in _QUERY_STOPWORDS:
+            continue
+        if token not in seen:
+            seen.append(token)
+        if len(seen) >= limit:
+            break
+    return seen
+
+
+def _topical_agent_tags(tags: list | None) -> list:
+    """Exclude identity/lifecycle classes from the discovery-tag fallback."""
+    return [
+        tag
+        for tag in (tags or [])
+        if isinstance(tag, str)
+        and tag.strip()
+        and tag.strip().lower() not in _NON_TOPICAL_AGENT_TAGS
+    ]
+
+
 @enrichment(order=130, lite_safe=True)
 async def enrich_knowledge_surfacing(ctx: UpdateContext) -> None:
-    """Surface top 3 relevant discoveries based on agent tags."""
+    """Surface up to 3 prior discoveries relevant to this check-in.
+
+    Retrieval is seeded from the agent's own check-in text, because the tag
+    intersection this used to rely on cannot match: agent tags are lifecycle
+    values (`ephemeral`, `engaged_ephemeral`) while discovery tags are topical,
+    so the two vocabularies overlap on a single token fleet-wide. Tag overlap
+    is kept as a fallback for callers that do carry topical tags.
+    """
     try:
-        agent_tags = ctx.meta.tags if ctx.meta and ctx.meta.tags else []
+        relevant_discoveries: list = []
+        match_basis = ""
 
-        if agent_tags:
-            from src.knowledge_graph import get_knowledge_graph
-            graph = await get_knowledge_graph()
+        # Reuse the shared check-in-text search rather than issuing our own:
+        # it is semantic-first with a full-text fallback, applies the relevance
+        # floor, and — the part that matters on this path — wraps every KG call
+        # in _KG_SEARCH_TIMEOUT. Measured tail for one such call is p99 281ms /
+        # max 2624ms, so an unbudgeted search here would hang the check-in.
+        relevant_discoveries = await _cached_kg_search_by_checkin_text(ctx)
+        if relevant_discoveries:
+            match_basis = "your check-in text"
 
-            tag_matches = await graph.query(tags=agent_tags, status="open", limit=10)
+        if not relevant_discoveries:
+            agent_tags = _topical_agent_tags(
+                ctx.meta.tags if ctx.meta and ctx.meta.tags else []
+            )
+            if agent_tags:
+                from src.knowledge_graph import get_knowledge_graph
+                graph = await get_knowledge_graph()
+                tag_matches = await asyncio.wait_for(
+                    graph.query(tags=agent_tags, status="open", limit=10),
+                    timeout=_KG_SEARCH_TIMEOUT,
+                )
+                agent_tags_set = set(agent_tags)
+                scored = [
+                    (len(agent_tags_set & set(d.tags)), d)
+                    for d in tag_matches
+                    if agent_tags_set & set(d.tags)
+                ]
+                scored.sort(reverse=True, key=lambda x: x[0])
+                relevant_discoveries = [
+                    d.to_dict(include_details=False) for _, d in scored
+                ]
+                if relevant_discoveries:
+                    match_basis = "your tags"
 
-            scored = []
-            agent_tags_set = set(agent_tags)
-            for disc in tag_matches:
-                disc_tags_set = set(disc.tags)
-                overlap = len(agent_tags_set & disc_tags_set)
-                if overlap > 0:
-                    scored.append((overlap, disc))
+        relevant_discoveries = relevant_discoveries[:3]
 
-            scored.sort(reverse=True, key=lambda x: x[0])
-            relevant_discoveries = [disc.to_dict(include_details=False) for _, disc in scored[:3]]
-
-            if relevant_discoveries:
-                ctx.response_data["relevant_discoveries"] = {
-                    "message": f"Found {len(relevant_discoveries)} relevant discovery/discoveries matching your tags",
-                    "discoveries": relevant_discoveries
-                }
+        if relevant_discoveries:
+            ctx.response_data["relevant_discoveries"] = {
+                "message": (
+                    f"Found {len(relevant_discoveries)} relevant "
+                    f"discovery/discoveries matching {match_basis}"
+                ),
+                "discoveries": relevant_discoveries,
+                "match_basis": match_basis,
+            }
     except Exception as e:
-        logger.debug(f"Could not surface relevant discoveries: {e}")
+        # Was logger.debug, which made a broken lookup indistinguishable from
+        # "nothing relevant" — the field is simply absent either way.
+        logger.warning(f"Knowledge surfacing failed: {e}")
+        ctx.response_data["knowledge_surfacing_degraded"] = True
 
 # ─── Onboarding Info ───────────────────────────────────────────────────
 
@@ -1430,7 +1517,7 @@ async def enrich_mirror_signals(ctx: UpdateContext) -> None:
         # 3. Reactive KG search — useful when there is a concrete signal /
         #    reflection / edge, not on steady-state check-ins.
         if _should_search_kg_by_checkin_text(ctx, signals, reflection):
-            kg_results = await _search_kg_by_checkin_text(ctx)
+            kg_results = await _cached_kg_search_by_checkin_text(ctx)
             if kg_results:
                 ctx.response_data["_mirror_kg_results"] = kg_results
         # 3b. Proactive KG surfacing — on a throttled cadence, even in healthy
@@ -1438,7 +1525,9 @@ async def enrich_mirror_signals(ctx: UpdateContext) -> None:
         #     default (UNITARES_KG_PROACTIVE_EVERY=0). Emits an attribution
         #     record so adoption can measure surfaced-vs-acted-on.
         elif _proactive_kg_due(ctx):
-            proactive = await _search_kg_by_checkin_text(ctx, floor=_KG_PROACTIVE_FLOOR)
+            proactive = await _cached_kg_search_by_checkin_text(
+                ctx, floor=_KG_PROACTIVE_FLOOR
+            )
             proactive = await _dedupe_surfaced_kg(ctx, proactive)
             if proactive:
                 ctx.response_data["_mirror_kg_results"] = proactive
@@ -1599,6 +1688,19 @@ def _detect_gaming(ctx: UpdateContext, records: list | None = None) -> list:
     return signals
 
 
+def _mark_surfacing_degraded(ctx: UpdateContext) -> None:
+    """Record that a KG lookup degraded rather than finding nothing.
+
+    Without this the two outcomes are indistinguishable downstream: both leave
+    the surfacing key absent, so a broken or timing-out search reads to the
+    agent exactly like "no prior work exists".
+    """
+    try:
+        ctx.response_data["knowledge_surfacing_degraded"] = True
+    except Exception:  # response_data shape is not worth failing a check-in over
+        pass
+
+
 async def _search_kg_by_checkin_text(
     ctx: UpdateContext, floor: float = _RELATED_DISCOVERY_RELEVANCE_FLOOR
 ) -> list:
@@ -1627,14 +1729,17 @@ async def _search_kg_by_checkin_text(
             )
         except asyncio.TimeoutError:
             logger.debug("KG semantic_search exceeded %.0fms budget; skipping surfacing", _KG_SEARCH_TIMEOUT * 1000)
+            _mark_surfacing_degraded(ctx)
             return []
         except (AttributeError, NotImplementedError):
             try:
                 results = await asyncio.wait_for(
-                    graph.full_text_search(response_text, limit=3), timeout=_KG_SEARCH_TIMEOUT
+                    _full_text_search_with_recall(graph, response_text),
+                    timeout=_KG_SEARCH_TIMEOUT,
                 )
             except asyncio.TimeoutError:
                 logger.debug("KG full_text_search exceeded %.0fms budget; skipping surfacing", _KG_SEARCH_TIMEOUT * 1000)
+                _mark_surfacing_degraded(ctx)
                 return []
             except (AttributeError, NotImplementedError):
                 pass
@@ -1679,8 +1784,55 @@ async def _search_kg_by_checkin_text(
             kg_results.append(entry)
         return kg_results
     except Exception as e:
-        logger.debug(f"KG text search failed: {e}")
+        logger.warning(f"KG text search failed: {e}")
+        _mark_surfacing_degraded(ctx)
         return []
+
+
+async def _full_text_search_with_recall(graph: Any, response_text: str) -> list:
+    """Run precise AND retrieval, then a recall-oriented OR fallback.
+
+    The caller wraps this whole sequence in one timeout, so the fallback does
+    not double the advisory path's latency budget.
+    """
+    terms = _distinctive_terms(response_text)
+    query = " ".join(terms) or response_text
+    results = await graph.full_text_search(query, limit=3)
+    if not results and len(terms) > 1:
+        results = await graph.full_text_search(query, limit=3, operator="OR")
+    return list(results or [])
+
+
+async def _cached_kg_search_by_checkin_text(
+    ctx: UpdateContext, floor: float = _RELATED_DISCOVERY_RELEVANCE_FLOOR
+) -> list:
+    """Return one KG lookup per check-in, filtered for the caller's floor.
+
+    Both the general knowledge-surfacing enrichment and the mirror enrichment
+    consume the same response text. Without a per-context cache an actionable
+    check-in pays for the identical advisory lookup twice, each with its own
+    timeout budget. Cache the default-floor result and let stricter consumers
+    (currently proactive surfacing) filter that bounded list locally.
+    """
+    if not getattr(ctx, "_kg_search_ready", False):
+        results = await _search_kg_by_checkin_text(
+            ctx, floor=_RELATED_DISCOVERY_RELEVANCE_FLOOR
+        )
+        ctx._kg_search_results = list(results)
+        ctx._kg_search_ready = True
+
+    results = list(getattr(ctx, "_kg_search_results", []))
+    if floor <= _RELATED_DISCOVERY_RELEVANCE_FLOOR:
+        return results
+
+    filtered = []
+    for entry in results:
+        try:
+            if float(entry.get("relevance", 0)) >= floor:
+                filtered.append(entry)
+        except (AttributeError, TypeError, ValueError):
+            continue
+    return filtered
 
 
 def _proactive_kg_due(ctx: UpdateContext) -> bool:

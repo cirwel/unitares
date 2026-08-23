@@ -1702,7 +1702,13 @@ class TestProcessAgentUpdateExtended:
             "id": "d-1", "summary": "Test coverage patterns", "tags": ["testing", "coverage"],
         })
 
+        mock_disc.status = "open"
+
         mock_graph = AsyncMock()
+        # Text retrieval finds nothing, so this exercises the tag fallback the
+        # test is named for. Set explicitly: a bare AsyncMock would return a
+        # MagicMock here and the assertions below would pass vacuously.
+        mock_graph.full_text_search = AsyncMock(return_value=[])
         mock_graph.query = AsyncMock(return_value=[mock_disc])
 
         p = self._common_patches(mock_server, agent_uuid=agent_uuid)
@@ -1718,6 +1724,11 @@ class TestProcessAgentUpdateExtended:
 
                 data = parse_result(result)
                 assert isinstance(data, dict)
+                surfaced = data.get("relevant_discoveries")
+                assert surfaced, "tag-overlap fallback surfaced nothing"
+                assert surfaced["match_basis"] == "your tags"
+                assert [d["id"] for d in surfaced["discoveries"]] == ["d-1"]
+                assert "knowledge_surfacing_degraded" not in data
 
     # ------------------------------------------------------------------
     # Lines 1444: Onboarding guidance in response
