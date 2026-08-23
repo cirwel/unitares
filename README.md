@@ -6,27 +6,25 @@
 
 </div>
 
-An agent forty turns into a task reports high confidence while its tests are
-failing. Every individual tool call was allowed, so an action-level guardrail has
-nothing to object to. What is missing is a longitudinal record that compares what
-the agent claims with what actually happened.
+Long-running agent work creates a continuity problem: every individual tool
+call can be allowed while the process's claims, evidence, and behavior drift
+apart over time.
 
-**UNITARES is that record.** Agents check in after meaningful units of work;
-the server keeps a longitudinal score of whether each agent's claims match its
-recorded results, pauses an agent whose behavior drifts, gates resumption on a
-recovery step, and leaves an audit trail plus a shared memory every other agent
-can search — record, score, interrupt, remember. Plain-language version:
-[What UNITARES is](docs/PRODUCT_DEFINITION.md). It is a self-hosted MCP/HTTP
-service you run yourself — not an agent framework, not a hosted platform.
+**UNITARES is a self-hosted runtime accountability service for that gap.** At
+meaningful checkpoints it binds writes to a process identity, records claims
+beside available outcomes, estimates longitudinal state, returns a policy
+action with a reason, and retains an audit trail plus searchable shared memory.
+It is an MCP/HTTP service you run yourself — not an agent framework and not a
+hosted platform. Plain-language definition: [What UNITARES is](docs/PRODUCT_DEFINITION.md).
 
-**Status:** v2.19.0. Continuously operated since November 2025 — 71,141 stored
-EISV state rows and six long-running resident agents, one on separate hardware.
-This is a single-operator deployment whose governed agents are largely the ones
-building it: evidence that the system runs at length under real load, not an
-efficacy study. Two things it does *not* establish — a falsifiability eval that
-detected no predictive lift, and a circuit breaker that actuates but is not
-shown to protect — are scoped, with every other number on this page, in
-[Evidence and limits](#evidence-and-limits).
+**Status:** v2.19.0. The maintainer deployment has operated continuously since
+November 2025, with 71,141 stored EISV state rows and six long-running resident
+agents at the frozen snapshot. That establishes sustained single-operator
+operation under real load. It is not an efficacy study. The evidence currently
+supports narrower claims about attributable records and exercised runtime
+paths; predictive utility, preventive benefit, and cross-operator generality
+remain open questions. [Evidence and limits](#evidence-and-limits) gives each
+claim its current evidence class.
 
 <div align="center">
 
@@ -45,34 +43,21 @@ shown to protect — are scoped, with every other number on this page, in
 
 ## What it does
 
-One governed incident, end to end — every step is deployed behavior:
+UNITARES sits at checkpoints in a longer-running process. The deployed contract
+at each stage is explicit:
 
-1. An agent **onboards** and gets a process identity; every later write is
-   attributable to that specific process.
-2. It **checks in** after each unit of work with what it did and its stated
-   confidence; recorded outcomes (tests, exit codes, reviews) are compared
-   against that claim.
-3. The server **scores** the check-in into four state coordinates and runs a
-   decision ladder that returns **proceed or pause** — with graduated `guide`
-   sub-actions on the proceed side — always with a named reason and a next
-   step.
-4. A paused agent's further check-ins are **refused** until it recovers: a
-   written reflection while its state remains unhealthy, or a quick resume
-   once the state has settled back to safe. A reflection can be reviewed by
-   another healthy agent whose resolution can attach conditions to its next
-   check-ins; stale pauses expire rather than wedging an abandoned agent.
-5. The recovering agent stores the finding in **shared memory** with writer
-   attribution, where the next agent searches before repeating the mistake. The whole chain is
-   replayable from the audit trail.
-
-The surfaces below are that chain broken into its parts:
-
-| Core surface | What the operator gets |
+| Stage | Deployed contract |
 |---|---|
-| **Accountable identity** | Bind writes to a process instance and retain what it did, claimed, and observed. Reads can remain open; every write is bound to an agent identity — strictly proof-carrying when `STRICT_IDENTITY_REQUIRED` is set, auto-minted otherwise (see the [trust contract](docs/trust-contract.md)). |
-| **Evidence-linked calibration** | Compare stated confidence with tests, exit codes, tool results, review labels, and other recorded outcomes. |
-| **Policy and recovery** | Return a named action, reason, and next step; enforce pauses on governed write surfaces; support a `reflect → validate → resume` path. |
-| **Operator visibility** | Inspect lifecycle, health, state, evidence, and policy history through MCP/HTTP APIs and a self-hosted dashboard. |
+| **Identity** | `start_session` binds later writes to a process instance. Reads can remain open; writes are proof-carrying when `STRICT_IDENTITY_REQUIRED` is set and auto-bound otherwise. See the [trust contract](docs/trust-contract.md). |
+| **Claim and evidence** | `sync_state` records what the process says it did and its stated confidence. Tests, exit codes, reviews, and other outcome records can be associated with that claim, with their producer and provenance retained. |
+| **State and policy** | The server updates longitudinal state and returns an action, reason, next step, and enforcement record. Graduated `guide` actions sit on the proceed side of the policy ladder. |
+| **Enforcement and recovery** | A policy pause and an applied pause are separate facts. When a pause is applied on a governed write surface, later check-ins are refused until recovery succeeds; actions outside that surface remain the host's responsibility. |
+| **Audit, memory, and review** | The process can store an attributed finding, request structured review, and leave the claim, evidence, policy, and recovery chain available for replay. |
+
+The stable integration boundary is the returned policy action, reason, next
+step, and enforcement record. EISV coordinates are diagnostic state estimates,
+not an independent correctness verdict. A recorded pause proves neither that it
+reached every host surface nor that pausing improved the eventual outcome.
 
 Selected state values carry an explicit provenance label, so a number can be
 wrong but cannot silently pretend to be a measurement. A mechanical lint
@@ -80,9 +65,9 @@ enforces label presence on the metrics read surface today; the full
 `measured` / `derived` / `prior` / `unknown` vocabulary and wider coverage are
 the staged target tracked in the [trust contract](docs/trust-contract.md).
 
-The core loop is deliberately small. Four further surfaces build **on** that
-record rather than beside it. Each is independently usable and none is required
-to run the check-in loop.
+The checkpoint loop is deliberately small. Four further surfaces build **on**
+its attributable record. Each is independently usable and none is required to
+run the loop.
 
 | Surface | What it adds |
 |---|---|
@@ -91,9 +76,10 @@ to run the check-in loop.
 | **Reference resident agents** | Long-running sweep, audit, triage, and narration agents shipped as working examples, not as a framework to subclass. |
 | **Elixir/OTP coordination** | Leases, handoffs, dispatch, and supervision for agents that outlive a single process. |
 
-The identity binding is what connects them: an accountable write is what makes a
-stored finding, a review, or a held lease attributable to a specific process
-rather than to a label.
+Identity binding connects them: an accountable write makes a stored finding, a
+review, or a held lease attributable to a process rather than to a display
+label. Operators can inspect lifecycle, state, evidence, and policy history
+through MCP/HTTP APIs and the self-hosted dashboard.
 
 The public [`unitares-sdk`](agents/sdk/README.md) handles connection, identity,
 check-ins, heartbeats, and knowledge participation for resident agents. Its
@@ -123,9 +109,15 @@ The dashboard is at `http://localhost:8767/dashboard`; MCP clients connect to
 
 Use the surface that matches the question:
 
-- **Does the signal beat a simple baseline?** Run the
-  [falsifiability harness](docs/REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc)
-  against your own data — the demo shows the loop works, not that the signal predicts.
+- **What does the current evidence support?** Start with
+  [Evidence and limits](#evidence-and-limits), then inspect the frozen
+  [outcome-lift artifact](docs/operations/eisv-ablation-frozen-2026-08-09.md)
+  and its [power audit](docs/operations/falsifiability-power-audit-2026-08-23.md).
+  The demo exercises the protocol; it does not establish predictive lift.
+- **How should I evaluate my own deployment?** Use the
+  [Reviewer Guide](docs/REVIEWER_GUIDE.md) and predeclare the target,
+  independent unit, minimum relevant effect, decision rule, and read protocol
+  before inspecting outcomes.
 - **What does sustained operation look like?** Read the
   [maintainer-deployment snapshot](docs/PRODUCTION_SNAPSHOT.md) and its
   [data caveat](docs/operations/DEPLOYMENT_DATA_CAVEAT.md).
@@ -153,6 +145,11 @@ if result.get("success") is False:  # refused write, e.g. the agent is paused
 elif result.get("state_summary", {}).get("action") == "pause":
     return_to_operator(result.get("next_action"))  # application-defined boundary
 ```
+
+A returned `pause` policy and an applied write refusal are deliberately
+separate in the response. `success=False` means the governed write was refused;
+a returned pause on an accepted response still requires the host to honor the
+action at any surface UNITARES does not control.
 
 For a durable resident, preserve its identity anchor rather than minting a new
 identity on every run; the [SDK lifecycle example](agents/sdk/README.md) handles
@@ -235,10 +232,29 @@ today.
 
 ## Evidence and limits
 
-Everything above is scoped by what has actually been measured. At the
-[2026-08-11 frozen snapshot](docs/PRODUCTION_SNAPSHOT.md), the maintainer
-deployment provided operational evidence — the system runs, at length, under
-real load — not an independent efficacy study:
+UNITARES separates operational observations, benchmark decisions, and
+scientific inferences. An evidence class says what a result licenses; it is not
+a positive or negative judgement about the project.
+
+| Evidence class | What it licenses |
+|---|---|
+| **Operational observation** | A named mechanism ran in the stated deployment. It does not establish benefit, correctness, or generality. |
+| **Benchmark pass / fail** | An artifact met or missed a fixed criterion. The result applies to that benchmark and operational decision, not automatically to a broader capability claim. |
+| **Non-detection** | The test did not separate the candidate from its comparison. Without adequate power, it establishes neither absence nor a useful ceiling. |
+| **Unidentified / inconclusive** | The design lacks the target match, counterfactual, independent unit, support, power, or protocol needed for the named inference. |
+| **Mismatch / path bound** | Source, formula, provenance, documentation, or control-flow inspection established a concrete engineering fact. |
+| **Untested** | No suitable measurement has been made. |
+
+A registered operational `FAIL` can close a scheduled line of work without
+scientifically refuting the underlying capability. A claim earns `REFUTED` only
+when the target, counterfactual, independent unit, support and power, decision
+rule, and read protocol all support that conclusion. The
+[inference-status contract](docs/ontology/falsification-inference-containment-2026-08-22.md)
+defines those boundaries.
+
+At the [2026-08-11 frozen snapshot](docs/PRODUCTION_SNAPSHOT.md), the maintainer
+deployment provided operational evidence that the system runs at length under
+real load:
 
 | Evidence | Scope |
 |---|---|
@@ -253,35 +269,29 @@ agents governed by the system are also building the system. Read
 [`DEPLOYMENT_DATA_CAVEAT.md`](docs/operations/DEPLOYMENT_DATA_CAVEAT.md) before
 citing a fleet number.
 
-What is not yet established:
+### Current claim status
 
-- **Incident prevention.** No incident has been shown to be prevented. The
-  system records, scores, interrupts, and remembers; that a governed run went
-  better than an ungoverned one is unmeasured.
-- **Predictive lift — unresolved.** The frozen 2026-08-09 evaluation detected
-  no lift over a previous-outcome baseline (selective p = 0.070–0.567, none
-  clearing 0.05). That is a non-detection, not a ceiling: the
-  [power audit](docs/operations/falsifiability-power-audit-2026-08-23.md)
-  measures roughly 3% power against a weak effect on a cohort of that shape.
-  The pre-registered
-  [2026-12-01 read](docs/proposals/eisv-outcome-grounding-stop-rule-v0.md)
-  settles it. Command and rows: [Reviewer Guide](docs/REVIEWER_GUIDE.md),
-  [ablation snapshot](docs/operations/eisv-ablation-frozen-2026-08-09.md).
-- **Behavior change from review and coordination.** The system records that the
-  review and coordination surfaces ran and what they concluded; whether they
-  change an agent's subsequent behavior is unmeasured.
-- **Robustness against a motivated attacker** optimizing the monitored proxy.
-  Calibrated capability concealment is a documented structural blind spot — see
-  the [scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md).
-- **Benefit from pausing.** The pause and recovery path runs and is recorded;
-  whether pausing improved any outcome is unmeasured.
-- **Pause delivery.** Producing a pause and delivering it are separate events.
-  At the 2026-08-06 audit a `gap_suppress` cadence window downgraded 195 of 218
-  recorded pauses (89.4%) before they reached the agent. Delivery is live — a
-  governed pause landed 2026-08-09 — but the rate has not been re-measured. The
-  contract ledger records fleet protection as untested; the earned claim is
-  that the breaker *can actuate*
-  ([rows 24, 27, 28](docs/ontology/eisv-proprioception-contract.md)).
+| Question | Current status | What the record supports |
+|---|---|---|
+| Sustained operation | **Operational observation** | The maintainer deployment has run continuously under real load. The counts above are rows, events, and configured residents — not independent trials or adopters. |
+| Identity and audit trail | **Exercised path** | Process-bound writes, evidence records, policy responses, and replayable audit history are deployed. This establishes mechanism execution, not outcome benefit. |
+| Pause actuation and delivery | **Event reconciled; protection untested** | A governed pause landed on 2026-08-09. At the 2026-08-06 audit, a cadence window had downgraded 195 of 218 recorded pauses (89.4%) before delivery; the current rate has not been re-measured. See [ledger rows 24, 27, and 28](docs/ontology/eisv-proprioception-contract.md). |
+| Predictive lift | **Non-detection; inconclusive for weak effects** | In the frozen 2026-08-09 cohort, no slice cleared the selection-aware null (selective p = 0.070–0.567). The [power audit](docs/operations/falsifiability-power-audit-2026-08-23.md) estimates roughly 3% power against a weak effect on a cohort of that shape, so the result sets no standing AUC ceiling. |
+| Incident prevention or benefit from pausing | **Untested** | No governed-versus-ungoverned comparison has shown an incident prevented or an outcome improved by pausing. |
+| Behavior change from review and coordination | **Untested** | The system records that review and coordination ran and what they concluded; downstream behavioral effect has not been measured. |
+| Robustness to a motivated attacker | **Structural limit** | A capable process can optimize or conceal behavior outside the monitored proxy; independent evidence remains necessary. See the [scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md). |
+| Cross-operator generality | **Untested** | Every deployment number above comes from one operator's co-development fleet. |
+
+The outcome read also has a protocol qualification. After the frozen cutoff,
+recurring automation exposed live discrimination output: the ablation watchdog
+completed 42 of 51 executions and the dogfood guard completed 43 of 52. Those
+jobs are paused. The fixed
+[2026-12-01 gate](docs/proposals/eisv-outcome-grounding-stop-rule-v0.md) remains
+an operational decision rule, but it is not the only post-registration read and
+cannot be described as clean single-read blinding. Its report must disclose the
+interim access and read-specific power. An operational `FAIL` may close further
+scheduled outcome-grounding work; inadequate support or an underpowered
+non-detection remains scientifically inconclusive.
 
 The instrument-frame validation the system does claim — reliability,
 faithfulness under intervention, calibration — is scoped and partly built; the

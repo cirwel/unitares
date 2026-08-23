@@ -32,9 +32,30 @@ The project requires **Python 3.12+** (`pyproject.toml` `requires-python`), and 
 
 ```bash
 python3.12 -m venv .venv && . .venv/bin/activate   # use any 3.12+ interpreter
-pip install -r requirements-full.txt               # same set CI installs
+pip install -r requirements-full.txt -c constraints.txt   # same resolution CI installs
 pytest tests/test_<specific>.py                    # now resolvable
 ```
+
+`-c constraints.txt` is not optional decoration. The ranges in
+`requirements-full.txt` float, so without it pip resolves whatever is newest on
+PyPI today rather than the versions CI and production actually run — currently
+`mcp` 2.x instead of the pinned 1.29.0, which makes most of the suite fail to
+*collect*. Reach for the `mcp-newest` lane (CI runs it as an advisory job) when
+testing the unconstrained resolution is the point; otherwise always pass `-c`.
+
+**On an environment that already has dependencies installed**, that command is
+not enough on its own. A pip constraint binds only when pip decides to install
+a package; it does not downgrade one already present that satisfies the range.
+An existing venv — or one seeded by `pip install -e .` — therefore keeps its
+newer `mcp` and the install still reports success. Rebuild the venv, or pin
+explicitly:
+
+```bash
+pip install "mcp==1.29.0" -r requirements-full.txt -c constraints.txt
+```
+
+See the header of [`constraints.txt`](constraints.txt) for why each pin is
+there and what bumping one requires.
 
 Pure-unit suites (e.g. `tests/test_naming_helpers.py`, `tests/test_lifecycle_agents.py`) run without a live Postgres/AGE; database-backed tests still need the services from *Quick setup* above.
 

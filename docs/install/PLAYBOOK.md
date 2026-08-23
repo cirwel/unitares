@@ -124,8 +124,16 @@ psql "$DB_POSTGRES_URL" -c "SELECT extname, extversion FROM pg_extension WHERE e
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
-pip install -r requirements-full.txt
+pip install -r requirements-full.txt -c constraints.txt
 ```
+
+`-c constraints.txt` pins the dependencies where CI/production drift has
+actually bitten, so a fresh install resolves what the project is tested and
+deployed against rather than whatever is newest on PyPI today. Omitting it
+currently installs `mcp` 2.x in place of the pinned 1.29.0, which breaks the
+server's push stream silently. If you are installing over an existing
+environment, note that a constraint does not downgrade an already-present
+package — see the header of `constraints.txt`.
 
 **Expected:** all packages install cleanly. The EISV ODE engine (`governance_core/`) lives directly in this repo — no separate install step.
 

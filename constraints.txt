@@ -13,6 +13,26 @@
 # job tests the newest in-range resolution WITHOUT these constraints, so
 # coverage of upcoming versions is a deliberate lane, not an accident.
 #
+# How to apply this file, and the one way it silently does not work:
+#
+#   pip install -r requirements-full.txt -c constraints.txt
+#
+# A constraint binds only when pip decides to install a package. It does NOT
+# downgrade something already present that satisfies the requirement range. So
+# on an environment that already resolved a newer version — a long-lived venv,
+# or one seeded by `pip install -e .`, whose ranges float — the command above
+# leaves that newer version in place and reports success. CI never hits this
+# because every run starts from a clean image; a developer's venv does.
+#
+# The failure is not subtle once it happens (an env carrying mcp 2.x fails to
+# COLLECT most of the suite, not merely to pass it), but the install that
+# caused it looked clean. On an existing environment, pin explicitly:
+#
+#   pip install "mcp==1.29.0" -r requirements-full.txt -c constraints.txt
+#
+# or rebuild the venv. `pip check` will not catch it: the newer version
+# satisfies every declared range, which is exactly why this file exists.
+#
 # mcp 2.x gate. The transport is written against httpx2 while our client-side
 # call sites injected httpx 0.x, which killed the server-push GET stream
 # SILENTLY. Moving this pin to 2.x needs ALL of:

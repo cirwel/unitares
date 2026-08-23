@@ -31,6 +31,15 @@ BOOTSTRAP_I = 0.5
 BOOTSTRAP_S = 0.2
 BOOTSTRAP_V = 0.0
 
+# Domain of the behavioral dimensions, enforced by the clamps in update().
+# V is signed (positive = running hot, negative = running careful); E/I/S are
+# unit-interval. Named here because instruments that reason about how far a
+# value *could* deviate need the bound as a fact, not a repeated literal.
+V_MIN = -1.0
+V_MAX = 1.0
+EIS_MIN = 0.0
+EIS_MAX = 1.0
+
 # History cap
 MAX_HISTORY = 100
 
@@ -210,10 +219,10 @@ class BehavioralEISV:
         self.V = (1.0 - alpha_V) * self.V + alpha_V * raw_v
 
         # Clamp to valid ranges
-        self.E = max(0.0, min(1.0, self.E))
-        self.I = max(0.0, min(1.0, self.I))
-        self.S = max(0.0, min(1.0, self.S))
-        self.V = max(-1.0, min(1.0, self.V))
+        self.E = max(EIS_MIN, min(EIS_MAX, self.E))
+        self.I = max(EIS_MIN, min(EIS_MAX, self.I))
+        self.S = max(EIS_MIN, min(EIS_MAX, self.S))
+        self.V = max(V_MIN, min(V_MAX, self.V))
 
         # Record history
         self.E_history.append(self.E)
@@ -264,7 +273,7 @@ class BehavioralEISV:
                 else:
                     alpha_v = self.alphas["V"]
                 raw_v = e_obs - i_obs  # v2 formula (reseed only runs post-flip)
-                v = max(-1.0, min(1.0, (1.0 - alpha_v) * v + alpha_v * raw_v))
+                v = max(V_MIN, min(V_MAX, (1.0 - alpha_v) * v + alpha_v * raw_v))
                 replayed.append(v)
             # Drop the cold-start bootstrap transient from the baseline when the
             # history is long enough to spare it; the live V still warms through
