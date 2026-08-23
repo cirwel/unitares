@@ -133,7 +133,7 @@ read-specific power analysis. It may not claim clean single-read blinding.
 
 ## Pre-registered gate
 
-**One fixed final decision read, 2026-12-01.** Before querying, record one UTC
+**One fixed scheduled operational decision read, 2026-12-01.** Before querying, record one UTC
 cutoff and use it for `READ_CUTOFF` below. Do not move the cutoff after seeing
 output.
 This correction changes neither the date nor the four PASS conditions; it makes
@@ -145,11 +145,38 @@ Command (run from a checkout of `master`):
 ```
 READ_CUTOFF="PREDECLARED_UTC_CUTOFF"
 python3 scripts/analysis/eisv_ablation_matrix.py \
+    --read-protocol registered \
+    --read-id eisv-outcome-grounding-2026-12-01 \
+    --not-before 2026-12-01T16:00:00Z \
+    --acknowledge-contamination \
     --scopes task --windows 365 --leads 0,30 \
     --anchor-scope trusted --exclude-harness-lanes beam \
     --as-of "$READ_CUTOFF" \
     --uncertainty-resamples 2000 --selective-null-resamples 400
 ```
+
+The CLI validates this declaration and writes an atomic access receipt before
+the database query. It refuses an early read, a future `--as-of`, an undeclared
+read, or reuse of the same read ID. If an attempt fails after its receipt is
+written, any retry uses a new ID and the report discloses both attempts; deleting
+the receipt to preserve a single-read story would itself be a protocol violation.
+The contamination acknowledgement records the already-known interim accesses;
+it does not turn the scheduled operational read into clean confirmatory evidence.
+
+After the matrix reports the primary slice's `Rows`, `Bad`, `Null clusters`, and
+`Agents`, run the database-free power probe with that exact shape:
+
+```
+python3 scripts/analysis/ablation_power_probe.py \
+    --rows <Rows> --bad <Bad> --clusters <Null clusters> --agents <Agents> \
+    --trials 100 --resamples 400 --seed 0
+```
+
+`--bad` controls the simulated class balance; it must come from this read rather
+than silently reusing the 2026-08-09 cohort. The probe remains an optimistic
+upper bound because its planted signal is deliberately clean. Report its power
+at the predeclared smallest relevant effect alongside the real slice's null
+width before assigning a scientific inference status.
 
 **PASS** — outcome-grounding remains open, and Stage B may be reconsidered —
 requires all of:

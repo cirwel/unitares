@@ -20,9 +20,7 @@ def test_outcome_and_basin_claims_keep_their_corrected_statuses():
 
 
 def test_v7_mechanism_note_does_not_turn_a_mixture_weight_into_an_effect():
-    note = _read(
-        "docs/ontology/v7-observer-self-loop-identification-boundary.md"
-    )
+    note = _read("docs/ontology/v7-observer-self-loop-identification-boundary.md")
     normalized = " ".join(note.split())
 
     assert "unidentified by" in note
@@ -35,9 +33,7 @@ def test_v7_mechanism_note_does_not_turn_a_mixture_weight_into_an_effect():
 
 
 def test_containment_note_defines_non_refutation_statuses():
-    note = _read(
-        "docs/ontology/falsification-inference-containment-2026-08-22.md"
-    )
+    note = _read("docs/ontology/falsification-inference-containment-2026-08-22.md")
 
     for status in (
         "BENCHMARK FAIL",
@@ -52,9 +48,7 @@ def test_containment_note_defines_non_refutation_statuses():
 
 
 def test_distributional_probe_is_not_greenlit_without_retiring_the_capability():
-    probe = _read(
-        "docs/proposals/resolved/eisv-distributional-signal-probe-v0.md"
-    )
+    probe = _read("docs/proposals/resolved/eisv-distributional-signal-probe-v0.md")
     normalized = " ".join(probe.split())
 
     assert "stronger KILL inference withdrawn" in normalized
@@ -109,9 +103,7 @@ def test_tested_claim_headings_do_not_label_engineering_findings_refuted():
 
 
 def test_system_audit_discloses_scope_power_and_repeated_reads():
-    audit = _read(
-        "docs/ontology/falsification-design-system-audit-2026-08-23.md"
-    )
+    audit = _read("docs/ontology/falsification-design-system-audit-2026-08-23.md")
     normalized = " ".join(audit.split())
 
     assert "36 of the 45 numbered claim headings" in normalized
@@ -136,3 +128,24 @@ def test_reviewer_path_does_not_instruct_an_interim_live_matrix_read():
     assert "python3 scripts/analysis/eisv_ablation_matrix.py \\" not in guide
     assert "Running that command again still exposes outcome discrimination" in guide
     assert "only the support inventory is permitted here" in guide
+
+
+def test_current_operator_surfaces_do_not_restore_the_legacy_noise_label():
+    surfaces = (
+        "docs/EVALUATION_INDEX.md",
+        "docs/EISV_COMPUTATION.md",
+        "docs/dev/CANONICAL_SOURCES.md",
+        "docs/manual/01-overview.md",
+        "docs/manual/05-reading-the-signals.md",
+        "docs/operations/eisv-ablation-frozen-2026-08-09.md",
+        "docs/operations/falsifiability-power-audit-2026-08-23.md",
+        "docs/proposals/independent-operator-cohort-preregistration-v0.md",
+        "docs/REVIEWER_GUIDE.md",
+        "scripts/analysis/ablation_power_probe.py",
+    )
+
+    for relative in surfaces:
+        text = _read(relative)
+        assert "NOISE-LEVEL" not in text, relative
+        assert "weaker than noise" not in text.lower(), relative
+        assert "NON_DETECTION" in text, relative

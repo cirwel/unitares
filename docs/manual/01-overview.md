@@ -108,10 +108,10 @@ prose. On a fresh clone, the
 asks whether EISV/prior-state telemetry adds signal over a simple
 previous-outcome baseline on AUC and Brier, then compares the selected best
 candidate with a matching permutation null. In the frozen 2026-08-09
-trusted-anchor matrix, every overall slice is `NOISE-LEVEL`; none clears the
-selection-aware p < 0.05 threshold. There is no demonstrated prevention. That is
-a non-detection rather than a demonstrated absence — the same harness's measured
-power against a weak effect is in the
+trusted-anchor matrix, every overall slice is `NON_DETECTION`; none clears the
+selection-aware p < 0.05 threshold. There is no demonstrated prevention. That
+class is a non-detection rather than a demonstrated absence — the same harness's
+measured power against a weak effect is in the
 [power audit](../operations/falsifiability-power-audit-2026-08-23.md). Run both
 yourself before relying on EISV for anything load-bearing.
 

@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 import subprocess
 import sys
+
+import pytest
 
 import scripts.analysis.eisv_ablation_matrix as matrix_module
 from scripts.analysis.eisv_ablation_matrix import (
@@ -230,8 +233,7 @@ def test_frozen_matrix_uses_marginal_envelope_strata_and_immutable_metadata(
     assert observed_kwargs[0]["as_of"] == as_of
     assert observed_kwargs[0]["include_identity_metadata"] is False
     assert [
-        (row.telemetry_dimension, row.telemetry_stratum, row.rows)
-        for row in rows
+        (row.telemetry_dimension, row.telemetry_stratum, row.rows) for row in rows
     ] == [
         (None, None, 1),
         ("source", "physical", 1),
@@ -259,6 +261,117 @@ def test_parse_args_accepts_frozen_telemetry_strata():
         "enforcement",
         "missingness",
     )
+
+
+def test_cli_rejects_undeclared_reads_before_database_access(monkeypatch, tmp_path):
+    called = False
+
+    async def fail_if_called(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr(matrix_module, "build_matrix_from_db", fail_if_called)
+    args = matrix_module.parse_args(["--read-ledger-dir", str(tmp_path)])
+
+    with pytest.raises(matrix_module.ReadProtocolError, match="--read-protocol"):
+        asyncio.run(matrix_module.main_async(args))
+
+    assert called is False
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_registered_read_fails_closed_before_its_not_before_boundary():
+    args = matrix_module.parse_args(
+        [
+            "--read-protocol",
+            "registered",
+            "--read-id",
+            "eisv-outcome-grounding-2026-12-01",
+            "--not-before",
+            "2026-12-01T16:00:00Z",
+            "--as-of",
+            "2026-12-01T16:00:00Z",
+        ]
+    )
+
+    with pytest.raises(
+        matrix_module.ReadProtocolError, match="registered read is early"
+    ):
+        matrix_module.validate_read_protocol(
+            args,
+            now=datetime(2026, 8, 23, 8, 0, tzinfo=timezone.utc),
+        )
+
+
+def test_reproduction_read_requires_explicit_contamination_acknowledgement():
+    args = matrix_module.parse_args(
+        [
+            "--read-protocol",
+            "reproduction",
+            "--read-id",
+            "frozen-2026-08-09-reproduction",
+            "--as-of",
+            "2026-08-09T20:00:00Z",
+        ]
+    )
+
+    with pytest.raises(
+        matrix_module.ReadProtocolError, match="acknowledge-contamination"
+    ):
+        matrix_module.validate_read_protocol(
+            args,
+            now=datetime(2026, 8, 23, 8, 0, tzinfo=timezone.utc),
+        )
+
+
+def test_read_receipt_is_atomic_parameterized_and_nonrepeatable(tmp_path):
+    args = matrix_module.parse_args(
+        [
+            "--read-protocol",
+            "reproduction",
+            "--read-id",
+            "frozen-2026-08-09-reproduction",
+            "--acknowledge-contamination",
+            "--as-of",
+            "2026-08-09T20:00:00Z",
+            "--read-ledger-dir",
+            str(tmp_path),
+            "--scopes",
+            "task",
+            "--windows",
+            "90",
+            "--leads",
+            "0,30",
+        ]
+    )
+    now = datetime(2026, 8, 23, 8, 0, tzinfo=timezone.utc)
+
+    receipt_path, recorded_at = matrix_module.record_read_receipt(
+        args,
+        exclude_harness_lanes=("beam",),
+        now=now,
+    )
+    receipt = json.loads(receipt_path.read_text())
+
+    assert recorded_at == now
+    assert receipt_path.stat().st_mode & 0o777 == 0o600
+    assert receipt["schema"] == "unitares.outcome_read_receipt.v1"
+    assert receipt["status"] == "access_started"
+    assert receipt["read_id"] == "frozen-2026-08-09-reproduction"
+    assert receipt["read_protocol"] == "reproduction"
+    assert receipt["contamination_acknowledged"] is True
+    assert "db_url" not in receipt["parameters"]
+    assert receipt["parameters"]["scopes"] == ["task"]
+    assert receipt["parameters"]["leads"] == [0.0, 30.0]
+    assert receipt["parameters"]["exclude_harness_lanes"] == ["beam"]
+
+    with pytest.raises(matrix_module.ReadProtocolError, match="already has a receipt"):
+        matrix_module.record_read_receipt(
+            args,
+            exclude_harness_lanes=("beam",),
+            now=now,
+        )
 
 
 def test_redact_sensitive_report_text_removes_credential_shapes():
@@ -298,6 +411,8 @@ def test_build_matrix_row_summarizes_baseline_and_best_candidate():
     assert row.lead_minutes == 30
     assert row.rows == 120
     assert row.bad == 24
+    assert row.agents == 6
+    assert row.inference_class == "UNASSESSED"
     assert row.prior_state == 120
     assert row.baseline_auc is not None
     assert row.baseline_brier is not None
@@ -384,17 +499,28 @@ def test_format_matrix_report_contains_skeptical_ablation_table():
             best_brier_permutation_p=0.04,
             beats_both=True,
             conclusion="KEEP TESTING: synthetic row",
+            agents=6,
+            inference_class="SIGNAL_CANDIDATE",
         )
     ]
 
-    report = format_matrix_report(rows, excluded_harness_lanes=("beam",))
+    report = format_matrix_report(
+        rows,
+        excluded_harness_lanes=("beam",),
+        read_protocol="reproduction",
+        read_id="synthetic-report-reproduction",
+        contamination_acknowledged=True,
+    )
 
     assert report.startswith("# EISV Ablation Matrix")
+    assert "Read ID: `synthetic-report-reproduction`" in report
+    assert "Read protocol: `reproduction`" in report
+    assert "Confirmatory authority: **none**" in report
+    assert "Contamination acknowledgement: recorded" in report
     assert "Excluded harness lanes: `beam`" in report
     assert (
         "| Scope | Window days | Lead min | Rows | Bad | Bad clusters | Bad agents "
-        "| Prior state | Prior risk |"
-        in report
+        "| Agents | Prior state | Prior risk |" in report
     )
     # "Trusted" was a lie: the matrix passes no anchor predicate by default, so
     # the count printed under it was the unanchored population.
@@ -406,8 +532,10 @@ def test_format_matrix_report_contains_skeptical_ablation_table():
     assert "Selective p" in report
     assert "Read `AUC delta` against `Null max median`, never against zero." in report
     assert "Read `Bad` against `Bad clusters`." in report
-    assert "Clusters are permutation blocks, not proof of independent outcomes" in report
-    assert "| task | 90 | 30 | 120 | 24 | 6 | 4 | 120 | 120 |" in report
+    assert (
+        "Clusters are permutation blocks, not proof of independent outcomes" in report
+    )
+    assert "| task | 90 | 30 | 120 | 24 | 6 | 4 | 6 | 120 | 120 |" in report
     assert "[0.010, 0.050]" in report
     assert "[0.0020, 0.0200]" in report
     assert "0.040" in report
@@ -420,6 +548,8 @@ def test_format_matrix_report_contains_skeptical_ablation_table():
     assert "bad-agent detector" in report
     assert "prior_risk_binned" in report
     assert "KEEP TESTING" in report
+    assert "SIGNAL_CANDIDATE" in report
+    assert "Inference class is narrower than a project verdict" in report
 
 
 def test_format_matrix_report_labels_enforcement_as_intervention_conditioned():
@@ -440,6 +570,8 @@ def test_format_matrix_report_labels_enforcement_as_intervention_conditioned():
         best_brier_improvement=None,
         beats_both=False,
         conclusion="INCONCLUSIVE",
+        agents=2,
+        inference_class="UNASSESSED",
         telemetry_envelope=12,
         telemetry_dimension="enforcement",
         telemetry_stratum="requested_not_applied",
@@ -475,6 +607,8 @@ def test_format_matrix_report_labels_grouped_harness_lane_rows():
             best_brier_improvement=None,
             beats_both=False,
             conclusion="BEAM lane needs runtime features",
+            agents=2,
+            inference_class="UNASSESSED",
             harness_lane="beam",
         ),
         AblationMatrixRow(
@@ -494,6 +628,8 @@ def test_format_matrix_report_labels_grouped_harness_lane_rows():
             best_brier_improvement=None,
             beats_both=False,
             conclusion="substrate lane separate",
+            agents=1,
+            inference_class="UNASSESSED",
             harness_lane="substrate",
         ),
     ]
@@ -502,8 +638,8 @@ def test_format_matrix_report_labels_grouped_harness_lane_rows():
 
     assert "Harness lane mode: grouped" in report
     assert "| Lane | Scope | Window days | Lead min |" in report
-    assert "| beam | task | 90 | 0 | 2 | 1 | 1 | 1 | 0 | 0 |" in report
-    assert "| substrate | task | 90 | 0 | 2 | 0 | 0 | 0 | 2 | 2 |" in report
+    assert "| beam | task | 90 | 0 | 2 | 1 | 1 | 1 | 2 | 0 | 0 |" in report
+    assert "| substrate | task | 90 | 0 | 2 | 0 | 0 | 0 | 1 | 2 | 2 |" in report
 
 
 def test_cli_help_runs_when_invoked_as_a_file():
@@ -521,6 +657,8 @@ def test_cli_help_runs_when_invoked_as_a_file():
     assert "--group-by-harness-lane" in result.stdout
     assert "--telemetry-strata" in result.stdout
     assert "--as-of" in result.stdout
+    assert "--read-protocol" in result.stdout
+    assert "--read-id" in result.stdout
 
 
 def test_count_bad_clusters_collapses_a_retry_burst_sharing_one_snapshot():
@@ -560,13 +698,18 @@ def test_selective_null_reports_the_distribution_of_the_reported_maximum():
 
     With ~7 candidates on a few dozen paired rows, EISV readings that carry no
     information still produce a sizeable best-candidate lift. Reporting the max
-    against an implicit zero null is what made a noise-level +0.139 read as a
+    against an implicit zero null is what made a non-detection at +0.139 read as a
     signal. Permuting readings between clusters (rather than shuffling labels)
     leaves the previous-outcome baseline identical in every resample, so the
     null isolates the EISV contribution.
     """
     rows = [
-        _row(idx, bad=(idx % 9 == 0), risk=0.1 + (idx % 5) / 10.0, agent=f"agent-{idx % 6}")
+        _row(
+            idx,
+            bad=(idx % 9 == 0),
+            risk=0.1 + (idx % 5) / 10.0,
+            agent=f"agent-{idx % 6}",
+        )
         for idx in range(180)
     ]
 
@@ -629,7 +772,9 @@ def test_validation_slices_keep_rows_whose_identity_self_declared_testing():
     self_declared = OutcomeRow(
         **{
             **_row(1, bad=True, risk=0.9).__dict__,
-            "detail": {"_identity_metadata": {"purpose": "testing", "label": "claude-x"}},
+            "detail": {
+                "_identity_metadata": {"purpose": "testing", "label": "claude-x"}
+            },
         }
     )
 
@@ -640,7 +785,7 @@ def test_validation_slices_keep_rows_whose_identity_self_declared_testing():
 
 
 def test_conclusion_is_downgraded_when_the_selective_null_is_not_cleared():
-    """"KEEP TESTING" must not survive a lift the noise floor reproduces.
+    """ "KEEP TESTING" must not survive a lift the noise floor reproduces.
 
     `summarize_conclusion` thresholds the best candidate against zero, but the
     reported delta is a maximum over ~7 candidates, so zero is the wrong
@@ -655,10 +800,15 @@ def test_conclusion_is_downgraded_when_the_selective_null_is_not_cleared():
         best_auc_delta=0.312,
         selective_null=not_cleared,
     )
-    assert qualified.startswith("NOISE-LEVEL")
+    assert qualified.startswith("NON-DETECTION")
     assert "selective p=0.100" in qualified
     assert "34 permutable clusters" in qualified
+    assert "scientific status remains INCONCLUSIVE" in qualified
     assert "KEEP TESTING" in qualified, "the original verdict stays visible"
+    assert (
+        matrix_module.classify_inference_with_selective_null(not_cleared)
+        == "NON_DETECTION"
+    )
 
     cleared = matrix_module.SelectiveNull(
         resamples=300, clusters=34, median=0.145, p95=0.400, selective_p=0.004
@@ -668,19 +818,26 @@ def test_conclusion_is_downgraded_when_the_selective_null_is_not_cleared():
         best_auc_delta=0.6,
         selective_null=cleared,
     )
-    assert kept.startswith("KEEP TESTING")
-    assert "Clears the selective null" in kept
-
-
-def test_conclusion_is_untouched_when_no_selective_null_was_computed():
+    assert kept.startswith("SIGNAL CANDIDATE")
+    assert "not confirmatory" in kept
+    assert "KEEP TESTING" in kept
     assert (
-        matrix_module.qualify_conclusion_with_selective_null(
-            "DESCRIPTIVE ONLY: nothing here",
-            best_auc_delta=0.01,
-            selective_null=None,
-        )
-        == "DESCRIPTIVE ONLY: nothing here"
+        matrix_module.classify_inference_with_selective_null(cleared)
+        == "SIGNAL_CANDIDATE"
     )
+
+
+def test_conclusion_is_explicitly_unassessed_without_a_selective_null():
+    conclusion = matrix_module.qualify_conclusion_with_selective_null(
+        "DESCRIPTIVE ONLY: nothing here",
+        best_auc_delta=0.01,
+        selective_null=None,
+    )
+
+    assert conclusion.startswith("UNASSESSED")
+    assert "licenses no inferential conclusion" in conclusion
+    assert "DESCRIPTIVE ONLY: nothing here" in conclusion
+    assert matrix_module.classify_inference_with_selective_null(None) == "UNASSESSED"
 
 
 def test_selective_null_survives_mixed_type_cluster_keys():

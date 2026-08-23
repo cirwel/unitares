@@ -13,13 +13,18 @@ prevention, or an independent deployment result.
 
 ```bash
 python3 scripts/analysis/eisv_ablation_matrix.py \
+  --read-protocol reproduction \
+  --read-id frozen-2026-08-09-reproduction-YYYYMMDD-HHMMSS \
+  --acknowledge-contamination \
   --scopes strict,task --windows 30,90 --leads 0,5,30 \
   --anchor-scope trusted --as-of 2026-08-09T20:00:00Z \
   --telemetry-strata source,warmup,enforcement,missingness
 ```
 
 The default selection-aware null uses 200 whole-cluster permutations with seed
-0. Those permutations reassign whole EISV readings between `(agent, prior-state
+0. Replace the read-ID timestamp before running; every reproduction is a
+disclosed outcome access and receives its own receipt. Those permutations
+reassign whole EISV readings between `(agent, prior-state
 snapshot)` clusters and hold the **labels fixed**, so the previous-outcome
 baseline is identical in every resample. (This sentence previously said "label
 permutations", copying a since-corrected `--selective-null-resamples` help
@@ -31,18 +36,18 @@ was requested for this documentation audit.
 
 | Scope | Window | Lead | Rows | Bad | Bad clusters | Agents | Prior state | Baseline AUC | Baseline Brier | Selected candidate | AUC Δ | Null max median | Selective p | Brier improvement | Result |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---|
-| strict | 30d | 0m | 223 | 53 | 29 | 16 | 223 | 0.427 | 0.1697 | `prior_risk_binned` | 0.151 | 0.163 | 0.562 | 0.0039 | `NOISE-LEVEL` |
-| strict | 30d | 5m | 223 | 53 | 28 | 16 | 218 | 0.427 | 0.1697 | `prior_risk_binned` | 0.238 | 0.161 | 0.189 | 0.0116 | `NOISE-LEVEL` |
-| strict | 30d | 30m | 223 | 53 | 28 | 16 | 189 | 0.427 | 0.1697 | `previous_bad_plus_dispersion` | 0.341 | 0.164 | 0.075 | 0.0007 | `NOISE-LEVEL` |
-| strict | 90d | 0m | 224 | 53 | 29 | 16 | 224 | 0.427 | 0.1686 | `prior_risk_binned` | 0.150 | 0.163 | 0.567 | 0.0038 | `NOISE-LEVEL` |
-| strict | 90d | 5m | 224 | 53 | 28 | 16 | 218 | 0.427 | 0.1686 | `prior_risk_binned` | 0.237 | 0.177 | 0.219 | 0.0118 | `NOISE-LEVEL` |
-| strict | 90d | 30m | 224 | 53 | 28 | 16 | 189 | 0.427 | 0.1686 | `prior_s_binned` | 0.343 | 0.162 | 0.080 | 0.0139 | `NOISE-LEVEL` |
-| task | 30d | 0m | 226 | 53 | 29 | 16 | 226 | 0.435 | 0.1679 | `prior_risk_binned` | 0.147 | 0.153 | 0.527 | 0.0038 | `NOISE-LEVEL` |
-| task | 30d | 5m | 226 | 53 | 28 | 16 | 221 | 0.435 | 0.1679 | `prior_risk_binned` | 0.233 | 0.156 | 0.164 | 0.0124 | `NOISE-LEVEL` |
-| task | 30d | 30m | 226 | 53 | 28 | 16 | 191 | 0.435 | 0.1679 | `previous_bad_plus_dispersion` | 0.341 | 0.144 | 0.070 | 0.0007 | `NOISE-LEVEL` |
-| task | 90d | 0m | 227 | 53 | 29 | 16 | 227 | 0.435 | 0.1669 | `prior_risk_binned` | 0.147 | 0.144 | 0.488 | 0.0037 | `NOISE-LEVEL` |
-| task | 90d | 5m | 227 | 53 | 28 | 16 | 221 | 0.435 | 0.1669 | `prior_risk_binned` | 0.232 | 0.149 | 0.159 | 0.0126 | `NOISE-LEVEL` |
-| task | 90d | 30m | 227 | 53 | 28 | 16 | 191 | 0.435 | 0.1669 | `prior_s_binned` | 0.343 | 0.167 | 0.085 | 0.0101 | `NOISE-LEVEL` |
+| strict | 30d | 0m | 223 | 53 | 29 | 16 | 223 | 0.427 | 0.1697 | `prior_risk_binned` | 0.151 | 0.163 | 0.562 | 0.0039 | `NON_DETECTION` |
+| strict | 30d | 5m | 223 | 53 | 28 | 16 | 218 | 0.427 | 0.1697 | `prior_risk_binned` | 0.238 | 0.161 | 0.189 | 0.0116 | `NON_DETECTION` |
+| strict | 30d | 30m | 223 | 53 | 28 | 16 | 189 | 0.427 | 0.1697 | `previous_bad_plus_dispersion` | 0.341 | 0.164 | 0.075 | 0.0007 | `NON_DETECTION` |
+| strict | 90d | 0m | 224 | 53 | 29 | 16 | 224 | 0.427 | 0.1686 | `prior_risk_binned` | 0.150 | 0.163 | 0.567 | 0.0038 | `NON_DETECTION` |
+| strict | 90d | 5m | 224 | 53 | 28 | 16 | 218 | 0.427 | 0.1686 | `prior_risk_binned` | 0.237 | 0.177 | 0.219 | 0.0118 | `NON_DETECTION` |
+| strict | 90d | 30m | 224 | 53 | 28 | 16 | 189 | 0.427 | 0.1686 | `prior_s_binned` | 0.343 | 0.162 | 0.080 | 0.0139 | `NON_DETECTION` |
+| task | 30d | 0m | 226 | 53 | 29 | 16 | 226 | 0.435 | 0.1679 | `prior_risk_binned` | 0.147 | 0.153 | 0.527 | 0.0038 | `NON_DETECTION` |
+| task | 30d | 5m | 226 | 53 | 28 | 16 | 221 | 0.435 | 0.1679 | `prior_risk_binned` | 0.233 | 0.156 | 0.164 | 0.0124 | `NON_DETECTION` |
+| task | 30d | 30m | 226 | 53 | 28 | 16 | 191 | 0.435 | 0.1679 | `previous_bad_plus_dispersion` | 0.341 | 0.144 | 0.070 | 0.0007 | `NON_DETECTION` |
+| task | 90d | 0m | 227 | 53 | 29 | 16 | 227 | 0.435 | 0.1669 | `prior_risk_binned` | 0.147 | 0.144 | 0.488 | 0.0037 | `NON_DETECTION` |
+| task | 90d | 5m | 227 | 53 | 28 | 16 | 221 | 0.435 | 0.1669 | `prior_risk_binned` | 0.232 | 0.149 | 0.159 | 0.0126 | `NON_DETECTION` |
+| task | 90d | 30m | 227 | 53 | 28 | 16 | 191 | 0.435 | 0.1669 | `prior_s_binned` | 0.343 | 0.167 | 0.085 | 0.0101 | `NON_DETECTION` |
 
 ## Errata — what this transcription dropped (added 2026-08-23)
 

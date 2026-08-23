@@ -149,9 +149,10 @@ harness](REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-do
 scores EISV/prior-state features against `previous_outcome_bad` on ranking (AUC)
 and calibration (Brier), then compares the selected best candidate with a
 best-of-candidates permutation null. In the frozen 2026-08-09 trusted-anchor
-matrix, every overall scope/window/lead slice is `NOISE-LEVEL` (selective
-p = 0.070–0.567). Some unadjusted point estimates improve both metrics, but none
-separates from the selection-aware null at p < 0.05; the selected features are
+matrix, every overall scope/window/lead slice is `NON_DETECTION` (selective
+p = 0.070–0.567), not a demonstrated absence or refutation. Some unadjusted point
+estimates improve both metrics, but none separates from the selection-aware null
+at p < 0.05; the selected features are
 usually `prior_risk`, `prior_s`, or dispersion rather than the full
 decomposition. No prevention is demonstrated. That is a non-detection, and
 `scripts/analysis/ablation_power_probe.py` measures what a cohort of that shape

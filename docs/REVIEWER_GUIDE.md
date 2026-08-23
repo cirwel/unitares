@@ -130,8 +130,9 @@ may be stale. Inspect the frozen records and run synthetic controls; do not quer
 live discrimination between registered reads. The ablation/skeptic harness scores EISV/prior-state features
 **against a deliberately dumb `previous_outcome_bad` baseline** on ranking (AUC) and
 calibration (Brier), timestamps its output, and self-labels each slice
-`INCONCLUSIVE` / `DESCRIPTIVE ONLY` / `WEAK SIGNAL` / `KEEP TESTING`; the matrix adds
-`NOISE-LEVEL` when a selected best candidate does not clear its matching null.
+with a heuristic summary. The matrix separately assigns `UNASSESSED`,
+`NON_DETECTION`, or `SIGNAL_CANDIDATE` based on its matching selective null;
+none of those classes alone is a project verdict.
 
 **No deployment DB (fresh clone)** — exercises the pipeline on an injected bad
 class. This is plumbing/containment, **not** evidence that EISV predicts anything
@@ -212,7 +213,7 @@ BEAM harness lane excluded:
   into 28–29 prior-state permutation blocks across 16 agents, depending on lead
   and window. Report all three counts; blocks are not independent failures.
 - Across both scopes, 30/90-day windows, and 0/5/30-minute leads, **all 12
-  overall slices are `NOISE-LEVEL`** after the selected best candidate is
+  overall slices are `NON_DETECTION`** after the selected best candidate is
   compared with the matching best-of-candidates permutation null. Selective p
   ranges from 0.070 to 0.567; none clears p < 0.05.
 - Several unqualified point estimates improve both ranking and calibration, but
@@ -221,7 +222,7 @@ BEAM harness lane excluded:
 - The frozen rows predate the telemetry envelope, so all source/warmup/
   enforcement/missingness strata are `legacy/no-envelope`. **No prevention is
   demonstrated.**
-- **What the non-detection does not say.** A `NOISE-LEVEL` slice cannot
+- **What the non-detection does not say.** A `NON_DETECTION` slice cannot
   distinguish "no association" from "an association this cohort is too small to
   resolve". The instrument's power on a cohort of this shape is measured in
   [`operations/falsifiability-power-audit-2026-08-23.md`](operations/falsifiability-power-audit-2026-08-23.md)
