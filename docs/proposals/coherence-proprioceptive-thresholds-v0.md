@@ -181,6 +181,18 @@ Choosing `k` is a policy call and should be recorded as one.
    floor-scale and immature-baseline edges. The control also runs in CI
    (`tests/test_coherence_gate_shadow_read.py`), so "the instrument can fire" is a
    regression-tested property, not a one-off claim.
+   **Corrected 2026-08-23:** the control as first built could not fail. It injected
+   each tier's excursion *in units of that tier's k*, so it passed for whatever k it
+   was handed — including k values reachable only from outside V's clamped `[-1, 1]`
+   domain. Its top tier certified `hard_block_floor` from V = 1.10, and it still
+   passed at `k_floor = 25` (V = 5.10). It also ran its tier scenarios against an
+   empirical sd while 6,343 of 6,510 eligible rows in the six-day read scored
+   against the calibrated floor, leaving the dominant regime tier-untested. The
+   control now guards V's domain, exercises every tier in the floor-scale regime,
+   and carries an arithmetic reachability bound (`|z| <= (V_MAX - V_MIN) / floor`)
+   that a bad k cannot satisfy by construction. Reachability stays necessary, never
+   sufficient: a k chosen because traffic was quiet at it still passes. See
+   [`../operations/positive-control-validity-2026-08-23.md`](../operations/positive-control-validity-2026-08-23.md).
 
 ## 7. Reproduce
 

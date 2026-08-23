@@ -20,10 +20,32 @@ Two modes:
 
   * --positive-control: no DB. Drives the REAL `evaluate()` code path with
     synthetic BehavioralEISV stand-ins carrying injected V excursions at each
-    candidate tier, plus the floor-scale and immature-baseline edge cases, and
-    reports PASS/FAIL per scenario. This is the evidence that soak silence is
-    informative. The same scenarios run in CI via
+    candidate tier -- in BOTH scale regimes -- plus the immature-baseline and
+    short-history edges, and reports PASS/FAIL per scenario. This is the
+    evidence that soak silence is informative. The same scenarios run in CI via
     `tests/test_coherence_gate_shadow_read.py`.
+
+What the control does and does not establish (corrected 2026-08-23):
+
+    An excursion injected *in units of k* rises with k, so a control built that
+    way passes for whatever k it is handed and proves only that `>=` works. The
+    earlier table had exactly that shape, and its top tier certified
+    `hard_block_floor` from V = 1.10 -- outside the [-1, 1] clamp
+    `BehavioralEISV.update` enforces, so from a state the deployed system
+    cannot produce. It kept passing at k_floor = 25 (V = 5.10). It also ran its
+    tier scenarios against an empirical sd, while 6,343 of 6,510 eligible rows
+    in the six-day read scored against the calibrated floor -- the dominant
+    regime was never tier-tested.
+
+    The table now keeps every scenario inside V's domain, exercises each tier
+    in the floor-scale regime as well, and carries `reachable::*` rows checking
+    each k against `(V_MAX - V_MIN) / floor`, the largest magnitude the
+    statistic can emit. Those three properties are what make a FAIL possible.
+
+    Reachability remains NECESSARY, not sufficient. A k chosen because observed
+    traffic was quiet at it still passes this control. Silence at a reachable k
+    is quietness over the observed window -- not efficacy, not outcome
+    validity, and not evidence the gate is useless.
 
 Measurement only: this script changes no flag, threshold, verdict, or weight.
 Choosing k values remains a recorded policy call (proposal section 4).
@@ -46,6 +68,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from src.behavioral_state import (  # noqa: E402
+    V_MAX,
+    V_MIN,
+    eisv_min_std_for_dimension,
+)
 from src.coherence_gate_shadow import (  # noqa: E402
     K_BLOCK,
     K_FLOOR,
@@ -53,6 +80,8 @@ from src.coherence_gate_shadow import (  # noqa: E402
     RECENT_MIN_SAMPLES,
     STATISTIC_VERSION,
     evaluate,
+    max_attainable_magnitude,
+    selected_k_reachability,
 )
 
 DEFAULT_DB_URL = "postgresql://localhost:5432/governance"
@@ -243,13 +272,24 @@ class _SyntheticBehavioral:
     alphas: Optional[Any] = None
 
 
-def _history_with_excursion(
+def _out_of_domain(behavioral: _SyntheticBehavioral) -> List[float]:
+    """Values in a synthetic state that V's clamp would never allow.
+
+    ``BehavioralEISV.update`` clamps V to ``[V_MIN, V_MAX]``, so a control
+    scenario built outside that interval is exercising a state the deployed
+    system cannot reach. Firing from it proves nothing about the tier.
+    """
+    values = list(behavioral.V_history) + [behavioral.V]
+    return [v for v in values if v < V_MIN or v > V_MAX]
+
+
+def _sample_sd_history(
     base: float, spread: float, magnitude_sigma: float, n: int = 61
 ) -> _SyntheticBehavioral:
-    """Deterministic history with known dispersion, current value displaced.
+    """Excursion scored against an *empirical* sd (``scale_source=sample_std``).
 
-    Alternating +/- spread around base gives sample sd == spread exactly (for
-    even prior counts), so the injected displacement lands at a predictable
+    Alternating +/- spread around base gives a sample sd of essentially
+    ``spread``, so the injected displacement lands at a predictable
     standardized magnitude when spread dominates the calibrated floor.
     """
     prior = [base + spread * (1 if i % 2 == 0 else -1) for i in range(n - 1)]
@@ -257,24 +297,82 @@ def _history_with_excursion(
     return _SyntheticBehavioral(V_history=prior + [current], V=current)
 
 
+def _floor_scale_history(
+    base: float, magnitude_sigma: float, n: int = 61
+) -> _SyntheticBehavioral:
+    """Excursion scored against the calibrated floor (``scale_source=floor``).
+
+    This is the regime real traffic overwhelmingly occupies -- 6,343 of 6,510
+    eligible rows in the six-day read -- so tier reachability has to be shown
+    *here*, not only in the rarer empirical-sd regime. The prior is near
+    constant, so its sample sd falls below the floor and the floor supplies the
+    scale; the displacement is then expressed in floor units directly.
+    """
+    floor = eisv_min_std_for_dimension("V", None)
+    jitter = floor / 25.0
+    prior = [base + jitter * (1 if i % 2 == 0 else -1) for i in range(n - 1)]
+    current = base + magnitude_sigma * floor
+    return _SyntheticBehavioral(V_history=prior + [current], V=current)
+
+
+def reachability_report(alphas: Optional[Any] = None) -> Dict[str, Any]:
+    """Arithmetic check that each selected k is attainable at all.
+
+    Independent of any injected excursion, and the one check in this file that
+    a bad k choice cannot satisfy by construction. Necessary, not sufficient:
+    it says the tier *can* be reached, never that traffic reaches it.
+    """
+    tiers = selected_k_reachability(alphas)
+    return {
+        "max_attainable_magnitude": max_attainable_magnitude(alphas),
+        "tiers": tiers,
+        "all_attainable": all(t["attainable"] for t in tiers.values()),
+    }
+
+
 def positive_control() -> List[Dict[str, Any]]:
     """Scenario table proving the shadow statistic fires at each tier.
 
-    Uses spread 0.2 so the empirical sd dominates the calibrated V floor and
-    the injected magnitudes land where they were aimed.
+    Three properties this table is built to preserve, each of which an earlier
+    version did not have:
+
+    * **Every scenario stays inside V's clamped domain.** The excursion is
+      injected in units of k, so raising k raises the injected value with it.
+      Without a domain guard the table reports a tier as reachable from a state
+      ``BehavioralEISV`` can never produce.
+    * **Each tier is exercised in the floor-scale regime**, which is where
+      nearly all observed eligible rows live. Showing a tier fires only against
+      an empirical sd leaves the dominant regime untested.
+    * **The control can fail.** A k above the arithmetic ceiling, or one whose
+      excursion leaves V's domain, is reported as FAIL rather than absorbed.
+
+    Spread 0.12 in the empirical-sd scenarios keeps the sd above the calibrated
+    V floor (so the regime is genuinely ``sample_std``) while leaving the top
+    tier's injected value inside ``[V_MIN, V_MAX]``.
     """
-    spread = 0.2
+    spread = 0.12
     scenarios = [
-        ("quiet_baseline", _history_with_excursion(0.0, spread, 0.0), "proceed"),
-        ("pause_tier", _history_with_excursion(0.0, spread, K_PAUSE + 0.5), "coherence_pause"),
-        ("block_tier", _history_with_excursion(0.0, spread, K_BLOCK + 0.5), "hard_block"),
-        ("floor_tier", _history_with_excursion(0.0, spread, K_FLOOR + 0.5), "hard_block_floor"),
-        # Near-constant history: the calibrated floor supplies the scale and
-        # a physically large excursion must still fire, tagged scale_source=floor.
+        ("quiet_baseline", _sample_sd_history(0.0, spread, 0.0), "proceed"),
+        # Empirical-sd regime: sd dominates the floor.
+        ("pause_tier", _sample_sd_history(0.0, spread, K_PAUSE + 0.5), "coherence_pause"),
+        ("block_tier", _sample_sd_history(0.0, spread, K_BLOCK + 0.5), "hard_block"),
+        ("floor_tier", _sample_sd_history(0.0, spread, K_FLOOR + 0.5), "hard_block_floor"),
+        # Floor-scale regime: the regime nearly all real eligible rows occupy.
+        # Each tier must be reachable here too, from an in-domain state.
         (
-            "floor_scale_excursion",
-            _SyntheticBehavioral(V_history=[0.1] * 60 + [0.9], V=0.9),
-            "fires_via_floor",
+            "pause_tier_floor_scale",
+            _floor_scale_history(0.0, K_PAUSE + 0.5),
+            "coherence_pause",
+        ),
+        (
+            "block_tier_floor_scale",
+            _floor_scale_history(0.0, K_BLOCK + 0.5),
+            "hard_block",
+        ),
+        (
+            "floor_tier_floor_scale",
+            _floor_scale_history(0.0, K_FLOOR + 0.5),
+            "hard_block_floor",
         ),
         (
             "immature_baseline",
@@ -290,19 +388,36 @@ def positive_control() -> List[Dict[str, Any]]:
         ),
     ]
 
+    floor_scale_expected = {
+        "pause_tier_floor_scale",
+        "block_tier_floor_scale",
+        "floor_tier_floor_scale",
+    }
+
     results = []
     for name, behavioral, expectation in scenarios:
+        outside = _out_of_domain(behavioral)
         outcome = evaluate(behavioral, fleet_action="proceed")
-        if expectation == "ineligible":
-            passed = not outcome["eligible"]
-        elif expectation == "fires_via_floor":
-            passed = (
-                outcome["eligible"]
-                and outcome["scale_source"] == "floor"
-                and outcome["would_action"] != "proceed"
+        reason = None
+        if outside:
+            # Never let an out-of-domain state certify a tier, however the
+            # comparison came out.
+            passed = False
+            reason = (
+                f"scenario leaves V's domain [{V_MIN}, {V_MAX}]: "
+                f"{sorted({round(v, 3) for v in outside})}"
             )
+        elif expectation == "ineligible":
+            passed = not outcome["eligible"]
         else:
             passed = outcome["eligible"] and outcome["would_action"] == expectation
+            if passed and name in floor_scale_expected:
+                passed = outcome["scale_source"] == "floor"
+                if not passed:
+                    reason = (
+                        "scenario was meant to exercise the floor-scale regime "
+                        f"but scored against {outcome['scale_source']}"
+                    )
         results.append(
             {
                 "scenario": name,
@@ -311,7 +426,36 @@ def positive_control() -> List[Dict[str, Any]]:
                 "eligible": outcome.get("eligible"),
                 "scale_source": outcome.get("scale_source"),
                 "magnitude": outcome.get("v_deviation_magnitude"),
+                "in_domain": not outside,
+                "reason": reason,
                 "passed": passed,
+            }
+        )
+
+    # The arithmetic reachability of each tier, as its own reportable row.
+    reach = reachability_report()
+    for tier_name, tier in reach["tiers"].items():
+        results.append(
+            {
+                "scenario": f"reachable::{tier_name}",
+                "expected": f"k <= {reach['max_attainable_magnitude']}",
+                "would_action": None,
+                "eligible": None,
+                "scale_source": "floor",
+                "magnitude": tier["k"],
+                "in_domain": True,
+                "reason": (
+                    None
+                    if tier["attainable"]
+                    else (
+                        f"k={tier['k']} exceeds the maximum attainable magnitude "
+                        f"{reach['max_attainable_magnitude']}; no state can reach it"
+                    )
+                ),
+                "passed": tier["attainable"],
+                "required_v_deviation_at_floor_scale": tier[
+                    "required_v_deviation_at_floor_scale"
+                ],
             }
         )
     return results
@@ -326,11 +470,24 @@ def render_positive_control(results: List[Dict[str, Any]]) -> str:
             f"(eligible={r['eligible']}, scale={r['scale_source']}, "
             f"|z|={r['magnitude']})"
         )
+        if r.get("required_v_deviation_at_floor_scale") is not None:
+            lines.append(
+                "         means |V_current - mean(V_recent_prior)| >= "
+                f"{r['required_v_deviation_at_floor_scale']} at floor scale"
+            )
+        if r.get("reason"):
+            lines.append(f"         reason: {r['reason']}")
     ok = all(r["passed"] for r in results)
     lines.append(
-        "instrument CAN fire at every tier — soak silence is informative"
+        "instrument CAN fire at every tier, from in-domain states, in the "
+        "floor-scale regime real traffic occupies — soak silence is informative"
         if ok
         else "instrument FAILED a control scenario — soak silence is NOT interpretable"
+    )
+    lines.append(
+        "NOTE: this control shows each tier is reachable. It does NOT show that "
+        "observed traffic reaches it, and a k selected for quietness will still "
+        "pass here. Reachability is necessary, never sufficient."
     )
     return "\n".join(lines)
 
