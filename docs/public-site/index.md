@@ -10,21 +10,26 @@ replace them.
 · [multi-architecture container](https://github.com/cirwel/unitares/pkgs/container/unitares)
 · Apache-2.0
 
+<div class="hero-actions" role="group" aria-label="Get started">
+  <a class="primary" href="#try-the-released-surfaces">Run the six-check-in demo</a>
+  <a class="secondary" href="#evaluate-the-project">Evaluate the evidence</a>
+</div>
+
 ## The operating problem
 
-An agent can remain within per-action permissions while becoming poorly
-calibrated over a long task. UNITARES retains the longitudinal record that an
-action-level guardrail usually does not: what a process claimed, what evidence
-was available, what state the service estimated, and which policy response it
-returned.
+An agent can remain within per-action permissions while its claims, evidence,
+and behavior drift apart over a long task. UNITARES retains the longitudinal
+record that an action-level guardrail usually does not: what a process claimed,
+what evidence was available, what state the service estimated, and which policy
+response it returned.
 
 ## What operators get
 
 | Surface | Operational value |
 |---|---|
 | Accountable identity | Bind writes to a process instance and retain lineage across explicit handoffs. |
-| Evidence-linked calibration | Compare stated confidence with tests, exit codes, tool results, review labels, and recorded outcomes. |
-| Policy and recovery | Return a named action, reason, and next step; support governed pause and review paths. |
+| Claims and evidence | Retain check-in claims beside tests, exit codes, tool results, review labels, and recorded outcomes. |
+| Policy and recovery | Return a proceed or pause action with a named reason and next step; support governed recovery and review paths. |
 | Operator visibility | Inspect lifecycle, state, evidence, and decision history through MCP, HTTP, and a self-hosted dashboard. |
 
 The deployed policy path uses auditable behavioral state estimation. The
@@ -70,17 +75,24 @@ value or governance efficacy.
 
 ## Evidence boundary
 
-The public operational record comes from one long-running maintainer deployment.
-External adoption remains unvalidated, and the frozen outcome-lift evaluation
-found no result beyond a selection-aware null. UNITARES does not claim to prove
-correctness, ethics, safety, or incident prevention. It makes process identity,
-telemetry, evidence, and policy history inspectable so those claims can be tested
-rather than assumed.
+The [public operational record](https://github.com/cirwel/unitares#evidence-and-limits)
+comes from one long-running maintainer deployment. External adoption remains unvalidated,
+and the frozen outcome-lift evaluation found no result beyond a selection-aware
+null. UNITARES does not claim to prove correctness, ethics, safety, or incident
+prevention. It makes process identity, telemetry, evidence, and policy history
+inspectable so those claims can be tested rather than assumed.
 
-## Federation direction
+## Federation is a research direction
 
 Today, each deployment is governed by its own operator. The architecture exposes
 versioned telemetry, provenance, identity, and named policy decisions so future
 work can test cross-operator attestations without centralizing raw telemetry.
 Cross-governor trust, consensus, and enforcement are research goals, not deployed
 guarantees.
+
+## Where to go next
+
+Run the [six-check-in demo](#try-the-released-surfaces). To assess the boundary
+between deployed mechanisms and research claims, start with the
+[Reviewer Guide](https://github.com/cirwel/unitares/blob/master/docs/REVIEWER_GUIDE.md).
+For integration or pilot questions, [start a GitHub Discussion](https://github.com/cirwel/unitares/discussions).

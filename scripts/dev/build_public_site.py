@@ -72,8 +72,9 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   header nav a{{color:var(--dim);text-decoration:none;margin-right:14px;font-size:14px}}
   header nav a.active,header nav a:hover{{color:var(--ink)}}
   main{{max-width:880px;margin:0 auto;padding:30px 22px 90px}}
-  h1,h2,h3{{line-height:1.25}} h1{{font-size:26px;margin-top:0}} h2{{margin-top:34px;border-bottom:1px solid var(--line);padding-bottom:6px}} h3{{margin-top:26px}}
+  h1,h2,h3{{line-height:1.25}} h1{{font-size:26px;margin-top:0}} h2{{margin-top:34px;border-bottom:1px solid var(--line);padding-bottom:6px;scroll-margin-top:80px}} h3{{margin-top:26px}}
   a{{color:var(--acc)}}
+  a:focus-visible{{outline:2px solid var(--acc);outline-offset:3px}}
   code{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88em;background:#1c232c;border:1px solid var(--line);border-radius:5px;padding:.08em .4em}}
   pre{{background:#1c232c;border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow:auto}} pre code{{border:0;padding:0;background:none}}
   table{{border-collapse:collapse;width:100%;margin:14px 0;font-size:14.5px;display:block;overflow-x:auto}}
@@ -81,10 +82,16 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   th{{background:#1c232c;color:var(--dim);font-size:12.5px;text-transform:uppercase;letter-spacing:.4px}}
   blockquote{{border-left:3px solid var(--acc);background:#1c232c;margin:16px 0;padding:10px 16px;border-radius:0 8px 8px 0;color:var(--dim)}}
   main > p:first-of-type{{font-size:18px;color:#b8c3cf;max-width:760px}}
+  .hero-actions{{display:flex;flex-wrap:wrap;gap:10px;margin:20px 0 6px}}
+  .hero-actions a{{display:inline-flex;align-items:center;min-height:40px;padding:8px 14px;border:1px solid var(--line);border-radius:8px;font-weight:600;text-decoration:none}}
+  .hero-actions .primary{{background:var(--acc);border-color:var(--acc);color:#07111f}}
+  .hero-actions .secondary{{background:var(--panel);color:var(--ink)}}
+  .hero-actions a:hover{{filter:brightness(1.08)}}
   .admonition{{border:1px solid var(--line);border-left:3px solid var(--acc);background:#161b22;border-radius:0 8px 8px 0;padding:12px 16px;margin:18px 0}}
   .admonition-title{{font-weight:600;color:var(--ink);margin:0 0 6px}}
   hr{{border:0;border-top:1px solid var(--line);margin:28px 0}}
   footer{{max-width:880px;margin:0 auto;padding:0 22px 50px;color:var(--dim);font-size:12.5px;border-top:1px solid var(--line)}}
+  @media (max-width:560px){{.hero-actions a{{width:100%;justify-content:center}}}}
 </style>
 </head>
 <body>
