@@ -339,10 +339,20 @@ def main() -> int:
         print("\nFAIL — see above")
         return 1
     if live_skipped:
-        # Qualified, because an arm the caller asked for did not run. Reporting
-        # this as an unqualified pass is how silence becomes evidence.
-        print(f"\nPASS (synthetic arms only) — live arm SKIPPED: {live_skipped}")
-        return 0
+        # UNASSESSED, not PASS. An arm the caller explicitly asked for did not
+        # run, so this invocation did not establish what it was asked to.
+        #
+        # Qualifying only the printed line was not enough: EVALUATION_INDEX.md
+        # documents this script's contract as "Console PASS/FAIL + exit", and
+        # eisv-basin-health-gating-v0.md names `--db` as a pre-merge operator
+        # step. Anything consuming the exit status alone -- which is what an
+        # automated gate does -- still recorded success from a run that examined
+        # nothing. Exit 2 keeps "unassessed" distinct from both 0 (assessed and
+        # passed) and 1 (assessed and failed), so no consumer has to infer it
+        # from prose.
+        print(f"\nUNASSESSED (synthetic arms passed) — live arm SKIPPED: {live_skipped}")
+        print("  exit 2: a requested arm did not run, so this is not a pass.")
+        return 2
     print("\nPASS — acceptance criteria met")
     return 0
 

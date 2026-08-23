@@ -57,30 +57,64 @@ def test_at_least_one_case_asserts_on_the_treatment_effect():
     assert source.count('"de_escalates"') >= 2
 
 
+async def _fake_live_skip(dsn, limit):
+    """Stand-in for `run_live` that skips without touching the network."""
+    return True, 0, "no database connection"
+
+
+async def _fake_live_pass(dsn, limit):
+    """Stand-in for `run_live` that examined rows and found no masking."""
+    return True, 42, None
+
+
 def test_live_arm_reports_a_skip_as_a_skip(monkeypatch):
     """A skipped live arm must not read as a pass.
 
     Every early exit returned a bare True, which `main` ANDed into an
     unqualified "PASS — acceptance criteria met".
+
+    Hermetic by construction: `run_live` is replaced, so this never opens a
+    socket. An earlier version called the real `run_live` with an unreachable
+    DSN, which passed here only because no database happened to be present --
+    on a machine with asyncpg and a reachable DATABASE_URL it would have queried
+    the live deployment and returned a different verdict.
     """
     import asyncio
 
-    monkeypatch.setattr(validator, "_build_from_stats", validator._build_from_stats)
-    ok, examined, skip_reason = asyncio.run(
-        validator.run_live("postgresql://127.0.0.1:1/nope", 10)
-    )
+    monkeypatch.setattr(validator, "run_live", _fake_live_skip)
+    ok, examined, skip_reason = asyncio.run(validator.run_live(None, 10))
     assert ok is True          # a skip is not a failure
     assert examined == 0
     assert skip_reason is not None   # ...but it is not a pass either
 
 
-def test_main_qualifies_its_verdict_when_the_live_arm_skips(capsys, monkeypatch):
+def test_main_exits_2_when_a_requested_arm_skips(capsys, monkeypatch):
+    """Unassessed must be distinguishable from passed by exit status alone.
+
+    EVALUATION_INDEX.md documents this script's contract as "Console PASS/FAIL
+    + exit", and eisv-basin-health-gating-v0.md names `--db` as a pre-merge
+    operator step, so a consumer reading only the status must not see success
+    from a run that examined nothing.
+    """
+    monkeypatch.setattr(validator, "run_live", _fake_live_skip)
+    monkeypatch.setattr("sys.argv", ["validate_basin_gate.py", "--db"])
+    rc = validator.main()
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "UNASSESSED" in out
+    assert "live arm SKIPPED" in out
+    assert "PASS — acceptance criteria met" not in out
+
+
+def test_main_exits_0_when_the_live_arm_actually_examined_rows(capsys, monkeypatch):
+    """The other direction: a live arm that ran must give an unqualified pass."""
+    monkeypatch.setattr(validator, "run_live", _fake_live_pass)
     monkeypatch.setattr("sys.argv", ["validate_basin_gate.py", "--db"])
     rc = validator.main()
     out = capsys.readouterr().out
     assert rc == 0
-    assert "live arm SKIPPED" in out
-    assert "PASS — acceptance criteria met" not in out
+    assert "PASS — acceptance criteria met" in out
+    assert "UNASSESSED" not in out
 
 
 def test_main_gives_an_unqualified_pass_only_for_the_synthetic_arms(capsys, monkeypatch):
