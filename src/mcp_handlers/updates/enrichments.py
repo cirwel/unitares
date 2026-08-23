@@ -553,6 +553,16 @@ _QUERY_STOPWORDS = frozenset({
 })
 _MAX_QUERY_TERMS = 8
 _MIN_TERM_LEN = 4
+_NON_TOPICAL_AGENT_TAGS = frozenset({
+    "autonomous",
+    "embodied",
+    "engaged_ephemeral",
+    "ephemeral",
+    "persistent",
+    "pioneer",
+    "protected",
+    "session_like",
+})
 
 
 def _distinctive_terms(text: str, limit: int = _MAX_QUERY_TERMS) -> list:
@@ -574,6 +584,17 @@ def _distinctive_terms(text: str, limit: int = _MAX_QUERY_TERMS) -> list:
     return seen
 
 
+def _topical_agent_tags(tags: list | None) -> list:
+    """Exclude identity/lifecycle classes from the discovery-tag fallback."""
+    return [
+        tag
+        for tag in (tags or [])
+        if isinstance(tag, str)
+        and tag.strip()
+        and tag.strip().lower() not in _NON_TOPICAL_AGENT_TAGS
+    ]
+
+
 @enrichment(order=130, lite_safe=True)
 async def enrich_knowledge_surfacing(ctx: UpdateContext) -> None:
     """Surface up to 3 prior discoveries relevant to this check-in.
@@ -593,12 +614,14 @@ async def enrich_knowledge_surfacing(ctx: UpdateContext) -> None:
         # floor, and — the part that matters on this path — wraps every KG call
         # in _KG_SEARCH_TIMEOUT. Measured tail for one such call is p99 281ms /
         # max 2624ms, so an unbudgeted search here would hang the check-in.
-        relevant_discoveries = await _search_kg_by_checkin_text(ctx)
+        relevant_discoveries = await _cached_kg_search_by_checkin_text(ctx)
         if relevant_discoveries:
             match_basis = "your check-in text"
 
         if not relevant_discoveries:
-            agent_tags = ctx.meta.tags if ctx.meta and ctx.meta.tags else []
+            agent_tags = _topical_agent_tags(
+                ctx.meta.tags if ctx.meta and ctx.meta.tags else []
+            )
             if agent_tags:
                 from src.knowledge_graph import get_knowledge_graph
                 graph = await get_knowledge_graph()
@@ -1494,7 +1517,7 @@ async def enrich_mirror_signals(ctx: UpdateContext) -> None:
         # 3. Reactive KG search — useful when there is a concrete signal /
         #    reflection / edge, not on steady-state check-ins.
         if _should_search_kg_by_checkin_text(ctx, signals, reflection):
-            kg_results = await _search_kg_by_checkin_text(ctx)
+            kg_results = await _cached_kg_search_by_checkin_text(ctx)
             if kg_results:
                 ctx.response_data["_mirror_kg_results"] = kg_results
         # 3b. Proactive KG surfacing — on a throttled cadence, even in healthy
@@ -1502,7 +1525,9 @@ async def enrich_mirror_signals(ctx: UpdateContext) -> None:
         #     default (UNITARES_KG_PROACTIVE_EVERY=0). Emits an attribution
         #     record so adoption can measure surfaced-vs-acted-on.
         elif _proactive_kg_due(ctx):
-            proactive = await _search_kg_by_checkin_text(ctx, floor=_KG_PROACTIVE_FLOOR)
+            proactive = await _cached_kg_search_by_checkin_text(
+                ctx, floor=_KG_PROACTIVE_FLOOR
+            )
             proactive = await _dedupe_surfaced_kg(ctx, proactive)
             if proactive:
                 ctx.response_data["_mirror_kg_results"] = proactive
@@ -1709,14 +1734,7 @@ async def _search_kg_by_checkin_text(
         except (AttributeError, NotImplementedError):
             try:
                 results = await asyncio.wait_for(
-                    # Bounded terms, not the raw check-in: kg_full_text_search
-                    # AND-joins every token it is handed, so a paragraph of
-                    # prose matches nothing. This fallback is the live path on
-                    # the Postgres backend, which has no semantic_search.
-                    graph.full_text_search(
-                        " ".join(_distinctive_terms(response_text)) or response_text,
-                        limit=3,
-                    ),
+                    _full_text_search_with_recall(graph, response_text),
                     timeout=_KG_SEARCH_TIMEOUT,
                 )
             except asyncio.TimeoutError:
@@ -1769,6 +1787,52 @@ async def _search_kg_by_checkin_text(
         logger.warning(f"KG text search failed: {e}")
         _mark_surfacing_degraded(ctx)
         return []
+
+
+async def _full_text_search_with_recall(graph: Any, response_text: str) -> list:
+    """Run precise AND retrieval, then a recall-oriented OR fallback.
+
+    The caller wraps this whole sequence in one timeout, so the fallback does
+    not double the advisory path's latency budget.
+    """
+    terms = _distinctive_terms(response_text)
+    query = " ".join(terms) or response_text
+    results = await graph.full_text_search(query, limit=3)
+    if not results and len(terms) > 1:
+        results = await graph.full_text_search(query, limit=3, operator="OR")
+    return list(results or [])
+
+
+async def _cached_kg_search_by_checkin_text(
+    ctx: UpdateContext, floor: float = _RELATED_DISCOVERY_RELEVANCE_FLOOR
+) -> list:
+    """Return one KG lookup per check-in, filtered for the caller's floor.
+
+    Both the general knowledge-surfacing enrichment and the mirror enrichment
+    consume the same response text. Without a per-context cache an actionable
+    check-in pays for the identical advisory lookup twice, each with its own
+    timeout budget. Cache the default-floor result and let stricter consumers
+    (currently proactive surfacing) filter that bounded list locally.
+    """
+    if not getattr(ctx, "_kg_search_ready", False):
+        results = await _search_kg_by_checkin_text(
+            ctx, floor=_RELATED_DISCOVERY_RELEVANCE_FLOOR
+        )
+        ctx._kg_search_results = list(results)
+        ctx._kg_search_ready = True
+
+    results = list(getattr(ctx, "_kg_search_results", []))
+    if floor <= _RELATED_DISCOVERY_RELEVANCE_FLOOR:
+        return results
+
+    filtered = []
+    for entry in results:
+        try:
+            if float(entry.get("relevance", 0)) >= floor:
+                filtered.append(entry)
+        except (AttributeError, TypeError, ValueError):
+            continue
+    return filtered
 
 
 def _proactive_kg_due(ctx: UpdateContext) -> bool:

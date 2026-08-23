@@ -31,8 +31,12 @@ import pytest
 from src.mcp_handlers.middleware.envelope_step import _memory_suggestions
 from src.mcp_handlers.response_formatter import normalize_discovery_list
 from src.mcp_handlers.updates.enrichments import (
+    _cached_kg_search_by_checkin_text,
     _distinctive_terms,
+    _full_text_search_with_recall,
     _mark_surfacing_degraded,
+    _search_kg_by_checkin_text,
+    _topical_agent_tags,
     enrich_knowledge_surfacing,
 )
 
@@ -106,6 +110,19 @@ class TestDistinctiveTerms:
         assert _distinctive_terms(text) == []
 
 
+class TestTopicalAgentTags:
+    def test_drops_identity_and_lifecycle_classes(self):
+        assert _topical_agent_tags(
+            ["ephemeral", "engaged_ephemeral", "persistent", "autonomous"]
+        ) == []
+
+    def test_retains_caller_supplied_topics(self):
+        assert _topical_agent_tags(["ephemeral", "knowledge-graph", "testing"]) == [
+            "knowledge-graph",
+            "testing",
+        ]
+
+
 class TestEnrichKnowledgeSurfacing:
     """The enrichment now delegates retrieval to the shared, timeout-bounded
     `_search_kg_by_checkin_text` rather than issuing its own KG calls, so these
@@ -155,6 +172,23 @@ class TestEnrichKnowledgeSurfacing:
                 await enrich_knowledge_surfacing(ctx)
 
         assert ctx.response_data["relevant_discoveries"]["match_basis"] == "your tags"
+
+    @pytest.mark.asyncio
+    async def test_does_not_fall_back_to_lifecycle_tags(self):
+        ctx = self._ctx(response_text="coherence gate", tags=["ephemeral"])
+        get_graph = AsyncMock()
+        with patch(
+            "src.mcp_handlers.updates.enrichments._search_kg_by_checkin_text",
+            AsyncMock(return_value=[]),
+        ):
+            with patch.dict(
+                "sys.modules",
+                {"src.knowledge_graph": MagicMock(get_knowledge_graph=get_graph)},
+            ):
+                await enrich_knowledge_surfacing(ctx)
+
+        get_graph.assert_not_awaited()
+        assert ctx.response_data == {}
 
     @pytest.mark.asyncio
     async def test_caps_at_three(self):
@@ -210,3 +244,91 @@ class TestSurfacingDegradedMarker:
 
     def test_marker_never_raises_on_a_bad_ctx(self):
         _mark_surfacing_degraded(SimpleNamespace(response_data=None))
+
+
+class TestFullTextRecall:
+    @pytest.mark.asyncio
+    async def test_falls_back_from_and_to_or(self):
+        graph = AsyncMock()
+        graph.full_text_search = AsyncMock(
+            side_effect=[[], [{"discovery_id": "d1", "relevance": 0.4}]]
+        )
+
+        result = await _full_text_search_with_recall(
+            graph, "coherence gate soak recovery"
+        )
+
+        assert result[0]["discovery_id"] == "d1"
+        assert graph.full_text_search.await_count == 2
+        assert graph.full_text_search.await_args_list[1].kwargs["operator"] == "OR"
+
+    @pytest.mark.asyncio
+    async def test_does_not_issue_or_when_and_matches(self):
+        graph = AsyncMock()
+        graph.full_text_search = AsyncMock(
+            return_value=[{"discovery_id": "d1", "relevance": 0.4}]
+        )
+
+        await _full_text_search_with_recall(graph, "coherence gate soak recovery")
+
+        graph.full_text_search.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_and_or_sequence_shares_one_timeout_budget(self):
+        class Graph:
+            async def full_text_search(self, query, limit=3, operator="AND"):
+                if operator == "AND":
+                    return []
+                await asyncio.sleep(5)
+                return [{"discovery_id": "late", "relevance": 0.5}]
+
+        ctx = SimpleNamespace(
+            response_text="coherence gate soak recovery",
+            response_data={},
+        )
+        with patch(
+            "src.knowledge_graph.get_knowledge_graph",
+            AsyncMock(return_value=Graph()),
+        ), patch(
+            "src.mcp_handlers.updates.enrichments._KG_SEARCH_TIMEOUT", 0.05
+        ):
+            started = asyncio.get_running_loop().time()
+            result = await _search_kg_by_checkin_text(ctx)
+            elapsed = asyncio.get_running_loop().time() - started
+
+        assert result == []
+        assert elapsed < 1
+        assert ctx.response_data["knowledge_surfacing_degraded"] is True
+
+
+class TestCheckinSearchCache:
+    @pytest.mark.asyncio
+    async def test_reuses_one_lookup_for_multiple_enrichments(self):
+        ctx = SimpleNamespace(_kg_search_ready=False, _kg_search_results=[])
+        found = [{"discovery_id": "d1", "relevance": 0.4}]
+        with patch(
+            "src.mcp_handlers.updates.enrichments._search_kg_by_checkin_text",
+            AsyncMock(return_value=found),
+        ) as search:
+            first = await _cached_kg_search_by_checkin_text(ctx)
+            second = await _cached_kg_search_by_checkin_text(ctx)
+
+        assert first == found
+        assert second == found
+        search.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_applies_a_stricter_floor_without_another_lookup(self):
+        ctx = SimpleNamespace(_kg_search_ready=False, _kg_search_results=[])
+        found = [
+            {"discovery_id": "weak", "relevance": 0.2},
+            {"discovery_id": "strong", "relevance": 0.5},
+        ]
+        with patch(
+            "src.mcp_handlers.updates.enrichments._search_kg_by_checkin_text",
+            AsyncMock(return_value=found),
+        ) as search:
+            result = await _cached_kg_search_by_checkin_text(ctx, floor=0.35)
+
+        assert [entry["discovery_id"] for entry in result] == ["strong"]
+        search.assert_awaited_once()
