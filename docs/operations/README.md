@@ -54,6 +54,9 @@ or [User Manual](../manual/README.md).
   descriptive model/harness provenance and like-for-like cohort reporting.
 - [`ablation-negative-controls.md`](ablation-negative-controls.md) — synthetic
   negative controls for the ablation plumbing.
+- [`positive-control-validity-2026-08-23.md`](positive-control-validity-2026-08-23.md)
+  — when a positive control may make an instrument's silence informative, and the
+  coherence-gate control that could not fail.
 - [`eisv-ablation-frozen-2026-08-09.md`](eisv-ablation-frozen-2026-08-09.md) —
   current frozen trusted-anchor matrix; selection-adjusted result is negative.
 - [`ablation-initiates-finding-2026-06-16.md`](ablation-initiates-finding-2026-06-16.md)

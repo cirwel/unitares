@@ -42,7 +42,7 @@ import os
 import statistics
 from typing import Any, Dict, Optional
 
-from src.behavioral_state import eisv_min_std_for_dimension
+from src.behavioral_state import V_MAX, V_MIN, eisv_min_std_for_dimension
 from src.coherence_provenance import (
     LEGACY_COHERENCE_SOURCE,
     ODE_CONTROL_FEEDBACK_ROLE,
@@ -69,6 +69,82 @@ RECENT_WINDOW = 60
 RECENT_MIN_SAMPLES = 30
 STATISTIC_VERSION = "behavioral_v_recent_two_sided_v2"
 COMPARISON_VERSION = "coherence_cause_attribution_v2"
+
+
+# ---------------------------------------------------------------------------
+# Reachability of a selected k
+# ---------------------------------------------------------------------------
+#
+# A positive control that injects an excursion expressed *in units of k* proves
+# only that ``>=`` works: raise k and the injected excursion rises with it, so
+# the control passes for whatever k it is handed. It cannot answer the question
+# a k policy actually rests on -- whether the deployed system can produce a
+# state that reaches k at all.
+#
+# That question has an arithmetic answer. The statistic is
+# ``|V_current - mean(V_recent_prior)| / effective_scale`` with
+# ``effective_scale = max(sample_sd, calibrated_floor) >= floor``, and V is
+# clamped to ``[V_MIN, V_MAX]`` by ``BehavioralEISV.update``. Both the current
+# value and the prior mean live in that interval, so the numerator cannot
+# exceed its width and
+#
+#     |z| <= (V_MAX - V_MIN) / floor
+#
+# bounds every magnitude the instrument can ever emit. A k above that ceiling
+# is unreachable by construction: it would produce a permanent zero that says
+# nothing whatever about the traffic it was pointed at.
+#
+# This is a NECESSARY condition, not a sufficient one. Clearing it establishes
+# that the tier is arithmetically attainable. It does not establish that real
+# traffic reaches it, and it is not a substitute for the soak read.
+
+
+def max_attainable_magnitude(alphas: Optional[Dict[str, float]] = None) -> float:
+    """Hard ceiling on ``v_deviation_magnitude`` given V's clamped domain.
+
+    The widest possible numerator is the full width of V's domain; the smallest
+    possible denominator is the calibrated floor. No history can exceed this.
+    """
+    floor = eisv_min_std_for_dimension("V", alphas)
+    return (V_MAX - V_MIN) / floor
+
+
+def deviation_required_for(
+    k: float, alphas: Optional[Dict[str, float]] = None
+) -> float:
+    """Smallest ``|V_current - mean(V_recent_prior)|`` that can reach ``k``.
+
+    Reported in V units at the floor scale, which is the regime the observed
+    soak traffic overwhelmingly occupies -- so this, not a sigma count, is what
+    a selected k means in practice.
+    """
+    return k * eisv_min_std_for_dimension("V", alphas)
+
+
+def k_reachability(
+    k: float, alphas: Optional[Dict[str, float]] = None
+) -> Dict[str, Any]:
+    """Whether ``k`` is attainable at all, with the numbers behind the verdict."""
+    ceiling = max_attainable_magnitude(alphas)
+    required = deviation_required_for(k, alphas)
+    return {
+        "k": k,
+        "required_v_deviation_at_floor_scale": round(required, 4),
+        "v_domain_width": round(V_MAX - V_MIN, 4),
+        "max_attainable_magnitude": round(ceiling, 4),
+        "attainable": k <= ceiling,
+    }
+
+
+def selected_k_reachability(
+    alphas: Optional[Dict[str, float]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Reachability of the three tiers this module currently carries."""
+    return {
+        "k_pause": k_reachability(K_PAUSE, alphas),
+        "k_block": k_reachability(K_BLOCK, alphas),
+        "k_floor": k_reachability(K_FLOOR, alphas),
+    }
 
 
 def coherence_gate_shadow_enabled() -> bool:
