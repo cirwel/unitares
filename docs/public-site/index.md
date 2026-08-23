@@ -76,11 +76,13 @@ value or governance efficacy.
 ## Evidence boundary
 
 The [public operational record](https://github.com/cirwel/unitares#evidence-and-limits)
-comes from one long-running maintainer deployment. External adoption remains unvalidated,
-and the frozen outcome-lift evaluation found no result beyond a selection-aware
-null. UNITARES does not claim to prove correctness, ethics, safety, or incident
-prevention. It makes process identity, telemetry, evidence, and policy history
-inspectable so those claims can be tested rather than assumed.
+comes from one long-running maintainer deployment. External adoption remains
+unvalidated. The frozen outcome-lift read did not establish predictive lift,
+and its preserved record lacks the cluster geometry needed to reconstruct
+read-specific power; the result is therefore inconclusive, not a demonstrated
+negative. UNITARES does not claim to prove correctness, ethics, safety, or
+incident prevention. It makes process identity, telemetry, evidence, and policy
+history inspectable so those claims can be tested rather than assumed.
 
 ## Federation is a research direction
 

@@ -18,7 +18,9 @@ def test_build_separates_product_landing_from_glossary(tmp_path):
 
     assert "Runtime governance for long-lived AI agents" in landing_text
     assert "External adoption remains unvalidated" in landing_text
-    assert "selection-aware null" in landing_text
+    assert "did not establish predictive lift" in landing_text
+    assert "read-specific power" in landing_text
+    assert "inconclusive, not a demonstrated negative" in landing_text
     assert "its claims, evidence, and behavior drift apart" in landing_text
     assert "Claims and evidence" in landing
     assert 'class="hero-actions"' in landing
