@@ -24,14 +24,17 @@ operator: 71,141 stored EISV state rows and six long-running resident agents,
 one of them on separate hardware. 4,573,890 audit/telemetry events were logged
 over the same period, but 91.4% of those are session-resolution and
 cross-device-call records, not independent policy decisions. A frozen
-falsifiability eval against a permutation null found no predictive lift
-(selective p = 0.070–0.567) — that bounds the EISV score's forecasting power,
-not the accountability mechanism it sits inside: identity-bound writes,
-claim-vs-recorded-evidence comparison, and an enforced pause until recovery all
-run independent of it. The defensible claim today is an accountability
-instrument with one working circuit breaker, not incident prevention.
-[Evidence and limits](#evidence-and-limits) scopes every number on this page,
-including that negative result.
+falsifiability eval against a permutation null did **not detect** predictive
+lift (selective p = 0.070–0.567). Read that as a non-detection on a 224-row
+cohort, not as a measured ceiling: on a cohort of that shape the harness cannot
+resolve a weak effect, which the
+[power audit](docs/operations/falsifiability-power-audit-2026-08-23.md)
+quantifies. Either way it says nothing about the accountability mechanism the
+score sits inside: identity-bound writes, claim-vs-recorded-evidence
+comparison, and an enforced pause until recovery all run independent of it. The
+defensible claim today is an accountability instrument with one working circuit
+breaker, not incident prevention. [Evidence and limits](#evidence-and-limits)
+scopes every number on this page, including that non-detection.
 
 <div align="center">
 
@@ -262,13 +265,21 @@ citing a fleet number.
 
 What is not yet established:
 
-- **Predictive lift.** The frozen 2026-08-09 outcome-lift evaluation is a
-  negative result: after model selection, no overall slice separated from the
-  permutation null (selective p = 0.070–0.567, none at or below the 0.05
-  threshold). Some unadjusted metrics improved,
-  but none cleared the selection-aware threshold. There is no demonstrated
-  prevention. The [Reviewer Guide](docs/REVIEWER_GUIDE.md) gives the frozen
-  command and interpretation; compact output is preserved in the
+- **Predictive lift.** Unresolved — not demonstrated, and not disproved. In
+  the frozen 2026-08-09 outcome-lift evaluation no overall slice separated from
+  the permutation null after model selection (selective p = 0.070–0.567, none
+  at or below the 0.05 threshold); some unadjusted metrics improved, none
+  cleared the selection-aware threshold. That is a non-detection. Its power was
+  unmeasured until the
+  [power audit](docs/operations/falsifiability-power-audit-2026-08-23.md),
+  which finds the instrument cannot resolve a weak effect on a cohort of this
+  shape — so the snapshot sets no ceiling on EISV's forecasting power, as the
+  [Reviewer Guide](docs/REVIEWER_GUIDE.md) and the
+  [stop rule](docs/proposals/eisv-outcome-grounding-stop-rule-v0.md) both
+  already stated. The question is settled by the pre-registered 2026-12-01
+  read, not by this snapshot. There is no demonstrated prevention. The Reviewer
+  Guide gives the frozen command and interpretation; compact output is
+  preserved in the
   [dated ablation snapshot](docs/operations/eisv-ablation-frozen-2026-08-09.md).
 - **Behavior change from review and coordination.** The system records that the
   review and coordination surfaces ran and what they concluded; whether they
