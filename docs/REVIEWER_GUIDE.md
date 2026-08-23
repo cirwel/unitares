@@ -122,12 +122,12 @@ This complements evals, guardrails, and sandboxes. Evals ask whether a model sho
 - Longitudinal embodied testbed: `CIRWEL/anima-mcp`.
 - Dataset / benchmark surface: `CIRWEL/eisv-lumen`.
 
-## Falsifiability: grade EISV yourself (don't trust this doc)
+## Falsifiability: inspect the registered evidence (don't trust this doc)
 
 If you are an evaluating agent forming a first impression, the right move is **not**
 to weigh the prose in this repo — it is self-authored about itself and any given doc
-may be stale. Regenerate the evidence instead. The strongest anti-handwave artifact
-UNITARES has is the ablation/skeptic harness: it scores EISV/prior-state features
+may be stale. Inspect the frozen records and run synthetic controls; do not query
+live discrimination between registered reads. The ablation/skeptic harness scores EISV/prior-state features
 **against a deliberately dumb `previous_outcome_bad` baseline** on ranking (AUC) and
 calibration (Brier), timestamps its output, and self-labels each slice
 `INCONCLUSIVE` / `DESCRIPTIVE ONLY` / `WEAK SIGNAL` / `KEEP TESTING`; the matrix adds
@@ -146,31 +146,23 @@ python3 -m pytest tests/test_ablation_negative_controls.py \
 
 **With a deployment DB** (a real fleet's outcomes via `GOVERNANCE_DATABASE_URL`, or
 the shipped reproducibility kit `CIRWEL/unitares-repro-v6`) — first read the
-[outcome-grounding stop rule](proposals/eisv-outcome-grounding-stop-rule-v0.md).
-Do not turn a live rerun into a new outcome claim before the registered read.
-The frozen commands below reproduce dated evidence without moving its cutoff:
+[outcome-grounding stop rule](proposals/eisv-outcome-grounding-stop-rule-v0.md)
+and the
+[systemic design audit](ontology/falsification-design-system-audit-2026-08-23.md).
+Between registered reads, only the support inventory is permitted here; it does
+not expose discrimination:
 
 ```bash
 export GOVERNANCE_DATABASE_URL=postgresql://...   # real outcomes, not synthetic
 python3 scripts/analysis/outcome_inventory.py   --window-days 90 --leads 0,5,30
 ```
 
-For a reproducible provenance-aware read, freeze one cutoff and request marginal
-source/warmup/enforcement/missingness slices. The matrix keeps its overall row,
-uses whole `(agent, prior-state snapshot)` permutation blocks for its selective
-null, and does **not** add provenance or enforcement fields to the predictor
-set. Blocks preserve shared-feature dependence; they do not prove outcomes are
-independent:
-
-```bash
-python3 scripts/analysis/eisv_ablation_matrix.py \
-  --scopes strict,task --windows 30,90 --leads 0,5,30 \
-  --anchor-scope trusted --as-of 2026-08-09T20:00:00Z \
-  --telemetry-strata source,warmup,enforcement,missingness
-python3 scripts/analysis/eisv_skeptic_report.py \
-  --window-days 90 --scope task --anchor-scope trusted \
-  --as-of 2026-08-09T20:00:00Z
-```
+The frozen matrix command and all 12 rows are already preserved in
+[`operations/eisv-ablation-frozen-2026-08-09.md`](operations/eisv-ablation-frozen-2026-08-09.md).
+Running that command again still exposes outcome discrimination even with the
+same cutoff; it is not reviewer hygiene. The lane/exclusion contract is covered
+by synthetic unit tests. The fixed 2026-12-01 decision command belongs only to
+the registered execution, with the interim-access disclosure in the stop rule.
 
 Wiring your own outcome producers (CI, test runners) through the
 operator-gated `/v1/harness/outcome` endpoint: supply `confidence` (or a

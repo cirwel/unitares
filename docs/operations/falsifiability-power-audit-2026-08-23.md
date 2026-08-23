@@ -101,7 +101,8 @@ two to seven times wider than the simulation's, which shifts the whole p-value
 distribution, and the frozen p-values were themselves selected post hoc. It is
 recorded here only because it points the same way as the power result — toward
 *unresolved* rather than *negative* — and suppressing it would repeat the error
-this audit is about. The pre-registered read settles it.
+this audit is about. The registered read is the next fixed decision point; its
+read-specific power will determine what scientific conclusion it can support.
 
 ## Two harness defects found while measuring this
 
@@ -115,8 +116,9 @@ frozen table remain correct as computed.
    "few clusters bound how small `Selective p` can get, so read them together",
    and the stop rule makes `AUC delta > Null max p95` a distinct PASS condition.
    Every downstream citation therefore quotes a p-value stripped of the two
-   figures that scope it. Recovering them needs a re-run at the same `--as-of`
-   cutoff; an errata note now records the gap.
+   figures that scope it. Recovering them would need a live re-run at the same
+   `--as-of` cutoff; do not perform one solely to repair a historical
+   transcription. An errata note records the gap.
 
 2. **The baseline reads below chance and nothing flags it.** The frozen slices
    report baseline AUC 0.427–0.435 — the `previous_outcome_bad` reference is
@@ -166,11 +168,13 @@ instrument with **one working circuit breaker**". The project's own contract
 ledger says otherwise, in the same words:
 
 - Row 28 — "The 2026-08-02 high-risk verdict demonstrates the enforcement path
-  **working** live." → **REFUTED.** "the verdict fired, the enforcement did not."
+  **working** live." → **EVENT RECONCILED: VERDICT RECORDED, DELIVERY
+  SUPPRESSED.** The event distinguishes computation from delivery.
 - Row 27 — "Enforcement is currently protecting the fleet." → **UNTESTED as a
   protection claim.** "The event proves the circuit breaker *can actuate*; it
   does not show prevention, benefit, or correctness."
-- Row 24 — pause delivery → **REFUTED BY CONSTRUCTION.** A `gap_suppress`
+- Row 24 — pause delivery → **IMPLEMENTATION MISMATCH plus DEPLOYMENT
+  SNAPSHOT.** A `gap_suppress`
   cadence window downgraded **195 of 218 recorded pauses (89.4%)** in the
   2026-08-06 audit window before they reached the agent. Delivery is live —
   corrected 2026-08-10 after a governed pause landed on 2026-08-09 — but the
@@ -190,7 +194,8 @@ sentence ("that bounds the EISV score's forecasting power, **not** the
 accountability mechanism it sits inside"). The negative therefore costs nothing
 while buying the credibility of a project that reports its own failures — and
 that credibility is spent on the claim no one tested. The word "working" carries
-the whole product claim, and it is the exact word the ledger refutes.
+the whole product claim, and it is the exact word the ledger's event
+reconciliation does not support.
 
 **On intent.** None of this requires anyone to have decided to mislead. The
 operator raised this concern unprompted, which is evidence against intent. But
@@ -206,8 +211,9 @@ negative-direction patterns.
 
 ## Not fixed here
 
-- **The dropped columns.** Recovering `Null max p95` and `Null clusters` needs a
-  re-run at the same `--as-of` cutoff against the deployment database.
+- **The dropped columns.** They remain missing. Recovery would require a live
+  re-run at the same `--as-of` cutoff, which is not justified solely to repair
+  a historical transcription before the registered decision read.
 - **The current pause-suppression rate.** The 89.4% figure is from 2026-08-06.
   Whether it still holds is unknown and is the single most decision-relevant
   number about the product's core mechanism.
@@ -218,6 +224,9 @@ negative-direction patterns.
 - Every number in the frozen table. This audit re-ran nothing against
   production.
 - The 2026-12-01 read: date, cutoff discipline, all four PASS conditions, and
-  the kill criterion stand exactly as written.
+  the operational kill criterion stand exactly as written. The later protocol
+  audit requires disclosure of repeated interim accesses and read-specific
+  power; see
+  [`../ontology/falsification-design-system-audit-2026-08-23.md`](../ontology/falsification-design-system-audit-2026-08-23.md).
 - "No demonstrated predictive lift" and "no demonstrated prevention" — both
   remain true and remain on every surface that carried them.
