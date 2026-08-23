@@ -3,6 +3,13 @@
 **Status:** Instrument characterisation. Measures the *harness*, not the
 deployment. No production data was read and no database was queried.
 
+**Governing framework:** inference status for EISV falsification claims is set
+by [`../ontology/falsification-inference-containment-2026-08-22.md`](../ontology/falsification-inference-containment-2026-08-22.md),
+which requires four questions answered before any test may earn `REFUTED`. This
+audit is the evidence for its question 3 — *did the observed sample have
+independent units and adequate power?* — on the frozen 2026-08-09 read. The
+answer is no, which is why that read is a non-detection rather than a refutation.
+
 **Scope guard:** this changes nothing about the pre-registered 2026-12-01
 confirmatory read in
 [`../proposals/eisv-outcome-grounding-stop-rule-v0.md`](../proposals/eisv-outcome-grounding-stop-rule-v0.md)
