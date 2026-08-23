@@ -1736,12 +1736,15 @@ _PATTERN_FILE_PATH_EXCLUSIONS: dict[str, tuple[str, ...]] = {
 # flagged line, the task reference is stored — not fire-and-forget.
 _P001_TASK_ASSIGNMENT = re.compile(r"\b[a-zA-Z_]\w*\s*=\s*[^=].*create_task\(")
 
-# Regex: project's blessed tracked-task wrapper. By construction stores the
-# task ref in a tracked set; P001 should not flag call sites of it. The
-# required-token check still keeps `create_task(` matches because
-# `create_tracked_task` contains the substring `create_task(`. Caught when
-# qwen3-coder-next flagged 2 sites in mcp_server_std.py on 2026-04-17.
-_P001_TRACKED_HELPER = re.compile(r"\bcreate_tracked_task\s*\(")
+# Regex: project's blessed tracked-task wrappers. By construction both store
+# the task ref in the supervisor registry; P001 should not flag their call
+# sites or the private helper's definition line. The required-token check still
+# keeps these matches because both names contain the substring `create_task(`.
+# Caught for the public alias on 2026-04-17 and for 12 private-helper sites in
+# background_tasks.py on 2026-08-23.
+_P001_TRACKED_HELPER = re.compile(
+    r"\b(?:create_tracked_task|_supervised_create_task)\s*\("
+)
 
 # Regex: bounded-growth cues near a flagged P002 growth op — a len-cap
 # trim check (`if len(x) > CAP:`), an explicit eviction (`.pop(0)`,
@@ -1802,11 +1805,12 @@ _P016_INNER_LAYER_FOLLOWUP = re.compile(
 
 # Regex: helper-function definitions whose body operates on already-unwrapped
 # inner results (the caller did the outer-envelope check before invoking them).
-# `_raise_for_tool_failure(tool_name, raw)` is the canonical SDK shape — single
-# `raw.get("success") is False` check + raise. By convention these helpers do
-# not double-check an envelope they were never handed.
+# `_raise_for_tool_failure(tool_name, raw)` is the canonical assertion shape;
+# `_capture_identity(raw)` is the canonical defensive-consumer shape. In both
+# cases `call_tool()` has already run `_parse_mcp_result()` and
+# `_raise_for_tool_failure()` before handing over the flat tool payload.
 _P016_INNER_ASSERTION_HELPER_DEF = re.compile(
-    r"""^\s*(?:async\s+)?def\s+_raise_for_\w+\s*\("""
+    r"""^\s*(?:async\s+)?def\s+(?:_raise_for_\w+|_capture_identity)\s*\("""
 )
 
 # Regex: P005 resource-leak false positive when the acquire/cursor/connect/lock
@@ -2073,17 +2077,21 @@ def _is_p016_inside_inner_assertion_helper(
     snippet_lines_by_num: dict[int, str],
     lookback: int = 6,
 ) -> bool:
-    """Detect that the flagged success check sits inside a helper named
-    `_raise_for_*`. By project convention these helpers operate on
-    already-unwrapped inner results — the caller did the outer-envelope
-    check before invoking them. Shape:
+    """Detect that the flagged success check sits inside a known SDK helper
+    for an already-unwrapped result. The caller did the outer-envelope check
+    before invoking it. Shapes:
 
         def _raise_for_tool_failure(tool_name: str, raw: dict) -> None:
             if raw.get("success") is False:          # ← flagged
                 raise GovernanceConnectionError(...)
 
+        def _capture_identity(self, raw: dict) -> None:
+            if raw.get("success") is False:          # ← flagged
+                return
+
     Caught when qwen3 reflagged sync_client.py:458 (and client.py's
-    equivalent at :545) on 2026-05-20.
+    equivalent at :545) on 2026-05-20, then `_capture_identity` on
+    2026-08-23.
     """
     for line_no in range(flagged_line - 1, flagged_line - lookback - 1, -1):
         line = snippet_lines_by_num.get(line_no, "")
@@ -2294,17 +2302,16 @@ def _verify_finding_against_source(
             "warning",
         )
         return False
-    # P016 specifically: the flagged success check sits inside a `_raise_for_*`
-    # helper that operates on an already-unwrapped inner result. By project
-    # convention the caller validated the outer envelope before invoking it.
-    # Caught when qwen3 reflagged sync_client.py:458 (and client.py:545) on
-    # 2026-05-20.
+    # P016 specifically: the flagged success check sits inside an SDK helper
+    # that operates on an already-unwrapped inner result. By project convention
+    # the caller validated the outer envelope before invoking it. This covers
+    # `_raise_for_*` assertion helpers and `_capture_identity`'s defensive gate.
     if finding.pattern == "P016" and _is_p016_inside_inner_assertion_helper(
         finding.line, snippet_lines_by_num
     ):
         log(
-            f"drop P016 {finding.file}:{finding.line} — inside _raise_for_* "
-            f"inner-layer assertion helper: {src_line.strip()[:80]}",
+            f"drop P016 {finding.file}:{finding.line} — inside known "
+            f"already-unwrapped SDK helper: {src_line.strip()[:80]}",
             "warning",
         )
         return False

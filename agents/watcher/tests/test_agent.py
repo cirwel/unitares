@@ -1608,6 +1608,32 @@ def test_print_unresolved_filters_missing_targets_without_mutating(
     assert watcher_module.FINDINGS_FILE.read_text() == before
 
 
+def test_print_unresolved_keeps_missing_target_with_source_snapshot(
+    watcher_module, tmp_path, capsys
+):
+    """A deleted worktree must not make a snapshotted finding disappear.
+
+    SessionStart stays read-only, but it can mark the display copy path-gone
+    and show the retained line so the finding remains adjudicable.
+    """
+    missing = tmp_path / "deleted-worktree" / "ghost.py"
+    finding = _make_raw_entry(
+        "ghost___00000000", file=str(missing), status="surfaced"
+    )
+    finding["line_content"] = "asyncio.create_task(run_forever())"
+    _seed_findings(watcher_module, [finding])
+    before = watcher_module.FINDINGS_FILE.read_text()
+
+    rc = watcher_module.print_unresolved(scope_root=tmp_path)
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "ghost.py" in out
+    assert "path gone; snapshot retained" in out
+    assert 'retained source line: "asyncio.create_task(run_forever())"' in out
+    assert watcher_module.FINDINGS_FILE.read_text() == before
+
+
 def test_print_unresolved_silent_when_only_missing_targets(
     watcher_module, tmp_path, capsys
 ):
@@ -2421,6 +2447,27 @@ def test_p001_dropped_when_task_reference_is_assigned(watcher_module):
     )
 
 
+@pytest.mark.parametrize(
+    "src_line",
+    [
+        "def _supervised_create_task(coro, *, name=None):",
+        '_supervised_create_task(worker(), name="worker")',
+        "create_tracked_task(worker())",
+    ],
+)
+def test_p001_dropped_for_project_tracked_task_helpers(watcher_module, src_line):
+    """The public and private supervisor helpers retain task references by
+    construction; neither their call sites nor the private definition is a
+    fire-and-forget expression."""
+    assert not _verify_finding(
+        watcher_module,
+        pattern="P001",
+        line=10,
+        src_line=src_line,
+        file="/repo/src/background_tasks.py",
+    )
+
+
 def test_p001_kept_for_true_fire_and_forget(watcher_module):
     """Positive case: a bare `asyncio.create_task(bad())` with no assignment
     is the real fire-and-forget pattern and must survive."""
@@ -2705,6 +2752,32 @@ def test_p016_dropped_inside_raise_for_tool_failure_helper(watcher_module):
     assert not watcher_module._verify_finding_against_source(f, "", snippet), (
         "P016 should be dropped inside _raise_for_* helper — the helper "
         "operates on an already-unwrapped inner result"
+    )
+
+
+def test_p016_dropped_inside_capture_identity_helper(watcher_module):
+    """`_capture_identity` consumes a flat tool payload after call_tool has
+    checked MCP `isError` and tool-level `success`. Its local failure guard is
+    defense in depth, not a missed nested-success check."""
+    f = watcher_module.Finding(
+        pattern="P016",
+        file="/repo/agents/sdk/src/unitares_sdk/client.py",
+        line=458,
+        hint="t",
+        severity="high",
+        detected_at="2026-08-23T00:00:00Z",
+        model_used="t",
+    )
+    snippet = {
+        456: "    def _capture_identity(self, raw: dict) -> None:",
+        457: "        # call_tool already raises on transport and tool failures",
+        458: '        if raw.get("success") is False:',
+        459: "            return",
+        460: "        self.client_session_id = raw.get('client_session_id')",
+    }
+    assert not watcher_module._verify_finding_against_source(f, "", snippet), (
+        "P016 should be dropped inside _capture_identity because it receives "
+        "an already-unwrapped flat tool result"
     )
 
 
