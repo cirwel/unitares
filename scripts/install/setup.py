@@ -386,7 +386,7 @@ def bootstrap_check() -> None:
     except ImportError:
         print(
             "MCP SDK not found. Run:\n"
-            "    pip install -r requirements-full.txt",
+            "    pip install -r requirements-full.txt -c constraints.txt",
             file=sys.stdout,
         )
         sys.exit(2)

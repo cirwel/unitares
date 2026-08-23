@@ -44,12 +44,13 @@ Don't rebuild discrimination analysis — these exist and are current:
   than as a general inference status. No hardcoded conclusion.
 - **`scripts/analysis/eisv_ablation_matrix.py`** ✓ — same question across scope/window/lead
   slices with bootstrap CIs, permutation p-values, BEAM-lane exclusion, and a
-  `NOISE-LEVEL` label when the selected best candidate does not clear its null.
+  `NON_DETECTION` inference class when the selected best candidate does not clear
+  its null. That class does not establish no effect or refutation.
 
 - **`scripts/analysis/ablation_power_probe.py`** ✓ — the companion to those two.
   They report whether a lift separated from its null; this reports what size of
   lift the same machinery could have separated, by planting a known effect in a
-  synthetic cohort of a given shape. Run it before reading any `NOISE-LEVEL`
+  synthetic cohort of a given shape. Run it before reading any `NON_DETECTION`
   result as evidence of absence. No database, no credentials, deterministic.
 
 **Reading either output:** `AUC delta`, `Null max p95`, and `Selective p`
@@ -60,8 +61,10 @@ agents.
 - `AUC delta` is the **maximum over ~7 candidates**, so its reference is `Null max
   median`, never zero. The null permutes whole EISV readings between `(agent,
   prior-state snapshot)` blocks, leaving labels — and therefore the baseline —
-  untouched. A delta below the null median is weaker than noise. `Selective p`
-  tests exactly the reported statistic; `Brier perm p` tests only Brier.
+  untouched. A delta below the null median is compatible with that
+  selection-aware null distribution; it does not establish noise or no effect.
+  `Selective p` tests exactly the reported statistic; `Brier perm p` tests only
+  Brier.
 - `Bad clusters` is the count of `(agent, prior-state snapshot)` permutation
   blocks. Prior state is constant within a block, so an edit-test-retry burst
   must not be counted as N distinct feature readings. The block count is not
@@ -102,8 +105,10 @@ formula, documentation, event, and snapshot findings are not promoted to
 223–227 outcomes, 53 bad rows grouped into 28–29 prior-state permutation blocks
 across 16 agents, depending on slice. Those blocks preserve shared-feature
 dependence; they are not an independent-failure count. All 12 overall
-strict/task × 30/90-day × 0/5/30-minute slices are `NOISE-LEVEL` after
+strict/task × 30/90-day × 0/5/30-minute slices are `NON_DETECTION` after
 best-candidate selection is included in the null (selective p = 0.070–0.567).
+Their scientific status remains inconclusive without adequate read-specific
+power.
 The removed sandbagging demo and private analysis memory are not reproducible
 evidence from this repository and should not be cited for numeric performance.
 The reproducible boundary is instead the synthetic twin replay documented in

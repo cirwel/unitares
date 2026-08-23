@@ -16,9 +16,13 @@ Read `AUC delta` against `Null max median`, never against zero, and read `Bad`
 against `Bad clusters`.
 
 Usage:
-    python3 scripts/analysis/eisv_ablation_matrix.py --windows 30,90 --leads 0,30
-    python3 scripts/analysis/eisv_ablation_matrix.py --scopes strict,task --output data/analysis/eisv_ablation_matrix.md
-    python3 scripts/analysis/eisv_ablation_matrix.py --anchor-scope trusted --selective-null-resamples 500
+    python3 scripts/analysis/eisv_ablation_matrix.py \
+        --read-protocol exploratory --read-id exploratory-YYYYMMDD-HHMMSS \
+        --acknowledge-contamination --windows 30,90 --leads 0,30
+
+Every CLI database read must declare its protocol and unique read ID. Registered
+reads also require frozen ``--as-of`` and ``--not-before`` boundaries. The CLI
+records an atomic access receipt before querying; repeated IDs fail closed.
 
 Env:
     GOVERNANCE_DATABASE_URL  (default inherited from eisv_skeptic_report; redact in reports)
@@ -28,6 +32,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
+import json
 import os
 import random
 import re
@@ -64,6 +70,19 @@ from scripts.analysis.outcome_inventory import (
 from src.grounding.outcome_anchors import anchored_outcomes_predicate
 
 DEFAULT_EXCLUDED_HARNESS_LANES = ("beam",)
+READ_PROTOCOLS = ("registered", "exploratory", "reproduction")
+CONTAMINATING_READ_PROTOCOLS = frozenset({"exploratory", "reproduction"})
+READ_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,127}")
+DEFAULT_READ_LEDGER_DIR = Path(
+    os.environ.get(
+        "UNITARES_OUTCOME_READ_LEDGER_DIR",
+        str(Path.home() / ".local" / "state" / "unitares" / "outcome-reads"),
+    )
+)
+
+
+class ReadProtocolError(ValueError):
+    """Raised before data access when a live-read protocol is incomplete."""
 
 
 @dataclass(frozen=True)
@@ -97,6 +116,8 @@ class AblationMatrixRow:
     best_brier_improvement: float | None
     beats_both: bool
     conclusion: str
+    agents: int | None = None
+    inference_class: str = "UNASSESSED"
     best_auc_delta_ci: tuple[float, float] | None = None
     best_brier_improvement_ci: tuple[float, float] | None = None
     best_brier_permutation_p: float | None = None
@@ -441,6 +462,20 @@ def estimate_selective_null(
     )
 
 
+def classify_inference_with_selective_null(
+    selective_null: SelectiveNull | None,
+    *,
+    alpha: float = 0.05,
+) -> str:
+    """Return the narrow evidence class licensed by the selective-null read."""
+
+    if selective_null is None or selective_null.selective_p is None:
+        return "UNASSESSED"
+    if selective_null.selective_p > alpha:
+        return "NON_DETECTION"
+    return "SIGNAL_CANDIDATE"
+
+
 def qualify_conclusion_with_selective_null(
     conclusion: str,
     *,
@@ -448,7 +483,7 @@ def qualify_conclusion_with_selective_null(
     selective_null: SelectiveNull | None,
     alpha: float = 0.05,
 ) -> str:
-    """Downgrade an encouraging verdict the selective null does not support.
+    """Attach the evidence class to the heuristic summary that gets quoted.
 
     `summarize_conclusion` compares the best candidate against fixed thresholds,
     which is a comparison to zero. The reported delta is a maximum over ~7
@@ -463,7 +498,11 @@ def qualify_conclusion_with_selective_null(
         or selective_null.median is None
         or best_auc_delta is None
     ):
-        return conclusion
+        return (
+            "UNASSESSED: a selection-aware null was not available, so this row "
+            "licenses no inferential conclusion. Heuristic summary was: "
+            f"{conclusion}"
+        )
     detail = (
         f"selective p={selective_null.selective_p:.3f}, "
         f"null max median={selective_null.median:.3f}, "
@@ -471,10 +510,17 @@ def qualify_conclusion_with_selective_null(
     )
     if selective_null.selective_p > alpha:
         return (
-            f"NOISE-LEVEL ({detail}): the reported lift is not separated from the "
-            f"best-of-candidates noise floor. Unqualified verdict was: {conclusion}"
+            f"NON-DETECTION ({detail}): the reported lift is not separated from "
+            "the best-of-candidates selective null. This does not establish no "
+            "effect or refutation; scientific status remains INCONCLUSIVE until "
+            "read-specific power and protocol are established. Heuristic summary "
+            f"was: {conclusion}"
         )
-    return f"{conclusion} Clears the selective null ({detail})."
+    return (
+        f"SIGNAL CANDIDATE ({detail}): the reported lift clears the selective "
+        "null. This is not confirmatory without a registered protocol and "
+        f"read-specific power. Heuristic summary was: {conclusion}"
+    )
 
 
 def count_bad_clusters(rows: Sequence[OutcomeRow]) -> tuple[int, int]:
@@ -520,7 +566,9 @@ def filter_rows_for_validation(
     if not excluded:
         return eligible_rows
     return [
-        row for row in eligible_rows if harness_lane_from_detail(row.detail) not in excluded
+        row
+        for row in eligible_rows
+        if harness_lane_from_detail(row.detail) not in excluded
     ]
 
 
@@ -609,6 +657,8 @@ def build_matrix_row(
             best_auc_delta=best_delta.auc_delta if best_delta else None,
             selective_null=selective_null,
         ),
+        agents=len({row.agent_id for row in rows}),
+        inference_class=classify_inference_with_selective_null(selective_null),
         best_auc_delta_ci=uncertainty.auc_delta_ci if uncertainty else None,
         best_brier_improvement_ci=(
             uncertainty.brier_improvement_ci if uncertainty else None
@@ -637,6 +687,10 @@ def format_matrix_report(
     excluded_harness_lanes: Sequence[str] = (),
     anchor_scope: str | None = None,
     as_of: datetime | None = None,
+    read_protocol: str | None = None,
+    read_id: str | None = None,
+    protocol_not_before: datetime | None = None,
+    contamination_acknowledged: bool = False,
 ) -> str:
     """Render a compact markdown table for skeptical multi-slice reporting."""
     generated_at = generated_at or datetime.now(timezone.utc)
@@ -646,6 +700,32 @@ def format_matrix_report(
         f"Generated: {generated_at.strftime('%Y-%m-%d %H:%M:%S %Z')}",
         "",
     ]
+    if read_protocol and read_id:
+        lines.extend(
+            [
+                f"Read ID: `{read_id}`",
+                f"Read protocol: `{read_protocol}`",
+            ]
+        )
+        if protocol_not_before is not None:
+            lines.append(
+                "Not-before boundary: "
+                f"`{protocol_not_before.astimezone(timezone.utc).isoformat()}`"
+            )
+        if read_protocol in CONTAMINATING_READ_PROTOCOLS:
+            lines.append(
+                "Confirmatory authority: **none** — this read explicitly "
+                "acknowledged protocol contamination."
+            )
+        else:
+            lines.append(
+                "Confirmatory authority: determined by the registered design, "
+                "its disclosed prior accesses, and read-specific power — not by "
+                "the protocol label alone."
+            )
+        if contamination_acknowledged:
+            lines.append("Contamination acknowledgement: recorded")
+        lines.append("")
     excluded = tuple(str(lane) for lane in excluded_harness_lanes if str(lane))
     if excluded:
         lines.extend(
@@ -708,6 +788,7 @@ def format_matrix_report(
         "Bad",
         "Bad clusters",
         "Bad agents",
+        "Agents",
         "Prior state",
         "Prior risk",
         "Envelope",
@@ -724,6 +805,7 @@ def format_matrix_report(
         "Brier improvement 95% CI",
         "Brier perm p",
         "Beats both?",
+        "Inference class",
         "Conclusion",
     ]
     lines.extend(
@@ -733,7 +815,8 @@ def format_matrix_report(
             "**Read `AUC delta` against `Null max median`, never against zero.** The "
             "reported delta is the maximum over ~7 candidates, so its null is the "
             "distribution of that maximum when EISV readings carry no information, "
-            "not 0. A delta below the null median is weaker than noise. `Selective p` "
+            "not 0. A delta below the null median is compatible with the "
+            "selection-aware null distribution. `Selective p` "
             "tests exactly the reported statistic; `Brier perm p` tests only Brier and "
             "has never tested the AUC delta.",
             "",
@@ -747,6 +830,12 @@ def format_matrix_report(
             "cluster, so an edit-test-retry burst does not contribute N distinct "
             "feature readings. Clusters are permutation blocks, not proof of "
             "independent outcomes; report bad rows and agents alongside them.",
+            "",
+            "**Inference class is narrower than a project verdict.** "
+            "`NON_DETECTION` means this read did not separate the selected candidate "
+            "from its selective null; without adequate read-specific power it remains "
+            "scientifically inconclusive. `SIGNAL_CANDIDATE` is not confirmation, and "
+            "`UNASSESSED` licenses no inference.",
             "",
             "| " + " | ".join(columns) + " |",
             "|" + "|".join("---" for _ in columns) + "|",
@@ -771,6 +860,7 @@ def format_matrix_report(
                 str(row.bad),
                 str(row.bad_clusters),
                 str(row.bad_agents),
+                "-" if row.agents is None else str(row.agents),
                 str(row.prior_state),
                 str(row.prior_risk),
                 "-" if row.telemetry_envelope is None else str(row.telemetry_envelope),
@@ -791,6 +881,7 @@ def format_matrix_report(
                 _fmt_ci(row.best_brier_improvement_ci, 4),
                 _fmt_float(row.best_brier_permutation_p, 3),
                 "yes" if row.beats_both else "no",
+                row.inference_class,
                 row.conclusion,
             ]
             lines.append("| " + " | ".join(cells) + " |")
@@ -839,6 +930,129 @@ def _parse_telemetry_strata(raw: str) -> tuple[str, ...]:
             f"invalid telemetry strata: {', '.join(invalid)}"
         )
     return dimensions
+
+
+def validate_read_protocol(
+    args: argparse.Namespace,
+    *,
+    now: datetime | None = None,
+) -> datetime:
+    """Validate live-read authority before any database query can begin."""
+
+    checked_at = now or datetime.now(timezone.utc)
+    if checked_at.tzinfo is None:
+        raise ReadProtocolError("protocol validation time must be timezone-aware")
+
+    errors: list[str] = []
+    if args.read_protocol is None:
+        errors.append("--read-protocol is required for every database read")
+    if not args.read_id:
+        errors.append("--read-id is required for an immutable access receipt")
+    elif READ_ID_PATTERN.fullmatch(args.read_id) is None:
+        errors.append(
+            "--read-id must be 3-128 characters using letters, digits, '.', '_', ':', or '-'"
+        )
+
+    if args.as_of is not None and args.as_of > checked_at:
+        errors.append("--as-of cannot be in the future at access time")
+
+    if args.read_protocol == "registered":
+        if args.not_before is None:
+            errors.append("registered reads require --not-before")
+        elif checked_at < args.not_before:
+            errors.append(
+                "registered read is early: not-before boundary is "
+                f"{args.not_before.astimezone(timezone.utc).isoformat()}"
+            )
+        if args.as_of is None:
+            errors.append("registered reads require a frozen --as-of boundary")
+    elif (
+        args.read_protocol in CONTAMINATING_READ_PROTOCOLS
+        and not args.acknowledge_contamination
+    ):
+        errors.append(f"{args.read_protocol} reads require --acknowledge-contamination")
+
+    if errors:
+        raise ReadProtocolError("; ".join(errors))
+    return checked_at.astimezone(timezone.utc)
+
+
+def record_read_receipt(
+    args: argparse.Namespace,
+    *,
+    exclude_harness_lanes: Sequence[str],
+    now: datetime | None = None,
+) -> tuple[Path, datetime]:
+    """Atomically record one declared access before querying outcome data."""
+
+    checked_at = validate_read_protocol(args, now=now)
+    ledger_dir = Path(args.read_ledger_dir)
+    try:
+        ledger_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ReadProtocolError(
+            f"cannot create read ledger {ledger_dir}: {exc}"
+        ) from exc
+
+    digest = hashlib.sha256(args.read_id.encode("utf-8")).hexdigest()
+    receipt_path = ledger_dir / f"{digest}.json"
+    receipt = {
+        "schema": "unitares.outcome_read_receipt.v1",
+        "status": "access_started",
+        "read_id": args.read_id,
+        "read_protocol": args.read_protocol,
+        "recorded_at": checked_at.isoformat(),
+        "not_before": args.not_before.isoformat() if args.not_before else None,
+        "as_of": args.as_of.isoformat() if args.as_of else None,
+        "contamination_acknowledged": bool(args.acknowledge_contamination),
+        "parameters": {
+            "scopes": list(args.scopes),
+            "windows": list(args.windows),
+            "leads": list(args.leads),
+            "train_fraction": args.train_fraction,
+            "min_feature_rows": args.min_feature_rows,
+            "anchor_scope": args.anchor_scope,
+            "exclude_harness_lanes": list(exclude_harness_lanes),
+            "group_by_harness_lane": bool(args.group_by_harness_lane),
+            "telemetry_strata": list(args.telemetry_strata),
+            "uncertainty_resamples": args.uncertainty_resamples,
+            "uncertainty_seed": args.uncertainty_seed,
+            "selective_null_resamples": args.selective_null_resamples,
+        },
+    }
+    payload = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    try:
+        fd = os.open(
+            os.fspath(receipt_path),
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+    except FileExistsError as exc:
+        raise ReadProtocolError(
+            f"read id {args.read_id!r} already has a receipt; repeated reads need "
+            "a new ID and explicit disclosure"
+        ) from exc
+    except OSError as exc:
+        raise ReadProtocolError(
+            f"cannot record read receipt {receipt_path}: {exc}"
+        ) from exc
+    try:
+        remaining = memoryview(payload)
+        while remaining:
+            written = os.write(fd, remaining)
+            if written <= 0:
+                raise ReadProtocolError(
+                    f"short write while recording read receipt {receipt_path}"
+                )
+            remaining = remaining[written:]
+        os.fsync(fd)
+    except OSError as exc:
+        raise ReadProtocolError(
+            f"cannot finish read receipt {receipt_path}: {exc}"
+        ) from exc
+    finally:
+        os.close(fd)
+    return receipt_path, checked_at
 
 
 async def build_matrix_from_db(
@@ -906,7 +1120,11 @@ async def build_matrix_from_db(
                                 outcome_rows, dimension
                             ).items()
                         )
-                    for telemetry_dimension, telemetry_stratum, stratum_rows in telemetry_groups:
+                    for (
+                        telemetry_dimension,
+                        telemetry_stratum,
+                        stratum_rows,
+                    ) in telemetry_groups:
                         matrix_rows.append(
                             build_matrix_row(
                                 stratum_rows,
@@ -930,6 +1148,41 @@ async def build_matrix_from_db(
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db-url", default=DEFAULT_DB_URL)
+    parser.add_argument(
+        "--read-protocol",
+        choices=READ_PROTOCOLS,
+        help=(
+            "Required classification for database access. Registered reads need "
+            "--not-before and --as-of; exploratory/reproduction reads need an "
+            "explicit contamination acknowledgement."
+        ),
+    )
+    parser.add_argument(
+        "--read-id",
+        help="Unique stable ID used to create an immutable local access receipt.",
+    )
+    parser.add_argument(
+        "--not-before",
+        type=parse_as_of,
+        help="Earliest UTC instant a registered read may access the database.",
+    )
+    parser.add_argument(
+        "--acknowledge-contamination",
+        action="store_true",
+        help=(
+            "Acknowledge that an exploratory/reproduction read is not confirmatory. "
+            "May also disclose known prior access on a registered operational read."
+        ),
+    )
+    parser.add_argument(
+        "--read-ledger-dir",
+        type=Path,
+        default=DEFAULT_READ_LEDGER_DIR,
+        help=(
+            "Directory for atomic read receipts (default: "
+            "$UNITARES_OUTCOME_READ_LEDGER_DIR or local state)."
+        ),
+    )
     parser.add_argument("--scopes", type=_parse_scope_list, default="strict,task")
     parser.add_argument("--windows", type=_parse_int_list, default="30,90,365")
     parser.add_argument("--leads", type=_parse_float_list, default="0,5,30")
@@ -1014,6 +1267,11 @@ async def main_async(args: argparse.Namespace) -> int:
         )
     else:
         exclude_harness_lanes = args.exclude_harness_lanes
+    receipt_path, read_started_at = record_read_receipt(
+        args,
+        exclude_harness_lanes=exclude_harness_lanes,
+    )
+    print(f"read receipt: {receipt_path}", file=sys.stderr)
     rows = await build_matrix_from_db(
         args.db_url,
         scopes=args.scopes,
@@ -1033,9 +1291,14 @@ async def main_async(args: argparse.Namespace) -> int:
     report = _redact_sensitive_report_text(
         format_matrix_report(
             rows,
+            generated_at=read_started_at,
             excluded_harness_lanes=exclude_harness_lanes,
             anchor_scope=args.anchor_scope,
             as_of=args.as_of,
+            read_protocol=args.read_protocol,
+            read_id=args.read_id,
+            protocol_not_before=args.not_before,
+            contamination_acknowledged=args.acknowledge_contamination,
         )
     )
     payload = (report + "\n").encode("utf-8")
@@ -1057,7 +1320,11 @@ async def main_async(args: argparse.Namespace) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    return asyncio.run(main_async(args))
+    try:
+        return asyncio.run(main_async(args))
+    except ReadProtocolError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
