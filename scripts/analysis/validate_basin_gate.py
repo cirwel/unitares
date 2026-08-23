@@ -170,10 +170,20 @@ def run_sweep() -> bool:
         m2 = TIGHT * TIGHT * (count - 1)
         return {"E": (meanE, m2), "I": (meanI, m2), "S": (meanS, m2), "V": (meanV, m2)}
 
-    # (label, baseline means, current EISV, expect) — expect: safe | pause | none
-    #   safe  → verdict must be "safe" (in-basin: deviation is information)
-    #   pause → verdict must be "high-risk" (genuine danger must still escalate)
-    #   none  → no verdict assertion; case demonstrates graded de-escalation
+    # (label, baseline means, current EISV, expect)
+    #   safe          → verdict must be "safe" (in-basin: deviation is information)
+    #   pause         → verdict must be "high-risk" (genuine danger must still escalate)
+    #   de_escalates  → the gate must CHANGE this verdict: high-risk without it,
+    #                   not-high-risk with it.
+    #
+    # `de_escalates` is what makes this script a test rather than a description.
+    # Every `safe` and `pause` case above is already satisfied by the `before`
+    # column -- the pre-#689 world where the gate does not exist -- so on those
+    # alone the script returns PASS with the treatment deleted. Verified by
+    # replacing `_basin_health_gate` with the constant-1.0 no-op: every row shows
+    # before == after and the script still printed "PASS -- acceptance criteria
+    # met". The two rows where the gate actually changes a verdict were the two
+    # carrying no assertion at all, so its entire effect was unasserted.
     cases = [
         ("in-basin: +0.06 E wobble",
          (0.75, 0.78, 0.18, -0.03), {"E": 0.69, "I": 0.78, "S": 0.18, "V": -0.03}, "safe"),
@@ -182,9 +192,9 @@ def run_sweep() -> bool:
         ("in-basin: multi-dim small wobble",
          (0.74, 0.80, 0.15, 0.02), {"E": 0.66, "I": 0.72, "S": 0.24, "V": 0.10}, "safe"),
         ("boundary: I→0.40 (graded de-escalation)",
-         (0.74, 0.80, 0.18, 0.0), {"E": 0.62, "I": 0.40, "S": 0.30, "V": 0.22}, "none"),
+         (0.74, 0.80, 0.18, 0.0), {"E": 0.62, "I": 0.40, "S": 0.30, "V": 0.22}, "de_escalates"),
         ("boundary: S→0.62 (graded de-escalation)",
-         (0.70, 0.76, 0.18, 0.0), {"E": 0.55, "I": 0.60, "S": 0.62, "V": 0.05}, "none"),
+         (0.70, 0.76, 0.18, 0.0), {"E": 0.55, "I": 0.60, "S": 0.62, "V": 0.05}, "de_escalates"),
         ("deep exit: E→0.35,I→0.45,S→0.65,V→0.20",
          (0.74, 0.78, 0.18, 0.0), {"E": 0.35, "I": 0.45, "S": 0.65, "V": 0.20}, "pause"),
         ("abs-floor breach: E→0.20,I→0.25,S→0.80",
@@ -202,23 +212,40 @@ def run_sweep() -> bool:
             print(f"  FAIL: in-basin wobble not safe (got {after.verdict})"); ok = False
         if expect == "pause" and after.verdict != "high-risk":
             print(f"  FAIL: genuine danger did not escalate (got {after.verdict})"); ok = False
+        if expect == "de_escalates":
+            # The only assertion in this file that the gate's absence can fail.
+            if before.verdict != "high-risk":
+                print("  FAIL: case cannot demonstrate de-escalation — it is not "
+                      f"high-risk without the gate (before={before.verdict})"); ok = False
+            elif after.verdict == "high-risk":
+                print("  FAIL: gate did not de-escalate a case built to be "
+                      "de-escalated — is the basin gate wired?"); ok = False
     return ok
 
 
-async def run_live(dsn: Optional[str], limit: int) -> bool:
+async def run_live(dsn: Optional[str], limit: int) -> tuple[bool, int, Optional[str]]:
+    """Return (ok, examined, skip_reason).
+
+    `ok` alone was the whole return value, and every early exit returned True --
+    asyncpg missing, connection refused, query failed, or simply no eligible
+    rows. `main` ANDed that into its verdict and printed "PASS -- acceptance
+    criteria met", so a live arm that examined nothing read identically to one
+    that examined 200 agents and found no masking. A skip is not a pass; the
+    caller now has to say which it got.
+    """
     print("\n=== Live fleet: recently-baselined agents from core.agent_state ===")
     import json
     import os
     try:
         import asyncpg  # type: ignore
     except Exception:
-        print("  SKIP: asyncpg not installed."); return True
+        print("  SKIP: asyncpg not installed."); return True, 0, "asyncpg not installed"
 
     dsn = dsn or os.environ.get("DATABASE_URL")
     try:
         conn = await asyncpg.connect(dsn) if dsn else await asyncpg.connect()
     except Exception as e:  # noqa: BLE001
-        print(f"  SKIP: could not connect to PostgreSQL ({e})."); return True
+        print(f"  SKIP: could not connect to PostgreSQL ({e})."); return True, 0, "no database connection"
 
     masked = 0
     flagged_before_safe_after = 0
@@ -240,7 +267,7 @@ async def run_live(dsn: Optional[str], limit: int) -> bool:
             limit,
         )
     except Exception as e:  # noqa: BLE001
-        print(f"  SKIP: query failed ({e})."); await conn.close(); return True
+        print(f"  SKIP: query failed ({e})."); await conn.close(); return True, 0, "query failed"
 
     examined = 0
     for r in rows:
@@ -283,8 +310,12 @@ async def run_live(dsn: Optional[str], limit: int) -> bool:
           f"fully-suppressed-in-basin: {masked}; "
           f"genuine-risk-masked (must be 0): {newly_masked}")
     if newly_masked > 0:
-        print("  FAIL: gate masked genuinely-degraded (absolute floor) states"); return False
-    return True
+        print("  FAIL: gate masked genuinely-degraded (absolute floor) states")
+        return False, examined, None
+    if examined == 0:
+        print("  SKIP: no baselined agents matched — the live arm asserted nothing.")
+        return True, 0, "no eligible rows"
+    return True, examined, None
 
 
 def main() -> int:
@@ -297,12 +328,41 @@ def main() -> int:
     ok = True
     ok &= run_trace_cases()
     ok &= run_sweep()
+
+    live_skipped: Optional[str] = None
     if args.db:
         import asyncio
-        ok &= asyncio.run(run_live(args.dsn, args.limit))
+        live_ok, live_examined, live_skipped = asyncio.run(run_live(args.dsn, args.limit))
+        ok &= live_ok
+        if live_ok and live_examined == 0 and not live_skipped:
+            # Belt and braces. Today every skip path in `run_live` populates the
+            # reason string, so this is unreachable -- but the count is the
+            # ground truth and the string is a report of it. Deriving the
+            # verdict from the count means a future skip path that forgets the
+            # string still cannot be read as a pass: nothing examined is nothing
+            # established, whatever anyone remembered to say about it.
+            live_skipped = "live arm examined 0 rows"
 
-    print("\n" + ("PASS — acceptance criteria met" if ok else "FAIL — see above"))
-    return 0 if ok else 1
+    if not ok:
+        print("\nFAIL — see above")
+        return 1
+    if live_skipped:
+        # UNASSESSED, not PASS. An arm the caller explicitly asked for did not
+        # run, so this invocation did not establish what it was asked to.
+        #
+        # Qualifying only the printed line was not enough: EVALUATION_INDEX.md
+        # documents this script's contract as "Console PASS/FAIL + exit", and
+        # eisv-basin-health-gating-v0.md names `--db` as a pre-merge operator
+        # step. Anything consuming the exit status alone -- which is what an
+        # automated gate does -- still recorded success from a run that examined
+        # nothing. Exit 2 keeps "unassessed" distinct from both 0 (assessed and
+        # passed) and 1 (assessed and failed), so no consumer has to infer it
+        # from prose.
+        print(f"\nUNASSESSED (synthetic arms passed) — live arm SKIPPED: {live_skipped}")
+        print("  exit 2: a requested arm did not run, so this is not a pass.")
+        return 2
+    print("\nPASS — acceptance criteria met")
+    return 0
 
 
 if __name__ == "__main__":

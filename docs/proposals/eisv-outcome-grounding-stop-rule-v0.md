@@ -1,6 +1,7 @@
 # EISV outcome-grounding: scope correction and a stop rule
 
-Status: proposed, 2026-07-31; evidence-scope correction, 2026-08-17
+Status: proposed, 2026-07-31; evidence-scope correction, 2026-08-17;
+power-characterisation correction, 2026-08-23
 Scope: whether per-agent EISV / prior-state adds predictive signal for
 externally-verified bad outcomes over a previous-outcome baseline.
 Supersedes the open-ended framing in `eisv-grounding-next-move-v0.md` §"what
@@ -131,6 +132,28 @@ the December report must disclose the interim accesses, identify any analysis,
 label, scope, collection, or narrative choices they affected, and include a
 read-specific power analysis. It may not claim clean single-read blinding.
 
+## Power-characterisation correction — disclosed 2026-08-23
+
+The first database-free power audit reused `(agent, prior-state snapshot)`
+cluster IDs as synthetic outcome `row_key` values. Production rows use unique
+`outcome_id`. Because candidate/baseline pairing indexes by `row_key`, the
+duplicates overwrote rows and invalidated the published simulation figures.
+Those figures, including 3% power at AUC about 0.57 and 80% near AUC 0.82, are
+withdrawn. The correction does not alter the frozen production matrix's own
+selective p-values.
+
+The corrected probe requires the observed row, bad-row, total null-cluster, and
+agent counts and reports unscorable trials in its denominator with a binomial
+interval. It remains an optimistic synthetic sensitivity scenario, not a proven
+upper bound on the real slice. The frozen record omitted total `Null clusters`,
+so its read-specific power cannot be reconstructed from the preserved table.
+
+This document also referred to a “predeclared smallest relevant effect” without
+naming one. As of this correction, no beta, AUC delta, or equivalent effect size
+fills that slot. It must be declared by the operator before any further live
+outcome-discrimination access; otherwise the December read can implement the
+operational stop rule but cannot earn a power-qualified scientific `REFUTED`.
+
 ## Pre-registered gate
 
 **One fixed scheduled operational decision read, 2026-12-01.** Before querying, record one UTC
@@ -173,10 +196,11 @@ python3 scripts/analysis/ablation_power_probe.py \
 ```
 
 `--bad` controls the simulated class balance; it must come from this read rather
-than silently reusing the 2026-08-09 cohort. The probe remains an optimistic
-upper bound because its planted signal is deliberately clean. Report its power
-at the predeclared smallest relevant effect alongside the real slice's null
-width before assigning a scientific inference status.
+than silently reusing the 2026-08-09 cohort. The probe is a deliberately clean,
+optimistic sensitivity scenario, not a proven upper bound. Report its power at
+the independently predeclared smallest relevant effect alongside the real
+slice's null width before assigning a scientific inference status. If that
+effect remains unspecified, report the scientific inference as `INCONCLUSIVE`.
 
 **PASS** — outcome-grounding remains open, and Stage B may be reconsidered —
 requires all of:
