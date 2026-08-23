@@ -6,6 +6,7 @@ Tests for the four governance eval infrastructure fixes:
 4. PI controller gate relaxation for declining coherence
 """
 
+import os
 import sys
 sys.path.insert(0, '.')
 
@@ -40,18 +41,114 @@ class TestConfidenceVariance:
         return state
 
     @patch('src.tool_usage_tracker.get_tool_usage_tracker')
-    def test_different_agents_different_confidence(self, mock_tracker):
-        """Two agents with same EISV but different IDs should get different confidence."""
+    def test_different_agents_spread_confidence(self, mock_tracker):
+        """Identical EISV across a population of agents must not collapse to one value.
+
+        Asserted over a population, not over a single pair: the offset is
+        bucketed into 1000 slots, so any *given* pair collides with
+        probability ~1/1000. The old pairwise assertion was therefore a
+        per-run lottery, and CI drew the losing ticket.
+        """
         mock_tracker.return_value.get_usage_stats.return_value = {'total_calls': 0}
 
         from src.confidence import derive_confidence
         state = self._make_state()
 
-        conf_a, meta_a = derive_confidence(state, agent_id="agent-aaa-111")
-        conf_b, meta_b = derive_confidence(state, agent_id="agent-bbb-222")
+        agents = [f"agent-{i:03d}" for i in range(20)]
+        confs = [derive_confidence(state, agent_id=a)[0] for a in agents]
 
-        assert conf_a != conf_b, "Identical EISV should still produce different confidence for different agents"
-        assert abs(conf_a - conf_b) <= 0.02, "Per-agent offset should be small (±0.01)"
+        assert len(set(confs)) >= len(agents) - 1, (
+            "Identical EISV should spread across agents, not collapse to one value"
+        )
+        assert max(confs) - min(confs) <= 0.02, "Per-agent offset should be small (±0.01)"
+
+    def test_agent_offset_is_stable_across_processes(self):
+        """The offset must not change when the interpreter's hash seed changes.
+
+        ``hash()`` is salted per process, so the previous implementation gave
+        one agent a different offset after every server restart. This is the
+        regression test for that: two subprocesses with different
+        PYTHONHASHSEED values must agree.
+        """
+        import subprocess
+        import sys as _sys
+
+        script = (
+            "import sys; sys.path.insert(0, '.');"
+            "from src.confidence import stable_agent_offset as f;"
+            "print(repr([f('agent-aaa-111'), f('agent-bbb-222'), f('')]))"
+        )
+        outs = []
+        for seed in ("0", "12345"):
+            env = dict(os.environ, PYTHONHASHSEED=seed)
+            out = subprocess.run(
+                [_sys.executable, "-c", script],
+                capture_output=True, text=True, env=env, check=True,
+            ).stdout.strip()
+            outs.append(out)
+
+        assert outs[0] == outs[1], (
+            f"per-agent offset moved with PYTHONHASHSEED: {outs[0]} vs {outs[1]}"
+        )
+
+    @patch('src.tool_usage_tracker.get_tool_usage_tracker')
+    def test_metadata_names_the_offset_scheme(self, mock_tracker):
+        """Telemetry must say WHICH offset formula produced the value.
+
+        Every agent's offset moves exactly once, at this change's rollout.
+        Without a marker, a later calibration analysis sees a one-time step in
+        every agent at the same instant and cannot distinguish that formula
+        migration from a real change in agent state.
+        """
+        mock_tracker.return_value.get_usage_stats.return_value = {'total_calls': 0}
+
+        from src.confidence import AGENT_OFFSET_SCHEME, derive_confidence
+        state = self._make_state()
+
+        _, meta = derive_confidence(state, agent_id="agent-aaa-111")
+        assert meta['agent_offset_scheme'] == AGENT_OFFSET_SCHEME
+
+        # Emitted for the no-agent_id case too, so a consumer never has to infer
+        # the formula from a record's timestamp.
+        _, meta_none = derive_confidence(state)
+        assert meta_none['agent_offset'] == 0.0
+        assert meta_none['agent_offset_scheme'] == AGENT_OFFSET_SCHEME
+
+    def test_the_scheme_marker_names_the_actual_formula(self):
+        """A version string that outlives its formula is worse than none.
+
+        Pins the marker to the digest it describes: changing the hash without
+        bumping the string would silently republish old-scheme telemetry under
+        a name that no longer matches.
+        """
+        import hashlib
+
+        from src.confidence import (
+            AGENT_OFFSET_BUCKETS,
+            AGENT_OFFSET_HALF_WIDTH,
+            AGENT_OFFSET_SCHEME,
+            stable_agent_offset,
+        )
+
+        assert AGENT_OFFSET_SCHEME == "blake2b-v1"
+
+        digest = hashlib.blake2b(b"agent-aaa-111", digest_size=8).digest()
+        bucket = int.from_bytes(digest, "big") % AGENT_OFFSET_BUCKETS
+        quantum = 2 * AGENT_OFFSET_HALF_WIDTH / AGENT_OFFSET_BUCKETS
+        assert stable_agent_offset("agent-aaa-111") == (
+            bucket - AGENT_OFFSET_BUCKETS / 2) * quantum
+
+    def test_agent_offset_stays_in_band(self):
+        """Offset is bounded to ±0.01 for any input, including empty/unicode."""
+        from src.confidence import AGENT_OFFSET_HALF_WIDTH, stable_agent_offset
+
+        samples = [""] + [f"agent-{i}" for i in range(2000)] + ["\u00e9\u00e0\u4e2d\u6587"]
+        offsets = [stable_agent_offset(a) for a in samples]
+
+        assert all(abs(o) <= AGENT_OFFSET_HALF_WIDTH for o in offsets)
+        # And it actually uses the band rather than clustering in one corner.
+        assert max(offsets) > 0.5 * AGENT_OFFSET_HALF_WIDTH
+        assert min(offsets) < -0.5 * AGENT_OFFSET_HALF_WIDTH
 
     @patch('src.tool_usage_tracker.get_tool_usage_tracker')
     def test_tool_gap_penalty(self, mock_tracker):

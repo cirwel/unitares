@@ -107,7 +107,8 @@ def test_system_audit_discloses_scope_power_and_repeated_reads():
     normalized = " ".join(audit.split())
 
     assert "36 of the 45 numbered claim headings" in normalized
-    assert "about 3% power" in normalized
+    assert "read-specific power is unknown" in normalized
+    assert "invalidating its 3% and 80%-power characterisation" in normalized
     assert "51 | 42 | 9" in audit
     assert "52 | 43 | 9" in audit
     for check in (
