@@ -236,48 +236,47 @@ automatically.
 Do not adjust these thresholds after seeing the read. The point of writing them
 down now is that they were chosen before the data existed.
 
-### Reachability of condition 3 — disclosed 2026-08-23
+### Feasibility diagnostic for condition 3 — disclosure corrected 2026-08-23
 
-Condition 3 is a supply threshold, and nothing here previously established that
-it is attainable by the read date. The `1/√K` accrual projection that would have
-answered it was withdrawn on 2026-08-17 with the contaminated cohort it rested
-on, and was never replaced. Computed from figures already recorded above and in
-the frozen artifact — no new measurement, no database access:
+This is a post-registration, exploratory support-feasibility note. It uses only
+the support counts already published in the frozen 2026-08-09 artifact; it adds
+no database access or discrimination read. It changes no cutoff, cohort, label
+definition, threshold, PASS condition, kill criterion, or reopening rule, and it
+cannot authorize an early stop or any change before the registered read.
+
+The frozen **task** slices report 29 bad clusters at lead 0 and 28 at lead 30 in
+both their 30- and 90-day windows. Relative to those observed counts, condition
+3's 150-block threshold leaves arithmetic gaps of 121 and 122 blocks. The
+registered slice, however, uses a 365-day window, which the frozen artifact did
+not measure. Equality at 30 and 90 days establishes only that extending the
+lookback from 30 to 90 days at the 2026-08-09 cutoff added no cluster keys. It
+does not establish that the unmeasured part of the registered window adds none,
+or that future accrual is supply-limited.
+
+The previously disclosed “28 bad clusters over 254 days ≈ 3.4/month” and
+“≈ 9.7×” acceleration are withdrawn. The 28 is a trailing-window slice count;
+254 days is the general deployment interval from the first identity record, not
+the exposure interval of this trusted, joinable analytic cohort. Dividing one by
+the other does not estimate historical accrual. Under the additional, unverified
+assumption that the wider window supplies no other blocks, the observed gaps
+would require 121 or 122 additional distinct blocks during the 114-day interval
+from the frozen cutoff to the registered date (about 32.3 or 32.6 per mean
+month). Those are conditional required paces, not observed rates or forecasts.
+
+The database-free diagnostic renders only this per-lead arithmetic and the
+fixed-cutoff lookback comparison by default:
 
 ```
 python3 scripts/analysis/support_reachability.py
 ```
 
-| | |
-|---|---|
-| observed (frozen 2026-08-09, trusted slice) | **28** bad clusters over 254 days ≈ **3.4/month** |
-| still needed for condition 3 | **122** in the 114 days to the read date ≈ **32.6/month** |
-| acceleration required | **≈ 9.7×** the observed rate |
-
-The frozen table also shows the population is **supply-limited, not
-window-limited**: widening 30d → 90d — three times the window — returned the same
-28–29 clusters. The registered command widens to `--windows 365`, and on this
-evidence that will not supply the missing blocks.
-
-**What this does and does not establish.** It is a projection from one operator's
-historical rate, not a forecast. Accrual can change, and a ratio above 1.0 shows
-only that the past rate would not have sufficed — never that the target *will* be
-missed. It is recorded here so the read happens with its likely outcome known in
-advance rather than discovered afterwards.
-
-**Nothing above is changed by it.** Not the date, the four PASS conditions, the
-150-block threshold, or the kill criterion. Lowering the threshold to make it
-reachable would be exactly the post-hoc adjustment this document forbids, and
-widening the label definition is already forbidden below. The disclosure exists
-so the choice between spending the interval, moving the support checkpoint
-earlier, and changing the premise now is made deliberately — and the third is
-already available, since "reopening requires a materially different label channel
-or measurement process" describes a supply-limited channel.
-
-This is the same check `k_reachability` performs for the coherence gate
-(`src/coherence_gate_shadow.py`, #1838): before trusting a decision procedure,
-establish that each branch it can return is attainable. There the defect was a
-control that could not FAIL; here it is a gate that may not be able to PASS.
+The repository records no longitudinal series of eligible cluster-key additions
+under the registered rules, so the historical rate, acceleration factor, and
+condition 3 reachability remain **UNKNOWN**. Do not refresh this diagnostic with
+live data before the registered read. The 2026-12-01 read remains in force
+exactly as registered. If condition 3 is unmet, the interpretation already
+specified above applies: closure for insufficient eligible evidence, not a
+measured null or disproof.
 
 ## What continues regardless
 

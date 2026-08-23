@@ -1,289 +1,454 @@
 #!/usr/bin/env python3
-"""Is the stop rule's support condition reachable before the read date?
+"""Describe condition 3 without inventing a historical accrual denominator.
 
-`docs/proposals/eisv-outcome-grounding-stop-rule-v0.md` makes PASS conditional on
-four things at once. Three are about signal. The fourth, condition 3, is about
-supply: `Bad clusters >= 150` on the trusted slice. A read that misses it closes
-outcome-grounding for insufficient eligible evidence -- correctly labelled in the
-stop rule as "not a measured null or as disproof".
+The registered 2026-12-01 EISV outcome-grounding gate requires at least 150 bad
+clusters on the trusted slice. The frozen 2026-08-09 artifact reports the stock
+present inside trailing 30- and 90-day windows at one cutoff. It does not report
+two comparable censuses, so it cannot identify a longitudinal accrual rate.
 
-Nothing currently establishes whether that threshold is attainable by the read
-date. The `1/sqrt(K)` accrual projection that would have answered it was
-withdrawn on 2026-08-17 along with the contaminated cohort it rested on, and was
-never replaced. So the read is scheduled without anyone having checked that its
-PASS branch is reachable.
+The default command renders only what that frozen artifact supports:
 
-This is the same question `k_reachability` answers for the coherence gate in
-`src/coherence_gate_shadow.py`, one layer up: before trusting an instrument's
-verdict, establish that each verdict it can return is attainable at all. There, a
-positive control could not FAIL. Here, a gate may not be able to PASS. Both are
-the same defect -- a decision procedure with an unreachable branch -- and both
-are cheap to check in advance.
+* the remaining arithmetic for each registered lead;
+* the blocks contributed by widening the lookback from 30 to 90 days; and
+* ``INSUFFICIENT_LONGITUDINAL_EVIDENCE`` for a rate comparison.
 
-Two checks, both pure arithmetic on already-published counts:
+The module-level longitudinal count-change comparator is available only when the caller
+supplies two dated, paired lead-0/lead-30 cumulative censuses produced from one
+registered-window lower bound and one named protocol fingerprint. The script
+cannot verify that provenance, so every such result remains a planning scenario
+rather than a forecast or a structural reachability proof. The command-line
+interface deliberately does not accept census overrides.
 
-  * ACCRUAL -- the observed rate of trusted bad clusters against the rate the
-    remaining time would require. Reports the ratio between them.
-  * WINDOW INVARIANCE -- whether widening the analysis window materially raises
-    the count. The frozen 2026-08-09 read gives this directly: 30d and 90d
-    windows returned the same 28-29 clusters, so the trusted-anchor population is
-    supply-limited rather than window-limited. That matters because the December
-    command widens to `--windows 365`; if the corpus is supply-limited, the wider
-    window does not supply the missing blocks.
+For this registered gate, do not obtain a second live census before the read.
+The optional comparison exists for independently frozen, methodologically
+comparable inputs; its presence does not authorize an interim look.
 
-WHAT THIS DOES NOT DO. It changes no threshold, date, PASS condition, or kill
-criterion, and it carries no authority to retire anything -- per the measurement
-rules in CLAUDE.md, a count may retire an instrument and never a capability. It
-does not query any database. A required-rate ratio is a projection from one
-operator's historical rate, NOT a forecast: accrual can change, and a ratio above
-1.0 establishes only that the past rate would not have sufficed. It cannot show
-the target WILL be missed. Its intended use is disclosure before the read, so the
-operator chooses knowingly between spending the interval, moving the checkpoint
-earlier, or changing the premise now rather than in December.
+This script is database-free. It changes no threshold, date, PASS condition,
+interpretation rule, or kill criterion.
 
 Usage:
     python3 scripts/analysis/support_reachability.py
     python3 scripts/analysis/support_reachability.py --json
-    python3 scripts/analysis/support_reachability.py --observed-blocks 60 \
-        --observed-through 2026-10-01
 """
 
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict, dataclass, field
+from datetime import date, timedelta
 import json
 import sys
-from dataclasses import dataclass, field
-from datetime import date
-from typing import Any, Dict, List, Sequence
+from typing import Any, Mapping, Sequence
 
-# --- Published inputs -------------------------------------------------------
-#
-# Every default below is a figure already recorded in the repository, not a new
-# measurement. Sources are named so a reader can check each one.
-
-# First identity record; the deployment's start. Source: README status line.
-OBSERVATION_START = date(2025, 11, 28)
 
 # Frozen trusted-anchor read. Source:
 # docs/operations/eisv-ablation-frozen-2026-08-09.md, "Overall rows".
 FROZEN_CUTOFF = date(2026, 8, 9)
-FROZEN_BAD_CLUSTERS = 28          # 28-29 across slices; 28 is the conservative read
-FROZEN_BAD_ROWS = 53
-FROZEN_AGENTS = 16
+FROZEN_WINDOW_COUNTS_BY_LEAD: dict[int, dict[int, int]] = {
+    0: {30: 29, 90: 29},
+    30: {30: 28, 90: 28},
+}
 
 # Condition 3 and the read date. Source:
 # docs/proposals/eisv-outcome-grounding-stop-rule-v0.md, "Pre-registered gate".
 TARGET_BAD_CLUSTERS = 150
 READ_DATE = date(2026, 12, 1)
-
-# Window-invariance evidence, same frozen table: widening 30d -> 90d.
-FROZEN_WINDOW_COUNTS = {30: 28, 90: 28}
+REGISTERED_WINDOW_DAYS = 365
+# Date-resolution representation only. The cohort fingerprint must pin the
+# registered command's exact UTC cutoff and all other query rules.
+REGISTERED_COHORT_START = READ_DATE - timedelta(days=REGISTERED_WINDOW_DAYS)
 
 DAYS_PER_MONTH = 30.4375  # mean Gregorian month
+INSUFFICIENT_LONGITUDINAL_EVIDENCE = "INSUFFICIENT_LONGITUDINAL_EVIDENCE"
 
 
-@dataclass
-class Reachability:
-    """Observed accrual against the rate the remaining interval would require."""
+@dataclass(frozen=True)
+class SupportRequirement:
+    """Conditional arithmetic from a count observed at one cutoff."""
 
     observed_blocks: int
+    observed_through: date
+    interval_to_read_days: int
+    target_blocks: int
+    conditional_gap_if_no_older_blocks: int
+    conditional_required_per_month: float | None
+
+
+@dataclass(frozen=True)
+class LeadCountChangeScenario:
+    """Conditional net eligible-count arithmetic for one lead."""
+
+    lead_minutes: int
+    start_blocks: int
+    end_blocks: int
+    net_eligible_count_change: int
     observed_days: int
     remaining_days: int
     target_blocks: int
     blocks_still_needed: int
-    observed_per_month: float
-    required_per_month: float
+    net_change_per_month: float
+    required_per_month: float | None
     acceleration_required: float | None
     verdict: str
-    notes: List[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
 
-def accrual_reachability(
-    observed_blocks: int = FROZEN_BAD_CLUSTERS,
-    observation_start: date = OBSERVATION_START,
+@dataclass(frozen=True)
+class PairedLongitudinalScenario:
+    """Two comparable cumulative censuses covering both registered leads."""
+
+    cohort_fingerprint: str
+    fixed_cohort_start: date
+    start_date: date
+    end_date: date
+    count_change_by_lead_minutes: dict[int, LeadCountChangeScenario]
+    notes: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class LookbackComparison:
+    """What a wider retrospective window added at one fixed cutoff."""
+
+    counts_by_window_days: dict[int, int]
+    narrow_window_days: int
+    wide_window_days: int
+    distinct_cluster_keys_added: int
+    lookback_invariant_at_cutoff: bool
+    verdict: str
+    reading: str
+
+
+def _require_nonnegative(name: str, value: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be a nonnegative integer")
+
+
+def support_requirement(
+    observed_blocks: int,
+    *,
     observed_through: date = FROZEN_CUTOFF,
-    target_blocks: int = TARGET_BAD_CLUSTERS,
-    read_date: date = READ_DATE,
-) -> Reachability:
-    """Compare the observed accrual rate with the rate the target would require.
+) -> SupportRequirement:
+    """Return the remaining support arithmetic without estimating accrual."""
+    _require_nonnegative("observed_blocks", observed_blocks)
+    if observed_through > READ_DATE:
+        raise ValueError("observed_through must not be after the registered read date")
+    remaining_days = (READ_DATE - observed_through).days
+    still_needed = max(0, TARGET_BAD_CLUSTERS - observed_blocks)
+    required_per_month = (
+        still_needed / remaining_days * DAYS_PER_MONTH
+        if still_needed > 0 and remaining_days > 0
+        else 0.0
+        if still_needed == 0
+        else None
+    )
+    return SupportRequirement(
+        observed_blocks=observed_blocks,
+        observed_through=observed_through,
+        interval_to_read_days=remaining_days,
+        target_blocks=TARGET_BAD_CLUSTERS,
+        conditional_gap_if_no_older_blocks=still_needed,
+        conditional_required_per_month=(
+            round(required_per_month, 2) if required_per_month is not None else None
+        ),
+    )
 
-    Returns the ratio between them. A ratio of 1.0 means the observed rate is
-    exactly sufficient; above 1.0 means the past rate would not have got there.
-    """
-    observed_days = (observed_through - observation_start).days
-    remaining_days = (read_date - observed_through).days
-    if observed_days <= 0:
-        raise ValueError("observation window must be positive")
 
-    still_needed = max(0, target_blocks - observed_blocks)
-    observed_per_month = observed_blocks / observed_days * DAYS_PER_MONTH
+def _validated_paired_counts(
+    name: str,
+    counts_by_lead: Mapping[int, int],
+) -> dict[int, int]:
+    counts = dict(counts_by_lead)
+    registered_leads = set(FROZEN_WINDOW_COUNTS_BY_LEAD)
+    if len(counts) != len(registered_leads) or set(counts) != registered_leads:
+        raise ValueError(f"{name} must contain exactly the registered leads 0 and 30")
+    for lead, count in counts.items():
+        if isinstance(lead, bool) or not isinstance(lead, int):
+            raise ValueError(f"{name} lead keys must be integers")
+        _require_nonnegative(f"{name}[{lead}]", count)
+    return counts
 
-    notes: List[str] = []
+
+def _lead_count_change_scenario(
+    *,
+    lead_minutes: int,
+    start_blocks: int,
+    end_blocks: int,
+    observed_days: int,
+    remaining_days: int,
+) -> LeadCountChangeScenario:
+    net_change = end_blocks - start_blocks
+    still_needed = max(0, TARGET_BAD_CLUSTERS - end_blocks)
+    net_change_per_month = net_change / observed_days * DAYS_PER_MONTH
+
     if still_needed == 0:
-        return Reachability(
-            observed_blocks=observed_blocks,
+        return LeadCountChangeScenario(
+            lead_minutes=lead_minutes,
+            start_blocks=start_blocks,
+            end_blocks=end_blocks,
+            net_eligible_count_change=net_change,
             observed_days=observed_days,
             remaining_days=remaining_days,
-            target_blocks=target_blocks,
+            target_blocks=TARGET_BAD_CLUSTERS,
             blocks_still_needed=0,
-            observed_per_month=round(observed_per_month, 2),
+            net_change_per_month=round(net_change_per_month, 2),
             required_per_month=0.0,
             acceleration_required=0.0,
-            verdict="ALREADY_MET",
-            notes=["the support condition is already satisfied at this count"],
+            verdict="TARGET_ALREADY_MET_AT_SECOND_CENSUS",
+            notes=["the supplied second census meets the support threshold"],
         )
 
-    if remaining_days <= 0:
-        return Reachability(
-            observed_blocks=observed_blocks,
+    if remaining_days == 0:
+        return LeadCountChangeScenario(
+            lead_minutes=lead_minutes,
+            start_blocks=start_blocks,
+            end_blocks=end_blocks,
+            net_eligible_count_change=net_change,
             observed_days=observed_days,
             remaining_days=remaining_days,
-            target_blocks=target_blocks,
+            target_blocks=TARGET_BAD_CLUSTERS,
             blocks_still_needed=still_needed,
-            observed_per_month=round(observed_per_month, 2),
-            required_per_month=float("inf"),
+            net_change_per_month=round(net_change_per_month, 2),
+            required_per_month=None,
             acceleration_required=None,
-            verdict="NO_TIME_REMAINING",
-            notes=["the read date has arrived or passed; no interval remains"],
+            verdict="REGISTERED_READ_REACHED_BELOW_TARGET",
+            notes=["the supplied second census is the registered read"],
         )
 
     required_per_month = still_needed / remaining_days * DAYS_PER_MONTH
     acceleration = (
-        required_per_month / observed_per_month if observed_per_month > 0 else None
+        required_per_month / net_change_per_month if net_change_per_month > 0 else None
     )
-
     if acceleration is None:
-        verdict = "NO_OBSERVED_ACCRUAL"
-        notes.append("no blocks observed, so no rate can be projected")
+        verdict = "NO_NET_ELIGIBLE_COUNT_CHANGE"
+        rate_note = "the supplied censuses contain no net eligible-count change"
     elif acceleration <= 1.0:
-        verdict = "ON_TRACK_AT_OBSERVED_RATE"
-        notes.append("the observed rate alone would reach the target")
+        verdict = "SUPPLIED_NET_CHANGE_PACE_WOULD_SUFFICE"
+        rate_note = "continuing the supplied net-change pace would meet the target"
     else:
-        verdict = "REQUIRES_ACCELERATION"
-        notes.append(
-            f"reaching the target needs about {acceleration:.1f}x the observed rate"
+        verdict = "SUPPLIED_NET_CHANGE_PACE_WOULD_NOT_SUFFICE"
+        rate_note = (
+            f"meeting the target would require about {acceleration:.1f}x the "
+            "supplied net-change pace"
         )
-    notes.append(
-        "a projection from the historical rate, not a forecast; it cannot show "
-        "the target will be missed, only what rate would be needed"
-    )
 
-    return Reachability(
-        observed_blocks=observed_blocks,
+    return LeadCountChangeScenario(
+        lead_minutes=lead_minutes,
+        start_blocks=start_blocks,
+        end_blocks=end_blocks,
+        net_eligible_count_change=net_change,
         observed_days=observed_days,
         remaining_days=remaining_days,
-        target_blocks=target_blocks,
+        target_blocks=TARGET_BAD_CLUSTERS,
         blocks_still_needed=still_needed,
-        observed_per_month=round(observed_per_month, 2),
+        net_change_per_month=round(net_change_per_month, 2),
         required_per_month=round(required_per_month, 2),
         acceleration_required=(
             round(acceleration, 2) if acceleration is not None else None
         ),
         verdict=verdict,
-        notes=notes,
+        notes=[rate_note],
     )
 
 
-def window_invariance(
-    counts_by_window: Dict[int, int] | None = None,
-) -> Dict[str, Any]:
-    """Does widening the analysis window materially raise the cluster count?
+def longitudinal_count_change_comparison(
+    *,
+    cohort_fingerprint: str,
+    fixed_cohort_start: date,
+    start_counts_by_lead: Mapping[int, int],
+    start_date: date,
+    end_counts_by_lead: Mapping[int, int],
+    end_date: date,
+) -> PairedLongitudinalScenario:
+    """Compare two complete, cumulative censuses under one claimed protocol.
 
-    If tripling the window adds essentially nothing, the population is limited by
-    what has been adjudicated rather than by how far back the query reaches --
-    and a still wider window at read time will not supply the missing blocks.
+    The counts must cover both registered leads and be cumulative from the
+    registered 365-day slice's lower bound. One fingerprint applies to the
+    entire pair so a caller cannot silently use different cohort, scope,
+    fixture, harness-lane, clustering, or joinability rules between dates or
+    leads. This function can validate arithmetic consistency, but it cannot
+    authenticate provenance or distinguish new events from late/backfilled
+    eligibility changes.
     """
-    counts = dict(counts_by_window or FROZEN_WINDOW_COUNTS)
-    windows = sorted(counts)
-    if len(windows) < 2:
+    if not isinstance(cohort_fingerprint, str) or not cohort_fingerprint.strip():
+        raise ValueError("cohort_fingerprint must be non-empty")
+    start_counts = _validated_paired_counts(
+        "start_counts_by_lead", start_counts_by_lead
+    )
+    end_counts = _validated_paired_counts("end_counts_by_lead", end_counts_by_lead)
+    if fixed_cohort_start != REGISTERED_COHORT_START:
+        raise ValueError(
+            "fixed_cohort_start must equal the registered 365-day slice start"
+        )
+    if start_date < fixed_cohort_start:
+        raise ValueError("start_date must not be before fixed_cohort_start")
+    if end_date <= start_date:
+        raise ValueError("end_date must be after start_date")
+    if end_date > READ_DATE:
+        raise ValueError("end_date must not be after the registered read date")
+
+    observed_days = (end_date - start_date).days
+    remaining_days = (READ_DATE - end_date).days
+    count_changes: dict[int, LeadCountChangeScenario] = {}
+    for lead in sorted(start_counts):
+        if end_counts[lead] < start_counts[lead]:
+            raise ValueError(
+                f"end_counts_by_lead[{lead}] must not be less than "
+                f"start_counts_by_lead[{lead}]"
+            )
+        count_changes[lead] = _lead_count_change_scenario(
+            lead_minutes=lead,
+            start_blocks=start_counts[lead],
+            end_blocks=end_counts[lead],
+            observed_days=observed_days,
+            remaining_days=remaining_days,
+        )
+
+    return PairedLongitudinalScenario(
+        cohort_fingerprint=cohort_fingerprint,
+        fixed_cohort_start=fixed_cohort_start,
+        start_date=start_date,
+        end_date=end_date,
+        count_change_by_lead_minutes=count_changes,
+        notes=[
+            "valid only if the fingerprint identifies identical cohort, scope, "
+            "fixture, harness-lane, clustering, and joinability rules",
+            "counts must be cumulative from the registered 365-day lower bound; "
+            "the fingerprint must pin its exact UTC timestamp",
+            "net eligible-count change is not necessarily event accrual; late or "
+            "backfilled anchors and prior state can add keys",
+            "planning scenario only; not a forecast or reachability proof",
+        ],
+    )
+
+
+def lookback_comparison(counts_by_window: Mapping[int, int]) -> LookbackComparison:
+    """Describe the annulus added by widening one fixed-cutoff lookback."""
+    counts = dict(counts_by_window)
+    if len(counts) < 2:
         raise ValueError("need at least two windows to compare")
+    if any(
+        isinstance(window, bool) or not isinstance(window, int) or window <= 0
+        for window in counts
+    ):
+        raise ValueError("window days must be positive integers")
+    if any(
+        isinstance(count, bool) or not isinstance(count, int) or count < 0
+        for count in counts.values()
+    ):
+        raise ValueError("window counts must be nonnegative integers")
+
+    windows = sorted(counts)
+    for narrow, wide in zip(windows, windows[1:]):
+        if counts[wide] < counts[narrow]:
+            raise ValueError("counts must not decrease as the lookback widens")
 
     narrow, wide = windows[0], windows[-1]
     gained = counts[wide] - counts[narrow]
-    window_ratio = wide / narrow
-    count_ratio = counts[wide] / counts[narrow] if counts[narrow] else None
-    supply_limited = gained == 0
+    invariant = gained == 0
+    verdict = (
+        "NO_ADDITIONAL_DISTINCT_CLUSTER_KEYS_WITH_WIDER_LOOKBACK"
+        if invariant
+        else "ADDITIONAL_DISTINCT_CLUSTER_KEYS_WITH_WIDER_LOOKBACK"
+    )
+    reading = (
+        f"At this cutoff, widening the lookback from {narrow} to {wide} days "
+        f"added {gained} distinct cluster keys to the slice. Equal key counts "
+        "do not imply an empty older annulus: older rows can reuse keys already "
+        "present. This does not estimate future accrual or the registered "
+        "365-day count."
+    )
+    return LookbackComparison(
+        counts_by_window_days=counts,
+        narrow_window_days=narrow,
+        wide_window_days=wide,
+        distinct_cluster_keys_added=gained,
+        lookback_invariant_at_cutoff=invariant,
+        verdict=verdict,
+        reading=reading,
+    )
 
+
+def frozen_diagnostic() -> dict[str, Any]:
+    """Return only the claims supported by the one-cutoff frozen artifact."""
+    requirements: dict[int, SupportRequirement] = {}
+    lookbacks: dict[int, LookbackComparison] = {}
+    for lead, counts in FROZEN_WINDOW_COUNTS_BY_LEAD.items():
+        requirements[lead] = support_requirement(
+            counts[max(counts)],
+        )
+        lookbacks[lead] = lookback_comparison(counts)
     return {
-        "counts_by_window_days": counts,
-        "window_widened_by": round(window_ratio, 2),
-        "clusters_gained": gained,
-        "count_ratio": round(count_ratio, 3) if count_ratio is not None else None,
-        "supply_limited": supply_limited,
-        "reading": (
-            f"widening the window {window_ratio:.0f}x added {gained} clusters — "
-            + (
-                "the population is supply-limited, so a wider window at read time "
-                "does not supply the missing blocks"
-                if supply_limited
-                else "the window still admits new clusters, so a wider window may "
-                "raise the count"
-            )
-        ),
+        "verdict": INSUFFICIENT_LONGITUDINAL_EVIDENCE,
+        "frozen_cutoff": FROZEN_CUTOFF,
+        "read_date": READ_DATE,
+        "requirements_by_lead_minutes": requirements,
+        "lookback_by_lead_minutes": lookbacks,
+        "notes": [
+            "one cutoff cannot identify an accrual rate",
+            "additional blocks assume the unmeasured 365-day slice adds no older "
+            "eligible blocks",
+            "no threshold, date, PASS condition, or kill criterion changes",
+        ],
     }
 
 
-def render(reach: Reachability, window: Dict[str, Any]) -> str:
-    lines = ["== stop-rule support condition — reachability =="]
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, date):
+        return value.isoformat()
+    if hasattr(value, "__dataclass_fields__"):
+        return {key: _jsonable(item) for key, item in asdict(value).items()}
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_jsonable(item) for item in value]
+    return value
+
+
+def render_frozen(diagnostic: Mapping[str, Any]) -> str:
+    """Render the frozen one-cutoff diagnostic without a rate projection."""
+    lines = ["== stop-rule support condition — frozen arithmetic =="]
+    lines.append(f"verdict: {diagnostic['verdict']}")
+    requirements = diagnostic["requirements_by_lead_minutes"]
+    for lead in sorted(requirements):
+        requirement = requirements[lead]
+        lines.append(
+            f"lead {lead}m: {requirement.observed_blocks} bad clusters; "
+            f"conditional gap {requirement.conditional_gap_if_no_older_blocks} "
+            f"over the {requirement.interval_to_read_days}-day interval from "
+            f"the frozen cutoff "
+            f"({requirement.conditional_required_per_month}/month)"
+        )
+    lines.append("  - one frozen cutoff does not identify an accrual rate")
     lines.append(
-        f"observed: {reach.observed_blocks} bad clusters over {reach.observed_days} days "
-        f"({reach.observed_per_month}/month)"
+        "  - remaining counts are conditional on the unmeasured 365-day slice "
+        "adding no older eligible blocks"
     )
-    lines.append(
-        f"target:   {reach.target_blocks} bad clusters, "
-        f"{reach.blocks_still_needed} still needed in {reach.remaining_days} days "
-        f"({reach.required_per_month}/month)"
-    )
-    if reach.acceleration_required:
-        lines.append(f"required acceleration: {reach.acceleration_required}x observed")
-    lines.append(f"verdict: {reach.verdict}")
-    for note in reach.notes:
-        lines.append(f"  - {note}")
     lines.append("")
-    lines.append("== window invariance ==")
-    lines.append(f"  counts by window (days): {window['counts_by_window_days']}")
-    lines.append(f"  {window['reading']}")
+    lines.append("== fixed-cutoff lookback comparison ==")
+    for lead in sorted(diagnostic["lookback_by_lead_minutes"]):
+        lookback = diagnostic["lookback_by_lead_minutes"][lead]
+        lines.append(f"lead {lead}m: {lookback.reading}")
     lines.append("")
     lines.append(
-        "This changes no threshold, date, PASS condition, or kill criterion, and "
-        "retires nothing. It is disclosure before the read."
+        "This changes no threshold, date, PASS condition, or kill criterion. "
+        "The registered read remains in force."
     )
     return "\n".join(lines)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--observed-blocks", type=int, default=FROZEN_BAD_CLUSTERS)
-    parser.add_argument(
-        "--observed-through",
-        type=date.fromisoformat,
-        default=FROZEN_CUTOFF,
-        help="date the observed count was taken (ISO)",
-    )
-    parser.add_argument(
-        "--observation-start", type=date.fromisoformat, default=OBSERVATION_START
-    )
-    parser.add_argument("--target-blocks", type=int, default=TARGET_BAD_CLUSTERS)
-    parser.add_argument("--read-date", type=date.fromisoformat, default=READ_DATE)
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    reach = accrual_reachability(
-        observed_blocks=args.observed_blocks,
-        observation_start=args.observation_start,
-        observed_through=args.observed_through,
-        target_blocks=args.target_blocks,
-        read_date=args.read_date,
-    )
-    window = window_invariance()
+    diagnostic = frozen_diagnostic()
     if args.json:
-        print(json.dumps({"accrual": vars(reach), "window": window}, indent=2, default=str))
+        print(json.dumps(_jsonable(diagnostic), indent=2, allow_nan=False))
     else:
-        print(render(reach, window))
+        print(render_frozen(diagnostic))
     return 0
 
 
