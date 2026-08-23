@@ -143,5 +143,19 @@ its own threshold has no such degree of freedom.
   restarts the clock) and `ablation_power_probe.py` is parameterised
   independently, so neither shows this defect. The rest of the falsification
   surface is inventoried in the design-system audit (PR #1836), not here.
+
+  **Corrected 2026-08-23.** This section, and the pull request that introduced
+  it, said the sweep had found "no second instance" of the antipattern. That was
+  wrong, and it was wrong for the reason the sweep was cheap: it grepped for
+  inputs derived from their own threshold, which is one shape the defect takes,
+  and inferred absence from a search that could only find that shape. A
+  systematic audit of twelve decision instruments against the four checks below
+  found further instances, of which the sharpest is
+  `scripts/analysis/validate_basin_gate.py` — it printed
+  `PASS — acceptance criteria met` with the treatment it validates replaced by a
+  no-op, because every assertion was already satisfied by its own pre-gate
+  `before` column. Read the original sentence as what it was: a non-detection
+  from a targeted scan, reported as an absence. The same error this document is
+  about.
 - **The k-policy promotion gate's missing PASS condition**, noted above as an
   operator call.

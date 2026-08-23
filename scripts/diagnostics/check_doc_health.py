@@ -842,10 +842,12 @@ _CONTESTED_CLAIMS: list[tuple[re.Pattern, str]] = [
         "agent-authored outcome records are not independently verified",
     ),
     # The next three rules are one symmetric pair plus its shared subject. The
-    # frozen 2026-08-09 matrix is a NON-DETECTION at power that was never
-    # measured until the 2026-08-23 audit, so it licenses no verdict in EITHER
-    # direction. Flagging only the optimistic phrasing turned the lint into a
-    # ratchet: prose could get more negative than the evidence, never less.
+    # frozen 2026-08-09 matrix is a NON-DETECTION whose read-specific power is
+    # unknown: the 2026-08-23 audit's first simulation used corrupt pairing keys,
+    # and the corrected hypothetical geometry is not a bound on the frozen read.
+    # It therefore licenses no verdict in EITHER direction. Flagging only the
+    # optimistic phrasing turned the lint into a ratchet: prose could get more
+    # negative than the evidence, never less.
     (
         re.compile(
             r"current (?:honest )?read is (?:a )?weak (?:early|short-lead) signal",
@@ -860,7 +862,8 @@ _CONTESTED_CLAIMS: list[tuple[re.Pattern, str]] = [
         re.compile(r"bounds the (?:EISV|score)", re.IGNORECASE),
         "unsupported in the negative direction: a non-detection at unmeasured "
         "power bounds nothing. REVIEWER_GUIDE.md and the stop rule both state "
-        "the frozen snapshot is not a standing AUC bound; measured power is in "
+        "the frozen snapshot is not a standing AUC bound; the attempted power "
+        "characterisation and its correction are in "
         "operations/falsifiability-power-audit-2026-08-23.md",
     ),
     (
