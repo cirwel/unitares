@@ -875,14 +875,16 @@ _CONTESTED_CLAIMS: list[tuple[re.Pattern, str]] = [
     ),
     # The same overclaim in the positive direction, on the product claim the
     # negative one is placed next to. The contract ledger records "enforcement
-    # is currently protecting the fleet" as UNTESTED (row 27) and "the
-    # enforcement path working live" as REFUTED (row 28); only "can actuate" is
-    # earned. Producing a pause and delivering it are separate events -- 195 of
-    # 218 recorded pauses (89.4%) were suppressed at the 2026-08-06 audit.
+    # is currently protecting the fleet" as UNTESTED (row 27), while row 28
+    # reconciles the cited event as verdict-recorded/delivery-suppressed; only
+    # "can actuate" is earned. Producing a pause and delivering it are separate
+    # events -- 195 of 218 recorded pauses (89.4%) were suppressed at the
+    # 2026-08-06 audit.
     (
         re.compile(r"working circuit breaker", re.IGNORECASE),
-        "overclaim: 'working' is refuted for the event it was cited for and "
-        "untested as a protection claim (ontology/eisv-proprioception-contract.md "
+        "overclaim: the cited event records a verdict whose delivery was "
+        "suppressed, and protection remains untested "
+        "(ontology/eisv-proprioception-contract.md "
         "rows 24, 27, 28). The earned claim is that the breaker demonstrably "
         "ACTUATES; say that, and disclose the pause-suppression rate with it",
     ),

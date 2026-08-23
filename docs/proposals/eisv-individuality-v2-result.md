@@ -101,7 +101,7 @@ conflate them.
 
 Leg C has a separate, narrower reading. Its frozen cold-start reconstruction
 failed the registered persistence benchmark, so that reconstruction is
-`NARROWLY REFUTED`. It did not restore the deployed EMA's pre-window history and
+`BENCHMARK FAIL`. It did not restore the deployed EMA's pre-window history and
 therefore does not identify the usefulness of the already-warm deployed
 reference. That broader claim remains `UNIDENTIFIED`, not refuted as deployed.
 
