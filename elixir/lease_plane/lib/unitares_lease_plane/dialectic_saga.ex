@@ -260,7 +260,7 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   already-terminal session; missing session -> :session_not_found; otherwise :ok.
   """
   @spec update_reviewer(String.t(), String.t()) ::
-          :ok | {:error, :invalid_reviewer | :session_not_found | term()}
+          :ok | {:error, :invalid_reviewer | :session_not_found | :session_terminal | term()}
   def update_reviewer(session_id, reviewer)
       when is_binary(session_id) and is_binary(reviewer) and byte_size(reviewer) > 0 do
     sql = """
@@ -275,10 +275,21 @@ defmodule UnitaresLeasePlane.DialecticSaga do
         :ok
 
       {:ok, %{num_rows: 0}} ->
+        # The guarded UPDATE matched nothing. Either the session is gone, or it
+        # exists and is terminal — the WHERE clause excludes resolved/failed/
+        # escalated rows deliberately (the dual-writer guard).
+        #
+        # ⛔This branch returned `:ok` for the terminal case until 2026-08-22,
+        # which reported a successful reviewer write when NOTHING was written.
+        # Python's caller treats 200/ok as persisted and emits
+        # `dialectic_reviewer_reassigned` on it, so a terminal row inflated the
+        # §11 criterion-10 reassignment count with reassignments that never
+        # happened — the same over-count #1804 fixed on the Python write tail,
+        # still open here. Existence is not a write.
         case Postgrex.query(DB, "SELECT 1 FROM core.dialectic_sessions WHERE session_id = $1", [
                session_id
              ]) do
-          {:ok, %{num_rows: 1}} -> :ok
+          {:ok, %{num_rows: 1}} -> {:error, :session_terminal}
           {:ok, %{num_rows: 0}} -> {:error, :session_not_found}
           {:error, e} -> {:error, e}
         end
