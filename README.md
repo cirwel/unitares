@@ -11,19 +11,22 @@ failing. Every individual tool call was allowed, so an action-level guardrail ha
 nothing to object to. What is missing is a longitudinal record that compares what
 the agent claims with what actually happened.
 
-**UNITARES is that record, with a circuit breaker attached.** Agents check in
-after meaningful units of work; the server keeps a longitudinal score of whether
-each agent's claims match its recorded results, pauses an agent whose behavior
-drifts, gates resumption on a recovery step, and leaves an audit
-trail plus a shared memory every other agent can search. Four verbs: **record,
-score, interrupt, remember** — the plain-language version is one page,
+**UNITARES is that record.** Agents check in after meaningful units of work;
+the server keeps a longitudinal score of whether each agent's claims match its
+recorded results, pauses an agent whose behavior drifts, gates resumption on a
+recovery step, and leaves an audit trail plus a shared memory every other agent
+can search — record, score, interrupt, remember. Plain-language version:
 [What UNITARES is](docs/PRODUCT_DEFINITION.md). It is a self-hosted MCP/HTTP
 service you run yourself — not an agent framework, not a hosted platform.
 
 **Status:** v2.19.0. Continuously operated since November 2025 under a single
-operator: 4,573,890 audit and telemetry events, 71,141 stored EISV state rows,
-and six long-running resident agents, one of them on separate hardware.
-[Evidence and limits](#evidence-and-limits) scopes every number on this page.
+operator: 71,141 stored EISV state rows and six long-running resident agents,
+one of them on separate hardware. 4,573,890 audit/telemetry events were logged
+over the same period, but 91.4% of those are session-resolution and
+cross-device-call records, not independent policy decisions. A frozen
+falsifiability eval against a permutation null found no predictive lift
+(selective p = 0.070–0.567). [Evidence and limits](#evidence-and-limits) scopes
+every number on this page, including that negative result.
 
 <div align="center">
 
@@ -31,8 +34,6 @@ and six long-running resident agents, one of them on separate hardware.
 [![Python](https://img.shields.io/badge/python-3.12+-2f7d72?style=flat-square&labelColor=0f171f)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-Apache_2.0-2f7d72?style=flat-square&labelColor=0f171f)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19647159.svg)](https://doi.org/10.5281/zenodo.19647159)
-
-**Maintainer dogfood since November 2025 · 4.5M+ recorded audit/telemetry events.**
 
 [![Quickstart](https://img.shields.io/badge/▶-quickstart-5eead4?style=for-the-badge&labelColor=0f171f)](#quickstart)
 [![Evidence](https://img.shields.io/badge/evidence-check_it-f5a623?style=for-the-badge&labelColor=0f171f)](#evidence-and-limits)
