@@ -11,11 +11,10 @@ recorded. What changes is what its supporting control is entitled to claim.
 
 ## The gap this fills
 
-The falsification design-system audit in flight on
-`codex/falsification-system-audit` (PR #1836) fixes six checks a result must
-pass before a **negative** may be called `REFUTED`. That covers the direction
-where a project overclaims what it disproved. Link this section to that audit's
-document once it lands on `master`.
+[`falsification-design-system-audit-2026-08-23.md`](../ontology/falsification-design-system-audit-2026-08-23.md)
+fixes six checks a result must pass before a **negative** may be called
+`REFUTED`. That covers the direction where a project overclaims what it
+disproved.
 
 There is a mirror direction with no equivalent gate. When an instrument is
 quiet, the repo already knows the zero is unfair unless a positive control shows
