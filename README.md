@@ -25,8 +25,13 @@ one of them on separate hardware. 4,573,890 audit/telemetry events were logged
 over the same period, but 91.4% of those are session-resolution and
 cross-device-call records, not independent policy decisions. A frozen
 falsifiability eval against a permutation null found no predictive lift
-(selective p = 0.070–0.567). [Evidence and limits](#evidence-and-limits) scopes
-every number on this page, including that negative result.
+(selective p = 0.070–0.567) — that bounds the EISV score's forecasting power,
+not the accountability mechanism it sits inside: identity-bound writes,
+claim-vs-recorded-evidence comparison, and an enforced pause until recovery all
+run independent of it. The defensible claim today is an accountability
+instrument with one working circuit breaker, not incident prevention.
+[Evidence and limits](#evidence-and-limits) scopes every number on this page,
+including that negative result.
 
 <div align="center">
 
