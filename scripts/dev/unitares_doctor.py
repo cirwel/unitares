@@ -1480,6 +1480,21 @@ def check_checkin_stream_live(db_url: str) -> CheckResult:
 
 RESIDENT_MIN_CHECKINS = 20    # below this there is no cadence to be silent against
 RESIDENT_MIN_ACTIVE_DAYS = 3  # a burst over one or two days is a task, not a resident
+# ⛔Distinct calendar dates are NOT a duration, and counting them in UTC
+# inflates evening work by one. Measured 2026-08-23: `opus_1a0de9ed`
+# (purpose='deployment', 36 check-ins) worked the afternoon of Aug 20 and the
+# evening of Aug 21 — TWO days — but Denver evening is next-day UTC, so it
+# registered THREE UTC dates (08-20/21/22), cleared RESIDENT_MIN_ACTIVE_DAYS by
+# exactly one, and was scored as a resident. It then warned forever, since a
+# finished agent's last_seen only recedes: precisely the permanent-false-warning
+# class the day threshold exists to prevent.
+#
+# Span is the timezone-independent form of the same intent. Measured the same
+# day, the separation is far wider than the day count's: that task agent spanned
+# 1.32 days while every real resident spanned 6.98-7.00. ⛔Both conditions are
+# kept — days alone admits a long-running burst, span alone admits an agent that
+# checked in twice a week apart.
+RESIDENT_MIN_ACTIVE_SPAN_DAYS = 3
 
 
 def _host_awake_s() -> float | None:
@@ -1716,7 +1731,9 @@ def check_resident_checkin_stale(db_url: str) -> CheckResult:
         "  GROUP BY label"
         f"  HAVING count(*) >= {RESIDENT_MIN_CHECKINS}"
         "     AND count(DISTINCT (recorded_at AT TIME ZONE 'UTC')::date) "
-        f"         >= {RESIDENT_MIN_ACTIVE_DAYS}), "
+        f"         >= {RESIDENT_MIN_ACTIVE_DAYS}"
+        "     AND max(recorded_at) - min(recorded_at) "
+        f"         >= interval '{RESIDENT_MIN_ACTIVE_SPAN_DAYS} days'), "
         "stale AS ("
         "  SELECT label, med_gap, p95_gap,"
         "         EXTRACT(epoch FROM (now() - last_seen)) AS silent_s,"
@@ -1744,7 +1761,8 @@ def check_resident_checkin_stale(db_url: str) -> CheckResult:
         return CheckResult(
             name, mode, Status.SKIP,
             f"no agent has {RESIDENT_MIN_CHECKINS}+ check-ins across "
-            f"{RESIDENT_MIN_ACTIVE_DAYS}+ distinct days in 7d (fresh install?)")
+            f"{RESIDENT_MIN_ACTIVE_DAYS}+ distinct days spanning "
+            f"{RESIDENT_MIN_ACTIVE_SPAN_DAYS}+ days in 7d (fresh install?)")
     if stale:
         return CheckResult(
             name, mode, Status.WARN,
