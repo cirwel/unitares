@@ -1,6 +1,7 @@
 # Frozen EISV ablation read — 2026-08-09
 
-**Status:** Dated negative-result snapshot. Generated 2026-08-11 from
+**Status:** Dated descriptive non-detection; **not a negative result or an AUC
+bound**. Generated 2026-08-11 from
 UNITARES v2.17.0 (`5f050f040fcd77699dd0f473c5ddf15710fdea84`) against the
 single-operator deployment database, frozen at `2026-08-09T20:00:00Z`.
 
@@ -61,9 +62,11 @@ missing and were never recorded elsewhere:
 Also dropped: `Prior risk`, `Envelope`, `AUC delta 95% CI`, `Brier improvement
 95% CI`, `Brier perm p`, and `Beats both?`.
 
-Recovering these requires re-running the frozen command against the deployment
-database at the same `--as-of` cutoff. Until that happens, cite the p-values in
-this table **only** alongside the power characterisation in
+Recovering these would require re-running the frozen command against the
+deployment database at the same `--as-of` cutoff. Do not perform another live
+read solely to repair this historical transcription; leave the columns marked
+missing. Cite the p-values in this table **only** alongside the power
+characterisation in
 [`falsifiability-power-audit-2026-08-23.md`](falsifiability-power-audit-2026-08-23.md),
 which measures what this instrument could have detected on a cohort of this
 shape. The rows themselves are unchanged.
@@ -87,3 +90,17 @@ the block count.
 
 The preregistered stop rule and next confirmatory date live in
 [`../proposals/eisv-outcome-grounding-stop-rule-v0.md`](../proposals/eisv-outcome-grounding-stop-rule-v0.md).
+
+## Protocol disclosure — added 2026-08-23
+
+After this cutoff, two six-hour automation jobs repeatedly queried live outcome
+discrimination: the ablation watchdog ran 51 times (42 completed), and the
+dogfood/ablation guard ran 52 times (43 completed). The former computed two
+selection-aware matrices per successful run; the latter computed two point
+estimate matrices with null resampling disabled. Both were paused on 2026-08-22.
+
+These later reads do not alter the numbers frozen above. They do invalidate any
+future description of the December analysis as the only post-registration read
+or as unqualified analysis-blind. Counts, implications, and containment are
+recorded in
+[`../ontology/falsification-design-system-audit-2026-08-23.md`](../ontology/falsification-design-system-audit-2026-08-23.md).

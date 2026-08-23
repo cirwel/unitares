@@ -743,7 +743,7 @@ Codex's argument was that the trust-tier cost of B-relaxed is not theoretical �
 
 ## 2026-08-13 — v7 empirics: the question died, the mechanism becomes the section
 
-**Driver.** A paper-landscape audit re-ran the v7 corpus-maturity check. The volume blocker cleared (~30× the flip target on epoch 3) — and clearing it exposed that the registered question was never answerable: both sides of the intended correlation are produced by the same estimator. Full statement, measurements, and decision: `v7-negative-result-observer-self-loop.md`.
+**Driver.** A paper-landscape audit re-ran the v7 corpus-maturity check. The volume blocker cleared (~30× the flip target on epoch 3) — and clearing it exposed that the registered question was never answerable: both sides of the intended correlation are produced by the same estimator. Full statement, measurements, and decision: `v7-observer-self-loop-identification-boundary.md`.
 
 **The mechanism.** regime flips → `_regime_instability` → 0.35 of S → EISV → risk → the very intervention events (`circuit_breaker_trip`, `lifecycle_paused`, `anomaly_detected`) the flips were to be correlated against. Verified against the full historical record, not a sample: 100% of both pause-event types' reason strings, all-time, are EISV/CIRS/risk-derived — zero operator, timeout, transport, or external-signal triggers. The sole EISV-blind intervention channel is `trajectory_drift` (~1.9k events, 4 agents) — a v7.1/v8 seed, not a v7 corpus.
 
