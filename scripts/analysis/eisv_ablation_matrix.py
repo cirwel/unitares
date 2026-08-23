@@ -969,10 +969,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=int,
         default=200,
         help=(
-            "Label permutations used to build the null distribution of the "
-            "reported max-over-candidates AUC delta; 0 disables. Without it the "
-            "table implies a null of zero, which understates the selection bias "
-            "of reporting a maximum."
+            "Permutations used to build the null distribution of the reported "
+            "max-over-candidates AUC delta; 0 disables. Whole EISV readings are "
+            "reassigned between (agent, prior-state snapshot) clusters and "
+            "LABELS ARE HELD FIXED, so the previous-outcome baseline is "
+            "identical in every resample. Without it the table implies a null "
+            "of zero, which understates the selection bias of reporting a "
+            "maximum."
         ),
     )
     parser.add_argument(

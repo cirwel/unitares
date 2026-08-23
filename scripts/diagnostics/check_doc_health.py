@@ -841,19 +841,61 @@ _CONTESTED_CLAIMS: list[tuple[re.Pattern, str]] = [
         "overclaim: trusted external evidence is harder to forge, but generic "
         "agent-authored outcome records are not independently verified",
     ),
+    # The next three rules are one symmetric pair plus its shared subject. The
+    # frozen 2026-08-09 matrix is a NON-DETECTION at power that was never
+    # measured until the 2026-08-23 audit, so it licenses no verdict in EITHER
+    # direction. Flagging only the optimistic phrasing turned the lint into a
+    # ratchet: prose could get more negative than the evidence, never less.
     (
         re.compile(
             r"current (?:honest )?read is (?:a )?weak (?:early|short-lead) signal",
             re.IGNORECASE,
         ),
-        "superseded: the frozen 2026-08-09 trusted-anchor matrix labels every "
-        "overall slice NOISE-LEVEL against the best-of-candidates null",
+        "unsupported in the positive direction: the frozen 2026-08-09 matrix "
+        "neither establishes nor excludes a weak signal. The honest state is "
+        "unresolved pending the pre-registered 2026-12-01 read "
+        "(proposals/eisv-outcome-grounding-stop-rule-v0.md)",
+    ),
+    (
+        re.compile(r"bounds the (?:EISV|score)", re.IGNORECASE),
+        "unsupported in the negative direction: a non-detection at unmeasured "
+        "power bounds nothing. REVIEWER_GUIDE.md and the stop rule both state "
+        "the frozen snapshot is not a standing AUC bound; measured power is in "
+        "operations/falsifiability-power-audit-2026-08-23.md",
+    ),
+    (
+        re.compile(
+            r"(?:outcome-lift evaluation|2026-08-09[^.\n]{0,40})\bis a negative "
+            r"result",
+            re.IGNORECASE,
+        ),
+        "overclaim: the frozen 2026-08-09 read is a non-detection and a dated "
+        "descriptive snapshot, not a demonstrated negative. Say what it did "
+        "not detect, and cite the power audit alongside it",
+    ),
+    # The same overclaim in the positive direction, on the product claim the
+    # negative one is placed next to. The contract ledger records "enforcement
+    # is currently protecting the fleet" as UNTESTED (row 27) and "the
+    # enforcement path working live" as REFUTED (row 28); only "can actuate" is
+    # earned. Producing a pause and delivering it are separate events -- 195 of
+    # 218 recorded pauses (89.4%) were suppressed at the 2026-08-06 audit.
+    (
+        re.compile(r"working circuit breaker", re.IGNORECASE),
+        "overclaim: 'working' is refuted for the event it was cited for and "
+        "untested as a protection claim (ontology/eisv-proprioception-contract.md "
+        "rows 24, 27, 28). The earned claim is that the breaker demonstrably "
+        "ACTUATES; say that, and disclose the pause-suppression rate with it",
     ),
 ]
 
 # Reader-facing scope for the contested-claims check.
 _CONTESTED_SKIP_PARTS = ("proposals",)  # internal research/provenance prose
-_CONTESTED_SKIP_FILES = {"CANONICAL_SOURCES.md"}  # quotes the patterns by design
+_CONTESTED_SKIP_FILES = {
+    "CANONICAL_SOURCES.md",  # quotes the patterns by design
+    # Quotes each corrected phrasing verbatim in order to correct it; the
+    # was/now table is the record of what these rules exist to prevent.
+    "falsifiability-power-audit-2026-08-23.md",
+}
 
 
 def check_contested_claims(md_files: list[Path]) -> list[str]:

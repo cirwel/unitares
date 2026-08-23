@@ -46,6 +46,12 @@ Don't rebuild discrimination analysis — these exist and are current:
   slices with bootstrap CIs, permutation p-values, BEAM-lane exclusion, and a
   `NOISE-LEVEL` label when the selected best candidate does not clear its null.
 
+- **`scripts/analysis/ablation_power_probe.py`** ✓ — the companion to those two.
+  They report whether a lift separated from its null; this reports what size of
+  lift the same machinery could have separated, by planting a known effect in a
+  synthetic cohort of a given shape. Run it before reading any `NOISE-LEVEL`
+  result as evidence of absence. No database, no credentials, deterministic.
+
 **Reading either output:** `AUC delta`, `Null max p95`, and `Selective p`
 decide whether a selected lift clears its matching null. Before making a claim,
 also verify anchor scope and cutoff and report bad rows, permutation blocks, and
