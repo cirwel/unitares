@@ -130,7 +130,7 @@ may be stale. Regenerate the evidence instead. The strongest anti-handwave artif
 UNITARES has is the ablation/skeptic harness: it scores EISV/prior-state features
 **against a deliberately dumb `previous_outcome_bad` baseline** on ranking (AUC) and
 calibration (Brier), timestamps its output, and self-labels each slice
-`INCONCLUSIVE` / `SKEPTICAL` / `WEAK SIGNAL` / `KEEP TESTING`; the matrix adds
+`INCONCLUSIVE` / `DESCRIPTIVE ONLY` / `WEAK SIGNAL` / `KEEP TESTING`; the matrix adds
 `NOISE-LEVEL` when a selected best candidate does not clear its matching null.
 
 **No deployment DB (fresh clone)** — exercises the pipeline on an injected bad
