@@ -14,12 +14,15 @@ formula inspection, documentation comparison, path analysis, or a dated
 single-deployment census. Those are useful findings, but they are not 36
 scientific falsifications of UNITARES.
 
-The outcome-lift evidence is a non-detection from an instrument with about 3%
-power against a weak planted effect (true AUC about 0.57), reaching 80% power
-only around AUC 0.82 in a deliberately favorable simulation. The individuality
-test had an autocorrelation-hostile veto, effective independent n=4, replicated
-host identities, and a long wall-clock outage treated as adjacent observations.
-The basin and observer-loop reads did not run the required counterfactual.
+The outcome-lift evidence is a non-detection whose read-specific power is
+unknown. The frozen record omitted total permutation-cluster geometry, and the
+first simulation reused cluster IDs as outcome pairing IDs, invalidating its 3%
+and 80%-power characterisation. A corrected run of the same hypothetical
+70-cluster scenario estimates 17% power [95% Wilson CI 7%–34%] at median AUC
+about 0.57, but it is not a bound on the frozen cohort. The individuality test
+had an autocorrelation-hostile veto, effective independent n=4, replicated host
+identities, and a long wall-clock outage treated as adjacent observations. The
+basin and observer-loop reads did not run the required counterfactual.
 
 Accordingly, the current scientific conclusion is **inconclusive or unidentified
 for the disputed capability claims**. The durable engineering findings remain:
@@ -49,7 +52,7 @@ promoted to a scientific refutation.
 | Individuality of raw behavioral EISV | Leg A rejects synthetic stationary, mean-reverting processes as autocorrelation rises; leg B's seven nominal agents collapse to four independent substrates; a fleet outage is invisible to step-time analysis | `UNTESTED AS DEPLOYED`; the registered operational kill remains honored, but the FAIL is not evidence against the axiom |
 | Runtime EMA reference | The registered benchmark cold-started the reconstruction and did not restore the already-warm deployed state | `BENCHMARK FAIL` for that reconstruction; warmed deployed EMA `UNIDENTIFIED` |
 | Historical outcome/AUC | Historical all-scope cohort did not match the trusted-anchor target | `WITHDRAWN FOR TARGET INFERENCE` |
-| Frozen trusted outcome matrix | 224 rows, 53 bad rows, 16 agents; baseline AUC 0.427–0.435; no slice cleared the selective null; weak-effect power about 3% | descriptive non-detection; no standing AUC bound; `INCONCLUSIVE` for weak/moderate lift |
+| Frozen trusted outcome matrix | 224 rows, 53 bad rows, 16 agents; baseline AUC 0.427–0.435; no slice cleared the selective null; total null-cluster geometry and read-specific power not preserved | descriptive non-detection; no standing AUC bound; `INCONCLUSIVE` for weak/moderate lift |
 | Basin guide self-loop | Source excludes the proposed direct same-check-in edge, but the read did not recursively replay ODE, EMA, policy, outcomes, and future decisions | direct path `PATH BOUND`; recursive counterfactual `UNIDENTIFIED` |
 | Basin-flip/intervention association | Predictor and response are produced by the same stateful observer; 0.35 is a mixture weight, not a regression coefficient | empirical or causal claim `UNIDENTIFIED`; self-loop and storage-coercion mechanisms remain engineering findings |
 | Remaining ledger rows | Most establish deployed formulas, missing inputs, unreachable branches, label provenance, event delivery, or dated population counts | `FORMULA/IMPLEMENTATION/PROVENANCE/DOCUMENTATION MISMATCH`, `PATH BOUND`, `EVENT RECONCILED`, or `DEPLOYMENT SNAPSHOT` |
