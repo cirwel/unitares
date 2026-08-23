@@ -1087,14 +1087,20 @@ def summarize_conclusion(rows: Sequence[OutcomeRow], scores: Sequence[ModelScore
         )
     if best_delta.auc_delta <= 0.0 or best_delta.brier_improvement <= 0.0:
         return (
-            "SKEPTICAL: EISV/prior-state features do not beat the boring "
+            "DESCRIPTIVE ONLY: EISV/prior-state features show no detectable "
+            "joint lift over the boring "
             "previous-outcome baseline across both ranking and calibration "
             f"in this split (best={best_delta.name}, paired N={best_delta.paired_n}, "
             f"AUC lift={best_delta.auc_delta:.3f}, "
-            f"Brier improvement={best_delta.brier_improvement:.4f})."
+            f"Brier improvement={best_delta.brier_improvement:.4f}). This split "
+            "does not establish harm or refutation."
         )
     if best is not None and best.auc is not None and best.auc < 0.55:
-        return f"SKEPTICAL: best EISV/prior-state AUC is weak ({best.name} AUC={best.auc:.3f})."
+        return (
+            "DESCRIPTIVE ONLY: best EISV/prior-state AUC is weak "
+            f"({best.name} AUC={best.auc:.3f}). This split does not establish "
+            "harm or refutation."
+        )
     best_name = best.name if best is not None else best_delta.name
     return f"WEAK SIGNAL: {best_name} has some predictive signal, but compare across more windows."
 

@@ -1,16 +1,16 @@
 # v7 empirical section: the observer's undeclared self-loop
 
-**Status:** decided direction for the v7 empirical section, 2026-08-13.
-Every claim below was verified adversarially — the refutation was attempted
-against source at `origin/master` and against the full live audit record, not
-sampled — before the direction was set. Supersedes "blocked on audit-corpus
-maturity" as the description of where v7's empirics stand.
+**Status:** mechanism and artifact findings retained; empirical interpretation
+reclassified 2026-08-22. The 2026-08-13 source audit established the topology
+and storage defect. It did not identify the registered association or a causal
+effect. This note is governed by
+[`falsification-inference-containment-2026-08-22.md`](falsification-inference-containment-2026-08-22.md).
 
 **One sentence:** the registered v7 question — *do agents whose basin
-assignment flips also receive governance interventions?* — is unanswerable on
-this system not for lack of data but because the regressor is an arithmetic
-summand of the regressand, with a known coefficient; v7 reports that mechanism,
-with its coefficient and its measured artifact rate, as the empirical finding.
+assignment flips also receive governance interventions?* — is unidentified by
+the proposed regression because both variables are generated inside the same
+endogenous observer; v7 may report the verified topology and measured storage
+artifact, but not a negative association, causal effect, or known coefficient.
 
 ---
 
@@ -27,7 +27,7 @@ backfilled on 2026-04-20 — the day after that measurement — and today's epoc
 holds exactly one row per identity, so it contains zero consecutive pairs. The
 April numbers describe a population that no longer exists in the table.
 
-## 2. The correlation is circular by arithmetic, not merely by provenance
+## 2. The proposed correlation is endogenous, not an arithmetic identity
 
 The intended regression:
 
@@ -45,9 +45,12 @@ regime label change
   → pause path emits the Y events             src/agent_loop_detection.py (~438)
 ```
 
-X is a weighted summand of the pipeline that produces Y. A positive
-correlation is not evidence; a portion of the effect size is computable a
-priori from the 0.40/0.35/0.25 weights.
+X is one input to a nonlinear, thresholded, stateful pipeline that may produce
+Y. That makes the proposed correlation endogenous and unsuitable as external
+validation. It does **not** make the event count Y an arithmetic quantity that
+contains X. The 0.35 value is a mixture weight inside behavioral S, not a
+regression coefficient, closed-loop gain, or causal effect size. No portion of
+the empirical effect is computable from the mixture weights alone.
 
 The verification catalogued **every distinct reason string ever recorded** for
 `circuit_breaker_trip` and `lifecycle_paused` (not a sample): energy-integrity
@@ -94,16 +97,20 @@ validating its own trajectory. The v7 question as registered violates it.
 
 This lands inside the frame v7 already committed to. `v7-fhat-spec.md` §0
 defines F̂ as *the governance observer's surprise over the agent*. An observer
-whose state estimate S takes its own categorical output (regime) as a 0.35
-summand, and whose intervention stream is downstream of that same estimate, has
-an **undeclared self-loop in its generative model**. That is a mechanism-level,
-falsifiable claim about observer design — with a measured coefficient (0.35), a
-measured artifact rate (31%), and a named repair — not a lament that data was
-insufficient.
+whose state estimate S takes its own categorical output (regime) as a mixture
+component, and whose intervention stream is downstream of that same estimate,
+has an **undeclared self-loop in its generative model**. That is a
+mechanism-level, falsifiable claim about observer design, with a configured
+mixture weight, a measured artifact rate (31%), and a named repair. The
+registered regression remains unidentified; the mechanism finding does not
+convert that design failure into a negative empirical result.
 
-Stated in the paper as: *here is a self-referential loop in the observer, its
-coefficient, its artifact rate, and the design invariant that excludes it* —
-never as *we could not measure*.
+Stated in the paper as: *here is a self-referential path in the observer, a
+measured storage artifact that excited it, and the design invariant that
+excludes self-validation*. State separately that the registered association was
+not identified by its proposed design. Do not call 0.35 a measured coefficient
+or effect size, and do not call the unidentified association a structural
+negative result.
 
 This also answers `paper-positioning.md`'s recorded worry that pivoting v7 to
 ontology "could be read as scope expansion to hide the v7 empirical blocker."
@@ -115,10 +122,13 @@ read that way.
 - Not "EISV is refuted." The finding is about the *validation question's*
   structure, not about EISV's proprioceptive value. The deployed-vs-target
   framing stands.
+- Not a negative empirical association. The proposed regression was not run and
+  could not serve as external validation; that is `UNIDENTIFIED`, not
+  `REFUTED`.
 - Not a reopening of outcome-grounding. The pre-registered 2026-12-01 stop-rule
   read (#1425) governs a different question (AUC vs previous-outcome baseline)
   and is untouched by this. No ad-hoc probe reruns.
-- Not "the corpus unblocked v7." Volume cleared; the question died anyway. The
-  blocker was never sample size.
+- Not "the corpus unblocked v7." More endogenous volume does not repair the
+  identification failure; the registered association remains `UNIDENTIFIED`.
 - Not a fleet-health claim. The 31% artifact is a measurement statement about
   one column's history, repaired going forward by 063.

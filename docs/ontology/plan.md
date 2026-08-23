@@ -750,3 +750,13 @@ Codex's argument was that the trust-tier cost of B-relaxed is not theoretical �
 **Compounding artifact, now repaired.** 31% of measured flips were manufactured by the `TRANSITION`→`'nominal'` storage coercion (detector emits five basins, schema admitted four; 1,374 casualty rows). #1650 made the coercion visible; #1653 (migration 063) admits `TRANSITION` and moves the sink to an explicit `unknown`. No backfill — pre-063 originals were destroyed pre-INSERT and stay identifiable as `regime='nominal' AND synthetic IS NOT TRUE`.
 
 **Decision.** The v7 empirical section reports this as a structural negative result inside the §0 observer frame — an undeclared self-loop in the observer's generative model, with its coefficient (0.35) and artifact rate (31%) — rather than deferring empirics again. This is the answer to `paper-positioning.md`'s scope-drift worry: publishing the blocker's mechanism is the one v7 that cannot be read as hiding it. The 2026-12-01 stop-rule read (#1425) is untouched; no probe reruns.
+
+**2026-08-22 inference correction.** Preserve the decision above as chronology,
+but supersede its empirical classification. Basin flips are an endogenous input
+to the nonlinear, thresholded pipeline that emits interventions; the event
+count is not an arithmetic regressand containing flips, and 0.35 is a mixture
+weight rather than a regression coefficient or effect size. The registered
+association is `UNIDENTIFIED`, not a structural negative result. The verified
+self-referential topology and the 31% storage-coercion artifact remain citable
+as separate mechanism and data-quality findings. Canonical correction:
+`falsification-inference-containment-2026-08-22.md`.

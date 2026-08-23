@@ -1,7 +1,15 @@
 # EISV Distributional Signal Probe — v0
 
 **Created:** 2026-06-20
-**Status:** **Probe A run — KILL (2026-06-22).** Dispersion carries no predictive lift over the boring `previous_outcome_bad` baseline; the larger "make EISV distributional" work is **not** greenlit. Probe B not run (Probe A did not greenlight, and is not inconclusive-suggestive). Cheap, falsifiable probe that must greenlight (or kill) distributional work **before** any dynamics change — it killed it.
+**Status:** **Probe A did not greenlight the build (2026-06-22); stronger KILL
+inference withdrawn 2026-08-22.** The objective strict scope had zero negative
+outcomes and could not exercise the probe. The task-scope point estimate used
+weaker, partly self-reported labels and predates the trusted-anchor and
+selection-aware-null corrections. It supports the conservative decision not to
+build a larger dynamics change *on this evidence*. It does not identify the
+observation-versus-representation bottleneck or retire distributional EISV as a
+capability. Canonical correction:
+`docs/ontology/falsification-inference-containment-2026-08-22.md`.
 
 > **Run result (2026-06-22, against the live governance DB).** Ran Probe A at the
 > module-default 90-min dispersion window, `--window-days 365`, both lead bands.
@@ -12,15 +20,18 @@
 >   `previous_bad_plus_dispersion` scores **AUC delta −0.117 (lead 0) / −0.265 (lead 5)**
 >   vs the previous-outcome baseline — negative, the *wrong sign* for the greenlight
 >   rule (needs ≥ +0.03). Every EISV/prior-state feature (phi, S, verdict, dispersion)
->   loses to "what happened last time for this agent." Conclusion line: `SKEPTICAL`.
+>   loses to "what happened last time for this agent." Historical conclusion
+>   line: `SKEPTICAL` (now classified `DESCRIPTIVE ONLY`, not refutation).
 > - Robust: same wrong-signed result at a 30-min window too. Honest limits: `task`
 >   scope includes self-reported outcomes; dispersion paired-N is smaller (555–654)
 >   from the ≥5-snapshot requirement. Reports archived under `data/analysis/eisv_skeptic_report_2026-06-22_*` (gitignored; reproducible via the command in this doc).
 >
-> **Decision:** do not build distributional EISV (`governance_core/dynamics.py` /
-> observation blend) on this evidence. Revisit only if a future data slice shows
-> verified-bad signal in `strict` scope where the dispersion feature could actually
-> be tested against objective outcomes.
+> **Corrected decision:** do not build distributional EISV
+> (`governance_core/dynamics.py` / observation blend) on this evidence. The
+> capability is not killed. Revisit only through a separately preregistered test
+> with an externally anchored cohort, dependence-aware units, uncertainty around
+> the fixed candidate, and a design that distinguishes static dispersion from the
+> proposed precision-weighted update rule.
 **Companion to:** `docs/REVIEWER_GUIDE.md` (§ Falsifiability), `scripts/analysis/eisv_skeptic_report.py`, `docs/EISV_COMPUTATION.md`, `docs/ontology/glossary.md` (FEP roadmap).
 
 > **Implementation note (2026-06-20).** Probe A landed in the harness: the
@@ -46,9 +57,10 @@ observation blend, we test the cheap proxy:
 > **Does the *uncertainty* in recent EISV carry predictive lift over the boring
 > `previous_outcome_bad` baseline — and over the current best feature `prior_risk`?**
 
-If yes → distributional EISV is worth building, with evidence in hand. If no → the
-bottleneck is upstream in the *observations*, not the *representation*, and effort should
-redirect there. Either answer is a win; only "build it and hope" is a loss.
+If yes → distributional EISV is worth building, with evidence in hand. If no → this
+proxy has not earned the build. A negative proxy read does not distinguish an upstream
+observation bottleneck from a representation problem, cohort defect, or proxy mismatch.
+Either answer informs the next experiment; only "build it and hope" is a loss.
 
 ## Why this is testable today (no new instrumentation)
 
@@ -57,8 +69,10 @@ The skeptic harness scores features that already live in the DB:
 `core.agent_state` snapshot at a lead time before the outcome. Each "model" in
 `build_model_scores` is just: quartile-bin a feature on train, fit a smoothed bad-rate
 per bin, predict on test, score AUC (ranking) + Brier (calibration) **paired against the
-baseline** (`score_deltas_vs_baseline`), and self-label
+baseline** (`score_deltas_vs_baseline`), and historically self-labeled
 INCONCLUSIVE / SKEPTICAL / WEAK SIGNAL / KEEP TESTING (`summarize_conclusion`).
+Current reports replace `SKEPTICAL` with `DESCRIPTIVE ONLY` so a negative split
+cannot be promoted to harm or refutation.
 
 A point estimate hides its own uncertainty — but the **dispersion of recent state
 snapshots** is a stored proxy for that uncertainty. The harness currently joins exactly
@@ -137,7 +151,7 @@ signal shows rising bad-rate across dispersion quartiles, not a flat or U-shaped
 | Result | Read | Action |
 |---|---|---|
 | `previous_bad_plus_dispersion` **beats baseline** (AUC Δ ≥ 0.03 **and** Brier improvement ≥ 0.001 → "KEEP TESTING") **and** beats `previous_bad_plus_prior_risk` on the paired delta | Uncertainty carries lift the point estimate was hiding | **Greenlight** the distributional build (Probe B, then dynamics) |
-| Dispersion model present but `SKEPTICAL` / non-monotonic quartiles | Spread doesn't rank outcomes | **Kill** distributional-for-signal; redirect to the observation layer |
+| Dispersion model present but `DESCRIPTIVE ONLY` / non-monotonic quartiles | This proxy does not earn the build on this cohort | **Do not greenlight** from this read; do not infer the bottleneck or retire the capability |
 | `INCONCLUSIVE` (the 90d task scope has only ~80 bad outcomes; adding a ≥5-snapshot filter shrinks coverage further) | Underpowered, not negative | **Hold**; the modeling/honesty case for distributional EISV still stands, but it can't be justified on *signal* yet |
 
 ## Probe B — precision-reweighted state (follow-up; heavier)
@@ -178,6 +192,6 @@ Probe B is only worth running if Probe A greenlights or is inconclusive-but-sugg
 This is the disciplined version of the whole glossary thread applied to code: a physics-
 shaped upgrade (distributional state) gets a falsifiable test against the system's own
 skeptic harness **before** it ships, so "more rigorous-looking" has to become "measurably
-better" first. Greenlight buys the distributional build with evidence; a kill saves the
-build and redirects to the real bottleneck. The probe is pure SQL + deterministic stats —
+better" first. Greenlight buys the distributional build with evidence; a non-greenlight
+saves an unsupported build without pretending to locate the bottleneck. The probe is pure SQL + deterministic stats —
 no model API, no new instrumentation — so it costs a day, not a quarter.

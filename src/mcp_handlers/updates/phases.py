@@ -1019,9 +1019,12 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                 # Sibling ablation: decision_e is the LARGEST term in E (0.35
                 # with outcomes, 0.40 without) and reads governance_monitor's
                 # own prior verdicts, so E -> basin -> guide -> decision_e -> E
-                # closes. Whether that is a bias or a live loop is the open
-                # question, and only the SHAPE of the per-check-in delta answers
-                # it. Measurement-only, same contract as the sibling above.
+                # is topologically present. This one-step neutralization shows
+                # whether the channel is excited on the current check-in; it
+                # cannot identify closed-loop gain, cross-checkin propagation,
+                # or a basin-boundary counterfactual (the payload says so under
+                # `cannot_measure`). Measurement-only, same contract as the
+                # sibling above.
                 decision_shadow = compute_decision_self_loop_shadow(
                     **behavioral_sensor_inputs,
                     deployed_observation=behavioral_eisv,

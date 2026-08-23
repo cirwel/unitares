@@ -315,6 +315,12 @@ defmodule UnitaresLeasePlane.HTTPRouter do
         {:error, :session_not_found} ->
           json(conn, 404, %{ok: false, error: "session_not_found"})
 
+        # ⛔409, not 200. The row exists but is terminal, so the guarded UPDATE
+        # wrote nothing. Reporting ok:true here made Python record a reviewer
+        # reassignment that never occurred (2026-08-22).
+        {:error, :session_terminal} ->
+          json(conn, 409, %{ok: false, error: "session_terminal"})
+
         {:error, _} ->
           json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
       end
