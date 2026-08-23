@@ -93,11 +93,18 @@ Changelog = "https://github.com/cirwel/unitares/blob/master/docs/CHANGELOG.md"
 # wheel-standalone-import job in tests.yml now builds and imports it so this
 # cannot regress silently again.
 #
-# NOT YET PUBLISHABLE. This distribution claims the top-level import names
-# `src` and `config`, which are far too generic to own on PyPI — installing it
-# alongside any other package using either name would break both. Publishing
-# requires re-homing these under a single `unitares/` namespace first. Until
-# then the install contract is the Docker Compose flow in README.md, and this
+# NOT YET PUBLISHABLE. This distribution (the server, "governance-mcp") claims
+# the top-level import names `src` and `config`, which are far too generic to
+# own on PyPI — installing it alongside any other package using either name
+# would break both. Publishing requires re-homing these under a single
+# `unitares/` namespace first. Until then the install contract is the Docker
+# Compose flow in README.md, and this metadata exists so the tree is a
+# coherent, testable package.
+#
+# This does NOT apply to the client SDK: `unitares-sdk` (agents/sdk/) is a
+# separate distribution with its own namespace and is already published on
+# PyPI (`pip install unitares-sdk`) — see COMPATIBILITY.md. Don't generalize
+# this comment to "UNITARES has no PyPI package."
 # metadata exists so the tree is a coherent, testable package.
 [tool.setuptools.packages.find]
 where = ["."]
