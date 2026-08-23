@@ -15,6 +15,7 @@ live formula. Do not silently reweight this path: its output feeds calibration
 history and can later affect the entropy penalty.
 """
 
+import hashlib
 import math
 from typing import Dict, Any, Tuple, TYPE_CHECKING
 
@@ -28,6 +29,34 @@ LEGACY_COHERENCE_CONFIDENCE_ABLATION_SCHEMA = (
     "legacy_coherence_confidence_ablation.v1"
 )
 LEGACY_COHERENCE_CONFIDENCE_NEUTRAL_VALUE = 0.5
+
+# Per-agent confidence offset: bucket count and half-width of the injected
+# spread. 1000 buckets over +/-0.01 -> a 2e-5 quantum per bucket.
+AGENT_OFFSET_BUCKETS = 1000
+AGENT_OFFSET_HALF_WIDTH = 0.01
+
+
+def stable_agent_offset(agent_id: str) -> float:
+    """Deterministic per-agent confidence offset in [-0.01, +0.01).
+
+    Uses blake2b rather than the builtin ``hash()``. Python salts string
+    hashing per interpreter process (PYTHONHASHSEED), so ``hash(agent_id)``
+    gave the same agent a *different* offset after every server restart — the
+    offset was constant only within one process, which is not what a
+    per-agent identifier is for: it injected a fresh +/-0.01 step into that
+    agent's calibration history at each boot, and made any test asserting on
+    the offset a per-run lottery.
+
+    Bucketing is intrinsically lossy: two distinct agent_ids collide with
+    probability ~1/1000. That is a property of the quantization, not a
+    defect. Callers must not treat "different agents get different offsets"
+    as a guarantee; the guarantee is that one agent gets one offset, always.
+    """
+    digest = hashlib.blake2b(agent_id.encode("utf-8"), digest_size=8).digest()
+    bucket = int.from_bytes(digest, "big") % AGENT_OFFSET_BUCKETS
+    quantum = 2 * AGENT_OFFSET_HALF_WIDTH / AGENT_OFFSET_BUCKETS
+    return (bucket - AGENT_OFFSET_BUCKETS / 2) * quantum
+
 
 
 def _compute_deviation_signal(state: 'GovernanceState', agent_id: str = None) -> float:
@@ -238,7 +267,7 @@ def derive_confidence(
     # Deterministic per-agent offset to break identical-EISV convergence
     agent_offset = 0.0
     if agent_id:
-        agent_offset = (hash(agent_id) % 1000 - 500) / 50000  # range ~[-0.01, +0.01]
+        agent_offset = stable_agent_offset(agent_id)
         final_confidence += agent_offset
     metadata['agent_offset'] = float(agent_offset)
 
