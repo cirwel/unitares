@@ -92,8 +92,13 @@ demonstrates no prevention — a non-detection on a cohort too small to resolve 
 weak effect ([power audit](operations/falsifiability-power-audit-2026-08-23.md)),
 so predictive lift is unresolved rather than ruled out — and calibrated
 concealment by a motivated agent is a documented structural blind spot. The
-defensible claim today is therefore **an accountability instrument with one
-working circuit breaker**, not incident prevention. The precise boundary is
+defensible claim today is therefore **an accountability instrument whose circuit
+breaker demonstrably actuates** — not one shown to protect anything. Producing a
+pause and delivering it are separate events: at the 2026-08-06 audit a cadence
+window suppressed 195 of 218 recorded pauses (89.4%) before they reached the
+agent, and while delivery is live (a governed pause landed 2026-08-09), the rate
+has not been re-measured since. The contract ledger records the protection claim
+as untested. The precise boundary is
 the [scope and threat model](SCOPE_AND_THREAT_MODEL.md); the evidence status
 is the README's [Evidence and limits](../README.md#evidence-and-limits)
 section and the [Reviewer Guide](REVIEWER_GUIDE.md).

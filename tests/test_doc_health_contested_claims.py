@@ -201,3 +201,32 @@ def test_allows_the_corrected_non_detection_wording(tmp_path, monkeypatch, doc_h
         "lift is unresolved pending the pre-registered 2026-12-01 read.",
     )
     assert warnings == []
+
+
+def test_flags_the_working_circuit_breaker_claim(tmp_path, monkeypatch, doc_health):
+    """The positive-direction overclaim, on the claim that actually sells.
+
+    The contract ledger refutes "the enforcement path working live" (row 28) and
+    records fleet protection as untested (row 27). Only actuation is earned.
+    """
+    warnings = _warnings(
+        tmp_path,
+        monkeypatch,
+        doc_health,
+        "The defensible claim today is an accountability instrument with one "
+        "working circuit breaker, not incident prevention.",
+    )
+    assert any("demonstrably" in w.lower() for w in warnings)
+
+
+def test_allows_the_actuation_claim_the_ledger_supports(
+    tmp_path, monkeypatch, doc_health
+):
+    warnings = _warnings(
+        tmp_path,
+        monkeypatch,
+        doc_health,
+        "An accountability instrument whose circuit breaker demonstrably "
+        "actuates; that it protects is untested.",
+    )
+    assert warnings == []

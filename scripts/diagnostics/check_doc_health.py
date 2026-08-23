@@ -873,11 +873,29 @@ _CONTESTED_CLAIMS: list[tuple[re.Pattern, str]] = [
         "descriptive snapshot, not a demonstrated negative. Say what it did "
         "not detect, and cite the power audit alongside it",
     ),
+    # The same overclaim in the positive direction, on the product claim the
+    # negative one is placed next to. The contract ledger records "enforcement
+    # is currently protecting the fleet" as UNTESTED (row 27) and "the
+    # enforcement path working live" as REFUTED (row 28); only "can actuate" is
+    # earned. Producing a pause and delivering it are separate events -- 195 of
+    # 218 recorded pauses (89.4%) were suppressed at the 2026-08-06 audit.
+    (
+        re.compile(r"working circuit breaker", re.IGNORECASE),
+        "overclaim: 'working' is refuted for the event it was cited for and "
+        "untested as a protection claim (ontology/eisv-proprioception-contract.md "
+        "rows 24, 27, 28). The earned claim is that the breaker demonstrably "
+        "ACTUATES; say that, and disclose the pause-suppression rate with it",
+    ),
 ]
 
 # Reader-facing scope for the contested-claims check.
 _CONTESTED_SKIP_PARTS = ("proposals",)  # internal research/provenance prose
-_CONTESTED_SKIP_FILES = {"CANONICAL_SOURCES.md"}  # quotes the patterns by design
+_CONTESTED_SKIP_FILES = {
+    "CANONICAL_SOURCES.md",  # quotes the patterns by design
+    # Quotes each corrected phrasing verbatim in order to correct it; the
+    # was/now table is the record of what these rules exist to prevent.
+    "falsifiability-power-audit-2026-08-23.md",
+}
 
 
 def check_contested_claims(md_files: list[Path]) -> list[str]:

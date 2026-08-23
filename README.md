@@ -31,10 +31,14 @@ resolve a weak effect, which the
 [power audit](docs/operations/falsifiability-power-audit-2026-08-23.md)
 quantifies. Either way it says nothing about the accountability mechanism the
 score sits inside: identity-bound writes, claim-vs-recorded-evidence
-comparison, and an enforced pause until recovery all run independent of it. The
-defensible claim today is an accountability instrument with one working circuit
-breaker, not incident prevention. [Evidence and limits](#evidence-and-limits)
-scopes every number on this page, including that non-detection.
+comparison, and an enforced pause until recovery all run independent of it —
+and that mechanism carries its own, separately scoped limits, so read the
+non-detection as bearing on neither. The defensible claim today is an
+accountability instrument whose circuit breaker demonstrably **actuates**; that
+it *protects* is untested, and at the last audit a cadence window suppressed
+delivery of 89.4% of recorded pauses.
+[Evidence and limits](#evidence-and-limits) scopes every number on this page,
+including both of those.
 
 <div align="center">
 
@@ -289,6 +293,19 @@ What is not yet established:
   the [scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md).
 - **Benefit from pausing.** The pause and recovery path runs and is recorded;
   whether pausing improved any outcome is unmeasured.
+- **Pause delivery.** Producing a pause and delivering it are separate events.
+  At the 2026-08-06 audit a `gap_suppress` cadence window downgraded 195 of 218
+  recorded pauses (89.4%) before they reached the agent. Delivery is live — a
+  governed `lifecycle_paused` event landed 2026-08-09 — but the current
+  suppression rate has not been re-measured since, and no surface should be
+  read as claiming the breaker protects the fleet. The project's own contract
+  ledger records "enforcement is currently protecting the fleet" as **untested**
+  and "the enforcement path working live" as **refuted** for the one event that
+  was cited for it (rows 24, 27, 28 of
+  [the proprioception contract](docs/ontology/eisv-proprioception-contract.md));
+  the earned claim is that the breaker *can actuate*. See the
+  [scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md) for how narrow that
+  surface is.
 
 The instrument-frame validation the system does claim — reliability,
 faithfulness under intervention, calibration — is scoped and partly built; the

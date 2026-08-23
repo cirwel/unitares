@@ -135,8 +135,7 @@ frozen table remain correct as computed.
 The internal canon was already correct. The stop rule records the honest state
 as "**unresolved** pending the registered trusted-anchor read"; the Reviewer
 Guide and the evaluation index both say the snapshot is "not a standing AUC
-bound". The storefront had drifted past all three, and a lint enforced the
-drift:
+bound". The storefront had gone past all three, and a lint enforced it:
 
 | Surface | Was | Now |
 |---|---|---|
@@ -144,11 +143,75 @@ drift:
 | `docs/PRODUCT_DEFINITION.md` | "**is a negative result** — no demonstrated predictive lift" | detected no lift; unresolved rather than ruled out |
 | `check_doc_health.py` contested claims | flagged only the optimistic phrasing ("weak early signal"), citing `NOISE-LEVEL` as having **superseded** it | symmetric: flags unsupported claims in both directions, and the stated reason is now "unresolved", not "superseded" |
 
-That last row is the one worth keeping in view. A CI lint running with
-`--strict` hard-failed any document describing the honest read as a weak signal,
-on the authority of a run with 3% power to see one. The repository was
-mechanically enforcing a conclusion its own evidence could not support, in the
-direction of understating the system. Honesty ratchets are still ratchets.
+## This is directional, not drift
+
+An earlier version of this document called the above "drift". That was the wrong
+word and it let the finding off too lightly. Drift is undirected. Every
+deviation found here points the same way, and they compound into a structure:
+
+**1. The tested thing is overclaimed negative.** A non-detection at ~3% power
+became "bounds the EISV score's forecasting power" — while three documents in
+the same repository said it bounds nothing.
+
+**2. The evidence that would reveal the weakness was dropped.** The frozen
+transcription kept `Selective p` and dropped exactly `Null max p95` and `Null
+clusters` — the two columns the harness's own output tells readers to read
+alongside it, and the two that would show the test could not resolve a weak
+effect. Whatever the intent, the columns that survived are the quotable ones and
+the columns that vanished are the scoping ones.
+
+**3. The untested thing is overclaimed positive — and it is the product.**
+Directly after the negative, both storefront surfaces asserted "an accountability
+instrument with **one working circuit breaker**". The project's own contract
+ledger says otherwise, in the same words:
+
+- Row 28 — "The 2026-08-02 high-risk verdict demonstrates the enforcement path
+  **working** live." → **REFUTED.** "the verdict fired, the enforcement did not."
+- Row 27 — "Enforcement is currently protecting the fleet." → **UNTESTED as a
+  protection claim.** "The event proves the circuit breaker *can actuate*; it
+  does not show prevention, benefit, or correctness."
+- Row 24 — pause delivery → **REFUTED BY CONSTRUCTION.** A `gap_suppress`
+  cadence window downgraded **195 of 218 recorded pauses (89.4%)** in the
+  2026-08-06 audit window before they reached the agent. Delivery is live —
+  corrected 2026-08-10 after a governed pause landed on 2026-08-09 — but the
+  suppression rate has not been re-measured since.
+
+The 89.4% figure was public, but only inside a
+[threat-model](../SCOPE_AND_THREAT_MODEL.md) paragraph arguing that a
+*hypothetical* one-line diff could disarm enforcement. It appeared as
+attack-surface leverage, never as a plain statement of how often the breaker
+currently fails to deliver. A reader looking for the product's limits would not
+find it there.
+
+**The structure.** An unsupported negative about the component that was measured
+sits immediately beside an unsupported positive about the component that was
+not, and the negative is explicitly fenced off from the positive in the same
+sentence ("that bounds the EISV score's forecasting power, **not** the
+accountability mechanism it sits inside"). The negative therefore costs nothing
+while buying the credibility of a project that reports its own failures — and
+that credibility is spent on the claim no one tested. The word "working" carries
+the whole product claim, and it is the exact word the ledger refutes.
+
+**On intent.** None of this requires anyone to have decided to mislead. The
+operator raised this concern unprompted, which is evidence against intent. But
+intent is not the question: the structure produces the effect whether or not
+anyone chose it, it survived many review passes, and one part of it was
+mechanically enforced by CI. A project whose central claim is that self-report
+must be checked against recorded evidence is the last place this should hold.
+
+Both overclaims are now corrected on both storefront surfaces, the pause
+suppression rate is disclosed in the README's own limits list, and
+`check_doc_health.py` flags "working circuit breaker" alongside the two
+negative-direction patterns.
+
+## Not fixed here
+
+- **The dropped columns.** Recovering `Null max p95` and `Null clusters` needs a
+  re-run at the same `--as-of` cutoff against the deployment database.
+- **The current pause-suppression rate.** The 89.4% figure is from 2026-08-06.
+  Whether it still holds is unknown and is the single most decision-relevant
+  number about the product's core mechanism.
+- **The anti-predictive baseline** (below), which is also a power sink.
 
 ## What did not change
 
