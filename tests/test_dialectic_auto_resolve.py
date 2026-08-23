@@ -120,12 +120,14 @@ async def test_antithesis_reassigns_reviewer_when_gone():
     mock_update_reviewer = AsyncMock()
     mock_add_msg = AsyncMock()
     mock_select = AsyncMock(return_value="new-reviewer")
+    mock_emit = AsyncMock()
 
     with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                new_callable=AsyncMock, return_value=sessions), \
          patch(f"{AUTO_RESOLVE}.mcp_server", server), \
          patch(f"{AUTO_RESOLVE}.update_session_reviewer_async", mock_update_reviewer), \
          patch(f"{AUTO_RESOLVE}.add_message_async", mock_add_msg), \
+         patch(f"{AUTO_RESOLVE}.emit_reviewer_reassigned", mock_emit), \
          patch("src.mcp_handlers.dialectic.reviewer.select_reviewer", mock_select):
         from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
         result = await auto_resolve_stuck_sessions()
@@ -133,6 +135,57 @@ async def test_antithesis_reassigns_reviewer_when_gone():
     assert result["reassigned_count"] == 1
     assert result["resolved_count"] == 0  # Not failed
     mock_update_reviewer.assert_called_once_with("s1", "new-reviewer")
+
+    # ⛔The (F) reassignment-rate baseline is computed from this event. The
+    # sweeper emitted NOTHING until 2026-08-22 while handlers.py called the
+    # other producer "the single chokepoint". Assert behaviour, not file text.
+    mock_emit.assert_awaited_once()
+    assert mock_emit.await_args.kwargs == {
+        "session_id": "s1",
+        "old_reviewer_id": "gone-reviewer",
+        "new_reviewer_id": "new-reviewer",
+        "reason": "reviewer_unresponsive",
+        "source": "sweeper",
+    }
+
+
+@pytest.mark.asyncio
+async def test_reassignment_recorded_even_if_transcript_append_fails():
+    """A committed reassignment must reach the (F) stream even if narration fails.
+
+    Regression for a 2026-08-22 review finding: the emit sat after
+    ``add_message_async`` inside one try whose except has no ``continue``, so a
+    transcript failure on an already-committed write fell through to the
+    facilitation branch — no event, no count, and a facilitation message naming
+    the stale reviewer.
+    """
+    sessions = [
+        {"session_id": "s1", "updated_at": _old_time(3), "paused_agent_id": "a1",
+         "phase": "antithesis", "reviewer_agent_id": "gone-reviewer"}
+    ]
+    server = _make_mock_server({
+        "a1": _make_agent_meta(status="paused"),
+        "new-reviewer": _make_agent_meta(status="active"),
+    })
+    mock_emit = AsyncMock()
+
+    with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
+               new_callable=AsyncMock, return_value=sessions), \
+         patch(f"{AUTO_RESOLVE}.mcp_server", server), \
+         patch(f"{AUTO_RESOLVE}.update_session_reviewer_async", AsyncMock(return_value=True)), \
+         patch(f"{AUTO_RESOLVE}.add_message_async",
+               AsyncMock(side_effect=RuntimeError("transcript down"))), \
+         patch(f"{AUTO_RESOLVE}.emit_reviewer_reassigned", mock_emit), \
+         patch("src.mcp_handlers.dialectic.reviewer.select_reviewer",
+               AsyncMock(return_value="new-reviewer")):
+        from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
+        result = await auto_resolve_stuck_sessions()
+
+    mock_emit.assert_awaited_once()
+    assert result["reassigned_count"] == 1
+    assert result["facilitation_count"] == 0, (
+        "a committed reassignment must not fall through to the facilitation branch"
+    )
 
 
 @pytest.mark.asyncio
