@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 
 
@@ -15,6 +16,25 @@ def _read(relative: str) -> str:
 
 def _current_version() -> str:
     return _read("VERSION").strip()
+
+
+def test_shared_contract_http_setup_has_runnable_dependency_contract() -> None:
+    install = (
+        '3. Install dependencies: '
+        '`pip install -e ".[full]" -c constraints.txt`'
+    )
+    start = '5. Start: `python src/mcp_server.py --port 8767`'
+
+    for relative in ("AGENTS.md", "CLAUDE.md"):
+        setup = _read(relative).split("## Setup\n", 1)[1].split("\n## ", 1)[0]
+        assert install in setup
+        assert start in setup
+
+    full = tomllib.loads(_read("pyproject.toml"))["project"][
+        "optional-dependencies"
+    ]["full"]
+    assert any(requirement.startswith("uvicorn") for requirement in full)
+    assert any(requirement.startswith("starlette") for requirement in full)
 
 
 def test_tier_one_quickstart_is_release_pinned_and_redis_complete() -> None:
