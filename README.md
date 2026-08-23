@@ -20,11 +20,10 @@ hosted platform. Plain-language definition: [What UNITARES is](docs/PRODUCT_DEFI
 **Status:** v2.19.0. The maintainer deployment has operated continuously since
 November 2025, with 71,141 stored EISV state rows and six long-running resident
 agents at the frozen snapshot. That establishes sustained single-operator
-operation under real load. It is not an efficacy study. The evidence currently
-supports narrower claims about attributable records and exercised runtime
-paths; predictive utility, preventive benefit, and cross-operator generality
-remain open questions. [Evidence and limits](#evidence-and-limits) gives each
-claim its current evidence class.
+operation under real load: attributable records and exercised runtime paths.
+Predictive utility, preventive benefit, and cross-operator generality are open.
+[Evidence and limits](#evidence-and-limits) gives each claim its current
+evidence class.
 
 <div align="center">
 
@@ -258,11 +257,11 @@ real load:
 
 | Evidence | Scope |
 |---|---|
-| **4,573,890 audit/telemetry events** | Continuous maintainer-run operation since 2025-11-28, the first identity record. Session-resolution observations and cross-device-call records make up 91.4%; this is infrastructure/load evidence, not 4.6M independent policy decisions. |
-| **71,141 stored EISV state rows** | Longitudinal state observations in `core.agent_state`; rows are not independent agents or trials. |
-| **15 recorded self-recovery events** | Of 21 canonical, non-automatic lifecycle-resume records. Shows the path was exercised; not 15 independent trials or proof that pauses improved outcomes. |
-| **32,181 labeled EISV windows** | [20,655 overlapping real windows from one 39-day Raspberry Pi run plus 11,526 synthetic windows](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories). Window parameters, the real/synthetic split (a per-row `provenance` column), and the generating pipeline are documented on the dataset card and indexed in the [evaluation catalog](docs/EVALUATION_INDEX.md#labelled-sets). These are windows, not independent agents or customer trajectories. |
-| **6 long-running resident agents** | Configured and operating in the maintainer deployment at the snapshot date; one runs on separate hardware, the same Raspberry Pi that produced the labeled-window dataset. The same single-operator fleet as every number above, not external adopters. |
+| **4,573,890 audit/telemetry events** | Continuous maintainer-run operation since 2025-11-28, the first identity record. Session-resolution observations and cross-device-call records make up 91.4%. Measures infrastructure load and uptime. |
+| **71,141 stored EISV state rows** | Longitudinal state observations in `core.agent_state`. The unit is the observation; the fleet producing them is the six residents below. |
+| **15 recorded self-recovery events** | Of 21 canonical, non-automatic lifecycle-resume records. Shows the recovery path was exercised. |
+| **32,181 labeled EISV windows** | [20,655 overlapping real windows from one 39-day Raspberry Pi run plus 11,526 synthetic windows](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories). Window parameters, the real/synthetic split (a per-row `provenance` column), and the generating pipeline are documented on the dataset card and indexed in the [evaluation catalog](docs/EVALUATION_INDEX.md#labelled-sets). The unit is the window; every real window comes from the single Raspberry Pi run named above. |
+| **6 long-running resident agents** | Configured and operating in the maintainer deployment at the snapshot date; one runs on separate hardware, the same Raspberry Pi that produced the labeled-window dataset. The same single-operator fleet as every number above. |
 
 The maintainer deployment is **single-operator and co-development dogfood**: most
 agents governed by the system are also building the system. Read
@@ -273,8 +272,8 @@ citing a fleet number.
 
 | Question | Current status | What the record supports |
 |---|---|---|
-| Sustained operation | **Operational observation** | The maintainer deployment has run continuously under real load. The counts above are rows, events, and configured residents — not independent trials or adopters. |
-| Identity and audit trail | **Exercised path** | Process-bound writes, evidence records, policy responses, and replayable audit history are deployed. This establishes mechanism execution, not outcome benefit. |
+| Sustained operation | **Operational observation** | The maintainer deployment has run continuously under real load. The counts above are rows, events, and configured residents. |
+| Identity and audit trail | **Exercised path** | Process-bound writes, evidence records, policy responses, and replayable audit history are deployed. This establishes mechanism execution. |
 | Pause actuation and delivery | **Event reconciled; protection untested** | A governed pause landed on 2026-08-09. At the 2026-08-06 audit, a cadence window had downgraded 195 of 218 recorded pauses (89.4%) before delivery; the current rate has not been re-measured. See [ledger rows 24, 27, and 28](docs/ontology/eisv-proprioception-contract.md). |
 | Predictive lift | **Non-detection; inconclusive for weak effects** | In the frozen 2026-08-09 cohort, no slice cleared the selection-aware null (selective p = 0.070–0.567). The [power audit](docs/operations/falsifiability-power-audit-2026-08-23.md) estimates roughly 3% power against a weak effect on a cohort of that shape, so the result sets no standing AUC ceiling. |
 | Incident prevention or benefit from pausing | **Untested** | No governed-versus-ungoverned comparison has shown an incident prevented or an outcome improved by pausing. |
