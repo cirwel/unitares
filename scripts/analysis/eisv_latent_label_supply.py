@@ -157,28 +157,60 @@ def build_report(db: dict, reverts, prs, repo: str, gh_repo: str) -> str:
              "1–3 committing agents does not create balanced agents.")
     a.append("- the uncaptured proxies need a commit→agent attribution map that does not exist "
              "(CI/git authorship ≠ governance agent_id).")
-    a.append("- the autocorrelation baseline (~0.94, unpinnable) is unbeatable on outcomes — "
-             "see eisv_label_power.py. More labels do not lower that bar.")
+    # "unbeatable on outcomes" and "more labels do not lower that bar" were both
+    # fixed claims no input could move, and the second is false as stated: more
+    # bad labels DO narrow the one-sample MDE — that is precisely what
+    # eisv_label_power.py computes. What labels cannot fix is the baseline's own
+    # instability, which is a different obstacle and the one that actually bites.
+    a.append("- the autocorrelation baseline (~0.94) is unstable across slices (0.61–0.94), "
+             "so more labels narrow the MDE without pinning the target — "
+             "see eisv_label_power.py, which computes both from the same counts.")
 
     a.append("\n## Verdict")
     vol_pass = trusted_eligible_q >= FLOOR_PER_QTR
     a.append(f"- raw volume floor (≥{FLOOR_PER_QTR}/qtr TRUSTED-eligible): "
              f"**{'PASS' if vol_pass else 'FAIL'}** ({trusted_eligible_q:.0f}/qtr)")
-    a.append(f"- but the gate-3-relevant supply (TRUSTED **and** per-agent-balanced): "
-             f"**FAIL** — {db['balanced_agents']} balanced agents.")
+    # `**FAIL**` was a literal here while the line above it branches correctly, so
+    # this clause returned FAIL for every database state -- including one with
+    # ample balanced coverage. Zero balanced agents is a definitional failure of
+    # "per-agent-balanced supply". Above zero, no minimum balanced-agent count is
+    # registered for gate-3 anywhere, so the honest report is that the gate is not
+    # decidable here rather than a verdict invented at print time.
+    bal = db["balanced_agents"]
+    if bal == 0:
+        a.append("- but the gate-3-relevant supply (TRUSTED **and** per-agent-balanced): "
+                 "**FAIL** \u2014 0 balanced agents.")
+    else:
+        a.append(f"- but the gate-3-relevant supply (TRUSTED **and** per-agent-balanced): "
+                 f"**NOT ESTABLISHED** \u2014 {bal} balanced agents observed, and no minimum "
+                 "balanced-agent count is registered for gate-3. Choosing that minimum is an "
+                 "operator call and belongs in the proposal, not in this printout.")
+    # This paragraph asserted "clears the floor" and "(0 balanced)" as fixed text
+    # while the real balanced count was interpolated a few lines above, so a run
+    # with a non-zero count printed both and contradicted itself.
     a.append(
-        "\n**Honest read: supply is not the binding constraint — distribution and tier are.** "
-        f"Raw bad-event supply clears the {FLOOR_PER_QTR}/quarter floor (SOFT ~{soft_q:.0f}, "
-        f"TRUSTED-eligible ~{trusted_eligible_q:.0f}), so 'capture more labels' is the WRONG "
-        "lever: the trustworthy slice is tiny, it concentrates on a handful of committing "
-        "agents (0 balanced), the proxies lack agent attribution, and the autocorrelation "
-        "baseline is unbeatable regardless. This refines Milestone 1: the gate is not volume "
-        "but TRUSTED + per-agent-balanced volume — which is not met and is not closed by "
-        "building capture plumbing. It pushes toward the preserved dissent: EISV may be "
-        "unfalsifiable-on-outcomes for structural reasons, and the grounding program — not "
-        "just Stage B — deserves reconsideration. The one capture leg still worth building "
-        "(operator-correction → trusted, with attribution) is justified for FUTURE optionality, "
-        "not as a near-term unblock."
+        "\n**Honest read: supply is not the binding constraint \u2014 distribution and tier are.** "
+        if vol_pass else
+        "\n**Honest read: raw volume and distribution are both binding.** "
+    )
+    a.append(
+        (f"Raw bad-event supply clears the {FLOOR_PER_QTR}/quarter floor"
+         if vol_pass else
+         f"Raw bad-event supply is short of the {FLOOR_PER_QTR}/quarter floor") +
+        f" (SOFT ~{soft_q:.0f}, TRUSTED-eligible ~{trusted_eligible_q:.0f}), " +
+        ("so 'capture more labels' is the WRONG lever" if vol_pass else
+         "so raw capture volume is binding too, on top of the constraints below") +
+        ": the trustworthy slice is tiny, it concentrates on a handful of committing "
+        f"agents ({bal} balanced), the proxies lack agent attribution, and the "
+        "comparison against the autocorrelation baseline is separately underpowered at "
+        "this label supply (see `eisv_label_power.py`, which computes it from the same "
+        "counts rather than asserting it). This refines Milestone 1: "
+        "the gate is not volume but TRUSTED + per-agent-balanced volume, which is not "
+        "closed by building capture plumbing. It pushes toward the preserved dissent: "
+        "EISV may be unfalsifiable-on-outcomes for structural reasons, and the grounding "
+        "program \u2014 not just Stage B \u2014 deserves reconsideration. The one capture leg "
+        "still worth building (operator-correction \u2192 trusted, with attribution) is "
+        "justified for FUTURE optionality, not as a near-term unblock."
     )
     return "\n".join(a) + "\n"
 
