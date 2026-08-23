@@ -229,6 +229,12 @@ BEAM harness lane excluded:
 - The frozen rows predate the telemetry envelope, so all source/warmup/
   enforcement/missingness strata are `legacy/no-envelope`. **No prevention is
   demonstrated.**
+- **What the non-detection does not say.** A `NOISE-LEVEL` slice cannot
+  distinguish "no association" from "an association this cohort is too small to
+  resolve". The instrument's power on a cohort of this shape is measured in
+  [`operations/falsifiability-power-audit-2026-08-23.md`](operations/falsifiability-power-audit-2026-08-23.md)
+  by `scripts/analysis/ablation_power_probe.py`. Quote the p-values with that
+  power figure, or the reader will hear a demonstrated negative.
 
 This does not validate EISV, establish predictive lift, or create a standing AUC
 bound. It is a reproducible dated descriptive snapshot after best-candidate
