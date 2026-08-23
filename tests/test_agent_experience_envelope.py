@@ -431,6 +431,98 @@ def test_search_envelope_counts_nested_raw_governance_payload():
     assert env["memory_suggestions"][0]["summary"] == "prior art"
 
 
+def test_store_finding_envelope_reports_write_instead_of_empty_search():
+    payload = {
+        "success": True,
+        "message": "Discovery stored for agent 'agent-1'",
+        "discovery_id": "d-new",
+        "discovery": {
+            "id": "d-new",
+            "type": "bug_found",
+            "status": "open",
+            "severity": "medium",
+            "summary": "write envelope bug",
+        },
+        "_resolve_when_done": (
+            "When this is addressed, close the loop: "
+            "knowledge(action='update', discovery_id='d-new', status='resolved')"
+        ),
+    }
+
+    env = build_experience_envelope(
+        "store_finding",
+        "knowledge",
+        payload,
+        {"summary": "write envelope bug"},
+    )
+
+    assert env["message"] == "Discovery stored for agent 'agent-1'"
+    assert env["discovery_id"] == "d-new"
+    assert env["state_summary"] == {
+        "type": "bug_found",
+        "status": "open",
+        "severity": "medium",
+        "summary": "write envelope bug",
+        "discovery_id": "d-new",
+        "message": "Discovery stored for agent 'agent-1'",
+    }
+    assert "update_finding(" in env["next_action"]
+    assert "No prior discoveries matched" not in env["next_action"]
+    assert env["raw_governance"] is payload
+
+
+def test_update_finding_envelope_reports_terminal_status_and_id():
+    payload = {
+        "success": True,
+        "message": "Discovery 'd-existing' status updated to 'resolved'",
+        "discovery": {
+            "id": "d-existing",
+            "type": "bug_found",
+            "status": "resolved",
+            "severity": "medium",
+            "summary": "write envelope bug",
+            "updated_at": "2026-08-23T01:00:00+00:00",
+            "resolved_at": "2026-08-23T01:00:00+00:00",
+        },
+    }
+
+    env = build_experience_envelope(
+        "update_finding",
+        "knowledge",
+        payload,
+        {"discovery_id": "d-existing", "status": "resolved"},
+    )
+
+    assert env["message"] == "Discovery 'd-existing' status updated to 'resolved'"
+    assert env["discovery_id"] == "d-existing"
+    assert env["state_summary"]["status"] == "resolved"
+    assert env["state_summary"]["resolved_at"] == "2026-08-23T01:00:00+00:00"
+    assert "is now 'resolved'" in env["next_action"]
+    assert "knowledge(action='details'" in env["next_action"]
+    assert "No prior discoveries matched" not in env["next_action"]
+    assert env["raw_governance"] is payload
+
+
+def test_update_finding_envelope_falls_back_to_argument_discovery_id():
+    payload = {
+        "success": True,
+        "message": "Discovery 'd-existing' updated",
+        "discovery": None,
+    }
+
+    env = build_experience_envelope(
+        "update_finding",
+        "knowledge",
+        payload,
+        {"discovery_id": "d-existing", "details": "new evidence"},
+    )
+
+    assert env["discovery_id"] == "d-existing"
+    assert env["state_summary"]["discovery_id"] == "d-existing"
+    assert "was updated" in env["next_action"]
+    assert "No prior discoveries matched" not in env["next_action"]
+
+
 def test_record_result_envelope_lifts_outcome():
     payload = {
         "success": True,
