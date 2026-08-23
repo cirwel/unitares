@@ -186,7 +186,7 @@ UNITARES governance MCP server. A behavioral governance framework for AI agents 
 
 1. Install PostgreSQL@17 with AGE extension
 2. Create a `governance` database
-3. Install dependencies: `pip install -e .`
+3. Install dependencies: `pip install -e ".[full]" -c constraints.txt`
 4. Copy `scripts/ops/com.unitares.governance-mcp.plist` to `~/Library/LaunchAgents/` and fill in paths/tokens (see template comments)
 5. Start: `python src/mcp_server.py --port 8767`
 
