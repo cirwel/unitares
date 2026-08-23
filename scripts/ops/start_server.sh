@@ -47,10 +47,10 @@ if ! "$PYTHON" -c "import mcp, uvicorn, starlette" 2>/dev/null; then
     echo "Error: missing dependencies for HTTP server."
     echo ""
     echo "Install minimal (stdio only):"
-    echo "  pip install -r requirements-core.txt"
+    echo "  pip install -r requirements-core.txt -c constraints.txt"
     echo ""
     echo "Install full (HTTP):"
-    echo "  pip install -r requirements-full.txt"
+    echo "  pip install -r requirements-full.txt -c constraints.txt"
     echo ""
     # Check if the specific blocker is the private package
     if ! "$PYTHON" -c "import governance_core" 2>/dev/null; then
