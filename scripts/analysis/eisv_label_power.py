@@ -42,8 +42,18 @@ Z_POWER_80 = 0.8416
 
 
 def auc_se(auc: float, n_bad: int, n_good: int) -> float:
-    """Hanley-McNeil standard error of an AUC. n_bad = positives (minority)."""
+    """Hanley-McNeil standard error of an AUC. n_bad = positives (minority).
+
+    AUC outside [0, 1] is not a domain error to paper over: the variance goes
+    negative there, and the `max(var, 0.0)` clamp below used to turn that into
+    SE = 0.0 -- an answer indistinguishable from a perfectly precise estimate.
+    `n_bad_for_lift` then read that zero as "the target is already detectable"
+    and returned its loop floor of 2. Return NaN instead, so an out-of-domain
+    call propagates as unknown rather than as good news.
+    """
     if n_bad < 1 or n_good < 1:
+        return float("nan")
+    if not (0.0 <= auc <= 1.0):
         return float("nan")
     q1 = auc / (2 - auc)
     q2 = 2 * auc * auc / (1 + auc)
@@ -75,6 +85,12 @@ def n_bad_for_lift(lift: float, n_good: int, baseline: float,
     n_bad rather than assuming an unlimited supply of negatives.
     """
     k = z_alpha + Z_POWER_80
+    # A lift that would carry the AUC to 1.0 or beyond is not a smaller-sample
+    # problem, it is an undefined target. -1 is this function's existing
+    # "not reachable" sentinel; returning 2 here (the loop floor, via SE = 0)
+    # reported the least demanding possible answer for the most impossible ask.
+    if baseline + lift >= 1.0:
+        return -1
     ratio = min(ratio_cap, max(1, n_good))
     for nb in range(2, 200001):
         ng = nb * ratio
@@ -149,14 +165,38 @@ def build_report(args) -> str:
         "  - The comparison target (autocorrelation AUC) is both very high (~0.94) and "
         "unpinnable (0.61–0.94 across slices, CI wider than any plausible EISV lift). "
         "There is no stable thing to beat.\n"
-        "Conclusion: Stage-B / GROUNDING_APPLY is NOT validatable on outcomes at this "
-        "label supply — by arithmetic, independent of the maths. The decision now "
-        "hinges on the *other* killer experiment, the latent-supply count: if the "
-        "fleet cannot emit clean bad labels at a rate that reaches the hundreds on a "
-        "reasonable horizon, EISV is plausibly unfalsifiable-on-outcomes and the "
-        "grounding program — not just Stage B — deserves reconsideration."
+        f"{_conclusion(mde_21, headroom)}"
     )
     return "\n".join(a) + "\n"
+
+
+def _conclusion(mde: float, headroom: float) -> str:
+    """Derive the verdict from the numbers above it.
+
+    This paragraph used to be a constant. `build_report` contained no branch on
+    any computed quantity, so the report printed "NOT validatable" for every
+    input -- including a label budget large enough to make it false. The test is
+    the comparison the surrounding prose already describes: an MDE wider than
+    the headroom above the baseline cannot resolve a lift into that headroom.
+    """
+    if mde > headroom:
+        return (
+            "Conclusion: Stage-B / GROUNDING_APPLY is NOT validatable on outcomes at "
+            f"this label supply — the MDE (**+{mde:.3f}**) is wider than the entire "
+            f"headroom above the baseline (**{headroom:.3f}**), by arithmetic and "
+            "independent of the maths. The decision then hinges on the *other* killer "
+            "experiment, the latent-supply count: if the fleet cannot emit clean bad "
+            "labels at a rate that reaches the hundreds on a reasonable horizon, EISV "
+            "is plausibly unfalsifiable-on-outcomes and the grounding program — not "
+            "just Stage B — deserves reconsideration."
+        )
+    return (
+        f"Conclusion: the MDE (**+{mde:.3f}**) now fits inside the headroom above the "
+        f"baseline (**{headroom:.3f}**), so a lift of that size is in principle "
+        "resolvable at this label supply. This is a statement about POWER only: it "
+        "says the test could detect such a lift, not that any lift exists. Whether "
+        "EISV shows one remains the registered question."
+    )
 
 
 def parse_args(argv=None):
