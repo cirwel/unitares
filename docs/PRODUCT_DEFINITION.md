@@ -88,9 +88,10 @@ failure looks like, is the [trust contract](trust-contract.md).
 Apart from the pause gate on governed write surfaces, enforcement is advisory:
 the server returns an action and the client decides whether to honor it. The
 frozen 2026-08-09 outcome-lift evaluation detected no predictive lift and
-demonstrates no prevention — a non-detection on a cohort too small to resolve a
-weak effect ([power audit](operations/falsifiability-power-audit-2026-08-23.md)),
-so predictive lift is unresolved rather than ruled out — and calibrated
+demonstrates no prevention — a non-detection whose preserved record cannot
+establish read-specific power
+([power audit](operations/falsifiability-power-audit-2026-08-23.md)), so weak
+predictive lift is unresolved rather than ruled out — and calibrated
 concealment by a motivated agent is a documented structural blind spot. The
 defensible claim today is therefore **an accountability instrument whose circuit
 breaker demonstrably actuates** — not one shown to protect anything. Producing a
