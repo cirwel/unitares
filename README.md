@@ -19,7 +19,7 @@ can search — record, score, interrupt, remember. Plain-language version:
 [What UNITARES is](docs/PRODUCT_DEFINITION.md). It is a self-hosted MCP/HTTP
 service you run yourself — not an agent framework, not a hosted platform.
 
-**Status:** v2.19.0, continuously operated since November 2025 — 71,141 stored
+**Status:** v2.19.0. Continuously operated since November 2025 — 71,141 stored
 EISV state rows and six long-running resident agents, one on separate hardware.
 This is a single-operator deployment whose governed agents are largely the ones
 building it: evidence that the system runs at length under real load, not an
