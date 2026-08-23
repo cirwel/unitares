@@ -549,17 +549,29 @@ class DialecticDB:
             return [dict(row) for row in rows]
 
     async def get_stats(self) -> Dict[str, Any]:
-        """Get database statistics."""
+        """Get operational database statistics.
+
+        ⛔Deliberately does NOT return a ``status`` breakdown. ``status``
+        conflates three endings — protocol failure, canary traffic (which ends
+        ``failed`` BY DESIGN), and a standing unfacilitated objection (the
+        dialectic working exactly as intended) — so a per-status count is not
+        outcome data and reading one as dialectic quality gets the answer
+        wrong. It did, on 2026-08-22: a Wave-3 decision artifact reported an
+        eligible criterion-10 cohort of 11 by counting ``failed`` rows, where
+        the true figure through the classifier is 5 and ``failed`` is in fact
+        **zero** across all non-canary traffic.
+
+        A ``by_status`` key was removed here on 2026-08-22 rather than
+        annotated. It had no production caller, and leaving a correctly-shaped
+        wrong number one dictionary key away from an operational stats call is
+        the footgun itself. Use :meth:`get_outcome_breakdown` — which routes
+        through ``src/dialectic_outcomes.py::classify_outcome`` — for anything
+        that answers "how is the dialectic doing". See RFC §0(F), §11 criterion
+        10, and issue #1689.
+        """
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             stats = {}
-
-            rows = await conn.fetch("""
-                SELECT status, COUNT(*) as count
-                FROM core.dialectic_sessions
-                GROUP BY status
-            """)
-            stats["by_status"] = {row["status"]: row["count"] for row in rows}
 
             rows = await conn.fetch("""
                 SELECT session_type, COUNT(*) as count

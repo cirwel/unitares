@@ -127,6 +127,27 @@ def test_activity_rollup_has_completed_tool_scope(client, recorder):
     assert rows[0][0]["details"]["agent_runtime_evidence"] is False
 
 
+def test_runtime_model_is_versioned_and_sensitive_values_are_not_persisted(
+    client, recorder
+):
+    rows, _db = recorder
+    payload = _payload("activity_rollup")
+    payload.pop("host_process_alive")
+    payload["model"] = "https://user:password@example.test/model?token=secret"
+
+    response = client.post("/v1/runtime/observe", json=payload)
+
+    assert response.status_code == 201
+    details = rows[0][0]["details"]
+    assert details["model"] == ""
+    assert details["runtime_provenance"]["schema"] == "s22.runtime_provenance.v1"
+    assert details["runtime_provenance"]["model"]["identifier"] is None
+    assert details["runtime_provenance"]["model"]["missing_reason"] == (
+        "redacted_sensitive_value"
+    )
+    assert "password" not in str(details)
+
+
 def test_session_identity_mismatch_fails_closed(client, recorder):
     rows, db = recorder
     db.session.agent_id = "11111111-1111-4111-8111-111111111111"

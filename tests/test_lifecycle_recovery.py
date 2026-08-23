@@ -24,6 +24,7 @@ from tests.helpers import (
     make_agent_meta, make_mock_server, make_monitor,
     patch_agent_storage,
 )
+from src.monitor_decision import make_decision
 
 
 # ============================================================================
@@ -232,6 +233,22 @@ class TestSelfRecoveryReview:
             I=0.3,
             S=0.5,
         )
+        decision_state = SimpleNamespace(
+            E=0.8,
+            I=0.8,
+            S=0.1,
+            V=0.0,
+            coherence=0.6,
+            void_active=False,
+            coherence_history=[],
+            risk_history=[],
+        )
+        risk_decision = make_decision(
+            decision_state,
+            risk_score=0.79,
+            unitares_verdict="high-risk",
+        )
+        hard_stop_provenance = risk_decision["hard_stop_provenance"]
         maturity_gate = {
             "schema": "eisv.cold-start-confirmation.v1",
             "outcome": "shadow_would_defer",
@@ -241,10 +258,13 @@ class TestSelfRecoveryReview:
             "confirmation_count": 1,
             "confirmations_required": 2,
             "primary_driver": "phi_cold_start",
+            "primary_eisv_source": "ode_fallback",
             "measurement_ready": False,
+            "is_baselined": False,
             "behavioral_confidence": 0.1,
             "independent_override": None,
             "lineage_status": "identity_genesis",
+            "hard_stop_provenance": hard_stop_provenance,
         }
         latest_state = SimpleNamespace(
             epistemic_class="substrate_interpretation",
@@ -255,9 +275,11 @@ class TestSelfRecoveryReview:
                     "policy_evaluation": {
                         "action": "pause",
                         "sub_action": "risk_pause",
+                        "hard_stop_provenance": hard_stop_provenance,
                         "inputs": {
                             "verdict_source": "phi_cold_start",
                             "primary_eisv_source": "ode_fallback",
+                            "nearest_edge": "risk",
                         },
                         "maturity_gate": maturity_gate,
                     },

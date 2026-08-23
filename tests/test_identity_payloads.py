@@ -125,6 +125,7 @@ def test_build_onboard_response_data_includes_thread_and_workflow_when_verbose()
         continuity_token="token-abc",
         system_activity={"agents": {"active": 1}},
         tool_mode_info={"current_mode": "lite"},
+        model_type="gpt-5.6-sol",
     )
 
     assert payload["continuity_token"] == "token-abc"
@@ -132,6 +133,10 @@ def test_build_onboard_response_data_includes_thread_and_workflow_when_verbose()
     assert payload["identity_assurance"]["tier"] == "strong"
     assert payload["identity_context"]["continuity_claim"] == "fresh_uuid_minted_after_resume_miss"
     assert payload["identity_context"]["harness_context"]["harness_type"] == "chatgpt"
+    assert payload["identity_context"]["harness_context"]["model"] == "gpt-5.6-sol"
+    assert payload["identity_context"]["harness_context"]["runtime_provenance"][
+        "model"
+    ]["source"] == "caller_declared"
     assert payload["thread_context"]["thread_id"] == "thread-1234567890"
     assert payload["workflow"]["step_1"] == "Copy client_session_id from above"
     assert payload["tool_mode"]["current_mode"] == "lite"
@@ -163,6 +168,8 @@ def test_identity_response_context_distinguishes_uuid_label_harness_and_assuranc
     assert context["harness_context"]["harness_type"] == "codex-cli"
     assert context["harness_context"]["model"] == "gpt-5.5"
     assert context["harness_context"]["is_identity_proof"] is False
+    assert context["harness_context"]["is_verdict_authority"] is False
+    assert context["harness_context"]["is_policy_dispatch_key"] is False
     assert context["identity_assurance"]["tier"] == "medium"
     assert context["continuity_claim"] == "resumed_by_recent_onboard_pin"
 

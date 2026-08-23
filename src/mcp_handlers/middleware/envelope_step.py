@@ -2,9 +2,9 @@
 
 Alias-gated: only calls invoked via an `experience=True` alias in
 tool_stability (start_session, sync_state, check_working_state,
-search_shared_memory, record_result, request_review) get their
-response reshaped. Canonical tool names stay byte-identical, so no
-existing client contract changes.
+search_shared_memory, store_finding, update_finding, record_result,
+request_review) get their response reshaped. Canonical tool names stay
+byte-identical, so no existing client contract changes.
 
 Envelope shape (friendly fields first, raw payload preserved):
 
@@ -305,6 +305,36 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
     return suggestions or None
 
 
+def _knowledge_write_summary(
+    payload: Dict[str, Any],
+    arguments: Optional[Dict[str, Any]],
+) -> tuple[Optional[str], Dict[str, Any]]:
+    """Lift the stable identity and result fields from a KG write response."""
+    discovery = payload.get("discovery")
+    discovery = discovery if isinstance(discovery, dict) else {}
+    arguments = arguments or {}
+    discovery_id = (
+        payload.get("discovery_id")
+        or discovery.get("id")
+        or arguments.get("discovery_id")
+    )
+    summary = _lift(
+        discovery,
+        "type",
+        "status",
+        "severity",
+        "summary",
+        "updated_at",
+        "resolved_at",
+    )
+    if discovery_id is not None:
+        summary["discovery_id"] = discovery_id
+    message = payload.get("message")
+    if message is not None:
+        summary["message"] = message
+    return str(discovery_id) if discovery_id is not None else None, summary
+
+
 def _experience_aliases():
     """Return the live friendly-alias registry without creating an import cycle."""
     from ..tool_stability import list_all_aliases
@@ -538,6 +568,58 @@ def build_experience_envelope(
             "risk_score",
         ).items():
             state_summary.setdefault(key, value)
+
+    elif canonical_name == "knowledge" and friendly_name in {
+        "store_finding",
+        "update_finding",
+    }:
+        discovery_id, state_summary = _knowledge_write_summary(
+            source_payload,
+            arguments,
+        )
+        message = source_payload.get("message")
+        if message is not None:
+            envelope["message"] = message
+        if discovery_id is not None:
+            envelope["discovery_id"] = discovery_id
+
+        if friendly_name == "store_finding":
+            next_action = source_payload.get("_resolve_when_done")
+            if not next_action:
+                suffix = (
+                    f"discovery_id='{discovery_id}'"
+                    if discovery_id is not None
+                    else "discovery_id='...'"
+                )
+                next_action = (
+                    "Finding stored. When it is addressed, close the loop with "
+                    f"update_finding({suffix}, status='resolved', "
+                    "resolution_notes='...')."
+                )
+        else:
+            status = state_summary.get("status")
+            target = discovery_id or "..."
+            if status in {
+                "resolved",
+                "closed",
+                "wont_fix",
+                "archived",
+                "superseded",
+                "cold",
+            }:
+                next_action = (
+                    f"Finding '{target}' is now '{status}'. Read the final record "
+                    "with knowledge(action='details', "
+                    f"discovery_id='{target}')."
+                )
+            else:
+                next_action = (
+                    f"Finding '{target}' was updated. Read it with "
+                    "knowledge(action='details', "
+                    f"discovery_id='{target}'); when addressed, close it with "
+                    f"update_finding(discovery_id='{target}', status='resolved', "
+                    "resolution_notes='...')."
+                )
 
     elif canonical_name == "knowledge":
         candidates = source_payload.get("results") or source_payload.get("discoveries") or []

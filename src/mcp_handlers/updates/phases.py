@@ -874,6 +874,7 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
             default_governance_mode="explicit",
             episode_fork_kind=episode_fork_kind,
             identity_lineage_fork=identity_lineage_fork,
+            include_runtime_provenance=True,
         )
         if provenance_context:
             ctx.agent_state["provenance_context"] = provenance_context

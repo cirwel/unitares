@@ -34,6 +34,17 @@ class SessionSignals:
     ip_ua_fingerprint: Optional[str] = None   # IP:MD5(UA)[:6] fallback
     user_agent: Optional[str] = None          # raw User-Agent
     client_hint: Optional[str] = None         # detected client type (cursor, claude_desktop, etc.)
+    # Descriptive runtime provenance supplied by the transport/harness.  These
+    # fields never participate in session-key or identity resolution; S22 state
+    # persistence normalizes and bounds them before storage.
+    reported_model: Optional[str] = None
+    model_provider: Optional[str] = None
+    model_provenance_source: Optional[str] = None
+    reported_harness_type: Optional[str] = None
+    harness_version: Optional[str] = None
+    harness_provenance_source: Optional[str] = None
+    adapter_type: Optional[str] = None
+    adapter_version: Optional[str] = None
     x_agent_name: Optional[str] = None        # X-Agent-Name header
     x_agent_id: Optional[str] = None          # X-Agent-Id header
     transport: str = "unknown"                # "mcp", "rest", "sse", "stdio", "uds"

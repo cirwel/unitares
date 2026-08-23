@@ -988,9 +988,17 @@ class UNITARESMonitor:
         return _estimate_risk(self.state, agent_state, score_result)
     
     def make_decision(self, risk_score: float, unitares_verdict: str = None,
-                      response_tier: str = None, oscillation_state: 'OscillationState' = None) -> Dict:
+                      response_tier: str = None, oscillation_state: 'OscillationState' = None,
+                      cirs_result: Dict = None) -> Dict:
         """Makes autonomous governance decision using UNITARES verdict and CIRS response tier."""
-        return _make_decision(self.state, risk_score, unitares_verdict, response_tier, oscillation_state)
+        return _make_decision(
+            self.state,
+            risk_score,
+            unitares_verdict,
+            response_tier,
+            oscillation_state,
+            cirs_result,
+        )
     
     def simulate_update(self, agent_state: Dict, confidence: Optional[float] = None) -> Dict:
         """
@@ -1455,6 +1463,11 @@ class UNITARESMonitor:
         ):
             verification_override = "independent_verification_floor"
             verdict_source = verification_override
+        primary_eisv_source = (
+            "behavioral"
+            if self._behavioral_state.confidence >= 0.3
+            else "ode_fallback"
+        )
 
         oscillation_state, response_tier, cirs_result, damping_result = self._run_cirs(
             risk_score=risk_score,
@@ -1466,7 +1479,8 @@ class UNITARESMonitor:
             risk_score,
             unitares_verdict=unitares_verdict,
             response_tier=response_tier,
-            oscillation_state=oscillation_state
+            oscillation_state=oscillation_state,
+            cirs_result=cirs_result,
         )
 
         # Shadow-measure a two-sided recent behavioral-V deviation gate against
@@ -1577,6 +1591,7 @@ class UNITARESMonitor:
             behavioral_confidence=self._behavioral_state.confidence,
             is_baselined=self._behavioral_state.is_baselined,
             primary_driver=verdict_source,
+            primary_eisv_source=primary_eisv_source,
             process_cycle=self._process_local_updates,
             monitor_lineage=self._cold_start_confirmation_lineage,
             lineage_status=self._cold_start_confirmation_lineage_status,
@@ -1679,11 +1694,6 @@ class UNITARESMonitor:
         # Primary EISV: behavioral (per-agent EMA observations) when confident,
         # ODE fallback for new agents. ODE values preserved in 'ode' sub-field.
         pE, pI, pS, pV = self.get_primary_eisv()
-        primary_eisv_source = (
-            "behavioral"
-            if self._behavioral_state.confidence >= 0.3
-            else "ode_fallback"
-        )
         metrics = {
             'E': pE,
             'I': pI,

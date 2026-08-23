@@ -684,13 +684,36 @@ def _normalize(
         raise RuntimeObservationError("missing or invalid 'slot_hash'")
 
     observed_at = _parse_observed_at(payload.get("observed_at"))
+    from src.model_harness_provenance import build_runtime_provenance_from_values
+
+    runtime_provenance = build_runtime_provenance_from_values(
+        model_identifier=payload.get("model"),
+        model_provider=payload.get("model_provider"),
+        model_source=(
+            str(payload.get("model_source") or "harness_reported")
+            if payload.get("model")
+            else "unavailable"
+        ),
+        model_exact=bool(payload.get("model")),
+        model_channel="host_hook_payload",
+        harness_type=host_family,
+        harness_type_source="harness_reported",
+        harness_version=payload.get("harness_version"),
+        harness_version_source=(
+            "harness_reported" if payload.get("harness_version") else "unavailable"
+        ),
+        adapter_type="unitares-governance-plugin",
+        adapter_version=payload.get("plugin_version"),
+        adapter_source="harness_reported",
+    )
     normalized: dict[str, Any] = {
         "schema_version": 1,
         "observation_kind": kind,
         "host_family": host_family,
         "execution_mode": execution_mode,
         "execution_mode_source": execution_mode_source,
-        "model": str(payload.get("model") or "").strip()[:80],
+        "model": runtime_provenance["model"]["identifier"] or "",
+        "runtime_provenance": runtime_provenance,
         "slot_hash": slot_hash,
         "observed_at": observed_at.isoformat(),
         "received_at": datetime.now(timezone.utc).isoformat(),
