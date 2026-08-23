@@ -1722,12 +1722,24 @@ def check_resident_checkin_stale(db_url: str) -> CheckResult:
         "    AND a.label NOT ILIKE 'claude%' AND a.label NOT ILIKE 'codex%'"
         "    AND s.recorded_at > now() - interval '7 days'), "
         "stats AS ("
+        # ⛔Aggregate over ALL rows; restrict only the percentiles to non-null
+        # gaps. `lag()` leaves each label's FIRST row with gap IS NULL, so the
+        # old `WHERE gap IS NOT NULL` on the whole CTE dropped it from every
+        # aggregate — count(*), the day count, and (once added) min(). The span
+        # measured was second-check-in→last, understating the real window by
+        # one gap and making the gate quietly stricter than documented.
+        # Measured 2026-08-23: Vigil 6.9598 as-coded vs 6.9811 true. Small
+        # today, wrong in principle, and it biases the one direction that
+        # matters — toward dropping a real resident from tracking, whose outage
+        # then goes undetected.
         "  SELECT label, count(*) AS n, max(recorded_at) AS last_seen,"
         "         percentile_cont(0.5) WITHIN GROUP "
-        "           (ORDER BY EXTRACT(epoch FROM gap)) AS med_gap,"
+        "           (ORDER BY EXTRACT(epoch FROM gap)) "
+        "           FILTER (WHERE gap IS NOT NULL) AS med_gap,"
         "         percentile_cont(0.95) WITHIN GROUP "
-        "           (ORDER BY EXTRACT(epoch FROM gap)) AS p95_gap"
-        "  FROM gaps WHERE gap IS NOT NULL"
+        "           (ORDER BY EXTRACT(epoch FROM gap)) "
+        "           FILTER (WHERE gap IS NOT NULL) AS p95_gap"
+        "  FROM gaps"
         "  GROUP BY label"
         f"  HAVING count(*) >= {RESIDENT_MIN_CHECKINS}"
         "     AND count(DISTINCT (recorded_at AT TIME ZONE 'UTC')::date) "
