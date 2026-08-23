@@ -44,6 +44,8 @@ including that negative result.
 [![Evidence](https://img.shields.io/badge/evidence-check_it-f5a623?style=for-the-badge&labelColor=0f171f)](#evidence-and-limits)
 [![Docs](https://img.shields.io/badge/docs-read-7d8f97?style=for-the-badge&labelColor=0f171f)](docs/README.md)
 
+*The DOI above identifies a public preprint, not peer-reviewed validation.*
+
 </div>
 
 ---
@@ -325,6 +327,8 @@ quickstart does not require them.
 
 Kenny Wang ([ORCID 0009-0006-7544-2374](https://orcid.org/0009-0006-7544-2374)),
 CIRWEL Systems. See [`CITATION.cff`](CITATION.cff) for the versioned citation.
+The DOI below identifies a public preprint, not peer-reviewed validation — see
+[Evidence and limits](#evidence-and-limits).
 
 ```bibtex
 @misc{wang2026unitares,
