@@ -88,11 +88,15 @@ explains. Corpora that might one day answer the question better than organic
 telemetry are recorded under
 [Candidate corpora](#candidate-corpora--not-yet-evaluated) — recorded, not run.
 
-The broader inference-status correction is recorded in
+The initial five-claim correction is recorded in
 [`ontology/falsification-inference-containment-2026-08-22.md`](ontology/falsification-inference-containment-2026-08-22.md).
+The systemic audit of all 45 tested-claim rows and the recurring-read protocol
+is
+[`ontology/falsification-design-system-audit-2026-08-23.md`](ontology/falsification-design-system-audit-2026-08-23.md).
 In particular, an invalid or endogenous design is `UNIDENTIFIED` or
-`WITHDRAWN`; it is never promoted to `REFUTED` because the observed direction
-was negative.
+`WITHDRAWN`; an underpowered non-detection is `INCONCLUSIVE`; and source, path,
+formula, documentation, event, and snapshot findings are not promoted to
+`REFUTED` because their wording points in a negative direction.
 
 **Current citable read:** the frozen 2026-08-09 trusted-anchor matrix has
 223–227 outcomes, 53 bad rows grouped into 28–29 prior-state permutation blocks
@@ -110,7 +114,12 @@ concealment measurement.
 
 The 2026-08-11 run repeated the already-documented frozen command solely to
 replace stale public wording. It is a dated descriptive snapshot, not the
-2026-12-01 preregistered confirmatory read and not a standing AUC bound.
+2026-12-01 preregistered decision read and not a standing AUC bound. After the
+frozen cutoff, two six-hour jobs also exposed live outcome discrimination or
+point estimates: 51 watchdog executions (42 completed) and 52 guard executions
+(43 completed). Both are paused. The December report must disclose those reads
+and cannot claim to be the only post-registration read or unqualified
+analysis-blind.
 
 Compact run provenance and all 12 overall rows are preserved in
 [`operations/eisv-ablation-frozen-2026-08-09.md`](operations/eisv-ablation-frozen-2026-08-09.md).

@@ -1,8 +1,11 @@
 # Falsification inference containment — 2026-08-22
 
-**Status:** authoritative correction for the five EISV falsification claims
-listed below. Historical reports remain preserved as provenance; their former
-categorical interpretations do not remain live conclusions.
+**Status:** initial correction for the five EISV falsification claims listed
+below. The systemic follow-up in
+[`falsification-design-system-audit-2026-08-23.md`](falsification-design-system-audit-2026-08-23.md)
+audits all 45 ledger rows and the repeated-read protocol. Historical reports
+remain preserved as provenance; their former categorical interpretations do not
+remain live conclusions.
 
 This correction separates four questions that earlier surfaces conflated:
 
@@ -21,16 +24,20 @@ invalid or endogenous design does not become a negative result. It becomes
 |---|---|
 | `EARNED` | A pre-registered test of the stated estimand passed its predeclared standard. |
 | `REFUTED` | A pre-registered, adequately powered test of the stated estimand failed its predeclared standard. |
-| `NARROWLY REFUTED` | A bounded mechanism or direct path was excluded; broader causal or dynamic claims remain open. |
+| `BENCHMARK FAIL` | An exact registered estimator or mechanism missed its benchmark; transfer to a deployed capability requires separate identification. |
+| `IMPLEMENTATION MISMATCH` | Source, configuration, or algebra contradicts an exact description of the deployed mechanism. |
+| `PATH BOUND` | Source or algebra excludes a named direct path; broader causal or dynamic claims remain open. |
+| `DEPLOYMENT SNAPSHOT` | A dated census describes the deployment without supplying independent trials or a general result. |
 | `INCONCLUSIVE` | A usable test ran but its interval, support, or decision standard did not resolve the claim. |
 | `UNIDENTIFIED` | The design cannot estimate the target claim, usually because predictor and outcome are endogenous, the counterfactual is absent, or the unit of analysis is wrong. |
 | `WITHDRAWN` | A previously reported inference was invalidated by a scope, provenance, dependence, or instrument defect. Historical numbers may remain only with that status. |
 | `UNTESTED AS DEPLOYED` | A test returned a negative, but its instrument had no usable power against the deployed claim. |
 | `LABEL-BLOCKED` | The external-label supply cannot yet support the registered test. |
 
-`REFUTED BY CONSTRUCTION` remains available only for a direct proof that the
-exact claim is impossible in the deployed code. Endogeneity, a missing direct
-edge, or absence of observed threshold crossings is not such a proof.
+`REFUTED BY CONSTRUCTION` is retired as an active scientific status. Direct
+source proofs now use `IMPLEMENTATION MISMATCH` or `PATH BOUND`. Endogeneity, a
+missing direct edge, or absence of observed threshold crossings is not a
+refutation.
 
 ## Reclassified claims
 
@@ -84,7 +91,7 @@ about EISV.
 **Former claim:** the guide self-loop cannot flip an agent across `E >= 0.6` and
 hold it there, refuted with adequate power.
 
-**Status:** `NARROWLY REFUTED` for a direct same-check-in path;
+**Status:** `PATH BOUND` for a direct same-check-in path;
 `UNIDENTIFIED` for the recursive dynamic counterfactual.
 
 The source guard correctly proves that the verdict classifier is handed the ODE
@@ -132,7 +139,7 @@ the 2026-06-22 result does not forbid it.
 **Former claim:** individuality-v2 Leg C refuted the usefulness of the deployed
 per-agent EMA reference.
 
-**Status:** `NARROWLY REFUTED` for the frozen cold-start reconstruction benchmark;
+**Status:** `BENCHMARK FAIL` for the frozen cold-start reconstruction benchmark;
 `UNIDENTIFIED` for the already-warm deployed EMA.
 
 Leg C pre-registered a useful bounded comparison and the tested reconstruction
@@ -172,5 +179,6 @@ the warmed-reference claim.
 Downstream documents, paper ledgers, scheduled reports, and shared-memory
 entries must link to this correction or carry the corrected status inline.
 Historical language may be quoted only as a withdrawn claim. A downstream
-summary may not collapse `WITHDRAWN`, `UNIDENTIFIED`, `INCONCLUSIVE`, or
-`NARROWLY REFUTED` into `REFUTED` or “negative result.”
+summary may not collapse `WITHDRAWN`, `UNIDENTIFIED`, `INCONCLUSIVE`,
+`BENCHMARK FAIL`, `IMPLEMENTATION MISMATCH`, `PATH BOUND`, or
+`DEPLOYMENT SNAPSHOT` into `REFUTED` or “negative result.”

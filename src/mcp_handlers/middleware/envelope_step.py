@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional
 from mcp.types import TextContent
 
 from src.logging_utils import get_logger
+from src.mcp_handlers.response_formatter import normalize_discovery_list
 
 logger = get_logger(__name__)
 
@@ -272,9 +273,7 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
     rather than a bare list, which the previous isinstance check discarded.
     """
     payload = _harvest_payload(payload)
-    candidates = payload.get("relevant_discoveries")
-    if isinstance(candidates, dict):
-        candidates = candidates.get("discoveries")
+    candidates = normalize_discovery_list(payload.get("relevant_discoveries"))
     if not candidates:
         candidates = (
             payload.get("relevant_prior_work")

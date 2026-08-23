@@ -4,8 +4,6 @@ from scripts.diagnostics.dogfood_ablation_guard import (
     extract_dogfood_response,
     identity_neutrality_alert,
     inventory_lane_alert,
-    matrix_exclusion_alert,
-    matrix_grouped_lane_alert,
     parse_inventory_counts,
     render_alert_report,
 )
@@ -86,30 +84,7 @@ eprocess_eligible_substrate: 285
     )
 
 
-def test_matrix_guard_requires_default_beam_exclusion_header():
-    assert matrix_exclusion_alert("Excluded harness lanes: `beam`\n") is None
-    assert matrix_exclusion_alert("# EISV Ablation Matrix\n") == (
-        "ablation matrix default no longer excludes BEAM harness lane"
-    )
-
-
-def test_grouped_matrix_guard_requires_visible_beam_lane():
-    grouped = """# EISV Ablation Matrix
-Harness lane mode: grouped
-
-| Lane | Scope | Window days | Lead min | Trusted | Bad | Prior state | Prior risk | Baseline AUC | Baseline Brier | Best EISV/prior model | AUC delta | AUC delta 95% CI | Brier improvement | Brier improvement 95% CI | Brier perm p | Beats both? | Conclusion |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| beam | task | 90 | 30 | 1200 | 80 | 0 | 0 | - | - | - | - | - | - | - | - | no | INCONCLUSIVE |
-| substrate | task | 90 | 30 | 400 | 5 | 300 | 300 | 0.9 | 0.01 | prior_risk | 0.0 | - | 0.0 | - | - | no | SKEPTICAL |
-"""
-
-    assert matrix_grouped_lane_alert(grouped) is None
-    assert matrix_grouped_lane_alert(grouped.replace("| beam |", "| substrate |", 1)) == (
-        "ablation matrix grouped mode no longer exposes BEAM harness lane"
-    )
-
-
-def test_collect_alerts_runs_grouped_matrix_for_beam_visibility(monkeypatch, tmp_path):
+def test_collect_alerts_checks_lane_contract_without_reading_live_matrix(monkeypatch, tmp_path):
     calls = []
     dogfood_output_dir = tmp_path / "dogfood-output"
     dogfood_output_dir.mkdir()
@@ -129,9 +104,9 @@ No actionable friction found after the query and edge-case probe.
         calls.append((script, tuple(args)))
         if script.endswith("outcome_inventory.py"):
             return "eprocess_eligible: 2\neprocess_eligible_beam: 1\neprocess_eligible_substrate: 1\nstrict_bad: 0\n"
-        if "--group-by-harness-lane" in args:
-            return "Harness lane mode: grouped\n| Lane | Scope | Beats both? |\n|---|---|---|\n| beam | task | no |\n"
-        return "Excluded harness lanes: `beam`\n"
+        assert script == "-m"
+        assert args[0] == "pytest"
+        return "4 passed\n"
 
     monkeypatch.setattr(
         "scripts.diagnostics.dogfood_ablation_guard.call_tool_no_session",
@@ -151,11 +126,9 @@ No actionable friction found after the query and edge-case probe.
     )
 
     assert alerts == []
-    matrix_calls = [args for script, args in calls if script.endswith("eisv_ablation_matrix.py")]
-    assert any("--group-by-harness-lane" in args for args in matrix_calls)
-    assert all(("--anchor-scope", "all") in zip(args, args[1:]) for args in matrix_calls)
-    assert all(("--selective-null-resamples", "0") == args[-2:] for args in matrix_calls)
-    assert "matrix_grouped_has_beam=True" in evidence
+    assert not any(script.endswith("eisv_ablation_matrix.py") for script, _ in calls)
+    assert any(script == "-m" and args[0] == "pytest" for script, args in calls)
+    assert "ablation_lane_contract_tests=passed; live_outcomes_read=false" in evidence
 
 
 def test_render_alert_report_is_silent_when_all_guards_pass():
