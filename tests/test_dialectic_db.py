@@ -1122,10 +1122,6 @@ class TestGetStats:
             def __getitem__(self, key):
                 return dict.__getitem__(self, key)
 
-        status_rows = [
-            DictRecord({"status": "active", "count": 5}),
-            DictRecord({"status": "resolved", "count": 20}),
-        ]
         type_rows = [
             DictRecord({"session_type": "recovery", "count": 15}),
             DictRecord({"session_type": None, "count": 10}),
@@ -1133,12 +1129,15 @@ class TestGetStats:
         msg_count_row = DictRecord({"count": 100})
         sess_count_row = DictRecord({"count": 25})
 
-        conn.fetch = AsyncMock(side_effect=[status_rows, type_rows])
+        # One fetch only: the status breakdown was removed 2026-08-22.
+        conn.fetch = AsyncMock(side_effect=[type_rows])
         conn.fetchrow = AsyncMock(side_effect=[msg_count_row, sess_count_row])
 
         result = await instance.get_stats()
 
-        assert result["by_status"] == {"active": 5, "resolved": 20}
+        # ⛔No `by_status`: a per-status count is not outcome data (#1689).
+        # Removed 2026-08-22; use get_outcome_breakdown() for quality reads.
+        assert "by_status" not in result
         assert result["by_type"] == {"recovery": 15, "unknown": 10}
         assert result["total_messages"] == 100
         assert result["total_sessions"] == 25
@@ -1159,7 +1158,7 @@ class TestGetStats:
 
         result = await instance.get_stats()
 
-        assert result["by_status"] == {}
+        assert "by_status" not in result
         assert result["by_type"] == {}
         assert result["total_messages"] == 0
         assert result["total_sessions"] == 0
