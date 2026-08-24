@@ -33,19 +33,53 @@ def rest_with_setpoint(sigma, steps=4000, dt=0.05):
     return s
 
 
-eq = compute_equilibrium(P, TH, complexity=0.5)
-print(f"current equilibrium: E={eq.E:.3f} I={eq.I:.3f} S={eq.S:.3f}\n")
-print(f"{'class':<12}{'healthyS':>9}{'sigma':>8}{'S_rest':>8}{'manif@rest':>12}"
-      f"{'(today)':>9}{'clears .40?':>12}")
-for cls, hp in HEALTHY_OPERATING_POINT_BY_CLASS.items():
-    dmax = get_delta_norm_max(cls).value
-    today = manifold(eq.E, eq.I, eq.S, hp, dmax)
-    sigma = hp[2] - eq.S                      # shift S-rest onto measured healthy S
-    r = rest_with_setpoint(sigma)
-    m = manifold(r.E, r.I, r.S, hp, dmax)
-    print(f"{cls:<12}{hp[2]:>9.3f}{sigma:>8.3f}{r.S:>8.3f}{m:>12.3f}{today:>9.3f}"
-          f"{('yes' if m>=CRIT else 'NO'):>12}")
+def build_report():
+    """Rows plus a residual reading DERIVED from them.
 
-# What full E/I/S alignment would give (trivially manifold=1.0) — the ceiling.
-print("\nResidual after S-only fix is dominated by E* (0.805 vs healthy ~0.73).")
-print("Full attractor alignment (E,I,S) -> manifold-at-rest = 1.0 by construction.")
+    The closing lines used to be two fixed sentences: "Residual after S-only fix
+    is dominated by E* (0.805 vs healthy ~0.73)" asserted two numbers this
+    script computes directly above, so re-tuning the parameters would leave the
+    printout confidently quoting the old equilibrium. And which axis actually
+    dominates the residual is a per-class fact -- it was stated once, for all
+    classes, from whichever run happened to be open at the time.
+    """
+    eq = compute_equilibrium(P, TH, complexity=0.5)
+    lines = [f"current equilibrium: E={eq.E:.3f} I={eq.I:.3f} S={eq.S:.3f}\n",
+             f"{'class':<12}{'healthyS':>9}{'sigma':>8}{'S_rest':>8}{'manif@rest':>12}"
+             f"{'(today)':>9}{'clears .40?':>12}"]
+
+    residual_by_class = {}
+    for cls, hp in HEALTHY_OPERATING_POINT_BY_CLASS.items():
+        dmax = get_delta_norm_max(cls).value
+        today = manifold(eq.E, eq.I, eq.S, hp, dmax)
+        sigma = hp[2] - eq.S                  # shift S-rest onto measured healthy S
+        r = rest_with_setpoint(sigma)
+        m = manifold(r.E, r.I, r.S, hp, dmax)
+        lines.append(f"{cls:<12}{hp[2]:>9.3f}{sigma:>8.3f}{r.S:>8.3f}{m:>12.3f}"
+                     f"{today:>9.3f}{('yes' if m >= CRIT else 'NO'):>12}")
+        # Per-axis gap that survives the S-only fix, at the post-fix rest point.
+        residual_by_class[cls] = {
+            "E": abs(r.E - hp[0]), "I": abs(r.I - hp[1]), "S": abs(r.S - hp[2]),
+        }
+
+    lines.append("\nResidual after the S-only fix, by axis (post-fix rest vs healthy):")
+    for cls, gaps in residual_by_class.items():
+        axis, gap = max(gaps.items(), key=lambda kv: kv[1])
+        detail = "  ".join(f"{a}={g:.3f}" for a, g in gaps.items())
+        lines.append(f"  {cls:<20}{detail}   -> dominated by {axis} ({gap:.3f})")
+
+    lines.append("\nAligning E, I and S all at once puts the rest point ON the healthy "
+                 "operating point,\nso manifold-at-rest is 1.0 by construction. That is "
+                 "the definition of the readout,\nnot a result: it bounds what S alone "
+                 "can close, and establishes nothing about\nwhether moving the attractor "
+                 "is safe.")
+    return "\n".join(lines)
+
+
+def main():
+    print(build_report())
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

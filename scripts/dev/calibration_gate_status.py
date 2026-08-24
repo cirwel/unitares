@@ -43,6 +43,9 @@ from src.calibration import (  # noqa: E402
     _OVERCONFIDENCE_GATE,
 )
 
+# How close to the min-samples floor counts as "near" it, in either direction.
+NEAR_FLOOR_MARGIN = 5
+
 
 def _load_checker() -> tuple[CalibrationChecker, str]:
     """Construct a checker and load the freshest state available.
@@ -93,11 +96,34 @@ def build_report(min_samples: int) -> dict:
         if populated and gap > _OVERCONFIDENCE_GATE:
             if worst_blocker is None or gap > worst_blocker[1]:
                 worst_blocker = (bin_key, gap)
-        # "Near floor" = populated but within 5 samples of dropping below the
-        # gate's evaluation threshold (or just over it). If such a blocking bin
-        # depopulates, a green appears without any real improvement.
-        if gates and m.count < min_samples + 5:
-            near_floor.append({"bin": bin_key, "count": m.count})
+        # "Near floor" = a bin whose overconfidence WOULD gate, sitting close
+        # enough to the evaluation threshold that its sample count decides
+        # whether the gate sees it at all.
+        #
+        # This used to require `gates`, which is False for every bin whenever
+        # the flag is green -- so on a GREEN gate the watch was always empty and
+        # always printed "no blocking bin is near the sample floor". The check
+        # the docstring promises ("is a green REAL?") could only fire while the
+        # gate was RED, i.e. in the one state where nobody needs it. The exact
+        # artifact it exists to catch -- a bin that dropped BELOW min_samples,
+        # taking its overconfidence out of the gate's view and turning the flag
+        # green -- was invisible to it, because such a bin is unpopulated and so
+        # `gates` is False.
+        #
+        # Overconfidence is now what qualifies a bin, and population is what is
+        # reported about it, so the watch is live in both gate states.
+        would_gate = gap > _OVERCONFIDENCE_GATE or (m.bin_range[0] >= 0.8 and m.accuracy < 0.7)
+        if would_gate and m.count < min_samples + NEAR_FLOOR_MARGIN:
+            near_floor.append({
+                "bin": bin_key,
+                "count": m.count,
+                "populated": populated,
+                "why": ("counted by the gate, but {} more samples from dropping out "
+                        "of it".format(min_samples + NEAR_FLOOR_MARGIN - m.count))
+                if populated else
+                ("BELOW the {}-sample floor, so its overconfidence is NOT counted "
+                 "by the gate".format(min_samples)),
+            })
 
     if worst_blocker is None:
         distance = {"green": True, "note": "no populated bin overconfident by > "
@@ -174,13 +200,19 @@ def print_report(r: dict) -> None:
     print()
 
     if r["cheap_green_watch"]:
-        print("Cheap-green watch (a green that appears because one of these")
-        print("blocking bins depopulates is a measurement artifact, not calibration):")
+        if r["calibrated"]:
+            print("Cheap-green watch — THE GREEN ABOVE MAY BE AN ARTIFACT. These bins")
+            print("are overconfident enough to gate, and their sample counts are what")
+            print("decides whether the gate sees them:")
+        else:
+            print("Cheap-green watch (a green that appears because one of these")
+            print("bins depopulates would be a measurement artifact, not calibration):")
         for n in r["cheap_green_watch"]:
-            print(f"  - bin {n['bin']}: only {n['count']} samples (near the "
-                  f"{r['min_samples_per_bin']}-sample floor)")
+            print(f"  - bin {n['bin']}: {n['count']} samples — {n['why']}")
     else:
-        print("Cheap-green watch: no blocking bin is near the sample floor.")
+        print(f"Cheap-green watch: no overconfident bin is within "
+              f"{NEAR_FLOOR_MARGIN} samples of the "
+              f"{r['min_samples_per_bin']}-sample floor.")
 
 
 def main() -> None:

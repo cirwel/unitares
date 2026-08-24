@@ -14,10 +14,19 @@ def test_build_separates_product_landing_from_glossary(tmp_path):
     landing = (tmp_path / "index.html").read_text(encoding="utf-8")
     glossary = (tmp_path / "glossary.html").read_text(encoding="utf-8")
     server_version = (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    landing_text = " ".join(landing.split())
 
-    assert "Runtime governance for long-lived AI agents" in landing
-    assert "External adoption remains unvalidated" in landing
-    assert "selection-aware null" in landing
+    assert "Runtime governance for long-lived AI agents" in landing_text
+    assert "External adoption remains unvalidated" in landing_text
+    assert "did not establish predictive lift" in landing_text
+    assert "read-specific power" in landing_text
+    assert "inconclusive, not a demonstrated negative" in landing_text
+    assert "its claims, evidence, and behavior drift apart" in landing_text
+    assert "Claims and evidence" in landing
+    assert 'class="hero-actions"' in landing
+    assert 'href="#try-the-released-surfaces"' in landing
+    assert 'href="#evaluate-the-project"' in landing
+    assert "github.com/cirwel/unitares/discussions" in landing
     assert "https://pypi.org/project/unitares-sdk/" in landing
     assert f"releases/tag/v{server_version}" in landing
     assert f"ghcr.io/cirwel/unitares:v{server_version}" in landing
