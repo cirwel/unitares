@@ -635,7 +635,24 @@ def build_identity_response_context(
     model_context = runtime_context["model"]
     harness_context = runtime_context["harness"]
     adapter_context = runtime_context.get("adapter") or {}
-    runtime_provenance_informative = any(
+    # "not_exposed" means the caller never sent a value -- genuinely nothing
+    # to show. Any other _safe_identifier reason (redacted_sensitive_value,
+    # value_too_long, invalid_identifier_format, ...) means something WAS
+    # sent and got rejected; that reason is itself useful diagnostic
+    # information and must not be collapsed away as if nothing happened.
+    rejection_reasons = (
+        model_context.get("missing_reason"),
+        model_context.get("provider_missing_reason"),
+        harness_context.get("missing_reason"),
+        harness_context.get("version_missing_reason"),
+        adapter_context.get("missing_reason"),
+        adapter_context.get("version_missing_reason"),
+    )
+    has_rejected_value = any(
+        reason is not None and reason != "not_exposed"
+        for reason in rejection_reasons
+    )
+    runtime_provenance_informative = has_rejected_value or any(
         [
             model_context.get("identifier"),
             model_context.get("provider"),
