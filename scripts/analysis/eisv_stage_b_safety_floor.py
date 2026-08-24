@@ -61,10 +61,62 @@ def pct(xs, p):
     return xs[f] if f == len(xs) - 1 else xs[f] + (xs[f + 1] - xs[f]) * (k - f)
 
 
-# The threshold is chosen on one half of the safe check-ins and the
-# false-positive rate is measured on the OTHER half. Splitting is the whole
-# point -- see `separation_report`.
+# Below this many safe check-ins the p99 is set by the top one or two values, so
+# the held-out noise check is not worth printing at all.
+#
+# This comment used to say "the threshold is chosen on one half ... splitting is
+# the whole point", which is the opposite of what the module does: every PRINTED
+# rate uses the full-sample `pct(safe, quantile)`, and the calibration half feeds
+# only the parenthetical noise check. Left as it was, it invited a future editor
+# to promote that half-sample threshold into the verdict on the strength of a
+# comment.
 MIN_SAFE_FOR_SPLIT = 100
+
+# Split-conformal coverage needs enough calibration points for the quantile to
+# exist at all: m >= 1/(1-q) - 1, i.e. 99 for q=0.99, so n >= 198.
+CONFORMAL_MIN_CALIB = lambda q: math.ceil(1.0 / (1.0 - q) - 1.0)  # noqa: E731
+
+
+def expected_holdout_rate(n_calib: int, quantile: float) -> float:
+    """Split-conformal exceedance centre: (m - q(m-1)) / (m+1).
+
+    NOT `1 - quantile`. An earlier version of the report asserted that centre
+    "because the halves are exchangeable" -- exchangeability gives this formula,
+    which only approaches 1-q for large m. At MIN_SAFE_FOR_SPLIT the calibration
+    half is m=50 and the true centre is 2.9%, nearly 3x the claimed 1.0%; worse,
+    the holdout is then 50 points, so the rate lives on a 2% grid and CANNOT
+    take the value 1.0% under any draw. Simulation over 400 seeds: 2.77% at
+    n=100, 1.91% at n=198, 1.49% at n=400, 1.11% at n=2000.
+    """
+    m = max(1, n_calib)
+    return (m - quantile * (m - 1)) / (m + 1)
+
+
+def clopper_pearson_upper(k: int, n: int, alpha: float = 0.05) -> float | None:
+    """One-sided exact upper bound on a binomial rate. Stdlib bisection.
+
+    A rate off a handful of trials is not the number it prints. 1-of-5 renders
+    as "20.0%" while its exact one-sided 95% upper bound is about 65% -- so the
+    interval, not the point, is what a reader needs before treating it as a
+    regression bound. Reported, never used to suppress: choosing a minimum n
+    would be a deciding standard, and the operator's.
+    """
+    if n < 1 or not (0 <= k <= n):
+        return None
+    if k == n:
+        return 1.0
+
+    def cdf(p):  # P(X <= k | n, p)
+        return sum(math.comb(n, i) * p ** i * (1 - p) ** (n - i) for i in range(k + 1))
+
+    lo, hi = k / n, 1.0
+    for _ in range(200):
+        mid = (lo + hi) / 2
+        if cdf(mid) > alpha:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2
 
 
 def split_sample(xs, seed=0):
@@ -117,11 +169,22 @@ def separation_report(safe, non_safe, seed=0, quantile=0.99, threshold=None):
 
     if threshold is not None:
         thr = float(threshold)
-        fp = sum(1 for z in safe if z > thr) / len(safe)
+        fp_k = sum(1 for z in safe if z > thr)
+        fp = fp_k / len(safe)
+        upper = clopper_pearson_upper(fp_k, len(safe))
         out.append(f"\nThreshold = {thr:.2f} (supplied, not derived from this sample)")
-        out.append(f"  false-positive rate among currently-safe (n={len(safe)}): {fp:.1%}")
+        # Counts, not just the rate. A rate off a handful of trials is not the
+        # number it prints, and the rendered percentage hides the denominator
+        # the reader needs to judge it.
+        out.append(f"  false-positive rate among currently-safe: {fp:.1%} "
+                   f"({fp_k}/{len(safe)}); one-sided 95% upper bound "
+                   f"{upper:.1%}" if upper is not None else
+                   f"  false-positive rate among currently-safe: {fp:.1%} "
+                   f"({fp_k}/{len(safe)})")
         out.append("  This IS a regression bound: the threshold did not come from the "
                    "safe distribution, so the rate is free to come out anywhere.")
+        out.append("  Read the upper bound, not the point estimate, before treating it "
+                   "as one.")
         measured_fp = fp
     else:
         thr = pct(safe, quantile)
@@ -141,11 +204,20 @@ def separation_report(safe, non_safe, seed=0, quantile=0.99, threshold=None):
                        "nothing from the separation below.")
         else:
             calib, holdout = split_sample(safe, seed=seed)
-            held = sum(1 for z in holdout if z > pct(calib, quantile)) / len(holdout)
-            out.append(f"  (held-out estimate on a disjoint half: {held:.1%} — a noise "
-                       f"check on the quantile itself,\n   centred on "
-                       f"{definitional:.1%} because the halves are exchangeable. Still "
-                       "not a regression bound.)")
+            held_k = sum(1 for z in holdout if z > pct(calib, quantile))
+            held = held_k / len(holdout)
+            centre = expected_holdout_rate(len(calib), quantile)
+            note = ""
+            if len(calib) < CONFORMAL_MIN_CALIB(quantile):
+                note = (f"\n   NB m={len(calib)} < {CONFORMAL_MIN_CALIB(quantile)}: no "
+                        f"p{quantile * 100:g} threshold with that coverage exists at "
+                        f"this calibration size,\n   and the holdout rate lives on a "
+                        f"{1 / len(holdout):.1%} grid, so it cannot even take the "
+                        "centre's value.")
+            out.append(f"  (held-out estimate on a disjoint half: {held:.1%} "
+                       f"({held_k}/{len(holdout)}) — a noise check on the quantile\n"
+                       f"   itself, centred on {centre:.1%} for a calibration half of "
+                       f"m={len(calib)}. Still not a regression bound.{note})")
         measured_fp = None
 
     if not non_safe:
@@ -153,24 +225,41 @@ def separation_report(safe, non_safe, seed=0, quantile=0.99, threshold=None):
                    "(this is not a pass)")
         return out
 
-    tp = sum(1 for z in non_safe if z > thr) / len(non_safe)
-    out.append(f"  flag rate among currently non-safe (n={len(non_safe)}): {tp:.1%}")
+    tp_k = sum(1 for z in non_safe if z > thr)
+    tp = tp_k / len(non_safe)
+    out.append(f"  flag rate among currently non-safe: {tp:.1%} "
+               f"({tp_k}/{len(non_safe)})")
+
+    # The thin-sample branch carried the strongest disclaimer in this function
+    # ("Read nothing from the separation below") and then fell through to print
+    # SEPARATES anyway -- the only "cannot support a reading" state that still
+    # emitted a verdict token. The empty-safe and no-non-safe paths both return
+    # before this point; this one now matches them.
+    if threshold is None and len(safe) < MIN_SAFE_FOR_SPLIT:
+        out.append("  → separation NOT ASSESSED: the threshold is set by the top one "
+                   f"or two of {len(safe)} values.")
+        return out
 
     # Compare against a rate that was actually measured. The old form floored fp
     # at 0.01 -- the same constant the identity produced -- so the comparison
     # never saw a real false-positive rate at all.
     ref = measured_fp if measured_fp is not None else (1.0 - quantile)
     ref_kind = "measured" if measured_fp is not None else "definitional"
+    # The multiple is computed on unrounded rates while the rates render at
+    # {:.1%}, so a printed "0.1%" and "0.3%" could carry a "6.0x" that no number
+    # on the page reproduces. The counts above now make the multiple checkable;
+    # the ratio is also stated as what it is -- a ratio of two rates, one of
+    # which may rest on a single observation.
     if ref <= 0.0:
         out.append(f"  → separation ratio UNDEFINED (false-positive rate is 0); raw "
                    f"rates: {tp:.1%} flagged vs 0 false positives.")
     elif tp > 3 * ref:
         out.append(f"  → SEPARATES at this threshold: {tp / ref:.1f}x the {ref_kind} "
-                   f"false-positive rate ({ref:.1%}). Says nothing about whether the "
-                   "residual predicts outcomes.")
+                   f"false-positive rate (exactly {tp:.4%} / {ref:.4%}). Bounds nothing "
+                   "about whether the residual predicts outcomes.")
     else:
         out.append(f"  → WEAK: {tp / ref:.1f}x the {ref_kind} false-positive rate "
-                   f"({ref:.1%}); want >3x.")
+                   f"(exactly {tp:.4%} / {ref:.4%}); want >3x.")
     return out
 
 
