@@ -13,7 +13,7 @@ from ..utils import success_response, error_response, require_registered_agent
 from ..error_helpers import agent_not_found_error, system_error as system_error_helper
 from ..support.coerce import resolve_agent_uuid
 from .helpers import _resume_with_persistence, _invalidate_agent_cache  # noqa: F401
-from .recovery_policy import authoritative_risk_score, recovery_policy_context
+from .recovery_policy import read_risk_authority, recovery_policy_context, render_risk
 from src import agent_storage
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
@@ -74,7 +74,8 @@ async def handle_direct_resume_if_safe(arguments: Dict[str, Any]) -> Sequence[Te
         metrics = monitor.get_metrics()
 
         coherence = float(monitor.state.coherence)
-        risk_score = authoritative_risk_score(metrics, default=0.5)
+        risk_authority = read_risk_authority(metrics)
+        risk_score = risk_authority.risk
         void_active = bool(monitor.state.void_active)
         status = meta.status
 
@@ -87,7 +88,11 @@ async def handle_direct_resume_if_safe(arguments: Dict[str, Any]) -> Sequence[Te
 
     # Safety checks
     safety_checks = {
-        "risk_ok": risk_score < 0.60,
+        # Unmeasured keeps its historical pass (no check-in has ever landed);
+        # a lost reading fails closed rather than resuming on a stand-in.
+        "risk_ok": risk_authority.is_unmeasured or (
+            risk_score is not None and risk_score < 0.60
+        ),
         "no_void": not void_active,
         "status_ok": status in ["paused", "waiting_input", "moderate"]
     }
@@ -103,7 +108,7 @@ async def handle_direct_resume_if_safe(arguments: Dict[str, Any]) -> Sequence[Te
         failed_checks = [k for k, v in safety_checks.items() if not v]
         return [error_response(
             f"Not safe to resume. Failed checks: {failed_checks}. "
-            f"Metrics: coherence={coherence:.3f}, risk={risk_score:.3f}, "
+            f"Metrics: coherence={coherence:.3f}, risk={render_risk(risk_score)}, "
             f"void_active={void_active}, status={status}. "
             f"Check get_governance_metrics and reflect on what needs to change.",
             context={"recovery_policy": policy},

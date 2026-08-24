@@ -31,9 +31,10 @@ from .helpers import (
     _resume_with_persistence,
 )
 from .recovery_policy import (
-    authoritative_risk_score,
     compute_recovery_margin,
+    read_risk_authority,
     recovery_policy_context,
+    render_risk,
 )
 
 logger = get_logger(__name__)
@@ -318,7 +319,8 @@ async def handle_self_recovery_review(arguments: Dict[str, Any]) -> Sequence[Tex
     metrics = monitor.get_metrics()
 
     coherence = safe_float(monitor.state.coherence, 0.5)
-    risk_score = authoritative_risk_score(metrics, default=0.5)
+    risk_authority = read_risk_authority(metrics)
+    risk_score = risk_authority.risk
     void_active = bool(monitor.state.void_active)
     void_value = safe_float(monitor.state.V, 0.0)
     status = meta.status
@@ -370,7 +372,13 @@ async def handle_self_recovery_review(arguments: Dict[str, Any]) -> Sequence[Tex
     # first-observation Phi circuit-breaker path.  DB failures, legacy rows, and
     # any missing/contradictory provenance fail closed.  Quick recovery remains
     # unchanged and strict.
-    baseline_risk_ok = risk_score < 0.65
+    # An agent that never checked in is not risk-gated here: a paused identity
+    # cannot author a state row, so gating it on a risk it never produced is a
+    # trap it can never climb out of.  A LOST reading is the opposite case --
+    # it did measure, and the pair is gone -- so that one fails closed.
+    baseline_risk_ok = risk_authority.is_unmeasured or (
+        risk_score is not None and risk_score < 0.65
+    )
     cold_start_recovery = None
     recovery_basis = "standard_metrics"
     if (
@@ -424,7 +432,7 @@ async def handle_self_recovery_review(arguments: Dict[str, Any]) -> Sequence[Tex
                 f"Metrics at reflection: coherence={coherence:.3f} "
                 f"({coherence_diagnostic['source']}/{coherence_diagnostic['role']}, "
                 "diagnostic-only), "
-                f"risk={risk_score:.3f}, void={void_value:.3f}\n\n"
+                f"risk={render_risk(risk_score)}, void={void_value:.3f}\n\n"
                 f"Recovery basis: {recovery_basis}"
             ),
             tags=[
@@ -506,7 +514,14 @@ async def handle_self_recovery_review(arguments: Dict[str, Any]) -> Sequence[Tex
 
         guidance = []
         if not safety_checks["risk_ok"]:
-            guidance.append(f"Risk is elevated ({risk_score:.3f}). What could you do differently to reduce risk?")
+            if risk_score is None:
+                guidance.append(
+                    "No resolved risk is available for this agent, so recovery "
+                    "cannot be authorized on it. Submit one check-in "
+                    "(sync_state) to produce a measured risk."
+                )
+            else:
+                guidance.append(f"Risk is elevated ({risk_score:.3f}). What could you do differently to reduce risk?")
         if not safety_checks["no_void"]:
             guidance.append("Void is active - there's accumulated E-I imbalance. This needs time to settle.")
 
