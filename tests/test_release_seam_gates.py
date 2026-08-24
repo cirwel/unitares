@@ -285,6 +285,35 @@ def test_blocks_a_release_when_the_sdk_moved_without_a_bump(repo: Repo):
     assert "cannot reach these changes" in result.stdout
 
 
+def test_a_readme_only_touch_does_not_block_the_sdk_series(repo: Repo):
+    """agents/sdk/README.md is the PyPI project page, but the server-tag
+    cross-reference line it carries updates on every server release
+    regardless of SDK code movement. That alone must not read as an
+    unbumped SDK change."""
+    _with_sdk(repo, "0.1.0")
+    repo.commit("chore(release): 1.1.0 (#99)", {
+        "agents/sdk/README.md": "pin: v1.1.0\n",
+        "VERSION": "1.1.0\n",
+    })
+    result = _run(repo.path, DRIFT)
+    assert result.returncode == 0
+    assert "level with its tag" in result.stdout
+
+
+def test_a_real_sdk_change_alongside_a_readme_touch_still_blocks(repo: Repo):
+    """The README exclusion must not shadow a genuine, concurrent SDK change."""
+    _with_sdk(repo, "0.1.0")
+    repo.commit("feat(sdk): new method (#10)", {
+        "agents/sdk/pyproject.toml": SDK_PYPROJECT.format(version="0.1.0"),
+        "agents/sdk/src/client.py": "def delegate(): ...\n",
+        "agents/sdk/README.md": "pin: v1.1.0\n",
+    })
+    repo.commit("chore(release): 1.1.0 (#99)", {"VERSION": "1.1.0\n"})
+    result = _run(repo.path, DRIFT)
+    assert result.returncode == 1
+    assert "unitares-sdk" in result.stdout
+
+
 def test_only_a_provably_forward_bump_clears_the_series(repo: Repo):
     """Equal, older, malformed, and unreadable all used to read as "bumped"."""
     for declared, why in [("0.1.0", "equal"), ("0.1", "equal under semver"),
