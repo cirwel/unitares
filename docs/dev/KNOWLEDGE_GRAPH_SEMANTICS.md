@@ -50,12 +50,18 @@ Search content has three retrieval tiers, surfaced in every search response as
 - `include_details=false` returns a digest: summary, tags, lifecycle status,
   severity, timestamps, supersession metadata, and a bounded details preview.
 - `knowledge(action="details", discovery_id=...)` opens one selected record.
-- `include_details=true` expands every result inline and can be large; use it
-  deliberately rather than as the normal follow-up to a search.
+- On the canonical `knowledge` tool, `include_details=true` expands every result
+  inline and can be large; use it deliberately rather than as the normal
+  follow-up to a search.
 
 The friendly `search_shared_memory` alias defaults to its compact experience
 envelope, keeps the first three digest rows under `memory_suggestions`, and omits
 the repeated canonical result set unless `response_mode="full"` is requested.
+Because the compact envelope only carries the digest, `include_details=true`
+does not make details visible there: the response reports `requested_tier` and
+`details_omitted_by` instead of falsely claiming `full_inline`. To expand every
+friendly-search result inline, pass both `response_mode="full"` and
+`include_details=true`; opening one selected record remains the preferred path.
 
 The mode is opt-in. Omitting `response_mode` is equivalent to `full`. Write
 actions ignore compact/lean for envelope shaping and always retain the full
