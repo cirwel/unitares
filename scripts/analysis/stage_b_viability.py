@@ -273,14 +273,25 @@ def emit_auc(conn) -> None:
     print(f"  distinct prior-state snapshots joined: {n_clusters} "
           f"({bad_clusters} carrying the bad labels)")
     a_res = auc(residuals, labels)
-    a_phi = auc(phis, labels)
+    # Φ is NEGATED before scoring. `auc` is documented "higher score should mean
+    # worse (is_bad=True)", and the residual satisfies that -- further from
+    # baseline is worse. Φ is the opposite: governance_core/scoring.py returns
+    # "Φ score (higher is better)" and verdict_from_phi maps HIGH Φ to "safe".
+    # Scoring raw Φ therefore computed P(Φ_bad > Φ_good), which for a working Φ
+    # sits BELOW 0.5 -- so a Φ that discriminates well was reported as an AUC
+    # near 0, and the `a_res > a_phi` comparison declared "residual > Φ" almost
+    # regardless of the data. The bias ran in favour of the residual, which is
+    # the option this document is proposing to adopt.
+    a_phi = auc([-p for p in phis], labels)
     if a_res is None or a_phi is None:
         print("  AUC undefined — need at least one bad and one good label.")
         return
     p_res = permutation_p(residuals, labels, a_res)
-    p_phi = permutation_p(phis, labels, a_phi)
+    p_phi = permutation_p([-p for p in phis], labels, a_phi)
     print(f"  AUC(residual z-norm) = {a_res:.3f}   (perm p={p_res:.3f})")
-    print(f"  AUC(absolute Φ)      = {a_phi:.3f}   (perm p={p_phi:.3f})")
+    print(f"  AUC(absolute Φ, sign-corrected) = {a_phi:.3f}   (perm p={p_phi:.3f})")
+    print("    Φ is negated before scoring: high Φ means healthy, so raw Φ under "
+          "the\n    higher-is-worse convention would score a good Φ near 0.")
     print()
     lead = "residual > Φ" if a_res > a_phi else ("Φ > residual" if a_phi > a_res else "tie")
     print(f"  Direction on this sample: {lead}. CAVEATS: rows sharing a prior-state")

@@ -26,7 +26,7 @@ from contextlib import asynccontextmanager
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from tests.helpers import patch_lifecycle_server
+from tests.helpers import patch_lifecycle_server, patch_agent_storage
 
 from mcp.types import TextContent
 
@@ -1081,14 +1081,11 @@ class TestMarkResponseComplete:
 
         with patch_lifecycle_server(mock_server, require_registered=("agent-1", None)), \
              patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True), \
-             patch("src.mcp_handlers.lifecycle.handlers.agent_storage", MagicMock(
-                 update_agent=AsyncMock(),
-                 persist_runtime_state=AsyncMock(),
-             )):
+             patch_agent_storage() as mock_storage:
+            mock_storage.update_agent = AsyncMock()
+            mock_storage.persist_runtime_state = AsyncMock()
 
             from src.mcp_handlers.lifecycle.handlers import handle_mark_response_complete
-            import src.mcp_handlers.lifecycle.operations as _lo; _lo.agent_storage = __import__("sys").modules["src.mcp_handlers.lifecycle.handlers"].agent_storage
-            import src.mcp_handlers.lifecycle.mutation as _lm; _lm.agent_storage = __import__("sys").modules["src.mcp_handlers.lifecycle.handlers"].agent_storage
             result = await handle_mark_response_complete({})
             data = _parse(result)
             assert data.get("status") == "waiting_input"
@@ -1103,14 +1100,11 @@ class TestMarkResponseComplete:
 
         with patch_lifecycle_server(mock_server, require_registered=("agent-1", None)), \
              patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True), \
-             patch("src.mcp_handlers.lifecycle.handlers.agent_storage", MagicMock(
-                 update_agent=AsyncMock(),
-                 persist_runtime_state=AsyncMock(),
-             )):
+             patch_agent_storage() as mock_storage:
+            mock_storage.update_agent = AsyncMock()
+            mock_storage.persist_runtime_state = AsyncMock()
 
             from src.mcp_handlers.lifecycle.handlers import handle_mark_response_complete
-            import src.mcp_handlers.lifecycle.operations as _lo; _lo.agent_storage = __import__("sys").modules["src.mcp_handlers.lifecycle.handlers"].agent_storage
-            import src.mcp_handlers.lifecycle.mutation as _lm; _lm.agent_storage = __import__("sys").modules["src.mcp_handlers.lifecycle.handlers"].agent_storage
             result = await handle_mark_response_complete({"summary": "Done with tests"})
 
             meta.add_lifecycle_event.assert_called_once_with(
