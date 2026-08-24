@@ -440,8 +440,17 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
             "default": "compact",
             "description": (
                 "Friendly read-envelope mode. Defaults to compact, which returns "
-                "the top matches and omits the repeated canonical payload. Use "
-                "full to include raw_governance with the complete result set."
+                "the top matches, keeps upstream retrieval digest-sized, and "
+                "omits the repeated canonical payload. Use full to include "
+                "raw_governance with the complete result set."
+            ),
+        },
+        "include_details": {
+            "description": (
+                "Expand every result inline only with response_mode='full'. "
+                "Compact/lean search suppresses detail serialization upstream "
+                "and returns bounded previews; open one result with "
+                "knowledge(action='details', discovery_id='...')."
             ),
         },
     },

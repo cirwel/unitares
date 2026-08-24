@@ -35,8 +35,10 @@ def test_search_shared_memory_advertises_compact_default():
 
     tool = mcp_server.mcp._tool_manager.get_tool("search_shared_memory")
     response_mode = tool.parameters["properties"]["response_mode"]
+    include_details = tool.parameters["properties"]["include_details"]
     assert response_mode["default"] == "compact"
     assert "Defaults to compact" in response_mode["description"]
+    assert "suppresses detail serialization upstream" in include_details["description"]
 
 
 @pytest.mark.asyncio
@@ -117,3 +119,95 @@ async def test_sync_state_mcp_wrapper_uses_alias_middleware(monkeypatch):
             "interpretation": "named_level",
         }
     }
+
+
+@pytest.mark.asyncio
+async def test_search_shared_memory_suppresses_detail_serialization_upstream(
+    monkeypatch,
+):
+    import src.mcp_handlers as handlers
+    import src.mcp_server as mcp_server
+
+    captured: dict = {}
+
+    async def fake_knowledge(arguments):
+        captured.update(arguments)
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps({
+                    "success": True,
+                    "results": [{
+                        "id": "d1",
+                        "summary": "federated prior art",
+                        "details_preview": "bounded preview",
+                        "has_details": True,
+                    }],
+                    "total_count": 1,
+                    "discovery_retrieval_options": {
+                        "current_tier": "digest",
+                        "digest": "include_details=false",
+                        "open_one": "knowledge(action='details', discovery_id='...')",
+                        "all_inline": "include_details=true (can be large)",
+                    },
+                }),
+            )
+        ]
+
+    monkeypatch.setitem(handlers.TOOL_HANDLERS, "knowledge", fake_knowledge)
+    monkeypatch.setattr(
+        "src.mcp_handlers.identity.handlers.resolve_session_identity",
+        AsyncMock(return_value={
+            "agent_uuid": "test-agent-uuid",
+            "agent_name": "TestAgent",
+            "created": False,
+            "persisted": True,
+        }),
+    )
+    monkeypatch.setattr(
+        "src.mcp_handlers.identity.handlers.lookup_onboard_pin",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "src.mcp_handlers.identity.handlers.derive_session_key",
+        AsyncMock(return_value="test-session-key"),
+    )
+
+    limiter = MagicMock()
+    limiter.check_rate_limit.return_value = (True, None)
+    limiter.get_stats.return_value = {}
+    monkeypatch.setattr(
+        "src.mcp_handlers.middleware.rate_limit_step.get_rate_limiter",
+        lambda: limiter,
+    )
+    monkeypatch.setattr(
+        "src.pattern_tracker.get_pattern_tracker",
+        lambda: MagicMock(),
+    )
+
+    tool = mcp_server.mcp._tool_manager.get_tool("search_shared_memory")
+    result = await tool.run(
+        *_run_args(
+            tool.run,
+            {
+                "client_session_id": "test-session",
+                "query": "federation",
+                "include_details": True,
+            },
+        ),
+        convert_result=False,
+    )
+
+    assert captured["action"] == "search"
+    assert captured["response_mode"] == "compact"
+    assert captured["include_details"] is False
+    assert captured["_friendly_search_detail_policy"] == (
+        "digest_before_serialization"
+    )
+    assert captured["_friendly_search_details_requested"] is True
+    options = result["discovery_retrieval_options"]
+    assert options["current_tier"] == "digest"
+    assert options["requested_tier"] == "full_inline"
+    assert options["details_serialized"] is False
+    assert result["response_options"]["current"] == "compact"
+    assert "raw_governance" not in result

@@ -364,9 +364,10 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
             "check-ins. 'auto' resolves to compact for steady states and mirror "
             "for actionable at-risk/guide/pause states. 'mirror' returns "
             "actionable self-awareness signals. 'full' returns the complete "
-            "payload. Compatibility aliases: 'lite' -> compact, 'verbose' -> "
-            "full, 'interpreted' -> standard. 'minimal' and 'standard' remain "
-            "legacy explicit modes for skinny or human-interpreted payloads."
+            "payload. 'standard' returns a bounded, explained summary for "
+            "agent consumption. Compatibility aliases: 'lite' -> compact, "
+            "'verbose' -> full, 'interpreted' -> standard. 'minimal' remains "
+            "the legacy bare action/EISV shape."
         )
     )
     lite: Union[bool, str, None] = Field(

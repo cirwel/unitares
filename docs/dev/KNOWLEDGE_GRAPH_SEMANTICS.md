@@ -57,9 +57,11 @@ Search content has three retrieval tiers, surfaced in every search response as
 The friendly `search_shared_memory` alias defaults to its compact experience
 envelope, keeps the first three digest rows under `memory_suggestions`, and omits
 the repeated canonical result set unless `response_mode="full"` is requested.
-Because the compact envelope only carries the digest, `include_details=true`
-does not make details visible there: the response reports `requested_tier` and
-`details_omitted_by` instead of falsely claiming `full_inline`. To expand every
+Because the compact envelope only carries the digest, it forces
+`include_details=false` before the canonical search serializes results.
+`include_details=true` does not make details visible there: the response reports
+`requested_tier`, `details_serialized=false`, and `details_omitted_by` instead of
+doing expensive work and falsely claiming `full_inline`. To expand every
 friendly-search result inline, pass both `response_mode="full"` and
 `include_details=true`; opening one selected record remains the preferred path.
 

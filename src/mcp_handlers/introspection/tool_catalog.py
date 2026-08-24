@@ -731,7 +731,7 @@ COMMON_PATTERNS: Dict[str, Dict[str, str]] = {
     },
     "search_shared_memory": {
         "by_query": "search_shared_memory(query=\"identity continuity\", limit=5)",
-        "with_details": "search_shared_memory(query=\"calibration\", include_details=true)",
+        "with_details": "search_shared_memory(query=\"calibration\", response_mode=\"full\", include_details=true)",
     },
     "record_result": {
         "test_passed": "record_result(outcome_type=\"test_passed\", confidence=0.8)",

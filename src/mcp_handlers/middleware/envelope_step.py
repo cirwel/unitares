@@ -50,6 +50,10 @@ from src.mcp_handlers.response_formatter import (
     canonical_response_mode,
     normalize_discovery_list,
 )
+from src.mcp_handlers.support.param_normalization import (
+    FRIENDLY_SEARCH_DETAIL_POLICY_KEY,
+    FRIENDLY_SEARCH_DETAILS_REQUESTED_KEY,
+)
 
 logger = get_logger(__name__)
 
@@ -695,6 +699,7 @@ def _effective_discovery_retrieval_options(
     source_payload: Dict[str, Any],
     *,
     include_raw: bool,
+    arguments: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Describe the discovery tier that actually survives the envelope.
 
@@ -715,10 +720,36 @@ def _effective_discovery_retrieval_options(
     if friendly_name != "search_shared_memory" or include_raw:
         return result
 
+    arguments = arguments or {}
+    detail_policy = arguments.get(FRIENDLY_SEARCH_DETAIL_POLICY_KEY)
+    if detail_policy == "digest_before_serialization":
+        requested_details = bool(
+            arguments.get(FRIENDLY_SEARCH_DETAILS_REQUESTED_KEY)
+        )
+        response_mode = str(
+            arguments.get("response_mode") or "compact"
+        ).strip().lower()
+        result["detail_policy"] = detail_policy
+        result["details_serialized"] = False
+        result["details_included"] = False
+        if requested_details:
+            result["requested_tier"] = "full_inline"
+            result["details_omitted_by"] = (
+                f"response_mode='{response_mode}' before serialization"
+            )
+            result["note"] = (
+                "Compact friendly search keeps the upstream result digest-sized, "
+                "even when include_details=true. Use response_mode='full' with "
+                "include_details=true for every result inline, or open one record "
+                "with knowledge(action='details', discovery_id='...')."
+            )
+        return result
+
     requested_tier = str(result.get("current_tier") or "digest")
     if requested_tier.startswith("full_inline"):
         result["requested_tier"] = requested_tier
         result["current_tier"] = "digest"
+        result["details_serialized"] = True
         result["details_included"] = False
         result["details_omitted_by"] = "response_mode='compact'"
         result["note"] = (
@@ -744,11 +775,12 @@ def _response_options(
         return {
             "current": current,
             "routine": "compact",
+            "interpreted_summary": "standard",
             "actionable_diagnostics": "mirror",
             "complete_audit": "full",
             "compatibility_aliases": (
                 "lite=compact; verbose=full; interpreted=standard; "
-                "minimal/standard are legacy explicit shapes"
+                "minimal is the legacy bare shape"
             ),
         }
     if friendly_name == "search_shared_memory":
@@ -843,6 +875,7 @@ def build_experience_envelope(
         friendly_name,
         source_payload,
         include_raw=include_raw,
+        arguments=arguments,
     )
 
     if canonical_name in {"process_agent_update", "get_governance_metrics"}:
