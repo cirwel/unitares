@@ -72,24 +72,69 @@ def pct(xs, p):
 # comment.
 MIN_SAFE_FOR_SPLIT = 100
 
+# The separation verdict's multiple. A DECIDING STANDARD, in force by
+# default rather than deferred: it converts two rates into SEPARATES or
+# WEAK. Named and overridable so the choice is visible and movable.
+SEPARATION_MULTIPLE = 3.0
+
 # Split-conformal coverage needs enough calibration points for the quantile to
 # exist at all: m >= 1/(1-q) - 1, i.e. 99 for q=0.99, so n >= 198.
 CONFORMAL_MIN_CALIB = lambda q: math.ceil(1.0 / (1.0 - q) - 1.0)  # noqa: E731
 
 
-def expected_holdout_rate(n_calib: int, quantile: float) -> float:
-    """Split-conformal exceedance centre: (m - q(m-1)) / (m+1).
+def conformal_rank(n_calib: int, quantile: float) -> int:
+    """The order-statistic INDEX the conformal threshold must use: ceil((m+1)q).
 
-    NOT `1 - quantile`. An earlier version of the report asserted that centre
-    "because the halves are exchangeable" -- exchangeability gives this formula,
-    which only approaches 1-q for large m. At MIN_SAFE_FOR_SPLIT the calibration
-    half is m=50 and the true centre is 2.9%, nearly 3x the claimed 1.0%; worse,
-    the holdout is then 50 points, so the rate lives on a 2% grid and CANNOT
-    take the value 1.0% under any draw. Simulation over 400 seeds: 2.77% at
-    n=100, 1.91% at n=198, 1.49% at n=400, 1.11% at n=2000.
+    Capped at m, where the threshold degenerates to the calibration maximum.
+    """
+    return min(math.ceil((n_calib + 1) * quantile), max(1, n_calib))
+
+
+def rank_conformal_threshold(xs, quantile: float):
+    """The ceil((m+1)q)-th order statistic. NO interpolation.
+
+    `pct` interpolates linearly between neighbouring order statistics, which is
+    the right thing for a descriptive quantile and the WRONG thing here: the
+    split-conformal guarantee is a statement about RANKS, so it survives any
+    continuous distribution only if the threshold IS an order statistic.
+    Interpolating places it at a position that depends on the local density, and
+    coverage stops being distribution-free -- see `conformal_exceedance`.
+    """
+    ordered = sorted(xs)
+    if not ordered:
+        return None
+    return ordered[conformal_rank(len(ordered), quantile) - 1]
+
+
+def conformal_exceedance(n_calib: int, quantile: float) -> float:
+    """EXACT distribution-free exceedance for the rank threshold: 1 - k/(m+1).
+
+    This is a theorem about ranks, not a fit. For continuous scores the new
+    point is equally likely to fall in any of the m+1 gaps between (and outside)
+    the calibration points, so P(exceed the k-th) = 1 - k/(m+1) regardless of
+    the distribution.
+
+    THE HISTORY MATTERS, because the same quantity was got wrong twice by
+    reasoning about what the estimator ought to do:
+
+      #1856 said "centred on 1-q because the halves are exchangeable".
+      #1862 said (m - q(m-1))/(m+1), the interpolated-quantile expectation.
+
+    Both were confirmed against a self-authored gaussian simulation, and both
+    times the simulation agreed BECAUSE IT SHARED THE ERROR -- gaussian is the
+    case where interpolation sits closest to the rank threshold. Measured mean
+    exceedance at m=50, 6000 seeds, against the second formula's flat 2.9216%:
+    uniform 2.9303%, gaussian 2.6700%, Pareto a=1.1 2.4197%, Pareto a=0.5
+    2.2983%. A 0.63pp spread, ~27% relative, and only the gaussian column looks
+    like agreement.
+
+    The rank form was checked the way the others should have been -- against a
+    heavy-tailed AND a bounded distribution, not just a gaussian. At m=99 theory
+    1.0000% vs gaussian 1.0230%, Pareto a=0.5 1.0301%, uniform 1.0301%; at m=200
+    theory 0.9950% vs 1.0070 / 1.0088 / 1.0088.
     """
     m = max(1, n_calib)
-    return (m - quantile * (m - 1)) / (m + 1)
+    return 1.0 - conformal_rank(m, quantile) / (m + 1)
 
 
 def clopper_pearson_upper(k: int, n: int, alpha: float = 0.05) -> float | None:
@@ -100,6 +145,17 @@ def clopper_pearson_upper(k: int, n: int, alpha: float = 0.05) -> float | None:
     interval, not the point, is what a reader needs before treating it as a
     regression bound. Reported, never used to suppress: choosing a minimum n
     would be a deciding standard, and the operator's.
+
+    ASSUMES INDEPENDENT BERNOULLI TRIALS, WHICH THESE ROWS ARE NOT. The safe
+    set is longitudinal per-agent check-ins, and this repo has measured how
+    strongly they autocorrelate -- the previous-outcome baseline predicts the
+    next outcome at AUC ~0.94. Under positive dependence the effective sample is
+    smaller than n, so this interval is ANTI-CONSERVATIVE: the true bound is
+    wider than the one printed. It is still worth printing, because it bounds
+    the sampling error a reader would otherwise ignore entirely, but it is a
+    floor on the uncertainty and not the uncertainty. Widening it correctly
+    needs a cluster-aware estimate over agents, which no registered design
+    specifies.
     """
     if n < 1 or not (0 <= k <= n):
         return None
@@ -107,7 +163,21 @@ def clopper_pearson_upper(k: int, n: int, alpha: float = 0.05) -> float | None:
         return 1.0
 
     def cdf(p):  # P(X <= k | n, p)
-        return sum(math.comb(n, i) * p ** i * (1 - p) ** (n - i) for i in range(k + 1))
+        # Evaluated in log space. The direct form overflowed: math.comb(2000,
+        # 1000) is a ~600-digit integer, and multiplying it by a float raises
+        # OverflowError before any probability is computed. lgamma keeps every
+        # term finite for any n this script can see.
+        if p <= 0.0:
+            return 1.0
+        if p >= 1.0:
+            return 1.0 if k >= n else 0.0
+        log_p, log_q = math.log(p), math.log1p(-p)
+        total = 0.0
+        for i in range(k + 1):
+            log_term = (math.lgamma(n + 1) - math.lgamma(i + 1) - math.lgamma(n - i + 1)
+                        + i * log_p + (n - i) * log_q)
+            total += math.exp(log_term)
+        return min(1.0, total)
 
     lo, hi = k / n, 1.0
     for _ in range(200):
@@ -197,6 +267,16 @@ def separation_report(safe, non_safe, seed=0, quantile=0.99, threshold=None):
                    "its own false-positive\n  rate on that distribution. This mode "
                    "CANNOT bound regression risk; pass --threshold with a\n  "
                    "policy-registered absolute value to get a bound.")
+        # Naming the standards this run is APPLYING. Calling them "the
+        # operator's" while shipping them as live defaults was applying a
+        # standard and labelling the application as a question.
+        out.append(f"  STANDARDS IN FORCE ON THIS RUN (not deferred — applied): "
+                   f"quantile mode is the\n  DEFAULT verdict path; "
+                   f"MIN_SAFE_FOR_SPLIT={MIN_SAFE_FOR_SPLIT} decides whether the "
+                   f"held-out check prints at all\n  (the conformal minimum implied "
+                   f"by q={quantile:g} is {2 * CONFORMAL_MIN_CALIB(quantile)}); and the "
+                   f"separation verdict uses a fixed\n  {SEPARATION_MULTIPLE:g}x "
+                   "multiple. Each decides an output of this run.")
         if len(safe) < MIN_SAFE_FOR_SPLIT:
             out.append(f"  THIN SAMPLE: {len(safe)} safe check-ins (want "
                        f"{MIN_SAFE_FOR_SPLIT}). At p{quantile * 100:g} the threshold is "
@@ -204,20 +284,27 @@ def separation_report(safe, non_safe, seed=0, quantile=0.99, threshold=None):
                        "nothing from the separation below.")
         else:
             calib, holdout = split_sample(safe, seed=seed)
-            held_k = sum(1 for z in holdout if z > pct(calib, quantile))
+            # RANK threshold, not pct(): the conformal guarantee is about ranks
+            # and holds for any continuous distribution only if the threshold IS
+            # an order statistic. Interpolating made the coverage
+            # distribution-dependent -- the defect that made the previous two
+            # centre claims wrong.
+            held_k = sum(1 for z in holdout if z > rank_conformal_threshold(calib, quantile))
             held = held_k / len(holdout)
-            centre = expected_holdout_rate(len(calib), quantile)
+            k = conformal_rank(len(calib), quantile)
+            exact = conformal_exceedance(len(calib), quantile)
             note = ""
             if len(calib) < CONFORMAL_MIN_CALIB(quantile):
                 note = (f"\n   NB m={len(calib)} < {CONFORMAL_MIN_CALIB(quantile)}: no "
-                        f"p{quantile * 100:g} threshold with that coverage exists at "
-                        f"this calibration size,\n   and the holdout rate lives on a "
-                        f"{1 / len(holdout):.1%} grid, so it cannot even take the "
-                        "centre's value.")
-            out.append(f"  (held-out estimate on a disjoint half: {held:.1%} "
-                       f"({held_k}/{len(holdout)}) — a noise check on the quantile\n"
-                       f"   itself, centred on {centre:.1%} for a calibration half of "
-                       f"m={len(calib)}. Still not a regression bound.{note})")
+                        f"p{quantile * 100:g} rank exists at this calibration size, so "
+                        f"the threshold degenerates to\n   the calibration maximum and "
+                        f"the exceedance is 1/(m+1) = {exact:.1%}, not "
+                        f"{1 - quantile:.1%}.")
+            out.append(f"  (held-out check on a disjoint half: {held:.1%} "
+                       f"({held_k}/{len(holdout)}) against an EXACT "
+                       f"distribution-free\n   exceedance of {exact:.1%} — the "
+                       f"{k}th of m={len(calib)} order statistics, 1 - {k}/{len(calib) + 1}. "
+                       f"Still not a regression bound.{note})")
         measured_fp = None
 
     if not non_safe:
@@ -253,7 +340,7 @@ def separation_report(safe, non_safe, seed=0, quantile=0.99, threshold=None):
     if ref <= 0.0:
         out.append(f"  → separation ratio UNDEFINED (false-positive rate is 0); raw "
                    f"rates: {tp:.1%} flagged vs 0 false positives.")
-    elif tp > 3 * ref:
+    elif tp > SEPARATION_MULTIPLE * ref:
         out.append(f"  → SEPARATES at this threshold: {tp / ref:.1f}x the {ref_kind} "
                    f"false-positive rate (exactly {tp:.4%} / {ref:.4%}). Bounds nothing "
                    "about whether the residual predicts outcomes.")

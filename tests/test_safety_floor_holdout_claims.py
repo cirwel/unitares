@@ -43,53 +43,131 @@ def sf():
     return mod
 
 
-# --- M1: the centre the estimator actually has -----------------------------
+# --- M1: distribution-free, tested against distributions that break fits ----
 
-@pytest.mark.parametrize("n", [100, 198, 400, 2000])
-def test_expected_holdout_rate_matches_simulation(sf, n):
-    """The formula is checked against the thing it predicts, not asserted."""
-    q, m = 0.99, n // 2
+DISTRIBUTIONS = [
+    ("gaussian", lambda r: r.gauss(0, 1)),
+    ("pareto-1.1", lambda r: r.paretovariate(1.1)),      # heavy tail
+    ("pareto-0.5", lambda r: r.paretovariate(0.5)),      # no finite mean
+    ("uniform", lambda r: r.random()),                   # bounded
+    ("exponential", lambda r: r.expovariate(1.0)),
+]
+
+
+def _measure(sf, draw, n, q, seeds, threshold_fn):
     rates = []
-    for seed in range(300):
+    for seed in range(seeds):
         rng = random.Random(seed)
-        safe = [rng.gauss(0, 1) for _ in range(n)]
+        safe = [draw(rng) for _ in range(n)]
         calib, holdout = sf.split_sample(safe, seed=seed)
-        thr = sf.pct(calib, q)
+        thr = threshold_fn(calib, q)
         rates.append(sum(1 for z in holdout if z > thr) / len(holdout))
-
-    assert statistics.mean(rates) == pytest.approx(
-        sf.expected_holdout_rate(m, q), abs=0.004)
+    return statistics.mean(rates)
 
 
-def test_the_old_centre_claim_was_wrong_at_the_shipped_floor(sf):
-    """1-q is off by ~3x exactly where MIN_SAFE_FOR_SPLIT puts operators."""
-    m = sf.MIN_SAFE_FOR_SPLIT // 2
-    assert sf.expected_holdout_rate(m, 0.99) == pytest.approx(0.0292, abs=1e-3)
-    assert sf.expected_holdout_rate(m, 0.99) > 2.5 * 0.01
+@pytest.mark.parametrize("name,draw", DISTRIBUTIONS)
+def test_the_rank_threshold_is_distribution_free(sf, name, draw):
+    """The property the previous two formulas lacked.
+
+    Gaussian ALONE is what hid the error twice: it is the case where linear
+    interpolation sits closest to the rank threshold, so a gaussian-only check
+    reads as agreement. A distribution-free claim is therefore tested against a
+    heavy tail and a bounded support as well.
+    """
+    q, m = 0.99, 200
+    measured = _measure(sf, draw, 2 * m, q, 1500, sf.rank_conformal_threshold)
+    assert measured == pytest.approx(sf.conformal_exceedance(m, q), abs=0.004), name
 
 
-def test_the_centre_converges_to_one_minus_q_only_for_large_m(sf):
-    """Which is why the claim looked right and was not."""
-    assert sf.expected_holdout_rate(50, 0.99) > 0.028
-    assert sf.expected_holdout_rate(10_000, 0.99) == pytest.approx(0.01, abs=5e-4)
+def test_the_interpolated_quantile_is_NOT_distribution_free(sf):
+    """Pins the defect, so nobody reintroduces pct() here.
+
+    At m=50 the old formula returned a flat 2.9216% for every distribution
+    while the truth ranged 2.30%-2.93%.
+    """
+    q = 0.99
+    rates = {name: _measure(sf, draw, 100, q, 2000, sf.pct)
+             for name, draw in DISTRIBUTIONS}
+
+    spread = max(rates.values()) - min(rates.values())
+    assert spread > 0.004, f"interpolation should vary by distribution: {rates}"
+    # ...and the heavy tail sits well below the bounded case.
+    assert rates["pareto-0.5"] < rates["uniform"] - 0.004
 
 
-def test_the_report_names_the_grid_when_the_centre_is_unreachable(sf):
-    """At m=50 the holdout rate cannot take the centre's value at all."""
-    rng = random.Random(4)
-    lines = "\n".join(sf.separation_report([rng.gauss(0, 1) for _ in range(100)], []))
-
-    assert "centred on 2.9%" in lines
-    assert "1.0% because the halves are exchangeable" not in lines
-    assert f"NB m=50 < {sf.CONFORMAL_MIN_CALIB(0.99)}" in lines
-    assert "grid" in lines
+def test_conformal_exceedance_is_the_rank_identity(sf):
+    """1 - k/(m+1), checked against the definition rather than a simulation."""
+    for m, q in ((50, 0.99), (99, 0.99), (200, 0.99), (1000, 0.99), (40, 0.95)):
+        k = min(math.ceil((m + 1) * q), m)
+        assert sf.conformal_rank(m, q) == k
+        assert sf.conformal_exceedance(m, q) == pytest.approx(1 - k / (m + 1))
 
 
-def test_the_grid_note_disappears_once_the_sample_supports_the_quantile(sf):
+def test_the_boundary_the_reviewer_named(sf):
+    """m=99 must give 1%, not the 1.98% the interpolated formula reported."""
+    assert sf.conformal_exceedance(99, 0.99) == pytest.approx(0.01)
+
+
+def test_below_the_conformal_minimum_the_threshold_degenerates(sf):
+    """k>m means the calibration MAX, and exceedance is 1/(m+1)."""
+    m, q = 50, 0.99
+    assert m < sf.CONFORMAL_MIN_CALIB(q)
+    assert sf.conformal_rank(m, q) == m
+    assert sf.conformal_exceedance(m, q) == pytest.approx(1 / (m + 1))
+
+    xs = [float(i) for i in range(m)]
+    assert sf.rank_conformal_threshold(xs, q) == max(xs)
+
+
+def test_the_threshold_is_an_order_statistic_never_between_two(sf):
+    """The structural property interpolation broke."""
+    rng = random.Random(2)
+    xs = [rng.gauss(0, 1) for _ in range(200)]
+    assert sf.rank_conformal_threshold(xs, 0.99) in xs
+    # pct, by contrast, generally is not one of the inputs.
+    assert sf.pct(xs, 0.995) not in xs
+
+
+def test_the_report_COUNTS_against_the_rank_threshold(sf):
+    """Binds the CALL SITE, not just the helper.
+
+    Reverting the noise check to pct(calib, q) left every other test passing:
+    the "EXACT distribution-free" wording comes from conformal_exceedance, so
+    the report would keep claiming distribution-free coverage while counting
+    against an interpolated threshold. That is the same label-says-one-thing /
+    value-computed-another-way defect this whole sweep exists to remove, and a
+    mutation caught it here rather than a reviewer catching it later.
+
+    Heavy-tailed data where the two thresholds genuinely disagree: at this seed
+    the rank threshold yields 2 exceedances and pct yields 5.
+    """
+    rng = random.Random(2)
+    safe = [rng.paretovariate(0.4) for _ in range(400)]
+    calib, holdout = sf.split_sample(safe, seed=2)
+
+    by_rank = sum(1 for z in holdout if z > sf.rank_conformal_threshold(calib, 0.99))
+    by_pct = sum(1 for z in holdout if z > sf.pct(calib, 0.99))
+    assert by_rank != by_pct, "fixture no longer discriminates the two thresholds"
+
+    lines = "\n".join(sf.separation_report(safe, non_safe=[], seed=2))
+    assert f"({by_rank}/{len(holdout)})" in lines
+    assert f"({by_pct}/{len(holdout)})" not in lines
+
+
+def test_the_report_states_the_exact_exceedance_not_a_fitted_centre(sf):
     rng = random.Random(4)
     lines = "\n".join(sf.separation_report([rng.gauss(0, 1) for _ in range(400)], []))
-    assert "centred on 1.5%" in lines
-    assert "NB m=" not in lines
+    assert "EXACT distribution-free" in lines
+    assert "1 - 199/201" in lines
+    assert "centred on" not in lines
+    assert "because the halves are exchangeable" not in lines
+
+
+def test_the_degenerate_case_says_so_in_the_report(sf):
+    rng = random.Random(4)
+    lines = "\n".join(sf.separation_report([rng.gauss(0, 1) for _ in range(100)], []))
+    assert "no p99 rank exists" in lines
+    assert "degenerates to" in lines
 
 
 # --- M2: no verdict token from a state that cannot support one -------------
@@ -148,6 +226,34 @@ def test_a_rate_off_a_handful_of_trials_carries_its_interval(sf):
     assert "Read the upper bound, not the point estimate" in lines
 
 
+def test_clopper_pearson_survives_a_large_n(sf):
+    """OverflowError at n=2000, k=1000: math.comb(2000,1000) is ~600 digits.
+
+    Multiplying that integer by a float raised before any probability was
+    computed. The safe set is thousands of check-ins, so this is the ordinary
+    case, not an edge.
+    """
+    u = sf.clopper_pearson_upper(1000, 2000)
+    assert u is not None
+    assert 0.5 < u < 0.55
+
+    assert sf.clopper_pearson_upper(4999, 5000) is not None
+    assert sf.clopper_pearson_upper(2500, 5000) is not None
+
+
+def test_the_interval_states_that_it_assumes_independence(sf):
+    """The rows are longitudinal per-agent check-ins, which autocorrelate.
+
+    Under positive dependence the effective sample is smaller than n, so the
+    interval is anti-conservative — a floor on the uncertainty, not the
+    uncertainty. That has to be said where the number is defined.
+    """
+    doc = sf.clopper_pearson_upper.__doc__
+    assert "ANTI-CONSERVATIVE" in doc.upper()
+    assert "independent" in doc.lower()
+    assert "autocorrelat" in doc.lower()
+
+
 def test_clopper_pearson_brackets_the_binomial(sf):
     """Checked against the binomial CDF it inverts, not against a table."""
     for k, n in ((0, 10), (1, 5), (2, 1000), (7, 20)):
@@ -161,6 +267,33 @@ def test_clopper_pearson_edges(sf):
     assert sf.clopper_pearson_upper(5, 5) == 1.0
     assert sf.clopper_pearson_upper(0, 0) is None
     assert sf.clopper_pearson_upper(3, 2) is None
+
+
+# --- standards in force are named as applied, not deferred -----------------
+
+def test_the_report_names_the_standards_it_is_applying(sf):
+    """Calling a live default "the operator's" is applying it, not deferring it.
+
+    MIN_SAFE_FOR_SPLIT, quantile mode as the default verdict path, and the
+    separation multiple each decide an output of the run that prints them.
+    """
+    rng = random.Random(4)
+    lines = "\n".join(sf.separation_report([rng.gauss(0, 1) for _ in range(400)], []))
+
+    assert "STANDARDS IN FORCE ON THIS RUN (not deferred — applied)" in lines
+    assert f"MIN_SAFE_FOR_SPLIT={sf.MIN_SAFE_FOR_SPLIT}" in lines
+    assert "DEFAULT verdict path" in lines
+    assert "3x multiple" in lines
+    # ...and it states the value its own maths implies, rather than hiding it.
+    assert f"is {2 * sf.CONFORMAL_MIN_CALIB(0.99)}" in lines
+
+
+def test_the_separation_multiple_is_a_named_movable_constant(sf):
+    """It was a literal 3 buried in a comparison."""
+    assert sf.SEPARATION_MULTIPLE == 3.0
+    source = (REPO / "scripts/analysis/eisv_stage_b_safety_floor.py").read_text()
+    assert "tp > SEPARATION_MULTIPLE * ref" in source
+    assert "tp > 3 * ref" not in source
 
 
 # --- M5: the constant's comment must describe the module -------------------
