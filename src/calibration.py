@@ -1098,10 +1098,19 @@ class CalibrationChecker:
             print(f"Warning: Failed to load calibration state: {e}, resetting", file=sys.stderr)
             self.reset()
 
-    async def load_state_async(self):
+    async def load_state_async(self) -> bool:
         """Load calibration state from PostgreSQL (call after event loop is running).
 
         Falls back to sync JSON load if DB is unavailable.
+
+        Returns True only if canonical DB state was actually applied, False if
+        this fell back to the JSON snapshot. Callers may ignore it, but a caller
+        that REPORTS the source must use this rather than reading
+        ``_backend`` -- that attribute is a config value read once from
+        UNITARES_CALIBRATION_BACKEND and never mutated, so it says which backend
+        was requested, never which one answered. Note the two silent fallbacks
+        below: a falsy result and an empty ``bins`` both land on the JSON path
+        without printing anything at all.
         """
         if self._backend == "postgres":
             try:
@@ -1112,12 +1121,13 @@ class CalibrationChecker:
                     state_data = {k: v for k, v in result.items() if not k.startswith('_')}
                     if state_data.get('bins'):
                         self._apply_state_data(state_data)
-                        return
+                        return True
             except Exception as e:
                 print(f"Warning: async calibration load failed: {e}", file=sys.stderr)
         # Fallback to sync JSON load (already done at __init__, but re-read in case
         # the file was updated since then)
         self.load_state()
+        return False
 
     def compute_correction_factors(self, min_samples: int = 5) -> Dict[str, float]:
         """
