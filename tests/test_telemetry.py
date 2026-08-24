@@ -428,3 +428,26 @@ class TestGetCalibrationMetrics:
         result = tc.get_calibration_metrics()
         assert isinstance(result, dict)
         assert "is_calibrated" in result
+
+    def test_surfaces_tri_state_instead_of_reinterpreting_legacy_boolean(self):
+        from src.telemetry import TelemetryCollector
+
+        tc = TelemetryCollector()
+        tc.calibration_checker = MagicMock()
+        tc.calibration_checker.check_calibration.return_value = (
+            True,
+            {
+                "calibration_status": "unassessed",
+                "assessability": {
+                    "overall": False,
+                    "strategic": True,
+                    "tactical": False,
+                },
+            },
+        )
+
+        result = tc.get_calibration_metrics()
+
+        assert result["is_calibrated"] is True  # legacy field remains compatible
+        assert result["calibration_status"] == "unassessed"
+        assert result["assessability"]["tactical"] is False

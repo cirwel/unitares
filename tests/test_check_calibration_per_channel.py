@@ -29,6 +29,8 @@ class TestCheckCalibrationPerChannel:
         _, result = checker.check_calibration()
         tasks_entry = result["per_channel_calibration"]["tasks"]
         assert "calibrated" in tasks_entry
+        assert tasks_entry["calibration_status"] == "calibrated"
+        assert tasks_entry["assessable"] is True
         assert "samples" in tasks_entry
         assert "calibration_gap" in tasks_entry
         assert "issues" in tasks_entry
@@ -50,3 +52,15 @@ class TestCheckCalibrationPerChannel:
         _, result = checker.check_calibration()
         assert "is_calibrated" in result
         assert isinstance(result["is_calibrated"], bool)
+
+    def test_underfilled_channel_is_explicitly_unassessed(self, checker):
+        checker.record_tactical_decision(
+            0.8, "proceed", True, signal_source="tasks"
+        )
+
+        _, result = checker.check_calibration(min_samples_per_bin=10)
+
+        tasks_entry = result["per_channel_calibration"]["tasks"]
+        assert tasks_entry["calibrated"] is True  # legacy vacuous boolean
+        assert tasks_entry["calibration_status"] == "unassessed"
+        assert tasks_entry["assessable"] is False
