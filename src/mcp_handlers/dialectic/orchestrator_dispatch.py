@@ -30,6 +30,14 @@ logger = get_logger(__name__)
 # Repo root: src/mcp_handlers/dialectic/orchestrator_dispatch.py -> repo
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
+# Must match agents.dialectic_reviewer.reviewer.DEFAULT_CONTINUATION_WAIT_S.
+# A contract test pins the two values together without importing the runner into
+# the governance server. The extra grace covers the initial model call (host
+# backends allow up to seven minutes), onboarding, and protocol writes before
+# the continuation clock starts.
+DEFAULT_CONTINUATION_WAIT_S = 3600.0
+REVIEWER_RUNTIME_GRACE_S = 900.0
+
 
 def orchestrated_review_enabled() -> bool:
     """Opt-in gate for routing reviews through the orchestrator (default OFF).
@@ -61,6 +69,28 @@ def _governance_url() -> str:
     if urlparse(raw).path in ("", "/"):
         raw = raw.rstrip("/") + "/mcp/"
     return raw
+
+
+def _reviewer_max_runtime_ms() -> int:
+    """Lifetime cap for one spawned reviewer.
+
+    The agent-orchestrator defaults to thirty minutes, which is shorter than
+    the dialectic protocol's one-hour synthesis window. Size this spawn's cap
+    from the same operator override the reviewer consumes, plus bounded setup
+    and model-call grace. Invalid/negative overrides fail back to the default
+    window rather than disabling the orchestrator's reaper.
+    """
+    raw = os.environ.get(
+        "UNITARES_DIALECTIC_CONTINUATION_WAIT_S",
+        str(DEFAULT_CONTINUATION_WAIT_S),
+    )
+    try:
+        wait_s = float(raw)
+    except (TypeError, ValueError):
+        wait_s = DEFAULT_CONTINUATION_WAIT_S
+    if wait_s < 0:
+        wait_s = DEFAULT_CONTINUATION_WAIT_S
+    return max(1, int((wait_s + REVIEWER_RUNTIME_GRACE_S) * 1000))
 
 
 def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Optional[str]) -> Dict[str, Any]:
@@ -106,6 +136,8 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
         "UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S",
         "UNITARES_DIALECTIC_CODEX_TIMEOUT_S",
         "UNITARES_DIALECTIC_REVIEW_MAX_TOKENS",
+        "UNITARES_DIALECTIC_CONTINUATION_WAIT_S",
+        "UNITARES_DIALECTIC_CONTINUATION_POLL_S",
         "UNITARES_CLAUDE_CLI",
         "UNITARES_CODEX_CLI",
         "UNITARES_LLM_MODEL",
@@ -128,6 +160,9 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
         "args": ["-m", "agents.dialectic_reviewer"],
         "cd": str(_REPO_ROOT),
         "env": env,
+        # Per-spawn override: the orchestrator's 30-minute default would reap a
+        # healthy reviewer halfway through the protocol's synthesis window.
+        "max_runtime_ms": _reviewer_max_runtime_ms(),
     }
 
 
