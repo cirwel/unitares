@@ -1,0 +1,336 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/cirwel/unitares/blob/master/docs/dev/tool_surface_audit_v1.schema.json",
+  "title": "UNITARES tool surface audit v1",
+  "description": "Content-addressed dispatch and exposure evidence. This artifact is not self-certification or mutation authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "content_hash",
+    "dispatch",
+    "exposure",
+    "summary",
+    "findings"
+  ],
+  "properties": {
+    "schema": {
+      "const": "unitares.tool-surface-audit.v1"
+    },
+    "content_hash": {
+      "$ref": "#/$defs/contentHash"
+    },
+    "dispatch": {
+      "$ref": "#/$defs/dispatchSnapshot"
+    },
+    "exposure": {
+      "$ref": "#/$defs/exposureSnapshot"
+    },
+    "summary": {
+      "$ref": "#/$defs/summary"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    }
+  },
+  "$defs": {
+    "contentHash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "stringArray": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "dispatchSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "content_hash",
+        "tools",
+        "aliases",
+        "import_failures",
+        "unbound_schemas",
+        "source_revision",
+        "source_files"
+      ],
+      "properties": {
+        "schema": {
+          "const": "unitares.tool-dispatch-snapshot.v1"
+        },
+        "content_hash": {
+          "$ref": "#/$defs/contentHash"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/dispatchTool"
+          }
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/alias"
+          }
+        },
+        "import_failures": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "unbound_schemas": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source_revision": {
+          "$ref": "#/$defs/contentHash"
+        },
+        "source_files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sourceFile"
+          }
+        }
+      }
+    },
+    "sourceFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "content_hash"],
+      "properties": {
+        "path": { "type": "string" },
+        "content_hash": { "$ref": "#/$defs/contentHash" }
+      }
+    },
+    "dispatchTool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "handler",
+        "schema",
+        "identity",
+        "stakes",
+        "timeout",
+        "deprecated",
+        "hidden",
+        "superseded_by",
+        "default_action",
+        "known_actions",
+        "actions"
+      ],
+      "properties": {
+        "name": { "type": "string" },
+        "handler": { "type": "string" },
+        "schema": { "type": ["string", "null"] },
+        "identity": { "type": "string" },
+        "stakes": { "type": "string" },
+        "timeout": { "type": "number", "minimum": 0 },
+        "deprecated": { "type": "boolean" },
+        "hidden": { "type": "boolean" },
+        "superseded_by": { "type": ["string", "null"] },
+        "default_action": { "type": ["string", "null"] },
+        "known_actions": { "$ref": "#/$defs/stringArray" },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/action"
+          }
+        }
+      }
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "target", "param_maps"],
+      "properties": {
+        "action": { "type": "string" },
+        "target": { "type": "string" },
+        "param_maps": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "alias": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "old_name",
+        "new_name",
+        "reason",
+        "inject_action",
+        "inject_defaults",
+        "param_normalizer",
+        "experience"
+      ],
+      "properties": {
+        "old_name": { "type": "string" },
+        "new_name": { "type": "string" },
+        "reason": { "type": "string" },
+        "inject_action": { "type": ["string", "null"] },
+        "inject_defaults": { "type": "object" },
+        "param_normalizer": { "type": ["string", "null"] },
+        "experience": { "type": "boolean" }
+      }
+    },
+    "exposureSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "content_hash",
+        "modes",
+        "orientation",
+        "tools",
+        "collection_failures"
+      ],
+      "properties": {
+        "schema": {
+          "const": "unitares.tool-exposure-snapshot.v1"
+        },
+        "content_hash": {
+          "$ref": "#/$defs/contentHash"
+        },
+        "modes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "minimal",
+            "lite",
+            "operator_readonly",
+            "operator_recovery",
+            "full"
+          ],
+          "properties": {
+            "minimal": { "$ref": "#/$defs/mode" },
+            "lite": { "$ref": "#/$defs/mode" },
+            "operator_readonly": { "$ref": "#/$defs/mode" },
+            "operator_recovery": { "$ref": "#/$defs/mode" },
+            "full": { "$ref": "#/$defs/mode" }
+          }
+        },
+        "orientation": {
+          "$ref": "#/$defs/orientation"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/exposedTool"
+          }
+        },
+        "collection_failures": {
+          "$ref": "#/$defs/stringArray"
+        }
+      }
+    },
+    "mode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "declared",
+        "advertised",
+        "declared_only",
+        "advertised_only",
+        "content_hash"
+      ],
+      "properties": {
+        "declared": { "$ref": "#/$defs/stringArray" },
+        "advertised": { "$ref": "#/$defs/stringArray" },
+        "declared_only": { "$ref": "#/$defs/stringArray" },
+        "advertised_only": { "$ref": "#/$defs/stringArray" },
+        "content_hash": { "$ref": "#/$defs/contentHash" }
+      }
+    },
+    "orientation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "list_tools_full",
+        "list_tools_lite",
+        "full_wire_only",
+        "full_orientation_only"
+      ],
+      "properties": {
+        "list_tools_full": { "$ref": "#/$defs/stringArray" },
+        "list_tools_lite": { "$ref": "#/$defs/stringArray" },
+        "full_wire_only": { "$ref": "#/$defs/stringArray" },
+        "full_orientation_only": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "exposedTool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "description",
+        "input_schema",
+        "input_schema_hash",
+        "kind",
+        "canonical_name",
+        "inject_action",
+        "wire_properties",
+        "wire_required",
+        "describe_input_schema",
+        "describe_input_schema_hash",
+        "describe_properties",
+        "describe_only_properties",
+        "wire_only_properties"
+      ],
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "input_schema": { "type": "object" },
+        "input_schema_hash": { "$ref": "#/$defs/contentHash" },
+        "kind": {
+          "enum": ["registered_tool", "workflow_alias"]
+        },
+        "canonical_name": { "type": "string" },
+        "inject_action": { "type": ["string", "null"] },
+        "wire_properties": { "$ref": "#/$defs/stringArray" },
+        "wire_required": { "$ref": "#/$defs/stringArray" },
+        "describe_input_schema": { "type": "object" },
+        "describe_input_schema_hash": { "$ref": "#/$defs/contentHash" },
+        "describe_properties": { "$ref": "#/$defs/stringArray" },
+        "describe_only_properties": { "$ref": "#/$defs/stringArray" },
+        "wire_only_properties": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "finding_counts", "self_certifying", "note"],
+      "properties": {
+        "status": { "enum": ["clean", "issues_detected"] },
+        "finding_counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["error", "warning", "info"],
+          "properties": {
+            "error": { "type": "integer", "minimum": 0 },
+            "warning": { "type": "integer", "minimum": 0 },
+            "info": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "self_certifying": { "const": false },
+        "note": { "type": "string" }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["severity", "code", "subject", "message", "evidence"],
+      "properties": {
+        "severity": { "enum": ["error", "warning", "info"] },
+        "code": { "type": "string" },
+        "subject": { "type": "string" },
+        "message": { "type": "string" },
+        "evidence": { "type": "object" }
+      }
+    }
+  }
+}
