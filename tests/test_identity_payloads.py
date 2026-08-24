@@ -204,6 +204,47 @@ def test_identity_response_context_trims_uninformative_runtime_provenance():
     }
 
 
+def test_identity_response_context_keeps_full_provenance_on_rejected_value():
+    """A rejected/sanitized value (e.g. a secret-bearing model identifier)
+    still yields identifier=None, same as a genuinely absent value -- but
+    the *reason* differs (redacted_sensitive_value vs. not_exposed) and that
+    distinction must survive. Collapsing this to the same "nothing was
+    reported" marker as the bare case would hide a real rejection reason an
+    operator needs to see.
+    """
+    context = build_identity_response_context(
+        agent_uuid="uuid-rejected",
+        agent_id="Claude_20260824",
+        display_name=None,
+        session_resolution_source="ip_ua_fingerprint",
+        identity_status=None,
+        model_type="sk-abcdef1234567890",  # looks like an API key -> redacted
+    )
+
+    runtime_provenance = context["harness_context"]["runtime_provenance"]
+    assert runtime_provenance.get("available") is not False
+    assert runtime_provenance["model"]["identifier"] is None
+    assert runtime_provenance["model"]["missing_reason"] == "redacted_sensitive_value"
+
+
+def test_identity_response_context_keeps_full_provenance_on_oversized_value():
+    """Same principle for an oversized value: value_too_long is a rejection
+    reason, not "nothing was reported", and must not be swallowed."""
+    context = build_identity_response_context(
+        agent_uuid="uuid-oversized",
+        agent_id="Claude_20260824",
+        display_name=None,
+        session_resolution_source="ip_ua_fingerprint",
+        identity_status=None,
+        client_hint="x" * 200,
+    )
+
+    runtime_provenance = context["harness_context"]["runtime_provenance"]
+    assert runtime_provenance.get("available") is not False
+    assert runtime_provenance["harness"]["type"] is None
+    assert runtime_provenance["harness"]["missing_reason"] == "value_too_long"
+
+
 def test_identity_response_context_keeps_full_provenance_when_only_harness_known():
     """Partial information (harness type known, model unknown) still counts
     as informative — the trim only fires when nothing at all was reported."""
