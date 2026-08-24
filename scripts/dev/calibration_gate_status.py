@@ -189,7 +189,27 @@ def build_report(min_samples: int) -> dict:
     populated_tactical = sum(1 for b in bins if b["populated"])
     assessable = populated_tactical > 0
 
-    if worst_blocker is None:
+    if worst_blocker is None and not is_calibrated:
+        # A tactical distance of "GREEN" is true only about the TACTICAL arm.
+        # Printed unqualified beside a RED flag it read as a third, contradictory
+        # verdict on the same page. The flag can be False for a strategic or
+        # danger-direction reason that has no tactical blocker to measure a
+        # distance to.
+        distance = {"green": False,
+                    "note": "no populated TACTICAL bin is overconfident, but the gate "
+                            "flag is False — see the issues above. There is no "
+                            "tactical distance to report.",
+                    "blocked_by": "non_tactical"}
+    elif worst_blocker is None and not assessable:
+        # "No populated bin is overconfident" is trivially true when there is no
+        # populated bin. A distance measured against an empty set is not a
+        # distance, and printing GREEN for it recreates the vacuous pass one
+        # line lower down.
+        distance = {"green": False,
+                    "note": "no populated TACTICAL bin exists, so there is no "
+                            "distance to measure. Not a green.",
+                    "blocked_by": "unassessable"}
+    elif worst_blocker is None:
         distance = {"green": True, "note": "no populated bin overconfident by > "
                     f"{_OVERCONFIDENCE_GATE:.2f}"}
     else:
@@ -233,16 +253,36 @@ def print_report(r: dict) -> None:
           f"min_samples/bin={r['min_samples_per_bin']}   "
           f"gate=±{r['overconfidence_gate']:.2f}")
     print()
-    if not r["assessable"]:
+    # TWO AXES, never collapsed into one headline.
+    #
+    # Did the gate FAIL, and was the tactical arm ASSESSABLE, are independent
+    # questions. An earlier version let non-assessability win the headline
+    # outright, so a run with is_calibrated=False and zero tactical bins printed
+    # "UNASSESSED" over the top of its own "these keep it RED" list. That is a
+    # worse failure than the vacuous GREEN it replaced: a vacuous green
+    # overstates health on a state nothing checked, while a vacuous UNASSESSED
+    # SUPPRESSES a finding that was checked and failed.
+    #
+    # A failure is always reported as a failure. Non-assessability qualifies the
+    # tactical arm underneath it, never the verdict line.
+    if not r["calibrated"]:
+        verdict = "RED (miscalibrated)"
+    elif not r["assessable"]:
         verdict = "UNASSESSED — no populated tactical bin"
     else:
-        verdict = "GREEN (calibrated)" if r["calibrated"] else "RED (miscalibrated)"
+        verdict = "GREEN (calibrated)"
     print(f"VERDICT: {verdict}")
+
     if not r["assessable"]:
-        print(f"  The gate flag reads {r['calibrated']}, but it is the TACTICAL gate and")
-        print(f"  {r['populated_tactical_bins']} of {r['total_tactical_bins']} tactical bins "
-              f"clear the {r['min_samples_per_bin']}-sample floor. No bin could be")
-        print("  overconfident, so nothing was checked. This is not a pass.")
+        print(f"  Tactical arm UNASSESSED: {r['populated_tactical_bins']} of "
+              f"{r['total_tactical_bins']} tactical bins clear the "
+              f"{r['min_samples_per_bin']}-sample floor,")
+        print("  so no bin could be overconfident and the tactical gate checked nothing.")
+        if r["calibrated"]:
+            print("  The flag reads True for that reason alone. This is not a pass.")
+        else:
+            print("  The RED above therefore rests on the issues listed below, NOT on "
+                  "the tactical gate.")
     print()
 
     if r["issues"]:
@@ -270,6 +310,11 @@ def print_report(r: dict) -> None:
     d = r["distance_to_green"]
     if d.get("green"):
         print(f"Distance to green: GREEN — {d['note']}.")
+    elif d.get("blocked_by") in ("non_tactical", "unassessable"):
+        # This line reports a distance along the TACTICAL axis only. Printed as
+        # an unqualified "GREEN" beside a RED flag it read as a third verdict
+        # contradicting the other two.
+        print(f"Distance to green: NOT GREEN — {d['note']}")
     else:
         print(f"Distance to green: blocking bin {d['blocking_bin']} is "
               f"overconfident by {d['worst_gap']:.3f}; needs to drop below "

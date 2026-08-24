@@ -148,6 +148,79 @@ def test_snapshot_age_is_printed_on_the_json_path_too(gate_mod, monkeypatch, cap
     assert "live DB" not in out_r
 
 
+# --- a verdict must never mask a failure -----------------------------------
+
+def _report_v(gate_mod, monkeypatch, tactical, is_calibrated, issues=()):
+    class _C(_StubChecker):
+        def check_calibration(self, min_samples_per_bin=10, include_complexity=True):
+            return is_calibrated, {"issues": list(issues), "advisories": []}
+
+    checker = _C(tactical, is_calibrated=is_calibrated)
+    monkeypatch.setattr(gate_mod, "_load_checker", lambda: (checker, "json_snapshot"))
+    monkeypatch.setattr(gate_mod, "_snapshot_age_seconds", lambda c: 100.0)
+    return gate_mod.build_report(10)
+
+
+def test_unassessed_never_masks_a_red(gate_mod, monkeypatch, capsys):
+    """The reviewer's case, pinned.
+
+    is_calibrated=False for a strategic reason, with zero tactical bins, used
+    to print three contradictory readings on one page: "VERDICT: UNASSESSED",
+    "these keep it RED", and "Distance to green: GREEN" — with the suppressing
+    one in the headline.
+
+    A vacuous GREEN overstates health on a state nothing checked. A vacuous
+    UNASSESSED hides a finding that WAS checked and failed, which is worse.
+    """
+    r = _report_v(gate_mod, monkeypatch, tactical={}, is_calibrated=False,
+                  issues=["strategic danger: confident agents trending unhealthy"])
+    gate_mod.print_report(r)
+    out = capsys.readouterr().out
+
+    assert "VERDICT: RED (miscalibrated)" in out
+    assert "UNASSESSED" not in out.split("VERDICT:")[1].split("\n")[0]
+    assert "Distance to green: GREEN" not in out
+    # ...and the tactical arm is still qualified, just not in the headline.
+    assert "Tactical arm UNASSESSED" in out
+    assert "rests on the issues listed below" in out
+
+
+def test_the_three_verdict_axes_do_not_contradict(gate_mod, monkeypatch, capsys):
+    """No page may carry two different verdicts. All four states."""
+    cases = [
+        ({}, False, ["strategic danger"], "RED (miscalibrated)"),
+        ({}, True, [], "UNASSESSED"),
+        ({"0.6-0.7": _bin(50, 0.65, 0.64, 0.6)}, True, [], "GREEN (calibrated)"),
+        ({"0.6-0.7": _bin(50, 0.65, 0.20, 0.6)}, False, ["overconfident"],
+         "RED (miscalibrated)"),
+    ]
+    for tactical, ok, issues, expected in cases:
+        r = _report_v(gate_mod, monkeypatch, tactical, ok, issues)
+        gate_mod.print_report(r)
+        out = capsys.readouterr().out
+        headline = out.split("VERDICT: ")[1].split("\n")[0]
+        assert expected in headline, (expected, headline)
+        # "Distance to green: GREEN" may appear ONLY under a GREEN headline.
+        if "Distance to green: GREEN" in out:
+            assert "GREEN (calibrated)" in headline
+
+
+def test_a_distance_is_not_green_when_there_is_nothing_to_measure(gate_mod, monkeypatch):
+    """"No populated bin is overconfident" is trivial with no populated bin."""
+    r = _report_v(gate_mod, monkeypatch, tactical={}, is_calibrated=True)
+    d = r["distance_to_green"]
+    assert d["green"] is False
+    assert d["blocked_by"] == "unassessable"
+
+
+def test_a_red_with_no_tactical_blocker_reports_no_tactical_distance(gate_mod, monkeypatch):
+    r = _report_v(gate_mod, monkeypatch, tactical={}, is_calibrated=False,
+                  issues=["strategic danger"])
+    d = r["distance_to_green"]
+    assert d["green"] is False
+    assert d["blocked_by"] == "non_tactical"
+
+
 # --- the watch's own numbers must not contradict its sentences -------------
 
 def test_gate_headroom_grows_with_population(gate_mod, monkeypatch):
