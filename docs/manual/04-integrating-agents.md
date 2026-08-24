@@ -59,11 +59,25 @@ preserve the raw payload under `raw_governance`; read aliases omit that repeated
 payload by default and expose a full-mode escape hatch. Call `list_tools()` for
 the current full surface rather than relying on a copied catalog in prose.
 
+For `sync_state`, read `action_summary` first. It keeps the policy action,
+one-line reason, risk score, and verdict maturity together; a cold-start result
+is labeled `verdict_confidence="provisional"` at that surface. If the response
+also contains `legacy_diagnostics`, treat that block as compatibility telemetry,
+not behavioral health evidence. `response_options` documents the routine,
+actionable, and complete modes in-band, while `_response_size` reports the
+approximate serialized size and suggests a smaller mode when the payload is
+large.
+
+`search_shared_memory` uses its compact envelope as a discovery digest. Its
+`memory_suggestions` retain lifecycle metadata and bounded detail previews;
+`discovery_retrieval_options` shows how to open one record or deliberately
+expand all results.
+
 ## 4.4 Handle the policy response
 
 ```python
-action = result.get("state_summary", {}).get("action")
-if action in ("pause", "reject"):
+action = result.get("action_summary", {}).get("action")
+if action == "pause":
     agent.require_human_review(result.get("next_action"))
 ```
 

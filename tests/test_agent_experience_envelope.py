@@ -173,16 +173,32 @@ def test_onboard_envelope_surfaces_predecessor():
 def test_sync_state_envelope_summarizes_decision_and_risk():
     payload = {
         "success": True,
-        "decision": {"action": "continue", "margin": 0.31, "nearest_edge": "S_min"},
-        "metrics": {"coherence": 0.82, "risk_score": 0.21},
+        "decision": {
+            "action": "continue",
+            "reason": "Low risk; continue the bounded task.",
+            "margin": 0.31,
+            "nearest_edge": "S_min",
+        },
+        "metrics": {"coherence": 0.82, "risk_score": 0.21, "verdict": "safe"},
         "health_status": "healthy",
     }
     env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert env["action_summary"] == {
+        "action": "proceed",
+        "verdict": "safe",
+        "reason": "Low risk; continue the bounded task.",
+        "risk_score": 0.21,
+        "verdict_confidence": "unspecified",
+    }
     summary = env["state_summary"]
     assert summary["action"] == "continue"
     assert summary["coherence"] == 0.82
     assert env["risk_summary"].startswith("risk low")
     assert "recovery_hint" not in env  # healthy state stays quiet
+    assert env["response_options"]["routine"] == "compact"
+    assert env["response_options"]["actionable_diagnostics"] == "mirror"
+    assert env["_response_size"]["approx_bytes"] > 0
+    assert env["_response_size"]["measured_without_self"] is True
 
 
 def test_sync_state_envelope_emits_recovery_hint_when_degraded():
@@ -245,6 +261,61 @@ def test_sync_state_envelope_surfaces_provisional_verdict_caveat():
     assert "provisional" in env["verdict_caveat"].lower()
     assert "4 more check-in" in env["verdict_caveat"]
     assert env["state_summary"]["verdict_provisional"] is True
+    assert env["action_summary"]["verdict_confidence"] == "provisional"
+    assert env["action_summary"]["evidence_basis"] == "phi_cold_start"
+
+
+def test_sync_state_compact_envelope_lifts_provisional_evidence_and_legacy_diagnostic():
+    """Compact mode keeps cold-start evidence inside metrics.verdict; the
+    action-first envelope must lift it without requiring a full payload."""
+    payload = {
+        "success": True,
+        "_mode": "compact",
+        "decision": {
+            "action": "proceed",
+            "sub_action": "approve",
+            "reason": "Low risk (0.05)",
+        },
+        "metrics": {
+            "coherence": 0.49,
+            "coherence_source": "legacy_tanh_v",
+            "coherence_role": "ode_control_feedback",
+            "risk_score": 0.05,
+            "verdict": {
+                "value": "safe",
+                "meaning": "Behavioral assessment: low risk. Provisional.",
+                "evidence": {
+                    "grade": "provisional",
+                    "basis": "ode_fallback",
+                },
+            },
+        },
+    }
+
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+
+    assert env["action_summary"] == {
+        "action": "proceed",
+        "sub_action": "approve",
+        "verdict": "safe",
+        "reason": "Low risk (0.05)",
+        "risk_score": 0.05,
+        "verdict_confidence": "provisional",
+        "evidence_basis": "ode_fallback",
+    }
+    assert "cold-start prior" in env["verdict_caveat"]
+    assert "metrics.verdict.evidence" in env["verdict_caveat"]
+    assert env["state_summary"]["verdict_provisional"] is True
+    assert env["legacy_diagnostics"] == {
+        "source": "legacy_tanh_v",
+        "role": "ode_control_feedback",
+        "health_evidence": False,
+        "interpretation": (
+            "Compatibility ODE controller feedback; diagnostic context, "
+            "not a behavioral health score."
+        ),
+        "coherence": 0.49,
+    }
 
 
 def test_sync_state_envelope_no_caveat_when_baseline_warm():
@@ -268,6 +339,8 @@ def test_sync_state_envelope_no_caveat_when_baseline_warm():
     env = build_experience_envelope("sync_state", "process_agent_update", payload)
     assert "verdict_caveat" not in env
     assert "verdict_provisional" not in env["state_summary"]
+    assert env["action_summary"]["verdict_confidence"] == "non_provisional"
+    assert env["action_summary"]["evidence_basis"] == "behavioral_assessment"
 
 
 def test_sync_state_envelope_surfaces_reflection():
@@ -371,15 +444,63 @@ def test_metrics_envelope_full_escape_hatch_preserves_raw_payload():
 def test_search_envelope_counts_and_suggests():
     payload = {
         "success": True,
-        "results": [{"id": "d1", "summary": "prior art"}],
+        "results": [{
+            "id": "d1",
+            "summary": "prior art",
+            "type": "observation",
+            "status": "open",
+            "severity": "medium",
+            "tags": ["response-ux"],
+            "created_at": "2026-08-22T00:00:00+00:00",
+            "updated_at": "2026-08-23T00:00:00+00:00",
+            "has_details": True,
+            "details_preview": "Bounded preview",
+            "has_more_details": True,
+        }],
         "total_count": 1,
+        "discovery_retrieval_options": {
+            "current_tier": "digest",
+            "digest": "include_details=false",
+            "open_one": "knowledge(action='details', discovery_id='...')",
+            "all_inline": "include_details=true (can be large)",
+        },
     }
     env = build_experience_envelope("search_shared_memory", "knowledge", payload)
     assert "1 prior discoveries matched" in env["next_action"]
     assert "store_finding(" in env["next_action"]
     assert env["memory_suggestions"][0]["summary"] == "prior art"
+    assert env["memory_suggestions"][0]["status"] == "open"
+    assert env["memory_suggestions"][0]["tags"] == ["response-ux"]
+    assert env["memory_suggestions"][0]["details_preview"] == "Bounded preview"
+    assert env["state_summary"]["result_tier"] == "digest"
+    assert env["state_summary"]["results_shown_in_digest"] == 1
+    assert env["discovery_retrieval_options"]["current_tier"] == "digest"
+    assert env["response_options"] == {
+        "current": "compact",
+        "digest": "compact",
+        "complete_result_set": "full",
+    }
     assert "raw_governance" not in env
     assert "response_mode='full'" in env["raw_governance_hint"]
+
+
+def test_full_sync_state_reports_large_response_and_reduction_mode():
+    payload = {
+        "success": True,
+        "decision": {"action": "proceed", "reason": "Low risk"},
+        "metrics": {"risk_score": 0.1, "verdict": "safe"},
+        "large_diagnostic": "x" * 5_000,
+    }
+
+    env = build_experience_envelope(
+        "sync_state",
+        "process_agent_update",
+        payload,
+        {"response_mode": "full"},
+    )
+
+    assert env["_response_size"]["size_class"] in {"medium", "large"}
+    assert "response_mode='compact'" in env["_response_size"]["reduce_with"]
 
 
 def test_search_envelope_full_escape_hatch_preserves_raw_payload():
