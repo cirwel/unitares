@@ -154,6 +154,15 @@ class DialecticParams(AgentIdentityMixin):
     root_cause: Optional[str] = Field(None, description="Root cause analysis (for action=thesis/synthesis)")
     proposed_conditions: Optional[List[str]] = Field(None, description="Conditions for resumption (for action=thesis/synthesis)")
     reasoning: Optional[str] = Field(None, description="Explanation/reasoning")
+    use_brief_as_thesis: Optional[bool] = Field(
+        None,
+        description=(
+            "For action=request or thesis, reuse the issue description or saved "
+            "session brief as the thesis instead of repeating it. The friendly "
+            "request_review alias defaults this to true when no explicit reasoning "
+            "or root_cause is supplied; raw dialectic calls default to false."
+        ),
+    )
     observed_metrics: Optional[dict] = Field(None, description="Observed metrics (for action=antithesis)")
     reviewer_provenance: Optional[dict] = Field(None, description="Reviewer/model provenance for the verdict (for action=antithesis/synthesis); reviewer_kind='external_consult' files an outside-model consult as a governed record")
     concerns: Optional[List[str]] = Field(None, description="Concerns (for action=antithesis)")
