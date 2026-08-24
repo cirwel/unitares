@@ -12,6 +12,29 @@ from ..shared import lazy_mcp_server as mcp_server
 logger = get_logger(__name__)
 
 
+# Reserved dispatch metadata must never be trusted merely because a caller used
+# the right private-looking key. ``validate_params`` strips these values and
+# reconstructs the trusted subset from DispatchContext after public validation.
+_VALIDATION_CONTEXT_KEYS = frozenset({
+    "_middleware_identity_session_key",
+    "_middleware_identity_result",
+    "_core_agent_row_status",
+    "_mangled_s22_recovery_warnings",
+    "_param_coercions",
+})
+
+
+async def strip_untrusted_dispatch_metadata(
+    name: str,
+    arguments: Dict[str, Any],
+    ctx,
+) -> Any:
+    """Remove caller-forged middleware handoff fields before any proof step."""
+    for key in _VALIDATION_CONTEXT_KEYS:
+        arguments.pop(key, None)
+    return name, arguments, ctx
+
+
 def _bound_identity_aliases(bound_id: str) -> set[str]:
     """Collect accepted aliases for a bound UUID from runtime/session caches."""
     aliases = {str(bound_id)}
@@ -246,8 +269,30 @@ async def validate_params(name: str, arguments: Dict[str, Any], ctx) -> Any:
     """Parameter validation: aliases → Pydantic model_validate (if available)."""
     from ..validators import apply_param_aliases
 
+    # The MCP protocol wrapper retains this original dict to attribute its
+    # post-dispatch audit row. Validation may replace ``arguments`` with a
+    # Pydantic-produced copy, so restore only middleware-rebuilt proof to this
+    # object after public validation; caller-forged values were stripped first.
+    dispatch_arguments = arguments
+
     # Step 1: Fuzzy parameter aliases (e.g., "content" → "summary")
     arguments = apply_param_aliases(name, arguments)
+
+    # Caller-supplied reserved keys are never proof. Identity middleware clears
+    # and re-stamps its handoff before this step, but rebuilding from ``ctx`` is
+    # both easier to audit and safe for direct/unit invocation of this function.
+    for key in _VALIDATION_CONTEXT_KEYS:
+        arguments.pop(key, None)
+    trusted_context: Dict[str, Any] = {}
+    identity_result = getattr(ctx, "identity_result", None)
+    if isinstance(identity_result, dict):
+        trusted_context["_middleware_identity_result"] = dict(identity_result)
+        trusted_context["_middleware_identity_session_key"] = getattr(
+            ctx, "session_key", None
+        )
+    normalized_parameters = getattr(ctx, "normalized_parameters", None)
+    if isinstance(normalized_parameters, dict) and normalized_parameters:
+        trusted_context["_param_coercions"] = dict(normalized_parameters)
 
     # Step 3: Pydantic model validation (structural + range + enum validation)
     try:
@@ -262,11 +307,9 @@ async def validate_params(name: str, arguments: Dict[str, Any], ctx) -> Any:
 
             recovery_warnings = recover_mangled_s22_provenance(arguments)
             if recovery_warnings:
-                existing = arguments.get("_mangled_s22_recovery_warnings") or []
-                arguments["_mangled_s22_recovery_warnings"] = [
-                    *existing,
-                    *recovery_warnings,
-                ]
+                trusted_context["_mangled_s22_recovery_warnings"] = list(
+                    recovery_warnings
+                )
         except Exception as exc:
             logger.debug("S22 provenance unmangling skipped before validation: %s", exc)
 
@@ -275,12 +318,17 @@ async def validate_params(name: str, arguments: Dict[str, Any], ctx) -> Any:
             from pydantic import ValidationError
             validated = schema_model.model_validate(arguments)
             validated_dict = validated.model_dump()
-            # Preserve extra fields not in the model (e.g., _param_coercions, client_hint)
-            for key, value in arguments.items():
-                if key not in validated_dict:
-                    validated_dict[key] = value
+            # Preserve the repository's long-standing pass-through behavior
+            # for legacy schemas that ignore extras. Strict schemas such as
+            # ConsultParams deliberately reject them instead.
+            if schema_model.model_config.get("extra") != "forbid":
+                for key, value in arguments.items():
+                    if key not in validated_dict:
+                        validated_dict[key] = value
+            validated_dict.update(trusted_context)
             arguments = validated_dict
         except ValidationError as e:
+            dispatch_arguments.update(trusted_context)
             return [_format_pydantic_error(e, name)]
         except Exception as e:
             # Non-validation errors (import failure, etc.): log and continue with coerced dict
@@ -288,7 +336,9 @@ async def validate_params(name: str, arguments: Dict[str, Any], ctx) -> Any:
     else:
         # Fallback debug log - should not happen if migration 100% successful
         logger.warning(f"[VALIDATION] Schema for {name} not found in Pydantic models!")
+        arguments.update(trusted_context)
 
+    dispatch_arguments.update(trusted_context)
     return name, arguments, ctx
 
 

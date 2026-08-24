@@ -3,6 +3,8 @@
 import asyncio
 import json
 
+import pytest
+
 from src.mcp_handlers.support import host_adapter as ha
 
 
@@ -107,6 +109,7 @@ def test_invoke_disabled(monkeypatch):
     monkeypatch.delenv("UNITARES_HOST_ADAPTER_ENABLED", raising=False)
     r = _run(ha.invoke_host_adapter("codex:host-adapter", "hi"))
     assert r["ok"] is False and "disabled" in r["error"]
+    assert r["dispatch_phase"] == "preflight"
 
 
 def test_invoke_unknown_host(monkeypatch):
@@ -271,6 +274,114 @@ def test_invoke_spawn_failure(monkeypatch):
     r = _run(ha.invoke_host_adapter("codex:host-adapter", "hi", timeout_s=5))
     assert r["ok"] is False
     assert "spawn 500" in r["error"]
+    assert r["dispatch_phase"] == "spawn_rejected"
+
+
+def test_invoke_acknowledged_spawn_without_id_is_ambiguous(monkeypatch):
+    _enable(monkeypatch)
+    _patch_httpx(monkeypatch, [_FakeResp(201, {"ok": True})])
+
+    result = _run(ha.invoke_host_adapter(
+        "claude:host-adapter",
+        "review",
+        timeout_s=5,
+    ))
+
+    assert result["ok"] is False
+    assert result["dispatch_phase"] == "spawn_acknowledged"
+    assert "no agent_id" in result["error"]
+
+
+def test_invoke_spawn_transport_error_is_ambiguous(monkeypatch):
+    _enable(monkeypatch)
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, _url, **_kwargs):
+            raise RuntimeError("lost spawn acknowledgement")
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: _Client())
+    result = _run(ha.invoke_host_adapter(
+        "claude:host-adapter",
+        "review",
+        timeout_s=5,
+    ))
+
+    assert result["ok"] is False
+    assert result["dispatch_phase"] == "spawn_request_started"
+    assert result.get("agent_id") is None
+
+
+def test_invoke_exception_after_spawn_preserves_orchestrator_agent_id(monkeypatch):
+    _enable(monkeypatch)
+    state = {"calls": 0}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, _url, **_kwargs):
+            state["calls"] += 1
+            if state["calls"] == 1:
+                return _FakeResp(201, {"agent_id": "ag-preserved"})
+            raise RuntimeError("await transport failed")
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: _Client())
+    result = _run(ha.invoke_host_adapter(
+        "claude:host-adapter",
+        "review",
+        timeout_s=5,
+    ))
+
+    assert result["ok"] is False
+    assert result["agent_id"] == "ag-preserved"
+    assert result["dispatch_phase"] == "spawned"
+    assert "await transport failed" in result["error"]
+
+
+def test_cancellation_after_spawn_propagates_and_child_is_runtime_bounded(monkeypatch):
+    _enable(monkeypatch)
+    state = {"calls": 0, "spawn_spec": None}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, _url, **kwargs):
+            state["calls"] += 1
+            if state["calls"] == 1:
+                state["spawn_spec"] = kwargs["json"]
+                return _FakeResp(201, {"agent_id": "ag-cancelled-await"})
+            raise asyncio.CancelledError
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: _Client())
+    with pytest.raises(asyncio.CancelledError):
+        _run(ha.invoke_host_adapter(
+            "claude:host-adapter",
+            "review",
+            timeout_s=5,
+        ))
+
+    # Cancellation never starts a fallback here. The orchestrator owns the
+    # accepted child and its max-runtime backstop bounds an unpolled orphan.
+    assert state["spawn_spec"]["max_runtime_ms"] == 35_000
 
 
 def test_registry_reflects_availability(monkeypatch):

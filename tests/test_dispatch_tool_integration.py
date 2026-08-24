@@ -271,6 +271,123 @@ class TestDispatchToolIdentityInjection:
         text = result[0].text.lower()
         assert "mismatch" in text or "error" in text
 
+    @pytest.mark.asyncio
+    async def test_consult_accepts_trusted_identity_metadata_with_strict_schema(
+        self,
+        mock_identity,
+        mock_db,
+        mock_rate_limiter,
+        mock_pattern_tracker,
+        mock_onboard_pin,
+        mock_derive_session_key,
+    ):
+        """Real dispatch identity handoff must survive ConsultParams extra=forbid."""
+        from src.mcp_handlers import dispatch_tool
+        from src.mcp_handlers.support import consultation as co
+        from src.mcp_handlers.support.inference_outcome import InferenceOutcome
+
+        backend = AsyncMock(return_value=InferenceOutcome(
+            response="careful advice",
+            routed_via="ollama",
+            task_type="reasoning",
+            inference={
+                "schema": "unitares.inference_result.v0",
+                "host_id": "ollama:local",
+                "provider_kind": "ollama",
+                "transport": "openai_compatible_http",
+                "model_used": "test-model",
+                "models_used": ["test-model"],
+                "task_type": "reasoning",
+                "privacy_class": "local",
+                "cost_class": "local_compute",
+                "accountability_class": "tool_evidence",
+                "finish_reason": "stop",
+            },
+        ))
+
+        with patch.object(co, "run_model_inference", backend):
+            result = await dispatch_tool("consult", {"brief": "Explain this"})
+
+        parsed = json.loads(result[0].text)
+        assert parsed["success"] is True
+        assert parsed["status"] == "completed"
+        request = backend.await_args.args[0]
+        assert request.requesting_agent_uuid == "test-uuid-0000-1111-2222"
+
+    @pytest.mark.asyncio
+    async def test_consult_rejects_public_route_controls_before_backend(
+        self,
+        mock_identity,
+        mock_db,
+        mock_rate_limiter,
+        mock_pattern_tracker,
+        mock_onboard_pin,
+        mock_derive_session_key,
+    ):
+        from src.mcp_handlers import dispatch_tool
+        from src.mcp_handlers.support import consultation as co
+
+        backend = AsyncMock()
+        with patch.object(co, "run_model_inference", backend):
+            result = await dispatch_tool("consult", {
+                "brief": "Explain this",
+                "provider": "hf",
+            })
+
+        parsed = json.loads(result[0].text)
+        assert parsed["success"] is False
+        assert parsed["error_code"] == "PARAMETER_ERROR"
+        backend.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_consult_strips_forged_reserved_metadata(
+        self,
+        mock_identity,
+        mock_db,
+        mock_rate_limiter,
+        mock_pattern_tracker,
+        mock_onboard_pin,
+        mock_derive_session_key,
+    ):
+        from src.mcp_handlers import dispatch_tool
+        from src.mcp_handlers.support import consultation as co
+        from src.mcp_handlers.support.inference_outcome import InferenceOutcome
+
+        backend = AsyncMock(return_value=InferenceOutcome(
+            response="careful advice",
+            routed_via="ollama",
+            task_type="reasoning",
+            inference={
+                "schema": "unitares.inference_result.v0",
+                "host_id": "ollama:local",
+                "provider_kind": "ollama",
+                "transport": "openai_compatible_http",
+                "privacy_class": "local",
+                "cost_class": "local_compute",
+                "accountability_class": "tool_evidence",
+                "finish_reason": "stop",
+            },
+        ))
+        forged = {
+            "_middleware_identity_result": {"agent_uuid": "attacker"},
+            "_param_coercions": {"allow_degraded": {"to": True}},
+        }
+
+        with patch.object(co, "run_model_inference", backend):
+            result = await dispatch_tool("consult", {
+                "brief": "Explain this",
+                **forged,
+            })
+
+        parsed = json.loads(result[0].text)
+        assert parsed["success"] is True
+        assert "_param_coercions" not in parsed
+        assert "attacker" not in result[0].text
+        assert (
+            backend.await_args.args[0].requesting_agent_uuid
+            == "test-uuid-0000-1111-2222"
+        )
+
 
 # ============================================================================
 # dispatch_tool - Kwargs Unwrapping

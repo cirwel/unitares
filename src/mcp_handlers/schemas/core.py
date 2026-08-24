@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, Union, Literal, Dict, Any, List
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from .mixins import AgentIdentityMixin
 
 
@@ -592,6 +592,62 @@ class DelegateInferenceParams(AgentIdentityMixin):
         le=420,
         description="Maximum seconds to await the delegated CLI result.",
     )
+
+
+class ConsultParams(AgentIdentityMixin):
+    """Bounded policy surface for advisory model consultation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    brief: str = Field(
+        ...,
+        min_length=1,
+        max_length=32_000,
+        description="Question or material to send for advisory model help.",
+    )
+    purpose: Literal["answer", "critique", "summarize", "generate"] = Field(
+        "answer",
+        description=(
+            "Desired advisory operation. critique remains model advice, not a "
+            "governed peer-review verdict."
+        ),
+    )
+    effort: Literal["standard", "thorough"] = Field(
+        "standard",
+        description=(
+            "standard uses the lower-overhead inference lane; thorough requests "
+            "the operator-authorized strong-model lane. Neither value is a latency SLA."
+        ),
+    )
+    privacy: Literal["local", "cloud_allowed"] = Field(
+        "local",
+        description=(
+            "local confines routing to the configured local inference service; "
+            "cloud_allowed permits, but does not require, external processing."
+        ),
+    )
+    allow_degraded: bool = Field(
+        False,
+        description=(
+            "Allow thorough effort to fall back to standard local inference. "
+            "This never weakens the requested privacy policy."
+        ),
+    )
+    response_mode: Literal["compact", "full"] = Field(
+        "compact",
+        description=(
+            "compact returns the advisory result and policy outcome; full adds "
+            "a single diagnostics object with route and inference provenance."
+        ),
+    )
+
+    @field_validator("brief")
+    @classmethod
+    def brief_must_not_be_blank(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("brief must contain non-whitespace text")
+        return normalized
 
 
 class ListInferenceHostsParams(AgentIdentityMixin):

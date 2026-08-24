@@ -20,7 +20,7 @@ wired). See
 [`dormant-capability-registry.md`](../operations/dormant-capability-registry.md)
 for the false-positive history this avoids.
 
-**56 registered tools · 8 consolidated (52 actions) · 72 aliases.**
+**57 registered tools · 8 consolidated (52 actions) · 72 aliases.**
 
 ## Content-addressed snapshots
 
@@ -30,10 +30,10 @@ registrars advertise in each deployable mode and what `describe_tool` says
 about those names. The snapshots are immutable evidence inputs; they do not
 certify the components that produced them.
 
-- Audit bundle: `sha256:49169efe589406a2bb5bc70a4f1f943f7e7d5343f2f6179ed296c698241ed715` (`unitares.tool-surface-audit.v1`).
-- Dispatch snapshot: `sha256:369db65755679f02fbf1c5203fda998534f5bb723d2313596960dbde72feaa02`.
-- Audited source revision: `sha256:1f9121124ce667272f253d5a9e91490220e45cf87d85ddf691c465e358475a58` (50 files).
-- Exposure snapshot: `sha256:05be0677009ed8c8a16cbe097ef0c867f9e41c14b8be52b3cf44d2f3576c8edb`.
+- Audit bundle: `sha256:cb665236459afe2a0290c8ccf81cefa77413ff80d1fda0ae581336986fcb773f` (`unitares.tool-surface-audit.v1`).
+- Dispatch snapshot: `sha256:f31b781d98d4c18b41a4bbad325d81da93cd967c9df5036a8d04e49554755a43`.
+- Audited source revision: `sha256:ddf2f70d14d526d2221459289e837bc07b72bba79a3a6f974da03be2ceee9b75` (52 files).
+- Exposure snapshot: `sha256:c50cd692fc546c4a866b54765672d6591614ba735274fe49569412dc64b1e955`.
 - JSON contract: [`tool_surface_audit_v1.schema.json`](tool_surface_audit_v1.schema.json).
 - Reproduce with `python3 scripts/dev/tool_edge_index.py --json`; run
   `--lint` to return non-zero when error-severity findings exist.
@@ -48,10 +48,10 @@ removal authority.
 | Mode | Declared | Advertised | Declared only | Advertised only |
 |---|---:|---:|---|---|
 | `minimal` | 6 | 11 | — | `record_result`, `request_review`, `search_shared_memory`, `store_finding`, `update_finding` |
-| `lite` | 28 | 28 | — | — |
+| `lite` | 29 | 29 | — | — |
 | `operator_readonly` | 13 | 21 | — | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
 | `operator_recovery` | 17 | 25 | — | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
-| `full` | 79 | 64 | `aggregate_metrics`, `archive_agent`, `backfill_calibration_from_dialectic`, `check_calibration`, `cleanup_knowledge_graph`, `compare_agents`, `compare_me_to_similar`, `delete_agent` … +15 | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
+| `full` | 80 | 65 | `aggregate_metrics`, `archive_agent`, `backfill_calibration_from_dialectic`, `check_calibration`, `cleanup_knowledge_graph`, `compare_agents`, `compare_me_to_similar`, `delete_agent` … +15 | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
 
 ### Workflow alias views
 
@@ -63,27 +63,23 @@ the alias wire rejects them.
 |---|---|---:|---|---|
 | `check_working_state` | `get_governance_metrics` | 4 | `agent_id` | `sha256:b7b0c68eff57d9bac4aa5a861a5f3228c94af4357a3fb8603bb6d09975f29e09` |
 | `record_result` | `outcome_event` | 14 | — | `sha256:ac61fb102158b83af68cc22d039b0d0a318dda30ebf1522dc49745d4335549ec` |
-| `request_review` | `dialectic` | 25 | `action` | `sha256:924fcb825ba3ee27238546b147cfa04e9bcf6e16930ebc20f168a38cf62164b2` |
-| `search_shared_memory` | `knowledge` | 36 | `action`, `auto_link_related`, `comparison_key`, `content`, `details`, `discovery_id`, `related_files`, `resolution_notes` … +7 | `sha256:3be01cf1217fbaccf89e9102d10a8e0ca73910d74338f861b9d3a2a513aaaa2d` |
+| `request_review` | `dialectic` | 9 | — | `sha256:5e1ead2e73cef1572c89d4a27317a209e47485dbd97f68733b41be2b66ae6508` |
+| `search_shared_memory` | `knowledge` | 36 | — | `sha256:3be01cf1217fbaccf89e9102d10a8e0ca73910d74338f861b9d3a2a513aaaa2d` |
 | `start_session` | `onboard` | 16 | — | `sha256:89788402e8e21a8e918d6aac1339ce2537127ee3b6f9b175b89c1fefbaabc8d3` |
-| `store_finding` | `knowledge` | 13 | `action`, `auto_link_related`, `closure_class`, `closure_evidence`, `confidence`, `discovery_id`, `dry_run`, `epoch_scope` … +30 | `sha256:88f13bbeed5d015e46b8fb362ae7a5656433926c7e5873b4fc7dd302fee57eaf` |
+| `store_finding` | `knowledge` | 13 | — | `sha256:88f13bbeed5d015e46b8fb362ae7a5656433926c7e5873b4fc7dd302fee57eaf` |
 | `sync_state` | `process_agent_update` | 22 | `agent_id`, `agent_name` | `sha256:9a96eb338278718eac4ced262db51207b748127d5716a5bcf3ec34c8bd1c2373` |
-| `update_finding` | `knowledge` | 13 | `action`, `auto_link_related`, `closure_class`, `closure_evidence`, `comparison_key`, `confidence`, `dry_run`, `epoch_scope` … +30 | `sha256:7dd261b60503ec631b43a071201424d2fe7f6dd7b1dccb1463852334985dfc90` |
+| `update_finding` | `knowledge` | 13 | — | `sha256:7dd261b60503ec631b43a071201424d2fe7f6dd7b1dccb1463852334985dfc90` |
 
 ## Deterministic findings
 
-**1 errors · 11 warnings · 15 informational.** Findings make drift reviewable;
+**1 errors · 7 warnings · 15 informational.** Findings make drift reviewable;
 they are not self-issued approval or remediation instructions.
 
 | Severity | Code | Subject | Finding | Evidence |
 |---|---|---|---|---|
 | error | `ALIAS_TARGET_MISSING` | `direct_resume_if_safe` | Alias target is not a registered dispatch tool. | {"target": "quick_resume"} |
 | warning | `DESCRIBE_SCHEMA_WIDER_THAN_WIRE` | `check_working_state` | describe_tool advertises parameters the alias wire schema rejects. | {"properties": ["agent_id"]} |
-| warning | `DESCRIBE_SCHEMA_WIDER_THAN_WIRE` | `request_review` | describe_tool advertises parameters the alias wire schema rejects. | {"properties": ["action"]} |
-| warning | `DESCRIBE_SCHEMA_WIDER_THAN_WIRE` | `search_shared_memory` | describe_tool advertises parameters the alias wire schema rejects. | {"properties": ["action", "auto_link_related", "comparison_key", "content", "details", "discovery_id", "related_files", "resolution_notes", "response_to", "summary", "superseded_by", "supersedes", "supersedes_id", "task_label", "task_outco… |
-| warning | `DESCRIBE_SCHEMA_WIDER_THAN_WIRE` | `store_finding` | describe_tool advertises parameters the alias wire schema rejects. | {"properties": ["action", "auto_link_related", "closure_class", "closure_evidence", "confidence", "discovery_id", "dry_run", "epoch_scope", "exclude_agent_labels", "include_archived", "include_cold", "include_details", "include_provenance"… |
 | warning | `DESCRIBE_SCHEMA_WIDER_THAN_WIRE` | `sync_state` | describe_tool advertises parameters the alias wire schema rejects. | {"properties": ["agent_id", "agent_name"]} |
-| warning | `DESCRIBE_SCHEMA_WIDER_THAN_WIRE` | `update_finding` | describe_tool advertises parameters the alias wire schema rejects. | {"properties": ["action", "auto_link_related", "closure_class", "closure_evidence", "comparison_key", "confidence", "dry_run", "epoch_scope", "exclude_agent_labels", "include_archived", "include_cold", "include_details", "include_provenanc… |
 | warning | `MODE_DECLARED_UNADVERTISED` | `full` | The mode declares names the production registrar would not advertise. | {"names": ["aggregate_metrics", "archive_agent", "backfill_calibration_from_dialectic", "check_calibration", "cleanup_knowledge_graph", "compare_agents", "compare_me_to_similar", "delete_agent", "detect_anomalies", "export_to_file", "get_a… |
 | warning | `MODE_UNDECLARED_ADVERTISED` | `full` | The production registrar advertises names absent from the mode declaration. | {"names": ["check_working_state", "record_result", "request_review", "search_shared_memory", "start_session", "store_finding", "sync_state", "update_finding"]} |
 | warning | `MODE_UNDECLARED_ADVERTISED` | `minimal` | The production registrar advertises names absent from the mode declaration. | {"names": ["record_result", "request_review", "search_shared_memory", "store_finding", "update_finding"]} |
@@ -118,15 +114,16 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `archive_orphan_agents` | `src/mcp_handlers/lifecycle/operations.py:745 handle_archive_orphan_agents` | `src/mcp_handlers/schemas/lifecycle.py:215 ArchiveOrphanAgentsParams` | 30s | — |
 | `bind_session` | `src/mcp_handlers/identity/handlers.py:1500 handle_bind_session` | `src/mcp_handlers/schemas/identity.py:210 BindSessionParams` | 5s | identity=pre_onboard |
 | `calibration` | `src/mcp_handlers/consolidated.py:245 action_router` | `src/mcp_handlers/schemas/calibration.py:67 CalibrationParams` | 60s | — |
-| `call_model` | `src/mcp_handlers/support/model_inference.py:168 handle_call_model` | `src/mcp_handlers/schemas/core.py:544 CallModelParams` | 240s | — |
+| `call_model` | `src/mcp_handlers/support/model_inference.py:624 handle_call_model` | `src/mcp_handlers/schemas/core.py:544 CallModelParams` | 240s | — |
 | `cirs_protocol` | `src/mcp_handlers/cirs/protocol.py:124 handle_cirs_protocol` | `src/mcp_handlers/schemas/core.py:516 CirsProtocolParams` | 15s | — |
 | `cleanup_stale_locks` | `src/mcp_handlers/admin/handlers.py:481 handle_cleanup_stale_locks` | `src/mcp_handlers/schemas/admin.py:133 CleanupStaleLocksParams` | 15s | — |
 | `config` | `src/mcp_handlers/consolidated.py:270 action_router` | `src/mcp_handlers/schemas/admin.py:148 ConfigParams` | 15s | — |
+| `consult` | `src/mcp_handlers/support/consultation.py:690 handle_consult` | `src/mcp_handlers/schemas/core.py:597 ConsultParams` | 480s | — |
 | `dashboard` | `src/mcp_handlers/admin/dashboard.py:44 handle_dashboard` | `src/mcp_handlers/schemas/dashboard.py:6 DashboardParams` | 15s | — |
 | `debug_request_context` | `src/mcp_handlers/admin/handlers.py:525 handle_debug_request_context` | `src/mcp_handlers/schemas/admin.py:144 DebugRequestContextParams` | 5s | — |
-| `delegate_inference` | `src/mcp_handlers/support/delegated_inference.py:51 handle_delegate_inference` | `src/mcp_handlers/schemas/core.py:562 DelegateInferenceParams` | 480s | — |
-| `describe_inference_host` | `src/mcp_handlers/support/model_inference.py:105 handle_describe_inference_host` | `src/mcp_handlers/schemas/core.py:615 DescribeInferenceHostParams` | 5s | identity=pre_onboard |
-| `describe_tool` | `src/mcp_handlers/introspection/tool_introspection.py:664 handle_describe_tool` | `src/mcp_handlers/schemas/admin.py:42 DescribeToolParams` | 10s | identity=pre_onboard |
+| `delegate_inference` | `src/mcp_handlers/support/delegated_inference.py:242 handle_delegate_inference` | `src/mcp_handlers/schemas/core.py:562 DelegateInferenceParams` | 480s | — |
+| `describe_inference_host` | `src/mcp_handlers/support/model_inference.py:135 handle_describe_inference_host` | `src/mcp_handlers/schemas/core.py:671 DescribeInferenceHostParams` | 5s | identity=pre_onboard |
+| `describe_tool` | `src/mcp_handlers/introspection/tool_introspection.py:666 handle_describe_tool` | `src/mcp_handlers/schemas/admin.py:42 DescribeToolParams` | 10s | identity=pre_onboard |
 | `detect_stuck_agents` | `src/mcp_handlers/lifecycle/stuck.py:919 handle_detect_stuck_agents` | `src/mcp_handlers/schemas/lifecycle.py:275 DetectStuckAgentsParams` | 15s | identity=pre_onboard |
 | `dialectic` | `src/mcp_handlers/consolidated.py:388 action_router` | `src/mcp_handlers/schemas/dialectic.py:137 DialecticParams` | 115s | — |
 | `direct_resume_if_safe` | `src/mcp_handlers/lifecycle/resume.py:23 handle_direct_resume_if_safe` | `src/mcp_handlers/schemas/lifecycle.py:333 DirectResumeIfSafeParams` | 10s | deprecated→`quick_resume or self_recovery_review` |
@@ -143,7 +140,7 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `identity` | `src/mcp_handlers/identity/handlers.py:1102 handle_identity_adapter` | `src/mcp_handlers/schemas/identity.py:6 IdentityParams` | 10s | identity=pre_onboard |
 | `knowledge` | `src/mcp_handlers/consolidated.py:175 action_router` | `src/mcp_handlers/schemas/knowledge.py:344 KnowledgeParams` | 120s | — |
 | `leave_note` | `src/mcp_handlers/knowledge/handlers.py:4106 handle_leave_note` | `src/mcp_handlers/schemas/knowledge.py:308 LeaveNoteParams` | 10s | deprecated→`knowledge` |
-| `list_inference_hosts` | `src/mcp_handlers/support/model_inference.py:79 handle_list_inference_hosts` | `src/mcp_handlers/schemas/core.py:597 ListInferenceHostsParams` | 5s | identity=pre_onboard |
+| `list_inference_hosts` | `src/mcp_handlers/support/model_inference.py:109 handle_list_inference_hosts` | `src/mcp_handlers/schemas/core.py:653 ListInferenceHostsParams` | 5s | identity=pre_onboard |
 | `list_process_bindings` | `src/mcp_handlers/identity/process_binding_handler.py:26 handle_list_process_bindings` | — | 10s | — |
 | `list_tools` | `src/mcp_handlers/introspection/tool_introspection.py:100 handle_list_tools` | `src/mcp_handlers/schemas/admin.py:5 ListToolsParams` | 10s | identity=pre_onboard |
 | `mark_response_complete` | `src/mcp_handlers/lifecycle/operations.py:114 handle_mark_response_complete` | `src/mcp_handlers/schemas/lifecycle.py:251 MarkResponseCompleteParams` | 5s | — |

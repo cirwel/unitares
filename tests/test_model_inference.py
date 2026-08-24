@@ -22,8 +22,8 @@ import pytest
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-# Ensure OpenAI attribute exists on the module for patching even when
-# the openai package is not installed (CI environment).
+# Ensure the historical OpenAI patch seam exists even when the openai package
+# is not installed (CI environment). Runtime binds it to AsyncOpenAI.
 import src.mcp_handlers.support.model_inference as _mi
 if not hasattr(_mi, 'OpenAI'):
     _mi.OpenAI = None
@@ -1518,44 +1518,86 @@ class TestQwenRouting:
         assert parsed["energy_cost"] == 0.01
 
 
-class TestEventLoopNonBlocking:
-    """The sync OpenAI call must run on an executor thread, never the loop.
-
-    Regression for the 2026-07-28 incident: Vigil's KG audit → call_model →
-    Ollama cold-load blocked gov-mcp's entire event loop 2-3 minutes every
-    30 minutes (WS keepalives died, /health timed out, Lumen check-ins
-    failed). A blocked loop also disarms the tool's own wait_for timeout.
-    """
+class TestAsyncInferenceLifetime:
+    """Provider I/O stays cancellable and cannot outlive its wall-clock cap."""
 
     @pytest.mark.asyncio
-    async def test_sync_client_runs_off_the_event_loop_thread(self):
-        import threading
+    async def test_wall_clock_timeout_cancels_inflight_async_request(self):
+        import asyncio
+        import time
 
-        loop_thread = threading.get_ident()
-        seen: dict = {}
+        from src.mcp_handlers.support import model_inference as mi
+
+        cancelled = asyncio.Event()
+
+        async def _hang(**kwargs):
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
 
         mock_client_instance = MagicMock()
-
-        def _record_thread(**kwargs):
-            seen["thread"] = threading.get_ident()
-            return _make_mock_response()
-
-        mock_client_instance.chat.completions.create.side_effect = _record_thread
-
-        with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True), \
-             patch("src.mcp_handlers.support.model_inference.OpenAI", return_value=mock_client_instance):
-            from src.mcp_handlers.support.model_inference import handle_call_model
-            await handle_call_model({
-                "prompt": "Hello",
-                "provider": "ollama",
-                "model": "auto",
-            })
-
-        assert "thread" in seen, "the mocked create was never called"
-        assert seen["thread"] != loop_thread, (
-            "chat.completions.create ran ON the event loop thread — the sync "
-            "OpenAI client must be dispatched via run_in_executor"
+        mock_client_instance.chat.completions.create = AsyncMock(
+            side_effect=_hang
         )
+        mock_client_instance.close = AsyncMock()
+        request = mi.CallModelRequest(
+            prompt="Hello",
+            requesting_agent_uuid="resolved-agent",
+            provider="ollama",
+            timeout_s=0.02,
+        )
+
+        started = time.monotonic()
+        with patch.object(mi, "OPENAI_AVAILABLE", True), patch.object(
+            mi,
+            "OpenAI",
+            return_value=mock_client_instance,
+        ):
+            outcome = await mi.run_model_inference(request)
+        elapsed = time.monotonic() - started
+
+        assert outcome.ok is False
+        assert outcome.failure is not None
+        assert outcome.failure.code == "TIMEOUT"
+        assert elapsed < 0.5
+        assert cancelled.is_set(), "the in-flight provider coroutine survived"
+        mock_client_instance.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_close_failure_cannot_replace_task_cancellation(self):
+        import asyncio
+
+        from src.mcp_handlers.support import model_inference as mi
+
+        started = asyncio.Event()
+
+        async def _hang(**kwargs):
+            started.set()
+            await asyncio.Event().wait()
+
+        mock_client_instance = MagicMock()
+        mock_client_instance.chat.completions.create = AsyncMock(
+            side_effect=_hang
+        )
+        mock_client_instance.close.side_effect = RuntimeError("close failed")
+        request = mi.CallModelRequest(
+            prompt="Hello",
+            requesting_agent_uuid="resolved-agent",
+            provider="ollama",
+            timeout_s=30.0,
+        )
+
+        with patch.object(mi, "OPENAI_AVAILABLE", True), patch.object(
+            mi,
+            "OpenAI",
+            return_value=mock_client_instance,
+        ):
+            task = asyncio.create_task(mi.run_model_inference(request))
+            await asyncio.wait_for(started.wait(), timeout=0.5)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
 
 
 class TestCallModelTimeoutInvariant:

@@ -35,6 +35,14 @@ import time
 from typing import Dict
 
 from src.mcp_compat import Context, get_tool_input_schema
+from src.alias_schema import (
+    ALIAS_SCHEMA_DROP,
+    ALIAS_SCHEMA_KEEP,
+    ALIAS_SCHEMA_PROPERTY_OVERRIDES,
+    _ALIAS_ALWAYS_KEEP,
+    apply_alias_schema_property_overrides as _apply_alias_schema_property_overrides,
+    build_alias_input_schema,
+)
 
 from src.logging_utils import get_logger
 from src.metrics_registry import TOOL_CALLS_TOTAL, TOOL_CALL_DURATION
@@ -58,6 +66,14 @@ from src.services.tool_usage_recorder import (
     resolve_dispatch_bound_agent_id,
     resolve_minted_agent_id,
 )
+
+__all__ = [
+    "ALIAS_SCHEMA_DROP",
+    "ALIAS_SCHEMA_KEEP",
+    "ALIAS_SCHEMA_PROPERTY_OVERRIDES",
+    "_ALIAS_ALWAYS_KEEP",
+    "build_alias_input_schema",
+]
 
 logger = get_logger(__name__)
 
@@ -158,13 +174,12 @@ def get_tool_wrapper(tool_name: str):
             #
             # The payload is built here, before dispatch, because dispatch_tool
             # runs params_step.resolve_alias which mutates `kwargs` in place.
-            # `session_id` and the request-side `agent_id` are read here for
-            # the same reason (identity middleware injects agent_id into
-            # kwargs during dispatch; we re-read it at the exit points so the
-            # RESOLVED binding wins over the request-side value).
+            # `session_id` is read before dispatch for stable telemetry. Actor
+            # identity is resolved only from the middleware-owned handoff at
+            # the exit point; a raw request agent_id may be a target, legacy
+            # reference, or rejected impersonation attempt.
             usage_payload = build_tool_usage_payload(tool_name, kwargs)
             session_id = kwargs.get("client_session_id")
-            request_agent_id = kwargs.get("agent_id")
 
             def _record(success, error_type=None, result=None):
                 """Fire-and-forget audit row.
@@ -177,24 +192,20 @@ def get_tool_wrapper(tool_name: str):
                 handler (where a raise would propagate to the client).
                 """
                 try:
-                    # Attribution, most-proven first:
-                    #   1. kwargs["agent_id"] — inject_identity's in-place write
-                    #      (survives, it runs BEFORE validate_params rebinds).
-                    #   2. the request-side value read at entry.
-                    #   3. the dispatch middleware's RESOLVED binding.
-                    # (3) is load-bearing, not a nicety: `dialectic` is in
-                    # inject_identity's `browsable_data_tools`, so (1) never
-                    # fires for it, and the handler's own
+                    # Actor attribution accepts only the dispatch middleware's
+                    # resolver-owned handoff. Raw kwargs["agent_id"] may name a
+                    # target or a rejected impersonation attempt, so it must
+                    # never outrank (or substitute for) caller proof.
+                    #
+                    # The handoff is load-bearing, not a nicety: `dialectic` is in
+                    # inject_identity's `browsable_data_tools`, so no public
+                    # agent_id is injected for it, and the handler's own
                     # `arguments["agent_id"]` write lands in validate_params'
                     # COPY. Without it a strongly-bound agent's
                     # `request_review` audits as agent_id=NULL — countable but
                     # not attributed, which is exactly the question #1387 was
                     # opened to answer. Same for knowledge(action="search").
-                    agent_id = (
-                        kwargs.get("agent_id")
-                        or request_agent_id
-                        or resolve_dispatch_bound_agent_id(kwargs)
-                    )
+                    agent_id = resolve_dispatch_bound_agent_id(kwargs)
                     if result is not None:
                         agent_id = resolve_minted_agent_id(tool_name, agent_id, result)
                     record_tool_usage(
@@ -396,85 +407,21 @@ EXTRA_ARGUMENT_PASSTHROUGH_TOOLS = {
 # passthrough, so a dropped name is rejected rather than silently ignored —
 # which is why the rule is "never read", not "rarely used".
 #
-# `request_review` is deliberately absent: its documented one-call form spans
-# `request` plus thesis fields, so no single action's parameter set describes it.
-ALIAS_SCHEMA_DROP = {
-    "search_shared_memory": frozenset({
-        "content", "summary", "details", "discovery_id",
-        "supersedes", "supersedes_id", "superseded_by", "resolution_notes",
-        "related_files", "response_to", "task_label", "task_outcome",
-        "auto_link_related", "comparison_key",
-    }),
-}
-
-# `store_finding` / `update_finding` are NEW names, so no caller can be passing a
-# parameter they omit. That makes a keep-list safe here where it would not be
-# for `search_shared_memory` (subtracting is the only safe direction once a name
-# has callers). Keeping them tight also stops the new names re-creating the very
-# problem they exist to solve: a write alias advertising every search filter
-# would compete for read intents the same way the read alias swallowed writes.
+# Keep-lists define friendly task verbs whose wire contract intentionally spans
+# fewer fields than their implementation router. ``request_review`` combines
+# request fields and the thesis fields used by its one-call experience; it must
+# not advertise get/list/antithesis/synthesis controls merely because dialectic
+# implements them too.
 #
 # Names are the ROUTER's, not the narrow tool's — `knowledge(action='update')`
 # routes to `update_discovery_status_graph`, but that handler's own schema says
 # `new_status` while the code path reads `status`. Verified against
 # `_parse_knowledge_update_request`. Identity params are added back below.
-ALIAS_SCHEMA_KEEP = {
-    "store_finding": frozenset({
-        "summary", "details", "content", "discovery_type", "severity", "tags",
-        "comparison_key", "memory_context", "task_label", "task_outcome",
-    }),
-    "update_finding": frozenset({
-        "discovery_id", "status", "details", "content", "resolution_notes",
-        "summary", "severity", "discovery_type", "tags", "superseded_by",
-    }),
-}
-
 # Alias-specific advertised schema overrides. The canonical knowledge router
 # remains full-by-default for compatibility; the task-verb read alias returns
 # its compact experience envelope unless the caller explicitly requests full.
 # FastMCP reconstructs schemas from wrapper signatures, so the override is
 # applied both before wrapper creation and to the registered Tool below.
-ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
-    "search_shared_memory": {
-        "response_mode": {
-            "default": "lean",
-            "description": (
-                "Friendly read-envelope mode. Defaults to lean: one-line result "
-                "digests with a single relevance score and no repeated identity, "
-                "detail previews, or score maps. Compact retains more diagnostics; "
-                "full includes raw_governance with the complete result set."
-            ),
-        },
-        "include_details": {
-            "description": (
-                "Expand every result inline only with response_mode='full'. "
-                "Compact/lean search suppresses detail serialization upstream "
-                "and returns bounded previews; open one result with "
-                "knowledge(action='details', discovery_id='...')."
-            ),
-        },
-    },
-}
-
-# Auto-injected/plumbing params every alias keeps regardless of its keep-list.
-_ALIAS_ALWAYS_KEEP = frozenset({
-    "agent_id", "client_session_id", "continuity_token",
-})
-
-
-def _apply_alias_schema_property_overrides(alias_name: str, schema: dict) -> None:
-    """Apply documented property overrides in place when the property exists."""
-    properties = schema.get("properties") if isinstance(schema, dict) else None
-    if not isinstance(properties, dict):
-        return
-    for parameter, updates in ALIAS_SCHEMA_PROPERTY_OVERRIDES.get(
-        alias_name, {}
-    ).items():
-        definition = properties.get(parameter)
-        if isinstance(definition, dict):
-            definition.update(updates)
-
-
 def auto_register_all_tools(mcp):
     """
     Auto-register tools from tool_schemas.py with typed signatures.
@@ -615,25 +562,11 @@ def _register_common_aliases(mcp):
         # the alias auto-injects it, so clients shouldn't need to provide it.
         # Drop the other actions' write-side parameters too, so the schema stops
         # advertising work this alias's name says it does not do.
-        if info.inject_action and actual_schema:
-            import copy
-            actual_schema = copy.deepcopy(actual_schema)
-            props = actual_schema.get("properties", {})
-            props.pop("action", None)
-            keep = ALIAS_SCHEMA_KEEP.get(alias_name)
-            if keep is not None:
-                allowed = keep | _ALIAS_ALWAYS_KEEP
-                dropped = frozenset(props) - allowed
-            else:
-                dropped = ALIAS_SCHEMA_DROP.get(alias_name) or frozenset()
-            for param in dropped:
-                props.pop(param, None)
-            req = actual_schema.get("required", [])
-            if "action" in req or dropped:
-                actual_schema["required"] = [
-                    r for r in req if r != "action" and r not in dropped
-                ]
-        _apply_alias_schema_property_overrides(alias_name, actual_schema)
+        actual_schema = build_alias_input_schema(
+            alias_name,
+            actual_schema,
+            inject_action=bool(info.inject_action),
+        )
 
         try:
             wrapper = create_typed_wrapper(
