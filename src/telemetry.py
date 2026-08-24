@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import json
 
 from src.audit_log import audit_logger
-from src.calibration import calibration_checker
+from src.calibration import calibration_checker, resolve_calibration_status
 from src.telemetry_cache import get_telemetry_cache
 
 
@@ -150,11 +150,12 @@ class TelemetryCollector:
         return result
     
     def get_calibration_metrics(self) -> Dict:
-        """Get calibration metrics"""
+        """Get calibration metrics with the authoritative assessability state."""
         is_calibrated, metrics = self.calibration_checker.check_calibration()
         return {
+            **metrics,
             "is_calibrated": is_calibrated,
-            **metrics
+            "calibration_status": resolve_calibration_status(is_calibrated, metrics),
         }
     
     def detect_suspicious_patterns(self, agent_id: Optional[str] = None) -> Dict:
@@ -222,4 +223,3 @@ class TelemetryCollector:
 
 # Global telemetry collector instance
 telemetry_collector = TelemetryCollector()
-

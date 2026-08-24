@@ -1,9 +1,11 @@
 """
 Tests for src/mcp_handlers/response_formatter.py — Response mode filtering.
 
-Tests _format_minimal, _format_compact, _strip_context (pure dict operations),
-and format_response routing (mocked for standard mode which needs GovernanceState).
+Tests response-mode builders, context stripping, alias routing, and bounded
+agent-facing interpretation using the real GovernanceState implementation.
 """
+
+import json
 
 import pytest
 import sys
@@ -1197,10 +1199,10 @@ def _policy_enforcement_fields():
     }
 
 
-class TestFormatStandardPreservesPredictionId:
+class TestFormatStandardAgentSummary:
     """_format_standard must pass prediction_id and warnings through (spec §6 + §2).
 
-    Exercise the real local imports so the legacy `standard` / `interpreted`
+    Exercise the real local imports so the bounded `standard` / `interpreted`
     path cannot regress to a missing top-level module.
     """
 
@@ -1227,15 +1229,85 @@ class TestFormatStandardPreservesPredictionId:
         result = self._call_format_standard(response_data)
         assert result.get("warnings") == ["evidence record failed for tool=pytest"]
 
-    def test_policy_and_enforcement_pass_through(self):
+    def test_actionable_policy_and_enforcement_are_summarized(self):
         response_data = {
             "decision": {"action": "pause"},
             "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
             **_policy_enforcement_fields(),
         }
         result = self._call_format_standard(response_data)
-        assert result.get("policy_evaluation") == response_data["policy_evaluation"]
-        assert result.get("enforcement") == response_data["enforcement"]
+        assert result["policy_evaluation"]["policy_name"] == "monitor_decision"
+        assert result["policy_evaluation"]["action"] == "pause"
+        assert result["policy_evaluation"]["_detail_level"] == "summary"
+        assert result["enforcement"]["requested"] is True
+        assert result["enforcement"]["applied"] is False
+        assert result["enforcement"]["_detail_level"] == "summary"
+        assert result["_detail_level"] == "interpreted_summary"
+        assert "response_mode='full'" in result["_raw_available"]
+
+    def test_routine_audit_gates_are_omitted_and_size_is_bounded(self):
+        gate = {
+            "schema": "eisv.cold-start-confirmation.v1",
+            "outcome": "ineligible",
+            "note": "x" * 5_000,
+            "original_decision": {"reason": "x" * 5_000},
+        }
+        response_data = {
+            "decision": {
+                "action": "proceed",
+                "sub_action": "approve",
+                "reason": "Low risk. " + "x" * 5_000,
+            },
+            "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
+            "policy_evaluation": {
+                "policy_name": "monitor_decision",
+                "action": "proceed",
+                "sub_action": "approve",
+                "maturity_gate": gate,
+                "epistemic_gate": gate,
+            },
+            "enforcement": {
+                "requested": False,
+                "applied": False,
+                "mode": "advisory",
+                "maturity_gate": gate,
+            },
+        }
+
+        result = self._call_format_standard(response_data)
+
+        assert "policy_evaluation" not in result
+        assert "enforcement" not in result
+        assert len(result["reason"]) <= 240
+        assert len(json.dumps(result).encode("utf-8")) < 6_000
+
+    def test_cold_start_action_and_verdict_provenance_survive(self):
+        response_data = {
+            "decision": {
+                "action": "proceed",
+                "sub_action": "approve",
+                "reason": "Low risk on the cold-start prior.",
+            },
+            "metrics": {
+                "E": 0.5,
+                "I": 0.5,
+                "S": 0.3,
+                "V": 0.0,
+                "phi": 0.7,
+                "verdict": "safe",
+                "primary_eisv_source": "ode_fallback",
+            },
+        }
+
+        result = self._call_format_standard(response_data)
+
+        assert result["decision"] == "proceed"  # legacy scalar stays compatible
+        assert result["action"] == "proceed"
+        assert result["sub_action"] == "approve"
+        assert result["reason"] == "Low risk on the cold-start prior."
+        assert result["verdict"]["value"] == "safe"
+        assert result["verdict"]["evidence"]["grade"] == "provisional"
+        assert result["metrics"]["primary_eisv_source"] == "ode_fallback"
 
     def test_no_prediction_id_when_absent(self):
         response_data = {
@@ -1317,7 +1389,7 @@ class TestFormatCompactPreservesPredictionId:
         result = _format_compact(response_data, using_default_mode=False, saved_trust_tier=None)
         assert result.get("warnings") == ["compact-warning"]
 
-    def test_policy_and_enforcement_pass_through(self):
+    def test_policy_and_enforcement_are_summarized(self):
         from src.mcp_handlers.response_formatter import _format_compact
         response_data = {
             "decision": {"action": "pause"},
@@ -1325,8 +1397,43 @@ class TestFormatCompactPreservesPredictionId:
             **_policy_enforcement_fields(),
         }
         result = _format_compact(response_data, using_default_mode=False, saved_trust_tier=None)
-        assert result.get("policy_evaluation") == response_data["policy_evaluation"]
-        assert result.get("enforcement") == response_data["enforcement"]
+        assert result["policy_evaluation"]["policy_name"] == "monitor_decision"
+        assert result["policy_evaluation"]["action"] == "pause"
+        assert result["policy_evaluation"]["_detail_level"] == "summary"
+        assert result["enforcement"]["requested"] is True
+        assert result["enforcement"]["applied"] is False
+        assert result["enforcement"]["_detail_level"] == "summary"
+        assert "response_mode='full'" in result["_raw_available"]
+
+    def test_routine_policy_and_advisory_enforcement_are_omitted(self):
+        from src.mcp_handlers.response_formatter import _format_compact
+        response_data = {
+            "decision": {"action": "proceed", "sub_action": "approve"},
+            "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
+            "policy_evaluation": {
+                "policy_name": "monitor_decision",
+                "action": "proceed",
+                "sub_action": "approve",
+                "reason": "Low risk.",
+                "maturity_gate": {"outcome": "ineligible"},
+            },
+            "enforcement": {
+                "requested": False,
+                "applied": False,
+                "mode": "advisory",
+                "basis": "advisory_policy",
+            },
+        }
+
+        result = _format_compact(
+            response_data,
+            using_default_mode=False,
+            saved_trust_tier=None,
+        )
+
+        assert "policy_evaluation" not in result
+        assert "enforcement" not in result
+        assert "response_mode='full'" in result["_raw_available"]
 
     def test_no_prediction_id_when_absent(self):
         from src.mcp_handlers.response_formatter import _format_compact
@@ -1337,44 +1444,114 @@ class TestFormatCompactPreservesPredictionId:
         result = _format_compact(response_data, using_default_mode=False, saved_trust_tier=None)
         assert "prediction_id" not in result
 
-    def test_identical_gates_deduplicated_without_mutating_source(self):
-        # Dogfood 2026-08-20: monitor_result embeds the same gate dict in both
-        # policy_evaluation and enforcement; compact replaces the enforcement
-        # copy with a pointer. The source dicts (shared with the persisted
-        # result/telemetry envelope) must stay intact.
+    def test_gate_diagnostics_are_bounded_without_mutating_source(self):
+        # Persisted policy/enforcement envelopes stay self-contained. Compact
+        # keeps the actionable maturity facts once and omits the duplicated
+        # enforcement gate instead of serializing either full audit record.
         from src.mcp_handlers.response_formatter import _format_compact
-        gate = {"schema": "eisv.cold-start-confirmation.v1", "outcome": "ineligible"}
-        epistemic = {"schema": "x.v1", "deferred": False}
+        gate = {
+            "schema": "eisv.cold-start-confirmation.v1",
+            "outcome": "ineligible",
+            "measurement_phase": "cold_start",
+            "note": "x" * 5_000,
+            "original_decision": {"reason": "x" * 5_000},
+        }
+        epistemic = {"schema": "x.v1", "epistemic_class": "agent_report", "note": "x" * 5_000}
         response_data = {
             "decision": {"action": "proceed"},
             "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
-            "policy_evaluation": {"policy_name": "monitor_decision",
-                                  "maturity_gate": gate, "epistemic_gate": epistemic},
-            "enforcement": {"requested": False, "basis": "advisory_policy",
-                            "maturity_gate": gate, "epistemic_gate": epistemic},
+            "policy_evaluation": {
+                "policy_name": "monitor_decision",
+                "action": "proceed",
+                "sub_action": "guide",
+                "guidance": "Verify the cold-start source. " + "x" * 5_000,
+                "maturity_gate": gate,
+                "epistemic_gate": epistemic,
+            },
+            "enforcement": {
+                "requested": True,
+                "requested_action": "pause",
+                "applied": False,
+                "mode": "advisory",
+                "basis": "advisory_policy",
+                "maturity_gate": gate,
+                "epistemic_gate": epistemic,
+            },
         }
         result = _format_compact(response_data, using_default_mode=False, saved_trust_tier=None)
-        assert result["policy_evaluation"]["maturity_gate"] == gate
-        assert "policy_evaluation.maturity_gate" in result["enforcement"]["maturity_gate"]
-        assert "policy_evaluation.epistemic_gate" in result["enforcement"]["epistemic_gate"]
-        # basis (the load-bearing derivative) survives the dedupe
+        assert result["policy_evaluation"]["maturity_gate"] == {
+            "schema": "eisv.cold-start-confirmation.v1",
+            "measurement_phase": "cold_start",
+            "outcome": "ineligible",
+        }
+        assert result["policy_evaluation"]["epistemic_gate"] == {
+            "schema": "x.v1",
+            "epistemic_class": "agent_report",
+        }
+        assert len(result["policy_evaluation"]["guidance"]) == 240
+        assert result["policy_evaluation"]["guidance"].endswith("...")
+        assert "maturity_gate" not in result["enforcement"]
+        assert "epistemic_gate" not in result["enforcement"]
         assert result["enforcement"]["basis"] == "advisory_policy"
-        # copy-on-write: the shared source dict still carries the full gate
+        assert len(str(result)) < 3_000
+        # Copy-on-read: the persisted source still carries the full audit gate.
         assert response_data["enforcement"]["maturity_gate"] == gate
+        assert response_data["policy_evaluation"]["maturity_gate"]["note"] == "x" * 5_000
 
-    def test_differing_gates_not_deduplicated(self):
+    def test_enforcement_gate_is_omitted_even_when_it_differs(self):
         from src.mcp_handlers.response_formatter import _format_compact
         response_data = {
             "decision": {"action": "proceed"},
             "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
-            "policy_evaluation": {"maturity_gate": {"outcome": "ineligible"}},
-            "enforcement": {"maturity_gate": {"outcome": "shadow_confirmed"}},
+            "policy_evaluation": {
+                "action": "guide",
+                "maturity_gate": {"outcome": "ineligible"},
+            },
+            "enforcement": {
+                "requested": True,
+                "maturity_gate": {"outcome": "shadow_confirmed"},
+            },
         }
         result = _format_compact(response_data, using_default_mode=False, saved_trust_tier=None)
-        assert result["enforcement"]["maturity_gate"] == {"outcome": "shadow_confirmed"}
+        assert result["policy_evaluation"]["maturity_gate"] == {"outcome": "ineligible"}
+        assert "maturity_gate" not in result["enforcement"]
+        assert "response_mode='full'" in result["enforcement"]["_full_available"]
 
 
 class TestFormatMinimalStripsPredictionIdButPreservesWarnings:
+    def test_minimal_keeps_cold_start_action_and_verdict_provenance(self):
+        from src.mcp_handlers.response_formatter import _format_minimal
+
+        response_data = {
+            "decision": {
+                "action": "proceed",
+                "sub_action": "approve",
+                "reason": "Low risk on the cold-start prior.",
+            },
+            "metrics": {
+                "E": 0.5,
+                "I": 0.5,
+                "S": 0.3,
+                "V": 0.0,
+                "phi": 0.7,
+                "verdict": "safe",
+                "primary_eisv_source": "ode_fallback",
+            },
+        }
+
+        result = _format_minimal(
+            response_data,
+            using_default_mode=False,
+            saved_trust_tier=None,
+        )
+
+        assert result["action"] == "proceed"
+        assert result["sub_action"] == "approve"
+        assert result["reason"] == "Low risk on the cold-start prior."
+        assert result["verdict"]["value"] == "safe"
+        assert result["verdict"]["evidence"]["grade"] == "provisional"
+        assert result["primary_eisv_source"] == "ode_fallback"
+
     def test_minimal_does_not_include_prediction_id(self):
         # Spec §6: minimal mode is bandwidth-constrained; prediction_id is a correlation
         # handle with no correctness value, so it is stripped intentionally.

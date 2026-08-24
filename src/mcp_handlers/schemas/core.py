@@ -364,14 +364,23 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
             "check-ins. 'auto' resolves to compact for steady states and mirror "
             "for actionable at-risk/guide/pause states. 'mirror' returns "
             "actionable self-awareness signals. 'full' returns the complete "
-            "payload. Compatibility aliases: 'lite' -> compact, 'verbose' -> "
-            "full, 'interpreted' -> standard. 'minimal' and 'standard' remain "
-            "legacy explicit modes for skinny or human-interpreted payloads."
+            "payload. 'standard' returns a bounded, explained summary for "
+            "agent consumption. Compatibility aliases: 'lite' -> compact, "
+            "'verbose' -> full, 'interpreted' -> standard. 'minimal' remains "
+            "the legacy bare action/EISV shape."
         )
     )
     lite: Union[bool, str, None] = Field(
         default=None,
         description="Boolean alias for response_mode='compact'. Applies only when response_mode is left at 'auto' (an explicit response_mode always wins)."
+    )
+    include_memory_suggestions: bool = Field(
+        default=False,
+        description=(
+            "Opt in to a KG lookup seeded from this check-in and include a few "
+            "matching discovery digests. Defaults to false so check-ins remain "
+            "pull-based; use search_shared_memory for deliberate retrieval."
+        ),
     )
     auto_export_on_significance: bool = Field(
         default=False,

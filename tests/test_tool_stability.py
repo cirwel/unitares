@@ -116,12 +116,20 @@ class TestResolveToolAlias:
             _, alias = resolve_tool_alias(alias_name)
             assert alias.param_normalizer is not None, alias_name
 
-    def test_canonical_tools_have_no_normalizer(self):
-        """Tolerance lives on the friendly aliases only — no alias of a
-        non-check-in tool grows a normalizer by accident."""
-        for name, alias in _TOOL_ALIASES.items():
-            if alias.new_name != "process_agent_update":
-                assert alias.param_normalizer is None, name
+    def test_normalizers_are_limited_to_declared_friendly_aliases(self):
+        """Canonical tools stay strict; only declared workflow aliases shape."""
+        normalized_aliases = {
+            name
+            for name, alias in _TOOL_ALIASES.items()
+            if alias.param_normalizer is not None
+        }
+        assert normalized_aliases == {
+            "checkin",
+            "log",
+            "update",
+            "sync_state",
+            "search_shared_memory",
+        }
 
     def test_pi_health_alias(self):
         pytest.importorskip("unitares_pi_plugin")

@@ -55,16 +55,26 @@ two; the LLM-assisted path runs internally via
 
 ### One-call review (the normal path)
 
-Passing `reasoning` or `root_cause` with the request runs session creation
-**and** the thesis in the same call, returning a verdict:
+The friendly `request_review` alias reuses a lone `issue_description` as the
+thesis, so a complete brief runs session creation **and** thesis submission in
+the same call without copying text between fields:
 
 ~~~python
 request_review(
-    issue_description="Agent memory consumption increasing over time",
-    reasoning="Memory leak suspected in state management",
+    issue_description=(
+        "Agent memory consumption is increasing over time. "
+        "Position: state management likely leaks retained objects."
+    ),
 )
 # Response includes one_call_review=True, review_verdict, whose_move
 ~~~
+
+Pass separate `reasoning` / `root_cause` fields when the subject and position
+should differ. Pass `use_brief_as_thesis=false` for a neutral two-call request.
+Raw `dialectic(action='request')` keeps the two-call default unless thesis fields
+or `use_brief_as_thesis=true` are supplied. A session already waiting at thesis
+can reuse its stored brief with
+`dialectic(action='thesis', session_id='...', use_brief_as_thesis=true)`.
 
 Timeouts are budgeted for this: the request path's timeout is derived from the
 synthetic-review budget so a one-call review can complete inside it.
@@ -117,7 +127,7 @@ Recommended conditions:
 
 **Paused agent:**
 1. Inspect state: `check_working_state` (`get_governance_metrics`)
-2. One-call review: `request_review(issue_description=..., reasoning=...)` — creates the session, submits your thesis, and returns a verdict in one call
+2. One-call review: `request_review(issue_description=...)` — reuses the brief as your thesis and returns a verdict in one call
 3. If the verdict is `resume`, follow its conditions; if the session stays open, read `whose_move`
 
 **Reviewer (antithesis):**
@@ -144,7 +154,8 @@ This provides durability and auditability, enabling post‑hoc review and calibr
 ## Related Tools
 
 **Dialectic surface (registered):**
-- `request_review` / `dialectic(action='request')` — start a review (one-call with `reasoning`)
+- `request_review` — start a one-call review from the brief by default
+- `dialectic(action='request')` — start an explicit two-call review, or pass `use_brief_as_thesis=true`
 - `dialectic(action='get')` — inspect session state and transcript (by session id or agent id)
 - `dialectic(action='list')` — list sessions with optional filters
 - `dialectic(action='quick')` — lightweight structured check without a full session

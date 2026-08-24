@@ -43,23 +43,37 @@ dialectic(
 )
 ```
 
-### One-call review (usually what you want)
+### One-call review (the friendly default)
 
-You do not have to learn the request→thesis protocol first. If you pass the
-thesis fields to the request itself, the thesis is submitted in the same call
-and you get back a review verdict (or a dispatched reviewer) directly:
+You do not have to learn the request→thesis protocol first. The friendly
+`request_review` tool reuses `issue_description` as the thesis when no separate
+thesis fields are supplied, so a complete review brief is actionable as-is:
 
 ```
 request_review(
-  issue_description: "What you want verified",
-  root_cause: "What went wrong or what triggered this",
-  reasoning: "Why your position is correct",
-  proposed_conditions: ["Concrete condition 1", "Condition 2"]
+  issue_description: "What you want verified, your position, and the evidence"
 )
 ```
 
-Passing either `reasoning` or `root_cause` triggers this. Omit both and you get
-the unchanged two-call flow (request, then `thesis`), which is still valid.
+Pass `reasoning` (and optionally `root_cause` / `proposed_conditions`) when the
+position should be distinct from the subject. Pass `use_brief_as_thesis=false`
+for a neutral request that deliberately waits for a later thesis. The raw
+`dialectic(action="request")` path preserves that two-call default unless you
+pass thesis fields or `use_brief_as_thesis=true`.
+
+For a session already waiting in the thesis phase, reuse what the server saved
+instead of copying it back:
+
+```
+dialectic(
+  action: "thesis",
+  session_id: "<session-id>",
+  use_brief_as_thesis: true
+)
+```
+
+Recovery sessions still require at least one concrete `proposed_condition`;
+manual review sessions may let the reviewer propose conditions if needed.
 
 ### Writing a Good Thesis
 

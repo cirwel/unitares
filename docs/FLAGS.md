@@ -14,7 +14,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**130 flags.**
+**131 flags.**
 
 | Flag | Default | Purpose | Read at |
 |---|---|---|---|
@@ -58,6 +58,7 @@ index; that one is the curated decision record.
 | `UNITARES_DIALECTIC_CLAUDE_MODEL` | `''` | Run Claude safely and return exact provider-reported model provenance | agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S` | `'420'` | Run Claude safely and return exact provider-reported model provenance | agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_DIALECTIC_CODEX_TIMEOUT_S` | `'420'` | Run the review on Codex (``codex exec``, ChatGPT-subscription CLI) — the capable-heterogeneous reviewer path (2026-07-02 planted-flaw probe: | agents/dialectic_reviewer/reviewer.py |
+| `UNITARES_DIALECTIC_CONTINUATION_WAIT_S` | `'3600'` | Lifetime cap for one spawned reviewer | src/mcp_handlers/dialectic/orchestrator_dispatch.py |
 | `UNITARES_DIALECTIC_DISPATCHER_UUID` | `(required)` | The standing dispatcher identity's UUID (operator-provisioned) | src/mcp_handlers/dialectic/governed_spawn.py |
 | `UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV` | `''` | Run the review on an operator-configured OpenAI-compatible endpoint | agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_DIALECTIC_EXTERNAL_BASE_URL` | `''` | Run the review on an operator-configured OpenAI-compatible endpoint | agents/dialectic_reviewer/host_backends.py |
@@ -94,7 +95,7 @@ index; that one is the curated decision record.
 | `UNITARES_INTEGRATOR` | `'rk4'` | Returns the ODE integration method | governance_core/parameters.py |
 | `UNITARES_IPUA_PIN_CHECK` | `'strict'` | Runtime accessor — respects env changes set after module load | config/governance_config.py |
 | `UNITARES_I_DYNAMICS` | `'linear'` | Returns the I-channel dynamics mode | governance_core/parameters.py |
-| `UNITARES_KG_PROACTIVE_EVERY` | `'0'` | Gate the proactive (steady-state) KG surface — cadence + warmup + length | src/mcp_handlers/updates/enrichments.py |
+| `UNITARES_KG_PROACTIVE_EVERY` | `'0'` | Add a cadence gate to explicit check-in KG recall; never enable it alone | src/mcp_handlers/updates/enrichments.py |
 | `UNITARES_KG_SEARCH_TIMEOUT_S` | `'0.25'` | — | src/mcp_handlers/updates/enrichments.py |
 | `UNITARES_KNOWLEDGE_BACKEND` | `'auto'` | Get global knowledge graph instance (singleton) | src/knowledge_graph.py |
 | `UNITARES_LEASE_PLANE_URL` | `'http://127.0.0.1:8788'` | read by _lease_plane_url() | src/mcp_handlers/dialectic/governed_spawn.py |

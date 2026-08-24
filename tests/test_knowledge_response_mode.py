@@ -43,12 +43,11 @@ def _full_identity_payload():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["compact", "lean"])
-async def test_read_modes_compact_only_caller_identity(mode):
+async def test_compact_read_mode_compacts_only_caller_identity():
     handler = AsyncMock(return_value=_text_payload(_full_identity_payload()))
     wrapped = _knowledge_read_response_mode(handler)
 
-    result = await wrapped({"response_mode": mode})
+    result = await wrapped({"response_mode": "compact"})
     payload = json.loads(result[0].text)
 
     compact_assurance = {"tier": "strong", "caller_proven": True}
@@ -64,6 +63,46 @@ async def test_read_modes_compact_only_caller_identity(mode):
     assert payload["discoveries"][0]["provenance"] == {
         "identity_context": "keep-me"
     }
+
+
+@pytest.mark.asyncio
+async def test_lean_read_mode_returns_one_line_discovery_digest():
+    payload = _full_identity_payload()
+    payload.update({
+        "query": "identity",
+        "count": 1,
+        "message": "Found 1 discovery",
+        "similarity_scores": {"d1": 0.42},
+    })
+    payload["discoveries"][0].update({
+        "summary": "A long\nidentity summary",
+        "type": "observation",
+        "status": "open",
+        "tags": ["identity", "source-claude-memory"],
+        "details_preview": "must disappear",
+        "score_breakdown": {"semantic": 0.42},
+    })
+    handler = AsyncMock(return_value=_text_payload(payload))
+    wrapped = _knowledge_read_response_mode(handler)
+
+    result = await wrapped({"response_mode": "lean"})
+    shaped = json.loads(result[0].text)
+
+    assert shaped["caller"] == {
+        "uuid": "11111111-2222-4333-8444-555555555555",
+        "tier": "strong",
+        "caller_proven": True,
+    }
+    assert "agent_signature" not in shaped
+    assert "similarity_scores" not in shaped
+    assert shaped["discoveries"] == [{
+        "id": "d1",
+        "summary": "A long identity summary",
+        "type": "observation",
+        "status": "open",
+        "tags": ["identity", "source-claude-memory"],
+        "relevance": 0.42,
+    }]
 
 
 @pytest.mark.asyncio

@@ -58,7 +58,11 @@ def _make_monitor(
     )
     monitor = MagicMock()
     monitor.state = state
-    monitor.get_metrics.return_value = {"mean_risk": risk}
+    monitor.get_metrics.return_value = {
+        "risk_score": risk,
+        "risk_score_source": "resolved",
+        "mean_risk": risk,
+    }
     return monitor
 
 

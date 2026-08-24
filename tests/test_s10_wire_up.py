@@ -230,7 +230,9 @@ class TestCheckCalibrationByClassEnvelope:
 
         parsed = parse_result(result)
         # Response must still be successful; by_class simply absent.
-        assert parsed.get("calibration_status") in {"no_data", "calibrated", "miscalibrated", "signal_stale"}
+        assert parsed.get("calibration_status") in {
+            "unassessed", "calibrated", "miscalibrated"
+        }
         assert "by_class" not in parsed
 
 

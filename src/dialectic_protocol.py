@@ -531,7 +531,9 @@ class DialecticSession:
         """
         Agent A submits thesis: "What I did, what I think happened"
 
-        Requires root_cause and at least one proposed condition.
+        Requires root_cause. Recovery sessions also require at least one
+        proposed condition; review/dispute/exploration sessions may begin from
+        a position alone and let the reviewer propose conditions if needed.
         """
         if message.agent_id != self.paused_agent_id:
             return {"success": False, "error": "Only paused agent can submit thesis"}
@@ -543,7 +545,13 @@ class DialecticSession:
         if not message.root_cause or not message.root_cause.strip():
             return {"success": False, "error": "Thesis requires root_cause: explain what you think happened"}
 
-        if not message.proposed_conditions or len(message.proposed_conditions) == 0:
+        if (
+            self.session_type == "recovery"
+            and (
+                not message.proposed_conditions
+                or len(message.proposed_conditions) == 0
+            )
+        ):
             return {"success": False, "error": "Thesis requires at least one proposed_condition for recovery"}
 
         self.transcript.append(message)

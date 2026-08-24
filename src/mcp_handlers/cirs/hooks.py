@@ -87,6 +87,9 @@ def auto_emit_state_announce(
         except Exception:
             pass
 
+        resolved_risk = metrics.get("risk_score")
+        if resolved_risk is None:
+            resolved_risk = metrics.get("current_risk")
         announce = StateAnnounce(
             agent_id=agent_id,
             timestamp=datetime.now().isoformat(),
@@ -95,7 +98,7 @@ def auto_emit_state_announce(
             regime=str(metrics.get("regime", "divergence")),
             phi=float(metrics.get("phi", 0.0)),
             verdict=str(metrics.get("verdict", "caution")),
-            risk_score=float(metrics.get("risk_score") or metrics.get("current_risk") or 0.0),
+            risk_score=float(resolved_risk if resolved_risk is not None else 0.0),
             trajectory_signature=None,
             purpose=None,
             update_count=int(update_count),

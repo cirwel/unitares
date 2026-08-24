@@ -722,8 +722,15 @@ class TestStickyRESTPath:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_rest_explicit_agent_id_takes_precedence(self):
-        """Explicit agent_id UUID wins over cache."""
+    async def test_rest_uncorroborated_agent_id_falls_back_to_cache(self):
+        """A bare uuid no longer wins over cache.
+
+        Before the explicit-bind corroboration gate armed (2026-08-24), an
+        unproven agent_id claim took precedence over a resolved sticky
+        binding — the exact shape-check-as-credential bug the trust-anchor
+        audit scoped. The cache holds a real resolved identity; the bare
+        uuid is an unauthenticated claim and must fall through to it.
+        """
         from src.http_api import _resolve_http_bound_agent
 
         update_transport_binding("sticky:11.22.33.44:ua4", "uuid-cached", "sk", "rest")
@@ -733,6 +740,32 @@ class TestStickyRESTPath:
         result = await _resolve_http_bound_agent(
             "call_model", {"agent_id": explicit_uuid}, signals
         )
+        assert result == "uuid-cached"
+
+    @pytest.mark.asyncio
+    async def test_rest_corroborated_agent_id_still_takes_precedence(self):
+        """A csid-corroborated agent_id is proof, and still wins over cache.
+
+        Corroboration requires the session to resolve to THIS agent_id (see
+        test_explicit_bind_canary.py's confused-deputy tests), so the
+        session-resolution lookup is mocked to agree with the claim.
+        """
+        from src.http_api import _resolve_http_bound_agent
+
+        update_transport_binding("sticky:11.22.33.55:ua4b", "uuid-cached", "sk", "rest")
+        signals = FakeSignals(ip_ua_fingerprint="11.22.33.55:ua4b")
+        explicit_uuid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeef"  # valid UUID shape
+
+        with patch(
+            "src.mcp_handlers.identity.handlers.resolve_session_identity",
+            new_callable=AsyncMock,
+            return_value={"agent_uuid": explicit_uuid, "created": False},
+        ):
+            result = await _resolve_http_bound_agent(
+                "call_model",
+                {"agent_id": explicit_uuid, "client_session_id": "proof-of-onboard"},
+                signals,
+            )
         assert result == explicit_uuid
 
     @pytest.mark.asyncio
