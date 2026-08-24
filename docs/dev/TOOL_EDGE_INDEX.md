@@ -31,8 +31,8 @@ the generated router — see [Action routing](#action-routing) for its delegates
 |---|---|---|---|---|
 | `admin` | `src/mcp_handlers/consolidated.py:354 action_router` | `src/mcp_handlers/schemas/admin.py:171 AdminParams` | 20s | — |
 | `agent` | `src/mcp_handlers/consolidated.py:216 action_router` | `src/mcp_handlers/schemas/lifecycle.py:308 AgentParams` | 20s | — |
-| `archive_old_test_agents` | `src/mcp_handlers/lifecycle/operations.py:632 handle_archive_old_test_agents` | `src/mcp_handlers/schemas/lifecycle.py:184 ArchiveOldTestAgentsParams` | 20s | — |
-| `archive_orphan_agents` | `src/mcp_handlers/lifecycle/operations.py:730 handle_archive_orphan_agents` | `src/mcp_handlers/schemas/lifecycle.py:215 ArchiveOrphanAgentsParams` | 30s | — |
+| `archive_old_test_agents` | `src/mcp_handlers/lifecycle/operations.py:647 handle_archive_old_test_agents` | `src/mcp_handlers/schemas/lifecycle.py:184 ArchiveOldTestAgentsParams` | 20s | — |
+| `archive_orphan_agents` | `src/mcp_handlers/lifecycle/operations.py:745 handle_archive_orphan_agents` | `src/mcp_handlers/schemas/lifecycle.py:215 ArchiveOrphanAgentsParams` | 30s | — |
 | `bind_session` | `src/mcp_handlers/identity/handlers.py:1500 handle_bind_session` | `src/mcp_handlers/schemas/identity.py:210 BindSessionParams` | 5s | identity=pre_onboard |
 | `calibration` | `src/mcp_handlers/consolidated.py:245 action_router` | `src/mcp_handlers/schemas/calibration.py:67 CalibrationParams` | 60s | — |
 | `call_model` | `src/mcp_handlers/support/model_inference.py:168 handle_call_model` | `src/mcp_handlers/schemas/core.py:535 CallModelParams` | 240s | — |
@@ -44,7 +44,7 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `delegate_inference` | `src/mcp_handlers/support/delegated_inference.py:51 handle_delegate_inference` | `src/mcp_handlers/schemas/core.py:553 DelegateInferenceParams` | 480s | — |
 | `describe_inference_host` | `src/mcp_handlers/support/model_inference.py:105 handle_describe_inference_host` | `src/mcp_handlers/schemas/core.py:606 DescribeInferenceHostParams` | 5s | identity=pre_onboard |
 | `describe_tool` | `src/mcp_handlers/introspection/tool_introspection.py:664 handle_describe_tool` | `src/mcp_handlers/schemas/admin.py:42 DescribeToolParams` | 10s | identity=pre_onboard |
-| `detect_stuck_agents` | `src/mcp_handlers/lifecycle/stuck.py:905 handle_detect_stuck_agents` | `src/mcp_handlers/schemas/lifecycle.py:275 DetectStuckAgentsParams` | 15s | identity=pre_onboard |
+| `detect_stuck_agents` | `src/mcp_handlers/lifecycle/stuck.py:919 handle_detect_stuck_agents` | `src/mcp_handlers/schemas/lifecycle.py:275 DetectStuckAgentsParams` | 15s | identity=pre_onboard |
 | `dialectic` | `src/mcp_handlers/consolidated.py:388 action_router` | `src/mcp_handlers/schemas/dialectic.py:137 DialecticParams` | 115s | — |
 | `direct_resume_if_safe` | `src/mcp_handlers/lifecycle/resume.py:23 handle_direct_resume_if_safe` | `src/mcp_handlers/schemas/lifecycle.py:333 DirectResumeIfSafeParams` | 10s | deprecated→`quick_resume or self_recovery_review` |
 | `export` | `src/mcp_handlers/consolidated.py:292 action_router` | `src/mcp_handlers/schemas/export.py:31 ExportParams` | 45s | — |
@@ -63,10 +63,10 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `list_inference_hosts` | `src/mcp_handlers/support/model_inference.py:79 handle_list_inference_hosts` | `src/mcp_handlers/schemas/core.py:588 ListInferenceHostsParams` | 5s | identity=pre_onboard |
 | `list_process_bindings` | `src/mcp_handlers/identity/process_binding_handler.py:26 handle_list_process_bindings` | — | 10s | — |
 | `list_tools` | `src/mcp_handlers/introspection/tool_introspection.py:100 handle_list_tools` | `src/mcp_handlers/schemas/admin.py:5 ListToolsParams` | 10s | identity=pre_onboard |
-| `mark_response_complete` | `src/mcp_handlers/lifecycle/operations.py:113 handle_mark_response_complete` | `src/mcp_handlers/schemas/lifecycle.py:251 MarkResponseCompleteParams` | 5s | — |
+| `mark_response_complete` | `src/mcp_handlers/lifecycle/operations.py:114 handle_mark_response_complete` | `src/mcp_handlers/schemas/lifecycle.py:251 MarkResponseCompleteParams` | 5s | — |
 | `observe` | `src/mcp_handlers/consolidated.py:311 action_router` | `src/mcp_handlers/schemas/observability.py:58 ObserveParams` | 15s | — |
 | `onboard` | `src/mcp_handlers/identity/handlers.py:1994 handle_onboard_v2` | `src/mcp_handlers/schemas/identity.py:45 OnboardParams` | 15s | identity=pre_onboard |
-| `operator_resume_agent` | `src/mcp_handlers/lifecycle/self_recovery.py:530 handle_operator_resume_agent` | `src/mcp_handlers/schemas/lifecycle.py:327 OperatorResumeAgentParams` | 15s | — |
+| `operator_resume_agent` | `src/mcp_handlers/lifecycle/self_recovery.py:553 handle_operator_resume_agent` | `src/mcp_handlers/schemas/lifecycle.py:327 OperatorResumeAgentParams` | 15s | — |
 | `outcome_correlation` | `src/mcp_handlers/observability/outcome_events.py:725 handle_outcome_correlation` | `src/mcp_handlers/schemas/observability.py:87 OutcomeCorrelationParams` | 30s | — |
 | `outcome_event` | `src/mcp_handlers/observability/outcome_events.py:585 handle_outcome_event` | `src/mcp_handlers/schemas/core.py:470 OutcomeEventParams` | 15s | — |
 | `process_agent_update` | `src/mcp_handlers/core.py:436 handle_process_agent_update` | `src/mcp_handlers/schemas/core.py:303 ProcessAgentUpdateParams` | 60s | — |
@@ -76,7 +76,7 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `research_registry` | `src/mcp_handlers/research_registry.py:66 handle_research_registry` | `src/mcp_handlers/schemas/research.py:13 ResearchRegistryParams` | 15s | — |
 | `reset_monitor` | `src/mcp_handlers/admin/handlers.py:462 handle_reset_monitor` | `src/mcp_handlers/schemas/admin.py:110 ResetMonitorParams` | 10s | — |
 | `search_knowledge_graph` | `src/mcp_handlers/knowledge/handlers.py:2607 handle_search_knowledge_graph` | `src/mcp_handlers/schemas/knowledge.py:80 SearchKnowledgeGraphParams` | 15s | identity=pre_onboard |
-| `self_recovery` | `src/mcp_handlers/lifecycle/self_recovery.py:191 handle_self_recovery` | `src/mcp_handlers/schemas/lifecycle.py:319 SelfRecoveryParams` | 15s | — |
+| `self_recovery` | `src/mcp_handlers/lifecycle/self_recovery.py:205 handle_self_recovery` | `src/mcp_handlers/schemas/lifecycle.py:319 SelfRecoveryParams` | 15s | — |
 | `set_thresholds` | `src/mcp_handlers/admin/config.py:45 handle_set_thresholds` | `src/mcp_handlers/schemas/admin.py:119 SetThresholdsParams` | 15s | — |
 | `simulate_update` | `src/mcp_handlers/core.py:266 handle_simulate_update` | `src/mcp_handlers/schemas/core.py:195 SimulateUpdateParams` | 30s | — |
 | `skills` | `src/mcp_handlers/introspection/skills.py:193 handle_skills` | `src/mcp_handlers/schemas/skills.py:15 SkillsParams` | 10s | identity=pre_onboard |
@@ -115,7 +115,7 @@ runs (`from→to`, filled only when the destination is absent).
 | `delete` | `src/mcp_handlers/lifecycle/mutation.py:344 handle_delete_agent` | — |
 | `get` | `src/mcp_handlers/lifecycle/query.py:1218 handle_get_agent_metadata` | — |
 | `list` | `src/mcp_handlers/lifecycle/query.py:1197 handle_list_agents` | — |
-| `resume` | `src/mcp_handlers/lifecycle/operations.py:43 handle_resume_agent` | — |
+| `resume` | `src/mcp_handlers/lifecycle/operations.py:44 handle_resume_agent` | — |
 | `update` | `src/mcp_handlers/lifecycle/mutation.py:55 handle_update_agent_metadata` | — |
 
 ### `calibration` · default `check`
