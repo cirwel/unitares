@@ -51,8 +51,16 @@ DEFAULT_MODEL = os.getenv("UNITARES_LLM_MODEL", "gemma4:latest")
 OLLAMA_BASE_URL = os.getenv("UNITARES_OLLAMA_BASE_URL", "http://localhost:11434/v1")
 SPAWN_REASON = LineageSpawnReason.DIALECTIC_REVIEWER.value
 REVIEWER_NAME = "DialecticReviewer"
-DEFAULT_CONTINUATION_WAIT_S = 600.0
-DEFAULT_CONTINUATION_POLL_S = 2.0
+# Keep a rejecting reviewer available for the protocol's full synthesis-response
+# window. DialecticSession.MAX_SYNTHESIS_WAIT is one hour; the old ten-minute
+# process window exited while the paused agent still had fifty minutes in which
+# to answer, stranding the response without the reviewer identity that alone can
+# reconsider it.
+DEFAULT_CONTINUATION_WAIT_S = 3600.0
+# A synthesis response is human/agent-paced, so sub-second visibility buys
+# nothing. Fifteen seconds bounds response pickup while avoiding 1,800 reads per
+# reviewer during an otherwise idle one-hour window.
+DEFAULT_CONTINUATION_POLL_S = 15.0
 _TERMINAL_PHASES = {"resolved", "failed", "escalated", "quorum_voting"}
 
 logger = logging.getLogger(__name__)

@@ -14,7 +14,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**130 flags.**
+**131 flags.**
 
 | Flag | Default | Purpose | Read at |
 |---|---|---|---|
@@ -58,6 +58,7 @@ index; that one is the curated decision record.
 | `UNITARES_DIALECTIC_CLAUDE_MODEL` | `''` | Run Claude safely and return exact provider-reported model provenance | agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S` | `'420'` | Run Claude safely and return exact provider-reported model provenance | agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_DIALECTIC_CODEX_TIMEOUT_S` | `'420'` | Run the review on Codex (``codex exec``, ChatGPT-subscription CLI) — the capable-heterogeneous reviewer path (2026-07-02 planted-flaw probe: | agents/dialectic_reviewer/reviewer.py |
+| `UNITARES_DIALECTIC_CONTINUATION_WAIT_S` | `'3600'` | Lifetime cap for one spawned reviewer | src/mcp_handlers/dialectic/orchestrator_dispatch.py |
 | `UNITARES_DIALECTIC_DISPATCHER_UUID` | `(required)` | The standing dispatcher identity's UUID (operator-provisioned) | src/mcp_handlers/dialectic/governed_spawn.py |
 | `UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV` | `''` | Run the review on an operator-configured OpenAI-compatible endpoint | agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_DIALECTIC_EXTERNAL_BASE_URL` | `''` | Run the review on an operator-configured OpenAI-compatible endpoint | agents/dialectic_reviewer/host_backends.py |

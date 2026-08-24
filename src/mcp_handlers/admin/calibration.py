@@ -63,7 +63,6 @@ def _build_calibration_guidance(
     *,
     calibration_status: str,
     truth_channel: str,
-    total_samples: int,
     issues: List[str],
     correction_factors: Dict[str, float],
     failure_modes: Dict[str, Any],
@@ -73,17 +72,18 @@ def _build_calibration_guidance(
     actions: List[str] = []
     confidence_policy = "use_reported_confidence"
 
-    if total_samples == 0:
-        confidence_policy = "no_auto_correction"
-        actions.append("Collect hard outcome evidence via recent_tool_results or outcome_event before interpreting calibration.")
-    elif calibration_status == "signal_stale":
-        confidence_policy = "do_not_use_stale_bins_for_correction"
-        actions.append("Refresh tactical evidence before applying calibration corrections.")
-    elif calibration_status == "miscalibrated":
+    if calibration_status == "miscalibrated":
         confidence_policy = "require_evidence_for_high_confidence_actions"
         actions.append("Treat high-confidence actions in miscalibrated bins as requiring external evidence.")
         if correction_factors:
             actions.append("Use correction_factors as advisory scaling when presenting calibrated confidence.")
+    elif calibration_status == "unassessed":
+        if tactical_staleness_days is not None and tactical_staleness_days > 7.0:
+            confidence_policy = "do_not_use_stale_bins_for_correction"
+            actions.append("Refresh tactical evidence before applying calibration corrections.")
+        else:
+            confidence_policy = "no_auto_correction"
+            actions.append("Collect hard outcome evidence via recent_tool_results or outcome_event before interpreting calibration.")
     else:
         actions.append("Calibration is currently acceptable; continue recording objective outcomes.")
 
@@ -120,7 +120,7 @@ async def handle_check_calibration(arguments: Dict[str, Any]) -> Sequence[TextCo
     We keep the `accuracy` field for backward compatibility, but it should be read as
     "trajectory_health" unless you explicitly provide an external truth signal.
     """
-    from src.calibration import calibration_checker
+    from src.calibration import calibration_checker, resolve_calibration_status
     
     is_calibrated, metrics = calibration_checker.check_calibration(include_complexity=True)
     
@@ -211,23 +211,35 @@ async def handle_check_calibration(arguments: Dict[str, Any]) -> Sequence[TextCo
         except Exception:
             tactical_staleness_days = None
 
-    # `calibration_status` is the operator-facing one-liner. The boolean
-    # `calibrated` is preserved for back-compat, but it conflates "we
-    # measured miscalibration" with "we have no signal to measure" —
-    # status splits those.
+    # The checker owns the tri-state contract. Staleness remains an orthogonal
+    # evidence-quality field and must not mask a measured strategic/tactical RED.
     STALENESS_THRESHOLD_DAYS = 7.0
-    if total_samples == 0:
-        calibration_status = "no_data"
-    elif tactical_staleness_days is not None and tactical_staleness_days > STALENESS_THRESHOLD_DAYS:
-        calibration_status = "signal_stale"
-    elif is_calibrated:
-        calibration_status = "calibrated"
+    calibration_status = resolve_calibration_status(is_calibrated, metrics)
+    if tactical_staleness_days is None:
+        tactical_signal_status = "unknown"
+    elif tactical_staleness_days > STALENESS_THRESHOLD_DAYS:
+        tactical_signal_status = "stale"
     else:
-        calibration_status = "miscalibrated"
+        tactical_signal_status = "fresh"
+
+    assessability = metrics.get("assessability")
+    if not isinstance(assessability, dict):
+        strategic_assessable = bool(metrics.get("bins"))
+        tactical_assessable = bool(
+            (metrics.get("tactical_calibration") or {}).get("bins")
+        )
+        assessability = {
+            "overall": strategic_assessable and tactical_assessable,
+            "strategic": strategic_assessable,
+            "tactical": tactical_assessable,
+            "reason": "Legacy calibration result omitted explicit assessability.",
+        }
 
     response = {
         "calibrated": is_calibrated,
         "calibration_status": calibration_status,
+        "assessability": assessability,
+        "tactical_signal_status": tactical_signal_status,
         "tactical_staleness_days": tactical_staleness_days,
         "issues": metrics.get('issues', []),
         "advisories": metrics.get('advisories', []),
@@ -313,7 +325,6 @@ async def handle_check_calibration(arguments: Dict[str, Any]) -> Sequence[TextCo
     response["calibration_guidance"] = _build_calibration_guidance(
         calibration_status=calibration_status,
         truth_channel=truth_channel,
-        total_samples=total_samples,
         issues=response["issues"],
         correction_factors=correction_factors,
         failure_modes=failure_modes,
