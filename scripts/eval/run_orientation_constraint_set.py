@@ -157,7 +157,15 @@ def _require_external_private_output(path: Path, *, create: bool) -> dict[str, A
         raise EnrollmentError(
             f"raw output directory must have mode 0700, found {mode:04o}"
         )
-    return {"path": str(resolved), "permissions": "0700"}
+    user_home = Path.home().resolve()
+    try:
+        home_relative = resolved.relative_to(user_home)
+    except ValueError as exc:
+        raise EnrollmentError(
+            "raw output directory must be under the operator home so tracked "
+            "enrollment can use a portable ~/ path"
+        ) from exc
+    return {"path": f"~/{home_relative}", "permissions": "0700"}
 
 
 def _http_json(
@@ -658,7 +666,7 @@ def run_cohort(enrollment_path: Path) -> dict[str, Any]:
         require_empty_output=True,
     )
     scenario_by_id = {scenario["scenario_id"]: scenario for scenario in scenarios}
-    output_dir = Path(enrollment["storage"]["raw_output"]["path"])
+    output_dir = Path(enrollment["storage"]["raw_output"]["path"]).expanduser().resolve()
     lock_path = output_dir / "run.lock.json"
     lock_payload = {
         "enrollment_digest": enrollment["enrollment_digest"],
