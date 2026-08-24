@@ -185,6 +185,9 @@ async def _handle_state_announce_emit(arguments: Dict[str, Any]) -> Sequence[Tex
         trust_tier_name = getattr(meta, 'trust_tier', None)
 
     # Create and store the announcement
+    resolved_risk = metrics.get("risk_score")
+    if resolved_risk is None:
+        resolved_risk = metrics.get("current_risk")
     announce = StateAnnounce(
         agent_id=agent_id,
         timestamp=datetime.now().isoformat(),
@@ -193,7 +196,7 @@ async def _handle_state_announce_emit(arguments: Dict[str, Any]) -> Sequence[Tex
         regime=str(metrics.get("regime", "divergence")),
         phi=float(metrics.get("phi", 0.0)),
         verdict=str(metrics.get("verdict", "caution")),
-        risk_score=float(metrics.get("risk_score") or metrics.get("current_risk") or 0.0),
+        risk_score=float(resolved_risk if resolved_risk is not None else 0.0),
         coherence_source=str(metrics.get("coherence_source") or "unknown"),
         coherence_role=str(metrics.get("coherence_role") or "unknown"),
         trajectory_signature=trajectory_signature,

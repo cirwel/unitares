@@ -45,7 +45,11 @@ from .helpers import (
     _resume_with_persistence,
     clear_loop_detector_state,  # noqa: F401 — re-exported for legacy imports from this module
 )
-from .recovery_policy import compute_recovery_margin, recovery_policy_context
+from .recovery_policy import (
+    compute_recovery_margin,
+    read_risk_authority,
+    recovery_policy_context,
+)
 from src import agent_storage
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
@@ -62,6 +66,20 @@ FORBIDDEN_CONDITIONS = [
 ]
 
 MAX_RISK_FOR_SELF_RECOVERY = 0.65  # Matches lifecycle.py review thresholds
+
+# A monitor can hold no risk that any verdict was made from: the resolved pair
+# did not survive a restart and could not be restored from the durable record.
+# That is not a low reading, so every gate below refuses instead of choosing a
+# number.  Recovery stays available the moment one measured check-in lands.
+NO_RISK_AUTHORITY_REASON = (
+    "No resolved risk is available for this agent - the risk paired with its "
+    "last governance verdict did not survive restart and could not be restored "
+    "from the durable record. Absence of a reading is not a safe reading."
+)
+NO_RISK_AUTHORITY_RESOLUTION = (
+    "Submit one check-in (sync_state) to produce a measured risk, or request "
+    "human review via leave_note(tags=['needs-human'])"
+)
 
 def validate_recovery_conditions(conditions: List[str]) -> tuple[bool, Optional[str]]:
     """
@@ -91,7 +109,7 @@ def validate_recovery_conditions(conditions: List[str]) -> tuple[bool, Optional[
 
 def assess_recovery_safety(
     coherence: float,
-    risk_score: float,
+    risk_score: float | None,
     void_active: bool,
     void_value: float,
     reflection: str,
@@ -130,7 +148,7 @@ def assess_recovery_safety(
             "recovery_policy": policy,
         }
     
-    if risk_score > MAX_RISK_FOR_SELF_RECOVERY:
+    if risk_score is not None and risk_score > MAX_RISK_FOR_SELF_RECOVERY:
         return {
             "safe": False,
             "reason": f"Risk score ({risk_score:.2f}) exceeds self-recovery limit ({MAX_RISK_FOR_SELF_RECOVERY})",
@@ -153,7 +171,7 @@ def assess_recovery_safety(
     
     # Soft limits - allowed but with warnings
     warnings = []
-    if risk_score > 0.50:
+    if risk_score is not None and risk_score > 0.50:
         warnings.append(f"Risk score ({risk_score:.2f}) is elevated - proceed carefully")
     if abs(void_value) > 0.5:
         warnings.append(f"Void value ({void_value:.2f}) shows some E-I imbalance")
@@ -258,7 +276,8 @@ async def handle_check_recovery_options(arguments: Dict[str, Any]) -> Sequence[T
         metrics = monitor.get_metrics()
 
         coherence = safe_float(monitor.state.coherence, 0.5)
-        risk_score = safe_float(metrics.get("mean_risk"), 0.5)
+        risk_authority = read_risk_authority(metrics)
+        risk_score = risk_authority.risk
         void_active = bool(monitor.state.void_active)
         void_value = safe_float(monitor.state.V, 0.0)
 
@@ -274,7 +293,13 @@ async def handle_check_recovery_options(arguments: Dict[str, Any]) -> Sequence[T
             "resolution": "Wait for void to clear or request human help",
         })
     
-    if risk_score > MAX_RISK_FOR_SELF_RECOVERY:
+    if risk_authority.is_lost:
+        blockers.append({
+            "type": "no_risk_authority",
+            "message": NO_RISK_AUTHORITY_REASON,
+            "resolution": NO_RISK_AUTHORITY_RESOLUTION,
+        })
+    elif risk_score is not None and risk_score > MAX_RISK_FOR_SELF_RECOVERY:
         blockers.append({
             "type": "high_risk",
             "message": f"Risk ({risk_score:.2f}) exceeds limit ({MAX_RISK_FOR_SELF_RECOVERY})",
@@ -395,7 +420,8 @@ async def handle_quick_resume(arguments: Dict[str, Any]) -> Sequence[TextContent
         metrics = monitor.get_metrics()
 
         coherence = safe_float(monitor.state.coherence, 0.5)
-        risk_score = safe_float(metrics.get("mean_risk"), 0.5)
+        risk_authority = read_risk_authority(metrics)
+        risk_score = risk_authority.risk
         void_active = bool(monitor.state.void_active)
         void_value = safe_float(monitor.state.V, 0.0)
         
@@ -418,7 +444,8 @@ async def handle_quick_resume(arguments: Dict[str, Any]) -> Sequence[TextContent
         )
     else:
         checks = {
-            "risk_low": risk_score <= QUICK_RESUME_MAX_RISK,
+            "risk_low": risk_score is not None and risk_score <= QUICK_RESUME_MAX_RISK,
+            "risk_authority": not risk_authority.is_lost,
             "no_void": not void_active,
         }
         authoritative_inputs = ("risk_score", "void_active", "status")
@@ -598,7 +625,8 @@ async def handle_operator_resume_agent(arguments: Dict[str, Any]) -> Sequence[Te
         metrics = monitor.get_metrics()
 
         coherence = safe_float(monitor.state.coherence, 0.5)
-        risk_score = safe_float(metrics.get("mean_risk"), 0.5)
+        risk_authority = read_risk_authority(metrics)
+        risk_score = risk_authority.risk
         void_active = bool(monitor.state.void_active)
         void_value = safe_float(monitor.state.V, 0.0)
         
@@ -615,7 +643,7 @@ async def handle_operator_resume_agent(arguments: Dict[str, Any]) -> Sequence[Te
             context={"void_value": void_value},
         )]
     
-    if risk_score > 0.80:
+    if risk_score is not None and risk_score > 0.80:
         return [error_response(
             f"Cannot resume {target_agent_id}: risk ({risk_score:.2f}) exceeds hard limit (0.80). "
             "This requires human intervention.",
@@ -623,10 +651,16 @@ async def handle_operator_resume_agent(arguments: Dict[str, Any]) -> Sequence[Te
             error_category="safety_error",
         )]
     
-    # Soft limits - warn but allow if force=True
+    # Soft limits - warn but allow if force=True.
+    # A missing reading is a soft limit rather than a hard one: an operator is
+    # a human in the loop, and this tool exists for exactly the stuck cases
+    # where the automated gates have already refused.  It still must not pass
+    # silently, so it blocks until the operator says force=True.
     warnings = []
     if not force:
-        if risk_score > 0.60:
+        if risk_authority.is_lost:
+            warnings.append(NO_RISK_AUTHORITY_REASON)
+        elif risk_score is not None and risk_score > 0.60:
             warnings.append(f"Risk ({risk_score:.2f}) is elevated")
         
         if warnings:

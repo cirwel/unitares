@@ -8,6 +8,7 @@ import sys
 import pytest
 from unittest.mock import patch
 
+from agents.dialectic_reviewer import reviewer as reviewer_runner
 from src.mcp_handlers.dialectic import orchestrator_dispatch as od
 
 
@@ -43,6 +44,8 @@ def test_build_spec_marshals_thesis_and_paths():
     )
     assert spec["cmd"] == sys.executable
     assert spec["args"] == ["-m", "agents.dialectic_reviewer"]
+    assert od.DEFAULT_CONTINUATION_WAIT_S == reviewer_runner.DEFAULT_CONTINUATION_WAIT_S
+    assert spec["max_runtime_ms"] == 4_500_000  # 1h response + 15m setup/model grace
     env = spec["env"]
     assert env["DIALECTIC_SESSION_ID"] == "sess-1"
     assert env["DIALECTIC_THESIS_ROOT_CAUSE"] == "rc"
@@ -82,6 +85,27 @@ def test_build_spec_forwards_bounded_reviewer_backend_config(monkeypatch):
     assert "AGENT_ORCHESTRATOR_BEARER_TOKEN" not in spec["env"]
     assert json.loads(spec["env"]["DIALECTIC_THESIS_CONDITIONS"]) == []
     assert json.loads(spec["env"]["DIALECTIC_PAUSED_AGENT_STATE"]) == {}
+
+
+def test_build_spec_forwards_continuation_timing_and_sizes_runtime(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_WAIT_S", "120")
+    monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_POLL_S", "7.5")
+
+    spec = od._build_spec(
+        "s",
+        {"root_cause": "", "proposed_conditions": [], "reasoning": ""},
+        None,
+    )
+
+    assert spec["env"]["UNITARES_DIALECTIC_CONTINUATION_WAIT_S"] == "120"
+    assert spec["env"]["UNITARES_DIALECTIC_CONTINUATION_POLL_S"] == "7.5"
+    assert spec["max_runtime_ms"] == 1_020_000  # 120s + 15m grace
+
+
+@pytest.mark.parametrize("value", ["bad", "-1"])
+def test_invalid_continuation_wait_cannot_disable_runtime_reaper(monkeypatch, value):
+    monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_WAIT_S", value)
+    assert od._reviewer_max_runtime_ms() == 4_500_000
 
 
 def test_build_spec_does_not_forward_beam_flag(monkeypatch):

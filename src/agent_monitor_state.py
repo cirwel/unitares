@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import json
+import math
 import tempfile
 import time
 import fcntl
@@ -118,6 +119,25 @@ def _attach_behavioral_state(monitor: UNITARESMonitor, state_data: dict) -> None
         logger.debug("Behavioral state serialization skipped during save", exc_info=True)
 
 
+def _attach_resolved_authority(monitor: UNITARESMonitor, state_data: dict) -> None:
+    """Persist the exact risk/verdict pair from the last real decision.
+
+    ``GovernanceState.risk_history`` is Φ-derived telemetry.  Keeping the
+    resolved pair at monitor level prevents a restart from promoting that
+    telemetry into the headline decision risk.  Simulations restore these
+    attributes before the live writer runs, so only real updates are durable.
+    """
+    try:
+        risk = getattr(monitor, "_last_resolved_risk", None)
+        if risk is not None:
+            state_data["resolved_risk"] = float(risk)
+        verdict = getattr(monitor, "_last_resolved_verdict", None)
+        if verdict:
+            state_data["resolved_verdict"] = str(verdict)
+    except Exception:  # noqa: BLE001 — state persistence must remain fail-open
+        logger.debug("Resolved authority serialization skipped during save", exc_info=True)
+
+
 def _attach_monitor_transients(monitor: UNITARESMonitor, state_data: dict) -> None:
     """Merge the monitor-level fields ``load_persisted_state`` already restores.
 
@@ -166,6 +186,7 @@ async def save_monitor_state_async(agent_id: str, monitor: UNITARESMonitor) -> N
     _snapshot_governor_state(monitor)
     state_data = monitor.state.to_dict_with_history()
     _attach_behavioral_state(monitor, state_data)
+    _attach_resolved_authority(monitor, state_data)
     _attach_monitor_transients(monitor, state_data)
 
     state_file = get_state_file(agent_id)
@@ -237,6 +258,7 @@ def save_monitor_state(agent_id: str, monitor: UNITARESMonitor) -> None:
     _snapshot_governor_state(monitor)
     state_data = monitor.state.to_dict_with_history()
     _attach_behavioral_state(monitor, state_data)
+    _attach_resolved_authority(monitor, state_data)
     _attach_monitor_transients(monitor, state_data)
 
     state_file = get_state_file(agent_id)
@@ -303,6 +325,63 @@ def load_monitor_state(agent_id: str) -> 'GovernanceState | None':
         return None
 
 
+def _restore_resolved_authority(monitor: UNITARESMonitor, state_json: object) -> bool:
+    """Restore a validated final risk/verdict pair from durable row JSON."""
+    if not isinstance(state_json, dict):
+        return False
+
+    restored = False
+    raw_risk = state_json.get("risk_score")
+    if raw_risk is not None:
+        try:
+            risk = float(raw_risk)
+            if math.isfinite(risk) and 0.0 <= risk <= 1.0:
+                monitor._last_resolved_risk = risk
+                restored = True
+        except (TypeError, ValueError):
+            pass
+
+    verdict = state_json.get("verdict")
+    if verdict in {"safe", "caution", "high-risk"}:
+        monitor._last_resolved_verdict = verdict
+        restored = True
+    return restored
+
+
+async def hydrate_resolved_authority_if_missing(
+    monitor: UNITARESMonitor,
+    agent_id: str,
+) -> bool:
+    """Heal a legacy file snapshot whose decision-time pair was not persisted.
+
+    Existing snapshots already carry EISV/history, so replacing that state from
+    PostgreSQL would be unnecessary and lossy.  Read only the latest durable
+    row and restore its final risk/verdict pair.  Never raises.
+    """
+    if (
+        getattr(monitor, "_last_resolved_risk", None) is not None
+        and getattr(monitor, "_last_resolved_verdict", None) is not None
+    ):
+        return False
+    try:
+        from src import agent_storage
+
+        latest = await agent_storage.get_latest_agent_state(agent_id)
+        if latest is None:
+            return False
+        restored = _restore_resolved_authority(
+            monitor, getattr(latest, "state_json", None)
+        )
+        if restored:
+            logger.info("Hydrated resolved risk/verdict from core.agent_state")
+        return restored
+    except Exception as exc:
+        logger.warning(
+            "Resolved authority hydration failed: %s", type(exc).__name__
+        )
+        return False
+
+
 async def hydrate_from_db_if_fresh(monitor: UNITARESMonitor, agent_id: str) -> bool:
     """Rehydrate a fresh monitor from core.agent_state when the JSON file is missing.
 
@@ -348,6 +427,12 @@ async def hydrate_from_db_if_fresh(monitor: UNITARESMonitor, agent_id: str) -> b
             return False
         chrono = list(reversed(rows))
         latest = chrono[-1]
+        latest_sj = getattr(latest, "state_json", None) or {}
+
+        # The DB row stores the exact final decision-time pair.  Restore it
+        # alongside EISV so get_metrics() cannot fall back to Φ history after a
+        # JSON-snapshot-loss restart.
+        _restore_resolved_authority(monitor, latest_sj)
 
         # Core EISV + coherence from latest row
         monitor.state.unitaires_state.E = float(latest.energy)
@@ -391,7 +476,6 @@ async def hydrate_from_db_if_fresh(monitor: UNITARESMonitor, agent_id: str) -> b
         # record_agent_state now persists behavioral_eisv into state_json, so the
         # DB path is symmetric with the JSON path (PR #545). Fail-open.
         try:
-            latest_sj = getattr(latest, "state_json", None) or {}
             beh_blob = latest_sj.get("behavioral_eisv") if isinstance(latest_sj, dict) else None
             if isinstance(beh_blob, dict) and beh_blob:
                 from src.behavioral_state import BehavioralEISV
@@ -421,8 +505,9 @@ async def ensure_hydrated(monitor: UNITARESMonitor, agent_id: str) -> bool:
     """Drain the `_needs_hydration` mark set by `get_or_create_monitor`.
 
     Idempotent: returns immediately when the flag is unset (the common hot-path
-    case). When the flag is set, runs `hydrate_from_db_if_fresh` and clears the
-    flag regardless of outcome — single-shot semantics.
+    case). A fresh monitor receives full EISV/history hydration; a legacy file
+    snapshot that already has state receives only its missing resolved
+    risk/verdict pair. The flag is cleared regardless of outcome.
 
     Call this at the top of any async handler that reads `monitor.state`.
     Without this drain, monitors created cold from a missing snapshot would
@@ -443,6 +528,8 @@ async def ensure_hydrated(monitor: UNITARESMonitor, agent_id: str) -> bool:
     if getattr(monitor, "_needs_hydration", False) is not True:
         return False
     try:
+        if getattr(monitor.state, "update_count", 0) > 0:
+            return await hydrate_resolved_authority_if_missing(monitor, agent_id)
         return await hydrate_from_db_if_fresh(monitor, agent_id)
     finally:
         # Single-shot: drain the mark even on hydrate failure (DB unreachable

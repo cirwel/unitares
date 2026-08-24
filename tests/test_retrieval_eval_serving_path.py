@@ -35,6 +35,31 @@ async def test_run_query_uses_serving_search_handler(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_query_reports_source_partition_diversity(monkeypatch):
+    async def fake_search(arguments):
+        return _text_payload({
+            "success": True,
+            "discoveries": [
+                {"id": "native", "tags": ["identity"]},
+                {
+                    "id": "mirror",
+                    "tags": ["source-claude-memory", "host-mac"],
+                },
+            ],
+        })
+
+    monkeypatch.setattr(retrieval_eval, "handle_search_knowledge_graph", fake_search)
+    result = await retrieval_eval.run_query("identity", top_k=2)
+
+    assert result.source_diagnostics == {
+        "partition_counts": {"native": 1, "source-claude-memory": 1},
+        "unique_partitions": 2,
+        "dominant_partition_share": 0.5,
+        "claude_memory_share": 0.5,
+    }
+
+
+@pytest.mark.asyncio
 async def test_run_query_maps_cli_flags_to_serving_handler(monkeypatch):
     observed = {}
 

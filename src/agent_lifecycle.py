@@ -33,11 +33,19 @@ def get_or_create_monitor(agent_id: str) -> UNITARESMonitor:
 
     if agent_id not in monitors:
         monitor = UNITARESMonitor(agent_id)
+        prior_activity = int(getattr(meta, "total_updates", 0) or 0) > 0
 
         persisted_state = load_monitor_state(agent_id)
         if persisted_state is not None:
             monitor.state = persisted_state
-            monitor._needs_hydration = False
+            # Snapshots written before resolved-risk persistence contain Φ
+            # history but not the final decision-time pair.  Mark those for a
+            # one-row DB authority heal; their EISV/history stays untouched.
+            authority_missing = (
+                getattr(monitor, "_last_resolved_risk", None) is None
+                or getattr(monitor, "_last_resolved_verdict", None) is None
+            )
+            monitor._needs_hydration = prior_activity and authority_missing
             monitor._cold_start_confirmation_lineage_status = "restored_snapshot"
             logger.info(f"Loaded persisted state for {agent_id} ({len(persisted_state.V_history)} history entries)")
         else:
@@ -46,7 +54,6 @@ def get_or_create_monitor(agent_id: str) -> UNITARESMonitor:
             # so downstream "no measured trajectory" guards still trigger.
             # Lineage is recorded via meta.parent_agent_id but never transplants
             # state; see docs/specs/2026-04-16-sever-fingerprint-eisv-inheritance-design.md
-            prior_activity = int(getattr(meta, "total_updates", 0) or 0) > 0
             monitor._needs_hydration = prior_activity
             if prior_activity:
                 monitor._cold_start_confirmation_lineage_status = "hydration_pending"
@@ -345,7 +352,9 @@ def build_standardized_agent_info(
             health_status = health_status_obj.value
 
             monitor_metrics = monitor.get_metrics() if hasattr(monitor, 'get_metrics') else {}
-            risk_score_value = monitor_metrics.get("risk_score") or risk_score
+            risk_score_value = monitor_metrics.get("risk_score")
+            if risk_score_value is None:
+                risk_score_value = risk_score
 
             metrics = {
                 "risk_score": float(risk_score_value) if risk_score_value is not None else None,

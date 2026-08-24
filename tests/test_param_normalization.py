@@ -1,9 +1,10 @@
-"""Tests for alias-layer parameter normalization (friendly check-in aliases).
+"""Tests for alias-layer parameter normalization on friendly workflows.
 
 Canonical process_agent_update stays strict 0-1; the friendly aliases
 (checkin/log/update/sync_state) accept named levels and explicit
 {'value', 'scale'} objects, reject ambiguous bare numerics, and disclose
-every transform via normalized_parameters.
+every transform via normalized_parameters. Friendly memory search separately
+materializes compact defaults and keeps inline details out of the digest path.
 """
 
 import json
@@ -16,8 +17,11 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.mcp_handlers.support.param_normalization import (
+    FRIENDLY_SEARCH_DETAIL_POLICY_KEY,
+    FRIENDLY_SEARCH_DETAILS_REQUESTED_KEY,
     NAMED_LEVELS,
     ParamNormalizationError,
+    normalize_compact_search_details,
     normalize_unit_interval,
 )
 
@@ -170,6 +174,46 @@ class TestAmbiguousRejection:
 
 
 # ============================================================================
+# Friendly search detail policy
+# ============================================================================
+
+class TestCompactSearchDetails:
+
+    @pytest.mark.parametrize("mode", [None, "compact", "lean"])
+    def test_digest_modes_suppress_details_before_serialization(self, mode):
+        args = {} if mode is None else {"response_mode": mode}
+
+        records = normalize_compact_search_details(args)
+
+        assert records == {}
+        assert args["response_mode"] == (mode or "lean")
+        assert args["include_details"] is False
+        assert args[FRIENDLY_SEARCH_DETAIL_POLICY_KEY] == "digest_before_serialization"
+        assert args[FRIENDLY_SEARCH_DETAILS_REQUESTED_KEY] is False
+
+    def test_explicit_detail_request_is_disclosed_and_suppressed(self):
+        args = {"response_mode": "compact", "include_details": True}
+
+        records = normalize_compact_search_details(args)
+
+        assert args["include_details"] is False
+        assert args[FRIENDLY_SEARCH_DETAILS_REQUESTED_KEY] is True
+        assert records == {
+            "include_details": {
+                "from": True,
+                "to": False,
+                "interpretation": "compact_digest_before_serialization",
+            }
+        }
+
+    def test_full_mode_preserves_detail_request(self):
+        args = {"response_mode": "full", "include_details": True}
+
+        assert normalize_compact_search_details(args) == {}
+        assert args == {"response_mode": "full", "include_details": True}
+
+
+# ============================================================================
 # resolve_alias middleware integration
 # ============================================================================
 
@@ -243,6 +287,38 @@ class TestResolveAliasIntegration:
 
         assert name == "process_agent_update"
         assert out_args["complexity"] == "medium"  # untouched; validation rejects later
+
+    @pytest.mark.asyncio
+    async def test_search_alias_shapes_details_before_handler(self):
+        from src.mcp_handlers.middleware import DispatchContext
+        from src.mcp_handlers.middleware.params_step import resolve_alias
+
+        ctx = DispatchContext()
+        args = {"query": "federation", "include_details": True}
+        name, out_args, out_ctx = await resolve_alias(
+            "search_shared_memory", args, ctx
+        )
+
+        assert name == "knowledge"
+        assert out_args["action"] == "search"
+        assert out_args["include_details"] is False
+        assert out_args[FRIENDLY_SEARCH_DETAIL_POLICY_KEY] == "digest_before_serialization"
+        assert out_args[FRIENDLY_SEARCH_DETAILS_REQUESTED_KEY] is True
+        assert out_ctx.normalized_parameters["include_details"]["to"] is False
+
+    @pytest.mark.asyncio
+    async def test_canonical_knowledge_detail_request_is_untouched(self):
+        from src.mcp_handlers.middleware import DispatchContext
+        from src.mcp_handlers.middleware.params_step import resolve_alias
+
+        ctx = DispatchContext()
+        args = {"action": "search", "query": "federation", "include_details": True}
+        name, out_args, out_ctx = await resolve_alias("knowledge", args, ctx)
+
+        assert name == "knowledge"
+        assert out_args["include_details"] is True
+        assert FRIENDLY_SEARCH_DETAIL_POLICY_KEY not in out_args
+        assert out_ctx.normalized_parameters is None
 
 
 # ============================================================================

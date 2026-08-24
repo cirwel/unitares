@@ -169,8 +169,10 @@ async def _emit_dialectic_event(event_type: str, session, **payload_extra) -> No
     knowledge handlers' guarded broadcast pattern. The broadcaster auto-persists to
     audit.events and serves the WS firehose; the dashboard and the Phoenix dialectic
     pane subscribe to any ``dialectic_*`` event as a doorbell to refetch
-    authoritative state. Names are the engine-owner-ratified set from #1167:
-    ``dialectic_opened``, ``dialectic_facilitation_needed``, ``dialectic_resolved``.
+    authoritative state. Names include the engine-owner-ratified set from #1167
+    plus the reviewer-dispatch proof point:
+    ``dialectic_opened``, ``dialectic_reviewer_dispatched``,
+    ``dialectic_facilitation_needed``, ``dialectic_resolved``.
 
     Emitted from the Python handler intentionally: when
     UNITARES_DIALECTIC_BEAM_RESOLUTION is on, BEAM is an alternative *persistence*
@@ -209,19 +211,61 @@ async def _emit_phase_changed(session, prev_phase) -> None:
         )
 
 
+async def _set_awaiting_facilitation(
+    session: DialecticSession,
+    awaiting: bool,
+    *,
+    reason: Optional[str] = None,
+) -> None:
+    """Persist a real transition into or out of human-facilitation state.
+
+    An open reviewer slot before thesis submission is not yet a failure: the
+    orchestrated reviewer is summoned only after the thesis exists. Keeping the
+    flag transition at the point where automated review actually succeeds or
+    fails prevents false ``dialectic_facilitation_needed`` events while retaining
+    the existing fail-soft telemetry/persistence contract.
+    """
+    awaiting = bool(awaiting)
+    if bool(getattr(session, "awaiting_facilitation", False)) == awaiting:
+        return
+
+    session.awaiting_facilitation = awaiting
+    try:
+        await pg_update_awaiting_facilitation(session.session_id, awaiting)
+    except Exception as exc:
+        logger.warning(
+            "Could not persist awaiting_facilitation=%s for %s: %s",
+            awaiting,
+            session.session_id,
+            exc,
+        )
+
+    if awaiting and reason:
+        await _emit_dialectic_event(
+            "dialectic_facilitation_needed", session, reason=reason
+        )
+
+
 async def check_reviewer_stuck(session: DialecticSession) -> bool:
     """
-    Check if reviewer is stuck (paused or hasn't responded after thesis submission).
+    Check if the assigned reviewer is unavailable when it owes a response.
 
-    Only meaningful during ANTITHESIS phase — that's when the reviewer needs to respond.
-    Uses thesis submission time (not session creation time) and aligns with
-    the protocol's MAX_ANTITHESIS_WAIT (2 hours).
+    During ANTITHESIS, the reviewer owes its first response; the timeout uses
+    thesis submission time and aligns with MAX_ANTITHESIS_WAIT (2 hours).
+    During SYNTHESIS, only a session already awaiting facilitation can make the
+    reviewer owe reconsideration. In that state, a missing/paused reviewer is
+    stuck immediately; an active reviewer retains the protocol's synthesis
+    window and is not reassigned merely because time passed.
 
     Returns:
         True if reviewer is stuck, False otherwise
     """
-    # Only check during ANTITHESIS phase — reviewer hasn't been asked in other phases
-    if session.phase != DialecticPhase.ANTITHESIS:
+    if session.phase not in (DialecticPhase.ANTITHESIS, DialecticPhase.SYNTHESIS):
+        return False
+    if (
+        session.phase == DialecticPhase.SYNTHESIS
+        and not bool(getattr(session, "awaiting_facilitation", False))
+    ):
         return False
 
     reviewer_id = session.reviewer_agent_id
@@ -241,6 +285,11 @@ async def check_reviewer_stuck(session: DialecticSession) -> bool:
     # Check if reviewer is paused
     if reviewer_meta.status == "paused":
         return True
+
+    # An active synthesis reviewer may still answer through its full negotiated
+    # response window. The phase timeout/reaper owns that clock.
+    if session.phase == DialecticPhase.SYNTHESIS:
+        return False
 
     # Measure from thesis submission time (when reviewer was actually asked to respond)
     # Aligned with protocol's MAX_ANTITHESIS_WAIT (2 hours)
@@ -543,6 +592,19 @@ def _latest_synthesis_agent_in_session_data(
     return None
 
 
+def _saved_brief_thesis_call(session_id: str, session_type: Optional[str]) -> str:
+    """Build a valid no-copy thesis call for review and recovery sessions."""
+    condition_arg = (
+        ", proposed_conditions=[...]"
+        if str(session_type or "review").lower() == "recovery"
+        else ""
+    )
+    return (
+        f"dialectic(action='thesis', session_id='{session_id}', "
+        f"use_brief_as_thesis=true{condition_arg})"
+    )
+
+
 def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, Any]:
     """Annotate a session payload with concrete next-action metadata."""
     # Two dict shapes reach this function. `load_session_as_dict`
@@ -558,6 +620,7 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
     reviewer_agent_id = session_data.get("reviewer_agent_id") or session_data.get("reviewer")
     phase = str(session_data.get("phase") or "").lower()
     session_id = session_data.get("session_id") or "<session_id>"
+    session_type = session_data.get("session_type") or "review"
     awaiting_facilitation = bool(session_data.get("awaiting_facilitation", False))
     reviewer_objection_stands = (
         phase == "synthesis"
@@ -727,11 +790,8 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
     next_call: Optional[str] = None
     if phase == "thesis":
         if current_agent_role == "paused_agent":
-            whose_move = "YOURS — your thesis is owed"
-            next_call = (
-                f"dialectic(action='thesis', session_id='{session_id}', "
-                "root_cause='...', reasoning='...', proposed_conditions=[...])"
-            )
+            whose_move = "YOURS — your thesis is owed; the saved brief can be reused"
+            next_call = _saved_brief_thesis_call(session_id, session_type)
         else:
             whose_move = "the paused agent's — their thesis is owed"
     elif phase == "antithesis":
@@ -1142,10 +1202,11 @@ def _capture_pause_evidence(monitor: Any) -> Dict[str, Any]:
 @mcp_tool("request_dialectic_review", timeout=REQUEST_REVIEW_TIMEOUT, register=True)
 async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
-    Create a dialectic recovery session.
+    Create a dialectic review session.
 
-    This is a lightweight entry point restored for recovery workflows.
-    It sets up the session and persists it, but does not auto-progress the protocol.
+    Explicit thesis fields progress the protocol in the same call. Callers may
+    also set ``use_brief_as_thesis`` to reuse the issue description as those
+    fields; the friendly ``request_review`` alias does this by default.
     """
     # Require a registered agent and use authoritative UUID for internal IDs
     # (Same pipeline as onboard/identity — dialectic was previously wonky using get_bound_agent_id)
@@ -1286,7 +1347,7 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
         }
 
     # Reviewer selection
-    auto_awaiting_reviewer = False
+    auto_open_reviewer_slot = False
     if reviewer_mode == "self":
         reviewer_agent_id = agent_uuid
     elif reviewer_mode == "auto":
@@ -1313,9 +1374,9 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
         if reviewer_agent_id is None:
             logger.info(
                 "[DIALECTIC] No eligible reviewer found; leaving reviewer slot "
-                "open for first-responder/summon, flagging awaiting_facilitation"
+                "open for first-responder/summon after thesis submission"
             )
-            auto_awaiting_reviewer = True
+            auto_open_reviewer_slot = True
     else:
         # Manual mode or unknown - no reviewer assigned
         # First responder can claim via submit_antithesis
@@ -1386,38 +1447,22 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
     ACTIVE_SESSIONS[session.session_id] = session
     await _emit_dialectic_event("dialectic_opened", session)
 
-    if auto_awaiting_reviewer:
-        # No independent reviewer yet; the antithesis is owed by a summoned or
-        # operator-assigned reviewer, not by the paused agent itself.
-        session.awaiting_facilitation = True
-        # Persist so dialectic(list) can float this to the top (#1167 Ask 2).
-        # Fail-soft: the session row already committed above; only the surface
-        # flag is at risk.
-        try:
-            await pg_update_awaiting_facilitation(session.session_id, True)
-        except Exception as e:
-            logger.error(f"Failed to persist awaiting_facilitation on create: {e}")
-        await _emit_dialectic_event(
-            "dialectic_facilitation_needed", session, reason="no_independent_reviewer"
-        )
-
     # Build response based on reviewer assignment
-    if auto_awaiting_reviewer:
+    if auto_open_reviewer_slot:
         if _synthetic_reviewer_enabled():
             note = (
-                "No independent live reviewer is available. Submit your thesis "
-                "now (dialectic action='thesis' with root_cause + "
-                "proposed_conditions): a local synthetic reviewer will generate "
-                "the antithesis and drive the dialectic to a resolved synthesis "
-                "in that same call. If a peer reviewer claims the slot first, the "
-                "multi-agent path is used instead."
+                "No standing peer is assigned yet. Submit your thesis now "
+                "(dialectic action='thesis' with root_cause + proposed_conditions): "
+                "a configured independent reviewer will be summoned, with the local "
+                "synthetic reviewer as fallback. If a peer claims the slot first, "
+                "the multi-agent path is used instead."
             )
         else:
             note = (
-                "No independent reviewer is currently available. The reviewer slot is "
-                "left open: submit your thesis now, and an independent reviewer "
-                "(summoned or operator-assigned) can claim it via submit_antithesis. "
-                "To proceed solo, recreate the session with reviewer_mode='self'."
+                "No standing peer is assigned yet. The reviewer slot is left open: "
+                "submit your thesis now, and an independent reviewer (summoned or "
+                "operator-assigned) can claim it via submit_antithesis. Human "
+                "facilitation is requested only if those review paths fail."
             )
     elif session.reviewer_agent_id and session.reviewer_agent_id != agent_uuid:
         note = f"Reviewer assigned: {session.reviewer_agent_id[:12]}... Use submit_thesis to add your thesis."
@@ -1426,19 +1471,25 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
     else:
         note = "Session created. Awaiting reviewer assignment. Operator should assign a reviewer, then paused agent submits thesis."
 
-    # One-call review (adoption UX): when the request already carries the
-    # thesis content, submit it in the same call — the caller gets a review
-    # verdict (or a dispatched reviewer) from a single request_review()
-    # instead of having to learn the request→thesis protocol and its
-    # pause-recovery vocabulary. The two-call flow is unchanged when the
-    # thesis fields are absent.
-    if arguments.get("reasoning") or arguments.get("root_cause"):
+    # One-call review (adoption UX): when the request already carries thesis
+    # content, submit it in the same call. The friendly request_review alias
+    # sets use_brief_as_thesis for a lone issue description; raw dialectic
+    # requests retain the explicit two-call flow unless callers opt in.
+    use_brief_as_thesis = coerce_bool(
+        arguments.get("use_brief_as_thesis"), default=False
+    )
+    if (
+        arguments.get("reasoning")
+        or arguments.get("root_cause")
+        or use_brief_as_thesis
+    ):
+        saved_brief = arguments.get("issue_description") or reason
         thesis_args: Dict[str, Any] = {
             "session_id": session.session_id,
             "root_cause": arguments.get("root_cause")
-            or arguments.get("issue_description")
-            or reason,
-            "reasoning": arguments.get("reasoning") or "",
+            or saved_brief,
+            "reasoning": arguments.get("reasoning")
+            or (saved_brief if use_brief_as_thesis else ""),
             "proposed_conditions": arguments.get("proposed_conditions") or [],
             # #1414: forward the AUTHORITATIVE UUID, not arguments["agent_id"] —
             # require_registered_agent has already rewritten that slot to the
@@ -1461,6 +1512,8 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
             return thesis_result
         payload.setdefault("session_id", session.session_id)
         payload["one_call_review"] = True
+        if use_brief_as_thesis:
+            payload["thesis_source"] = "issue_description"
         # #1414: the nested thesis can fail AFTER the session row committed
         # (bad phase, missing root_cause, DB error). Say so, instead of letting
         # a failed payload fall through to the `else` branch below and be
@@ -1473,8 +1526,7 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
                 "YOURS — the session exists but your thesis was NOT recorded"
             )
             payload["next_call"] = (
-                f"dialectic(action='thesis', session_id='{session.session_id}', "
-                "root_cause='...', reasoning='...', proposed_conditions=[...])"
+                _saved_brief_thesis_call(session.session_id, session.session_type)
             )
             return success_response(payload, arguments=arguments)
         resolution = payload.get("resolution") or {}
@@ -1505,7 +1557,11 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
         "session_type": session.session_type,
         "reason": session.reason,
         "trigger_source": session.trigger_source,
-        "note": note
+        "note": note,
+        "whose_move": "YOURS — your thesis is owed; the saved brief can be reused",
+        "next_call": _saved_brief_thesis_call(
+            session.session_id, session.session_type
+        ),
     })
 
 @mcp_tool("get_dialectic_session", timeout=10.0, register=False)
@@ -2191,19 +2247,33 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
         # to prevent silent data loss from parameter-name confusion.
         proposed_conditions = _read_proposed_conditions(arguments)
 
+        root_cause = arguments.get('root_cause')
+        reasoning = arguments.get('reasoning')
+        reused_session_brief = False
+        if coerce_bool(arguments.get("use_brief_as_thesis"), default=False):
+            saved_brief = getattr(session, "topic", None) or getattr(
+                session, "reason", None
+            )
+            if saved_brief:
+                root_cause = root_cause or saved_brief
+                reasoning = reasoning or saved_brief
+                reused_session_brief = True
+
         # Create thesis message
         message = DialecticMessage(
             phase="thesis",
             agent_id=agent_id,
             timestamp=datetime.now(timezone.utc).isoformat(),
-            root_cause=arguments.get('root_cause'),
+            root_cause=root_cause,
             proposed_conditions=proposed_conditions,
-            reasoning=arguments.get('reasoning')
+            reasoning=reasoning,
         )
 
         # Submit to session
         _prev_phase = session.phase.value
         result = session.submit_thesis(message, api_key)
+        if reused_session_brief:
+            result["thesis_source"] = "saved_session_brief"
 
         if result["success"]:
             result["next_step"] = next_step_submit_antithesis(session.reviewer_agent_id)
@@ -2214,9 +2284,9 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                     session_id=session_id,
                     agent_id=agent_id,
                     message_type="thesis",
-                    root_cause=arguments.get('root_cause'),
+                    root_cause=root_cause,
                     proposed_conditions=proposed_conditions,
-                    reasoning=arguments.get('reasoning'),
+                    reasoning=reasoning,
                 )
                 # BEAM owns the phase write when flagged; else Python. (Slice 2.2)
                 _beam_ph = await beam_update_phase(session_id, session.phase.value)
@@ -2234,6 +2304,13 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
             except Exception as e:
                 logger.warning(f"Could not save session after thesis: {e}")
 
+            # Older sessions may carry the creation-time facilitation flag from
+            # before dispatch was attempted. A recorded thesis activates the
+            # automated review paths below, so clear that stale request now and
+            # set it again only if every eligible path actually fails.
+            if session.reviewer_agent_id is None:
+                await _set_awaiting_facilitation(session, False)
+
             # Escalation tier (design b): when orchestrated review is enabled and
             # no live reviewer has claimed the slot, spawn an INDEPENDENT reviewer
             # process through the agent-orchestrator. That process onboards with its
@@ -2241,6 +2318,7 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
             # submits its verdict — so on success we must NOT also run the in-process
             # reviewer. ANY dispatch failure falls through to the in-process path
             # below (the orchestrator being down never breaks dialectic).
+            review_path_failure_reason = "no_automated_reviewer"
             if session.reviewer_agent_id is None:
                 from .orchestrator_dispatch import (
                     orchestrated_review_enabled,
@@ -2257,8 +2335,8 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                 # Checked here rather than inside the reviewer for exactly that
                 # reason: a routing rule runs before the conflict can bite.
                 _recusal = detect_subject_matter_conflict(
-                    arguments.get("reasoning"),
-                    arguments.get("root_cause"),
+                    reasoning,
+                    root_cause,
                     getattr(session, "topic", None),
                     getattr(session, "reason", None),
                 )
@@ -2287,11 +2365,9 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                     # reviewer without a stake, decides. Deliberately does NOT
                     # fall through to the in-process synthetic reviewer — that is
                     # the same interested party by another route.
-                    session.awaiting_facilitation = True
-                    try:
-                        await pg_update_awaiting_facilitation(session_id, True)
-                    except Exception as _e:
-                        logger.warning("could not persist facilitation flag: %s", _e)
+                    await _set_awaiting_facilitation(
+                        session, True, reason="reviewer_recused"
+                    )
                     result["awaiting_facilitation"] = True
                     result["note"] = (
                         "RECUSED: this thesis is about the review system, so the "
@@ -2304,6 +2380,7 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                     return success_response(result)
 
                 if orchestrated_review_enabled():
+                    review_path_failure_reason = "reviewer_dispatch_failed"
                     situation_parts = []
                     if getattr(session, "topic", None):
                         situation_parts.append(f"Topic: {session.topic}")
@@ -2312,9 +2389,9 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                     dispatched = await dispatch_orchestrated_review(
                         session_id,
                         {
-                            "root_cause": arguments.get('root_cause'),
+                            "root_cause": root_cause,
                             "proposed_conditions": proposed_conditions,
-                            "reasoning": arguments.get('reasoning') or "",
+                            "reasoning": reasoning or "",
                             # Server-owned context and telemetry captured when the
                             # session was opened. The reviewer receives these
                             # separately from the paused agent's authored claims.
@@ -2332,11 +2409,19 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                         # resolves now instead of stranding at antithesis. A success
                         # or still-running reviewer owns the slot → async path.
                         if not await reviewer_crashed_fast(agent_id_spawned):
+                            await _set_awaiting_facilitation(session, False)
                             result["orchestrated_review"] = True
                             result["reviewer_dispatch"] = {
                                 "agent_id": agent_id_spawned,
                                 "via": "agent-orchestrator",
                             }
+                            await _emit_dialectic_event(
+                                "dialectic_reviewer_dispatched",
+                                session,
+                                orchestrator_agent_id=agent_id_spawned,
+                                effect_id=dispatched.get("effect_id"),
+                                governed=bool(dispatched.get("governed")),
+                            )
                             result["note"] = (
                                 "Independent reviewer spawned via the agent-orchestrator; "
                                 "it will claim the reviewer slot and submit its verdict. "
@@ -2344,6 +2429,7 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                             )
                             return success_response(result)
                         # reviewer crashed fast → fall through to in-process
+                        review_path_failure_reason = "reviewer_crashed_fast"
                     # dispatch failed → fall through to in-process synthetic reviewer
 
             # End-to-end completion: when no independent live reviewer has claimed
@@ -2353,10 +2439,11 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
             # without a second live agent. Bounded so an overrun degrades to the
             # prior await-facilitation behaviour (thesis stays recorded above).
             if session.reviewer_agent_id is None and _synthetic_reviewer_enabled():
+                review_path_failure_reason = "synthetic_reviewer_unavailable"
                 thesis_dict = {
-                    "root_cause": arguments.get('root_cause'),
+                    "root_cause": root_cause,
                     "proposed_conditions": proposed_conditions,
-                    "reasoning": arguments.get('reasoning') or "",
+                    "reasoning": reasoning or "",
                 }
                 agent_state = _snapshot_agent_state(agent_id)
                 try:
@@ -2401,6 +2488,31 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                         result["next_steps"] = _get_dialectic_next_steps(
                             (review.get("recommendation") or "ESCALATE")
                         )
+                    else:
+                        # The in-process reviewer has no resident continuation
+                        # identity. A rejection or incomplete synthesis therefore
+                        # genuinely requires a peer/operator, unlike the open slot
+                        # that existed before review was attempted.
+                        await _set_awaiting_facilitation(
+                            session,
+                            True,
+                            reason="synthetic_reviewer_did_not_approve",
+                        )
+                        result["awaiting_facilitation"] = True
+
+            # No reviewer claimed the slot and every enabled automatic path
+            # declined, crashed, timed out, or was disabled. This is the first
+            # point at which a human-facilitation request is truthful.
+            if session.reviewer_agent_id is None:
+                await _set_awaiting_facilitation(
+                    session, True, reason=review_path_failure_reason
+                )
+                result["awaiting_facilitation"] = True
+                result["note"] = (
+                    "The thesis is recorded, but no automated reviewer could take "
+                    "the open slot. Assign an independent reviewer or facilitate "
+                    "this session as operator."
+                )
 
         return success_response(result)
 

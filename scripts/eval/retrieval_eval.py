@@ -15,7 +15,9 @@ Requires live Postgres + embeddings backend.
 
 import argparse
 import asyncio
+from collections import Counter
 from contextlib import contextmanager
+from dataclasses import dataclass
 import json
 import os
 import statistics
@@ -28,6 +30,45 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from scripts.eval.metrics import dcg, mrr, ndcg_at_k, recall_at_k  # noqa: F401  (dcg re-exported for callers)
 from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+
+@dataclass
+class QueryRun:
+    """Backward-compatible 3-value query result plus source diagnostics."""
+
+    ranked_ids: List[str]
+    scores: List[float]
+    latency_ms: float
+    source_diagnostics: Dict[str, Any]
+
+    def __iter__(self):
+        # Preserve existing ``ranked, scores, latency = await run_query(...)``.
+        yield self.ranked_ids
+        yield self.scores
+        yield self.latency_ms
+
+
+def _source_partition(discovery: Dict[str, Any]) -> str:
+    """Classify a result by its explicit source tag, or the native KG lane."""
+    for tag in discovery.get("tags") or []:
+        tag = str(tag)
+        if tag.startswith("source-"):
+            return tag
+    return "native"
+
+
+def _source_diagnostics(discoveries: List[Dict[str, Any]]) -> Dict[str, Any]:
+    counts = Counter(_source_partition(item) for item in discoveries)
+    total = sum(counts.values())
+    dominant = max(counts.values(), default=0)
+    return {
+        "partition_counts": dict(sorted(counts.items())),
+        "unique_partitions": len(counts),
+        "dominant_partition_share": round(dominant / total, 3) if total else 0.0,
+        "claude_memory_share": round(
+            counts.get("source-claude-memory", 0) / total, 3
+        ) if total else 0.0,
+    }
 
 
 def _parse_handler_response(result: Any) -> Dict[str, Any]:
@@ -90,7 +131,7 @@ async def run_query(
     rerank_pool_size: int = 50,
     hybrid: bool = False,
     graph_expand: bool = False,
-) -> tuple[List[str], List[float], float]:
+) -> QueryRun:
     """Run a single query against the current serving retrieval stack.
 
     Returns (ids, scores, latency_ms). Supports:
@@ -132,7 +173,17 @@ async def run_query(
     ]
 
     dt_ms = (time.perf_counter() - t0) * 1000.0
-    return ranked_ids, scores, dt_ms
+    ranked_discoveries = [
+        discovery
+        for discovery in payload.get("discoveries", [])[:top_k]
+        if isinstance(discovery, dict) and discovery.get("id") is not None
+    ]
+    return QueryRun(
+        ranked_ids=ranked_ids,
+        scores=scores,
+        latency_ms=dt_ms,
+        source_diagnostics=_source_diagnostics(ranked_discoveries),
+    )
 
 
 async def evaluate(
@@ -155,11 +206,14 @@ async def evaluate(
 
     per_query: List[Dict[str, Any]] = []
     ndcgs, recalls, mrrs, latencies = [], [], [], []
+    source_partition_counts: List[float] = []
+    dominant_source_shares: List[float] = []
+    claude_memory_shares: List[float] = []
 
     for pair in pairs:
         query = pair["query"]
         relevant = set(pair["relevant_ids"])
-        ranked, scores, dt_ms = await run_query(
+        query_run = await run_query(
             query,
             max(top_k_fetch, recall_k),
             rerank=rerank,
@@ -167,6 +221,8 @@ async def evaluate(
             hybrid=hybrid,
             graph_expand=graph_expand,
         )
+        ranked, scores, dt_ms = query_run
+        source_diag = getattr(query_run, "source_diagnostics", {})
         ndcg = ndcg_at_k(ranked, relevant, ndcg_k)
         rec = recall_at_k(ranked, relevant, recall_k)
         m = mrr(ranked, relevant)
@@ -186,11 +242,16 @@ async def evaluate(
             "flat_miss": first_hit_rank is None,
             "top_score": round(top_score, 3),
             "latency_ms": round(dt_ms, 1),
+            "source_partitions": source_diag,
         })
         ndcgs.append(ndcg)
         recalls.append(rec)
         mrrs.append(m)
         latencies.append(dt_ms)
+        if source_diag:
+            source_partition_counts.append(float(source_diag["unique_partitions"]))
+            dominant_source_shares.append(float(source_diag["dominant_partition_share"]))
+            claude_memory_shares.append(float(source_diag["claude_memory_share"]))
 
     def agg(values: List[float]) -> Dict[str, float]:
         if not values:
@@ -247,6 +308,17 @@ async def evaluate(
             "latency_ms": percentiles(latencies),
             "flat_miss_count": flat_miss_count,
             "flat_miss_rate": round(flat_miss_count / len(per_query), 3) if per_query else 0.0,
+            "source_diversity": {
+                "mean_unique_partitions": round(
+                    statistics.fmean(source_partition_counts), 3
+                ) if source_partition_counts else None,
+                "mean_dominant_partition_share": round(
+                    statistics.fmean(dominant_source_shares), 3
+                ) if dominant_source_shares else None,
+                "mean_claude_memory_share": round(
+                    statistics.fmean(claude_memory_shares), 3
+                ) if claude_memory_shares else None,
+            },
         },
         "per_query": per_query,
     }
@@ -271,6 +343,14 @@ def print_human(result: Dict[str, Any]) -> None:
         f"({agg['flat_miss_rate']:.1%})"
     )
     print(f"  Latency    p50 {lat['p50']}ms  p95 {lat['p95']}ms  max {lat['max']}ms\n")
+    source = agg["source_diversity"]
+    if source["mean_unique_partitions"] is not None:
+        print(
+            "  Sources    mean unique "
+            f"{source['mean_unique_partitions']:.2f}; dominant share "
+            f"{source['mean_dominant_partition_share']:.1%}; Claude-memory share "
+            f"{source['mean_claude_memory_share']:.1%}\n"
+        )
 
     print("Per-query detail:")
     print(f"  {'query':<42}  ndcg  recall  mrr    rank  top_score  latency")

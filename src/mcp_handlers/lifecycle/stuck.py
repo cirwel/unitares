@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from ..decorators import mcp_tool
 from ..utils import success_response, error_response
 from src.logging_utils import get_logger
-from .recovery_policy import compute_recovery_margin
+from .recovery_policy import compute_recovery_margin, read_risk_authority, render_risk
 from src.identity.lineage_semantics import is_non_succession_spawn_reason
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 # Same redacted-handle synthesis agent(action=list) uses, so a stuck entry and
@@ -557,7 +557,7 @@ def _detect_stuck_agents(
 
             if monitor:
                 metrics = monitor.get_metrics()
-                risk_score = float(metrics.get("mean_risk") or 0.5)
+                risk_score = read_risk_authority(metrics).risk
                 void_active = bool(monitor.state.void_active)
 
                 # Stuck/recovery headroom must use recovery-authoritative
@@ -590,7 +590,7 @@ def _detect_stuck_agents(
                 # second, independently measured attention signal.
                 # Skip low-update agents (<50) - their EISV dynamics are noise, not signal
                 _is_actually_degraded = (
-                    risk_score > 0.45  # Approaching pause threshold
+                    (risk_score is not None and risk_score > 0.45)  # Approaching pause threshold
                     or float(monitor.state.S) > 0.5  # High entropy
                 )
                 if margin == "tight" and age_minutes > max(tight_margin_timeout_minutes, 60.0) and total_updates >= 50 and _is_actually_degraded:
@@ -831,13 +831,17 @@ async def _try_recover_agent(stuck: dict, note_cooldown_minutes: float) -> list:
             await ensure_hydrated(monitor, agent_id)
             metrics = monitor.get_metrics()
             coherence = float(monitor.state.coherence)
-            risk_score = float(metrics.get("mean_risk") or 0.5)
+            risk_authority = read_risk_authority(metrics)
+            risk_score = risk_authority.risk
             void_active = bool(monitor.state.void_active)
             responsive = True
         except Exception as e:
             logger.warning(f"[STUCK_AGENT_RECOVERY] Agent {agent_id[:8]}... is unresponsive: {e}")
             responsive = False
-            coherence, risk_score, void_active = 0.5, 0.5, False
+            # An unresponsive agent yields no reading at all.  This branch only
+            # feeds the dialectic payload below, so record the absence rather
+            # than a midpoint the agent never produced.
+            coherence, risk_score, void_active = 0.5, None, False
 
         # Unresponsive — trigger dialectic immediately
         if not responsive:
@@ -859,7 +863,16 @@ async def _try_recover_agent(stuck: dict, note_cooldown_minutes: float) -> list:
 
         # C(V) is retained in the dialectic/audit payload below, but recovery
         # authority rests on risk and void state.
-        is_safe = risk_score < 0.60 and not void_active
+        # A missing resolved reading is not a low reading.  This sweep resumes
+        # agents with no human in the loop, so it refuses rather than guessing
+        # and lets the dialectic path below surface the agent for review.
+        is_safe = (
+            not void_active
+            and (
+                risk_authority.is_unmeasured
+                or (risk_score is not None and risk_score < 0.60)
+            )
+        )
 
         if is_safe:
             meta = mcp_server.agent_metadata.get(agent_id)
@@ -888,7 +901,8 @@ async def _try_recover_agent(stuck: dict, note_cooldown_minutes: float) -> list:
                     },
                     note=(
                         "Unsafe stuck - triggered dialectic "
-                        f"(risk={risk_score:.2f}, legacy_CV={coherence:.2f} diagnostic)"
+                        f"(risk={render_risk(risk_score, places=2)}, "
+                        f"legacy_CV={coherence:.2f} diagnostic)"
                     ),
                 )
                 if result:
