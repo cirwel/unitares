@@ -111,6 +111,7 @@ from .support.model_inference import (
     handle_list_inference_hosts,
 )
 from .support.delegated_inference import handle_delegate_inference
+from .support.consultation import handle_consult
 # Outcome Events - EISV validation infrastructure (Feb 2026)
 from .observability.outcome_events import handle_outcome_event
 # Resident Progress - sentinel push-based pulse (Phase 1)

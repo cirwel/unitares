@@ -459,19 +459,28 @@ async def _fake_resolve_identity(name, arguments, ctx):
     Both facts matter — the teardown is why a contextvar fallback cannot
     rescue attribution on this surface.
     """
-    from src.mcp_handlers.context import set_session_context
+    from src.mcp_handlers.context import (
+        set_session_context,
+        update_context_agent_id,
+    )
     from src.mcp_handlers.middleware import identity_step
 
+    identity_result = {
+        "agent_uuid": BOUND_UUID,
+        "source": "test",
+    }
     identity_step._attach_middleware_identity(
         arguments,
         session_key="sk-e2e",
-        identity_result={"agent_uuid": BOUND_UUID, "source": "test"},
+        identity_result=identity_result,
     )
     ctx.context_token = set_session_context(
         session_key="sk-e2e", client_session_id="csid-e2e", agent_id=BOUND_UUID
     )
+    update_context_agent_id(BOUND_UUID)
     ctx.session_key = "sk-e2e"
     ctx.bound_agent_id = BOUND_UUID
+    ctx.identity_result = identity_result
     return name, arguments, ctx
 
 
@@ -533,6 +542,69 @@ async def test_mcp_wrapper_attributes_request_review_end_to_end(
 
     assert append.call_count == 1
     assert append.call_args.kwargs["agent_id"] == BOUND_UUID
+
+
+@pytest.mark.asyncio
+async def test_mcp_wrapper_mismatch_audit_attributes_resolved_actor(monkeypatch):
+    """Rejected caller text cannot displace the resolver-owned audit actor."""
+    import src.mcp_handlers.middleware as mw
+    import src.tool_registration as tr
+
+    attacker = "11111111-2222-4333-8444-555555555555"
+    _tracker, append = _patch_recorder_io(monkeypatch)
+    monkeypatch.setattr(tr, "_wave3a_get_route", lambda _n: None)
+
+    steps = mw.PRE_DISPATCH_STEPS
+    slot = steps.index(mw.resolve_identity)
+    original = steps[slot]
+    steps[slot] = _fake_resolve_identity
+    tr._tool_wrappers_cache.clear()
+    try:
+        result = await tr.get_tool_wrapper("consult")(
+            brief="audit this",
+            agent_id=attacker,
+        )
+    finally:
+        steps[slot] = original
+        tr._tool_wrappers_cache.clear()
+
+    assert result["success"] is False
+    assert append.call_count == 1
+    assert append.call_args.kwargs["agent_id"] == BOUND_UUID
+
+
+@pytest.mark.asyncio
+async def test_mcp_wrapper_unbound_refusal_does_not_audit_raw_uuid(monkeypatch):
+    """An unproved UUID on a refused call audits anonymously, not as its target."""
+    from src.mcp_handlers.identity_bootstrap import strict_identity_refusal_payload
+    from src.mcp_handlers.response_base import success_response
+    import src.mcp_handlers.middleware as mw
+    import src.tool_registration as tr
+
+    attacker = "11111111-2222-4333-8444-555555555555"
+    _tracker, append = _patch_recorder_io(monkeypatch)
+    monkeypatch.setattr(tr, "_wave3a_get_route", lambda _n: None)
+
+    async def _refuse(name, arguments, ctx):
+        return success_response(strict_identity_refusal_payload(name))
+
+    steps = mw.PRE_DISPATCH_STEPS
+    slot = steps.index(mw.resolve_identity)
+    original = steps[slot]
+    steps[slot] = _refuse
+    tr._tool_wrappers_cache.clear()
+    try:
+        result = await tr.get_tool_wrapper("consult")(
+            brief="audit this",
+            agent_id=attacker,
+        )
+    finally:
+        steps[slot] = original
+        tr._tool_wrappers_cache.clear()
+
+    assert result["status"] == "identity_required"
+    assert append.call_count == 1
+    assert append.call_args.kwargs["agent_id"] is None
 
 
 def test_dispatch_bound_attribution_ignores_a_caller_supplied_handoff_key():
@@ -748,12 +820,20 @@ async def test_mcp_protocol_wrapper_is_audit_only(monkeypatch):
         lambda agent_id, client_session_id=None: scheduled.append(agent_id),
     )
     monkeypatch.setattr(tr, "_wave3a_get_route", lambda _n: None)
-    monkeypatch.setattr(tr, "dispatch_tool", _dispatch_that_injects_the_alias_action)
+
+    async def _trusted_dispatch(name, arguments):
+        arguments["_middleware_identity_result"] = {
+            "agent_uuid": AGENT_UUID,
+            "source": "test_resolver",
+        }
+        return await _dispatch_that_injects_the_alias_action(name, arguments)
+
+    monkeypatch.setattr(tr, "dispatch_tool", _trusted_dispatch)
 
     tr._tool_wrappers_cache.clear()
     try:
         await tr.get_tool_wrapper("knowledge")(
-            action="search", query="x", agent_id=AGENT_UUID
+            action="search", query="x"
         )
     finally:
         tr._tool_wrappers_cache.clear()

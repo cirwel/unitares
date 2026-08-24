@@ -31,6 +31,7 @@ dropped name is REJECTED, not ignored.
 from __future__ import annotations
 
 import inspect
+import json
 import re
 
 import pytest
@@ -40,6 +41,7 @@ from src.tool_registration import (
     ALIAS_SCHEMA_DROP,
     ALIAS_SCHEMA_KEEP,
     _ALIAS_ALWAYS_KEEP,
+    build_alias_input_schema,
 )
 from src.mcp_handlers.tool_stability import _TOOL_ALIASES
 from src.tool_schemas import get_tool_definitions
@@ -114,6 +116,47 @@ def test_write_aliases_carry_what_their_action_needs():
     assert {"summary", "details"} <= ALIAS_SCHEMA_KEEP["store_finding"], (
         "store_finding cannot carry the finding itself"
     )
+
+
+def test_request_review_wire_schema_is_only_the_friendly_one_call_contract():
+    schema = build_alias_input_schema(
+        "request_review",
+        _schema("dialectic"),
+        inject_action=True,
+    )
+    properties = set(schema["properties"])
+
+    assert properties == (
+        ALIAS_SCHEMA_KEEP["request_review"] | _ALIAS_ALWAYS_KEEP
+    )
+    assert {
+        "action",
+        "session_id",
+        "status",
+        "limit",
+        "concerns",
+        "reviewer_provenance",
+    }.isdisjoint(properties)
+
+
+@pytest.mark.asyncio
+async def test_describe_request_review_uses_friendly_wire_schema_and_authority():
+    from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
+
+    result = await handle_describe_tool({
+        "tool_name": "request_review",
+        "lite": False,
+    })
+    payload = json.loads(result[0].text)
+    tool = payload["tool"]
+    properties = set(tool["inputSchema"]["properties"])
+
+    assert properties == (
+        ALIAS_SCHEMA_KEEP["request_review"] | _ALIAS_ALWAYS_KEEP
+    )
+    assert "governed, on-record judgment" in tool["description"]
+    assert tool["name"] == "request_review"
+    assert tool["implementation_name"] == "dialectic"
 
 
 def test_dropped_params_exist_on_the_router():

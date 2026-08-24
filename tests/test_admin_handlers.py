@@ -1876,10 +1876,19 @@ class TestListTools:
                  "process_agent_update": None,
                  "health_check": None,
                  "list_tools": None,
+                 "consult": None,
+                 "request_review": None,
+                 "call_model": None,
              }), \
              patch("src.tool_modes.TOOL_TIERS", {
-                 "essential": {"onboard", "process_agent_update", "list_tools"},
-                 "common": {"health_check"},
+                 "essential": {
+                     "onboard",
+                     "process_agent_update",
+                     "list_tools",
+                     "consult",
+                     "request_review",
+                 },
+                 "common": {"health_check", "call_model"},
                  "advanced": set(),
              }), \
              patch("src.tool_modes.TOOL_OPERATIONS", {
@@ -1887,9 +1896,13 @@ class TestListTools:
                  "process_agent_update": "write",
                  "health_check": "read",
                  "list_tools": "read",
+                 "consult": "read",
+                 "request_review": "write",
+                 "call_model": "read",
              }), \
              patch("src.tool_modes.LITE_MODE_TOOLS", {
-                 "onboard", "process_agent_update", "list_tools", "health_check"
+                 "onboard", "process_agent_update", "list_tools", "health_check",
+                 "consult", "request_review", "call_model",
              }), \
              patch("src.mcp_handlers.tool_stability.list_all_aliases", return_value={}), \
              patch("src.mcp_handlers.decorators.get_tool_timeout", return_value=10.0), \
@@ -1904,7 +1917,14 @@ class TestListTools:
             assert "tools" in data
             assert data["shown"] > 0
             assert data["getting_started_path"][0]["tool"] == "start_session"
-            assert data["essential_toolkit"]["preferred_consolidated_tools"]["dialectic"].startswith("Use action='quick'")
+            names = [tool["name"] for tool in data["tools"]]
+            assert names.index("consult") < names.index("call_model")
+            assert data["workflows"]["advisory_help"] == ["consult(brief='...')"]
+            assert "consult" in data["signatures"]
+            toolkit = data["essential_toolkit"]["preferred_consolidated_tools"]
+            assert "advisory answers" in toolkit["consult"]
+            assert "on-record judgment" in toolkit["request_review"]
+            assert "quick" not in toolkit["dialectic"]
 
     @pytest.mark.asyncio
     async def test_list_tools_full_mode(self, mock_mcp_server, patch_context_agent_id):

@@ -11,6 +11,7 @@ async def execute_http_dispatch_fallback(name: str, arguments: Optional[Dict[str
     from src.mcp_handlers.middleware.params_step import (
         inject_identity,
         resolve_alias,
+        strip_untrusted_dispatch_metadata,
         unwrap_kwargs,
         validate_params,
     )
@@ -21,6 +22,7 @@ async def execute_http_dispatch_fallback(name: str, arguments: Optional[Dict[str
         name=name,
         arguments=arguments,
         pre_steps=[
+            strip_untrusted_dispatch_metadata,
             verify_trajectory,
             unwrap_kwargs,
             resolve_alias,

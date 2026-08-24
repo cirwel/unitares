@@ -616,6 +616,7 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
             set_session_context,
             set_session_resolution_source,
             set_session_proof_origin,
+            update_context_agent_id,
         )
         set_session_resolution_source(sticky_resolution_source(cached))
         # Sticky-cache hit = fingerprint resolution with no per-call proof. Stamp
@@ -637,6 +638,7 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
             client_hint=client_hint,
             identity_result=identity_result,
         )
+        update_context_agent_id(cached.agent_uuid)
         ctx.session_key = cached.session_key
         ctx.client_session_id = client_session_id
         ctx.bound_agent_id = cached.agent_uuid
@@ -778,7 +780,7 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                 await _emit_middleware_hijack("log")
             # mode == "off": unchanged behavior, no log, no broadcast
 
-        from ..context import set_session_context
+        from ..context import set_session_context, update_context_agent_id
         client_hint = arguments.get("client_hint") if arguments else None
         core_status = await _lookup_core_agent_row_status(_direct_uuid, "PATH0")
         identity_result = {
@@ -793,6 +795,7 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
             client_hint=client_hint,
             identity_result=identity_result,
         )
+        update_context_agent_id(_direct_uuid)
         ctx.session_key = session_key
         ctx.client_session_id = client_session_id
         ctx.bound_agent_id = _direct_uuid
@@ -1117,7 +1120,7 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
         logger.debug(f"Could not resolve session identity: {e}")
 
     # Set context for this request
-    from ..context import set_session_context
+    from ..context import set_session_context, update_context_agent_id
     client_hint = arguments.get("client_hint") if arguments else None
     context_token = set_session_context(
         session_key=session_key,
@@ -1127,6 +1130,12 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
         spawn_reason=identity_result.get("spawn_reason") if identity_result else None,
         identity_result=identity_result,
     )
+    if bound_agent_id:
+        # ``set_session_context`` can also carry transport assertions, so its
+        # generic agent_id slot is intentionally not proof-bearing. This value
+        # came from the resolver-owned MCP identity path; stamp that provenance
+        # explicitly for context-only consumers such as consult.
+        update_context_agent_id(bound_agent_id)
 
     logger.info(
         f"[DISPATCH_ENTRY] tool={name}, has_kwargs={'kwargs' in arguments}, "

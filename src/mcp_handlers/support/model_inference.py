@@ -13,6 +13,8 @@ Usage tracked in EISV (Energy consumption) for self-regulation.
 from typing import Dict, Any, Sequence
 from mcp.types import TextContent
 import asyncio
+from dataclasses import dataclass
+import inspect
 import os
 import time
 
@@ -28,16 +30,38 @@ from .inference_registry import (
     sha256_text as _sha256_text,
 )
 from src.logging_utils import get_logger
+from src.mcp_handlers.context import get_context_resolved_agent_id
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
+from .inference_outcome import InferenceOutcome
 logger = get_logger(__name__)
 
 # Check if OpenAI SDK available (Ollama and HF Inference Providers expose
-# OpenAI-compatible APIs that this client speaks).
+# OpenAI-compatible APIs that this client speaks). Keep the historical
+# module-level ``OpenAI`` patch seam, but point it at the async client: the
+# network request must remain cancellable by the facade's wall-clock deadline.
 try:
-    from openai import OpenAI
+    from openai import AsyncOpenAI
+
+    OpenAI = AsyncOpenAI
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
+
+
+@dataclass(frozen=True, slots=True)
+class CallModelRequest:
+    """Validated input to the standard advisory inference service."""
+
+    prompt: str
+    requesting_agent_uuid: str | None
+    model: str = "auto"
+    provider: str = "auto"
+    host_id: str | None = None
+    task_type: str = "reasoning"
+    max_tokens: int = 2048
+    temperature: float = 0.7
+    privacy: str = "local"
+    timeout_s: float = 235.0
 
 
 def _invocation_gate() -> Dict[str, Any]:
@@ -57,6 +81,7 @@ def _invocation_gate() -> Dict[str, Any]:
 
     call_model_requirement = get_call_identity_requirement("call_model", {})
     delegate_requirement = get_call_identity_requirement("delegate_inference", {})
+    consult_requirement = get_call_identity_requirement("consult", {})
     gate: Dict[str, Any] = {
         # Preserve the original scalar fields for older clients while exposing
         # the complete per-tool map for hosts routed outside call_model.
@@ -65,9 +90,14 @@ def _invocation_gate() -> Dict[str, Any]:
         "tools": {
             "call_model": {"requires_identity": call_model_requirement},
             "delegate_inference": {"requires_identity": delegate_requirement},
+            "consult": {"requires_identity": consult_requirement},
         },
     }
-    if call_model_requirement == "required" or delegate_requirement == "required":
+    if "required" in {
+        call_model_requirement,
+        delegate_requirement,
+        consult_requirement,
+    }:
         gate["note"] = (
             "Listing hosts serves unbound callers; calling one does not. "
             "Bind first with start_session(force_new=true) — inference calls "
@@ -165,39 +195,24 @@ def _call_model_timeout(default: float = 240.0) -> float:
     return default
 
 
-@mcp_tool("call_model", timeout=_call_model_timeout())
-async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
+def _provider_timeout_s() -> float:
+    """End the provider request before the public tool deadline.
+
+    Provider timeout values are phase budgets in HTTPX, not an aggregate
+    deadline. ``run_model_inference`` therefore also wraps the cancellable
+    async request in ``asyncio.timeout``; this shorter budget leaves cleanup
+    margin for the MCP wrapper.
     """
-    Call a free/low-cost LLM for reasoning, generation, or analysis.
+    return max(1.0, _call_model_timeout() - 5.0)
 
-    Providers:
-    - Ollama (local, free) — default when privacy="local" (the default). Pass a
-      model name that is actually pulled on the host (`ollama list`). The
-      local fallback for model="auto" is taken from UNITARES_LLM_MODEL
-      (default "gemma4:latest"). Requested model names are passed through
-      verbatim — no silent aliasing.
-    - Hugging Face Inference Providers (privacy="cloud", provider="hf")
-      — requires HF_TOKEN or HUGGINGFACE_TOKEN. Model names like
-      "deepseek-ai/DeepSeek-R1" or "Qwen/Qwen3-235B-A22B-Instruct" route here.
 
-    Usage tracked in EISV (Energy consumption):
-    - Model calls consume Energy
-    - High usage → higher Energy → agent learns efficiency
-    - Natural self-regulation
-
-    Example:
-    {
-      "prompt": "Analyze this code for potential bugs",
-      "model": "gemma4:latest",
-      "task_type": "analysis",
-      "max_tokens": 2048
-    }
-    """
+async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
+    """Run one standard advisory inference without an MCP response envelope."""
     if not OPENAI_AVAILABLE:
-        return [error_response(
+        return InferenceOutcome.failed(
             "OpenAI SDK required for model inference. Install with: pip install openai",
-            error_code="DEPENDENCY_MISSING",
-            error_category="system_error",
+            code="DEPENDENCY_MISSING",
+            category="system_error",
             recovery={
                 "action": "Install OpenAI SDK",
                 "related_tools": ["health_check"],
@@ -207,43 +222,38 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                     "3. Retry call_model tool"
                 ]
             }
-        )]
-    
-    # Validate required parameter
-    prompt, error = require_argument(arguments, "prompt")
-    if error:
-        return [error]
-    
-    # Get optional parameters
-    model = arguments.get("model", "auto")  # auto, or any Ollama/HF model name
-    task_type = arguments.get("task_type", "reasoning")  # reasoning, generation, analysis
-    max_tokens = int(arguments.get("max_tokens", 2048))  # Must be int for Ollama
-    temperature = float(arguments.get("temperature", 0.7))
-    privacy = arguments.get("privacy", "local")  # local (Ollama default), auto, cloud
-    provider = arguments.get("provider", "auto")  # auto, hf, ollama
-    host_id = arguments.get("host_id")
+        )
+
+    prompt = request.prompt
+    model = request.model
+    task_type = request.task_type
+    max_tokens = request.max_tokens
+    temperature = request.temperature
+    privacy = request.privacy
+    provider = request.provider
+    host_id = request.host_id
 
     if host_id:
         host = get_inference_host(str(host_id))
         if host is None:
-            return [error_response(
+            return InferenceOutcome.failed(
                 f"Inference host '{host_id}' is not registered",
-                error_code="INFERENCE_HOST_NOT_FOUND",
-                error_category="validation_error",
+                code="INFERENCE_HOST_NOT_FOUND",
+                category="validation_error",
                 recovery={
                     "action": "Call list_inference_hosts to see registered hosts",
                     "related_tools": ["list_inference_hosts"],
                 },
-            )]
+            )
         # Reachability is checked BEFORE availability on purpose. A host that
         # nothing routes to stays unreachable no matter how configured it is, so
         # reporting it as "not available" would send the caller off to enable a
         # flag that cannot help. Say the true thing first.
         if "call_model" not in (host.get("accepts_host_id_from") or []):
-            return [error_response(
+            return InferenceOutcome.failed(
                 f"Inference host '{host_id}' is registered but not reachable from call_model",
-                error_code="INFERENCE_HOST_UNREACHABLE",
-                error_category="validation_error",
+                code="INFERENCE_HOST_UNREACHABLE",
+                category="validation_error",
                 details={"host": host, "accepts_host_id_from": host.get("accepts_host_id_from") or []},
                 recovery={
                     "action": (
@@ -253,18 +263,18 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                     ),
                     "related_tools": ["list_inference_hosts", "delegate_inference"],
                 },
-            )]
+            )
         if not host.get("configured") or not host.get("available"):
-            return [error_response(
+            return InferenceOutcome.failed(
                 f"Inference host '{host_id}' is not available",
-                error_code="INFERENCE_HOST_UNAVAILABLE",
-                error_category="system_error",
+                code="INFERENCE_HOST_UNAVAILABLE",
+                category="system_error",
                 details={"host": host},
                 recovery={
                     "action": "Choose an available host or configure the requested adapter",
                     "related_tools": ["list_inference_hosts", "describe_inference_host"],
                 },
-            )]
+            )
         provider_kind = host.get("provider_kind")
         if provider_kind == "ollama":
             provider = "ollama"
@@ -275,10 +285,10 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         else:
             # Reachable per the registry but this handler has no branch for it —
             # a registry/handler drift, not an agent error.
-            return [error_response(
+            return InferenceOutcome.failed(
                 f"Inference host '{host_id}' uses unsupported provider kind '{provider_kind}'",
-                error_code="INFERENCE_HOST_UNSUPPORTED",
-                error_category="system_error",
+                code="INFERENCE_HOST_UNSUPPORTED",
+                category="system_error",
                 details={"host": host},
                 recovery={
                     "action": (
@@ -288,7 +298,7 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                     ),
                     "related_tools": ["list_inference_hosts"],
                 },
-            )]
+            )
     
     # Privacy routing: Force local if requested
     if privacy == "local" or provider == "ollama":
@@ -306,10 +316,10 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         base_url = "https://router.huggingface.co/v1"
         api_key = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN")
         if not api_key:
-            return [error_response(
+            return InferenceOutcome.failed(
                 "HF_TOKEN or HUGGINGFACE_TOKEN required for Hugging Face Inference Providers",
-                error_code="MISSING_CONFIG",
-                error_category="system_error",
+                code="MISSING_CONFIG",
+                category="system_error",
                 recovery={
                     "action": "Set HF_TOKEN environment variable (get free token from https://huggingface.co/settings/tokens)",
                     "related_tools": ["health_check"],
@@ -320,7 +330,7 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                         "4. Retry call_model tool"
                     ]
                 }
-            )]
+            )
         # Clean model name (remove hf: prefix if present)
         if model.startswith("hf:"):
             model = model[3:]
@@ -361,10 +371,10 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 provider = "hf"
                 logger.info(f"Auto-selected Hugging Face: {model}")
             else:
-                return [error_response(
+                return InferenceOutcome.failed(
                     "No provider available. Ollama not running and HF_TOKEN not configured.",
-                    error_code="MISSING_CONFIG",
-                    error_category="system_error",
+                    code="MISSING_CONFIG",
+                    category="system_error",
                     recovery={
                         "action": "Start Ollama (recommended) or set HF_TOKEN",
                         "related_tools": ["health_check"],
@@ -374,40 +384,64 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                             "3. Retry call_model tool"
                         ]
                     }
-                )]
+                )
     else:
         # Unknown provider value. Pydantic schema (Literal["auto","hf","ollama"])
         # blocks this in normal MCP calls; only direct calls can reach here.
-        return [error_response(
+        return InferenceOutcome.failed(
             f"Unknown provider '{provider}'. Expected one of: auto, hf, ollama.",
-            error_code="INVALID_PROVIDER",
-            error_category="validation_error",
-        )]
+            code="INVALID_PROVIDER",
+            category="validation_error",
+        )
     
     try:
         started = time.monotonic()
 
         logger.debug(f"Calling model '{model}' via {base_url} for task_type='{task_type}'")
 
-        # The sync OpenAI client MUST run on an executor thread, never on the
-        # event loop. This exact call blocked the entire gov-mcp loop for
-        # 2-3 minutes every 30 minutes (live incident 2026-07-28: Vigil's KG
-        # audit → call_model → Ollama cold-loading the model; captured stack:
-        # openai._base_client → sync httpx → sock.recv on the main thread).
-        # A blocked loop also disarms the tool's own asyncio.wait_for timeout
-        # — the timer needs the very loop that is stuck. Same bug class as
-        # llm_delegation.py, which already wraps all its sync calls this way.
-        def _call_sync():
-            client = OpenAI(base_url=base_url, api_key=api_key)
-            return client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=max_tokens,
-                temperature=temperature
-            )
-
-        loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(None, _call_sync)
+        # Use AsyncOpenAI rather than an executor-wrapped sync client. The
+        # latter keeps running after task cancellation, so a cold or wedged
+        # provider could outlive consult's public deadline. Async HTTP I/O is
+        # cancelled with this task, and asyncio.timeout supplies an aggregate
+        # wall-clock cap in addition to HTTPX's per-phase timeouts.
+        client = OpenAI(
+            base_url=base_url,
+            api_key=api_key,
+            timeout=request.timeout_s,
+            max_retries=0,
+        )
+        try:
+            async with asyncio.timeout(request.timeout_s):
+                pending_response = client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+                # Some downstream tests and embedders retain a synchronous
+                # mock at the historical OpenAI patch seam. Production's
+                # AsyncOpenAI result is always awaitable.
+                response = (
+                    await pending_response
+                    if inspect.isawaitable(pending_response)
+                    else pending_response
+                )
+        finally:
+            close = getattr(client, "close", None)
+            if close is not None:
+                try:
+                    close_result = close()
+                    if inspect.isawaitable(close_result):
+                        await close_result
+                except Exception as close_error:
+                    # Cleanup must never replace an active CancelledError (or a
+                    # provider exception) and turn cancellation into a normal
+                    # failed outcome. Async cancellation remains uncaught; an
+                    # ordinary close failure is diagnostic only.
+                    logger.warning(
+                        "Could not close async inference client: %s",
+                        close_error,
+                    )
         latency_ms = int((time.monotonic() - started) * 1000)
         
         message = response.choices[0].message
@@ -445,7 +479,7 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         logger.info(f"Model inference: model={model_used}, tokens={tokens_used}, energy_cost={energy_cost}")
         
         # Update Energy in governance monitor (if agent_id available)
-        agent_id = arguments.get("agent_id")
+        agent_id = request.requesting_agent_uuid
         if agent_id:
             try:
                 monitor = mcp_server.get_or_create_monitor(agent_id)
@@ -497,7 +531,7 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             "privacy_class": host.get("privacy_class", privacy),
             "cost_class": host.get("cost_class", "unknown"),
             "accountability_class": host.get("accountability_class", "tool_evidence"),
-            "requesting_agent_uuid": arguments.get("agent_id"),
+            "requesting_agent_uuid": request.requesting_agent_uuid,
             "latency_ms": latency_ms,
             "tokens_used": tokens_used,
             "energy_cost": energy_cost,
@@ -510,24 +544,29 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             "warnings": [],
         }
         
-        return success_response({
-            "success": True,
-            "response": result_text,
-            "model_used": model_used,
-            "tokens_used": tokens_used,
-            "energy_cost": energy_cost,
-            "routed_via": routed_via,
-            "task_type": task_type,
-            "inference": inference,
-            "message": f"Model inference completed via {routed_via}"
-        }, agent_id=arguments.get("agent_id"), arguments=arguments)
+        return InferenceOutcome(
+            response=result_text,
+            inference=inference,
+            routed_via=routed_via,
+            task_type=task_type,
+            model_used=model_used,
+            tokens_used=tokens_used,
+            energy_cost=energy_cost,
+            message=f"Model inference completed via {routed_via}",
+        )
         
     except Exception as e:
         logger.error(f"Model inference failed: {e}", exc_info=True)
         
         # Provide helpful error message
         error_msg = str(e)
-        if "timeout" in error_msg.lower():
+        if isinstance(e, TimeoutError):
+            error_msg = (
+                f"request exceeded the {request.timeout_s:g}s wall-clock timeout"
+            )
+            error_code = "TIMEOUT"
+            recovery_hint = "Try a shorter prompt or increase timeout"
+        elif "timeout" in error_msg.lower():
             error_code = "TIMEOUT"
             recovery_hint = "Try a shorter prompt or increase timeout"
         elif "rate limit" in error_msg.lower():
@@ -559,10 +598,10 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             error_code = "INFERENCE_ERROR"
             recovery_hint = "Check provider configuration and model availability"
         
-        return [error_response(
+        return InferenceOutcome.failed(
             f"Model inference failed: {error_msg}",
-            error_code=error_code,
-            error_category="system_error",
+            code=error_code,
+            category="system_error",
             details={
                 "model_requested": model,
                 "base_url": base_url,
@@ -579,4 +618,51 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                     "5. Check server logs for details"
                 ]
             }
+        )
+
+
+@mcp_tool("call_model", timeout=_call_model_timeout())
+async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """Call a standard advisory model for reasoning, generation, or analysis."""
+    prompt, error = require_argument(arguments, "prompt")
+    if error:
+        return [error]
+
+    requesting_agent_uuid = (
+        get_context_resolved_agent_id() or arguments.get("agent_id")
+    )
+    request = CallModelRequest(
+        prompt=str(prompt),
+        requesting_agent_uuid=requesting_agent_uuid,
+        model=str(arguments.get("model", "auto")),
+        provider=str(arguments.get("provider", "auto")),
+        host_id=(str(arguments["host_id"]) if arguments.get("host_id") else None),
+        task_type=str(arguments.get("task_type", "reasoning")),
+        max_tokens=int(arguments.get("max_tokens", 2048)),
+        temperature=float(arguments.get("temperature", 0.7)),
+        privacy=str(arguments.get("privacy", "local")),
+        timeout_s=_provider_timeout_s(),
+    )
+    outcome = await run_model_inference(request)
+    if not outcome.ok:
+        failure = outcome.failure
+        assert failure is not None
+        return [error_response(
+            failure.message,
+            error_code=failure.code,
+            error_category=failure.category,
+            details=failure.details,
+            recovery=failure.recovery,
         )]
+
+    return success_response({
+        "success": True,
+        "response": outcome.response,
+        "model_used": outcome.model_used,
+        "tokens_used": outcome.tokens_used,
+        "energy_cost": outcome.energy_cost,
+        "routed_via": outcome.routed_via,
+        "task_type": outcome.task_type,
+        "inference": outcome.inference,
+        "message": outcome.message,
+    }, agent_id=requesting_agent_uuid, arguments=arguments)

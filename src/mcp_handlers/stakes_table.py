@@ -165,6 +165,7 @@ _BASELINE: frozenset[tuple[str, Optional[str]]] = frozenset({
     # single-purpose: identity lifecycle + self-governance + reads
     ("bind_session", None),
     ("call_model", None),
+    ("consult", None),
     ("delegate_inference", None),
     ("dashboard", None),
     ("debug_request_context", None),

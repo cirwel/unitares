@@ -137,6 +137,7 @@ TOOL_ORDER = [
     "get_lifecycle_stats",
     "list_inference_hosts",
     "describe_inference_host",
+    "consult",
     "call_model",
     "delegate_inference",
     "onboard",

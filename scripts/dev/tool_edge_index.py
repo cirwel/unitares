@@ -70,6 +70,7 @@ DEPLOYABLE_MODES = (
     "full",
 )
 SURFACE_SOURCE_FILES = (
+    "src/alias_schema.py",
     "src/mcp_compat.py",
     "src/mcp_handlers/decorators.py",
     "src/mcp_handlers/introspection/tool_catalog.py",
@@ -508,6 +509,7 @@ def build_exposure_snapshot(
         AGENT_WORKFLOW_ALIASES,
         list_all_aliases,
     )
+    from src.alias_schema import build_alias_input_schema
     from src.tool_modes import LITE_MODE_TOOLS, get_tools_for_mode
     from src.tool_schemas import get_pydantic_schemas
 
@@ -555,6 +557,12 @@ def build_exposure_snapshot(
             if model is not None
             else wire["input_schema"]
         )
+        if alias is not None:
+            describe_schema = build_alias_input_schema(
+                name,
+                describe_schema,
+                inject_action=bool(alias.inject_action),
+            )
         wire_properties = _schema_properties(wire["input_schema"])
         describe_properties = _schema_properties(describe_schema)
         views.append(
