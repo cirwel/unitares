@@ -45,7 +45,11 @@ from .helpers import (
     _resume_with_persistence,
     clear_loop_detector_state,  # noqa: F401 — re-exported for legacy imports from this module
 )
-from .recovery_policy import compute_recovery_margin, recovery_policy_context
+from .recovery_policy import (
+    authoritative_risk_score,
+    compute_recovery_margin,
+    recovery_policy_context,
+)
 from src import agent_storage
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
@@ -258,7 +262,7 @@ async def handle_check_recovery_options(arguments: Dict[str, Any]) -> Sequence[T
         metrics = monitor.get_metrics()
 
         coherence = safe_float(monitor.state.coherence, 0.5)
-        risk_score = safe_float(metrics.get("mean_risk"), 0.5)
+        risk_score = authoritative_risk_score(metrics, default=0.5)
         void_active = bool(monitor.state.void_active)
         void_value = safe_float(monitor.state.V, 0.0)
 
@@ -395,7 +399,7 @@ async def handle_quick_resume(arguments: Dict[str, Any]) -> Sequence[TextContent
         metrics = monitor.get_metrics()
 
         coherence = safe_float(monitor.state.coherence, 0.5)
-        risk_score = safe_float(metrics.get("mean_risk"), 0.5)
+        risk_score = authoritative_risk_score(metrics, default=0.5)
         void_active = bool(monitor.state.void_active)
         void_value = safe_float(monitor.state.V, 0.0)
         
@@ -598,7 +602,7 @@ async def handle_operator_resume_agent(arguments: Dict[str, Any]) -> Sequence[Te
         metrics = monitor.get_metrics()
 
         coherence = safe_float(monitor.state.coherence, 0.5)
-        risk_score = safe_float(metrics.get("mean_risk"), 0.5)
+        risk_score = authoritative_risk_score(metrics, default=0.5)
         void_active = bool(monitor.state.void_active)
         void_value = safe_float(monitor.state.V, 0.0)
         

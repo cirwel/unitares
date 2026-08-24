@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from ..decorators import mcp_tool
 from ..utils import success_response, error_response
 from src.logging_utils import get_logger
-from .recovery_policy import compute_recovery_margin
+from .recovery_policy import authoritative_risk_score, compute_recovery_margin
 from src.identity.lineage_semantics import is_non_succession_spawn_reason
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 # Same redacted-handle synthesis agent(action=list) uses, so a stuck entry and
@@ -557,7 +557,7 @@ def _detect_stuck_agents(
 
             if monitor:
                 metrics = monitor.get_metrics()
-                risk_score = float(metrics.get("mean_risk") or 0.5)
+                risk_score = authoritative_risk_score(metrics, default=0.5)
                 void_active = bool(monitor.state.void_active)
 
                 # Stuck/recovery headroom must use recovery-authoritative
@@ -831,7 +831,7 @@ async def _try_recover_agent(stuck: dict, note_cooldown_minutes: float) -> list:
             await ensure_hydrated(monitor, agent_id)
             metrics = monitor.get_metrics()
             coherence = float(monitor.state.coherence)
-            risk_score = float(metrics.get("mean_risk") or 0.5)
+            risk_score = authoritative_risk_score(metrics, default=0.5)
             void_active = bool(monitor.state.void_active)
             responsive = True
         except Exception as e:
