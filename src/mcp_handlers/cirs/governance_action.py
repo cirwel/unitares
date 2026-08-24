@@ -95,9 +95,10 @@ async def _handle_governance_action_initiate(arguments: Dict[str, Any]) -> Seque
         from src.agent_monitor_state import ensure_hydrated
         await ensure_hydrated(monitor, agent_id)
         metrics = monitor.get_metrics()
+        resolved_risk = metrics.get("risk_score")
         payload["initiator_state"] = {
             "coherence": float(metrics.get("coherence", 0.5)),
-            "risk_score": float(metrics.get("risk_score") or 0.3),
+            "risk_score": float(resolved_risk if resolved_risk is not None else 0.3),
             "verdict": str(metrics.get("verdict", "caution"))
         }
 

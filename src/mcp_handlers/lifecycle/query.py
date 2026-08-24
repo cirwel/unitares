@@ -452,7 +452,7 @@ def _monitor_metrics(agent_id: str, meta: Any) -> tuple[str, Optional[dict]]:
     try:
         monitor = mcp_server.monitors[agent_id]
         metrics = monitor.get_metrics()
-        risk_score = metrics.get("risk_score") or metrics.get("current_risk")
+        risk_score = _optional_float(metrics.get("risk_score"))
         coherence = float(monitor.state.coherence) if monitor.state else None
         void_active = bool(monitor.state.void_active) if monitor.state else False
         health_status, _ = mcp_server.health_checker.get_health_status(
@@ -461,12 +461,19 @@ def _monitor_metrics(agent_id: str, meta: Any) -> tuple[str, Optional[dict]]:
         state = monitor.state
         E, I, S, V = map(safe_float, (state.E, state.I, state.S, state.V))
         coherence_value = safe_float(state.coherence)
-        risk = safe_float(metrics.get("risk_score") or metrics.get("current_risk") or metrics.get("mean_risk", 0.5))
+        risk = _optional_float(metrics.get("risk_score"))
         try:
             from config.governance_config import classify_basin
             basin = classify_basin(E=E, I=I, S=S, V=V, coherence=coherence_value, risk_score=risk)
         except Exception:
             basin = None
+        lineage_status = getattr(
+            monitor, "_cold_start_confirmation_lineage_status", None
+        )
+        restored_without_local_update = (
+            getattr(monitor, "_process_local_updates", 0) == 0
+            and lineage_status in {"restored_snapshot", "db_hydrated_restart"}
+        )
         return health_status.value, {
             "E": E, "I": I, "S": S, "V": V,
             "coherence": coherence_value,
@@ -474,14 +481,23 @@ def _monitor_metrics(agent_id: str, meta: Any) -> tuple[str, Optional[dict]]:
             "coherence_role": metrics.get("coherence_role", "ode_control_feedback"),
             "coherence_health_evidence": False,
             "current_risk": metrics.get("current_risk"),
+            "phi_risk_latest": metrics.get("phi_risk_latest"),
+            "phi_risk_current": metrics.get("phi_risk_current"),
+            "phi_risk_mean": metrics.get("phi_risk_mean"),
             "risk_score": risk,
+            "risk_score_source": metrics.get("risk_score_source"),
             "phi": metrics.get("phi"),
             "verdict": metrics.get("verdict"),
+            "verdict_source": metrics.get("verdict_source"),
+            "verdict_resolution_source": metrics.get("verdict_resolution_source"),
             "basin": basin,
-            "mean_risk": safe_float(metrics.get("mean_risk", 0.5)),
+            "mean_risk": _optional_float(metrics.get("mean_risk")),
             "lambda1": safe_float(state.lambda1),
             "void_active": bool(state.void_active) if state.void_active is not None else False,
-            "source": "live_monitor",
+            "source": (
+                "restored_monitor" if restored_without_local_update
+                else "live_monitor"
+            ),
             "recorded_at": getattr(meta, "last_update", None),
             "rolling_metrics_available": True,
         }
@@ -551,10 +567,22 @@ def _persisted_state_metrics(state: Any) -> tuple[str, dict[str, Any]]:
         "coherence_source": state_json.get("coherence_source", "legacy_tanh_v"),
         "coherence_role": state_json.get("coherence_role", "ode_control_feedback"),
         "coherence_health_evidence": False,
-        "current_risk": risk,
+        # A single durable row has no process-local Φ rolling window.  Do not
+        # alias the resolved decision risk into telemetry fields.
+        "current_risk": None,
+        "phi_risk_latest": None,
+        "phi_risk_current": None,
+        "phi_risk_mean": None,
         "risk_score": risk,
+        "risk_score_source": (
+            state_json.get("risk_score_source")
+            or ("resolved" if risk is not None else None)
+        ),
         "phi": _optional_float(state_json.get("phi")),
         "verdict": state_json.get("verdict"),
+        "verdict_resolution_source": (
+            "resolved" if state_json.get("verdict") else None
+        ),
         "basin": basin,
         "mean_risk": None,
         "lambda1": _optional_float(state_json.get("lambda1")),
@@ -953,12 +981,23 @@ async def _list_agents_full(
             )
 
     # The in-memory monitor map is process-local and intentionally sparse after
-    # a server restart.  Fill only those absent-monitor gaps from ONE durable
-    # batch read; never hydrate/create a monitor per agent (the old N+1 path
-    # exceeded the tool timeout on a large fleet).  A loaded-but-broken monitor
-    # keeps its error rather than being masked by an older persisted row.
+    # a server restart. Fill absent-monitor gaps AND legacy snapshots whose
+    # resolved pair was never persisted from ONE durable batch read; never
+    # hydrate/create monitors per agent (the old N+1 path exceeded the timeout).
+    # A loaded-but-broken monitor keeps its error rather than being masked.
     if include_metrics and any(
-        a.get("metrics") is None and a["_agent_uuid"] not in mcp_server.monitors
+        (
+            a.get("metrics") is None
+            and a["_agent_uuid"] not in mcp_server.monitors
+        )
+        or (
+            a.get("metrics") is not None
+            and (a.get("total_updates") or 0) > 0
+            and (
+                a["metrics"].get("risk_score_source") != "resolved"
+                or a["metrics"].get("verdict_resolution_source") != "resolved"
+            )
+        )
         for a in agents_list
     ):
         try:
@@ -971,8 +1010,23 @@ async def _list_agents_full(
             fallback = persisted_metrics.get(aid)
             if (
                 fallback is not None
-                and agent_info.get("metrics") is None
-                and aid not in mcp_server.monitors
+                and (
+                    (
+                        agent_info.get("metrics") is None
+                        and aid not in mcp_server.monitors
+                    )
+                    or (
+                        agent_info.get("metrics") is not None
+                        and (agent_info.get("total_updates") or 0) > 0
+                        and (
+                            agent_info["metrics"].get("risk_score_source")
+                            != "resolved"
+                            or agent_info["metrics"].get(
+                                "verdict_resolution_source"
+                            ) != "resolved"
+                        )
+                    )
+                )
             ):
                 health_status, metrics = fallback
                 agent_info["health_status"] = health_status

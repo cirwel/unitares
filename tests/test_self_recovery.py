@@ -20,7 +20,10 @@ from src.mcp_handlers.lifecycle.self_recovery import (
     MAX_RISK_FOR_SELF_RECOVERY,
     FORBIDDEN_CONDITIONS,
 )
-from src.mcp_handlers.lifecycle.recovery_policy import recovery_policy_context
+from src.mcp_handlers.lifecycle.recovery_policy import (
+    authoritative_risk_score,
+    recovery_policy_context,
+)
 
 
 # ============================================================================
@@ -82,6 +85,24 @@ class TestValidateRecoveryConditions:
 # ============================================================================
 
 class TestAssessRecoverySafety:
+
+    def test_recovery_reads_resolved_risk_not_phi_mean(self):
+        metrics = {
+            "risk_score": 0.0,
+            "risk_score_source": "resolved",
+            "mean_risk": 0.91,
+            "current_risk": 0.88,
+        }
+        assert authoritative_risk_score(metrics) == pytest.approx(0.0)
+
+    def test_phi_history_fallback_is_not_recovery_authority(self):
+        metrics = {
+            "risk_score": 0.91,
+            "risk_score_source": "phi_history",
+            "mean_risk": 0.91,
+        }
+        assert authoritative_risk_score(metrics, default=0.5) == pytest.approx(0.5)
+
 
     def test_recovery_context_preserves_explicit_coherence_provenance(self):
         policy = recovery_policy_context(
@@ -286,7 +307,11 @@ class TestCheckRecoveryOptions:
         mock_monitor.state.coherence = coherence
         mock_monitor.state.void_active = void_active
         mock_monitor.state.V = void_value
-        mock_monitor.get_metrics.return_value = {"mean_risk": risk}
+        mock_monitor.get_metrics.return_value = {
+            "risk_score": risk,
+            "risk_score_source": "resolved",
+            "mean_risk": risk,
+        }
         mock_server.get_or_create_monitor.return_value = mock_monitor
         return mock_server
 
@@ -391,7 +416,11 @@ class TestQuickResume:
         mock_monitor.state.coherence = coherence
         mock_monitor.state.void_active = void_active
         mock_monitor.state.V = void_value
-        mock_monitor.get_metrics.return_value = {"mean_risk": risk}
+        mock_monitor.get_metrics.return_value = {
+            "risk_score": risk,
+            "risk_score_source": "resolved",
+            "mean_risk": risk,
+        }
         mock_server.get_or_create_monitor.return_value = mock_monitor
 
         mock_meta = MagicMock()
@@ -680,7 +709,11 @@ class TestOperatorResumeAgent:
         mock_monitor.state.coherence = target_coherence
         mock_monitor.state.void_active = target_void_active
         mock_monitor.state.V = target_void_value
-        mock_monitor.get_metrics.return_value = {"mean_risk": target_risk}
+        mock_monitor.get_metrics.return_value = {
+            "risk_score": target_risk,
+            "risk_score_source": "resolved",
+            "mean_risk": target_risk,
+        }
         mock_server.get_or_create_monitor.return_value = mock_monitor
 
         return mock_server
