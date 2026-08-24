@@ -21,7 +21,8 @@ from src.mcp_handlers.lifecycle.self_recovery import (
     FORBIDDEN_CONDITIONS,
 )
 from src.mcp_handlers.lifecycle.recovery_policy import (
-    authoritative_risk_score,
+    compute_recovery_margin,
+    read_risk_authority,
     recovery_policy_context,
 )
 
@@ -93,15 +94,61 @@ class TestAssessRecoverySafety:
             "mean_risk": 0.91,
             "current_risk": 0.88,
         }
-        assert authoritative_risk_score(metrics) == pytest.approx(0.0)
+        assert read_risk_authority(metrics).risk == pytest.approx(0.0)
 
-    def test_phi_history_fallback_is_not_recovery_authority(self):
+    def test_phi_history_fallback_yields_no_reading_at_all(self):
+        """Absence must stay absent: no scalar may stand in for it.
+
+        A midpoint here would clear both recovery gates (0.65 self-recovery,
+        0.60 auto-resume), so an agent whose resolved pair did not survive a
+        restart would be resumed on a number no verdict was made from.
+        """
         metrics = {
             "risk_score": 0.91,
             "risk_score_source": "phi_history",
             "mean_risk": 0.91,
         }
-        assert authoritative_risk_score(metrics, default=0.5) == pytest.approx(0.5)
+        assert read_risk_authority(metrics).is_lost
+
+    def test_never_measured_is_not_the_same_absence_as_authority_lost(self):
+        """Both have no risk; only one of them measured and lost it.
+
+        Collapsing the two either traps a brand-new paused agent that can never
+        author a state row to improve its reading, or resumes a measured agent
+        on a number no verdict was made from. The gates need both answers.
+        """
+        never_measured = {"risk_score": None, "risk_score_source": None}
+        authority_lost = {"risk_score": 0.91, "risk_score_source": "phi_history"}
+
+        assert read_risk_authority(never_measured).is_unmeasured
+        assert not read_risk_authority(never_measured).is_lost
+        assert read_risk_authority(authority_lost).is_lost
+        assert not read_risk_authority(authority_lost).is_unmeasured
+        assert read_risk_authority(never_measured).risk is None
+        assert read_risk_authority(authority_lost).risk is None
+
+    def test_unreadable_resolved_value_is_lost_not_unmeasured(self):
+        """A source claiming authority we cannot parse must fail closed."""
+        for bad in (float("nan"), float("inf"), "not-a-number"):
+            authority = read_risk_authority(
+                {"risk_score": bad, "risk_score_source": "resolved"}
+            )
+            assert authority.is_lost, bad
+            assert authority.risk is None
+
+    def test_unlabelled_headline_risk_still_reads_as_resolved(self):
+        """Older callers and fixtures pass a bare risk_score with no source."""
+        authority = read_risk_authority({"risk_score": 0.22})
+        assert authority.is_resolved
+        assert authority.risk == pytest.approx(0.22)
+
+    def test_margin_reports_unknown_rather_than_headroom(self):
+        margin = compute_recovery_margin(
+            risk_score=None, void_active=False, max_risk=0.65,
+        )
+        assert margin["margin"] == "unknown"
+        assert margin["nearest_edge"] == "no_risk_authority"
+        assert margin["distance"] is None
 
 
     def test_recovery_context_preserves_explicit_coherence_provenance(self):
