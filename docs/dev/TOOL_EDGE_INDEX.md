@@ -122,10 +122,10 @@ runs (`from→to`, filled only when the destination is absent).
 
 | Action | Delegate | Remaps |
 |---|---|---|
-| `backfill` | `src/mcp_handlers/admin/calibration.py:512 handle_backfill_calibration_from_dialectic` | — |
+| `backfill` | `src/mcp_handlers/admin/calibration.py:523 handle_backfill_calibration_from_dialectic` | — |
 | `check` | `src/mcp_handlers/admin/calibration.py:110 handle_check_calibration` | — |
-| `rebuild` | `src/mcp_handlers/admin/calibration.py:341 handle_rebuild_calibration` | — |
-| `update` | `src/mcp_handlers/admin/calibration.py:386 handle_update_calibration_ground_truth` | — |
+| `rebuild` | `src/mcp_handlers/admin/calibration.py:352 handle_rebuild_calibration` | — |
+| `update` | `src/mcp_handlers/admin/calibration.py:397 handle_update_calibration_ground_truth` | — |
 
 ### `config` · default `get`
 
