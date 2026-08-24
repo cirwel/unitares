@@ -84,7 +84,9 @@ def test_fixed_split_does_not_make_a_longitudinal_trend_exchangeable(sf):
     Each window has a monotone time trend plus continuous noise. Reusing seed 0
     fixes which time positions land in each half, so the calibration and holdout
     scores are not exchangeable. The mean exceedance reproduces the independent
-    probe's roughly 0.4%, far from the 1% exchangeable-rank reference.
+    probe's roughly 0.4%, far from the 1% exchangeable-rank reference. This one
+    low-side example does not establish a direction; the controlled probe below
+    demonstrates that the violation can move the rate either way.
     """
     q, m = 0.99, 200
     rates = []
@@ -99,6 +101,31 @@ def test_fixed_split_does_not_make_a_longitudinal_trend_exchangeable(sf):
     reference = sf.conformal_exceedance(m, q)
     assert observed == pytest.approx(0.00415, abs=0.0005)
     assert observed < reference - 0.004
+
+
+def test_nonexchangeability_can_miss_in_either_direction(sf):
+    """A failed premise supplies no conservative or anti-conservative ordering.
+
+    Hold the rank threshold, Gaussian noise, calibration size, and random seeds
+    fixed while varying only the sign of a longitudinal drift. The flat control
+    reproduces the exchangeable reference, which validates the harness. Opposite
+    drifts then move exceedance to opposite sides of that reference.
+    """
+    q, m, windows = 0.99, 200, 2000
+    rates = {}
+    for slope in (0.01, 0.0, -0.01):
+        exceedances = 0
+        for seed in range(windows):
+            rng = random.Random(seed)
+            scores = [slope * t + rng.gauss(0, 1) for t in range(m + 1)]
+            threshold = sf.rank_conformal_threshold(scores[:m], q)
+            exceedances += scores[m] > threshold
+        rates[slope] = exceedances / windows
+
+    reference = sf.conformal_exceedance(m, q)
+    assert rates == pytest.approx({0.01: 0.042, 0.0: 0.01, -0.01: 0.0005})
+    assert rates[-0.01] < reference < rates[0.01]
+    assert rates[0.0] == pytest.approx(reference, abs=0.0001)
 
 
 def test_the_interpolated_quantile_is_NOT_distribution_free(sf):
