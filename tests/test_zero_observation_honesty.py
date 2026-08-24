@@ -352,3 +352,26 @@ def test_fleet_calibration_feedback_carries_scope_label():
 
     assert feedback["confidence"]["scope"] == "fleet"
     assert "system_accuracy" in feedback["confidence"]
+
+
+def test_unassessed_calibration_does_not_trigger_corrective_feedback():
+    """The old False boolean covered both no evidence and measured failure."""
+    from src.mcp_handlers.introspection.feedback import get_calibration_feedback
+
+    fake_metrics = {
+        "calibration_status": "unassessed",
+        "assessability": {
+            "overall": False,
+            "strategic": False,
+            "tactical": False,
+        },
+        "bins": {},
+        "issues": [],
+    }
+    with patch(
+        "src.calibration.calibration_checker.check_calibration",
+        return_value=(False, fake_metrics),
+    ):
+        feedback = get_calibration_feedback(include_complexity=False)
+
+    assert feedback == {}

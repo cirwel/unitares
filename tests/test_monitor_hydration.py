@@ -25,6 +25,7 @@ from src.agent_monitor_state import (
     _write_state_file,
     ensure_hydrated,
     hydrate_from_db_if_fresh,
+    hydrate_resolved_authority_if_missing,
     save_monitor_state_async,
 )
 
@@ -59,7 +60,11 @@ async def test_hydrate_from_db_if_fresh_populates_eisv_and_history():
     fake_identity = MagicMock(identity_id=42)
     fake_rows_desc = [
         # Most-recent-first (DB returns DESC)
-        _FakeStateRow(E=0.7, I=0.8, S=0.1, V=-0.05, coherence=0.55, regime="DIVERGENCE"),
+        _FakeStateRow(
+            E=0.7, I=0.8, S=0.1, V=-0.05, coherence=0.55,
+            regime="DIVERGENCE",
+            state_json={"risk_score": 0.0, "verdict": "safe"},
+        ),
         _FakeStateRow(E=0.65, I=0.78, S=0.12, V=-0.03, coherence=0.52, regime="CONVERGENCE"),
         _FakeStateRow(E=0.6, I=0.75, S=0.15, V=0.0, coherence=0.5, regime="EXPLORATION"),
     ]
@@ -83,6 +88,8 @@ async def test_hydrate_from_db_if_fresh_populates_eisv_and_history():
     # Histories are chronological (oldest → newest)
     assert monitor.state.coherence_history == pytest.approx([0.5, 0.52, 0.55])
     assert monitor.state.regime_history == ["EXPLORATION", "CONVERGENCE", "DIVERGENCE"]
+    assert monitor._last_resolved_risk == pytest.approx(0.0)
+    assert monitor._last_resolved_verdict == "safe"
     assert monitor._cold_start_confirmation_lineage_status == "db_hydrated_restart"
 
 
@@ -296,8 +303,8 @@ async def test_factory_does_not_mark_needs_hydration_for_genuinely_new_agent(tmp
 
 
 @pytest.mark.asyncio
-async def test_factory_clears_needs_hydration_when_file_load_succeeds(tmp_path, monkeypatch):
-    """File present → no need for DB hydration; flag must be False."""
+async def test_factory_marks_legacy_file_for_authority_hydration(tmp_path, monkeypatch):
+    """A state file without the resolved pair needs a one-row authority heal."""
     from src.agent_lifecycle import get_or_create_monitor
     import src.agent_monitor_state as ams
     from src.agent_monitor_state import monitors
@@ -314,7 +321,7 @@ async def test_factory_clears_needs_hydration_when_file_load_succeeds(tmp_path, 
          patch("src.agent_lifecycle.load_monitor_state", return_value=fake_state):
         monitor = get_or_create_monitor(agent_id)
 
-    assert monitor._needs_hydration is False
+    assert monitor._needs_hydration is True
     monitors.pop(agent_id, None)
 
 
@@ -353,6 +360,49 @@ async def test_ensure_hydrated_noop_when_flag_unset():
 
     assert applied is False
     fake_db.get_identity.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_ensure_hydrated_heals_only_authority_for_legacy_snapshot():
+    """Existing EISV stays intact while the latest durable pair is restored."""
+    monitor = _make_fresh_monitor("ensure-authority-only")
+    monitor.state.update_count = 12
+    monitor.state.unitaires_state.E = 0.73
+    monitor._needs_hydration = True
+    latest = MagicMock(
+        state_json={"risk_score": 0.0, "verdict": "safe"},
+    )
+
+    with patch(
+        "src.agent_storage.get_latest_agent_state",
+        new=AsyncMock(return_value=latest),
+    ):
+        applied = await ensure_hydrated(monitor, "ensure-authority-only")
+
+    assert applied is True
+    assert monitor._needs_hydration is False
+    assert monitor.state.update_count == 12
+    assert monitor.state.unitaires_state.E == pytest.approx(0.73)
+    assert monitor._last_resolved_risk == pytest.approx(0.0)
+    assert monitor._last_resolved_verdict == "safe"
+
+
+@pytest.mark.asyncio
+async def test_authority_hydration_rejects_phi_only_row():
+    monitor = _make_fresh_monitor("ensure-no-authority")
+    latest = MagicMock(state_json={"phi": -0.2})
+
+    with patch(
+        "src.agent_storage.get_latest_agent_state",
+        new=AsyncMock(return_value=latest),
+    ):
+        applied = await hydrate_resolved_authority_if_missing(
+            monitor, "ensure-no-authority"
+        )
+
+    assert applied is False
+    assert monitor._last_resolved_risk is None
+    assert monitor._last_resolved_verdict is None
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,8 @@ health evidence and must not authorize or deny a recovery action.
 
 from __future__ import annotations
 
-from typing import Any, Iterable
+import math
+from typing import Any, Iterable, Mapping
 
 from src.coherence_provenance import (
     LEGACY_COHERENCE_SOURCE,
@@ -17,6 +18,36 @@ from src.coherence_provenance import (
 
 
 RECOVERY_POLICY_SCHEMA = "recovery.authority.v2"
+
+
+def authoritative_risk_score(
+    metrics: Mapping[str, Any],
+    *,
+    default: float = 0.5,
+) -> float:
+    """Read decision risk without promoting Φ trend telemetry.
+
+    Current monitor metrics always expose ``risk_score_source``.  ``resolved``
+    is the pair that produced the last verdict; ``phi_history`` is an honest
+    read fallback but must not gate recovery.  Missing source is accepted for
+    backward-compatible fixtures/older callers that already provide a headline
+    ``risk_score``.  Invalid or non-authoritative readings use the caller's
+    explicit default and never fall through to ``current_risk``/``mean_risk``.
+    """
+    source = metrics.get("risk_score_source")
+    if source not in (None, "resolved"):
+        return float(default)
+
+    value = metrics.get("risk_score")
+    if value is None:
+        return float(default)
+    try:
+        risk = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if not math.isfinite(risk):
+        return float(default)
+    return min(1.0, max(0.0, risk))
 
 
 def recovery_policy_context(

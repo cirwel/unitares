@@ -21,10 +21,13 @@ def get_calibration_feedback(include_complexity: bool = True) -> Dict[str, Any]:
     calibration_feedback = {}
 
     try:
-        from src.calibration import calibration_checker
+        from src.calibration import calibration_checker, resolve_calibration_status
         is_calibrated, cal_metrics = calibration_checker.check_calibration(include_complexity=include_complexity)
+        calibration_status = resolve_calibration_status(is_calibrated, cal_metrics)
 
-        if not is_calibrated:
+        # Unassessed is absence of eligible evidence, not evidence that warrants
+        # a corrective feedback path. The legacy False boolean represented both.
+        if calibration_status == "miscalibrated":
             bins_data = cal_metrics.get('bins', {})
             total_samples = sum(bin_data.get('count', 0) for bin_data in bins_data.values())
 

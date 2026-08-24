@@ -56,6 +56,26 @@ DEFAULT_TOPIC_LIMIT = 20
 MAX_MEMBERS_PER_ROLLUP = 12
 ROLLUP_SUMMARY_TOKENS = 256
 
+# These tags are useful partition/filter metadata, not subjects worth narrating.
+# Keep them on discoveries for exact reconciliation and provenance, while
+# excluding them from community/topic synthesis and related-topic prose.
+NON_SEMANTIC_TOPIC_PREFIXES = (
+    "slug-",
+    "host-",
+    "source-",
+    "mem-",
+)
+NON_SEMANTIC_TOPIC_TAGS = frozenset({
+    "rollup",
+    "ephemeral",
+    "permanent",
+    "persistent",
+    "audit",
+    "sweep",
+    "weekly",
+    "gardener",
+})
+
 
 def rollup_id(topic: str) -> str:
     """Deterministic discovery id for a topic's rollup row."""
@@ -69,6 +89,14 @@ def is_rollup(discovery: Any) -> bool:
     return dtype == ROLLUP_TYPE or (isinstance(did, str) and did.startswith(ROLLUP_ID_PREFIX))
 
 
+def is_semantic_topic_tag(tag: Any) -> bool:
+    """Whether a tag names knowledge content rather than its storage lane."""
+    normalized = str(tag or "").strip().lower()
+    if not normalized or normalized in NON_SEMANTIC_TOPIC_TAGS:
+        return False
+    return not any(normalized.startswith(prefix) for prefix in NON_SEMANTIC_TOPIC_PREFIXES)
+
+
 def extract_related_topics(members: List[Dict[str, Any]], topic: str, limit: int = 8) -> List[str]:
     """Co-occurring tags across the members — the precomputed cross-reference set.
 
@@ -78,7 +106,7 @@ def extract_related_topics(members: List[Dict[str, Any]], topic: str, limit: int
     counts: Dict[str, int] = {}
     for m in members:
         for tag in m.get("tags", []) or []:
-            if tag and tag != topic:
+            if tag and tag != topic and is_semantic_topic_tag(tag):
                 counts[tag] = counts.get(tag, 0) + 1
     ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
     return [tag for tag, _ in ranked[:limit]]
@@ -232,6 +260,14 @@ async def synthesize_topic(
     Returns a small report dict, or None if the topic has too few members to be
     worth a rollup.
     """
+    if not is_semantic_topic_tag(topic):
+        return {
+            "topic": topic,
+            "member_count": 0,
+            "action": "skipped",
+            "reason": "non_semantic_topic",
+        }
+
     members = await graph.query(tags=[topic], limit=MAX_MEMBERS_PER_ROLLUP * 3, exclude_archived=True)
     member_dicts = [m.to_dict(include_details=False) for m in members]
     # Never let an existing rollup row become a member of itself.
@@ -280,7 +316,11 @@ async def synthesize_topics(
         from src.db import get_db
         db = get_db()
         candidates = await db.kg_topic_candidates(
-            min_members=min_members, limit=limit, exclude_types=[ROLLUP_TYPE]
+            min_members=min_members,
+            limit=limit,
+            exclude_types=[ROLLUP_TYPE],
+            exclude_tags=sorted(NON_SEMANTIC_TOPIC_TAGS),
+            exclude_tag_prefixes=list(NON_SEMANTIC_TOPIC_PREFIXES),
         )
 
     rollups: List[Dict[str, Any]] = []

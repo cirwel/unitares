@@ -1,9 +1,14 @@
-"""Primary-workflow parameter normalization for check-in tools.
+"""Primary-workflow parameter normalization for friendly aliases.
 
 Raw implementation tools stay strict: process_agent_update rejects complexity
 outside 0-1. The workflow tools (checkin/log/update/sync_state) absorb common agent
 vocabulary by normalizing it BEFORE schema validation, and the dispatch
 envelope discloses every transform via ``normalized_parameters``.
+
+The friendly memory-search alias also materializes its advertised compact
+default before canonical validation and suppresses inline detail serialization
+unless the caller deliberately selects full mode. Canonical ``knowledge``
+semantics remain unchanged.
 
 Bare numerics above 1 are never silently rescaled — a bare 5 could mean 5/10
 or 5/100, so the caller must declare the scale (``{"value": 5, "scale": 10}``)
@@ -32,6 +37,12 @@ _LEVELS_DISPLAY = "'trivial'|'low'|'medium'|'high'|'very_high'"
 # Normalizer return type: {param: {"from": ..., "to": ..., "interpretation": ...}}
 NormalizationRecords = Dict[str, Dict[str, Any]]
 ParamNormalizer = Callable[[Dict[str, Any]], NormalizationRecords]
+
+# Internal alias-to-envelope handoff. These keys deliberately survive schema
+# validation so the post-execution experience envelope can distinguish an
+# upstream digest from a full payload that was serialized and then discarded.
+FRIENDLY_SEARCH_DETAIL_POLICY_KEY = "_friendly_search_detail_policy"
+FRIENDLY_SEARCH_DETAILS_REQUESTED_KEY = "_friendly_search_details_requested"
 
 
 class ParamNormalizationError(ValueError):
@@ -151,3 +162,41 @@ def normalize_unit_interval(param: str) -> ParamNormalizer:
         )
 
     return _normalize
+
+
+def normalize_compact_search_details(arguments: Dict[str, Any]) -> NormalizationRecords:
+    """Keep the friendly compact search path digest-sized before serialization.
+
+    ``knowledge`` retains its canonical detail semantics. Only the
+    ``search_shared_memory`` alias uses this normalizer: compact/lean responses
+    force ``include_details=False`` before the handler builds its result, while
+    full mode remains an explicit escape hatch for inline details.
+    """
+    response_mode = str(arguments.get("response_mode") or "lean").strip().lower()
+    # The alias advertises lean as its default, but canonical validation
+    # otherwise fills KnowledgeParams.response_mode="full" after alias
+    # resolution. Materialize the friendly default now so execution matches
+    # the schema agents actually saw.
+    if not arguments.get("response_mode"):
+        arguments["response_mode"] = "lean"
+    if response_mode == "full":
+        return {}
+
+    provided = arguments.get("include_details")
+    requested = provided is True or (
+        isinstance(provided, str)
+        and provided.strip().lower() in {"true", "1", "yes", "on"}
+    )
+    arguments[FRIENDLY_SEARCH_DETAIL_POLICY_KEY] = "digest_before_serialization"
+    arguments[FRIENDLY_SEARCH_DETAILS_REQUESTED_KEY] = requested
+    arguments["include_details"] = False
+
+    if not requested:
+        return {}
+    return {
+        "include_details": {
+            "from": provided,
+            "to": False,
+            "interpretation": "compact_digest_before_serialization",
+        }
+    }

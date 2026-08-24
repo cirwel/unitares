@@ -13,7 +13,7 @@ from ..utils import success_response, error_response, require_registered_agent
 from ..error_helpers import agent_not_found_error, system_error as system_error_helper
 from ..support.coerce import resolve_agent_uuid
 from .helpers import _resume_with_persistence, _invalidate_agent_cache  # noqa: F401
-from .recovery_policy import recovery_policy_context
+from .recovery_policy import authoritative_risk_score, recovery_policy_context
 from src import agent_storage
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
@@ -74,7 +74,7 @@ async def handle_direct_resume_if_safe(arguments: Dict[str, Any]) -> Sequence[Te
         metrics = monitor.get_metrics()
 
         coherence = float(monitor.state.coherence)
-        risk_score = float(metrics.get("mean_risk") or 0.5)
+        risk_score = authoritative_risk_score(metrics, default=0.5)
         void_active = bool(monitor.state.void_active)
         status = meta.status
 

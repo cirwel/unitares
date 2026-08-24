@@ -4,11 +4,9 @@ Council follow-up to #1856. Four findings, all in code that PR added — an
 instrument that fixed one construction and shipped four more:
 
   M1. The held-out line claimed a centre of `1 - quantile` "because the halves
-      are exchangeable". Exchangeability gives the split-conformal centre
-      (m - q(m-1))/(m+1), which only approaches 1-q for large m. At
-      MIN_SAFE_FOR_SPLIT the calibration half is m=50 and the true centre is
-      2.9% — and the holdout is 50 points, so the rate lives on a 2% grid and
-      CANNOT take the claimed 1.0% under any draw.
+      are exchangeable". The rank correction is distribution-free only within
+      an exchangeable model; a fixed split does not establish that premise for
+      longitudinal check-ins.
   M2. The thin-sample branch carried the strongest disclaimer in the function
       ("Read nothing from the separation below") and then printed SEPARATES.
       It was the only "cannot support a reading" state that still emitted a
@@ -43,7 +41,7 @@ def sf():
     return mod
 
 
-# --- M1: distribution-free, tested against distributions that break fits ----
+# --- M1: distribution-free under exchangeability, not unconditionally -------
 
 DISTRIBUTIONS = [
     ("gaussian", lambda r: r.gauss(0, 1)),
@@ -66,17 +64,68 @@ def _measure(sf, draw, n, q, seeds, threshold_fn):
 
 
 @pytest.mark.parametrize("name,draw", DISTRIBUTIONS)
-def test_the_rank_threshold_is_distribution_free(sf, name, draw):
+def test_the_rank_threshold_is_distribution_free_for_exchangeable_draws(sf, name, draw):
     """The property the previous two formulas lacked.
 
     Gaussian ALONE is what hid the error twice: it is the case where linear
     interpolation sits closest to the rank threshold, so a gaussian-only check
     reads as agreement. A distribution-free claim is therefore tested against a
-    heavy tail and a bounded support as well.
+    heavy tail and a bounded support as well. Every fixture here is iid, which
+    is the exchangeability premise the rank theorem requires.
     """
     q, m = 0.99, 200
     measured = _measure(sf, draw, 2 * m, q, 1500, sf.rank_conformal_threshold)
     assert measured == pytest.approx(sf.conformal_exceedance(m, q), abs=0.004), name
+
+
+def test_fixed_split_does_not_make_a_longitudinal_trend_exchangeable(sf):
+    """A reproducible partition cannot manufacture the theorem's premise.
+
+    Each window has a monotone time trend plus continuous noise. Reusing seed 0
+    fixes which time positions land in each half, so the calibration and holdout
+    scores are not exchangeable. The mean exceedance reproduces the independent
+    probe's roughly 0.4%, far from the 1% exchangeable-rank reference. This one
+    low-side example does not establish a direction; the controlled probe below
+    demonstrates that the violation can move the rate either way.
+    """
+    q, m = 0.99, 200
+    rates = []
+    for noise_seed in range(1000):
+        rng = random.Random(noise_seed)
+        safe = [0.3 * t + rng.gauss(0, 1) for t in range(2 * m)]
+        calib, holdout = sf.split_sample(safe, seed=0)
+        threshold = sf.rank_conformal_threshold(calib, q)
+        rates.append(sum(z > threshold for z in holdout) / len(holdout))
+
+    observed = statistics.mean(rates)
+    reference = sf.conformal_exceedance(m, q)
+    assert observed == pytest.approx(0.00415, abs=0.0005)
+    assert observed < reference - 0.004
+
+
+def test_nonexchangeability_can_miss_in_either_direction(sf):
+    """A failed premise supplies no conservative or anti-conservative ordering.
+
+    Hold the rank threshold, Gaussian noise, calibration size, and random seeds
+    fixed while varying only the sign of a longitudinal drift. The flat control
+    reproduces the exchangeable reference, which validates the harness. Opposite
+    drifts then move exceedance to opposite sides of that reference.
+    """
+    q, m, windows = 0.99, 200, 2000
+    rates = {}
+    for slope in (0.01, 0.0, -0.01):
+        exceedances = 0
+        for seed in range(windows):
+            rng = random.Random(seed)
+            scores = [slope * t + rng.gauss(0, 1) for t in range(m + 1)]
+            threshold = sf.rank_conformal_threshold(scores[:m], q)
+            exceedances += scores[m] > threshold
+        rates[slope] = exceedances / windows
+
+    reference = sf.conformal_exceedance(m, q)
+    assert rates == pytest.approx({0.01: 0.042, 0.0: 0.01, -0.01: 0.0005})
+    assert rates[-0.01] < reference < rates[0.01]
+    assert rates[0.0] == pytest.approx(reference, abs=0.0001)
 
 
 def test_the_interpolated_quantile_is_NOT_distribution_free(sf):
@@ -132,8 +181,8 @@ def test_the_report_COUNTS_against_the_rank_threshold(sf):
     """Binds the CALL SITE, not just the helper.
 
     Reverting the noise check to pct(calib, q) left every other test passing:
-    the "EXACT distribution-free" wording comes from conformal_exceedance, so
-    the report would keep claiming distribution-free coverage while counting
+    the exact-under-exchangeability wording comes from conformal_exceedance, so
+    the report would keep claiming rank coverage while counting
     against an interpolated threshold. That is the same label-says-one-thing /
     value-computed-another-way defect this whole sweep exists to remove, and a
     mutation caught it here rather than a reviewer catching it later.
@@ -157,7 +206,8 @@ def test_the_report_COUNTS_against_the_rank_threshold(sf):
 def test_the_report_states_the_exact_exceedance_not_a_fitted_centre(sf):
     rng = random.Random(4)
     lines = "\n".join(sf.separation_report([rng.gauss(0, 1) for _ in range(400)], []))
-    assert "EXACT distribution-free" in lines
+    assert "EXACT under exchangeability" in lines
+    assert "exchangeability premise is NOT ESTABLISHED" in lines
     assert "1 - 199/201" in lines
     assert "centred on" not in lines
     assert "because the halves are exchangeable" not in lines
@@ -428,7 +478,7 @@ def test_the_reader_meets_the_caveat_before_the_verdict(sf):
     assert text.index("upper bound") < text.index("CAVEAT") < text.index("→")
 
 
-# 2. "EXACT distribution-free" is false when residuals tie
+# 2. exact-under-exchangeability equality is false when residuals tie
 
 def test_all_tied_residuals_do_not_claim_an_exact_exceedance(sf):
     """safe=[1.0]*100 observed 0/50 while claiming an EXACT 2.0%.
@@ -439,7 +489,7 @@ def test_all_tied_residuals_do_not_claim_an_exact_exceedance(sf):
     below the rank value — an upper bound, never an equality.
     """
     text = _quantile_report(sf, [1.0] * 100, [])
-    assert "EXACT distribution-free" not in text
+    assert "EXACT under exchangeability" not in text
     assert "TIE-DEGRADED" in text
     assert "UPPER BOUND" in text
     # and it must say the observed shortfall is expected rather than a finding
@@ -466,15 +516,17 @@ def test_tie_split_across_calibration_and_holdout_degrades_the_claim(sf):
     assert len(set(calib + holdout)) < len(calib) + len(holdout)
 
     text = _quantile_report(sf, safe, [])
-    assert "EXACT distribution-free" not in text
+    assert "EXACT under exchangeability" not in text
     assert "TIE-DEGRADED" in text
     assert "UPPER BOUND" in text
 
 
 def test_distinct_residuals_keep_the_exact_claim(sf):
-    """The guarantee is real for a.s.-distinct values; the fix must not blunt it."""
+    """The exact reference remains, with its exchangeability premise visible."""
     text = _quantile_report(sf, [float(i) for i in range(150)], [])
-    assert "EXACT distribution-free" in text
+    assert "EXACT under exchangeability" in text
+    assert "distribution-free within that model" in text
+    assert "NOT ESTABLISHED" in text
     assert "TIE-DEGRADED" not in text
 
 

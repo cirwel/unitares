@@ -289,6 +289,8 @@ class KnowledgeGraphMixin:
         min_members: int = 3,
         limit: int = 20,
         exclude_types: Optional[List[str]] = None,
+        exclude_tags: Optional[List[str]] = None,
+        exclude_tag_prefixes: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Topics (normalized tags) dense enough to be worth rolling up.
 
@@ -299,6 +301,8 @@ class KnowledgeGraphMixin:
         of a future rollup (no feedback loop). Read-only aggregate; no writes.
         """
         excluded = exclude_types or []
+        excluded_tags = exclude_tags or []
+        excluded_prefixes = exclude_tag_prefixes or []
         async with self.acquire() as conn:
             rows = await conn.fetch(
                 """
@@ -308,6 +312,15 @@ class KnowledgeGraphMixin:
                 FROM knowledge.discoveries d, unnest(d.tags) AS tag
                 WHERE d.status <> 'archived'
                   AND ($3::text[] IS NULL OR d.type <> ALL($3::text[]))
+                  AND (cardinality($4::text[]) = 0 OR NOT (tag = ANY($4::text[])))
+                  AND (
+                    cardinality($5::text[]) = 0
+                    OR NOT EXISTS (
+                      SELECT 1
+                      FROM unnest($5::text[]) AS blocked(prefix)
+                      WHERE tag LIKE blocked.prefix || '%'
+                    )
+                  )
                 GROUP BY tag
                 HAVING COUNT(*) >= $1
                 ORDER BY member_count DESC, tag ASC
@@ -316,6 +329,8 @@ class KnowledgeGraphMixin:
                 min_members,
                 limit,
                 excluded or None,
+                excluded_tags,
+                excluded_prefixes,
             )
             return [
                 {

@@ -1,4 +1,5 @@
 from scripts.diagnostics.dogfood_ablation_guard import (
+    RISK_AUTHORITY_ALERT,
     collect_alerts,
     dogfood_response_alerts,
     extract_dogfood_response,
@@ -62,7 +63,10 @@ def test_identity_neutrality_alerts_on_laundered_server_identity():
         "agent_signature": {"uuid": None},
     }
 
-    assert identity_neutrality_alert(metrics) == "no-session get_governance_metrics is not identity-neutral"
+    assert (
+        identity_neutrality_alert(metrics)
+        == "no-session get_governance_metrics is not identity-neutral"
+    )
 
 
 def test_inventory_lane_guard_requires_beam_and_substrate_counts():
@@ -84,7 +88,9 @@ eprocess_eligible_substrate: 285
     )
 
 
-def test_collect_alerts_checks_lane_contract_without_reading_live_matrix(monkeypatch, tmp_path):
+def test_collect_alerts_checks_lane_contract_without_reading_live_matrix(
+    monkeypatch, tmp_path
+):
     calls = []
     dogfood_output_dir = tmp_path / "dogfood-output"
     dogfood_output_dir.mkdir()
@@ -106,7 +112,7 @@ No actionable friction found after the query and edge-case probe.
             return "eprocess_eligible: 2\neprocess_eligible_beam: 1\neprocess_eligible_substrate: 1\nstrict_bad: 0\n"
         assert script == "-m"
         assert args[0] == "pytest"
-        return "4 passed\n"
+        return "passed\n"
 
     monkeypatch.setattr(
         "scripts.diagnostics.dogfood_ablation_guard.call_tool_no_session",
@@ -128,7 +134,59 @@ No actionable friction found after the query and edge-case probe.
     assert alerts == []
     assert not any(script.endswith("eisv_ablation_matrix.py") for script, _ in calls)
     assert any(script == "-m" and args[0] == "pytest" for script, args in calls)
+    assert any(
+        script == "-m" and "tests/test_risk_authority_ablation.py" in args
+        for script, args in calls
+    )
     assert "ablation_lane_contract_tests=passed; live_outcomes_read=false" in evidence
+    assert (
+        "risk_authority_ablation_tests=passed; arms=3; live_outcomes_read=false; "
+        "live_governance_mutated=false"
+    ) in evidence
+
+
+def test_collect_alerts_surfaces_risk_authority_contract_failure(monkeypatch, tmp_path):
+    dogfood_output_dir = tmp_path / "dogfood-output"
+    dogfood_output_dir.mkdir()
+    (dogfood_output_dir / "2026-08-20_00-00-00.md").write_text(
+        """## Response
+**Selected Surface:** #4
+Open findings query: `knowledge(action="search", query="dogfood friction")`.
+No actionable friction found after the query and edge-case probe.
+""",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "scripts.diagnostics.dogfood_ablation_guard.call_tool_no_session",
+        lambda *_args, **_kwargs: {
+            "status": "⚪ unbound",
+            "agent_signature": {"uuid": None},
+        },
+    )
+
+    def fake_run_repo_script(repo, python, script, args, *, timeout_seconds):
+        if script.endswith("outcome_inventory.py"):
+            return "eprocess_eligible_beam: 1\neprocess_eligible_substrate: 1\n"
+        if "tests/test_risk_authority_ablation.py" in args:
+            raise RuntimeError("synthetic arm failed")
+        return "passed\n"
+
+    monkeypatch.setattr(
+        "scripts.diagnostics.dogfood_ablation_guard.run_repo_script",
+        fake_run_repo_script,
+    )
+
+    alerts, evidence = collect_alerts(
+        http_url="http://localhost:8767",
+        repo=tmp_path,
+        python="python3",
+        timeout_seconds=1,
+        dogfood_output_dir=dogfood_output_dir,
+    )
+
+    assert alerts == [RISK_AUTHORITY_ALERT]
+    assert "risk_authority_error=RuntimeError: synthetic arm failed" in evidence
 
 
 def test_render_alert_report_is_silent_when_all_guards_pass():
