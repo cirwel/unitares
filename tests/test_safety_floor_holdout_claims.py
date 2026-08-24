@@ -288,12 +288,75 @@ def test_the_report_names_the_standards_it_is_applying(sf):
     assert f"is {2 * sf.CONFORMAL_MIN_CALIB(0.99)}" in lines
 
 
+def test_the_printed_target_tracks_the_constant_that_decides(sf, monkeypatch):
+    """The verdict line hardcoded "want >3x" while the rule used the constant.
+
+    Set SEPARATION_MULTIPLE to 10.0 and the report printed
+    "WEAK: 7.0x ...; want >3x" — a verdict contradicting its own stated target,
+    in the very constant introduced to make the standard visible. Naming a
+    standard is worth nothing if the printout still quotes a literal.
+    """
+    safe = [0.0] * 990 + [9.0] * 10      # definitional ref = 1%
+    non_safe = [9.0] * 7 + [0.0] * 93    # tp = 7%
+
+    monkeypatch.setattr(sf, "SEPARATION_MULTIPLE", 10.0)
+    lines = "\n".join(sf.separation_report(safe, non_safe))
+    assert "WEAK" in lines
+    assert "want >10x" in lines
+    assert "want >3x" not in lines
+
+    monkeypatch.setattr(sf, "SEPARATION_MULTIPLE", 3.0)
+    lines = "\n".join(sf.separation_report(safe, non_safe))
+    assert "SEPARATES" in lines
+
+
+def test_no_docstring_still_asserts_the_withdrawn_centre(sf):
+    """R3: the retracted #1856 claim survived in a docstring, present tense.
+
+    The earlier source scan greped two phrases that do not occur in docstrings,
+    so `separation_report` went on asserting "the halves are exchangeable by
+    construction, so the held-out rate is a sampling estimate centred on
+    1 - quantile" while `conformal_exceedance` named that as the error and the
+    report printed the contradicting number. Docstrings are shipped prose and
+    are scanned as such.
+
+    Marked retractions are exempt, per the house rule on provenance — the test
+    requires the withdrawal marker to be adjacent, not the words to be absent.
+    """
+    import inspect
+
+    withdrawn = "centred on `1 - quantile`"
+    for name in ("separation_report", "conformal_exceedance", "clopper_pearson_upper",
+                 "rank_conformal_threshold", "conformal_rank"):
+        doc = inspect.getdoc(getattr(sf, name)) or ""
+        if withdrawn in doc:
+            window = doc[max(0, doc.index(withdrawn) - 400): doc.index(withdrawn) + 400]
+            assert "WITHDRAWN" in window or "earlier version" in window, name
+
+
+def test_the_module_docstring_scan_covers_docstrings(sf):
+    """Guards the guard that missed R3.
+
+    The source scan must see docstring text, not only executable lines — that
+    gap is precisely why a withdrawn claim survived a passing suite.
+    """
+    import inspect
+
+    doc = inspect.getdoc(sf.separation_report) or ""
+    assert "WITHDRAWN" in doc
+    assert "not a centre at" in doc or "not a centre" in doc
+
+
 def test_the_separation_multiple_is_a_named_movable_constant(sf):
     """It was a literal 3 buried in a comparison."""
     assert sf.SEPARATION_MULTIPLE == 3.0
     source = (REPO / "scripts/analysis/eisv_stage_b_safety_floor.py").read_text()
-    assert "tp > SEPARATION_MULTIPLE * ref" in source
-    assert "tp > 3 * ref" not in source
+    live = "\n".join(ln for ln in source.splitlines()
+                     if not ln.lstrip().startswith("#"))
+    assert "tp > SEPARATION_MULTIPLE * ref" in live
+    assert "tp > 3 * ref" not in live
+    # "overridable" overstated it: there is no flag, so it moves by edit only.
+    assert "overridable" not in live
 
 
 # --- M5: the constant's comment must describe the module -------------------

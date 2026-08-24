@@ -72,9 +72,11 @@ def pct(xs, p):
 # comment.
 MIN_SAFE_FOR_SPLIT = 100
 
-# The separation verdict's multiple. A DECIDING STANDARD, in force by
-# default rather than deferred: it converts two rates into SEPARATES or
-# WEAK. Named and overridable so the choice is visible and movable.
+# The separation verdict's multiple. A DECIDING STANDARD, in force by default
+# rather than deferred: it converts two rates into SEPARATES or WEAK. Named so
+# the choice is visible and greppable -- but there is no --separation-multiple
+# flag, so it is movable by EDIT ONLY. An earlier comment said "overridable",
+# which overstates what naming a constant buys.
 SEPARATION_MULTIPLE = 3.0
 
 # Split-conformal coverage needs enough calibration points for the quantile to
@@ -215,11 +217,19 @@ def separation_report(safe, non_safe, seed=0, quantile=0.99, threshold=None):
 
     THE POINT THAT SURVIVES THE OBVIOUS FIX. Splitting the safe set into
     calibration and holdout halves stops `fp` being an exact identity, but does
-    not make it informative: the halves are exchangeable by construction, so the
-    held-out rate is a sampling estimate centred on `1 - quantile`. It measures
-    threshold-estimation noise, not whether the residual is safe. No amount of
-    resampling repairs this, because a threshold DEFINED as a quantile of the
-    safe distribution fixes its own false-positive rate on that distribution.
+    not make it informative: the held-out rate measures threshold-estimation
+    noise, not whether the residual is safe. No amount of resampling repairs
+    this, because a threshold DEFINED as a quantile of the safe distribution
+    fixes its own false-positive rate on that distribution.
+
+    (An earlier version of this paragraph added "the halves are exchangeable by
+    construction, so the held-out rate is a sampling estimate centred on
+    `1 - quantile`". That sentence is WITHDRAWN -- it is the #1856 claim this
+    module exists to retract, and it survived here in the present tense while
+    `conformal_exceedance` below named it as the error and the report printed
+    "the exceedance is 1/(m+1) = 2.0%, not 1.0%". Exchangeability is real; what
+    it gives is the RANK result in `conformal_exceedance`, not a centre at
+    1 - q, and not anything at all for an interpolated threshold.)
     The regression bound is simply not identified from a quantile threshold.
 
     So the two modes are reported as the different things they are:
@@ -346,7 +356,8 @@ def separation_report(safe, non_safe, seed=0, quantile=0.99, threshold=None):
                    "about whether the residual predicts outcomes.")
     else:
         out.append(f"  → WEAK: {tp / ref:.1f}x the {ref_kind} false-positive rate "
-                   f"(exactly {tp:.4%} / {ref:.4%}); want >3x.")
+                   f"(exactly {tp:.4%} / {ref:.4%}); want "
+                   f">{SEPARATION_MULTIPLE:g}x.")
     return out
 
 
