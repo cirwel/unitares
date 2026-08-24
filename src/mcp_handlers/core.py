@@ -444,7 +444,8 @@ async def handle_process_agent_update(arguments: Dict[str, Any]) -> Sequence[Tex
         complexity: 0.0-1.0 how complex was this work
         confidence: 0.0-1.0 how confident are you
         lite: If true, returns compact response. Alias for response_mode='compact'
-        response_mode: 'auto' (compact unless action is needed), 'compact' (brief metrics), 'mirror' (actionable diagnostics), 'full' (everything). Legacy: 'minimal' and 'standard'.
+        include_memory_suggestions: Opt in to KG recall for this check-in (default false)
+        response_mode: 'auto' (compact unless action is needed), 'compact' (brief metrics), 'standard'/'interpreted' (bounded explained summary), 'mirror' (actionable diagnostics), 'full' (everything). Legacy bare shape: 'minimal'.
 
     No api_key needed - identity is bound to session via UUID.
     """

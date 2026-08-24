@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Silent guard for UNITARES dogfood identity and ablation-lane invariants.
+"""Silent guard for dogfood identity, ablation lanes, and risk authority.
 
 This script is deliberately small and CI-testable: pure helper functions hold the
 invariants, while the CLI wires them to the live REST endpoint and repo-local
@@ -31,6 +31,7 @@ DEFAULT_DOGFOOD_OUTPUT_DIR = (
 IDENTITY_ALERT = "no-session get_governance_metrics is not identity-neutral"
 INVENTORY_ALERT = "outcome inventory no longer exposes BEAM/substrate eprocess lanes"
 LANE_CONTRACT_ALERT = "ablation harness-lane contract tests failed"
+RISK_AUTHORITY_ALERT = "risk-authority ablation contract failed"
 DOGFOOD_SILENT_ALERT = "dogfood response combines [SILENT] with substantive content"
 DOGFOOD_SURFACE_ALERT = "dogfood response declares multiple primary surfaces"
 DOGFOOD_ALL_CLEAR_ALERT = "dogfood all-clear omits the required open-findings query"
@@ -74,7 +75,10 @@ def parse_inventory_counts(text: str) -> dict[str, int]:
 def inventory_lane_alert(counts: dict[str, int]) -> str | None:
     """Return an alert if inventory output stopped exposing harness lanes."""
 
-    if "eprocess_eligible_beam" not in counts or "eprocess_eligible_substrate" not in counts:
+    if (
+        "eprocess_eligible_beam" not in counts
+        or "eprocess_eligible_substrate" not in counts
+    ):
         return INVENTORY_ALERT
     return None
 
@@ -102,9 +106,7 @@ def dogfood_response_alerts(text: str) -> list[str]:
     if silent_lines and substantive_lines:
         alerts.append(DOGFOOD_SILENT_ALERT)
 
-    plural_selection = re.search(
-        r"(?im)^\s*[*_#\s-]*selected surfaces\b", response
-    )
+    plural_selection = re.search(r"(?im)^\s*[*_#\s-]*selected surfaces\b", response)
     all_surfaces = re.search(r"(?i)\ball surfaces tested this pulse\b", response)
     singular_selections = set(
         re.findall(
@@ -160,12 +162,15 @@ def render_alert_report(alerts: Sequence[str], evidence: Sequence[str]) -> str:
     ]
     lines.extend(f"- {item}" for item in evidence)
     lines.append(
-        "Next: inspect identity proof-origin and harness-lane code before interpreting dogfood or ablation signals."
+        "Next: inspect identity proof-origin, harness-lane, and risk-authority "
+        "persistence/read-path code before interpreting dogfood or ablation signals."
     )
     return "\n".join(lines)
 
 
-def call_tool_no_session(http_url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+def call_tool_no_session(
+    http_url: str, name: str, arguments: dict[str, Any]
+) -> dict[str, Any]:
     """Call the REST tool endpoint without session or identity headers."""
 
     payload = {"name": name, "arguments": arguments}
@@ -244,7 +249,9 @@ def collect_alerts(
         evidence.append(f"dogfood_protocol_error={type(exc).__name__}: {exc}")
 
     try:
-        metrics = call_tool_no_session(http_url, "get_governance_metrics", {"lite": True})
+        metrics = call_tool_no_session(
+            http_url, "get_governance_metrics", {"lite": True}
+        )
         identity_summary = {
             "status": metrics.get("status"),
             "agent_id": metrics.get("agent_id"),
@@ -306,6 +313,22 @@ def collect_alerts(
         alerts.append(LANE_CONTRACT_ALERT)
         evidence.append(f"lane_contract_error={type(exc).__name__}: {exc}")
 
+    try:
+        run_repo_script(
+            repo,
+            python,
+            "-m",
+            ("pytest", "tests/test_risk_authority_ablation.py", "-q"),
+            timeout_seconds=timeout_seconds,
+        )
+        evidence.append(
+            "risk_authority_ablation_tests=passed; arms=3; "
+            "live_outcomes_read=false; live_governance_mutated=false"
+        )
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+        alerts.append(RISK_AUTHORITY_ALERT)
+        evidence.append(f"risk_authority_error={type(exc).__name__}: {exc}")
+
     return alerts, evidence
 
 
@@ -313,20 +336,30 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse CLI options for the silent guard."""
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--http-url", default=os.environ.get("UNITARES_HTTP_URL", DEFAULT_HTTP_URL))
-    parser.add_argument("--repo", type=Path, default=Path(os.environ.get("UNITARES_REPO", DEFAULT_REPO)))
-    parser.add_argument("--python", default=os.environ.get("UNITARES_PYTHON", DEFAULT_PYTHON))
+    parser.add_argument(
+        "--http-url", default=os.environ.get("UNITARES_HTTP_URL", DEFAULT_HTTP_URL)
+    )
+    parser.add_argument(
+        "--repo", type=Path, default=Path(os.environ.get("UNITARES_REPO", DEFAULT_REPO))
+    )
+    parser.add_argument(
+        "--python", default=os.environ.get("UNITARES_PYTHON", DEFAULT_PYTHON)
+    )
     parser.add_argument(
         "--dogfood-output-dir",
         type=Path,
         default=Path(
-            os.environ.get("UNITARES_DOGFOOD_OUTPUT_DIR", str(DEFAULT_DOGFOOD_OUTPUT_DIR))
+            os.environ.get(
+                "UNITARES_DOGFOOD_OUTPUT_DIR", str(DEFAULT_DOGFOOD_OUTPUT_DIR)
+            )
         ),
     )
     parser.add_argument(
         "--timeout-seconds",
         type=int,
-        default=int(os.environ.get("UNITARES_GUARD_TIMEOUT", str(DEFAULT_TIMEOUT_SECONDS))),
+        default=int(
+            os.environ.get("UNITARES_GUARD_TIMEOUT", str(DEFAULT_TIMEOUT_SECONDS))
+        ),
     )
     return parser.parse_args(argv)
 

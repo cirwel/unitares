@@ -8,8 +8,10 @@ numbers that baseline it:
 
   1. Check-in concentration — what share of process_agent_update calls come
      from the top-2 callers (residents). Baseline 2026-06-12: 76%.
-  2. Agent KG retrieval — knowledge/search_knowledge_graph calls from
-     NAMED agents, excluding operator credentials (the dashboard).
+  2. Agent KG retrieval — knowledge/search_shared_memory calls from
+     NAMED agents, excluding operator credentials (the dashboard). The legacy
+     search_knowledge_graph alias is retained only where historical continuity
+     across the rename requires it.
      Baseline: 3 per 14d, and both callers were burn-in probes.
 
      WAS "voluntary KG retrieval" and that name was the defect, not the
@@ -44,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -80,13 +83,46 @@ def connect():
 # work, so the gap is the only available stand-in — state it, do not hide it.
 _RETURN_GAP_SECONDS = 60
 
-# Callers whose governance calls are scheduled or harness-wired rather than
-# elected. Kept as one regex so the continuation metric and the retrieval
-# composition line cannot drift apart.
-_SCHEDULED_LABEL_RE = (
-    r"^(Vigil|Sentinel|Watcher|Steward|Chronicler|Lumen"
-    r"|memory-kg-sync|kg-gardener|kg-sweep|canary_|Hermes Agent)"
+# Callers whose governance calls are SCHEDULED or harness-wired: they call on a
+# cadence, so "did it come back?" is answered by the cadence rather than by the
+# caller. Excluded from the return-rate denominator for that reason alone.
+#
+# The word "elected" used to appear here and at the surface_return_rate query
+# below, as the justification for excluding them. That is the volition word this
+# module's own docstring declares a category error: every call is conditioned on
+# context the operator controls, so no call is "elected" and none is not. The
+# metric name was corrected on 2026-08-18; the presupposition survived one layer
+# down, inside the filter, which is where it actually decided a number.
+#
+# Non-resident job/harness prefixes. Literal because they are job names this
+# repo owns, not deployment configuration.
+_SCHEDULED_JOB_PREFIXES = (
+    "memory-kg-sync", "kg-gardener", "kg-sweep", "canary_", "Hermes Agent",
 )
+
+
+def _scheduled_label_re() -> str:
+    """Regex for the scheduled cohort, resident half DERIVED from the roster.
+
+    The resident names used to be hardcoded — the same six the fleet-identity
+    guard's own FLEET_IDENTITIES list exists to keep out of shipped source. It
+    never tripped CI because that guard's DEFAULT_PATHS covers src /
+    governance_core / config / agents/sdk/src and not scripts/dev, so this was a
+    correctness defect rather than a rule violation. The correctness part:
+    a resident renamed, or added to UNITARES_RESIDENTS and not to the literal,
+    silently entered the return-rate DENOMINATOR as an ordinary caller — and
+    scheduled callers return by construction, so the drift INFLATED the measured
+    return rate. It failed in the comfortable direction, quietly.
+
+    Reading the roster means the two cannot disagree. On a residentless install
+    (the default: UNITARES_RESIDENTS unset) this is the job prefixes alone,
+    which is correct — there are no residents to exclude.
+    """
+    from src.grounding.class_indicator import load_resident_labels
+
+    parts = [re.escape(label) for label in sorted(load_resident_labels())]
+    parts += [re.escape(prefix) for prefix in _SCHEDULED_JOB_PREFIXES]
+    return "^(" + "|".join(parts) + ")"
 
 
 def _snapshot_queries() -> dict:
@@ -156,11 +192,12 @@ def _snapshot_queries() -> dict:
         # surfaces (get_governance_metrics ~991k/14d, list_agents = the
         # Discord bridge), lease substrate, KG housekeeping, dialectic
         # dashboard reads, and the scheduled cohort (residents, KG jobs,
-        # canaries, and the hermes harness loop, which calls record_result
-        # as part of its turn rather than electing it).
+        # canaries, and the hermes harness loop, which calls record_result on a
+        # cadence — so its return is set by the schedule, not by the caller).
         "surface_return_rate": """
-            WITH non_ceremony AS (
+            WITH eligible_calls AS (
                 SELECT u.ts, u.agent_id,
+                       a.label ~* %(scheduled_re)s AS scheduled,
                        CASE WHEN u.tool_name IN ('knowledge', 'search_shared_memory')
                                 THEN 'kg'
                             WHEN u.tool_name IN ('dialectic', 'request_review')
@@ -169,7 +206,6 @@ def _snapshot_queries() -> dict:
                 FROM audit.tool_usage u
                 JOIN core.agents a ON a.id::text = u.agent_id
                 WHERE u.ts > now() - make_interval(days => %(days)s)
-                  AND a.label !~* %(scheduled_re)s
                   AND (
                         (u.tool_name IN ('knowledge', 'search_shared_memory')
                          AND u.payload->>'action' IN ('search', 'details'))
@@ -180,6 +216,11 @@ def _snapshot_queries() -> dict:
                                         'self_recovery', 'store_finding',
                                         'leave_note', 'export', 'calibration')
                   )
+            ),
+            non_ceremony AS (
+                SELECT ts, agent_id, surface
+                FROM eligible_calls
+                WHERE NOT scheduled
             ),
             gaps AS (
                 SELECT *, lag(ts) OVER (PARTITION BY agent_id ORDER BY ts) AS prev_any,
@@ -199,7 +240,16 @@ def _snapshot_queries() -> dict:
                    sum(calls) AS surface_calls,
                    count(*) FILTER (WHERE max_gap_s >= %(return_gap_s)s) AS agents_returned,
                    count(*) FILTER (WHERE kg_calls > 0) AS kg_agents,
-                   count(*) FILTER (WHERE kg_gap_s >= %(return_gap_s)s) AS kg_returned
+                   count(*) FILTER (WHERE kg_gap_s >= %(return_gap_s)s) AS kg_returned,
+                   -- How many agents this metric DELETED from its own
+                   -- denominator. The same regex is used two metrics up to
+                   -- DISCLOSE composition ("N of them scheduled"); here it was
+                   -- a silent exclusion, and the printed line reported no
+                   -- excluded count at all. A reader could not tell whether the
+                   -- rate covered the fleet or a filtered slice of it.
+                   (SELECT count(DISTINCT agent_id)
+                      FROM eligible_calls
+                     WHERE scheduled) AS scheduled_excluded
             FROM per_agent
         """,
         # Onboard engagement. `converted` used to mean process_agent_update only,
@@ -234,8 +284,20 @@ def _snapshot_queries() -> dict:
                             AND oe.verification_source = 'external_signal'
                             AND oe.detail->>'harness' = 'beam') AS beam_checked_in,
                     (
+                        -- `search_shared_memory` is the LIVE tool name.
+                        -- `search_knowledge_graph` is the dead alias (0 rows in
+                        -- 30d, as this file's own note at the KG-retrieval query
+                        -- above already records). That correction was applied to
+                        -- the retrieval and return-rate queries and MISSED here,
+                        -- so `cohort_engaged` counted a tool nobody calls and
+                        -- silently UNDERSTATED engagement: an agent whose only
+                        -- value action was a shared-memory search read as not
+                        -- engaged. Both names are kept so the metric stays
+                        -- comparable across the rename.
                         EXISTS (SELECT 1 FROM audit.tool_usage t WHERE t.agent_id = a.id::text AND t.success
-                                AND t.tool_name IN ('process_agent_update','knowledge','search_knowledge_graph','outcome_event'))
+                                AND t.tool_name IN ('process_agent_update','knowledge',
+                                                    'search_shared_memory','search_knowledge_graph',
+                                                    'outcome_event'))
                         OR EXISTS (SELECT 1 FROM audit.outcome_events oe WHERE oe.agent_id = a.id::text
                                    AND oe.ts > now() - make_interval(days => %(days)s))
                     ) AS engaged_value,
@@ -366,7 +428,7 @@ def snapshot(
         "days": days,
         # Scheduled/wired callers: residents on timers, KG maintenance jobs,
         # dialectic canaries, and the hermes harness loop. Not elections.
-        "scheduled_re": _SCHEDULED_LABEL_RE,
+        "scheduled_re": _scheduled_label_re(),
         "return_gap_s": _RETURN_GAP_SECONDS,
         "nudge_since": window_start,
         "nudge_until": window_end,
@@ -469,6 +531,8 @@ def main() -> int:
     print(f"  surface return rate: {ec['agents_returned']}/{ec['agents_with_calls']} agents "
           f"({ec['returned_pct']}%) came back to a governance surface after a "
           f"{_RETURN_GAP_SECONDS}s+ gap — {ec['surface_calls']} non-ceremony calls")
+    print(f"    (excludes {ec.get('scheduled_excluded', 0)} scheduled/harness-wired "
+          f"callers, whose return is set by their cadence)")
     print(f"    KG surface alone: {ec['kg_returned']}/{ec['kg_agents']} "
           f"({ec['kg_returned_pct']}%) searched again later")
     print(f"  onboard→checkin (process + BEAM external): {oc['converted']}/{oc['minted']} "

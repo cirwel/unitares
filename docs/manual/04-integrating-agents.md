@@ -68,10 +68,29 @@ actionable, and complete modes in-band, while `_response_size` reports the
 approximate serialized size and suggests a smaller mode when the payload is
 large.
 
-`search_shared_memory` uses its compact envelope as a discovery digest. Its
-`memory_suggestions` retain lifecycle metadata and bounded detail previews;
+For routine `proceed` / `approve` check-ins, `compact` omits the duplicated
+`policy_evaluation` and advisory-only `enforcement` blocks. A guide, pause,
+reject, suppression, or actuator event restores bounded summaries marked
+`_detail_level="summary"`; use `full` for the self-contained maturity gates and
+audit diagnostics. `minimal` remains the smallest legacy shape and `standard`
+is a bounded interpreted summary for agents: action/reason, explained state and
+verdict provenance, EISV/risk, and only actionable policy/enforcement summaries.
+Both retain the normalized action and cold-start verdict caveat. Compatibility
+aliases are exact: `lite=compact`, `verbose=full`, and `interpreted=standard`.
+
+`search_shared_memory` defaults to a lean discovery digest. Its
+`memory_suggestions` retain ids, one-line summaries, lifecycle/type metadata,
+bounded tags, and one relevance score; detail previews and score maps are omitted.
 `discovery_retrieval_options` shows how to open one record or deliberately
-expand all results.
+expand all results. Expanding every result through the friendly alias requires
+both `response_mode="full"` and `include_details=true`; compact mode remains a
+digest even if details were requested. It forces digest retrieval before the
+canonical search serializes results, and reports that policy explicitly.
+
+`sync_state` is pull-based with respect to shared memory: it performs no KG
+lookup unless the caller sets `include_memory_suggestions=true`. Prefer an
+explicit `search_shared_memory` call when recall is the task rather than a side
+effect of governance check-in.
 
 ## 4.4 Handle the policy response
 

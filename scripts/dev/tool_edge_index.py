@@ -31,17 +31,21 @@ Usage:
     python3 scripts/dev/tool_edge_index.py            # write the index
     python3 scripts/dev/tool_edge_index.py --check    # exit 1 if stale
     python3 scripts/dev/tool_edge_index.py --json     # machine-readable dump
+    python3 scripts/dev/tool_edge_index.py --lint     # deterministic findings
 
 Exit codes:
     0 — index written, or up to date under --check
     1 — index is stale (--check)
+        or the snapshot contains error-severity findings (--lint)
     2 — handler package not importable (dependencies absent). Distinct from 1 so
         a caller can tell "cannot look" from "looked and found drift"; the
         doctor SKIPs on 2 rather than reporting a false failure.
 """
+
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
 import inspect
 import json
@@ -49,10 +53,33 @@ import pkgutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
 OUT = REPO / "docs" / "dev" / "TOOL_EDGE_INDEX.md"
+JSON_SCHEMA = REPO / "docs" / "dev" / "tool_surface_audit_v1.schema.json"
 UNKNOWN = "?"
+AUDIT_SCHEMA = "unitares.tool-surface-audit.v1"
+DISPATCH_SCHEMA = "unitares.tool-dispatch-snapshot.v1"
+EXPOSURE_SCHEMA = "unitares.tool-exposure-snapshot.v1"
+DEPLOYABLE_MODES = (
+    "minimal",
+    "lite",
+    "operator_readonly",
+    "operator_recovery",
+    "full",
+)
+SURFACE_SOURCE_FILES = (
+    "src/mcp_compat.py",
+    "src/mcp_handlers/decorators.py",
+    "src/mcp_handlers/introspection/tool_catalog.py",
+    "src/mcp_handlers/introspection/tool_introspection.py",
+    "src/mcp_handlers/tool_stability.py",
+    "src/tool_descriptions.py",
+    "src/tool_modes.py",
+    "src/tool_registration.py",
+    "src/tool_schemas.py",
+)
 
 
 @dataclass
@@ -74,6 +101,7 @@ class ToolEdge:
     hidden: bool = False
     superseded_by: str | None = None
     default_action: str | None = None
+    known_actions: list[str] = field(default_factory=list)
     actions: list[ActionEdge] = field(default_factory=list)
 
 
@@ -83,6 +111,49 @@ class AliasEdge:
     new_name: str
     reason: str
     inject_action: str | None = None
+    inject_defaults: dict[str, Any] = field(default_factory=dict)
+    param_normalizer: str | None = None
+    experience: bool = False
+
+
+@dataclass(frozen=True)
+class AuditFinding:
+    severity: str
+    code: str
+    subject: str
+    message: str
+    evidence: dict[str, Any] = field(default_factory=dict)
+
+
+def _jsonable(value: Any) -> Any:
+    """Return a deterministic JSON-compatible representation."""
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in sorted(value.items())}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        normalized = [_jsonable(item) for item in value]
+        return sorted(normalized, key=lambda item: _canonical_json(item))
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if hasattr(value, "model_dump"):
+        return _jsonable(value.model_dump())
+    return str(value)
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(
+        _jsonable(value),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def content_hash(value: Any) -> str:
+    """Content address for a JSON-compatible value."""
+    digest = hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
 
 
 def _site(func) -> str:
@@ -130,7 +201,9 @@ def _load_registries() -> tuple[dict, dict, dict, list[str]]:
     import src.mcp_handlers as handlers_pkg  # noqa: E402
 
     failures: list[str] = []
-    for info in pkgutil.walk_packages(handlers_pkg.__path__, handlers_pkg.__name__ + "."):
+    for info in pkgutil.walk_packages(
+        handlers_pkg.__path__, handlers_pkg.__name__ + "."
+    ):
         try:
             importlib.import_module(info.name)
         except Exception as exc:  # noqa: BLE001 — reported, not suppressed
@@ -217,6 +290,7 @@ def collect() -> tuple[list[ToolEdge], list[AliasEdge], list[str], int]:
             hidden=td.hidden,
             superseded_by=td.superseded_by,
             default_action=td.default_action,
+            known_actions=sorted(td.known_actions or ()),
         )
         action_map, param_maps = _router_actions(td.handler)
         for action in sorted(action_map):
@@ -235,6 +309,11 @@ def collect() -> tuple[list[ToolEdge], list[AliasEdge], list[str], int]:
             new_name=alias.new_name,
             reason=alias.reason,
             inject_action=alias.inject_action,
+            inject_defaults=dict(alias.inject_defaults or {}),
+            param_normalizer=(
+                _site(alias.param_normalizer) if alias.param_normalizer else None
+            ),
+            experience=bool(alias.experience),
         )
         for old, alias in sorted(aliases.items())
     ]
@@ -244,10 +323,504 @@ def collect() -> tuple[list[ToolEdge], list[AliasEdge], list[str], int]:
     return tools, alias_edges, failures, unbound_schemas
 
 
+def _tool_payload(tool: ToolEdge) -> dict[str, Any]:
+    return {
+        "name": tool.name,
+        "handler": tool.handler,
+        "schema": tool.schema,
+        "identity": tool.identity,
+        "stakes": tool.stakes,
+        "timeout": tool.timeout,
+        "deprecated": tool.deprecated,
+        "hidden": tool.hidden,
+        "superseded_by": tool.superseded_by,
+        "default_action": tool.default_action,
+        "known_actions": list(tool.known_actions),
+        "actions": [
+            {
+                "action": edge.action,
+                "target": edge.target,
+                "param_maps": dict(sorted(edge.param_maps.items())),
+            }
+            for edge in tool.actions
+        ],
+    }
+
+
+def _alias_payload(alias: AliasEdge) -> dict[str, Any]:
+    return {
+        "old_name": alias.old_name,
+        "new_name": alias.new_name,
+        "reason": alias.reason,
+        "inject_action": alias.inject_action,
+        "inject_defaults": dict(sorted(alias.inject_defaults.items())),
+        "param_normalizer": alias.param_normalizer,
+        "experience": alias.experience,
+    }
+
+
+def _hashed_snapshot(schema: str, payload: dict[str, Any]) -> dict[str, Any]:
+    unhashed = {"schema": schema, **payload}
+    return {
+        "schema": schema,
+        "content_hash": content_hash(unhashed),
+        **payload,
+    }
+
+
+def verify_content_hash(snapshot: dict[str, Any]) -> bool:
+    """Verify a snapshot whose hash covers every field except itself."""
+    expected = snapshot.get("content_hash")
+    unhashed = {key: value for key, value in snapshot.items() if key != "content_hash"}
+    return isinstance(expected, str) and expected == content_hash(unhashed)
+
+
+def _repo_path_from_site(site: str | None) -> Path | None:
+    if not site:
+        return None
+    location = site.split(" ", 1)[0]
+    path_text, separator, line_text = location.rpartition(":")
+    if not separator or not line_text.isdigit():
+        return None
+    candidate = (REPO / path_text).resolve()
+    try:
+        candidate.relative_to(REPO)
+    except ValueError:
+        return None
+    return candidate if candidate.is_file() else None
+
+
+def _source_manifest(
+    tools: list[ToolEdge], aliases: list[AliasEdge]
+) -> list[dict[str, str]]:
+    """Content-address every source file that contributes dispatch/exposure truth."""
+    paths = {
+        (REPO / relative).resolve()
+        for relative in SURFACE_SOURCE_FILES
+        if (REPO / relative).is_file()
+    }
+    paths.update((REPO / "src" / "mcp_handlers" / "schemas").glob("*.py"))
+    for tool in tools:
+        for site in (
+            tool.handler,
+            tool.schema,
+            *(edge.target for edge in tool.actions),
+        ):
+            path = _repo_path_from_site(site)
+            if path is not None:
+                paths.add(path)
+    for alias in aliases:
+        path = _repo_path_from_site(alias.param_normalizer)
+        if path is not None:
+            paths.add(path)
+
+    manifest = []
+    for path in sorted(paths):
+        try:
+            relative = path.resolve().relative_to(REPO)
+        except ValueError:
+            continue
+        manifest.append(
+            {
+                "path": relative.as_posix(),
+                "content_hash": f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}",
+            }
+        )
+    return manifest
+
+
+def build_dispatch_snapshot(
+    tools: list[ToolEdge],
+    aliases: list[AliasEdge],
+    failures: list[str],
+    unbound_schemas: int,
+) -> dict[str, Any]:
+    source_files = _source_manifest(tools, aliases)
+    return _hashed_snapshot(
+        DISPATCH_SCHEMA,
+        {
+            "tools": [_tool_payload(tool) for tool in tools],
+            "aliases": [_alias_payload(alias) for alias in aliases],
+            "import_failures": list(failures),
+            "unbound_schemas": unbound_schemas,
+            "source_revision": content_hash(source_files),
+            "source_files": source_files,
+        },
+    )
+
+
+def _collect_wire_catalog() -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """Build the actual FastMCP full-mode catalog through production registrars.
+
+    The dispatch registry says what can run after dispatch. This catalog says
+    what the MCP protocol advertises before dispatch, including the narrowed
+    workflow-alias schemas. Building it through the same registration functions
+    avoids a second implementation of alias-schema policy in this audit.
+    """
+    failures: list[str] = []
+    try:
+        from src.mcp_compat import FastMCP
+        import src.tool_modes as tool_modes
+        from src.tool_registration import (
+            _register_common_aliases,
+            auto_register_all_tools,
+        )
+
+        original_mode = tool_modes.TOOL_MODE
+        try:
+            tool_modes.TOOL_MODE = "full"
+            mcp = FastMCP(name="unitares-tool-surface-audit")
+            auto_register_all_tools(mcp)
+            _register_common_aliases(mcp)
+        finally:
+            tool_modes.TOOL_MODE = original_mode
+
+        manager = getattr(mcp, "_tool_manager", None)
+        registered = getattr(manager, "_tools", None)
+        if not isinstance(registered, dict):
+            raise TypeError("FastMCP tool manager did not expose a tool dictionary")
+
+        catalog: dict[str, dict[str, Any]] = {}
+        for name, exposed in sorted(registered.items()):
+            input_schema = _jsonable(getattr(exposed, "parameters", {}) or {})
+            catalog[name] = {
+                "name": name,
+                "description": str(getattr(exposed, "description", "") or ""),
+                "input_schema": input_schema,
+                "input_schema_hash": content_hash(input_schema),
+            }
+        return catalog, failures
+    except Exception as exc:  # noqa: BLE001 — evidence, not silent fallback
+        failures.append(f"{type(exc).__name__}: {exc}")
+        return {}, failures
+
+
+def _schema_properties(schema: dict[str, Any]) -> list[str]:
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    return sorted(properties) if isinstance(properties, dict) else []
+
+
+def build_exposure_snapshot(
+    tools: list[ToolEdge], aliases: list[AliasEdge]
+) -> dict[str, Any]:
+    """Capture declared modes, actual wire registration, and introspection views."""
+    from src.mcp_handlers.tool_stability import (
+        AGENT_WORKFLOW_ALIASES,
+        list_all_aliases,
+    )
+    from src.tool_modes import LITE_MODE_TOOLS, get_tools_for_mode
+    from src.tool_schemas import get_pydantic_schemas
+
+    wire_catalog, collection_failures = _collect_wire_catalog()
+    wire_names = set(wire_catalog)
+    workflow_aliases = set(AGENT_WORKFLOW_ALIASES) & wire_names
+    canonical_wire_names = wire_names - workflow_aliases
+
+    modes: dict[str, dict[str, Any]] = {}
+    for mode in DEPLOYABLE_MODES:
+        declared = set(get_tools_for_mode(mode))
+        # Mirrors src/mcp_server.py: canonical registrations are mode-filtered,
+        # then workflow aliases are registered unconditionally.
+        advertised = (canonical_wire_names & declared) | workflow_aliases
+        mode_payload = {
+            "declared": sorted(declared),
+            "advertised": sorted(advertised),
+            "declared_only": sorted(declared - advertised),
+            "advertised_only": sorted(advertised - declared),
+        }
+        modes[mode] = {
+            **mode_payload,
+            "content_hash": content_hash(mode_payload),
+        }
+
+    registered_names = {tool.name for tool in tools}
+    deprecated_alias_names = set(list_all_aliases()) - set(AGENT_WORKFLOW_ALIASES)
+    list_tools_full = (registered_names | workflow_aliases) - deprecated_alias_names
+    orientation = {
+        "list_tools_full": sorted(list_tools_full),
+        "list_tools_lite": sorted(list_tools_full & set(LITE_MODE_TOOLS)),
+        "full_wire_only": sorted(wire_names - list_tools_full),
+        "full_orientation_only": sorted(list_tools_full - wire_names),
+    }
+
+    schemas = get_pydantic_schemas()
+    aliases_by_name = {alias.old_name: alias for alias in aliases}
+    views: list[dict[str, Any]] = []
+    for name, wire in sorted(wire_catalog.items()):
+        alias = aliases_by_name.get(name) if name in workflow_aliases else None
+        canonical_name = alias.new_name if alias else name
+        model = schemas.get(canonical_name)
+        describe_schema = (
+            _jsonable(model.model_json_schema())
+            if model is not None
+            else wire["input_schema"]
+        )
+        wire_properties = _schema_properties(wire["input_schema"])
+        describe_properties = _schema_properties(describe_schema)
+        views.append(
+            {
+                **wire,
+                "kind": "workflow_alias" if alias else "registered_tool",
+                "canonical_name": canonical_name,
+                "inject_action": alias.inject_action if alias else None,
+                "wire_properties": wire_properties,
+                "wire_required": sorted(wire["input_schema"].get("required", [])),
+                "describe_input_schema": describe_schema,
+                "describe_input_schema_hash": content_hash(describe_schema),
+                "describe_properties": describe_properties,
+                "describe_only_properties": sorted(
+                    set(describe_properties) - set(wire_properties)
+                ),
+                "wire_only_properties": sorted(
+                    set(wire_properties) - set(describe_properties)
+                ),
+            }
+        )
+
+    return _hashed_snapshot(
+        EXPOSURE_SCHEMA,
+        {
+            "modes": modes,
+            "orientation": orientation,
+            "tools": views,
+            "collection_failures": collection_failures,
+        },
+    )
+
+
+def _alias_cycles(alias_targets: dict[str, str]) -> list[list[str]]:
+    cycles: set[tuple[str, ...]] = set()
+    for start in sorted(alias_targets):
+        order: list[str] = []
+        positions: dict[str, int] = {}
+        current = start
+        while current in alias_targets:
+            if current in positions:
+                cycle = order[positions[current] :]
+                rotations = [
+                    tuple(cycle[index:] + cycle[:index]) for index in range(len(cycle))
+                ]
+                cycles.add(min(rotations))
+                break
+            positions[current] = len(order)
+            order.append(current)
+            current = alias_targets[current]
+    return [list(cycle) for cycle in sorted(cycles)]
+
+
+def lint_snapshots(
+    dispatch: dict[str, Any], exposure: dict[str, Any]
+) -> list[AuditFinding]:
+    """Return structural findings without granting them certification authority."""
+    findings: list[AuditFinding] = []
+
+    def add(
+        severity: str,
+        code: str,
+        subject: str,
+        message: str,
+        **evidence: Any,
+    ) -> None:
+        findings.append(
+            AuditFinding(severity, code, subject, message, _jsonable(evidence))
+        )
+
+    tools = {tool["name"]: tool for tool in dispatch["tools"]}
+    aliases = {alias["old_name"]: alias for alias in dispatch["aliases"]}
+
+    for failure in dispatch["import_failures"]:
+        add(
+            "error",
+            "DISPATCH_IMPORT_FAILURE",
+            "dispatch",
+            "A handler module failed to import; the dispatch snapshot is incomplete.",
+            failure=failure,
+        )
+    for failure in exposure["collection_failures"]:
+        add(
+            "error",
+            "EXPOSURE_COLLECTION_FAILURE",
+            "exposure",
+            "The production registration path could not be snapshotted.",
+            failure=failure,
+        )
+
+    for cycle in _alias_cycles(
+        {name: alias["new_name"] for name, alias in aliases.items()}
+    ):
+        add(
+            "error",
+            "ALIAS_CYCLE",
+            cycle[0],
+            "Alias resolution contains a cycle.",
+            cycle=cycle,
+        )
+
+    for name, alias in sorted(aliases.items()):
+        target = tools.get(alias["new_name"])
+        if target is None:
+            add(
+                "error",
+                "ALIAS_TARGET_MISSING",
+                name,
+                "Alias target is not a registered dispatch tool.",
+                target=alias["new_name"],
+            )
+            continue
+        if alias["new_name"] in aliases:
+            add(
+                "error",
+                "ALIAS_TARGET_IS_ALIAS",
+                name,
+                "One-hop alias resolution points at another alias.",
+                target=alias["new_name"],
+            )
+        inject_action = alias.get("inject_action")
+        known_actions = set(target["known_actions"])
+        if inject_action and inject_action not in known_actions:
+            add(
+                "error",
+                "ALIAS_ACTION_UNKNOWN",
+                name,
+                "Alias injects an action the target router does not declare.",
+                target=alias["new_name"],
+                inject_action=inject_action,
+                known_actions=sorted(known_actions),
+            )
+
+    for name, tool in sorted(tools.items()):
+        default_action = tool.get("default_action")
+        known_actions = set(tool["known_actions"])
+        if default_action and default_action not in known_actions:
+            add(
+                "error",
+                "DEFAULT_ACTION_UNKNOWN",
+                name,
+                "Tool default action does not resolve to a declared delegate.",
+                default_action=default_action,
+                known_actions=sorted(known_actions),
+            )
+
+    for mode, mode_view in sorted(exposure["modes"].items()):
+        if mode_view["declared_only"]:
+            add(
+                "error" if mode == "lite" else "warning",
+                "MODE_DECLARED_UNADVERTISED",
+                mode,
+                "The mode declares names the production registrar would not advertise.",
+                names=mode_view["declared_only"],
+            )
+        if mode_view["advertised_only"]:
+            add(
+                "error" if mode == "lite" else "warning",
+                "MODE_UNDECLARED_ADVERTISED",
+                mode,
+                "The production registrar advertises names absent from the mode declaration.",
+                names=mode_view["advertised_only"],
+            )
+
+    for view in exposure["tools"]:
+        if view["kind"] != "workflow_alias":
+            continue
+        if view["inject_action"] and "action" in view["wire_properties"]:
+            add(
+                "error",
+                "WIRE_ALIAS_ACTION_EXPOSED",
+                view["name"],
+                "Action-injecting alias still asks the caller for action.",
+                inject_action=view["inject_action"],
+            )
+        if view["describe_only_properties"]:
+            add(
+                "warning",
+                "DESCRIBE_SCHEMA_WIDER_THAN_WIRE",
+                view["name"],
+                "describe_tool advertises parameters the alias wire schema rejects.",
+                properties=view["describe_only_properties"],
+            )
+
+    for name in exposure["orientation"]["full_orientation_only"]:
+        add(
+            "warning",
+            "ORIENTATION_NAME_NOT_ON_WIRE",
+            name,
+            "list_tools can name a tool absent from the full MCP wire catalog.",
+        )
+    for name in exposure["orientation"]["full_wire_only"]:
+        add(
+            "info",
+            "WIRE_NAME_NOT_IN_ORIENTATION",
+            name,
+            "The full MCP wire catalog advertises a name hidden by list_tools.",
+        )
+
+    hidden = {name for name, tool in tools.items() if tool["hidden"]}
+    for mode, mode_view in sorted(exposure["modes"].items()):
+        for name in sorted(hidden & set(mode_view["advertised"])):
+            add(
+                "error",
+                "HIDDEN_TOOL_ADVERTISED",
+                name,
+                "A hidden dispatch tool is exposed on the MCP wire.",
+                mode=mode,
+            )
+
+    severity_order = {"error": 0, "warning": 1, "info": 2}
+    return sorted(
+        findings,
+        key=lambda item: (
+            severity_order.get(item.severity, 99),
+            item.code,
+            item.subject,
+        ),
+    )
+
+
+def build_audit_snapshot(
+    tools: list[ToolEdge],
+    aliases: list[AliasEdge],
+    failures: list[str],
+    unbound_schemas: int,
+) -> dict[str, Any]:
+    dispatch = build_dispatch_snapshot(tools, aliases, failures, unbound_schemas)
+    exposure = build_exposure_snapshot(tools, aliases)
+    findings = lint_snapshots(dispatch, exposure)
+    counts = {
+        severity: sum(item.severity == severity for item in findings)
+        for severity in ("error", "warning", "info")
+    }
+    payload = {
+        "dispatch": dispatch,
+        "exposure": exposure,
+        "summary": {
+            "status": "issues_detected" if findings else "clean",
+            "finding_counts": counts,
+            "self_certifying": False,
+            "note": (
+                "This artifact is evidence for review, not authorization or "
+                "certification of the components that produced it."
+            ),
+        },
+        "findings": [
+            {
+                "severity": item.severity,
+                "code": item.code,
+                "subject": item.subject,
+                "message": item.message,
+                "evidence": item.evidence,
+            }
+            for item in findings
+        ],
+    }
+    return _hashed_snapshot(AUDIT_SCHEMA, payload)
+
+
 def _flags(tool: ToolEdge) -> str:
     marks = []
     if tool.deprecated:
-        marks.append(f"deprecated→`{tool.superseded_by}`" if tool.superseded_by else "deprecated")
+        marks.append(
+            f"deprecated→`{tool.superseded_by}`" if tool.superseded_by else "deprecated"
+        )
     if tool.hidden:
         marks.append("hidden")
     if tool.identity != "required":
@@ -255,6 +828,25 @@ def _flags(tool: ToolEdge) -> str:
     if tool.stakes != "baseline":
         marks.append(f"stakes={tool.stakes}")
     return ", ".join(marks) or "—"
+
+
+def _md_code_list(values: list[str], *, limit: int = 8) -> str:
+    if not values:
+        return "—"
+    shown = values[:limit]
+    rendered = ", ".join(f"`{value}`" for value in shown)
+    if len(values) > limit:
+        rendered += f" … +{len(values) - limit}"
+    return rendered
+
+
+def _md_evidence(evidence: dict[str, Any], *, limit: int = 240) -> str:
+    if not evidence:
+        return "—"
+    rendered = json.dumps(evidence, ensure_ascii=False, sort_keys=True)
+    if len(rendered) > limit:
+        rendered = rendered[: limit - 1] + "…"
+    return rendered.replace("|", "\\|")
 
 
 def render(
@@ -265,6 +857,10 @@ def render(
 ) -> str:
     routers = [t for t in tools if t.actions]
     action_count = sum(len(t.actions) for t in routers)
+    audit = build_audit_snapshot(tools, aliases, failures, unbound_schemas)
+    dispatch = audit["dispatch"]
+    exposure = audit["exposure"]
+    finding_counts = audit["summary"]["finding_counts"]
 
     lines = [
         "<!-- GENERATED by scripts/dev/tool_edge_index.py — do not edit by hand. Re-run to refresh. -->",
@@ -280,7 +876,7 @@ def render(
         "registration happens in a decorator, action routing lives in a closure, schema",
         "modules are loaded from a string list in `src/tool_schemas.py`, and legacy names",
         "are rewritten by an alias table. Reading the tree cannot tell you where",
-        "`knowledge(action=\"store\")` goes; this file can.",
+        '`knowledge(action="store")` goes; this file can.',
         "",
         "It is **runtime-grounded, not grep-derived**: it reports what actually",
         "registered. That is deliberate — a static pass over this surface reports live",
@@ -291,6 +887,87 @@ def render(
         "",
         f"**{len(tools)} registered tools · {len(routers)} consolidated "
         f"({action_count} actions) · {len(aliases)} aliases.**",
+        "",
+        "## Content-addressed snapshots",
+        "",
+        "The generated JSON is a dual view: **dispatch** records what the live",
+        "registries route, while **exposure** records what the production FastMCP",
+        "registrars advertise in each deployable mode and what `describe_tool` says",
+        "about those names. The snapshots are immutable evidence inputs; they do not",
+        "certify the components that produced them.",
+        "",
+        f"- Audit bundle: `{audit['content_hash']}` (`{audit['schema']}`).",
+        f"- Dispatch snapshot: `{dispatch['content_hash']}`.",
+        f"- Audited source revision: `{dispatch['source_revision']}` "
+        f"({len(dispatch['source_files'])} files).",
+        f"- Exposure snapshot: `{exposure['content_hash']}`.",
+        "- JSON contract: "
+        "[`tool_surface_audit_v1.schema.json`](tool_surface_audit_v1.schema.json).",
+        "- Reproduce with `python3 scripts/dev/tool_edge_index.py --json`; run",
+        "  `--lint` to return non-zero when error-severity findings exist.",
+        "",
+        "## Exposure snapshot",
+        "",
+        "`declared` is the mode policy set. `advertised` is the production registrar",
+        "composition: mode-filtered canonical tools plus the workflow aliases that",
+        "are registered unconditionally. Differences are evidence, not automatic",
+        "removal authority.",
+        "",
+        "| Mode | Declared | Advertised | Declared only | Advertised only |",
+        "|---|---:|---:|---|---|",
+    ]
+    for mode in DEPLOYABLE_MODES:
+        view = exposure["modes"][mode]
+        lines.append(
+            f"| `{mode}` | {len(view['declared'])} | {len(view['advertised'])} | "
+            f"{_md_code_list(view['declared_only'])} | "
+            f"{_md_code_list(view['advertised_only'])} |"
+        )
+
+    workflow_views = [
+        view for view in exposure["tools"] if view["kind"] == "workflow_alias"
+    ]
+    lines += [
+        "",
+        "### Workflow alias views",
+        "",
+        "The wire schema is what FastMCP accepts. `describe-only` lists parameters",
+        "that introspection advertises for the canonical implementation even though",
+        "the alias wire rejects them.",
+        "",
+        "| Public name | Canonical | Wire params | Describe-only | Wire schema hash |",
+        "|---|---|---:|---|---|",
+    ]
+    for view in workflow_views:
+        lines.append(
+            f"| `{view['name']}` | `{view['canonical_name']}` | "
+            f"{len(view['wire_properties'])} | "
+            f"{_md_code_list(view['describe_only_properties'])} | "
+            f"`{view['input_schema_hash']}` |"
+        )
+
+    lines += [
+        "",
+        "## Deterministic findings",
+        "",
+        f"**{finding_counts['error']} errors · {finding_counts['warning']} warnings · "
+        f"{finding_counts['info']} informational.** Findings make drift reviewable;",
+        "they are not self-issued approval or remediation instructions.",
+        "",
+        "| Severity | Code | Subject | Finding | Evidence |",
+        "|---|---|---|---|---|",
+    ]
+    if audit["findings"]:
+        for finding in audit["findings"]:
+            lines.append(
+                f"| {finding['severity']} | `{finding['code']}` | "
+                f"`{finding['subject']}` | {finding['message']} | "
+                f"{_md_evidence(finding['evidence'])} |"
+            )
+    else:
+        lines.append("| — | — | — | No structural findings. | — |")
+
+    lines += [
         "",
         "## Tools",
         "",
@@ -376,7 +1053,14 @@ def render(
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true", help="exit 1 if the index is stale")
-    ap.add_argument("--json", action="store_true", help="dump the graph as JSON to stdout")
+    ap.add_argument(
+        "--json", action="store_true", help="dump the graph as JSON to stdout"
+    )
+    ap.add_argument(
+        "--lint",
+        action="store_true",
+        help="print deterministic findings and exit 1 when any are errors",
+    )
     args = ap.parse_args()
 
     try:
@@ -389,24 +1073,27 @@ def main() -> int:
         )
         return 2
 
-    if args.json:
-        json.dump(
-            {
-                "tools": [
-                    {
-                        **{k: v for k, v in vars(tool).items() if k != "actions"},
-                        "actions": [vars(edge) for edge in tool.actions],
-                    }
-                    for tool in tools
-                ],
-                "aliases": [vars(alias) for alias in aliases],
-                "import_failures": failures,
-                "unbound_schemas": unbound,
-            },
-            sys.stdout,
-            indent=2,
-        )
-        print()
+    if args.json or args.lint:
+        audit = build_audit_snapshot(tools, aliases, failures, unbound)
+        if args.json:
+            json.dump(audit, sys.stdout, indent=2, ensure_ascii=False)
+            print()
+        if args.lint:
+            counts = audit["summary"]["finding_counts"]
+            print(
+                f"tool surface audit {audit['content_hash']}: "
+                f"{counts['error']} errors, {counts['warning']} warnings, "
+                f"{counts['info']} informational",
+                file=sys.stderr if args.json else sys.stdout,
+            )
+            for finding in audit["findings"]:
+                print(
+                    f"{finding['severity'].upper()} {finding['code']} "
+                    f"[{finding['subject']}]: {finding['message']}",
+                    file=sys.stderr if args.json else sys.stdout,
+                )
+            if counts["error"]:
+                return 1
         return 0
 
     content = render(tools, aliases, failures, unbound)

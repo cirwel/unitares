@@ -32,6 +32,7 @@ _ACTION_VERDICTS = frozenset({"pause", "reject"})
 _ACTIONABLE_POLICY_VERDICTS = frozenset({"caution", "high-risk"})
 _KNOWN_POLICY_VERDICTS = _STEADY_VERDICTS | _ACTIONABLE_POLICY_VERDICTS
 _SUPPORTED_RESPONSE_MODES = frozenset({"compact", "full", "mirror", "minimal", "standard"})
+_COMPACT_TEXT_LIMIT = 240
 _RESPONSE_MODE_ALIASES = {
     "lite": "compact",
     "verbose": "full",
@@ -109,6 +110,185 @@ def _copy_passthrough_fields(response_data: dict, result: dict, fields: tuple) -
         value = response_data.get(field)
         if value is not None:
             result[field] = value
+
+
+def _bounded_text(value: Any) -> Any:
+    """Collapse free text to one bounded line for filtered response modes."""
+    if not isinstance(value, str):
+        return value
+    value = " ".join(value.split())
+    if len(value) > _COMPACT_TEXT_LIMIT:
+        value = value[: _COMPACT_TEXT_LIMIT - 3].rstrip() + "..."
+    return value
+
+
+def _compact_mapping(value: Any, fields: tuple[str, ...]) -> dict:
+    """Copy a bounded set of present fields from one diagnostic mapping."""
+    if not isinstance(value, dict):
+        return {}
+    result = {}
+    for field in fields:
+        if field not in value or value[field] is None:
+            continue
+        result[field] = _bounded_text(value[field])
+    return result
+
+
+def _compact_policy_evaluation(value: Any) -> Optional[dict]:
+    """Keep policy provenance useful without shipping the audit payload.
+
+    The full policy envelope contains maturity, epistemic, and original-decision
+    records that are intentionally self-contained for persistence. Repeating all
+    of them in compact mode made a routine response nearly as large as full.
+    Compact retains the decision inputs and maturity facts an agent can act on;
+    full remains the audit/detail tier.
+    """
+    if not isinstance(value, dict):
+        return None
+
+    result = _compact_mapping(
+        value,
+        (
+            "policy_name",
+            "policy_version",
+            "action",
+            "sub_action",
+            "reason",
+            "guidance",
+            "measurement_role",
+        ),
+    )
+    inputs = _compact_mapping(
+        value.get("inputs"),
+        (
+            "basin",
+            "policy_basin",
+            "primary_eisv_source",
+            "risk_score",
+            "risk_score_latest",
+            "verdict",
+            "verdict_source",
+            "void_active",
+            "margin",
+            "nearest_edge",
+        ),
+    )
+    if inputs:
+        result["inputs"] = inputs
+
+    maturity_gate = _compact_mapping(
+        value.get("maturity_gate"),
+        (
+            "schema",
+            "measurement_phase",
+            "measurement_ready",
+            "behavioral_confidence",
+            "is_baselined",
+            "primary_driver",
+            "primary_eisv_source",
+            "eligible",
+            "ineligibility_reason",
+            "confirmation_count",
+            "confirmations_required",
+            "outcome",
+            "actuation_enabled",
+            "actuation_applied",
+            "actuation_blocker",
+        ),
+    )
+    if maturity_gate:
+        result["maturity_gate"] = maturity_gate
+
+    epistemic_gate = _compact_mapping(
+        value.get("epistemic_gate"),
+        (
+            "schema",
+            "epistemic_class",
+            "applied",
+            "eligible",
+            "ineligibility_reason",
+            "outcome",
+            "enforcement_basis",
+        ),
+    )
+    if epistemic_gate:
+        result["epistemic_gate"] = epistemic_gate
+
+    suppression = _compact_mapping(
+        value.get("suppression"),
+        ("applied", "reason", "basis", "source"),
+    )
+    if suppression:
+        result["suppression"] = suppression
+
+    result["_detail_level"] = "summary"
+    result["_full_available"] = "Use response_mode='full' for complete policy diagnostics."
+    return result
+
+
+def _compact_enforcement(value: Any) -> Optional[dict]:
+    """Keep the actuator outcome and omit duplicated gate diagnostics."""
+    if not isinstance(value, dict):
+        return None
+    result = _compact_mapping(
+        value,
+        (
+            "schema",
+            "scope",
+            "requested",
+            "requested_action",
+            "applied",
+            "mode",
+            "basis",
+            "actuation_id",
+            "applied_at",
+            "failure",
+            "error",
+        ),
+    )
+    result["_detail_level"] = "summary"
+    result["_full_available"] = "Use response_mode='full' for complete enforcement diagnostics."
+    return result
+
+
+def _compact_policy_is_actionable(value: Any) -> bool:
+    """Return whether a policy block adds information beyond decision/metrics."""
+    if not isinstance(value, dict):
+        return False
+    action = str(value.get("action") or "").lower()
+    sub_action = str(value.get("sub_action") or "").lower()
+    suppression = value.get("suppression")
+    suppression_applied = (
+        isinstance(suppression, dict) and suppression.get("applied") is True
+    )
+    maturity_gate = value.get("maturity_gate")
+    maturity_actuated = isinstance(maturity_gate, dict) and any(
+        maturity_gate.get(key) is True
+        for key in ("actuation_applied", "would_defer", "confirmed")
+    )
+    return bool(
+        action in {"guide", "pause", "reject", "block", "stop"}
+        or sub_action not in {"", "approve"}
+        or value.get("guidance")
+        or suppression_applied
+        or maturity_actuated
+    )
+
+
+def _compact_enforcement_is_actionable(value: Any) -> bool:
+    """Return whether actuator state warrants space in a compact response."""
+    if not isinstance(value, dict):
+        return False
+    mode = str(value.get("mode") or "").lower()
+    return bool(
+        value.get("requested") is True
+        or value.get("applied") is True
+        or value.get("requested_action")
+        or value.get("actuation_id")
+        or value.get("failure")
+        or value.get("error")
+        or mode not in {"", "advisory"}
+    )
 
 
 def canonical_response_mode(value: Any) -> str:
@@ -221,13 +401,14 @@ def format_response(
     Preferred modes:
     - "auto": compact for routine check-ins, mirror for actionable states
     - "compact": brief metrics + decision summary
+    - "standard": bounded agent-readable interpretation
     - "mirror": actionable self-awareness signals
     - "full": no filtering (return as-is)
 
     Compatibility modes:
     - "lite": alias for compact
     - "verbose": alias for full
-    - "standard"/"interpreted": human-readable interpretation via GovernanceState
+    - "interpreted": alias for standard
     - "minimal": legacy bare action + EISV snapshot + margin
 
     Args:
@@ -329,7 +510,7 @@ def format_response(
     return response_data
 
 def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any = None) -> dict:
-    """Build standard (interpreted) response."""
+    """Build a bounded interpreted summary for agents."""
     from src.governance_state import GovernanceState
     from governance_core import State, Theta, DEFAULT_THETA
 
@@ -354,22 +535,61 @@ def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any 
         explain_basin,
         explain_mode,
         explain_trajectory,
+        explain_verdict,
+    )
+
+    policy_source = response_data.get("policy_evaluation")
+    enforcement_source = response_data.get("enforcement")
+    action = decision.get("action") or response_data.get("status")
+    guidance = decision.get("guidance")
+    if guidance is None and isinstance(policy_source, dict):
+        guidance = policy_source.get("guidance")
+    health_status = (
+        response_data.get("health_status")
+        or metrics.get("health_status")
+        or response_data.get("status")
     )
 
     result = {
         "success": True,
         "agent_id": response_data.get("agent_id"),
-        "decision": decision.get("action") or response_data.get("status"),
+        "status": response_data.get("status"),
+        "health_status": health_status,
+        "health_message": _bounded_text(
+            response_data.get("health_message") or metrics.get("health_message")
+        ),
+        # Keep the scalar decision for wire compatibility while exposing the
+        # structured fields agents need without opening the audit payload.
+        "decision": action,
+        "action": action,
+        "sub_action": decision.get("sub_action"),
+        "reason": _bounded_text(decision.get("reason")),
+        "guidance": _bounded_text(guidance),
+        "require_human": decision.get("require_human"),
+        "margin": decision.get("margin"),
+        "nearest_edge": decision.get("nearest_edge"),
         "state": interpreted,
         "metrics": {
             "E": E, "I": I, "S": S, "V": V,
             "coherence": coherence, "risk_score": risk_score,
+            "risk_score_latest": metrics.get("latest_risk_score"),
+            "phi": metrics.get("phi"),
             "coherence_source": metrics.get("coherence_source"),
             "coherence_role": metrics.get("coherence_role"),
+            "primary_eisv_source": metrics.get("primary_eisv_source"),
         },
         "_mode": "standard",
-        "_raw_available": "Use response_mode='full' to see complete metrics",
+        "_detail_level": "interpreted_summary",
+        "_raw_available": (
+            "Use response_mode='full' for complete metrics, policy gates, "
+            "enforcement, and audit diagnostics."
+        ),
     }
+    if metrics.get("verdict") is not None:
+        result["verdict"] = explain_verdict(
+            metrics.get("verdict"),
+            evidence_source=metrics.get("primary_eisv_source"),
+        )
     state_glossary = {}
     if interpreted.get("mode") is not None:
         state_glossary["mode"] = explain_mode(interpreted.get("mode"))
@@ -397,8 +617,6 @@ def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any 
         (
             "prediction_id",
             "warnings",
-            "policy_evaluation",
-            "enforcement",
             "evidence_status",
             # Orphaned by the allowlist refactor: the enrichment writes this into
             # response_data but every formatter rebuilds `result` from scratch,
@@ -408,6 +626,18 @@ def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any 
             "knowledge_surfacing_degraded",
         ),
     )
+
+    policy_summary = None
+    if _compact_policy_is_actionable(policy_source):
+        policy_summary = _compact_policy_evaluation(policy_source)
+    if policy_summary is not None:
+        result["policy_evaluation"] = policy_summary
+
+    enforcement_summary = None
+    if _compact_enforcement_is_actionable(enforcement_source):
+        enforcement_summary = _compact_enforcement(enforcement_source)
+    if enforcement_summary is not None:
+        result["enforcement"] = enforcement_summary
     return result
 
 def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None) -> dict:
@@ -694,7 +924,7 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
 
 
 def _format_minimal(response_data: dict, using_default_mode: bool, saved_trust_tier: Any) -> dict:
-    """Build minimal response: action + EISV + margin."""
+    """Build minimal response: action + verdict provenance + EISV + margin."""
     decision = response_data.get("decision", {}) if isinstance(response_data.get("decision"), dict) else {}
     metrics = response_data.get("metrics", {}) if isinstance(response_data.get("metrics"), dict) else {}
 
@@ -714,7 +944,19 @@ def _format_minimal(response_data: dict, using_default_mode: bool, saved_trust_t
         "phi": metrics.get("phi"),
         "risk_score": metrics.get("risk_score"),
         "risk_score_latest": metrics.get("latest_risk_score"),
+        "primary_eisv_source": metrics.get("primary_eisv_source"),
     }
+    if decision.get("sub_action") is not None:
+        result["sub_action"] = decision["sub_action"]
+    if decision.get("reason") is not None:
+        result["reason"] = _bounded_text(decision["reason"])
+    if metrics.get("verdict") is not None:
+        from src.governance_glossary import explain_verdict
+
+        result["verdict"] = explain_verdict(
+            metrics.get("verdict"),
+            evidence_source=metrics.get("primary_eisv_source"),
+        )
 
     margin = decision.get("margin")
     if margin:
@@ -773,7 +1015,7 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
         ),
         "lambda1": metrics.get("lambda1"),
         "health_status": metrics.get("health_status"),
-        "health_message": metrics.get("health_message"),
+        "health_message": _bounded_text(metrics.get("health_message")),
     }
 
     compact_decision = {
@@ -785,7 +1027,7 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
         # diverging from mirror/full, which carry sub_action. Surface it here for
         # parity (None on a plain approve).
         "sub_action": decision.get("sub_action"),
-        "reason": decision.get("reason"),
+        "reason": _bounded_text(decision.get("reason")),
         "require_human": decision.get("require_human"),
         "margin": decision.get("margin"),
         "nearest_edge": decision.get("nearest_edge"),
@@ -813,7 +1055,7 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
         "agent_id": response_data.get("agent_id"),
         "status": response_data.get("status"),
         "health_status": health_status,
-        "health_message": response_data.get("health_message"),
+        "health_message": _bounded_text(response_data.get("health_message")),
         "decision": compact_decision,
         "metrics": compact_metrics,
         "summary": summary,
@@ -840,8 +1082,6 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
         (
             "prediction_id",
             "warnings",
-            "policy_evaluation",
-            "enforcement",
             "evidence_status",
             # Orphaned by the allowlist refactor: the enrichment writes this into
             # response_data but every formatter rebuilds `result` from scratch,
@@ -852,28 +1092,24 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
         ),
     )
 
-    # monitor_result embeds the same maturity/epistemic gate dict in BOTH
-    # policy_evaluation and enforcement so each persisted envelope is
-    # self-contained. On the compact wire that self-containment is ~1.5KB of
-    # verbatim duplication per check-in (dogfood 2026-08-20); replace the
-    # enforcement copy with a pointer. enforcement.basis — the load-bearing
-    # derivative — stays. Full/mirror/standard keep both copies. Copy-on-write:
-    # response_data's dicts are shared with the persisted result.
-    policy_eval = result.get("policy_evaluation")
-    enforcement = result.get("enforcement")
-    if isinstance(policy_eval, dict) and isinstance(enforcement, dict):
-        deduped = None
-        for gate_key in ("maturity_gate", "epistemic_gate"):
-            gate = enforcement.get(gate_key)
-            if isinstance(gate, dict) and gate == policy_eval.get(gate_key):
-                if deduped is None:
-                    deduped = dict(enforcement)
-                deduped[gate_key] = (
-                    f"identical to policy_evaluation.{gate_key} "
-                    "(deduplicated in compact mode)"
-                )
-        if deduped is not None:
-            result["enforcement"] = deduped
+    policy_source = response_data.get("policy_evaluation")
+    enforcement_source = response_data.get("enforcement")
+
+    policy_summary = None
+    if _compact_policy_is_actionable(policy_source):
+        policy_summary = _compact_policy_evaluation(policy_source)
+    if policy_summary is not None:
+        result["policy_evaluation"] = policy_summary
+
+    enforcement_summary = None
+    if _compact_enforcement_is_actionable(enforcement_source):
+        enforcement_summary = _compact_enforcement(enforcement_source)
+    if enforcement_summary is not None:
+        result["enforcement"] = enforcement_summary
+    if isinstance(policy_source, dict) or isinstance(enforcement_source, dict):
+        result["_raw_available"] = (
+            "Use response_mode='full' for complete policy and enforcement diagnostics."
+        )
 
     return result
 

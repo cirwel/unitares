@@ -369,7 +369,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 "store_finding": "(summary:str, details?:str, discovery_type?:str, tags?:list, severity?:str)",
                 "update_finding": "(discovery_id:str, status?:str, details?:str, resolution_notes?:str)",
                 "record_result": "(outcome_type:str, confidence?:float, prediction_id?:str, detail?:dict)",
-                "request_review": "(issue_description:str, reason?:str, reasoning?:str — with reasoning, the whole review runs in this one call)",
+                "request_review": "(issue_description:str, reasoning?:str, use_brief_as_thesis?:bool — the brief is the thesis by default; false keeps the two-call flow)",
                 "store_knowledge_graph": "(summary:str, tags?:list, severity?:str, details?:str)",
                 "search_knowledge_graph": "(query?:str, tags?:list, limit?:int, include_details?:bool)",
                 "knowledge_search": "(action='search', query?:str, tags?:list, limit?:int, include_details?:bool)",

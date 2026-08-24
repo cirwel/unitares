@@ -67,6 +67,28 @@ def test_extract_related_topics_excludes_self_and_ranks_by_frequency():
     assert set(related) == {"redis", "cache", "latency"}
 
 
+def test_semantic_topic_policy_excludes_identity_and_lifecycle_tags():
+    for tag in (
+        "slug-one",
+        "host-mac",
+        "source-claude-memory",
+        "mem-project",
+        "ephemeral",
+        "audit",
+    ):
+        assert syn.is_semantic_topic_tag(tag) is False
+    for tag in ("identity", "redis", "retrieval-quality"):
+        assert syn.is_semantic_topic_tag(tag) is True
+
+
+def test_extract_related_topics_drops_partition_metadata():
+    members = [
+        {"tags": ["identity", "redis", "slug-one", "source-claude-memory"]},
+        {"tags": ["identity", "redis", "host-mac", "mem-project"]},
+    ]
+    assert syn.extract_related_topics(members, "identity") == ["redis"]
+
+
 def test_build_deterministic_summary_carries_counts_and_members():
     members = [
         {"summary": "leak in pool", "type": "bug_found", "status": "open"},
@@ -179,6 +201,19 @@ async def test_synthesize_topic_skips_below_min_members():
 
 
 @pytest.mark.asyncio
+async def test_synthesize_topic_rejects_non_semantic_partition_tag():
+    graph = FakeGraph({"source-claude-memory": [
+        _disc(f"d{i}", f"s{i}", ["source-claude-memory"]) for i in range(5)
+    ]})
+    report = await syn.synthesize_topic(
+        graph, "source-claude-memory", use_llm=False
+    )
+    assert report["action"] == "skipped"
+    assert report["reason"] == "non_semantic_topic"
+    assert graph.added == []
+
+
+@pytest.mark.asyncio
 async def test_synthesize_topic_persists_and_excludes_existing_rollup():
     members = [_disc(f"d{i}", f"s{i}", ["auth"]) for i in range(3)]
     # An existing rollup row tagged 'auth' must not count as a member of itself.
@@ -224,8 +259,17 @@ async def test_synthesize_topics_sweeps_candidates_and_isolates_errors(monkeypat
     graph = FakeGraph({"good": good})  # "bad" tag absent -> query returns []
 
     class FakeDB:
-        async def kg_topic_candidates(self, min_members, limit, exclude_types):
+        async def kg_topic_candidates(
+            self,
+            min_members,
+            limit,
+            exclude_types,
+            exclude_tags,
+            exclude_tag_prefixes,
+        ):
             assert syn.ROLLUP_TYPE in exclude_types
+            assert "ephemeral" in exclude_tags
+            assert "source-" in exclude_tag_prefixes
             return [{"topic": "good"}, {"topic": "bad"}]
 
     monkeypatch.setattr("src.db.get_db", lambda: FakeDB())

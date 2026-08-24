@@ -20,7 +20,11 @@ from src.mcp_handlers.lifecycle.self_recovery import (
     MAX_RISK_FOR_SELF_RECOVERY,
     FORBIDDEN_CONDITIONS,
 )
-from src.mcp_handlers.lifecycle.recovery_policy import recovery_policy_context
+from src.mcp_handlers.lifecycle.recovery_policy import (
+    compute_recovery_margin,
+    read_risk_authority,
+    recovery_policy_context,
+)
 
 
 # ============================================================================
@@ -82,6 +86,70 @@ class TestValidateRecoveryConditions:
 # ============================================================================
 
 class TestAssessRecoverySafety:
+
+    def test_recovery_reads_resolved_risk_not_phi_mean(self):
+        metrics = {
+            "risk_score": 0.0,
+            "risk_score_source": "resolved",
+            "mean_risk": 0.91,
+            "current_risk": 0.88,
+        }
+        assert read_risk_authority(metrics).risk == pytest.approx(0.0)
+
+    def test_phi_history_fallback_yields_no_reading_at_all(self):
+        """Absence must stay absent: no scalar may stand in for it.
+
+        A midpoint here would clear both recovery gates (0.65 self-recovery,
+        0.60 auto-resume), so an agent whose resolved pair did not survive a
+        restart would be resumed on a number no verdict was made from.
+        """
+        metrics = {
+            "risk_score": 0.91,
+            "risk_score_source": "phi_history",
+            "mean_risk": 0.91,
+        }
+        assert read_risk_authority(metrics).is_lost
+
+    def test_never_measured_is_not_the_same_absence_as_authority_lost(self):
+        """Both have no risk; only one of them measured and lost it.
+
+        Collapsing the two either traps a brand-new paused agent that can never
+        author a state row to improve its reading, or resumes a measured agent
+        on a number no verdict was made from. The gates need both answers.
+        """
+        never_measured = {"risk_score": None, "risk_score_source": None}
+        authority_lost = {"risk_score": 0.91, "risk_score_source": "phi_history"}
+
+        assert read_risk_authority(never_measured).is_unmeasured
+        assert not read_risk_authority(never_measured).is_lost
+        assert read_risk_authority(authority_lost).is_lost
+        assert not read_risk_authority(authority_lost).is_unmeasured
+        assert read_risk_authority(never_measured).risk is None
+        assert read_risk_authority(authority_lost).risk is None
+
+    def test_unreadable_resolved_value_is_lost_not_unmeasured(self):
+        """A source claiming authority we cannot parse must fail closed."""
+        for bad in (float("nan"), float("inf"), "not-a-number"):
+            authority = read_risk_authority(
+                {"risk_score": bad, "risk_score_source": "resolved"}
+            )
+            assert authority.is_lost, bad
+            assert authority.risk is None
+
+    def test_unlabelled_headline_risk_still_reads_as_resolved(self):
+        """Older callers and fixtures pass a bare risk_score with no source."""
+        authority = read_risk_authority({"risk_score": 0.22})
+        assert authority.is_resolved
+        assert authority.risk == pytest.approx(0.22)
+
+    def test_margin_reports_unknown_rather_than_headroom(self):
+        margin = compute_recovery_margin(
+            risk_score=None, void_active=False, max_risk=0.65,
+        )
+        assert margin["margin"] == "unknown"
+        assert margin["nearest_edge"] == "no_risk_authority"
+        assert margin["distance"] is None
+
 
     def test_recovery_context_preserves_explicit_coherence_provenance(self):
         policy = recovery_policy_context(
@@ -286,7 +354,11 @@ class TestCheckRecoveryOptions:
         mock_monitor.state.coherence = coherence
         mock_monitor.state.void_active = void_active
         mock_monitor.state.V = void_value
-        mock_monitor.get_metrics.return_value = {"mean_risk": risk}
+        mock_monitor.get_metrics.return_value = {
+            "risk_score": risk,
+            "risk_score_source": "resolved",
+            "mean_risk": risk,
+        }
         mock_server.get_or_create_monitor.return_value = mock_monitor
         return mock_server
 
@@ -391,7 +463,11 @@ class TestQuickResume:
         mock_monitor.state.coherence = coherence
         mock_monitor.state.void_active = void_active
         mock_monitor.state.V = void_value
-        mock_monitor.get_metrics.return_value = {"mean_risk": risk}
+        mock_monitor.get_metrics.return_value = {
+            "risk_score": risk,
+            "risk_score_source": "resolved",
+            "mean_risk": risk,
+        }
         mock_server.get_or_create_monitor.return_value = mock_monitor
 
         mock_meta = MagicMock()
@@ -680,7 +756,11 @@ class TestOperatorResumeAgent:
         mock_monitor.state.coherence = target_coherence
         mock_monitor.state.void_active = target_void_active
         mock_monitor.state.V = target_void_value
-        mock_monitor.get_metrics.return_value = {"mean_risk": target_risk}
+        mock_monitor.get_metrics.return_value = {
+            "risk_score": target_risk,
+            "risk_score_source": "resolved",
+            "mean_risk": target_risk,
+        }
         mock_server.get_or_create_monitor.return_value = mock_monitor
 
         return mock_server

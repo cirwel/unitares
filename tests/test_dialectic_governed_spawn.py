@@ -39,6 +39,7 @@ def _spec(env_extra: Dict[str, str] | None = None) -> Dict[str, Any]:
         "args": ["-m", "agents.dialectic_reviewer"],
         "cd": "/repo",
         "env": env,
+        "max_runtime_ms": 4_500_000,
     }
 
 
@@ -94,6 +95,7 @@ def test_envelope_shape_and_key_derivation(monkeypatch):
     assert env1["surface"] == f"dialectic:/{SESSION}"
     assert env1["payload"]["cmd"] == "/usr/bin/python3"
     assert env1["payload"]["cd"] == "/repo"
+    assert env1["payload"]["max_runtime_ms"] == 4_500_000
     assert env1["provenance"]["session_id"] == SESSION
     assert env1["proposer"]["agent_uuid"] == DISPATCHER
     assert env1["proposer"]["continuity_token"].startswith("v1.")

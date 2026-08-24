@@ -713,6 +713,15 @@ defmodule UnitaresLeasePlane.GovernedEffect do
         _ -> base
       end
 
+    # The reviewer may remain alive through a full synthesis-response window.
+    # Forward its positive per-spawn cap so the governed path does not silently
+    # fall back to the orchestrator's shorter global default.
+    base =
+      case Map.get(p, "max_runtime_ms") do
+        ms when is_integer(ms) and ms > 0 -> Map.put(base, "max_runtime_ms", ms)
+        _ -> base
+      end
+
     case env.proposer_agent_uuid do
       uuid when is_binary(uuid) ->
         # Orchestrator lineage contract: `parent_agent_uuid` (+ optional

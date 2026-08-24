@@ -38,11 +38,11 @@ knowledge(action="search", query="identity", response_mode="compact")
 knowledge(action="details", discovery_id="...", response_mode="lean")
 ```
 
-`compact` and `lean` are aliases. They affect caller identity metadata only:
-`agent_signature` retains `uuid` and an `identity_assurance` summary containing
-`tier` and `caller_proven`; repeated `identity_context` is omitted. Discovery
-content, ranking scores, staleness warnings, writer attribution, and discovery
-provenance are unchanged.
+`compact` trims repeated caller identity metadata while retaining the ordinary
+discovery diagnostics. `lean` is a genuinely smaller search shape: each result
+keeps only id, one-line summary, type/status/severity, bounded tags, lifecycle
+warnings, and one relevance score. Detail previews, score maps, writer identity,
+and discovery provenance stay behind `compact`/`full` or a targeted details read.
 
 Search content has three retrieval tiers, surfaced in every search response as
 `discovery_retrieval_options`:
@@ -50,17 +50,39 @@ Search content has three retrieval tiers, surfaced in every search response as
 - `include_details=false` returns a digest: summary, tags, lifecycle status,
   severity, timestamps, supersession metadata, and a bounded details preview.
 - `knowledge(action="details", discovery_id=...)` opens one selected record.
-- `include_details=true` expands every result inline and can be large; use it
-  deliberately rather than as the normal follow-up to a search.
+- On the canonical `knowledge` tool, `include_details=true` expands every result
+  inline and can be large; use it deliberately rather than as the normal
+  follow-up to a search.
 
-The friendly `search_shared_memory` alias defaults to its compact experience
-envelope, keeps the first three digest rows under `memory_suggestions`, and omits
+The friendly `search_shared_memory` alias defaults to its lean experience
+envelope, keeps the first three one-line rows under `memory_suggestions`, and omits
 the repeated canonical result set unless `response_mode="full"` is requested.
+Because the lean/compact envelope only carries a digest, it forces
+`include_details=false` before the canonical search serializes results.
+`include_details=true` does not make details visible there: the response reports
+`requested_tier`, `details_serialized=false`, and `details_omitted_by` instead of
+doing expensive work and falsely claiming `full_inline`. To expand every
+friendly-search result inline, pass both `response_mode="full"` and
+`include_details=true`; opening one selected record remains the preferred path.
+
+`sync_state` does no KG lookup by default. A caller may opt in for one check-in
+with `include_memory_suggestions=true`, but deliberate recall should normally use
+`search_shared_memory`. This keeps governance state reporting independent from
+shared-memory injection and retrieval latency.
 
 The mode is opt-in. Omitting `response_mode` is equivalent to `full`. Write
 actions ignore compact/lean for envelope shaping and always retain the full
 attribution context. `list` likewise retains its existing full shape because it
 is outside the initial read-mode contract.
+
+## Semantic topics versus source partitions
+
+The KG remains one physical graph. Provenance/identity tags (`source-*`,
+`host-*`, `slug-*`, `mem-*`) form logical filter lanes, not semantic topics.
+Synthesis excludes those prefixes plus lifecycle/maintenance tags such as
+`ephemeral`, `audit`, and `sweep` before applying its topic limit; related-topic
+lists use the same policy. The tags remain stored for reconciliation and source
+filters, so cross-source linking does not require separate databases.
 
 ## Write / consistency semantics
 

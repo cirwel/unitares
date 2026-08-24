@@ -50,6 +50,10 @@ from src.mcp_handlers.response_formatter import (
     canonical_response_mode,
     normalize_discovery_list,
 )
+from src.mcp_handlers.support.param_normalization import (
+    FRIENDLY_SEARCH_DETAIL_POLICY_KEY,
+    FRIENDLY_SEARCH_DETAILS_REQUESTED_KEY,
+)
 
 logger = get_logger(__name__)
 
@@ -141,6 +145,9 @@ def _verdict_value(payload: Dict[str, Any]) -> Optional[str]:
 
 
 def _decision_action(payload: Dict[str, Any]) -> Optional[str]:
+    decision = payload.get("decision")
+    if decision is not None and not isinstance(decision, dict):
+        return str(decision).lower()
     for container in (payload.get("decision"), payload.get("verdict"), payload):
         if not isinstance(container, dict):
             continue
@@ -178,10 +185,18 @@ def _verdict_assurance(payload: Dict[str, Any]) -> tuple[str, Optional[str]]:
     discriminability = discriminability if isinstance(discriminability, dict) else {}
     evidence = _verdict_evidence(payload)
 
+    metrics = payload.get("metrics")
+    metrics = metrics if isinstance(metrics, dict) else {}
+    primary_source = metrics.get("primary_eisv_source") or payload.get(
+        "primary_eisv_source"
+    )
     driver = attribution.get("primary_driver")
-    basis = evidence.get("basis") or driver
+    basis = evidence.get("basis") or driver or primary_source
     grade = str(evidence.get("grade") or "").strip().lower()
-    cold_start = driver == "phi_cold_start" or basis in {
+    cold_start = driver == "phi_cold_start" or primary_source in {
+        "ode_fallback",
+        "phi_cold_start",
+    } or basis in {
         "ode_fallback",
         "phi_cold_start",
     }
@@ -189,11 +204,6 @@ def _verdict_assurance(payload: Dict[str, Any]) -> tuple[str, Optional[str]]:
     if grade == "provisional" or cold_start or non_discriminative:
         return "provisional", str(basis or "non_discriminative_cold_start")
 
-    metrics = payload.get("metrics")
-    metrics = metrics if isinstance(metrics, dict) else {}
-    primary_source = metrics.get("primary_eisv_source") or payload.get(
-        "primary_eisv_source"
-    )
     if driver == "behavioral_assessment" or primary_source == "behavioral":
         return "non_provisional", str(driver or primary_source)
     if driver == "independent_verification_floor":
@@ -228,7 +238,12 @@ def _action_summary(
         raw_action,
         (raw_action, None),
     )
-    sub_action = decision.get("sub_action") or policy.get("sub_action") or inferred_sub_action
+    sub_action = (
+        decision.get("sub_action")
+        or payload.get("sub_action")
+        or policy.get("sub_action")
+        or inferred_sub_action
+    )
 
     verdict_obj = payload.get("verdict")
     if not isinstance(verdict_obj, dict):
@@ -240,6 +255,8 @@ def _action_summary(
             for text in (
                 _one_line(decision.get("reason")),
                 _one_line(decision.get("guidance")),
+                _one_line(payload.get("reason")),
+                _one_line(payload.get("guidance")),
                 _one_line(policy.get("reason")),
                 _one_line(policy.get("guidance")),
                 _one_line(verdict_obj.get("meaning")),
@@ -306,6 +323,17 @@ def _legacy_diagnostics(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 def _needs_attention(payload: Dict[str, Any]) -> bool:
     verdict = _verdict_value(payload)
     if verdict in {"guide", "pause", "reject"}:
+        return True
+    decision = payload.get("decision")
+    decision = decision if isinstance(decision, dict) else {}
+    policy = payload.get("policy_evaluation")
+    policy = policy if isinstance(policy, dict) else {}
+    sub_action = (
+        decision.get("sub_action")
+        or payload.get("sub_action")
+        or policy.get("sub_action")
+    )
+    if str(sub_action or "").lower() in {"guide", "reject", "pause"}:
         return True
     margin = str(payload.get("margin", "")).lower()
     return margin in {"tight", "boundary", "near_edge"}
@@ -418,18 +446,27 @@ def _verdict_caveat(source_payload: Dict[str, Any]) -> Optional[str]:
     tail = ""
     if isinstance(until, int) and until > 0:
         tail = f" ~{until} more check-in(s) until the behavioral signal is weighted."
-    evidence_path = (
-        "raw_governance.risk_attribution"
-        if cold_start or non_discriminative
-        else "raw_governance.metrics.verdict.evidence"
-    )
+    if cold_start or non_discriminative:
+        evidence_path = "raw_governance.risk_attribution"
+    elif isinstance(source_payload.get("verdict"), dict):
+        evidence_path = "raw_governance.verdict.evidence"
+    elif isinstance(source_payload.get("metrics"), dict) and isinstance(
+        source_payload["metrics"].get("verdict"), dict
+    ):
+        evidence_path = "raw_governance.metrics.verdict.evidence"
+    elif isinstance(source_payload.get("metrics"), dict) and source_payload[
+        "metrics"
+    ].get("primary_eisv_source") is not None:
+        evidence_path = "raw_governance.metrics.primary_eisv_source"
+    elif source_payload.get("primary_eisv_source") is not None:
+        evidence_path = "raw_governance.primary_eisv_source"
+    else:
+        evidence_path = "raw_governance.metrics.verdict.evidence"
     return (
-        "Verdict is provisional: the behavioral baseline isn't warm yet, so it "
-        "runs on the cold-start prior and risk_score is non-discriminative "
-        "during bootstrap. A 'safe'/'proceed' here means 'no evidence of trouble "
-        "yet', not a validated all-clear — don't read it as vindication of a high "
-        f"self-reported drift. Evidence basis: {evidence_basis or 'cold-start prior'}. "
-        f"See {evidence_path} for the full provenance." + tail
+        "Verdict is provisional: the behavioral baseline is not warm. "
+        "'safe'/'proceed' means no trouble detected under the cold-start prior, "
+        f"not a validated all-clear. Evidence basis: {evidence_basis or 'cold-start prior'}. "
+        f"See {evidence_path} for provenance." + tail
     )
 
 
@@ -449,7 +486,7 @@ def _reflection(source_payload: Dict[str, Any]) -> Optional[str]:
 
 
 def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
-    """Surface prior discoveries the canonical payload already carries.
+    """Surface bounded discovery digests the canonical payload already carries.
 
     `relevant_prior_work` is the check-in path's contribution: the formatter
     already builds it from the mirror's KG lookup and puts it in the response,
@@ -481,19 +518,8 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
                     "title",
                     "type",
                     "status",
-                    "severity",
                     "tags",
-                    "by",
-                    "agent_id",
-                    "created_at",
-                    "updated_at",
-                    "superseded",
-                    "superseded_by",
                     "staleness_warning",
-                    "has_details",
-                    "details_preview",
-                    "details_length",
-                    "has_more_details",
                     "similarity",
                     # the mirror path scores its hits as `relevance`; without it
                     # a suggestion arrives with no indication of match strength
@@ -631,7 +657,7 @@ def _raw_governance_policy(
 ) -> tuple[bool, Optional[str]]:
     """Choose whether a friendly read alias should repeat its canonical payload.
 
-    Canonical tools are unchanged. Read aliases default to their compact
+    Canonical tools are unchanged. Read aliases default to their bounded
     experience envelope and retain an explicit full-response escape hatch.
     """
     if friendly_name not in _COMPACT_READ_ALIASES:
@@ -650,11 +676,81 @@ def _raw_governance_policy(
         )
 
     response_mode = str(
-        arguments.get("response_mode") or "compact"
+        arguments.get("response_mode") or "lean"
     ).strip().lower()
     return response_mode == "full", (
         "Re-call search_shared_memory(response_mode='full') for the complete result set."
     )
+
+
+def _effective_discovery_retrieval_options(
+    friendly_name: str,
+    source_payload: Dict[str, Any],
+    *,
+    include_raw: bool,
+    arguments: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Describe the discovery tier that actually survives the envelope.
+
+    The canonical search can materialize full details before this middleware
+    runs. A compact friendly response deliberately omits that raw payload and
+    returns only bounded suggestions, so reporting ``full_inline`` there was a
+    false claim: the caller paid the server-side work but received no details.
+    """
+    value = source_payload.get("discovery_retrieval_options")
+    if not isinstance(value, dict):
+        return None
+
+    result = dict(value)
+    result["all_inline"] = (
+        "response_mode='full' plus include_details=true "
+        "(can be large for multi-result searches)"
+    )
+    if friendly_name != "search_shared_memory" or include_raw:
+        return result
+
+    arguments = arguments or {}
+    detail_policy = arguments.get(FRIENDLY_SEARCH_DETAIL_POLICY_KEY)
+    if detail_policy == "digest_before_serialization":
+        requested_details = bool(
+            arguments.get(FRIENDLY_SEARCH_DETAILS_REQUESTED_KEY)
+        )
+        response_mode = str(
+            arguments.get("response_mode") or "lean"
+        ).strip().lower()
+        result["detail_policy"] = detail_policy
+        result["details_serialized"] = False
+        result["details_included"] = False
+        if requested_details:
+            result["requested_tier"] = "full_inline"
+            result["details_omitted_by"] = (
+                f"response_mode='{response_mode}' before serialization"
+            )
+            result["note"] = (
+                "Digest-mode friendly search keeps the upstream result bounded, "
+                "even when include_details=true. Use response_mode='full' with "
+                "include_details=true for every result inline, or open one record "
+                "with knowledge(action='details', discovery_id='...')."
+            )
+        return result
+
+    requested_tier = str(result.get("current_tier") or "digest")
+    if requested_tier.startswith("full_inline"):
+        response_mode = str(
+            arguments.get("response_mode") or "lean"
+        ).strip().lower()
+        result["requested_tier"] = requested_tier
+        result["current_tier"] = "digest"
+        result["details_serialized"] = True
+        result["details_included"] = False
+        result["details_omitted_by"] = f"response_mode='{response_mode}'"
+        result["note"] = (
+            "The digest friendly response returns bounded previews even when "
+            "include_details=true. Use response_mode='full' with "
+            "include_details=true for every result inline, or open one record "
+            "with knowledge(action='details', discovery_id='...')."
+        )
+    return result
 
 
 def _response_options(
@@ -671,19 +767,22 @@ def _response_options(
         return {
             "current": current,
             "routine": "compact",
+            "interpreted_summary": "standard",
             "actionable_diagnostics": "mirror",
             "complete_audit": "full",
             "compatibility_aliases": (
                 "lite=compact; verbose=full; interpreted=standard; "
-                "minimal/standard are legacy explicit shapes"
+                "minimal is the legacy bare shape"
             ),
         }
     if friendly_name == "search_shared_memory":
-        current = str(arguments.get("response_mode") or "compact").strip().lower()
+        current = str(arguments.get("response_mode") or "lean").strip().lower()
         return {
             "current": current,
-            "digest": "compact",
+            "digest": "lean",
+            "diagnostic_digest": "compact",
             "complete_result_set": "full",
+            "all_inline_details": "response_mode='full' + include_details=true",
         }
     if friendly_name == "check_working_state":
         current = "full" if not _as_bool(arguments.get("lite"), default=True) else "lite"
@@ -723,7 +822,7 @@ def _attach_response_size(
         current = envelope.get("response_options", {}).get("current")
         if friendly_name == "search_shared_memory":
             metadata["reduce_with"] = (
-                "Use include_details=false and response_mode='compact'; open one "
+                "Use include_details=false and response_mode='lean'; open one "
                 "discovery with knowledge(action='details', discovery_id='...')."
             )
         elif friendly_name == "sync_state" and current == "full":
@@ -764,6 +863,13 @@ def build_experience_envelope(
 
     source_payload = _harvest_payload(payload)
     coherence, risk = _coherence_and_risk(source_payload)
+    include_raw, raw_hint = _raw_governance_policy(friendly_name, arguments)
+    retrieval_options = _effective_discovery_retrieval_options(
+        friendly_name,
+        source_payload,
+        include_raw=include_raw,
+        arguments=arguments,
+    )
 
     if canonical_name in {"process_agent_update", "get_governance_metrics"}:
         summary = _action_summary(source_payload, risk)
@@ -779,6 +885,7 @@ def build_experience_envelope(
 
     next_action: Any = None
     state_summary: Optional[Dict[str, Any]] = None
+    is_knowledge_search = False
 
     if canonical_name == "onboard":
         next_action = (
@@ -809,8 +916,29 @@ def build_experience_envelope(
         # which this envelope strips.
         state_summary.update(_lift(decision, "action", "margin", "nearest_edge",
                                    "margin_scope", "unmeasurable_edges"))
+        for key, value in _lift(
+            payload,
+            "action",
+            "sub_action",
+            "margin",
+            "nearest_edge",
+            "margin_scope",
+            "unmeasurable_edges",
+        ).items():
+            state_summary.setdefault(key, value)
         if coherence is not None:
-            state_summary["coherence"] = coherence
+            if legacy:
+                # Match get_governance_metrics's inline badge (runtime_queries.py's
+                # lite branch) instead of a bare float agents have to cross-reference
+                # against the separate legacy_diagnostics block to interpret.
+                state_summary["coherence"] = {
+                    "value": coherence,
+                    "status": "⚪ legacy control feedback (not health-rated)",
+                    "source": legacy.get("source", "legacy_tanh_v"),
+                    "role": legacy.get("role", "ode_control_feedback"),
+                }
+            else:
+                state_summary["coherence"] = coherence
         if risk is not None:
             state_summary["risk_score"] = risk
         prediction_id = payload.get("prediction_id") or source_payload.get("prediction_id")
@@ -923,6 +1051,7 @@ def build_experience_envelope(
                 )
 
     elif canonical_name == "knowledge":
+        is_knowledge_search = True
         candidates = source_payload.get("results") or source_payload.get("discoveries") or []
         total = source_payload.get("total_count")
         if total is None:
@@ -961,9 +1090,8 @@ def build_experience_envelope(
         note = source_payload.get("confidence_note")
         if note:
             state_summary["confidence_note"] = note
-        retrieval = source_payload.get("discovery_retrieval_options")
-        if isinstance(retrieval, dict) and retrieval.get("current_tier"):
-            state_summary["result_tier"] = retrieval["current_tier"]
+        if retrieval_options and retrieval_options.get("current_tier"):
+            state_summary["result_tier"] = retrieval_options["current_tier"]
         state_summary["results_shown_in_digest"] = min(
             len(candidates),
             _MEMORY_SUGGESTION_LIMIT,
@@ -988,12 +1116,36 @@ def build_experience_envelope(
         next_action = "Outcome recorded - continue, or sync_state to fold it into your working state."
 
     elif canonical_name == "dialectic":
-        state_summary = _lift(payload, "session_id", "phase", "reviewer")
-        session_id = state_summary.get("session_id", "...")
-        next_action = (
-            "Review session open - submit your position with "
-            f"dialectic(action='thesis', session_id='{session_id}', root_cause='...')."
+        state_summary = _lift(
+            payload,
+            "session_id",
+            "phase",
+            "reviewer",
+            "reviewer_agent_id",
+            "whose_move",
+            "one_call_review",
+            "thesis_source",
+            "review_verdict",
         )
+        session_id = state_summary.get("session_id", "...")
+        next_action = payload.get("next_call") or payload.get("next_step")
+        if not next_action:
+            whose_move = str(payload.get("whose_move") or "").strip()
+            phase = str(payload.get("phase") or "").lower()
+            if whose_move:
+                next_action = whose_move
+            elif phase in {"resolved", "failed", "escalated"}:
+                verdict = payload.get("review_verdict") or phase
+                next_action = (
+                    f"Review session {session_id} is {phase} ({verdict}); follow "
+                    "the recorded verdict or resolution."
+                )
+            else:
+                next_action = (
+                    "Review session open - advance it without copying the saved "
+                    f"brief: dialectic(action='thesis', session_id='{session_id}', "
+                    "use_brief_as_thesis=true)."
+                )
 
     if next_action is not None:
         envelope["next_action"] = _friendly_action_hint(next_action)
@@ -1023,11 +1175,18 @@ def build_experience_envelope(
     if reflection:
         envelope["reflection"] = reflection
 
-    suggestions = _memory_suggestions(payload)
-    if suggestions:
+    suggestions_enabled = (
+        canonical_name != "process_agent_update"
+        or _as_bool((arguments or {}).get("include_memory_suggestions"), default=False)
+    )
+    suggestions = _memory_suggestions(payload) if suggestions_enabled else None
+    # When the full canonical discoveries list is about to go out under
+    # raw_governance, a trimmed top-N copy under memory_suggestions is a
+    # strict subset of it in the same response — drop the duplicate rather
+    # than serialize the same results twice.
+    if suggestions and not (is_knowledge_search and include_raw):
         envelope["memory_suggestions"] = suggestions
-    retrieval_options = source_payload.get("discovery_retrieval_options")
-    if isinstance(retrieval_options, dict):
+    if retrieval_options:
         envelope["discovery_retrieval_options"] = _friendly_action_hint(
             retrieval_options
         )
@@ -1045,7 +1204,6 @@ def build_experience_envelope(
     if hint:
         envelope["recovery_hint"] = hint
 
-    include_raw, raw_hint = _raw_governance_policy(friendly_name, arguments)
     if include_raw:
         envelope["raw_governance"] = payload
     else:
