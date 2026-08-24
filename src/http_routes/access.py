@@ -207,12 +207,33 @@ def _check_http_auth(request, *, http_api_token: str | None) -> bool:
     return False
 
 
-async def _extract_client_session_id(request) -> str:
+async def _extract_client_session_id(request) -> tuple[str, bool]:
     """
-    Stable per-client session id for HTTP callers.
+    Stable per-client session id for HTTP callers, plus whether the CALLER
+    actually asserted it.
     Uses SessionSignals + derive_session_key() for unified derivation.
     Falls back to legacy logic if signals unavailable.
+
+    Returns ``(client_session_id, is_caller_asserted)``.
+
+    ``is_caller_asserted`` is read from `get_session_proof_origin()`, not
+    re-derived here — `derive_session_key` -> `_mark()`
+    (`identity/session.py`) already single-sources this classification
+    across its full priority ladder, and an earlier version of this
+    function that approximated it locally (``result == ip_ua_fp and not
+    x_session_id``) got it wrong for a real branch: an onboard-PIN hit
+    (`_mark("pinned_onboard_session")`, step 7) resolves to a stable,
+    non-fingerprint value with no ``x_session_id`` present, so the local
+    approximation read it as caller-asserted — but `_mark()` itself
+    classifies a pin hit as ``server_inferred`` (it is NOT in
+    ``_CALLER_ASSERTED_SOURCES``): the pin is keyed on IP+UA fingerprint,
+    which the docstring on `_extract_base_fingerprint` notes is shared
+    across unrelated callers behind the same proxy pool or UA string, so
+    treating a pin hit as proof would let one caller's identity claim ride
+    another caller's recent onboard. Found via a codex review probing that
+    exact case against this file's own test suite.
     """
+    from src.mcp_handlers.context import get_session_proof_origin
     from src.mcp_handlers.identity.handlers import derive_session_key
 
     signals = _build_http_session_signals(request)
@@ -220,6 +241,7 @@ async def _extract_client_session_id(request) -> str:
     ip_ua_fp = signals.ip_ua_fingerprint
 
     result = await derive_session_key(signals)
+    is_caller_asserted = get_session_proof_origin() == "caller_asserted"
 
     # If derive_session_key returned the raw IP:UA fingerprint (no pin found),
     # and there's no explicit session header, generate a unique ID so REST
@@ -227,18 +249,18 @@ async def _extract_client_session_id(request) -> str:
     if result == ip_ua_fp and not x_session_id:
         try:
             if hasattr(request, "state") and hasattr(request.state, "governance_client_id"):
-                return str(getattr(request.state, "governance_client_id"))
+                return str(getattr(request.state, "governance_client_id")), False
         except Exception:
             pass
         import uuid as _uuid
         unique_id = str(_uuid.uuid4())[:12]
         try:
             host = request.client.host if request.client else "unknown"
-            return f"http:{host}:{unique_id}"
+            return f"http:{host}:{unique_id}", False
         except Exception:
-            return f"http:unknown:{unique_id}"
+            return f"http:unknown:{unique_id}", False
 
-    return result
+    return result, is_caller_asserted
 
 
 _HTTP_PREBIND_SKIP_TOOLS = {
@@ -253,62 +275,157 @@ _HTTP_PREBIND_SKIP_TOOLS = {
 }
 
 
-def _explicit_bind_corroboration(arguments: dict) -> str:
+async def _explicit_bind_corroboration(arguments: dict) -> str:
     """Classify what *else* a caller offered alongside a declared ``agent_id``.
 
-    Pure and side-effect free. Exists so the canary below can answer one
-    question with data instead of estimation: if the explicit-``agent_id``
-    path required corroborating proof, which live callers would still bind?
+    Exists so the gate can answer one question with data instead of
+    estimation: if the explicit-``agent_id`` path required corroborating
+    proof, which live callers would still bind?
 
-      * ``csid``  — echoed ``client_session_id``; the server issued it, so the
-        caller demonstrably completed an onboard.
-      * ``token`` — ``continuity_token``; same-live-process rebind proof.
+      * ``csid``  — a caller-asserted ``client_session_id`` that resolves to
+        the SAME ``agent_id`` being claimed.
+      * ``token`` — ``continuity_token`` that verifies AND names this same
+        ``agent_id`` — same-live-process rebind proof.
       * ``none``  — the uuid and nothing else.
 
-    ``none`` is the population that a corroboration requirement would turn
-    away, and therefore the whole cost of tightening this path.
+    ``none`` is the population a corroboration requirement turns away, and
+    therefore the whole cost of tightening this path.
+
+    Both proof kinds need TWO checks, not one — proof of *something* is not
+    proof of *this agent_id*:
+
+    1. A present ``client_session_id`` is not by itself caller proof:
+       `_inject_http_client_session` (http_routes/tools.py) synthesizes one
+       into ``arguments`` for every REST call that doesn't already carry
+       one, so presence alone is satisfied by every request regardless of
+       what the caller actually sent — the identical argument-presence trap
+       PR #608 and the strict-identity gate docstring both warn about ("DO
+       NOT TRUST client_session_id FOR AUTH"). `get_csid_transport_injected()`
+       is the server's own record of which case this request is; a
+       transport-injected id is server-inferred and must not count.
+    2. A caller-asserted ``client_session_id`` is STILL not proof of THIS
+       claim: it proves the caller completed some onboard, not that the
+       onboard was for the ``agent_id`` in this call. Found via a codex
+       review that reproduced it directly: an attacker's own real session
+       plus `agent_id=<victim uuid>` would otherwise corroborate — a
+       confused-deputy bypass one level up from the token branch's, and
+       just as real, since a caller always has cheap access to a real
+       session of their own. `resolve_session_identity` (the codebase's
+       single identity-resolution function, `persist=False` so this check
+       creates nothing) must resolve the session to the SAME uuid.
+
+    The ``continuity_token`` branch needs the matching discipline for the
+    same reason: `extract_token_agent_uuid_safe` performs the HMAC
+    signature verification single-sourced in `identity/session.py`, but a
+    token only corroborates when it ALSO verifies AND the uuid it embeds
+    matches the ``agent_id`` being claimed — otherwise a caller could
+    corroborate agent A's uuid with a valid token for agent B.
     """
     if not isinstance(arguments, dict):
         return "none"
-    if isinstance(arguments.get("client_session_id"), str) and arguments["client_session_id"]:
-        return "csid"
-    if isinstance(arguments.get("continuity_token"), str) and arguments["continuity_token"]:
-        return "token"
+    claimed_agent_id = arguments.get("agent_id")
+    client_session_id = arguments.get("client_session_id")
+    if isinstance(client_session_id, str) and client_session_id:
+        from src.mcp_handlers.context import get_csid_transport_injected
+
+        if not get_csid_transport_injected():
+            from src.mcp_handlers.identity.handlers import resolve_session_identity
+            from src.mcp_handlers.identity.session import normalize_client_session_id
+
+            normalized = normalize_client_session_id(client_session_id)
+            if normalized:
+                resolved = await resolve_session_identity(
+                    normalized, persist=False, resume=True
+                )
+                if (
+                    resolved
+                    and not resolved.get("created")
+                    and resolved.get("agent_uuid") == claimed_agent_id
+                ):
+                    return "csid"
+    continuity_token = arguments.get("continuity_token")
+    if isinstance(continuity_token, str) and continuity_token:
+        from src.mcp_handlers.identity.session import extract_token_agent_uuid_safe
+
+        token_agent_uuid = extract_token_agent_uuid_safe(continuity_token)
+        if token_agent_uuid and token_agent_uuid == claimed_agent_id:
+            return "token"
     return "none"
 
 
-def _bind_explicit_http_agent(arguments: dict) -> str | None:
-    explicit_agent_id = arguments.get("agent_id")
-    if not (
-        isinstance(explicit_agent_id, str)
-        and len(explicit_agent_id) == 36
-        and explicit_agent_id.count("-") == 4
-    ):
-        return None
-    from src.mcp_handlers.context import update_context_agent_id
+def _looks_like_uuid(value: object) -> bool:
+    """Shape check only (36 chars, 4 hyphens) — no lookup, no verification.
 
-    # CANARY — observation only, no behaviour change.
+    Single-sourced so a downstream consumer's "is this UUID-shaped, or a
+    legacy handle" branch stays in lockstep with what actually reaches the
+    explicit-bind path.
+    """
+    return (
+        isinstance(value, str)
+        and len(value) == 36
+        and value.count("-") == 4
+    )
+
+
+async def _bind_explicit_http_agent(arguments: dict) -> str | None:
+    explicit_agent_id = arguments.get("agent_id")
+    if not _looks_like_uuid(explicit_agent_id):
+        return None
+
+    # GATE — armed 2026-08-24. This branch used to accept an identity on the
+    # caller's word: the test above is a *shape* check (36 chars, 4 hyphens),
+    # not a lookup, and it ran first in `_resolve_http_prebind`, ahead of the
+    # operator token and the sticky binding. A resolution that succeeded here
+    # meant the strict-identity gate downstream never saw a miss, so it never
+    # emitted its typed refusal — the surface the trust-anchor audit is scoped
+    # to. Corroboration turns the shape check into a proof check: a bare uuid
+    # is a payload field (who this call is *about*), not a credential (who is
+    # *asking*), and must not be treated as the latter.
     #
-    # This branch accepts an identity on the caller's word: the test above is
-    # a *shape* check (36 chars, 4 hyphens), not a lookup, and it runs first in
-    # `_resolve_http_prebind`, ahead of the operator token and the sticky
-    # binding. A resolution that succeeds here means the strict-identity gate
-    # downstream never sees a miss, so it never emits its typed refusal.
+    # This ran as an observation-only canary (PR #1566) per the fleet rule
+    # that a gate needs a wired canary before it is armed. Precondition:
+    # sentinel was the one caller measured relying on the bare-uuid path
+    # (#1565) and was fixed to bind by CSID instead (#1568).
     #
-    # That is the surface the trust-anchor audit is scoped to. Closing it is a
-    # behaviour change with real blast radius — some live callers declare a
-    # uuid and nothing else — and per the fleet rule that a gate needs a wired
-    # canary before it is armed, this measures the population first. The log
-    # line is the measurement; nothing here changes what binds.
-    #
+    # ⛔ The canary's own reading is NOT the evidence for this arming. The
+    # instrument it ran with (this PR's first draft) counted a
+    # transport-injected `client_session_id` as corroboration — and the
+    # transport injects one into EVERY REST call missing it — so its
+    # "298,573 calls, 100% csid, 0% none" measured the transport's own
+    # filler, not caller behaviour. It also, in the draft one round later,
+    # counted ANY real session as corroboration for ANY claimed agent_id —
+    # not just the caller's own — so even a corrected re-run of that count
+    # would still have overstated how many callers were actually proving
+    # THIS claim. Both fixed same PR (see this function's docstring and
+    # `_explicit_bind_corroboration`'s), but not re-measured against live
+    # traffic before arming: closing a live impersonation bypass took
+    # priority over waiting out a second canary window. The only population
+    # this can newly refuse under the corrected classifier is a caller
+    # offering NEITHER a caller-asserted client_session_id (body or header)
+    # that resolves to THIS agent_id NOR a token that verifies and names
+    # THIS agent_id — i.e. no proof of any kind that this claim is theirs,
+    # which is the exact case #1565 already proved sentinel does not fall
+    # into (sentinel binds by its own CSID naming its own uuid).
+    corroboration = await _explicit_bind_corroboration(arguments)
+
     # Deliberately NOT logged: the uuid itself, at any length. A prefix is
     # still an identity fragment, and this line is meant to be safe to leave
     # on in a live server and safe to read in a shared log.
     logger.info(
         "[ATTEST] explicit_agent_id bind corroboration=%s tool_arg_keys=%d",
-        _explicit_bind_corroboration(arguments),
+        corroboration,
         len(arguments) if isinstance(arguments, dict) else 0,
     )
+
+    if corroboration == "none":
+        # No lookup, no proof of ownership — fall through to the next
+        # resolution step (operator token, sticky binding, session binding)
+        # exactly as an unrecognized shape does. If none of those resolve
+        # either, the strict-identity gate downstream emits its typed
+        # identity_required refusal.
+        return None
+
+    from src.mcp_handlers.context import update_context_agent_id
 
     update_context_agent_id(explicit_agent_id)
     return explicit_agent_id
@@ -499,7 +616,7 @@ async def _resolve_http_bound_agent(
     if not isinstance(arguments, dict) or tool_name in _HTTP_PREBIND_SKIP_TOOLS:
         return None
 
-    explicit_agent_id = _bind_explicit_http_agent(arguments)
+    explicit_agent_id = await _bind_explicit_http_agent(arguments)
     if explicit_agent_id:
         return explicit_agent_id
 
