@@ -107,11 +107,32 @@ def test_surface_return_rate_excludes_hook_poll_and_scheduled_callers():
 
 
 def test_scheduled_label_regex_is_shared_by_both_metrics():
-    """One regex, so composition and continuation cannot drift apart."""
+    """One regex, so composition and continuation cannot drift apart.
+
+    THIS TEST WAS PINNING A DEFECT. It asserted `"Vigil" in
+    _SCHEDULED_LABEL_RE` — i.e. it required the resident roster to be
+    hardcoded, which is what let the literal drift away from
+    UNITARES_RESIDENTS and silently inflate the return rate (a resident not in
+    the literal entered the denominator as an ordinary caller, and scheduled
+    callers return by construction). The shared-regex property it was written
+    to protect is real and is kept; the hardcoded-roster assertion is not.
+
+    Residents now come from the roster and are checked against it, so the two
+    still cannot drift — they cannot drift from each OTHER, and they cannot
+    drift from the deployment either.
+    """
+    import re
+
+    from src.grounding.class_indicator import load_resident_labels
+
     from scripts.dev import adoption_kpi
 
     queries = adoption_kpi._snapshot_queries()
     assert "%(scheduled_re)s" in queries["agent_kg_retrieval"]
     assert "%(scheduled_re)s" in queries["surface_return_rate"]
-    for expected in ("Vigil", "Hermes Agent", "canary_", "kg-sweep"):
-        assert expected in adoption_kpi._SCHEDULED_LABEL_RE
+
+    pattern = adoption_kpi._scheduled_label_re()
+    for job in ("Hermes Agent", "canary_", "kg-sweep"):
+        assert re.match(pattern, job), job
+    for resident in load_resident_labels():
+        assert re.match(pattern, resident), resident
