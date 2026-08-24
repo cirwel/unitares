@@ -14,6 +14,7 @@ rollout advances.
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -236,6 +237,38 @@ async def test_execute_refuses_before_fallback(strict_on, unbound_context):
     assert result["status"] == "identity_required"
     assert result["rollout_flag"] == "STRICT_IDENTITY_REQUIRED"
     fallback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_refuses_unbound_legacy_identity_before_consult_inference(
+    strict_on,
+    unbound_context,
+):
+    """A legacy-looking name is not proof for inference attribution."""
+    from src.mcp_handlers.support import consultation as co
+
+    standard = AsyncMock()
+    thorough = AsyncMock()
+    with patch.object(co, "run_model_inference", standard), patch.object(
+        co,
+        "run_delegated_inference",
+        thorough,
+    ), patch("src.services.http_tool_service.record_tool_usage"):
+        result = await execute_http_tool(
+            "consult",
+            {
+                "brief": "Review this proposal",
+                "agent_id": "caller-controlled-legacy-name",
+            },
+        )
+
+    # The REST gate refuses before fallback dispatch, so the result is the
+    # transport-native typed identity payload rather than MCP TextContent.
+    assert result["status"] == "identity_required"
+    assert result["tool"] == "consult"
+    assert "caller-controlled-legacy-name" not in json.dumps(result)
+    standard.assert_not_awaited()
+    thorough.assert_not_awaited()
 
 
 @pytest.mark.asyncio

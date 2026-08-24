@@ -261,11 +261,27 @@ async def invoke_host_adapter(
     caller can poll the orchestrator rather than block — strong models can exceed any
     single budget. Never raises.
     """
+    # ``dispatch_phase`` is a safety signal consumed by delegated inference.
+    # Only ``preflight`` and an explicit HTTP ``spawn_rejected`` response prove
+    # that no child can be running. Once the spawn POST begins, a lost response
+    # is the classic distributed-systems lost-ack case: the orchestrator may
+    # have accepted the child even when this client never receives its id.
+    dispatch_phase = "preflight"
     spec_def = _HOST_COMMANDS.get(host_id)
     if spec_def is None:
-        return {"ok": False, "host_id": host_id, "error": f"unknown host adapter '{host_id}'"}
+        return {
+            "ok": False,
+            "host_id": host_id,
+            "dispatch_phase": dispatch_phase,
+            "error": f"unknown host adapter '{host_id}'",
+        }
     if not host_adapter_enabled():
-        return {"ok": False, "host_id": host_id, "error": "host adapter disabled (UNITARES_HOST_ADAPTER_ENABLED unset)"}
+        return {
+            "ok": False,
+            "host_id": host_id,
+            "dispatch_phase": dispatch_phase,
+            "error": "host adapter disabled (UNITARES_HOST_ADAPTER_ENABLED unset)",
+        }
 
     cli, shell_cmd, family = spec_def
     cli_path = resolve_host_cli(host_id)
@@ -274,11 +290,17 @@ async def invoke_host_adapter(
         return {
             "ok": False,
             "host_id": host_id,
+            "dispatch_phase": dispatch_phase,
             "error": f"CLI '{cli}' not found or not executable; set {override}",
         }
     bearer = os.environ.get("AGENT_ORCHESTRATOR_BEARER_TOKEN")
     if not bearer:
-        return {"ok": False, "host_id": host_id, "error": "AGENT_ORCHESTRATOR_BEARER_TOKEN unset"}
+        return {
+            "ok": False,
+            "host_id": host_id,
+            "dispatch_phase": dispatch_phase,
+            "error": "AGENT_ORCHESTRATOR_BEARER_TOKEN unset",
+        }
 
     spec: Dict[str, Any] = {
         "cmd": "/bin/sh",
@@ -307,19 +329,35 @@ async def invoke_host_adapter(
         "via": "agent_orchestrator",
         "model_requested": model,
     }
+    agent_id: Optional[str] = None
     try:
         import httpx
 
         started = time.monotonic()
 
+        dispatch_phase = "spawn_request_started"
         async with httpx.AsyncClient(timeout=15.0) as client:
             sp = await client.post(f"{base}/v1/agents", json=spec, headers=headers)
         if sp.status_code not in (200, 201, 202):
-            return {"ok": False, "host_id": host_id, "error": f"spawn {sp.status_code}: {sp.text[:200]}", "provenance": provenance}
+            return {
+                "ok": False,
+                "host_id": host_id,
+                "dispatch_phase": "spawn_rejected",
+                "error": f"spawn {sp.status_code}: {sp.text[:200]}",
+                "provenance": provenance,
+            }
+        dispatch_phase = "spawn_acknowledged"
         agent_id = (sp.json() or {}).get("agent_id")
         if not agent_id:
-            return {"ok": False, "host_id": host_id, "error": "spawn returned no agent_id", "provenance": provenance}
+            return {
+                "ok": False,
+                "host_id": host_id,
+                "dispatch_phase": dispatch_phase,
+                "error": "spawn returned no agent_id",
+                "provenance": provenance,
+            }
 
+        dispatch_phase = "spawned"
         async with httpx.AsyncClient(timeout=timeout_s + 15.0) as client:
             aw = await client.post(
                 f"{base}/v1/agents/{agent_id}/await",
@@ -327,11 +365,24 @@ async def invoke_host_adapter(
                 headers=headers,
             )
         if aw.status_code == 504:
-            return {"ok": False, "host_id": host_id, "status": "still_running", "agent_id": agent_id,
-                    "hint": f"poll {base}/v1/agents/{agent_id}/await", "provenance": provenance}
+            return {
+                "ok": False,
+                "host_id": host_id,
+                "dispatch_phase": "await_timeout",
+                "status": "still_running",
+                "agent_id": agent_id,
+                "hint": f"poll {base}/v1/agents/{agent_id}/await",
+                "provenance": provenance,
+            }
         if aw.status_code != 200:
-            return {"ok": False, "host_id": host_id, "error": f"await {aw.status_code}: {aw.text[:200]}",
-                    "agent_id": agent_id, "provenance": provenance}
+            return {
+                "ok": False,
+                "host_id": host_id,
+                "dispatch_phase": "await_failed",
+                "error": f"await {aw.status_code}: {aw.text[:200]}",
+                "agent_id": agent_id,
+                "provenance": provenance,
+            }
 
         result = (aw.json() or {}).get("result") or {}
         output = result.get("output") or []
@@ -353,6 +404,7 @@ async def invoke_host_adapter(
         return {
             "ok": adapter_ok,
             "host_id": host_id,
+            "dispatch_phase": "terminal",
             "text": text,
             "raw": "\n".join(output),
             "exit_status": exit_status,
@@ -362,4 +414,11 @@ async def invoke_host_adapter(
         }
     except Exception as exc:  # noqa: BLE001 — any failure degrades to a structured error
         logger.warning("[host_adapter] %s invocation failed: %r", host_id, exc)
-        return {"ok": False, "host_id": host_id, "error": f"orchestrator dispatch failed: {exc!r}", "provenance": provenance}
+        return {
+            "ok": False,
+            "host_id": host_id,
+            "dispatch_phase": dispatch_phase,
+            "error": f"orchestrator dispatch failed: {exc!r}",
+            "provenance": provenance,
+            **({"agent_id": agent_id} if agent_id else {}),
+        }

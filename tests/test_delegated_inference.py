@@ -35,7 +35,11 @@ def test_delegate_inference_requires_attributed_identity():
 @pytest.mark.asyncio
 async def test_delegate_inference_returns_attributed_provenance(monkeypatch):
     monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _claude_host())
-    monkeypatch.setattr(di, "get_context_agent_id", lambda: "uuid-requester")
+    monkeypatch.setattr(
+        di,
+        "get_context_resolved_agent_id",
+        lambda: "uuid-requester",
+    )
     captured = {}
 
     async def fake_invoke(host_id, prompt, **kwargs):
@@ -160,3 +164,81 @@ async def test_delegate_inference_rejects_unknown_host(monkeypatch):
     parsed = _payload(result)
     assert parsed["success"] is False
     assert parsed["error_code"] == "INFERENCE_HOST_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_explicit_spawn_rejection_is_pre_execution(monkeypatch):
+    monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _claude_host())
+    monkeypatch.setattr(
+        di,
+        "invoke_host_adapter",
+        lambda *_args, **_kwargs: _async_value({
+            "ok": False,
+            "error": "spawn 503",
+            "dispatch_phase": "spawn_rejected",
+            "provenance": {},
+        }),
+    )
+
+    outcome = await di.run_delegated_inference(di.DelegatedInferenceRequest(
+        prompt="review",
+        requesting_agent_uuid="requester",
+    ))
+
+    assert outcome.ok is False
+    assert outcome.failure is not None
+    assert outcome.failure.code == "INFERENCE_HOST_UNAVAILABLE"
+    assert outcome.failure.execution_started is False
+    assert outcome.failure.possibly_running is False
+
+
+@pytest.mark.asyncio
+async def test_acknowledged_spawn_without_id_is_possibly_running(monkeypatch):
+    monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _claude_host())
+    monkeypatch.setattr(
+        di,
+        "invoke_host_adapter",
+        lambda *_args, **_kwargs: _async_value({
+            "ok": False,
+            "error": "spawn returned no agent_id",
+            "dispatch_phase": "spawn_acknowledged",
+            "provenance": {},
+        }),
+    )
+
+    outcome = await di.run_delegated_inference(di.DelegatedInferenceRequest(
+        prompt="review",
+        requesting_agent_uuid="requester",
+    ))
+
+    assert outcome.ok is False
+    assert outcome.failure is not None
+    assert outcome.failure.code == "DELEGATED_INFERENCE_FAILED"
+    assert outcome.failure.execution_started is True
+    assert outcome.failure.possibly_running is True
+    assert outcome.failure.details["dispatch_phase"] == "spawn_acknowledged"
+
+
+@pytest.mark.asyncio
+async def test_raw_handler_preserves_adapter_failure_error_code(monkeypatch):
+    monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _claude_host())
+    monkeypatch.setattr(
+        di,
+        "invoke_host_adapter",
+        lambda *_args, **_kwargs: _async_value({
+            "ok": False,
+            "error": "spawn 503",
+            "dispatch_phase": "spawn_rejected",
+            "provenance": {},
+        }),
+    )
+
+    parsed = _payload(await di.handle_delegate_inference({"prompt": "review"}))
+
+    assert parsed["success"] is False
+    assert parsed["error_code"] == "DELEGATED_INFERENCE_FAILED"
+    assert "dispatch_phase" not in parsed
+
+
+async def _async_value(value):
+    return value

@@ -171,8 +171,10 @@ def _strict_identity_refusal_or_none(
       reserved third tier ``scoped`` deliberately refuses here until a
       first scoped tool defines its semantics)
     - resolved context binding → None
-    - explicit non-UUID ``agent_id`` argument → None (legacy-name
-      reference; require_agent_id + downstream ownership checks own it)
+    - explicit non-UUID ``agent_id`` argument → None for legacy-compatible
+      tools (legacy-name reference; require_agent_id + downstream ownership
+      checks own it). ``consult`` is deliberately excluded because inference
+      attribution requires a resolved caller binding, never a name reference.
     - a UUID-shaped ``agent_id`` that did NOT resolve to a context binding
       → the typed refusal, same as no agent_id at all. Before 2026-08-24
       every UUID-shaped claim resolved unconditionally, so this branch was
@@ -204,7 +206,11 @@ def _strict_identity_refusal_or_none(
             return None
     except Exception:
         pass
-    if isinstance(arguments, dict) and arguments.get("agent_id"):
+    if (
+        tool_name != "consult"
+        and isinstance(arguments, dict)
+        and arguments.get("agent_id")
+    ):
         from src.http_routes.access import _looks_like_uuid
 
         if not _looks_like_uuid(arguments["agent_id"]):

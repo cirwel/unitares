@@ -90,10 +90,12 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
     "list_inference_hosts": (
         "List known inference hosts and live adapter readiness. Read both "
         "available (runtime/config readiness) and accepts_host_id_from "
-        "(agent-callable routing). Ollama and Hugging Face route through "
-        "call_model; Claude routes through delegate_inference; the Codex host "
-        "adapter remains registered but unwired. Listing is available before "
-        "onboarding, but inference calls require a bound identity."
+        "(advanced route-specific callability). consult selects among the "
+        "implemented lanes without exposing host controls; Ollama and Hugging "
+        "Face route through call_model, while Claude routes through "
+        "delegate_inference. The Codex host adapter remains registered but "
+        "unwired. Listing is available before onboarding, but inference calls "
+        "require a bound identity."
     ),
     "describe_inference_host": (
         "Describe one inference host by host_id, including transport, privacy, "
@@ -102,14 +104,15 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "does not invoke the host or validate an answer."
     ),
     "call_model": (
-        "Weak/fast synchronous advisory inference through local Ollama or the "
-        "configured Hugging Face router (~30s tool ceiling). It returns tool "
-        "evidence, not a peer-governance record. For a stronger Claude "
-        "consultation use delegate_inference; for an on-record review use "
-        "request_review/dialectic(action='request')."
+        "Advanced route-specific standard advisory inference through the "
+        "operator-configured Ollama lane or Hugging Face router. The default "
+        "tool deadline is 240 seconds and is not a latency promise. Prefer "
+        "consult unless explicit provider, host, model, or generation controls "
+        "are required. This returns tool evidence, never a governed review record."
     ),
     "delegate_inference": (
-        "Delegate a bounded advisory task to Claude through the operator's "
+        "Advanced route-specific delegation of a bounded advisory task to "
+        "Claude through the operator's "
         "authenticated subscription CLI and the agent-orchestrator. This is "
         "the long-running strong-model lane, separate from call_model. Claude "
         "runs in safe mode with tools disabled and session persistence off. "
@@ -117,10 +120,25 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "models_used, usage, cost, latency, requesting identity, and "
         "orchestrator execution ID. Pass model to request an alias or exact "
         "model; omit it to use the operator/CLI default. This creates "
-        "attributed evidence but not a dialectic peer-review record. Requires "
+        "attributed evidence but not a dialectic peer-review record. Prefer "
+        "consult unless explicit host, model, or timeout control is required. Requires "
         "UNITARES_HOST_ADAPTER_ENABLED=1, AGENT_ORCHESTRATOR_BEARER_TOKEN, and "
         "an authenticated Claude CLI discoverable on PATH, ~/.local/bin, or "
         "UNITARES_CLAUDE_CLI."
+    ),
+    "consult": (
+        "Primary advisory model-help surface. Choose purpose, standard or "
+        "thorough effort, and whether external processing is allowed; routing "
+        "and any explicit local degradation are reported. It returns advisory "
+        "evidence, not governed judgment. Use response_mode='full' for route "
+        "diagnostics. consult never creates a review verdict; use request_review "
+        "for that."
+    ),
+    "request_review": (
+        "Request governed, on-record judgment through the dialectic lifecycle. "
+        "The response identifies the actual reviewer path and provenance. This "
+        "is categorically different from consult, which returns advisory model "
+        "evidence only."
     ),
     "dialectic": (
         "Governed review operations: get, list, quick, request, thesis, "
@@ -131,8 +149,8 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "orchestrated reviewer's backend with "
         "UNITARES_DIALECTIC_REVIEWER_HOST (local, codex, or claude); backend "
         "failures degrade to local inference and record the fallback. Use "
-        "delegate_inference for off-record Claude advice and call_model for "
-        "weak/fast synchronous advice."
+        "consult for advisory model help; use call_model or delegate_inference "
+        "only when route-specific controls are required."
     ),
 }
 

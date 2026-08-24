@@ -36,6 +36,21 @@ DEPRECATION_REGISTRY: Dict[str, Dict[str, str]] = {
 
 
 LITE_PARAMETER_PRIORITIES: Dict[str, List[str]] = {
+    "request_review": [
+        "issue_description",
+        "reasoning",
+        "root_cause",
+        "proposed_conditions",
+        "use_brief_as_thesis",
+    ],
+    "consult": [
+        "brief",
+        "purpose",
+        "effort",
+        "privacy",
+        "allow_degraded",
+        "response_mode",
+    ],
     "process_agent_update": [
         "client_session_id",
         "response_text",
@@ -87,7 +102,7 @@ TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
     },
     "request_review": {
         "depends_on": ["sync_state"],
-        "related_to": ["dialectic", "self_recovery"],
+        "related_to": ["dialectic", "self_recovery", "consult"],
         "category": "dialectic",
     },
     "process_agent_update": {
@@ -426,17 +441,23 @@ TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
     },
     "list_inference_hosts": {
         "depends_on": [],
-        "related_to": ["describe_inference_host", "call_model", "delegate_inference"],
+        "related_to": ["describe_inference_host", "consult", "call_model", "delegate_inference"],
         "category": "inference",
     },
     "describe_inference_host": {
         "depends_on": ["list_inference_hosts"],
-        "related_to": ["call_model", "delegate_inference"],
+        "related_to": ["consult", "call_model", "delegate_inference"],
+        "category": "inference",
+    },
+    "consult": {
+        "depends_on": [],
+        "related_to": ["call_model", "delegate_inference", "request_review"],
         "category": "inference",
     },
     "call_model": {
         "depends_on": [],
         "related_to": [
+            "consult",
             "list_inference_hosts",
             "describe_inference_host",
             "knowledge",
@@ -446,7 +467,7 @@ TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
     },
     "delegate_inference": {
         "depends_on": ["list_inference_hosts"],
-        "related_to": ["describe_inference_host", "dialectic"],
+        "related_to": ["consult", "describe_inference_host", "dialectic"],
         "category": "inference",
     },
     "config": {
@@ -583,6 +604,10 @@ TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
 
 
 WORKFLOWS: Dict[str, List[str]] = {
+    "model_help": [
+        "consult",
+        "request_review",
+    ],
     "onboarding": [
         "onboard",  # 🚀 Portal tool - call FIRST
         "process_agent_update",  # Start working
@@ -634,7 +659,13 @@ TOOL_DESCRIPTION_OVERRIDES: Dict[str, str] = {
         "Record real task/tool/test outcome for calibration. "
         f"{EISV_INLINE_SUMMARY}"
     ),
-    "request_review": "Ask for structured review/recovery",
+    "request_review": (
+        "Request governed, on-record judgment with actual reviewer provenance; "
+        "use consult for advisory model evidence."
+    ),
+    "consult": (
+        "Ask for advisory model evidence without creating a governed review record."
+    ),
     "onboard": "Register a fresh process identity. Prefer start_session(force_new=true); use parent_agent_id only for real handoffs.",
     "identity": "🪞 Check current binding or set your display name. Not the normal start/resume path; use start_session first.",
     "process_agent_update": (
@@ -742,6 +773,13 @@ COMMON_PATTERNS: Dict[str, Dict[str, str]] = {
         "neutral_two_call": "request_review(issue_description=\"Review X\", use_brief_as_thesis=false)",
         "recovery": "request_review(issue_description=\"Paused after conflicting evidence\", proposed_conditions=[\"Re-check the evidence before resuming\"])",
         "with_reason": "request_review(issue_description=\"Need adversarial review\", reason=\"uncertain root cause\")",
+    },
+    "consult": {
+        "answer": "consult(brief=\"Explain this code\")",
+        "critique": "consult(brief=\"Critique this design\", purpose=\"critique\")",
+        "local_summary": "consult(brief=\"Summarize this document\", purpose=\"summarize\")",
+        "thorough": "consult(brief=\"Analyze this deeply\", effort=\"thorough\", privacy=\"cloud_allowed\")",
+        "full_diagnostics": "consult(brief=\"Explain this route\", response_mode=\"full\")",
     },
     "store_knowledge_graph": {
         "insight": "store_knowledge_graph(summary=\"Key insight about X\", tags=[\"insight\"])",
@@ -858,7 +896,9 @@ def essential_toolkit() -> Dict[str, Any]:
         "small_surface": "Use list_tools(essential_only=true) or list_tools(lite=true) before exploring the full registry.",
         "preferred_consolidated_tools": {
             "knowledge": "Use action='search'|'note'|'store' instead of older KG-specific tools.",
-            "dialectic": "Use action='quick' for simple decision triage; use request/thesis/antithesis/synthesis for paused-state recovery.",
+            "consult": "Use for advisory answers, critique, summaries, and generation; it is never an on-record verdict.",
+            "request_review": "Use when you need governed, on-record judgment or paused-state recovery with reviewer provenance.",
+            "dialectic": "Use the raw action router only for explicit session lifecycle operations after request_review.",
             "calibration": "Use action='check' first; add ground truth with action='update' only when you have trusted external evidence.",
             "export": "Use action='history' for in-memory export; action='file' writes a server-side file.",
         },

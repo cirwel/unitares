@@ -170,19 +170,18 @@ def test_action_injecting_aliases_do_not_expose_action_on_the_wire(audit_snapsho
     ]
     assert alias_views
     assert all("action" not in tool["wire_properties"] for tool in alias_views)
-
-    # Introspection currently resolves the alias to its canonical schema. The
-    # audit records that mismatch instead of silently treating the two surfaces
-    # as equivalent; request_review is the smallest concrete regression guard.
-    request_review = next(
-        tool for tool in alias_views if tool["name"] == "request_review"
-    )
-    assert "action" in request_review["describe_only_properties"]
-    assert any(
-        finding["code"] == "DESCRIBE_SCHEMA_WIDER_THAN_WIRE"
-        and finding["subject"] == "request_review"
-        for finding in audit_snapshot["findings"]
-    )
+    assert all(not tool["describe_only_properties"] for tool in alias_views)
+    for alias_name in (
+        "request_review",
+        "search_shared_memory",
+        "store_finding",
+        "update_finding",
+    ):
+        assert not any(
+            finding["code"] == "DESCRIBE_SCHEMA_WIDER_THAN_WIRE"
+            and finding["subject"] == alias_name
+            for finding in audit_snapshot["findings"]
+        )
 
 
 def test_snapshot_hash_detects_evidence_mutation(audit_snapshot):

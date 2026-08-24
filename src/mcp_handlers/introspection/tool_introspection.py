@@ -285,7 +285,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             # Default workflow order
             order = [
                 "start_session", "sync_state", "check_working_state",
-                "search_shared_memory", "record_result", "request_review",
+                "search_shared_memory", "record_result", "consult", "request_review",
                 "onboard", "identity", "process_agent_update",
                 "get_governance_metrics", "list_tools", "describe_tool",
                 "agent", "knowledge", "dialectic", "health_check",
@@ -358,6 +358,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 "check_in": ["sync_state(response_text='...', complexity=0.5)"],
                 "save_insight": ["knowledge(action='note', content='...')", "OR knowledge(action='store', summary='...', tags=[...])"],
                 "find_info": ["search_shared_memory(query='...')", "OR knowledge(action='search', tags=[...])"],
+                "advisory_help": ["consult(brief='...')"],
                 "recover": ["request_review(issue_description='...')", "OR self_recovery(action='review', reflection='...')"],
             },
             # Common signatures (type hints at a glance)
@@ -369,6 +370,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 "store_finding": "(summary:str, details?:str, discovery_type?:str, tags?:list, severity?:str)",
                 "update_finding": "(discovery_id:str, status?:str, details?:str, resolution_notes?:str)",
                 "record_result": "(outcome_type:str, confidence?:float, prediction_id?:str, detail?:dict)",
+                "consult": "(brief:str, purpose?:str, effort?:str, privacy?:str, allow_degraded?:bool, response_mode?:'compact'|'full')",
                 "request_review": "(issue_description:str, reasoning?:str, use_brief_as_thesis?:bool — the brief is the thesis by default; false keeps the two-call flow)",
                 "store_knowledge_graph": "(summary:str, tags?:list, severity?:str, details?:str)",
                 "search_knowledge_graph": "(query?:str, tags?:list, limit?:int, include_details?:bool)",
@@ -746,6 +748,23 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                 },
             )]
 
+        if alias_info:
+            # Discovery must describe the alias clients can actually call, not
+            # the wider implementation router. Registration uses this same
+            # builder, preventing describe_tool from drifting from the wire.
+            from src.alias_schema import build_alias_input_schema
+
+            tool_schema = build_alias_input_schema(
+                requested_tool_name,
+                tool_schema,
+                inject_action=bool(alias_info.inject_action),
+            )
+            description = (
+                tool_catalog.TOOL_DESCRIPTION_OVERRIDES.get(requested_tool_name)
+                or alias_info.migration_note
+                or description
+            )
+
         if not include_full_description:
             description = (description or "").splitlines()[0].strip() if description else ""
 
@@ -792,7 +811,11 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                         add_lite_field(field_name, required=True)
 
                     shown = 0
-                    for field_name in tool_catalog.LITE_PARAMETER_PRIORITIES.get(tool_name, []):
+                    priorities = (
+                        tool_catalog.LITE_PARAMETER_PRIORITIES.get(requested_tool_name)
+                        or tool_catalog.LITE_PARAMETER_PRIORITIES.get(tool_name, [])
+                    )
+                    for field_name in priorities:
                         if add_lite_field(field_name, force=True):
                             shown += 1
 

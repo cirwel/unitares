@@ -13,7 +13,14 @@ from mcp.types import TextContent
 # Re-export all step functions
 from .identity_step import resolve_identity
 from .trajectory_step import verify_trajectory
-from .params_step import unwrap_kwargs, resolve_alias, inject_identity, validate_params, _format_pydantic_error
+from .params_step import (
+    _format_pydantic_error,
+    inject_identity,
+    resolve_alias,
+    strip_untrusted_dispatch_metadata,
+    unwrap_kwargs,
+    validate_params,
+)
 from .rate_limit_step import check_rate_limit, _tool_call_history
 from .pattern_step import track_patterns
 from .envelope_step import apply_experience_envelope
@@ -45,6 +52,7 @@ class DispatchContext:
 # Steps that must succeed (short-circuit on error)
 PRE_DISPATCH_STEPS = [
     unwrap_kwargs,
+    strip_untrusted_dispatch_metadata,
     resolve_identity,
     verify_trajectory,
     resolve_alias,

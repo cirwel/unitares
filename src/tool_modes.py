@@ -41,6 +41,7 @@ LITE_MODE_TOOLS: Set[str] = {
     "update_finding",             # Revise a finding already in shared memory
     "record_result",              # Record task/tool/test outcomes
     "request_review",             # Ask for structured review
+    "consult",                    # Ask for advisory model help
 
     # Identity (streamlined - Dec 2025)
     "identity",                   # Primary identity tool (auto-creates on first call)
@@ -147,6 +148,7 @@ TOOL_TIERS: dict[str, Set[str]] = {
         "search_shared_memory",   # Search shared memory
         "record_result",          # Record outcomes
         "request_review",         # Ask for structured review
+        "consult",                # Primary advisory model help
         "identity",               # Primary identity tool (auto-creates on first call)
         "list_tools",             # Discover available tools
         "describe_tool",          # Get full tool details
@@ -294,6 +296,7 @@ TOOL_OPERATIONS: dict[str, str] = {
     "get_connection_status": "read",      # Verify MCP connection and tool availability
     "list_inference_hosts": "read",       # Discover inference hosts
     "describe_inference_host": "read",    # Inspect one inference host
+    "consult": "read",                    # Canonical advisory inference facade
     "call_model": "read",                 # Advisory inference; returns evidence artifact
     "delegate_inference": "read",         # Strong advisory inference; returns evidence artifact
 
@@ -372,6 +375,7 @@ TOOL_CATEGORIES = {
     "inference": {
         "list_inference_hosts",
         "describe_inference_host",
+        "consult",
         "call_model",
         "delegate_inference",
     },
