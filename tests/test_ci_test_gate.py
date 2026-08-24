@@ -27,8 +27,10 @@ def _ci_shard(path: Path) -> str | None:
         return None
 
     first_letter = path.name.removeprefix("test_")[:1].lower()
-    if "a" <= first_letter <= "h":
-        return "tests-a-h"
+    if "a" <= first_letter <= "d":
+        return "tests-a-d"
+    if "e" <= first_letter <= "h":
+        return "tests-e-h"
     if "i" <= first_letter <= "p":
         return "tests-i-p"
     if "q" <= first_letter <= "z":
@@ -43,8 +45,12 @@ def test_github_full_test_jobs_cover_every_test_file() -> None:
 
     shard_job = workflow.split("\n  test_shard:", 1)[1].split("\n  test:", 1)[0]
     assert "needs: smoke" not in shard_job
-    assert "shard: [tests-a-h, tests-i-p, tests-q-z, agents-and-nested]" in shard_job
-    assert "targets=(tests/test_[a-h]*.py)" in shard_job
+    assert (
+        "shard: [tests-a-d, tests-e-h, tests-i-p, tests-q-z, "
+        "agents-and-nested]" in shard_job
+    )
+    assert "targets=(tests/test_[a-d]*.py)" in shard_job
+    assert "targets=(tests/test_[e-h]*.py)" in shard_job
     assert "targets=(tests/test_[i-p]*.py)" in shard_job
     assert "targets=(tests/test_[q-z]*.py)" in shard_job
     assert "targets=(agents/ tests/*/ tests/smoke_test.py)" in shard_job
