@@ -17,10 +17,14 @@ shape of its own construction rather than the data:
   * `eisv_stage_a_feasibility` — the residual reading was two fixed numbers
     asserted below the code that computes them, and wrong for 2 of 5 classes.
 
-`scripts/dev/adoption_kpi.py` was the fifth. On inspection its "voluntary
-retrieval" naming defect had already been repaired (operator-identified,
-2026-08-18) and its report derives every figure it prints, so nothing is
-changed there; `test_adoption_kpi_asserts_no_verdict` records why.
+`scripts/dev/adoption_kpi.py` was the fifth, and this file originally recorded
+it as clean. THAT WAS WRONG (corrected 2026-08-24 after independent review):
+its `cohort_engaged` predicate filtered on the dead `search_knowledge_graph`
+alias and omitted the live `search_shared_memory`, understating engagement. The
+naming defect was indeed already repaired, but "the naming was fixed" is not
+"the file is clean", and the test shipped here asserted only that no verdict
+token appears — which cannot see a wrong tool name. See
+tests/test_adoption_kpi_tool_names.py.
 """
 
 from __future__ import annotations
@@ -340,15 +344,26 @@ def test_importing_the_module_does_not_run_the_integration():
     assert callable(mod.main)
 
 
-# --- adoption_kpi: the finding that did not survive inspection -------------
+# --- adoption_kpi: the finding I got wrong ---------------------------------
 
 def test_adoption_kpi_asserts_no_verdict():
-    """Recorded as clean, with the reason, so the sweep is auditable.
+    """The NO-VERDICT property still holds. THE "CLEAN" VERDICT DID NOT.
 
-    The "voluntary KG retrieval" naming defect CLAUDE.md warns about was already
-    repaired here (operator-identified, 2026-08-18): the metric is renamed, and
-    the docstring states what the number cannot support. The report prints
-    derived counts and no pass/fail, so there is no verdict to make unreachable.
+    CORRECTED 2026-08-24, independent review. This sweep judged
+    `adoption_kpi.py` clean and shipped only the assertion below. The file did
+    carry a real defect: the `cohort_engaged` predicate filtered on the dead
+    `search_knowledge_graph` alias and omitted the live `search_shared_memory`,
+    so an agent whose only value action was a shared-memory search read as not
+    engaged and the metric UNDERSTATED engagement. The file's own note recorded
+    that rename; the correction was applied to two queries and missed in a third.
+
+    This test could not have caught it. It asserts what the module refrains
+    from SAYING, not what its queries SELECT, so it passed over a wrong tool
+    name while reading as coverage — the same shape as the instruments this
+    sweep was repairing. Coverage of the actual defect is in
+    tests/test_adoption_kpi_tool_names.py; this one is kept for the narrower
+    property it does check, and relabelled so it no longer stands as a
+    clean bill of health.
     """
     source = (REPO / "scripts/dev/adoption_kpi.py").read_text()
 

@@ -268,13 +268,37 @@ flagged change.
 0. **Φ → telemetry, not a verdict floor.** Φ stops gating decisions; the
    per-agent residual / behavioral path becomes authoritative and Φ is kept only
    as a telemetry field. Cleanest expression of axiom 2 (Φ is the RLHF/
-   punish-toward-ideal shape), and now *evidenced safe*: the Stage-B safety-floor
-   probe (`scripts/analysis/eisv_stage_b_safety_floor.py`, 2026-06-25) shows
-   currently-safe agents at residual p99≈6.8 vs caution ≈10 — clean separation,
-   ~1% regression floor — so demoting Φ doesn't strand healthy agents. (NB:
+   punish-toward-ideal shape), adopted here as an operator policy direction. The
+   Stage-B safety-floor probe (`scripts/analysis/eisv_stage_b_safety_floor.py`,
+   2026-06-25) was originally cited as safety evidence; the correction below
+   withdraws that inference. (NB:
    supersedes the *purpose* of the A.2 coupling — once Φ is telemetry, keeping
    its verdict invariant is moot; A.2 stays correct as the interim while Φ still
    gates, i.e. until this lands.)
+
+> **Evidence correction, 2026-08-24 — cited safety support withdrawn; the
+> operator decision remains recorded.** Decision 0 above previously read "clean
+> separation, ~1% regression floor". The "~1% regression floor" is
+> **withdrawn**: it was not a measurement.
+> The probe computed it as the fraction of the safe sample lying above that same
+> sample's own 99th percentile, which is ~1% for any input whatsoever — the
+> definition of a percentile, not a property of the residual. Across normal,
+> heavy-tailed and bimodal draws at n=200 and n=2000 it returns exactly 1.000%
+> every time. Repaired in #1856 and #1862.
+>
+> No direction can be inferred from that definitional statistic. A real
+> policy-threshold false-positive or regression rate could be lower **or higher**;
+> establishing it requires an externally chosen threshold evaluated against a
+> separately labelled or outcome-matched cohort.
+>
+> The descriptive separation remains reproducible — safe-verdict residual
+> p99≈6.8 sits below the caution mass at ≈10 — but separation without a decision
+> threshold and matched outcomes establishes neither verdict invariance nor
+> non-regression. It therefore cannot rescue the withdrawn safety inference.
+>
+> Nothing here re-opens or re-decides decision 0, which remains the operator's
+> policy choice as recorded on 2026-06-25. The choice now loses the cited
+> empirical support; this correction does not supply replacement evidence.
 
 1. **Resident ground truth = "whatever we can."** No canonical per-resident
    source required; take every exogenous signal and tier it (§7): Watcher
