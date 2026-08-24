@@ -374,6 +374,14 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
         default=None,
         description="Boolean alias for response_mode='compact'. Applies only when response_mode is left at 'auto' (an explicit response_mode always wins)."
     )
+    include_memory_suggestions: bool = Field(
+        default=False,
+        description=(
+            "Opt in to a KG lookup seeded from this check-in and include a few "
+            "matching discovery digests. Defaults to false so check-ins remain "
+            "pull-based; use search_shared_memory for deliberate retrieval."
+        ),
+    )
     auto_export_on_significance: bool = Field(
         default=False,
         description="If true, automatically export governance history when thermodynamically significant events occur."

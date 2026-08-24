@@ -29,15 +29,15 @@ def _run_args(run_method, arguments):
     return (arguments,)
 
 
-def test_search_shared_memory_advertises_compact_default():
-    """The friendly read alias is compact by default; canonical knowledge is not."""
+def test_search_shared_memory_advertises_lean_default():
+    """The friendly read alias is lean by default; canonical knowledge is not."""
     import src.mcp_server as mcp_server
 
     tool = mcp_server.mcp._tool_manager.get_tool("search_shared_memory")
     response_mode = tool.parameters["properties"]["response_mode"]
     include_details = tool.parameters["properties"]["include_details"]
-    assert response_mode["default"] == "compact"
-    assert "Defaults to compact" in response_mode["description"]
+    assert response_mode["default"] == "lean"
+    assert "Defaults to lean" in response_mode["description"]
     assert "suppresses detail serialization upstream" in include_details["description"]
 
 
@@ -199,7 +199,7 @@ async def test_search_shared_memory_suppresses_detail_serialization_upstream(
     )
 
     assert captured["action"] == "search"
-    assert captured["response_mode"] == "compact"
+    assert captured["response_mode"] == "lean"
     assert captured["include_details"] is False
     assert captured["_friendly_search_detail_policy"] == (
         "digest_before_serialization"
@@ -209,5 +209,5 @@ async def test_search_shared_memory_suppresses_detail_serialization_upstream(
     assert options["current_tier"] == "digest"
     assert options["requested_tier"] == "full_inline"
     assert options["details_serialized"] is False
-    assert result["response_options"]["current"] == "compact"
+    assert result["response_options"]["current"] == "lean"
     assert "raw_governance" not in result

@@ -172,13 +172,13 @@ def normalize_compact_search_details(arguments: Dict[str, Any]) -> Normalization
     force ``include_details=False`` before the handler builds its result, while
     full mode remains an explicit escape hatch for inline details.
     """
-    response_mode = str(arguments.get("response_mode") or "compact").strip().lower()
-    # The alias advertises compact as its default, but canonical validation
+    response_mode = str(arguments.get("response_mode") or "lean").strip().lower()
+    # The alias advertises lean as its default, but canonical validation
     # otherwise fills KnowledgeParams.response_mode="full" after alias
     # resolution. Materialize the friendly default now so execution matches
     # the schema agents actually saw.
     if not arguments.get("response_mode"):
-        arguments["response_mode"] = "compact"
+        arguments["response_mode"] = "lean"
     if response_mode == "full":
         return {}
 

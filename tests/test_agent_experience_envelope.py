@@ -483,9 +483,25 @@ def test_sync_state_envelope_surfaces_discoveries():
             {"discovery_id": f"d{i}", "summary": f"finding {i}"} for i in range(5)
         ],
     }
-    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    env = build_experience_envelope(
+        "sync_state",
+        "process_agent_update",
+        payload,
+        {"include_memory_suggestions": True},
+    )
     assert len(env["memory_suggestions"]) == 3  # truncated
     assert env["memory_suggestions"][0]["discovery_id"] == "d0"
+
+
+def test_sync_state_envelope_omits_memory_suggestions_by_default():
+    payload = {
+        "success": True,
+        "relevant_discoveries": [
+            {"discovery_id": "d1", "summary": "prior work"},
+        ],
+    }
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert "memory_suggestions" not in env
 
 
 def test_metrics_envelope_maps_existing_friendly_fields():
@@ -585,13 +601,14 @@ def test_search_envelope_counts_and_suggests():
     assert env["memory_suggestions"][0]["summary"] == "prior art"
     assert env["memory_suggestions"][0]["status"] == "open"
     assert env["memory_suggestions"][0]["tags"] == ["response-ux"]
-    assert env["memory_suggestions"][0]["details_preview"] == "Bounded preview"
+    assert "details_preview" not in env["memory_suggestions"][0]
     assert env["state_summary"]["result_tier"] == "digest"
     assert env["state_summary"]["results_shown_in_digest"] == 1
     assert env["discovery_retrieval_options"]["current_tier"] == "digest"
     assert env["response_options"] == {
-        "current": "compact",
-        "digest": "compact",
+        "current": "lean",
+        "digest": "lean",
+        "diagnostic_digest": "compact",
         "complete_result_set": "full",
         "all_inline_details": "response_mode='full' + include_details=true",
     }
@@ -691,7 +708,7 @@ def test_full_sync_state_reports_large_response_and_reduction_mode():
         "sync_state",
         "process_agent_update",
         payload,
-        {"response_mode": "full"},
+        {"response_mode": "full", "include_memory_suggestions": True},
     )
 
     assert env["_response_size"]["size_class"] in {"medium", "large"}
@@ -820,10 +837,7 @@ def test_search_envelope_compact_mode_keeps_memory_suggestions():
 
 
 def test_metrics_envelope_full_mode_keeps_memory_suggestions():
-    """The dedup is scoped to knowledge search specifically — other tools
-    that surface relevant_discoveries alongside a full raw_governance payload
-    (e.g. sync_state) are unaffected; their raw_governance isn't a duplicate
-    of memory_suggestions."""
+    """An explicit check-in recall opt-in survives even in full mode."""
     payload = {
         "success": True,
         "decision": {"action": "proceed"},
@@ -836,7 +850,7 @@ def test_metrics_envelope_full_mode_keeps_memory_suggestions():
         "sync_state",
         "process_agent_update",
         payload,
-        {"response_mode": "full"},
+        {"response_mode": "full", "include_memory_suggestions": True},
     )
     assert env["raw_governance"] is payload
     assert env["memory_suggestions"][0]["summary"] == "prior art"

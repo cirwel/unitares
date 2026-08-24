@@ -486,7 +486,7 @@ def _reflection(source_payload: Dict[str, Any]) -> Optional[str]:
 
 
 def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
-    """Surface prior discoveries the canonical payload already carries.
+    """Surface bounded discovery digests the canonical payload already carries.
 
     `relevant_prior_work` is the check-in path's contribution: the formatter
     already builds it from the mirror's KG lookup and puts it in the response,
@@ -518,19 +518,8 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
                     "title",
                     "type",
                     "status",
-                    "severity",
                     "tags",
-                    "by",
-                    "agent_id",
-                    "created_at",
-                    "updated_at",
-                    "superseded",
-                    "superseded_by",
                     "staleness_warning",
-                    "has_details",
-                    "details_preview",
-                    "details_length",
-                    "has_more_details",
                     "similarity",
                     # the mirror path scores its hits as `relevance`; without it
                     # a suggestion arrives with no indication of match strength
@@ -668,7 +657,7 @@ def _raw_governance_policy(
 ) -> tuple[bool, Optional[str]]:
     """Choose whether a friendly read alias should repeat its canonical payload.
 
-    Canonical tools are unchanged. Read aliases default to their compact
+    Canonical tools are unchanged. Read aliases default to their bounded
     experience envelope and retain an explicit full-response escape hatch.
     """
     if friendly_name not in _COMPACT_READ_ALIASES:
@@ -687,7 +676,7 @@ def _raw_governance_policy(
         )
 
     response_mode = str(
-        arguments.get("response_mode") or "compact"
+        arguments.get("response_mode") or "lean"
     ).strip().lower()
     return response_mode == "full", (
         "Re-call search_shared_memory(response_mode='full') for the complete result set."
@@ -727,7 +716,7 @@ def _effective_discovery_retrieval_options(
             arguments.get(FRIENDLY_SEARCH_DETAILS_REQUESTED_KEY)
         )
         response_mode = str(
-            arguments.get("response_mode") or "compact"
+            arguments.get("response_mode") or "lean"
         ).strip().lower()
         result["detail_policy"] = detail_policy
         result["details_serialized"] = False
@@ -738,7 +727,7 @@ def _effective_discovery_retrieval_options(
                 f"response_mode='{response_mode}' before serialization"
             )
             result["note"] = (
-                "Compact friendly search keeps the upstream result digest-sized, "
+                "Digest-mode friendly search keeps the upstream result bounded, "
                 "even when include_details=true. Use response_mode='full' with "
                 "include_details=true for every result inline, or open one record "
                 "with knowledge(action='details', discovery_id='...')."
@@ -747,13 +736,16 @@ def _effective_discovery_retrieval_options(
 
     requested_tier = str(result.get("current_tier") or "digest")
     if requested_tier.startswith("full_inline"):
+        response_mode = str(
+            arguments.get("response_mode") or "lean"
+        ).strip().lower()
         result["requested_tier"] = requested_tier
         result["current_tier"] = "digest"
         result["details_serialized"] = True
         result["details_included"] = False
-        result["details_omitted_by"] = "response_mode='compact'"
+        result["details_omitted_by"] = f"response_mode='{response_mode}'"
         result["note"] = (
-            "The compact friendly response returns bounded previews even when "
+            "The digest friendly response returns bounded previews even when "
             "include_details=true. Use response_mode='full' with "
             "include_details=true for every result inline, or open one record "
             "with knowledge(action='details', discovery_id='...')."
@@ -784,10 +776,11 @@ def _response_options(
             ),
         }
     if friendly_name == "search_shared_memory":
-        current = str(arguments.get("response_mode") or "compact").strip().lower()
+        current = str(arguments.get("response_mode") or "lean").strip().lower()
         return {
             "current": current,
-            "digest": "compact",
+            "digest": "lean",
+            "diagnostic_digest": "compact",
             "complete_result_set": "full",
             "all_inline_details": "response_mode='full' + include_details=true",
         }
@@ -829,7 +822,7 @@ def _attach_response_size(
         current = envelope.get("response_options", {}).get("current")
         if friendly_name == "search_shared_memory":
             metadata["reduce_with"] = (
-                "Use include_details=false and response_mode='compact'; open one "
+                "Use include_details=false and response_mode='lean'; open one "
                 "discovery with knowledge(action='details', discovery_id='...')."
             )
         elif friendly_name == "sync_state" and current == "full":
@@ -1160,7 +1153,11 @@ def build_experience_envelope(
 
     include_raw, raw_hint = _raw_governance_policy(friendly_name, arguments)
 
-    suggestions = _memory_suggestions(payload)
+    suggestions_enabled = (
+        canonical_name != "process_agent_update"
+        or _as_bool((arguments or {}).get("include_memory_suggestions"), default=False)
+    )
+    suggestions = _memory_suggestions(payload) if suggestions_enabled else None
     # When the full canonical discoveries list is about to go out under
     # raw_governance, a trimmed top-N copy under memory_suggestions is a
     # strict subset of it in the same response — drop the duplicate rather

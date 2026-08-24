@@ -595,9 +595,18 @@ def _topical_agent_tags(tags: list | None) -> list:
     ]
 
 
+def _memory_suggestions_requested(ctx: UpdateContext) -> bool:
+    """Whether this check-in explicitly opted into shared-memory retrieval."""
+    arguments = getattr(ctx, "arguments", {})
+    value = arguments.get("include_memory_suggestions", False)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return value is True
+
+
 @enrichment(order=130, lite_safe=True)
 async def enrich_knowledge_surfacing(ctx: UpdateContext) -> None:
-    """Surface up to 3 prior discoveries relevant to this check-in.
+    """Surface up to 3 prior discoveries when the caller explicitly opts in.
 
     Retrieval is seeded from the agent's own check-in text, because the tag
     intersection this used to rely on cannot match: agent tags are lifecycle
@@ -605,6 +614,9 @@ async def enrich_knowledge_surfacing(ctx: UpdateContext) -> None:
     so the two vocabularies overlap on a single token fleet-wide. Tag overlap
     is kept as a fallback for callers that do carry topical tags.
     """
+    if not _memory_suggestions_requested(ctx):
+        return
+
     try:
         relevant_discoveries: list = []
         match_basis = ""
@@ -1514,35 +1526,36 @@ async def enrich_mirror_signals(ctx: UpdateContext) -> None:
         if reflection:
             ctx.response_data["_mirror_reflection"] = reflection
 
-        # 3. Reactive KG search — useful when there is a concrete signal /
-        #    reflection / edge, not on steady-state check-ins.
-        if _should_search_kg_by_checkin_text(ctx, signals, reflection):
-            kg_results = await _cached_kg_search_by_checkin_text(ctx)
-            if kg_results:
-                ctx.response_data["_mirror_kg_results"] = kg_results
-        # 3b. Proactive KG surfacing — on a throttled cadence, even in healthy
-        #     steady state, offer strong & session-novel prior work. OFF by
-        #     default (UNITARES_KG_PROACTIVE_EVERY=0). Emits an attribution
-        #     record so adoption can measure surfaced-vs-acted-on.
-        elif _proactive_kg_due(ctx):
-            proactive = await _cached_kg_search_by_checkin_text(
-                ctx, floor=_KG_PROACTIVE_FLOOR
-            )
-            proactive = await _dedupe_surfaced_kg(ctx, proactive)
-            if proactive:
-                ctx.response_data["_mirror_kg_results"] = proactive
-                signal_records.append({
-                    "signal_type": "kg_proactive_surface",
-                    "metric": "kg_relevance",
-                    "value": max(
-                        (r.get("relevance", 0) or 0) for r in proactive
-                    ),
-                    "threshold": _KG_PROACTIVE_FLOOR,
-                    "fired": True,
-                    "discovery_ids": [
-                        r.get("discovery_id") for r in proactive if r.get("discovery_id")
-                    ],
-                })
+        # 3. KG recall is pull-based. Even a concrete mirror signal does not
+        #    silently spend retrieval/context budget unless this check-in set
+        #    include_memory_suggestions=true. Explicit search_shared_memory is
+        #    the normal path for deliberate recall.
+        if _memory_suggestions_requested(ctx):
+            if _should_search_kg_by_checkin_text(ctx, signals, reflection):
+                kg_results = await _cached_kg_search_by_checkin_text(ctx)
+                if kg_results:
+                    ctx.response_data["_mirror_kg_results"] = kg_results
+            # Proactive surfacing remains additionally cadence-gated. The
+            # caller opt-in is necessary but not sufficient for this branch.
+            elif _proactive_kg_due(ctx):
+                proactive = await _cached_kg_search_by_checkin_text(
+                    ctx, floor=_KG_PROACTIVE_FLOOR
+                )
+                proactive = await _dedupe_surfaced_kg(ctx, proactive)
+                if proactive:
+                    ctx.response_data["_mirror_kg_results"] = proactive
+                    signal_records.append({
+                        "signal_type": "kg_proactive_surface",
+                        "metric": "kg_relevance",
+                        "value": max(
+                            (r.get("relevance", 0) or 0) for r in proactive
+                        ),
+                        "threshold": _KG_PROACTIVE_FLOOR,
+                        "fired": True,
+                        "discovery_ids": [
+                            r.get("discovery_id") for r in proactive if r.get("discovery_id")
+                        ],
+                    })
 
         # 3c. In-flow review nudge (adoption increment 2, #1685) — when this
         #     check-in itself reports uncertain ground, offer the one-call

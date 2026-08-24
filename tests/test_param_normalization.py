@@ -186,7 +186,7 @@ class TestCompactSearchDetails:
         records = normalize_compact_search_details(args)
 
         assert records == {}
-        assert args["response_mode"] == (mode or "compact")
+        assert args["response_mode"] == (mode or "lean")
         assert args["include_details"] is False
         assert args[FRIENDLY_SEARCH_DETAIL_POLICY_KEY] == "digest_before_serialization"
         assert args[FRIENDLY_SEARCH_DETAILS_REQUESTED_KEY] is False
