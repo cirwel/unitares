@@ -10,6 +10,7 @@ import json
 import pytest
 
 from agents.dialectic_reviewer.reviewer import (
+    DEFAULT_CONTINUATION_WAIT_S,
     Thesis,
     Verdict,
     build_continuation_prompt,
@@ -17,6 +18,13 @@ from agents.dialectic_reviewer.reviewer import (
     find_pending_paused_response,
     parse_reviewer_verdict,
 )
+from src.dialectic_protocol import DialecticSession
+
+
+def test_default_continuation_covers_protocol_synthesis_window():
+    assert DEFAULT_CONTINUATION_WAIT_S >= (
+        DialecticSession.MAX_SYNTHESIS_WAIT.total_seconds()
+    )
 
 
 # --------------------------- parse_reviewer_verdict --------------------------- #
