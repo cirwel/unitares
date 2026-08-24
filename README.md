@@ -141,6 +141,9 @@ possible:
 | Request governed, on-record review | `request_review(issue_description=...)` |
 | Read state without writing | `check_working_state()` |
 
+See the [advisory consultation facade proposal](docs/proposals/consult-advisory-facade-v1.md)
+for the routing, privacy, and authority contract behind `consult`.
+
 When recording an outcome for a specific check-in, pass the `prediction_id`
 from that check-in's response so the outcome grades that claim rather than an
 unrelated earlier one.
