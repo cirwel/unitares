@@ -130,9 +130,13 @@ def get_monitor_metrics(monitor: Any, include_state: bool = True) -> Dict:
     )
     ode_verdict = verdict_from_phi(phi)
 
-    # Prefer behavioral verdict when available (observation-first, not thermostat)
+    # Replay the final verdict paired with ``resolved_risk``.  The behavioral
+    # verdict alone is not sufficient: the verification floor can escalate the
+    # final pair after behavioral/Φ resolution.  Legacy monitors without the
+    # resolved transient keep the old best-effort fallback until DB hydration.
+    resolved_verdict = getattr(monitor, '_last_resolved_verdict', None)
     behavioral_verdict = getattr(monitor, '_last_behavioral_verdict', None)
-    verdict = behavioral_verdict if behavioral_verdict else ode_verdict
+    verdict = resolved_verdict or behavioral_verdict or ode_verdict
 
     # Headline `risk_score` must be the verdict's risk, matching what the
     # check-in persisted — not the Φ trend it used to report.
@@ -171,6 +175,15 @@ def get_monitor_metrics(monitor: Any, include_state: bool = True) -> Dict:
         'history_size': len(state.V_history),
         'current_risk': None if is_uninitialized else current_risk,
         'mean_risk': None if is_uninitialized else mean_risk,
+        # Explicit names for the demoted Φ-derived telemetry.  Keep the legacy
+        # aliases above for wire compatibility, but new consumers must not use
+        # them as decision or recovery authority.
+        'phi_risk_latest': (
+            None if is_uninitialized or not state.risk_history
+            else float(state.risk_history[-1])
+        ),
+        'phi_risk_current': None if is_uninitialized else current_risk,
+        'phi_risk_mean': None if is_uninitialized else mean_risk,
         'risk_score': None if is_uninitialized else risk_score_value,
         # Which signal produced risk_score/status. 'resolved' = the risk the
         # last verdict was made from (matches the persisted row);
@@ -183,6 +196,11 @@ def get_monitor_metrics(monitor: Any, include_state: bool = True) -> Dict:
         'latest_risk_score': None if is_uninitialized else latest_risk_score,
         'phi': float(phi),
         'verdict': 'uninitialized' if is_uninitialized else verdict,
+        'verdict_resolution_source': (
+            None if is_uninitialized
+            else ('resolved' if resolved_verdict is not None
+                  else ('behavioral_transient' if behavioral_verdict else 'phi_state'))
+        ),
         'void_active': bool(state.void_active),
         'void_frequency': float(np.mean([float(abs(v) > config.VOID_THRESHOLD_INITIAL)
                                         for v in state.V_history])) if state.V_history else 0.0,

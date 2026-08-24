@@ -151,13 +151,14 @@ async def test_low_legacy_coherence_does_not_block_resume(test_agent_setup):
 
 @pytest.mark.asyncio
 async def test_high_risk_not_resumed(test_agent_setup):
-    """Test 5: High risk should prevent resume."""
+    """Test 5: High resolved decision risk should prevent resume."""
     from src.mcp_handlers.shared import get_mcp_server
     mcp_server = get_mcp_server()
 
-    # Set high risk via risk_history (get_metrics() computes mean_risk from this)
+    # Recovery authority is the resolved risk/verdict pair, not Phi history.
     monitor = mcp_server.get_or_create_monitor(test_agent_setup["_agent_uuid"])
-    monitor.state.risk_history = [0.8] * 10  # Above threshold of 0.65
+    monitor._last_resolved_risk = 0.8  # Above threshold of 0.65
+    monitor._last_resolved_verdict = "pause"
     monitor.state.update_count = 10
 
     arguments = {

@@ -344,7 +344,9 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
             v41["basin_note"] = "pending (first check-in required)"
     else:
         try:
-            risk_score = metrics.get("risk_score") or metrics.get("latest_risk_score")
+            risk_score = metrics.get("risk_score")
+            if risk_score is None:
+                risk_score = metrics.get("latest_risk_score")
             interpreted_state = monitor.state.interpret_state(risk_score=risk_score)
             standardized_metrics["state"] = interpreted_state
             health = interpreted_state.get("health", "unknown")

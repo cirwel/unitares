@@ -29,7 +29,8 @@ describe("agents observability semantics", () => {
             presence: { status: "unknown", signals: [] },
             metrics: {
               E: 0.70, I: 0.74, S: 0.28, V: -0.04,
-              coherence: 0.48, risk: 0, verdict: "safe",
+              coherence: 0.48, risk: 0, riskSource: "resolved",
+              phiRiskCurrent: 0.88, verdict: "safe",
               source: "persisted_state", recordedAt: last,
               rollingMetricsAvailable: false,
             },
@@ -83,6 +84,8 @@ describe("agents observability semantics", () => {
     let text = dom.window.document.getElementById("ag-mount").textContent;
     expect(text).toContain("State rows");
     expect(text).toContain("observed");
+    expect(text).toContain("Decision risk");
+    expect(text).not.toContain("Raw risk telemetry");
 
     dom.window.document.querySelector(".ag-row").dispatchEvent(
       new dom.window.Event("click", { bubbles: true }),
@@ -104,6 +107,8 @@ describe("agents observability semantics", () => {
     expect(text).toContain("0 authored");
     expect(text).toContain("42 automatic");
     expect(text).toContain("telemetry legacy/missing");
+    expect(text).toContain("decision risk 0.00");
+    expect(text).toContain("Φ risk 0.88");
   });
 
   it("keeps positive presence independent from archived lifecycle and state rows", async () => {
