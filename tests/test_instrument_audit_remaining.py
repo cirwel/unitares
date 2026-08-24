@@ -79,15 +79,28 @@ def test_quantile_mode_reports_its_rate_as_definitional_not_measured(floor_mod):
 
     A threshold DEFINED as a quantile of the safe distribution fixes its own
     false-positive rate on that distribution. Splitting into calibration and
-    holdout halves stops the rate being an exact identity, but the halves are
-    exchangeable by construction, so the held-out number is a sampling estimate
-    centred on 1-q — a noise check on the quantile, not a regression bound.
+    holdout halves stops the rate being an exact identity, but it still does not
+    bound regression risk: the held-out number is a noise check on the quantile.
+
+    An earlier version of this docstring finished that sentence with "a sampling
+    estimate centred on 1-q, because the halves are exchangeable". That is the
+    #1856 claim #1862 retracted, and it survived here in a TEST docstring after
+    being withdrawn from the module — so the suite documenting the retraction
+    still asserted the retracted thing. Exchangeability gives the RANK result in
+    `conformal_exceedance`, not a centre at 1-q.
+
+    The assertion below checks the PROPERTY (the rate is reported as
+    definitional, not as a measurement) rather than one phrasing of it. The
+    wording moved when the report began printing the rate its threshold actually
+    realizes instead of the nominal 1-q; the property did not.
     """
     rng = random.Random(11)
     safe = [rng.gauss(0, 1) for _ in range(1000)]
     lines = "\n".join(floor_mod.separation_report(safe, non_safe=[], seed=0))
 
-    assert "BY CONSTRUCTION, not measured" in lines
+    assert "definitional" in lines and "not measured" in lines
+    # ...and it must not sell the quantile-mode rate as a bound
+    assert "This IS a regression bound" not in lines
     assert "CANNOT bound regression risk" in lines
     assert "Still not a regression bound" in lines
     assert "--threshold" in lines           # names the mode that does bound it

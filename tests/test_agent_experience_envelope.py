@@ -12,6 +12,7 @@ request_review) are reshaped. The two contract guarantees pinned here:
 
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 
 import pytest
@@ -22,6 +23,7 @@ from src.mcp_handlers.middleware.envelope_step import (
     apply_experience_envelope,
     build_experience_envelope,
 )
+from src.mcp_handlers.response_formatter import format_response
 from src.mcp_handlers.tool_stability import is_experience_alias
 
 
@@ -265,6 +267,36 @@ def test_sync_state_envelope_surfaces_provisional_verdict_caveat():
     assert env["action_summary"]["evidence_basis"] == "phi_cold_start"
 
 
+def test_sync_state_full_payload_uses_primary_eisv_source_for_verdict_maturity():
+    """Full mode need not depend on the optional risk-attribution wrapper.
+
+    The canonical metrics source is enough to preserve the same cold-start
+    caveat that the filtered modes carry in their wrapped verdict evidence.
+    """
+    payload = {
+        "success": True,
+        "decision": {"action": "proceed", "sub_action": "approve"},
+        "metrics": {
+            "coherence": 0.49,
+            "risk_score": 0.05,
+            "verdict": "safe",
+            "primary_eisv_source": "ode_fallback",
+        },
+    }
+
+    env = build_experience_envelope(
+        "sync_state",
+        "process_agent_update",
+        payload,
+        {"response_mode": "full"},
+    )
+
+    assert env["action_summary"]["verdict_confidence"] == "provisional"
+    assert env["action_summary"]["evidence_basis"] == "ode_fallback"
+    assert "metrics.primary_eisv_source" in env["verdict_caveat"]
+    assert env["state_summary"]["verdict_provisional"] is True
+
+
 def test_sync_state_compact_envelope_lifts_provisional_evidence_and_legacy_diagnostic():
     """Compact mode keeps cold-start evidence inside metrics.verdict; the
     action-first envelope must lift it without requiring a full payload."""
@@ -316,6 +348,64 @@ def test_sync_state_compact_envelope_lifts_provisional_evidence_and_legacy_diagn
         ),
         "coherence": 0.49,
     }
+
+
+@pytest.mark.parametrize(
+    ("requested_mode", "resolved_mode"),
+    (("minimal", "minimal"), ("standard", "standard"), ("interpreted", "standard")),
+)
+def test_legacy_modes_keep_action_and_cold_start_caveat(
+    requested_mode: str,
+    resolved_mode: str,
+):
+    """Legacy skinny/interpreted modes must not erase verdict assurance."""
+    source = {
+        "success": True,
+        "status": "healthy",
+        "decision": {
+            "action": "proceed",
+            "sub_action": "approve",
+            "reason": "Low risk on the cold-start prior.",
+            "margin": "settling",
+            "nearest_edge": None,
+        },
+        "metrics": {
+            "E": 0.5,
+            "I": 0.5,
+            "S": 0.3,
+            "V": 0.0,
+            "phi": 0.7,
+            "coherence": 0.49,
+            "coherence_source": "legacy_tanh_v",
+            "coherence_role": "ode_control_feedback",
+            "risk_score": 0.05,
+            "verdict": "safe",
+            "primary_eisv_source": "ode_fallback",
+        },
+    }
+
+    formatted = format_response(
+        deepcopy(source),
+        {"response_mode": requested_mode},
+        task_type="feature",
+    )
+    env = build_experience_envelope(
+        "sync_state",
+        "process_agent_update",
+        formatted,
+        {"response_mode": requested_mode},
+    )
+
+    assert formatted["_mode"] == resolved_mode
+    assert env["action_summary"]["action"] == "proceed"
+    assert env["action_summary"]["sub_action"] == "approve"
+    assert env["action_summary"]["verdict"] == "safe"
+    assert env["action_summary"]["verdict_confidence"] == "provisional"
+    assert env["action_summary"]["evidence_basis"] == "ode_fallback"
+    assert env["state_summary"]["action"] == "proceed"
+    assert env["state_summary"]["verdict_provisional"] is True
+    assert "raw_governance.verdict.evidence" in env["verdict_caveat"]
+    assert env["legacy_diagnostics"]["health_evidence"] is False
 
 
 def test_sync_state_envelope_no_caveat_when_baseline_warm():
@@ -479,9 +569,50 @@ def test_search_envelope_counts_and_suggests():
         "current": "compact",
         "digest": "compact",
         "complete_result_set": "full",
+        "all_inline_details": "response_mode='full' + include_details=true",
     }
     assert "raw_governance" not in env
     assert "response_mode='full'" in env["raw_governance_hint"]
+
+
+def test_compact_search_does_not_claim_details_it_omits():
+    payload = {
+        "success": True,
+        "count": 1,
+        "discoveries": [
+            {
+                "id": "d1",
+                "summary": "prior art",
+                "details": "large inline details",
+                "details_preview": "large inline...",
+                "has_details": True,
+                "has_more_details": True,
+            }
+        ],
+        "discovery_retrieval_options": {
+            "current_tier": "full_inline",
+            "digest": "include_details=false",
+            "open_one": "knowledge(action='details', discovery_id='...')",
+            "all_inline": "include_details=true (can be large)",
+        },
+    }
+
+    env = build_experience_envelope(
+        "search_shared_memory",
+        "knowledge",
+        payload,
+        {"response_mode": "compact", "include_details": True},
+    )
+
+    options = env["discovery_retrieval_options"]
+    assert options["requested_tier"] == "full_inline"
+    assert options["current_tier"] == "digest"
+    assert options["details_included"] is False
+    assert options["details_omitted_by"] == "response_mode='compact'"
+    assert "response_mode='full'" in options["all_inline"]
+    assert env["state_summary"]["result_tier"] == "digest"
+    assert "details" not in env["memory_suggestions"][0]
+    assert "raw_governance" not in env
 
 
 def test_full_sync_state_reports_large_response_and_reduction_mode():
@@ -501,6 +632,85 @@ def test_full_sync_state_reports_large_response_and_reduction_mode():
 
     assert env["_response_size"]["size_class"] in {"medium", "large"}
     assert "response_mode='compact'" in env["_response_size"]["reduce_with"]
+
+
+def test_compact_sync_state_stays_small_with_large_audit_gates():
+    """Persisted self-contained gates must not turn compact into near-full."""
+    gate = {
+        "schema": "eisv.cold-start-confirmation.v1",
+        "measurement_phase": "behavioral_ready",
+        "measurement_ready": True,
+        "behavioral_confidence": 0.6,
+        "is_baselined": True,
+        "primary_driver": "behavioral_assessment",
+        "primary_eisv_source": "behavioral",
+        "eligible": False,
+        "outcome": "ineligible",
+        "note": "x" * 5_000,
+        "original_decision": {"reason": "x" * 5_000},
+    }
+    source = {
+        "success": True,
+        "status": "healthy",
+        "health_status": "healthy",
+        "decision": {
+            "action": "proceed",
+            "sub_action": "approve",
+            "reason": "Low risk.",
+            "margin": "comfortable",
+            "nearest_edge": None,
+        },
+        "metrics": {
+            "E": 0.6,
+            "I": 0.7,
+            "S": 0.2,
+            "V": -0.1,
+            "coherence": 0.49,
+            "coherence_source": "legacy_tanh_v",
+            "coherence_role": "ode_control_feedback",
+            "risk_score": 0.08,
+            "verdict": "safe",
+            "primary_eisv_source": "behavioral",
+        },
+        "policy_evaluation": {
+            "policy_name": "monitor_decision",
+            "action": "proceed",
+            "sub_action": "approve",
+            "inputs": {
+                "primary_eisv_source": "behavioral",
+                "risk_score": 0.08,
+                "verdict": "safe",
+            },
+            "maturity_gate": gate,
+        },
+        "enforcement": {
+            "schema": "governance.enforcement.v1",
+            "scope": "runtime_circuit_breaker",
+            "requested": False,
+            "applied": False,
+            "basis": "advisory_policy",
+            "maturity_gate": gate,
+        },
+    }
+
+    formatted = format_response(
+        deepcopy(source),
+        {"response_mode": "compact"},
+        task_type="feature",
+    )
+    env = build_experience_envelope(
+        "sync_state",
+        "process_agent_update",
+        formatted,
+        {"response_mode": "compact"},
+    )
+
+    wire_bytes = len(json.dumps(env, ensure_ascii=False).encode("utf-8"))
+    assert wire_bytes < 4_000
+    assert env["_response_size"]["size_class"] == "small"
+    assert "policy_evaluation" not in formatted
+    assert "enforcement" not in formatted
+    assert "response_mode='full'" in formatted["_raw_available"]
 
 
 def test_search_envelope_full_escape_hatch_preserves_raw_payload():
