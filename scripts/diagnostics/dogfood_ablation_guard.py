@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Silent guard for UNITARES dogfood identity and ablation-lane invariants.
+"""Silent guard for dogfood identity, ablation lanes, and risk authority.
 
 This script is deliberately small and CI-testable: pure helper functions hold the
 invariants, while the CLI wires them to the live REST endpoint and repo-local
@@ -31,6 +31,7 @@ DEFAULT_DOGFOOD_OUTPUT_DIR = (
 IDENTITY_ALERT = "no-session get_governance_metrics is not identity-neutral"
 INVENTORY_ALERT = "outcome inventory no longer exposes BEAM/substrate eprocess lanes"
 LANE_CONTRACT_ALERT = "ablation harness-lane contract tests failed"
+RISK_AUTHORITY_ALERT = "risk-authority ablation contract failed"
 DOGFOOD_SILENT_ALERT = "dogfood response combines [SILENT] with substantive content"
 DOGFOOD_SURFACE_ALERT = "dogfood response declares multiple primary surfaces"
 DOGFOOD_ALL_CLEAR_ALERT = "dogfood all-clear omits the required open-findings query"
@@ -76,6 +77,27 @@ def inventory_lane_alert(counts: dict[str, int]) -> str | None:
 
     if "eprocess_eligible_beam" not in counts or "eprocess_eligible_substrate" not in counts:
         return INVENTORY_ALERT
+    return None
+
+
+def risk_authority_ablation_alert(report: object) -> str | None:
+    """Validate the bounded synthetic authority report without live outcomes."""
+
+    if not isinstance(report, dict):
+        return RISK_AUTHORITY_ALERT
+    if (
+        report.get("schema") != "risk_authority_ablation.v1"
+        or report.get("mode") != "synthetic_restart_contract"
+        or report.get("live_outcomes_read") is not False
+        or report.get("live_governance_mutated") is not False
+        or report.get("passed") is not True
+    ):
+        return RISK_AUTHORITY_ALERT
+    arms = report.get("arms")
+    if not isinstance(arms, list) or len(arms) != 3:
+        return RISK_AUTHORITY_ALERT
+    if any(not isinstance(arm, dict) or arm.get("passed") is not True for arm in arms):
+        return RISK_AUTHORITY_ALERT
     return None
 
 
@@ -160,7 +182,8 @@ def render_alert_report(alerts: Sequence[str], evidence: Sequence[str]) -> str:
     ]
     lines.extend(f"- {item}" for item in evidence)
     lines.append(
-        "Next: inspect identity proof-origin and harness-lane code before interpreting dogfood or ablation signals."
+        "Next: inspect identity proof-origin, harness-lane, and risk-authority "
+        "persistence/read-path code before interpreting dogfood or ablation signals."
     )
     return "\n".join(lines)
 
@@ -305,6 +328,32 @@ def collect_alerts(
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
         alerts.append(LANE_CONTRACT_ALERT)
         evidence.append(f"lane_contract_error={type(exc).__name__}: {exc}")
+
+    try:
+        authority_output = run_repo_script(
+            repo,
+            python,
+            "scripts/diagnostics/risk_authority_ablation.py",
+            (),
+            timeout_seconds=timeout_seconds,
+        )
+        authority_report = json.loads(authority_output)
+        if alert := risk_authority_ablation_alert(authority_report):
+            alerts.append(alert)
+            evidence.append("risk_authority_ablation=invalid_report")
+        else:
+            evidence.append(
+                "risk_authority_ablation=passed; arms=3; "
+                "live_outcomes_read=false; live_governance_mutated=false"
+            )
+    except (
+        OSError,
+        RuntimeError,
+        subprocess.TimeoutExpired,
+        json.JSONDecodeError,
+    ) as exc:
+        alerts.append(RISK_AUTHORITY_ALERT)
+        evidence.append(f"risk_authority_error={type(exc).__name__}: {exc}")
 
     return alerts, evidence
 

@@ -1,3 +1,5 @@
+import json
+
 from scripts.diagnostics.dogfood_ablation_guard import (
     collect_alerts,
     dogfood_response_alerts,
@@ -6,6 +8,7 @@ from scripts.diagnostics.dogfood_ablation_guard import (
     inventory_lane_alert,
     parse_inventory_counts,
     render_alert_report,
+    risk_authority_ablation_alert,
 )
 
 
@@ -84,6 +87,28 @@ eprocess_eligible_substrate: 285
     )
 
 
+def test_risk_authority_guard_requires_three_bounded_passing_arms():
+    report = {
+        "schema": "risk_authority_ablation.v1",
+        "mode": "synthetic_restart_contract",
+        "live_outcomes_read": False,
+        "live_governance_mutated": False,
+        "passed": True,
+        "arms": [{"passed": True}, {"passed": True}, {"passed": True}],
+    }
+
+    assert risk_authority_ablation_alert(report) is None
+    assert risk_authority_ablation_alert({**report, "live_outcomes_read": True}) == (
+        "risk-authority ablation contract failed"
+    )
+    assert risk_authority_ablation_alert({**report, "arms": report["arms"][:2]}) == (
+        "risk-authority ablation contract failed"
+    )
+    assert risk_authority_ablation_alert({**report, "passed": False}) == (
+        "risk-authority ablation contract failed"
+    )
+
+
 def test_collect_alerts_checks_lane_contract_without_reading_live_matrix(monkeypatch, tmp_path):
     calls = []
     dogfood_output_dir = tmp_path / "dogfood-output"
@@ -104,6 +129,19 @@ No actionable friction found after the query and edge-case probe.
         calls.append((script, tuple(args)))
         if script.endswith("outcome_inventory.py"):
             return "eprocess_eligible: 2\neprocess_eligible_beam: 1\neprocess_eligible_substrate: 1\nstrict_bad: 0\n"
+        if script.endswith("risk_authority_ablation.py"):
+            return json.dumps({
+                "schema": "risk_authority_ablation.v1",
+                "mode": "synthetic_restart_contract",
+                "live_outcomes_read": False,
+                "live_governance_mutated": False,
+                "passed": True,
+                "arms": [
+                    {"passed": True},
+                    {"passed": True},
+                    {"passed": True},
+                ],
+            })
         assert script == "-m"
         assert args[0] == "pytest"
         return "4 passed\n"
@@ -128,7 +166,12 @@ No actionable friction found after the query and edge-case probe.
     assert alerts == []
     assert not any(script.endswith("eisv_ablation_matrix.py") for script, _ in calls)
     assert any(script == "-m" and args[0] == "pytest" for script, args in calls)
+    assert any(script.endswith("risk_authority_ablation.py") for script, _ in calls)
     assert "ablation_lane_contract_tests=passed; live_outcomes_read=false" in evidence
+    assert (
+        "risk_authority_ablation=passed; arms=3; live_outcomes_read=false; "
+        "live_governance_mutated=false"
+    ) in evidence
 
 
 def test_render_alert_report_is_silent_when_all_guards_pass():

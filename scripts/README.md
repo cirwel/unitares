@@ -132,6 +132,7 @@ checks:
 |--------|-------------|
 | `agent_fragmentation.py` | Read-only report for identities with zero or sparse real check-ins, grouped by model/session/thread so fresh-UUID fragmentation is visible. |
 | `count_tools.py` | Canonical tool counter — counts from the runtime decorator registry (`--json`, `--by-module`); warns and reports 0 when runtime deps are absent. |
+| `risk_authority_ablation.py` | Synthetic three-arm restart contract proving resolved decision risk and rolling Φ telemetry stay separate through persistence, metrics, and recovery authority; reads no live outcomes and mutates no live governance state. |
 | `update_docs_tool_count.py` | Check (`--check`) or update (`--update`) tool-count references in docs, counting via `count_tools.py`. |
 | `check_ci_python_matrix_sync.py` | Static check that the tests.yml Python matrix matches pyproject `requires-python`. |
 | `validate_tool_modes.py` | Asserts `TOOL_CATEGORIES` matches the tool schema (alias-aware) and that minimal/lite keep their discovery tools. DB-free; wired into the CI `smoke` gate. |
