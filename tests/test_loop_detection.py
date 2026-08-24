@@ -351,7 +351,9 @@ class TestSafetyNetResume:
         state = SimpleNamespace(coherence=0.05, void_active=False)
         monitor = MagicMock()
         monitor.state = state
-        monitor.get_metrics.return_value = {"mean_risk": 0.3}
+        monitor.get_metrics.return_value = {
+            "risk_score": 0.3, "risk_score_source": "resolved", "mean_risk": 0.3,
+        }
         return monitor
 
     @pytest.fixture
@@ -359,7 +361,9 @@ class TestSafetyNetResume:
         state = SimpleNamespace(coherence=0.90, void_active=False)
         monitor = MagicMock()
         monitor.state = state
-        monitor.get_metrics.return_value = {"mean_risk": 0.7}
+        monitor.get_metrics.return_value = {
+            "risk_score": 0.7, "risk_score_source": "resolved", "mean_risk": 0.7,
+        }
         return monitor
 
     @pytest.mark.asyncio

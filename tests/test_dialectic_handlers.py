@@ -260,15 +260,19 @@ class TestHandleRequestDialecticReview:
         Regression guard: previously this self-assigned the paused agent as its own
         reviewer, which occupied the slot and blocked any later summoned/first-
         responder reviewer (the first-responder guard requires reviewer_agent_id
-        is None). The slot must stay claimable and the session flag
-        awaiting_facilitation.
+        is None). The slot must stay claimable, but opening it before a thesis
+        exists is not yet a human-facilitation request.
         """
         from src.mcp_handlers.dialectic.handlers import handle_request_dialectic_review
         from src.mcp_handlers.dialectic.session import ACTIVE_SESSIONS
 
         with mock_require_registered("agent-paused"), mock_verify_ownership, \
              mock_pg_create as pg_create, mock_is_in_session, mock_context_agent, \
-             mock_select_reviewer:
+             mock_select_reviewer, \
+             patch(f"{DIALECTIC}.pg_update_awaiting_facilitation",
+                   new_callable=AsyncMock) as update_awaiting, \
+             patch(f"{DIALECTIC}._emit_dialectic_event",
+                   new_callable=AsyncMock) as emit:
             result = await handle_request_dialectic_review({
                 "agent_id": "agent-paused",
                 "_agent_uuid": "agent-paused",
@@ -288,9 +292,12 @@ class TestHandleRequestDialecticReview:
         assert "thesis" in data["note"].lower()
         # Persisted with a NULL reviewer (not the paused agent).
         assert pg_create.await_args.kwargs["reviewer_agent_id"] is None
-        # Session flagged as awaiting an independent reviewer.
+        # The reviewer is summoned only after thesis submission. Do not page a
+        # human or poison the facilitation metric before that attempt occurs.
         session = ACTIVE_SESSIONS[data["session_id"]]
-        assert session.awaiting_facilitation is True
+        assert session.awaiting_facilitation is False
+        update_awaiting.assert_not_awaited()
+        assert [call.args[0] for call in emit.await_args_list] == ["dialectic_opened"]
 
     @pytest.mark.asyncio
     async def test_explicit_self_review_still_self_assigns(
@@ -2164,6 +2171,44 @@ class TestCheckReviewerStuck:
 
         result = await check_reviewer_stuck(session)
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_paused_reviewer_owing_reconsideration_is_stuck(self, mock_server):
+        """A paused reviewer can strand a rejected synthesis response."""
+        from src.mcp_handlers.dialectic.handlers import check_reviewer_stuck
+
+        mock_server.agent_metadata["agent-reviewer"] = _make_agent_meta(
+            status="paused"
+        )
+        session = _make_session(phase=DialecticPhase.SYNTHESIS)
+        session.awaiting_facilitation = True
+
+        assert await check_reviewer_stuck(session) is True
+
+    @pytest.mark.asyncio
+    async def test_synthesis_without_owed_reconsideration_is_not_stuck(self, mock_server):
+        """A normal synthesis phase still belongs to the protocol timeout."""
+        from src.mcp_handlers.dialectic.handlers import check_reviewer_stuck
+
+        mock_server.agent_metadata["agent-reviewer"] = _make_agent_meta(
+            status="paused"
+        )
+        session = _make_session(phase=DialecticPhase.SYNTHESIS)
+        session.awaiting_facilitation = False
+
+        assert await check_reviewer_stuck(session) is False
+
+    @pytest.mark.asyncio
+    async def test_active_reconsidering_reviewer_keeps_synthesis_window(self, mock_server):
+        from src.mcp_handlers.dialectic.handlers import check_reviewer_stuck
+
+        mock_server.agent_metadata["agent-reviewer"] = _make_agent_meta(
+            status="active"
+        )
+        session = _make_session(phase=DialecticPhase.SYNTHESIS)
+        session.awaiting_facilitation = True
+
+        assert await check_reviewer_stuck(session) is False
 
 
 # ============================================================================

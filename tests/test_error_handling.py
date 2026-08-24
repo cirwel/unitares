@@ -18,6 +18,8 @@ These tests pin both, plus the error_response envelope shape.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -138,6 +140,59 @@ class TestErrorResponse:
         assert d["error"] == "Agent not found"
         assert "server_time" in d
         assert "agent_signature" in d
+
+    # -- the error path has no response_mode, so the envelope itself must
+    # -- carry its own weight (dogfood 2026-08-24)
+
+    @patch("src.mcp_handlers.context.get_context_client_hint")
+    @patch("src.mcp_handlers.context.get_context_agent_id")
+    @patch("src.mcp_handlers.shared.get_mcp_server")
+    def test_error_signature_stubs_provenance_but_keeps_the_contract(
+        self, mock_srv, mock_ctx, mock_hint
+    ):
+        """A bound caller's validation error carries the trimmed envelope.
+
+        This has to mock a bound identity to mean anything: with no context
+        agent_id, compute_agent_signature returns {"uuid": None} and there is
+        no identity_context to assert about at all -- a version of this test
+        that skipped the mocks would pass with the change fully reverted.
+        """
+        mock_ctx.return_value = "uuid-err"
+        # A harness type has to be present, or runtime_provenance is stubbed by
+        # #1872's "nothing was reported" branch and this test would pass with
+        # the change reverted.
+        mock_hint.return_value = "claude_code"
+        server = MagicMock()
+        server.agent_metadata = {
+            "uuid-err": SimpleNamespace(
+                status="active",
+                label="dogfood",
+                structured_id=None,
+                display_name="dogfood",
+                paused_at=None,
+                agent_uuid="uuid-err",
+                tags=[],
+                public_agent_id="Claude_20260824",
+            )
+        }
+        mock_srv.return_value = server
+
+        d = self._payload("Invalid limit -5: must be at least 1", arguments=None)
+        assert d["success"] is False
+        signature = d["agent_signature"]
+        # Guard the guard: if the identity never bound, the assertions below
+        # would be vacuous.
+        assert signature["uuid"] == "uuid-err"
+        context = signature["identity_context"]
+
+        assert context["agent_id_is"] == "public_structured_handle"
+        assert context["public_handle"]["agent_id"] == "Claude_20260824"
+        provenance = context["harness_context"]["runtime_provenance"]
+        assert context["harness_context"]["harness_type"] == "claude_code"
+        assert provenance["detail"] == "omitted"
+        assert "model" not in provenance
+        assert "identity_assurance" not in context
+        assert "identity_assurance" in signature
 
     def test_auto_infers_code_and_category(self):
         d = self._payload("Agent not found", arguments=None)

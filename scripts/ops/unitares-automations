@@ -951,62 +951,109 @@ def collect_external(warnings: list[str]) -> list[Automation]:
     return results
 
 
-def _settings_hook_sources() -> list[tuple[Path, str | None]]:
-    """(settings-or-hooks-json, plugin_root) pairs that can declare hooks.
+def _installed_plugin_roots() -> list[Path]:
+    """Return runtime plugin roots, never historical cache siblings.
 
-    User settings first, then every installed plugin's hooks/hooks.json —
-    directory-source plugins (read live from a checkout) and cached ones.
+    Claude records each installed version's exact ``installPath``. Codex's
+    personal plugins are the direct entries under ``~/.codex/plugins`` (often
+    symlinks to live source checkouts). A cache walk cannot distinguish either
+    of those from old versions left behind after an update, and a marketplace
+    source path says where a plugin is developed, not whether that checkout is
+    the runtime installation.
     """
+    roots: list[Path] = []
+    installed = HOME / ".claude/plugins/installed_plugins.json"
+    if installed.exists():
+        try:
+            data = json.loads(installed.read_text())
+            plugins = data.get("plugins", data) if isinstance(data, dict) else {}
+            if isinstance(plugins, dict):
+                for entries in plugins.values():
+                    if isinstance(entries, dict):
+                        entries = [entries]
+                    if not isinstance(entries, list):
+                        continue
+                    for entry in entries:
+                        path = entry.get("installPath") if isinstance(entry, dict) else None
+                        if path:
+                            roots.append(Path(path).expanduser())
+        except Exception:  # noqa: BLE001 - best-effort inventory
+            pass
+
+    codex_plugins = HOME / ".codex/plugins"
+    if codex_plugins.is_dir():
+        for entry in sorted(codex_plugins.iterdir()):
+            if entry.name == "cache" or entry.name.startswith("."):
+                continue
+            if entry.is_dir():
+                roots.append(entry)
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        if not root.is_dir():
+            continue
+        key = str(root.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(root)
+    return deduped
+
+
+def _plugin_hook_declarations(root: Path) -> list[Path]:
+    """Resolve host hook manifests declared by a runtime plugin root."""
+    candidates: list[Path] = []
+    for manifest_rel in (".claude-plugin/plugin.json", ".codex-plugin/plugin.json"):
+        manifest = root / manifest_rel
+        if not manifest.exists():
+            continue
+        try:
+            data = json.loads(manifest.read_text())
+        except Exception:  # noqa: BLE001 - conventional paths still apply
+            continue
+        declared = data.get("hooks") if isinstance(data, dict) else None
+        if isinstance(declared, str):
+            candidates.append(root / declared)
+        elif isinstance(declared, list):
+            candidates.extend(root / item for item in declared if isinstance(item, str))
+
+    # Older Claude plugins use hooks/hooks.json without a manifest pointer;
+    # host-specific bundles may also keep Claude and Codex declarations apart.
+    candidates.extend(
+        root / rel
+        for rel in ("hooks/hooks.json", "hooks/claude-hooks.json", "hooks/codex-hooks.json")
+    )
+
+    declarations: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        key = str(candidate.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        declarations.append(candidate)
+    return declarations
+
+
+def _settings_hook_sources() -> list[tuple[Path, str | None]]:
+    """(settings-or-hooks-json, plugin_root) pairs that can declare hooks."""
     sources: list[tuple[Path, str | None]] = [
         (HOME / ".claude/settings.json", None),
         (HOME / ".claude/settings.local.json", None),
     ]
-    marketplaces = HOME / ".claude/plugins/known_marketplaces.json"
-    roots: list[Path] = []
-    if marketplaces.exists():
-        try:
-            data = json.loads(marketplaces.read_text())
-            for entry in (data or {}).values() if isinstance(data, dict) else []:
-                src = (entry or {}).get("source") if isinstance(entry, dict) else None
-                path = (src or {}).get("path") if isinstance(src, dict) else None
-                if path:
-                    roots.append(Path(path))
-        except Exception:  # noqa: BLE001 - best effort; absence is not an error
-            pass
-    # Cached (marketplace-installed) plugins nest hooks.json/codex-hooks.json
-    # at `cache/<marketplace>/<plugin>/<version>/hooks/...` -- three levels
-    # under `cache/`, not directly inside it. `cache.iterdir()` treated each
-    # marketplace directory itself as a plugin root and never found a hooks
-    # declaration there, so every cached (non-directory-source) plugin's
-    # hooks were invisible to the census, not merely orphaned or missing --
-    # verified 2026-08-22 against the live cache: `hookify` declares hooks.json
-    # in three installed locations and none reached this collector. Walking
-    # for the declaration files directly is depth-agnostic, so it survives
-    # a marketplace changing its own nesting.
-    cache = HOME / ".claude/plugins/cache"
-    if cache.is_dir():
-        seen_cache_roots: set[Path] = set()
-        for declaration in ("hooks/hooks.json", "hooks/codex-hooks.json"):
-            for hit in cache.rglob(declaration):
-                plugin_root = hit.parent.parent
-                if plugin_root not in seen_cache_roots:
-                    seen_cache_roots.add(plugin_root)
-                    roots.append(plugin_root)
-    for root in roots:
-        # A plugin declares hooks per HOST, in separate files. Reading only
-        # hooks.json (the Claude contract) reports every Codex-only hook as
-        # orphaned -- caught in the field by `post-activity`, which is wired
-        # in codex-hooks.json and was listed as dead.
-        for declaration in ("hooks/hooks.json", "hooks/codex-hooks.json"):
-            path = root / declaration
-            if path.exists():
-                sources.append((path, str(root)))
+    for root in _installed_plugin_roots():
+        for declaration in _plugin_hook_declarations(root):
+            sources.append((declaration, str(root)))
     return sources
 
 
 DISPATCHER_NAMES = {"run-hook.cmd", "run-hook", "run-hook.sh"}
 # Editor/tooling debris that lives beside real hooks but is not a hook.
 NON_HOOK_SUFFIXES = (".bak", ".orig", ".disabled", ".sample", "~")
+NON_HOOK_FILENAMES = {"__init__.py"}
 
 
 _SHELL_KEYWORDS = {
@@ -1198,9 +1245,7 @@ def collect_claude_hooks(warnings: list[str]) -> list[Automation]:
     launchd_blob = "\n".join(launchd_refs)
 
     hook_dirs = [HOME / ".claude/hooks"]
-    for _, plugin_root in _settings_hook_sources():
-        if plugin_root:
-            hook_dirs.append(Path(plugin_root) / "hooks")
+    hook_dirs.extend(root / "hooks" for root in _installed_plugin_roots())
     seen_dirs: set[str] = set()
     for hook_dir in hook_dirs:
         key = str(hook_dir)
@@ -1216,7 +1261,9 @@ def collect_claude_hooks(warnings: list[str]) -> list[Automation]:
             # hooks; reporting them as orphaned is noise that trains people
             # to ignore the orphan list.
             name_l = script.name.lower()
-            if any(s in name_l for s in NON_HOOK_SUFFIXES):
+            if script.name in NON_HOOK_FILENAMES or any(
+                suffix in name_l for suffix in NON_HOOK_SUFFIXES
+            ):
                 continue
             resolved = str(script.resolve())
             if resolved in referenced or script.name in launchd_blob:

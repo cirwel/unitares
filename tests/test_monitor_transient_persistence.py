@@ -105,6 +105,21 @@ class TestLiveWriterPersistsTransients:
 
         assert restored.created_at == born
 
+    def test_resolved_decision_pair_survives_a_restart(self, isolated_data_dir):
+        monitor = UNITARESMonitor(agent_id="transients_authority", load_state=False)
+        _update(monitor)
+        before_risk = monitor._last_resolved_risk
+        before_verdict = monitor._last_resolved_verdict
+
+        ams.save_monitor_state("transients_authority", monitor)
+        data = _saved(isolated_data_dir, "transients_authority")
+        restored = UNITARESMonitor(agent_id="transients_authority")
+
+        assert data["resolved_risk"] == pytest.approx(before_risk)
+        assert data["resolved_verdict"] == before_verdict
+        assert restored._last_resolved_risk == pytest.approx(before_risk)
+        assert restored._last_resolved_verdict == before_verdict
+
     def test_no_divergence_recorded_leaves_keys_absent(self, isolated_data_dir):
         """An agent that submits no sensor EISV must not gain an empty history."""
         monitor = UNITARESMonitor(agent_id="transients_nosensor", load_state=False)
@@ -134,7 +149,8 @@ class TestLiveWriterPersistsTransients:
         legacy = _saved(isolated_data_dir, "transients_parity")
 
         for key in ("sensor_divergence", "sensor_divergence_history",
-                    "created_at_iso", "last_update_iso"):
+                    "created_at_iso", "last_update_iso", "resolved_risk",
+                    "resolved_verdict"):
             assert (key in live) == (key in legacy), f"writers disagree on {key}"
 
     @pytest.mark.asyncio

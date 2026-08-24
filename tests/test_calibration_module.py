@@ -545,14 +545,27 @@ class TestCheckCalibration:
         is_cal, metrics = checker.check_calibration()
         assert is_cal is False
         assert "error" in metrics
+        assert metrics["calibration_status"] == "unassessed"
+        assert metrics["assessability"] == {
+            "overall": False,
+            "strategic": False,
+            "tactical": False,
+            "minimum_samples_per_bin": 10,
+            "reason": "No strategic or tactical calibration bins contain data.",
+        }
 
     def test_well_calibrated_strategic(self, checker):
-        """High confidence + high accuracy -> calibrated."""
+        """A passing strategic arm does not assess the absent tactical arm."""
         for _ in range(20):
             checker.update_ground_truth(0.85, True, True)
         is_cal, metrics = checker.check_calibration(min_samples_per_bin=5)
         assert is_cal is True
         assert len(metrics.get("issues", [])) == 0
+        assert metrics["calibration_status"] == "unassessed"
+        assert metrics["strategic_calibration"]["calibration_status"] == "calibrated"
+        assert metrics["tactical_calibration"]["calibration_status"] == "unassessed"
+        assert metrics["assessability"]["strategic"] is True
+        assert metrics["assessability"]["tactical"] is False
 
     def test_miscalibrated_strategic(self, checker):
         """High confidence + low accuracy -> not calibrated."""
@@ -561,6 +574,24 @@ class TestCheckCalibration:
         is_cal, metrics = checker.check_calibration(min_samples_per_bin=5)
         assert is_cal is False
         assert len(metrics.get("issues", [])) > 0
+        # A measured strategic danger remains RED even though tactical is
+        # independently unassessed.
+        assert metrics["calibration_status"] == "miscalibrated"
+        assert metrics["strategic_calibration"]["calibration_status"] == "miscalibrated"
+        assert metrics["tactical_calibration"]["calibration_status"] == "unassessed"
+
+    def test_both_eligible_arms_are_required_for_calibrated_status(self, checker):
+        for _ in range(20):
+            checker.update_ground_truth(0.85, True, True)
+            checker.record_tactical_decision(0.85, "proceed", True)
+
+        is_cal, metrics = checker.check_calibration(min_samples_per_bin=5)
+
+        assert is_cal is True
+        assert metrics["calibration_status"] == "calibrated"
+        assert metrics["assessability"]["overall"] is True
+        assert metrics["strategic_calibration"]["calibration_status"] == "calibrated"
+        assert metrics["tactical_calibration"]["calibration_status"] == "calibrated"
 
     def test_strategic_and_tactical_keys(self, checker):
         for _ in range(10):
@@ -611,6 +642,8 @@ class TestCheckCalibration:
         # No real miscalibration issues — just insufficient data
         assert len(issues) == 0
         assert is_cal is True
+        assert metrics["calibration_status"] == "unassessed"
+        assert metrics["assessability"]["overall"] is False
 
     def test_strategic_large_error_is_advisory_not_gating(self, checker):
         """A large STRATEGIC error outside the danger direction is advisory, not gating.

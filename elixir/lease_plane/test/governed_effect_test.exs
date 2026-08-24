@@ -365,19 +365,21 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
       assert {:error, :governance_blocked} = blocked.(%{"cmd" => "echo", "args" => ["b"]})
     end
 
-    test "orchestrator_spec forwards cd when the payload names one, omits it otherwise" do
+    test "orchestrator_spec forwards bounded runtime and cd when named" do
       env = %{
         payload: %{
           "cmd" => "python3",
           "args" => ["-m", "agents.dialectic_reviewer"],
           "env" => %{"A" => "1"},
-          "cd" => "/tmp/repo-root"
+          "cd" => "/tmp/repo-root",
+          "max_runtime_ms" => 4_500_000
         },
         proposer_agent_uuid: "00000000-0000-0000-0000-0000000000aa"
       }
 
       spec = GovernedEffect.orchestrator_spec(env)
       assert spec["cd"] == "/tmp/repo-root"
+      assert spec["max_runtime_ms"] == 4_500_000
       assert spec["cmd"] == "python3"
       assert spec["lineage"]["parent_agent_uuid"] == "00000000-0000-0000-0000-0000000000aa"
 
@@ -386,6 +388,14 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
 
       blank_cd = GovernedEffect.orchestrator_spec(%{env | payload: %{env.payload | "cd" => ""}})
       refute Map.has_key?(blank_cd, "cd")
+
+      invalid_runtime =
+        GovernedEffect.orchestrator_spec(%{
+          env
+          | payload: %{env.payload | "max_runtime_ms" => 0}
+        })
+
+      refute Map.has_key?(invalid_runtime, "max_runtime_ms")
     end
   end
 

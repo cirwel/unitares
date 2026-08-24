@@ -1202,6 +1202,109 @@ class TestCheckCalibration:
             assert "capped_alarm" not in data["tactical_evidence"]
 
     @pytest.mark.asyncio
+    async def test_strategic_red_is_not_masked_by_unassessed_stale_tactical_arm(
+        self, patch_context_agent_id
+    ):
+        mock_checker = MagicMock()
+        mock_checker.check_calibration.return_value = (
+            False,
+            {
+                "calibration_status": "miscalibrated",
+                "assessability": {
+                    "overall": False,
+                    "strategic": True,
+                    "tactical": False,
+                    "reason": "Tactical calibration has no eligible bin.",
+                },
+                "bins": {
+                    "high": {
+                        "count": 20,
+                        "accuracy": 0.2,
+                        "expected_accuracy": 0.9,
+                    },
+                },
+                "tactical_calibration": {
+                    "bins": {},
+                    "calibration_status": "unassessed",
+                },
+                "issues": ["strategic danger"],
+            },
+        )
+        mock_checker.get_pending_updates.return_value = 0
+        mock_seq_tracker = MagicMock()
+        mock_seq_tracker.compute_metrics.return_value = {
+            "status": "tracking",
+            "last_updated": "2026-01-01T00:00:00Z",
+            "eligible_samples": 0,
+            "signal_sources": {},
+        }
+        mock_seq_tracker.compute_metrics_by_class.return_value = {}
+
+        with patch("src.calibration.calibration_checker", mock_checker), patch(
+            "src.sequential_calibration.get_sequential_calibration_tracker",
+            return_value=mock_seq_tracker,
+        ):
+            from src.mcp_handlers.admin.calibration import handle_check_calibration
+
+            result = await handle_check_calibration({})
+
+        data = parse_result(result)
+        assert data["calibration_status"] == "miscalibrated"
+        assert data["assessability"]["tactical"] is False
+        assert data["tactical_signal_status"] == "stale"
+        assert data["calibration_guidance"]["confidence_policy"] == (
+            "require_evidence_for_high_confidence_actions"
+        )
+
+    @pytest.mark.asyncio
+    async def test_vacuous_true_is_reported_as_unassessed_not_acceptable(
+        self, patch_context_agent_id
+    ):
+        mock_checker = MagicMock()
+        mock_checker.check_calibration.return_value = (
+            True,
+            {
+                "calibration_status": "unassessed",
+                "assessability": {
+                    "overall": False,
+                    "strategic": True,
+                    "tactical": False,
+                    "reason": "Tactical calibration has no eligible bin.",
+                },
+                "bins": {
+                    "high": {
+                        "count": 20,
+                        "accuracy": 0.95,
+                        "expected_accuracy": 0.9,
+                    },
+                },
+                "tactical_calibration": {"bins": {}},
+                "issues": [],
+            },
+        )
+        mock_checker.get_pending_updates.return_value = 0
+        mock_seq_tracker = MagicMock()
+        mock_seq_tracker.compute_metrics.return_value = {
+            "status": "no_data",
+            "eligible_samples": 0,
+            "signal_sources": {},
+        }
+        mock_seq_tracker.compute_metrics_by_class.return_value = {}
+
+        with patch("src.calibration.calibration_checker", mock_checker), patch(
+            "src.sequential_calibration.get_sequential_calibration_tracker",
+            return_value=mock_seq_tracker,
+        ):
+            from src.mcp_handlers.admin.calibration import handle_check_calibration
+
+            result = await handle_check_calibration({})
+
+        data = parse_result(result)
+        assert data["calibrated"] is True  # legacy compatibility only
+        assert data["calibration_status"] == "unassessed"
+        assert data["calibration_guidance"]["confidence_policy"] == "no_auto_correction"
+
+    @pytest.mark.asyncio
     async def test_check_calibration_accuracy_uses_real_outcome_evidence(self, patch_context_agent_id):
         """Regression: `accuracy` must report sequential tracker's empirical_accuracy
         (real outcome-match) when available, NOT alias trajectory_health."""

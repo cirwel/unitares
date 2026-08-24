@@ -39,7 +39,14 @@ A standalone process — `unitares.dialectic_reviewer` — that:
 2. **Receives the thesis and server-captured pause evidence** in the bounded orchestrator spawn payload; it does not borrow the paused agent's session or credentials.
 3. **Calls the operator-selected heterogeneous backend** for a *genuine* structured verdict: `{ agrees: bool, root_cause, proposed_conditions, reasoning }`. `UNITARES_DIALECTIC_REVIEWER_HOST` selects `local`/`ollama` (default), `codex`, `claude`, or `external` (alias `gemini`). Local uses `UNITARES_LLM_MODEL` (default `gemma4:latest`). Claude may be pinned with `UNITARES_DIALECTIC_CLAUDE_MODEL`; otherwise its authenticated CLI/operator default selects, and the exact models actually used are read from the CLI's `modelUsage` envelope. Codex currently uses its CLI/operator default and records the family when the CLI does not expose an exact identifier. `external` is the **third-family seam**: an operator-configured OpenAI-compatible endpoint (`UNITARES_DIALECTIC_EXTERNAL_BASE_URL` + `_MODEL` + `_API_KEY_ENV`, the last naming the variable that holds the key so no secret rides in a flag value), which reports the provider's own `model` and token usage as provenance. The vendor is configuration, not a code branch — the reason #66/#80 deleted the previous hardcoded `gemini` provider was that nothing wired its key, so it could only answer MISSING_CONFIG.
 4. **Submits via the dialectic protocol** — `dialectic(action="antithesis")` followed by `dialectic(action="synthesis")`, with the **model-derived `agrees`** (which may be `False`). This is the same write path a peer reviewer uses; `agrees=False` is a first-class, supported outcome.
-5. **Exits.** The orchestrator reaps it and releases the lease.
+5. **Stays for reconsideration, then exits.** An approving reviewer exits after
+   resolving the session. A rejecting reviewer remains under the same identity
+   for the protocol's one-hour synthesis-response window, polling at a bounded
+   cadence so it can evaluate the paused agent's answer. Its per-spawn
+   orchestrator cap is the response window plus 15 minutes for initial model,
+   onboarding, and protocol work; that cap is preserved through both direct and
+   governed-effect dispatch. The orchestrator then reaps it and releases the
+   lease.
 
 ### 3. How the verdict flows back
 
@@ -68,7 +75,14 @@ No new verdict contract or model API key is required. Codex/Claude use the opera
 - **Which backend reviews:** `UNITARES_DIALECTIC_REVIEWER_HOST` chooses `local`, `codex`, or `claude`. An absent value chooses local Ollama.
 - **Which model:** local is `UNITARES_LLM_MODEL`; Claude is `UNITARES_DIALECTIC_CLAUDE_MODEL` when set and otherwise the CLI/operator default. Claude can report more than one actual model (for example a primary model plus an internal helper); every exact ID is retained and `model_used` is deliberately left unset when the provider reports multiple models. Codex currently records its family unless its output yields an exact identifier.
 - **How failure behaves:** a missing CLI, timeout, nonzero exit, or unparsable host verdict falls back to local Ollama. The fallback source is recorded; no failed external backend silently becomes an approval.
-- **What is durable:** the reviewer identity's `model_type` fingerprints the backend/models and its real governance check-in records backend, host, exact model IDs, fallback source, and provider cost when available. The dialectic verdict itself still flows through the ordinary antithesis/synthesis rows.
+- **What is durable:** `dialectic_reviewer_dispatched` records the actual spawn
+  (including orchestrator agent/effect IDs), while
+  `dialectic_facilitation_needed` is emitted only after enabled reviewer paths
+  fail—not merely because the pre-thesis reviewer slot is open. The reviewer
+  identity's `model_type` fingerprints the backend/models and its real
+  governance check-in records backend, host, exact model IDs, fallback source,
+  and provider cost when available. The dialectic verdict itself still flows
+  through the ordinary antithesis/synthesis rows.
 - **Off-record consultation:** `delegate_inference(host_id="claude:host-adapter", ...)` lets an onboarded Codex/other agent ask Claude for attributed tool evidence without opening a dialectic session. It uses safe mode, disables tools and session persistence, and returns hashes, usage/cost, exact model IDs, latency, requester UUID, and orchestrator execution ID.
 
 ## Blast radius / cautions
