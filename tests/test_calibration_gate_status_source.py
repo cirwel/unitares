@@ -274,6 +274,39 @@ def test_the_noise_tail_separates_a_real_miscalibration(gate_mod):
     assert genuinely_bad < 1e-20
 
 
+def test_the_noise_tail_names_its_one_p_approximation(gate_mod):
+    """Bins are unequal-width; the tail uses the bin's MEAN confidence.
+
+    The exact statistic is a Poisson-binomial over per-prediction confidences,
+    which `record_tactical_decision` does not retain — it accumulates
+    `confidence_sum` and discards the individuals. So no exact form is
+    computable, and the approximation is not neutral: at n=12 with six
+    predictions at 0.05 and six at 0.45, all wrong, the mean-p tail gives 3.17%
+    against an exact 2.03%. 1.56x too large, biased toward "this could be
+    chance" — the direction that makes a real miscalibration look benign.
+    """
+    exact = (1 - 0.05) ** 6 * (1 - 0.45) ** 6
+    approx = gate_mod.calibrated_gap_tail(12, (6 * 0.05 + 6 * 0.45) / 12, 0.0)
+
+    assert approx == pytest.approx(0.0317, abs=5e-4)
+    assert exact == pytest.approx(0.0203, abs=5e-4)
+    assert approx > exact                       # biased high, not merely different
+
+    doc = gate_mod.calibrated_gap_tail.__doc__
+    assert "APPROXIMATION" in doc.upper()
+    assert "Poisson-binomial" in doc
+    assert "biased toward" in doc
+
+
+def test_the_printed_tail_flags_itself_as_approximate(gate_mod, monkeypatch, capsys):
+    """A reader of the output, not the docstring, must see the caveat too."""
+    r = _report(gate_mod, monkeypatch,
+                tactical={"0.7-0.8": _bin(count=2, expected=0.75, actual=0.5, lo=0.7)})
+    gate_mod.print_report(r)
+    out = capsys.readouterr().out
+    assert "one-p approximation, biased high" in out
+
+
 def test_the_noise_tail_is_reported_not_thresholded(gate_mod, monkeypatch, capsys):
     """No significance level is chosen here — that would be the operator's."""
     r = _report(gate_mod, monkeypatch,

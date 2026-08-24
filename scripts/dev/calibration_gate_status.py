@@ -64,6 +64,20 @@ def calibrated_gap_tail(count: int, declared: float, accuracy: float) -> float |
     trips the overconfidence gate 43.8% of the time. Printing the tail says so
     without anyone choosing a significance level -- which would be a deciding
     standard, and the operator's.
+
+    ASSUMES ONE p PER BIN, WHICH IS AN APPROXIMATION. `declared` is
+    `expected_accuracy`, the bin's MEAN confidence (`src/calibration.py:458`),
+    and bins are unequal-width -- "0.0-0.5" pools half the confidence range. The
+    exact statistic is a Poisson-binomial over the per-prediction confidences,
+    and those are not recoverable: `record_tactical_decision` accumulates
+    `confidence_sum` and discards the individual values, so no exact form is
+    computable from stored state.
+
+    The approximation is not neutral. Worked case: n=12, six predictions at
+    p=0.05 and six at p=0.45, all wrong. The binomial tail at the mean p=0.25
+    gives 3.17%; the exact Poisson-binomial gives 2.03% -- 1.56x too large,
+    biased toward "this could be chance". Read it as an upper-ish estimate of
+    the noise, not a p-value.
     """
     if count < 1 or not (0.0 <= declared <= 1.0):
         return None
@@ -344,7 +358,8 @@ def print_report(r: dict) -> None:
             noise = ""
             if isinstance(tail, (int, float)):
                 noise = (f"; a perfectly-calibrated bin this size shows a gap this "
-                         f"large {tail:.1%} of the time")
+                         f"large ~{tail:.1%} of the time (one-p approximation, "
+                         "biased high)")
             print(f"  - bin {n['bin']}: {n['count']} samples — {n['why']}{noise}")
     else:
         print(f"Cheap-green watch: no overconfident bin is within "
