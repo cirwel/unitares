@@ -22,6 +22,89 @@ for the false-positive history this avoids.
 
 **56 registered tools · 8 consolidated (52 actions) · 72 aliases.**
 
+## Content-addressed snapshots
+
+The generated JSON is a dual view: **dispatch** records what the live
+registries route, while **exposure** records what the production FastMCP
+registrars advertise in each deployable mode and what `describe_tool` says
+about those names. The snapshots are immutable evidence inputs; they do not
+certify the components that produced them.
+
+- Audit bundle: `sha256:49169efe589406a2bb5bc70a4f1f943f7e7d5343f2f6179ed296c698241ed715` (`unitares.tool-surface-audit.v1`).
+- Dispatch snapshot: `sha256:369db65755679f02fbf1c5203fda998534f5bb723d2313596960dbde72feaa02`.
+- Audited source revision: `sha256:1f9121124ce667272f253d5a9e91490220e45cf87d85ddf691c465e358475a58` (50 files).
+- Exposure snapshot: `sha256:05be0677009ed8c8a16cbe097ef0c867f9e41c14b8be52b3cf44d2f3576c8edb`.
+- JSON contract: [`tool_surface_audit_v1.schema.json`](tool_surface_audit_v1.schema.json).
+- Reproduce with `python3 scripts/dev/tool_edge_index.py --json`; run
+  `--lint` to return non-zero when error-severity findings exist.
+
+## Exposure snapshot
+
+`declared` is the mode policy set. `advertised` is the production registrar
+composition: mode-filtered canonical tools plus the workflow aliases that
+are registered unconditionally. Differences are evidence, not automatic
+removal authority.
+
+| Mode | Declared | Advertised | Declared only | Advertised only |
+|---|---:|---:|---|---|
+| `minimal` | 6 | 11 | — | `record_result`, `request_review`, `search_shared_memory`, `store_finding`, `update_finding` |
+| `lite` | 28 | 28 | — | — |
+| `operator_readonly` | 13 | 21 | — | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
+| `operator_recovery` | 17 | 25 | — | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
+| `full` | 79 | 64 | `aggregate_metrics`, `archive_agent`, `backfill_calibration_from_dialectic`, `check_calibration`, `cleanup_knowledge_graph`, `compare_agents`, `compare_me_to_similar`, `delete_agent` … +15 | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
+
+### Workflow alias views
+
+The wire schema is what FastMCP accepts. `describe-only` lists parameters
+that introspection advertises for the canonical implementation even though
+the alias wire rejects them.
+
+| Public name | Canonical | Wire params | Describe-only | Wire schema hash |
+|---|---|---:|---|---|
+| `check_working_state` | `get_governance_metrics` | 4 | `agent_id` | `sha256:b7b0c68eff57d9bac4aa5a861a5f3228c94af4357a3fb8603bb6d09975f29e09` |
+| `record_result` | `outcome_event` | 14 | — | `sha256:ac61fb102158b83af68cc22d039b0d0a318dda30ebf1522dc49745d4335549ec` |
+| `request_review` | `dialectic` | 25 | `action` | `sha256:924fcb825ba3ee27238546b147cfa04e9bcf6e16930ebc20f168a38cf62164b2` |
+| `search_shared_memory` | `knowledge` | 36 | `action`, `auto_link_related`, `comparison_key`, `content`, `details`, `discovery_id`, `related_files`, `resolution_notes` … +7 | `sha256:3be01cf1217fbaccf89e9102d10a8e0ca73910d74338f861b9d3a2a513aaaa2d` |
+| `start_session` | `onboard` | 16 | — | `sha256:89788402e8e21a8e918d6aac1339ce2537127ee3b6f9b175b89c1fefbaabc8d3` |
+| `store_finding` | `knowledge` | 13 | `action`, `auto_link_related`, `closure_class`, `closure_evidence`, `confidence`, `discovery_id`, `dry_run`, `epoch_scope` … +30 | `sha256:88f13bbeed5d015e46b8fb362ae7a5656433926c7e5873b4fc7dd302fee57eaf` |
+| `sync_state` | `process_agent_update` | 22 | `agent_id`, `agent_name` | `sha256:9a96eb338278718eac4ced262db51207b748127d5716a5bcf3ec34c8bd1c2373` |
+| `update_finding` | `knowledge` | 13 | `action`, `auto_link_related`, `closure_class`, `closure_evidence`, `comparison_key`, `confidence`, `dry_run`, `epoch_scope` … +30 | `sha256:7dd261b60503ec631b43a071201424d2fe7f6dd7b1dccb1463852334985dfc90` |
+
+## Deterministic findings
+
+**1 errors · 11 warnings · 15 informational.** Findings make drift reviewable;
+they are not self-issued approval or remediation instructions.
+
+| Severity | Code | Subject | Finding | Evidence |
+|---|---|---|---|---|
+| error | `ALIAS_TARGET_MISSING` | `direct_resume_if_safe` | Alias target is not a registered dispatch tool. | {"target": "quick_resume"} |
+| warning | `DESCRIBE_SCHEMA_WIDER_THAN_WIRE` | `check_working_state` | describe_tool advertises parameters the alias wire schema rejects. | {"properties": ["agent_id"]} |
+| warning | `DESCRIBE_SCHEMA_WIDER_THAN_WIRE` | `request_review` | describe_tool advertises parameters the alias wire schema rejects. | {"properties": ["action"]} |
+| warning | `DESCRIBE_SCHEMA_WIDER_THAN_WIRE` | `search_shared_memory` | describe_tool advertises parameters the alias wire schema rejects. | {"properties": ["action", "auto_link_related", "comparison_key", "content", "details", "discovery_id", "related_files", "resolution_notes", "response_to", "summary", "superseded_by", "supersedes", "supersedes_id", "task_label", "task_outco… |
+| warning | `DESCRIBE_SCHEMA_WIDER_THAN_WIRE` | `store_finding` | describe_tool advertises parameters the alias wire schema rejects. | {"properties": ["action", "auto_link_related", "closure_class", "closure_evidence", "confidence", "discovery_id", "dry_run", "epoch_scope", "exclude_agent_labels", "include_archived", "include_cold", "include_details", "include_provenance"… |
+| warning | `DESCRIBE_SCHEMA_WIDER_THAN_WIRE` | `sync_state` | describe_tool advertises parameters the alias wire schema rejects. | {"properties": ["agent_id", "agent_name"]} |
+| warning | `DESCRIBE_SCHEMA_WIDER_THAN_WIRE` | `update_finding` | describe_tool advertises parameters the alias wire schema rejects. | {"properties": ["action", "auto_link_related", "closure_class", "closure_evidence", "comparison_key", "confidence", "dry_run", "epoch_scope", "exclude_agent_labels", "include_archived", "include_cold", "include_details", "include_provenanc… |
+| warning | `MODE_DECLARED_UNADVERTISED` | `full` | The mode declares names the production registrar would not advertise. | {"names": ["aggregate_metrics", "archive_agent", "backfill_calibration_from_dialectic", "check_calibration", "cleanup_knowledge_graph", "compare_agents", "compare_me_to_similar", "delete_agent", "detect_anomalies", "export_to_file", "get_a… |
+| warning | `MODE_UNDECLARED_ADVERTISED` | `full` | The production registrar advertises names absent from the mode declaration. | {"names": ["check_working_state", "record_result", "request_review", "search_shared_memory", "start_session", "store_finding", "sync_state", "update_finding"]} |
+| warning | `MODE_UNDECLARED_ADVERTISED` | `minimal` | The production registrar advertises names absent from the mode declaration. | {"names": ["record_result", "request_review", "search_shared_memory", "store_finding", "update_finding"]} |
+| warning | `MODE_UNDECLARED_ADVERTISED` | `operator_readonly` | The production registrar advertises names absent from the mode declaration. | {"names": ["check_working_state", "record_result", "request_review", "search_shared_memory", "start_session", "store_finding", "sync_state", "update_finding"]} |
+| warning | `MODE_UNDECLARED_ADVERTISED` | `operator_recovery` | The production registrar advertises names absent from the mode declaration. | {"names": ["check_working_state", "record_result", "request_review", "search_shared_memory", "start_session", "store_finding", "sync_state", "update_finding"]} |
+| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `cleanup_stale_locks` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
+| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `debug_request_context` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
+| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `direct_resume_if_safe` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
+| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `get_connection_status` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
+| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `get_server_info` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
+| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `get_telemetry_metrics` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
+| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `get_tool_usage_stats` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
+| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `get_workspace_health` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
+| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `reassign_reviewer` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
+| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `request_dialectic_review` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
+| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `reset_monitor` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
+| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `submit_antithesis` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
+| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `submit_synthesis` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
+| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `submit_thesis` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
+| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `validate_file_path` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
+
 ## Tools
 
 `handler` is the function the dispatcher calls. For a consolidated tool that is
