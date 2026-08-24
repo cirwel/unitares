@@ -8,8 +8,10 @@ numbers that baseline it:
 
   1. Check-in concentration — what share of process_agent_update calls come
      from the top-2 callers (residents). Baseline 2026-06-12: 76%.
-  2. Agent KG retrieval — knowledge/search_knowledge_graph calls from
-     NAMED agents, excluding operator credentials (the dashboard).
+  2. Agent KG retrieval — knowledge/search_shared_memory calls from
+     NAMED agents, excluding operator credentials (the dashboard). The legacy
+     search_knowledge_graph alias is retained only where historical continuity
+     across the rename requires it.
      Baseline: 3 per 14d, and both callers were burn-in probes.
 
      WAS "voluntary KG retrieval" and that name was the defect, not the
@@ -193,8 +195,9 @@ def _snapshot_queries() -> dict:
         # canaries, and the hermes harness loop, which calls record_result on a
         # cadence — so its return is set by the schedule, not by the caller).
         "surface_return_rate": """
-            WITH non_ceremony AS (
+            WITH eligible_calls AS (
                 SELECT u.ts, u.agent_id,
+                       a.label ~* %(scheduled_re)s AS scheduled,
                        CASE WHEN u.tool_name IN ('knowledge', 'search_shared_memory')
                                 THEN 'kg'
                             WHEN u.tool_name IN ('dialectic', 'request_review')
@@ -203,7 +206,6 @@ def _snapshot_queries() -> dict:
                 FROM audit.tool_usage u
                 JOIN core.agents a ON a.id::text = u.agent_id
                 WHERE u.ts > now() - make_interval(days => %(days)s)
-                  AND a.label !~* %(scheduled_re)s
                   AND (
                         (u.tool_name IN ('knowledge', 'search_shared_memory')
                          AND u.payload->>'action' IN ('search', 'details'))
@@ -214,6 +216,11 @@ def _snapshot_queries() -> dict:
                                         'self_recovery', 'store_finding',
                                         'leave_note', 'export', 'calibration')
                   )
+            ),
+            non_ceremony AS (
+                SELECT ts, agent_id, surface
+                FROM eligible_calls
+                WHERE NOT scheduled
             ),
             gaps AS (
                 SELECT *, lag(ts) OVER (PARTITION BY agent_id ORDER BY ts) AS prev_any,
@@ -240,11 +247,9 @@ def _snapshot_queries() -> dict:
                    -- a silent exclusion, and the printed line reported no
                    -- excluded count at all. A reader could not tell whether the
                    -- rate covered the fleet or a filtered slice of it.
-                   (SELECT count(DISTINCT u.agent_id)
-                      FROM audit.tool_usage u
-                      JOIN core.agents a ON a.id::text = u.agent_id
-                     WHERE u.ts > now() - make_interval(days => %(days)s)
-                       AND a.label ~* %(scheduled_re)s) AS scheduled_excluded
+                   (SELECT count(DISTINCT agent_id)
+                      FROM eligible_calls
+                     WHERE scheduled) AS scheduled_excluded
             FROM per_agent
         """,
         # Onboard engagement. `converted` used to mean process_agent_update only,

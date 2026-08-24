@@ -101,8 +101,11 @@ def test_surface_return_rate_excludes_hook_poll_and_scheduled_callers():
         assert excluded not in sql, f"{excluded} must not be counted"
     # dashboard reads of the dialectic are not participation
     assert "NOT IN ('get', 'list')" in sql
-    # scheduled/harness-wired callers are filtered by the shared regex
-    assert "a.label !~* %(scheduled_re)s" in sql
+    # scheduled/harness-wired callers are classified only after they satisfy
+    # the same eligibility predicate as denominator calls.
+    assert "a.label ~* %(scheduled_re)s AS scheduled" in sql
+    assert "FROM eligible_calls" in sql
+    assert "WHERE NOT scheduled" in sql
     assert "%(return_gap_s)s" in sql
 
 
