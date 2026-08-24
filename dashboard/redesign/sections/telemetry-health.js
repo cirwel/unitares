@@ -71,8 +71,9 @@
     };
   }
 
-  function card(label, value, sub) {
-    return `<div class="card"><h3>${esc(label)}</h3><div class="num">${value}</div><div class="sub">${sub}</div></div>`;
+  function card(label, value, sub, unit) {
+    const suffix = unit ? `<span class="of"> ${esc(unit)}</span>` : "";
+    return `<div class="card"><h3>${esc(label)}</h3><div class="num">${value}${suffix}</div><div class="sub">${sub}</div></div>`;
   }
 
   function rateRows(rows, labelKey) {
@@ -229,11 +230,11 @@
       card("Behavioral primary", pct(summary.behavioral_primary_rate), `${num(summary.behavioral_primary)} covered observations`),
       card("ODE fallback", pct(summary.ode_fallback_rate), `${num(summary.ode_fallback)} covered observations`),
       card("Measurement ready", pct(summary.measurement_ready_rate), `${num(summary.measurement_ready)} behavior-authoritative observations`),
-      card("Shadow would defer", num(summary.maturity_would_defer), `${pct(summary.maturity_would_defer_rate)} counterfactual only`),
+      card("Shadow would defer", num(summary.maturity_would_defer), `${pct(summary.maturity_would_defer_rate)} counterfactual only`, "obs."),
       card("Missing inputs", pct(summary.missing_rate), `${num(summary.missing)} covered observations`),
-      card("Invalid envelopes", num(summary.invalid_envelopes), `${pct(summary.invalid_envelope_rate)} of envelope-bearing rows`),
-      card("Contract violations", num(summary.contract_violation_rows), `${pct(summary.contract_violation_rate)} of ${num(summary.contract_checked_rows)} checked rows`),
-      card("Outcome clusters", num(calibration.clusters), `${num(calibration.bad_clusters)} bad · ${esc(calibration.status || "unknown")}`),
+      card("Invalid envelopes", num(summary.invalid_envelopes), `${pct(summary.invalid_envelope_rate)} of envelope-bearing rows`, "rows"),
+      card("Contract violations", num(summary.contract_violation_rows), `${pct(summary.contract_violation_rate)} of ${num(summary.contract_checked_rows)} checked rows`, "rows"),
+      card("Outcome clusters", num(calibration.clusters), `${num(calibration.bad_clusters)} bad · ${esc(calibration.status || "unknown")}`, "clusters"),
       card("Actuator delivery", `${num(summary.enforcement_delivered)} / ${num(summary.enforcement_requested)}`, `${pct(summary.enforcement_delivery_rate)} of requests applied; not causal effect`),
     ].join("");
 
