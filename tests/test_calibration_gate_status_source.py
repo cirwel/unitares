@@ -148,6 +148,77 @@ def test_snapshot_age_is_printed_on_the_json_path_too(gate_mod, monkeypatch, cap
     assert "live DB" not in out_r
 
 
+# --- the watch's own numbers must not contradict its sentences -------------
+
+def test_gate_headroom_grows_with_population(gate_mod, monkeypatch):
+    """The printed number used to run backwards.
+
+    `min_samples + NEAR_FLOOR_MARGIN - count` is the distance to leaving the
+    WATCH WINDOW, and it shrinks as a bin gets better populated — so under
+    "the green may be an artifact" the thinnest bin got the most comfortable
+    number. At min_samples=10 it printed "1 more samples" for count=14 and
+    "5" for count=10. Gate headroom is count - min_samples.
+    """
+    seen = {}
+    for count in (10, 12, 14):
+        r = _report(gate_mod, monkeypatch,
+                    tactical={"0.6-0.7": _bin(count, expected=0.65, actual=0.20, lo=0.6)})
+        why = r["cheap_green_watch"][0]["why"]
+        seen[count] = why
+        assert "more samples from dropping out" not in why
+
+    assert "0 sample(s) of headroom" in seen[10]
+    assert "2 sample(s) of headroom" in seen[12]
+    assert "4 sample(s) of headroom" in seen[14]
+
+
+def test_an_unpopulated_bin_is_not_given_headroom(gate_mod, monkeypatch):
+    """Below the floor there is no headroom to report — it is not counted."""
+    r = _report(gate_mod, monkeypatch,
+                tactical={"0.6-0.7": _bin(count=4, expected=0.65, actual=0.20, lo=0.6)})
+    why = r["cheap_green_watch"][0]["why"]
+    assert "headroom" not in why
+    assert "NOT counted by the gate" in why
+
+
+def test_the_noise_tail_reproduces_a_known_well_calibrated_flag_rate(gate_mod):
+    """A bin at its declared rate still trips the gate, often, when tiny.
+
+    declared 0.75 with n=2 and one miss: a perfectly-calibrated bin looks this
+    bad 43.8% of the time. The watch window has no lower bound on count, so
+    such a bin enters it — hence the headline is conditional and this number
+    is printed beside the bin.
+    """
+    assert gate_mod.calibrated_gap_tail(2, 0.75, 0.5) == pytest.approx(0.4375, abs=1e-4)
+    assert gate_mod.calibrated_gap_tail(3, 0.60, 2 / 3) == pytest.approx(0.784, abs=1e-3)
+
+
+def test_the_noise_tail_separates_a_real_miscalibration(gate_mod):
+    """It must not flatten everything to "could be noise"."""
+    well_calibrated = gate_mod.calibrated_gap_tail(200, 0.65, 0.64)
+    genuinely_bad = gate_mod.calibrated_gap_tail(200, 0.65, 0.20)
+    assert well_calibrated > 0.3
+    assert genuinely_bad < 1e-20
+
+
+def test_the_noise_tail_is_reported_not_thresholded(gate_mod, monkeypatch, capsys):
+    """No significance level is chosen here — that would be the operator's."""
+    r = _report(gate_mod, monkeypatch,
+                tactical={"0.7-0.8": _bin(count=2, expected=0.75, actual=0.5, lo=0.7)})
+    gate_mod.print_report(r)
+    out = capsys.readouterr().out
+
+    assert "43.8% of the time" in out
+    # The bin is still listed — the tail annotates it, it does not filter it.
+    assert "bin 0.7-0.8" in out
+    # And the headline no longer asserts the gap is a property of the bin.
+    assert "are overconfident enough to gate" not in out
+
+
+def test_the_noise_tail_is_none_for_a_degenerate_bin(gate_mod):
+    assert gate_mod.calibrated_gap_tail(0, 0.65, 0.0) is None
+
+
 # --- 1. the label must come from what answered -----------------------------
 
 def test_load_state_async_reports_whether_db_state_applied():

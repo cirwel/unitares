@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -43,8 +44,32 @@ from src.calibration import (  # noqa: E402
     _OVERCONFIDENCE_GATE,
 )
 
-# How close to the min-samples floor counts as "near" it, in either direction.
+# How close to the min-samples floor counts as "near" it. Applies in both
+# directions but is not symmetric about the floor: the test is
+# `count < min_samples + NEAR_FLOOR_MARGIN`, so at min_samples=10 the window is
+# counts 0..14 -- every bin below the floor, plus the four just above it.
+# count == 15 is outside. The value is the operator's; it decides no verdict and
+# only widens an advisory list.
 NEAR_FLOOR_MARGIN = 5
+
+
+def calibrated_gap_tail(count: int, declared: float, accuracy: float) -> float | None:
+    """P(a perfectly-calibrated bin of this size shows a gap this large).
+
+    One-sided binomial tail: if the bin's true accuracy equalled its declared
+    confidence, how often would it come out this bad or worse by chance alone?
+
+    This is reported, never thresholded. At the small end of the watch window a
+    gap is mostly the draw: a well-calibrated bin at declared 0.75 with n=2
+    trips the overconfidence gate 43.8% of the time. Printing the tail says so
+    without anyone choosing a significance level -- which would be a deciding
+    standard, and the operator's.
+    """
+    if count < 1 or not (0.0 <= declared <= 1.0):
+        return None
+    k = max(0, min(count, int(round(accuracy * count))))
+    return sum(math.comb(count, i) * declared ** i * (1 - declared) ** (count - i)
+               for i in range(k + 1))
 
 
 def _load_checker() -> tuple[CalibrationChecker, str]:
@@ -128,11 +153,21 @@ def build_report(min_samples: int) -> dict:
                 "bin": bin_key,
                 "count": m.count,
                 "populated": populated,
-                "why": ("counted by the gate, but {} more samples from dropping out "
-                        "of it".format(min_samples + NEAR_FLOOR_MARGIN - m.count))
+                # `min_samples + NEAR_FLOOR_MARGIN - m.count` used to be printed
+                # as "N more samples from dropping out of [the gate]". It is
+                # neither: it is the distance to leaving this WATCH WINDOW, and
+                # it DECREASES as a bin gets better populated -- so under
+                # "the green may be an artifact" the thinnest bin was given the
+                # most comfortable-looking number. At min_samples=10: count=14
+                # printed "1 more samples", count=10 printed "5". Gate headroom
+                # is count - min_samples, and only a populated bin has any.
+                "why": ("counted by the gate, with {} sample(s) of headroom above "
+                        "the {}-sample floor".format(m.count - min_samples, min_samples))
                 if populated else
                 ("BELOW the {}-sample floor, so its overconfidence is NOT counted "
                  "by the gate".format(min_samples)),
+                "calibrated_gap_tail": calibrated_gap_tail(
+                    m.count, m.expected_accuracy, m.accuracy),
             })
 
     # A gate that cannot fail has not passed. The gate is TACTICAL: it asks
@@ -243,14 +278,25 @@ def print_report(r: dict) -> None:
 
     if r["cheap_green_watch"]:
         if r["calibrated"]:
-            print("Cheap-green watch — THE GREEN ABOVE MAY BE AN ARTIFACT. These bins")
-            print("are overconfident enough to gate, and their sample counts are what")
-            print("decides whether the gate sees them:")
+            # Stated conditionally. The window has no lower bound on count, so a
+            # count=1 bin enters it -- and at that size an overconfidence gap is
+            # mostly the draw, not a property of the bin. The old headline said
+            # these bins ARE overconfident enough to gate; the per-bin tail below
+            # says how often a perfectly-calibrated bin of that size would look
+            # this way anyway.
+            print("Cheap-green watch — THE GREEN ABOVE MAY BE AN ARTIFACT. Each bin")
+            print("below shows a gap that would gate, and its sample count is what")
+            print("decides whether the gate sees it at all:")
         else:
             print("Cheap-green watch (a green that appears because one of these")
             print("bins depopulates would be a measurement artifact, not calibration):")
         for n in r["cheap_green_watch"]:
-            print(f"  - bin {n['bin']}: {n['count']} samples — {n['why']}")
+            tail = n.get("calibrated_gap_tail")
+            noise = ""
+            if isinstance(tail, (int, float)):
+                noise = (f"; a perfectly-calibrated bin this size shows a gap this "
+                         f"large {tail:.1%} of the time")
+            print(f"  - bin {n['bin']}: {n['count']} samples — {n['why']}{noise}")
     else:
         print(f"Cheap-green watch: no overconfident bin is within "
               f"{NEAR_FLOOR_MARGIN} samples of the "
