@@ -8,7 +8,7 @@ Reduces friction from constant tool churn by:
 4. Single source of truth for tool lifecycle
 """
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 from enum import Enum
 from datetime import datetime
@@ -30,6 +30,7 @@ class ToolAlias:
     deprecated_since: Optional[datetime] = None
     migration_note: Optional[str] = None
     inject_action: Optional[str] = None  # For consolidated tools: auto-inject this action parameter
+    inject_defaults: Optional[Dict[str, Any]] = None  # Friendly-surface defaults applied only when omitted
     # Friendly aliases may absorb agent vocabulary (named levels, explicit
     # scale objects) before validation; canonical tools stay strict. Runs in
     # resolve_alias; transforms are disclosed via normalized_parameters.
@@ -410,10 +411,11 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     "request_review": ToolAlias(
         old_name="request_review", new_name="dialectic", reason="intuitive_alias",
         migration_note="Primary workflow name for structured review; implemented by "
-        "dialectic(action='request'). One-call form: pass reasoning (and optionally "
-        "root_cause/proposed_conditions) and the thesis is submitted in the same "
-        "call — a reviewer answers or a verdict returns without further protocol.",
-        inject_action="request", experience=True),
+        "dialectic(action='request'). The issue description is reused as the thesis "
+        "by default, so a reviewer answers or a verdict returns without duplicating "
+        "the brief. Pass use_brief_as_thesis=false for the explicit two-call flow.",
+        inject_action="request", inject_defaults={"use_brief_as_thesis": True},
+        experience=True),
 }
 
 # Reverse mapping: new_name -> list of old names

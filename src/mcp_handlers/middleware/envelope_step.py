@@ -1077,12 +1077,36 @@ def build_experience_envelope(
         next_action = "Outcome recorded - continue, or sync_state to fold it into your working state."
 
     elif canonical_name == "dialectic":
-        state_summary = _lift(payload, "session_id", "phase", "reviewer")
-        session_id = state_summary.get("session_id", "...")
-        next_action = (
-            "Review session open - submit your position with "
-            f"dialectic(action='thesis', session_id='{session_id}', root_cause='...')."
+        state_summary = _lift(
+            payload,
+            "session_id",
+            "phase",
+            "reviewer",
+            "reviewer_agent_id",
+            "whose_move",
+            "one_call_review",
+            "thesis_source",
+            "review_verdict",
         )
+        session_id = state_summary.get("session_id", "...")
+        next_action = payload.get("next_call") or payload.get("next_step")
+        if not next_action:
+            whose_move = str(payload.get("whose_move") or "").strip()
+            phase = str(payload.get("phase") or "").lower()
+            if whose_move:
+                next_action = whose_move
+            elif phase in {"resolved", "failed", "escalated"}:
+                verdict = payload.get("review_verdict") or phase
+                next_action = (
+                    f"Review session {session_id} is {phase} ({verdict}); follow "
+                    "the recorded verdict or resolution."
+                )
+            else:
+                next_action = (
+                    "Review session open - advance it without copying the saved "
+                    f"brief: dialectic(action='thesis', session_id='{session_id}', "
+                    "use_brief_as_thesis=true)."
+                )
 
     if next_action is not None:
         envelope["next_action"] = _friendly_action_hint(next_action)
