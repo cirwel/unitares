@@ -1,10 +1,12 @@
 # Fleet Workload Identity and Tool-Call Audit - v0
 
 **Created:** 2026-08-24  
-**Status:** Draft v0.1 - threat model and pilot specification only. No live auth
+**Status:** Draft v0.2 - threat model and pilot specification only. No live auth
 or enforcement change is authorized by this document.  
 **Council:** UNITARES dialectic `9b55c5144ee1b78a`, resolved `resume` on
-2026-08-24 with the conditions folded below.
+2026-08-24 with the conditions folded below.  
+**Independent review:** Claude Opus 5, 2026-08-24, verdict `REVISE`; Gate B
+conditions and readiness findings are folded into v0.2 in section 13.
 
 ## 1. Decision summary
 
@@ -20,9 +22,11 @@ The v0 direction is:
 1. Each destination service owns issuance for its own audience. The Lease Plane
    pilot does not introduce a fleet-wide signing key or third-party credential
    runtime.
-2. A caller authenticates to the issuer with a distinct workload key held
-   outside launchd configuration. The issuer maps that workload to an allowlist
-   of scopes and mints a short-lived, one-use capability.
+2. A caller authenticates over a peer-credentialed local channel from a
+   distinct service account and proves possession of a distinct workload key
+   held outside launchd configuration. Same-UID interpreted callers are not
+   eligible for the pilot. The issuer maps that workload to an allowlist of
+   scopes and mints a short-lived, one-use capability.
 3. The destination service remains the authorization authority. Token claims
    do not bypass its exact route-to-scope map.
 4. Security audit is separate from `audit.tool_usage`. The latter is currently
@@ -146,16 +150,33 @@ migration unit.
 - Replacing governance identity, Cedar authorization, or Orchestrator
   enforcement.
 
-### 4.3 Honest residual risk
+### 4.3 Honest residual risk and pilot eligibility
 
 All current launchd jobs run as the same interactive user. Moving a key from a
-plist into a broadly accessible login Keychain item would relocate the secret,
-not establish workload identity. The pilot therefore requires a non-exportable
-Keychain key whose access control is pinned to a designated signed helper or
-service binary. Acceptance test `BOOT-04` must demonstrate that an unrelated
-same-user process cannot use that key. If macOS cannot enforce that condition
-for the chosen integration, the pilot is blocked until jobs run under distinct
-service accounts or another workload isolation mechanism is approved.
+plist into a login Keychain item, or allowing a signed helper to sign arbitrary
+caller-supplied bytes, would relocate the secret and create a signing oracle. It
+would not establish workload identity. Pinning a Keychain ACL to `python3`,
+`beam.smp`, `node`, `bash`, or another shared interpreter is equally
+non-discriminating.
+
+The v0 pilot therefore requires distinct macOS service accounts for the Lease
+Plane, its audit collector, and each participating workload. Issuance uses a
+Unix-domain socket that authenticates the caller's peer UID before returning a
+challenge. A private workload key is accessible only to its service account and
+never appears in plist or environment data. A non-exportable System Keychain
+item is preferred; a service-account-owned mode-0600 key file is admissible for
+the custody spike, with the weaker extraction resistance recorded explicitly.
+
+A signed helper is optional and admissible only if it authenticates each IPC
+peer from the macOS audit token, checks an explicit designated requirement with
+`SecCodeCheckValidity`, rejects unsigned/ad-hoc peers and `get-task-allow`, and
+constructs the domain-separated message itself. It must never expose a generic
+"sign these bytes" operation.
+
+Gate A.5 is a throwaway custody spike with non-production keys and identities.
+It must prove peer rejection and signing-oracle resistance before protocol code
+begins. If distinct service accounts or authenticated helper peers cannot be
+made operationally viable, the Lease Plane pilot is blocked.
 
 ## 5. Threats, controls, and falsifiers
 
@@ -163,12 +184,12 @@ service accounts or another workload isolation mechanism is approved.
 |---|---|---|---|
 | T1 | Plist or backup disclosure yields permanent access | No bearer, signing key, or workload private key in plist or environment after sunset | Secret-shape and key-name scan plus leaked-plist exercise cannot mint or call |
 | T2 | Issuer compromise mints arbitrary fleet credentials | Per-service signer and audience; no fleet-wide signing key | Lease signer is rejected by every non-Lease audience |
-| T3 | Captured token replay | One-use `jti`, atomically consumed through durable state before effect | Second use is rejected before route execution, including after service restart |
+| T3 | Captured token replay | One-use `jti`, durably consumed and committed before effect execution; failed attempts burn the token | Second use is rejected before route execution, including after failure, crash, and service restart |
 | T4 | Confused deputy or overbroad caller | Workload-to-scope allowlist at issuance and exact route-to-scope check at use | Cross-scope and cross-route negative matrix |
 | T5 | Algorithm, key, or token-type confusion | Fixed `EdDSA` allowlist, exact `typ`, explicit `kid`, duplicate-claim rejection | Alternate `alg`, missing/unknown `kid`, wrong `typ`, and duplicate claims fail closed |
-| T6 | Stale verifier key or revocation cache | Versioned key set, bounded refresh, emergency invalidation, no unbounded stale-on-error | Revocation and old-key retirement meet the declared time bound |
-| T7 | Clock manipulation or drift | Maximum TTL and +/-15 second skew bound; reject beyond either side | Boundary tests at `nbf`, `exp`, and skew edges |
-| T8 | Audit loss or reordering | Durable append, per-service sequence, event hash chain, idempotent collector | Kill/restart, duplicate delivery, truncation, and sink-outage tests |
+| T6 | Stale verifier key or revocation cache | Same-process signer verification plus 5-second registry refresh and 30-second hard stale ceiling | Subject/key revocation and old-key retirement meet the declared time bound |
+| T7 | Clock manipulation or drift | Issuer and verifier share one Lease Plane clock; v0 permits zero verifier skew | Boundary tests at exact `nbf` and `exp`; split issuance requires a new review |
+| T8 | Audit loss, forgery, or reordering | Separate-UID collector authentication, durable intent, transactional terminal outbox, per-service sequence/hash, frequent external anchor | Kill/restart, forged submitter, duplicate delivery, truncation, and sink-outage tests |
 | T9 | Static downgrade becomes permanent | Token-mode discrimination, no ephemeral-to-static retry, expiry and numeric sunset gates | Downgrade test, fallback-use alarm, and post-expiry rejection |
 | T10 | Audit payload leaks credentials | Schema allowlist; no headers, raw args, token, signature, challenge, or private data | Adversarial redaction corpus and serialized-event inspection |
 
@@ -191,18 +212,24 @@ authority. Registration is an explicit operator action.
 
 ### 6.2 Bootstrap identity
 
-Each calling workload receives a distinct Ed25519 key pair:
+Each eligible calling workload runs under a distinct macOS service account and
+receives a distinct Ed25519 key pair:
 
-- Private key: non-exportable macOS Keychain item, inaccessible to plist and
-  process environment, constrained to a designated signed helper or service
-  binary.
+- Private key: inaccessible to other service UIDs, plist data, and process
+  environment. Non-exportable System Keychain custody is preferred; any weaker
+  custody requires an explicit spike result and operator acceptance.
 - Public key: registered with Lease Plane under `workload_id` and `key_id`.
 - Policy: exact list of scopes the workload may request.
 - Rotation: at most 30 days between workload-key rotations.
 
-The workload first requests a challenge. The Lease Plane returns a random
-256-bit nonce, audience, issuance endpoint identifier, and a 30-second expiry.
-The workload signs a versioned canonical request containing:
+The workload first requests a challenge over an issuance-only Unix-domain
+socket. The Lease Plane authenticates the socket peer UID, binds the challenge
+to the registered `(workload_id, key_id, peer_uid)`, applies a per-workload and
+global issuance rate limit, and returns a random 256-bit nonce, audience,
+issuance endpoint identifier, and a 30-second expiry.
+
+The workload signs the UTF-8 RFC 8785 JSON Canonicalization Scheme bytes of an
+object containing exactly these keys:
 
 ```text
 protocol_version
@@ -216,9 +243,21 @@ challenge_expires_at
 correlation_id
 ```
 
-The issuer consumes each challenge exactly once, verifies the signature against
-the registered workload key, rejects unregistered scopes, and only then mints a
-capability. Private key bytes never enter the calling process.
+The signed message is:
+
+```text
+ASCII("UNITARES-WORKLOAD-ISSUANCE-V1") || 0x00 || JCS(request_object)
+```
+
+The request carries base64url-encoded canonical bytes and signature. The issuer
+parses with duplicate-key rejection, re-encodes with RFC 8785, rejects any byte
+difference, verifies the fixed domain prefix and signature, then compares every
+field to the consumed challenge binding. `correlation_id` is a UUID, identifiers
+are bounded ASCII, and scopes match `^[a-z][a-z0-9_.:-]{0,63}$`.
+
+The issuer consumes each challenge exactly once, rejects unregistered scopes,
+and only then mints a capability. A helper, if used, constructs this exact
+object from its authenticated peer and exposes no generic signing API.
 
 ### 6.3 Capability format
 
@@ -228,12 +267,13 @@ The v0 wire format is a compact JWT signed with Ed25519:
 - Claims: `iss`, `sub`, `aud`, `scope`, `iat`, `nbf`, `exp`, `jti`, `cid`,
   `token_use=capability`, and `version=1`.
 - `sub` is the registered workload ID, never a caller-controlled display name.
-- `scope` is a sorted, duplicate-free array drawn from the Lease Plane scope
-  registry.
+- `scope` is a canonical single-space-delimited string. The issuer sorts and
+  deduplicates requested scopes; the verifier treats them as a set.
 - Default TTL: 60 seconds.
 - Maximum TTL: 120 seconds.
-- Clock-skew allowance: 15 seconds in either direction.
-- Maximum ordinary stolen-token exposure: 135 seconds, before emergency key
+- Clock-skew allowance: zero in v0 because issuer and verifier are the same
+  Lease Plane process and use the same clock.
+- Maximum ordinary stolen-token exposure: 120 seconds, before emergency key
   revocation is considered.
 
 The verifier uses a parser that rejects duplicate JSON keys. It does not select
@@ -243,14 +283,20 @@ contract is rejected.
 ### 6.4 Replay handling
 
 Each capability is one-use. Before route execution, Lease Plane atomically
-inserts `(issuer, jti, exp, correlation_id)` into durable replay state. A
-duplicate insert rejects the request. Where a route mutation is backed by the
-same database, capability consumption and the protected mutation occur in the
-same transaction. If that cannot be achieved for a route, the route must define
-an idempotency key and failure/retry semantics before entering the pilot.
+inserts `(issuer, jti, exp, correlation_id)` into durable replay state and
+commits that write. A duplicate insert rejects the request. Consumption is not
+rolled back with the protected mutation: business rejection, timeout, crash, or
+mutation rollback burns the token. The caller must obtain a new challenge and
+capability before retrying.
 
-Replay state is retained until `exp + 15 seconds`. A service restart must not
-make a previously consumed capability reusable.
+Every mutating route must therefore define an operation idempotency key distinct
+from token `jti`. A retry with a new capability and the same operation key must
+return the prior committed result or execute the mutation at most once. No route
+enters Gate C without that contract.
+
+Replay state is retained until `exp`. The insert is fsync-durable before effect
+execution, and a service or host restart must not make a consumed capability
+reusable.
 
 ### 6.5 Exact route-to-scope map
 
@@ -270,7 +316,8 @@ make a previously consumed capability reusable.
 | `POST /v1/dialectic/reviewer` | `dialectic.reviewer.assign` |
 | `POST /v1/dialectic/resolve` | `dialectic.resolve` |
 | `GET /v1/dialectic/presence` | `dialectic.presence.read` |
-| `GET /v1/health` | `lease.health.read` |
+| `GET /v1/health` | Unauthenticated minimal liveness only; no dependencies, identities, or policy detail |
+| `GET /v1/health/detail` | `lease.health.read` |
 
 Unknown routes and unknown scopes fail closed. `lease.force_release` is never
 included in a general Lease Plane workload profile and requires a separately
@@ -280,16 +327,26 @@ registered operator workload key.
 
 - Signing keys rotate at least every 30 days.
 - Planned rotation publishes the new public key before activation. The old key
-  becomes verify-only for 150 seconds, then is removed.
+  becomes verify-only for 150 seconds, providing 30 seconds beyond the v0
+  maximum token TTL, then is removed.
 - Workload keys rotate at least every 30 days. Planned overlap is allowed only
   for a named workload and a maximum of 24 hours.
-- Emergency signer or workload-key revocation must become effective within 30
-  seconds of the operator action.
-- If a durable token-level denylist is unavailable, incident documentation must
-  state that already minted token exposure lasts up to 135 seconds.
+- Emergency signer, workload-key, or workload-subject revocation must become
+  effective within 30 seconds of the operator action. The workload registry
+  refreshes every 5 seconds and has a 30-second hard stale ceiling. Once the
+  ceiling is exceeded, capability verification returns 503 until fresh policy
+  state is available; stale state never remains valid without a bound.
+- V0 does not promise individual-token revocation. If no key or subject is
+  revoked, a specific already minted token can remain usable for at most 120
+  seconds. Key or subject revocation is checked on every verification through
+  the bounded registry state.
 - Key IDs contain at least 128 bits of randomness and are never reused.
 - Rotation and revocation each emit a security audit event and have a tested
   rollback procedure.
+- Workload rotation enrolls the new public key through a proof signed by the
+  current key plus explicit operator approval. Expiry warnings fire at 7 days,
+  24 hours, and 1 hour. An expired workload key fails closed with a distinct
+  internal reason code and never re-enables static fallback.
 
 Signer private keys use the same non-exportability and signed-binary access
 requirement as workload keys. Public verification keys and workload public keys
@@ -298,10 +355,16 @@ authority and an audit event.
 
 ## 7. Authorization failure behavior
 
+Static migration uses `Authorization: Bearer <token>`. Capabilities use the
+distinct scheme `Authorization: UNITARES-Capability <jwt>`. Shape inspection or
+JWT parse success never chooses the verifier. The raw HTTP boundary rejects
+duplicate or comma-merged Authorization headers and forbids credentials in
+query parameters or request bodies. Static comparison remains constant-time.
+
 The verifier checks, in order:
 
 1. Exactly one authorization credential is present.
-2. The credential is unambiguously static-migration or capability format.
+2. The explicit authorization scheme selects exactly one verifier.
 3. Header algorithm, type, key, and signature are valid.
 4. Required claims exist exactly once and have the expected types.
 5. Issuer, audience, token use, and version match exactly.
@@ -309,11 +372,13 @@ The verifier checks, in order:
 7. The subject is an active registered workload.
 8. Requested scope is present and still allowed for the workload.
 9. `jti` consumption succeeds.
-10. The required security audit record is durable.
+10. The required pre-execution security audit intent is durable.
 
-Any failure returns a typed 401 or 403 without disclosing which registered key,
-subject, or policy entry exists. A capability failure never retries against the
-static bearer path.
+Invalid or absent credentials return a generic 401. A valid capability lacking
+route scope returns a generic 403. Detailed reason codes exist only in the
+security audit. Audit, replay-store, registry-staleness, or issuance
+infrastructure failures return a typed 503 and alert; they are never reported as
+credential failures. A capability failure never retries against static auth.
 
 ## 8. Security-grade audit contract
 
@@ -329,8 +394,11 @@ re-qualified without altering governance sensor meaning.
 ### 8.2 Canonical event schema
 
 Every issuance attempt, verification decision, protected call, fallback use,
-key change, revocation, and audit degradation emits a
-`unitares.security_call_event.v1` record containing only allowlisted fields:
+key change, revocation, and audit degradation emits a typed
+`unitares.security_call_event.v1` record. Event types are
+`authorization_denied`, `call_intent`, `call_terminal`, `outcome_unknown`,
+`issuance`, `fallback`, `key_change`, `revocation`, and `audit_state`.
+Allowlisted fields are:
 
 ```text
 schema, event_id, service, service_instance, sequence, previous_hash,
@@ -344,32 +412,55 @@ latency_ms, audit_delivery_state
 Raw authorization headers, tokens, signatures, challenges, request arguments,
 response bodies, free text, and environment values are forbidden.
 
+`correlation_id`, `event_id`, and `token_jti` are UUIDs. `route` is the static
+router template, never a resolved target or query string. `decision_reason_code`,
+`authorization_decision`, `outcome`, and `audit_delivery_state` are closed
+enums. Every string has an explicit byte limit; invalid audit values fail schema
+validation rather than being truncated into a misleading record.
+
 ### 8.3 Durability and integrity
 
-- The service appends the event to an fsync-backed, mode-0600 local spool before
-  executing a protected mutation.
-- Each service instance owns its spool and monotonic sequence. Multiple services
-  never append concurrently to one file.
-- Events form a per-instance hash chain over canonical serialized fields.
+- Before a protected mutation, the service writes and fsyncs `call_intent`.
+  This event contains the authorization decision but no terminal outcome or
+  latency.
+- Successful DB-backed mutation and its `call_terminal` outbox row commit in
+  one database transaction. Business rejection writes a terminal event in a
+  separate short transaction after the protected mutation rolls back.
+- A crash after intent but before terminal leaves an explicit orphan. A
+  reconciler emits `outcome_unknown` or a state-derived terminal result; it
+  never fabricates success.
+- Authorization denial has one terminal `authorization_denied` event. Allowed
+  mutations normally have one intent and one terminal event sharing a call ID.
+- The audit collector runs under a different service UID. Its Unix socket
+  verifies the submitting peer UID against the service registry. Forged or
+  unregistered submitters are rejected and tested.
+- Each service instance owns its mode-0600 fallback spool and monotonic
+  sequence. Multiple services never append to one file. The caller workload UID
+  cannot read or rewrite the Lease Plane spool.
+- Events form a per-instance hash chain over canonical serialized fields. The
+  chain root is acknowledged by the separate-UID collector at least every 60
+  seconds. Roots exist in collector custody before local segments may be
+  deleted.
 - The collector writes idempotently by `event_id` into an append-only security
-  table using an insert-only database role.
-- A daily chain root is retained outside the service spool so truncation is
-  detectable.
+  table using an insert-only role distinct from the schema owner.
 - Canonical database retention is 365 days. Acknowledged local spool segments
   are retained for 7 days.
 - Collector duplicates are ignored by ID but counted. Sequence gaps, hash
-  failures, or conflicting duplicates alert immediately.
+  failures, forged submitters, or conflicting duplicates alert within 60
+  seconds and have a 5-minute operator-response SLO during the pilot.
 
-The spool has a 256 MiB hard limit. If the canonical sink is unavailable but the
-spool remains durable, calls may continue and report `spooled`. If the spool
-cannot append or is full, protected mutations fail closed. The pilot may allow
-`GET /v1/health` and `GET /v1/lease/status` while audit is degraded only if their
-events can still be durably spooled; otherwise they also fail closed.
+Spool size is not a fixed guess. Gate C measures calls by route and event bytes,
+then provisions at least 24 hours of observed two-times-peak volume plus 100%
+headroom. If the canonical sink is unavailable but the spool remains durable,
+calls may continue and report `spooled`. If intent cannot append or reserved
+terminal capacity is unavailable, protected mutations return 503 before
+execution. Minimal `/v1/health` remains available without security detail.
 
 ### 8.4 Operational projection
 
 The existing automation directory gains a sibling projection named
-`tool-calls.jsonl` with schema `unitares.tool_call_event.v1`. It contains:
+`security-transitions.jsonl` with schema
+`unitares.security_transition_event.v1`. It contains:
 
 - auth-mode transitions;
 - first static fallback use after a quiet period;
@@ -387,6 +478,14 @@ without turning a 120-second loop into hundreds of daily automation rows.
 Before dual mode starts, every static Lease Plane token is rotated. The server
 records a fixed fallback expiry no more than 14 calendar days after activation.
 Static credentials remain distinct for ordinary and force-release paths.
+
+An offline asymmetric recovery key is provisioned before dual mode. Its private
+key is held by the operator outside launchd and service environments; only its
+public key is pinned in Lease Plane. A manual, challenge-bound signature can
+authorize only `auth.recover` or `lease.force_release`, creates a maximum
+15-minute recovery window, is one-use, and must rotate after use. It cannot
+authorize ordinary lease or dialectic routes. Break-glass use always creates a
+separate operator-visible event and incident record.
 
 Dual mode follows these rules:
 
@@ -428,6 +527,9 @@ pilot must run explicit canaries to obtain evidence.
 | BOOT-03 | No private key or bearer appears in plist, environment, emitted event, or ordinary log |
 | BOOT-04 | An unrelated same-user process cannot export or use the workload or signer key |
 | BOOT-05 | Cross-audience issuance request is rejected before signing |
+| BOOT-06 | An unregistered peer cannot obtain a signature through helper IPC; arbitrary-byte signing is unavailable |
+| BOOT-07 | Shared interpreters and callers without the required service UID are ineligible and rejected |
+| BOOT-08 | Non-canonical, duplicate-key, structurally ambiguous, wrong-domain, and altered RFC 8785 payloads fail verification |
 
 ### 10.2 Parsing and authorization
 
@@ -435,19 +537,24 @@ pilot must run explicit canaries to obtain evidence.
 |---|---|
 | AUTH-01 | Every route in section 6.5 accepts its exact scope and rejects every other scope |
 | AUTH-02 | Wrong issuer, audience, token use, version, type, algorithm, or key fails closed |
-| AUTH-03 | Missing, duplicate, malformed, incorrectly typed, or unsorted scope claims fail closed |
+| AUTH-03 | Missing, duplicate, malformed, or incorrectly typed claims fail closed; scope order is normalized, not trusted |
 | AUTH-04 | Unknown route and unknown scope fail closed |
 | AUTH-05 | General Lease scopes cannot authorize force release; force-release scope cannot authorize ordinary routes by implication |
+| AUTH-06 | Duplicate/comma-merged Authorization headers and query/body credentials fail before verifier selection |
+| AUTH-07 | Explicit schemes select one verifier; malformed capability never invokes static comparison |
+| AUTH-08 | A second-audience verifier stub rejects a valid Lease Plane signer and audience |
 
 ### 10.3 Time and replay
 
 | ID | Required test |
 |---|---|
 | TIME-01 | Default and maximum TTL are enforced; caller cannot request more than 120 seconds |
-| TIME-02 | `nbf` and `exp` accept exactly within the 15-second skew budget and reject beyond it |
+| TIME-02 | `nbf` and `exp` use the shared Lease Plane clock with zero skew and reject at the exact boundaries |
 | REPLAY-01 | Second presentation of one `jti` is rejected before route execution |
 | REPLAY-02 | Restart between first and second presentation does not restore replayability |
 | REPLAY-03 | Concurrent duplicate presentations result in exactly one authorized execution |
+| REPLAY-04 | Business rejection, timeout, and mutation rollback burn the capability; retry requires a new capability |
+| REPLAY-05 | New capability plus the same operation idempotency key cannot execute a mutation twice |
 
 ### 10.4 Rotation and revocation
 
@@ -457,18 +564,23 @@ pilot must run explicit canaries to obtain evidence.
 | KEY-02 | Old signer is rejected after 150 seconds and cannot be reintroduced by stale cache |
 | KEY-03 | Emergency signer and workload-key revocation take effect within 30 seconds |
 | KEY-04 | Rotation rollback restores a known-good signer without accepting an unregistered key |
-| KEY-05 | Revocation behavior explicitly demonstrates token-level denial or the documented 135-second exposure bound |
+| KEY-05 | Subject/key revocation meets 30 seconds; absent revocation, individual-token exposure is bounded at 120 seconds |
+| KEY-06 | Token minted immediately before rotation remains valid only through the 150-second verify-only overlap |
+| KEY-07 | New-key enrollment requires old-key proof plus operator approval; expiry warns and then fails closed |
 
 ### 10.5 Audit and outage behavior
 
 | ID | Required test |
 |---|---|
-| AUDIT-01 | Every issuance and protected call has one canonical terminal event with correlation and auth provenance |
+| AUDIT-01 | Denials have one terminal event; allowed mutations have one durable intent and one terminal/outcome-unknown event |
 | AUDIT-02 | No forbidden credential or free-text field survives serialization |
 | AUDIT-03 | Duplicate delivery is idempotent; sequence gaps and conflicting duplicates alert |
 | AUDIT-04 | Service kill/restart preserves acknowledged spool events and hash-chain continuity |
 | AUDIT-05 | Database outage spools durably; spool write failure and full spool deny protected mutations |
 | AUDIT-06 | Operational ledger emits transitions and hourly summaries without per-call high-frequency rows |
+| AUDIT-07 | Unregistered UID and forged collector submissions are rejected without creating conflicting canonical events |
+| AUDIT-08 | Collector acknowledges chain roots within 60 seconds; local truncation or rewrite is detected |
+| AUDIT-09 | Mutation and terminal outbox commit atomically; crash gaps reconcile to outcome-unknown, never success |
 
 ### 10.6 Fallback and rollback
 
@@ -480,6 +592,26 @@ pilot must run explicit canaries to obtain evidence.
 | FALLBACK-04 | A named exception affects only its caller and expires within 48 hours |
 | ROLLBACK-01 | Capability mode can be disabled without losing newly rotated static separation during the pilot |
 | ROLLBACK-02 | Rollback emits an event, preserves replay/audit evidence, and does not restore an expired static credential |
+| RECOVERY-01 | Offline recovery signature opens only a one-use 15-minute recovery/force-release window |
+| RECOVERY-02 | Recovery cannot authorize ordinary routes and requires key rotation plus incident closure after use |
+
+### 10.7 Default-off invariance
+
+| ID | Required test |
+|---|---|
+| FLAG-01 | With flags off, existing static auth responses and route behavior are unchanged |
+| FLAG-02 | Fixed workload produces identical `audit.tool_usage`, behavioral-sensor, and presence inputs before and after merge |
+| FLAG-03 | Enabling then disabling test-only capability mode leaves no active spool, replay, registry, projection, or background task |
+
+### 10.8 Availability and capacity
+
+| ID | Required test |
+|---|---|
+| AVAIL-01 | Issuer/key-custody outage during an active lease returns typed 503 and cannot silently downgrade |
+| AVAIL-02 | Challenge flood is bounded by peer UID, 10 requests/second per workload, 200/second global, 8 outstanding per workload, and 1024 global |
+| AVAIL-03 | At two-times projected peak heartbeat load, issuance p99 is at most 100 ms and causes zero renewal deadline misses |
+| AVAIL-04 | Minimal unauthenticated health remains responsive during issuer, registry, replay-store, and audit degradation |
+| CAP-01 | Measured event size and caller cadence prove replay, spool, collector, and 365-day retention capacity with required headroom |
 
 ## 11. Promotion gates
 
@@ -488,25 +620,36 @@ pilot must run explicit canaries to obtain evidence.
 The operator explicitly accepts or revises:
 
 - per-service issuer ownership;
-- Keychain/signed-helper bootstrap and its same-user isolation test;
+- distinct service-account bootstrap, peer-credentialed issuance, and the
+  signing-oracle-resistant custody test;
 - EdDSA JWT format;
 - 60-second default and 120-second maximum TTL;
-- 15-second clock skew;
-- one-use durable replay state;
+- zero v0 verifier skew;
+- consume-before-execute durable replay state and operation idempotency;
 - 30-second emergency revocation target;
 - security-audit fail-closed behavior; and
 - 14-day fallback window and numeric sunset gates.
 
+### Gate A.5 - custody feasibility spike
+
+Before protocol code, create only throwaway keys, non-production service UIDs,
+an issuance socket, and any proposed helper. No live registry, plist, caller
+environment, or service key changes are allowed. The spike must pass
+`BOOT-04`, `BOOT-06`, and `BOOT-07` and record the exact custody mechanism and
+code-signing/peer-credential evidence. Failure blocks the pilot.
+
 ### Gate B - prepare, do not deploy
 
-After Gate A, implementation may add verifier/issuer abstractions, schemas, and
-the acceptance harness behind default-off flags. No launchd plist, live key,
-caller environment, or enforcement default changes in this gate.
+After Gate A.5 passes, the first merged implementation is `FLAG-01..03`. Only
+then may implementation add verifier/issuer abstractions, schemas, and the rest
+of the acceptance harness behind default-off flags. No launchd plist, live key,
+caller environment, or enforcement default changes are allowed in this gate.
 
 ### Gate C - Lease Plane pilot readiness review
 
 A separate review examines test evidence, key operations, rollback, audit
-qualification, and the exact caller inventory before dual mode is enabled.
+qualification, the exact caller/route/cadence inventory, issuance availability,
+and measured replay/spool/retention capacity before dual mode is enabled.
 
 ### Gate D - static sunset
 
@@ -531,3 +674,30 @@ proposal or the Lease Plane pilot.
 
 These require their own evidence and cannot be inferred from a successful Lease
 Plane pilot.
+
+## 13. Independent review disposition
+
+Claude Opus 5 reviewed v0.1 on 2026-08-24 with tools, web access, and session
+persistence disabled. The verdict was `REVISE`, not `BLOCK`: the direction was
+sound, but the original contract would have certified incorrect behavior.
+
+V0.2 resolves the Gate B blockers by:
+
+- replacing same-UID helper trust with distinct service accounts,
+  peer-credentialed issuance, explicit helper peer authentication, and a
+  signing-oracle test;
+- defining RFC 8785 canonical bytes and an issuance-proof domain prefix;
+- choosing consume-before-execute replay semantics and requiring operation
+  idempotency for safe remint/retry;
+- splitting durable pre-execution intent from terminal/outcome-unknown audit and
+  returning 503 for audit infrastructure faults;
+- making off-state parity tests the first implementation artifact;
+- selecting zero verifier skew, 120-second token exposure, 150-second key
+  overlap, 5-second policy refresh, and a 30-second hard stale ceiling; and
+- authorizing only a throwaway custody spike before protocol code.
+
+The review's Gate C findings are now named requirements: issuance availability
+and rate limits, collector authentication and external root custody, offline
+asymmetric recovery, explicit credential schemes, bounded audit values,
+workload re-enrollment, unauthenticated minimal liveness, capacity measurement,
+and a complete caller inventory.
