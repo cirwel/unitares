@@ -1,3 +1,5 @@
+import json
+
 from src.services.identity_payloads import (
     build_identity_response_context,
     build_identity_diag_payload,
@@ -261,6 +263,198 @@ def test_identity_response_context_keeps_full_provenance_when_only_harness_known
     assert runtime_provenance.get("available") is not False
     assert runtime_provenance["harness"]["type"] == "claude_code"
     assert runtime_provenance["model"]["identifier"] is None
+
+
+# -- agent_signature stays contract-complete while shedding bulk ----------
+#
+# Dogfood 2026-08-24: the signature rides on EVERY response, successes and
+# plain validation errors alike, and no response_mode reaches the error path.
+# The trim therefore has to come from the envelope itself -- but the ontology
+# in it is load-bearing, not decoration: unitares-governance-plugin's
+# scripts/audit_identity_contract.py hard-errors on a missing agent_id_is and
+# cross-checks the flat uuid/agent_id/display_name fields against the nested
+# registry/public_handle/label blocks. These pin that what was removed is only
+# the field-by-field provenance record, and that everything the contract
+# reads survived.
+
+CONTRACT_KEYS = ("schema", "agent_id_is", "registry", "public_handle", "label")
+
+
+def _sig(**overrides):
+    kwargs = dict(
+        agent_uuid="uuid-sig",
+        agent_id="Codex_20260622",
+        display_name="codex-dispatch",
+        label_source="claimed",
+        session_resolution_source="explicit_client_session_id",
+        client_hint="codex",
+        proof_origin="caller_asserted",
+    )
+    kwargs.update(overrides)
+    return build_identity_signature_payload(**kwargs)
+
+
+def test_signature_keeps_every_field_the_contract_auditor_reads():
+    """The plugin auditor treats a missing agent_id_is as a hard violation."""
+    context = _sig()["identity_context"]
+
+    for key in CONTRACT_KEYS:
+        assert key in context, f"{key} is read by the plugin identity-contract auditor"
+    assert context["agent_id_is"] == "public_structured_handle"
+    assert context["registry"]["uuid"] == "uuid-sig"
+    assert context["public_handle"]["agent_id"] == "Codex_20260622"
+    assert context["label"]["display_name"] == "codex-dispatch"
+
+
+def test_signature_keeps_the_per_call_continuity_claim():
+    """continuity_claim is computed per call, not static -- it must survive.
+
+    It is the tell for a discontinuity (fresh mint after a resume miss,
+    reactivated archive, heuristic fallback), so trimming it would drop
+    signal, not repetition.
+    """
+    assert _sig()["identity_context"]["continuity_claim"] == "resumed_by_explicit_session"
+    minted = _sig(
+        session_resolution_source="unknown",
+        identity_resolution_outcome="minted_force_new",
+    )
+    assert minted["identity_context"]["continuity_claim"] == "fresh_uuid_minted_by_force_new"
+
+
+def test_signature_stubs_the_provenance_record_but_keeps_the_flat_fields():
+    """Only the field-by-field record goes; harness/model context stays."""
+    harness = _sig()["identity_context"]["harness_context"]
+
+    assert harness["harness_type"] == "codex"
+    for key in ("harness_version", "model", "model_provider"):
+        assert key in harness
+    provenance = harness["runtime_provenance"]
+    assert provenance["schema"] == "s22.runtime_provenance.v1"
+    # The detail is genuinely gone, not merely renamed.
+    assert "model" not in provenance
+    assert provenance["detail"] == "omitted"
+
+
+def test_omitted_provenance_is_not_reported_as_unavailable():
+    """Two different states must not share one flag.
+
+    "nothing was reported" (available=False, #1872's case) and "something was
+    reported but is not inlined in this envelope" are different. Reusing
+    available=False for the second would make the response fail toward a wrong
+    label instead of toward "unknown".
+    """
+    omitted = _sig()["identity_context"]["harness_context"]["runtime_provenance"]
+    assert "available" not in omitted
+
+    nothing_reported = build_identity_response_context(
+        agent_uuid="uuid-sig",
+        agent_id="Codex_20260622",
+        display_name="codex-dispatch",
+        session_resolution_source="explicit_client_session_id",
+        identity_status=None,
+        provenance_detail=False,
+    )["harness_context"]["runtime_provenance"]
+    assert nothing_reported["available"] is False
+    assert "detail" not in nothing_reported
+
+
+def test_a_rejected_value_survives_provenance_suppression():
+    """#1872 kept rejection reasons deliberately; this must not undo that.
+
+    A reason other than "not_exposed" means something WAS sent and got
+    rejected, which is diagnostic information -- so the full record is
+    retained regardless of provenance_detail.
+    """
+    context = build_identity_response_context(
+        agent_uuid="uuid-sig",
+        agent_id="Codex_20260622",
+        display_name="codex-dispatch",
+        session_resolution_source="explicit_client_session_id",
+        identity_status=None,
+        client_hint="codex",
+        model_type="x" * 5000,
+        provenance_detail=False,
+    )
+    provenance = context["harness_context"]["runtime_provenance"]
+
+    assert "model" in provenance, "the rejection diagnostic was collapsed away"
+    assert provenance["model"]["missing_reason"] == "value_too_long"
+
+
+def test_default_still_builds_the_full_provenance_record():
+    """identity()/onboard() keep the default, so their contract is unchanged.
+
+    This pins the builder default only -- it does not exercise the identity()
+    handler, and the stub deliberately does not promise that a bare identity()
+    call reproduces a suppressed record (it forwards the caller's current
+    model_type rather than the stored one).
+    """
+    context = build_identity_response_context(
+        agent_uuid="uuid-sig",
+        agent_id="Codex_20260622",
+        display_name="codex-dispatch",
+        session_resolution_source="explicit_client_session_id",
+        identity_status=None,
+        client_hint="codex",
+    )
+    provenance = context["harness_context"]["runtime_provenance"]
+    assert provenance.get("available") is not False
+    assert provenance["harness"]["type"] == "codex"
+
+
+def test_signature_carries_exactly_one_assurance_block():
+    """It was emitted nested AND mirrored at the top; the top copy stays.
+
+    response_base._neutral_denial_signature reads the top-level one, so that
+    is the copy that has to survive.
+    """
+    payload = _sig()
+
+    assert "identity_assurance" in payload
+    assert "identity_assurance" not in payload["identity_context"]
+
+
+def test_signature_assurance_matches_the_full_context_computation():
+    """Dropping the nested copy must not change the binding-strength claim."""
+    for origin, expected_tier in (("caller_asserted", "strong"), ("server_inferred", "weak")):
+        payload = _sig(proof_origin=origin)
+        context = build_identity_response_context(
+            agent_uuid="uuid-sig",
+            agent_id="Codex_20260622",
+            display_name="codex-dispatch",
+            session_resolution_source="explicit_client_session_id",
+            identity_status=None,
+            client_hint="codex",
+            proof_origin=origin,
+        )
+        assert payload["identity_assurance"] == context["identity_assurance"]
+        assert payload["identity_assurance"]["tier"] == expected_tier
+
+
+def test_signature_is_materially_smaller_than_the_untrimmed_form():
+    """Regression guard on the reason this exists.
+
+    Measured 2026-08-24 for a claude_code caller: 2,651 bytes before, 1,671
+    after. The assertion pins the direction and rough magnitude, not the exact
+    counts, so unrelated field additions do not fail it while a silent
+    re-expansion of the provenance record does.
+    """
+    payload = _sig(client_hint="claude_code")
+    untrimmed = dict(payload)
+    untrimmed["identity_context"] = build_identity_response_context(
+        agent_uuid="uuid-sig",
+        agent_id="Codex_20260622",
+        display_name="codex-dispatch",
+        session_resolution_source="explicit_client_session_id",
+        identity_status=None,
+        client_hint="claude_code",
+        proof_origin="caller_asserted",
+    )
+
+    trimmed_size = len(json.dumps(payload))
+    untrimmed_size = len(json.dumps(untrimmed))
+    assert trimmed_size < untrimmed_size
+    assert untrimmed_size - trimmed_size > 500
 
 
 def test_identity_signature_payload_uses_s22_contract():
