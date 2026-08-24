@@ -110,11 +110,31 @@ def test_gate_fail_closed_for_unknown_tools(strict_on, unbound_context):
 
 
 def test_gate_passes_explicit_agent_id(strict_on, unbound_context):
-    """An explicit agent_id is a cross-agent/legacy-name reference —
+    """An explicit NON-UUID agent_id is a cross-agent/legacy-name reference —
     require_agent_id and downstream ownership checks own it."""
     assert _strict_identity_refusal_or_none(
         "knowledge", {"agent_id": "some-agent"}
     ) is None
+
+
+def test_gate_refuses_unbound_uuid_shaped_agent_id(strict_on, unbound_context):
+    """A UUID-shaped agent_id with no context binding must now refuse.
+
+    Before 2026-08-24, `_bind_explicit_http_agent` bound EVERY UUID-shaped
+    claim unconditionally, so this branch was unreachable for that shape —
+    `get_context_resolved_agent_id()` above would already have returned
+    non-None. Since that path can now refuse an uncorroborated claim
+    (explicit-bind corroboration gate), a UUID-shaped agent_id reaching here
+    unbound means exactly what the function's own docstring always said an
+    unbound credential means: treated as what it is, refused. Exempting it
+    via bare presence would silently undo the refusal one layer up — the
+    finding a code-reviewer pass caught in this same PR.
+    """
+    refusal = _strict_identity_refusal_or_none(
+        "knowledge", {"agent_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "action": "store"}
+    )
+    assert refusal is not None
+    assert refusal["status"] == "identity_required"
 
 
 @pytest.mark.parametrize(

@@ -159,9 +159,11 @@ def _strict_identity_refusal_or_none(
     caller whose credential RESOLVED has a context binding by the time
     this runs (``_resolve_http_bound_agent`` precedes
     ``execute_http_tool`` and calls ``update_context_agent_id`` on
-    success — valid session ids, valid continuity tokens, and explicit
-    UUIDs all land there); a garbage or synthetic credential resolves
-    to nothing and is treated as what it is: unbound.
+    success — valid session ids, valid continuity tokens, and CORROBORATED
+    explicit UUIDs all land there, since 2026-08-24; an uncorroborated one
+    no longer does — see ``access._bind_explicit_http_agent``); a garbage,
+    synthetic, or uncorroborated credential resolves to nothing and is
+    treated as what it is: unbound.
 
     - flag off → None (inert; today's default everywhere)
     - ``requires_identity="pre_onboard"`` → None (the tool serves its
@@ -171,6 +173,13 @@ def _strict_identity_refusal_or_none(
     - resolved context binding → None
     - explicit non-UUID ``agent_id`` argument → None (legacy-name
       reference; require_agent_id + downstream ownership checks own it)
+    - a UUID-shaped ``agent_id`` that did NOT resolve to a context binding
+      → the typed refusal, same as no agent_id at all. Before 2026-08-24
+      every UUID-shaped claim resolved unconditionally, so this branch was
+      unreachable for that shape and the presence check below was
+      (accidentally) safe; it is reachable now that
+      ``_bind_explicit_http_agent`` can refuse an uncorroborated claim, and
+      exempting it here would silently undo that refusal one layer up.
     - otherwise → the single-sourced typed refusal (same payload the
       MCP middleware wraps; transports cannot drift)
     """
@@ -196,7 +205,10 @@ def _strict_identity_refusal_or_none(
     except Exception:
         pass
     if isinstance(arguments, dict) and arguments.get("agent_id"):
-        return None
+        from src.http_routes.access import _looks_like_uuid
+
+        if not _looks_like_uuid(arguments["agent_id"]):
+            return None
     logger.info(
         "[HTTP] %s unbound under STRICT_IDENTITY_REQUIRED — returning "
         "typed refusal (no auto-mint)",
