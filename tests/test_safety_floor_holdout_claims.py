@@ -453,6 +453,24 @@ def test_ties_anywhere_in_the_safe_set_degrade_the_claim(sf):
     assert "TIE-DEGRADED" in _quantile_report(sf, safe, [])
 
 
+def test_tie_split_across_calibration_and_holdout_degrades_the_claim(sf):
+    """A cross-half duplicate must not escape two per-half uniqueness checks."""
+    safe = [float(i) for i in range(100)]
+    calib_indices, holdout_indices = sf.split_sample(range(len(safe)), seed=0)
+    safe[calib_indices[0]] = 1000.0
+    safe[holdout_indices[0]] = 1000.0
+
+    calib, holdout = sf.split_sample(safe, seed=0)
+    assert len(set(calib)) == len(calib)
+    assert len(set(holdout)) == len(holdout)
+    assert len(set(calib + holdout)) < len(calib) + len(holdout)
+
+    text = _quantile_report(sf, safe, [])
+    assert "EXACT distribution-free" not in text
+    assert "TIE-DEGRADED" in text
+    assert "UPPER BOUND" in text
+
+
 def test_distinct_residuals_keep_the_exact_claim(sf):
     """The guarantee is real for a.s.-distinct values; the fix must not blunt it."""
     text = _quantile_report(sf, [float(i) for i in range(150)], [])

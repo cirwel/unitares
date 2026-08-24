@@ -346,7 +346,11 @@ def separation_report(safe, non_safe, seed=0, quantile=0.99, threshold=None):
             # non-exceeding side, so the realized rate comes in AT OR BELOW the
             # rank value. safe=[1.0]*100 is the extreme: 0/50 observed against a
             # "2.0% EXACT" claim. Ties make it an upper bound, not an equality.
-            distinct = len(set(calib)) == len(calib) and len(set(holdout)) == len(holdout)
+            # Check the whole split, not each half independently: the two
+            # copies of a tied value can land on opposite sides and still
+            # prevent a strict total order over the exchangeable draws.
+            split_values = calib + holdout
+            distinct = len(set(split_values)) == len(split_values)
             claim = "an EXACT distribution-free" if distinct else "a TIE-DEGRADED"
             tie_note = ("" if distinct else
                         f"\n   NB residuals TIE in this sample, so the rank guarantee is "
