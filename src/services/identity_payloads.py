@@ -634,6 +634,27 @@ def build_identity_response_context(
         )
     model_context = runtime_context["model"]
     harness_context = runtime_context["harness"]
+    adapter_context = runtime_context.get("adapter") or {}
+    runtime_provenance_informative = any(
+        [
+            model_context.get("identifier"),
+            model_context.get("provider"),
+            harness_context.get("type"),
+            harness_context.get("version"),
+            adapter_context.get("type"),
+            adapter_context.get("version"),
+        ]
+    )
+    runtime_provenance_field = (
+        runtime_context
+        if runtime_provenance_informative
+        else {
+            "schema": runtime_context.get("schema"),
+            "record_status": runtime_context.get("record_status"),
+            "available": False,
+            "note": "No model/harness/adapter identifier was reported for this call; full field-by-field detail omitted.",
+        }
+    )
 
     context = {
         "schema": S22_IDENTITY_RESPONSE_SCHEMA,
@@ -663,7 +684,7 @@ def build_identity_response_context(
             "harness_version": harness_context["version"],
             "model": model_context["identifier"],
             "model_provider": model_context["provider"],
-            "runtime_provenance": runtime_context,
+            "runtime_provenance": runtime_provenance_field,
             "role": "descriptive_context",
             "is_identity_proof": False,
             "is_verdict_authority": False,
