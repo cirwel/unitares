@@ -234,8 +234,20 @@ def _snapshot_queries() -> dict:
                             AND oe.verification_source = 'external_signal'
                             AND oe.detail->>'harness' = 'beam') AS beam_checked_in,
                     (
+                        -- `search_shared_memory` is the LIVE tool name.
+                        -- `search_knowledge_graph` is the dead alias (0 rows in
+                        -- 30d, as this file's own note at the KG-retrieval query
+                        -- above already records). That correction was applied to
+                        -- the retrieval and return-rate queries and MISSED here,
+                        -- so `cohort_engaged` counted a tool nobody calls and
+                        -- silently UNDERSTATED engagement: an agent whose only
+                        -- value action was a shared-memory search read as not
+                        -- engaged. Both names are kept so the metric stays
+                        -- comparable across the rename.
                         EXISTS (SELECT 1 FROM audit.tool_usage t WHERE t.agent_id = a.id::text AND t.success
-                                AND t.tool_name IN ('process_agent_update','knowledge','search_knowledge_graph','outcome_event'))
+                                AND t.tool_name IN ('process_agent_update','knowledge',
+                                                    'search_shared_memory','search_knowledge_graph',
+                                                    'outcome_event'))
                         OR EXISTS (SELECT 1 FROM audit.outcome_events oe WHERE oe.agent_id = a.id::text
                                    AND oe.ts > now() - make_interval(days => %(days)s))
                     ) AS engaged_value,
