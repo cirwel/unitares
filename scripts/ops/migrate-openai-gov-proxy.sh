@@ -61,6 +61,21 @@ proxy_ready() {
     | awk 'NR>1{found=1} END{exit !found}'
 }
 
+launchd_job_gone() {
+  ! "$LAUNCHCTL" print "gui/$UID_NUM/$LABEL" >/dev/null 2>&1
+}
+
+# `bootout` returns before launchd finishes tearing the job out of the domain
+# — `print` can still report it (observed: `state = SIGTERMed`) a full second
+# later. An immediate `bootstrap` under the same label races that teardown and
+# launchd answers "Bootstrap failed: 5: Input/output error", leaving the job
+# unloaded entirely rather than reloaded. Wait for the label to actually
+# disappear first.
+wait_for_unload() {
+  deploy_lib_poll 10 1 launchd_job_gone \
+    || echo "[$TAG] WARNING — $LABEL still registered 10s after bootout; bootstrap may race it" >&2
+}
+
 WAS_LOADED=0
 "$LAUNCHCTL" print "gui/$UID_NUM/$LABEL" >/dev/null 2>&1 && WAS_LOADED=1
 
@@ -113,6 +128,7 @@ restore_plist() {
   cp "$BACKUP" "$PLIST"
   if [ "$RELOAD_ATTEMPTED" = 1 ] && [ "$WAS_LOADED" = 1 ]; then
     "$LAUNCHCTL" bootout "gui/$UID_NUM/$LABEL" 2>/dev/null || true
+    wait_for_unload
     "$LAUNCHCTL" bootstrap "gui/$UID_NUM" "$PLIST" 2>/dev/null \
       || "$LAUNCHCTL" load "$PLIST" 2>/dev/null \
       || echo "[$TAG] CRITICAL — original plist was restored but launchd did not reload it" >&2
@@ -136,6 +152,7 @@ fi
 echo "[$TAG] reloading $LABEL so launchd reads the new interpreter and PYTHONPATH"
 RELOAD_ATTEMPTED=1
 "$LAUNCHCTL" bootout "gui/$UID_NUM/$LABEL" 2>/dev/null || true
+wait_for_unload
 if ! "$LAUNCHCTL" bootstrap "gui/$UID_NUM" "$PLIST" 2>/dev/null \
   && ! "$LAUNCHCTL" load "$PLIST" 2>/dev/null; then
   echo "[$TAG] FAILED — launchd rejected the deploy plist; restoring $BACKUP" >&2
