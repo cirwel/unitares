@@ -25,6 +25,15 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 SOURCE = (REPO / "scripts/dev/adoption_kpi.py").read_text()
 
+
+def _load():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "adoption_kpi", REPO / "scripts/dev/adoption_kpi.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
 LIVE_SEARCH_TOOL = "search_shared_memory"
 DEAD_SEARCH_TOOL = "search_knowledge_graph"
 
@@ -71,3 +80,102 @@ def test_a_search_capable_filter_is_not_left_search_blind():
         names = _names(clause)
         if any("search" in n or n == "knowledge" for n in names):
             assert LIVE_SEARCH_TOOL in names, sorted(names)
+
+
+# --- the scheduled cohort must come from the roster, not a literal ---------
+
+def test_the_resident_half_is_derived_from_the_configured_roster(monkeypatch):
+    """A hardcoded roster drifts, and the drift inflated the number.
+
+    The regex named six residents literally — the same six the fleet-identity
+    guard's own FLEET_IDENTITIES list exists to keep out of shipped source. It
+    never tripped CI because that guard's DEFAULT_PATHS covers src /
+    governance_core / config / agents/sdk/src and not scripts/dev.
+
+    The correctness cost: `surface_return_rate` EXCLUDES these labels from its
+    denominator, and scheduled callers return by construction. So a resident
+    added to UNITARES_RESIDENTS and not to the literal silently entered the
+    denominator as an ordinary caller and INFLATED the measured return rate —
+    failing in the comfortable direction.
+    """
+    import src.grounding.class_indicator as ci
+
+    mod = _load()
+    monkeypatch.setattr(ci, "load_resident_labels", lambda: frozenset({"Aardvark", "Zephyr"}))
+
+    pattern = mod._scheduled_label_re()
+    assert "Aardvark" in pattern and "Zephyr" in pattern
+    # ...and a name that is NOT on the roster must not be excluded.
+    assert "Vigil" not in pattern
+
+
+def test_the_residentless_install_excludes_only_jobs(monkeypatch):
+    """The default install (UNITARES_RESIDENTS unset) is the case to test."""
+    import re as _re
+
+    import src.grounding.class_indicator as ci
+
+    mod = _load()
+    monkeypatch.setattr(ci, "load_resident_labels", lambda: frozenset())
+
+    pattern = mod._scheduled_label_re()
+    for job in mod._SCHEDULED_JOB_PREFIXES:
+        assert _re.match(pattern, job), job
+    # No resident name is baked in when the roster is empty.
+    assert not _re.match(pattern, "Vigil")
+    assert not _re.match(pattern, "Sentinel")
+
+
+def test_no_resident_name_is_hardcoded_in_the_module():
+    """The literal roster is gone from executable source.
+
+    Comments are stripped: the provenance note names what was removed, and the
+    house rule says provenance in a comment is deliberately not flagged.
+    """
+    live = "\n".join(ln for ln in SOURCE.splitlines()
+                      if not ln.lstrip().startswith("#"))
+    for name in ("Vigil", "Sentinel", "Watcher", "Steward", "Chronicler", "Lumen"):
+        assert name not in live, name
+
+
+def test_the_exclusion_is_disclosed_not_silent():
+    """The same regex DISCLOSES composition two metrics up; here it deleted.
+
+    `surface_return_rate` removed agents from its own denominator and printed
+    no excluded count, so a reader could not tell whether the rate covered the
+    fleet or a filtered slice of it.
+    """
+    mod = _load()
+    query = mod._snapshot_queries()["surface_return_rate"]
+
+    assert "scheduled_excluded" in query
+    assert "excludes {ec.get('scheduled_excluded', 0)} scheduled" in SOURCE
+
+    # The disclosed count must select the COMPLEMENT of the exclusion, using
+    # the same parameter — otherwise it can report a number unrelated to what
+    # was removed. Replacing its predicate with `AND FALSE` passed a test that
+    # only checked the column name existed.
+    subquery = query[query.index("AS scheduled_excluded") - 700:
+                     query.index("AS scheduled_excluded")]
+    assert "a.label ~* %(scheduled_re)s" in subquery      # positive of the exclusion
+    assert "FALSE" not in subquery.upper().replace("FALSE POSITIVE", "")
+
+    exclusion = query[:query.index("AS scheduled_excluded")]
+    assert "a.label !~* %(scheduled_re)s" in exclusion     # the negative it mirrors
+
+    # LIMIT OF THIS CHECK, stated rather than implied: both assertions are
+    # structural. Confirming the count equals the agents actually removed needs
+    # a database, and no fixture here has one. This pins that the two
+    # predicates are complements over one parameter; it does not execute them.
+
+
+def test_the_volition_word_is_gone_from_the_filter():
+    """"Elected" is the category error the module's own docstring names.
+
+    The metric was renamed off it on 2026-08-18; the presupposition survived
+    one layer down, inside the filter, which is where it decided a number.
+    """
+    live = "\n".join(ln for ln in SOURCE.splitlines()
+                      if not ln.lstrip().startswith("#"))
+    for word in ("electing it", "rather than\n# elected"):
+        assert word not in live
