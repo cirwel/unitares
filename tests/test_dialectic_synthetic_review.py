@@ -73,6 +73,7 @@ def _common_patches():
         patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=None)),
         patch(f"{DIALECTIC}.pg_add_message", new=AsyncMock()),
         patch(f"{DIALECTIC}.pg_update_phase", new=AsyncMock()),
+        patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", new=AsyncMock()),
         patch(f"{DIALECTIC}.pg_resolve_session", new=AsyncMock()),
         patch(f"{DIALECTIC}.save_session", new=AsyncMock()),
         patch("src.mcp_handlers.context.get_context_agent_id", return_value=None),
@@ -154,6 +155,8 @@ async def test_disputed_thesis_does_not_auto_resolve_even_on_resume(server_patch
     # Recommendation may still read RESUME, but it must NOT bind to a resolution.
     assert data["resolved"] is False
     assert session.phase != DialecticPhase.RESOLVED
+    assert data["awaiting_facilitation"] is True
+    assert session.awaiting_facilitation is True
 
 
 OD = "src.mcp_handlers.dialectic.orchestrator_dispatch"
@@ -173,6 +176,7 @@ async def test_orchestrated_dispatch_skips_in_process(server_patch):
     ACTIVE_SESSIONS[session.session_id] = session
     gen_anti = AsyncMock(return_value=_antithesis())
     dispatch = AsyncMock(return_value={"ok": True, "agent_id": "agent-rev-1"})
+    emit = AsyncMock()
 
     import contextlib
     with contextlib.ExitStack() as stack:
@@ -183,6 +187,7 @@ async def test_orchestrated_dispatch_skips_in_process(server_patch):
         stack.enter_context(patch(f"{OD}.dispatch_orchestrated_review", new=dispatch))
         # reviewer is running/healthy (not a fast crash) → async path owns it
         stack.enter_context(patch(f"{OD}.reviewer_crashed_fast", new=AsyncMock(return_value=False)))
+        stack.enter_context(patch(f"{DIALECTIC}._emit_dialectic_event", new=emit))
         result = await handle_submit_thesis({
             "session_id": session.session_id,
             "agent_id": "agent-paused",
@@ -202,6 +207,16 @@ async def test_orchestrated_dispatch_skips_in_process(server_patch):
     }
     assert "Topic: Investigate false high-risk pause" in dispatched_thesis["situation"]
     assert "Reason: Risk guard requested independent review" in dispatched_thesis["situation"]
+    assert "dialectic_reviewer_dispatched" in [
+        call.args[0] for call in emit.await_args_list
+    ]
+    dispatch_event = next(
+        call
+        for call in emit.await_args_list
+        if call.args[0] == "dialectic_reviewer_dispatched"
+    )
+    assert dispatch_event.kwargs["orchestrator_agent_id"] == "agent-rev-1"
+    assert session.awaiting_facilitation is False
 
 
 @pytest.mark.asyncio
@@ -295,6 +310,7 @@ async def test_live_reviewer_is_not_preempted(server_patch):
     assert data.get("synthetic_review") is None
     gen_anti.assert_not_awaited()
     assert session.phase == DialecticPhase.ANTITHESIS
+    assert session.awaiting_facilitation is False
     assert session.reviewer_agent_id == "agent-reviewer"
 
 
@@ -325,6 +341,8 @@ async def test_disabled_via_env_leaves_slot_open(server_patch):
     assert data.get("synthetic_review") is None
     gen_anti.assert_not_awaited()
     assert session.phase == DialecticPhase.ANTITHESIS
+    assert data["awaiting_facilitation"] is True
+    assert session.awaiting_facilitation is True
 
 
 @pytest.mark.asyncio
@@ -352,3 +370,5 @@ async def test_llm_unavailable_degrades_gracefully(server_patch):
     assert data["success"] is True
     assert data.get("synthetic_review") is None
     assert session.phase == DialecticPhase.ANTITHESIS
+    assert data["awaiting_facilitation"] is True
+    assert session.awaiting_facilitation is True

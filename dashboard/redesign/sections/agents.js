@@ -48,16 +48,21 @@
       + `<span class="val">${num(val)}</span></div>`;
   }
 
-  // E/I/S/V bars + coh/risk/φ. `note` identifies the observation source.
+  // E/I/S/V bars + resolved decision risk + separately named Φ telemetry.
+  // `note` identifies the observation source.
   function stateBlock(m, note) {
     m = m || {};
+    const riskSource = m.riskSource ? ` · ${esc(m.riskSource)}` : "";
     return `<div class="eyebrow" style="margin-bottom:var(--space-3)">State${note ? ` <span style="text-transform:none;letter-spacing:0;color:var(--faint);font-weight:400">${note}</span>` : ""}</div>
       <div class="eisv" style="margin-bottom:var(--space-4)">
         ${eisvRow("E", m.E, "e", false)}${eisvRow("I", m.I, "i", false)}
         ${eisvRow("S", m.S, "s", false)}${eisvRow("V", m.V, "v", true)}
       </div>
       <div style="display:flex;gap:var(--space-5);font-family:var(--font-mono);font-size:var(--text-sm);color:var(--ink-2)">
-        <span>coh ${num(m.coherence)}</span><span>risk ${num(m.risk)}</span>${typeof m.phi === "number" ? `<span>φ ${num(m.phi)}</span>` : ""}
+        <span>coh ${num(m.coherence)}</span>
+        <span title="risk paired with the last governance verdict${riskSource}">decision risk ${num(m.risk)}</span>
+        ${typeof m.phiRiskCurrent === "number" ? `<span title="rolling Φ-derived telemetry; never recovery authority">Φ risk ${num(m.phiRiskCurrent)}</span>` : ""}
+        ${typeof m.phi === "number" ? `<span title="Φ objective">φ ${num(m.phi)}</span>` : ""}
       </div>`;
   }
 
@@ -68,6 +73,7 @@
     const stateNote = m.source === "persisted_state"
       ? `· persisted ${staleness(m.recordedAt || a.last, MODEL.nowMs).label}`
         + (m.rollingMetricsAvailable === false ? " · rolling metrics unavailable" : "")
+      : m.source === "restored_monitor" ? "· restored monitor snapshot"
       : m.source === "live_monitor" ? "· in-memory monitor" : "";
     const basin = m.basin ? `<span class="tag" style="color:${BASIN_COLOR[m.basin] || "var(--muted)"};border-color:color-mix(in srgb, ${BASIN_COLOR[m.basin] || "var(--line-2)"} 40%, var(--line-2))">${m.basin} basin</span>` : "";
     const tags = (a.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join(" ");
@@ -291,7 +297,7 @@
          <input id="ag-search" placeholder="search name · id · purpose · tag" value="${q.replace(/"/g, "&quot;")}"
            style="flex:1;min-width:200px;padding:var(--space-2) var(--space-3);font-family:var(--font-sans);font-size:var(--text-sm);background:var(--surface);color:var(--ink);border:var(--hairline) solid var(--line-2);border-radius:var(--radius-sm)" />
          <select id="ag-status" class="theme-toggle">${[["all", "all lifecycles"], ["active", "lifecycle: active"], ["paused", "lifecycle: paused"], ["archived", "lifecycle: archived"]].map(([v, t]) => `<option value="${v}" ${v === statusF ? "selected" : ""}>${t}</option>`).join("")}</select>
-         <select id="ag-sort" class="theme-toggle">${[["recent", "newest"], ["name", "name"], ["coherence", "coherence"], ["risk", "risk"], ["updates", "state rows"]].map(([v, t]) => `<option value="${v}" ${v === sortF ? "selected" : ""}>${t}</option>`).join("")}</select>
+         <select id="ag-sort" class="theme-toggle">${[["recent", "newest"], ["name", "name"], ["coherence", "coherence"], ["risk", "decision risk"], ["updates", "state rows"]].map(([v, t]) => `<option value="${v}" ${v === sortF ? "selected" : ""}>${t}</option>`).join("")}</select>
          <label style="font-size:var(--text-xs);color:var(--muted);display:flex;gap:6px;align-items:center"><input type="checkbox" id="ag-prod" ${prodOnly ? "checked" : ""}/> prod only</label>
        </div>
        <div id="ag-results"></div>`;
@@ -361,14 +367,14 @@
           </div>${a.purpose ? `<div style="font-size:var(--text-xs);color:var(--muted);margin-top:2px">${a.purpose}</div>` : ""}</td>
         <td><span class="tag ${verdictClass(a.metrics.verdict)}">${a.metrics.verdict || "—"}</span></td>
         <td class="mono">${num(a.metrics.coherence)}</td>
-        <td class="mono">${num(a.metrics.risk)}</td>
+        <td class="mono" title="${esc(a.metrics.riskSource || "risk source unavailable")}">${num(a.metrics.risk)}</td>
         <td class="mono">${(a.updates || 0).toLocaleString()}</td>
         <td><span class="tag" title="${esc(presence.detail)}">${esc(presence.label)}</span></td>
         <td class="mono" style="color:var(--muted)">${(a.updates || 0) > 0 ? st.label : "none"}</td>
       </tr>`;
     };
     const head = `<thead><tr>
-      <th></th><th>Agent</th><th title="Governance policy verdict at the last check-in — not derived from the raw risk number, so high risk beside 'safe' is expected">Verdict</th><th>Coh</th><th title="Raw risk telemetry (0–1): instrumentation, not a judgment. Verdicts come from policy, so this column deliberately is not colour-coded">Risk</th><th>State rows</th><th>Presence</th><th>Last observation</th>
+      <th></th><th>Agent</th><th title="Governance policy verdict at the last check-in">Verdict</th><th>Coh</th><th title="Resolved risk used for the last governance verdict. Open a row to inspect separate Φ telemetry when available.">Decision risk</th><th>State rows</th><th>Presence</th><th>Last observation</th>
     </tr></thead>`;
     const sm = MODEL.summary || {};
     const unknownPresence = typeof sm.presenceUnknown === "number" || typeof sm.presenceUnavailable === "number"

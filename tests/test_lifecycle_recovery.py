@@ -609,7 +609,7 @@ class TestDetectStuckAgentsInternal:
             coherence=0.8, void_active=False,
             E=0.7, I=0.3, S=0.5, V=0.0, lambda1=0.1, coherence_history=[],
         )
-        mock_monitor.get_metrics.return_value = {"mean_risk": 0.3}
+        mock_monitor.get_metrics.return_value = {"risk_score": 0.3, "risk_score_source": "resolved", "mean_risk": 0.3}
         server.monitors = {"agent-1": mock_monitor}
 
         with patch_lifecycle_server(server), \
@@ -637,7 +637,7 @@ class TestDetectStuckAgentsInternal:
             lambda1=0.1,
             coherence_history=[0.05] * 20,
         )
-        mock_monitor.get_metrics.return_value = {"mean_risk": 0.3}
+        mock_monitor.get_metrics.return_value = {"risk_score": 0.3, "risk_score_source": "resolved", "mean_risk": 0.3}
         server.monitors = {"agent-1": mock_monitor}
 
         with patch_lifecycle_server(server):
@@ -798,7 +798,7 @@ class TestDirectResumeEdgeCases:
             coherence=0.8, void_active=False,
             E=0.7, I=0.3, S=0.5, V=0.0, lambda1=0.1, coherence_history=[],
         )
-        mock_monitor.get_metrics.return_value = {"mean_risk": 0.3}
+        mock_monitor.get_metrics.return_value = {"risk_score": 0.3, "risk_score_source": "resolved", "mean_risk": 0.3}
         server.get_or_create_monitor.return_value = mock_monitor
 
         with patch_lifecycle_server(server, require_registered=("agent-1", None)), \
@@ -924,7 +924,7 @@ class TestDetectStuckAgentsInternalEdgeCases:
             coherence=0.8, void_active=False,
             E=0.7, I=0.3, S=0.5, V=0.0, lambda1=0.1, coherence_history=[],
         )
-        mock_monitor.get_metrics.return_value = {"mean_risk": 0.3}
+        mock_monitor.get_metrics.return_value = {"risk_score": 0.3, "risk_score_source": "resolved", "mean_risk": 0.3}
         server.monitors = {"agent-1": mock_monitor}
 
         with patch_lifecycle_server(server), \
@@ -948,7 +948,7 @@ class TestDetectStuckAgentsInternalEdgeCases:
             coherence=0.8, void_active=False,
             E=0.7, I=0.3, S=0.5, V=0.0, lambda1=0.1, coherence_history=[],
         )
-        mock_monitor.get_metrics.return_value = {"mean_risk": 0.3}
+        mock_monitor.get_metrics.return_value = {"risk_score": 0.3, "risk_score_source": "resolved", "mean_risk": 0.3}
         server.monitors = {"agent-1": mock_monitor}
 
         mock_tracker = MagicMock()
@@ -977,7 +977,7 @@ class TestDetectStuckAgentsInternalEdgeCases:
             coherence=0.8, void_active=False,
             E=0.7, I=0.3, S=0.5, V=0.0, lambda1=0.1, coherence_history=[],
         )
-        mock_monitor.get_metrics.return_value = {"mean_risk": 0.3}
+        mock_monitor.get_metrics.return_value = {"risk_score": 0.3, "risk_score_source": "resolved", "mean_risk": 0.3}
         server.monitors = {"agent-1": mock_monitor}
 
         mock_tracker = MagicMock()
@@ -1012,7 +1012,7 @@ class TestDetectStuckAgentsInternalEdgeCases:
             coherence=0.8, void_active=False,
             E=0.7, I=0.3, S=0.5, V=0.0, lambda1=0.1, coherence_history=[],
         )
-        mock_monitor.get_metrics.return_value = {"mean_risk": 0.3}
+        mock_monitor.get_metrics.return_value = {"risk_score": 0.3, "risk_score_source": "resolved", "mean_risk": 0.3}
         server.monitors = {"agent-1": mock_monitor}
 
         with patch_lifecycle_server(server), \
@@ -1047,7 +1047,7 @@ class TestDetectStuckAgentsInternalEdgeCases:
             coherence=0.2, void_active=True,
             E=0.9, I=0.1, S=0.3, V=0.5, lambda1=0.8, coherence_history=[],
         )
-        mock_monitor.get_metrics.return_value = {"mean_risk": 0.8}
+        mock_monitor.get_metrics.return_value = {"risk_score": 0.8, "risk_score_source": "resolved", "mean_risk": 0.8}
         server.monitors = {"agent-1": mock_monitor}
 
         with patch_lifecycle_server(server), \
@@ -1076,7 +1076,7 @@ class TestDetectStuckAgentsInternalEdgeCases:
             coherence=0.5, void_active=False,
             E=0.6, I=0.3, S=0.5, V=0.1, lambda1=0.3, coherence_history=[],
         )
-        mock_monitor.get_metrics.return_value = {"mean_risk": 0.5}
+        mock_monitor.get_metrics.return_value = {"risk_score": 0.5, "risk_score_source": "resolved", "mean_risk": 0.5}
         server.monitors = {"agent-1": mock_monitor}
 
         with patch_lifecycle_server(server), \
@@ -1542,7 +1542,7 @@ class TestDetectStuckAgentsAutoRecoverAdditional:
             coherence=0.8, void_active=False,
             E=0.7, I=0.3, S=0.5, V=0.0, lambda1=0.1, coherence_history=[],
         )
-        mock_monitor.get_metrics.return_value = {"mean_risk": 0.3}
+        mock_monitor.get_metrics.return_value = {"risk_score": 0.3, "risk_score_source": "resolved", "mean_risk": 0.3}
         server.get_or_create_monitor.return_value = mock_monitor
 
         mock_leave_note = AsyncMock()

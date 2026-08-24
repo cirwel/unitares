@@ -51,6 +51,29 @@ _OVERCONFIDENCE_GATE = 0.2
 _CURVE_INVERSION_MARGIN = 0.05
 
 
+CALIBRATION_STATUSES = frozenset({"calibrated", "miscalibrated", "unassessed"})
+
+
+def resolve_calibration_status(is_calibrated: bool, metrics: Dict[str, Any]) -> str:
+    """Return the authoritative tri-state status, with legacy-shape fallback.
+
+    ``check_calibration`` historically returned only a boolean. ``True`` could
+    mean either "eligible evidence passed" or "every bin was skipped", while
+    ``False`` covered both measured failure and no data. New results always
+    carry ``calibration_status``; the fallback keeps older mocks and external
+    implementations readable without recreating that vacuity in live callers.
+    """
+    status = metrics.get("calibration_status")
+    if status in CALIBRATION_STATUSES:
+        return status
+
+    strategic_bins = metrics.get("bins") or {}
+    tactical_bins = (metrics.get("tactical_calibration") or {}).get("bins") or {}
+    if metrics.get("error") or (not strategic_bins and not tactical_bins):
+        return "unassessed"
+    return "calibrated" if is_calibrated else "miscalibrated"
+
+
 class CalibrationChecker:
     """
     Checks calibration of confidence estimates.
@@ -555,7 +578,11 @@ class CalibrationChecker:
             include_complexity: Whether to include complexity calibration metrics
         
         Returns:
-            (is_calibrated, metrics_dict)
+            ``(is_calibrated, metrics_dict)``. ``is_calibrated`` is the legacy
+            boolean and remains backward compatible. Consumers should use the
+            authoritative ``metrics_dict["calibration_status"]`` tri-state plus
+            ``metrics_dict["assessability"]`` so skipped bins are not mistaken
+            for evidence of calibration.
         """
         # STRATEGIC calibration (trajectory health)
         strategic_metrics = self.compute_calibration_metrics()
@@ -564,7 +591,31 @@ class CalibrationChecker:
         tactical_metrics = self.compute_tactical_metrics()
         
         if not strategic_metrics and not tactical_metrics:
-            return False, {"error": "No calibration data"}
+            return False, {
+                "error": "No calibration data",
+                "is_calibrated": False,
+                "calibration_status": "unassessed",
+                "assessability": {
+                    "overall": False,
+                    "strategic": False,
+                    "tactical": False,
+                    "minimum_samples_per_bin": min_samples_per_bin,
+                    "reason": "No strategic or tactical calibration bins contain data.",
+                },
+                "issues": [],
+                "advisories": [],
+            }
+
+        strategic_eligible_bins = [
+            bin_key for bin_key, metrics in strategic_metrics.items()
+            if metrics.count >= min_samples_per_bin
+        ]
+        tactical_eligible_bins = [
+            bin_key for bin_key, metrics in tactical_metrics.items()
+            if metrics.count >= min_samples_per_bin
+        ]
+        strategic_assessable = bool(strategic_eligible_bins)
+        tactical_assessable = bool(tactical_eligible_bins)
         
         # Check strategic calibration.
         #
@@ -644,6 +695,8 @@ class CalibrationChecker:
             "strategic_calibration": {
                 "description": "Trajectory health by confidence level (retroactive marking)",
                 "use_for": "Agent trust scoring, confidence estimates",
+                "assessable": strategic_assessable,
+                "eligible_bins": strategic_eligible_bins,
                 "bins": {k: {
                     "count": v.count,
                     "trajectory_health": v.accuracy,  # Renamed from "accuracy"
@@ -666,6 +719,8 @@ class CalibrationChecker:
             result["tactical_calibration"] = {
                 "description": "Per-decision correctness (no retroactive marking)",
                 "use_for": "Sampling parameter adjustment (temperature, top_p)",
+                "assessable": tactical_assessable,
+                "eligible_bins": tactical_eligible_bins,
                 "bins": {k: {
                     "count": v.count,
                     "decision_accuracy": v.accuracy,
@@ -677,6 +732,8 @@ class CalibrationChecker:
             result["tactical_calibration"] = {
                 "description": "Per-decision correctness (no retroactive marking)",
                 "use_for": "Sampling parameter adjustment (temperature, top_p)",
+                "assessable": False,
+                "eligible_bins": [],
                 "bins": {},
                 "note": "No tactical data yet - call record_tactical_decision() to populate"
             }
@@ -715,6 +772,52 @@ class CalibrationChecker:
         result["issues"] = strategic_issues + tactical_issues + issues
         result["advisories"] = strategic_advisories + tactical_advisories
 
+        # Authoritative tri-state contract. A detected failure remains
+        # ``miscalibrated`` even when the other arm is unassessed; otherwise both
+        # strategic and tactical arms need at least one eligible bin before the
+        # overall status can say ``calibrated``. The legacy boolean above stays
+        # unchanged so existing callers do not suddenly enter correction paths.
+        strategic_status = (
+            "miscalibrated" if strategic_issues
+            else "calibrated" if strategic_assessable
+            else "unassessed"
+        )
+        tactical_status = (
+            "miscalibrated" if tactical_issues
+            else "calibrated" if tactical_assessable
+            else "unassessed"
+        )
+        overall_assessable = strategic_assessable and tactical_assessable
+        calibration_status = (
+            "miscalibrated" if not is_calibrated
+            else "calibrated" if overall_assessable
+            else "unassessed"
+        )
+        if overall_assessable:
+            unassessed_reason = None
+        elif not strategic_assessable and not tactical_assessable:
+            unassessed_reason = "Neither calibration arm has an eligible bin."
+        elif not strategic_assessable:
+            unassessed_reason = "Strategic calibration has no eligible bin."
+        else:
+            unassessed_reason = "Tactical calibration has no eligible bin."
+
+        result["calibration_status"] = calibration_status
+        result["assessability"] = {
+            "overall": overall_assessable,
+            "strategic": strategic_assessable,
+            "tactical": tactical_assessable,
+            "minimum_samples_per_bin": min_samples_per_bin,
+            "reason": unassessed_reason,
+        }
+        result["strategic_calibration"]["calibration_status"] = strategic_status
+        result["tactical_calibration"]["calibration_status"] = tactical_status
+        result["legacy_boolean_note"] = (
+            "is_calibrated is retained for backward compatibility and can be "
+            "vacuously true when bins are skipped; consume calibration_status "
+            "and assessability for decisions."
+        )
+
         # Per-channel breakdown (additive — aggregate fields above are unchanged).
         # Allows callers to ask "miscalibrated where?" instead of just "miscalibrated".
         per_channel_metrics = self.compute_tactical_metrics_per_channel()
@@ -722,6 +825,9 @@ class CalibrationChecker:
             per_channel_response = {}
             for channel, bin_metrics in per_channel_metrics.items():
                 channel_samples = sum(b.count for b in bin_metrics.values())
+                channel_assessable = any(
+                    b.count >= min_samples_per_bin for b in bin_metrics.values()
+                )
                 channel_issues = []
                 channel_advisories = []
                 max_gap = 0.0
@@ -745,6 +851,12 @@ class CalibrationChecker:
                         max_gap = b.calibration_error
                 per_channel_response[channel] = {
                     "calibrated": len(channel_issues) == 0,
+                    "calibration_status": (
+                        "miscalibrated" if channel_issues
+                        else "calibrated" if channel_assessable
+                        else "unassessed"
+                    ),
+                    "assessable": channel_assessable,
                     "samples": channel_samples,
                     "calibration_gap": max_gap,
                     "issues": channel_issues,
@@ -1423,4 +1535,3 @@ class _CalibrationCheckerProxy:
         return get_calibration_checker()
 
 calibration_checker = _CalibrationCheckerProxy()
-

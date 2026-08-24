@@ -437,11 +437,20 @@ ALIAS_SCHEMA_KEEP = {
 ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
     "search_shared_memory": {
         "response_mode": {
-            "default": "compact",
+            "default": "lean",
             "description": (
-                "Friendly read-envelope mode. Defaults to compact, which returns "
-                "the top matches and omits the repeated canonical payload. Use "
-                "full to include raw_governance with the complete result set."
+                "Friendly read-envelope mode. Defaults to lean: one-line result "
+                "digests with a single relevance score and no repeated identity, "
+                "detail previews, or score maps. Compact retains more diagnostics; "
+                "full includes raw_governance with the complete result set."
+            ),
+        },
+        "include_details": {
+            "description": (
+                "Expand every result inline only with response_mode='full'. "
+                "Compact/lean search suppresses detail serialization upstream "
+                "and returns bounded previews; open one result with "
+                "knowledge(action='details', discovery_id='...')."
             ),
         },
     },
