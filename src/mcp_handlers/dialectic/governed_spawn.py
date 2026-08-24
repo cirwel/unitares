@@ -153,6 +153,13 @@ def build_envelope(
     }
     if spec.get("cd"):
         payload["cd"] = spec["cd"]
+    # Preserve the reviewer's lifecycle cap through the governed-effect hop.
+    # Without this, the direct spawn honored the one-hour continuation window
+    # while the live governed path silently fell back to the orchestrator's
+    # thirty-minute default.
+    max_runtime_ms = spec.get("max_runtime_ms")
+    if isinstance(max_runtime_ms, int) and max_runtime_ms > 0:
+        payload["max_runtime_ms"] = max_runtime_ms
 
     try:
         psha = canonical_payload_sha256(payload)
