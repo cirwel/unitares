@@ -738,8 +738,9 @@ COMMON_PATTERNS: Dict[str, Dict[str, str]] = {
         "linked": "record_result(outcome_type=\"task_completed\", prediction_id=\"...\", detail={\"summary\":\"...\"})",
     },
     "request_review": {
-        "one_call": "request_review(issue_description=\"Review my decision to X\", reasoning=\"I chose X because ... my main uncertainty is ...\")",
-        "recovery": "request_review(issue_description=\"Paused after conflicting evidence\")",
+        "one_call": "request_review(issue_description=\"Review my decision to X. I chose X because ... my main uncertainty is ...\")",
+        "neutral_two_call": "request_review(issue_description=\"Review X\", use_brief_as_thesis=false)",
+        "recovery": "request_review(issue_description=\"Paused after conflicting evidence\", proposed_conditions=[\"Re-check the evidence before resuming\"])",
         "with_reason": "request_review(issue_description=\"Need adversarial review\", reason=\"uncertain root cause\")",
     },
     "store_knowledge_graph": {

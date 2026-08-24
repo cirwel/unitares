@@ -17,10 +17,14 @@ shape of its own construction rather than the data:
   * `eisv_stage_a_feasibility` — the residual reading was two fixed numbers
     asserted below the code that computes them, and wrong for 2 of 5 classes.
 
-`scripts/dev/adoption_kpi.py` was the fifth. On inspection its "voluntary
-retrieval" naming defect had already been repaired (operator-identified,
-2026-08-18) and its report derives every figure it prints, so nothing is
-changed there; `test_adoption_kpi_asserts_no_verdict` records why.
+`scripts/dev/adoption_kpi.py` was the fifth, and this file originally recorded
+it as clean. THAT WAS WRONG (corrected 2026-08-24 after independent review):
+its `cohort_engaged` predicate filtered on the dead `search_knowledge_graph`
+alias and omitted the live `search_shared_memory`, understating engagement. The
+naming defect was indeed already repaired, but "the naming was fixed" is not
+"the file is clean", and the test shipped here asserted only that no verdict
+token appears — which cannot see a wrong tool name. See
+tests/test_adoption_kpi_tool_names.py.
 """
 
 from __future__ import annotations
@@ -75,15 +79,28 @@ def test_quantile_mode_reports_its_rate_as_definitional_not_measured(floor_mod):
 
     A threshold DEFINED as a quantile of the safe distribution fixes its own
     false-positive rate on that distribution. Splitting into calibration and
-    holdout halves stops the rate being an exact identity, but the halves are
-    exchangeable by construction, so the held-out number is a sampling estimate
-    centred on 1-q — a noise check on the quantile, not a regression bound.
+    holdout halves stops the rate being an exact identity, but it still does not
+    bound regression risk: the held-out number is a noise check on the quantile.
+
+    An earlier version of this docstring finished that sentence with "a sampling
+    estimate centred on 1-q, because the halves are exchangeable". That is the
+    #1856 claim #1862 retracted, and it survived here in a TEST docstring after
+    being withdrawn from the module — so the suite documenting the retraction
+    still asserted the retracted thing. Exchangeability gives the RANK result in
+    `conformal_exceedance`, not a centre at 1-q.
+
+    The assertion below checks the PROPERTY (the rate is reported as
+    definitional, not as a measurement) rather than one phrasing of it. The
+    wording moved when the report began printing the rate its threshold actually
+    realizes instead of the nominal 1-q; the property did not.
     """
     rng = random.Random(11)
     safe = [rng.gauss(0, 1) for _ in range(1000)]
     lines = "\n".join(floor_mod.separation_report(safe, non_safe=[], seed=0))
 
-    assert "BY CONSTRUCTION, not measured" in lines
+    assert "definitional" in lines and "not measured" in lines
+    # ...and it must not sell the quantile-mode rate as a bound
+    assert "This IS a regression bound" not in lines
     assert "CANNOT bound regression risk" in lines
     assert "Still not a regression bound" in lines
     assert "--threshold" in lines           # names the mode that does bound it
@@ -327,15 +344,26 @@ def test_importing_the_module_does_not_run_the_integration():
     assert callable(mod.main)
 
 
-# --- adoption_kpi: the finding that did not survive inspection -------------
+# --- adoption_kpi: the finding I got wrong ---------------------------------
 
 def test_adoption_kpi_asserts_no_verdict():
-    """Recorded as clean, with the reason, so the sweep is auditable.
+    """The NO-VERDICT property still holds. THE "CLEAN" VERDICT DID NOT.
 
-    The "voluntary KG retrieval" naming defect CLAUDE.md warns about was already
-    repaired here (operator-identified, 2026-08-18): the metric is renamed, and
-    the docstring states what the number cannot support. The report prints
-    derived counts and no pass/fail, so there is no verdict to make unreachable.
+    CORRECTED 2026-08-24, independent review. This sweep judged
+    `adoption_kpi.py` clean and shipped only the assertion below. The file did
+    carry a real defect: the `cohort_engaged` predicate filtered on the dead
+    `search_knowledge_graph` alias and omitted the live `search_shared_memory`,
+    so an agent whose only value action was a shared-memory search read as not
+    engaged and the metric UNDERSTATED engagement. The file's own note recorded
+    that rename; the correction was applied to two queries and missed in a third.
+
+    This test could not have caught it. It asserts what the module refrains
+    from SAYING, not what its queries SELECT, so it passed over a wrong tool
+    name while reading as coverage — the same shape as the instruments this
+    sweep was repairing. Coverage of the actual defect is in
+    tests/test_adoption_kpi_tool_names.py; this one is kept for the narrower
+    property it does check, and relabelled so it no longer stands as a
+    clean bill of health.
     """
     source = (REPO / "scripts/dev/adoption_kpi.py").read_text()
 
