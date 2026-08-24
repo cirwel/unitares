@@ -55,7 +55,9 @@ async def _handle_void_alert_emit(arguments: Dict[str, Any]) -> Sequence[TextCon
 
     # Get risk score from metrics
     metrics = monitor.get_metrics()
-    current_risk = metrics.get("risk_score") or metrics.get("current_risk") or 0.0
+    current_risk = metrics.get("risk_score")
+    if current_risk is None:
+        current_risk = metrics.get("current_risk")
 
     # Determine severity
     severity_str = arguments.get("severity", "").lower()
