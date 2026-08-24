@@ -42,7 +42,7 @@ The core lifecycle should use primary task-verb tools. Each is implemented by a 
 | Store a durable finding | `store_finding(summary=..., discovery_type=...)` | `knowledge(action="store")` |
 | Update a durable finding | `update_finding(discovery_id=..., ...)` | `knowledge(action="update")` |
 
-Use the primary workflow tools by default. Use raw implementation names only for older servers, compatibility code, or when you explicitly need the unwrapped handler response. `start_session(force_new=true)` is a process-start operation, not a per-turn continuation primitive. `request_review` also supports a one-call form: pass `reasoning` (and optionally `root_cause`/`proposed_conditions`) and the thesis is submitted in the same call, with the response carrying plain-language `whose_move`/`next_call` guidance on every dialectic session read.
+Use the primary workflow tools by default. Use raw implementation names only for older servers, compatibility code, or when you explicitly need the unwrapped handler response. `start_session(force_new=true)` is a process-start operation, not a per-turn continuation primitive. `request_review` reuses its `issue_description` as the thesis by default, so a lone review brief is actionable in one call. Pass explicit `reasoning`/`root_cause` to distinguish the position from the subject, or `use_brief_as_thesis=false` for the neutral two-call flow. Raw `dialectic(action="request")` remains two-call unless thesis fields or `use_brief_as_thesis=true` are supplied. Session reads carry plain-language `whose_move`/`next_call` guidance.
 
 ## Starting a Session
 
@@ -192,7 +192,7 @@ When you are paused, stuck, or need intervention:
 | Inspect recovery eligibility | `self_recovery(action="check")` | Read-only blockers, thresholds, and recommendations |
 | Clearly safe self-resume | `self_recovery(action="quick")` | Requires low risk and no active void |
 | Moderate state with reflection | `self_recovery(action="review", reflection="...")` | Requires a genuine reflection; may accept conditions |
-| Disagree with verdict, want structured review | `request_review(issue_description="...", reasoning="...")` | One-call request + thesis, or omit thesis fields for the two-call flow |
+| Disagree with verdict, want structured review | `request_review(issue_description="...")` | One-call request + thesis by default; pass `use_brief_as_thesis=false` for a neutral two-call flow |
 | Human/operator override | `agent(action="resume", agent_id="...")` | Privileged lifecycle mutation; not ordinary self-recovery |
 
 Recovery is not a shortcut. Its authoritative checks are risk, active void, status,

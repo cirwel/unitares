@@ -879,11 +879,58 @@ def test_record_result_envelope_lifts_outcome():
     assert "state_semantics" not in env["state_summary"]["working_state"]
 
 
-def test_request_review_envelope_threads_session_id():
-    payload = {"success": True, "session_id": "sess-42", "phase": "thesis"}
+def test_request_review_envelope_preserves_saved_brief_next_call():
+    payload = {
+        "success": True,
+        "session_id": "sess-42",
+        "phase": "thesis",
+        "whose_move": "YOURS — your thesis is owed; the saved brief can be reused",
+        "next_call": (
+            "dialectic(action='thesis', session_id='sess-42', "
+            "use_brief_as_thesis=true)"
+        ),
+    }
     env = build_experience_envelope("request_review", "dialectic", payload)
     assert "sess-42" in env["next_action"]
+    assert "use_brief_as_thesis=true" in env["next_action"]
     assert env["state_summary"]["phase"] == "thesis"
+    assert env["state_summary"]["whose_move"].startswith("YOURS")
+
+
+def test_request_review_envelope_does_not_reopen_resolved_one_call_review():
+    payload = {
+        "success": True,
+        "session_id": "sess-resolved",
+        "phase": "resolved",
+        "one_call_review": True,
+        "thesis_source": "issue_description",
+        "review_verdict": "resume",
+        "whose_move": "nobody — review resolved in this call",
+    }
+
+    env = build_experience_envelope("request_review", "dialectic", payload)
+
+    assert "resolved" in env["next_action"]
+    assert "action='thesis'" not in env["next_action"]
+    assert env["state_summary"]["review_verdict"] == "resume"
+    assert env["state_summary"]["thesis_source"] == "issue_description"
+
+
+def test_request_review_envelope_preserves_reviewer_wait_guidance():
+    payload = {
+        "success": True,
+        "session_id": "sess-reviewer",
+        "phase": "antithesis",
+        "whose_move": (
+            "the reviewer's — an independent reviewer was spawned; poll "
+            "dialectic(action='get', session_id='sess-reviewer')"
+        ),
+    }
+
+    env = build_experience_envelope("request_review", "dialectic", payload)
+
+    assert "reviewer" in env["next_action"]
+    assert "action='thesis'" not in env["next_action"]
 
 
 # ---------------------------------------------------------------------------
