@@ -149,9 +149,15 @@ async def _inject_http_client_session(request, arguments: dict) -> str | None:
     if "client_session_id" in arguments:
         return arguments.get("client_session_id")
 
-    client_session_id = await access._extract_client_session_id(request)
+    client_session_id, is_caller_asserted = await access._extract_client_session_id(request)
     arguments["client_session_id"] = client_session_id
-    set_csid_transport_injected(True)
+    # Only a value the caller actually asserted (per `get_session_proof_origin`,
+    # single-sourced in `_extract_client_session_id`) is NOT transport-injected.
+    # A real signal — e.g. the documented X-Session-ID header — counts; a
+    # fingerprint-only onboard-pin hit does not, even though it isn't the
+    # purely-random fallback either, because the pin key (IP+UA) can be
+    # shared by unrelated callers behind the same proxy pool or client string.
+    set_csid_transport_injected(not is_caller_asserted)
     return client_session_id
 
 
