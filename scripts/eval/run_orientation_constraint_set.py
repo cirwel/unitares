@@ -168,6 +168,11 @@ def _require_external_private_output(path: Path, *, create: bool) -> dict[str, A
     return {"path": f"~/{home_relative}", "permissions": "0700"}
 
 
+def resolve_recorded_output_path(output_record: Mapping[str, Any]) -> Path:
+    """Resolve the portable path stored in a tracked enrollment record."""
+    return Path(str(output_record["path"])).expanduser().resolve()
+
+
 def _http_json(
     url: str,
     *,
@@ -271,7 +276,7 @@ def build_enrollment(
     scored_schedule = build_scored_schedule(scenarios)
     canary_schedule = build_canary_schedule(scenarios)
     output_record = _require_external_private_output(output_dir, create=True)
-    if any(Path(output_record["path"]).iterdir()):
+    if any(resolve_recorded_output_path(output_record).iterdir()):
         raise EnrollmentError("raw output directory must be empty at enrollment")
     protocol_commit = _git("log", "-n", "1", "--format=%H", "--", _repo_relative(protocol_path))
     if not protocol_commit:
@@ -538,7 +543,7 @@ def validate_enrollment(
     )
     if output != enrollment["storage"]["raw_output"]:
         raise EnrollmentError("output directory metadata changed")
-    if require_empty_output and any(Path(output["path"]).iterdir()):
+    if require_empty_output and any(resolve_recorded_output_path(output).iterdir()):
         raise EnrollmentError("output directory is not empty; cohort cannot be rerun")
     return enrollment, scenarios
 
@@ -666,7 +671,7 @@ def run_cohort(enrollment_path: Path) -> dict[str, Any]:
         require_empty_output=True,
     )
     scenario_by_id = {scenario["scenario_id"]: scenario for scenario in scenarios}
-    output_dir = Path(enrollment["storage"]["raw_output"]["path"]).expanduser().resolve()
+    output_dir = resolve_recorded_output_path(enrollment["storage"]["raw_output"])
     lock_path = output_dir / "run.lock.json"
     lock_payload = {
         "enrollment_digest": enrollment["enrollment_digest"],

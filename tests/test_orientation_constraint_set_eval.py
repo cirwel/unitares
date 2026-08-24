@@ -26,6 +26,7 @@ from scripts.eval.orientation_constraint_set import (
     sha256_json,
     validate_response_object,
 )
+from scripts.eval.run_orientation_constraint_set import resolve_recorded_output_path
 
 
 SCENARIO_PATH = (
@@ -70,6 +71,11 @@ def test_fixture_has_registered_family_and_split_shape(scenarios):
         assert len(rows) == 4
         assert sum(row["split"] == "canary" for row in rows) == 1
         assert sum(row["split"] == "scored" for row in rows) == 3
+
+
+def test_portable_enrollment_output_path_expands_operator_home():
+    resolved = resolve_recorded_output_path({"path": "~/.local/state/cohort-v0"})
+    assert resolved == (Path.home() / ".local/state/cohort-v0").resolve()
 
 
 def test_every_representation_has_an_identical_canonical_fact_manifest(scenarios):
