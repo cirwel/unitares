@@ -1175,8 +1175,6 @@ def build_experience_envelope(
     if reflection:
         envelope["reflection"] = reflection
 
-    include_raw, raw_hint = _raw_governance_policy(friendly_name, arguments)
-
     suggestions_enabled = (
         canonical_name != "process_agent_update"
         or _as_bool((arguments or {}).get("include_memory_suggestions"), default=False)

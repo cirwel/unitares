@@ -837,7 +837,8 @@ def test_search_envelope_compact_mode_keeps_memory_suggestions():
 
 
 def test_metrics_envelope_full_mode_keeps_memory_suggestions():
-    """An explicit check-in recall opt-in survives even in full mode."""
+    """Knowledge-search dedup does not suppress an explicit check-in recall
+    opt-in, even when the check-in also requests the full governance payload."""
     payload = {
         "success": True,
         "decision": {"action": "proceed"},
