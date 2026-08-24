@@ -151,22 +151,59 @@ def test_the_exclusion_is_disclosed_not_silent():
     assert "scheduled_excluded" in query
     assert "excludes {ec.get('scheduled_excluded', 0)} scheduled" in SOURCE
 
-    # The disclosed count must select the COMPLEMENT of the exclusion, using
-    # the same parameter — otherwise it can report a number unrelated to what
-    # was removed. Replacing its predicate with `AND FALSE` passed a test that
-    # only checked the column name existed.
-    subquery = query[query.index("AS scheduled_excluded") - 700:
-                     query.index("AS scheduled_excluded")]
-    assert "a.label ~* %(scheduled_re)s" in subquery      # positive of the exclusion
-    assert "FALSE" not in subquery.upper().replace("FALSE POSITIVE", "")
+    # Eligibility is derived once. Both the denominator and the disclosed
+    # exclusion count split that candidate relation, so an ineligible scheduled
+    # call cannot be reported as something removed from the denominator.
+    assert query.count("FROM audit.tool_usage") == 1
+    assert "WITH eligible_calls AS" in query
+    assert "a.label ~* %(scheduled_re)s AS scheduled" in query
+    assert "FROM eligible_calls\n                WHERE NOT scheduled" in query
+    assert "FROM eligible_calls\n                     WHERE scheduled" in query
 
-    exclusion = query[:query.index("AS scheduled_excluded")]
-    assert "a.label !~* %(scheduled_re)s" in exclusion     # the negative it mirrors
 
-    # LIMIT OF THIS CHECK, stated rather than implied: both assertions are
-    # structural. Confirming the count equals the agents actually removed needs
-    # a database, and no fixture here has one. This pins that the two
-    # predicates are complements over one parameter; it does not execute them.
+@pytest.mark.asyncio
+async def test_scheduled_exclusion_equals_eligible_rows_removed(live_postgres_backend):
+    """Execute the production query over qualifying and non-qualifying calls.
+
+    The regression case is a scheduled agent whose only call is lifecycle
+    ceremony. It never qualified for the return-rate denominator, so it must
+    not be disclosed as excluded. A second scheduled agent makes an eligible
+    ``observe`` call and is the one actual removal.
+    """
+    mod = _load()
+    query = mod._snapshot_queries()["surface_return_rate"]
+    query = (
+        query.replace("%(days)s", "$1")
+        .replace("%(scheduled_re)s", "$2")
+        .replace("%(return_gap_s)s", "$3")
+    )
+
+    rows = (
+        ("ordinary-eligible", "ordinary", "observe"),
+        ("scheduled-eligible", "canary_eligible", "observe"),
+        ("scheduled-ceremony", "canary_ceremony", "process_agent_update"),
+    )
+    async with live_postgres_backend.acquire() as conn:
+        for agent_id, label, tool_name in rows:
+            await conn.execute(
+                "INSERT INTO core.agents (id, api_key, label) VALUES ($1, $2, $3)",
+                agent_id,
+                f"key-{agent_id}",
+                label,
+            )
+            await conn.execute(
+                """
+                INSERT INTO audit.tool_usage (ts, agent_id, tool_name, payload)
+                VALUES (now(), $1, $2, '{}'::jsonb)
+                """,
+                agent_id,
+                tool_name,
+            )
+
+        result = await conn.fetchrow(query, 1, mod._scheduled_label_re(), 60)
+
+    assert result["agents_with_calls"] == 1
+    assert result["scheduled_excluded"] == 1
 
 
 def test_the_volition_word_is_gone_from_the_filter():
