@@ -56,8 +56,18 @@ def _load_checker() -> tuple[CalibrationChecker, str]:
     checker = CalibrationChecker()
     source = "json_snapshot"
     try:
-        asyncio.run(checker.load_state_async())
-        if getattr(checker, "_backend", "") == "postgres":
+        # The label must come from what ANSWERED, not from what was requested.
+        # This read `checker._backend`, which is a config value from
+        # UNITARES_CALIBRATION_BACKEND set once at __init__ and never mutated --
+        # so it printed "postgres(canonical) live DB" whenever postgres was
+        # merely *configured*, including when the connection had just failed.
+        # Reproduced on a host with no database: the connection error printed to
+        # stderr, and the report still read "live DB" over a snapshot that was
+        # by then well over an hour old. `load_state_async` cannot surface this
+        # through an exception either -- it catches its own, and falls through
+        # SILENTLY when the row is missing or its `bins` are empty -- so it now
+        # reports whether canonical state was applied.
+        if asyncio.run(checker.load_state_async()):
             source = "postgres(canonical)"
     except Exception as exc:  # pragma: no cover - diagnostic resilience
         print(f"# async DB load failed ({exc}); using sync snapshot", file=sys.stderr)
@@ -125,6 +135,25 @@ def build_report(min_samples: int) -> dict:
                  "by the gate".format(min_samples)),
             })
 
+    # A gate that cannot fail has not passed. The gate is TACTICAL: it asks
+    # whether any populated tactical bin is overconfident. With no populated
+    # tactical bin there is no such bin, so `is_calibrated` comes back True on
+    # an empty table -- vacuously, not because anything was checked.
+    #
+    # `check_calibration`'s own no-data guard does not catch this: it requires
+    # BOTH strategic and tactical to be empty, so a single unrelated strategic
+    # bin satisfies it. Reproduced on this deployment: 1 strategic bin (count=1),
+    # 0 tactical bins, VERDICT GREEN -- printed beside the state's own
+    # "No tactical data yet" note.
+    #
+    # This is reported, NOT decided here. `check_calibration` is the live gate
+    # (council-reviewed 2026-06-19) and changing its return is the operator's
+    # call, so this script keeps the flag it was given and says what the flag
+    # rests on. UNASSESSED follows the exit 0/1/2 convention from #1850: not a
+    # pass, not a failure, nothing established.
+    populated_tactical = sum(1 for b in bins if b["populated"])
+    assessable = populated_tactical > 0
+
     if worst_blocker is None:
         distance = {"green": True, "note": "no populated bin overconfident by > "
                     f"{_OVERCONFIDENCE_GATE:.2f}"}
@@ -143,6 +172,9 @@ def build_report(min_samples: int) -> dict:
         "min_samples_per_bin": min_samples,
         "overconfidence_gate": _OVERCONFIDENCE_GATE,
         "calibrated": is_calibrated,
+        "assessable": assessable,
+        "populated_tactical_bins": populated_tactical,
+        "total_tactical_bins": len(bins),
         "issues": metrics.get("issues", []),
         "advisories": metrics.get("advisories", []),
         "tactical_bins": bins,
@@ -153,19 +185,29 @@ def build_report(min_samples: int) -> dict:
 
 def print_report(r: dict) -> None:
     age = r["snapshot_age_seconds"]
-    if r["source"].startswith("postgres"):
-        freshness = "live DB"
-    elif isinstance(age, (int, float)):
-        freshness = f"snapshot {age:.0f}s old"
+    # Age is printed even on the live-DB path. It used to be suppressed whenever
+    # the source claimed postgres, which removed the one field that would have
+    # exposed a stale read at exactly the moment the label was wrong.
+    if isinstance(age, (int, float)):
+        stamp = f"snapshot {age:.0f}s old"
     else:
-        freshness = "snapshot age unknown"
+        stamp = "snapshot age unknown"
+    freshness = f"live DB ({stamp})" if r["source"].startswith("postgres") else stamp
     print("UNITARES calibration gate — overconfidence read")
     print(f"  source: {r['source']}   {freshness}   "
           f"min_samples/bin={r['min_samples_per_bin']}   "
           f"gate=±{r['overconfidence_gate']:.2f}")
     print()
-    verdict = "GREEN (calibrated)" if r["calibrated"] else "RED (miscalibrated)"
+    if not r["assessable"]:
+        verdict = "UNASSESSED — no populated tactical bin"
+    else:
+        verdict = "GREEN (calibrated)" if r["calibrated"] else "RED (miscalibrated)"
     print(f"VERDICT: {verdict}")
+    if not r["assessable"]:
+        print(f"  The gate flag reads {r['calibrated']}, but it is the TACTICAL gate and")
+        print(f"  {r['populated_tactical_bins']} of {r['total_tactical_bins']} tactical bins "
+              f"clear the {r['min_samples_per_bin']}-sample floor. No bin could be")
+        print("  overconfident, so nothing was checked. This is not a pass.")
     print()
 
     if r["issues"]:
