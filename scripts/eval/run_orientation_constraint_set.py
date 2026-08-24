@@ -232,6 +232,48 @@ def _function_digest(function: Any) -> str:
     return sha256_text(inspect.getsource(function))
 
 
+def build_model_request(
+    enrollment: Mapping[str, Any],
+    scenario: Mapping[str, Any],
+    entry: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build the exact frozen Ollama request for one scheduled call."""
+    model = enrollment["model"]
+    decoding = model["decoding"]
+    return {
+        "model": model["record"]["requested_model"],
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": build_user_prompt(scenario, entry["arm"]),
+            },
+        ],
+        "format": RESPONSE_SCHEMA,
+        "stream": False,
+        "think": decoding["think"],
+        "options": {
+            "temperature": decoding["temperature"],
+            "num_predict": decoding["num_predict"],
+            "num_ctx": decoding["num_ctx"],
+            "seed": entry["sample_seed"],
+        },
+        "keep_alive": "30m",
+    }
+
+
+def parse_provider_answer(
+    response: Mapping[str, Any],
+) -> tuple[str | None, dict[str, Any] | None, str | None]:
+    """Parse only a normally terminated answer-channel response."""
+    raw_text = response.get("message", {}).get("content")
+    done_reason = response.get("done_reason")
+    if done_reason != "stop":
+        return raw_text, None, f"provider_termination:{done_reason or 'missing'}"
+    parsed, parse_error = parse_response_text(raw_text)
+    return raw_text, parsed, parse_error
+
+
 def _prompt_set_digest(
     scenarios: Sequence[Mapping[str, Any]], arm: str
 ) -> str:
@@ -345,6 +387,7 @@ def build_enrollment(
             ),
             "response_schema": RESPONSE_SCHEMA,
             "response_schema_digest": sha256_json(RESPONSE_SCHEMA),
+            "request_builder_digest": _function_digest(build_model_request),
             "scorer_digest": _function_digest(score_response),
             "analyzer_digest": _function_digest(analyze_results),
         },
@@ -358,6 +401,7 @@ def build_enrollment(
                 "temperature": temperature,
                 "num_predict": num_predict,
                 "num_ctx": num_ctx,
+                "think": False,
                 "stream": False,
                 "structured_format": "json_schema",
                 "sample_seed_source": "sha256(condition_order_seed,scenario_id,repetition), shared by paired arms",
@@ -504,6 +548,10 @@ def validate_enrollment(
         analyze_results
     ):
         raise EnrollmentError("analyzer digest mismatch")
+    if enrollment["prompt_and_scorer"].get(
+        "request_builder_digest"
+    ) != _function_digest(build_model_request):
+        raise EnrollmentError("model request builder digest mismatch")
     if enrollment["prompt_and_scorer"]["system_prompt_sha256"] != sha256_text(
         SYSTEM_PROMPT
     ):
@@ -533,6 +581,8 @@ def validate_enrollment(
         raise EnrollmentError("canary schedule order mismatch")
 
     model = enrollment["model"]
+    if model["decoding"].get("think") is not False:
+        raise EnrollmentError("enrolled model request must explicitly set think=false")
     current_model = inspect_local_model(
         model["base_url"], model["record"]["requested_model"]
     )
@@ -573,24 +623,7 @@ def _invoke_model(
     entry: Mapping[str, Any],
 ) -> dict[str, Any]:
     model = enrollment["model"]
-    decoding = model["decoding"]
-    user_prompt = build_user_prompt(scenario, entry["arm"])
-    request_payload = {
-        "model": model["record"]["requested_model"],
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-        "format": RESPONSE_SCHEMA,
-        "stream": False,
-        "options": {
-            "temperature": decoding["temperature"],
-            "num_predict": decoding["num_predict"],
-            "num_ctx": decoding["num_ctx"],
-            "seed": entry["sample_seed"],
-        },
-        "keep_alive": "30m",
-    }
+    request_payload = build_model_request(enrollment, scenario, entry)
     started = time.monotonic()
     base_record = {
         **dict(entry),
@@ -636,8 +669,7 @@ def _invoke_model(
             "latency_ms": round((time.monotonic() - started) * 1000, 3),
             "score": score,
         }
-    raw_text = response.get("message", {}).get("content")
-    parsed, parse_error = parse_response_text(raw_text)
+    raw_text, parsed, parse_error = parse_provider_answer(response)
     score = score_response(scenario, parsed, parse_error=parse_error)
     return {
         **base_record,

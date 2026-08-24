@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from pathlib import Path
 
 import pytest
@@ -26,11 +27,19 @@ from scripts.eval.orientation_constraint_set import (
     sha256_json,
     validate_response_object,
 )
-from scripts.eval.run_orientation_constraint_set import resolve_recorded_output_path
+from scripts.eval.run_orientation_constraint_set import (
+    build_model_request,
+    parse_provider_answer,
+    resolve_recorded_output_path,
+)
 
 
 SCENARIO_PATH = (
     Path(__file__).parent / "orientation_constraint_set/scenarios-v0.json"
+)
+ENROLLMENT_V0_PATH = (
+    Path(__file__).parents[1]
+    / "docs/evaluations/orientation-constraint-set/enrollment-v0.json"
 )
 
 
@@ -76,6 +85,33 @@ def test_fixture_has_registered_family_and_split_shape(scenarios):
 def test_portable_enrollment_output_path_expands_operator_home():
     resolved = resolve_recorded_output_path({"path": "~/.local/state/cohort-v0"})
     assert resolved == (Path.home() / ".local/state/cohort-v0").resolve()
+
+
+def test_v1_request_explicitly_disables_thinking_and_matches_reviewed_probe(
+    scenarios,
+):
+    enrollment = json.loads(ENROLLMENT_V0_PATH.read_text())
+    enrollment["model"]["decoding"]["think"] = False
+    entry = build_canary_schedule(scenarios)[0]
+    scenario = _scenario(scenarios, entry["scenario_id"])
+    request = build_model_request(enrollment, scenario, entry)
+    assert request["think"] is False
+    assert request["options"]["num_predict"] == 320
+    assert sha256_json(request) == (
+        "d519b4b98f50bab4e40ec545da48a37c0d5dafe1deeeebf3b35125e7070bf3e9"
+    )
+
+
+def test_non_stop_provider_termination_fails_even_with_valid_json(scenarios):
+    scenario = _scenario(scenarios, "terminal-review-canary")
+    response = {
+        "done_reason": "length",
+        "message": {"content": json.dumps(_passing_response(scenario))},
+    }
+    raw, parsed, parse_error = parse_provider_answer(response)
+    assert raw
+    assert parsed is None
+    assert parse_error == "provider_termination:length"
 
 
 def test_every_representation_has_an_identical_canonical_fact_manifest(scenarios):
