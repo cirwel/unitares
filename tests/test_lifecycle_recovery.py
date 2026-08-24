@@ -44,12 +44,10 @@ class TestDirectResumeIfSafe:
         server.get_or_create_monitor.return_value = make_monitor(coherence=0.8, mean_risk=0.3, I=0.3, S=0.5)
 
         with patch_lifecycle_server(server, require_registered=("agent-1", None)), \
-             patch("src.mcp_handlers.lifecycle.handlers.agent_storage") as mock_storage, \
+             patch_agent_storage() as mock_storage, \
              patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True):
             mock_storage.update_agent = AsyncMock()
             mock_storage.persist_runtime_state = AsyncMock()
-            import src.mcp_handlers.lifecycle.mutation as _lm; _lm.agent_storage = mock_storage
-            import src.mcp_handlers.lifecycle.operations as _lo; _lo.agent_storage = mock_storage
             from src.mcp_handlers.lifecycle.handlers import handle_direct_resume_if_safe
             result = await handle_direct_resume_if_safe({"agent_id": "agent-1"})
             data = _parse(result)
@@ -205,12 +203,10 @@ class TestSelfRecoveryReview:
         server.get_or_create_monitor.return_value = make_monitor(coherence=0.8, I=0.3, S=0.5)
 
         with patch_lifecycle_server(server, require_registered=("agent-1", None)), \
-             patch("src.mcp_handlers.lifecycle.handlers.agent_storage") as mock_storage, \
+             patch_agent_storage() as mock_storage, \
              patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True):
             mock_storage.update_agent = AsyncMock()
             mock_storage.persist_runtime_state = AsyncMock()
-            import src.mcp_handlers.lifecycle.mutation as _lm; _lm.agent_storage = mock_storage
-            import src.mcp_handlers.lifecycle.operations as _lo; _lo.agent_storage = mock_storage
             from src.mcp_handlers.lifecycle.handlers import handle_self_recovery_review
             result = await handle_self_recovery_review({
                 "agent_id": "agent-1",
@@ -410,12 +406,10 @@ class TestSelfRecoveryReview:
         )
 
         with patch_lifecycle_server(server, require_registered=("agent-1", None)), \
-             patch("src.mcp_handlers.lifecycle.handlers.agent_storage") as mock_storage, \
+             patch_agent_storage() as mock_storage, \
              patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True):
             mock_storage.update_agent = AsyncMock()
             mock_storage.persist_runtime_state = AsyncMock()
-            import src.mcp_handlers.lifecycle.mutation as _lm; _lm.agent_storage = mock_storage
-            import src.mcp_handlers.lifecycle.operations as _lo; _lo.agent_storage = mock_storage
             from src.mcp_handlers.lifecycle.handlers import handle_self_recovery_review
             result = await handle_self_recovery_review({
                 "agent_id": "agent-1",
@@ -850,12 +844,10 @@ class TestSelfRecoveryReviewEdgeCases:
         server.get_or_create_monitor.return_value = make_monitor(void_active=True, V=0.5, I=0.3, S=0.5)
 
         with patch_lifecycle_server(server, require_registered=("agent-1", None)), \
-             patch("src.mcp_handlers.lifecycle.handlers.agent_storage") as mock_storage, \
+             patch_agent_storage() as mock_storage, \
              patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True):
             mock_storage.update_agent = AsyncMock()
             mock_storage.persist_runtime_state = AsyncMock()
-            import src.mcp_handlers.lifecycle.mutation as _lm; _lm.agent_storage = mock_storage
-            import src.mcp_handlers.lifecycle.operations as _lo; _lo.agent_storage = mock_storage
             from src.mcp_handlers.lifecycle.handlers import handle_self_recovery_review
             result = await handle_self_recovery_review({
                 "agent_id": "agent-1",
@@ -1130,11 +1122,9 @@ class TestDetectStuckAgentsAutoRecover:
                  {"agent_id": "agent-1", "reason": "activity_timeout", "age_minutes": 60.0,
                   "details": "No updates in 60.0 minutes"}
              ]), \
-             patch("src.mcp_handlers.lifecycle.handlers.agent_storage") as mock_storage:
+             patch_agent_storage() as mock_storage:
             mock_storage.update_agent = AsyncMock()
             mock_storage.persist_runtime_state = AsyncMock()
-            import src.mcp_handlers.lifecycle.mutation as _lm; _lm.agent_storage = mock_storage
-            import src.mcp_handlers.lifecycle.operations as _lo; _lo.agent_storage = mock_storage
             # Mock the leave_note to prevent KG errors
             with patch("src.mcp_handlers.lifecycle.handlers.handle_leave_note", new_callable=AsyncMock, create=True):
                 from src.mcp_handlers.lifecycle.handlers import handle_detect_stuck_agents
