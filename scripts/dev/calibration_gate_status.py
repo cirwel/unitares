@@ -184,8 +184,12 @@ def build_report(min_samples: int) -> dict:
     # This is reported, NOT decided here. `check_calibration` is the live gate
     # (council-reviewed 2026-06-19) and changing its return is the operator's
     # call, so this script keeps the flag it was given and says what the flag
-    # rests on. UNASSESSED follows the exit 0/1/2 convention from #1850: not a
-    # pass, not a failure, nothing established.
+    # rests on. NOTE this script is a REPORTER, not a gate: main() returns None
+    # and every verdict exits 0. An earlier version of this comment claimed
+    # "UNASSESSED follows the exit 0/1/2 convention from #1850" — it does not,
+    # and asserting behaviour the code does not have is the defect #1850 itself
+    # was about. Making RED non-zero would turn this reporter into a gate, which
+    # is an operator decision and not one taken here.
     populated_tactical = sum(1 for b in bins if b["populated"])
     assessable = populated_tactical > 0
 

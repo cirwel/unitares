@@ -332,8 +332,68 @@ def test_load_state_async_reports_whether_db_state_applied():
     assert applied == ["json", "json"]                  # fell back exactly twice
 
 
-def test_a_json_backend_never_claims_postgres():
-    """`_backend` is config. It must not be what the label reads."""
-    source = (REPO / "scripts/dev/calibration_gate_status.py").read_text()
-    assert 'getattr(checker, "_backend", "") == "postgres"' not in source
-    assert "if asyncio.run(checker.load_state_async()):" in source
+def test_a_json_backend_never_claims_postgres(gate_mod, monkeypatch):
+    """`_backend` is config. It must not be what the label reads.
+
+    BEHAVIOURAL, because the grep version did not hold. It pinned the exact
+    spelling `getattr(checker, "_backend", "")` — evaded by writing
+    `checker._backend` — and its positive assertion was satisfied by the target
+    line surviving inside a COMMENT. Reinstating the original defect that way
+    left all 18 tests passing while `_load_checker` returned
+    "postgres(canonical)" for a database that had not answered.
+
+    It also broke the house rule this repo states plainly: a test that scans
+    source must strip comments first. The sibling test in #1862 does; this one
+    did not. Driving the function is better than scanning it either way.
+    """
+    class _Stub:
+        state_file = "/nonexistent"
+
+        def __init__(self, applied):
+            self._applied = applied
+            self._backend = "postgres"       # CONFIG says postgres...
+
+        async def load_state_async(self):
+            return self._applied             # ...but this is what ANSWERED
+
+    for applied, expected in ((True, "postgres(canonical)"), (False, "json_snapshot")):
+        monkeypatch.setattr(gate_mod, "CalibrationChecker", lambda a=applied: _Stub(a))
+        _, source = gate_mod._load_checker()
+        assert source == expected, (applied, source)
+
+
+def test_the_reporter_exits_zero_on_every_verdict(gate_mod, monkeypatch, capsys):
+    """Pins what the script ACTUALLY does, so no comment can misdescribe it.
+
+    A comment claimed "UNASSESSED follows the exit 0/1/2 convention from #1850".
+    It does not: main() returns None and every verdict exits 0. Asserting
+    behaviour the code lacks is the defect #1850 was about, committed while
+    citing #1850.
+
+    This does not argue the exit codes SHOULD differ — making RED non-zero
+    turns a reporter into a gate, and that is an operator decision. It pins
+    that they currently do not, so the next contract sentence has to be made
+    true before it can be written.
+    """
+    import inspect
+
+    assert inspect.signature(gate_mod.main).return_annotation in (None, "None", type(None))
+
+    for tactical, ok, issues in (
+        ({}, True, []),                                          # UNASSESSED
+        ({}, False, ["strategic danger"]),                       # RED
+        ({"0.6-0.7": _bin(50, 0.65, 0.64, 0.6)}, True, []),      # GREEN
+    ):
+        _report_v(gate_mod, monkeypatch, tactical, ok, issues)
+        monkeypatch.setattr("sys.argv", ["calibration_gate_status.py"])
+        assert gate_mod.main() is None
+        capsys.readouterr()
+
+    # Comments stripped: the correction note names the false claim on purpose.
+    live = "\n".join(
+        ln for ln in (REPO / "scripts/dev/calibration_gate_status.py").read_text().splitlines()
+        if not ln.lstrip().startswith("#")
+    )
+    assert "exit 0/1/2 convention" not in live
+
+
