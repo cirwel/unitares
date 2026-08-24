@@ -1720,6 +1720,7 @@ class TestProcessAgentUpdateExtended:
                 result = await handle_process_agent_update({
                     "response_text": "test discoveries",
                     "complexity": 0.5,
+                    "include_memory_suggestions": True,
                 })
 
                 data = parse_result(result)

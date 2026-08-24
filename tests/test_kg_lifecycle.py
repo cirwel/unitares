@@ -802,6 +802,8 @@ class TestGetLifecycleStats:
         assert "stats" in data
         assert data["stats"]["by_status"]["open"] == 10
         assert data["stats"]["raw_current_counts"]["by_status"]["open"] == 7
+        assert data["stats"]["canonical_current_total"] == 12
+        assert data["stats"]["lifecycle_managed_counts"]["total_discoveries"] == 17
         assert "count_scope_warning" in data["stats"]
 
     @pytest.mark.asyncio

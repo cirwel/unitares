@@ -128,12 +128,30 @@ class TestEnrichKnowledgeSurfacing:
     `_search_kg_by_checkin_text` rather than issuing its own KG calls, so these
     exercise the delegation seam and the tag fallback behind it."""
 
-    def _ctx(self, response_text="", tags=None):
+    def _ctx(self, response_text="", tags=None, *, include_memory_suggestions=True):
         return SimpleNamespace(
+            arguments={
+                "include_memory_suggestions": include_memory_suggestions,
+            },
             response_text=response_text,
             meta=SimpleNamespace(tags=tags or []),
             response_data={},
         )
+
+    @pytest.mark.asyncio
+    async def test_default_pull_based_mode_skips_lookup(self):
+        ctx = self._ctx(
+            response_text="coherence gate soak",
+            include_memory_suggestions=False,
+        )
+        with patch(
+            "src.mcp_handlers.updates.enrichments._search_kg_by_checkin_text",
+            AsyncMock(return_value=[{"discovery_id": "d1"}]),
+        ) as search:
+            await enrich_knowledge_surfacing(ctx)
+
+        search.assert_not_awaited()
+        assert ctx.response_data == {}
 
     @pytest.mark.asyncio
     async def test_prefers_check_in_text_and_does_not_touch_tags(self):
