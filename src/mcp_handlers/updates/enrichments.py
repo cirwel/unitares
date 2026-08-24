@@ -33,14 +33,13 @@ logger = get_logger(__name__)
 # so this floor sits well under the raw similarity gate.
 _RELATED_DISCOVERY_RELEVANCE_FLOOR = 0.1
 
-# ─── Proactive KG surfacing (adoption v0) ───────────────────────────────
-# The reactive gate (_should_search_kg_by_checkin_text) only surfaces prior
-# work when an agent is already in trouble or already asking. Proactive
-# surfacing also offers strong, relevant prior discoveries during *healthy,
-# steady-state* work — the moment a "someone already solved this" note prevents
-# wasted effort. It is OFF by default and bounded on three axes so it cannot
-# regress the steady-state latency budget (KG calls amplify ~60x in-handler,
-# see CLAUDE.md "Substrate Tax"):
+# ─── Opt-in proactive KG surfacing (adoption v0) ────────────────────────
+# Check-ins never reach this cadence gate unless the caller explicitly sets
+# include_memory_suggestions=true. Within that deliberate recall request,
+# proactive surfacing can offer strong prior work during healthy steady state.
+# It is additionally OFF by default and bounded on three axes so an opt-in
+# cannot regress the steady-state latency budget (KG calls amplify ~60x
+# in-handler, see CLAUDE.md "Substrate Tax"):
 #   1. Cadence — only every UNITARES_KG_PROACTIVE_EVERY-th check-in fires a
 #      search (0 = disabled, the default), so cost is amortized to 1/N.
 #   2. Relevance — a higher floor than the reactive path: a proactive nudge
@@ -1849,12 +1848,12 @@ async def _cached_kg_search_by_checkin_text(
 
 
 def _proactive_kg_due(ctx: UpdateContext) -> bool:
-    """Gate the proactive (steady-state) KG surface — cadence + warmup + length.
+    """Add a cadence gate to explicit check-in KG recall; never enable it alone.
 
-    OFF unless ``UNITARES_KG_PROACTIVE_EVERY`` is a positive integer N, in which
-    case it fires on every Nth check-in past warmup. This is the cost throttle:
-    a healthy steady-state check-in normally does no KG search, so we amortize
-    the search latency to 1/N of check-ins rather than opening the gate fully.
+    The caller has already opted in with ``include_memory_suggestions=true``.
+    This branch remains OFF unless ``UNITARES_KG_PROACTIVE_EVERY`` is a positive
+    integer N, in which case it fires on every Nth check-in past warmup. It is a
+    cost throttle, not an injection switch.
     """
     try:
         every = int(os.getenv("UNITARES_KG_PROACTIVE_EVERY", "0") or "0")
