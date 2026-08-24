@@ -139,11 +139,12 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ['3.12']
-        # Top-level tests are split by filename because recent Actions timing
-        # puts these ranges within roughly two minutes of each other. Nested
-        # tests and agents form the fourth shard. Each job gets its own DB and
-        # filesystem, avoiding the shared-state hazards of pytest-xdist.
-        shard: [tests-a-h, tests-i-p, tests-q-z, agents-and-nested]
+        # Top-level tests are split by filename using recent Actions timing.
+        # The former a-h shard had grown to roughly twice the runtime of the
+        # others, so it is split again at d/e. Nested tests and agents keep a
+        # dedicated shard. Each job gets its own DB and filesystem, avoiding
+        # the shared-state hazards of pytest-xdist.
+        shard: [tests-a-d, tests-e-h, tests-i-p, tests-q-z, agents-and-nested]
 
     # Without a database, 333 tests across 29 modules skip themselves — every
     # migration test among them. The suite went green while the riskiest surface
@@ -208,8 +209,11 @@ jobs:
         COVERAGE_FILE: .coverage.${{ matrix.shard }}
       run: |
         case "${{ matrix.shard }}" in
-          tests-a-h)
-            targets=(tests/test_[a-h]*.py)
+          tests-a-d)
+            targets=(tests/test_[a-d]*.py)
+            ;;
+          tests-e-h)
+            targets=(tests/test_[e-h]*.py)
             ;;
           tests-i-p)
             targets=(tests/test_[i-p]*.py)
