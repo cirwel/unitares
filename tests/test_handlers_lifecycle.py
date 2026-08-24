@@ -1032,6 +1032,9 @@ class TestListAgentsNoHydration:
         assert agent["metrics"]["S"] == pytest.approx(0.28)
         assert agent["metrics"]["V"] == pytest.approx(-0.04)
         assert agent["metrics"]["risk_score"] == pytest.approx(0.0)
+        assert agent["metrics"]["risk_score_source"] == "resolved"
+        assert agent["metrics"]["verdict_resolution_source"] == "resolved"
+        assert agent["metrics"]["current_risk"] is None
         assert agent["metrics"]["coherence_source"] == "legacy_tanh_v"
         assert agent["metrics"]["coherence_role"] == "ode_control_feedback"
         assert agent["metrics"]["coherence_health_evidence"] is False
@@ -1040,6 +1043,63 @@ class TestListAgentsNoHydration:
         assert agent["metrics"]["rolling_metrics_available"] is False
         mock_db.get_all_latest_agent_states.assert_awaited_once()
         mock_mcp_server.get_or_create_monitor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_batch_persisted_state_replaces_legacy_phi_only_monitor(
+        self, mock_mcp_server
+    ):
+        """A restored monitor must not outrank the durable decision row."""
+        from src.db.base import AgentStateRecord
+
+        monitor = MagicMock()
+        monitor.state = SimpleNamespace(
+            E=0.70, I=0.74, S=0.28, V=-0.04, coherence=0.48,
+            lambda1=0.1, void_active=False,
+        )
+        monitor.get_metrics.return_value = {
+            "risk_score": 0.91,
+            "risk_score_source": "phi_history",
+            "current_risk": 0.91,
+            "mean_risk": 0.88,
+            "phi_risk_current": 0.91,
+            "verdict": "caution",
+        }
+        mock_mcp_server.monitors = {"agent-1": monitor}
+        mock_mcp_server.agent_metadata = {
+            "agent-1": make_agent_meta(label="Legacy", total_updates=42),
+        }
+        state = AgentStateRecord(
+            state_id=1, identity_id=10, agent_id="agent-1",
+            recorded_at=datetime.now(timezone.utc),
+            energy=0.70, integrity=0.74, entropy=0.28, void=-0.04,
+            coherence=0.48, regime="EXPLORATION",
+            epistemic_class="agent_report",
+            state_json={
+                "risk_score": 0.0,
+                "risk_score_source": "resolved",
+                "verdict": "safe",
+                "health_status": "healthy",
+            },
+        )
+        mock_db = MagicMock()
+        mock_db.get_all_latest_agent_states = AsyncMock(return_value=[state])
+
+        with patch_lifecycle_server(mock_mcp_server), \
+             patch("src.db.get_db", return_value=mock_db):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            result = await handle_list_agents({
+                "include_metrics": True,
+                "grouped": True,
+                "status_filter": "all",
+            })
+
+        data = json.loads(result[0].text)
+        agent = [a for bucket in data["agents"].values() for a in bucket][0]
+        assert agent["metrics"]["risk_score"] == pytest.approx(0.0)
+        assert agent["metrics"]["risk_score_source"] == "resolved"
+        assert agent["metrics"]["verdict_resolution_source"] == "resolved"
+        assert agent["metrics"]["verdict"] == "safe"
+        assert agent["metrics"]["source"] == "persisted_state"
 
     @pytest.mark.asyncio
     async def test_missing_cached_health_falls_back_to_unknown(self, mock_mcp_server):

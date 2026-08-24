@@ -130,6 +130,9 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
         # meaning + next_action inline so cold-onboarded agents observing
         # themselves don't have to look up what "pause"/"guide" mean.
         from src.governance_glossary import explain_verdict
+        risk_score = metrics.get("risk_score")
+        if risk_score is None:
+            risk_score = metrics.get("current_risk")
         observation = {
             "current_state": {
                 "E": pE,
@@ -137,7 +140,8 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
                 "S": pS,
                 "V": pV,
                 "coherence": float(monitor.state.coherence),
-                "risk_score": float(metrics.get("risk_score") or metrics.get("current_risk") or 0.0),  # Governance/operational risk
+                "risk_score": float(risk_score if risk_score is not None else 0.0),
+                "risk_score_source": metrics.get("risk_score_source"),
                 "phi": metrics.get("phi"),  # Primary physics signal
                 "verdict": explain_verdict(
                     metrics.get("verdict"), evidence_source=metrics.get("primary_eisv_source")
@@ -304,7 +308,9 @@ async def handle_compare_agents(arguments: Dict[str, Any]) -> Sequence[TextConte
             
             # Calculate health_status consistently with process_agent_update
             # Use health_checker.get_health_status() instead of metrics.get("status")
-            risk_score = metrics.get("risk_score") or metrics.get("current_risk")
+            risk_score = metrics.get("risk_score")
+            if risk_score is None:
+                risk_score = metrics.get("current_risk")
             coherence = float(monitor.state.coherence) if monitor.state else None
             void_active = bool(monitor.state.void_active) if monitor.state else False
             
@@ -316,15 +322,18 @@ async def handle_compare_agents(arguments: Dict[str, Any]) -> Sequence[TextConte
             
             # Guard against None values for agents with 0 updates
             # dict.get default is only used when key is ABSENT; if key exists with value=None, it returns None
-            _risk = metrics.get("risk_score") or metrics.get("current_risk") or metrics.get("mean_risk") or 0.0
+            _risk = risk_score if risk_score is not None else 0.0
+            mean_risk = metrics.get("mean_risk")
             _state = monitor.state
             agents_data.append({
                 "agent_id": agent_id,
-                "current_risk": metrics.get("current_risk"),  # Recent trend (last 10) - USED FOR HEALTH STATUS
+                # Φ-derived recent trend: telemetry only, never health/recovery authority.
+                "current_risk": metrics.get("current_risk"),
                 "risk_score": float(_risk),  # Governance/operational risk
+                "risk_score_source": metrics.get("risk_score_source"),
                 "phi": metrics.get("phi"),  # Primary physics signal
                 "verdict": metrics.get("verdict"),  # Primary governance signal
-                "mean_risk": metrics.get("mean_risk") or 0.0,  # Overall mean (all-time average) - for historical context
+                "mean_risk": mean_risk if mean_risk is not None else 0.0,
                 "coherence": float(_state.coherence if _state and _state.coherence is not None else 0.5),
                 "coherence_source": metrics.get("coherence_source", "unknown"),
                 "coherence_role": metrics.get("coherence_role", "unknown"),

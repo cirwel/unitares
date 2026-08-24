@@ -144,10 +144,94 @@ def _compact_caller_identity_envelope(payload: Dict[str, Any]) -> Dict[str, Any]
     return compact
 
 
+_LEAN_DISCOVERY_FIELDS = (
+    "id",
+    "discovery_id",
+    "summary",
+    "type",
+    "status",
+    "severity",
+    "tags",
+    "superseded",
+    "superseded_by",
+    "staleness_warning",
+)
+
+
+def _one_line(value: Any, limit: int = 240) -> Any:
+    if not isinstance(value, str):
+        return value
+    value = " ".join(value.split())
+    return value if len(value) <= limit else value[: limit - 3].rstrip() + "..."
+
+
+def _lean_search_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Return one-line search digests without preview, score-map, or identity bloat."""
+    discoveries = payload.get("discoveries")
+    if not isinstance(discoveries, list):
+        return payload
+
+    score_maps = [
+        payload.get("rerank_scores"),
+        payload.get("rrf_scores"),
+        payload.get("similarity_scores"),
+    ]
+    lean_discoveries = []
+    for discovery in discoveries:
+        if not isinstance(discovery, dict):
+            continue
+        lean = {
+            key: discovery[key]
+            for key in _LEAN_DISCOVERY_FIELDS
+            if discovery.get(key) is not None
+        }
+        if "summary" in lean:
+            lean["summary"] = _one_line(lean["summary"])
+        if isinstance(lean.get("tags"), list):
+            lean["tags"] = lean["tags"][:12]
+        discovery_id = discovery.get("id") or discovery.get("discovery_id")
+        for score_map in score_maps:
+            if isinstance(score_map, dict) and discovery_id in score_map:
+                lean["relevance"] = score_map[discovery_id]
+                break
+        lean_discoveries.append(lean)
+
+    lean_payload = {
+        key: payload[key]
+        for key in (
+            "success",
+            "query",
+            "count",
+            "message",
+            "search_mode_used",
+            "low_confidence",
+            "confidence_note",
+            "search_degraded",
+            "search_degraded_message",
+            "limit_clamped_from",
+            "_more_available",
+        )
+        if payload.get(key) is not None
+    }
+    lean_payload["discoveries"] = lean_discoveries
+    lean_payload["discovery_retrieval_options"] = {
+        "current_tier": "lean_digest",
+        "open_one": "knowledge(action='details', discovery_id='...')",
+    }
+
+    signature = payload.get("agent_signature")
+    if isinstance(signature, dict) and signature.get("uuid"):
+        assurance = _compact_identity_assurance(signature.get("identity_assurance"))
+        lean_payload["caller"] = {"uuid": signature["uuid"], **assurance}
+    return lean_payload
+
+
 def _compact_knowledge_read_result(
     result: Sequence[TextContent],
+    *,
+    mode: str,
 ) -> Sequence[TextContent]:
-    """Apply lean identity shaping to JSON text blocks, preserving other content."""
+    """Apply response-mode shaping to JSON text blocks, preserving other content."""
     compacted = []
     for item in result:
         if not isinstance(item, TextContent):
@@ -161,9 +245,12 @@ def _compact_knowledge_read_result(
         if not isinstance(payload, dict):
             compacted.append(item)
             continue
+        shaped = _compact_caller_identity_envelope(payload)
+        if mode == "lean":
+            shaped = _lean_search_payload(shaped)
         compacted.append(item.model_copy(update={
             "text": json.dumps(
-                _compact_caller_identity_envelope(payload),
+                shaped,
                 ensure_ascii=False,
             )
         }))
@@ -182,7 +269,7 @@ def _knowledge_read_response_mode(handler):
         mode = str(arguments.get("response_mode") or "full").strip().lower()
         if mode not in {"compact", "lean"}:
             return result
-        return _compact_knowledge_read_result(result)
+        return _compact_knowledge_read_result(result, mode=mode)
 
     wrapped._lean_knowledge_read_response = True
     return wrapped
@@ -4159,29 +4246,42 @@ async def handle_get_lifecycle_stats(arguments: Dict[str, Any]) -> Sequence[Text
                 except TypeError:
                     raw_stats = await get_stats()
                 if isinstance(raw_stats, dict):
+                    lifecycle_total = stats.get("total_discoveries")
+                    lifecycle_statuses = dict(stats.get("by_status") or {})
+                    raw_total = raw_stats.get("total_discoveries")
+                    raw_statuses = dict(raw_stats.get("by_status") or {})
                     stats["raw_current_counts"] = {
-                        "total_discoveries": raw_stats.get("total_discoveries"),
-                        "by_status": raw_stats.get("by_status", {}),
+                        "total_discoveries": raw_total,
+                        "by_status": raw_statuses,
                         "scope": raw_stats.get("scope", {}),
                     }
-                    lifecycle_total = stats.get("total_discoveries")
-                    raw_total = raw_stats.get("total_discoveries")
+                    stats["canonical_current_total"] = raw_total
+                    stats["lifecycle_managed_counts"] = {
+                        "total_discoveries": lifecycle_total,
+                        "by_status": lifecycle_statuses,
+                        "included_statuses": ["open", "resolved", "archived", "cold"],
+                    }
                     if (
                         isinstance(lifecycle_total, int)
                         and isinstance(raw_total, int)
                         and lifecycle_total != raw_total
                     ):
+                        stats["statuses_outside_lifecycle_buckets"] = {
+                            status: count
+                            for status, count in raw_statuses.items()
+                            if status not in lifecycle_statuses and count
+                        }
                         stats["count_scope_warning"] = (
-                            "Lifecycle bucket totals differ from raw current counts. "
-                            "Use raw_current_counts.by_status to confirm immediate "
-                            "status updates; lifecycle buckets may span backend or "
-                            "historical query scope."
+                            "canonical_current_total is the corpus-size field. "
+                            "lifecycle_managed_counts intentionally covers only "
+                            "open/resolved/archived/cold; terminal statuses such as "
+                            "superseded or closed remain in raw_current_counts."
                         )
         except Exception as exc:
             stats["raw_current_counts_error"] = str(exc)
 
         return success_response({
-            "message": "Lifecycle statistics",
+            "message": "Lifecycle statistics; canonical_current_total is corpus size",
             "stats": stats,
         }, arguments=arguments)
 

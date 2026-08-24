@@ -197,6 +197,37 @@ async def test_kg_tag_stats_all_scope_including_cold_has_no_filters():
 
 
 @pytest.mark.asyncio
+async def test_kg_topic_candidates_filters_partition_tags_before_limit():
+    conn = MagicMock()
+    conn.fetch = AsyncMock(return_value=[
+        {"topic": "identity", "member_count": 9, "open_count": 4},
+    ])
+    backend = _FakeKgBackend(conn)
+
+    result = await backend.kg_topic_candidates(
+        min_members=5,
+        limit=7,
+        exclude_types=["topic_rollup"],
+        exclude_tags=["ephemeral", "audit"],
+        exclude_tag_prefixes=["slug-", "source-"],
+    )
+
+    query, *args = conn.fetch.await_args.args
+    assert "NOT (tag = ANY($4::text[]))" in query
+    assert "tag LIKE blocked.prefix || '%'" in query
+    assert args == [
+        5,
+        7,
+        ["topic_rollup"],
+        ["ephemeral", "audit"],
+        ["slug-", "source-"],
+    ]
+    assert result == [
+        {"topic": "identity", "member_count": 9, "open_count": 4}
+    ]
+
+
+@pytest.mark.asyncio
 async def test_postgres_stats_use_sql_tag_counts_with_current_epoch_scope():
     from config.governance_config import GovernanceConfig
 

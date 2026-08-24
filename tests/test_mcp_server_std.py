@@ -1117,7 +1117,9 @@ class TestSafetyNetResume:
 
         monitor = MagicMock()
         monitor.state = MagicMock(coherence=0.62, void_active=False)
-        monitor.get_metrics.return_value = {"mean_risk": 0.21}
+        monitor.get_metrics.return_value = {
+            "risk_score": 0.21, "risk_score_source": "resolved", "mean_risk": 0.21,
+        }
 
         agent_metadata[agent_id] = meta
         monitors[agent_id] = monitor
@@ -1155,7 +1157,9 @@ class TestSafetyNetResume:
 
         monitor = MagicMock()
         monitor.state = MagicMock(coherence=0.25, void_active=False)
-        monitor.get_metrics.return_value = {"mean_risk": 0.75}
+        monitor.get_metrics.return_value = {
+            "risk_score": 0.75, "risk_score_source": "resolved", "mean_risk": 0.75,
+        }
 
         agent_metadata[agent_id] = meta
         monitors[agent_id] = monitor

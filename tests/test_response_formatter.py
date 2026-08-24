@@ -1,9 +1,11 @@
 """
 Tests for src/mcp_handlers/response_formatter.py — Response mode filtering.
 
-Tests _format_minimal, _format_compact, _strip_context (pure dict operations),
-and format_response routing (mocked for standard mode which needs GovernanceState).
+Tests response-mode builders, context stripping, alias routing, and bounded
+agent-facing interpretation using the real GovernanceState implementation.
 """
+
+import json
 
 import pytest
 import sys
@@ -1197,10 +1199,10 @@ def _policy_enforcement_fields():
     }
 
 
-class TestFormatStandardPreservesPredictionId:
+class TestFormatStandardAgentSummary:
     """_format_standard must pass prediction_id and warnings through (spec §6 + §2).
 
-    Exercise the real local imports so the legacy `standard` / `interpreted`
+    Exercise the real local imports so the bounded `standard` / `interpreted`
     path cannot regress to a missing top-level module.
     """
 
@@ -1227,15 +1229,57 @@ class TestFormatStandardPreservesPredictionId:
         result = self._call_format_standard(response_data)
         assert result.get("warnings") == ["evidence record failed for tool=pytest"]
 
-    def test_policy_and_enforcement_pass_through(self):
+    def test_actionable_policy_and_enforcement_are_summarized(self):
         response_data = {
             "decision": {"action": "pause"},
             "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
             **_policy_enforcement_fields(),
         }
         result = self._call_format_standard(response_data)
-        assert result.get("policy_evaluation") == response_data["policy_evaluation"]
-        assert result.get("enforcement") == response_data["enforcement"]
+        assert result["policy_evaluation"]["policy_name"] == "monitor_decision"
+        assert result["policy_evaluation"]["action"] == "pause"
+        assert result["policy_evaluation"]["_detail_level"] == "summary"
+        assert result["enforcement"]["requested"] is True
+        assert result["enforcement"]["applied"] is False
+        assert result["enforcement"]["_detail_level"] == "summary"
+        assert result["_detail_level"] == "interpreted_summary"
+        assert "response_mode='full'" in result["_raw_available"]
+
+    def test_routine_audit_gates_are_omitted_and_size_is_bounded(self):
+        gate = {
+            "schema": "eisv.cold-start-confirmation.v1",
+            "outcome": "ineligible",
+            "note": "x" * 5_000,
+            "original_decision": {"reason": "x" * 5_000},
+        }
+        response_data = {
+            "decision": {
+                "action": "proceed",
+                "sub_action": "approve",
+                "reason": "Low risk. " + "x" * 5_000,
+            },
+            "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
+            "policy_evaluation": {
+                "policy_name": "monitor_decision",
+                "action": "proceed",
+                "sub_action": "approve",
+                "maturity_gate": gate,
+                "epistemic_gate": gate,
+            },
+            "enforcement": {
+                "requested": False,
+                "applied": False,
+                "mode": "advisory",
+                "maturity_gate": gate,
+            },
+        }
+
+        result = self._call_format_standard(response_data)
+
+        assert "policy_evaluation" not in result
+        assert "enforcement" not in result
+        assert len(result["reason"]) <= 240
+        assert len(json.dumps(result).encode("utf-8")) < 6_000
 
     def test_cold_start_action_and_verdict_provenance_survive(self):
         response_data = {

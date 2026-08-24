@@ -1071,6 +1071,7 @@ class TestRecordAgentState:
 
         state_json = db.record_agent_state.call_args.kwargs["state_json"]
         assert state_json["risk_score"] == 0.3
+        assert state_json["risk_score_source"] == "resolved"
         assert state_json["phi"] == 0.42
         assert state_json["verdict"] == "safe"
 
@@ -1126,6 +1127,7 @@ class TestRecordAgentState:
 
         state_json = db.record_agent_state.call_args.kwargs["state_json"]
         assert "risk_score" not in state_json
+        assert "risk_score_source" not in state_json
         assert "phi" not in state_json
         assert "verdict" not in state_json
 

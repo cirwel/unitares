@@ -246,6 +246,11 @@ class UNITARESMonitor:
         # Behavioral EISV: observation-first state (no ODE, no attractor)
         self._behavioral_state = BehavioralEISV()
         self._last_behavioral_verdict: Optional[str] = None  # safe/caution/high-risk
+        # Final decision-time pair after behavioral/Φ resolution and any
+        # verification floor.  This is the authority read APIs must replay;
+        # ``state.risk_history`` remains Φ-derived telemetry and can disagree.
+        self._last_resolved_risk: Optional[float] = None
+        self._last_resolved_verdict: Optional[str] = None
         # Exact result of the last completed, non-simulated governance update.
         # Dialectic review uses this decision-time bundle rather than rebuilding
         # evidence from ``state.to_dict()`` (which is only the diagnostic ODE
@@ -397,6 +402,22 @@ class UNITARESMonitor:
                 beh_data = data.pop('behavioral_eisv', None)
                 if beh_data:
                     self._behavioral_state = BehavioralEISV.from_dict(beh_data)
+                # Restore the exact pair that produced the last governance
+                # decision.  Older snapshots omit these keys and are healed
+                # from the latest durable DB row by ensure_hydrated().
+                resolved_risk = data.pop('resolved_risk', None)
+                if resolved_risk is not None:
+                    try:
+                        resolved_risk_value = float(resolved_risk)
+                        if np.isfinite(resolved_risk_value) and 0.0 <= resolved_risk_value <= 1.0:
+                            self._last_resolved_risk = resolved_risk_value
+                    except (TypeError, ValueError):
+                        logger.warning(
+                            "Ignoring invalid resolved_risk for %s", self.agent_id
+                        )
+                resolved_verdict = data.pop('resolved_verdict', None)
+                if resolved_verdict in _VERDICT_SEVERITY:
+                    self._last_resolved_verdict = resolved_verdict
                 # Restore last divergence snapshot if present (transient; pop so
                 # GovernanceState.from_dict does not see an unknown key).
                 self._last_sensor_divergence = data.pop('sensor_divergence', None)
@@ -454,6 +475,10 @@ class UNITARESMonitor:
             _obs_source = getattr(self, '_behavioral_obs_source', None)
             if _obs_source:
                 state_data['behavioral_eisv']['obs_source'] = _obs_source
+            if self._last_resolved_risk is not None:
+                state_data['resolved_risk'] = float(self._last_resolved_risk)
+            if self._last_resolved_verdict:
+                state_data['resolved_verdict'] = self._last_resolved_verdict
             # Persist the most recent model<->body divergence snapshot (transient
             # signal; recomputed each check-in, kept for observability/debugging).
             last_div = getattr(self, '_last_sensor_divergence', None)
@@ -1042,6 +1067,8 @@ class UNITARESMonitor:
         # verdict produced this". That is the same dashboard-disagrees-with-the-
         # record bug #1646 fixed, reintroduced through the simulation door.
         saved_last_resolved_risk = getattr(self, "_last_resolved_risk", None)
+        saved_last_resolved_verdict = getattr(self, "_last_resolved_verdict", None)
+        saved_last_behavioral_verdict = getattr(self, "_last_behavioral_verdict", None)
         
         try:
             # OPTIMIZED: Shallow copy + selective deep copy
@@ -1093,6 +1120,8 @@ class UNITARESMonitor:
             self._last_governance_result = saved_last_governance_result
             self._last_surfaced_complexity_gap = saved_last_gap
             self._last_resolved_risk = saved_last_resolved_risk
+            self._last_resolved_verdict = saved_last_resolved_verdict
+            self._last_behavioral_verdict = saved_last_behavioral_verdict
     
     def process_update(self, agent_state: Dict, confidence: Optional[float] = None, task_type: str = "mixed") -> Dict:
         """
@@ -1689,6 +1718,7 @@ class UNITARESMonitor:
         # migration promoted the behavioral signal and left one consumer on the
         # demoted one.
         self._last_resolved_risk = float(risk_score)
+        self._last_resolved_verdict = unitares_verdict
 
         # Build metrics dict
         # Primary EISV: behavioral (per-agent EMA observations) when confident,
@@ -1708,9 +1738,15 @@ class UNITARESMonitor:
             'coherence_role': ODE_CONTROL_FEEDBACK_ROLE,
             'lambda1': float(self.state.lambda1),
             'risk_score': float(risk_score),  # Governance/operational risk (70% phi-based + 30% traditional)
+            'risk_score_source': 'resolved',
+            'phi_risk_latest': (
+                float(self.state.risk_history[-1])
+                if self.state.risk_history else None
+            ),
             'phi': float(phi),  # Primary physics signal: Φ objective function
             'verdict': unitares_verdict,  # Primary governance signal: safe/caution/high-risk
             'verdict_source': verdict_source,
+            'verdict_resolution_source': 'resolved',
             'void_active': bool(void_active),
             'regime': str(getattr(self.state, 'regime', 'divergence')),  # Operational regime: DIVERGENCE | TRANSITION | CONVERGENCE | STABLE (with fallback)
             'time': float(self.state.time),

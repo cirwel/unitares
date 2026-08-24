@@ -334,7 +334,11 @@
               redacted: a.agent_id_redacted === true, parent: a.parent_agent_id,
               superseded: a.superseded === true, lifecycleReason: a.last_lifecycle_reason,
               presence: a.presence || { status: "unavailable", signals: [] },
-              metrics: { coherence: m.coherence, risk: m.risk_score, verdict: m.verdict, E: m.E, I: m.I, S: m.S, V: m.V, basin: m.basin, phi: m.phi,
+              metrics: { coherence: m.coherence, risk: m.risk_score, riskSource: m.risk_score_source,
+                phiRiskCurrent: m.phi_risk_current ?? m.current_risk,
+                phiRiskMean: m.phi_risk_mean ?? m.mean_risk,
+                verdict: m.verdict, verdictSource: m.verdict_resolution_source,
+                E: m.E, I: m.I, S: m.S, V: m.V, basin: m.basin, phi: m.phi,
                 source: m.source, recordedAt: m.recorded_at,
                 rollingMetricsAvailable: m.rolling_metrics_available },
             });

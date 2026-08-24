@@ -197,7 +197,8 @@ form.
 | Artifact | What it does | Output / finding | Freshness |
 |---|---|---|---|
 | `scripts/analysis/ablation_negative_controls.py` ✓ | Synthetic known-safe/bad fixtures as red-team controls | JSONL fixtures; hardcoded "SYNTHETIC NEGATIVE CONTROL — not validation" | current |
-| `scripts/diagnostics/dogfood_ablation_guard.py` ✓ | Silent CI guard: identity neutrality, BEAM/substrate lanes, matrix exclusion | Empty stdout = healthy; alerts only on regression | current |
+| `tests/test_risk_authority_ablation.py` ✓ | Three-arm synthetic restart contract: resolved-low/Φ-high, resolved-high/Φ-low, and Φ-only | Pytest authority, persistence, and recovery assertions; no live outcomes read and no live governance state mutated | current |
+| `scripts/diagnostics/dogfood_ablation_guard.py` ✓ | Silent operational guard: identity neutrality, BEAM/substrate lanes, matrix exclusion, and the synthetic risk-authority restart contract | Empty stdout = healthy; alerts only on regression | current; recurring Hermes job paused under the outcome-grounding stop rule |
 | `docs/operations/ablation-negative-controls.md` ✓ | Documents the negative-controls fixture (synthetic-only, never persisted) | "validates plumbing + containment, NOT EISV"; smoke `strict_bad:4` | current (Experimental) |
 | `docs/operations/ablation-initiates-finding-2026-06-16.md` ✓ | Finding: `strict_bad` 0→1 was **observed/classified, NOT prevented** | logged correction; not EISV validation | logged |
 
