@@ -273,9 +273,23 @@ def build_identity_signature_payload(
             client_hint=client_hint,
             model_type=model_type,
             proof_origin=proof_origin,
+            # This envelope is attached to every response, including plain
+            # validation errors, and no response_mode reaches the error path.
+            # The provenance record is the bulk of it and restates harness
+            # context the caller itself supplied; the flat fields beside it
+            # survive, and a rejected value keeps the full record.
+            provenance_detail=False,
         )
+        # One assurance block per response, not two. It was emitted both
+        # nested here and mirrored at the top of the signature, and
+        # _neutral_denial_signature (response_base.py) reads the top-level
+        # one, so that is the copy that stays.
+        identity_context.pop("identity_assurance", None)
         payload["identity_context"] = identity_context
-        payload["identity_assurance"] = identity_context["identity_assurance"]
+        payload["identity_assurance"] = _identity_assurance_from_source(
+            _normalize_source(session_resolution_source),
+            proof_origin,
+        )
 
     return payload
 
@@ -597,6 +611,7 @@ def build_identity_response_context(
     model_type: Optional[str] = None,
     runtime_provenance: Optional[Mapping[str, Any]] = None,
     proof_origin: Optional[str] = None,
+    provenance_detail: bool = True,
 ) -> Dict[str, Any]:
     """Build S22 response annotation for identity/onboard payloads.
 
@@ -605,6 +620,19 @@ def build_identity_response_context(
     is a public/structured handle in identity responses; display_name is
     social/cosmetic; harness/model context is descriptive; assurance is the
     strength of the session-resolution signal.
+
+    ``provenance_detail=False`` drops the field-by-field ``runtime_provenance``
+    record, keeping the flat ``harness_type``/``harness_version``/``model``/
+    ``model_provider`` fields beside it. It exists for the ``agent_signature``
+    envelope, which rides on every response -- successes and validation errors
+    alike -- where the record is the bulk of the payload and restates context
+    the caller supplied. A rejection reason is never dropped: #1872 preserved
+    those deliberately, so ``has_rejected_value`` keeps the full record
+    regardless of this flag.
+
+    The ontology itself is untouched: ``agent_id_is``, which the plugin's
+    identity-contract auditor requires, and the registry/public_handle/label
+    blocks it cross-checks the flat fields against, are all still emitted.
     """
     source_key = _normalize_source(session_resolution_source)
     identity_assurance = _identity_assurance_from_source(source_key, proof_origin)
@@ -665,11 +693,31 @@ def build_identity_response_context(
     runtime_provenance_field = (
         runtime_context
         if runtime_provenance_informative
+        and (provenance_detail or has_rejected_value)
         else {
             "schema": runtime_context.get("schema"),
             "record_status": runtime_context.get("record_status"),
-            "available": False,
-            "note": "No model/harness/adapter identifier was reported for this call; full field-by-field detail omitted.",
+            **(
+                {
+                    "available": False,
+                    "note": (
+                        "No model/harness/adapter identifier was reported for "
+                        "this call; full field-by-field detail omitted."
+                    ),
+                }
+                if not runtime_provenance_informative
+                # "nothing was reported" and "something was reported but is not
+                # inlined here" are different states and must not share a flag.
+                # Saying available=False for the second would be the response
+                # failing toward a wrong label rather than toward "unknown".
+                else {
+                    "detail": "omitted",
+                    "note": (
+                        "Field-by-field provenance omitted from this envelope; "
+                        "the flat harness/model fields beside it are unchanged."
+                    ),
+                }
+            ),
         }
     )
 
