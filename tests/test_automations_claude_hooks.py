@@ -47,7 +47,7 @@ def _exe(path: Path, body: str = "#!/bin/sh\nexit 0\n") -> Path:
 
 @pytest.fixture()
 def fake_home(tmp_path, monkeypatch, census_mod):
-    """A HOME with a user hooks dir, a settings.json, and a directory plugin."""
+    """A HOME with a user hooks dir, settings, and an installed plugin."""
     home = tmp_path / "home"
     hooks = home / ".claude/hooks"
     _exe(hooks / "wired-one.sh")
@@ -61,6 +61,7 @@ def fake_home(tmp_path, monkeypatch, census_mod):
     # placeholder rather than ${CLAUDE_PLUGIN_ROOT}.
     _exe(plugin / "hooks/post-activity")
     _exe(plugin / "hooks/never-wired")
+    _exe(plugin / "hooks/__init__.py", "")
 
     (home / ".claude").mkdir(parents=True, exist_ok=True)
     (home / ".claude/settings.json").write_text(json.dumps({
@@ -72,10 +73,13 @@ def fake_home(tmp_path, monkeypatch, census_mod):
         }
     }))
 
-    marketplaces = home / ".claude/plugins/known_marketplaces.json"
-    marketplaces.parent.mkdir(parents=True, exist_ok=True)
-    marketplaces.write_text(json.dumps({
-        "demo": {"source": {"source": "directory", "path": str(plugin)}}
+    installed = home / ".claude/plugins/installed_plugins.json"
+    installed.parent.mkdir(parents=True, exist_ok=True)
+    installed.write_text(json.dumps({
+        "version": 2,
+        "plugins": {
+            "demo@local": [{"scope": "user", "installPath": str(plugin)}],
+        },
     }))
     (plugin / "hooks/hooks.json").write_text(json.dumps({
         "hooks": {
@@ -147,6 +151,12 @@ def test_backups_are_not_reported_as_orphans(census_mod, fake_home):
     items, _ = _collect(census_mod)
     orphans = {i.name for i in items if i.status == "orphaned"}
     assert not any(".bak" in n for n in orphans), orphans
+
+
+def test_python_package_marker_is_not_reported_as_orphan(census_mod, fake_home):
+    items, _ = _collect(census_mod)
+    orphans = {i.name for i in items if i.status == "orphaned"}
+    assert not any("__init__.py" in name for name in orphans), orphans
 
 
 def test_dispatcher_itself_is_not_an_orphan(census_mod, fake_home):
@@ -280,20 +290,7 @@ def test_plugin_root_placeholder_is_expanded(census_mod, fake_home):
 
 
 def test_cache_installed_plugin_hooks_are_discovered(census_mod, tmp_path, monkeypatch):
-    """Cached (marketplace-installed, non-directory-source) plugins nest
-    hooks.json three levels under `cache/`:
-    `cache/<marketplace>/<plugin>/<version>/hooks/hooks.json`. Treating
-    each top-level `cache/` entry as a plugin root itself (the old
-    `cache.iterdir()`) never finds a declaration there, so every such
-    plugin's hooks were invisible to the census -- not orphaned, not
-    missing, simply never enumerated. Verified against the real
-    ~/.claude/plugins/cache layout on 2026-08-22: `hookify`, installed
-    from a github-source marketplace, has this exact shape and zero of
-    its hooks reached the collector before this fix. No entry is
-    registered for this plugin in known_marketplaces.json (a github
-    source has no "path" field to contribute), so this can only be
-    found through the cache walk, not the marketplace-roots branch.
-    """
+    """The exact cache version named by installed_plugins.json is live."""
     home = tmp_path / "home"
     plugin_root = home / ".claude/plugins/cache/some-marketplace/demo-cached-plugin/1.2.3"
     _exe(plugin_root / "hooks/run-hook.cmd")
@@ -309,12 +306,92 @@ def test_cache_installed_plugin_hooks_are_discovered(census_mod, tmp_path, monke
             }]
         }
     }))
-    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    installed = home / ".claude/plugins/installed_plugins.json"
+    installed.parent.mkdir(parents=True, exist_ok=True)
+    installed.write_text(json.dumps({
+        "version": 2,
+        "plugins": {"demo@market": [{"installPath": str(plugin_root)}]},
+    }))
     monkeypatch.setattr(census_mod, "HOME", home)
     items, _ = _collect(census_mod)
     wired = [i for i in items if i.status == "wired" and "post-edit" in i.name]
     assert len(wired) == 1, [(i.name, i.status) for i in items]
     assert "run-hook.cmd" not in wired[0].name
+
+
+def test_historical_cache_version_is_not_scanned(census_mod, tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    family = home / ".claude/plugins/cache/market/demo"
+    live = family / "2.0.0"
+    stale = family / "1.0.0"
+    _exe(live / "hooks/live-hook")
+    _exe(stale / "hooks/stale-orphan")
+    for root, hook in ((live, "live-hook"), (stale, "stale-orphan")):
+        (root / "hooks/hooks.json").write_text(json.dumps({
+            "hooks": {"Stop": [{"hooks": [{
+                "type": "command", "command": str(root / "hooks" / hook),
+            }]}]},
+        }))
+    installed = home / ".claude/plugins/installed_plugins.json"
+    installed.parent.mkdir(parents=True, exist_ok=True)
+    installed.write_text(json.dumps({
+        "version": 2,
+        "plugins": {"demo@market": [{"installPath": str(live)}]},
+    }))
+    monkeypatch.setattr(census_mod, "HOME", home)
+
+    items, _ = _collect(census_mod)
+    assert any("live-hook" in item.name for item in items)
+    assert not any("stale-orphan" in item.name for item in items)
+
+
+def test_manifest_declared_claude_hooks_are_discovered(census_mod, tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    plugin = home / "plugins/manifest-plugin"
+    _exe(plugin / "hooks/run-hook.cmd")
+    _exe(plugin / "hooks/prompt-submit")
+    (plugin / "hooks/claude-hooks.json").write_text(json.dumps({
+        "hooks": {"UserPromptSubmit": [{"hooks": [{
+            "type": "command",
+            "command": '"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd" prompt-submit',
+        }]}]},
+    }))
+    manifest = plugin / ".claude-plugin/plugin.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({
+        "name": "manifest-plugin", "hooks": "./hooks/claude-hooks.json",
+    }))
+    installed = home / ".claude/plugins/installed_plugins.json"
+    installed.parent.mkdir(parents=True, exist_ok=True)
+    installed.write_text(json.dumps({
+        "plugins": {"manifest-plugin@local": [{"installPath": str(plugin)}]},
+    }))
+    monkeypatch.setattr(census_mod, "HOME", home)
+
+    items, _ = _collect(census_mod)
+    wired = [item for item in items if "prompt-submit" in item.name]
+    assert len(wired) == 1
+    assert wired[0].status == "wired"
+
+
+def test_codex_personal_plugin_symlink_is_a_runtime_root(census_mod, tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    plugin = home / "src/demo-codex"
+    _exe(plugin / "hooks/run-hook.cmd")
+    _exe(plugin / "hooks/post-activity")
+    (plugin / "hooks/codex-hooks.json").write_text(json.dumps({
+        "hooks": {"PostToolUse": [{"hooks": [{
+            "type": "command",
+            "command": '"${PLUGIN_ROOT}/hooks/run-hook.cmd" post-activity',
+        }]}]},
+    }))
+    link = home / ".codex/plugins/demo-codex"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(plugin, target_is_directory=True)
+    monkeypatch.setattr(census_mod, "HOME", home)
+
+    items, _ = _collect(census_mod)
+    assert any(item.status == "wired" and "post-activity" in item.name for item in items)
 
 
 def test_true_cache_rollover_glob_fallback_resolves(census_mod, tmp_path):
