@@ -44,6 +44,19 @@ knowledge(action="details", discovery_id="...", response_mode="lean")
 content, ranking scores, staleness warnings, writer attribution, and discovery
 provenance are unchanged.
 
+Search content has three retrieval tiers, surfaced in every search response as
+`discovery_retrieval_options`:
+
+- `include_details=false` returns a digest: summary, tags, lifecycle status,
+  severity, timestamps, supersession metadata, and a bounded details preview.
+- `knowledge(action="details", discovery_id=...)` opens one selected record.
+- `include_details=true` expands every result inline and can be large; use it
+  deliberately rather than as the normal follow-up to a search.
+
+The friendly `search_shared_memory` alias defaults to its compact experience
+envelope, keeps the first three digest rows under `memory_suggestions`, and omits
+the repeated canonical result set unless `response_mode="full"` is requested.
+
 The mode is opt-in. Omitting `response_mode` is equivalent to `full`. Write
 actions ignore compact/lean for envelope shaping and always retain the full
 attribution context. `list` likewise retains its existing full shape because it

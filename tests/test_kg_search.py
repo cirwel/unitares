@@ -769,6 +769,41 @@ class TestSearchKnowledgeGraph:
         assert data["success"] is True
         if data["count"] > 0:
             assert "details" in data["discoveries"][0]
+            assert data["discovery_retrieval_options"]["current_tier"] == "full_inline"
+            assert "can be large" in data["discovery_retrieval_options"]["all_inline"]
+
+    @pytest.mark.asyncio
+    async def test_search_digest_keeps_lifecycle_metadata_and_details_preview(self, patch_common):
+        """Summary-only search is a useful intermediate tier, not an id/title stub."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        discovery = make_discovery(
+            id="digest-1",
+            details="Previewable details that should not require expanding every result.",
+            tags=["response-ux", "dogfood"],
+            severity="medium",
+        )
+        discovery.timestamp = "2026-08-22T10:00:00+00:00"
+        discovery.updated_at = "2026-08-23T10:00:00+00:00"
+        mock_graph.query = AsyncMock(return_value=[discovery])
+
+        result = await handle_search_knowledge_graph({"include_details": False})
+
+        data = parse_result(result)
+        item = data["discoveries"][0]
+        assert "details" not in item
+        assert item["details_preview"].startswith("Previewable details")
+        assert item["has_details"] is True
+        assert item["has_more_details"] is False
+        assert item["status"] == "open"
+        assert item["severity"] == "medium"
+        assert item["tags"] == ["response-ux", "dogfood"]
+        assert item["created_at"] == "2026-08-22T10:00:00+00:00"
+        assert item["updated_at"] == "2026-08-23T10:00:00+00:00"
+        assert data["discovery_retrieval_options"]["current_tier"] == "digest"
+        assert "knowledge(action='details'" in data["discovery_retrieval_options"]["open_one"]
+        assert "Open one" in data["_tip"]
 
     @pytest.mark.asyncio
     async def test_search_exception_handling(self, patch_common):
