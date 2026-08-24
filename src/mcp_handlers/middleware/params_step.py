@@ -77,6 +77,29 @@ async def resolve_alias(name: str, arguments: Dict[str, Any], ctx) -> Any:
             arguments["action"] = alias_info.inject_action
             logger.debug(f"[ALIAS] Injected action='{alias_info.inject_action}' for consolidated tool '{actual_name}'")
 
+        if alias_info.inject_defaults:
+            from copy import deepcopy
+
+            injected_records = {}
+            for parameter, value in alias_info.inject_defaults.items():
+                if parameter in arguments:
+                    continue
+                arguments[parameter] = deepcopy(value)
+                injected_records[parameter] = {
+                    "from": "omitted",
+                    "to": value,
+                    "interpretation": "alias_default",
+                }
+            if injected_records:
+                ctx.normalized_parameters = {
+                    **(ctx.normalized_parameters or {}),
+                    **injected_records,
+                }
+                logger.info(
+                    f"[ALIAS] Injected defaults for '{ctx.original_name}' → "
+                    f"'{actual_name}': {injected_records}"
+                )
+
         if alias_info.param_normalizer:
             from ..support.param_normalization import ParamNormalizationError
 
@@ -103,7 +126,10 @@ async def resolve_alias(name: str, arguments: Dict[str, Any], ctx) -> Any:
                     },
                 )]
             if records:
-                ctx.normalized_parameters = records
+                ctx.normalized_parameters = {
+                    **(ctx.normalized_parameters or {}),
+                    **records,
+                }
                 logger.info(
                     f"[ALIAS] Normalized parameters for '{ctx.original_name}' → '{actual_name}': {records}"
                 )

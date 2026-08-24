@@ -1,9 +1,9 @@
 """Tests for the one-call review flow and whose_move guidance.
 
-Adoption UX (2026-07-28): request_review / dialectic(action='request') with
-thesis-bearing fields (reasoning / root_cause) submits the thesis in the same
-call; non-terminal session reads carry a plain-language `whose_move` +
-`next_call` so a session waiting on the caller is never misread as a hang.
+Adoption UX (2026-07-28, amended 2026-08-23): request_review reuses a lone
+issue description as the thesis; raw dialectic(action='request') retains the
+explicit two-call flow. Non-terminal reads carry a plain-language `whose_move`
+and `next_call`, including a no-copy way to reuse the saved brief.
 """
 from __future__ import annotations
 
@@ -60,6 +60,78 @@ def _thesis_response(payload: dict):
 
 
 class TestOneCallReview:
+    @pytest.mark.asyncio
+    async def test_friendly_alias_defaults_lone_brief_to_thesis(self):
+        from src.mcp_handlers.middleware import DispatchContext
+        from src.mcp_handlers.middleware.params_step import resolve_alias
+
+        arguments = {"issue_description": "Review the attached evidence"}
+        ctx = DispatchContext()
+
+        canonical, resolved, out_ctx = await resolve_alias(
+            "request_review", arguments, ctx
+        )
+
+        assert canonical == "dialectic"
+        assert resolved["use_brief_as_thesis"] is True
+        assert out_ctx.normalized_parameters["use_brief_as_thesis"] == {
+            "from": "omitted",
+            "to": True,
+            "interpretation": "alias_default",
+        }
+
+    @pytest.mark.parametrize(
+        "arguments",
+        [
+            {"issue_description": "Neutral review", "use_brief_as_thesis": False},
+            {"issue_description": "Review", "reasoning": "My explicit position"},
+            {"issue_description": "Review", "root_cause": "Explicit cause"},
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_friendly_alias_preserves_explicit_opt_out(self, arguments):
+        from src.mcp_handlers.middleware import DispatchContext
+        from src.mcp_handlers.middleware.params_step import resolve_alias
+
+        before = dict(arguments)
+        ctx = DispatchContext()
+
+        _canonical, resolved, out_ctx = await resolve_alias(
+            "request_review", arguments, ctx
+        )
+
+        assert resolved["use_brief_as_thesis"] is before.get(
+            "use_brief_as_thesis", True
+        )
+        if "use_brief_as_thesis" in before:
+            assert out_ctx.normalized_parameters is None
+        else:
+            assert out_ctx.normalized_parameters["use_brief_as_thesis"]["to"] is True
+
+    @pytest.mark.asyncio
+    async def test_saved_brief_flag_triggers_thesis_without_copying(self, request_env):
+        from src.mcp_handlers.dialectic.handlers import handle_request_dialectic_review
+
+        brief = "Review this position, its evidence, and its open questions"
+        with patch(
+            f"{DIALECTIC}.handle_submit_thesis",
+            new_callable=AsyncMock,
+            return_value=_thesis_response({"success": True, "phase": "antithesis"}),
+        ) as thesis:
+            result = await handle_request_dialectic_review({
+                "agent_id": "agent-paused",
+                "_agent_uuid": "agent-paused",
+                "issue_description": brief,
+                "use_brief_as_thesis": True,
+            })
+
+        data = parse_result(result)
+        submitted = thesis.await_args.args[0]
+        assert data["one_call_review"] is True
+        assert data["thesis_source"] == "issue_description"
+        assert submitted["root_cause"] == brief
+        assert submitted["reasoning"] == brief
+
     @pytest.mark.asyncio
     async def test_reasoning_triggers_thesis_in_same_call(self, request_env):
         from src.mcp_handlers.dialectic.handlers import handle_request_dialectic_review
@@ -118,7 +190,7 @@ class TestOneCallReview:
 
     @pytest.mark.asyncio
     async def test_without_thesis_fields_behavior_unchanged(self, request_env):
-        """No reasoning/root_cause → today's two-call shape, thesis never runs."""
+        """Raw requests without an opt-in retain the two-call protocol."""
         from src.mcp_handlers.dialectic.handlers import handle_request_dialectic_review
 
         with patch(
@@ -134,7 +206,76 @@ class TestOneCallReview:
         assert data["success"] is True
         assert "one_call_review" not in data
         assert data["message"] == "Dialectic session created"
+        assert data["whose_move"].startswith("YOURS")
+        assert "use_brief_as_thesis=true" in data["next_call"]
         thesis.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_existing_session_reuses_saved_brief_for_thesis(self):
+        from src.dialectic_protocol import DialecticSession
+        from src.mcp_handlers.dialectic.handlers import handle_submit_thesis
+
+        brief = "Saved review brief with the position and supporting evidence"
+        session = DialecticSession(
+            paused_agent_id="agent-paused",
+            reviewer_agent_id="agent-reviewer",
+            topic=brief,
+            reason=brief,
+        )
+        with (
+            patch(
+                f"{DIALECTIC}._resolve_dialectic_agent_id",
+                new_callable=AsyncMock,
+                return_value=("agent-paused", None),
+            ),
+            patch(
+                f"{DIALECTIC}.load_session",
+                new_callable=AsyncMock,
+                return_value=session,
+            ),
+            patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock) as add_message,
+            patch(
+                f"{DIALECTIC}.beam_update_phase",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(f"{DIALECTIC}._emit_phase_changed", new_callable=AsyncMock),
+            patch(f"{DIALECTIC}.save_session", new_callable=AsyncMock),
+        ):
+            result = await handle_submit_thesis({
+                "session_id": session.session_id,
+                "use_brief_as_thesis": True,
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True, data
+        assert data["thesis_source"] == "saved_session_brief"
+        assert session.transcript[0].root_cause == brief
+        assert session.transcript[0].reasoning == brief
+        assert add_message.await_args.kwargs["root_cause"] == brief
+        assert add_message.await_args.kwargs["reasoning"] == brief
+
+    def test_recovery_session_still_requires_a_proposed_condition(self):
+        from src.dialectic_protocol import DialecticMessage, DialecticSession
+
+        session = DialecticSession(
+            paused_agent_id="agent-paused",
+            reviewer_agent_id="agent-reviewer",
+            session_type="recovery",
+        )
+        result = session.submit_thesis(
+            DialecticMessage(
+                phase="thesis",
+                agent_id="agent-paused",
+                timestamp="2026-08-23T00:00:00+00:00",
+                root_cause="Circuit breaker triggered",
+                proposed_conditions=[],
+                reasoning="Recovery needs an explicit safety condition",
+            )
+        )
+
+        assert result["success"] is False
+        assert "proposed_condition for recovery" in result["error"]
 
 
 # ----------------------------------------------------------------------
@@ -530,6 +671,8 @@ class TestWhoseMove:
         assert "unassigned" not in out["recommended_action"]
         assert out["current_agent_role"] == "paused_agent"
         assert out["current_agent_can_submit"] is True
+        assert "saved brief" in out["whose_move"]
+        assert "use_brief_as_thesis=true" in out["next_call"]
 
     def test_actionability_unchanged_for_to_dict_shape(self):
         from src.mcp_handlers.dialectic.handlers import _build_dialectic_actionability
@@ -544,6 +687,21 @@ class TestWhoseMove:
         assert out["allowed_agent_ids"] == ["agent-paused"]
         assert out["required_agent_id"] == "agent-paused"
         assert "unassigned" not in out["recommended_action"]
+
+    def test_recovery_actionability_keeps_required_condition_in_next_call(self):
+        from src.mcp_handlers.dialectic.handlers import _build_dialectic_actionability
+
+        with self._ctx("agent-paused"):
+            out = _build_dialectic_actionability({
+                "session_id": "sess-recovery",
+                "paused_agent_id": "agent-paused",
+                "reviewer_agent_id": "agent-reviewer",
+                "phase": "thesis",
+                "session_type": "recovery",
+            })
+
+        assert "use_brief_as_thesis=true" in out["next_call"]
+        assert "proposed_conditions=[...]" in out["next_call"]
 
     def test_actionability_treats_unknown_sentinel_as_absent(self):
         """`load_session_as_dict` coalesces a NULL paused_agent_id to the string
