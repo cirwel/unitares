@@ -859,6 +859,7 @@ def build_experience_envelope(
 
     next_action: Any = None
     state_summary: Optional[Dict[str, Any]] = None
+    is_knowledge_search = False
 
     if canonical_name == "onboard":
         next_action = (
@@ -900,7 +901,18 @@ def build_experience_envelope(
         ).items():
             state_summary.setdefault(key, value)
         if coherence is not None:
-            state_summary["coherence"] = coherence
+            if legacy:
+                # Match get_governance_metrics's inline badge (runtime_queries.py's
+                # lite branch) instead of a bare float agents have to cross-reference
+                # against the separate legacy_diagnostics block to interpret.
+                state_summary["coherence"] = {
+                    "value": coherence,
+                    "status": "⚪ legacy control feedback (not health-rated)",
+                    "source": legacy.get("source", "legacy_tanh_v"),
+                    "role": legacy.get("role", "ode_control_feedback"),
+                }
+            else:
+                state_summary["coherence"] = coherence
         if risk is not None:
             state_summary["risk_score"] = risk
         prediction_id = payload.get("prediction_id") or source_payload.get("prediction_id")
@@ -1013,6 +1025,7 @@ def build_experience_envelope(
                 )
 
     elif canonical_name == "knowledge":
+        is_knowledge_search = True
         candidates = source_payload.get("results") or source_payload.get("discoveries") or []
         total = source_payload.get("total_count")
         if total is None:
@@ -1136,8 +1149,14 @@ def build_experience_envelope(
     if reflection:
         envelope["reflection"] = reflection
 
+    include_raw, raw_hint = _raw_governance_policy(friendly_name, arguments)
+
     suggestions = _memory_suggestions(payload)
-    if suggestions:
+    # When the full canonical discoveries list is about to go out under
+    # raw_governance, a trimmed top-N copy under memory_suggestions is a
+    # strict subset of it in the same response — drop the duplicate rather
+    # than serialize the same results twice.
+    if suggestions and not (is_knowledge_search and include_raw):
         envelope["memory_suggestions"] = suggestions
     if retrieval_options:
         envelope["discovery_retrieval_options"] = _friendly_action_hint(
