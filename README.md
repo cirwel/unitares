@@ -17,7 +17,7 @@ action with a reason, and retains an audit trail plus searchable shared memory.
 It is an MCP/HTTP service you run yourself — not an agent framework and not a
 hosted platform. Plain-language definition: [What UNITARES is](docs/PRODUCT_DEFINITION.md).
 
-**Status:** v2.19.0. The maintainer deployment has operated continuously since
+**Status:** v2.20.0. The maintainer deployment has operated continuously since
 November 2025, with 71,141 stored EISV state rows and six long-running resident
 agents at the frozen snapshot. That establishes sustained single-operator
 operation under real load: attributable records and exercised runtime paths.
@@ -43,7 +43,7 @@ evidence class.
 ## Quickstart
 
 ```bash
-git clone --branch v2.19.0 --depth 1 https://github.com/cirwel/unitares.git
+git clone --branch v2.20.0 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
 make demo
