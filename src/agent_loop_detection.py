@@ -25,6 +25,7 @@ from src.agent_identity_auth import verify_agent_ownership
 from src.agent_metadata_persistence import load_metadata_async
 from src.perf_monitor import record_ms as _perf_record_ms
 from src.loop_rules import LoopWindow, evaluate_loop_rules
+from src.mcp_handlers.lifecycle.recovery_policy import authoritative_risk_score
 
 logger = get_logger(__name__)
 
@@ -615,7 +616,9 @@ async def _safety_net_resume(agent_id: str, reason: str) -> None:
         coherence = getattr(monitor.state, 'coherence', None) or 0.0
         void_active = bool(getattr(monitor.state, 'void_active', False))
         metrics = monitor.get_metrics()
-        risk = metrics.get('mean_risk') or metrics.get('risk_score') or 0.5
+        # Unknown/non-resolved risk must never authorize this last-resort
+        # auto-resume.  In particular, do not promote Φ trend telemetry.
+        risk = authoritative_risk_score(metrics, default=1.0)
 
         if risk < 0.60 and not void_active:
             meta.status = "active"

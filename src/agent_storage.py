@@ -637,6 +637,9 @@ async def record_agent_state(
         state_json["regime_raw"] = regime
     if risk_score is not None:
         state_json["risk_score"] = risk_score
+        # This is the final risk paired with the persisted verdict/action, not
+        # the Φ-derived rolling telemetry kept in monitor.risk_history.
+        state_json["risk_score_source"] = "resolved"
     if phi is not None:
         state_json["phi"] = phi
     if verdict is not None:

@@ -17,8 +17,10 @@ anchor bridge). It only asks: is the residual *consistent with current health*?
 Caveat: "healthy" is proxied by the current (Φ-based) verdict — the very signal
 we're moving away from — so agreement is necessary, not sufficient. A residual
 that flags a currently-"safe" agent is either a regression OR a case where Φ was
-too lax; this probe can't tell which without outcomes. It bounds the regression
-risk, it doesn't bless the residual.
+too lax; this probe can't tell which without outcomes. Default quantile mode
+does not bound regression risk. Policy-threshold mode measures historical proxy
+disagreement, but generalizing that rate still needs an outcome-matched,
+longitudinally valid design.
 """
 from __future__ import annotations
 
@@ -97,8 +99,9 @@ def rank_conformal_threshold(xs, quantile: float):
 
     `pct` interpolates linearly between neighbouring order statistics, which is
     the right thing for a descriptive quantile and the WRONG thing here: the
-    split-conformal guarantee is a statement about RANKS, so it survives any
-    continuous distribution only if the threshold IS an order statistic.
+    split-conformal result is a statement about RANKS, so under exchangeability
+    it survives any continuous distribution only if the threshold IS an order
+    statistic.
     Interpolating places it at a position that depends on the local density, and
     coverage stops being distribution-free -- see `conformal_exceedance`.
     """
@@ -109,12 +112,18 @@ def rank_conformal_threshold(xs, quantile: float):
 
 
 def conformal_exceedance(n_calib: int, quantile: float) -> float:
-    """EXACT distribution-free exceedance for the rank threshold: 1 - k/(m+1).
+    """Exchangeability-conditional rank reference: 1 - k/(m+1).
 
-    This is a theorem about ranks, not a fit. For continuous scores the new
-    point is equally likely to fall in any of the m+1 gaps between (and outside)
-    the calibration points, so P(exceed the k-th) = 1 - k/(m+1) regardless of
-    the distribution.
+    This is a theorem about ranks, not a fit. If the m calibration scores and a
+    new continuous score are exchangeable, the new point is equally likely to
+    fall in any of the m+1 gaps between (and outside) the calibration points, so
+    P(exceed the k-th) = 1 - k/(m+1) regardless of the distribution.
+
+    EXCHANGEABILITY IS AN ASSUMPTION, NOT A CONSEQUENCE OF SPLITTING. The source
+    rows are longitudinal per-agent check-ins; a deterministic shuffle makes the
+    report reproducible but does not make a nonstationary sequence exchangeable.
+    Without a source-specific justification, this number is a reference under a
+    model whose premise is unestablished, not an unconditional coverage claim.
 
     THE HISTORY MATTERS, because the same quantity was got wrong twice by
     reasoning about what the estimator ought to do:
@@ -198,7 +207,7 @@ def clopper_pearson_upper(k: int, n: int, alpha: float = 0.05) -> float | None:
 
 
 def split_sample(xs, seed=0):
-    """Deterministic random halves: (calibration, holdout)."""
+    """Deterministic random halves; reproducibility, not exchangeability proof."""
     shuffled = list(xs)
     random.Random(seed).shuffle(shuffled)
     mid = len(shuffled) // 2
@@ -233,9 +242,10 @@ def separation_report(safe, non_safe, seed=0, quantile=0.99, threshold=None):
     `1 - quantile`". That sentence is WITHDRAWN -- it is the #1856 claim this
     module exists to retract, and it survived here in the present tense while
     `conformal_exceedance` below named it as the error and the report printed
-    "the exceedance is 1/(m+1) = 2.0%, not 1.0%". Exchangeability is real; what
-    it gives is the RANK result in `conformal_exceedance`, not a centre at
-    1 - q, and not anything at all for an interpolated threshold.)
+    "the exceedance is 1/(m+1) = 2.0%, not 1.0%". Under exchangeability, the
+    RANK result in `conformal_exceedance` applies — not a centre at 1 - q, and
+    not anything at all for an interpolated threshold. A fixed random split does
+    not establish exchangeability for these longitudinal rows.)
     The regression bound is simply not identified from a quantile threshold.
 
     So the two modes are reported as the different things they are:
@@ -328,9 +338,9 @@ def separation_report(safe, non_safe, seed=0, quantile=0.99, threshold=None):
                        "nothing from the separation below.")
         else:
             calib, holdout = split_sample(safe, seed=seed)
-            # RANK threshold, not pct(): the conformal guarantee is about ranks
-            # and holds for any continuous distribution only if the threshold IS
-            # an order statistic. Interpolating made the coverage
+            # RANK threshold, not pct(): under exchangeability the conformal
+            # result is about ranks and holds for any continuous distribution
+            # only if the threshold IS an order statistic. Interpolating made the coverage
             # distribution-dependent -- the defect that made the previous two
             # centre claims wrong.
             held_k = sum(1 for z in holdout if z > rank_conformal_threshold(calib, quantile))
@@ -351,7 +361,8 @@ def separation_report(safe, non_safe, seed=0, quantile=0.99, threshold=None):
             # prevent a strict total order over the exchangeable draws.
             split_values = calib + holdout
             distinct = len(set(split_values)) == len(split_values)
-            claim = "an EXACT distribution-free" if distinct else "a TIE-DEGRADED"
+            claim = ("EXACT under exchangeability (distribution-free within that model)"
+                     if distinct else "TIE-DEGRADED under exchangeability")
             tie_note = ("" if distinct else
                         f"\n   NB residuals TIE in this sample, so the rank guarantee is "
                         f"an UPPER BOUND, not an\n   equality: ties at the threshold fall "
@@ -366,10 +377,13 @@ def separation_report(safe, non_safe, seed=0, quantile=0.99, threshold=None):
                         f"the exceedance is 1/(m+1) = {exact:.1%}, not "
                         f"{1 - quantile:.1%}.")
             out.append(f"  (held-out check on a disjoint half: {held:.1%} "
-                       f"({held_k}/{len(holdout)}) against {claim}"
-                       f"\n   exceedance of {exact:.1%} — the "
+                       f"({held_k}/{len(holdout)}) against a rank reference of "
+                       f"{exact:.1%}\n   ({claim}) — the "
                        f"{k}th of m={len(calib)} order statistics, 1 - {k}/{len(calib) + 1}. "
-                       f"Still not a regression bound.{tie_note}{note})")
+                       "The exchangeability premise is NOT ESTABLISHED for these "
+                       "longitudinal\n   check-ins; the fixed split seed provides "
+                       f"reproducibility, not exchangeability. Still not a regression "
+                       f"bound.{tie_note}{note})")
         measured_fp = None
 
     if not non_safe:

@@ -8,12 +8,16 @@ Reduces friction from constant tool churn by:
 4. Single source of truth for tool lifecycle
 """
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 from enum import Enum
 from datetime import datetime
 from .support.tool_hints import KNOWLEDGE_SEARCH_SIMILARITY_MIGRATION_NOTE
-from .support.param_normalization import ParamNormalizer, normalize_unit_interval
+from .support.param_normalization import (
+    ParamNormalizer,
+    normalize_compact_search_details,
+    normalize_unit_interval,
+)
 from src.governance_glossary import EISV_INLINE_SUMMARY
 class ToolStability(Enum):
     """Tool stability tier - helps users know what to expect"""
@@ -30,9 +34,11 @@ class ToolAlias:
     deprecated_since: Optional[datetime] = None
     migration_note: Optional[str] = None
     inject_action: Optional[str] = None  # For consolidated tools: auto-inject this action parameter
-    # Friendly aliases may absorb agent vocabulary (named levels, explicit
-    # scale objects) before validation; canonical tools stay strict. Runs in
-    # resolve_alias; transforms are disclosed via normalized_parameters.
+    inject_defaults: Optional[Dict[str, Any]] = None  # Friendly-surface defaults applied only when omitted
+    # Friendly aliases may absorb agent vocabulary or materialize advertised
+    # workflow defaults before validation; canonical tools stay strict. Runs in
+    # resolve_alias; caller-visible transforms are disclosed via
+    # normalized_parameters.
     param_normalizer: Optional[ParamNormalizer] = None
     experience: bool = False  # Agent-experience alias: response gets the normalized envelope
 
@@ -59,6 +65,7 @@ class ToolLifecycle:
 # implementation tools, but are the public first-run surface for agents.
 
 _CHECKIN_COMPLEXITY_NORMALIZER = normalize_unit_interval("complexity")
+_SEARCH_SHARED_MEMORY_NORMALIZER = normalize_compact_search_details
 
 _TOOL_ALIASES: Dict[str, ToolAlias] = {
     # Identity tools - all point to identity() (the primary identity tool)
@@ -372,7 +379,9 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     "search_shared_memory": ToolAlias(
         old_name="search_shared_memory", new_name="knowledge", reason="intuitive_alias",
         migration_note="Primary workflow name for memory search; implemented by knowledge(action='search').",
-        inject_action="search", experience=True),
+        inject_action="search",
+        param_normalizer=_SEARCH_SHARED_MEMORY_NORMALIZER,
+        experience=True),
     # The write half of shared memory. `search_shared_memory` named the read and
     # left store/update reachable only through the `knowledge` router — and a
     # caller that matches on the domain noun never gets to the router, because
@@ -410,10 +419,11 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     "request_review": ToolAlias(
         old_name="request_review", new_name="dialectic", reason="intuitive_alias",
         migration_note="Primary workflow name for structured review; implemented by "
-        "dialectic(action='request'). One-call form: pass reasoning (and optionally "
-        "root_cause/proposed_conditions) and the thesis is submitted in the same "
-        "call — a reviewer answers or a verdict returns without further protocol.",
-        inject_action="request", experience=True),
+        "dialectic(action='request'). The issue description is reused as the thesis "
+        "by default, so a reviewer answers or a verdict returns without duplicating "
+        "the brief. Pass use_brief_as_thesis=false for the explicit two-call flow.",
+        inject_action="request", inject_defaults={"use_brief_as_thesis": True},
+        experience=True),
 }
 
 # Reverse mapping: new_name -> list of old names

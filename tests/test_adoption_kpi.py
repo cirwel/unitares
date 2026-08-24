@@ -101,17 +101,41 @@ def test_surface_return_rate_excludes_hook_poll_and_scheduled_callers():
         assert excluded not in sql, f"{excluded} must not be counted"
     # dashboard reads of the dialectic are not participation
     assert "NOT IN ('get', 'list')" in sql
-    # scheduled/harness-wired callers are filtered by the shared regex
-    assert "a.label !~* %(scheduled_re)s" in sql
+    # scheduled/harness-wired callers are classified only after they satisfy
+    # the same eligibility predicate as denominator calls.
+    assert "a.label ~* %(scheduled_re)s AS scheduled" in sql
+    assert "FROM eligible_calls" in sql
+    assert "WHERE NOT scheduled" in sql
     assert "%(return_gap_s)s" in sql
 
 
 def test_scheduled_label_regex_is_shared_by_both_metrics():
-    """One regex, so composition and continuation cannot drift apart."""
+    """One regex, so composition and continuation cannot drift apart.
+
+    THIS TEST WAS PINNING A DEFECT. It asserted `"Vigil" in
+    _SCHEDULED_LABEL_RE` — i.e. it required the resident roster to be
+    hardcoded, which is what let the literal drift away from
+    UNITARES_RESIDENTS and silently inflate the return rate (a resident not in
+    the literal entered the denominator as an ordinary caller, and scheduled
+    callers return by construction). The shared-regex property it was written
+    to protect is real and is kept; the hardcoded-roster assertion is not.
+
+    Residents now come from the roster and are checked against it, so the two
+    still cannot drift — they cannot drift from each OTHER, and they cannot
+    drift from the deployment either.
+    """
+    import re
+
+    from src.grounding.class_indicator import load_resident_labels
+
     from scripts.dev import adoption_kpi
 
     queries = adoption_kpi._snapshot_queries()
     assert "%(scheduled_re)s" in queries["agent_kg_retrieval"]
     assert "%(scheduled_re)s" in queries["surface_return_rate"]
-    for expected in ("Vigil", "Hermes Agent", "canary_", "kg-sweep"):
-        assert expected in adoption_kpi._SCHEDULED_LABEL_RE
+
+    pattern = adoption_kpi._scheduled_label_re()
+    for job in ("Hermes Agent", "canary_", "kg-sweep"):
+        assert re.match(pattern, job), job
+    for resident in load_resident_labels():
+        assert re.match(pattern, resident), resident

@@ -30,7 +30,11 @@ from .helpers import (
     _is_test_agent,
     _resume_with_persistence,
 )
-from .recovery_policy import compute_recovery_margin, recovery_policy_context
+from .recovery_policy import (
+    authoritative_risk_score,
+    compute_recovery_margin,
+    recovery_policy_context,
+)
 
 logger = get_logger(__name__)
 
@@ -314,7 +318,7 @@ async def handle_self_recovery_review(arguments: Dict[str, Any]) -> Sequence[Tex
     metrics = monitor.get_metrics()
 
     coherence = safe_float(monitor.state.coherence, 0.5)
-    risk_score = safe_float(metrics.get("mean_risk"), 0.5)
+    risk_score = authoritative_risk_score(metrics, default=0.5)
     void_active = bool(monitor.state.void_active)
     void_value = safe_float(monitor.state.V, 0.0)
     status = meta.status

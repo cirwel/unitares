@@ -80,6 +80,18 @@ class TestReadPathRiskAuthority:
         read = get_monitor_metrics(monitor, include_state=False)
         assert read["status"] != "critical"
 
+    def test_read_path_replays_the_final_resolved_verdict(self):
+        """A verification floor can make final verdict stricter than behavioral."""
+        monitor = _assessed_monitor("risk_authority_verdict_pair")
+        monitor._last_resolved_risk = 0.82
+        monitor._last_resolved_verdict = "high-risk"
+        monitor._last_behavioral_verdict = "safe"
+
+        read = get_monitor_metrics(monitor, include_state=False)
+        assert read["risk_score"] == pytest.approx(0.82)
+        assert read["verdict"] == "high-risk"
+        assert read["verdict_resolution_source"] == "resolved"
+
     def test_falls_back_to_phi_before_any_assessment(self):
         """A monitor that has not assessed yet has no resolved risk to report.
 
@@ -150,3 +162,4 @@ class TestSimulationDoesNotLeakIntoTheRecord:
         monitor.simulate_update(self._sim_payload("dry run before any real check-in"))
 
         assert getattr(monitor, "_last_resolved_risk", None) is None
+        assert getattr(monitor, "_last_resolved_verdict", None) is None

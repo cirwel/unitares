@@ -112,6 +112,16 @@ def _copy_passthrough_fields(response_data: dict, result: dict, fields: tuple) -
             result[field] = value
 
 
+def _bounded_text(value: Any) -> Any:
+    """Collapse free text to one bounded line for filtered response modes."""
+    if not isinstance(value, str):
+        return value
+    value = " ".join(value.split())
+    if len(value) > _COMPACT_TEXT_LIMIT:
+        value = value[: _COMPACT_TEXT_LIMIT - 3].rstrip() + "..."
+    return value
+
+
 def _compact_mapping(value: Any, fields: tuple[str, ...]) -> dict:
     """Copy a bounded set of present fields from one diagnostic mapping."""
     if not isinstance(value, dict):
@@ -120,12 +130,7 @@ def _compact_mapping(value: Any, fields: tuple[str, ...]) -> dict:
     for field in fields:
         if field not in value or value[field] is None:
             continue
-        item = value[field]
-        if isinstance(item, str):
-            item = " ".join(item.split())
-            if len(item) > _COMPACT_TEXT_LIMIT:
-                item = item[: _COMPACT_TEXT_LIMIT - 3].rstrip() + "..."
-        result[field] = item
+        result[field] = _bounded_text(value[field])
     return result
 
 
@@ -396,13 +401,14 @@ def format_response(
     Preferred modes:
     - "auto": compact for routine check-ins, mirror for actionable states
     - "compact": brief metrics + decision summary
+    - "standard": bounded agent-readable interpretation
     - "mirror": actionable self-awareness signals
     - "full": no filtering (return as-is)
 
     Compatibility modes:
     - "lite": alias for compact
     - "verbose": alias for full
-    - "standard"/"interpreted": human-readable interpretation via GovernanceState
+    - "interpreted": alias for standard
     - "minimal": legacy bare action + EISV snapshot + margin
 
     Args:
@@ -504,7 +510,7 @@ def format_response(
     return response_data
 
 def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any = None) -> dict:
-    """Build standard (interpreted) response."""
+    """Build a bounded interpreted summary for agents."""
     from src.governance_state import GovernanceState
     from governance_core import State, Theta, DEFAULT_THETA
 
@@ -532,28 +538,52 @@ def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any 
         explain_verdict,
     )
 
+    policy_source = response_data.get("policy_evaluation")
+    enforcement_source = response_data.get("enforcement")
     action = decision.get("action") or response_data.get("status")
+    guidance = decision.get("guidance")
+    if guidance is None and isinstance(policy_source, dict):
+        guidance = policy_source.get("guidance")
+    health_status = (
+        response_data.get("health_status")
+        or metrics.get("health_status")
+        or response_data.get("status")
+    )
 
     result = {
         "success": True,
         "agent_id": response_data.get("agent_id"),
-        # Keep the legacy scalar decision while also exposing the fields the
-        # action-first experience envelope needs. Previously standard mode
-        # erased its own action/reason provenance during formatting.
+        "status": response_data.get("status"),
+        "health_status": health_status,
+        "health_message": _bounded_text(
+            response_data.get("health_message") or metrics.get("health_message")
+        ),
+        # Keep the scalar decision for wire compatibility while exposing the
+        # structured fields agents need without opening the audit payload.
         "decision": action,
         "action": action,
         "sub_action": decision.get("sub_action"),
-        "reason": decision.get("reason"),
+        "reason": _bounded_text(decision.get("reason")),
+        "guidance": _bounded_text(guidance),
+        "require_human": decision.get("require_human"),
+        "margin": decision.get("margin"),
+        "nearest_edge": decision.get("nearest_edge"),
         "state": interpreted,
         "metrics": {
             "E": E, "I": I, "S": S, "V": V,
             "coherence": coherence, "risk_score": risk_score,
+            "risk_score_latest": metrics.get("latest_risk_score"),
+            "phi": metrics.get("phi"),
             "coherence_source": metrics.get("coherence_source"),
             "coherence_role": metrics.get("coherence_role"),
             "primary_eisv_source": metrics.get("primary_eisv_source"),
         },
         "_mode": "standard",
-        "_raw_available": "Use response_mode='full' to see complete metrics",
+        "_detail_level": "interpreted_summary",
+        "_raw_available": (
+            "Use response_mode='full' for complete metrics, policy gates, "
+            "enforcement, and audit diagnostics."
+        ),
     }
     if metrics.get("verdict") is not None:
         result["verdict"] = explain_verdict(
@@ -587,8 +617,6 @@ def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any 
         (
             "prediction_id",
             "warnings",
-            "policy_evaluation",
-            "enforcement",
             "evidence_status",
             # Orphaned by the allowlist refactor: the enrichment writes this into
             # response_data but every formatter rebuilds `result` from scratch,
@@ -598,6 +626,18 @@ def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any 
             "knowledge_surfacing_degraded",
         ),
     )
+
+    policy_summary = None
+    if _compact_policy_is_actionable(policy_source):
+        policy_summary = _compact_policy_evaluation(policy_source)
+    if policy_summary is not None:
+        result["policy_evaluation"] = policy_summary
+
+    enforcement_summary = None
+    if _compact_enforcement_is_actionable(enforcement_source):
+        enforcement_summary = _compact_enforcement(enforcement_source)
+    if enforcement_summary is not None:
+        result["enforcement"] = enforcement_summary
     return result
 
 def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None) -> dict:
@@ -909,7 +949,7 @@ def _format_minimal(response_data: dict, using_default_mode: bool, saved_trust_t
     if decision.get("sub_action") is not None:
         result["sub_action"] = decision["sub_action"]
     if decision.get("reason") is not None:
-        result["reason"] = decision["reason"]
+        result["reason"] = _bounded_text(decision["reason"])
     if metrics.get("verdict") is not None:
         from src.governance_glossary import explain_verdict
 
@@ -975,7 +1015,7 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
         ),
         "lambda1": metrics.get("lambda1"),
         "health_status": metrics.get("health_status"),
-        "health_message": metrics.get("health_message"),
+        "health_message": _bounded_text(metrics.get("health_message")),
     }
 
     compact_decision = {
@@ -987,7 +1027,7 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
         # diverging from mirror/full, which carry sub_action. Surface it here for
         # parity (None on a plain approve).
         "sub_action": decision.get("sub_action"),
-        "reason": decision.get("reason"),
+        "reason": _bounded_text(decision.get("reason")),
         "require_human": decision.get("require_human"),
         "margin": decision.get("margin"),
         "nearest_edge": decision.get("nearest_edge"),
@@ -1015,7 +1055,7 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
         "agent_id": response_data.get("agent_id"),
         "status": response_data.get("status"),
         "health_status": health_status,
-        "health_message": response_data.get("health_message"),
+        "health_message": _bounded_text(response_data.get("health_message")),
         "decision": compact_decision,
         "metrics": compact_metrics,
         "summary": summary,

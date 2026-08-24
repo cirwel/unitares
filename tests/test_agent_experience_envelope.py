@@ -198,6 +198,7 @@ def test_sync_state_envelope_summarizes_decision_and_risk():
     assert env["risk_summary"].startswith("risk low")
     assert "recovery_hint" not in env  # healthy state stays quiet
     assert env["response_options"]["routine"] == "compact"
+    assert env["response_options"]["interpreted_summary"] == "standard"
     assert env["response_options"]["actionable_diagnostics"] == "mirror"
     assert env["_response_size"]["approx_bytes"] > 0
     assert env["_response_size"]["measured_without_self"] is True
@@ -348,17 +349,40 @@ def test_sync_state_compact_envelope_lifts_provisional_evidence_and_legacy_diagn
         ),
         "coherence": 0.49,
     }
+    # state_summary.coherence carries the same "not health-rated" badge inline
+    # (matching check_working_state's lite presentation of the same legacy
+    # field) instead of a bare float a reader has to cross-reference against
+    # legacy_diagnostics to interpret correctly.
+    assert env["state_summary"]["coherence"] == {
+        "value": 0.49,
+        "status": "⚪ legacy control feedback (not health-rated)",
+        "source": "legacy_tanh_v",
+        "role": "ode_control_feedback",
+    }
+
+
+def test_sync_state_envelope_coherence_stays_a_bare_float_when_not_legacy():
+    """Only the known-legacy tanh coherence gets the inline badge; an
+    ordinary coherence reading (no legacy source/role) is left as a plain
+    number, matching test_sync_state_envelope_summarizes_decision_and_risk."""
+    payload = {
+        "success": True,
+        "decision": {"action": "proceed"},
+        "metrics": {"coherence": 0.82, "risk_score": 0.21},
+    }
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert env["state_summary"]["coherence"] == 0.82
 
 
 @pytest.mark.parametrize(
     ("requested_mode", "resolved_mode"),
     (("minimal", "minimal"), ("standard", "standard"), ("interpreted", "standard")),
 )
-def test_legacy_modes_keep_action_and_cold_start_caveat(
+def test_filtered_modes_keep_action_and_cold_start_caveat(
     requested_mode: str,
     resolved_mode: str,
 ):
-    """Legacy skinny/interpreted modes must not erase verdict assurance."""
+    """Bare and interpreted summary modes must not erase verdict assurance."""
     source = {
         "success": True,
         "status": "healthy",
@@ -459,9 +483,25 @@ def test_sync_state_envelope_surfaces_discoveries():
             {"discovery_id": f"d{i}", "summary": f"finding {i}"} for i in range(5)
         ],
     }
-    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    env = build_experience_envelope(
+        "sync_state",
+        "process_agent_update",
+        payload,
+        {"include_memory_suggestions": True},
+    )
     assert len(env["memory_suggestions"]) == 3  # truncated
     assert env["memory_suggestions"][0]["discovery_id"] == "d0"
+
+
+def test_sync_state_envelope_omits_memory_suggestions_by_default():
+    payload = {
+        "success": True,
+        "relevant_discoveries": [
+            {"discovery_id": "d1", "summary": "prior work"},
+        ],
+    }
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert "memory_suggestions" not in env
 
 
 def test_metrics_envelope_maps_existing_friendly_fields():
@@ -561,13 +601,14 @@ def test_search_envelope_counts_and_suggests():
     assert env["memory_suggestions"][0]["summary"] == "prior art"
     assert env["memory_suggestions"][0]["status"] == "open"
     assert env["memory_suggestions"][0]["tags"] == ["response-ux"]
-    assert env["memory_suggestions"][0]["details_preview"] == "Bounded preview"
+    assert "details_preview" not in env["memory_suggestions"][0]
     assert env["state_summary"]["result_tier"] == "digest"
     assert env["state_summary"]["results_shown_in_digest"] == 1
     assert env["discovery_retrieval_options"]["current_tier"] == "digest"
     assert env["response_options"] == {
-        "current": "compact",
-        "digest": "compact",
+        "current": "lean",
+        "digest": "lean",
+        "diagnostic_digest": "compact",
         "complete_result_set": "full",
         "all_inline_details": "response_mode='full' + include_details=true",
     }
@@ -607,12 +648,52 @@ def test_compact_search_does_not_claim_details_it_omits():
     options = env["discovery_retrieval_options"]
     assert options["requested_tier"] == "full_inline"
     assert options["current_tier"] == "digest"
+    assert options["details_serialized"] is True
     assert options["details_included"] is False
     assert options["details_omitted_by"] == "response_mode='compact'"
     assert "response_mode='full'" in options["all_inline"]
     assert env["state_summary"]["result_tier"] == "digest"
     assert "details" not in env["memory_suggestions"][0]
     assert "raw_governance" not in env
+
+
+def test_compact_search_suppresses_details_before_serialization():
+    payload = {
+        "success": True,
+        "results": [{
+            "id": "d1",
+            "summary": "prior art",
+            "details_preview": "bounded preview",
+            "has_details": True,
+        }],
+        "total_count": 1,
+        "discovery_retrieval_options": {
+            "current_tier": "digest",
+            "digest": "include_details=false",
+            "open_one": "knowledge(action='details', discovery_id='...')",
+            "all_inline": "include_details=true (can be large)",
+        },
+    }
+    arguments = {
+        "response_mode": "compact",
+        "include_details": False,
+        "_friendly_search_detail_policy": "digest_before_serialization",
+        "_friendly_search_details_requested": True,
+    }
+
+    env = build_experience_envelope(
+        "search_shared_memory", "knowledge", payload, arguments
+    )
+
+    options = env["discovery_retrieval_options"]
+    assert options["current_tier"] == "digest"
+    assert options["requested_tier"] == "full_inline"
+    assert options["details_serialized"] is False
+    assert options["details_included"] is False
+    assert options["detail_policy"] == "digest_before_serialization"
+    assert options["details_omitted_by"] == (
+        "response_mode='compact' before serialization"
+    )
 
 
 def test_full_sync_state_reports_large_response_and_reduction_mode():
@@ -627,15 +708,22 @@ def test_full_sync_state_reports_large_response_and_reduction_mode():
         "sync_state",
         "process_agent_update",
         payload,
-        {"response_mode": "full"},
+        {"response_mode": "full", "include_memory_suggestions": True},
     )
 
     assert env["_response_size"]["size_class"] in {"medium", "large"}
     assert "response_mode='compact'" in env["_response_size"]["reduce_with"]
 
 
-def test_compact_sync_state_stays_small_with_large_audit_gates():
-    """Persisted self-contained gates must not turn compact into near-full."""
+@pytest.mark.parametrize(
+    ("mode", "wire_limit"),
+    (("compact", 4_000), ("standard", 6_000), ("interpreted", 6_000)),
+)
+def test_agent_summary_modes_stay_small_with_large_audit_gates(
+    mode: str,
+    wire_limit: int,
+):
+    """Persisted self-contained gates must not turn summaries into near-full."""
     gate = {
         "schema": "eisv.cold-start-confirmation.v1",
         "measurement_phase": "behavioral_ready",
@@ -695,19 +783,19 @@ def test_compact_sync_state_stays_small_with_large_audit_gates():
 
     formatted = format_response(
         deepcopy(source),
-        {"response_mode": "compact"},
+        {"response_mode": mode},
         task_type="feature",
     )
     env = build_experience_envelope(
         "sync_state",
         "process_agent_update",
         formatted,
-        {"response_mode": "compact"},
+        {"response_mode": mode},
     )
 
     wire_bytes = len(json.dumps(env, ensure_ascii=False).encode("utf-8"))
-    assert wire_bytes < 4_000
-    assert env["_response_size"]["size_class"] == "small"
+    assert wire_bytes < wire_limit
+    assert env["_response_size"]["size_class"] in {"small", "medium"}
     assert "policy_evaluation" not in formatted
     assert "enforcement" not in formatted
     assert "response_mode='full'" in formatted["_raw_available"]
@@ -727,6 +815,46 @@ def test_search_envelope_full_escape_hatch_preserves_raw_payload():
     )
     assert env["raw_governance"] is payload
     assert "raw_governance_available" not in env
+    # raw_governance.discoveries is already the full result set; a trimmed
+    # top-N copy under memory_suggestions would just serialize the same
+    # results twice in the same response.
+    assert "memory_suggestions" not in env
+    assert env["raw_governance"]["discoveries"][0]["summary"] == "prior art"
+
+
+def test_search_envelope_compact_mode_keeps_memory_suggestions():
+    """The dedup only applies once raw_governance is actually attached —
+    the default compact path still needs memory_suggestions as its only
+    view of the results."""
+    payload = {
+        "success": True,
+        "count": 1,
+        "discoveries": [{"id": "d1", "summary": "prior art"}],
+    }
+    env = build_experience_envelope("search_shared_memory", "knowledge", payload)
+    assert "raw_governance" not in env
+    assert env["memory_suggestions"][0]["summary"] == "prior art"
+
+
+def test_metrics_envelope_full_mode_keeps_memory_suggestions():
+    """Knowledge-search dedup does not suppress an explicit check-in recall
+    opt-in, even when the check-in also requests the full governance payload."""
+    payload = {
+        "success": True,
+        "decision": {"action": "proceed"},
+        "metrics": {"coherence": 0.6, "risk_score": 0.2},
+        "relevant_discoveries": {
+            "discoveries": [{"discovery_id": "d1", "summary": "prior art"}],
+        },
+    }
+    env = build_experience_envelope(
+        "sync_state",
+        "process_agent_update",
+        payload,
+        {"response_mode": "full", "include_memory_suggestions": True},
+    )
+    assert env["raw_governance"] is payload
+    assert env["memory_suggestions"][0]["summary"] == "prior art"
 
 
 def test_search_envelope_promotes_low_confidence():
@@ -879,11 +1007,58 @@ def test_record_result_envelope_lifts_outcome():
     assert "state_semantics" not in env["state_summary"]["working_state"]
 
 
-def test_request_review_envelope_threads_session_id():
-    payload = {"success": True, "session_id": "sess-42", "phase": "thesis"}
+def test_request_review_envelope_preserves_saved_brief_next_call():
+    payload = {
+        "success": True,
+        "session_id": "sess-42",
+        "phase": "thesis",
+        "whose_move": "YOURS — your thesis is owed; the saved brief can be reused",
+        "next_call": (
+            "dialectic(action='thesis', session_id='sess-42', "
+            "use_brief_as_thesis=true)"
+        ),
+    }
     env = build_experience_envelope("request_review", "dialectic", payload)
     assert "sess-42" in env["next_action"]
+    assert "use_brief_as_thesis=true" in env["next_action"]
     assert env["state_summary"]["phase"] == "thesis"
+    assert env["state_summary"]["whose_move"].startswith("YOURS")
+
+
+def test_request_review_envelope_does_not_reopen_resolved_one_call_review():
+    payload = {
+        "success": True,
+        "session_id": "sess-resolved",
+        "phase": "resolved",
+        "one_call_review": True,
+        "thesis_source": "issue_description",
+        "review_verdict": "resume",
+        "whose_move": "nobody — review resolved in this call",
+    }
+
+    env = build_experience_envelope("request_review", "dialectic", payload)
+
+    assert "resolved" in env["next_action"]
+    assert "action='thesis'" not in env["next_action"]
+    assert env["state_summary"]["review_verdict"] == "resume"
+    assert env["state_summary"]["thesis_source"] == "issue_description"
+
+
+def test_request_review_envelope_preserves_reviewer_wait_guidance():
+    payload = {
+        "success": True,
+        "session_id": "sess-reviewer",
+        "phase": "antithesis",
+        "whose_move": (
+            "the reviewer's — an independent reviewer was spawned; poll "
+            "dialectic(action='get', session_id='sess-reviewer')"
+        ),
+    }
+
+    env = build_experience_envelope("request_review", "dialectic", payload)
+
+    assert "reviewer" in env["next_action"]
+    assert "action='thesis'" not in env["next_action"]
 
 
 # ---------------------------------------------------------------------------
