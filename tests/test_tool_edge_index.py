@@ -15,6 +15,8 @@ an independent path to the same truth. If the closure read breaks, the two
 disagree.
 """
 
+import copy
+import json
 import pathlib
 import subprocess
 import sys
@@ -31,6 +33,11 @@ import tool_edge_index as tei  # noqa: E402
 @pytest.fixture(scope="module")
 def collected():
     return tei.collect()
+
+
+@pytest.fixture(scope="module")
+def audit_snapshot(collected):
+    return tei.build_audit_snapshot(*collected)
 
 
 def test_every_registered_tool_is_indexed(collected):
@@ -95,6 +102,96 @@ def test_render_is_deterministic(collected):
     assert tei.render(*collected) == tei.render(*collected)
 
 
+def test_dual_snapshot_contract_is_content_addressed(audit_snapshot):
+    assert audit_snapshot["schema"] == tei.AUDIT_SCHEMA
+    assert audit_snapshot["dispatch"]["schema"] == tei.DISPATCH_SCHEMA
+    assert audit_snapshot["exposure"]["schema"] == tei.EXPOSURE_SCHEMA
+    assert tei.verify_content_hash(audit_snapshot)
+    assert tei.verify_content_hash(audit_snapshot["dispatch"])
+    assert tei.verify_content_hash(audit_snapshot["exposure"])
+    assert audit_snapshot["summary"]["self_certifying"] is False
+    source_files = audit_snapshot["dispatch"]["source_files"]
+    assert source_files
+    assert (
+        tei.content_hash(source_files) == audit_snapshot["dispatch"]["source_revision"]
+    )
+    assert all(entry["content_hash"].startswith("sha256:") for entry in source_files)
+
+
+def test_snapshot_matches_versioned_json_schema(audit_snapshot):
+    jsonschema = pytest.importorskip("jsonschema")
+    schema = json.loads(tei.JSON_SCHEMA.read_text(encoding="utf-8"))
+    jsonschema.Draft202012Validator.check_schema(schema)
+    jsonschema.Draft202012Validator(schema).validate(audit_snapshot)
+
+
+def test_exposure_snapshot_uses_the_production_registration_path(audit_snapshot):
+    from src.mcp_handlers.tool_stability import AGENT_WORKFLOW_ALIASES
+    from src.tool_modes import LITE_MODE_TOOLS
+
+    exposure = audit_snapshot["exposure"]
+    assert not exposure["collection_failures"]
+    assert set(exposure["modes"]["lite"]["advertised"]) == LITE_MODE_TOOLS
+    assert {tool["name"] for tool in exposure["tools"]} == set(
+        exposure["modes"]["full"]["advertised"]
+    )
+    alias_views = {
+        tool["name"]: tool
+        for tool in exposure["tools"]
+        if tool["kind"] == "workflow_alias"
+    }
+    assert set(alias_views) == set(AGENT_WORKFLOW_ALIASES)
+
+
+def test_mode_differences_partition_declared_and_advertised(audit_snapshot):
+    for mode in audit_snapshot["exposure"]["modes"].values():
+        declared = set(mode["declared"])
+        advertised = set(mode["advertised"])
+        assert set(mode["declared_only"]) == declared - advertised
+        assert set(mode["advertised_only"]) == advertised - declared
+        assert (
+            tei.content_hash(
+                {
+                    "declared": mode["declared"],
+                    "advertised": mode["advertised"],
+                    "declared_only": mode["declared_only"],
+                    "advertised_only": mode["advertised_only"],
+                }
+            )
+            == mode["content_hash"]
+        )
+
+
+def test_action_injecting_aliases_do_not_expose_action_on_the_wire(audit_snapshot):
+    alias_views = [
+        tool
+        for tool in audit_snapshot["exposure"]["tools"]
+        if tool["kind"] == "workflow_alias" and tool["inject_action"]
+    ]
+    assert alias_views
+    assert all("action" not in tool["wire_properties"] for tool in alias_views)
+
+    # Introspection currently resolves the alias to its canonical schema. The
+    # audit records that mismatch instead of silently treating the two surfaces
+    # as equivalent; request_review is the smallest concrete regression guard.
+    request_review = next(
+        tool for tool in alias_views if tool["name"] == "request_review"
+    )
+    assert "action" in request_review["describe_only_properties"]
+    assert any(
+        finding["code"] == "DESCRIBE_SCHEMA_WIDER_THAN_WIRE"
+        and finding["subject"] == "request_review"
+        for finding in audit_snapshot["findings"]
+    )
+
+
+def test_snapshot_hash_detects_evidence_mutation(audit_snapshot):
+    mutated = copy.deepcopy(audit_snapshot)
+    mutated["exposure"]["modes"]["lite"]["advertised"].append("invented_tool")
+    assert not tei.verify_content_hash(mutated)
+    assert not tei.verify_content_hash(mutated["exposure"])
+
+
 def test_committed_index_is_fresh():
     """The checked-in doc must match what the standalone generator produces.
 
@@ -112,7 +209,11 @@ def test_committed_index_is_fresh():
     pollution-invariant.
     """
     result = subprocess.run(
-        [sys.executable, str(REPO / "scripts" / "dev" / "tool_edge_index.py"), "--check"],
+        [
+            sys.executable,
+            str(REPO / "scripts" / "dev" / "tool_edge_index.py"),
+            "--check",
+        ],
         capture_output=True,
         text=True,
         cwd=str(REPO),
