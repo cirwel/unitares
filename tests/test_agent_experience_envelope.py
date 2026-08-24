@@ -316,6 +316,29 @@ def test_sync_state_compact_envelope_lifts_provisional_evidence_and_legacy_diagn
         ),
         "coherence": 0.49,
     }
+    # state_summary.coherence carries the same "not health-rated" badge inline
+    # (matching check_working_state's lite presentation of the same legacy
+    # field) instead of a bare float a reader has to cross-reference against
+    # legacy_diagnostics to interpret correctly.
+    assert env["state_summary"]["coherence"] == {
+        "value": 0.49,
+        "status": "⚪ legacy control feedback (not health-rated)",
+        "source": "legacy_tanh_v",
+        "role": "ode_control_feedback",
+    }
+
+
+def test_sync_state_envelope_coherence_stays_a_bare_float_when_not_legacy():
+    """Only the known-legacy tanh coherence gets the inline badge; an
+    ordinary coherence reading (no legacy source/role) is left as a plain
+    number, matching test_sync_state_envelope_summarizes_decision_and_risk."""
+    payload = {
+        "success": True,
+        "decision": {"action": "proceed"},
+        "metrics": {"coherence": 0.82, "risk_score": 0.21},
+    }
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert env["state_summary"]["coherence"] == 0.82
 
 
 def test_sync_state_envelope_no_caveat_when_baseline_warm():
@@ -517,6 +540,48 @@ def test_search_envelope_full_escape_hatch_preserves_raw_payload():
     )
     assert env["raw_governance"] is payload
     assert "raw_governance_available" not in env
+    # raw_governance.discoveries is already the full result set; a trimmed
+    # top-N copy under memory_suggestions would just serialize the same
+    # results twice in the same response.
+    assert "memory_suggestions" not in env
+    assert env["raw_governance"]["discoveries"][0]["summary"] == "prior art"
+
+
+def test_search_envelope_compact_mode_keeps_memory_suggestions():
+    """The dedup only applies once raw_governance is actually attached —
+    the default compact path still needs memory_suggestions as its only
+    view of the results."""
+    payload = {
+        "success": True,
+        "count": 1,
+        "discoveries": [{"id": "d1", "summary": "prior art"}],
+    }
+    env = build_experience_envelope("search_shared_memory", "knowledge", payload)
+    assert "raw_governance" not in env
+    assert env["memory_suggestions"][0]["summary"] == "prior art"
+
+
+def test_metrics_envelope_full_mode_keeps_memory_suggestions():
+    """The dedup is scoped to knowledge search specifically — other tools
+    that surface relevant_discoveries alongside a full raw_governance payload
+    (e.g. sync_state) are unaffected; their raw_governance isn't a duplicate
+    of memory_suggestions."""
+    payload = {
+        "success": True,
+        "decision": {"action": "proceed"},
+        "metrics": {"coherence": 0.6, "risk_score": 0.2},
+        "relevant_discoveries": {
+            "discoveries": [{"discovery_id": "d1", "summary": "prior art"}],
+        },
+    }
+    env = build_experience_envelope(
+        "sync_state",
+        "process_agent_update",
+        payload,
+        {"response_mode": "full"},
+    )
+    assert env["raw_governance"] is payload
+    assert env["memory_suggestions"][0]["summary"] == "prior art"
 
 
 def test_search_envelope_promotes_low_confidence():

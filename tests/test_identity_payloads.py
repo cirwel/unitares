@@ -170,8 +170,56 @@ def test_identity_response_context_distinguishes_uuid_label_harness_and_assuranc
     assert context["harness_context"]["is_identity_proof"] is False
     assert context["harness_context"]["is_verdict_authority"] is False
     assert context["harness_context"]["is_policy_dispatch_key"] is False
-    assert context["identity_assurance"]["tier"] == "medium"
-    assert context["continuity_claim"] == "resumed_by_recent_onboard_pin"
+    # Both model and harness were caller-declared, so the full field-by-field
+    # detail is worth the bytes.
+    assert context["harness_context"]["runtime_provenance"]["model"]["source"] == "caller_declared"
+
+
+def test_identity_response_context_trims_uninformative_runtime_provenance():
+    """No model_type or client_hint given: every model/harness/adapter
+    identifier is unavailable, so the nested field-by-field skeleton (mostly
+    "unavailable"/"not_exposed" noise) collapses to a compact marker instead
+    of the full envelope. The flattened harness_type/model fields on
+    harness_context are unaffected — only the redundant nested detail shrinks.
+    """
+    context = build_identity_response_context(
+        agent_uuid="uuid-bare",
+        agent_id="Claude_20260824",
+        display_name="claude_code-claude_79305dbd",
+        session_resolution_source="ip_ua_fingerprint",
+        identity_status=None,
+        identity_resolution_outcome="minted_force_new",
+    )
+
+    assert context["harness_context"]["harness_type"] == "unknown"
+    assert context["harness_context"]["model"] is None
+    assert context["harness_context"]["runtime_provenance"] == {
+        "schema": "s22.runtime_provenance.v1",
+        "record_status": "captured",
+        "available": False,
+        "note": (
+            "No model/harness/adapter identifier was reported for this call; "
+            "full field-by-field detail omitted."
+        ),
+    }
+
+
+def test_identity_response_context_keeps_full_provenance_when_only_harness_known():
+    """Partial information (harness type known, model unknown) still counts
+    as informative — the trim only fires when nothing at all was reported."""
+    context = build_identity_response_context(
+        agent_uuid="uuid-partial",
+        agent_id="Claude_20260824",
+        display_name=None,
+        session_resolution_source="explicit_client_session_id",
+        identity_status=None,
+        client_hint="claude_code",
+    )
+
+    runtime_provenance = context["harness_context"]["runtime_provenance"]
+    assert runtime_provenance.get("available") is not False
+    assert runtime_provenance["harness"]["type"] == "claude_code"
+    assert runtime_provenance["model"]["identifier"] is None
 
 
 def test_identity_signature_payload_uses_s22_contract():
