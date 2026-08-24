@@ -384,3 +384,133 @@ def test_the_printed_threshold_is_the_full_sample_quantile(sf):
 
     calib, _ = sf.split_sample(safe, seed=0)
     assert f"= {sf.pct(calib, 0.99):.2f}" not in lines.split("held-out")[0]
+
+
+# --- second blocking review: three claims the output made that its own -------
+# --- implementation did not support -----------------------------------------
+#
+# All three were reproduced before being fixed. They share the shape this module
+# exists to catch: a printed claim computed by a different path than the value
+# printed beside it.
+
+
+def _quantile_report(sf, safe, non_safe, quantile=0.99):
+    return "\n".join(sf.separation_report(safe, non_safe, quantile=quantile))
+
+
+def _policy_report(sf, safe, non_safe, threshold):
+    return "\n".join(sf.separation_report(safe, non_safe, threshold=threshold))
+
+
+# 1. the dependence caveat existed only where no operator would read it
+
+def test_policy_mode_prints_the_dependence_caveat_not_just_the_interval(sf):
+    """The docstring carried it; the report did not.
+
+    Worse than silence: the report told the reader to prefer the upper bound
+    over the point estimate, while never saying that bound is itself optimistic
+    under the autocorrelation these rows are known to carry.
+    """
+    text = _policy_report(sf, [float(i) for i in range(200)], [250.0] * 10, threshold=180.0)
+    assert "one-sided 95% upper bound" in text
+    low = text.lower()
+    assert "independent" in low
+    assert "autocorrelated" in low
+    assert "anti-conservative" in low
+    assert "floor on the uncertainty" in low
+
+
+def test_the_reader_meets_the_caveat_before_the_verdict(sf):
+    """Ordering is the whole point: a caveat printed after the conclusion is
+    decoration. It has to sit between the interval it qualifies and the
+    SEPARATES/WEAK line a reader would stop at."""
+    text = _policy_report(sf, [float(i) for i in range(200)], [250.0] * 10, threshold=180.0)
+    assert text.index("upper bound") < text.index("CAVEAT") < text.index("→")
+
+
+# 2. "EXACT distribution-free" is false when residuals tie
+
+def test_all_tied_residuals_do_not_claim_an_exact_exceedance(sf):
+    """safe=[1.0]*100 observed 0/50 while claiming an EXACT 2.0%.
+
+    The rank derivation orders m+1 exchangeable draws, which needs a strict
+    total order. Under the strict `>` at the call site every tie at the
+    threshold falls on the non-exceeding side, so the realized rate lands at or
+    below the rank value — an upper bound, never an equality.
+    """
+    text = _quantile_report(sf, [1.0] * 100, [])
+    assert "EXACT distribution-free" not in text
+    assert "TIE-DEGRADED" in text
+    assert "UPPER BOUND" in text
+    # and it must say the observed shortfall is expected rather than a finding
+    assert "expected, not evidence" in text
+
+
+def test_ties_anywhere_in_the_safe_set_degrade_the_claim(sf):
+    """Not only the all-tied extreme: one duplicate is enough to break equality."""
+    safe = [float(i) for i in range(150)]
+    safe[7] = safe[8]                       # a single tie
+    assert "TIE-DEGRADED" in _quantile_report(sf, safe, [])
+
+
+def test_distinct_residuals_keep_the_exact_claim(sf):
+    """The guarantee is real for a.s.-distinct values; the fix must not blunt it."""
+    text = _quantile_report(sf, [float(i) for i in range(150)], [])
+    assert "EXACT distribution-free" in text
+    assert "TIE-DEGRADED" not in text
+
+
+def test_the_tie_note_is_absent_when_there_is_nothing_to_note(sf):
+    assert "UPPER BOUND" not in _quantile_report(sf, [float(i) for i in range(150)], [])
+
+
+# 3. the verdict compared against the nominal rate, not the realized one
+
+def test_quantile_mode_reports_the_rate_the_threshold_actually_realizes(sf):
+    """n=150 at q=0.99 interpolates between the 148th and 149th order statistics,
+    so two of 150 exceed it — 1.333%, not the nominal 1.000%."""
+    text = _quantile_report(sf, [float(i) for i in range(150)], [])
+    assert "1.3% (2/150)" in text
+    assert "REALIZED on this sample" in text
+    # the nominal is still shown, as the target it missed
+    assert "Nominal target was 1.0%" in text
+
+
+def test_the_nominal_rate_no_longer_drives_the_separation_verdict(sf):
+    """The reviewer's counterexample, which flipped the verdict on its own.
+
+    7/200 non-safe flagged is 3.5%. Against the nominal 1% that clears the 3x
+    multiple and printed SEPARATES; against the realized 1.333% it is 2.6x,
+    which is WEAK. The printed ratio also has to agree with the printed counts.
+    """
+    safe = [float(i) for i in range(150)]
+    thr = sf.pct(safe, 0.99)
+    non_safe = [thr + 1.0] * 7 + [0.0] * 193
+    text = _quantile_report(sf, safe, non_safe)
+
+    assert "WEAK" in text
+    assert "SEPARATES" not in text
+    assert "2.6x" in text
+    assert "3.5000% / 1.3333%" in text     # the ratio reproduces from the page
+
+
+def test_a_genuinely_separating_residual_still_reads_as_separating(sf):
+    """The fix must not make SEPARATES unreachable — that would be the same
+    defect class inverted: a verdict with a branch nothing can take."""
+    safe = [float(i) for i in range(150)]
+    thr = sf.pct(safe, 0.99)
+    non_safe = [thr + 1.0] * 60 + [0.0] * 140      # 30%, far above 3 x 1.333%
+    text = _quantile_report(sf, safe, non_safe)
+    assert "SEPARATES" in text
+    assert "WEAK" not in text
+
+
+def test_a_zero_realized_rate_yields_no_ratio_rather_than_a_verdict(sf):
+    """All-tied safe values realize 0%, and a ratio against 0 is undefined.
+
+    This must reach the UNDEFINED branch rather than dividing, and must not be
+    reported as a pass.
+    """
+    text = _quantile_report(sf, [1.0] * 100, [5.0] * 40)
+    assert "UNDEFINED" in text
+    assert "SEPARATES" not in text

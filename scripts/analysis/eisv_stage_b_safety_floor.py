@@ -134,6 +134,12 @@ def conformal_exceedance(n_calib: int, quantile: float) -> float:
     heavy-tailed AND a bounded distribution, not just a gaussian. At m=99 theory
     1.0000% vs gaussian 1.0230%, Pareto a=0.5 1.0301%, uniform 1.0301%; at m=200
     theory 0.9950% vs 1.0070 / 1.0088 / 1.0088.
+
+    ASSUMES A.S.-DISTINCT VALUES. Ranking m+1 exchangeable draws needs a strict
+    total order; residuals tie in practice, and under the strict `>` used at the
+    call site every tie at the threshold counts as non-exceeding. With ties this
+    number is an UPPER BOUND on exceedance rather than an equality -- the
+    all-tied sample realizes 0.
     """
     m = max(1, n_calib)
     return 1.0 - conformal_rank(m, quantile) / (m + 1)
@@ -265,14 +271,42 @@ def separation_report(safe, non_safe, seed=0, quantile=0.99, threshold=None):
                    "safe distribution, so the rate is free to come out anywhere.")
         out.append("  Read the upper bound, not the point estimate, before treating it "
                    "as one.")
+        # The caveat used to live only in `clopper_pearson_upper`'s docstring,
+        # where no operator reading this report would ever see it -- while the
+        # line directly above pointed at the interval as the number to trust.
+        # Directing a reader to a bound without saying the bound is optimistic
+        # is worse than printing the point estimate alone.
+        out.append("  CAVEAT: that interval assumes INDEPENDENT trials. These are "
+                   "longitudinal per-agent\n  check-ins and this repo measures them as "
+                   "strongly autocorrelated (previous-outcome\n  baseline predicts the "
+                   "next at AUC ~0.94), so the effective sample is smaller than\n  "
+                   f"n={len(safe)} and the interval is ANTI-CONSERVATIVE: the true bound "
+                   "is WIDER than\n  the one printed. Treat it as a floor on the "
+                   "uncertainty, not the uncertainty.")
         measured_fp = fp
     else:
         thr = pct(safe, quantile)
         definitional = 1.0 - quantile
+        # The rate this threshold ACTUALLY realizes on this sample. The nominal
+        # 1-q is what an interpolated quantile aims at, not what it hits: with
+        # n=150 at q=0.99 the interpolation lands between the 148th and 149th
+        # order statistics, so two of 150 exceed it -- 1.333%, not 1.000%. The
+        # gap is discreteness, and under ties it runs the other way (all-equal
+        # residuals put NOTHING above the threshold, realizing 0%).
+        #
+        # Printing the nominal while the sample realizes something else made the
+        # separation ratio arithmetically false, and it could flip the verdict:
+        # 7/200 non-safe flagged is 3.5%, which clears 3x the nominal 1% and
+        # prints SEPARATES, but is only 2.6x the realized 1.333% -- WEAK.
+        realized_k = sum(1 for z in safe if z > thr)
+        realized_fp = realized_k / len(safe)
         out.append(f"\nThreshold = p{quantile * 100:g} of the safe check-ins "
                    f"(n={len(safe)}) = {thr:.2f}")
-        out.append(f"  false-positive rate among currently-safe: {definitional:.1%} "
-                   "BY CONSTRUCTION, not measured.")
+        out.append(f"  false-positive rate among currently-safe: {realized_fp:.1%} "
+                   f"({realized_k}/{len(safe)}) — REALIZED on this sample, and "
+                   f"definitional,\n  not measured: the threshold came from these same "
+                   f"values. Nominal target was {definitional:.1%};\n  the difference is "
+                   "the discreteness of a finite sample (and ties, which push it to 0).")
         out.append("  A threshold defined as a quantile of the safe distribution fixes "
                    "its own false-positive\n  rate on that distribution. This mode "
                    "CANNOT bound regression risk; pass --threshold with a\n  "
@@ -303,6 +337,23 @@ def separation_report(safe, non_safe, seed=0, quantile=0.99, threshold=None):
             held = held_k / len(holdout)
             k = conformal_rank(len(calib), quantile)
             exact = conformal_exceedance(len(calib), quantile)
+            # The rank guarantee is EXACT only for a.s.-distinct values. The
+            # derivation ranks m+1 exchangeable draws and reads off the chance
+            # the new one lands above rank k -- which needs a strict total
+            # order. Residuals tie in practice (a warmed-up agent sitting on its
+            # baseline emits the same z repeatedly), and with the strict `>`
+            # comparison used here every tie at the threshold falls on the
+            # non-exceeding side, so the realized rate comes in AT OR BELOW the
+            # rank value. safe=[1.0]*100 is the extreme: 0/50 observed against a
+            # "2.0% EXACT" claim. Ties make it an upper bound, not an equality.
+            distinct = len(set(calib)) == len(calib) and len(set(holdout)) == len(holdout)
+            claim = "an EXACT distribution-free" if distinct else "a TIE-DEGRADED"
+            tie_note = ("" if distinct else
+                        f"\n   NB residuals TIE in this sample, so the rank guarantee is "
+                        f"an UPPER BOUND, not an\n   equality: ties at the threshold fall "
+                        f"below a strict `>`, so the realized rate sits at\n   or under "
+                        f"{exact:.1%}. Observing less than {exact:.1%} here is expected, "
+                        f"not evidence of anything.")
             note = ""
             if len(calib) < CONFORMAL_MIN_CALIB(quantile):
                 note = (f"\n   NB m={len(calib)} < {CONFORMAL_MIN_CALIB(quantile)}: no "
@@ -311,10 +362,10 @@ def separation_report(safe, non_safe, seed=0, quantile=0.99, threshold=None):
                         f"the exceedance is 1/(m+1) = {exact:.1%}, not "
                         f"{1 - quantile:.1%}.")
             out.append(f"  (held-out check on a disjoint half: {held:.1%} "
-                       f"({held_k}/{len(holdout)}) against an EXACT "
-                       f"distribution-free\n   exceedance of {exact:.1%} — the "
+                       f"({held_k}/{len(holdout)}) against {claim}"
+                       f"\n   exceedance of {exact:.1%} — the "
                        f"{k}th of m={len(calib)} order statistics, 1 - {k}/{len(calib) + 1}. "
-                       f"Still not a regression bound.{note})")
+                       f"Still not a regression bound.{tie_note}{note})")
         measured_fp = None
 
     if not non_safe:
@@ -340,8 +391,14 @@ def separation_report(safe, non_safe, seed=0, quantile=0.99, threshold=None):
     # Compare against a rate that was actually measured. The old form floored fp
     # at 0.01 -- the same constant the identity produced -- so the comparison
     # never saw a real false-positive rate at all.
-    ref = measured_fp if measured_fp is not None else (1.0 - quantile)
-    ref_kind = "measured" if measured_fp is not None else "definitional"
+    # In quantile mode the reference is the rate the PRINTED threshold realizes
+    # on the safe set -- not the nominal 1-q it was aiming at. Substituting the
+    # nominal made the printed ratio disagree with the printed counts and could
+    # flip SEPARATES/WEAK on its own (see the worked case above).
+    if measured_fp is not None:
+        ref, ref_kind = measured_fp, "measured"
+    else:
+        ref, ref_kind = realized_fp, "realized definitional"
     # The multiple is computed on unrounded rates while the rates render at
     # {:.1%}, so a printed "0.1%" and "0.3%" could carry a "6.0x" that no number
     # on the page reproduces. The counts above now make the multiple checkable;
