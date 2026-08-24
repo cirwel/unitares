@@ -270,11 +270,34 @@ flagged change.
    as a telemetry field. Cleanest expression of axiom 2 (Φ is the RLHF/
    punish-toward-ideal shape), and now *evidenced safe*: the Stage-B safety-floor
    probe (`scripts/analysis/eisv_stage_b_safety_floor.py`, 2026-06-25) shows
-   currently-safe agents at residual p99≈6.8 vs caution ≈10 — clean separation,
-   ~1% regression floor — so demoting Φ doesn't strand healthy agents. (NB:
+   currently-safe agents at residual p99≈6.8 vs caution ≈10 — clean separation —
+   so demoting Φ doesn't strand healthy agents. (NB:
    supersedes the *purpose* of the A.2 coupling — once Φ is telemetry, keeping
    its verdict invariant is moot; A.2 stays correct as the interim while Φ still
    gates, i.e. until this lands.)
+
+> **Evidence correction, 2026-08-24 — one cited number withdrawn, the decision
+> unchanged.** Decision 0 above previously read "clean separation, ~1% regression
+> floor". The "~1% regression floor" is **withdrawn**: it was not a measurement.
+> The probe computed it as the fraction of the safe sample lying above that same
+> sample's own 99th percentile, which is ~1% for any input whatsoever — the
+> definition of a percentile, not a property of the residual. Across normal,
+> heavy-tailed and bimodal draws at n=200 and n=2000 it returns exactly 1.000%
+> every time. Repaired in #1856 and #1862.
+>
+> **This does not weaken decision 0, and the direction matters.** The withdrawn
+> number *overstated* regression risk — a real regression bound would have been
+> free to come out lower — so it argued mildly *against* demoting Φ. Removing it
+> removes a conservative figure, not a supporting one.
+>
+> What the decision actually rests on is the separation that is still quoted and
+> still reproducible: safe-verdict residual p99≈6.8 sits below the caution mass
+> at ≈10. That comparison was never the defective quantity.
+>
+> Nothing here re-opens or re-decides decision 0, which remains the operator's as
+> recorded on 2026-06-25. This note corrects a citation, and is filed because an
+> evidence chain should not be treated as repaired while it still quotes a
+> withdrawn figure.
 
 1. **Resident ground truth = "whatever we can."** No canonical per-resident
    source required; take every exogenous signal and tier it (§7): Watcher
