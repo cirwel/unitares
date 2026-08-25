@@ -486,13 +486,36 @@ class DialecticDB:
             return row["message_id"] if row else 0
 
     async def is_agent_in_active_session(self, agent_id: str) -> bool:
-        """Check if agent is in an active session."""
+        """Check if agent is in an active session.
+
+        Terminal on EITHER column. `status` alone is not sufficient here:
+        Python may not write terminal status at all — `TERMINAL_WRITE_GUARD`
+        and dialectic_saga.ex reserve both terminal transitions for BEAM — so
+        the lazy synthesis-timeout path calls `update_session_phase('failed')`,
+        which by design sets `phase` and leaves `status` untouched. That leaves
+        a real row shape of `status='active', phase='failed'`: a session that
+        is over, whose status write has not landed yet.
+
+        Reading `status` alone treated that shape as active and refused the
+        agent a new session with SESSION_EXISTS. The auto-resolve sweeper only
+        considers sessions inactive for more than two hours, so the refusal
+        persisted for up to that long after a 1.4h synthesis timeout had
+        already ended the session — roughly 3.4h of lockout per abandonment.
+        `self_recovery` does not clear it (it resumes the agent, not the
+        session) and `reopen_session` cannot (it requires
+        `awaiting_facilitation`, false for manually requested reviews).
+
+        Adding the phase predicate cannot hide a live session: `reopen_session`
+        is the only path out of a terminal state and it refuses to set a
+        terminal phase, so a revived row always carries a workable one.
+        """
         await self._ensure_pool()
         async with compatible_acquire(self._pool) as conn:
             row = await conn.fetchrow("""
                 SELECT 1 FROM core.dialectic_sessions
                 WHERE (paused_agent_id = $1 OR reviewer_agent_id = $1)
                 AND status NOT IN ('resolved', 'failed', 'timeout', 'abandoned')
+                AND phase NOT IN ('resolved', 'failed')
                 LIMIT 1
             """, agent_id)
             return row is not None
