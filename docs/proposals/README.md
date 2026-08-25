@@ -74,6 +74,7 @@ The ADR-001 thread: do not enable operator-vision delegation as first proposed; 
 | [`accountable-testbed-metrics-preregistration-v0.md`](accountable-testbed-metrics-preregistration-v0.md) | Frozen evaluation pre-registration for the accountable multi-principal testbed |
 | [`accountable-testbed-metrics-preregistration-v1.md`](accountable-testbed-metrics-preregistration-v1.md) | Frozen v1.1 evaluation contract for future headline, ablation, and scale-sweep runs; the document merge did not execute those runs |
 | [`accountable-testbed-preliminary-trace.md`](accountable-testbed-preliminary-trace.md) | Preliminary deployed-system trace exercising the federation primitives; explicitly not a multi-host or multi-organization result |
+| [`orientation-constraint-set-preregistration-v0.md`](orientation-constraint-set-preregistration-v0.md) | Frozen protocol candidate for a paired, information-matched test of a temporary read-only diagnostic constraint set; no durable self-schema or runtime surface is authorized |
 
 ## Resolved — relocated to [`resolved/`](resolved/)
 
