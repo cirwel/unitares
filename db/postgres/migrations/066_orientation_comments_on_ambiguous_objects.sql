@@ -64,4 +64,8 @@ COMMENT ON COLUMN audit.events.raw_hash IS
 COMMENT ON COLUMN audit.events.event_type IS
 'Dotted or underscored family name. Values ending in _shadow (coherence_gate_shadow, grounding_shadow, basin_shadow) are EVALUATIONS THAT NEVER ACTUATE -- a gate computing what it would have done while a signal is under repair. Shadow volume runs orders of magnitude above actuation volume, so a rate computed with a shadow denominator reads as "operationally inert" while the system is actively intervening. Actuation lives in circuit_breaker_trip and lifecycle_paused here, and in core.dialectic_sessions (paused_agent_id IS NOT NULL) for review pauses. These are four distinct populations with four different counts; name the stream before quoting a pause rate.';
 
+INSERT INTO core.schema_migrations (version, name, applied_at)
+VALUES (66, 'orientation_comments_on_ambiguous_objects', NOW())
+ON CONFLICT (version) DO NOTHING;
+
 COMMIT;
