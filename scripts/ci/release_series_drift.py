@@ -40,7 +40,18 @@ VERSION_FILE = REPO_ROOT / "VERSION"
 SERIES = [
     {
         "name": "unitares-sdk",
-        "paths": ["agents/sdk"],
+        # agents/sdk/README.md is excluded on purpose, not because it is
+        # harmless to PyPI — it IS the package's rendered project page
+        # (pyproject.toml `readme = "README.md"`) — but because one of its
+        # lines is a cross-reference to the SERVER's own release tag ("install
+        # the SDK as it shipped with server release vX.Y.Z"), which every
+        # server release updates regardless of whether SDK code moved. Without
+        # this exclusion that update alone reads as an unbumped SDK change on
+        # every single server release, forever. A genuine SDK-facing README
+        # edit (API docs, usage examples) still needs a human to notice and
+        # bump the version — this narrows what CI enforces automatically, it
+        # does not change what a careful author owes the PyPI page.
+        "paths": ["agents/sdk", ":(exclude)agents/sdk/README.md"],
         "tag_pattern": r"sdk-v\d+\.\d+\.\d+",
         "tag_glob": "refs/tags/sdk-v*",
         "tag_prefix": "sdk-v",
