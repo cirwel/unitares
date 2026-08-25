@@ -971,6 +971,29 @@ class TestIsAgentInActiveSession:
         assert result is True
 
     @pytest.mark.asyncio
+    async def test_excludes_terminal_phase_not_only_terminal_status(self, db):
+        """The guard must be terminal on EITHER column, not on status alone.
+
+        Python may not write terminal status (TERMINAL_WRITE_GUARD reserves both
+        terminal transitions for BEAM), so the synthesis-timeout path sets
+        phase='failed' and leaves status='active'. Reading status alone treated
+        that finished session as active and locked the agent out of opening a
+        new one until the >2h auto-resolve sweeper reaped it.
+
+        Asserting on the SQL because the shape only exists inside that window --
+        a point-in-time integration query almost always returns zero rows and
+        would let this regress silently.
+        """
+        instance, pool, conn = db
+        conn.fetchrow = AsyncMock(return_value=None)
+
+        await instance.is_agent_in_active_session("agent-A")
+
+        sql = " ".join(conn.fetchrow.call_args[0][0].split())
+        assert "status NOT IN ('resolved', 'failed', 'timeout', 'abandoned')" in sql
+        assert "phase NOT IN ('resolved', 'failed')" in sql
+
+    @pytest.mark.asyncio
     async def test_agent_in_active_session_false(self, db):
         """is_agent_in_active_session returns False when no row."""
         instance, pool, conn = db
