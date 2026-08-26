@@ -186,7 +186,14 @@ This repo's version of that lesson is already written down as the four states a
 zero cannot distinguish. Here the mitigation is available and theirs was not:
 the transcripts *can* be read, by the operator, on a sample. That is Phase 1.
 
-**T5. Selection.** Sessions that produce transcripts are not a random sample of
+**T5. Corpus heterogeneity.** The transcript corpus is harness-local and
+per-harness heterogeneous (see Phase 1). A judge prompt calibrated on one
+harness's format is not validated for another, and the substrate-plurality
+posture this repo already holds elsewhere applies: the harness is a property of
+the reading, not a nuisance parameter to average over. Phase 1 results are
+reported per harness or not at all.
+
+**T6. Selection.** Sessions that produce transcripts are not a random sample of
 work. Whatever the coverage turns out to be, it is reported as a coverage
 statement, and the population is described by what it is rather than called "the
 fleet."
@@ -215,6 +222,28 @@ events. Two sub-reads:
 license 1b's counterfactual: a judge that recovers observed duration may still
 be systematically wrong about the counterfactual, and 1b is the only check on
 that. Both must clear their declared thresholds.
+
+*Where the corpus actually lives (corrected 2026-08-26).* An earlier revision of
+this section assumed the transcripts and the wall-clock were server-side. They
+are not. The governance database holds no agent-session transcript: the only
+`transcript` it stores is the dialectic message record
+(`src/dialectic_protocol.py`), which is a record of a review conversation, not of
+an agent working. Session transcripts are **harness-local files** — the Claude
+Code project store, Codex's own store — which this repo does not own and whose
+formats differ per harness. `t_actual` comes from transcript message timestamps
+for the same reason: `audit.tool_usage` spans only governance calls, so it is a
+lower bound on working time, it covers only agents that call governance tools,
+and it carries a known transport blind spot (#1424, `/mcp` and `/sse` unrecorded).
+
+This cuts both ways and both directions matter:
+
+- It makes Phase 1 **genuinely embargo-safe** under §3.1 rather than
+  safe-by-promise. The phase reads files on the operator's machine and cannot
+  reach `audit.outcome_events` or `core.agent_state` even by mistake.
+- It makes Phase 1 **harness-coupled**, which the rest of this document does not
+  reflect. Any implementation needs a per-harness reader, the sample definition
+  has to state which harness it drew from, and a result on one harness does not
+  transfer to another. This is a portability cost the proposal had not paid.
 
 **Phase 0 — supply and coverage census (deferred past the registered read).**
 Counts only: how many sessions are joinable to a prior-state snapshot, how they
