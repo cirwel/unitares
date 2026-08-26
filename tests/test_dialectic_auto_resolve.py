@@ -190,7 +190,15 @@ async def test_reassignment_recorded_even_if_transcript_append_fails():
 
 @pytest.mark.asyncio
 async def test_antithesis_awaits_facilitation_when_no_candidates():
-    """Stuck antithesis with no replacement should await facilitation (not fail immediately)."""
+    """Stuck antithesis with no replacement should await facilitation (not fail immediately).
+
+    The request must be PERSISTED, not only narrated. Until 2026-08-26 this
+    branch appended the transcript message and counted a facilitation while
+    `awaiting_facilitation` stayed false in the row — and every reader that
+    answers a facilitation request (`reopen_session`,
+    `_apply_reviewer_reassignment`) keys on that flag, so the request was
+    visible in the transcript and unanswerable in the database.
+    """
     # Session is 2.5 hours old (past threshold but under facilitation timeout of 4h)
     sessions = [
         {"session_id": "s1", "updated_at": _old_time(2.5), "paused_agent_id": "a1",
@@ -204,12 +212,14 @@ async def test_antithesis_awaits_facilitation_when_no_candidates():
 
     mock_update_status = AsyncMock()
     mock_add_msg = AsyncMock()
+    mock_mark = AsyncMock(return_value=True)
     mock_select = AsyncMock(return_value=None)
 
     with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                new_callable=AsyncMock, return_value=sessions), \
          patch(f"{AUTO_RESOLVE}.mcp_server", server), \
          patch(f"{AUTO_RESOLVE}.update_session_status_async", mock_update_status), \
+         patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async", mock_mark), \
          patch(f"{AUTO_RESOLVE}.add_message_async", mock_add_msg), \
          patch("src.mcp_handlers.dialectic.reviewer.select_reviewer", mock_select):
         from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
@@ -218,6 +228,86 @@ async def test_antithesis_awaits_facilitation_when_no_candidates():
     assert result["facilitation_count"] == 1
     assert result["resolved_count"] == 0  # NOT failed yet
     mock_update_status.assert_not_called()  # Should not mark as failed
+    mock_mark.assert_awaited_once_with("s1")
+
+
+@pytest.mark.asyncio
+async def test_facilitation_request_is_recorded_once_not_once_per_cycle():
+    """A session already awaiting facilitation is held, not re-narrated.
+
+    `add_message` writes to dialectic_messages and leaves
+    dialectic_sessions.updated_at alone, so a row that asked for a human keeps
+    looking stuck. Re-entering this branch would append the same message every
+    sweep (~10m) — and now that the flag write bumps updated_at, it would also
+    push the 4h reap out by another cycle, forever.
+    """
+    sessions = [
+        {"session_id": "s1", "updated_at": _old_time(2.5), "paused_agent_id": "a1",
+         "phase": "antithesis", "reviewer_agent_id": "gone-reviewer",
+         "awaiting_facilitation": True}
+    ]
+
+    server = _make_mock_server({"a1": _make_agent_meta(status="paused")})
+
+    mock_update_status = AsyncMock()
+    mock_add_msg = AsyncMock()
+    mock_mark = AsyncMock(return_value=True)
+
+    with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
+               new_callable=AsyncMock, return_value=sessions), \
+         patch(f"{AUTO_RESOLVE}.mcp_server", server), \
+         patch(f"{AUTO_RESOLVE}.update_session_status_async", mock_update_status), \
+         patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async", mock_mark), \
+         patch(f"{AUTO_RESOLVE}.add_message_async", mock_add_msg), \
+         patch("src.mcp_handlers.dialectic.reviewer.select_reviewer",
+               new_callable=AsyncMock, return_value=None):
+        from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
+        result = await auto_resolve_stuck_sessions()
+
+    assert result["facilitation_count"] == 0, "the request was already recorded"
+    assert result["resolved_count"] == 0, "the operator's 4h clock is still running"
+    mock_mark.assert_not_awaited()
+    mock_add_msg.assert_not_awaited()
+    mock_update_status.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_refused_facilitation_write_is_not_narrated():
+    """A refused flag write means another writer finished the session.
+
+    Same posture as the refused reviewer write: no transcript message, no
+    facilitation count — narrating a request the database rejected would put a
+    standing ask on a session nobody can answer.
+    """
+    sessions = [
+        {"session_id": "s1", "updated_at": _old_time(2.5), "paused_agent_id": "a1",
+         "phase": "antithesis", "reviewer_agent_id": "gone-reviewer"}
+    ]
+
+    server = _make_mock_server({"a1": _make_agent_meta(status="paused")})
+
+    mock_add_msg = AsyncMock()
+    mock_mark = AsyncMock(return_value=False)
+
+    with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
+               new_callable=AsyncMock, return_value=sessions), \
+         patch(f"{AUTO_RESOLVE}.mcp_server", server), \
+         patch(f"{AUTO_RESOLVE}.update_session_status_async", AsyncMock()), \
+         patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async", mock_mark), \
+         patch(f"{AUTO_RESOLVE}.add_message_async", mock_add_msg), \
+         patch("src.mcp_handlers.dialectic.reviewer.select_reviewer",
+               new_callable=AsyncMock, return_value=None):
+        from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
+        result = await auto_resolve_stuck_sessions()
+
+    assert result["facilitation_count"] == 0
+    assert result["skipped_count"] == 1
+    mock_add_msg.assert_not_awaited()
+    assert result["details"] == [{
+        "session_id": "s1",
+        "action": "write_refused",
+        "attempted": "awaiting_facilitation",
+    }]
 
 
 @pytest.mark.asyncio

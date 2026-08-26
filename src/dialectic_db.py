@@ -341,6 +341,46 @@ class DialecticDB:
                 )
             return False
 
+    async def mark_awaiting_facilitation(self, session_id: str) -> bool:
+        """Record a standing facilitation request on a LIVE session.
+
+        Deliberately separate from `update_session_awaiting_facilitation`,
+        which is unguarded because its callers include the clear-on-resolve
+        path — a write that by definition lands as the row goes terminal.
+        SETTING the flag is the opposite case: it only means anything while
+        the session can still be answered, and stamping it onto a row another
+        writer has just failed would make an ordinary failure revivable —
+        `reopen_session` reopens exactly `status='failed' AND
+        awaiting_facilitation=true`.
+
+        Carries TERMINAL_WRITE_GUARD like the status/reviewer/phase writers.
+        Returns False when refused or missing; the sweeper reads that as
+        "another writer finished this session" and skips it, the same way it
+        treats a refused reviewer write.
+        """
+        await self._ensure_pool()
+        async with self._pool.acquire() as conn:
+            result = await conn.execute("""
+                UPDATE core.dialectic_sessions
+                SET awaiting_facilitation = true, updated_at = now()
+                WHERE session_id = $1
+                  AND status NOT IN ('resolved', 'failed')
+            """, session_id)
+            if "UPDATE 1" in result:
+                return True
+            existing = await conn.fetchrow(
+                "SELECT status FROM core.dialectic_sessions WHERE session_id = $1",
+                session_id,
+            )
+            if existing is None:
+                logger.warning(f"mark_awaiting_facilitation: {session_id[:16]}... not found")
+            else:
+                logger.warning(
+                    f"mark_awaiting_facilitation: {session_id[:16]}... is terminal as "
+                    f"{existing['status']!r}; facilitation write refused"
+                )
+            return False
+
     async def update_session_awaiting_facilitation(self, session_id: str, awaiting: bool) -> bool:
         """Persist the awaiting_facilitation flag (#1167 Ask 2).
 
@@ -775,6 +815,11 @@ async def update_session_reviewer_async(session_id: str, reviewer_agent_id: str)
 async def update_session_status_async(session_id: str, status: str) -> bool:
     db = await get_dialectic_db()
     return await db.update_session_status(session_id, status)
+
+
+async def mark_awaiting_facilitation_async(session_id: str) -> bool:
+    db = await get_dialectic_db()
+    return await db.mark_awaiting_facilitation(session_id)
 
 
 async def update_session_awaiting_facilitation_async(session_id: str, awaiting: bool) -> bool:

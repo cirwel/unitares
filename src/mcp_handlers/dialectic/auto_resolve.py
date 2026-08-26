@@ -16,6 +16,7 @@ from src.dialectic_db import (
     get_active_sessions_async,
     update_session_status_async,
     update_session_reviewer_async,
+    mark_awaiting_facilitation_async,
     add_message_async,
     has_inflight_saga_async,
 )
@@ -269,8 +270,53 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
                         except Exception as e:
                             logger.warning(f"Could not persist reviewer reassignment for {session_id[:16]}: {e}")
 
-                    # No replacement found — mark awaiting facilitation if not too old
-                    if check_time and check_time > fail_time:
+                    # No replacement found — record a standing facilitation
+                    # request if not too old.
+                    #
+                    # ⛔PERSIST THE FLAG, don't just narrate it. Until 2026-08-26
+                    # this branch appended the message, counted a facilitation
+                    # and returned — while `awaiting_facilitation` stayed false
+                    # in the row, because nothing here wrote it. Two costs, both
+                    # measured by replaying the sweeper over one stuck session:
+                    #
+                    #   1. `add_message` inserts into dialectic_messages and does
+                    #      NOT touch dialectic_sessions.updated_at (no trigger;
+                    #      migration 003), so the row kept looking stuck and this
+                    #      branch re-fired every sweep — three cycles, three
+                    #      identical transcript messages, `facilitation_count`
+                    #      counting cycles rather than sessions.
+                    #   2. At the 4h timeout the row was reaped with
+                    #      `awaiting_facilitation=false`, so `reopen_session` and
+                    #      `_apply_reviewer_reassignment` — both of which key on
+                    #      that flag — read it as an ordinary failure and refused
+                    #      to revive it. That is the same dead-end #1577 closed
+                    #      for requests raised at THESIS through the handler;
+                    #      requests the SWEEPER raises at ANTITHESIS never had
+                    #      the flag to be rescued by.
+                    #
+                    # The `awaiting_facilitation` re-entry guard below is not
+                    # optional once the flag is written: the write bumps
+                    # updated_at, so the session goes un-stuck for another
+                    # STUCK_SESSION_THRESHOLD and then lands back here. Without
+                    # the guard it would re-narrate and re-bump forever — an
+                    # immortal session that the 4h reap can never reach.
+                    if check_time and check_time > fail_time and not awaiting_facilitation:
+                        if not await mark_awaiting_facilitation_async(session_id):
+                            # Guarded UPDATE wrote nothing — another writer
+                            # finished this session (dual-writer TOCTOU) or the
+                            # row is gone. Same posture as the refused reviewer
+                            # write above: don't narrate, don't count.
+                            logger.info(
+                                f"Session {session_id[:16]} facilitation write refused "
+                                "(row terminal or missing); request not recorded"
+                            )
+                            skipped_count += 1
+                            details.append({
+                                "session_id": session_id,
+                                "action": "write_refused",
+                                "attempted": "awaiting_facilitation",
+                            })
+                            continue
                         try:
                             await add_message_async(
                                 session_id=session_id,
@@ -278,21 +324,23 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
                                 message_type="system",
                                 reasoning=f"Reviewer '{reviewer_agent_id}' unresponsive. Awaiting human facilitation.",
                             )
-                            facilitation_count += 1
-                            details.append({
-                                "session_id": session_id,
-                                "paused_agent_id": paused_agent_id,
-                                "phase": phase,
-                                "action": "awaiting_facilitation",
-                                "stuck_reviewer": reviewer_agent_id,
-                            })
-                            logger.info(
-                                f"Session {session_id[:16]} awaiting human facilitation "
-                                f"(reviewer {reviewer_agent_id} unresponsive)"
-                            )
-                            continue  # Don't fail yet — give human time
                         except Exception as e:
+                            # Narration only. The request is committed; do not
+                            # unwind it, and do not fall through to the reap.
                             logger.warning(f"Could not add facilitation message for {session_id[:16]}: {e}")
+                        facilitation_count += 1
+                        details.append({
+                            "session_id": session_id,
+                            "paused_agent_id": paused_agent_id,
+                            "phase": phase,
+                            "action": "awaiting_facilitation",
+                            "stuck_reviewer": reviewer_agent_id,
+                        })
+                        logger.info(
+                            f"Session {session_id[:16]} awaiting human facilitation "
+                            f"(reviewer {reviewer_agent_id} unresponsive)"
+                        )
+                        continue  # Don't fail yet — give human time
 
             # A session already awaiting human facilitation runs on the HUMAN's
             # clock, not the stuck-process clock. STUCK_SESSION_THRESHOLD (2h)
