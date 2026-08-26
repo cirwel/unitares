@@ -30,9 +30,9 @@ registrars advertise in each deployable mode and what `describe_tool` says
 about those names. The snapshots are immutable evidence inputs; they do not
 certify the components that produced them.
 
-- Audit bundle: `sha256:3aa1dff0a8a6e5da16abbfb52a63ce8b0dcf9385cf6a12f68aada28b0992e468` (`unitares.tool-surface-audit.v1`).
-- Dispatch snapshot: `sha256:d6690a6bedd9d3dbf9a4ae12dedc492c634b43bffe8670dec7f1626d4ac0a4dc`.
-- Audited source revision: `sha256:22c1b8a335350bc14f985e8cc762ce9625c505415adf9c96e6e6c4bb6ed4856f` (52 files).
+- Audit bundle: `sha256:3ef294d09c5971c7fa8b20a61e3dfcaf7d0770ee64fd31abec97fc90a008a07d` (`unitares.tool-surface-audit.v1`).
+- Dispatch snapshot: `sha256:9bf87c92db2cf7cb128168d9729a3abba445fbac433121a4f30d2516d065f17a`.
+- Audited source revision: `sha256:433264d8f249a7276f985a92513ab8bc6b03c6af0b8b07135f94177fc15b049d` (52 files).
 - Exposure snapshot: `sha256:f3a1de2a620aef9f06b35caac320e86e47ef1e3396eea5d73cce95fc8b8d85ea`.
 - JSON contract: [`tool_surface_audit_v1.schema.json`](tool_surface_audit_v1.schema.json).
 - Reproduce with `python3 scripts/dev/tool_edge_index.py --json`; run
@@ -150,9 +150,9 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `outcome_correlation` | `src/mcp_handlers/observability/outcome_events.py:725 handle_outcome_correlation` | `src/mcp_handlers/schemas/observability.py:87 OutcomeCorrelationParams` | 30s | — |
 | `outcome_event` | `src/mcp_handlers/observability/outcome_events.py:585 handle_outcome_event` | `src/mcp_handlers/schemas/core.py:479 OutcomeEventParams` | 15s | — |
 | `process_agent_update` | `src/mcp_handlers/core.py:436 handle_process_agent_update` | `src/mcp_handlers/schemas/core.py:303 ProcessAgentUpdateParams` | 60s | — |
-| `reassign_reviewer` | `src/mcp_handlers/dialectic/handlers.py:3136 handle_reassign_reviewer` | `src/mcp_handlers/schemas/dialectic.py:177 ReassignReviewerParams` | 15s | — |
+| `reassign_reviewer` | `src/mcp_handlers/dialectic/handlers.py:3343 handle_reassign_reviewer` | `src/mcp_handlers/schemas/dialectic.py:177 ReassignReviewerParams` | 15s | — |
 | `record_progress_pulse` | `src/mcp_handlers/resident_progress.py:20 handle_record_progress_pulse` | — | 5s | — |
-| `request_dialectic_review` | `src/mcp_handlers/dialectic/handlers.py:1202 handle_request_dialectic_review` | `src/mcp_handlers/schemas/dialectic.py:5 RequestDialecticReviewParams` | 105s | — |
+| `request_dialectic_review` | `src/mcp_handlers/dialectic/handlers.py:1261 handle_request_dialectic_review` | `src/mcp_handlers/schemas/dialectic.py:5 RequestDialecticReviewParams` | 105s | — |
 | `research_registry` | `src/mcp_handlers/research_registry.py:66 handle_research_registry` | `src/mcp_handlers/schemas/research.py:13 ResearchRegistryParams` | 15s | — |
 | `reset_monitor` | `src/mcp_handlers/admin/handlers.py:462 handle_reset_monitor` | `src/mcp_handlers/schemas/admin.py:110 ResetMonitorParams` | 10s | — |
 | `search_knowledge_graph` | `src/mcp_handlers/knowledge/handlers.py:2694 handle_search_knowledge_graph` | `src/mcp_handlers/schemas/knowledge.py:80 SearchKnowledgeGraphParams` | 15s | identity=pre_onboard |
@@ -160,9 +160,9 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `set_thresholds` | `src/mcp_handlers/admin/config.py:45 handle_set_thresholds` | `src/mcp_handlers/schemas/admin.py:119 SetThresholdsParams` | 15s | — |
 | `simulate_update` | `src/mcp_handlers/core.py:266 handle_simulate_update` | `src/mcp_handlers/schemas/core.py:195 SimulateUpdateParams` | 30s | — |
 | `skills` | `src/mcp_handlers/introspection/skills.py:193 handle_skills` | `src/mcp_handlers/schemas/skills.py:15 SkillsParams` | 10s | identity=pre_onboard |
-| `submit_antithesis` | `src/mcp_handlers/dialectic/handlers.py:2522 handle_submit_antithesis` | `src/mcp_handlers/schemas/dialectic.py:73 SubmitAntithesisParams` | 10s | — |
-| `submit_synthesis` | `src/mcp_handlers/dialectic/handlers.py:2730 handle_submit_synthesis` | `src/mcp_handlers/schemas/dialectic.py:106 SubmitSynthesisParams` | 15s | — |
-| `submit_thesis` | `src/mcp_handlers/dialectic/handlers.py:2202 handle_submit_thesis` | `src/mcp_handlers/schemas/dialectic.py:64 SubmitThesisParams` | 90s | — |
+| `submit_antithesis` | `src/mcp_handlers/dialectic/handlers.py:2581 handle_submit_antithesis` | `src/mcp_handlers/schemas/dialectic.py:73 SubmitAntithesisParams` | 10s | — |
+| `submit_synthesis` | `src/mcp_handlers/dialectic/handlers.py:2789 handle_submit_synthesis` | `src/mcp_handlers/schemas/dialectic.py:106 SubmitSynthesisParams` | 15s | — |
+| `submit_thesis` | `src/mcp_handlers/dialectic/handlers.py:2261 handle_submit_thesis` | `src/mcp_handlers/schemas/dialectic.py:64 SubmitThesisParams` | 90s | — |
 | `validate_file_path` | `src/mcp_handlers/admin/handlers.py:631 handle_validate_file_path` | `src/mcp_handlers/schemas/core.py:534 ValidateFilePathParams` | 5s | — |
 | `verify_trajectory_identity` | `src/mcp_handlers/identity/handlers.py:2758 handle_verify_trajectory_identity` | `src/mcp_handlers/schemas/identity.py:206 VerifyTrajectoryIdentityParams` | 10s | — |
 
@@ -218,14 +218,14 @@ runs (`from→to`, filled only when the destination is absent).
 
 | Action | Delegate | Remaps |
 |---|---|---|
-| `antithesis` | `src/mcp_handlers/dialectic/handlers.py:2522 handle_submit_antithesis` | — |
-| `get` | `src/mcp_handlers/dialectic/handlers.py:1567 handle_get_dialectic_session` | — |
-| `list` | `src/mcp_handlers/dialectic/handlers.py:1787 handle_list_dialectic_sessions` | — |
+| `antithesis` | `src/mcp_handlers/dialectic/handlers.py:2581 handle_submit_antithesis` | — |
+| `get` | `src/mcp_handlers/dialectic/handlers.py:1626 handle_get_dialectic_session` | — |
+| `list` | `src/mcp_handlers/dialectic/handlers.py:1846 handle_list_dialectic_sessions` | — |
 | `quick` | `src/mcp_handlers/dialectic/handlers.py:383 handle_quick_dialectic` | — |
-| `reassign` | `src/mcp_handlers/dialectic/handlers.py:3136 handle_reassign_reviewer` | — |
-| `request` | `src/mcp_handlers/dialectic/handlers.py:1202 handle_request_dialectic_review` | — |
-| `synthesis` | `src/mcp_handlers/dialectic/handlers.py:2730 handle_submit_synthesis` | — |
-| `thesis` | `src/mcp_handlers/dialectic/handlers.py:2202 handle_submit_thesis` | — |
+| `reassign` | `src/mcp_handlers/dialectic/handlers.py:3343 handle_reassign_reviewer` | — |
+| `request` | `src/mcp_handlers/dialectic/handlers.py:1261 handle_request_dialectic_review` | — |
+| `synthesis` | `src/mcp_handlers/dialectic/handlers.py:2789 handle_submit_synthesis` | — |
+| `thesis` | `src/mcp_handlers/dialectic/handlers.py:2261 handle_submit_thesis` | — |
 
 ### `export` · default `history`
 

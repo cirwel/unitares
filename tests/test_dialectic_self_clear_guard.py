@@ -243,7 +243,16 @@ class TestSelfReviewIsNotExempt:
         assert s.phase != DialecticPhase.RESOLVED
 
     def test_self_review_with_no_prior_rejection_still_resolves(self):
-        """The guard fires on a recorded rejection, not on self-review per se."""
+        """The guard fires on a recorded rejection, not on self-review per se.
+
+        ⛔This pins the PROTOCOL layer only, and is not a statement that a
+        self-review may resume its own agent. Whether that convergence releases
+        a live pause is decided at the actuator — `handle_submit_synthesis`
+        refuses to execute a self-reviewed resolution while the agent is
+        actually paused and routes it to facilitation instead (#1585 item 1,
+        `test_self_review_cannot_release_a_live_pause`). The protocol object
+        cannot make that call because it cannot see live agent status.
+        """
         s = self._self_review_session()
         result = s.submit_synthesis(_synthesis(PAUSED, agrees=True))
         assert result["converged"] is True

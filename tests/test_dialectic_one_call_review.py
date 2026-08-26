@@ -432,6 +432,47 @@ class TestWhoseMove:
         assert "action='synthesis'" in out["next_call"]
         assert "sess-1" in out["next_call"]
 
+    def test_self_review_awaiting_ratification_stops_telling_the_agent_to_negotiate(self):
+        """A refused self-review must not read as "your move" (#1585 item 1).
+
+        Without this the paused agent — who is also the reviewer — is told to
+        "negotiate until convergence" against itself, and every attempt is
+        refused by the authority guard. The move belongs to an operator.
+        """
+        from src.mcp_handlers.dialectic.handlers import _build_dialectic_actionability
+
+        session_data = {
+            "session_id": "sess-self",
+            "paused_agent_id": "agent-paused",
+            "reviewer_agent_id": "agent-paused",
+            "phase": "synthesis",
+            "awaiting_facilitation": True,
+        }
+
+        with self._ctx("agent-paused"):
+            out = _build_dialectic_actionability(dict(session_data))
+        assert out["whose_move"].startswith("NOT YOURS")
+        assert out["next_call"] is None
+        assert out["required_role"] == "reviewer_or_operator"
+
+        with self._ctx("an-operator"), self._operator():
+            out = _build_dialectic_actionability(dict(session_data))
+        assert out["whose_move"].startswith("YOURS")
+        assert "action='reassign'" in out["next_call"]
+
+    def test_self_review_without_the_refusal_still_negotiates(self):
+        """The new branch keys on the routed state, not on self-review as such."""
+        from src.mcp_handlers.dialectic.handlers import _build_dialectic_actionability
+
+        with self._ctx("agent-paused"):
+            out = _build_dialectic_actionability({
+                "session_id": "sess-self",
+                "paused_agent_id": "agent-paused",
+                "reviewer_agent_id": "agent-paused",
+                "phase": "synthesis",
+            })
+        assert out["whose_move"].startswith("YOURS")
+
     def test_synthesis_for_observer_is_not_yours(self):
         from src.mcp_handlers.dialectic.handlers import _build_dialectic_actionability
 

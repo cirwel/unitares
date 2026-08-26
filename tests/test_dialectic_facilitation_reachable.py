@@ -22,7 +22,8 @@ Two defects, fixed together:
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -245,3 +246,106 @@ async def test_revival_refused_reviewer_write_raises_under_strict():
                 "sess-refused", session, "new-reviewer",
                 reason="race", strict_persistence=True,
             )
+
+
+# --- Self-review authority (#1585 item 1) ---------------------------------
+#
+# Conditions set by the governed review of the guard itself (dialectic session
+# cfb3f0085a4d5c06, reviewer chatgpt-codex_fb8d5918, 2026-08-26).
+
+
+@pytest.mark.asyncio
+async def test_the_transition_owner_refuses_a_self_authorized_resume():
+    """The last authoritative check, not the handler, is the safety boundary.
+
+    `execute_resolution` owns the paused→active mutation and reads the status
+    it is about to act on, so the handler's earlier read cannot go stale
+    underneath it.
+    """
+    from src.mcp_handlers.dialectic import resolution as res
+
+    session = DialecticSession(
+        paused_agent_id="agent-a", reviewer_agent_id="agent-a",
+        dispute_type="verification",
+    )
+    meta = SimpleNamespace(status="paused", api_key="k")
+    server = MagicMock()
+    server.load_metadata_async = AsyncMock()
+    server.agent_metadata = {"agent-a": meta}
+
+    with patch.object(res, "mcp_server", server):
+        out = await res.execute_resolution(session, SimpleNamespace(conditions=[], root_cause="rc"))
+
+    assert out["success"] is False
+    assert out["refused"] == "self_review_not_authorizing"
+    assert meta.status == "paused", "the agent must not have been resumed"
+
+
+@pytest.mark.asyncio
+async def test_the_transition_owner_leaves_independent_resumes_alone():
+    """The refusal keys on the conflicted identity, not on resuming as such."""
+    from src.mcp_handlers.dialectic import resolution as res
+
+    session = DialecticSession(
+        paused_agent_id="agent-a", reviewer_agent_id="agent-b",
+        dispute_type="verification",
+    )
+    server = MagicMock()
+    server.load_metadata_async = AsyncMock()
+    # MagicMock, not SimpleNamespace: this path runs past the authority check
+    # into the real resume, which calls metadata methods this test does not care
+    # about. The assertion is only that the authority check let it through.
+    live_meta = MagicMock()
+    live_meta.status = "paused"
+    server.agent_metadata = {"agent-a": live_meta}
+
+    with patch.object(res, "mcp_server", server), \
+         patch.object(res, "parse_condition", side_effect=lambda c: c), \
+         patch.object(res, "apply_condition", new_callable=AsyncMock,
+                      return_value={"status": "applied"}), \
+         patch.object(res, "_record_outcome_event_inline", new_callable=AsyncMock):
+        out = await res.execute_resolution(
+            session,
+            SimpleNamespace(conditions=[], root_cause="rc", hash=lambda: "sha-test"),
+        )
+
+    assert out.get("refused") is None
+
+
+@pytest.mark.asyncio
+async def test_reassignment_rewinds_a_refused_self_review_to_antithesis():
+    """The incoming independent reviewer must actually get a turn.
+
+    Left at SYNTHESIS, the only antithesis on the record is the conflicted
+    identity's, so `_reviewer_verdict_pending` never holds the paused agent and
+    it could resolve with the new reviewer never having spoken.
+    """
+    from src.mcp_handlers.dialectic.handlers import _apply_reviewer_reassignment
+
+    session = DialecticSession(
+        paused_agent_id="agent-a", reviewer_agent_id="agent-a",
+        dispute_type="verification",
+    )
+    session.phase = DialecticPhase.SYNTHESIS
+    session.awaiting_facilitation = True
+    session.transcript.append(DialecticMessage(
+        phase="thesis", agent_id="agent-a",
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        reasoning="my case", root_cause="rc",
+    ))
+
+    D = "src.mcp_handlers.dialectic.handlers"
+    with patch(f"{D}.beam_update_reviewer", new_callable=AsyncMock, return_value=None), \
+         patch(f"{D}.pg_update_reviewer", new_callable=AsyncMock), \
+         patch(f"{D}.pg_update_awaiting_facilitation", new_callable=AsyncMock), \
+         patch(f"{D}.pg_reopen_session", new_callable=AsyncMock, return_value=True), \
+         patch(f"{D}.pg_add_message", new_callable=AsyncMock):
+        await _apply_reviewer_reassignment(
+            "sess-self", session, "agent-b", reason="operator facilitation",
+        )
+
+    assert session.phase == DialecticPhase.ANTITHESIS
+    assert session.reviewer_agent_id == "agent-b"
+    assert session.awaiting_facilitation is False
+    # The conflicted identity's messages stay as attributed audit evidence.
+    assert any(m.agent_id == "agent-a" for m in session.transcript)
