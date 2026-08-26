@@ -5,8 +5,10 @@ The three public dispatch surfaces -- streamable HTTP MCP, REST
 input schemas for a given tool mode.  Dispatch already resolves workflow
 aliases on every surface; this module makes discovery use that same contract.
 
-The contract describes tool reachability only.  It does not claim that a host
-installed lifecycle hooks, forwards host events, or honors returned policy.
+The contract describes tool reachability and the stable normalized lifecycle
+envelope used by product-facing workflow aliases.  It does not claim that a
+host installed lifecycle hooks, forwards host events, or honors returned
+policy.
 """
 
 from __future__ import annotations
@@ -22,7 +24,20 @@ from src.mcp_compat import get_tool_input_schema
 
 
 INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
-INTERFACE_CONTRACT_VERSION = "1.0.0"
+INTERFACE_CONTRACT_VERSION = "1.1.0"
+LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
+SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
+FEDERATION_LIFECYCLE_CAPABILITIES = (
+    "start_session",
+    "sync_state",
+    "check_working_state",
+    "record_result",
+)
+LIFECYCLE_SUCCESS_REQUIRED_FIELDS = (
+    "success",
+    "tool",
+    "next_action",
+)
 PUBLIC_TRANSPORTS = (
     "mcp_streamable_http",
     "rest_v1_tools",
@@ -173,11 +188,48 @@ def build_interface_contract(mode: str = "lite") -> dict[str, Any]:
     return {
         "schema": INTERFACE_CONTRACT_SCHEMA,
         "version": INTERFACE_CONTRACT_VERSION,
-        "scope": "advertised_and_callable_tool_names",
+        "scope": "tool_surface_and_lifecycle_envelopes",
         "mode": mode,
         "transports": list(PUBLIC_TRANSPORTS),
         "surface_sha256": hashlib.sha256(canonical).hexdigest(),
         "capabilities": capabilities,
+        "federation": {
+            "negotiation": {
+                "tool": "list_tools",
+                "arguments": {"lite": True},
+                "contract_path": "interface_contract",
+                "capabilities_path": "tools[*].name",
+            },
+            "mcp": {
+                "version_specifier": SUPPORTED_MCP_SPECIFIER,
+                "tested_majors": [1, 2],
+                "newest_in_range_ci": "blocking",
+            },
+            "lifecycle": {
+                "schema": LIFECYCLE_ENVELOPE_SCHEMA,
+                "capabilities": list(FEDERATION_LIFECYCLE_CAPABILITIES),
+                "success_envelope": {
+                    "required": list(LIFECYCLE_SUCCESS_REQUIRED_FIELDS),
+                    "constants": {"success": True},
+                    "field_types": {
+                        "success": "boolean",
+                        "tool": "string",
+                        "next_action": "string_or_object",
+                        "state_summary": "object",
+                        "risk_summary": "string",
+                        "memory_suggestions": "array",
+                        "recovery_hint": "string_or_object",
+                        "raw_governance": "object",
+                    },
+                    "optional_fields_may_be_omitted": True,
+                },
+                "failure_envelope": {
+                    "required": ["success"],
+                    "constants": {"success": False},
+                    "detail_fields_any_of": ["error", "message"],
+                },
+            },
+        },
         "limits": {
             "lifecycle_automation": "not_implied",
             "host_event_capture": "not_implied",
@@ -196,6 +248,7 @@ def get_interface_contract_summary(mode: str = "lite") -> dict[str, Any]:
         "capability_count": len(contract["capabilities"]),
         "transports": contract["transports"],
         "scope": contract["scope"],
+        "federation": contract["federation"],
     }
 
 
