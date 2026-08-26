@@ -12,9 +12,10 @@ roadmap aspiration). Where a component has a known limit, it's named here, not b
 UNITARES Core does not own the agent execution loop. Agent harnesses, custom
 clients, and reference residents sit above the public interfaces and remain
 independent userlands. MCP is the primary agent-facing contract, while REST,
-the SDK, adapters, and the dashboard expose the same Core. A future
-general-purpose **UNITARES Resident** belongs in that userland layer and must
-use those public contracts; it is not a deployed Core component.
+the SDK, adapters, and the dashboard expose the same Core. The general-purpose
+**UNITARES Resident** belongs in that userland layer and must use those public
+contracts; its separate repository ships an early skeleton, and it is not a
+deployed Core component.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -115,6 +116,6 @@ not** drive verdicts.
 | Dialectic Engine | **In-flight** | Independent reviewer serving live; reviewer-quality is the open frontier |
 | EISV & Governance | **Deployed (bounded)** | Calibration-observability; catches naive overconfidence/drift, not deliberate concealment |
 | Coordination (BEAM) | **Partial** | Advisory-first; Wave 3a read-only cutovers live; Wave 3 committed, not started |
-| Reference residents · Substrate · Interfaces | **Live / Mature** | Operational; no general-purpose UNITARES Resident is shipped |
+| Reference residents · Substrate · Interfaces | **Live / Mature** | Operational; UNITARES Resident has a separate early skeleton, not yet a usable agent product |
 
 **See also:** [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md) (pipeline/flow view) · [`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md) (who it's for, what's unproven) · [`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md) (verify it yourself) · [`EVALUATION_INDEX.md`](EVALUATION_INDEX.md) (the eval surface).

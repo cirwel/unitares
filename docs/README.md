@@ -64,7 +64,7 @@ User- and integrator-facing how-tos. Thin by design — most architecture lives 
 ### `integration/` — MCP and client wiring
 
 - [`MCP_CLIENTS.md`](integration/MCP_CLIENTS.md) — Streamable HTTP MCP endpoints, stdio bridges, and hosted/client-neutral setup
-- [`CLIENT_CAPABILITY_MATRIX.md`](integration/CLIENT_CAPABILITY_MATRIX.md) — what direct MCP, host plugins, adapters, and a future Resident do and do not automate
+- [`CLIENT_CAPABILITY_MATRIX.md`](integration/CLIENT_CAPABILITY_MATRIX.md) — what direct MCP, host plugins, adapters, and UNITARES Resident do and do not automate
 
 ### `ontology/` — identity ontology
 

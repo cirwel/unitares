@@ -1,7 +1,7 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "1.0.0",
-  "scope": "advertised_and_callable_tool_names",
+  "version": "1.1.0",
+  "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "lite",
   "transports": [
     "mcp_streamable_http",
@@ -330,6 +330,66 @@
       }
     }
   ],
+  "federation": {
+    "negotiation": {
+      "tool": "list_tools",
+      "arguments": {
+        "lite": true
+      },
+      "contract_path": "interface_contract",
+      "capabilities_path": "tools[*].name"
+    },
+    "mcp": {
+      "version_specifier": ">=1.26.0,<3.0.0",
+      "tested_majors": [
+        1,
+        2
+      ],
+      "newest_in_range_ci": "blocking"
+    },
+    "lifecycle": {
+      "schema": "unitares.lifecycle-envelope.v1",
+      "capabilities": [
+        "start_session",
+        "sync_state",
+        "check_working_state",
+        "record_result"
+      ],
+      "success_envelope": {
+        "required": [
+          "success",
+          "tool",
+          "next_action"
+        ],
+        "constants": {
+          "success": true
+        },
+        "field_types": {
+          "success": "boolean",
+          "tool": "string",
+          "next_action": "string_or_object",
+          "state_summary": "object",
+          "risk_summary": "string",
+          "memory_suggestions": "array",
+          "recovery_hint": "string_or_object",
+          "raw_governance": "object"
+        },
+        "optional_fields_may_be_omitted": true
+      },
+      "failure_envelope": {
+        "required": [
+          "success"
+        ],
+        "constants": {
+          "success": false
+        },
+        "detail_fields_any_of": [
+          "error",
+          "message"
+        ]
+      }
+    }
+  },
   "limits": {
     "lifecycle_automation": "not_implied",
     "host_event_capture": "not_implied",
