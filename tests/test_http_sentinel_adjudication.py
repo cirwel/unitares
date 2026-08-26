@@ -9,12 +9,15 @@ builder semantics — fp dismissal is the only bad label).
 
 from __future__ import annotations
 
+import inspect
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.testclient import TestClient
+
+import src.http_routes.sentinel as sentinel_routes
 
 from src.http_api import (
     http_sentinel_adjudicate,
@@ -92,7 +95,7 @@ class TestAdjudicateRecording:
             # Sentinel-slug producer -- the path that still falls back to the
             # substrate claim, keeping the pre-existing assertions meaningful.
             patch("src.http_routes.sentinel._finding_producer_uuid",
-                  AsyncMock(return_value=(None, "sentinel"))),
+                  AsyncMock(return_value=(None, "sentinel", "sentinel_alarm_finding"))),
             patch("src.http_routes.sentinel._adjudication_progress",
                   AsyncMock(return_value=dict(PROGRESS))),
             patch("src.mcp_handlers.observability.outcome_events._record_outcome_event_inline",
@@ -363,7 +366,7 @@ class TestProducerAttribution:
     def test_outcome_is_booked_against_the_producer_not_sentinel(self, client):
         """The whole point: a Watcher finding must not credit Sentinel."""
         watcher = "907e3195-c649-49db-b753-1edc1a105f33"
-        p1, p2, prod, p3, rec = self._patches(producer=(watcher, watcher))
+        p1, p2, prod, p3, rec = self._patches(producer=(watcher, watcher, "watcher_finding"))
         with p1, p2, prod, p3, rec as recorder:
             r = client.post("/v1/sentinel/adjudicate",
                             json={"fingerprint": "fp9", "status": "confirmed"},
@@ -376,7 +379,7 @@ class TestProducerAttribution:
     def test_sentinel_slug_still_falls_back_to_the_substrate_claim(self, client):
         """Sentinel writes the bare slug 'sentinel' on its alarm findings (249
         rows/14d), so that path must keep working byte-identically."""
-        p1, p2, prod, p3, rec = self._patches(producer=(None, "sentinel"))
+        p1, p2, prod, p3, rec = self._patches(producer=(None, "sentinel", "sentinel_alarm_finding"))
         with p1, p2, prod, p3, rec as recorder:
             r = client.post("/v1/sentinel/adjudicate",
                             json={"fingerprint": "fp8", "status": "confirmed"},
@@ -388,7 +391,7 @@ class TestProducerAttribution:
         """A doctor finding has no governance identity. Refusing is correct;
         booking it against Sentinel would corrupt the anchor channel the
         falsifiability test depends on."""
-        p1, p2, prod, p3, rec = self._patches(producer=(None, "doctor-findings"))
+        p1, p2, prod, p3, rec = self._patches(producer=(None, "doctor-findings", "doctor_check_finding"))
         with p1, p2, prod, p3, rec as recorder:
             r = client.post("/v1/sentinel/adjudicate",
                             json={"fingerprint": "fp7", "status": "confirmed"},
@@ -398,7 +401,7 @@ class TestProducerAttribution:
         recorder.assert_not_called()
 
     def test_unknown_fingerprint_is_refused(self, client):
-        p1, p2, prod, p3, rec = self._patches(producer=(None, None))
+        p1, p2, prod, p3, rec = self._patches(producer=(None, None, None))
         with p1, p2, prod, p3, rec as recorder:
             r = client.post("/v1/sentinel/adjudicate",
                             json={"fingerprint": "nope", "status": "confirmed"},
@@ -408,7 +411,7 @@ class TestProducerAttribution:
 
     def test_producer_ref_is_recorded_for_forensics(self, client):
         watcher = "907e3195-c649-49db-b753-1edc1a105f33"
-        p1, p2, prod, p3, rec = self._patches(producer=(watcher, watcher))
+        p1, p2, prod, p3, rec = self._patches(producer=(watcher, watcher, "watcher_finding"))
         with p1, p2, prod, p3, rec as recorder:
             client.post("/v1/sentinel/adjudicate",
                         json={"fingerprint": "fp6", "status": "confirmed"},
@@ -420,7 +423,7 @@ class TestProducerAttribution:
         _adjudication_progress. Per-producer types must land WITH those
         filters — changing them here would silently break dedup."""
         watcher = "907e3195-c649-49db-b753-1edc1a105f33"
-        p1, p2, prod, p3, rec = self._patches(producer=(watcher, watcher))
+        p1, p2, prod, p3, rec = self._patches(producer=(watcher, watcher, "watcher_finding"))
         with p1, p2, prod, p3, rec as recorder:
             r = client.post("/v1/sentinel/adjudicate",
                             json={"fingerprint": "fp5", "status": "confirmed"},
@@ -428,3 +431,106 @@ class TestProducerAttribution:
         assert r.json()["outcome_type"] == "sentinel_finding_confirmed"
         from src.http_routes.sentinel import _SENTINEL_ADJUDICATION_OUTCOME_TYPES
         assert r.json()["outcome_type"] in _SENTINEL_ADJUDICATION_OUTCOME_TYPES
+
+
+class TestDoctorFamilyWidening:
+    """doctor_check_finding joined the queue on 2026-08-26.
+
+    It could not before: all 203 doctor findings in the preceding 30 days wrote
+    the bare slug 'doctor-findings' into audit.events.agent_id, so
+    _finding_producer_uuid could not resolve one and every adjudication
+    attempt returned 422. Provisioning the doctor layer's shared identity is
+    what made the family eligible; these pin what widening must and must not do.
+    """
+
+    DOCTOR_UUID = "7dea7dcb-e887-4c90-8c8a-4f3433da102b"
+
+    def _patches(self, producer, already=frozenset()):
+        return (
+            patch("src.http_routes.sentinel._adjudicated_sentinel_fingerprints",
+                  AsyncMock(return_value=set(already))),
+            patch("src.http_routes.sentinel._sentinel_substrate_uuid",
+                  AsyncMock(return_value=SENTINEL_UUID)),
+            patch("src.http_routes.sentinel._finding_producer_uuid",
+                  AsyncMock(return_value=producer)),
+            patch("src.http_routes.sentinel._adjudication_progress",
+                  AsyncMock(return_value=dict(PROGRESS))),
+            patch("src.mcp_handlers.observability.outcome_events._record_outcome_event_inline",
+                  AsyncMock(return_value={"success": True})),
+        )
+
+    def test_doctor_finding_is_in_the_queue_families(self):
+        assert "doctor_check_finding" in sentinel_routes._SENTINEL_FINDING_EVENT_TYPES
+
+    def test_doctor_outcome_keeps_its_own_label(self, client):
+        """⛔The identities pool; the LABELS must not.
+
+        These detectors differ enormously in precision and volume, so one
+        shared outcome_type would track the volume mix rather than any
+        detector's quality — the confound that made the pooled
+        dialectic-reviewer number describe neither instrument.
+        """
+        p1, p2, prod, p3, rec = self._patches(
+            producer=(self.DOCTOR_UUID, self.DOCTOR_UUID, "doctor_check_finding"))
+        with p1, p2, prod, p3, rec as recorder:
+            r = client.post("/v1/sentinel/adjudicate",
+                            json={"fingerprint": "fpdoc1", "status": "confirmed"},
+                            headers=_op_headers())
+        assert r.status_code == 200
+        args = recorder.call_args[0][0]
+        assert args["outcome_type"] == "doctor_check_finding_confirmed"
+        assert args["agent_id"] == self.DOCTOR_UUID
+
+    def test_sentinel_label_is_unchanged_by_the_widening(self, client):
+        """Both Sentinel families still map to 'sentinel_finding'.
+
+        Remapping them would orphan every historical sentinel_finding_* row
+        from the dedup set that has to find it again.
+        """
+        p1, p2, prod, p3, rec = self._patches(
+            producer=(SENTINEL_UUID, SENTINEL_UUID, "sentinel_alarm_finding"))
+        with p1, p2, prod, p3, rec as recorder:
+            r = client.post("/v1/sentinel/adjudicate",
+                            json={"fingerprint": "fpsen1", "status": "confirmed"},
+                            headers=_op_headers())
+        assert r.status_code == 200
+        assert recorder.call_args[0][0]["outcome_type"] == "sentinel_finding_confirmed"
+
+    def test_dismissal_reason_still_drives_is_bad_per_family(self, client):
+        """Only 'fp' is a bad label — the sole true-negative in precision math."""
+        p1, p2, prod, p3, rec = self._patches(
+            producer=(self.DOCTOR_UUID, self.DOCTOR_UUID, "doctor_check_finding"))
+        with p1, p2, prod, p3, rec as recorder:
+            r = client.post("/v1/sentinel/adjudicate",
+                            json={"fingerprint": "fpdoc2", "status": "dismissed",
+                                  "reason": "fp"},
+                            headers=_op_headers())
+        assert r.status_code == 200
+        args = recorder.call_args[0][0]
+        assert args["outcome_type"] == "doctor_check_finding_dismissed"
+        assert args["is_bad"] is True
+
+    def test_dedup_set_covers_every_queue_family(self):
+        """⛔A family missing here is adjudicated, recorded, and then handed
+        straight back to the operator on the next page load."""
+        kinds = set(sentinel_routes._FINDING_KIND_BY_EVENT_TYPE.values())
+        for kind in kinds:
+            for suffix in ("confirmed", "dismissed"):
+                assert f"{kind}_{suffix}" in sentinel_routes._SENTINEL_ADJUDICATION_OUTCOME_TYPES
+        assert "doctor_check_finding_confirmed" in sentinel_routes._SENTINEL_ADJUDICATION_OUTCOME_TYPES
+
+    def test_every_queue_family_has_a_label_mapping(self):
+        """A family in the queue with no mapping would silently book its
+        outcomes under Sentinel's label via the default."""
+        for event_type in sentinel_routes._SENTINEL_FINDING_EVENT_TYPES:
+            assert event_type in sentinel_routes._FINDING_KIND_BY_EVENT_TYPE
+
+    def test_falsifier_progress_is_not_silently_widened(self):
+        """⛔Deliberate: _adjudication_progress reads the EISV falsifier's
+        anchor-day count, an externally quoted figure. Whether a doctor
+        adjudication is anchor evidence of the same grade as a Sentinel one is
+        an open operator call — not a side effect of closing the doctor loop.
+        """
+        src = inspect.getsource(sentinel_routes._adjudication_progress)
+        assert "doctor_check_finding" not in src
+        assert "sentinel_finding_%" in src
