@@ -32,7 +32,7 @@ core. That makes it MCP-native and harness-agnostic: not MCP-only, not an agent
 framework, not a hosted platform. Plain-language definition:
 [What UNITARES is](docs/PRODUCT_DEFINITION.md).
 
-**Status: v2.20.0.** The maintainer deployment has run continuously since
+**Status:** v2.20.0. The maintainer deployment has run continuously since
 November 2025, with 71,141 stored EISV state rows and six long-running resident
 agents at the frozen snapshot. That establishes sustained single-operator
 operation under real load: attributable records and exercised runtime paths.
@@ -132,9 +132,9 @@ It is built for long-lived coding, research, operations, monitoring, and
 multi-agent processes that can instrument a check-in loop. It is usually not
 worth the overhead for short-lived chat turns.
 
-UNITARES is a state instrument, not an outcome oracle. It does not decide whether
-an output is correct or ethical, and it cannot detect deliberate concealment
-without independent evidence. The
+UNITARES is a state instrument, not an outcome oracle. It
+does not decide whether an output is correct or ethical, and it
+cannot detect deliberate concealment without independent evidence. The
 [scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md) draws that boundary
 precisely. The mathematical formulation in the companion paper is a parallel
 research path, not the deployed policy mechanism.
@@ -251,12 +251,14 @@ today.
 
 ## Evidence and limits
 
-Every claim below carries an evidence class saying what it licenses. That is
-deliberate, and it is the part of this project worth copying: an operational
-`FAIL` can close a line of work without scientifically refuting the underlying
-capability, and a claim earns `REFUTED` only when target, counterfactual,
-independent unit, support and power, decision rule, and read protocol all support
-it. The
+Every claim below carries an evidence class saying what it licenses. An evidence
+class says what a result supports; it is not a positive or negative judgement
+about the project.
+
+A registered operational `FAIL` can close a scheduled line of work without
+scientifically refuting the underlying capability. A claim earns `REFUTED` only
+when the target, counterfactual, independent unit, support and power, decision
+rule, and read protocol all support that conclusion. The
 [inference-status contract](docs/ontology/falsification-inference-containment-2026-08-22.md)
 defines those boundaries.
 
