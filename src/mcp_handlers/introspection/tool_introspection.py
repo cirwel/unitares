@@ -125,8 +125,10 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # Progressive disclosure: Order tools by usage frequency
     progressive = coerce_bool(arguments.get("progressive"), False)
     
-    # Import TOOL_TIERS from single source of truth
-    from src.tool_modes import TOOL_TIERS
+    # Import public-surface metadata from their single sources of truth.
+    from src.interface_contract import get_interface_contract_summary
+    from src.tool_modes import TOOL_MODE, TOOL_TIERS
+    interface_contract = get_interface_contract_summary(TOOL_MODE)
 
     # Deprecated tools - hidden from list_tools by default
     # Source of truth: tool_stability.py (aliases handle routing)
@@ -327,6 +329,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 
         response_data = {
             "tools": lite_tools,
+            "interface_contract": interface_contract,
             "total_available": len(tools_list),
             "shown": len(lite_tools),
             # Tier summary for quick understanding of tool importance
@@ -456,6 +459,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     tools_info = {
         "success": True,
         "server_version": mcp_server.SERVER_VERSION,
+        "interface_contract": interface_contract,
         "tools": tools_list,
         "tiers": {
             "essential": list(TOOL_TIERS["essential"]),

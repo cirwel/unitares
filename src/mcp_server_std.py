@@ -77,7 +77,7 @@ from src.agent_state import (
     _normalize_http_proxy_base,
 )
 
-from src.tool_schemas import get_tool_definitions
+from src.interface_contract import get_public_tool_definitions
 from src.lock_cleanup import cleanup_stale_state_locks
 from src.services.tool_usage_recorder import (
     build_tool_usage_payload,
@@ -297,12 +297,11 @@ activity_tracker = get_activity_tracker(HEARTBEAT_CONFIG)
 async def list_tools() -> list[Tool]:
     """List all available MCP tools"""
     def _filtered_local_tools() -> list[Tool]:
-        tools = get_tool_definitions()
         try:
-            from src.tool_modes import TOOL_MODE, should_include_tool
-            return [t for t in tools if should_include_tool(t.name, mode=TOOL_MODE)]
+            from src.tool_modes import TOOL_MODE
+            return get_public_tool_definitions(TOOL_MODE)
         except Exception:
-            return tools
+            return get_public_tool_definitions("full")
 
     if STDIO_PROXY_HTTP_URL:
         try:
