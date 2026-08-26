@@ -97,9 +97,6 @@ NOT_IDENTITIES: dict[str, str] = {
 # it did not establish. Fix an entry and delete its line; never add one to
 # quiet a NEW leak.
 KNOWN_COUPLINGS: dict[str, str] = {
-    "src/agent_lifecycle.py":
-        'label == "Lumen" gates archival protection; the file\'s own comment '
-        'says "Drop once tagged" — the generic path is persistent/protected tags',
     "src/http_routes/vigil.py":
         "resident-specific route module that dispatches on label.lower() == "
         '"vigil"; a deployment without that resident gets a dead endpoint',
