@@ -191,11 +191,13 @@ class TestSchemaStructure:
     """Validate the Tool objects returned by get_tool_definitions()."""
 
     @pytest.fixture(scope="class")
-    def full_tools(self):
+    @classmethod
+    def full_tools(cls):
         return get_tool_definitions(verbosity="full")
 
     @pytest.fixture(scope="class")
-    def short_tools(self):
+    @classmethod
+    def short_tools(cls):
         return get_tool_definitions(verbosity="short")
 
     def test_tool_definitions_returns_non_empty_list(self, full_tools):
