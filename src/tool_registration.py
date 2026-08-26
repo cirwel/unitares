@@ -534,8 +534,11 @@ def auto_register_all_tools(mcp):
 # agents can use intuitive names like status() without "Unknown tool" errors.
 
 def _register_common_aliases(mcp):
+    from src.interface_contract import (
+        build_alias_tool_definition,
+        workflow_alias_names_for_mode,
+    )
     from src.mcp_handlers.tool_stability import (
-        AGENT_WORKFLOW_ALIASES,
         resolve_tool_alias,
     )
     from src.mcp_handlers.support.wrapper_generator import (
@@ -543,32 +546,21 @@ def _register_common_aliases(mcp):
         enable_extra_argument_passthrough,
     )
 
-    common = list(AGENT_WORKFLOW_ALIASES)
+    from src.tool_modes import TOOL_MODE
+
+    common = workflow_alias_names_for_mode(TOOL_MODE)
     count = 0
     for alias_name in common:
         actual, info = resolve_tool_alias(alias_name)
         if not info:
             continue
 
-        # Get the actual tool's schema so the alias has matching parameters
-        from src.tool_schemas import get_tool_definitions
-        actual_schema = {}
-        for tool_def in get_tool_definitions():
-            if tool_def.name == actual:
-                actual_schema = get_tool_input_schema(tool_def, {}) or {}
-                break
-
-        # If inject_action is set, remove "action" from the alias schema —
-        # the alias auto-injects it, so clients shouldn't need to provide it.
-        # Drop the other actions' write-side parameters too, so the schema stops
-        # advertising work this alias's name says it does not do.
-        actual_schema = build_alias_input_schema(
-            alias_name,
-            actual_schema,
-            inject_action=bool(info.inject_action),
-        )
-
         try:
+            # The transport-neutral contract owns the alias schema. REST and
+            # stdio discovery consume the same Tool definition. A missing
+            # implementation schema leaves the alias unadvertised.
+            alias_tool = build_alias_tool_definition(alias_name)
+            actual_schema = get_tool_input_schema(alias_tool, {}) or {}
             wrapper = create_typed_wrapper(
                 tool_name=alias_name,
                 input_schema=actual_schema,
@@ -576,7 +568,7 @@ def _register_common_aliases(mcp):
                 inject_session=actual in TOOLS_NEEDING_SESSION_INJECTION,
                 session_extractor=_session_id_from_ctx,
             )
-            desc = f"{info.migration_note or f'Alias for {actual}'}"
+            desc = alias_tool.description or f"Alias for {actual}"
             mcp.tool(description=desc, structured_output=False)(wrapper)
             tool_manager = getattr(mcp, "_tool_manager", None)
             registered_tool = (
