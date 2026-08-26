@@ -31,10 +31,11 @@ guardrails. MCP is its primary agent-facing contract; it does not own the
 agent's reasoning, tool-execution, or user-interaction loop. (Full scope:
 [`../SCOPE_AND_THREAT_MODEL.md`](../SCOPE_AND_THREAT_MODEL.md).)
 
-A future first-party **UNITARES Resident** can supply that agent experience,
-but it remains a separate userland built on the same public MCP/SDK contract as
-every other harness. The specialized residents shipped as examples in this
-repository are not that general-purpose runtime.
+The first-party **UNITARES Resident** is intended to supply that agent
+experience, but it remains a separate userland built on the same public MCP/SDK
+contract as every other harness. Its repository currently ships an early
+runtime skeleton, not a usable general-purpose agent. The specialized residents
+shipped as examples in this repository are not that product.
 
 **Use UNITARES if** you run autonomous coding/research/ops/resident agents, you want mid-run health signals rather than only pre-deploy evals or post-hoc logs, you want agents to check their own state before continuing, and you want an audit trail of confidence, evidence, drift, and recovery.
 

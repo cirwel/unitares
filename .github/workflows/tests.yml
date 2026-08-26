@@ -42,7 +42,7 @@ jobs:
 
     - name: Install dependencies
       # -c constraints.txt pins drift-bitten deps to the production resolution;
-      # the mcp-newest advisory job covers the unconstrained resolution.
+      # the blocking mcp-newest job covers the unconstrained resolution.
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements-full.txt -c constraints.txt
@@ -199,7 +199,7 @@ jobs:
 
     - name: Install dependencies
       # -c constraints.txt pins drift-bitten deps to the production resolution;
-      # the mcp-newest advisory job covers the unconstrained resolution.
+      # the blocking mcp-newest job covers the unconstrained resolution.
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements-full.txt -c constraints.txt
@@ -498,16 +498,17 @@ jobs:
       run: python -m pytest agents/sdk/tests -q -o pythonpath=
 
   mcp-newest:
-    # Advisory lane: tests the NEWEST in-range mcp resolution, deliberately
+    # Blocking support lane: tests the NEWEST in-range mcp resolution,
+    # deliberately
     # without constraints.txt. This is where "does the next mcp version work"
     # is answered on purpose — the blocking jobs pin to the production
     # resolution, so a new PyPI release can no longer silently become the
     # tested configuration. Red here means the newest allowed mcp breaks a
-    # real client seam (see tests/test_mcp_dependency_canary.py); it blocks
-    # nothing, but green is the precondition for bumping constraints.txt.
-    name: mcp-newest (advisory)
+    # real client seam (see tests/test_mcp_dependency_canary.py). Because the
+    # package admits this resolution, red blocks merges; green is also the
+    # precondition for bumping constraints.txt.
+    name: mcp-newest (supported)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
     - name: Checkout code
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

@@ -48,17 +48,17 @@ checkpoints without requiring them to become one kind of agent.
 
 ## Core and Resident are different products
 
-The repository ships UNITARES Core and several specialized reference
-residents. It does not currently ship a general-purpose conversational agent
-runtime.
+This repository ships UNITARES Core and several specialized reference
+residents. The separate UNITARES Resident repository ships an early runtime
+skeleton, not yet a usable general-purpose conversational agent.
 
 | Product surface | Owns | Boundary |
 |---|---|---|
 | **UNITARES Core** | Identity, provenance, state estimation, policy and recovery, audit, shared knowledge, dialectic review, and coordination. | Does not own the agent's reasoning or tool-execution loop. |
-| **UNITARES Resident** | A future first-party agent experience: persistent conversations, provider and tool adapters, scheduling, task queues, memory participation, and operator-facing interfaces. | Must live outside Core and use the same public MCP/SDK contract as any other harness. It is not shipped today. |
+| **UNITARES Resident** | A first-party agent experience: persistent conversations, provider and tool adapters, scheduling, task queues, memory participation, and operator-facing interfaces. | Lives outside Core and uses the same public MCP/SDK contract as any other harness. Its repository and runtime skeleton are shipped; the usable agent product is not yet shipped. |
 
 Keeping that boundary prevents the system from grading an execution loop it
-privately controls. A future UNITARES Resident may be the easiest way to run a
+privately controls. UNITARES Resident may become the easiest way to run a
 governed agent, but it must remain ordinary userland: no direct database access,
 no imports from Core internals, and no privileged measurement or policy path.
 
