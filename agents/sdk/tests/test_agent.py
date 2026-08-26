@@ -172,13 +172,20 @@ class TestIdentityResolution:
 
     @pytest.mark.asyncio
     async def test_fresh_onboard_when_no_uuid(self, tmp_path):
-        """If no stored UUID, should onboard fresh."""
+        """If no stored UUID, should onboard fresh — and SAY it is fresh.
+
+        This asserted a bare ``onboard("TestAgent")`` until 2026-08-26, which
+        pinned a call the live server refuses: a bare onboard is ambiguous
+        (first run, or a resident that lost its anchor?) so governance answers
+        ``status: lineage_declaration_required`` and mints nothing. Reaching
+        this path IS the deliberate bootstrap, so it declares itself.
+        """
         agent = SimpleAgent(session_file=tmp_path / ".test_session")
 
         client = _mock_client_connected()
         await agent._ensure_identity(client)
 
-        client.onboard.assert_called_once_with("TestAgent")
+        client.onboard.assert_called_once_with("TestAgent", force_new=True)
         client.identity.assert_not_called()
 
     @pytest.mark.asyncio
@@ -195,6 +202,7 @@ class TestIdentityResolution:
 
         client.onboard.assert_called_once_with(
             "TestAgent",
+            force_new=True,
             parent_agent_id="parent-uuid-123",
             spawn_reason="subagent",
         )

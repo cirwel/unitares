@@ -406,7 +406,22 @@ class GovernanceAgent:
             onboard_kwargs["parent_agent_id"] = self.parent_agent_id
         if self.spawn_reason is not None:
             onboard_kwargs["spawn_reason"] = self.spawn_reason
-        await client.onboard(self.name, **onboard_kwargs)
+        # force_new=True because reaching here IS the deliberate bootstrap:
+        # the anchor is absent and (for refuse_fresh_onboard residents) the
+        # operator set UNITARES_FIRST_RUN=1 to say so. A BARE onboard is
+        # ambiguous to the server -- it cannot tell a first run from a resident
+        # that lost its anchor -- so it answers
+        # `status: lineage_declaration_required` with a hint, a next_step, and
+        # three safe_options. That response carries no client_session_id, so
+        # OnboardResult refused to validate and the agent died on a pydantic
+        # error naming a missing field, with every word of the server's
+        # guidance discarded.
+        #
+        # Verified 2026-08-26 against unitares-sdk 0.2.2 installed from PyPI
+        # into a clean venv: the README's own 30-line resident cannot onboard.
+        # Declaring the fresh mint is what the server asks for, and this path
+        # has already established that it is one.
+        await client.onboard(self.name, force_new=True, **onboard_kwargs)
         self._verify_resident_registration(client)
         self._sync_from_client(client)
         self._save_session()
