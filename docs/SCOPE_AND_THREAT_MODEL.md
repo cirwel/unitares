@@ -152,6 +152,27 @@ peer's thresholds; an operator who cannot answer that is asking to be trusted
 rather than verified, which is the one thing a mutually-distrustful exchange
 cannot supply. Tracked in [#1671](https://github.com/cirwel/unitares/issues/1671).
 
+**The attestation half of the same boundary.** Resolution attestations are HMAC
+keyed on each agent's `api_key`. That is a symmetric construction: a verifier
+needs the signing key to recompute a signature, and a party holding that key
+could also forge one. `Resolution.compute_signature` states this in its own
+docstring, and retention of the symmetric stack is a recorded decision rather
+than an oversight (see [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md)). It
+is sound for what it deploys against, which is one operator attesting inside
+their own trust boundary. A second principal is exactly the party who cannot be
+given the key, so a resolution record is not today independently verifiable by
+an operator who does not already trust its issuer.
+
+This is a statement of the deployed boundary, not an argument that issuer
+non-repudiation is the only route across it. Constructions exist that supply
+useful exchange semantics without it: a transparency log can establish
+inclusion, ordering, and consistency without validating issuer authorship, and
+a witness that authenticates an issuer through a separate channel can sign a
+receipt third parties verify. Both introduce different trust assumptions rather
+than removing them. The decision genuinely upstream of any exchange work is
+therefore which verification semantics a multi-principal deployment requires;
+what key material that implies follows from it, and is not settled here.
+
 **The highest-stakes surface: the governed-effect execute plane.** Everything above
 concerns the *signal* and whether an agent can game it. The most security-relevant
 capability is different in kind: an optional **governed-effect execute plane** (BEAM,
