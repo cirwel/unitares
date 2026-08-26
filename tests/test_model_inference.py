@@ -4,9 +4,11 @@ Comprehensive tests for src/mcp_handlers/model_inference.py
 Tests the handle_call_model tool handler with fully mocked external
 API calls (OpenAI SDK).
 
-IMPORTANT: The privacy parameter defaults to "local", which routes to Ollama
-before any provider-specific logic. Tests for non-Ollama providers must
-explicitly set privacy="cloud" or privacy="auto" to bypass the Ollama shortcut.
+IMPORTANT: privacy defaults to local, but an UNSTATED default no longer outranks
+an explicit provider — see TestProviderPrivacyPrecedence. Many tests below still
+pass privacy="cloud" explicitly; that is now belt-and-braces rather than the
+workaround it originally was, and it is left in place so these tests keep
+asserting one thing each.
 """
 
 import json
@@ -513,8 +515,10 @@ class TestOllamaRouting:
 class TestHuggingFaceRouting:
     """Tests for Hugging Face Inference Provider routing.
 
-    All HF tests must use privacy="cloud" to bypass the default
-    privacy="local" Ollama shortcut.
+    These pass privacy="cloud" explicitly. That is no longer required to reach
+    the HF lane — provider="hf" alone suffices — but stating it keeps each test
+    pinned to one behaviour. TestProviderPrivacyPrecedence covers the implicit
+    case.
     """
 
     @pytest.mark.asyncio
@@ -1640,3 +1644,115 @@ class TestCallModelTimeoutInvariant:
 
         with patch.dict(os.environ, {"UNITARES_CALL_MODEL_TIMEOUT": "90"}):
             assert mi._call_model_timeout() == 90.0
+
+
+# =============================================================================
+# Tests: provider vs privacy precedence
+# =============================================================================
+
+class TestProviderPrivacyPrecedence:
+    """An unstated privacy is a default; an explicit one is a policy floor.
+
+    Before this distinction existed, `privacy` was materialised as the literal
+    string "local" whether or not the caller said so, and the routing chain
+    tested `privacy == "local"` first. provider="hf" therefore reached Ollama,
+    404'd on a Hugging Face model id, and recovered with "run `ollama pull
+    Qwen/...`". It failed confidently rather than loudly, which is why it
+    survived: the suite was written around it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_explicit_provider_hf_beats_unstated_privacy(self):
+        """provider=hf with no privacy given reaches HF, not Ollama."""
+        mock_client_instance = MagicMock()
+        mock_client_instance.chat.completions.create.return_value = _make_mock_response(
+            content="hf response", model="Qwen/Qwen2.5-72B-Instruct"
+        )
+
+        with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True), \
+             patch("src.mcp_handlers.support.model_inference.OpenAI", return_value=mock_client_instance) as mock_openai, \
+             patch.dict(os.environ, {"HF_TOKEN": "hf_test_token"}):
+            from src.mcp_handlers.support.model_inference import handle_call_model
+            result = await handle_call_model({
+                "prompt": "Hello",
+                "provider": "hf",
+                "model": "Qwen/Qwen2.5-72B-Instruct",
+            })
+
+        assert "router.huggingface.co" in mock_openai.call_args[1]["base_url"]
+        parsed = _parse_text_content(result)
+        assert parsed["success"] is True
+        assert parsed["routed_via"] == "huggingface"
+
+    @pytest.mark.asyncio
+    async def test_explicit_privacy_local_still_wins_over_provider_hf(self):
+        """An explicitly requested local privacy is never weakened — it refuses.
+
+        Silently honouring provider='hf' here would leak the prompt off-host
+        against a stated policy, and silently honouring privacy='local' is the
+        original bug. The only honest answer to a contradiction is to name it.
+        """
+        with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True):
+            from src.mcp_handlers.support.model_inference import handle_call_model
+            result = await handle_call_model({
+                "prompt": "Hello",
+                "provider": "hf",
+                "privacy": "local",
+            })
+
+        parsed = _parse_text_content(result)
+        assert parsed["success"] is False
+        assert parsed["error_code"] == "PROVIDER_PRIVACY_CONFLICT"
+        # The recovery must offer both ways out, not just the permissive one.
+        action = parsed["recovery"]["action"]
+        assert "privacy='cloud'" in action
+        assert "provider='hf'" in action
+
+    @pytest.mark.asyncio
+    async def test_hf_model_id_under_auto_provider_reaches_hf(self):
+        """An HF-shaped model id names the lane as clearly as the provider does."""
+        mock_client_instance = MagicMock()
+        mock_client_instance.chat.completions.create.return_value = _make_mock_response(
+            content="hf response", model="deepseek-ai/DeepSeek-R1"
+        )
+
+        with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True), \
+             patch("src.mcp_handlers.support.model_inference.OpenAI", return_value=mock_client_instance) as mock_openai, \
+             patch.dict(os.environ, {"HF_TOKEN": "hf_test_token"}):
+            from src.mcp_handlers.support.model_inference import handle_call_model
+            result = await handle_call_model({
+                "prompt": "Hello",
+                "model": "deepseek-ai/DeepSeek-R1",
+            })
+
+        assert "router.huggingface.co" in mock_openai.call_args[1]["base_url"]
+        assert _parse_text_content(result)["routed_via"] == "huggingface"
+
+    @pytest.mark.asyncio
+    async def test_bare_call_still_defaults_to_local(self):
+        """Nothing stated at all keeps the pre-existing local default."""
+        mock_client_instance = MagicMock()
+        mock_client_instance.chat.completions.create.return_value = _make_mock_response(
+            content="ollama response", model="llama3:70b"
+        )
+
+        with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True), \
+             patch("src.mcp_handlers.support.model_inference.OpenAI", return_value=mock_client_instance) as mock_openai:
+            from src.mcp_handlers.support.model_inference import handle_call_model
+            result = await handle_call_model({"prompt": "Hello"})
+
+        assert "localhost:11434" in mock_openai.call_args[1]["base_url"]
+        assert _parse_text_content(result)["routed_via"] == "ollama"
+
+    def test_hf_model_prefix_helper_matches_the_documented_shapes(self):
+        from src.mcp_handlers.support.model_inference import _is_hf_model_id
+
+        assert _is_hf_model_id("deepseek-ai/DeepSeek-R1")
+        assert _is_hf_model_id("Qwen/Qwen2.5-72B-Instruct")
+        assert _is_hf_model_id("qwen/qwen-2.5-72b-instruct")
+        assert _is_hf_model_id("hf:some/model")
+        assert _is_hf_model_id("openai/gpt-oss-120b")
+        # Ollama tags must not be mistaken for HF ids.
+        assert not _is_hf_model_id("gemma4:latest")
+        assert not _is_hf_model_id("llama3:70b")
+        assert not _is_hf_model_id("auto")

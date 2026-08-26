@@ -60,8 +60,23 @@ class CallModelRequest:
     task_type: str = "reasoning"
     max_tokens: int = 2048
     temperature: float = 0.7
-    privacy: str = "local"
+    # None means "caller said nothing". It is NOT the same as an explicit
+    # privacy="local": an explicit local is a policy floor that must never be
+    # weakened, while an unstated one is only a default and must not silently
+    # override an explicit provider. Collapsing the two is what made
+    # provider="hf" route to Ollama and 404.
+    privacy: str | None = None
     timeout_s: float = 235.0
+
+
+# Model-id shapes that only exist on the Hugging Face side. Kept in one place so
+# the routing test and the branch that acts on it cannot drift apart.
+_HF_MODEL_PREFIXES = ("deepseek-ai/", "openai/gpt-oss", "hf:", "Qwen/", "qwen/")
+
+
+def _is_hf_model_id(model: str) -> bool:
+    """True when the model id itself names the Hugging Face lane."""
+    return model.startswith(_HF_MODEL_PREFIXES)
 
 
 def _invocation_gate() -> Dict[str, Any]:
@@ -300,8 +315,38 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
                 },
             )
     
-    # Privacy routing: Force local if requested
-    if privacy == "local" or provider == "ollama":
+    # `privacy is None` means the caller said nothing, and that is the only way to
+    # tell an unstated default from an explicit privacy="local". The distinction is
+    # load-bearing: an explicit local is a policy floor that must never be weakened,
+    # but a default must not silently outrank an explicit provider. Collapsing the
+    # two sent provider="hf" to Ollama, which then 404'd with a recovery hint
+    # advising `ollama pull` on a Hugging Face model id.
+    privacy_stated = privacy is not None
+    privacy = privacy or "local"
+
+    # An HF model id under provider="auto" requests the HF lane as plainly as
+    # naming the provider does.
+    wants_hf = provider == "hf" or (provider == "auto" and _is_hf_model_id(model))
+
+    if privacy_stated and privacy == "local" and provider == "hf":
+        return InferenceOutcome.failed(
+            "provider='hf' conflicts with privacy='local'",
+            code="PROVIDER_PRIVACY_CONFLICT",
+            category="validation_error",
+            details={"provider": provider, "privacy": privacy},
+            recovery={
+                "action": (
+                    "Hugging Face is external, so this asks to stay local and to "
+                    "leave at the same time. Drop provider='hf' to stay local, or "
+                    "pass privacy='cloud' (or 'auto') to allow external "
+                    "processing. Privacy is never weakened implicitly."
+                ),
+                "related_tools": ["list_inference_hosts", "describe_inference_host"],
+            },
+        )
+
+    # Privacy routing: local unless the caller asked for a lane that is not.
+    if provider == "ollama" or (privacy == "local" and not wants_hf):
         # Route to Ollama (local). Model names pass through verbatim so
         # callers get a clean 404 if the model isn't pulled — no silent
         # aliasing to a model that may also be absent.
@@ -311,7 +356,7 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
         api_key = "ollama"  # Dummy key - Ollama ignores it but OpenAI SDK requires non-None
         provider = "ollama"
         logger.info(f"Privacy mode: local - routing to Ollama with model {model}")
-    elif provider == "hf" or (provider == "auto" and (model.startswith("deepseek-ai/") or model.startswith("openai/gpt-oss") or model.startswith("hf:") or model.startswith("Qwen/") or model.startswith("qwen/"))):
+    elif wants_hf:
         # Hugging Face Inference Providers (free tier, OpenAI-compatible)
         base_url = "https://router.huggingface.co/v1"
         api_key = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN")
@@ -640,7 +685,7 @@ async def handle_call_model(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         task_type=str(arguments.get("task_type", "reasoning")),
         max_tokens=int(arguments.get("max_tokens", 2048)),
         temperature=float(arguments.get("temperature", 0.7)),
-        privacy=str(arguments.get("privacy", "local")),
+        privacy=(str(arguments["privacy"]) if arguments.get("privacy") else None),
         timeout_s=_provider_timeout_s(),
     )
     outcome = await run_model_inference(request)

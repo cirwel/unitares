@@ -134,6 +134,36 @@
              back to the server default. -->
         <key>UNITARES_LLM_MODEL</key>
         <string>YOUR_LOCAL_MODEL</string>
+        <!-- Inference lanes beyond the local one. A host built from this
+             template comes up with ONLY ollama:local reachable; the two keys
+             below are what the other three lanes wait on. list_inference_hosts
+             reports each lane's `configured` / `available` state, so check
+             there rather than guessing.
+
+             HF_TOKEN enables hf:router (external cloud, OpenAI-compatible).
+             Note it is read from the ENVIRONMENT only — a token sitting in
+             ~/.cache/huggingface/token is NOT picked up, even with HF_HOME set.
+             The neighbouring HF_HUB_OFFLINE / TRANSFORMERS_OFFLINE keys do not
+             block this lane: they govern the in-process embedding model, while
+             hf:router is a plain HTTPS call to router.huggingface.co. -->
+        <key>HF_TOKEN</key>
+        <string>YOUR_HF_TOKEN_OR_OMIT_THIS_KEY</string>
+        <!-- ONE flag for BOTH strong-model lanes: claude:host-adapter and
+             codex:host-adapter. There is no per-lane switch. Enabling it lets
+             any bound agent spend the operator's subscription quota through
+             delegate_inference; it adds no metered model-API dependency (these
+             drive subscription-auth CLIs), but the quota is real. Each lane
+             additionally needs its CLI authenticated as the user this service
+             runs as, plus AGENT_ORCHESTRATOR_BEARER_TOKEN.
+
+             Credential gotcha: a CLI that keeps its token in an OS keyring
+             rather than a file may be unreadable from a service-spawned child
+             even when HOME is correct, and reports itself as simply logged out.
+             Verify by running the CLI under `env -i HOME=... PATH=...` before
+             concluding the adapter is broken. Leave this unset to keep both
+             strong lanes off. -->
+        <key>UNITARES_HOST_ADAPTER_ENABLED</key>
+        <string>0</string>
     </dict>
 </dict>
 </plist>
