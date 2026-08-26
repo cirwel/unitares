@@ -397,11 +397,13 @@ def test_registry_reflects_availability(monkeypatch):
     assert hosts2["codex:host-adapter"]["available"] is False
 
 
-def test_only_claude_adapter_is_agent_callable(monkeypatch):
+def test_both_host_adapters_are_agent_callable(monkeypatch):
     """Availability is not callability.
 
     Reachability describes a routing contract and therefore does not flap with
-    runtime readiness. Claude has delegate_inference; Codex remains unwired.
+    runtime readiness: both subscription-CLI adapters accept a host_id from
+    delegate_inference whether or not this install has the flag, the CLI, or
+    the bearer token. Readiness is what `available` answers.
     """
     from src.mcp_handlers.support import inference_registry as reg
 
@@ -411,14 +413,39 @@ def test_only_claude_adapter_is_agent_callable(monkeypatch):
         else:
             monkeypatch.delenv("UNITARES_HOST_ADAPTER_ENABLED", raising=False)
         hosts = {h["host_id"]: h for h in reg.list_inference_hosts()}
-        assert hosts["codex:host-adapter"]["accepts_host_id_from"] == []
-        assert hosts["codex:host-adapter"]["implementation_status"] == "built_unwired"
-        assert hosts["claude:host-adapter"]["accepts_host_id_from"] == [
-            "delegate_inference"
-        ]
-        assert hosts["claude:host-adapter"]["implementation_status"] == "active"
+        for host_id in ("codex:host-adapter", "claude:host-adapter"):
+            assert hosts[host_id]["accepts_host_id_from"] == ["delegate_inference"]
+            assert hosts[host_id]["implementation_status"] == "active"
 
     # The synchronous hosts are the ones call_model can actually serve.
     hosts = {h["host_id"]: h for h in reg.list_inference_hosts()}
     assert hosts["ollama:local"]["accepts_host_id_from"] == ["call_model"]
     assert hosts["hf:router"]["accepts_host_id_from"] == ["call_model"]
+
+
+def test_codex_model_request_is_passed_to_the_cli(monkeypatch):
+    """A requested model must reach the CLI, not just the provenance record.
+
+    `model_requested` was recorded while the command dropped it, so a caller
+    who asked for a specific Codex model got the CLI default and an evidence
+    trail claiming otherwise.
+    """
+    from src.mcp_handlers.support import host_adapter as ha
+
+    _cli, shell_command, family = ha._HOST_COMMANDS["codex:host-adapter"]
+    assert family == "openai_codex"
+    assert '-m "$HA_MODEL"' in shell_command
+    # The no-model branch stays byte-identical to the command verified live.
+    assert (
+        'exec "$HA_CLI" exec --sandbox "$HA_SANDBOX" '
+        '--skip-git-repo-check "$HA_PROMPT" </dev/null'
+    ) in shell_command
+
+
+def test_codex_cli_env_var_is_named_for_its_own_host():
+    """Recovery text must name the knob for the host that actually failed."""
+    from src.mcp_handlers.support import host_adapter as ha
+
+    assert ha.host_cli_env_var("codex:host-adapter") == "UNITARES_CODEX_CLI"
+    assert ha.host_cli_env_var("claude:host-adapter") == "UNITARES_CLAUDE_CLI"
+    assert ha.host_cli_env_var("nope") is None

@@ -42,7 +42,18 @@ logger = logging.getLogger(__name__)
 _HOST_COMMANDS = {
     "codex:host-adapter": (
         "codex",
-        'exec "$HA_CLI" exec --sandbox "$HA_SANDBOX" --skip-git-repo-check "$HA_PROMPT" </dev/null',
+        # The no-model branch is byte-identical to the command verified live on
+        # 2026-06-30, so an operator who names no model runs exactly what was
+        # proven. `-m` is only ever added when a caller explicitly asks for a
+        # model — previously that request was accepted, recorded in provenance
+        # as `model_requested`, and then silently dropped.
+        (
+            'if [ -n "$HA_MODEL" ]; then '
+            'exec "$HA_CLI" exec --sandbox "$HA_SANDBOX" --skip-git-repo-check '
+            '-m "$HA_MODEL" "$HA_PROMPT" </dev/null; '
+            'else exec "$HA_CLI" exec --sandbox "$HA_SANDBOX" '
+            '--skip-git-repo-check "$HA_PROMPT" </dev/null; fi'
+        ),
         "openai_codex",
     ),
     "claude:host-adapter": (
@@ -62,6 +73,16 @@ _CLI_ENV_OVERRIDES = {
     "codex:host-adapter": "UNITARES_CODEX_CLI",
     "claude:host-adapter": "UNITARES_CLAUDE_CLI",
 }
+
+
+def host_cli_env_var(host_id: str) -> Optional[str]:
+    """The operator variable that pins this host's CLI, for recovery text.
+
+    Exists so callers can name the right knob without reaching into this
+    module's tables: a recovery action that says UNITARES_CLAUDE_CLI to
+    somebody whose Codex call failed sends them to configure the wrong thing.
+    """
+    return _CLI_ENV_OVERRIDES.get(host_id)
 
 
 def _is_executable(path: str) -> bool:

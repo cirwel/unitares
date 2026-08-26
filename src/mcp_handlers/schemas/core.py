@@ -567,19 +567,23 @@ class DelegateInferenceParams(AgentIdentityMixin):
         max_length=100_000,
         description="Prompt to send to the operator-authorized strong model.",
     )
-    host_id: Literal["claude:host-adapter"] = Field(
+    host_id: Literal["claude:host-adapter", "codex:host-adapter"] = Field(
         "claude:host-adapter",
         description=(
-            "Long-running host adapter to invoke. Claude is the first enabled "
-            "reciprocal adapter; Codex remains registered but unwired."
+            "Long-running host adapter to invoke. Both subscription-CLI "
+            "adapters are reachable here; each is opt-in and unavailable "
+            "until the operator enables it. Claude stays the default because "
+            "its CLI reports exact model identifiers and usage, which Codex "
+            "does not."
         ),
     )
     model: Optional[str] = Field(
         None,
         description=(
-            "Optional Claude model alias or exact identifier. When omitted, "
-            "the operator/CLI default selects the model; exact models actually "
-            "used are returned in provenance."
+            "Optional model alias or exact identifier for the selected host. "
+            "When omitted, the operator/CLI default selects the model; exact "
+            "models actually used are returned in provenance where the CLI "
+            "reports them."
         ),
     )
     task_type: Literal["reasoning", "review", "summarize"] = Field(

@@ -9,11 +9,13 @@ opt-in flag). The strong hosts are gated by ``UNITARES_HOST_ADAPTER_ENABLED``.
 **Availability is not callability.** ``available`` answers "could this adapter
 run if something invoked it". ``accepts_host_id_from`` answers the question an
 agent actually has: "which tools will accept this host as a ``host_id``
-argument". They can diverge: the Codex adapter remains built but unwired, while
-the Claude adapter is reachable through the long-running
-``delegate_inference`` tool. A host that advertises itself as usable while
-nothing can call it is a discoverability lie, so an unwired record carries
-``accepts_host_id_from=[]``. Wire a caller -> update reachability and
+argument". They diverge in the ordinary case: both subscription-CLI adapters
+are reachable from ``delegate_inference`` on every install, while ``available``
+goes false on any install where the opt-in flag is off, the CLI is absent, or
+the orchestrator bearer is unset. Reachability is a routing contract and must
+not flap with runtime readiness. A host that advertises itself as usable while
+nothing can call it is a discoverability lie, so a genuinely unwired record
+carries ``accepts_host_id_from=[]``. Wire a caller -> update reachability and
 implementation status in the same change.
 
 ``accepts_host_id_from`` is deliberately a claim about *parameter validity*, not
@@ -185,17 +187,22 @@ def _base_hosts() -> list[InferenceHost]:
             accountability_class="tool_evidence",
             capabilities=["reasoning", "review", "summarize"],
             models=["codex"],
-            implementation_status="built_unwired",
-            accepts_host_id_from=[],
+            implementation_status="active",
+            accepts_host_id_from=["delegate_inference"],
             notes=(
-                "NOT REACHABLE BY AGENTS YET. Subscription-backed Codex "
-                "(`codex exec`) served ASYNC via the agent-orchestrator, not the "
-                "sync call_model path. The adapter is built and tested, but "
-                "invoke_host_adapter() has no production caller, so no tool "
-                "routes here even with UNITARES_HOST_ADAPTER_ENABLED=1 + the "
-                "codex CLI on PATH + AGENT_ORCHESTRATOR_BEARER_TOKEN. "
-                "`available` reports adapter readiness, not callability. "
-                "See support/host_adapter.py."
+                "Agent-callable through delegate_inference. Subscription-backed "
+                "Codex (`codex exec --sandbox read-only`) served ASYNC via the "
+                "agent-orchestrator, not the sync call_model path. Requires "
+                "UNITARES_HOST_ADAPTER_ENABLED=1, a codex CLI (PATH, "
+                "~/.local/bin/codex, or UNITARES_CODEX_CLI) authenticated "
+                "against the operator's ChatGPT subscription, and "
+                "AGENT_ORCHESTRATOR_BEARER_TOKEN. `model` is passed as `-m` "
+                "when supplied. The CLI reports no exact model identifier, so "
+                "provenance carries a warning rather than a model id where the "
+                "Claude adapter returns one. Separately, the dialectic reviewer "
+                "runs its own Codex lane via UNITARES_DIALECTIC_REVIEWER_HOST "
+                "(agents/dialectic_reviewer/), which does not route through "
+                "this registry."
             ),
         ),
         InferenceHost(
