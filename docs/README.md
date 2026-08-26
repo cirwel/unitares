@@ -11,7 +11,7 @@ an analogy or proposal is not mistaken for a deployed contract.
 | You are… | Read in this order |
 |---|---|
 | **A reviewer / first-time visitor** | [repo README](../README.md) → [`PRODUCT_DEFINITION.md`](PRODUCT_DEFINITION.md) → [`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md) → [`EISV_COMPUTATION.md`](EISV_COMPUTATION.md) → [`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md) → [`PRODUCTION_SNAPSHOT.md`](PRODUCTION_SNAPSHOT.md) |
-| **Integrating an MCP client** | [`manual/04-integrating-agents.md`](manual/04-integrating-agents.md) → [`integration/MCP_CLIENTS.md`](integration/MCP_CLIENTS.md) → [`guides/TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) |
+| **Integrating an agent client** | [`INTERFACE_CONTRACT.md`](INTERFACE_CONTRACT.md) → [`integration/CLIENT_CAPABILITY_MATRIX.md`](integration/CLIENT_CAPABILITY_MATRIX.md) → [`manual/04-integrating-agents.md`](manual/04-integrating-agents.md) → [`integration/MCP_CLIENTS.md`](integration/MCP_CLIENTS.md) → [`guides/TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) |
 | **Installing / deploying** | [`manual/02-install.md`](manual/02-install.md) → [`install/PLAYBOOK.md`](install/PLAYBOOK.md) → [`operations/OPERATOR_RUNBOOK.md`](operations/OPERATOR_RUNBOOK.md) |
 | **Contributing to the identity layer** | [`../AGENTS.md`](../AGENTS.md) → [`ontology/README.md`](ontology/README.md) → [`ontology/identity.md`](ontology/identity.md) → [`ontology/plan.md`](ontology/plan.md) |
 | **Reading research history** | [`EVALUATION_INDEX.md`](EVALUATION_INDEX.md) → [`ontology/README.md`](ontology/README.md) → [`proposals/README.md`](proposals/README.md) |
@@ -34,6 +34,7 @@ A cohesive, multi-chapter front door for operators and integrators. Thin chapter
 - **[`PRODUCT_DEFINITION.md`](PRODUCT_DEFINITION.md)** — what UNITARES is, in plain language: the one-sentence product, the Core/userland boundary, MCP's place in the stack, the record/score/interrupt/remember loop, and the honest limits. Start here when the architecture nouns aren't landing.
 - **[`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md)** — the canonical architecture doc. End-to-end picture of the server, state model, transports, and storage.
 - **[`CANONICAL_COMPONENTS.md`](CANONICAL_COMPONENTS.md)** — component/layer map, orthogonal to the check-in pipeline view in `UNIFIED_ARCHITECTURE.md`.
+- **[`INTERFACE_CONTRACT.md`](INTERFACE_CONTRACT.md)** — versioned, transport-neutral capability names and the boundary between tool reachability and host lifecycle integration.
 - **[`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md)** — guided tour for reviewers evaluating the project.
 - **[`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md)** — who this is for, what anchors the signal, and what gaming or robustness remains unproven.
 - **[`PRODUCTION_SNAPSHOT.md`](PRODUCTION_SNAPSHOT.md)** — frozen live metrics and dashboard views.
@@ -63,6 +64,7 @@ User- and integrator-facing how-tos. Thin by design — most architecture lives 
 ### `integration/` — MCP and client wiring
 
 - [`MCP_CLIENTS.md`](integration/MCP_CLIENTS.md) — Streamable HTTP MCP endpoints, stdio bridges, and hosted/client-neutral setup
+- [`CLIENT_CAPABILITY_MATRIX.md`](integration/CLIENT_CAPABILITY_MATRIX.md) — what direct MCP, host plugins, adapters, and a future Resident do and do not automate
 
 ### `ontology/` — identity ontology
 

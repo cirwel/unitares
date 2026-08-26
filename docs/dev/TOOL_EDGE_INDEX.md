@@ -30,9 +30,9 @@ registrars advertise in each deployable mode and what `describe_tool` says
 about those names. The snapshots are immutable evidence inputs; they do not
 certify the components that produced them.
 
-- Audit bundle: `sha256:7802bd9449079ef8c78363a66f193a76062bca75f9deab78d34c3620d56b48fd` (`unitares.tool-surface-audit.v1`).
-- Dispatch snapshot: `sha256:8c90ab9c1e950aaf9dccf826c57ce4ba1e2dfd15e1173e7e86782970f6bb0736`.
-- Audited source revision: `sha256:97e11d55e7414cba72db4ca345729db60f0fbff27599ae36dcdfa57a88280cc0` (52 files).
+- Audit bundle: `sha256:fbfbcd6a151ed2af3e98f73650e7e30b7229dd2a4273eef14210d3126f968a3c` (`unitares.tool-surface-audit.v1`).
+- Dispatch snapshot: `sha256:40576d957c0e963a1808418975dc2e75063312ff93ecc22c29e928f9260d9124`.
+- Audited source revision: `sha256:e141e14016ff43f21e48ac5fc53b674910bcd17c125ef5b48cc3bd3bb2272f22` (52 files).
 - Exposure snapshot: `sha256:f3a1de2a620aef9f06b35caac320e86e47ef1e3396eea5d73cce95fc8b8d85ea`.
 - JSON contract: [`tool_surface_audit_v1.schema.json`](tool_surface_audit_v1.schema.json).
 - Reproduce with `python3 scripts/dev/tool_edge_index.py --json`; run
@@ -123,7 +123,7 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `debug_request_context` | `src/mcp_handlers/admin/handlers.py:525 handle_debug_request_context` | `src/mcp_handlers/schemas/admin.py:144 DebugRequestContextParams` | 5s | — |
 | `delegate_inference` | `src/mcp_handlers/support/delegated_inference.py:243 handle_delegate_inference` | `src/mcp_handlers/schemas/core.py:562 DelegateInferenceParams` | 480s | — |
 | `describe_inference_host` | `src/mcp_handlers/support/model_inference.py:150 handle_describe_inference_host` | `src/mcp_handlers/schemas/core.py:675 DescribeInferenceHostParams` | 5s | identity=pre_onboard |
-| `describe_tool` | `src/mcp_handlers/introspection/tool_introspection.py:666 handle_describe_tool` | `src/mcp_handlers/schemas/admin.py:42 DescribeToolParams` | 10s | identity=pre_onboard |
+| `describe_tool` | `src/mcp_handlers/introspection/tool_introspection.py:670 handle_describe_tool` | `src/mcp_handlers/schemas/admin.py:42 DescribeToolParams` | 10s | identity=pre_onboard |
 | `detect_stuck_agents` | `src/mcp_handlers/lifecycle/stuck.py:919 handle_detect_stuck_agents` | `src/mcp_handlers/schemas/lifecycle.py:275 DetectStuckAgentsParams` | 15s | identity=pre_onboard |
 | `dialectic` | `src/mcp_handlers/consolidated.py:388 action_router` | `src/mcp_handlers/schemas/dialectic.py:137 DialecticParams` | 115s | — |
 | `direct_resume_if_safe` | `src/mcp_handlers/lifecycle/resume.py:23 handle_direct_resume_if_safe` | `src/mcp_handlers/schemas/lifecycle.py:333 DirectResumeIfSafeParams` | 10s | deprecated→`quick_resume or self_recovery_review` |

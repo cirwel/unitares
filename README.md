@@ -113,7 +113,7 @@ record and policy surface.
 | Layer | Responsibility | Status |
 |---|---|---|
 | **UNITARES Core** | Identity, provenance, longitudinal state, policy and recovery, audit, knowledge, dialectic review, and coordination. | Shipped in this repository. |
-| **Public interfaces** | MCP as the primary agent-facing contract, plus REST, `unitares-sdk`, the dashboard, plugins, and host adapters. | Shipped; individual surfaces have their own maturity limits. |
+| **Public interfaces** | MCP as the primary agent-facing contract, plus REST, `unitares-sdk`, the dashboard, plugins, and host adapters. The versioned [interface contract](docs/INTERFACE_CONTRACT.md) defines the common tool-discovery seam. | Shipped; individual surfaces have their own maturity limits. |
 | **Agent userlands** | The conversational loop, model/provider selection, tool execution, scheduling, and user interaction. | Supplied by external harnesses and custom clients today. |
 | **UNITARES Resident** | A possible first-party, general-purpose agent userland built entirely on the public interfaces above. | Not shipped. It belongs outside Core and must not receive a privileged scoring or database path. |
 

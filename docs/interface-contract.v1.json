@@ -1,0 +1,338 @@
+{
+  "schema": "unitares.interface-contract.v1",
+  "version": "1.0.0",
+  "scope": "advertised_and_callable_tool_names",
+  "mode": "lite",
+  "transports": [
+    "mcp_streamable_http",
+    "rest_v1_tools",
+    "stdio"
+  ],
+  "surface_sha256": "4b68819a1c5b5ef16680f7c6b2911522346482eccf943e2d376d8fa9a42fd1c7",
+  "capabilities": [
+    {
+      "name": "start_session",
+      "implementation": "onboard",
+      "kind": "workflow_alias",
+      "input_schema_sha256": "58460b855a1113d7c19f91507a99dc450e932ed42cceef846550ffc028ead234",
+      "transport_names": {
+        "mcp_streamable_http": "start_session",
+        "rest_v1_tools": "start_session",
+        "stdio": "start_session"
+      }
+    },
+    {
+      "name": "sync_state",
+      "implementation": "process_agent_update",
+      "kind": "workflow_alias",
+      "input_schema_sha256": "e31a69e0340cf0ca9d633814ddac9134565730ee81e776c6347a6fe3a32bdd69",
+      "transport_names": {
+        "mcp_streamable_http": "sync_state",
+        "rest_v1_tools": "sync_state",
+        "stdio": "sync_state"
+      }
+    },
+    {
+      "name": "check_working_state",
+      "implementation": "get_governance_metrics",
+      "kind": "workflow_alias",
+      "input_schema_sha256": "e15800e972d5d2e5000131aa124c0bb094cbe51a3dd4434603744903b2b03f84",
+      "transport_names": {
+        "mcp_streamable_http": "check_working_state",
+        "rest_v1_tools": "check_working_state",
+        "stdio": "check_working_state"
+      }
+    },
+    {
+      "name": "search_shared_memory",
+      "implementation": "knowledge",
+      "kind": "workflow_alias",
+      "input_schema_sha256": "d3d6f4ca443b271458a40df9d77bc6881a06bd47fdcdb144f18fcd223dd8247f",
+      "transport_names": {
+        "mcp_streamable_http": "search_shared_memory",
+        "rest_v1_tools": "search_shared_memory",
+        "stdio": "search_shared_memory"
+      }
+    },
+    {
+      "name": "store_finding",
+      "implementation": "knowledge",
+      "kind": "workflow_alias",
+      "input_schema_sha256": "142278021934b964179957c7a0b4378a29d113c04e68da55d0146b13f621ff7b",
+      "transport_names": {
+        "mcp_streamable_http": "store_finding",
+        "rest_v1_tools": "store_finding",
+        "stdio": "store_finding"
+      }
+    },
+    {
+      "name": "update_finding",
+      "implementation": "knowledge",
+      "kind": "workflow_alias",
+      "input_schema_sha256": "a50eafa0f55e6c93e1999b265e3d81088536aa8494b5f820a42122c9a0967f8c",
+      "transport_names": {
+        "mcp_streamable_http": "update_finding",
+        "rest_v1_tools": "update_finding",
+        "stdio": "update_finding"
+      }
+    },
+    {
+      "name": "record_result",
+      "implementation": "outcome_event",
+      "kind": "workflow_alias",
+      "input_schema_sha256": "d7b4a33436d579454024818485bfd6544063aab2d3b89dddd9aa24d366adf726",
+      "transport_names": {
+        "mcp_streamable_http": "record_result",
+        "rest_v1_tools": "record_result",
+        "stdio": "record_result"
+      }
+    },
+    {
+      "name": "request_review",
+      "implementation": "dialectic",
+      "kind": "workflow_alias",
+      "input_schema_sha256": "07446b73f0f67b1b82d959eb3e31a78a7c46692685079f5590f15a880f1ce953",
+      "transport_names": {
+        "mcp_streamable_http": "request_review",
+        "rest_v1_tools": "request_review",
+        "stdio": "request_review"
+      }
+    },
+    {
+      "name": "health_check",
+      "implementation": "health_check",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "26c6983087bc77fef7a4cfa6cb87579fd17b5c37c84d767bc2f40795d3daebf5",
+      "transport_names": {
+        "mcp_streamable_http": "health_check",
+        "rest_v1_tools": "health_check",
+        "stdio": "health_check"
+      }
+    },
+    {
+      "name": "archive_orphan_agents",
+      "implementation": "archive_orphan_agents",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "b773fbdf4e1f01e23bb1902898a7559283be9a2f0bdfaa523c76a552ddefabd8",
+      "transport_names": {
+        "mcp_streamable_http": "archive_orphan_agents",
+        "rest_v1_tools": "archive_orphan_agents",
+        "stdio": "archive_orphan_agents"
+      }
+    },
+    {
+      "name": "list_tools",
+      "implementation": "list_tools",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "42517d552947436b046000963269e503fab274ca52101bf54d5cc83f1e3b45ab",
+      "transport_names": {
+        "mcp_streamable_http": "list_tools",
+        "rest_v1_tools": "list_tools",
+        "stdio": "list_tools"
+      }
+    },
+    {
+      "name": "describe_tool",
+      "implementation": "describe_tool",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "b921fbdfbd223d3e22ee5a28764cbb4ab62c203572b83808dd1e7f6108e5ac57",
+      "transport_names": {
+        "mcp_streamable_http": "describe_tool",
+        "rest_v1_tools": "describe_tool",
+        "stdio": "describe_tool"
+      }
+    },
+    {
+      "name": "leave_note",
+      "implementation": "leave_note",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "44de810d8ab5f18a1ee1ff33f2504c64bb4a0207d252e438de4b97f8340bee53",
+      "transport_names": {
+        "mcp_streamable_http": "leave_note",
+        "rest_v1_tools": "leave_note",
+        "stdio": "leave_note"
+      }
+    },
+    {
+      "name": "list_inference_hosts",
+      "implementation": "list_inference_hosts",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "bb1ef07268db8fa592324cde2049a0ab9445f0782a0a84235ec3baa5acd25f6d",
+      "transport_names": {
+        "mcp_streamable_http": "list_inference_hosts",
+        "rest_v1_tools": "list_inference_hosts",
+        "stdio": "list_inference_hosts"
+      }
+    },
+    {
+      "name": "describe_inference_host",
+      "implementation": "describe_inference_host",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "f9b0d6f0f0c4c49b732d4e9e7216ae31beb7bd97526aca90368bbe40a0b78c8e",
+      "transport_names": {
+        "mcp_streamable_http": "describe_inference_host",
+        "rest_v1_tools": "describe_inference_host",
+        "stdio": "describe_inference_host"
+      }
+    },
+    {
+      "name": "consult",
+      "implementation": "consult",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "01218452fa9e8ab0461c608ae6f33083970e30486da1f9a693cef445c03dbd49",
+      "transport_names": {
+        "mcp_streamable_http": "consult",
+        "rest_v1_tools": "consult",
+        "stdio": "consult"
+      }
+    },
+    {
+      "name": "call_model",
+      "implementation": "call_model",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "800bc532fc15e958825ff44d749ecadc560168418efd63e59a693ee13cb43169",
+      "transport_names": {
+        "mcp_streamable_http": "call_model",
+        "rest_v1_tools": "call_model",
+        "stdio": "call_model"
+      }
+    },
+    {
+      "name": "delegate_inference",
+      "implementation": "delegate_inference",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "baf9894d79a4314efa8194fcda292d70f81b846a753ef1994283ad063c1a7d7c",
+      "transport_names": {
+        "mcp_streamable_http": "delegate_inference",
+        "rest_v1_tools": "delegate_inference",
+        "stdio": "delegate_inference"
+      }
+    },
+    {
+      "name": "onboard",
+      "implementation": "onboard",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "58460b855a1113d7c19f91507a99dc450e932ed42cceef846550ffc028ead234",
+      "transport_names": {
+        "mcp_streamable_http": "onboard",
+        "rest_v1_tools": "onboard",
+        "stdio": "onboard"
+      }
+    },
+    {
+      "name": "identity",
+      "implementation": "identity",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "72c3b3538b7b42be31eb6535fd2a3e79ed1e85727d9564433f64d3a934887fd0",
+      "transport_names": {
+        "mcp_streamable_http": "identity",
+        "rest_v1_tools": "identity",
+        "stdio": "identity"
+      }
+    },
+    {
+      "name": "bind_session",
+      "implementation": "bind_session",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "4080f72cfc3622abc97b14816cc21bf6bb6d29b05efeb8aa26a1805e15bb3d07",
+      "transport_names": {
+        "mcp_streamable_http": "bind_session",
+        "rest_v1_tools": "bind_session",
+        "stdio": "bind_session"
+      }
+    },
+    {
+      "name": "knowledge",
+      "implementation": "knowledge",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "65bb1709af06439b048e39cdce0a935070ddd2ddeb1f052fa7171b33502683c9",
+      "transport_names": {
+        "mcp_streamable_http": "knowledge",
+        "rest_v1_tools": "knowledge",
+        "stdio": "knowledge"
+      }
+    },
+    {
+      "name": "agent",
+      "implementation": "agent",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "2fade5edec949e11134a34daa53c2ca98e8cf3004d694f1dff437b428defb6da",
+      "transport_names": {
+        "mcp_streamable_http": "agent",
+        "rest_v1_tools": "agent",
+        "stdio": "agent"
+      }
+    },
+    {
+      "name": "calibration",
+      "implementation": "calibration",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "c477f5878b29abf8f0bd9d650a23cbb70cc9873b8d3f0619d1175f17b64c9cd3",
+      "transport_names": {
+        "mcp_streamable_http": "calibration",
+        "rest_v1_tools": "calibration",
+        "stdio": "calibration"
+      }
+    },
+    {
+      "name": "config",
+      "implementation": "config",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "e1001b1c49430a5d74e5fc05de801c6d8988cb45a883df4a2ba4a84f0f624712",
+      "transport_names": {
+        "mcp_streamable_http": "config",
+        "rest_v1_tools": "config",
+        "stdio": "config"
+      }
+    },
+    {
+      "name": "export",
+      "implementation": "export",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "ebc318013177b1d55a073c7218d4f7b191fb64f3ed2d4b31b7254009319065da",
+      "transport_names": {
+        "mcp_streamable_http": "export",
+        "rest_v1_tools": "export",
+        "stdio": "export"
+      }
+    },
+    {
+      "name": "self_recovery",
+      "implementation": "self_recovery",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "d3659b30b1ab0a2c6f7c63f066f756b628bcd7dfa4851888d8129b75751a779b",
+      "transport_names": {
+        "mcp_streamable_http": "self_recovery",
+        "rest_v1_tools": "self_recovery",
+        "stdio": "self_recovery"
+      }
+    },
+    {
+      "name": "observe",
+      "implementation": "observe",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "240e22867855aa307f9e15d0bdf7a5296e1bbdcb4d6618b9d650a6379c9a6eb5",
+      "transport_names": {
+        "mcp_streamable_http": "observe",
+        "rest_v1_tools": "observe",
+        "stdio": "observe"
+      }
+    },
+    {
+      "name": "dialectic",
+      "implementation": "dialectic",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "2ac18625cc1c81f5985e09d2b914aaf36aa825e23928cb4b650e0c816c78498f",
+      "transport_names": {
+        "mcp_streamable_http": "dialectic",
+        "rest_v1_tools": "dialectic",
+        "stdio": "dialectic"
+      }
+    }
+  ],
+  "limits": {
+    "lifecycle_automation": "not_implied",
+    "host_event_capture": "not_implied",
+    "policy_actuation_outside_governed_writes": "not_implied"
+  }
+}
