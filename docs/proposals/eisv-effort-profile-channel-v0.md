@@ -472,3 +472,65 @@ adjudication dial are from `eisv-grounding-next-move-v0.md`; the anchor tiering
 and Invariant 4 are `src/grounding/outcome_anchors.py`; the supply census this
 channel's Phase 0 would extend is `scripts/analysis/eisv_latent_label_supply.py`;
 the local-model backend precedent is `src/verification_backend.py`.
+
+## 14. Pre-committed degeneracy check — threshold fixed 2026-08-26, before any data
+
+This section was written and committed **before any transcript corpus was
+measured**, from a container holding exactly one transcript file — this
+document's own authoring session. The author could not have seen the
+distribution when choosing these numbers. That is the point of writing them
+here rather than reporting them afterwards as "the method."
+
+**These thresholds are the author's proposal, not the operator's decision.**
+Per the standing rule that a deciding standard belongs to the operator, any of
+them may be overridden before the check runs. What may not happen is choosing
+them after seeing the output.
+
+### What it asks
+
+Whether the effort profile has any variance to model at all. This is upstream of
+every other question in this document: if sessions do not differ from each other
+on these quantities, no judge, no EISV model, and no answer to D7 can rescue the
+channel.
+
+### The rule-free core
+
+`turns(s)` and `t_actual(s)` require no marker set, no model, and no judgement —
+message counts and timestamps. They are the non-absorbable part of this check.
+
+- **Corpus floor.** ≥ 30 sessions and ≥ 3 distinct agent identities. Below
+  either, the verdict is `UNDERPOWERED` and no degeneracy claim may be made in
+  any direction.
+- **KILL if** median `turns` ≤ 2, or the interquartile range of `turns` is 0.
+- **KILL if** the coefficient of variation of `t_actual` < 0.25. This is a
+  degeneracy floor, not a power criterion: real session lengths vary by more
+  than this, and failing it means the corpus is uniform rather than merely
+  noisy.
+- **Between-agent.** If fewer than 3 agents have ≥ 10 sessions each, the report
+  says `SINGLE-AGENT` and makes no claim about between-agent spread. It does not
+  substitute within-agent variance for it.
+
+A KILL here closes the channel. Not "defers pending tooling", not "reopens under
+a new premise" — closes it, on the same terms the stop rule uses.
+
+### The rule-dependent part, and why it cannot kill on its own
+
+`cycles(s)` needs a marker set, and the marker set is itself a judgement (T5).
+So it is reported but is **not** granted kill authority:
+
+- If ≥ 90% of sessions show zero cycles **while `turns` and `t_actual` do vary**,
+  the finding is `MARKER-SET-BLIND` — a statement about the instrument, not about
+  the world. It licenses revising the markers. It does not license a conclusion
+  about effort.
+- If `cycles` varies, that validates nothing about whether the markers capture
+  re-direction. Reliability is not validity, here as in §5a.
+
+The marker set is frozen at this commit, in the script, so a later revision is
+visible as a diff rather than as a silent retune.
+
+### What a PASS licenses
+
+Only that the dependent variable is not degenerate. It says nothing about D7,
+nothing about the difficulty confound in T2, and nothing about whether prior
+state predicts anything. A PASS is permission to keep asking, not evidence for
+any answer.
