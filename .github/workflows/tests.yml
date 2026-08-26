@@ -13,6 +13,12 @@ on:
 permissions:
   contents: read
 
+# Only the newest revision of a branch is actionable. Cancel superseded runs so
+# an active PR does not consume eight database-backed runners for stale commits.
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
@@ -134,17 +140,17 @@ jobs:
   test_shard:
     name: test shard (${{ matrix.shard }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     strategy:
       fail-fast: false
       matrix:
         python-version: ['3.12']
         # Top-level tests are split by filename using recent Actions timing.
-        # The former a-h shard had grown to roughly twice the runtime of the
-        # others, so it is split again at d/e. Nested tests and agents keep a
-        # dedicated shard. Each job gets its own DB and filesystem, avoiding
-        # the shared-state hazards of pytest-xdist.
-        shard: [tests-a-d, tests-e-h, tests-i-p, tests-q-z, agents-and-nested]
+        # The eight groups target roughly 2-3 minutes of test execution each;
+        # nested tests and agents keep a dedicated shard. Each job gets its own
+        # DB and filesystem, avoiding the shared-state hazards of pytest-xdist.
+        shard: [tests-a-b, tests-c-d, tests-e-h, tests-i-l, tests-m-p, tests-q-t, tests-u-z, agents-and-nested]
 
     # Without a database, 333 tests across 29 modules skip themselves — every
     # migration test among them. The suite went green while the riskiest surface
@@ -168,7 +174,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U postgres"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -209,17 +215,26 @@ jobs:
         COVERAGE_FILE: .coverage.${{ matrix.shard }}
       run: |
         case "${{ matrix.shard }}" in
-          tests-a-d)
-            targets=(tests/test_[a-d]*.py)
+          tests-a-b)
+            targets=(tests/test_[a-b]*.py)
+            ;;
+          tests-c-d)
+            targets=(tests/test_[c-d]*.py)
             ;;
           tests-e-h)
             targets=(tests/test_[e-h]*.py)
             ;;
-          tests-i-p)
-            targets=(tests/test_[i-p]*.py)
+          tests-i-l)
+            targets=(tests/test_[i-l]*.py)
             ;;
-          tests-q-z)
-            targets=(tests/test_[q-z]*.py)
+          tests-m-p)
+            targets=(tests/test_[m-p]*.py)
+            ;;
+          tests-q-t)
+            targets=(tests/test_[q-t]*.py)
+            ;;
+          tests-u-z)
+            targets=(tests/test_[u-z]*.py)
             ;;
           agents-and-nested)
             targets=(agents/ tests/*/ tests/smoke_test.py)
@@ -230,7 +245,7 @@ jobs:
             ;;
         esac
 
-        python -m pytest "${targets[@]}" -v \
+        python -m pytest "${targets[@]}" -q -ra \
           --cov=src --cov=agents/sdk/src/unitares_sdk --cov=agents \
           --cov-report= --durations=25 --durations-min=0.5
 
