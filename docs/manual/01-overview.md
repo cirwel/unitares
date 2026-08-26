@@ -25,7 +25,16 @@ UNITARES runs **alongside** your evals and guardrails. It does not replace eithe
 | **Guardrails** | Is this *action* allowed right now? | per action |
 | **UNITARES** | What state and evidence does this process have as it works? | continuously, mid-run |
 
-It is **not** an output validator, a sandbox, or a hosted agent platform. It is the runtime *state layer* between evals and guardrails. (Full scope: [`../SCOPE_AND_THREAT_MODEL.md`](../SCOPE_AND_THREAT_MODEL.md).)
+It is **not** an output validator, a sandbox, or a hosted agent platform. It is
+an MCP-native, harness-agnostic runtime *state layer* between evals and
+guardrails. MCP is its primary agent-facing contract; it does not own the
+agent's reasoning, tool-execution, or user-interaction loop. (Full scope:
+[`../SCOPE_AND_THREAT_MODEL.md`](../SCOPE_AND_THREAT_MODEL.md).)
+
+A future first-party **UNITARES Resident** can supply that agent experience,
+but it remains a separate userland built on the same public MCP/SDK contract as
+every other harness. The specialized residents shipped as examples in this
+repository are not that general-purpose runtime.
 
 **Use UNITARES if** you run autonomous coding/research/ops/resident agents, you want mid-run health signals rather than only pre-deploy evals or post-hoc logs, you want agents to check their own state before continuing, and you want an audit trail of confidence, evidence, drift, and recovery.
 

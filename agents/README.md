@@ -2,6 +2,12 @@
 
 Reference implementations of Unitares governance agents. These are **not** part of the public contract — the public contract is [`unitares-sdk`](sdk/) (published as its own package). Treat the code under `vigil/`, `sentinel/`, `chronicler/`, and `watcher/` as examples of how to build a resident agent, not as load-bearing governance internals.
 
+These specialized agents are also distinct from a general-purpose **UNITARES
+Resident** product. If that first-party conversational runtime is built, it
+belongs in a separate `unitares-resident` repository and must depend only on
+the public MCP/SDK contract. It must not import Core internals, access the
+governance database directly, or receive a privileged measurement path.
+
 ## Layout
 
 | Path        | Role                                                                           |

@@ -1,9 +1,11 @@
 # Repo Scope
 
-**unitares is user- and agent-agnostic.** It is a governance MCP server, not an
+**unitares is user- and agent-agnostic.** It is the MCP-native governance Core, not an
 operator's personal workspace and not a Claude- or Codex-specific project. What
 lives here should make sense to a stranger who maintains the repo and runs any
-agent (or no agent) against it.
+agent (or no agent) against it. Agent reasoning loops and user-facing harnesses
+belong outside Core and integrate through its public MCP, REST, and SDK
+contracts.
 
 ## Out of scope — do not commit here
 
