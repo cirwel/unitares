@@ -136,6 +136,34 @@ you write "continuity," mean the layered concept unless you write the full
 Both appear in the provenance envelope; keep `thread_id` out of any sentence
 about causal ancestry.
 
+### Φ / phi — UNITARES quantity vs. IIT quantity (**the highest-stakes homonym here**)
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `Φ (UNITARES)` | How far is this state from a fixed reference point? Loss against the ideal `E→1, I→1, S→0, V→0`. | `src/monitor_phi.py`; `eisv-proprioception-contract.md` |
+| `Φ (IIT)` | How much integrated information does this system have? The headline quantity of Integrated Information Theory, proposed as a measure of consciousness. | Tononi et al. — **external, not implemented here** |
+
+⛔ **UNITARES does not compute IIT's Φ and makes no claim on it.** The two share a
+letter and nothing else: ours is a scalar distance from a configured setpoint, and
+it is deliberately *not* a measure of integration, irreducibility, or experience.
+A reader who binds the wrong sense will hear a consciousness claim in a
+regime-visualization number.
+
+Two further properties a peer needs before consuming `metrics.phi` off the wire:
+
+- **Telemetry, not authority.** `UNITARES_PHI_TELEMETRY_ONLY=1` is live, so Φ is
+  not a verdict floor. Its remaining verdict-shaped role is the cold-start path
+  (`phi_cold_start`), which is a fallback prior, not a behavioral read.
+- **Expressive, not validated.** Φ has the widest dynamic range of any field and
+  separates regimes that categorical verdicts collapse. That is *sensitivity*.
+  The outcome evidence runs the other way, and wide swings plus sign flips plus no
+  predictive lift is the signature of a number that looks informative on a
+  dashboard while carrying no outcome signal. Keep it for visualization and regime
+  reads; ⛔never cite it as validated discrimination.
+
+Per rule 2 above, the fix is disambiguation, not renaming: `metrics.phi` is a
+published wire field and consumers depend on it. Qualify the sense, keep the key.
+
 ### basin — attractor vs. health band (**confirmed at code level, 2026-06-20**)
 
 | Sense | Question it answers | Canonical source |
