@@ -14,7 +14,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**131 flags.**
+**147 flags.**
 
 | Flag | Default | Purpose | Read at |
 |---|---|---|---|
@@ -32,6 +32,7 @@ index; that one is the curated decision record.
 | `GOVERNANCE_WARMUP_STRUCTURAL_GRACE` | `'true'` | — | config/governance_config.py |
 | `STRICT_IDENTITY_REQUIRED` | `''` | True iff STRICT_IDENTITY_REQUIRED env var is set to a truthy value | src/mcp_handlers/identity_bootstrap.py |
 | `UNITARES_AGENT_LOCK_BACKEND` | `'advisory'` | Execute the extracted process_agent_update workflow for a prepared UpdateContext. | src/services/update_workflow_service.py, src/state_locking.py |
+| `UNITARES_AIC_SIGNING_KEY` | `(required)` | Load the server signing key from a seed, or from the env var | src/identity/agent_identity_credential.py |
 | `UNITARES_ANCHORS_DIR` | `(required)` | Return the anchors directory path | src/identity/substrate.py |
 | `UNITARES_API_TOKEN` | `(required)` | Return continuity token support details for diagnostics. | src/mcp_handlers/identity/session.py |
 | `UNITARES_AUDIT_WRITE_JSONL` | `'1'` | read by __init__() | src/audit_log.py |
@@ -39,6 +40,7 @@ index; that one is the curated decision record.
 | `UNITARES_AUTOSELECT_REVIEWER` | `''` | Gate for reviewer auto-selection | src/mcp_handlers/dialectic/reviewer.py |
 | `UNITARES_AUTO_DIALECTIC_RECOVERY` | `'1'` | Process governance update with authentication enforcement (async version) | src/agent_loop_detection.py |
 | `UNITARES_BASELINE_CACHE_MAXLEN` | `'1000'` | — | governance_core/ethical_drift.py |
+| `UNITARES_BIND_ALL_INTERFACES` | `False (via env_truthy)` | Return the default socket bind address | src/mcp_listen_config.py |
 | `UNITARES_BUILD_SHA` | `''` | Best-effort short commit SHA of the running build (``git rev-parse``) | src/versioning.py |
 | `UNITARES_CALIBRATION_ALLOW_SCRAPED_CONFIDENCE` | `''` | Shared body for outcome_event recording | src/mcp_handlers/observability/outcome_events.py |
 | `UNITARES_CALIBRATION_BACKEND` | `'postgres'` | Initialize calibration checker with confidence bins | src/calibration.py |
@@ -51,7 +53,7 @@ index; that one is the curated decision record.
 | `UNITARES_COHORT_PRIOR_MODE` | `(required)` | Behavior when cohort priors are enabled: 'observe' (default) or 'apply' | src/cohort_prior.py |
 | `UNITARES_CONNECT_RETRIES` | `'1'` | read by __init__() | agents/sdk/src/unitares_sdk/client.py |
 | `UNITARES_CONNECT_TIMEOUT` | `'10'` | read by __init__() | agents/sdk/src/unitares_sdk/client.py |
-| `UNITARES_CONTINUITY_TOKEN_SECRET` | `(required)` | Return continuity token support details for diagnostics. | src/mcp_handlers/identity/session.py |
+| `UNITARES_CONTINUITY_TOKEN_SECRET` | `(required)` | Return continuity token support details for diagnostics. | src/mcp_handlers/identity/session.py, src/mcp_handlers/knowledge/handlers.py |
 | `UNITARES_DASHBOARD_DB_BUDGET_S` | `(required)` | Inner DB-read budget in seconds | src/mcp_handlers/admin/dashboard.py |
 | `UNITARES_DASHBOARD_OPERATOR_LABEL` | `'operator'` | read by _operator_label() | src/dashboard_auth.py |
 | `UNITARES_DIALECTIC_BEAM_RESOLUTION` | `'0'` | True iff the operator has flipped UNITARES_DIALECTIC_BEAM_RESOLUTION on. | src/mcp_handlers/dialectic/beam_resolve_client.py |
@@ -66,6 +68,7 @@ index; that one is the curated decision record.
 | `UNITARES_DIALECTIC_EXTERNAL_TIMEOUT_S` | `'180'` | Run the review on an operator-configured OpenAI-compatible endpoint | agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_DIALECTIC_GOVERNED_SPAWN` | `'0'` | Opt-in gate (default OFF) | src/mcp_handlers/dialectic/governed_spawn.py |
 | `UNITARES_DIALECTIC_ORCHESTRATED_REVIEW` | `'0'` | Opt-in gate for routing reviews through the orchestrator (default OFF) | src/mcp_handlers/dialectic/orchestrator_dispatch.py |
+| `UNITARES_DIALECTIC_RECUSAL` | `(required)` | ``enforce`` (default), ``flag``, or ``off`` | src/mcp_handlers/dialectic/recusal.py |
 | `UNITARES_DIALECTIC_REVIEWER_HOST` | `''` | Route to the configured reviewer backend, falling back to the free local model | agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_DIALECTIC_REVIEWER_TIMEOUT` | `(required)` | Timeout budget for a structured dialectic reviewer call | src/mcp_handlers/support/llm_delegation.py |
 | `UNITARES_DIALECTIC_REVIEW_BUDGET` | `(required)` | Wall-clock cap for the inline synthetic review (antithesis + synthesis) | src/mcp_handlers/dialectic/handlers.py |
@@ -75,19 +78,22 @@ index; that one is the curated decision record.
 | `UNITARES_DISABLE_PLUGINS` | `(required)` | Load every registered ``governance_mcp.plugins`` entry point | src/plugin_loader.py |
 | `UNITARES_DOCTOR_ANCHOR` | `str(Path.home() / '.unitares'…` | — | agents/common/findings.py |
 | `UNITARES_EMBEDDING_MODEL` | `'minilm'` | Derive a config tag matching baseline filename suffix from env vars | src/embeddings.py, agents/vigil/agent.py |
-| `UNITARES_ENABLE_GRAPH_EXPANSION` | `''` | Derive a config tag matching baseline filename suffix from env vars | agents/vigil/agent.py |
-| `UNITARES_ENABLE_HYBRID` | `''` | Derive a config tag matching baseline filename suffix from env vars | agents/vigil/agent.py |
-| `UNITARES_ENABLE_RERANKER` | `''` | Derive a config tag matching baseline filename suffix from env vars | agents/vigil/agent.py |
+| `UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL` | `''` | Return whether automated agent archival may mutate lifecycle state | src/agent_lifecycle.py |
+| `UNITARES_ENABLE_GRAPH_EXPANSION` | `False (via _flag_enabled)` | True when 1-hop typed-edge expansion should run | src/retrieval.py, agents/vigil/agent.py |
+| `UNITARES_ENABLE_HYBRID` | `False (via _flag_enabled)` | True when hybrid RRF retrieval should run | src/retrieval.py, agents/vigil/agent.py |
+| `UNITARES_ENABLE_RERANKER` | `False (via _flag_enabled)` | True when the reranker should run | src/reranker.py, agents/vigil/agent.py |
 | `UNITARES_FINDINGS_URL` | `'http://localhost:8767/api/fi…` | — | agents/common/findings.py |
 | `UNITARES_FIRST_RUN` | `(required)` | Identity resolution: UUID lookup | agents/sdk/src/unitares_sdk/agent.py, agents/watcher/agent.py |
 | `UNITARES_GOVERNANCE_HTTP` | `'http://localhost:8767'` | POST a resolution outcome to the operator-gated harness endpoint | agents/watcher/agent.py |
 | `UNITARES_GOVERNANCE_URL` | `(required)` | read by _governance_url() | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py (+2 more) |
+| `UNITARES_GOVERNED_EFFECT_BINDING` | `(required)` | Is effect-binding enforced for this effect type? (#1252 item 2) The global ``UNITARES_GOVERNED_EFFECT_BINDING`` enforces every type at once  | src/http_routes/effects.py |
 | `UNITARES_GROUNDING_APPLY` | `''` | Whether grounded E/I/S/coherence actually replace the ODE/heuristic values in the canonical metrics (UNITARES_GROUNDING_APPLY) | config/governance_config.py |
 | `UNITARES_GROUNDING_SHADOW` | `''` | Whether to shadow-compare grounded vs ungrounded canonical metrics each check-in (UNITARES_GROUNDING_SHADOW) | config/governance_config.py |
 | `UNITARES_HEALTH_PROBE_INTERVAL_SECONDS` | `(required)` | Periodically run the deep health check and cache the result | src/background_tasks.py |
 | `UNITARES_HOST_ADAPTER_ENABLED` | `''` | Opt-in flag | src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_HTTP_API_TOKEN` | `(required)` | Serve the phase-space visualization | src/http_routes/dashboard.py, src/http_routes/effects.py (+14 more) |
 | `UNITARES_HTTP_CORS_ALLOW_ORIGIN` | `(required)` | read by _configure_middleware() | src/services/mcp_transport_service.py |
+| `UNITARES_HTTP_CORS_EXTRA_ORIGINS` | `[] (via split_csv_env)` | Optional extra CORS origins from UNITARES_HTTP_CORS_EXTRA_ORIGINS | src/mcp_listen_config.py |
 | `UNITARES_IDENTITY_ANCHOR_RECOVERY` | `'1'` | Whether pre-mint anchor/pin recovery runs (UNITARES_IDENTITY_ANCHOR_RECOVERY) | src/mcp_handlers/identity/session.py |
 | `UNITARES_IDENTITY_ANCHOR_TTL` | `''` | Anchor TTL in seconds (UNITARES_IDENTITY_ANCHOR_TTL) | src/mcp_handlers/identity/session.py |
 | `UNITARES_IDENTITY_STRICT` | `'log'` | Runtime accessor — respects env changes set after module load | config/governance_config.py |
@@ -101,6 +107,10 @@ index; that one is the curated decision record.
 | `UNITARES_LEASE_PLANE_URL` | `'http://127.0.0.1:8788'` | read by _lease_plane_url() | src/mcp_handlers/dialectic/governed_spawn.py |
 | `UNITARES_LINEAGE_TRANSITIVE_ARCHIVAL` | `(required)` | Whether transitive succession-reachability DRIVES archival (vs shadow) | src/mcp_handlers/lifecycle/stuck.py |
 | `UNITARES_LLM_MODEL` | `'gemma4:latest'` | Default model for local inference | src/mcp_handlers/support/inference_registry.py, agents/dialectic_reviewer/reviewer.py, agents/local_resident/runner.py |
+| `UNITARES_MCP_ALLOWED_HOSTS` | `[] (via split_csv_env)` | Build TransportSecuritySettings for FastMCP | src/mcp_listen_config.py |
+| `UNITARES_MCP_ALLOWED_ORIGINS` | `[] (via split_csv_env)` | Build TransportSecuritySettings for FastMCP | src/mcp_listen_config.py |
+| `UNITARES_MCP_ALLOW_NULL_ORIGIN` | `False (via env_truthy)` | Build TransportSecuritySettings for FastMCP | src/mcp_listen_config.py |
+| `UNITARES_MCP_BEARER_TOKENS` | `[] (via split_csv_env)` | Allowlist of bearer tokens accepted on the ``/mcp`` endpoint | src/mcp_listen_config.py |
 | `UNITARES_MCP_DNS_REBIND_PROTECTION` | `''` | Whether Host/Origin validation is enforced on the MCP transports | src/mcp_listen_config.py |
 | `UNITARES_MCP_HOST` | `''` | Return the default socket bind address | src/mcp_listen_config.py |
 | `UNITARES_METADATA_BACKEND` | `'postgres'` | — | src/agent_metadata_persistence.py |
@@ -115,6 +125,8 @@ index; that one is the curated decision record.
 | `UNITARES_OLLAMA_BASE` | `'http://localhost:11434'` | Base URL of the local Ollama endpoint | src/mcp_handlers/support/inference_registry.py |
 | `UNITARES_OLLAMA_BASE_URL` | `'http://localhost:11434/v1'` | — | agents/dialectic_reviewer/reviewer.py, agents/local_resident/runner.py |
 | `UNITARES_OPERATOR_TOKEN` | `''` | POST a resolution outcome to the operator-gated harness endpoint | agents/watcher/agent.py |
+| `UNITARES_OPERATOR_TOKENS` | `''` | Parse the operator-token allowlist from env at call time | src/mcp_handlers/identity/operator.py, src/mcp_handlers/wave3a_admin.py |
+| `UNITARES_ORCHESTRATOR_VOUCH` | `''` | Return whether the (inert, default-off) vouch path is enabled | src/substrate/vouch.py |
 | `UNITARES_OUTCOME_PROVENANCE_FILTER` | `'off'` | Fetch recent outcome events for an agent | src/db/mixins/tool_usage.py |
 | `UNITARES_PARAMS_JSON` | `(required)` | Returns the active dynamics parameters | governance_core/parameters.py |
 | `UNITARES_PARAMS_PROFILE` | `'default'` | Returns the active parameters profile name | governance_core/parameters.py |
@@ -128,7 +140,11 @@ index; that one is the curated decision record.
 | `UNITARES_PROXY_URL` | `(required)` | — | src/mcp_server_std.py |
 | `UNITARES_REPO` | `str(Path(__file__).resolve().…` | read by main() | agents/vigil_hygiene/agent.py |
 | `UNITARES_RERANKER_MODEL` | `'bge-m3'` | — | src/reranker.py |
+| `UNITARES_RESEARCH_REGISTRY_DIR` | `(required)` | Resolve the registry directory, honoring the env override. | src/research_registry.py |
+| `UNITARES_RESIDENTS` | `(required)` | Resident labels for this deployment, from ``UNITARES_RESIDENTS`` | src/grounding/class_indicator.py, agents/sdk/src/unitares_sdk/_substrate.py |
 | `UNITARES_RESIDENT_AGENTS` | `''` | Figure out which agent labels to treat as residents | src/http_routes/residents.py |
+| `UNITARES_RESIDENT_PROGRESS_MANIFEST` | `''` | Load the resident-progress registry from a JSON manifest | src/resident_progress/registry.py |
+| `UNITARES_RESIDENT_SILENCE_SECONDS` | `''` | Parse ``label=seconds`` pairs from the environment | src/http_routes/residents.py |
 | `UNITARES_REVIEW_NUDGE` | `''` | Return the trigger reason when an in-flow review nudge is due, else None | src/mcp_handlers/updates/enrichments.py |
 | `UNITARES_SCRIBE_DRY_RUN` | `'1'` | read by _job() | agents/triage_scribe/scribe.py |
 | `UNITARES_SCRIBE_MAX_TOKENS` | `'1600'` | read by _job() | agents/triage_scribe/scribe.py |

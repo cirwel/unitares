@@ -29,6 +29,19 @@ PREFIXES = ("UNITARES_", "GOVERNANCE_")
 # behavior but cannot be renamed to a prefixed form.
 EXTRA_FLAGS = frozenset({"STRICT_IDENTITY_REQUIRED"})
 GETENV = {"getenv", "get"}  # os.getenv(...) / os.environ.get(...)
+# Env reads that go through a wrapper instead of os.getenv directly. An
+# AST walk that only matches os.getenv/os.environ.get silently omits these, and
+# the omission is not random: every current wrapper call site is in
+# src/mcp_listen_config.py, so the flags that vanished were the entire listen
+# surface -- bind-all-interfaces, the Host allowlist, CORS origins. A catalog
+# that documents 118 flags and drops exactly the network-exposure ones is worse
+# than one that admits it is partial. Each entry maps helper -> the value it
+# falls back to when the variable is unset, so Default stays honest.
+ENV_HELPERS = {
+    "env_truthy": "False",
+    "split_csv_env": "[]",
+    "_flag_enabled": "False",
+}
 
 
 @dataclass
@@ -39,16 +52,23 @@ class Flag:
     sites: list[str] = field(default_factory=list)
 
 
-def _is_env_read(node: ast.Call) -> bool:
+def _is_env_read(node: ast.Call) -> str | None:
+    """Return the reader's name if this call reads an env var, else None.
+
+    "os" for a direct os.getenv / os.environ.get; otherwise the wrapper's name
+    (see ENV_HELPERS), which the caller uses to render an honest Default.
+    """
     f = node.func
     if isinstance(f, ast.Attribute) and f.attr in GETENV:
         # os.getenv(...) or os.environ.get(...)
         base = f.value
         if isinstance(base, ast.Name) and base.id == "os":
-            return True
+            return "os"
         if isinstance(base, ast.Attribute) and base.attr == "environ":
-            return True
-    return False
+            return "os"
+    if isinstance(f, ast.Name) and f.id in ENV_HELPERS:
+        return f.id
+    return None
 
 
 def _first_sentence(text: str | None) -> str:
@@ -63,10 +83,24 @@ def _first_sentence(text: str | None) -> str:
 
 
 class Collector(ast.NodeVisitor):
-    def __init__(self, rel: str):
+    def __init__(self, rel: str, consts: dict[str, str] | None = None):
         self.rel = rel
         self.flags: dict[str, Flag] = {}
         self._func_stack: list[ast.FunctionDef] = []
+        # Module-level NAME = "UNITARES_..." bindings. Without these, a read
+        # written as
+        #     _OPERATOR_TOKENS_ENV = "UNITARES_OPERATOR_TOKENS"
+        #     os.environ.get(_OPERATOR_TOKENS_ENV, "")
+        # is a Name, not a Constant, and drops out of the catalog -- which is
+        # how the operator-token allowlist came to be undocumented.
+        self.consts = consts or {}
+
+    def _key_name(self, key: ast.expr) -> str | None:
+        if isinstance(key, ast.Constant) and isinstance(key.value, str):
+            return key.value
+        if isinstance(key, ast.Name):
+            return self.consts.get(key.id)
+        return None
 
     def visit_FunctionDef(self, node):
         self._func_stack.append(node)
@@ -76,11 +110,10 @@ class Collector(ast.NodeVisitor):
     visit_AsyncFunctionDef = visit_FunctionDef
 
     def visit_Call(self, node):
-        if _is_env_read(node) and node.args:
-            key = node.args[0]
-            if isinstance(key, ast.Constant) and isinstance(key.value, str) \
-                    and (key.value.startswith(PREFIXES) or key.value in EXTRA_FLAGS):
-                name = key.value
+        reader = _is_env_read(node)
+        if reader and node.args:
+            name = self._key_name(node.args[0])
+            if name and (name.startswith(PREFIXES) or name in EXTRA_FLAGS):
                 fl = self.flags.setdefault(name, Flag(name))
                 # default = 2nd positional arg, unparsed
                 if len(node.args) >= 2:
@@ -88,6 +121,14 @@ class Collector(ast.NodeVisitor):
                         d = ast.unparse(node.args[1])
                     except Exception:
                         d = "?"
+                    if fl.default is None or fl.default == "(required)":
+                        fl.default = d
+                elif reader != "os":
+                    # A wrapper with no explicit default is not "(required)" --
+                    # it has the wrapper's own fallback. Say which.
+                    # No inner backticks: the Default cell is itself rendered
+                    # inside backticks, and nesting them breaks the table.
+                    d = f"{ENV_HELPERS[reader]} (via {reader})"
                     if fl.default is None or fl.default == "(required)":
                         fl.default = d
                 elif fl.default is None:
@@ -121,7 +162,16 @@ def collect() -> dict[str, Flag]:
                 tree = ast.parse(py.read_text(encoding="utf-8"))
             except (SyntaxError, UnicodeDecodeError):
                 continue
-            c = Collector(str(py.relative_to(REPO)))
+            consts = {
+                t.id: n.value.value
+                for n in tree.body
+                if isinstance(n, ast.Assign)
+                and isinstance(n.value, ast.Constant)
+                and isinstance(n.value.value, str)
+                for t in n.targets
+                if isinstance(t, ast.Name)
+            }
+            c = Collector(str(py.relative_to(REPO)), consts)
             c.visit(tree)
             for name, fl in c.flags.items():
                 tgt = flags.setdefault(name, Flag(name))
