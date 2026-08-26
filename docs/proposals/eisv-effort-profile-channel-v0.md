@@ -151,9 +151,30 @@ clause asks for a different *measurement process* for the same concern, not a
 different concern. Whether "does prior state predict how a session goes" is the
 same concern as "does prior state predict externally-verified bad outcomes" is
 a judgement, and it is the operator's, not this document's. It is listed as D7
-in §11 and is unfilled. If the answer is that they are different concerns, this
-document is not a reopening premise and should be read as a proposal for a new
-track that must earn its own justification from scratch.
+in §11. If the answer is that they are different concerns, this document is not
+a reopening premise and should be read as a proposal for a new track that must
+earn its own justification from scratch.
+
+**Answered 2026-08-26: same concern.** The operator's reading is that the
+registered question is about whether EISV is grounded in anything outside the
+loop, and that externally-verified bad outcomes were the signal that happened to
+be available rather than the concern itself. On that reading an effort profile
+is a different measurement process for the same concern, which is what the stop
+rule's reopening clause asks for.
+
+The alternative was live and is recorded so this does not read as a formality: a
+PASS on the registered read explicitly means Stage B may be reconsidered, and
+Stage B is an actuation path. Someone taking the concern to be *warning in time
+to act* would answer differently, and under that reading this document is not a
+reopening premise at all.
+
+**What this answer does not do.** It does not ratify the channel, retire any
+threat, or supply evidence for anything. T1 and T2 are untouched, the §14
+degeneracy check has not been run on a real corpus, and no independent
+adversarial review has happened. The only thing it settles is the document's
+*standing*: it is now the pre-declared candidate that a FAIL on 2026-12-01 would
+hand the reopening clause to. That raises what the document owes a reader rather
+than lowering it.
 
 The baseline clause is not optional. The tournament's central negative finding
 is that a per-agent AR(1)/persistence null is the thing to beat, and that
@@ -413,7 +434,7 @@ offered for rejection, not defaults.
 | D4 | Smallest relevant effect for the Phase 2 read | — | **UNFILLED** |
 | D5 | Phase 2 read date and cohort | — | **UNFILLED** |
 | D6 | Position on T1 (productive friction) required before publishing | — | **UNFILLED** |
-| D7 | Whether an effort profile addresses the same concern as the registered question, or is a separate track | — | **UNFILLED** |
+| D7 | Whether an effort profile addresses the same concern as the registered question, or is a separate track | — | **ANSWERED 2026-08-26: same concern.** Rationale and the rejected alternative in §5 |
 
 Every slot above is a *decision*, not a measurement. None of them asks the
 operator to supply a number about the world; each asks what standard a number
