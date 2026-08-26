@@ -15,6 +15,34 @@ from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
 logger = get_logger(__name__)
 
+async def agent_pause_is_live(agent_id: str) -> bool:
+    """True when this agent is paused right now — i.e. a resolution would release it.
+
+    The discriminator between the two things `reviewer_mode="self"` can mean.
+    A self-reviewed session over a LIVE pause is self-certification: one identity
+    holds both roles and its own approval returns it to active. A self-reviewed
+    session on an ACTIVE agent releases nothing — `execute_resolution` below
+    already declines with "Agent status is not 'paused'. No action taken." —
+    and is the diagnostic reflection that #1585 deliberately keeps available.
+
+    Reads exactly what `execute_resolution` reads: same freshness call, same
+    cache, same field. A guard that consults a different source than the
+    actuator it guards can disagree with it, and the disagreement is invisible
+    from either side — it would either wave through a resume the executor then
+    performs, or block one the executor would have declined anyway.
+
+    Not stored on the session, deliberately. `trigger_source` looks like it
+    would answer this and does not: it is inferred from substring matches on a
+    free-text reason (`handlers.py`, "auto-recovery"/"loop"/"drift") and
+    defaults to "manual", so a genuinely paused agent whose reason happens to
+    read plainly is recorded the same as a reflection. Safety must not key on
+    a string that a caller writes.
+    """
+    await mcp_server.load_metadata_async()
+    meta = mcp_server.agent_metadata.get(agent_id)
+    return bool(meta is not None and getattr(meta, "status", None) == "paused")
+
+
 async def execute_resolution(session: DialecticSession, resolution: Resolution) -> Dict[str, Any]:
     """
     Execute the resolution: resume agent with agreed conditions.

@@ -130,7 +130,7 @@ from .calibration import (
     update_calibration_from_dialectic_disagreement,
     backfill_calibration_from_historical_sessions,  # noqa: F401 — re-exported; tests patch via this module
 )
-from .resolution import execute_resolution
+from .resolution import agent_pause_is_live, execute_resolution
 from .beam_resolve_client import (
     beam_resolve,
     beam_create_session,
@@ -633,6 +633,15 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
     independent_reviewer_can_revise = bool(
         reviewer_agent_id and reviewer_agent_id != paused_agent_id
     )
+    # A self-reviewed session that has been routed to facilitation: the paused
+    # agent's own agreeing synthesis was recorded and refused as non-authorizing
+    # (#1585 item 1). Without this the guidance below keeps telling that agent to
+    # "negotiate until convergence" against itself, and every attempt is refused.
+    self_review_awaiting_ratification = bool(
+        reviewer_agent_id
+        and reviewer_agent_id == paused_agent_id
+        and awaiting_facilitation
+    )
     latest_synthesis_agent_id = _latest_synthesis_agent_in_session_data(session_data)
     paused_response_owed = bool(
         reviewer_objection_stands
@@ -739,6 +748,17 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
                 "This session has no independent reviewer who can reconsider the "
                 "standing rejection. An operator should assign a facilitator or "
                 "replacement reviewer."
+            )
+        elif self_review_awaiting_ratification:
+            required_role = "reviewer_or_operator"
+            required_agent_id = None
+            required_agent_label = None
+            allowed_agent_ids = [current_agent_id] if operator_caller and current_agent_id else []
+            recommended_action = (
+                "This session is self-reviewed: the reviewer and the paused agent are "
+                "the same identity, so no independent verdict can be reached from "
+                "inside it. The synthesis is recorded but cannot lift the pause. An "
+                "operator should assign an independent reviewer."
             )
         else:
             required_role = "participant"
@@ -876,6 +896,20 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
             whose_move = "NOT YOURS — an independent facilitator is required"
         else:
             whose_move = "an operator's — an independent facilitator is required"
+    elif phase == "synthesis" and self_review_awaiting_ratification:
+        if current_agent_role == "operator":
+            whose_move = "YOURS — assign an independent reviewer; this session reviewed itself"
+            next_call = (
+                f"dialectic(action='reassign', session_id='{session_id}', "
+                "reason='Self-review cannot ratify its own resumption')"
+            )
+        elif current_agent_role == "paused_agent":
+            whose_move = (
+                "NOT YOURS — you are also the reviewer here, so your agreement cannot "
+                "lift your own pause; an independent reviewer or operator is required"
+            )
+        else:
+            whose_move = "an operator's — an independent reviewer is required"
     elif phase == "synthesis":
         if current_agent_role in {"paused_agent", "reviewer"}:
             whose_move = "YOURS — a converging synthesis is owed (negotiate until agreement)"
@@ -2974,6 +3008,94 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                             await pg_resolve_session(session_id=session_id, resolution=_block, status="failed")
                     except Exception as e:
                         logger.warning(f"Could not resolve session in PostgreSQL: {e}")
+                elif (
+                    session.reviewer_agent_id == session.paused_agent_id
+                    and await agent_pause_is_live(session.paused_agent_id)
+                ):
+                    # A self-review may not release a live pause (#1585 item 1).
+                    #
+                    # `reviewer_mode="self"` collapses both roles into one
+                    # identity, so `submit_synthesis` converged on the paused
+                    # agent's own `agrees=True` and `execute_resolution` would
+                    # return it to active on nobody's authority but its own.
+                    # The existing guards cover only the neighbouring cases: a
+                    # self-reviewer overturning its OWN recorded rejection, and
+                    # a paused agent agreeing while an INDEPENDENT reviewer's
+                    # verdict is pending. The plain first agreeing synthesis was
+                    # documented as "the explicit self-review completion path" —
+                    # which is the self-certification hole under its own name.
+                    #
+                    # ⛔The check belongs HERE, not in `submit_synthesis`. The
+                    # protocol object cannot see live agent status, and the fact
+                    # that decides this is precisely "would a pause be released",
+                    # which is only knowable at the actuator. Putting it here
+                    # also keeps `DialecticSession` pure and reuses the handler's
+                    # established authority to override a convergence — the
+                    # safety-violation branch directly above does the same thing.
+                    #
+                    # ROUTES, does not refuse. `recusal.py` settled the shape for
+                    # this conflict class when the reviewing apparatus is an
+                    # interested party: "It never renders a verdict. It routes...
+                    # It fails toward facilitation — a person decides — rather
+                    # than toward silent auto-review by a party with a stake."
+                    # That module names this very case as the sibling conflict it
+                    # deliberately does not cover ("issue #1585,
+                    # reviewer_mode='self'"). Its reasoning for why introspection
+                    # cannot close the gap is the reasoning for this guard: "the
+                    # same generative process produced both the judgment and the
+                    # introspection, so a better model narrows the gap without
+                    # closing it. You close it by adding a DIFFERENT process."
+                    #
+                    # The synthesis is already recorded above, so the agent's
+                    # reasoning survives for whoever picks the session up; what
+                    # is refused is the resume, not the submission.
+                    session.phase = DialecticPhase.SYNTHESIS
+                    result["action"] = "facilitation_required"
+                    result["success"] = False
+                    result["converged"] = False
+                    result["blocked"] = "self_review_not_authorizing"
+                    await _set_awaiting_facilitation(
+                        session, True, reason="self_review_not_authorizing"
+                    )
+                    # Re-snapshot: the save above ran while the protocol still
+                    # had this session RESOLVED. `defer_terminal` suppressed the
+                    # terminal PostgreSQL write but the JSON snapshot happened
+                    # anyway, so without this the offline snapshot claims a
+                    # resolution that was refused. The PG phase write was skipped
+                    # on the converged path, so the row already reads SYNTHESIS.
+                    try:
+                        await save_session(session)
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not re-save session after refusing a self-review "
+                            f"resolution: {e}"
+                        )
+                    return [error_response(
+                        "A self-review cannot release your own pause. The synthesis "
+                        "is recorded; resuming requires an independent reviewer or "
+                        "an operator.",
+                        error_code="SELF_REVIEW_NOT_AUTHORIZING",
+                        error_category="governance_refusal",
+                        details={
+                            "session_id": session_id,
+                            "reviewer_agent_id": session.reviewer_agent_id,
+                            "paused_agent_id": session.paused_agent_id,
+                            "awaiting_facilitation": True,
+                        },
+                        recovery={
+                            "action": (
+                                "Your synthesis WAS recorded and the session remains "
+                                "open — what is refused is resuming yourself on your "
+                                "own verdict. An operator can assign an independent "
+                                "reviewer with dialectic(action='reassign', "
+                                f"session_id='{session_id}', new_reviewer_id='<agent_id>'). "
+                                "Self-review remains available for reflection; it only "
+                                "stops short of lifting a pause."
+                            ),
+                            "related_tools": ["dialectic", "identity"],
+                        },
+                        arguments=arguments,
+                    )]
                 else:
                     result["action"] = "resume"
                     result["resolution"] = resolution.to_dict()

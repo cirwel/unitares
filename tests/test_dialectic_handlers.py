@@ -1319,6 +1319,144 @@ class TestHandleSubmitSynthesis:
         assert data.get("action") == "resume"
 
     @pytest.mark.asyncio
+    async def test_self_review_cannot_release_a_live_pause(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_pg_resolve_session, mock_context_agent,
+    ):
+        """#1585 item 1: one identity holding both roles may not resume itself.
+
+        `reviewer_mode="self"` sets reviewer_agent_id = paused_agent_id, so the
+        protocol converges on the paused agent's own agrees=True and the handler
+        would call execute_resolution, returning it to active on nobody's
+        authority but its own. The refusal ROUTES rather than refusing outright:
+        the synthesis stays recorded and the session stays answerable by an
+        operator, which is the shape recusal.py settled for this conflict class.
+        """
+        from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
+
+        session = _make_session(reviewer_id="agent-paused", phase=DialecticPhase.SYNTHESIS)
+        session.synthesis_round = 1
+
+        mock_result = {"success": True, "converged": True, "phase": "resolved"}
+        mock_resolution = MagicMock()
+        mock_resolution.to_dict.return_value = {"action": "resume", "conditions": []}
+        execute = AsyncMock(return_value={"success": True})
+        facilitation = AsyncMock()
+
+        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
+             patch.object(session, "submit_synthesis", return_value=mock_result), \
+             patch.object(session, "finalize_resolution", return_value=mock_resolution), \
+             patch.object(session, "check_hard_limits", return_value=(True, None)), \
+             patch(f"{DIALECTIC}.agent_pause_is_live", new_callable=AsyncMock,
+                   return_value=True), \
+             patch(f"{DIALECTIC}.execute_resolution", execute), \
+             patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", facilitation), \
+             mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
+             mock_pg_resolve_session, mock_context_agent:
+            result = await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-paused",
+                "proposed_conditions": ["Lower threshold"],
+                "agrees": True,
+                "api_key": "key",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "SELF_REVIEW_NOT_AUTHORIZING"
+        assert data["error_category"] == "governance_refusal"
+        # The pause is the thing being protected: the actuator is never reached.
+        execute.assert_not_awaited()
+        # Un-converged and durably routed, so the next process to load this
+        # session does not resolve it and an operator can see it is waiting.
+        assert session.phase == DialecticPhase.SYNTHESIS
+        assert session.awaiting_facilitation is True
+        facilitation.assert_awaited_once_with(session.session_id, True)
+
+    @pytest.mark.asyncio
+    async def test_self_review_on_an_active_agent_still_resolves(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_pg_resolve_session, mock_context_agent,
+    ):
+        """Reflection is not self-certification, and must not be blocked.
+
+        A session can be opened without a pause — `dialectic(action='request')`
+        does not pause anyone — and `execute_resolution` already declines to act
+        on an agent that is not paused. Blocking here would buy no safety and
+        cost a human look per reflection session, so the guard is scoped to a
+        live pause rather than to self-review as such.
+        """
+        from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
+
+        session = _make_session(reviewer_id="agent-active", paused_id="agent-active",
+                                phase=DialecticPhase.SYNTHESIS)
+        session.synthesis_round = 1
+
+        mock_result = {"success": True, "converged": True, "phase": "resolved"}
+        mock_resolution = MagicMock()
+        mock_resolution.to_dict.return_value = {"action": "resume", "conditions": []}
+        execute = AsyncMock(return_value={"success": True})
+
+        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
+             patch.object(session, "submit_synthesis", return_value=mock_result), \
+             patch.object(session, "finalize_resolution", return_value=mock_resolution), \
+             patch.object(session, "check_hard_limits", return_value=(True, None)), \
+             patch(f"{DIALECTIC}.agent_pause_is_live", new_callable=AsyncMock,
+                   return_value=False), \
+             patch(f"{DIALECTIC}.execute_resolution", execute), \
+             mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
+             mock_pg_resolve_session, mock_context_agent:
+            result = await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-active",
+                "proposed_conditions": ["Lower threshold"],
+                "agrees": True,
+                "api_key": "key",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data.get("action") == "resume"
+        execute.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_independent_reviewer_over_a_live_pause_is_unaffected(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_pg_resolve_session, mock_context_agent,
+    ):
+        """The guard keys on WHO reviewed, not on the pause being live."""
+        from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
+
+        session = _make_session(phase=DialecticPhase.SYNTHESIS)
+        session.synthesis_round = 1
+
+        mock_result = {"success": True, "converged": True, "phase": "resolved"}
+        mock_resolution = MagicMock()
+        mock_resolution.to_dict.return_value = {"action": "resume", "conditions": []}
+        execute = AsyncMock(return_value={"success": True})
+
+        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
+             patch.object(session, "submit_synthesis", return_value=mock_result), \
+             patch.object(session, "finalize_resolution", return_value=mock_resolution), \
+             patch.object(session, "check_hard_limits", return_value=(True, None)), \
+             patch(f"{DIALECTIC}.agent_pause_is_live", new_callable=AsyncMock,
+                   return_value=True), \
+             patch(f"{DIALECTIC}.execute_resolution", execute), \
+             mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
+             mock_pg_resolve_session, mock_context_agent:
+            result = await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "proposed_conditions": ["Lower threshold"],
+                "agrees": True,
+                "api_key": "key",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        execute.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_convergence_clears_awaiting_facilitation(
         self, mock_server, mock_pg_add_message, mock_pg_update_phase,
         mock_save_session, mock_pg_resolve_session, mock_context_agent,
