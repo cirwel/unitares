@@ -240,14 +240,29 @@ which readings are supported and which are not.
 Identity, telemetry, evidence, and policy history stay on infrastructure you
 control, with no outbound dependency on a vendor service.
 
-The architecture also exposes the seams a later federation experiment would need:
-process-bound identity, evidence provenance, a
+The architecture exposes several of the seams a later federation experiment
+would need: process-bound identity, evidence provenance, a
 [versioned telemetry envelope](docs/ontology/eisv-telemetry-envelope-v1.md), and
-policy decisions with named reasons. Whether those records suffice to exchange
-cross-operator attestations without centralizing raw telemetry is an open
-question on the **multi-principal trust** track in the [roadmap](ROADMAP.md).
-Cross-governor trust, consensus, and enforcement are not deployed guarantees
-today.
+policy decisions with named reasons. One more is worth naming because it is the
+property that makes a review record resistant to the party it describes: a
+paused agent cannot clear its own session over a standing reviewer objection
+(`src/dialectic_protocol.py`). The session records the refusal and waits for
+facilitation rather than resolving.
+
+**The blocker is named, not unknown.** Resolution attestations are HMAC keyed on
+each agent's api_key, which is a symmetric construction: a verifier needs the
+signing key to check a signature, and holding that key would also let them
+forge one. The scheme is sound for its deployed purpose, which is one operator
+attesting within their own trust boundary, and it is explicitly not
+non-repudiation. Asymmetric or DPoP-style keys were considered and shelved on
+2026-04-19. Until that decision is revisited, a record from this system cannot
+be verified by an operator who does not already trust its issuer, which is the
+whole problem a federation exchange has to solve.
+
+Whether the remaining records suffice to exchange cross-operator attestations
+without centralizing raw telemetry stays an open question on the
+**multi-principal trust** track in the [roadmap](ROADMAP.md). Cross-governor
+trust, consensus, and enforcement are not deployed guarantees today.
 
 ## What is built
 
@@ -317,7 +332,8 @@ citing a fleet number.
 | Pause actuation and delivery | **Event reconciled; protection untested** | A governed pause landed on 2026-08-09. At the 2026-08-06 audit, a cadence window had downgraded 195 of 218 recorded pauses (89.4%) before delivery; the current rate has not been re-measured. See [ledger rows 24, 27, and 28](docs/ontology/eisv-proprioception-contract.md). |
 | Predictive lift | **Non-detection; inconclusive for weak effects** | In the frozen 2026-08-09 cohort, no slice cleared the selection-aware null (selective p = 0.070–0.567). The first power characterisation was withdrawn for corrupted synthetic pairing and uncontrolled class-balance drift, and the preserved record omits the total cluster geometry needed to reconstruct read-specific power. The corrected [power audit](docs/operations/falsifiability-power-audit-2026-08-23.md) therefore sets no standing AUC ceiling. |
 | Incident prevention or benefit from pausing | **Untested** | No governed-versus-ungoverned comparison has shown an incident prevented or an outcome improved by pausing. |
-| Behavior change from review and coordination | **Untested** | The system records that review and coordination ran and what they concluded; downstream behavioral effect has not been measured. |
+| Review binds on the reviewed agent | **Exercised path** | A paused agent cannot resolve its own session over a standing reviewer objection: the submission is recorded, the session is not resolved, and it waits for facilitation (`src/dialectic_protocol.py`). 33 non-canary sessions carry such a submission after a reviewer's rejection. Since the 2026-07-02 reviewer-label split, 81 non-canary verdicts are recorded and 77 carry the reviewer's conditions; 42 dissent, one of which is a parse failure recorded as disagreement rather than a reviewer's judgement. |
+| Benefit from review and coordination | **Untested** | No governed-versus-ungoverned comparison has shown an outcome improved by review. Coverage is also narrower than the mechanism: these records cover dialectic-mediated review, and review conducted through subagent councils or external models leaves no row here unless filed through `reviewer_provenance`. |
 | Robustness to a motivated attacker | **Structural limit** | A capable process can optimize or conceal behavior outside the monitored proxy; independent evidence remains necessary. See the [scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md). |
 | Cross-operator generality | **Untested** | Every deployment number above comes from one operator's co-development fleet. |
 
