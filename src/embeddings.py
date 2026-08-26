@@ -21,8 +21,9 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import os
-from typing import Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from src.logging_utils import get_logger
 
@@ -59,13 +60,23 @@ EMBEDDING_DIM: int = int(_DEFAULT_ENTRY["dim"])
 EMBEDDINGS_TABLE: str = f"core.discovery_embeddings{_DEFAULT_ENTRY['table_suffix']}"
 
 
-# Check if sentence-transformers is available
-try:
+# NumPy is a direct core dependency and is used by similarity/ranking even when
+# no embedding model is loaded.  sentence-transformers is intentionally only
+# imported inside _ensure_model(): importing it here used to pull torch,
+# transformers, and sklearn into every process that merely checked embedding
+# capability.  On GitHub runners that added 8-10 seconds and hundreds of MB to
+# each pytest shard before a model was ever requested.
+import numpy as np
+
+if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
-    import numpy as np
-    SENTENCE_TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    SENTENCE_TRANSFORMERS_AVAILABLE = False
+else:
+    SentenceTransformer = Any
+
+SENTENCE_TRANSFORMERS_AVAILABLE = (
+    importlib.util.find_spec("sentence_transformers") is not None
+)
+if not SENTENCE_TRANSFORMERS_AVAILABLE:
     logger.warning(
         "sentence-transformers not available. Install with: "
         "pip install sentence-transformers"
@@ -116,6 +127,8 @@ class EmbeddingsService:
             loop = asyncio.get_running_loop()
 
             def _load_model():
+                from sentence_transformers import SentenceTransformer
+
                 logger.info(f"Loading embedding model: {self.model_name} (key={self.model_key}, dim={self.dim})")
                 model = SentenceTransformer(self.model_name)
                 logger.info(f"Embedding model loaded: {self.model_name}")
