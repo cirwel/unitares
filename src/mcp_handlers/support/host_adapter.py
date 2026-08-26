@@ -361,6 +361,29 @@ async def invoke_host_adapter(
             "HA_SANDBOX": sandbox,
             "HA_MODEL": model or "",
             "USER": _current_username(),
+            # Neutralise console-API credentials so this stays a SUBSCRIPTION
+            # lane by construction. The orchestrator merges this map over its
+            # own inherited environment, and that environment is whatever the
+            # shell that bootstrapped the launchd job happened to export --
+            # `.zshrc` exports ANTHROPIC_API_KEY here, so the job inherited it
+            # at bootstrap even though the plist never mentions it. That makes
+            # the leak invisible to `launchctl print`, whose `environment`
+            # block shows only plist-declared vars.
+            #
+            # The consequence was not a crash but a silent billing switch: the
+            # CLI preferred the key, spent metered API credit instead of the
+            # operator subscription, and once that balance ran out the lane
+            # started returning HTTP 400 "Credit balance is too low" as a bare
+            # exit 1. That reads exactly like the USER/"not logged in" bug this
+            # env map already fixes, which is how it stayed hidden behind it.
+            #
+            # Empty string rather than a true unset: the orchestrator's
+            # /v1/agents contract validates env as string => string, so `false`
+            # (the Erlang "remove this variable" form) is rejected before it
+            # reaches Port.open. Verified live -- blanking these two turns the
+            # lane's exit 1 into exit 0 with a subscription-billed result.
+            "ANTHROPIC_API_KEY": "",
+            "ANTHROPIC_AUTH_TOKEN": "",
         },
         "lease": False,  # read-only advisor lane, no presence/lineage
         "max_runtime_ms": int(timeout_s * 1000) + 30_000,  # orchestrator backstop

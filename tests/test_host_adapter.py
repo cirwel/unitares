@@ -475,6 +475,41 @@ def test_spawn_spec_passes_user_even_when_absent_from_our_environment(monkeypatc
     assert spawn_spec["env"]["USER"] == "svcuser"
 
 
+def test_spawn_spec_neutralises_console_api_credentials(monkeypatch):
+    """The strong lanes are subscription-backed by construction, not by luck.
+
+    The orchestrator merges the spawn env over its own inherited environment,
+    and that environment is whatever shell bootstrapped the launchd job. On the
+    reference host `.zshrc` exports ANTHROPIC_API_KEY, so the job inherited it
+    at bootstrap while the plist never mentioned it -- invisible to
+    `launchctl print`, whose environment block lists only plist-declared vars.
+
+    The failure that caused was not a crash. The CLI preferred the key, spent
+    metered API credit instead of the operator subscription, and once that
+    balance ran out returned HTTP 400 "Credit balance is too low" as a bare
+    exit 1 -- indistinguishable from the USER/"not logged in" bug, which is how
+    it hid behind it. Blanking these in the spec is what makes the lane's
+    billing a property of the code rather than of the operator's dotfiles.
+    """
+    _enable(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-should-not-reach-the-child")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "should-not-reach-the-child")
+
+    state = _patch_httpx(monkeypatch, [
+        _FakeResp(201, {"ok": True, "agent_id": "ag-billing"}),
+        _FakeResp(200, {"result": {"exit_status": 0, "output": ["done"]}}),
+    ])
+
+    _run(ha.invoke_host_adapter("claude:host-adapter", "hi", timeout_s=5))
+
+    env = state["calls"][0][1]["json"]["env"]
+    # Empty string, not absent: the orchestrator's /v1/agents contract validates
+    # env as string => string, so Erlang's `false` (remove-the-variable) form is
+    # rejected before it reaches Port.open.
+    assert env["ANTHROPIC_API_KEY"] == ""
+    assert env["ANTHROPIC_AUTH_TOKEN"] == ""
+
+
 def test_current_username_falls_back_to_env_when_lookup_raises(monkeypatch):
     """A uid with no password-database entry is pathological, not a crash."""
     monkeypatch.setattr(ha.getpass, "getuser", _raise_lookup_error)
