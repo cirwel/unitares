@@ -14,6 +14,7 @@ from src.mcp_handlers.context import (
 )
 from src.services.mcp_transport_service import (
     McpAuthConfig,
+    build_transport_runtime,
     capture_transport_context,
     make_streamable_mcp_asgi,
     reset_transport_context,
@@ -31,6 +32,52 @@ def _scope(*headers: tuple[bytes, bytes], peer_pid: int | None = None):
     if peer_pid is not None:
         scope["unitares_peer_pid"] = peer_pid
     return scope
+
+
+def test_transport_runtime_uses_supported_sansio_websocket_backend(monkeypatch):
+    app = object()
+    session_manager = object()
+
+    monkeypatch.setattr(
+        "src.background_tasks.start_all_background_tasks", lambda **_kwargs: None
+    )
+    monkeypatch.setattr("src.mcp_compat.lowlevel_server", lambda _mcp: object())
+    monkeypatch.setattr(
+        "src.mcp_listen_config.build_streamable_session_manager",
+        lambda _server: session_manager,
+    )
+    monkeypatch.setattr(
+        "src.services.mcp_transport_service._log_transport_security",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "src.services.mcp_transport_service._create_base_application",
+        lambda _mcp: app,
+    )
+    monkeypatch.setattr(
+        "src.services.mcp_transport_service._configure_middleware",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "src.services.mcp_transport_service._register_application_routes",
+        lambda *_args, **_kwargs: None,
+    )
+
+    runtime = build_transport_runtime(
+        object(),
+        auth_config=McpAuthConfig(),
+        host="127.0.0.1",
+        port=8767,
+        reload=False,
+        server_ready_fn=lambda: True,
+        set_server_ready=lambda: None,
+        server_start_time=0.0,
+        server_version="test",
+        server_build_sha="test",
+    )
+
+    assert runtime.session_manager is session_manager
+    assert runtime.server.config.ws == "websockets-sansio"
 
 
 def test_capture_transport_context_sets_and_resets_all_compatibility_contexts():

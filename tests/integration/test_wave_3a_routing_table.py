@@ -123,7 +123,12 @@ class _StubServer:
         self.port = port
         app = Starlette(routes=[Route("/", _beam_stub_handler, methods=["POST"])])
         config = uvicorn.Config(
-            app, host="127.0.0.1", port=port, log_level="error", lifespan="off"
+            app,
+            host="127.0.0.1",
+            port=port,
+            log_level="error",
+            lifespan="off",
+            ws="none",
         )
         self.server = uvicorn.Server(config)
         self._task: Optional[asyncio.Task[None]] = None
