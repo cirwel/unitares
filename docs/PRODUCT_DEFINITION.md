@@ -11,7 +11,8 @@ purpose and links to the precise version at every step.
 long-running AI agents.** It acts as a flight recorder and bounded circuit
 breaker: agents check in with it as they work; it keeps a
 longitudinal score of whether each agent's claims match its recorded results,
-pauses an agent whose behavior drifts, requires a written reflection — and
+can refuse further governed writes when policy pauses an agent, requires a
+written reflection — and
 optionally a structured peer review — before that agent can resume, and leaves
 an auditable record plus a shared memory that every other agent on the fleet
 can search.
@@ -33,6 +34,12 @@ different agent runtimes can use the same identity, state, policy, review, and
 memory capabilities. It is not the product's outer boundary. REST, the public
 SDK, host adapters, and the dashboard expose the same Core for clients whose
 lifecycle cannot be expressed by a direct MCP connection alone.
+
+The versioned [interface contract](INTERFACE_CONTRACT.md) names that narrow
+waist precisely. It guarantees advertised, callable capability names across
+MCP, REST discovery, and local stdio. Lifecycle hooks and policy actuation are
+separate host-integration capabilities; connecting an MCP client does not imply
+that its host will onboard, check in, or stop automatically.
 
 This makes UNITARES **harness-agnostic**. Claude Code, Codex, Hermes, custom
 runtimes, and resident agents keep their own reasoning loops, model choices,

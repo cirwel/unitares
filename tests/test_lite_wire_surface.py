@@ -7,9 +7,9 @@ That wire surface is composed from two places in src/mcp_server.py:
 
   1. `register_dynamic_tools()` advertises every `register=True` handler
      (`get_tool_registry()`) that passes the active mode filter.
-  2. `_register_common_aliases()` advertises the workflow aliases in
-     `AGENT_WORKFLOW_ALIASES` (start_session, sync_state, ...), which resolve at
-     dispatch time to canonical handlers (onboard, process_agent_update, ...).
+  2. `_register_common_aliases()` advertises the workflow aliases allowed by
+     the active mode (start_session, sync_state, ...), which resolve at dispatch
+     time to canonical handlers (onboard, process_agent_update, ...).
 
 If someone adds a tool to `LITE_MODE_TOOLS` but forgets `register=True` (or an
 alias entry), it would be silently dropped from the wire — the client sees fewer
@@ -36,6 +36,7 @@ import pytest
 
 from src.mcp_handlers.decorators import get_tool_registry
 from src.mcp_handlers.tool_stability import AGENT_WORKFLOW_ALIASES, resolve_tool_alias
+from src.interface_contract import workflow_alias_names_for_mode
 from src.tool_modes import (
     LITE_MODE_TOOLS,
     MINIMAL_MODE_TOOLS,
@@ -58,7 +59,7 @@ def _lite_wire_surface() -> set[str]:
     surface = {name for name in registry if name in allowed}
 
     # (2) _register_common_aliases: each resolvable workflow alias is advertised.
-    for alias in AGENT_WORKFLOW_ALIASES:
+    for alias in workflow_alias_names_for_mode("lite"):
         _actual, info = resolve_tool_alias(alias)
         if info is not None:
             surface.add(alias)
@@ -160,9 +161,7 @@ def test_every_mode_tool_is_backed_by_handler_or_alias(mode_name, mode_tools):
 
 
 def test_workflow_aliases_are_lite_visible():
-    """All workflow aliases live in the lite set (they are registered uncondition-
-    ally by _register_common_aliases, so a lite-excluded alias would over-advertise).
-    """
+    """All primary workflow aliases are intentionally available in lite mode."""
     alias_names = {a for a in AGENT_WORKFLOW_ALIASES if resolve_tool_alias(a)[1] is not None}
     leaked = sorted(alias_names - LITE_MODE_TOOLS)
     assert not leaked, (
