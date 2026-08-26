@@ -75,6 +75,7 @@ The ADR-001 thread: do not enable operator-vision delegation as first proposed; 
 | [`accountable-testbed-metrics-preregistration-v1.md`](accountable-testbed-metrics-preregistration-v1.md) | Frozen v1.1 evaluation contract for future headline, ablation, and scale-sweep runs; the document merge did not execute those runs |
 | [`accountable-testbed-preliminary-trace.md`](accountable-testbed-preliminary-trace.md) | Preliminary deployed-system trace exercising the federation primitives; explicitly not a multi-host or multi-organization result |
 | [`orientation-constraint-set-preregistration-v0.md`](orientation-constraint-set-preregistration-v0.md) | Frozen protocol candidate for a paired, information-matched test of a temporary read-only diagnostic constraint set; no durable self-schema or runtime surface is authorized |
+| [`eisv-counterfactual-effort-channel-v0.md`](eisv-counterfactual-effort-channel-v0.md) | DRAFT / design-first (2026-08-26) — **no code, no read, no registration.** Pre-declares a reopening premise for the outcome-grounding stop rule *before* its 2026-12-01 read resolves, so the premise cannot be reverse-engineered from that read's outcome. Proposes a continuous per-session counterfactual-effort ratio (METR's validated-judge method) in place of the supply-limited bad class, with frozen non-pooling/embargo interlocks, a local-model-must-work constraint, and six unfilled operator declarations |
 
 ## Resolved — relocated to [`resolved/`](resolved/)
 
