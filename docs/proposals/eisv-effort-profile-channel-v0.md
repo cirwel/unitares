@@ -1,4 +1,4 @@
-# EISV counterfactual-effort label channel — reopening premise, pre-declared
+# EISV effort-profile label channel — reopening premise, pre-declared
 
 **Status: DRAFT / design-first. Not a change, not a registration, and not a
 read.** No code, no database access, and no live-path wiring is proposed here.
@@ -57,8 +57,8 @@ class.** The stop rule's dependent variable is `is_bad`: a rare, externally
 verified failure. Power is set by the bad count, the bad count is set by the
 world (operator correction bandwidth, a mostly-non-committing fleet), and the
 tournament's own arithmetic says the resulting gate is unwinnable at this
-supply. A per-task *counterfactual effort ratio* has no minority class. Every
-session that produced a transcript carries one. Power comes from the total, and
+supply. A per-session *effort profile* has no minority class. Every session
+that produced a transcript carries one. Power comes from the total, and
 the total is not bandwidth-limited.
 
 **(b) The judge is validated against known ground truth before it is used.**
@@ -105,7 +105,7 @@ it:
 - **It is not the de-scoped resident-adjudication throughput dial.** The
   tournament de-scoped that on contamination grounds — an adjudication dial
   creates pressure to manufacture labels, and the 497-synthetic incident is what
-  that looks like. An effort ratio has no dial to turn. It is computed
+  that looks like. An effort profile has no dial to turn. It is computed
   retrospectively over sessions that already happened, at whatever rate they
   happened; there is no rate to increase and therefore nothing to inflate. This
   distinction is the whole of the rebuttal, and if it turns out to be wrong the
@@ -118,18 +118,30 @@ it:
 
 ## 5. The measurement
 
-For a completed agent session *s* with a transcript:
+**Corrected 2026-08-26 — the dependent variable is observable, not
+counterfactual.** An earlier revision made `t_counterfactual` — how long the work
+would have taken without agent assistance — the numerator of the dependent
+variable, and proposed validating it against the operator's own blind estimate.
+That design is withdrawn. Its reasoning is in §5a; it is kept visible rather than
+quietly replaced because the mistake is instructive.
 
-- `t_actual(s)` — observed wall-clock working duration, already available from
-  session records and requiring no judge.
-- `t_counterfactual(s)` — the judge's estimate of how long the same work would
-  have taken the operator without agent assistance.
-- `effort_ratio(s) = t_counterfactual(s) / t_actual(s)` — the dependent
-  variable.
+For a completed agent session *s* with a transcript, all observable, no judge
+required for any of them:
+
+- `t_actual(s)` — wall-clock working span from transcript message timestamps.
+- `turns(s)` — the number of exchanges.
+- `cycles(s)` — re-direction events: the agent's output is rejected, corrected,
+  or re-specified rather than carried forward.
+
+Together these are an **effort profile**, not an efficiency score. The judge's
+job is reduced to extracting `cycles(s)` from a redacted transcript, which is a
+classification over text present in the artifact and therefore checkable. It no
+longer estimates anything counterfactual.
 
 The research question this channel would eventually ask is *not* the registered
-one. It is: **does prior-state EISV carry information about the effort ratio of
-the session that follows it, over and above a per-agent persistence baseline?**
+one. It is: **does prior-state EISV carry information about the effort profile
+of the session that follows it, over and above a per-agent persistence
+baseline?**
 
 The baseline clause is not optional. The tournament's central negative finding
 is that a per-agent AR(1)/persistence null is the thing to beat, and that
@@ -143,6 +155,53 @@ own support and power criteria, on its own permutation structure, declared
 before any read. Reusing 150 here would be a number laundered across
 questions — exactly the conflation the stop rule's "two counts" section exists
 to prevent.
+
+## 5a. Why the counterfactual and the operator-oracle were removed
+
+The withdrawn design had the operator estimate `t_counterfactual` blind to the
+judge, and treated agreement between the two as the validation statistic. Two
+independent objections, either sufficient:
+
+**The operator is not an oracle, and this is the one quantity where that is
+proven.** METR's own earlier randomized trial of experienced open-source
+developers is the canonical result here: measured **19% slower** with AI tools,
+while the same developers self-reported **20% faster** — and the misestimate
+survived doing the tasks. Forecasts before, self-assessment after, and
+measurement disagreed in the same direction. Counterfactual duration is
+precisely the judgement humans are documented to get wrong. Building this
+channel's validation on an operator's blind estimate of it would have been
+citing METR for the method while using the instrument METR's own work
+discredited.
+
+**It re-seats the operator as a throughput bottleneck.** The design tournament's
+diagnosis of the label supply problem was that labels are limited by a solo
+operator's correction bandwidth. A protocol that requires per-sample operator
+adjudication spends the exact resource the channel was supposed to stop
+depending on, and works against the direction
+[`bridge-dispatch-v0.md`](bridge-dispatch-v0.md) is pushing — operator as
+evidence-backed exception handler, not as transport.
+
+**What replaces it.** Nothing, on the counterfactual: a quantity with no
+observable ground truth and no trustworthy adjudicator is not measured here at
+all. The effort profile in §5 is observable end to end.
+
+Retaining the counterfactual as an *exploratory* secondary is permitted only
+under a reliability floor and an explicit refusal of any validity claim:
+heterogeneous judges from different model families — the routing
+`UNITARES_DIALECTIC_REVIEWER_HOST` already provides — estimate independently,
+and their agreement is reported as inter-family reliability. **Reliability is not
+validity.** Judges that agree can be agreeing and wrong, and on this quantity
+they would likely be wrong together, since they share the training distribution
+that produced the human bias. Any published exploratory counterfactual carries
+that sentence next to it.
+
+**Operator authority is untouched by this.** The distinction the withdrawn
+design collapsed is between the operator as *decision-maker* and the operator as
+*measuring instrument*. Deciding standards — thresholds, effect sizes, what a
+result licenses — belong to the operator and cannot be delegated to an
+implementing agent; that is a standing rule in this repo and §11 keeps every one
+of those slots. Supplying measurements is a different job, and this protocol no
+longer asks for it.
 
 ## 6. Construct validity — the threats, worst first
 
@@ -213,15 +272,16 @@ events. Two sub-reads:
   all timestamps stripped. Ground truth is the recorded wall-clock. This is the
   local analogue of METR's check against known developer times, and it is fully
   verifiable without any new labelling effort.
-- *1b, adjudicated:* on a declared random sample, the operator independently
-  estimates `t_counterfactual` blind to the judge's answer. Agreement between
-  the two is the validation statistic for the counterfactual, which has no
-  observable ground truth.
+- *1b, checkable:* the judge extracts `cycles(s)` — re-direction events — from
+  the same redacted transcript. Ground truth is a rule-based extraction over
+  explicit correction markers, which is conservative (it under-counts implicit
+  re-direction) and is therefore reported as a floor, not as a gold standard.
+  Disagreement is inspected by reading the transcript, which is the mitigation
+  Anthropic's pilot could not use and this one can.
 
-1a bounds whether the judge can read a transcript for effort at all. It does not
-license 1b's counterfactual: a judge that recovers observed duration may still
-be systematically wrong about the counterfactual, and 1b is the only check on
-that. Both must clear their declared thresholds.
+Neither sub-read asks anyone to estimate a counterfactual, and neither requires
+operator adjudication. Both compare a judge's output against something already
+present in the artifact. Both must clear their declared thresholds.
 
 *Where the corpus actually lives (corrected 2026-08-26).* An earlier revision of
 this section assumed the transcripts and the wall-clock were server-side. They
@@ -283,7 +343,7 @@ validation and requires re-running Phase 1, not a footnote.
 Everything the standing rules say applies here, with two consequences worth
 making explicit because this channel is unusually easy to misuse:
 
-- A judge-derived count may not retire any capability. If effort ratios come
+- A judge-derived count may not retire any capability. If effort profiles come
   back flat, that is telemetry about the ratio, and it authorizes nothing about
   EISV, the sessions measured, or the agents that produced them.
 - **A failed Phase 1 kills the judge as an instrument, not the question.** "The
@@ -311,11 +371,16 @@ offered for rejection, not defaults.
 | # | Declaration | Proposed | Status |
 |---|---|---|---|
 | D1 | Phase 1a agreement threshold (judge vs recorded wall-clock) | [Spearman ρ ≥ 0.6 on ≥ 60 sessions] | **UNFILLED** |
-| D2 | Phase 1b agreement threshold (judge vs blind operator estimate) | [ρ ≥ 0.5 on ≥ 30 sessions] | **UNFILLED** |
+| D2 | Phase 1b agreement threshold (judge vs rule-based cycle floor) | [ρ ≥ 0.5 on ≥ 60 sessions] | **UNFILLED** |
 | D3 | Registered primary judge backend, model version, prompt | [local Ollama; version pinned at registration] | **UNFILLED** |
 | D4 | Smallest relevant effect for the Phase 2 read | — | **UNFILLED** |
 | D5 | Phase 2 read date and cohort | — | **UNFILLED** |
 | D6 | Position on T1 (productive friction) required before publishing | — | **UNFILLED** |
+
+Every slot above is a *decision*, not a measurement. None of them asks the
+operator to supply a number about the world; each asks what standard a number
+must meet. That is the only role this protocol assigns to the operator, and it
+is the one role that cannot be delegated.
 
 D4 deliberately mirrors the slot the stop rule already records as unfilled. A
 channel that reaches a read without it earns `INCONCLUSIVE`, by the same rule
@@ -328,7 +393,7 @@ that governs the December read.
 - Do not cite this document as a registration, a gate, or evidence that the
   reopening clause has been satisfied. It pre-declares a premise; satisfying the
   clause requires Phases 1 and 0 to clear and a separate registration to exist.
-- Do not present an effort ratio as a measure of value, quality, or agent
+- Do not present an effort profile as a measure of value, quality, or agent
   performance. Absent a declared position on T1 it is a speed reading and
   nothing else.
 - Do not reuse `Bad clusters ≥ 150`, the withdrawn `0.05` AUC bound, or any
@@ -336,6 +401,9 @@ that governs the December read.
 - Do not schedule any part of this. The 2026-08-23 audit exists because
   automation ran a read 93 times that a human would have run once.
 - Do not lower a Phase 1 threshold because the free backend missed it.
+- Do not reintroduce an operator estimate, self-report, or recollection as
+  ground truth for any quantity in this protocol. If a quantity has no
+  observable referent, it is exploratory or it is not measured — see §5a.
 
 ## 13. Provenance
 
@@ -344,7 +412,11 @@ The method borrowed in §2 is described in Anthropic's
 whose own writeup was not public at the time of writing and whose findings that
 post describes as preliminary. The productive-friction threat in T1 is from the
 Stanford SALT Lab study reported in the same post. The judge-wording failure
-mode in T4 is Anthropic's own account of running the pilot. None of these are
+mode in T4 is Anthropic's own account of running the pilot. The earlier METR
+randomized trial cited in §5a — measured 19% slowdown against a self-reported
+20% speedup among experienced open-source developers — is the published result
+that removed the operator-oracle design; it is load-bearing for that removal and
+for nothing else. None of these are
 peer-reviewed results and none are load-bearing for anything asserted here; they
 are the source of a design, not evidence for it.
 
