@@ -191,6 +191,7 @@ async def start_uds_listener(
         # Disable uvicorn's lifespan and CORS — those are handled by the
         # primary HTTP listener; UDS is just a transport into the same app.
         lifespan="off",
+        ws="none",
         access_log=False,
         backlog=_UDS_BACKLOG,
     )
