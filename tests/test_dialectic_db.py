@@ -814,6 +814,67 @@ class TestUpdateSessionAwaitingFacilitation:
 
 
 # ============================================================================
+# DialecticDB.mark_awaiting_facilitation
+# ============================================================================
+
+class TestMarkAwaitingFacilitation:
+    @pytest.mark.asyncio
+    async def test_carries_the_terminal_write_guard(self, db):
+        """Setting the flag is guarded; the unguarded writer is for clearing it.
+
+        `reopen_session` reopens exactly `status='failed' AND
+        awaiting_facilitation=true`, so stamping the flag onto a row another
+        writer has just failed would make an ordinary failure revivable.
+        """
+        instance, pool, conn = db
+        conn.execute = AsyncMock(return_value="UPDATE 1")
+
+        result = await instance.mark_awaiting_facilitation("sess-001")
+
+        assert result is True
+        sql = " ".join(conn.execute.call_args[0][0].split())
+        assert "awaiting_facilitation = true" in sql
+        assert "status NOT IN ('resolved', 'failed')" in sql
+        assert conn.execute.call_args[0][1] == "sess-001"
+
+    @pytest.mark.asyncio
+    async def test_does_not_touch_updated_at(self, db):
+        """`updated_at` is the sweeper's staleness clock — leave it alone.
+
+        The sweeper is the only unattended retry of `select_reviewer`. Bumping
+        `updated_at` here would drop the session out of the stuck set for a
+        full STUCK_SESSION_THRESHOLD (2h), so a reviewer who becomes available
+        ten minutes after the request would not be picked up for two hours.
+        Recording that a session waits on a human must not stop a machine
+        rescuing it.
+        """
+        instance, pool, conn = db
+        conn.execute = AsyncMock(return_value="UPDATE 1")
+
+        await instance.mark_awaiting_facilitation("sess-001")
+
+        assert "updated_at" not in conn.execute.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_refused_on_a_terminal_row(self, db):
+        """A refused write returns False so the caller does not narrate it."""
+        instance, pool, conn = db
+        conn.execute = AsyncMock(return_value="UPDATE 0")
+        conn.fetchrow = AsyncMock(return_value={"status": "resolved"})
+
+        assert await instance.mark_awaiting_facilitation("sess-001") is False
+
+    @pytest.mark.asyncio
+    async def test_missing_row(self, db):
+        """A vanished row is also False, and does not raise."""
+        instance, pool, conn = db
+        conn.execute = AsyncMock(return_value="UPDATE 0")
+        conn.fetchrow = AsyncMock(return_value=None)
+
+        assert await instance.mark_awaiting_facilitation("sess-gone") is False
+
+
+# ============================================================================
 # DialecticDB.resolve_session
 # ============================================================================
 

@@ -9,13 +9,17 @@ and only fails sessions after extended inactivity (4+ hours total).
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any
 
+from src.dialectic_protocol import DialecticPhase
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
-from .events import emit_reviewer_reassigned
+from .events import emit_facilitation_needed, emit_reviewer_reassigned
+from .session import ACTIVE_SESSIONS
 from src.dialectic_db import (
     get_active_sessions_async,
     update_session_status_async,
     update_session_reviewer_async,
+    update_session_awaiting_facilitation_async,
+    mark_awaiting_facilitation_async,
     add_message_async,
     has_inflight_saga_async,
 )
@@ -51,6 +55,42 @@ def _parse_timestamp(value) -> datetime | None:
             return None
     return None
 
+
+
+def _sync_cached_session(session_id: str, **fields) -> None:
+    """Mirror a committed sweeper write into the in-process session cache.
+
+    The sweeper writes straight to PostgreSQL, and `ACTIVE_SESSIONS` is never
+    evicted — no writer in `src/` removes an entry — so a session this process
+    already holds keeps whatever state Python last set on it and never learns
+    what the sweeper committed. Every reader that ANSWERS a facilitation
+    request is cache-first: `handle_reassign_reviewer` reads `ACTIVE_SESSIONS`
+    before the database, and `_apply_reviewer_reassignment` decides revival
+    from `session.awaiting_facilitation` and `session.phase`. Unmirrored, a
+    sweeper-raised request is answerable only from a process that has never
+    seen the session — and in the process that raised it, the reassignment
+    succeeds in memory while the guarded UPDATE refuses the terminal row.
+
+    `phase` is accepted as the string the row carries and converted; an
+    unrecognised value is skipped rather than stored, so a cache entry never
+    ends up holding a phase the protocol cannot act on. Best-effort by design:
+    the row is authoritative and already committed, so a failure here must not
+    unwind it.
+    """
+    cached = ACTIVE_SESSIONS.get(session_id)
+    if cached is None:
+        return
+    for name, value in fields.items():
+        if name == "phase":
+            try:
+                value = DialecticPhase(value)
+            except ValueError:
+                logger.debug(
+                    f"_sync_cached_session: {session_id[:16]}... unknown phase {value!r}; "
+                    "cache left as-is"
+                )
+                continue
+        setattr(cached, name, value)
 
 
 def _describe_reap(
@@ -252,6 +292,30 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
                                     f"Reassignment transcript append failed for "
                                     f"{session_id[:16]}: {msg_exc}"
                                 )
+                            # A reassignment ANSWERS a standing request, so
+                            # the request must not outlive it. The handler
+                            # path clears the flag deliberately (#1167); this
+                            # one never did, which was harmless only while the
+                            # sweeper could not raise the flag itself. A stale
+                            # `awaiting_facilitation` makes a later ordinary
+                            # failure revivable by `reassign` — exactly the
+                            # hazard `mark_awaiting_facilitation` is guarded
+                            # against creating.
+                            if awaiting_facilitation:
+                                try:
+                                    await update_session_awaiting_facilitation_async(
+                                        session_id, False
+                                    )
+                                except Exception as clear_exc:
+                                    logger.warning(
+                                        f"Could not clear awaiting_facilitation for "
+                                        f"{session_id[:16]}: {clear_exc}"
+                                    )
+                            _sync_cached_session(
+                                session_id,
+                                reviewer_agent_id=new_reviewer,
+                                awaiting_facilitation=False,
+                            )
                             reassigned_count += 1
                             details.append({
                                 "session_id": session_id,
@@ -269,8 +333,74 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
                         except Exception as e:
                             logger.warning(f"Could not persist reviewer reassignment for {session_id[:16]}: {e}")
 
-                    # No replacement found — mark awaiting facilitation if not too old
-                    if check_time and check_time > fail_time:
+                    # No replacement found — record a standing facilitation
+                    # request if not too old.
+                    #
+                    # ⛔PERSIST THE FLAG, don't just narrate it. Until 2026-08-26
+                    # this branch appended the message, counted a facilitation
+                    # and returned — while `awaiting_facilitation` stayed false
+                    # in the row, because nothing here wrote it. Two costs, both
+                    # measured by replaying the sweeper over one stuck session:
+                    #
+                    #   1. `add_message` inserts into dialectic_messages and does
+                    #      NOT touch dialectic_sessions.updated_at (no trigger;
+                    #      migration 003), so the row kept looking stuck and this
+                    #      branch re-fired every sweep — three cycles, three
+                    #      identical transcript messages, `facilitation_count`
+                    #      counting cycles rather than sessions.
+                    #   2. At the 4h timeout the row was reaped with
+                    #      `awaiting_facilitation=false`, so `reopen_session` and
+                    #      `_apply_reviewer_reassignment` — both of which key on
+                    #      that flag — read it as an ordinary failure and refused
+                    #      to revive it. That is the same dead-end #1577 closed
+                    #      for requests raised at THESIS through the handler;
+                    #      requests the SWEEPER raises at ANTITHESIS never had
+                    #      the flag to be rescued by.
+                    #
+                    # The re-entry guard is what keeps the request to one
+                    # message and one count: `mark_awaiting_facilitation`
+                    # deliberately leaves `updated_at` alone (see its
+                    # docstring), so the row stays in the stuck set and this
+                    # branch is re-entered on every sweep — which is what keeps
+                    # `select_reviewer` retrying while a human is waited on.
+                    if check_time and check_time > fail_time and not awaiting_facilitation:
+                        try:
+                            recorded = await mark_awaiting_facilitation_async(session_id)
+                        except Exception as e:
+                            # Guarded like the neighbouring DB writes: this
+                            # runs inside the per-session loop of a sweep that
+                            # has already committed reaps, and letting it reach
+                            # the outer handler would discard their counts and
+                            # report the whole cycle as an error. Skip the
+                            # session; the next sweep retries it.
+                            logger.warning(
+                                f"Could not record facilitation request for "
+                                f"{session_id[:16]}: {e}"
+                            )
+                            continue
+                        if not recorded:
+                            # Guarded UPDATE wrote nothing — another writer
+                            # finished this session (dual-writer TOCTOU) or the
+                            # row is gone. Same posture as the refused reviewer
+                            # write above: don't narrate, don't count.
+                            logger.info(
+                                f"Session {session_id[:16]} facilitation write refused "
+                                "(row terminal or missing); request not recorded"
+                            )
+                            skipped_count += 1
+                            details.append({
+                                "session_id": session_id,
+                                "action": "write_refused",
+                                "attempted": "awaiting_facilitation",
+                            })
+                            continue
+                        _sync_cached_session(session_id, awaiting_facilitation=True)
+                        await emit_facilitation_needed(
+                            session_id=session_id,
+                            paused_agent_id=paused_agent_id,
+                            phase=phase,
+                            reason="reviewer_unresponsive",
+                        )
                         try:
                             await add_message_async(
                                 session_id=session_id,
@@ -278,21 +408,23 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
                                 message_type="system",
                                 reasoning=f"Reviewer '{reviewer_agent_id}' unresponsive. Awaiting human facilitation.",
                             )
-                            facilitation_count += 1
-                            details.append({
-                                "session_id": session_id,
-                                "paused_agent_id": paused_agent_id,
-                                "phase": phase,
-                                "action": "awaiting_facilitation",
-                                "stuck_reviewer": reviewer_agent_id,
-                            })
-                            logger.info(
-                                f"Session {session_id[:16]} awaiting human facilitation "
-                                f"(reviewer {reviewer_agent_id} unresponsive)"
-                            )
-                            continue  # Don't fail yet — give human time
                         except Exception as e:
+                            # Narration only. The request is committed; do not
+                            # unwind it, and do not fall through to the reap.
                             logger.warning(f"Could not add facilitation message for {session_id[:16]}: {e}")
+                        facilitation_count += 1
+                        details.append({
+                            "session_id": session_id,
+                            "paused_agent_id": paused_agent_id,
+                            "phase": phase,
+                            "action": "awaiting_facilitation",
+                            "stuck_reviewer": reviewer_agent_id,
+                        })
+                        logger.info(
+                            f"Session {session_id[:16]} awaiting human facilitation "
+                            f"(reviewer {reviewer_agent_id} unresponsive)"
+                        )
+                        continue  # Don't fail yet — give human time
 
             # A session already awaiting human facilitation runs on the HUMAN's
             # clock, not the stuck-process clock. STUCK_SESSION_THRESHOLD (2h)
@@ -335,6 +467,13 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
                         "attempted": "reap_failed",
                     })
                     continue
+                # `update_session_status` writes status AND phase; mirror the
+                # reap so a cached session in this process does not go on
+                # reading as live. Without it `_apply_reviewer_reassignment`
+                # sees a non-terminal phase, skips `reopen_session`, and the
+                # guarded reviewer write is then refused by the row it never
+                # reopened — the standing request answered in memory only.
+                _sync_cached_session(session_id, phase="failed")
                 failure_reason = _describe_reap(
                     phase=phase,
                     awaiting_facilitation=awaiting_facilitation,

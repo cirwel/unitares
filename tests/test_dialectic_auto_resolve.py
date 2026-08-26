@@ -190,7 +190,15 @@ async def test_reassignment_recorded_even_if_transcript_append_fails():
 
 @pytest.mark.asyncio
 async def test_antithesis_awaits_facilitation_when_no_candidates():
-    """Stuck antithesis with no replacement should await facilitation (not fail immediately)."""
+    """Stuck antithesis with no replacement should await facilitation (not fail immediately).
+
+    The request must be PERSISTED, not only narrated. Until 2026-08-26 this
+    branch appended the transcript message and counted a facilitation while
+    `awaiting_facilitation` stayed false in the row — and every reader that
+    answers a facilitation request (`reopen_session`,
+    `_apply_reviewer_reassignment`) keys on that flag, so the request was
+    visible in the transcript and unanswerable in the database.
+    """
     # Session is 2.5 hours old (past threshold but under facilitation timeout of 4h)
     sessions = [
         {"session_id": "s1", "updated_at": _old_time(2.5), "paused_agent_id": "a1",
@@ -204,12 +212,16 @@ async def test_antithesis_awaits_facilitation_when_no_candidates():
 
     mock_update_status = AsyncMock()
     mock_add_msg = AsyncMock()
+    mock_mark = AsyncMock(return_value=True)
+    mock_emit = AsyncMock()
     mock_select = AsyncMock(return_value=None)
 
     with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                new_callable=AsyncMock, return_value=sessions), \
          patch(f"{AUTO_RESOLVE}.mcp_server", server), \
          patch(f"{AUTO_RESOLVE}.update_session_status_async", mock_update_status), \
+         patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async", mock_mark), \
+         patch(f"{AUTO_RESOLVE}.emit_facilitation_needed", mock_emit), \
          patch(f"{AUTO_RESOLVE}.add_message_async", mock_add_msg), \
          patch("src.mcp_handlers.dialectic.reviewer.select_reviewer", mock_select):
         from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
@@ -218,6 +230,92 @@ async def test_antithesis_awaits_facilitation_when_no_candidates():
     assert result["facilitation_count"] == 1
     assert result["resolved_count"] == 0  # NOT failed yet
     mock_update_status.assert_not_called()  # Should not mark as failed
+    mock_mark.assert_awaited_once_with("s1")
+    # Every other writer of this flag announces it; a request nobody is told
+    # about is one the operator has to go looking for.
+    assert mock_emit.await_args.kwargs["session_id"] == "s1"
+    assert mock_emit.await_args.kwargs["reason"] == "reviewer_unresponsive"
+
+
+@pytest.mark.asyncio
+async def test_facilitation_request_is_recorded_once_not_once_per_cycle():
+    """A session already awaiting facilitation is held, not re-narrated.
+
+    `add_message` writes to dialectic_messages and leaves
+    dialectic_sessions.updated_at alone, so a row that asked for a human keeps
+    looking stuck — deliberately, since that is what keeps `select_reviewer`
+    retrying while a human is waited on. Re-entering this branch must therefore
+    cost nothing: no second message, no second count, and no second event.
+    """
+    sessions = [
+        {"session_id": "s1", "updated_at": _old_time(2.5), "paused_agent_id": "a1",
+         "phase": "antithesis", "reviewer_agent_id": "gone-reviewer",
+         "awaiting_facilitation": True}
+    ]
+
+    server = _make_mock_server({"a1": _make_agent_meta(status="paused")})
+
+    mock_update_status = AsyncMock()
+    mock_add_msg = AsyncMock()
+    mock_mark = AsyncMock(return_value=True)
+
+    with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
+               new_callable=AsyncMock, return_value=sessions), \
+         patch(f"{AUTO_RESOLVE}.mcp_server", server), \
+         patch(f"{AUTO_RESOLVE}.update_session_status_async", mock_update_status), \
+         patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async", mock_mark), \
+         patch(f"{AUTO_RESOLVE}.emit_facilitation_needed", new_callable=AsyncMock), \
+         patch(f"{AUTO_RESOLVE}.add_message_async", mock_add_msg), \
+         patch("src.mcp_handlers.dialectic.reviewer.select_reviewer",
+               new_callable=AsyncMock, return_value=None):
+        from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
+        result = await auto_resolve_stuck_sessions()
+
+    assert result["facilitation_count"] == 0, "the request was already recorded"
+    assert result["resolved_count"] == 0, "the operator's 4h clock is still running"
+    mock_mark.assert_not_awaited()
+    mock_add_msg.assert_not_awaited()
+    mock_update_status.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_refused_facilitation_write_is_not_narrated():
+    """A refused flag write means another writer finished the session.
+
+    Same posture as the refused reviewer write: no transcript message, no
+    facilitation count — narrating a request the database rejected would put a
+    standing ask on a session nobody can answer.
+    """
+    sessions = [
+        {"session_id": "s1", "updated_at": _old_time(2.5), "paused_agent_id": "a1",
+         "phase": "antithesis", "reviewer_agent_id": "gone-reviewer"}
+    ]
+
+    server = _make_mock_server({"a1": _make_agent_meta(status="paused")})
+
+    mock_add_msg = AsyncMock()
+    mock_mark = AsyncMock(return_value=False)
+
+    with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
+               new_callable=AsyncMock, return_value=sessions), \
+         patch(f"{AUTO_RESOLVE}.mcp_server", server), \
+         patch(f"{AUTO_RESOLVE}.update_session_status_async", AsyncMock()), \
+         patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async", mock_mark), \
+         patch(f"{AUTO_RESOLVE}.emit_facilitation_needed", new_callable=AsyncMock), \
+         patch(f"{AUTO_RESOLVE}.add_message_async", mock_add_msg), \
+         patch("src.mcp_handlers.dialectic.reviewer.select_reviewer",
+               new_callable=AsyncMock, return_value=None):
+        from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
+        result = await auto_resolve_stuck_sessions()
+
+    assert result["facilitation_count"] == 0
+    assert result["skipped_count"] == 1
+    mock_add_msg.assert_not_awaited()
+    assert result["details"] == [{
+        "session_id": "s1",
+        "action": "write_refused",
+        "attempted": "awaiting_facilitation",
+    }]
 
 
 @pytest.mark.asyncio
@@ -371,3 +469,166 @@ def test_facilitation_timeout_is_4_hours():
     """Facilitation timeout should be 4 hours (2h stuck + 2h grace)."""
     from src.mcp_handlers.dialectic.auto_resolve import FACILITATION_TIMEOUT
     assert FACILITATION_TIMEOUT == timedelta(hours=4)
+
+# --- In-process cache coherence -------------------------------------------
+#
+# The sweeper writes straight to PostgreSQL while ACTIVE_SESSIONS is never
+# evicted, so anything it commits and does not mirror is invisible to the
+# handlers in the same process — which are the ones that answer the request.
+
+
+def _cached(session_id, *, phase, reviewer="gone-reviewer", awaiting=False):
+    """Put a live session object in ACTIVE_SESSIONS, as a real process would."""
+    from src.dialectic_protocol import DialecticSession, DialecticPhase
+    from src.mcp_handlers.dialectic.session import ACTIVE_SESSIONS
+
+    session = DialecticSession(
+        paused_agent_id="a1", reviewer_agent_id=reviewer, dispute_type="verification",
+    )
+    session.phase = DialecticPhase(phase)
+    session.awaiting_facilitation = awaiting
+    ACTIVE_SESSIONS[session_id] = session
+    return session
+
+
+@pytest.fixture
+def clean_active_sessions():
+    from src.mcp_handlers.dialectic.session import ACTIVE_SESSIONS
+    ACTIVE_SESSIONS.clear()
+    yield ACTIVE_SESSIONS
+    ACTIVE_SESSIONS.clear()
+
+
+@pytest.mark.asyncio
+async def test_facilitation_request_reaches_the_in_process_cache(clean_active_sessions):
+    """A DB-only flag write is answerable everywhere except where it was raised.
+
+    `handle_reassign_reviewer` reads ACTIVE_SESSIONS before the database and
+    `_apply_reviewer_reassignment` decides revival from the in-memory
+    `awaiting_facilitation`, so without the mirror the operator's reassign in
+    this process reopens nothing and the guarded reviewer write is refused.
+    """
+    sessions = [
+        {"session_id": "s1", "updated_at": _old_time(2.5), "paused_agent_id": "a1",
+         "phase": "antithesis", "reviewer_agent_id": "gone-reviewer"}
+    ]
+    cached = _cached("s1", phase="antithesis")
+    server = _make_mock_server({"a1": _make_agent_meta(status="paused")})
+
+    with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
+               new_callable=AsyncMock, return_value=sessions), \
+         patch(f"{AUTO_RESOLVE}.mcp_server", server), \
+         patch(f"{AUTO_RESOLVE}.update_session_status_async", AsyncMock()), \
+         patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async",
+               new_callable=AsyncMock, return_value=True), \
+         patch(f"{AUTO_RESOLVE}.emit_facilitation_needed", new_callable=AsyncMock), \
+         patch(f"{AUTO_RESOLVE}.add_message_async", new_callable=AsyncMock), \
+         patch("src.mcp_handlers.dialectic.reviewer.select_reviewer",
+               new_callable=AsyncMock, return_value=None):
+        from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
+        await auto_resolve_stuck_sessions()
+
+    assert cached.awaiting_facilitation is True
+
+
+@pytest.mark.asyncio
+async def test_reap_reaches_the_in_process_cache(clean_active_sessions):
+    """A cached session must not go on reading as live after its row is reaped."""
+    from src.dialectic_protocol import DialecticPhase
+
+    sessions = [
+        {"session_id": "s1", "updated_at": _old_time(5), "paused_agent_id": "a1",
+         "phase": "antithesis", "reviewer_agent_id": None,
+         "awaiting_facilitation": True}
+    ]
+    cached = _cached("s1", phase="antithesis", reviewer=None, awaiting=True)
+    server = _make_mock_server({"a1": _make_agent_meta(status="paused")})
+
+    with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
+               new_callable=AsyncMock, return_value=sessions), \
+         patch(f"{AUTO_RESOLVE}.mcp_server", server), \
+         patch(f"{AUTO_RESOLVE}.update_session_status_async",
+               new_callable=AsyncMock, return_value=True), \
+         patch(f"{AUTO_RESOLVE}.add_message_async", new_callable=AsyncMock):
+        from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
+        result = await auto_resolve_stuck_sessions()
+
+    assert result["resolved_count"] == 1
+    assert cached.phase == DialecticPhase.FAILED
+
+
+@pytest.mark.asyncio
+async def test_reassignment_clears_a_standing_request(clean_active_sessions):
+    """Reassigning ANSWERS the request, so the request must not outlive it.
+
+    A stale flag on a session that later fails ordinarily would make it
+    revivable by `reassign` — the hazard the guarded writer exists to avoid.
+    """
+    sessions = [
+        {"session_id": "s1", "updated_at": _old_time(2.5), "paused_agent_id": "a1",
+         "phase": "antithesis", "reviewer_agent_id": "gone-reviewer",
+         "awaiting_facilitation": True}
+    ]
+    cached = _cached("s1", phase="antithesis", awaiting=True)
+    server = _make_mock_server({
+        "a1": _make_agent_meta(status="paused"),
+        "a2": _make_agent_meta(status="active"),
+    })
+    mock_clear = AsyncMock(return_value=True)
+
+    with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
+               new_callable=AsyncMock, return_value=sessions), \
+         patch(f"{AUTO_RESOLVE}.mcp_server", server), \
+         patch(f"{AUTO_RESOLVE}.update_session_reviewer_async",
+               new_callable=AsyncMock, return_value=True), \
+         patch(f"{AUTO_RESOLVE}.update_session_awaiting_facilitation_async", mock_clear), \
+         patch(f"{AUTO_RESOLVE}.emit_reviewer_reassigned", new_callable=AsyncMock), \
+         patch(f"{AUTO_RESOLVE}.update_session_status_async", AsyncMock()), \
+         patch(f"{AUTO_RESOLVE}.add_message_async", new_callable=AsyncMock), \
+         patch("src.mcp_handlers.dialectic.reviewer.select_reviewer",
+               new_callable=AsyncMock, return_value="a2"):
+        from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
+        result = await auto_resolve_stuck_sessions()
+
+    assert result["reassigned_count"] == 1
+    mock_clear.assert_awaited_once_with("s1", False)
+    assert cached.awaiting_facilitation is False
+    assert cached.reviewer_agent_id == "a2"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_flag_write_does_not_discard_the_cycle():
+    """One session's DB error must not throw away reaps already committed.
+
+    The write sits in the per-session loop of a sweep whose earlier iterations
+    have already marked sessions failed; letting it reach the outer handler
+    would report the whole cycle as an error and lose their counts.
+    """
+    sessions = [
+        # Reaped first (5h old, no reviewer), then the one that errors.
+        {"session_id": "reaped", "updated_at": _old_time(5), "paused_agent_id": "a0",
+         "phase": "thesis", "reviewer_agent_id": None},
+        {"session_id": "s1", "updated_at": _old_time(2.5), "paused_agent_id": "a1",
+         "phase": "antithesis", "reviewer_agent_id": "gone-reviewer"},
+    ]
+    server = _make_mock_server({
+        "a0": _make_agent_meta(status="paused"),
+        "a1": _make_agent_meta(status="paused"),
+    })
+
+    with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
+               new_callable=AsyncMock, return_value=sessions), \
+         patch(f"{AUTO_RESOLVE}.mcp_server", server), \
+         patch(f"{AUTO_RESOLVE}.update_session_status_async",
+               new_callable=AsyncMock, return_value=True), \
+         patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async",
+               new_callable=AsyncMock, side_effect=RuntimeError("connection lost")), \
+         patch(f"{AUTO_RESOLVE}.add_message_async", new_callable=AsyncMock), \
+         patch("src.mcp_handlers.dialectic.reviewer.select_reviewer",
+               new_callable=AsyncMock, return_value=None):
+        from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
+        result = await auto_resolve_stuck_sessions()
+
+    assert "error" not in result, "the cycle must not be reported as a failure"
+    assert result["resolved_count"] == 1, "the committed reap keeps its count"
+    assert result["facilitation_count"] == 0, "the request was never recorded"
