@@ -143,6 +143,18 @@ one. It is: **does prior-state EISV carry information about the effort profile
 of the session that follows it, over and above a per-agent persistence
 baseline?**
 
+**The standing objection to this whole document, stated plainly.** If the
+effort profile is a different question, then calling it a reopening premise for
+outcome-grounding may be a category error rather than a contribution: a
+measurement problem solved by quietly changing the subject. The stop rule's
+clause asks for a different *measurement process* for the same concern, not a
+different concern. Whether "does prior state predict how a session goes" is the
+same concern as "does prior state predict externally-verified bad outcomes" is
+a judgement, and it is the operator's, not this document's. It is listed as D7
+in §11 and is unfilled. If the answer is that they are different concerns, this
+document is not a reopening premise and should be read as a proposal for a new
+track that must earn its own justification from scratch.
+
 The baseline clause is not optional. The tournament's central negative finding
 is that a per-agent AR(1)/persistence null is the thing to beat, and that
 beating a fleet mean alone is not success. An effort-ratio model that only beats
@@ -219,12 +231,37 @@ declared position on it.** The honest minimum is to report the ratio as
 *throughput telemetry* and refuse any efficiency-is-goodness reading, in the
 same posture Φ already holds (telemetry-only, no verdict authority).
 
-**T2. Axiom-2 / anti-RLHF.** A speed metric wired to a verdict hard-codes
-optimize-toward-fast, the same defect the tournament identified in the
-recent-failure-rate gate (punish-toward-zero-failures). The mitigation is
-structural, not procedural: eval-only, never read by the verdict path.
+**T2. Task difficulty confounds the whole profile.** A long session with many
+turns and many corrections may reflect a hard problem rather than anything about
+the agent's prior state. Difficulty is not measured anywhere in this design and
+is not randomly assigned: agents are given the work that arrives, and whatever
+selects which agent gets which task is exactly the sort of thing prior state
+could correlate with. A model that appears to predict effort from prior state
+may be recovering the task-assignment process instead.
 
-**T3. Loop contamination through the transcript — Invariant 4.** This is the
+This is not fixable by a bigger sample — more sessions add more of the same
+confound. It needs either a difficulty covariate that is itself observable and
+not judge-derived, or a within-agent design that holds the work roughly fixed.
+Neither exists in this document, and a Phase 2 registration that does not
+supply one is measuring something it cannot name.
+
+**T3. Axiom-2 / anti-RLHF, and the subtler reactivity case.** A speed metric
+wired to a verdict hard-codes optimize-toward-fast, the same defect the
+tournament identified in the recent-failure-rate gate
+(punish-toward-zero-failures). The mitigation there is structural, not
+procedural: eval-only, never read by the verdict path.
+
+The subtler case is not wiring but *visibility*. Governance output is surfaced
+into agent context (see T4). If an effort profile were ever surfaced the same
+way, the measured agents could see the quantity they are scored on, and turn
+count is trivially suppressible — end sooner, ask fewer questions, batch less.
+The metric would then be reactive, and reactivity of a measure that rewards
+brevity pushes directly against the productive friction in T1. So the constraint
+is stronger than eval-only: **an effort profile must never enter agent context at
+all**, not as telemetry, not as a dashboard the agent can read, not in a mirror
+signal. That is a requirement on the surfacing layer, not on the analysis.
+
+**T4. Loop contamination through the transcript — Invariant 4.** This is the
 sharpest repo-specific hazard and it is easy to miss. Governance output is
 surfaced *into agent context* by the envelope middleware, so a raw session
 transcript contains the loop's own verdicts, metrics, and state commentary. A
@@ -234,7 +271,7 @@ the loop. **Redaction of all governance-envelope content from judge input is a
 correctness requirement, not a hygiene nicety**, and the redaction must be
 verified by a test that fails on leakage rather than asserted in a docstring.
 
-**T4. Judge wording sensitivity.** Anthropic's own account of the pilot names
+**T5. Judge wording sensitivity.** Anthropic's own account of the pilot names
 this as the failure mode they could not fully solve: the tool "is sensitive to a
 question's wording; a poorly phrased one can place conversations into categories
 that misrepresent them," and — their words — "because no one can read the
@@ -245,14 +282,14 @@ This repo's version of that lesson is already written down as the four states a
 zero cannot distinguish. Here the mitigation is available and theirs was not:
 the transcripts *can* be read, by the operator, on a sample. That is Phase 1.
 
-**T5. Corpus heterogeneity.** The transcript corpus is harness-local and
+**T6. Corpus heterogeneity.** The transcript corpus is harness-local and
 per-harness heterogeneous (see Phase 1). A judge prompt calibrated on one
 harness's format is not validated for another, and the substrate-plurality
 posture this repo already holds elsewhere applies: the harness is a property of
 the reading, not a nuisance parameter to average over. Phase 1 results are
 reported per harness or not at all.
 
-**T6. Selection.** Sessions that produce transcripts are not a random sample of
+**T7. Selection.** Sessions that produce transcripts are not a random sample of
 work. Whatever the coverage turns out to be, it is reported as a coverage
 statement, and the population is described by what it is rather than called "the
 fleet."
@@ -376,6 +413,7 @@ offered for rejection, not defaults.
 | D4 | Smallest relevant effect for the Phase 2 read | — | **UNFILLED** |
 | D5 | Phase 2 read date and cohort | — | **UNFILLED** |
 | D6 | Position on T1 (productive friction) required before publishing | — | **UNFILLED** |
+| D7 | Whether an effort profile addresses the same concern as the registered question, or is a separate track | — | **UNFILLED** |
 
 Every slot above is a *decision*, not a measurement. None of them asks the
 operator to supply a number about the world; each asks what standard a number
@@ -412,13 +450,22 @@ The method borrowed in §2 is described in Anthropic's
 whose own writeup was not public at the time of writing and whose findings that
 post describes as preliminary. The productive-friction threat in T1 is from the
 Stanford SALT Lab study reported in the same post. The judge-wording failure
-mode in T4 is Anthropic's own account of running the pilot. The earlier METR
+mode in T5 is Anthropic's own account of running the pilot. The earlier METR
 randomized trial cited in §5a — measured 19% slowdown against a self-reported
 20% speedup among experienced open-source developers — is the published result
 that removed the operator-oracle design; it is load-bearing for that removal and
 for nothing else. None of these are
 peer-reviewed results and none are load-bearing for anything asserted here; they
 are the source of a design, not evidence for it.
+
+An adversarial critique of §1, §4, and §5 was run through `consult` on the local
+`gemma4` backend (consultation `d2e7134e`, advisory and not on-record; the
+`thorough` lane is unreachable under `privacy="local"`, so it ran degraded to
+standard). Two of its findings are incorporated: the task-difficulty confound
+now in T2, and the reactivity case now in T3. Its framing of the
+different-question problem prompted D7. The rest of its output did not survive
+inspection and is not reflected here. One degraded local pass by a single model
+is not the adversarial design review this document still lacks.
 
 Repo antecedents: the binding-constraint diagnosis and the de-scoped
 adjudication dial are from `eisv-grounding-next-move-v0.md`; the anchor tiering
