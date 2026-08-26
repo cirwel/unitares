@@ -1,6 +1,6 @@
 <div align="center">
 
-<img alt="UNITARES" src="docs/assets/hero-v2.png" width="100%">
+<img alt="UNITARES: self-state telemetry for long-lived AI-agent fleets" src="docs/assets/hero-v3.png" width="100%">
 
 ### Self-state telemetry for long-lived AI-agent fleets.
 
@@ -248,6 +248,26 @@ cross-operator attestations without centralizing raw telemetry is an open
 question on the **multi-principal trust** track in the [roadmap](ROADMAP.md).
 Cross-governor trust, consensus, and enforcement are not deployed guarantees
 today.
+
+## What is built
+
+One operator, since 2025-11-20. The counts below are structural facts about this
+repository and its companions, not a claim that any of it outperforms an
+alternative. They answer one question an evaluator reasonably asks first: is this
+a prototype or a system?
+
+| | |
+|---|---|
+| **106 MCP tools** | identity, state, knowledge, review, coordination, inference routing, and admin surfaces, all discoverable through `list_tools()` |
+| **12,619 test functions** | across 720 files, sharded in CI, with the fleet-neutrality and evidence contracts enforced as tests rather than as conventions |
+| **64 database migrations** | slot-and-name drift is gated by the repo doctor |
+| **509 Python modules** | `src/`, `governance_core/`, and the reference residents |
+| **208 documents** | ontology, proposals, operations runbooks, and the evaluation index, with dead-reference checks in CI |
+| **7 companion repositories** | listed under [Ecosystem repositories](#ecosystem-repositories), including a published SDK, a host adapter, a Raspberry Pi testbed, and the resident userland |
+
+Evidence class for this section: **operational observation**. Surface area
+establishes that the mechanisms exist and are exercised. It does not establish
+benefit, correctness, or generality, and the section below says what does.
 
 ## Evidence and limits
 

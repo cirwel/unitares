@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2560" height="880" viewBox="0 0 2560 880" role="img"
+     aria-label="UNITARES. Self-state telemetry for long-lived AI-agent fleets.">
+  <title>UNITARES</title>
+  <defs>
+    <pattern id="grid" width="128" height="128" patternUnits="userSpaceOnUse">
+      <path d="M128 0H0V128" fill="none" stroke="#12222a" stroke-width="1"/>
+    </pattern>
+    <linearGradient id="fade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#060c0f" stop-opacity="0"/>
+      <stop offset="1" stop-color="#060c0f" stop-opacity="0.85"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="2560" height="880" fill="#060c0f"/>
+  <rect x="30" y="30" width="2500" height="820" rx="18" fill="#080f13" stroke="#14252d" stroke-width="2"/>
+  <rect x="32" y="32" width="2496" height="816" rx="16" fill="url(#grid)" opacity="0.55"/>
+  <rect x="32" y="32" width="2496" height="816" rx="16" fill="url(#fade)"/>
+
+  <!-- eyebrow -->
+  <text x="143" y="210" font-family="Menlo, monospace" font-size="30" letter-spacing="7.5"
+        fill="#2dd4bf">CIRWEL SYSTEMS  ·  SELF-STATE TELEMETRY</text>
+
+  <!-- wordmark -->
+  <text x="138" y="372" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="150" font-weight="700" letter-spacing="-3" fill="#eef6f7">UNITARES<tspan fill="#2dd4bf">.</tspan></text>
+
+  <!-- claim: the question, not a prevention promise -->
+  <text x="143" y="486" font-family="Times New Roman, Times, Georgia, serif" font-size="62"
+        fill="#e2ecee">Is this the same agent as yesterday,</text>
+  <text x="143" y="562" font-family="Times New Roman, Times, Georgia, serif" font-size="62"
+        font-style="italic" fill="#5eead4">and is it working the way it usually works?</text>
+
+  <!-- footer -->
+  <text x="143" y="672" font-family="Menlo, monospace" font-size="28" letter-spacing="1.5"
+        fill="#7d8f97">live since nov 2025  ·  4.5M+ audit events  ·  self-hosted</text>
+
+  <!-- check-in card -->
+  <g>
+    <rect x="1690" y="186" width="722" height="506" rx="20" fill="#0b141a" stroke="#1c3038" stroke-width="2"/>
+    <circle cx="1738" cy="236" r="11" fill="#ef5f56"/>
+    <circle cx="1774" cy="236" r="11" fill="#f5bf4f"/>
+    <circle cx="1810" cy="236" r="11" fill="#5fc85f"/>
+
+    <text x="1734" y="316" font-family="Menlo, monospace" font-size="27" letter-spacing="3.5"
+          fill="#6b7f88">AGENT  ·  CHECK-IN #4</text>
+
+    <text x="1734" y="396" font-family="Menlo, monospace" font-size="42" fill="#94a8b0">E <tspan fill="#5eead4">0.64</tspan> I <tspan fill="#5eead4">0.63</tspan> S <tspan fill="#5eead4">0.50</tspan> V <tspan fill="#5eead4">-0.05</tspan></text>
+
+    <line x1="1734" y1="440" x2="2368" y2="440" stroke="#1c3038" stroke-width="2"/>
+
+    <text x="1734" y="504" font-family="Menlo, monospace" font-size="30" fill="#8b9ea6">margin</text>
+    <text x="2368" y="504" text-anchor="end" font-family="Menlo, monospace" font-size="30"
+          font-weight="700" fill="#dbe8ea">comfortable</text>
+
+    <text x="1734" y="558" font-family="Menlo, monospace" font-size="30" fill="#8b9ea6">baseline</text>
+    <text x="2368" y="558" text-anchor="end" font-family="Menlo, monospace" font-size="30"
+          font-weight="700" fill="#dbe8ea">30 check-ins</text>
+
+    <line x1="1734" y1="596" x2="2368" y2="596" stroke="#1c3038" stroke-width="2"/>
+
+    <text x="1734" y="652" font-family="Menlo, monospace" font-size="30" fill="#8b9ea6">verdict</text>
+    <rect x="1900" y="622" width="152" height="42" rx="8" fill="#123c38" stroke="#2dd4bf" stroke-width="2"/>
+    <text x="1976" y="652" text-anchor="middle" font-family="Menlo, monospace" font-size="26"
+          font-weight="700" fill="#5eead4">PROCEED</text>
+    <text x="2074" y="652" font-family="Menlo, monospace" font-size="30" fill="#6b7f88">·  guide</text>
+  </g>
+</svg>
