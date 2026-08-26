@@ -462,8 +462,9 @@ class GovernanceClient:
         self,
         response_text: str,
         complexity: float = 0.3,
-        confidence: float = 0.7,
+        confidence: float | None = None,
         response_mode: str = "compact",
+        epistemic_class: str | None = None,
         **kwargs: Any,
     ) -> CheckinResult:
         """Check in with governance via the advertised ``sync_state`` tool.
@@ -474,13 +475,30 @@ class GovernanceClient:
         #1292 dropped the raw twin from the lite MCP wire, so calling
         ``process_agent_update`` by raw name now fails ``Unknown tool`` on the
         :8767 ``/mcp/`` surface residents use. Do NOT revert to the raw name.
+
+        ``confidence`` and ``epistemic_class`` both default to ``None`` and are
+        omitted from the payload when unset. Both fields fabricate an epistemic
+        claim if defaulted: a non-None confidence mints a scored prediction, and
+        an absent class is coerced to ``agent_report``. Pass them only when the
+        claim is true.
         """
         args: dict[str, Any] = {
             "response_text": response_text,
             "complexity": complexity,
-            "confidence": confidence,
             "response_mode": response_mode,
         }
+        # `confidence` is a belief. The server mints a SCORED calibration
+        # prediction whenever it is not None, and that prediction feeds
+        # calibration_error -> _compute_I, which carries verdict authority.
+        # Hardcoded defaults poisoned that curve once already. Omitting the
+        # field leaves ctx.confidence None and mints nothing, so a caller that
+        # holds no belief must place no bet.
+        if confidence is not None:
+            args["confidence"] = max(0.0, min(1.0, float(confidence)))
+        # An absent epistemic_class is coerced to "agent_report" server-side,
+        # so silence reads as a positive claim of agent authorship. Say it.
+        if epistemic_class is not None:
+            args["epistemic_class"] = epistemic_class
         args.update(kwargs)
 
         raw = await self.call_tool("sync_state", args)

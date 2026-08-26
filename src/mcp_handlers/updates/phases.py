@@ -767,6 +767,20 @@ def transform_inputs(ctx: UpdateContext) -> Optional[Sequence[TextContent]]:
     # Epistemic class: forward-only storage label for the state row. Pydantic
     # validates the public schema; this fallback keeps non-schema internal
     # callers on the honest default.
+    # ⛔ Do NOT "fix" this default by flipping it to a substrate class.
+    #
+    # The coercion is real and it is the mechanism by which the ledger
+    # over-labels automation as agent voice: a caller that omits the field is
+    # recorded as having claimed authorship. But `agent_report` is ~80.3% of
+    # all state rows, so changing the default silently RECLASSIFIES history —
+    # every stored row keeps its old label while new rows get a new one, and
+    # any series that spans the change quietly switches units mid-flight.
+    #
+    # The fix is at the CALLER: residents now state their class explicitly
+    # (unitares_sdk.agent.GovernanceAgent.epistemic_class defaults to
+    # substrate_interpretation, and checkin() omits the field when unset).
+    # Keep this default until every producer is explicit, then retire it in a
+    # dated change that says so — not as a side effect.
     raw_epistemic_class = ctx.arguments.get("epistemic_class") or "agent_report"
     if raw_epistemic_class not in _ALLOWED_EPISTEMIC_CLASSES:
         logger.warning(

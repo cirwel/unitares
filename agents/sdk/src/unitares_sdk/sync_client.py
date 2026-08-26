@@ -165,16 +165,28 @@ class SyncGovernanceClient:
         self,
         response_text: str,
         complexity: float = 0.3,
-        confidence: float = 0.7,
+        confidence: float | None = None,
         response_mode: str = "compact",
+        epistemic_class: str | None = None,
         **kwargs: Any,
     ) -> CheckinResult:
+        """Sync mirror of :meth:`UnitaresClient.checkin`.
+
+        ``confidence`` and ``epistemic_class`` default to ``None`` and are
+        omitted when unset: a non-None confidence mints a scored calibration
+        prediction, and an absent class is coerced to ``agent_report``
+        server-side. Defaulting either one fabricates a claim the caller
+        never made.
+        """
         args: dict[str, Any] = {
             "response_text": response_text,
             "complexity": complexity,
-            "confidence": confidence,
             "response_mode": response_mode,
         }
+        if confidence is not None:
+            args["confidence"] = max(0.0, min(1.0, float(confidence)))
+        if epistemic_class is not None:
+            args["epistemic_class"] = epistemic_class
         args.update(kwargs)
         # sync_state: advertised alias of the raw process_agent_update handler.
         # #1292 dropped the raw twin from the lite MCP wire; call the alias so

@@ -52,9 +52,24 @@ class CycleResult:
 
     summary: str
     complexity: float = 0.3
-    confidence: float = 0.7
+    confidence: float | None = None
     response_mode: str = "compact"
     notes: list[tuple[str, list[str]]] | None = None
+    epistemic_class: str | None = None
+    """Who composed ``summary``.
+
+    ``None`` defers to the agent's class attribute
+    (``GovernanceAgent.epistemic_class``).  Set ``"agent_report"`` per-cycle
+    ONLY when a model actually authored the text; a formula or f-string is
+    ``"substrate_interpretation"``.
+
+    ``confidence`` defaults to ``None`` deliberately.  The server mints a
+    SCORED calibration prediction whenever confidence is not None, and that
+    prediction feeds ``calibration_error`` -> ``_compute_I``, which carries
+    verdict authority.  A templated cycle summary holds no belief, so it must
+    not place a bet.  Pass a float only when the value is a real estimate you
+    intend to settle.
+    """
 
     @classmethod
     def simple(cls, summary: str) -> CycleResult:
@@ -79,6 +94,22 @@ class GovernanceAgent:
             async def run_cycle(self, client: GovernanceClient) -> CycleResult | None:
                 # do work
                 return CycleResult.simple("processed 5 items")
+    """
+
+    epistemic_class: str = "substrate_interpretation"
+    """Who composes this agent's check-in text, by default.
+
+    ``substrate_interpretation`` is correct for the overwhelming majority of
+    residents: their cycle summary is built by an f-string or ``" | ".join``,
+    so the SUBSTRATE composed it, not a model.  Override to ``"agent_report"``
+    on a subclass ONLY when a model actually writes the check-in prose.
+
+    Why this is not left to the server default: an absent ``epistemic_class``
+    is coerced to ``agent_report`` server-side, so a silent omission is
+    indistinguishable from a positive claim of agent authorship.  That is the
+    mechanism by which the ledger over-labels automation as agent voice.
+    ``epistemic_class`` records WHO COMPOSED a row's text, never whether the
+    row's existence was scheduled or chosen; do not read it as the latter.
     """
 
     def __init__(
@@ -520,6 +551,7 @@ class GovernanceAgent:
             complexity=result.complexity,
             confidence=result.confidence,
             response_mode=result.response_mode,
+            epistemic_class=result.epistemic_class or self.epistemic_class,
         )
         self._last_checkin_time = time.monotonic()
 
@@ -544,6 +576,9 @@ class GovernanceAgent:
                     complexity=result.complexity,
                     confidence=result.confidence,
                     response_mode=result.response_mode,
+                    epistemic_class=(
+                        result.epistemic_class or self.epistemic_class
+                    ),
                 )
                 self._last_checkin_time = time.monotonic()
 
@@ -561,11 +596,16 @@ class GovernanceAgent:
     async def _send_heartbeat(self, client: GovernanceClient) -> None:
         """Send a lightweight heartbeat check-in."""
         try:
+            # A liveness ping observed by the substrate: fixed literal text,
+            # no model in the loop, and therefore no belief to bet.  It used to
+            # send confidence=0.9, which minted a scored calibration prediction
+            # on EVERY heartbeat and fed a number no agent ever estimated into
+            # calibration_error -> _compute_I.
             await client.checkin(
                 response_text="heartbeat",
                 complexity=0.05,
-                confidence=0.9,
                 response_mode="compact",
+                epistemic_class="substrate_observation",
             )
             self._last_checkin_time = time.monotonic()
             logger.debug("%s: heartbeat sent", self.name)

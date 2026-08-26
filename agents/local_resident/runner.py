@@ -105,7 +105,8 @@ async def run_local_resident(
     governance_url: Optional[str] = None,
     parent_agent_id: Optional[str] = None,
     complexity: float = 0.4,
-    confidence: float = 0.6,
+    confidence: Optional[float] = None,
+    epistemic_class: str = "substrate_interpretation",
 ) -> str:
     """Onboard, run ``job``, check in with its summary, exit. Returns the summary.
 
@@ -114,6 +115,19 @@ async def run_local_resident(
     child declares it. Nothing here resumes an identity — co-location is not
     lineage, and a resident that inherited no work should pass None rather than
     claim a parent because one happened to be in the environment.
+
+    ``epistemic_class`` describes who composes ``job``'s returned summary. It
+    defaults to ``substrate_interpretation`` because that is the conservative
+    claim and because the composer is caller-dependent: a job that formats a
+    result is substrate, and only a job whose text a MODEL actually wrote may
+    pass ``"agent_report"``. Under-crediting a genuine agent report is
+    recoverable; minting false agent voice is what over-labels the ledger, and
+    the cold-start authority guard fails closed on non-authoring classes, so
+    the conservative value is also the safe one.
+
+    ``confidence`` defaults to ``None`` (omitted) for the same reason it does
+    on ``checkin()``: a non-None value mints a scored calibration prediction,
+    and a caller that did not state a belief must not place a bet.
     """
     from unitares_sdk.client import GovernanceClient  # type: ignore
 
@@ -138,6 +152,7 @@ async def run_local_resident(
             response_text=summary,
             complexity=complexity,
             confidence=confidence,
+            epistemic_class=epistemic_class,
         )
         return summary
     finally:
