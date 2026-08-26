@@ -49,9 +49,27 @@ residents:
   — the SDK gates substrate-state emission on the resident's own name being in
   the roster.
 
-The checked-in plist + templates under `scripts/ops/` set the canonical fleet
-(`Lumen,Vigil,Sentinel,Watcher,Steward,Chronicler`). A different deployment
-edits these to its own roster, or clears them for a residentless install.
+The checked-in plist + templates under `scripts/ops/` ship an **empty** roster;
+the canonical fleet (`Lumen,Vigil,Sentinel,Watcher,Steward,Chronicler`) appears
+only as a comment example. A deployment sets these to its own roster, or leaves
+them empty for a residentless install.
+
+### Non-obvious consequence: privileged tags
+
+The roster is not only a classification hint — it is the **only** sanctioned way
+an identity acquires `persistent` and `autonomous`. Both are in `PRIVILEGED_TAGS`
+(`src/mcp_handlers/lifecycle/mutation.py`) and the server refuses
+self-assignment, because they confer auto-archival immunity and loop-detection
+exemption. The grant happens in `src/grounding/onboard_classifier.py`, which
+stamps `RESIDENT_DEFAULT_TAGS` at mint time when the onboarding `name` matches
+the roster **exactly**.
+
+So a resident onboarded under a name that is not in the roster comes up
+untagged, and the orphan sweep archives it — silently, later, after anything
+anchored to it has started attributing to a ghost. If you are adding a resident,
+add it to the roster and restart the governance server *before* it first
+onboards. `scripts/ops/provision_doctor_identity.py` is the worked example: it
+refuses to write its anchor when the read-back shows the tags were not granted.
 
 ## Two neighbouring env vars that are NOT this one
 

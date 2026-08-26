@@ -1,5 +1,29 @@
 #!/usr/bin/env python3
-"""Degeneracy check for the effort-profile label channel (read-only, local files).
+"""Degeneracy check for the effort-profile label channel — REFUTED, no authority.
+
+REFUTED 2026-08-26 by three adversarial passes. See section 0 of
+docs/proposals/eisv-effort-profile-channel-v0.md. In short:
+
+  * The authority split this implements does not hold. `turns` was granted KILL
+    authority for being judgement-free; `_is_human_turn` embeds four judgement
+    calls and, measured on a real corpus, 55% of what it counts as human turns
+    are harness-injected `task-notification` wakes. Injected `system-reminder`
+    blocks arrive as `type: "attachment"` records this never sees.
+  * The thresholds cannot fire on any plausible corpus of agent sessions.
+  * `read_session` drops zero-turn and single-timestamp sessions, an undeclared
+    selection rule that removes the shortest sessions and so biases away from
+    the `median turns <= 2` kill condition.
+  * CYCLE_MARKERS scored zero precision and zero recall on the only real corpus.
+
+The KILL and PASS verdicts below are therefore NOT authoritative and must not be
+cited as closing or licensing anything. The module is retained as a worked
+example of a pre-registered check designed to pass. Do not repair it in place --
+a replacement needs a validated turn classifier and a dependent variable that is
+not constructed from the predictor's inputs.
+
+Original docstring follows.
+
+Degeneracy check for the effort-profile label channel (read-only, local files).
 
 Implements §14 of docs/proposals/eisv-effort-profile-channel-v0.md, whose
 thresholds were committed before any corpus was measured. This script does not
@@ -173,7 +197,7 @@ def evaluate(sessions):
         findings.append(
             f"median turns {median_turns}, turns IQR {turns_iqr}, duration CV "
             f"{duration_cv:.3f}. Variance exists. This licenses continuing to "
-            "ask; it is evidence for no answer."
+            "ask; it is not evidence for any answer."
         )
 
     if len(qualifying) < MIN_IDENTITIES:
@@ -228,6 +252,8 @@ def main():
 
     print(f"corpus: {len(sessions)} sessions, "
           f"{result['corpus']['identity_proxies']} identity proxies, root {root}")
+    print("REFUTED INSTRUMENT - verdicts below are not authoritative; "
+          "see section 0 of the effort-profile channel proposal")
     print(f"verdict: {' + '.join(result['verdicts'])}")
     for f in result["findings"]:
         print(f"  - {f}")

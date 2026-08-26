@@ -240,14 +240,29 @@ which readings are supported and which are not.
 Identity, telemetry, evidence, and policy history stay on infrastructure you
 control, with no outbound dependency on a vendor service.
 
-The architecture also exposes the seams a later federation experiment would need:
-process-bound identity, evidence provenance, a
+The architecture exposes several of the seams a later federation experiment
+would need: process-bound identity, evidence provenance, a
 [versioned telemetry envelope](docs/ontology/eisv-telemetry-envelope-v1.md), and
-policy decisions with named reasons. Whether those records suffice to exchange
-cross-operator attestations without centralizing raw telemetry is an open
-question on the **multi-principal trust** track in the [roadmap](ROADMAP.md).
-Cross-governor trust, consensus, and enforcement are not deployed guarantees
-today.
+policy decisions with named reasons. One more is worth naming because it is the
+property that makes a review record resistant to the party it describes: a
+paused agent cannot clear its own session over a standing reviewer objection
+(`src/dialectic_protocol.py`). The session records the refusal and waits for
+facilitation rather than resolving.
+
+**The blocker is named, not unknown.** Resolution attestations are HMAC keyed on
+each agent's api_key, which is a symmetric construction: a verifier needs the
+signing key to check a signature, and holding that key would also let them
+forge one. The scheme is sound for its deployed purpose, which is one operator
+attesting within their own trust boundary, and it is explicitly not
+non-repudiation. Asymmetric or DPoP-style keys were considered and shelved on
+2026-04-19. Until that decision is revisited, a record from this system cannot
+be verified by an operator who does not already trust its issuer, which is the
+whole problem a federation exchange has to solve.
+
+Whether the remaining records suffice to exchange cross-operator attestations
+without centralizing raw telemetry stays an open question on the
+**multi-principal trust** track in the [roadmap](ROADMAP.md). Cross-governor
+trust, consensus, and enforcement are not deployed guarantees today.
 
 ## What is built
 
