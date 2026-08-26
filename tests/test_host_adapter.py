@@ -449,3 +449,41 @@ def test_codex_cli_env_var_is_named_for_its_own_host():
     assert ha.host_cli_env_var("codex:host-adapter") == "UNITARES_CODEX_CLI"
     assert ha.host_cli_env_var("claude:host-adapter") == "UNITARES_CLAUDE_CLI"
     assert ha.host_cli_env_var("nope") is None
+
+
+def test_spawn_spec_passes_user_even_when_absent_from_our_environment(monkeypatch):
+    """USER is set explicitly, not inherited.
+
+    A service manager may hand the orchestrator a minimal environment — the
+    reference launchd job gets HOME, LANG, PATH, SSH_AUTH_SOCK and nothing else.
+    A CLI whose credential lookup keys on the username then reports itself
+    logged out while HOME is correct and the credentials are on disk. Passing it
+    explicitly is what makes the strong lanes work off this one host.
+    """
+    _enable(monkeypatch)
+    monkeypatch.delenv("USER", raising=False)
+    monkeypatch.setattr(ha.getpass, "getuser", lambda: "svcuser")
+
+    state = _patch_httpx(monkeypatch, [
+        _FakeResp(201, {"ok": True, "agent_id": "ag-user"}),
+        _FakeResp(200, {"result": {"exit_status": 0, "output": ["done"]}}),
+    ])
+
+    _run(ha.invoke_host_adapter("codex:host-adapter", "hi", timeout_s=5))
+
+    spawn_spec = state["calls"][0][1]["json"]
+    assert spawn_spec["env"]["USER"] == "svcuser"
+
+
+def test_current_username_falls_back_to_env_when_lookup_raises(monkeypatch):
+    """A uid with no password-database entry is pathological, not a crash."""
+    monkeypatch.setattr(ha.getpass, "getuser", _raise_lookup_error)
+    monkeypatch.setenv("USER", "fallback")
+    assert ha._current_username() == "fallback"
+
+    monkeypatch.delenv("USER", raising=False)
+    assert ha._current_username() == ""
+
+
+def _raise_lookup_error():
+    raise KeyError("no such uid")

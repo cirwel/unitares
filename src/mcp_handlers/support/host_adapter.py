@@ -20,6 +20,7 @@ failure mode degrades to a structured error; it never raises into a handler.
 
 from __future__ import annotations
 
+import getpass
 import json
 import os
 import shutil
@@ -130,6 +131,20 @@ def resolve_host_cli(host_id: str) -> Optional[str]:
         if _is_executable(candidate_text):
             return candidate_text
     return None
+
+
+def _current_username() -> str:
+    """The username to hand a subscription CLI, never empty if it can be helped.
+
+    `getpass.getuser()` reads the environment first and falls back to a uid
+    lookup in the password database, which is what makes this useful under a
+    service manager that strips USER. Its failure mode is an exception, not a
+    wrong answer, so an empty string is the honest last resort.
+    """
+    try:
+        return getpass.getuser()
+    except Exception:  # pragma: no cover - no uid entry is pathological
+        return os.environ.get("USER", "")
 
 
 def host_adapter_enabled() -> bool:
@@ -328,11 +343,24 @@ async def invoke_host_adapter(
         "args": ["-c", shell_cmd],
         # Prompt via env (not argv) = injection-safe; orchestrator merges with inherited
         # env so the CLI keeps PATH/HOME and its subscription auth (~/.codex, ~/.claude).
+        #
+        # USER is passed explicitly because inheriting it cannot be relied on. A
+        # service manager may hand the orchestrator a minimal environment — this
+        # deployment's launchd job gets HOME, LANG, PATH, SSH_AUTH_SOCK and
+        # nothing else — and a CLI whose credential lookup keys on the username
+        # then finds nothing. `claude -p` fails that way, reporting the flatly
+        # misleading "Not logged in · Please run /login" while HOME is correct and
+        # the credentials are present; `codex exec` is unaffected because it
+        # resolves ~/.codex/auth.json from HOME alone. Reproduce the failure with
+        # `env -i HOME=$HOME PATH=/usr/bin:/bin <cli> ...` and watch adding USER
+        # alone fix it. getpass falls back to a uid lookup, so this stays correct
+        # when the variable is absent from our own environment too.
         "env": {
             "HA_CLI": cli_path,
             "HA_PROMPT": prompt,
             "HA_SANDBOX": sandbox,
             "HA_MODEL": model or "",
+            "USER": _current_username(),
         },
         "lease": False,  # read-only advisor lane, no presence/lineage
         "max_runtime_ms": int(timeout_s * 1000) + 30_000,  # orchestrator backstop
