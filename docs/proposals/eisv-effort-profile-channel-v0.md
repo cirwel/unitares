@@ -1,12 +1,27 @@
-# EISV effort-profile label channel — reopening premise, pre-declared
+# EISV effort-profile label channel — separate track, refuted as designed
 
-**Status: DRAFT / design-first. Not a change, not a registration, and not a
-read.** No code, no database access, and no live-path wiring is proposed here.
-The document exists to fix a reopening premise in writing *before* the
-2026-12-01 stop-rule read resolves, so the premise cannot be reverse-engineered
-from that read's outcome. It becomes registrable only when the operator
-declarations in §11 are filled; until then every threshold below is a proposal
-to the operator, not a method.
+**Status: SEPARATED AND REFUTED, 2026-08-26.** This document was written as a
+pre-declared reopening premise for the outcome-grounding stop rule. It is no
+longer that, on two counts decided the day it was written:
+
+1. **D7 was answered `separate track`** (§5). The channel does not address the
+   registered question's concern, so it has no claim on the reopening clause.
+   That clause stays **empty** through the 2026-12-01 read.
+2. **The design is refuted as written** (§0). Three independent adversarial
+   passes found two circularities that are each independently fatal, plus a
+   pre-committed kill check that could not fire.
+
+What remains is a proposal for a **new track that must earn its own
+justification from scratch**, and which currently does not. Read §0 first. Do
+not cite this document as a reopening premise, a registration, a gate, or
+evidence for anything.
+
+An earlier revision of this header read "No code, no database access, and no
+live-path wiring is proposed here." That was true when written and false by the
+end of the same commit, which added `scripts/analysis/effort_profile_degeneracy.py`
+and its tests. The sentence is corrected rather than deleted because the
+document's own self-audit sentences turning out to be unreliable is part of what
+§0 records.
 
 Relationship to [`eisv-outcome-grounding-stop-rule-v0.md`](eisv-outcome-grounding-stop-rule-v0.md):
 that rule owns the maintainer-deployment outcome question and its fixed
@@ -18,6 +33,127 @@ Companion to [`eisv-grounding-next-move-v0.md`](eisv-grounding-next-move-v0.md)
 (the design tournament that named bad-label supply as the binding constraint)
 and [`independent-operator-cohort-preregistration-v0.md`](independent-operator-cohort-preregistration-v0.md)
 (which addresses a different gap — external validity, not label supply).
+
+## 0. Refutation record — three adversarial passes, 2026-08-26
+
+The passes were conceptual refutation, ground-truth verification against the
+live system, and stranger-executability, matching the review
+[`independent-operator-cohort-preregistration-v0.md`](independent-operator-cohort-preregistration-v0.md)
+ran before registering. They converged.
+
+**These are refutations, not threats.** The distinction is load-bearing and the
+first pass predicted it would be violated — that the response would be to add
+"T8 through T12" to §6 and continue. A threat is something a design will handle;
+a refutation is a finding that the design fails. Nothing below is being managed.
+
+### R1. The predictor is made of the outcome — fatal
+
+`CLAUDE.md` records that the live per-turn `process_agent_update` is "a
+substrate reading of turn shape." `src/behavioral_state.py` makes behavioral
+EISV an EMA over those updates, with `update_count` driving confidence through
+`BOOTSTRAP_UPDATES` and `BASELINE_WARMUP_UPDATES`. So prior-state EISV is a
+smoothed function of past turn shape — and §5 proposed predicting *this
+session's turn shape* from it.
+
+A positive Phase 2 read would be fully explained by EMA-of-past-turn-count
+predicting next-turn-count, with no grounding content. §5's per-agent
+persistence baseline does not save this: it removes autocorrelation in `y`,
+while `X` is *constructed from* `y`'s own history by live middleware. §4
+pre-committed that if its rebuttal failed the channel "should be abandoned
+rather than repaired." This is that failure.
+
+### R2. The other half of the dependent variable measures the loop too — fatal
+
+`t_actual` is a `max − min` span over transcript timestamps, so it contains
+every governance call's latency. `CLAUDE.md`'s Substrate Tax section documents
+in-handler KG calls at "~4,464ms, a ~60× amplification," and the plugin's
+`hooks/post-stop` fires `process_agent_update` every turn. Duration is
+therefore partly a measurement of the governance loop's own cost. Both
+components of the effort profile are entangled with the thing they were
+supposed to be independent of.
+
+### R3. §14's authority split does not survive its implementation
+
+§14 grants KILL authority to `turns` and `t_actual` *because* they are
+judgement-free, and withholds it from `cycles` because a marker set is a
+judgement. But `_is_human_turn` embeds four judgement calls, and measured on
+the only real corpus, 12 of 22 counted "human turns" are harness-injected
+`task-notification` wakes — **55% inflation** on the quantity holding kill
+authority. Injected `system-reminder` blocks arrive as `type: "attachment"`
+records the classifier never sees.
+
+Compounding it, `read_session` silently drops zero-turn and single-timestamp
+sessions. That is an undeclared selection rule removing the *shortest* sessions,
+which biases the corpus away from `median turns ≤ 2` — the kill condition. Under
+§14's own logic `turns` as implemented belongs on the `cycles` side of the line.
+
+### R4. The pre-committed thresholds could not fire
+
+`CV < 0.25` on session durations, `IQR == 0` on turn counts, and
+`median turns ≤ 2` do not require seeing a distribution to rule out; they
+describe a corpus that is not agent sessions. §14 presented not having seen
+*this* corpus as blinding. Not having seen the corpus is not the same as not
+knowing what the quantity looks like. The check was offered as the answer to the
+objection that this document is unfalsifiable, and it was a test designed to
+pass.
+
+### R5. The marker set scores zero precision and zero recall
+
+Measured against real text: `"stop "` matches "the stop rule", `"instead"`
+matches ordinary repo idiom, `"no,"` and `"don't"` match an explicit agreement.
+Meanwhile the operator turns that actually re-directed this work — including the
+one that caused §5a's withdrawal — match nothing. On the only corpus available
+the single counted cycle came from pasted third-party prose. `MARKER-SET-BLIND`
+only fires on *under*-firing, so the guard cannot detect this instrument's
+actual failure mode.
+
+### R6. §1's blindness claim is false
+
+The stop rule publishes its own likely failure: 28–29 observed blocks against a
+threshold of 150, "arithmetic gaps of 121 and 122 blocks," and the tournament
+records the target as needing "a ~17× sustained rate increase the system cannot
+*cause*." A condition-3 FAIL is the forecastable default. §2(a) — "no minority
+class" — is written directly against minority-class scarcity, which is that
+failure by name. The document is not blind to how the question fails; it is
+written from it.
+
+### R7. §2(a)'s power claim is refuted by §7 of this document
+
+§2(a) says power comes from the total. §7 says "labels are not blocks, and more
+rows on the same snapshots add no permutation structure." Effective power is set
+by distinct prior-state snapshots, of which the frozen matrix reports 28–29. A
+continuous outcome adds rows within blocks, not blocks. The escape from the
+binding constraint is not an escape; it relocates which count is scarce and
+never argues the new one is abundant.
+
+### R8. Three factual errors
+
+- **#1424 is the fix, not the defect.** `src/audit_db.py` sets
+  `TOOL_USAGE_MCP_INSTRUMENTED_SINCE = 2026-07-31T19:24:49Z`; the blind spot is a
+  historical boundary, not a standing property. §7 cited the remedy as the
+  disease. Corrected below. The conclusion it supported — that Phase 1 must be
+  harness-local — survives on the two other reasons.
+- **"93 times" was never in the audit.** The rows are 51 fired / 42 completed
+  and 52 fired / 43 completed: 103 and 85. The 93 is one job's fired count plus
+  that same job's completed count. Corrected in §12.
+- **The dialectic pointer was wrong.** The stored artifact is
+  `core.dialectic_messages`, not the in-memory list in `src/dialectic_protocol.py`.
+  The substance — that the governance database holds no agent-session
+  transcript — was verified across all migrations and stands.
+
+### What survived the passes
+
+§5a's withdrawal of the operator-oracle and its METR citation. §9's
+instrument-not-question rule. §8's free-backend requirement including its
+unwelcome branch. §3.5's fail-closed requirement. §5's refusal to reuse
+`Bad clusters ≥ 150`. The script's isolation claims, which are verifiable in
+ten seconds. And §3's frozen interlocks, which were right — see §5.
+
+### What would have to be true for this track to resume
+
+R1 and R2 answered, not mitigated: a dependent variable demonstrably not
+constructed from the predictor's inputs. Nothing else in this document matters
+until that exists.
 
 ## 1. Why this exists now
 
@@ -151,9 +287,56 @@ clause asks for a different *measurement process* for the same concern, not a
 different concern. Whether "does prior state predict how a session goes" is the
 same concern as "does prior state predict externally-verified bad outcomes" is
 a judgement, and it is the operator's, not this document's. It is listed as D7
-in §11 and is unfilled. If the answer is that they are different concerns, this
-document is not a reopening premise and should be read as a proposal for a new
-track that must earn its own justification from scratch.
+in §11. If the answer is that they are different concerns, this document is not
+a reopening premise and should be read as a proposal for a new track that must
+earn its own justification from scratch.
+
+**Answered 2026-08-26: SEPARATE TRACK.**
+
+An earlier answer the same day said "same concern," on the reading that the
+registered question is about whether EISV is grounded in anything outside the
+loop and that bad outcomes were merely the available signal. That answer is
+**reversed**, and the reversal is recorded rather than overwritten because how it
+was reached matters more than the answer.
+
+*Why it was reversed.* The concern question itself is not verifiable — what a
+stop rule was *for* is intent, not fact. But the justification offered for "same
+concern" is verifiable, and it fails two independent checks:
+
+- **Its own criterion, its own instrument.** "Outside the loop" is not a loose
+  phrase in this repo; `src/grounding/outcome_anchors.py` implements it.
+  `external_signal` is TRUSTED_EXTERNAL, `server_observation` is EXCLUDED as
+  "the loop's self-validation — the one that would silently build the echo
+  chamber if treated as an outcome," and unlisted provenance is EXCLUDED by
+  default. An effort profile is derived from a governed session's transcript and,
+  per R1 and R2, from quantities entangled with the loop's own operation. It is
+  not `external_signal`. Under the criterion that was offered to justify "same
+  concern," the channel fails.
+- **A textual incompatibility.** The registered PASS branch reads
+  "outcome-grounding remains open, *and Stage B may be reconsidered*." Stage B is
+  actuation. §4 declares this channel "not a live-path signal. Eval-only,
+  forever," and T3 requires that an effort profile "must never enter agent
+  context at all." A channel barred from ever informing anything cannot satisfy a
+  PASS condition defined by permission to actuate.
+
+*What this does not establish.* It refutes "same concern **because**
+outside-the-loop." It does not prove the concerns are different in every sense.
+Someone could hold "same" on a different justification; none has been offered.
+
+*A procedural defect in how the first answer was obtained.* The options the
+operator chose between were written by this document's author, who benefits from
+"same concern." "Same" was presented first and closed with "everything else in
+the doc applies as written," while both alternatives were described purely as
+loss and neither was described in terms of what it gains. That framing was
+leading, and a document whose pitch is pre-registration discipline should not
+have had a declaration recorded that way.
+
+*Consequence.* This document has **no claim on the reopening clause**, which
+stays empty through 2026-12-01. §1's timing argument loses its force with it: it
+was justified as pre-declaring a *reopening* premise, and R6 independently shows
+the blindness it claimed was not available. §3's frozen interlocks — "different
+dependent variables on different populations," "an adjacent question" — were
+right, and the "same concern" answer was the thing that contradicted them.
 
 The baseline clause is not optional. The tournament's central negative finding
 is that a per-agent AR(1)/persistence null is the thing to beat, and that
@@ -324,13 +507,13 @@ present in the artifact. Both must clear their declared thresholds.
 this section assumed the transcripts and the wall-clock were server-side. They
 are not. The governance database holds no agent-session transcript: the only
 `transcript` it stores is the dialectic message record
-(`src/dialectic_protocol.py`), which is a record of a review conversation, not of
+(`core.dialectic_messages`; `src/dialectic_protocol.py` holds only the in-memory list), which is a record of a review conversation, not of
 an agent working. Session transcripts are **harness-local files** — the Claude
 Code project store, Codex's own store — which this repo does not own and whose
 formats differ per harness. `t_actual` comes from transcript message timestamps
 for the same reason: `audit.tool_usage` spans only governance calls, so it is a
 lower bound on working time, it covers only agents that call governance tools,
-and it carries a known transport blind spot (#1424, `/mcp` and `/sse` unrecorded).
+and — before 2026-07-31T19:24:49Z — it recorded no MCP-protocol calls at all. That boundary is `TOOL_USAGE_MCP_INSTRUMENTED_SINCE` in `src/audit_db.py`; #1424 is the fix that closed it, not the defect. An earlier revision cited the remedy as the disease (R8).
 
 This cuts both ways and both directions matter:
 
@@ -413,7 +596,7 @@ offered for rejection, not defaults.
 | D4 | Smallest relevant effect for the Phase 2 read | — | **UNFILLED** |
 | D5 | Phase 2 read date and cohort | — | **UNFILLED** |
 | D6 | Position on T1 (productive friction) required before publishing | — | **UNFILLED** |
-| D7 | Whether an effort profile addresses the same concern as the registered question, or is a separate track | — | **UNFILLED** |
+| D7 | Whether an effort profile addresses the same concern as the registered question, or is a separate track | — | **ANSWERED 2026-08-26: separate track.** Reversed from an earlier same-day answer of "same concern"; both answers, the verifiable basis for the reversal, and the procedural defect in the first are in §5 |
 
 Every slot above is a *decision*, not a measurement. None of them asks the
 operator to supply a number about the world; each asks what standard a number
@@ -437,7 +620,7 @@ that governs the December read.
 - Do not reuse `Bad clusters ≥ 150`, the withdrawn `0.05` AUC bound, or any
   other number from the bad-outcome track as a threshold here.
 - Do not schedule any part of this. The 2026-08-23 audit exists because
-  automation ran a read 93 times that a human would have run once.
+  automation fired two scheduled jobs 103 times between them, completing 85 runs against data a human would have queried once. An earlier revision said "93 times," a number formed by adding one job's fired count to that same job's completed count (R8).
 - Do not lower a Phase 1 threshold because the free backend missed it.
 - Do not reintroduce an operator estimate, self-report, or recollection as
   ground truth for any quantity in this protocol. If a quantity has no
@@ -473,7 +656,21 @@ and Invariant 4 are `src/grounding/outcome_anchors.py`; the supply census this
 channel's Phase 0 would extend is `scripts/analysis/eisv_latent_label_supply.py`;
 the local-model backend precedent is `src/verification_backend.py`.
 
-## 14. Pre-committed degeneracy check — threshold fixed 2026-08-26, before any data
+## 14. Pre-committed degeneracy check — REFUTED, retained as a worked example
+
+**This check is refuted and holds no authority. See R3, R4, and R5.** Its
+thresholds could not fire on any real corpus; the quantity it granted kill
+authority to is 55% harness-injected wakes; it applies an undeclared selection
+rule that biases away from its own kill condition; and its marker set scored zero
+precision and zero recall on the only corpus available.
+
+It is kept rather than deleted because it is the most useful artifact this
+document produced: a worked example of a pre-registered kill criterion that was
+designed to pass, presented in good faith as the answer to an unfalsifiability
+objection, and caught only by independent review. The section below is the
+original text, unedited, so the failure is legible.
+
+## 14a. The original section, as committed — threshold fixed 2026-08-26, before any data
 
 This section was written and committed **before any transcript corpus was
 measured**, from a container holding exactly one transcript file — this
