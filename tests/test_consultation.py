@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 
+from src.mcp_compat import get_tool_input_schema
 from src.mcp_handlers.decorators import (
     get_call_identity_requirement,
     get_tool_registry,
@@ -131,9 +132,10 @@ class TestConsultSchema:
             for item in get_tool_definitions(verbosity="full")
             if item.name == "consult"
         )
-        assert tool.inputSchema["additionalProperties"] is False
+        schema = get_tool_input_schema(tool)
+        assert schema["additionalProperties"] is False
         for hidden_control in ("provider", "host_id", "model", "temperature", "timeout_s"):
-            assert hidden_control not in tool.inputSchema["properties"]
+            assert hidden_control not in schema["properties"]
 
     def test_schema_rejects_blank_and_overlong_briefs(self):
         with pytest.raises(ValidationError, match="non-whitespace"):

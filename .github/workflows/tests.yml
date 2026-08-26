@@ -515,4 +515,11 @@ jobs:
         python -c "import importlib.metadata as m; print('resolved mcp', m.version('mcp'))"
 
     - name: Run the mcp dependency canary under the newest resolution
-      run: python -m pytest tests/test_mcp_dependency_canary.py -q
+      # Include the schema contract that first exposed the 2.x
+      # inputSchema -> input_schema attribute rename. The production accessor
+      # must remain the only read path under either supported major.
+      run: >-
+        python -m pytest
+        tests/test_mcp_dependency_canary.py
+        tests/test_consultation.py::TestConsultSchema::test_schema_is_bounded_and_forbids_route_controls
+        -q
