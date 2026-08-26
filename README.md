@@ -2,7 +2,7 @@
 
 <img alt="UNITARES: self-state telemetry for long-lived AI-agent fleets" src="docs/assets/hero-v3.png" width="100%">
 
-### Self-state telemetry for long-lived AI-agent fleets.
+### Coordination and self-state telemetry for long-lived AI-agent fleets.
 
 </div>
 
@@ -19,7 +19,11 @@ running a fleet actually has:
 > **Is this the same agent as yesterday, and is it working the way it usually
 > works?**
 
-**UNITARES measures that.** At each checkpoint it binds the write to a process
+For a multi-agent fleet there is a second, immediate question: can two live
+processes contend for the same governed surface without silently colliding?
+
+**UNITARES coordinates that boundary and measures the longer trajectory.** At
+each checkpoint it binds the write to a process
 identity, records what the agent claims alongside whatever evidence exists,
 updates a longitudinal state estimate, and returns a policy action with a named
 reason. The whole chain stays replayable. Governance sits on top of the
@@ -61,19 +65,28 @@ current evidence class.
 git clone --branch v2.20.0 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
-make demo
+make coordination-demo
 ```
 
 This release-tagged Docker Compose flow is the supported install path for a
 local, single-operator deployment. It brings up PostgreSQL/AGE/pgvector, Redis,
-and the server on loopback without manual database initialization.
+the lease plane, and the server on loopback without manual database
+initialization. After cloning, the one-command install/start is
+`docker compose up -d --wait`.
 
-`make demo` onboards a fresh process and sends six check-ins over the real API,
-printing the response shape, decision reason, state detail, and warmup position.
-In about a minute the checkpoint loop is running against your own stack.
+`make coordination-demo` gives the first observable result: participant A
+acquires one governed surface, participant B is refused with `held_by_other`,
+and ownership moves through an atomic handoff before release. The printed
+receipt also names the boundary: clients must participate in the lease plane,
+and this does not establish cross-operator trust or improved outcomes.
+
+To exercise longitudinal state next, run `make demo`. It onboards a fresh
+process and sends six check-ins over the real API, printing the response shape,
+decision reason, state detail, and warmup position.
 
 The dashboard is at `http://localhost:8767/dashboard`; MCP clients connect to
-`http://localhost:8767/mcp/`.
+`http://localhost:8767/mcp/`; the lease plane listens on
+`http://127.0.0.1:8788` with bearer auth.
 
 Evaluating rather than installing? Start with
 [Evidence and limits](#evidence-and-limits) and the

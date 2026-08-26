@@ -154,8 +154,17 @@ defmodule UnitaresLeasePlane.Application do
 
   defp http_children do
     if Application.get_env(:lease_plane, :start_http, true) do
-      port = Application.get_env(:lease_plane, :http_port, 8788)
-      ip = Application.get_env(:lease_plane, :http_ip, {127, 0, 0, 1})
+      port =
+        parse_http_port(
+          System.get_env("UNITARES_LEASE_PLANE_HTTP_PORT"),
+          Application.get_env(:lease_plane, :http_port, 8788)
+        )
+
+      ip =
+        parse_http_ip(
+          System.get_env("UNITARES_LEASE_PLANE_HTTP_IP"),
+          Application.get_env(:lease_plane, :http_ip, {127, 0, 0, 1})
+        )
 
       [
         {Bandit, plug: UnitaresLeasePlane.HTTPRouter, ip: ip, port: port}
@@ -263,5 +272,27 @@ defmodule UnitaresLeasePlane.Application do
       end
 
     %{username: user, password: pass, host: host, port: port, database: database}
+  end
+
+  @doc false
+  def parse_http_ip(nil, default), do: default
+  def parse_http_ip("", default), do: default
+
+  def parse_http_ip(raw, _default) when is_binary(raw) do
+    case :inet.parse_address(String.to_charlist(raw)) do
+      {:ok, address} -> address
+      {:error, _} -> raise ArgumentError, "invalid UNITARES_LEASE_PLANE_HTTP_IP: #{inspect(raw)}"
+    end
+  end
+
+  @doc false
+  def parse_http_port(nil, default), do: default
+  def parse_http_port("", default), do: default
+
+  def parse_http_port(raw, _default) when is_binary(raw) do
+    case Integer.parse(raw) do
+      {port, ""} when port in 1..65_535 -> port
+      _ -> raise ArgumentError, "invalid UNITARES_LEASE_PLANE_HTTP_PORT: #{inspect(raw)}"
+    end
   end
 end

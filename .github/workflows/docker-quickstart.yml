@@ -16,7 +16,10 @@ on:
       - 'db/postgres/**'
       - 'docker-compose.yml'
       - 'Dockerfile'
+      - 'elixir/lease_plane/**'
+      - 'elixir/unitares_sdk/**'
       - 'requirements*.txt'
+      - 'scripts/demo/coordination_demo.py'
       - 'scripts/demo/quick_demo.py'
       - '.github/workflows/docker-quickstart.yml'
   pull_request:
@@ -25,7 +28,10 @@ on:
       - 'db/postgres/**'
       - 'docker-compose.yml'
       - 'Dockerfile'
+      - 'elixir/lease_plane/**'
+      - 'elixir/unitares_sdk/**'
       - 'requirements*.txt'
+      - 'scripts/demo/coordination_demo.py'
       - 'scripts/demo/quick_demo.py'
       - '.github/workflows/docker-quickstart.yml'
 
@@ -55,6 +61,9 @@ jobs:
 
       - name: Run the quickstart demo against the stack
         run: make demo
+
+      - name: Run the two-agent coordination proof
+        run: make coordination-demo
 
       - name: Dump container logs on failure
         if: failure()
