@@ -55,6 +55,7 @@ from src.logging_utils import get_logger
 logger = get_logger(__name__)
 
 REVIEWER_REASSIGNED = "dialectic_reviewer_reassigned"
+FACILITATION_NEEDED = "dialectic_facilitation_needed"
 
 
 async def emit_reviewer_reassigned(
@@ -111,4 +112,44 @@ async def emit_reviewer_reassigned(
         logger.warning(
             "%s audit emit failed: session=%s source=%s err=%s",
             REVIEWER_REASSIGNED, session_id, source, exc,
+        )
+
+
+async def emit_facilitation_needed(
+    *,
+    session_id: str,
+    paused_agent_id: Optional[str],
+    phase: Optional[str],
+    reason: str,
+) -> None:
+    """Announce a standing facilitation request raised by the sweeper.
+
+    The handler path emits this through `_emit_dialectic_event`, which reads a
+    live `DialecticSession` object. The sweeper only ever holds a database row,
+    so it emits from row fields here rather than rehydrating a session just to
+    announce one. Same event name and same `awaiting_facilitation` payload key,
+    because the dashboard and the Phoenix dialectic pane treat any
+    ``dialectic_*`` event as a doorbell to refetch authoritative state — a
+    request nobody is told about is one the operator finds by looking.
+
+    Fail-soft: the request is already committed when this runs, so a failure
+    here costs observability, never correctness.
+    """
+    try:
+        from src.broadcaster import broadcaster_instance
+
+        await broadcaster_instance.broadcast_event(
+            FACILITATION_NEEDED,
+            agent_id=paused_agent_id,
+            payload={
+                "session_id": session_id,
+                "phase": phase,
+                "awaiting_facilitation": True,
+                "reason": reason,
+                "source": "sweeper",
+            },
+        )
+    except Exception as exc:  # pragma: no cover - telemetry must not break the sweep
+        logger.warning(
+            "%s emit failed: session=%s err=%s", FACILITATION_NEEDED, session_id, exc
         )

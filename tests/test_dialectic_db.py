@@ -838,6 +838,24 @@ class TestMarkAwaitingFacilitation:
         assert conn.execute.call_args[0][1] == "sess-001"
 
     @pytest.mark.asyncio
+    async def test_does_not_touch_updated_at(self, db):
+        """`updated_at` is the sweeper's staleness clock — leave it alone.
+
+        The sweeper is the only unattended retry of `select_reviewer`. Bumping
+        `updated_at` here would drop the session out of the stuck set for a
+        full STUCK_SESSION_THRESHOLD (2h), so a reviewer who becomes available
+        ten minutes after the request would not be picked up for two hours.
+        Recording that a session waits on a human must not stop a machine
+        rescuing it.
+        """
+        instance, pool, conn = db
+        conn.execute = AsyncMock(return_value="UPDATE 1")
+
+        await instance.mark_awaiting_facilitation("sess-001")
+
+        assert "updated_at" not in conn.execute.call_args[0][0]
+
+    @pytest.mark.asyncio
     async def test_refused_on_a_terminal_row(self, db):
         """A refused write returns False so the caller does not narrate it."""
         instance, pool, conn = db

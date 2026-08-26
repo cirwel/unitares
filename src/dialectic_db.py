@@ -357,12 +357,23 @@ class DialecticDB:
         Returns False when refused or missing; the sweeper reads that as
         "another writer finished this session" and skips it, the same way it
         treats a refused reviewer write.
+
+        ⛔Deliberately does NOT touch `updated_at`, which every other writer
+        here does. `updated_at` is the sweeper's staleness clock, and the
+        sweeper is the only unattended retry of `select_reviewer`: bumping it
+        would drop the session out of the stuck set for a full
+        STUCK_SESSION_THRESHOLD (2h), so a replacement reviewer that becomes
+        available ten minutes after the request would not be picked up for two
+        hours. Recording that a session is waiting on a human must not stop it
+        being rescued by a machine. The handler path writes the flag through
+        `update_session_awaiting_facilitation`, which does bump — it is a
+        caller-driven transition on a live session, not a sweep observation.
         """
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             result = await conn.execute("""
                 UPDATE core.dialectic_sessions
-                SET awaiting_facilitation = true, updated_at = now()
+                SET awaiting_facilitation = true
                 WHERE session_id = $1
                   AND status NOT IN ('resolved', 'failed')
             """, session_id)
