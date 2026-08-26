@@ -1,5 +1,5 @@
 # Makefile for governance-mcp-v1
-.PHONY: help test test-cache-quick test-quick test-smoke version version-check version-bump restart logs serve docs clean
+.PHONY: help test test-cache-quick test-quick test-smoke version version-check version-bump restart logs serve docs demo coordination-demo clean
 
 help: ## Show this help message
 	@echo "Available commands:"
@@ -82,6 +82,9 @@ uninstall-hooks: ## Remove git pre-commit hooks
 
 demo: ## Onboard an agent and run six governed check-ins against a live server (default :8767)
 	@python3 scripts/demo/quick_demo.py
+
+coordination-demo: ## Show two agents contending for and handing off one governed surface (default :8788)
+	@python3 scripts/demo/coordination_demo.py
 
 # ── Cleanup ──────────────────────────────────────────────
 

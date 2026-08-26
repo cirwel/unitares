@@ -61,4 +61,32 @@ defmodule UnitaresLeasePlane.ParseDatabaseUrlTest do
       end
     end
   end
+
+  describe "HTTP bind parsing" do
+    test "uses configured defaults when environment values are absent" do
+      assert App.parse_http_ip(nil, {127, 0, 0, 1}) == {127, 0, 0, 1}
+      assert App.parse_http_port(nil, 8788) == 8788
+    end
+
+    test "accepts explicit IPv4 and IPv6 addresses" do
+      assert App.parse_http_ip("0.0.0.0", {127, 0, 0, 1}) == {0, 0, 0, 0}
+      assert App.parse_http_ip("::1", {127, 0, 0, 1}) == {0, 0, 0, 0, 0, 0, 0, 1}
+    end
+
+    test "accepts a valid explicit port" do
+      assert App.parse_http_port("18788", 8788) == 18_788
+    end
+
+    test "rejects invalid bind values" do
+      assert_raise ArgumentError, ~r/HTTP_IP/, fn ->
+        App.parse_http_ip("not-an-address", {127, 0, 0, 1})
+      end
+
+      for port <- ["0", "65536", "abc", "8788x"] do
+        assert_raise ArgumentError, ~r/HTTP_PORT/, fn ->
+          App.parse_http_port(port, 8788)
+        end
+      end
+    end
+  end
 end
