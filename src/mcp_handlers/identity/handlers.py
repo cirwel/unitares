@@ -2434,9 +2434,12 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # than left to out-of-band SDK writes that only fire for resident
     # subclasses. Rule lives in src/grounding/onboard_classifier.py; see
  # .
+    _stamped_tags: Optional[list] = None
+    _stamp_ran = False
     if is_new:
         try:
-            await _stamp_default_tags_on_onboard(agent_uuid, name)
+            _stamped_tags = await _stamp_default_tags_on_onboard(agent_uuid, name)
+            _stamp_ran = True
         except Exception as e:
             logger.debug(f"[ONBOARD] default-stamp failed (non-fatal): {e}")
 
@@ -2713,6 +2716,30 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         model_type=model_type,
     )
 
+    # Resident registration verdict. Registering a resident has two halves --
+    # the name must be on this deployment's UNITARES_RESIDENTS roster, and the
+    # privileged tags are granted only here, only at mint -- and nothing used
+    # to connect them. An off-roster name minted an `ephemeral` identity that
+    # reported success and was archived by the orphan sweep days later, with
+    # the only signal a per-cycle SDK warning that never named the cause.
+    #
+    # Reported only on a fresh mint, which is where the decision is actually
+    # made and the only point at which it can still be changed: privileged
+    # tags cannot be added to an existing identity by that identity.
+    if _stamp_ran:
+        try:
+            from src.grounding.onboard_classifier import resident_registration
+            registration = resident_registration(name, _stamped_tags)
+            if registration:
+                result["resident_registration"] = registration
+                if registration["status"] in ("not_on_roster", "no_roster_configured"):
+                    logger.warning(
+                        "[ONBOARD] %s minted WITHOUT resident tags (%s) — %s",
+                        f"{agent_uuid[:8]}...", registration["status"], name,
+                    )
+        except Exception:
+            pass  # Never let a response annotation fail a mint.
+
     # Temporal narrator — contextual time awareness (silence by default)
     try:
         from src.temporal import build_temporal_context
@@ -2884,7 +2911,9 @@ async def _create_spawned_edge_bg(
         logger.debug(f"SPAWNED edge creation failed (non-fatal): {e}")
 
 
-async def _stamp_default_tags_on_onboard(agent_uuid: str, name: Optional[str]) -> None:
+async def _stamp_default_tags_on_onboard(
+    agent_uuid: str, name: Optional[str]
+) -> Optional[list]:
     """Stamp default class tags from the onboard handler. Thin wrapper around
     ``stamp_default_class_tags`` in ``src.grounding.onboard_classifier``;
     keeps the original log line shape so onboard-specific log filters keep
@@ -2900,6 +2929,10 @@ async def _stamp_default_tags_on_onboard(agent_uuid: str, name: Optional[str]) -
         logger.info(
             f"[ONBOARD] S8a default-stamp: {agent_uuid[:8]}... tagged {stamped} (name={name!r})"
         )
+    # Returned so the mint response can report what registration actually
+    # happened. `None` is meaningful here and distinct from `[]`: it means
+    # stamping was SKIPPED because the caller supplied their own tags.
+    return stamped
 
 
 async def _seed_genesis_from_parent_bg(child_id: str, parent_id: str):

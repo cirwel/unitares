@@ -9,6 +9,7 @@
 # This brings up:
 #   - postgres-age      Postgres 17 + Apache AGE + pgvector  (port 5432)
 #   - redis             De-facto primary session store + locks (port 6379)
+#   - lease-plane       Exclusive surface leases + handoffs   (port 8788)
 #   - governance-mcp    UNITARES governance server            (port 8767)
 #
 # All ports bind to 127.0.0.1 only. Override credentials via .env (copy
@@ -62,6 +63,34 @@ services:
       retries: 5
     restart: unless-stopped
 
+  lease-plane:
+    build:
+      context: .
+      dockerfile: elixir/lease_plane/Dockerfile
+    container_name: unitares-lease-plane
+    ports:
+      # The container listens on its private Compose network; publication stays
+      # loopback-only. Override the host side if 8788 is already occupied.
+      - "127.0.0.1:${LEASE_PLANE_HOST_PORT:-8788}:8788"
+    environment:
+      UNITARES_LEASE_PLANE_DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres-age:5432/${POSTGRES_DB:-governance}
+      UNITARES_LEASE_PLANE_HTTP_IP: 0.0.0.0
+      UNITARES_LEASE_PLANE_HTTP_PORT: 8788
+      # Development-only default for a loopback quickstart. Set a unique value
+      # in .env before exposing the service beyond a local evaluation machine.
+      LEASE_PLANE_BEARER_TOKEN: ${LEASE_PLANE_BEARER_TOKEN:-unitares-local-lease-plane}
+      UNITARES_GOVERNANCE_URL: http://governance-mcp:8767
+    depends_on:
+      postgres-age:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", 'curl -fsS -H "Authorization: Bearer $$LEASE_PLANE_BEARER_TOKEN" http://127.0.0.1:8788/v1/health -o /dev/null || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+
   governance-mcp:
     build:
       context: .
@@ -78,6 +107,10 @@ services:
       # PostgreSQL is the canonical KG store; AGE is an explicit graph-feature opt-in.
       UNITARES_KNOWLEDGE_BACKEND: postgres
       UNITARES_DIALECTIC_BACKEND: postgres
+      # Coordination boundary used by governed clients and spawned workers.
+      LEASE_PLANE_BASE_URL: http://lease-plane:8788
+      UNITARES_LEASE_PLANE_URL: http://lease-plane:8788
+      LEASE_PLANE_BEARER_TOKEN: ${LEASE_PLANE_BEARER_TOKEN:-unitares-local-lease-plane}
       # Operator wiring (#1791): set these in .env to enable the operator-gated
       # surfaces. Empty default = unchanged behavior (default-deny stays on).
       #   UNITARES_OPERATOR_TOKENS — csv allowlist for X-Unitares-Operator
@@ -99,6 +132,8 @@ services:
       postgres-age:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      lease-plane:
         condition: service_healthy
     healthcheck:
       # /v1/tools is a plain REST endpoint that returns 200 once the server
