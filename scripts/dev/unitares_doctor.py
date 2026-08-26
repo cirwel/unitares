@@ -2355,8 +2355,16 @@ def check_producer_never_reported(db_url: str, repo_root: Path) -> CheckResult:
 # tree, so importing server code would silently measure the wrong definition.
 # tests/test_adjudication_feedstock.py asserts the mirror still matches source,
 # so a change to the queue's definition cannot silently desync this check.
-ADJUDICABLE_EVENT_TYPES = ("sentinel_finding", "sentinel_alarm_finding")
+ADJUDICABLE_EVENT_TYPES = (
+    "sentinel_finding", "sentinel_alarm_finding", "doctor_check_finding",
+)
 ADJUDICABLE_SEVERITIES = ("high", "critical")
+# Per-family override, mirroring _ADJUDICABLE_SEVERITIES_BY_EVENT_TYPE. The
+# doctor layer emits `warning` only, so holding it to the Sentinel default
+# would make its admission to the queue inert.
+ADJUDICABLE_SEVERITIES_BY_EVENT_TYPE = {
+    "doctor_check_finding": ("warning", "high", "critical"),
+}
 FEEDSTOCK_DRY_DAYS = 7       # queue-eligible findings absent this long
 FEEDSTOCK_ALIVE_MIN = 20     # ...while producers emitted at least this many
 

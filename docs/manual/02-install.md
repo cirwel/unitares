@@ -4,8 +4,8 @@
 
 Choose one path:
 
-- **Docker** is the Tier-1 install contract and brings up PostgreSQL, Redis, and
-  the server together from a named release.
+- **Docker** is the Tier-1 install contract and brings up PostgreSQL, Redis, the
+  coordination lease plane, and the server together from a named release.
 - **Bare metal** is the advanced macOS operator path. The canonical, maintained
   instructions live in the [install playbook](../install/PLAYBOOK.md); this
   chapter does not duplicate them or present it as an equivalent default.
@@ -16,25 +16,34 @@ Choose one path:
 git clone --branch v2.20.0 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
-make demo
+make coordination-demo
 ```
 
-`make demo` sends six warmup check-ins and prints the real API response shape.
-It verifies installation and wiring; it does not exercise self-relative scoring
-or establish predictive value.
+After cloning, `docker compose up -d --wait` is the one-command install/start;
+there is no separate schema bootstrap. `make coordination-demo` verifies the
+live coordination boundary by acquiring one surface, refusing a second holder,
+handing ownership over, and releasing it. The proof is single-operator: it does
+not establish cross-operator trust or outcome benefit.
+
+Run `make demo` next to send six warmup check-ins and print the real governance
+API response shape. It verifies identity and telemetry wiring; it does not
+exercise self-relative scoring or establish predictive value.
 
 When it completes:
 
 - MCP: `http://localhost:8767/mcp/`
 - Dashboard: `http://localhost:8767/dashboard`
 - Liveness: `http://localhost:8767/health/live`
+- Lease plane: `http://127.0.0.1:8788/v1/health` (bearer-authenticated)
 
 If the default ports are occupied:
 
 ```bash
 POSTGRES_HOST_PORT=15432 REDIS_HOST_PORT=16379 GOVERNANCE_HOST_PORT=18767 \
+  LEASE_PLANE_HOST_PORT=18788 \
   docker compose up -d --wait
 UNITARES_DEMO_PORT=18767 make demo
+UNITARES_COORDINATION_DEMO_PORT=18788 make coordination-demo
 ```
 
 ## 2.2 Bare-metal installation
@@ -51,8 +60,9 @@ for the demo but does not preserve production continuity.
 
 ## 2.3 Verify and continue
 
-An install is ready when `/health/live` reports alive, the demo returns six
-well-formed decisions, and the dashboard loads. Then continue to
+An install is ready when `/health/live` reports alive, the coordination demo
+completes its refusal and handoff, the telemetry demo returns six well-formed
+decisions, and the dashboard loads. Then continue to
 [Running the server](03-running-the-server.md) and
 [Integrating agents](04-integrating-agents.md).
 

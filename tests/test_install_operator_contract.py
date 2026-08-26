@@ -47,7 +47,7 @@ def test_dev_install_provides_starlette_testclient_backend() -> None:
     assert "httpx2>=2.0.0,<3.0.0" in _read("requirements-full.txt")
 
 
-def test_tier_one_quickstart_is_release_pinned_and_redis_complete() -> None:
+def test_tier_one_quickstart_is_release_pinned_and_coordination_complete() -> None:
     readme = _read("README.md")
     manual = _read("docs/manual/02-install.md")
     compose = _read("docker-compose.yml")
@@ -61,9 +61,25 @@ def test_tier_one_quickstart_is_release_pinned_and_redis_complete() -> None:
     assert "the supported install path" in readme
     assert pin in readme
     assert pin in manual
+    assert "make coordination-demo" in readme
+    assert "make coordination-demo" in manual
+    assert "one-command install/start" in readme
+    assert "one-command install/start" in manual
     assert "depends_on:" in compose
     assert "redis:" in compose
+    assert "lease-plane:" in compose
+    assert 'dockerfile: elixir/lease_plane/Dockerfile' in compose
+    assert '"127.0.0.1:${LEASE_PLANE_HOST_PORT:-8788}:8788"' in compose
+    assert "LEASE_PLANE_BASE_URL: http://lease-plane:8788" in compose
+    assert "UNITARES_LEASE_PLANE_URL: http://lease-plane:8788" in compose
     assert "condition: service_healthy" in compose
+
+    makefile = _read("Makefile")
+    workflow = _read(".github/workflows/docker-quickstart.yml")
+    assert "coordination-demo:" in makefile
+    assert "scripts/demo/coordination_demo.py" in makefile
+    assert "run: make coordination-demo" in workflow
+    assert "elixir/lease_plane/**" in workflow
 
 
 def test_advanced_bare_metal_path_uses_one_schema_bootstrap() -> None:
