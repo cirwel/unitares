@@ -70,3 +70,36 @@ def test_readme_preserves_earned_and_unearned_claims_side_by_side() -> None:
     )
     assert "Incident prevention or benefit from pausing | **Untested**" in NORMALIZED
     assert "sets no standing AUC ceiling" in NORMALIZED
+
+
+def test_readme_separates_the_review_mechanism_from_its_benefit() -> None:
+    """One row cannot carry both claims without one of them being wrong.
+
+    The mechanism is exercised and countable; the benefit is not measured. A
+    single "Untested" row understated the first, and a single "Exercised path"
+    row would overstate the second.
+    """
+    assert "Review binds on the reviewed agent | **Exercised path**" in NORMALIZED
+    assert "Benefit from review and coordination | **Untested**" in NORMALIZED
+
+
+def test_readme_states_the_review_coverage_boundary() -> None:
+    """These records cover one review channel, not every review that happens.
+
+    Consequential review also runs through subagent councils and external
+    models, which write no dialectic row unless filed through
+    `reviewer_provenance`. A claim derived from these records without the
+    boundary silently generalises past the channel it measured.
+    """
+    assert "cover dialectic-mediated review" in NORMALIZED
+    assert "reviewer_provenance" in NORMALIZED
+
+
+def test_readme_does_not_launder_a_parse_failure_as_a_verdict() -> None:
+    """One recorded dissent is a parser default, not a reviewer's judgement.
+
+    `agrees` is the column a reviewer sets, and a model whose output failed to
+    parse defaults to disagreement in it. Reporting the dissent count without
+    that carve-out overstates recorded disagreement.
+    """
+    assert "parse failure recorded as disagreement" in NORMALIZED
