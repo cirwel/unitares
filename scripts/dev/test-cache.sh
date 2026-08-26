@@ -215,34 +215,42 @@ _print_staged_dirty_inputs() {
 PYTHON="${UNITARES_PYTHON:-python3}"
 RUNTIME_HASH=$(_hash_runtime)
 
-# --- compute tree hash ---
 HASH_MODE="worktree"
-if [[ "$STAGED" == true ]]; then
-    HASH_MODE="staged"
-    DIRTY_INPUTS=$(_print_staged_dirty_inputs)
-    if [[ -n "$DIRTY_INPUTS" ]]; then
-        echo "[test-cache] --staged refused: unstaged or untracked files would affect pytest:" >&2
-        echo "$DIRTY_INPUTS" >&2
-        echo "[test-cache] stash them, stage them, or use a clean worktree before validating the staged tree." >&2
-        exit 4
-    fi
-    TREE_HASH=$(_hash_staged_inputs)
-else
-    TREE_HASH=$(_hash_worktree_inputs)
-fi
-
 TEST_PROFILE="coverage"
 if [[ "$QUICK" == true ]]; then
     TEST_PROFILE="quick"
 fi
 
 PYTEST_ARGS_HASH=$(_hash_pytest_args ${PYTEST_EXTRA[@]+"${PYTEST_EXTRA[@]}"})
-CACHE_KEY=$(printf '%s\0%s\0%s\0%s\0%s\0%s\0' "$CACHE_VERSION" "$HASH_MODE" "$TEST_PROFILE" "$TREE_HASH" "$PYTEST_ARGS_HASH" "$RUNTIME_HASH" | shasum -a 256 | cut -d' ' -f1)
-CACHE_FILE="$CACHE_DIR/$CACHE_KEY"
-CACHE_LABEL="$HASH_MODE inputs $TREE_HASH profile $TEST_PROFILE runtime $RUNTIME_HASH"
-if [[ ${#PYTEST_EXTRA[@]} -gt 0 ]]; then
-    CACHE_LABEL="$CACHE_LABEL args $PYTEST_ARGS_HASH"
-fi
+
+_refresh_cache_identity() {
+    local dirty_inputs=""
+    if [[ "$STAGED" == true ]]; then
+        HASH_MODE="staged"
+        dirty_inputs=$(_print_staged_dirty_inputs)
+        if [[ -n "$dirty_inputs" ]]; then
+            echo "[test-cache] --staged refused: unstaged or untracked files would affect pytest:" >&2
+            echo "$dirty_inputs" >&2
+            echo "[test-cache] stash them, stage them, or use a clean worktree before validating the staged tree." >&2
+            exit 4
+        fi
+        TREE_HASH=$(_hash_staged_inputs)
+    else
+        TREE_HASH=$(_hash_worktree_inputs)
+    fi
+
+    CACHE_KEY=$(printf '%s\0%s\0%s\0%s\0%s\0%s\0' "$CACHE_VERSION" "$HASH_MODE" "$TEST_PROFILE" "$TREE_HASH" "$PYTEST_ARGS_HASH" "$RUNTIME_HASH" | shasum -a 256 | cut -d' ' -f1)
+    CACHE_FILE="$CACHE_DIR/$CACHE_KEY"
+    CACHE_LABEL="$HASH_MODE inputs $TREE_HASH profile $TEST_PROFILE runtime $RUNTIME_HASH"
+    if [[ ${#PYTEST_EXTRA[@]} -gt 0 ]]; then
+        CACHE_LABEL="$CACHE_LABEL args $PYTEST_ARGS_HASH"
+    fi
+}
+
+# Compute once for the lock-free cache-hit path. The identity is recomputed
+# after acquiring the lock because callers are allowed to keep editing while
+# another worktree's pytest run holds the global lock.
+_refresh_cache_identity
 
 _valid_cache_file() {
     [[ -f "$1" ]] || return 1
@@ -315,6 +323,15 @@ _interrupt_test_cache() {
 trap '_cleanup_test_cache' EXIT
 trap '_interrupt_test_cache INT 130' INT
 trap '_interrupt_test_cache TERM 143' TERM
+
+# Inputs may have changed while this process waited for the global pytest lock.
+# Rehash before either accepting a cache hit or publishing a new result so a
+# later tree can never be cached under the earlier tree's key.
+PRE_LOCK_TREE_HASH="$TREE_HASH"
+_refresh_cache_identity
+if [[ "$TREE_HASH" != "$PRE_LOCK_TREE_HASH" ]]; then
+    echo "[test-cache] inputs changed while waiting; using post-lock hash $TREE_HASH"
+fi
 
 # --- double-check cache now that we hold the lock ---
 # The holder ahead of us may have just populated the cache for this

@@ -27,14 +27,20 @@ def _ci_shard(path: Path) -> str | None:
         return None
 
     first_letter = path.name.removeprefix("test_")[:1].lower()
-    if "a" <= first_letter <= "d":
-        return "tests-a-d"
+    if "a" <= first_letter <= "b":
+        return "tests-a-b"
+    if "c" <= first_letter <= "d":
+        return "tests-c-d"
     if "e" <= first_letter <= "h":
         return "tests-e-h"
-    if "i" <= first_letter <= "p":
-        return "tests-i-p"
-    if "q" <= first_letter <= "z":
-        return "tests-q-z"
+    if "i" <= first_letter <= "l":
+        return "tests-i-l"
+    if "m" <= first_letter <= "p":
+        return "tests-m-p"
+    if "q" <= first_letter <= "t":
+        return "tests-q-t"
+    if "u" <= first_letter <= "z":
+        return "tests-u-z"
     return None
 
 
@@ -45,15 +51,21 @@ def test_github_full_test_jobs_cover_every_test_file() -> None:
 
     shard_job = workflow.split("\n  test_shard:", 1)[1].split("\n  test:", 1)[0]
     assert "needs: smoke" not in shard_job
+    assert "timeout-minutes: 20" in shard_job
     assert (
-        "shard: [tests-a-d, tests-e-h, tests-i-p, tests-q-z, "
-        "agents-and-nested]" in shard_job
+        "shard: [tests-a-b, tests-c-d, tests-e-h, tests-i-l, tests-m-p, "
+        "tests-q-t, tests-u-z, agents-and-nested]" in shard_job
     )
-    assert "targets=(tests/test_[a-d]*.py)" in shard_job
+    assert "targets=(tests/test_[a-b]*.py)" in shard_job
+    assert "targets=(tests/test_[c-d]*.py)" in shard_job
     assert "targets=(tests/test_[e-h]*.py)" in shard_job
-    assert "targets=(tests/test_[i-p]*.py)" in shard_job
-    assert "targets=(tests/test_[q-z]*.py)" in shard_job
+    assert "targets=(tests/test_[i-l]*.py)" in shard_job
+    assert "targets=(tests/test_[m-p]*.py)" in shard_job
+    assert "targets=(tests/test_[q-t]*.py)" in shard_job
+    assert "targets=(tests/test_[u-z]*.py)" in shard_job
     assert "targets=(agents/ tests/*/ tests/smoke_test.py)" in shard_job
+    assert '--health-cmd "pg_isready -U postgres"' in shard_job
+    assert 'python -m pytest "${targets[@]}" -q -ra' in shard_job
     assert "--cov=src --cov=agents/sdk/src/unitares_sdk --cov=agents" in shard_job
 
     test_files = [
@@ -71,6 +83,7 @@ def test_github_full_test_jobs_cover_every_test_file() -> None:
     assert "needs: test_shard" in workflow
     assert "needs.test_shard.result != 'success'" in workflow
     assert "python -m coverage combine coverage-data" in workflow
+    assert "cancel-in-progress: true" in workflow
     assert _coverage_floor(workflow) >= MIN_COVERAGE_FLOOR
 
 

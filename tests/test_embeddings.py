@@ -7,7 +7,9 @@ Uses mocked SentenceTransformer to avoid model downloads in CI.
 
 import pytest
 import asyncio
+import subprocess
 import sys
+import types
 from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock
 import numpy as np
@@ -18,6 +20,25 @@ sys.path.insert(0, str(project_root))
 
 
 # --- Unit tests for EmbeddingsService ---
+
+
+def test_module_import_does_not_load_sentence_transformers():
+    """Capability checks must not import the heavyweight model runtime."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; import src.embeddings; "
+                "assert 'sentence_transformers' not in sys.modules"
+            ),
+        ],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.asyncio
@@ -226,6 +247,23 @@ async def test_ensure_model_raises_without_sentence_transformers():
     with patch("src.embeddings.SENTENCE_TRANSFORMERS_AVAILABLE", False):
         with pytest.raises(RuntimeError, match="sentence-transformers not installed"):
             await service._ensure_model()
+
+
+@pytest.mark.asyncio
+async def test_ensure_model_imports_framework_only_when_requested(monkeypatch):
+    """The first real model request performs the deferred framework import."""
+    import src.embeddings as emb_module
+
+    model = MagicMock()
+    constructor = MagicMock(return_value=model)
+    fake_module = types.ModuleType("sentence_transformers")
+    fake_module.SentenceTransformer = constructor
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake_module)
+    monkeypatch.setattr(emb_module, "SENTENCE_TRANSFORMERS_AVAILABLE", True)
+
+    service = emb_module.EmbeddingsService()
+    assert await service._ensure_model() is model
+    constructor.assert_called_once_with(service.model_name)
 
 
 @pytest.mark.asyncio

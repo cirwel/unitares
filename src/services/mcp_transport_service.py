@@ -457,6 +457,7 @@ def build_transport_runtime(
         timeout_graceful_shutdown=10,
         forwarded_allow_ips="127.0.0.1",
         proxy_headers=True,
+        ws="websockets-sansio",
     )
     return McpTransportRuntime(
         app=app,
