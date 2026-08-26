@@ -1,7 +1,7 @@
 # UNITARES Documentation
 
 This is the documentation tree for the
-[UNITARES governance MCP server](../README.md). Start with the repo README for
+[UNITARES MCP-native accountability and coordination layer](../README.md). Start with the repo README for
 the core idea and quickstart, then choose the path below. Canonical references,
 operator runbooks, research provenance, and optional essays are kept separate so
 an analogy or proposal is not mistaken for a deployed contract.
@@ -31,7 +31,7 @@ A cohesive, multi-chapter front door for operators and integrators. Thin chapter
 
 ### Canonical reference
 
-- **[`PRODUCT_DEFINITION.md`](PRODUCT_DEFINITION.md)** — what UNITARES is, in plain language: the one-sentence product, the record/score/interrupt/remember loop, one governed incident end to end, and the honest limits. Start here when the architecture nouns aren't landing.
+- **[`PRODUCT_DEFINITION.md`](PRODUCT_DEFINITION.md)** — what UNITARES is, in plain language: the one-sentence product, the Core/userland boundary, MCP's place in the stack, the record/score/interrupt/remember loop, and the honest limits. Start here when the architecture nouns aren't landing.
 - **[`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md)** — the canonical architecture doc. End-to-end picture of the server, state model, transports, and storage.
 - **[`CANONICAL_COMPONENTS.md`](CANONICAL_COMPONENTS.md)** — component/layer map, orthogonal to the check-in pipeline view in `UNIFIED_ARCHITECTURE.md`.
 - **[`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md)** — guided tour for reviewers evaluating the project.

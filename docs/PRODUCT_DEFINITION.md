@@ -7,8 +7,9 @@ purpose and links to the precise version at every step.
 
 ## The product in one sentence
 
-**UNITARES is a self-hosted flight recorder and circuit breaker for
-long-running AI agents.** Agents check in with it as they work; it keeps a
+**UNITARES is a self-hosted, MCP-native operating layer for accountable,
+long-running AI agents.** It acts as a flight recorder and bounded circuit
+breaker: agents check in with it as they work; it keeps a
 longitudinal score of whether each agent's claims match its recorded results,
 pauses an agent whose behavior drifts, requires a written reflection — and
 optionally a structured peer review — before that agent can resume, and leaves
@@ -24,6 +25,35 @@ is internal machinery for four verbs: **record, score, interrupt, remember.**
 | **Score** | Each check-in updates a four-coordinate state estimate: is work advancing, do claims match results, how far off the agent's own baseline, running hot vs. careful. | [`EISV_COMPUTATION.md`](EISV_COMPUTATION.md) |
 | **Interrupt** | A priority ladder returns proceed / guide / pause with a named reason; a paused agent's further check-ins are refused until it recovers. | `src/monitor_decision.py`, `src/mcp_handlers/lifecycle/self_recovery.py` |
 | **Remember** | Findings, reviews, and resolutions land in a provenance-aware knowledge graph the next agent searches before repeating the mistake. | [`KNOWLEDGE_GRAPH_SEMANTICS.md`](dev/KNOWLEDGE_GRAPH_SEMANTICS.md) |
+
+## MCP-native, not MCP-only
+
+MCP is the primary agent-facing contract: it is the narrow waist through which
+different agent runtimes can use the same identity, state, policy, review, and
+memory capabilities. It is not the product's outer boundary. REST, the public
+SDK, host adapters, and the dashboard expose the same Core for clients whose
+lifecycle cannot be expressed by a direct MCP connection alone.
+
+This makes UNITARES **harness-agnostic**. Claude Code, Codex, Hermes, custom
+runtimes, and resident agents keep their own reasoning loops, model choices,
+tools, and interaction surfaces. UNITARES observes and governs their declared
+checkpoints without requiring them to become one kind of agent.
+
+## Core and Resident are different products
+
+The repository ships UNITARES Core and several specialized reference
+residents. It does not currently ship a general-purpose conversational agent
+runtime.
+
+| Product surface | Owns | Boundary |
+|---|---|---|
+| **UNITARES Core** | Identity, provenance, state estimation, policy and recovery, audit, shared knowledge, dialectic review, and coordination. | Does not own the agent's reasoning or tool-execution loop. |
+| **UNITARES Resident** | A future first-party agent experience: persistent conversations, provider and tool adapters, scheduling, task queues, memory participation, and operator-facing interfaces. | Must live outside Core and use the same public MCP/SDK contract as any other harness. It is not shipped today. |
+
+Keeping that boundary prevents the system from grading an execution loop it
+privately controls. A future UNITARES Resident may be the easiest way to run a
+governed agent, but it must remain ordinary userland: no direct database access,
+no imports from Core internals, and no privileged measurement or policy path.
 
 ## One governed incident, end to end
 
@@ -59,8 +89,8 @@ location; none of it is aspirational.
 
 The customer is **one operator running several long-lived autonomous agents**
 — tool-using, multi-step, working over hours or days — on infrastructure that
-operator controls. It is a self-hosted MCP/HTTP service, not an agent
-framework and not a hosted platform.
+operator controls. It is a self-hosted, MCP-native operating layer, not an
+agent framework and not a hosted platform.
 
 The end state it buys: the operator can leave a fleet running and
 

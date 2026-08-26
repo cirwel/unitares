@@ -1,8 +1,8 @@
 <div align="center">
 
-<img alt="UNITARES — runtime governance for AI-agent fleets" src="docs/assets/hero-v2.png" width="100%">
+<img alt="UNITARES — an MCP-native operating layer for accountable AI-agent fleets" src="docs/assets/hero-v2.png" width="100%">
 
-### Runtime state, accountability, and recovery for long-lived AI-agent fleets.
+### An MCP-native operating layer for accountable, long-lived AI-agent fleets.
 
 </div>
 
@@ -10,12 +10,14 @@ Long-running agent work creates a continuity problem: every individual tool
 call can be allowed while the process's claims, evidence, and behavior drift
 apart over time.
 
-**UNITARES is a self-hosted runtime accountability service for that gap.** At
+**UNITARES is a self-hosted accountability and coordination layer for that gap.** At
 meaningful checkpoints it binds writes to a process identity, records claims
 beside available outcomes, estimates longitudinal state, returns a policy
 action with a reason, and retains an audit trail plus searchable shared memory.
-It is an MCP/HTTP service you run yourself — not an agent framework and not a
-hosted platform. Plain-language definition: [What UNITARES is](docs/PRODUCT_DEFINITION.md).
+MCP is its primary agent-facing interface; REST, the public SDK, host adapters,
+and the dashboard expose the same core. UNITARES is therefore **MCP-native and
+harness-agnostic** — not MCP-only, not an agent framework, and not a hosted
+platform. Plain-language definition: [What UNITARES is](docs/PRODUCT_DEFINITION.md).
 
 **Status:** v2.20.0. The maintainer deployment has operated continuously since
 November 2025, with 71,141 stored EISV state rows and six long-running resident
@@ -100,6 +102,29 @@ process rather than a display label. Operators can inspect lifecycle, state,
 evidence, and policy history through MCP/HTTP APIs and the self-hosted dashboard.
 The public [`unitares-sdk`](agents/sdk/README.md) handles connection, identity,
 check-ins, heartbeats, and knowledge participation for resident agents.
+
+## Product boundary
+
+UNITARES does not own the agent's reasoning or tool-execution loop. It governs
+that loop from outside it, so Claude Code, Codex, Hermes, custom runtimes, and
+resident agents can remain different userlands while sharing one accountable
+record and policy surface.
+
+| Layer | Responsibility | Status |
+|---|---|---|
+| **UNITARES Core** | Identity, provenance, longitudinal state, policy and recovery, audit, knowledge, dialectic review, and coordination. | Shipped in this repository. |
+| **Public interfaces** | MCP as the primary agent-facing contract, plus REST, `unitares-sdk`, the dashboard, plugins, and host adapters. | Shipped; individual surfaces have their own maturity limits. |
+| **Agent userlands** | The conversational loop, model/provider selection, tool execution, scheduling, and user interaction. | Supplied by external harnesses and custom clients today. |
+| **UNITARES Resident** | A possible first-party, general-purpose agent userland built entirely on the public interfaces above. | Not shipped. It belongs outside Core and must not receive a privileged scoring or database path. |
+
+The operating-layer description is architectural, not a claim of universal
+enforcement. UNITARES can refuse writes at governed surfaces; it does not trap
+every action an agent can take through its host. The
+[scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md) defines that boundary.
+
+The specialized agents under [`agents/`](agents/README.md) are reference
+clients and operational examples. They are not the general-purpose UNITARES
+Resident and are not a framework applications must subclass.
 
 ## Integrate an MCP client
 

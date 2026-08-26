@@ -1,6 +1,6 @@
 # UNITARES — Canonical Components
 
-**Last reviewed:** 2026-08-16
+**Last reviewed:** 2026-08-26
 
 The system as a set of **modules/layers**, bottom-up. This is the orthogonal view to
 [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md), which traces a single check-in through the
@@ -9,9 +9,18 @@ The system as a set of **modules/layers**, bottom-up. This is the orthogonal vie
 Each component states what it is, its key modules, and its **honest current maturity** (not a
 roadmap aspiration). Where a component has a known limit, it's named here, not buried.
 
+UNITARES Core does not own the agent execution loop. Agent harnesses, custom
+clients, and reference residents sit above the public interfaces and remain
+independent userlands. MCP is the primary agent-facing contract, while REST,
+the SDK, adapters, and the dashboard expose the same Core. A future
+general-purpose **UNITARES Resident** belongs in that userland layer and must
+use those public contracts; it is not a deployed Core component.
+
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ SURFACES        MCP /mcp/ · REST /v1 · Dashboard · SDK · governance plugin      │  reach
+│ USERLANDS       agent harnesses · custom clients · reference residents          │  run agents
+├──────────────────────────────────────────────────────────────────────────────┤
+│ INTERFACES      MCP /mcp/ · REST /v1 · Dashboard · SDK · governance plugin      │  reach Core
 ├──────────────────────────────────────────────────────────────────────────────┤
 │ EISV & GOVERNANCE   state vector → risk → verdict (proceed/guide/pause/reject)  │  "is this
 │ DIALECTIC ENGINE    independent review when state degrades or a verdict is      │   agent
@@ -23,8 +32,8 @@ roadmap aspiration). Where a component has a known limit, it's named here, not b
 │ IDENTITY & ONTOLOGY  per-instance UUID · lineage DAG · proof tiers              │  who did what
 │                      — anchors every write and verdict above it                  │  (the base)
 ├──────────────────────────────────────────────────────────────────────────────┤
-│ SUBSTRATE       one Postgres (relational + Apache AGE + pgvector) ·             │  durable truth
-│                 BEAM lease plane (coordination) · resident agents                │  + coordination
+│ SUBSTRATE       one Postgres (relational + Apache AGE + pgvector) · Redis ·     │  durable truth
+│                 BEAM lease plane (coordination)                                  │  + coordination
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -89,7 +98,7 @@ not** drive verdicts.
 | Component | What it is | Key modules | Maturity |
 |---|---|---|---|
 | **Coordination / lease plane** | BEAM (Elixir/OTP) kernel for single-writer coordination + liveness on shared surfaces (Plexus). Port 8788, bearer-gated. | `lease_plane.*`, the `dispatch_beam` client | **PARTIAL** — advisory-first rollout; Wave 3a read-only cutovers live; Wave 3 proper is committed and open with no active implementation (see [`proposals/beam-wave-3-handler-dispatch.md`](proposals/beam-wave-3-handler-dispatch.md)) |
-| **Resident agents** | Always-on governed agents | Vigil (cron janitorial) · Sentinel (continuous analytical) · Watcher (PostToolUse) · Steward (Pi→Mac) · Chronicler (daily) · Lumen (embodied Pi) | **LIVE** (launchd) |
+| **Reference resident agents** | Specialized, optional governed clients; examples rather than Core internals or a general agent framework. | `agents/` and independently deployed residents | **LIVE** in the maintainer deployment |
 | **Substrate** | Durable truth | ONE Postgres = relational + Apache AGE 1.7 + pgvector; Redis = de-facto primary session store (not optional), being migrated to PG-mirror | **MATURE** |
 | **Surfaces** | How agents/humans reach it | MCP `/mcp/` · REST `/v1/tools/call` · Dashboard `/dashboard` · SDK · governance plugin (Claude Code/Codex hooks) · host-adapter | **LIVE** |
 
@@ -104,6 +113,6 @@ not** drive verdicts.
 | Dialectic Engine | **In-flight** | Independent reviewer serving live; reviewer-quality is the open frontier |
 | EISV & Governance | **Deployed (bounded)** | Calibration-observability; catches naive overconfidence/drift, not deliberate concealment |
 | Coordination (BEAM) | **Partial** | Advisory-first; Wave 3a read-only cutovers live; Wave 3 committed, not started |
-| Residents · Substrate · Surfaces | **Live / Mature** | Operational |
+| Reference residents · Substrate · Interfaces | **Live / Mature** | Operational; no general-purpose UNITARES Resident is shipped |
 
 **See also:** [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md) (pipeline/flow view) · [`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md) (who it's for, what's unproven) · [`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md) (verify it yourself) · [`EVALUATION_INDEX.md`](EVALUATION_INDEX.md) (the eval surface).
