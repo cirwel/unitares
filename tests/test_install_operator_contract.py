@@ -33,8 +33,18 @@ def test_shared_contract_http_setup_has_runnable_dependency_contract() -> None:
     full = tomllib.loads(_read("pyproject.toml"))["project"][
         "optional-dependencies"
     ]["full"]
-    assert any(requirement.startswith("uvicorn") for requirement in full)
+    assert "uvicorn>=0.35.0,<1.0.0" in full
     assert any(requirement.startswith("starlette") for requirement in full)
+    for requirements_file in ("requirements-full.txt", "requirements-docker.txt"):
+        assert "uvicorn>=0.35.0,<1.0.0" in _read(requirements_file)
+
+
+def test_dev_install_provides_starlette_testclient_backend() -> None:
+    project = tomllib.loads(_read("pyproject.toml"))["project"]
+    dev = project["optional-dependencies"]["dev"]
+
+    assert any(requirement.startswith("httpx2>=2.0.0") for requirement in dev)
+    assert "httpx2>=2.0.0,<3.0.0" in _read("requirements-full.txt")
 
 
 def test_tier_one_quickstart_is_release_pinned_and_redis_complete() -> None:

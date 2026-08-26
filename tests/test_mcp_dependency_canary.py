@@ -195,6 +195,7 @@ def canary_server_url():
         host="127.0.0.1",
         port=port,
         log_level="warning",
+        ws="none",
     )
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
@@ -298,7 +299,11 @@ def push_stream_server():
 
     server = uvicorn.Server(
         uvicorn.Config(
-            recording_app, host="127.0.0.1", port=port, log_level="warning"
+            recording_app,
+            host="127.0.0.1",
+            port=port,
+            log_level="warning",
+            ws="none",
         )
     )
     thread = threading.Thread(target=server.run, daemon=True)
