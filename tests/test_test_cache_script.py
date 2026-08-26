@@ -220,6 +220,49 @@ def test_staged_mode_refuses_unstaged_tracked_non_python_input(cache_repo):
     assert _pytest_count(repo) == 0
 
 
+def test_waiter_rehashes_inputs_after_acquiring_lock(cache_repo):
+    repo, env = cache_repo
+    lock_dir = Path(env["UNITARES_TEST_CACHE_LOCK_DIR"])
+    lock_dir.mkdir()
+    (lock_dir / "holder.pid").write_text(str(os.getpid()), encoding="utf-8")
+
+    process = subprocess.Popen(
+        ["bash", "scripts/dev/test-cache.sh", "--quick"],
+        cwd=repo,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert process.stdout is not None
+    waiting_line = process.stdout.readline()
+    assert "waiting for pytest lock" in waiting_line
+    assert process.poll() is None, "cache process did not wait for the held lock"
+
+    app = repo / "src" / "app.py"
+    app.write_text("VALUE = 2\n", encoding="utf-8")
+    shutil.rmtree(lock_dir)
+    stdout, stderr = process.communicate(timeout=5)
+    stdout = waiting_line + stdout
+
+    assert process.returncode == 0, stdout + stderr
+    assert "inputs changed while waiting" in stdout
+    assert _pytest_count(repo) == 1
+
+    # The completed run belongs to VALUE=2, not the pre-lock VALUE=1 hash.
+    app.write_text("VALUE = 1\n", encoding="utf-8")
+    original = _run_cache(repo, env, "--quick")
+    assert original.returncode == 0, original.stdout + original.stderr
+    assert "[test-cache] MISS" in original.stdout
+    assert _pytest_count(repo) == 2
+
+    app.write_text("VALUE = 2\n", encoding="utf-8")
+    changed = _run_cache(repo, env, "--quick")
+    assert changed.returncode == 0, changed.stdout + changed.stderr
+    assert "[test-cache] HIT" in changed.stdout
+    assert _pytest_count(repo) == 2
+
+
 def test_sigterm_stops_pytest_and_never_populates_cache(cache_repo):
     repo, env = cache_repo
     pytest_pid = repo / "pytest.pid"
