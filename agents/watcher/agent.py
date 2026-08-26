@@ -741,6 +741,9 @@ def _do_checkin() -> None:
             complexity=complexity,
             confidence=confidence,
             response_mode="compact",
+            # summary is built by an f-string join above, not written by the
+            # local model: the substrate composed this text.
+            epistemic_class="substrate_interpretation",
             **checkin_kwargs,
         )
         log(f"check-in: {summary}")

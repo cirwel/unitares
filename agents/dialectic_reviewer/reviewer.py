@@ -848,6 +848,9 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
             ),
             complexity=0.4,
             confidence=0.6 if not verdict.degraded else 0.3,
+            # The VERDICT is model-produced, but this check-in text is an
+            # f-string over verdict fields, so the substrate composed the row.
+            epistemic_class="substrate_interpretation",
         )
         if not verdict.agrees and not (
             isinstance(synthesis_result, dict)

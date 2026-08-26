@@ -24,7 +24,14 @@ class TestCycleResult:
         r = CycleResult.simple("did some work")
         assert r.summary == "did some work"
         assert r.complexity == 0.3
-        assert r.confidence == 0.7
+        # confidence defaults to None, NOT 0.7. A non-None confidence mints a
+        # scored calibration prediction server-side; a convenience factory
+        # holds no belief and must not place a bet. The old 0.7 default is the
+        # literal that dominated the calibration curve.
+        assert r.confidence is None
+        # epistemic_class defaults to None so the agent's class attribute
+        # decides; it must not silently become "agent_report".
+        assert r.epistemic_class is None
         assert r.response_mode == "compact"
         assert r.notes is None
 
@@ -1251,3 +1258,36 @@ class TestRunForeverBackoff:
         go, sleeps = self._run(agent, interval=5)
         await go()
         assert sleeps == [5.0]
+
+
+class TestEpistemicClassIsNeverSilent:
+    """An omitted epistemic_class is coerced to 'agent_report' server-side.
+
+    Silence is therefore indistinguishable from a positive claim of agent
+    authorship, which is the mechanism that over-labels automation as agent
+    voice in the ledger. These tests pin the SDK's side of that contract:
+    residents state their class, and a caller holding no belief places no bet.
+    """
+
+    def test_base_agent_defaults_to_substrate_not_agent_report(self):
+        from unitares_sdk.agent import GovernanceAgent
+
+        # The overwhelming majority of residents build their summary with an
+        # f-string or " | ".join, so the substrate composed the text.
+        assert GovernanceAgent.epistemic_class == "substrate_interpretation"
+
+    def test_cycle_result_class_overrides_agent_default(self):
+        from unitares_sdk.agent import CycleResult
+
+        r = CycleResult(summary="model wrote this", epistemic_class="agent_report")
+        # Per-cycle override wins over the class attribute; the base-class
+        # call site resolves `result.epistemic_class or self.epistemic_class`.
+        assert (r.epistemic_class or "substrate_interpretation") == "agent_report"
+
+    def test_cycle_result_falls_back_to_agent_default(self):
+        from unitares_sdk.agent import CycleResult
+
+        r = CycleResult(summary="templated")
+        assert (r.epistemic_class or "substrate_interpretation") == (
+            "substrate_interpretation"
+        )

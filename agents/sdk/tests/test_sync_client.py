@@ -362,3 +362,45 @@ class TestSyncConnectionError:
 
         with pytest.raises(GovernanceTimeoutError, match="timed out after 1.0s"):
             client.call_tool("test", {})
+
+
+class TestCheckinOmitsFabricatedFields:
+    """confidence and epistemic_class must be ABSENT from the payload when unset.
+
+    Sending a defaulted value is not a harmless convenience: the server mints a
+    scored calibration prediction whenever confidence is not None (it feeds
+    calibration_error -> _compute_I, which carries verdict authority), and an
+    absent epistemic_class is coerced to 'agent_report'. Both defaults fabricate
+    a claim the caller never made.
+    """
+
+    def _capture(self):
+        client = SyncGovernanceClient(transport="rest")
+        captured = {}
+
+        def fake_call(tool_name, arguments, **kwargs):
+            captured["name"] = tool_name
+            captured["args"] = arguments
+            return {"success": True, "decision": {"action": "proceed"}, "metrics": {}}
+
+        client.call_tool = fake_call
+        return client, captured
+
+    def test_unset_fields_are_omitted(self):
+        client, captured = self._capture()
+        client.checkin(response_text="templated summary")
+        args = captured["args"]
+        assert "confidence" not in args, "unset confidence must mint no prediction"
+        assert "epistemic_class" not in args
+        assert captured["name"] == "sync_state"
+
+    def test_explicit_fields_are_sent_and_clamped(self):
+        client, captured = self._capture()
+        client.checkin(
+            response_text="real bet",
+            confidence=1.7,
+            epistemic_class="substrate_interpretation",
+        )
+        args = captured["args"]
+        assert args["confidence"] == 1.0, "confidence must be clamped to [0,1]"
+        assert args["epistemic_class"] == "substrate_interpretation"
