@@ -15,6 +15,19 @@ is broken by construction -- ``immortal_lease`` is a structural false positive
 for every ``resident:/dispatch/<thread>`` lease -- must show up as one bad
 detector, not as a drag on the whole layer.
 
+⛔PREREQUISITE: ``Doctor`` must be in the governance server's
+``UNITARES_RESIDENTS`` roster BEFORE running this. The identity needs
+``persistent`` + ``autonomous``, both of which are in
+``PRIVILEGED_TAGS`` (``src/mcp_handlers/lifecycle/mutation.py``) and cannot be
+self-assigned -- the server rejects that by design, since they confer archival
+immunity and loop-detection exemption. The only sanctioned grant is the onboard
+classifier (``src/grounding/onboard_classifier.py``), which stamps
+``RESIDENT_DEFAULT_TAGS`` server-side when the minted ``name`` matches the
+roster exactly. Roster first, restart the server, then run this. Running it
+against a roster that lacks ``Doctor`` mints an untagged identity that the
+orphan sweep archives, and every doctor producer then attributes to a ghost --
+so this refuses to write the anchor in that case rather than leaving one.
+
 Idempotent: if the anchor already names a live identity, this reports and
 exits 0 without minting a second one.
 
@@ -98,20 +111,54 @@ def main(argv: list[str] | None = None) -> int:
         print(f"mint failed, nothing written: {exc}", file=sys.stderr)
         return 1
 
-    uuid = res.get("agent_uuid") or (res.get("raw_governance") or {}).get("uuid")
+    # `/v1/tools/call` is the REST shape: the tool payload is nested under
+    # "result", NOT spread at the top level (the native MCP transport is the
+    # one with the content/text envelope). Reading `res` directly found no
+    # uuid on a mint that had actually SUCCEEDED, so the script exited 1 and
+    # left an untagged orphan identity behind -- the exact ghost the tag stamp
+    # below exists to prevent. Unwrap once, tolerate either shape.
+    body = res.get("result") if isinstance(res.get("result"), dict) else res
+    uuid = body.get("agent_uuid") or (body.get("raw_governance") or {}).get("uuid")
     if not uuid:
         print(f"no uuid in response, refusing to write anchor: {res}", file=sys.stderr)
         return 1
 
+    # The tags are NOT stamped here. `persistent` and `autonomous` are in
+    # `PRIVILEGED_TAGS` (mcp_handlers/lifecycle/mutation.py), which the server
+    # refuses to let an identity self-assign -- correctly, since they confer
+    # archival immunity and loop-detection exemption. The sanctioned grant is
+    # the onboard classifier: `stamp_default_class_tags` stamps
+    # RESIDENT_DEFAULT_TAGS server-side when the minted `name` matches the
+    # deployment's UNITARES_RESIDENTS roster exactly. So the roster is the
+    # prerequisite, and a mint that comes back untagged means the roster is
+    # missing this name -- report that instead of writing an anchor that
+    # points at an identity the orphan sweep will archive.
+    # The mint envelope carries no tags in `minimal` response_mode, so read
+    # them back rather than inferring. A failed read is treated as "missing":
+    # writing an anchor we could not verify is the failure mode that costs
+    # most, and re-running after a fix is free.
+    session_id = body.get("client_session_id")
     try:
-        _call("agent", {"action": "update_metadata", "agent_id": uuid,
-                        "tags": REQUIRED_TAGS}, token)
+        got = _call("agent", {"action": "get", "agent_id": uuid,
+                              **({"client_session_id": session_id} if session_id else {})},
+                    token)
+        gbody = got.get("result") if isinstance(got.get("result"), dict) else got
+        agent_row = gbody.get("agent") or gbody
+        tags = {str(t) for t in (agent_row.get("tags") or [])}
     except Exception as exc:
-        # Not fatal to the anchor -- but say so loudly, because an untagged
-        # identity gets archived by the orphan sweep and the producers would
-        # then attribute to a ghost.
-        print(f"WARNING: tag stamp failed ({exc}). Stamp {REQUIRED_TAGS} by hand "
-              f"or the orphan sweep will archive this identity.", file=sys.stderr)
+        print(f"could not read back tags for {uuid}: {exc}", file=sys.stderr)
+        tags = set()
+    missing = [t for t in REQUIRED_TAGS if t not in tags]
+    if missing:
+        print(
+            f"minted {uuid} but the server did not grant {missing}.\n"
+            f"  {DISPLAY_NAME!r} is almost certainly absent from UNITARES_RESIDENTS on the\n"
+            f"  governance server. Privileged tags cannot be self-assigned; add\n"
+            f"  {DISPLAY_NAME!r} to the roster, restart the server, then re-run.\n"
+            f"  Refusing to write the anchor: an untagged identity is archived by the\n"
+            f"  orphan sweep and every doctor producer would then attribute to a ghost.",
+            file=sys.stderr)
+        return 1
 
     ANCHOR.parent.mkdir(parents=True, exist_ok=True)
     tmp = ANCHOR.with_suffix(".tmp")
