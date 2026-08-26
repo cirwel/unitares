@@ -27,12 +27,13 @@ def client():
     return TestClient(app, client=("127.0.0.1", 50000))
 
 
-def _audit_row(severity, finding_type="verdict_shift", vclass="ENT", ts="2026-06-16T16:00:00+00:00"):
+def _audit_row(severity, finding_type="verdict_shift", vclass="ENT", ts="2026-06-16T16:00:00+00:00",
+               event_type="sentinel_finding"):
     """Shape one audit.events row as query_audit_events_async returns it."""
     return {
         "timestamp": ts,
         "agent_id": "Sentinel",
-        "event_type": "sentinel_finding",
+        "event_type": event_type,
         "confidence": 1.0,
         "event_id": 42,
         "details": {
@@ -73,8 +74,12 @@ def test_default_filters_to_high_and_critical(client, monkeypatch):
     severities = {f["severity"] for f in body["findings"]}
     assert severities == {"high", "critical"}
     assert body["count"] == 2
-    # Default queries the sentinel finding event types over a window.
-    assert set(captured["event_types"]) == {"sentinel_finding", "sentinel_alarm_finding"}
+    # Default queries every adjudicable finding family over a window.
+    # doctor_check_finding joined on 2026-08-26, once the doctor layer's shared
+    # identity was provisioned and its findings began carrying a real UUID.
+    assert set(captured["event_types"]) == {
+        "sentinel_finding", "sentinel_alarm_finding", "doctor_check_finding",
+    }
     assert captured["order"] == "desc"
 
 
@@ -143,3 +148,27 @@ def test_query_failure_returns_500_with_empty_list(client, monkeypatch):
     r = client.get("/v1/sentinel/backlog")
     assert r.status_code == 500
     assert r.json()["findings"] == []
+
+
+def test_severity_default_is_per_family_not_global(client, monkeypatch):
+    """⛔The second gate. Eligibility is (event_type AT severity).
+
+    The doctor layer emits `warning` and nothing else, so admitting
+    doctor_check_finding to the queue while holding it to Sentinel's
+    {high, critical} would show zero of it — a wire that reads live and
+    carries nothing. Sentinel's own `warning` must still be filtered out:
+    the relaxation is per-family, not a global loosening.
+    """
+    rows = [
+        _audit_row("warning", "immortal_lease", "OPS", event_type="doctor_check_finding"),
+        _audit_row("warning", "entropy_outlier", "ENT", event_type="sentinel_finding"),
+        _audit_row("high", "verdict_shift", "ENT", event_type="sentinel_finding"),
+    ]
+    _patch_query(monkeypatch, rows)
+
+    body = client.get("/v1/sentinel/backlog").json()
+    kept = {(f["finding_type"], f["severity"]) for f in body["findings"]}
+    assert ("immortal_lease", "warning") in kept, "doctor warning must survive"
+    assert ("entropy_outlier", "warning") not in kept, "sentinel warning must not"
+    assert ("verdict_shift", "high") in kept
+    assert body["count"] == 2

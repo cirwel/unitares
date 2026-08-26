@@ -245,3 +245,113 @@ async def reconcile_resident_tags(
         meta.tags = merged
     _reconciled_residents.add(agent_uuid)
     return merged
+
+
+# --- Resident registration status (public, agnostic) ------------------------
+#
+# Registering a resident has TWO halves, and nothing used to connect them:
+# the name must be on this deployment's ``UNITARES_RESIDENTS`` roster, AND
+# the privileged tags are granted ONLY here, ONLY at mint. A name that is not
+# on the roster mints an ``ephemeral`` identity that looks fine, reports
+# success, and is archived by the orphan sweep days later. The SDK's
+# ``persistent=True`` cannot fix it either: ``persistent``/``autonomous`` are
+# in ``PRIVILEGED_TAGS`` and the server refuses self-assignment by design, so
+# an off-roster resident logs a tag-reconcile warning on every cycle forever
+# without ever naming the cause.
+#
+# So the mint response says what happened. Not a new tool and not a new
+# endpoint -- the one call that already knows both halves now reports both.
+# Every MCP client sees it, not just the Python SDK.
+#
+# Deliberately fleet-AGNOSTIC: this reports whatever the deployment declared
+# and never names a resident. An empty roster is the shipped default and a
+# legitimate posture (a residentless install), so it reports
+# ``no_roster_configured`` rather than nagging about an absent fleet.
+RESIDENT_REGISTRATION_SCHEMA = "s22.resident_registration.v1"
+
+_REGISTRATION_DETAIL = {
+    "registered": (
+        "Registered as a named resident: {granted}. Protected from "
+        "auto-archive and exempt from loop-detection pattern 4."
+    ),
+    "not_on_roster": (
+        "{name!r} is NOT in this deployment's UNITARES_RESIDENTS roster, so it "
+        "was minted as an ordinary agent and did NOT receive {required}. Those "
+        "tags are granted only at mint and only to roster names -- they cannot "
+        "be self-assigned afterwards (PRIVILEGED_TAGS). This identity is not "
+        "protected from auto-archive. To register it: add {name!r} to "
+        "UNITARES_RESIDENTS where the governance server reads it, restart the "
+        "server so it re-reads the config, then bootstrap a fresh identity. "
+        "An existing identity cannot be upgraded in place."
+    ),
+    "no_roster_configured": (
+        "This deployment declares no named residents (UNITARES_RESIDENTS is "
+        "empty, which is the default), so {name!r} was minted as an ordinary "
+        "agent without {required}. That is the correct outcome for a "
+        "residentless install. If this agent is meant to be a long-lived "
+        "resident, set UNITARES_RESIDENTS on the governance server, restart "
+        "it, then bootstrap a fresh identity."
+    ),
+    "caller_supplied_tags": (
+        "Tags were supplied by the caller, so no default class tag was "
+        "stamped. Whether this identity carries {required} is the caller's "
+        "responsibility; note that they cannot be added later by the identity "
+        "itself (PRIVILEGED_TAGS)."
+    ),
+}
+
+
+def resident_registration(
+    name: Optional[str],
+    stamped_tags: Optional[Iterable[str]],
+    *,
+    roster: Optional[Iterable[str]] = None,
+) -> Optional[dict]:
+    """Describe what registration actually happened for a freshly minted identity.
+
+    Args:
+      name: The display name the caller asked to mint under.
+      stamped_tags: What ``stamp_default_class_tags`` returned -- the tags
+        actually written, or ``None`` when stamping was skipped because the
+        caller had already supplied tags.
+      roster: Resident labels for this deployment. Defaults to
+        ``KNOWN_RESIDENT_LABELS``; injectable so this is testable without
+        touching process env.
+
+    Returns:
+      A JSON-safe dict for the mint response, or ``None`` when the caller
+      asked for no name at all (an anonymous mint is not a registration
+      attempt and does not need a verdict).
+    """
+    if not name:
+        return None
+
+    known = KNOWN_RESIDENT_LABELS if roster is None else frozenset(roster)
+    granted = sorted(stamped_tags) if stamped_tags else []
+    on_roster = name in known
+    is_resident = all(t in granted for t in RESIDENT_DEFAULT_TAGS)
+
+    if stamped_tags is None:
+        status = "caller_supplied_tags"
+    elif is_resident:
+        status = "registered"
+    elif not known:
+        status = "no_roster_configured"
+    else:
+        status = "not_on_roster"
+
+    return {
+        "schema": RESIDENT_REGISTRATION_SCHEMA,
+        "requested_name": name,
+        "status": status,
+        "on_roster": on_roster,
+        "roster_configured": bool(known),
+        "granted_tags": granted,
+        "required_tags": list(RESIDENT_DEFAULT_TAGS),
+        "roster_env": "UNITARES_RESIDENTS",
+        "detail": _REGISTRATION_DETAIL[status].format(
+            name=name,
+            granted=", ".join(granted) or "no tags",
+            required=" + ".join(RESIDENT_DEFAULT_TAGS),
+        ),
+    }

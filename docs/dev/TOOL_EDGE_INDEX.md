@@ -30,9 +30,9 @@ registrars advertise in each deployable mode and what `describe_tool` says
 about those names. The snapshots are immutable evidence inputs; they do not
 certify the components that produced them.
 
-- Audit bundle: `sha256:fbfbcd6a151ed2af3e98f73650e7e30b7229dd2a4273eef14210d3126f968a3c` (`unitares.tool-surface-audit.v1`).
-- Dispatch snapshot: `sha256:40576d957c0e963a1808418975dc2e75063312ff93ecc22c29e928f9260d9124`.
-- Audited source revision: `sha256:e141e14016ff43f21e48ac5fc53b674910bcd17c125ef5b48cc3bd3bb2272f22` (52 files).
+- Audit bundle: `sha256:6d2196a18c7ee6cb02bb00c4470072d40ec4f0ddb779ffad05e63932e98a7a8c` (`unitares.tool-surface-audit.v1`).
+- Dispatch snapshot: `sha256:eaffde50555d0804937f646fa261ef489c6681aec227d8d3410d5cda9e88f26f`.
+- Audited source revision: `sha256:e4214b8ebfc1d5666810d25feaf4152f49f63e72657df76a188248a4760e7a1a` (52 files).
 - Exposure snapshot: `sha256:f3a1de2a620aef9f06b35caac320e86e47ef1e3396eea5d73cce95fc8b8d85ea`.
 - JSON contract: [`tool_surface_audit_v1.schema.json`](tool_surface_audit_v1.schema.json).
 - Reproduce with `python3 scripts/dev/tool_edge_index.py --json`; run
@@ -134,7 +134,7 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `get_telemetry_metrics` | `src/mcp_handlers/admin/handlers.py:403 handle_get_telemetry_metrics` | `src/mcp_handlers/schemas/admin.py:91 GetTelemetryMetricsParams` | 15s | — |
 | `get_thresholds` | `src/mcp_handlers/admin/config.py:16 handle_get_thresholds` | `src/mcp_handlers/schemas/admin.py:115 GetThresholdsParams` | 10s | — |
 | `get_tool_usage_stats` | `src/mcp_handlers/admin/handlers.py:260 handle_get_tool_usage_stats` | `src/mcp_handlers/schemas/admin.py:98 GetToolUsageStatsParams` | 15s | — |
-| `get_trajectory_status` | `src/mcp_handlers/identity/handlers.py:2817 handle_get_trajectory_status` | `src/mcp_handlers/schemas/identity.py:202 GetTrajectoryStatusParams` | 10s | — |
+| `get_trajectory_status` | `src/mcp_handlers/identity/handlers.py:2844 handle_get_trajectory_status` | `src/mcp_handlers/schemas/identity.py:202 GetTrajectoryStatusParams` | 10s | — |
 | `get_workspace_health` | `src/mcp_handlers/admin/handlers.py:506 handle_get_workspace_health` | `src/mcp_handlers/schemas/core.py:539 GetWorkspaceHealthParams` | 20s | — |
 | `health_check` | `src/mcp_handlers/admin/handlers.py:332 handle_health_check` | `src/mcp_handlers/schemas/admin.py:85 HealthCheckParams` | 5s | identity=pre_onboard |
 | `identity` | `src/mcp_handlers/identity/handlers.py:1102 handle_identity_adapter` | `src/mcp_handlers/schemas/identity.py:6 IdentityParams` | 10s | identity=pre_onboard |
@@ -164,7 +164,7 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `submit_synthesis` | `src/mcp_handlers/dialectic/handlers.py:2789 handle_submit_synthesis` | `src/mcp_handlers/schemas/dialectic.py:106 SubmitSynthesisParams` | 15s | — |
 | `submit_thesis` | `src/mcp_handlers/dialectic/handlers.py:2261 handle_submit_thesis` | `src/mcp_handlers/schemas/dialectic.py:64 SubmitThesisParams` | 90s | — |
 | `validate_file_path` | `src/mcp_handlers/admin/handlers.py:631 handle_validate_file_path` | `src/mcp_handlers/schemas/core.py:534 ValidateFilePathParams` | 5s | — |
-| `verify_trajectory_identity` | `src/mcp_handlers/identity/handlers.py:2758 handle_verify_trajectory_identity` | `src/mcp_handlers/schemas/identity.py:206 VerifyTrajectoryIdentityParams` | 10s | — |
+| `verify_trajectory_identity` | `src/mcp_handlers/identity/handlers.py:2785 handle_verify_trajectory_identity` | `src/mcp_handlers/schemas/identity.py:206 VerifyTrajectoryIdentityParams` | 10s | — |
 
 ## Action routing
 

@@ -20,6 +20,11 @@ class OnboardResult(_GovModel):
     guidance: str | None = None
     session_resolution_source: str | None = None
     welcome: str | None = None
+    # Present on a fresh mint that supplied a name. Reports whether the name
+    # was on the deployment's UNITARES_RESIDENTS roster and which tags were
+    # actually granted — the only point at which privileged resident tags can
+    # be obtained. Absent on older servers, hence the default.
+    resident_registration: dict | None = None
 
 
 class IdentityResult(_GovModel):

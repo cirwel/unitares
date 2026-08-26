@@ -17,6 +17,19 @@ from src.logging_utils import get_logger
 from src.broadcaster import broadcaster_instance
 
 from src.http_routes import access
+from src.grounding.onboard_classifier import RESIDENT_DEFAULT_TAGS
+
+# Tags every active resident must carry. Single-sourced from the server-side
+# RESIDENT_DEFAULT_TAGS (the same constant the creation-time stamp and the
+# check-in reconcile use) so the audit endpoint and the writers cannot drift
+# apart within this process. Keep in sync with the cross-process SDK copy
+# agents/sdk/src/unitares_sdk/agent.py::RESIDENT_TAGS. The Steward regression
+# of 2026-04-20 was caused by this set drifting across onboarding paths —
+# the tag-audit endpoint exists so future drift is detectable in production.
+#
+# Hoisted to module scope 2026-08-26: resident label resolution now ranks on
+# these too, and that runs well above the tag-audit endpoint in this file.
+RESIDENT_REQUIRED_TAGS: frozenset[str] = frozenset(RESIDENT_DEFAULT_TAGS)
 
 logger = get_logger(__name__)
 
@@ -254,18 +267,63 @@ def _safe_resident_total_updates(meta: object) -> int:
         return 0
 
 
-def _resident_meta_preference_key(meta: object) -> tuple[int, int, float, int]:
-    """Sort key for duplicate resident labels.
+def _resident_label_claim(label: Optional[str], agent_id: object) -> Optional[str]:
+    """The roster label this row is claiming, exact or renamed-on-collision.
+
+    ``identity/persistence.py`` renames a fresh identity to ``{label}_{uuid8}``
+    when another ACTIVE agent already holds the label it asked for. The rename
+    lands on the newcomer regardless of which row is the real resident, so a
+    ghost holding the clean name pushes the genuine resident to a suffixed
+    label -- and every resident surface here resolves by exact label, so the
+    genuine resident stops being a candidate at all while the ghost is the one
+    presented and audited.
+
+    Measured 2026-08-26 over the full identity table: 201 suffixed
+    resident-prefixed labels, of which 199 are ghosts correctly taking the
+    suffix -- that is the mechanism working. Only 2 were the inverse, a real
+    resident renamed behind a ghost. It is rare, but it is silent and it
+    persists: ``Watcher_7bf970d4`` carried ``persistent`` under a suffixed
+    label from 2026-04-19 to 2026-06-14, invisible to this route and to the
+    tag audit for nearly two months.
+
+    Only the exact ``_{own uuid8}`` suffix counts. Stripping any trailing
+    ``_xxxxxxxx`` would capture deliberately distinct names (a
+    ``Sentinel_backup``-style label) and merge two real agents into one row.
+    """
+    if not label:
+        return None
+    prefix, sep, suffix = label.rpartition("_")
+    if not sep or not prefix:
+        return None
+    if suffix and suffix == str(agent_id or "")[:8]:
+        return prefix
+    return None
+
+
+def _resident_meta_preference_key(
+    meta: object, *, exact_label: bool = True
+) -> tuple[int, int, int, float, int]:
+    """Sort key for rows competing for one roster label.
 
     Governance restarts can leave active 0-update resident forks beside the
-    canonical row. Prefer an active row, then one that has real updates, then
-    the freshest timestamp, then total update count as a final tiebreaker.
+    canonical row. Prefer an active row, then one that actually carries the
+    resident tags, then an exact label over a renamed one, then a row with
+    real updates, the freshest timestamp, and total update count.
+
+    ``has_required_tags`` outranks ``exact_label`` deliberately. The tags are
+    the only ground truth for "this is the resident" -- they are privileged,
+    granted by the server at mint, and cannot be self-assigned -- whereas the
+    label is cosmetic and is exactly what the collision rename took away. A
+    ghost holding the clean name must never outrank the tagged resident.
     """
     status = getattr(meta, "status", None)
     total_updates = _safe_resident_total_updates(meta)
     last_dt = _parse_resident_timestamp(getattr(meta, "last_update", None))
+    tags = set(getattr(meta, "tags", None) or [])
     return (
         1 if status == "active" else 0,
+        1 if RESIDENT_REQUIRED_TAGS <= tags else 0,
+        1 if exact_label else 0,
         1 if total_updates > 0 else 0,
         last_dt.timestamp() if last_dt else 0.0,
         total_updates,
@@ -390,18 +448,30 @@ async def http_residents(request):
         # appears multiple times (e.g. archived + active duplicates created
         # across server restarts), prefer the most-active live record so the
         # dashboard tracks the agent that's actually running.
+        # A row competes for a roster label under its exact label OR under the
+        # `{label}_{uuid8}` name the collision rename gave it. Without the
+        # second case a resident that lost its name to a ghost is not a
+        # candidate at all, and the ghost is what the dashboard shows.
         label_to_meta = {}
+        label_exactness = {}
         for agent_id, meta in list(getattr(mcp_server_obj, "agent_metadata", {}).items()):
             label = getattr(meta, "label", None)
             if not label:
                 continue
-            existing = label_to_meta.get(label)
-            if existing is None:
-                label_to_meta[label] = (agent_id, meta)
-                continue
-            existing_meta = existing[1]
-            if _resident_meta_preference_key(meta) > _resident_meta_preference_key(existing_meta):
-                label_to_meta[label] = (agent_id, meta)
+            claims = [(label, True)]
+            renamed_from = _resident_label_claim(label, agent_id)
+            if renamed_from:
+                claims.append((renamed_from, False))
+            for claim, exact in claims:
+                key = _resident_meta_preference_key(meta, exact_label=exact)
+                existing = label_to_meta.get(claim)
+                if existing is None:
+                    label_to_meta[claim] = (agent_id, meta)
+                    label_exactness[claim] = key
+                    continue
+                if key > label_exactness[claim]:
+                    label_to_meta[claim] = (agent_id, meta)
+                    label_exactness[claim] = key
 
         residents: list[dict] = []
         now_ts = time.time()
@@ -549,18 +619,6 @@ async def http_residents(request):
 # Resident tag-hygiene audit — Vigil consumes this to detect tag drift
 # ---------------------------------------------------------------------------
 
-from src.grounding.onboard_classifier import RESIDENT_DEFAULT_TAGS
-
-# Tags every active resident must carry. Single-sourced from the server-side
-# RESIDENT_DEFAULT_TAGS (the same constant the creation-time stamp and the
-# check-in reconcile use) so the audit endpoint and the writers cannot drift
-# apart within this process. Keep in sync with the cross-process SDK copy
-# agents/sdk/src/unitares_sdk/agent.py::RESIDENT_TAGS. The Steward regression
-# of 2026-04-20 was caused by this set drifting across onboarding paths —
-# this endpoint exists so future drift is detectable in production.
-RESIDENT_REQUIRED_TAGS: frozenset[str] = frozenset(RESIDENT_DEFAULT_TAGS)
-
-
 async def http_resident_tag_audit(request):
     """Report which active residents are missing required tags.
 
@@ -593,17 +651,31 @@ async def http_resident_tag_audit(request):
         checked: list[str] = []
         missing: dict[str, list[str]] = {}
 
-        for meta in getattr(mcp_server_obj, "agent_metadata", {}).values():
-            label = getattr(meta, "label", None)
-            if not label or label not in KNOWN_RESIDENT_LABELS:
-                continue
+        # Pick ONE row per roster label, by the same preference order
+        # http_residents uses. First-encountered was wrong twice over: dict
+        # order is arbitrary, and a resident renamed to `{label}_{uuid8}` by
+        # the collision rename was skipped entirely (its label is not on the
+        # roster) while the ghost holding the clean name was audited in its
+        # place. That reports a correctly-tagged resident as missing its tags,
+        # which is what Vigil then alarms on — every cycle, with no way to
+        # tell a real gap from a shadowed one.
+        best: dict[str, tuple] = {}
+        for agent_id, meta in getattr(mcp_server_obj, "agent_metadata", {}).items():
             if getattr(meta, "status", None) != "active":
                 continue
-            if label in checked:
-                # Duplicate rows for the same label (ghost identities) — only
-                # audit the first active one we encounter. Consistent with
-                # the label_to_meta deduplication http_residents does.
+            label = getattr(meta, "label", None)
+            if not label:
                 continue
+            claims = [(label, True)] if label in KNOWN_RESIDENT_LABELS else []
+            renamed_from = _resident_label_claim(label, agent_id)
+            if renamed_from and renamed_from in KNOWN_RESIDENT_LABELS:
+                claims.append((renamed_from, False))
+            for claim, exact in claims:
+                key = _resident_meta_preference_key(meta, exact_label=exact)
+                if claim not in best or key > best[claim][0]:
+                    best[claim] = (key, meta)
+
+        for label, (_key, meta) in best.items():
             checked.append(label)
             have = set(getattr(meta, "tags", None) or [])
             gap = sorted(RESIDENT_REQUIRED_TAGS - have)

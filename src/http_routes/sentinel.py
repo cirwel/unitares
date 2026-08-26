@@ -33,10 +33,82 @@ _FINDING_TYPE_SUFFIX = "_finding"
 _FINDING_REQUIRED_FIELDS = ("type", "severity", "message", "agent_id", "agent_name", "fingerprint")
 # Sentinel finding event types as persisted in audit.events (the durable store
 # behind the transient ring buffer). The backlog endpoint reads these.
-_SENTINEL_FINDING_EVENT_TYPES = ("sentinel_finding", "sentinel_alarm_finding")
+# Families eligible for the adjudication queue. Widened ONE family at a time,
+# and only after that producer is verified to write a real governance UUID into
+# audit.events.agent_id -- a slug cannot be resolved by _finding_producer_uuid
+# and would just yield 422s. doctor_check_finding qualified 2026-08-26, when the
+# doctor layer's shared identity was first provisioned; the other six slug
+# producers do NOT yet.
+#
+# ⛔After adding a family, watch that it still produces DISMISSALS. A family
+# that only ever confirms has become the all-positive generator Invariant 4
+# forbids, and it poisons the anchor channel rather than feeding it.
+_SENTINEL_FINDING_EVENT_TYPES = (
+    "sentinel_finding", "sentinel_alarm_finding", "doctor_check_finding",
+)
+
+# event_type -> outcome_type prefix. Identities may pool; LABELS MUST NOT.
+# These detectors have very different precision and very different volume, so a
+# shared label would move with the volume mix rather than with any detector's
+# quality -- the confound that made the pooled dialectic-reviewer number
+# describe neither instrument. Keeping doctor_check_finding_* distinct is what
+# lets a structurally-broken check (immortal_lease is a known false positive for
+# every resident:/dispatch/<thread> lease) show up as one bad detector instead
+# of quietly dragging Sentinel's precision down.
+#
+# Sentinel's two families deliberately BOTH map to "sentinel_finding": that is
+# today's behaviour, and remapping them would orphan every historical
+# sentinel_finding_* outcome row from its own dedup set.
+_FINDING_KIND_BY_EVENT_TYPE = {
+    "sentinel_finding": "sentinel_finding",
+    "sentinel_alarm_finding": "sentinel_finding",
+    "doctor_check_finding": "doctor_check_finding",
+}
+# Fallback for a fingerprint whose event_type is not a queue family. This
+# preserves today's behaviour exactly rather than changing it in passing, but
+# it is a KNOWN GAP, not a design: a watcher_finding adjudicated through this
+# endpoint is booked as sentinel_finding_confirmed. Watcher has its own local
+# resolution path, so this is reachable only by adjudicating a Watcher
+# fingerprint here directly. Giving Watcher its own mapping is a separate
+# change with its own blast radius (audit.outcome_events already carries
+# watcher_finding_% rows from that other path) and wants its own review.
+_DEFAULT_FINDING_KIND = "sentinel_finding"
 # Default severities the operator cares about when reviewing "did I miss
 # something across restarts?" — the load-bearing findings.
 _SENTINEL_BACKLOG_DEFAULT_SEVERITIES = frozenset({"high", "critical"})
+
+# ⛔The SECOND gate. Eligibility is (event_type AT severity), and adding a
+# family to _SENTINEL_FINDING_EVENT_TYPES without checking the severity half
+# admits it and then shows zero of it -- an inert wire that reads like a
+# working one.
+#
+# Severity vocabularies are NOT shared across producers. Sentinel emits
+# medium/high/info and is held at {high, critical} for a reason: its `medium`
+# alone is 834 distinct fingerprints over 30d, and the queue is deliberately
+# small because outcomes join to the last prior state snapshot, so a batch
+# sweep collapses into ONE statistical cluster.
+#
+# The doctor layer emits `warning` and nothing else. Measured 2026-08-26: 204
+# doctor_check_finding rows over 30d but only **7 distinct fingerprints** --
+# the rest are cooldown re-alerts of the same still-open conditions. So
+# admitting `warning` for this family adds ~7 items per 30d against the 22 the
+# queue sees today. That is inside "a few per day", which is the constraint
+# that matters.
+_ADJUDICABLE_SEVERITIES_BY_EVENT_TYPE = {
+    "doctor_check_finding": frozenset({"warning", "high", "critical"}),
+}
+
+
+def _adjudicable_severities(event_type):
+    """Severities eligible for the queue, for this finding family."""
+    return _ADJUDICABLE_SEVERITIES_BY_EVENT_TYPE.get(
+        event_type, _SENTINEL_BACKLOG_DEFAULT_SEVERITIES
+    )
+
+
+# Marker for "no explicit ?severity= was given, so apply the per-family
+# default". Distinct from None, which means "all severities".
+_PER_FAMILY_SEVERITY_DEFAULT = object()
 
 
 _SENTINEL_DEFAULT_WINDOW_HOURS = 24
@@ -338,7 +410,7 @@ async def http_sentinel_backlog(request):
         elif severity_param in _FINDING_SEVERITIES:
             severity_filter = {severity_param}
         else:
-            severity_filter = set(_SENTINEL_BACKLOG_DEFAULT_SEVERITIES)
+            severity_filter = _PER_FAMILY_SEVERITY_DEFAULT
 
         from src.audit_db import query_audit_events_async
         start_time = (
@@ -357,7 +429,11 @@ async def http_sentinel_backlog(request):
         for e in events:
             details = e.get("details") or {}
             severity = details.get("severity")
-            if severity_filter is not None and severity not in severity_filter:
+            if severity_filter is _PER_FAMILY_SEVERITY_DEFAULT:
+                allowed = _adjudicable_severities(e.get("event_type"))
+            else:
+                allowed = severity_filter
+            if allowed is not None and severity not in allowed:
                 continue
             findings.append({
                 "timestamp": e.get("timestamp"),
@@ -376,7 +452,13 @@ async def http_sentinel_backlog(request):
         return JSONResponse({
             "success": True,
             "window_hours": window_hours,
-            "severity": "all" if severity_filter is None else sorted(severity_filter),
+            "severity": (
+                "all" if severity_filter is None
+                else sorted(set().union(*_ADJUDICABLE_SEVERITIES_BY_EVENT_TYPE.values(),
+                                        _SENTINEL_BACKLOG_DEFAULT_SEVERITIES))
+                if severity_filter is _PER_FAMILY_SEVERITY_DEFAULT
+                else sorted(severity_filter)
+            ),
             "count": len(findings),
             "findings": findings,
         })
@@ -394,8 +476,14 @@ async def http_sentinel_backlog(request):
 # to the last prior state snapshot, so a batch sweep collapses into ONE
 # statistical cluster — the queue is deliberately small (a few per day).
 
-_SENTINEL_ADJUDICATION_OUTCOME_TYPES = (
-    "sentinel_finding_confirmed", "sentinel_finding_dismissed",
+# Every outcome_type any queue family can produce. ⛔Must stay in sync with
+# _FINDING_KIND_BY_EVENT_TYPE: a family whose outcome_type is missing here is
+# adjudicated, recorded, and then handed straight back to the operator on the
+# next page load, because the dedup lookup never sees its row.
+_SENTINEL_ADJUDICATION_OUTCOME_TYPES = tuple(
+    f"{kind}_{suffix}"
+    for kind in dict.fromkeys(_FINDING_KIND_BY_EVENT_TYPE.values())
+    for suffix in ("confirmed", "dismissed")
 )
 # Mirrors agents/common/resolution_outcome.py semantics: only "fp" is a bad
 # label; the other reasons drop a finding that was still analytically right.
@@ -431,8 +519,16 @@ def event_type_is_sentinel_family(producer_ref: Optional[str]) -> bool:
     return producer_ref == "sentinel"
 
 
-async def _finding_producer_uuid(fingerprint: str) -> tuple[Optional[str], Optional[str]]:
-    """``(producer_uuid, producer_ref)`` for the newest finding with this fingerprint.
+async def _finding_producer_uuid(
+    fingerprint: str,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """``(producer_uuid, producer_ref, event_type)`` for the newest finding with this fingerprint.
+
+    The event_type rides along from the SAME row on purpose. It selects the
+    outcome_type family, and a second query for it could read a DIFFERENT row
+    if a finding lands in between -- booking one producer's outcome under
+    another producer's label, which is precisely the pooling this split exists
+    to prevent.
 
     ``build_resolution_outcome_args`` states the contract: *"agent_uuid must be
     the resident's own UUID so the handler snapshots that resident's EISV."*
@@ -454,7 +550,7 @@ async def _finding_producer_uuid(fingerprint: str) -> tuple[Optional[str], Optio
     db = get_db()
     async with db.acquire() as conn:
         row = await conn.fetchrow(
-            """SELECT e.agent_id AS ref, a.id AS resolved
+            """SELECT e.agent_id AS ref, a.id AS resolved, e.event_type AS event_type
                FROM audit.events e
                LEFT JOIN core.agents a ON a.id = e.agent_id
                WHERE e.event_type LIKE '%\\_finding' ESCAPE '\\'
@@ -464,8 +560,8 @@ async def _finding_producer_uuid(fingerprint: str) -> tuple[Optional[str], Optio
             fingerprint,
         )
     if row is None:
-        return None, None
-    return row["resolved"], row["ref"]
+        return None, None, None
+    return row["resolved"], row["ref"], row["event_type"]
 
 
 async def _sentinel_substrate_uuid() -> Optional[str]:
@@ -681,7 +777,7 @@ async def http_sentinel_adjudication_queue(request):
         for e in events:
             details = e.get("details") or {}
             severity = details.get("severity")
-            if severity not in _SENTINEL_BACKLOG_DEFAULT_SEVERITIES:
+            if severity not in _adjudicable_severities(e.get("event_type")):
                 continue
             fp = details.get("fingerprint")
             if not fp or fp in seen:
@@ -771,7 +867,7 @@ async def http_sentinel_adjudicate(request):
         # for its own families keeps today's behaviour byte-identical (its
         # alarm rows carry the slug 'sentinel', not a UUID) while removing the
         # mis-attribution that would fire on the first non-Sentinel finding.
-        producer_uuid, producer_ref = await _finding_producer_uuid(fingerprint)
+        producer_uuid, producer_ref, event_type = await _finding_producer_uuid(fingerprint)
         if not producer_uuid and event_type_is_sentinel_family(producer_ref):
             producer_uuid = await _sentinel_substrate_uuid()
             if not producer_uuid:
@@ -800,12 +896,20 @@ async def http_sentinel_adjudicate(request):
             )
 
         from agents.common.resolution_outcome import build_resolution_outcome_args
-        # `finding_kind` stays "sentinel_finding" deliberately: it prefixes
-        # outcome_type, and both the dedup set (_SENTINEL_ADJUDICATION_OUTCOME_TYPES)
-        # and _adjudication_progress filter on those exact strings. Per-producer
-        # outcome types must land WITH those filters, not before them.
+        # Per-family outcome_type. This lands together with the dedup set that
+        # filters on these exact strings (_SENTINEL_ADJUDICATION_OUTCOME_TYPES
+        # is now derived from the same map), which is the ordering the previous
+        # hardcoded "sentinel_finding" was holding the line for.
+        #
+        # ⛔_adjudication_progress() is deliberately NOT widened here. It reads
+        # the EISV falsifier's anchor-day count -- an externally quoted figure --
+        # and whether a doctor adjudication is anchor evidence of the same grade
+        # as a Sentinel one is an open operator call, not a side effect of
+        # closing the doctor loop. Doctor findings become closable now; they do
+        # not silently inflate that number.
+        finding_kind = _FINDING_KIND_BY_EVENT_TYPE.get(event_type, _DEFAULT_FINDING_KIND)
         args = build_resolution_outcome_args(
-            "sentinel_finding", status, fingerprint, producer_uuid, reason
+            finding_kind, status, fingerprint, producer_uuid, reason
         )
         args["detail"]["producer_ref"] = producer_ref
         args["detail"]["adjudicated_via"] = "dashboard"
