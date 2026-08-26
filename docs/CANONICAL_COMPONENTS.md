@@ -44,7 +44,9 @@ use those public contracts; it is not a deployed Core component.
 Every action in the system attributes to a **per-instance identity**: a registry UUID minted on a
 fresh process (`onboard(force_new=true)`), distinct from its public handle and its cosmetic label
 (the s22 identity ontology — *identity is the UUID; the name is social*). Identity carries a
-**proof tier** (`weak` → `strong`, strengthened by echoing a `continuity_token`), a **lineage DAG**
+**proof tier** (`weak` → `strong`; ordinary continuation echoes the returned
+`client_session_id`, while a short-lived `continuity_token` is reserved for an explicit
+same-live-process rebind), a **lineage DAG**
 (`parent_agent_id` / `spawn_reason`, declared not inferred), and a **strict write gate** — reads may
 be anonymous, writes must be accountable.
 

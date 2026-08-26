@@ -23,6 +23,10 @@ from src.services.http_request_parser import (
     validate_http_tool_content_length,
 )
 from src.mcp_compat import get_tool_input_schema
+from src.interface_contract import (
+    get_interface_contract_summary,
+    get_public_tool_definitions,
+)
 
 from src.http_routes import access
 
@@ -103,17 +107,13 @@ async def http_list_tools(request):
     try:
         if not access._check_http_auth(request, http_api_token=http_api_token):
             return access._http_unauthorized()
-        from src.tool_schemas import get_tool_definitions
-        from src.tool_modes import TOOL_MODE, should_include_tool
+        from src.tool_modes import TOOL_MODE
 
         # Get mode from query param or env default
         query_mode = request.query_params.get("mode", TOOL_MODE)
 
-        # get_tool_definitions() is synchronous, no await needed
-        mcp_tools = get_tool_definitions()
-
-        # Filter tools by mode
-        filtered_tools = [t for t in mcp_tools if should_include_tool(t.name, mode=query_mode)]
+        filtered_tools = get_public_tool_definitions(query_mode)
+        all_tools = get_public_tool_definitions("full")
 
         openai_tools = []
         for tool in filtered_tools:
@@ -130,8 +130,9 @@ async def http_list_tools(request):
             "tools": openai_tools,
             "count": len(openai_tools),
             "mode": query_mode,
-            "total_available": len(mcp_tools),
-            "note": f"Showing {len(filtered_tools)}/{len(mcp_tools)} tools in '{query_mode}' mode. Use ?mode=full for all."
+            "total_available": len(all_tools),
+            "interface_contract": get_interface_contract_summary(query_mode),
+            "note": f"Showing {len(filtered_tools)}/{len(all_tools)} tools in '{query_mode}' mode. Use ?mode=full for all."
         })
     except Exception as e:
         logger.error(f"Error listing tools: {e}", exc_info=True)
