@@ -75,6 +75,37 @@ async def execute_resolution(session: DialecticSession, resolution: Resolution) 
             "success": False,
             "warning": f"Agent status is '{meta.status}', not 'paused'. No action taken."
         }
+
+    # ⛔THE authority check for paused→active, at the transition owner.
+    #
+    # `handle_submit_synthesis` refuses a self-reviewed resolution before it
+    # gets here, and that early refusal is what produces coherent dialectic
+    # state and a legible response. It cannot be the only check. Governed
+    # review of this guard (dialectic session cfb3f0085a4d5c06, reviewer
+    # chatgpt-codex_fb8d5918, 2026-08-26) named the gap: "A handler-only read
+    # of current status also creates a time-of-check/time-of-use gap: an agent
+    # observed active for reflection could become paused before
+    # execute_resolution and then be resumed by its own verdict."
+    #
+    # This check is immediately before the mutation and reads the status this
+    # function is about to act on, so that window does not exist here. The
+    # ordering is deliberate: it sits AFTER the not-paused early return, so a
+    # reflection session on an active agent still returns the same
+    # "No action taken" it always did, and only an actual paused→active
+    # transition can reach the refusal.
+    if session.reviewer_agent_id and session.reviewer_agent_id == agent_id:
+        logger.warning(
+            "Refusing self-authorized resume for %s: reviewer == paused agent",
+            agent_id,
+        )
+        return {
+            "success": False,
+            "refused": "self_review_not_authorizing",
+            "warning": (
+                "Reviewer and paused agent are the same identity; a self-review "
+                "cannot authorize its own resume. No action taken."
+            ),
+        }
     
     # Apply conditions using condition parser
     applied_conditions = []

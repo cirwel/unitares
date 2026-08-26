@@ -1374,6 +1374,69 @@ class TestHandleSubmitSynthesis:
         facilitation.assert_awaited_once_with(session.session_id, True)
 
     @pytest.mark.asyncio
+    async def test_toctou_active_then_paused_is_caught_at_the_transition(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_pg_resolve_session, mock_context_agent,
+    ):
+        """The early handler check is not the safety boundary; the actuator is.
+
+        Governed review of this guard (session cfb3f0085a4d5c06, reviewer
+        chatgpt-codex_fb8d5918) named the window: "an agent observed active for
+        reflection could become paused before execute_resolution and then be
+        resumed by its own verdict." Here the handler check sees an ACTIVE agent
+        and lets the resolution through; `execute_resolution` then refuses on
+        authority, and that refusal must be nonterminal — no resolved write, no
+        dialectic_resolved, session left answerable.
+        """
+        from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
+
+        session = _make_session(reviewer_id="agent-paused", phase=DialecticPhase.SYNTHESIS)
+        session.synthesis_round = 1
+
+        mock_result = {"success": True, "converged": True, "phase": "resolved"}
+        mock_resolution = MagicMock()
+        mock_resolution.to_dict.return_value = {"action": "resume", "conditions": []}
+        resolve_row = AsyncMock()
+        emitted = []
+
+        async def _emit(event_type, _session, **kw):
+            emitted.append(event_type)
+
+        with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
+             patch.object(session, "submit_synthesis", return_value=mock_result), \
+             patch.object(session, "finalize_resolution", return_value=mock_resolution), \
+             patch.object(session, "check_hard_limits", return_value=(True, None)), \
+             patch(f"{DIALECTIC}.agent_pause_is_live", new_callable=AsyncMock,
+                   return_value=False), \
+             patch(f"{DIALECTIC}.execute_resolution", new_callable=AsyncMock,
+                   return_value={"success": False,
+                                 "refused": "self_review_not_authorizing",
+                                 "warning": "..."}), \
+             patch(f"{DIALECTIC}._emit_dialectic_event", new=_emit), \
+             patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", new_callable=AsyncMock), \
+             patch(f"{DIALECTIC}.pg_resolve_session", resolve_row), \
+             patch(f"{DIALECTIC}.beam_resolve", new_callable=AsyncMock, return_value=None), \
+             mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
+             mock_context_agent:
+            result = await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-paused",
+                "proposed_conditions": ["Lower threshold"],
+                "agrees": True,
+                "api_key": "key",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "SELF_REVIEW_NOT_AUTHORIZING"
+        # error_response flattens `details` into the payload.
+        assert data["detected_at"] == "resume_transition"
+        resolve_row.assert_not_awaited()
+        assert "dialectic_resolved" not in emitted
+        assert session.phase == DialecticPhase.SYNTHESIS
+        assert session.awaiting_facilitation is True
+
+    @pytest.mark.asyncio
     async def test_self_review_on_an_active_agent_still_resolves(
         self, mock_server, mock_pg_add_message, mock_pg_update_phase,
         mock_save_session, mock_pg_resolve_session, mock_context_agent,

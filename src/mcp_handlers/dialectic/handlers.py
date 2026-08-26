@@ -1053,6 +1053,31 @@ async def _apply_reviewer_reassignment(
         has_thesis = any(m.phase == "thesis" for m in session.transcript)
         session.phase = DialecticPhase.ANTITHESIS if has_thesis else DialecticPhase.THESIS
         revived = True
+    elif (
+        was_awaiting
+        and old_reviewer_id
+        and old_reviewer_id == session.paused_agent_id
+        and session.phase == DialecticPhase.SYNTHESIS
+    ):
+        # Answering a refused self-review: rewind to ANTITHESIS so the incoming
+        # independent reviewer actually gets a turn.
+        #
+        # Left at SYNTHESIS, the new reviewer inherits a session whose only
+        # antithesis and synthesis were authored by the conflicted identity.
+        # `_reviewer_verdict_pending` needs an INDEPENDENT antithesis to exist
+        # before it will hold the paused agent, so it stays False, no objection
+        # stands, and the paused agent can resolve the session with its new
+        # reviewer never having spoken — the same self-certification arriving
+        # by a longer route.
+        #
+        # Governed review required this (session cfb3f0085a4d5c06, 2026-08-26):
+        # "Reassignment must leave a newly independent reviewer a reachable
+        # phase; reopening to ANTITHESIS is safest because the prior antithesis
+        # and synthesis came from the conflicted identity and should not be
+        # treated as the independent reviewer's verdict." The self-review
+        # messages stay in the transcript as attributed audit evidence.
+        session.phase = DialecticPhase.ANTITHESIS
+        revived = True
 
     reasoning = (
         f"Reviewer reassigned: {old_reviewer_id or 'unassigned'} -> {new_reviewer_id}. "
@@ -3109,6 +3134,66 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                             result["next_step"] = next_step_resume_not_applied(
                                 execution_result.get("warning")
                             )
+
+                        # The transition owner refused on authority, not on a
+                        # transient condition. Everything below this point
+                        # commits the session as RESOLVED regardless of whether
+                        # the resume happened — which is correct for "the agent
+                        # was already active" but wrong here, because it would
+                        # close a session whose defect is MISSING INDEPENDENT
+                        # AUTHORITY and emit resolution evidence for a resume
+                        # that never occurred.
+                        #
+                        # Reachable only through the TOCTOU window: the early
+                        # handler guard saw an active agent, and it became
+                        # paused before the mutation. Governed review of this
+                        # guard required that such a rejection be nonterminal
+                        # with "no resolved session write, no condition
+                        # application, no resume calibration, and no
+                        # dialectic_resolved outcome" (session
+                        # cfb3f0085a4d5c06, 2026-08-26).
+                        if execution_result.get("refused") == "self_review_not_authorizing":
+                            session.phase = DialecticPhase.SYNTHESIS
+                            result["action"] = "facilitation_required"
+                            result["success"] = False
+                            result["converged"] = False
+                            result["blocked"] = "self_review_not_authorizing"
+                            await _set_awaiting_facilitation(
+                                session, True, reason="self_review_not_authorizing"
+                            )
+                            try:
+                                await save_session(session)
+                            except Exception as e:
+                                logger.warning(
+                                    f"Could not re-save session after a refused "
+                                    f"self-authorized resume: {e}"
+                                )
+                            return [error_response(
+                                "A self-review cannot release your own pause. The "
+                                "synthesis is recorded; resuming requires an "
+                                "independent reviewer or an operator.",
+                                error_code="SELF_REVIEW_NOT_AUTHORIZING",
+                                error_category="governance_refusal",
+                                details={
+                                    "session_id": session_id,
+                                    "reviewer_agent_id": session.reviewer_agent_id,
+                                    "paused_agent_id": session.paused_agent_id,
+                                    "awaiting_facilitation": True,
+                                    "detected_at": "resume_transition",
+                                },
+                                recovery={
+                                    "action": (
+                                        "Your synthesis WAS recorded and the session "
+                                        "remains open. An operator can assign an "
+                                        "independent reviewer with "
+                                        "dialectic(action='reassign', "
+                                        f"session_id='{session_id}', "
+                                        "new_reviewer_id='<agent_id>')."
+                                    ),
+                                    "related_tools": ["dialectic", "identity"],
+                                },
+                                arguments=arguments,
+                            )]
     
                         # Execution succeeded - mark resolved. When
                         # UNITARES_DIALECTIC_BEAM_RESOLUTION is on, BEAM owns the
