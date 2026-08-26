@@ -2755,6 +2755,32 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
             elif reviewer_takeover:
                 result["reviewer_takeover"] = reviewer_takeover
 
+            # An independent reviewer just took the slot, so the standing
+            # request for a human is answered — clear it.
+            #
+            # ⛔This was the single largest source of operator-visible
+            # facilitation load, and almost all of it was stale. Measured over
+            # the audit stream 2026-06-29 → 2026-08-26: 96 emits of
+            # `dialectic_facilitation_needed`, of which 95 carry
+            # reason=`no_independent_reviewer` at phase=thesis — set when every
+            # automated review path failed AT THAT MOMENT. A reviewer then
+            # arrives anyway (#1585 measured 76 of 80 sessions getting an
+            # on-demand independent identity, median 37.5s), claims the open
+            # slot through this path, and nothing cleared the flag. The result
+            # is a session that shows "needs a human" for the rest of its life
+            # while an independent reviewer is actively working it: of 44
+            # non-probe sessions that ended flagged, 43 HAD a reviewer.
+            #
+            # The thesis path already clears the same stale flag on its own
+            # entry and again on a successful orchestrated dispatch; this is the
+            # remaining slot-filling path that did not.
+            #
+            # Scoped to an independent claimant: a session whose reviewer is the
+            # paused agent still needs a human (#1585 item 1), and re-flagging
+            # is what the sweeper does if this reviewer later stalls.
+            if session.reviewer_agent_id and session.reviewer_agent_id != session.paused_agent_id:
+                await _set_awaiting_facilitation(session, False)
+
             # Persist to PostgreSQL
             try:
                 await pg_add_message(
