@@ -92,10 +92,9 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "available (runtime/config readiness) and accepts_host_id_from "
         "(advanced route-specific callability). consult selects among the "
         "implemented lanes without exposing host controls; Ollama and Hugging "
-        "Face route through call_model, while Claude routes through "
-        "delegate_inference. The Codex host adapter remains registered but "
-        "unwired. Listing is available before onboarding, but inference calls "
-        "require a bound identity."
+        "Face route through call_model, while the Claude and Codex host "
+        "adapters route through delegate_inference. Listing is available "
+        "before onboarding, but inference calls require a bound identity."
     ),
     "describe_inference_host": (
         "Describe one inference host by host_id, including transport, privacy, "

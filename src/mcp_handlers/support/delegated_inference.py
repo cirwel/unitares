@@ -14,7 +14,7 @@ from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from ..context import get_context_resolved_agent_id
 from ..decorators import mcp_tool
 from ..utils import error_response, require_argument, success_response
-from .host_adapter import invoke_host_adapter
+from .host_adapter import host_cli_env_var, invoke_host_adapter
 from .inference_registry import get_inference_host, sha256_text as _sha256_text
 from .inference_outcome import InferenceOutcome
 
@@ -120,8 +120,9 @@ async def run_delegated_inference(
             recovery={
                 "action": (
                     "Set UNITARES_HOST_ADAPTER_ENABLED=1, configure the "
-                    "orchestrator bearer, and install or point UNITARES_CLAUDE_CLI "
-                    "at an authenticated Claude CLI"
+                    "orchestrator bearer, and install or point "
+                    f"{host_cli_env_var(host_id) or 'the host CLI variable'} "
+                    "at an authenticated CLI for this host"
                 ),
                 "related_tools": ["describe_inference_host", "health_check"],
             },
@@ -235,7 +236,7 @@ async def run_delegated_inference(
         models_used=tuple(models_used),
         tokens_used=tokens_used,
         energy_cost=energy_cost,
-        message="Delegated inference completed via the Claude host adapter",
+        message=f"Delegated inference completed via {host.get('display_name') or host_id}",
     )
 
 

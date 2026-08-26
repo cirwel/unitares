@@ -258,8 +258,8 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
                 recovery={
                     "action": (
                         "Pick a host whose accepts_host_id_from includes call_model. "
-                        "Claude's strong-model host runs through delegate_inference; "
-                        "Codex's host adapter remains unwired."
+                        "The Claude and Codex strong-model hosts run through "
+                        "delegate_inference instead."
                     ),
                     "related_tools": ["list_inference_hosts", "delegate_inference"],
                 },

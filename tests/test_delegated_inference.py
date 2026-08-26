@@ -1,4 +1,4 @@
-"""Tests for the agent-callable long-running Claude delegation lane."""
+"""Tests for the agent-callable long-running delegation lane (Claude, Codex)."""
 
 import json
 
@@ -242,3 +242,108 @@ async def test_raw_handler_preserves_adapter_failure_error_code(monkeypatch):
 
 async def _async_value(value):
     return value
+
+
+def _codex_host(*, configured=True, available=True, accepts=None):
+    return {
+        "host_id": "codex:host-adapter",
+        "display_name": "Codex host adapter",
+        "provider_kind": "codex_host_adapter",
+        "transport": "host_adapter",
+        "configured": configured,
+        "available": available,
+        "privacy_class": "operator_authorized_external",
+        "cost_class": "subscription_backed",
+        "accountability_class": "tool_evidence",
+        "accepts_host_id_from": (
+            ["delegate_inference"] if accepts is None else accepts
+        ),
+    }
+
+
+def test_schema_accepts_the_codex_host_id():
+    """The Literal was the hard gate — the service below it is host-agnostic."""
+    from pydantic import ValidationError
+
+    from src.mcp_handlers.schemas.core import DelegateInferenceParams
+
+    assert DelegateInferenceParams(
+        prompt="hi", host_id="codex:host-adapter"
+    ).host_id == "codex:host-adapter"
+    # Claude stays the default: its CLI reports exact model ids, Codex's does not.
+    assert DelegateInferenceParams(prompt="hi").host_id == "claude:host-adapter"
+    with pytest.raises(ValidationError):
+        DelegateInferenceParams(prompt="hi", host_id="ollama:local")
+
+
+@pytest.mark.asyncio
+async def test_delegate_inference_routes_to_codex(monkeypatch):
+    """A codex call reaches the adapter and is reported as its own host.
+
+    The Codex CLI reports no model identifier, so provenance carries the
+    warning instead of a model id — the evidence must not imply otherwise.
+    """
+    monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _codex_host())
+    monkeypatch.setattr(di, "get_context_resolved_agent_id", lambda: "uuid-requester")
+    captured = {}
+
+    async def fake_invoke(host_id, prompt, **kwargs):
+        captured.update({"host_id": host_id, "prompt": prompt, **kwargs})
+        return {
+            "ok": True,
+            "host_id": host_id,
+            "text": "codex answer",
+            "exit_status": 0,
+            "agent_id": "orch-agent-2",
+            "provenance": {
+                "models_used": [],
+                "latency_ms": 900,
+                "warnings": ["CLI did not report an exact model identifier"],
+            },
+        }
+
+    async def fake_track(agent_uuid, **kwargs):
+        return None
+
+    monkeypatch.setattr(di, "invoke_host_adapter", fake_invoke)
+    monkeypatch.setattr(di, "_track_energy", fake_track)
+
+    parsed = _payload(await di.handle_delegate_inference({
+        "prompt": "review this diff",
+        "host_id": "codex:host-adapter",
+        "model": "gpt-5-codex",
+        "task_type": "review",
+    }))
+
+    assert parsed["success"] is True
+    assert parsed["response"] == "codex answer"
+    assert captured["host_id"] == "codex:host-adapter"
+    assert captured["model"] == "gpt-5-codex"
+    inference = parsed["inference"]
+    assert inference["host_id"] == "codex:host-adapter"
+    assert inference["provider_kind"] == "codex_host_adapter"
+    assert inference["model_requested"] == "gpt-5-codex"
+    assert inference["model_used"] is None
+    assert inference["models_used"] == []
+    # The message named Claude on every host before Codex was wired.
+    assert "Codex" in parsed["message"]
+    assert "Claude" not in parsed["message"]
+
+
+@pytest.mark.asyncio
+async def test_unavailable_codex_names_its_own_cli_variable(monkeypatch):
+    """Recovery text pointed at UNITARES_CLAUDE_CLI whichever host failed."""
+    monkeypatch.setattr(
+        di, "get_inference_host", lambda _host_id: _codex_host(available=False)
+    )
+    monkeypatch.setattr(di, "get_context_resolved_agent_id", lambda: "uuid-requester")
+
+    parsed = _payload(await di.handle_delegate_inference({
+        "prompt": "review this diff",
+        "host_id": "codex:host-adapter",
+    }))
+
+    assert parsed["success"] is False
+    action = parsed["recovery"]["action"]
+    assert "UNITARES_CODEX_CLI" in action
+    assert "UNITARES_CLAUDE_CLI" not in action
