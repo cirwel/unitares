@@ -1,0 +1,58 @@
+{
+  "schema_version": "eisv-ablation-pilot-manifest.v1",
+  "study_id": "eisv-incremental-value-v1",
+  "dataset_namespace": "eisv-incremental-value-v1",
+  "phase": "pilot",
+  "lifecycle_status": "pilot_provisional",
+  "created_at": "2026-08-27T11:30:00Z",
+  "collection_enabled": false,
+  "pilot_authorization": null,
+  "collection_guards": {
+    "shadow_scores_hidden_from_agent": true,
+    "collection_changes_production_policy": false,
+    "raw_prompt_or_response_required": false
+  },
+  "artifacts": {
+    "protocol_path": "docs/proposals/eisv-incremental-value-ablation-v1.md",
+    "protocol_sha256": "c1c7a326dd276cfedae98af46a68c8dd95b588c91630cbe7db8ea28513bca142",
+    "episode_schema_path": "docs/evaluations/eisv-incremental-value/eisv-ablation-episode-v2.schema.json",
+    "episode_schema_sha256": "bca7c96c552c57a23b8ca0aaa9841adae21de1a9a97de419cfbf448c2bb85e73"
+  },
+  "versions": {
+    "protocol_version": "0.2.0",
+    "access_policy_version": "eisv-incremental-access.v1",
+    "independence_resolver_version": "registry-union-v1",
+    "config_version": "pilot.1",
+    "feature_registry_version": "pilot.1",
+    "scorer_bundle_version": "pilot.1",
+    "instrument_validation_bundle_version": "instrument-pilot.1"
+  },
+  "arm_registry": {
+    "shadow_arm_ids": [
+      "a0_base_rate",
+      "a0_persistence",
+      "a1_direct_evidence",
+      "a2_behavioral_no_eisv",
+      "a3_behavioral_plus_eisv",
+      "a4_eisv_only",
+      "a5_minus_e",
+      "a5_minus_i",
+      "a5_minus_s",
+      "a5_minus_v",
+      "a6_legacy_only"
+    ],
+    "production_arm_id": "a7_production"
+  },
+  "primary_label_producer_classes": [
+    "external_system",
+    "human",
+    "server_primitive"
+  ],
+  "confirmatory_freeze": {
+    "status": "not_frozen",
+    "preregistration_sha256": null,
+    "config_sha256": null,
+    "independence_registry_sha256": null,
+    "confirmatory_start_not_before": null
+  }
+}
