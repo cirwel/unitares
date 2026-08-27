@@ -128,7 +128,7 @@ _BINDING_FLAG = "UNITARES_GOVERNED_EFFECT_BINDING"
 
 
 def _binding_enforced(effect_type) -> bool:
-    """Is effect-binding enforced for this effect type? (#1252 item 2)
+    """Return whether effect binding is enabled for this type; unset is off. (#1252 item 2)
 
     The global ``UNITARES_GOVERNED_EFFECT_BINDING`` enforces every type at
     once — flipping it requires every producer to be minting simultaneously.
