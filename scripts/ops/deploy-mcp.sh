@@ -6,12 +6,14 @@
 # DESIGN — why this is split into a one-time setup vs. a recurring deploy:
 #
 # The live MCP is a LaunchAgent. `launchctl kickstart` restarts the *process*
-# but does NOT re-read the plist file — only a RELOAD (`launchctl unload` +
-# `load`) picks up plist changes, and that reload needs a login/GUI context
-# (it fails from a sandboxed/automated shell). So changing WHERE the MCP runs
-# from is a one-time, operator-interactive step. After that the plist is
-# STATIC (always points at the deploy worktree) and recurring deploys are just
-# ff + kickstart — exactly like the lease plane, whose plist never changes.
+# but does NOT re-read the plist file — only a RELOAD (bootout + bootstrap)
+# picks up plist changes. Changing WHERE the MCP runs from remains a one-time,
+# operator-interactive step (the preflight below refuses on a wrong target).
+# Recurring deploys kickstart when the plist is unchanged, and RELOAD when it
+# changed since the last deploy-driven restart (content-hash sidecar,
+# deploy_lib_restart_service) — the plist is not assumed static any more:
+# env-flag flips are routine and a kickstart silently never loads them
+# (bit live 2026-08-27, UNITARES_GOVERNED_EFFECT_BINDING_AGENT_SPAWN).
 #
 # This script does ONLY the recurring deploy and REFUSES if the plist does not
 # already point at the deploy worktree, so it can never (a) silently no-op a
@@ -120,8 +122,18 @@ if [[ -f "$MIGRATE" ]]; then
   fi
 fi
 
-echo "[deploy-mcp] restarting $LABEL (plist is static + already points at the worktree, so kickstart suffices)"
-launchctl kickstart -k "gui/$UID_NUM/$LABEL"
+# kickstart when the plist is unchanged since the last deploy restart; full
+# RELOAD (bootout + bootstrap) when it changed — kickstart reuses the cached
+# service definition, so a plist env edit silently never loads (2026-08-27).
+# Called in a conditional (set -e would otherwise exit before the rollback):
+# a restart failure — reload refused with the old process still up, or the
+# service down after a dead bootstrap — rolls the worktree back to $PREV so
+# disk never sits ahead of whatever is (or is not) running, then fails loudly.
+if ! deploy_lib_restart_service "$TAG" "gui/$UID_NUM" "$LABEL" "$PLIST"; then
+  echo "[deploy-mcp] FAILED — restart did not complete (see above). Rolling the worktree back to ${PREV:0:8}." >&2
+  git -C "$DEPLOY" reset --hard "$PREV"
+  exit 1
+fi
 
 check_mcp_running_deploy_code() {
   local pid
