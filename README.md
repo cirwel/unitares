@@ -29,7 +29,7 @@ interface; REST, the public SDK, host adapters, and the dashboard expose the sam
 core. Plain-language definition:
 [What UNITARES is](docs/PRODUCT_DEFINITION.md).
 
-**Status:** v2.20.0, running continuously since November 2025.
+**Status:** v2.20.0. Running continuously since November 2025.
 [Evidence and limits](#evidence-and-limits) gives every claim its evidence class,
 including the open ones.
 
@@ -125,9 +125,13 @@ them.
 
 It is built for long-lived coding, research, operations, monitoring, and
 multi-agent processes that can instrument a check-in loop, and is usually not
-worth the overhead for short-lived chat turns. What it measures and where that
-measurement fails is drawn precisely in the
-[scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md).
+worth the overhead for short-lived chat turns.
+
+UNITARES is a state instrument, not an outcome oracle. It
+does not decide whether an output is correct or ethical, and it
+cannot detect deliberate concealment without independent evidence. The
+[scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md) draws that boundary
+precisely.
 
 It governs the agent's loop from outside rather than owning it, so Claude Code,
 Codex, Hermes, custom runtimes, and resident agents stay different userlands
@@ -199,7 +203,8 @@ adapters all reach the same server.
   <img src="docs/assets/flow.png" width="100%" alt="agent acts, checks in, receives state and policy, self-regulates, and leaves an audit trail">
 </div>
 
-Operators can optionally inspect four EISV coordinates covering work progress,
+Clients can treat the policy action, reason, and next step as the stable
+contract. Operators can optionally inspect four EISV coordinates covering work progress,
 evidence alignment, behavioral drift, and their balance. EISV is self-state
 estimation: a read of how the process is working, drawn from auditable,
 published heuristics. The
