@@ -1,0 +1,37 @@
+{
+  "schema_version": "eisv-ablation-power-planning.v1",
+  "status": "PLANNING_ONLY",
+  "notes": "Illustrative assumptions only. Replace with registered pilot estimates before confirmation.",
+  "scenarios": [
+    {
+      "scenario_id": "illustrative-central",
+      "alpha_two_sided": 0.05,
+      "target_power": 0.8,
+      "baseline_brier": 0.18,
+      "minimum_relative_brier_improvement": 0.05,
+      "paired_loss_difference_sd": 0.2,
+      "censored_fraction": 0.1,
+      "unscorable_fraction_of_uncensored": 0.05,
+      "primary_adverse_rate": 0.2,
+      "independence_unit_icc": 0.05,
+      "task_icc": 0.03,
+      "independence_unit_cluster_sizes": [4, 6, 8, 12],
+      "task_cluster_sizes": [2, 3, 5, 10]
+    },
+    {
+      "scenario_id": "illustrative-conservative",
+      "alpha_two_sided": 0.05,
+      "target_power": 0.9,
+      "baseline_brier": 0.18,
+      "minimum_relative_brier_improvement": 0.03,
+      "paired_loss_difference_sd": 0.24,
+      "censored_fraction": 0.15,
+      "unscorable_fraction_of_uncensored": 0.1,
+      "primary_adverse_rate": 0.15,
+      "independence_unit_icc": 0.08,
+      "task_icc": 0.05,
+      "independence_unit_cluster_sizes": [4, 6, 8, 12],
+      "task_cluster_sizes": [2, 3, 5, 10]
+    }
+  ]
+}

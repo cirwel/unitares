@@ -369,6 +369,23 @@ The instrumentation pilot runs for at least 14 calendar days and until at least
 - estimate the sample size needed to detect the minimum important effect; and
 - identify missing or unstable feature sources.
 
+The create-only pilot manifest is
+`docs/evaluations/eisv-incremental-value/pilot-manifest-v1.example.json`, checked
+against `pilot-manifest-v1.schema.json`. The checked-in example has collection
+disabled. Enabling a real store requires a separately reviewed manifest carrying
+an authorization identifier and trusted `start_not_before`; the pilot tool has no
+enable command. Manifest versions are `pilot_provisional`: they are immutable
+within one pilot store so its records stay interpretable, but they are **not** a
+claim that the confirmatory registry or scorer has been frozen.
+
+`scripts/analysis/eisv_incremental_value_pilot.py` installs that manifest and can
+atomically append only schema-valid `pilot` / `pilot_only` bundles. It writes a
+score-free structural sidecar for uniqueness, independence-registry, censoring,
+and cluster-geometry checks. Its only read command returns aggregate structural
+and outcome inventory after an immutable access receipt; it neither enumerates
+raw episodes nor pairs arm scores with outcomes. The implementation does not
+enroll a cohort, schedule collection, or query production data.
+
 The power analysis must preserve unique outcome IDs, paired arm rows, observed
 class balance, censored and unscorable trials in the denominator, and the
 observed independence-unit/task cluster geometry. It must model the paired
@@ -377,6 +394,16 @@ an effect, overwrites rows by reusing cluster IDs, or treats repeated rows as
 independent is invalid. If the minimum scientifically relevant effect is still
 unspecified at freeze, the scientific result is `INCONCLUSIVE` regardless of an
 operational stopping decision.
+
+`scripts/analysis/eisv_incremental_value_power.py` is a planning entrypoint, not
+that final power analysis. It accepts explicit sensitivity assumptions, including
+the standard deviation of the paired A3-minus-A2 Brier-loss difference, and
+inflates the episode denominator for observed cluster geometry, censoring, and
+unscorable episodes. Its output is always `PLANNING_ONLY` with no decision
+authority. The current pilot-instrumentation access policy intentionally does not
+authorize paired prediction/outcome access, so it cannot estimate that covariance.
+Before confirmatory freeze, a separately reviewed access declaration and a
+registered two-way clustered Monte Carlo analysis remain required.
 
 Pilot data is not part of the confirmatory result.
 
