@@ -730,8 +730,30 @@ async def ensure_agent_persisted(
 # =============================================================================
 
 async def set_agent_label(agent_uuid: str, label: str, session_key: Optional[str] = None) -> bool:
+    """Set display name for an agent. ``True`` iff the write succeeded.
+
+    ⛔The label written may DIFFER from the one requested: a collision with
+    another active agent renames this one to ``{label}_{uuid8}``. A bool cannot
+    express that, and callers that read "success" as "I got the name I asked
+    for" reported the requested label back to the agent while the database
+    held the renamed one. Use ``set_agent_label_resolved`` when the answer
+    feeds a response.
     """
-    Set display name for an agent.
+    return await set_agent_label_resolved(agent_uuid, label, session_key) is not None
+
+
+async def set_agent_label_resolved(
+    agent_uuid: str, label: str, session_key: Optional[str] = None
+) -> Optional[str]:
+    """Set the display name and return the label ACTUALLY applied, or ``None``.
+
+    Identical to ``set_agent_label`` except that a collision rename is
+    observable. The rename is silent by construction -- the caller asks for
+    ``Doctor`` and the row becomes ``Doctor_7dea7dcb`` -- and every resident
+    surface resolves by exact label, so a renamed resident drops out of the
+    dashboard and the tag audit while the row that took its name is presented
+    in its place. Returning the applied label is what lets the mint response
+    say so instead of echoing the request back.
 
     This is a simple UPDATE, not identity resolution.
     Label uniqueness is NOT enforced - duplicates get UUID suffix.
@@ -739,7 +761,7 @@ async def set_agent_label(agent_uuid: str, label: str, session_key: Optional[str
     If agent is not yet persisted (lazy creation), this will persist it first.
     """
     if not agent_uuid or not label:
-        return False
+        return None
 
     try:
         # Ensure agent is persisted before setting label (lazy creation support)
@@ -820,7 +842,37 @@ async def set_agent_label(agent_uuid: str, label: str, session_key: Optional[str
                     existing[:8], agent_uuid[:8], new_label,
                 )
             else:
-                logger.info(f"Label collision, using: {new_label}")
+                # The incumbent is NOT a resident. Ordinarily unremarkable --
+                # 199 of the 201 suffixed resident-prefixed labels measured on
+                # 2026-08-26 are duplicates correctly taking the suffix.
+                #
+                # But when the requested label is on the deployment's roster,
+                # the operator has declared that name reserved for a resident,
+                # and the row being renamed is very likely the resident itself:
+                # this is what a registration collides with when a name is
+                # added to the roster AFTER something else already took it.
+                # Renaming here is still the right local move -- the incumbent
+                # may be a legitimate agent a human deliberately named, and
+                # mutating it as a side effect of someone else's onboard would
+                # be worse -- but it must not be an INFO line nobody reads.
+                try:
+                    from src.grounding.class_indicator import KNOWN_RESIDENT_LABELS
+                    roster_reserved = label in KNOWN_RESIDENT_LABELS
+                except Exception:
+                    roster_reserved = False
+                if roster_reserved:
+                    logger.warning(
+                        "[RESIDENT_LABEL_TAKEN] %r is on this deployment's "
+                        "UNITARES_RESIDENTS roster but is already held by "
+                        "active agent %s, which is not a resident. Minting %s "
+                        "as %r instead. If %s is the resident, it will not "
+                        "match the roster label. Remedy: archive or rename the "
+                        "incumbent to free the name, then bootstrap again.",
+                        label, existing[:8], agent_uuid[:8], new_label,
+                        agent_uuid[:8],
+                    )
+                else:
+                    logger.info(f"Label collision, using: {new_label}")
             label = new_label
 
         # Update agent label using the proper backend method
@@ -949,8 +1001,8 @@ async def set_agent_label(agent_uuid: str, label: str, session_key: Optional[str
                 except Exception:
                     pass
 
-        return success
+        return label if success else None
 
     except Exception as e:
         logger.warning(f"Failed to set label: {e}")
-        return False
+        return None
