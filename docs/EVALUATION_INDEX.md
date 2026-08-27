@@ -231,6 +231,7 @@ UNITARES writes, nothing scheduled) — a measurement harness, not a live subsys
 | Artifact | What it does | Freshness |
 |---|---|---|
 | `scripts/analysis/outcome_inventory.py` ✓ | Read-only inventory of outcome provenance/objectivity/prior-state coverage | current (live PG) |
+| `scripts/analysis/eisv_history_structure_read.py` ✓ | Descriptive history-structure read: per-identity history-length census (measured-rows side; identity-side incl. zero-check-in buckets is `src/identity/agent_fragmentation.py`), cadence, gap-aware wall-clock 24h ACF, hour-of-day variance share printed beside its chance floor, per-identity epoch + `coherence_form` mix. E from `state_json.E`, S from the `entropy` column (the column does not hold E). No outcome labels; prints its own interpretation guards | current (live PG) |
 | `scripts/analysis/export_outcome_dataset.py` ✓ | Exports flattened `audit.outcome_events` for offline study | current |
 | `scripts/analysis/analyze_drift.py` ✓ | `trajectory_validated` convergence + decision/EISV correlation | current (JSONL path legacy) |
 | `scripts/analysis/basin_estimation.py` ✓ | Monte-Carlo EISV basin-of-attraction mapping | current (pure `governance_core`) |
