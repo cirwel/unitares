@@ -334,6 +334,56 @@ defmodule UnitaresLeasePlane.Repo do
     end
   end
 
+  # ---------- identity attestation replay ledger ----------
+
+  @doc """
+  Atomically consume one operator-issued lease attestation.
+
+  The `(issuer, jti)` primary key is the serialization point: one inserted row
+  authorizes the mutation, while zero rows means the credential was already
+  presented.  Store failures remain distinct so the identity gate can fail
+  closed as unavailable rather than mislabeling them as invalid credentials.
+  """
+  @spec consume_identity_attestation(String.t(), String.t(), integer()) ::
+          :ok | {:error, :replayed | term()}
+  def consume_identity_attestation(issuer, jti, exp)
+      when is_binary(issuer) and is_binary(jti) and is_integer(exp) do
+    sql = """
+    INSERT INTO lease_plane.consumed_identity_attestations (issuer, jti, expires_at)
+    VALUES ($1, $2, to_timestamp($3))
+    ON CONFLICT (issuer, jti) DO NOTHING
+    """
+
+    case Postgrex.query(DB, sql, [issuer, jti, exp]) do
+      {:ok, %Postgrex.Result{num_rows: 1}} -> :ok
+      {:ok, %Postgrex.Result{num_rows: 0}} -> {:error, :replayed}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @spec purge_expired_identity_attestations(pos_integer()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def purge_expired_identity_attestations(limit \\ 1_000)
+      when is_integer(limit) and limit > 0 and limit <= 10_000 do
+    sql = """
+    WITH expired AS (
+      SELECT issuer, jti
+      FROM lease_plane.consumed_identity_attestations
+      WHERE expires_at < now()
+      ORDER BY expires_at
+      LIMIT $1
+    )
+    DELETE FROM lease_plane.consumed_identity_attestations AS consumed
+    USING expired
+    WHERE consumed.issuer = expired.issuer AND consumed.jti = expired.jti
+    """
+
+    case Postgrex.query(DB, sql, [limit]) do
+      {:ok, %Postgrex.Result{num_rows: count}} -> {:ok, count}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   # ---------- renew / heartbeat ----------
 
   @doc """

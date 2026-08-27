@@ -80,11 +80,17 @@ services:
       # in .env before exposing the service beyond a local evaluation machine.
       LEASE_PLANE_BEARER_TOKEN: ${LEASE_PLANE_BEARER_TOKEN:-unitares-local-lease-plane}
       UNITARES_GOVERNANCE_URL: http://governance-mcp:8767
-      # Prove the quickstart's maintenance-surface holder attribution through
-      # governance. Other kinds stay on their existing rollout posture so the
-      # onboarding-time agent:/ presence lease has no proof bootstrap loop.
+      # Enforce request-bound operator attestations for every lease kind. The
+      # governance service signs its own onboarding-time agent:/ presence lease,
+      # so all-kind enforcement has no continuity-token bootstrap loop.
       UNITARES_LEASE_IDENTITY_BINDING: ${UNITARES_LEASE_IDENTITY_BINDING:-enforce}
-      UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS: ${UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:-maintenance}
+      UNITARES_LEASE_IDENTITY_PROOF_FORMAT: ${UNITARES_LEASE_IDENTITY_PROOF_FORMAT:-attestation}
+      # Empty means every kind; set a CSV only for a staged upgrade.
+      UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS: ${UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:-}
+      UNITARES_LEASE_TRUSTED_ISSUERS: '${UNITARES_LEASE_TRUSTED_ISSUERS:-{"unitares-local":"http://governance-mcp:8767/v1/lease-holder/keys"}}'
+      # HTTP is permitted only for the private Compose network. Remote operator
+      # key URLs should be HTTPS and should leave this override disabled.
+      UNITARES_LEASE_TRUST_ALLOW_INSECURE_HTTP: "1"
       UNITARES_HTTP_API_TOKEN: ${UNITARES_HTTP_API_TOKEN:-}
     depends_on:
       postgres-age:
@@ -130,6 +136,10 @@ services:
       # Development-only signing key so onboard() can issue the identity proof
       # exercised by the coordination demo. Override on shared/non-loopback hosts.
       UNITARES_CONTINUITY_TOKEN_SECRET: ${UNITARES_CONTINUITY_TOKEN_SECRET:-unitares-local-continuity-secret}
+      # Known development-only Ed25519 seed + issuer for the loopback quickstart.
+      # Replace the seed and choose a globally stable issuer on shared installs.
+      UNITARES_LEASE_ATTESTATION_SIGNING_KEY: ${UNITARES_LEASE_ATTESTATION_SIGNING_KEY:-AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8}
+      UNITARES_LEASE_ATTESTATION_ISSUER: ${UNITARES_LEASE_ATTESTATION_ISSUER:-unitares-local}
       UNITARES_BUILD_SHA: ${UNITARES_BUILD_SHA:-}
       # Optional: pick embedding backend. Default falls back to PG FTS if
       # sentence-transformers / model not available at runtime.

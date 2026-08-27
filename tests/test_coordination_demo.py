@@ -65,6 +65,12 @@ class FakeLeaseAPI:
                         "holder_agent_uuid": A,
                     },
                 }
+            if self.acquire_count == 3:
+                return {
+                    "ok": False,
+                    "error": "permission_denied",
+                    "reason": "identity_proof_replayed",
+                }
             if self.bad_conflict:
                 return {"ok": False, "error": "service_unavailable"}
             return {
@@ -109,6 +115,7 @@ def test_demo_proves_refusal_handoff_status_and_release(capsys) -> None:
         "/v1/lease/acquire",
         "/v1/lease/acquire",
         "/v1/lease/acquire",
+        "/v1/lease/acquire",
         "/v1/lease/handoff/offer",
         "/v1/lease/handoff/accept",
         "/v1/lease/status",
@@ -116,26 +123,52 @@ def test_demo_proves_refusal_handoff_status_and_release(capsys) -> None:
     ]
     spoof_acquire = api.calls[1][2]
     first_acquire = api.calls[2][2]
-    second_acquire = api.calls[3][2]
+    replay_acquire = api.calls[3][2]
+    second_acquire = api.calls[4][2]
     assert spoof_acquire["holder_agent_uuid"] == B
     assert first_acquire["holder_agent_uuid"] == A
+    assert replay_acquire == first_acquire
     assert second_acquire["holder_agent_uuid"] == B
     assert first_acquire["surface_id"] == second_acquire["surface_id"] == SURFACE
     assert first_acquire["holder_kind"] == "remote_heartbeat"
     assert api.calls[1][4] == PROOF_A
     assert api.calls[2][4] == PROOF_A
-    assert api.calls[3][4] == PROOF_B
-    assert api.calls[4][4] == PROOF_A
-    assert api.calls[5][4] == PROOF_B
-    assert api.calls[7][4] == PROOF_B
+    assert api.calls[3][4] == PROOF_A
+    assert api.calls[4][4] == PROOF_B
+    assert api.calls[5][4] == PROOF_A
+    assert api.calls[6][4] == PROOF_B
+    assert api.calls[8][4] == PROOF_B
 
     coordination_demo.print_receipt(result, "http://127.0.0.1:8788")
     receipt = capsys.readouterr().out
     assert "participant B refused: held_by_other" in receipt
     assert "A's proof cannot impersonate B" in receipt
     assert "governance identity binding: enforced" in receipt
+    assert "request-bound replay resistance: active" in receipt
     assert "cross-operator trust" in receipt
     assert "participating clients must acquire before acting" in receipt
+
+
+def test_demo_mints_each_mutation_and_reuses_only_the_replay_token() -> None:
+    api = FakeLeaseAPI()
+    minted = []
+
+    def mint(participant, method, path, payload):
+        minted.append((participant.agent_uuid, method, path, payload))
+        return f"lat.v1.minted-{len(minted)}.signature"
+
+    coordination_demo.run_demo(
+        api,
+        participant_a=IDENTITY_A,
+        participant_b=IDENTITY_B,
+        surface_id=SURFACE,
+        mint_attestation=mint,
+    )
+
+    assert len(minted) == 6
+    assert api.calls[2][4] == api.calls[3][4]
+    assert api.calls[1][4] != api.calls[2][4]
+    assert all(call[1] == "POST" for call in minted)
 
 
 def test_demo_releases_participant_a_when_expected_conflict_is_missing() -> None:

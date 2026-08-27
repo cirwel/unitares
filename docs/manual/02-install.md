@@ -22,10 +22,12 @@ make coordination-demo
 After cloning, `docker compose up -d --wait` is the one-command install/start;
 there is no separate schema bootstrap. `make coordination-demo` verifies the
 live coordination boundary by onboarding two participants, rejecting A's
-signed proof when it claims B's UUID, acquiring one `maintenance:/` surface,
-refusing a second holder, handing ownership over through identity-checked
-mutations, and releasing it. The proof is single-operator: it does not establish
-cross-operator trust or outcome benefit.
+request-bound attestation when it claims B's UUID, refusing replay of a captured
+attestation, acquiring one `maintenance:/` surface, refusing a second holder,
+handing ownership over through identity-checked mutations, and releasing it.
+The local proof uses one operator; the runtime supports explicitly allowlisted
+peer issuers, but this demo does not exercise a second operator or establish
+outcome benefit.
 
 Run `make demo` next to send six warmup check-ins and print the real governance
 API response shape. It verifies identity and telemetry wiring; it does not
@@ -71,6 +73,13 @@ decisions, and the dashboard loads. Then continue to
 Production hardening, bearer rotation, and remote exposure belong in
 [Operating](06-operating.md) and the
 [operator runbook](../operations/OPERATOR_RUNBOOK.md).
+
+For a shared deployment, replace the Compose-only development Ed25519 seed in
+`UNITARES_LEASE_ATTESTATION_SIGNING_KEY`, set a stable
+`UNITARES_LEASE_ATTESTATION_ISSUER`, and configure each trusted peer as an
+issuer-to-HTTPS `/v1/lease-holder/keys` entry in
+`UNITARES_LEASE_TRUSTED_ISSUERS`. Never copy a private seed or continuity token
+into the lease plane.
 
 ---
 

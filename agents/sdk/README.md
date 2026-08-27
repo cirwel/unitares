@@ -198,11 +198,16 @@ Both shapes respect `cycle_timeout_seconds` and auto-trim `log_file`.
 ## Identity-bound lease calls
 
 `LeasePlaneClient` accepts `identity_proof=<continuity_token>` on `acquire`,
-`renew`, `heartbeat`, `release`, `handoff_offer`, and `handoff_accept`. The proof
-travels only in `X-Unitares-Identity-Proof`, never in the persisted request
-body. Deployments can stage enforcement by surface kind with
-`UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS`; callers for an enforced kind must
-refresh their proof through governance before it expires.
+`renew`, `heartbeat`, `release`, `handoff_offer`, and `handoff_accept`. Before
+each mutation it exchanges that credential with governance for a short-lived
+`lat.v1` attestation bound to the exact method, path, and serialized request
+body. Only the attestation travels in `X-Unitares-Identity-Proof`; neither proof
+is persisted in the request body. A caller may pass an already-minted `lat.v1`
+token, but it is single-use: retries must mint a fresh token. `hybrid` mode
+supports mixed-version upgrades; `attestation` mode fails closed on raw proofs.
+The SDK does not forward a continuity credential when exchange fails unless an
+operator deliberately sets `identity_legacy_fallback=True` in its client config
+for that migration window.
 
 ## Not in the SDK (on purpose)
 

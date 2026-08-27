@@ -1,0 +1,25 @@
+{
+  "seed": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "issuer": "operator-a",
+  "holder_agent_uuid": "11111111-1111-4111-8111-111111111111",
+  "method": "POST",
+  "path": "/v1/lease/acquire",
+  "body": "{\"surface_id\":\"maintenance:/vector\",\"holder_agent_uuid\":\"11111111-1111-4111-8111-111111111111\",\"holder_kind\":\"remote_heartbeat\",\"ttl_s\":30}",
+  "body_sha256": "ceca388d3e7444c9d8c61a67444e8304a0f9401b8cd3b5921d449ee2ea0da056",
+  "jwks": {
+    "issuer": "operator-a",
+    "audience": "unitares-lease-plane",
+    "keys": [
+      {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "use": "sig",
+        "alg": "EdDSA",
+        "kid": "56475aa75463474c",
+        "x": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg"
+      }
+    ]
+  },
+  "token": "lat.v1.eyJhbGciOiJFZERTQSIsImF1ZCI6InVuaXRhcmVzLWxlYXNlLXBsYW5lIiwiYnNoYSI6ImNlY2EzODhkM2U3NDQ0YzlkOGM2MWE2NzQ0NGU4MzA0YTBmOTQwMWI4Y2QzYjU5MjFkNDQ5ZWUyZWEwZGEwNTYiLCJleHAiOjIwMDAwMDAwMzAsImlhdCI6MjAwMDAwMDAwMCwiaXNzIjoib3BlcmF0b3ItYSIsImp0aSI6InZlY3Rvci1ub25jZS0xIiwia2lkIjoiNTY0NzVhYTc1NDYzNDc0YyIsIm10aCI6IlBPU1QiLCJuYmYiOjIwMDAwMDAwMDAsInB0aCI6Ii92MS9sZWFzZS9hY3F1aXJlIiwic3ViIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwidHlwIjoibGVhc2UtYXR0ZXN0YXRpb24iLCJ2IjoxfQ.Cq1qw_HclWrTnP9KOERnTK35A8CW9X4Z6GG8LUUUguxLWysGcUhn_MEIoZoCPiH24ZJz5DC02UEUIT6q_mDXCQ",
+  "now": 2000000010
+}

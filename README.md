@@ -64,12 +64,13 @@ initialization. After cloning, the one-command install/start is
 `docker compose up -d --wait`.
 
 `make coordination-demo` gives the first observable result: two participants
-onboard through governance, A's signed proof is refused when it claims B's
-UUID, A acquires one governed `maintenance:/` surface, B is refused with
-`held_by_other`, and ownership moves through an identity-checked atomic handoff
-before release. The printed receipt also names the boundary: clients must
-participate in the lease plane, and this does not establish cross-operator
-trust or improved outcomes.
+onboard through governance; governance exchanges their continuity credentials
+for single-use, request-bound Ed25519 attestations; A's attestation is refused
+when it claims B's UUID; a captured attestation is refused on replay; and one
+governed `maintenance:/` surface moves through an identity-checked atomic
+handoff before release. The printed receipt also names the boundary: clients
+must participate in the lease plane, and this local demo does not exercise a
+second operator or establish improved outcomes.
 
 To exercise longitudinal state next, run `make demo`. It onboards a fresh
 process and sends six check-ins over the real API, printing the response shape,
@@ -110,8 +111,13 @@ Four optional surfaces build on that record:
 
 Identity binding is what makes stored findings, reviews, and leases attributable
 to a process rather than to a display label. The Docker quickstart enforces this
-for `maintenance:/` lease mutations; other surface kinds can be staged with
-`UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS` as their callers carry proofs.
+for every lease kind. Governance keeps the continuity credential and private
+signing key; the lease plane verifies a short-lived token bound to the exact
+method, path, and request-body hash, then consumes its nonce once. Independent
+operators federate explicitly by allowlisting issuer-to-HTTPS-key URLs through
+`UNITARES_LEASE_TRUSTED_ISSUERS`; the public key endpoint reveals no private
+credential. `legacy`, `hybrid`, and `attestation` proof modes and an optional
+surface-kind list support staged upgrades.
 Operators inspect lifecycle, state, evidence, and policy history through
 MCP/HTTP APIs and the self-hosted dashboard.
 The public [`unitares-sdk`](agents/sdk/README.md) handles connection, identity,

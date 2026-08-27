@@ -125,6 +125,28 @@ defmodule UnitaresLeasePlane.Application do
       )
     )
 
+    Application.put_env(
+      :lease_plane,
+      :identity_proof_format,
+      UnitaresLeasePlane.IdentityBinding.parse_proof_format(
+        System.get_env("UNITARES_LEASE_IDENTITY_PROOF_FORMAT")
+      )
+    )
+
+    Application.put_env(
+      :lease_plane,
+      :trusted_identity_issuers,
+      UnitaresLeasePlane.IdentityBinding.parse_trusted_issuers(
+        System.get_env("UNITARES_LEASE_TRUSTED_ISSUERS")
+      )
+    )
+
+    Application.put_env(
+      :lease_plane,
+      :allow_insecure_operator_keys,
+      System.get_env("UNITARES_LEASE_TRUST_ALLOW_INSECURE_HTTP") == "1"
+    )
+
     # dialectic-on-BEAM Slice 2: per-session liveness timers. The flag gates only
     # whether a stuck-timeout *acts* (fails the session); the watcher processes
     # and presence run regardless and are always safe.
@@ -137,6 +159,8 @@ defmodule UnitaresLeasePlane.Application do
     children =
       [
         {Postgrex, postgrex_opts()},
+        UnitaresLeasePlane.IdentityMetrics,
+        UnitaresLeasePlane.OperatorKeyCache,
         {Registry, keys: :unique, name: UnitaresLeasePlane.HolderRegistry},
         UnitaresLeasePlane.LeaseSupervisor,
         UnitaresLeasePlane.HandoffServer,
@@ -202,6 +226,12 @@ defmodule UnitaresLeasePlane.Application do
          worker: UnitaresLeasePlane.Reaper,
          interval_ms: Application.get_env(:lease_plane, :reaper_interval_ms, 30_000),
          initial_delay_ms: Application.get_env(:lease_plane, :reaper_initial_delay_ms, 1_000)},
+        {UnitaresLeasePlane.PeriodicWorker,
+         id: UnitaresLeasePlane.IdentityNonceReaper,
+         name: UnitaresLeasePlane.IdentityNonceReaperScheduler,
+         worker: UnitaresLeasePlane.IdentityNonceReaper,
+         interval_ms: 60_000,
+         initial_delay_ms: 15_000},
         {UnitaresLeasePlane.PeriodicWorker,
          id: UnitaresLeasePlane.HandoffTimeout,
          name: UnitaresLeasePlane.HandoffTimeoutScheduler,

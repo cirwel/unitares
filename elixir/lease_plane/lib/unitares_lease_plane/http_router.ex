@@ -36,7 +36,8 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   plug(UnitaresLeasePlane.SafeParsers,
     parsers: [:json],
     pass: ["application/json"],
-    json_decoder: Jason
+    json_decoder: Jason,
+    body_reader: {UnitaresLeasePlane.RawBodyReader, :read_body, []}
   )
 
   plug(:dispatch)
@@ -63,7 +64,8 @@ defmodule UnitaresLeasePlane.HTTPRouter do
         case IdentityBinding.authorize(
                params.holder_agent_uuid,
                IdentityBinding.proof_from_conn(conn),
-               surface_kind_from_id(params.surface_id)
+               surface_kind_from_id(params.surface_id),
+               IdentityBinding.request_context(conn)
              ) do
           :ok ->
             acquire_authorized(conn, params)
@@ -418,7 +420,15 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   # the payload (e.g., `db_ready`, `pool_size`, `inflight_lease_count`)
   # additively per Stability discipline; clients tolerate unknown fields.
   get "/v1/health" do
-    json(conn, 200, %{ok: true, status: "ok"})
+    json(conn, 200, %{
+      ok: true,
+      status: "ok",
+      identity_binding: %{
+        mode: Application.get_env(:lease_plane, :identity_binding_mode, :off),
+        proof_format: Application.get_env(:lease_plane, :identity_proof_format, :hybrid),
+        metrics: UnitaresLeasePlane.IdentityMetrics.snapshot()
+      }
+    })
   end
 
   # ---------- /v1/lease/status ----------
@@ -696,7 +706,8 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           IdentityBinding.authorize(
             lease.holder_agent_uuid,
             IdentityBinding.proof_from_conn(conn),
-            lease.surface_kind
+            lease.surface_kind,
+            IdentityBinding.request_context(conn)
           )
 
         {:error, :not_found} ->
@@ -719,7 +730,8 @@ defmodule UnitaresLeasePlane.HTTPRouter do
               IdentityBinding.authorize(
                 recipient_uuid,
                 IdentityBinding.proof_from_conn(conn),
-                lease.surface_kind
+                lease.surface_kind,
+                IdentityBinding.request_context(conn)
               )
 
             {:error, :not_found} ->
@@ -742,6 +754,14 @@ defmodule UnitaresLeasePlane.HTTPRouter do
       ok: false,
       error: "permission_denied",
       reason: "identity_proof_invalid"
+    })
+  end
+
+  defp identity_refusal(conn, :identity_proof_replayed) do
+    json(conn, 403, %{
+      ok: false,
+      error: "permission_denied",
+      reason: "identity_proof_replayed"
     })
   end
 
