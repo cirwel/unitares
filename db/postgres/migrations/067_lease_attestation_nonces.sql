@@ -4,8 +4,8 @@
 -- A lat.v1 credential is signed, content-bound, and short-lived, but a bearer
 -- could otherwise submit the same mutation twice before expiry.  The lease
 -- plane atomically inserts (issuer, jti) before executing the mutation;
--- conflict means replay and is refused.  Rows remain until the credential has
--- expired, after which an operator may purge them safely.
+-- conflict means replay and is refused. Rows remain for a safety margin after
+-- credential expiry so verifier/database clock skew cannot reopen replay.
 
 BEGIN;
 
@@ -23,7 +23,7 @@ CREATE INDEX IF NOT EXISTS idx_consumed_identity_attestations_expires_at
 COMMENT ON TABLE lease_plane.consumed_identity_attestations IS
     'Single-use ledger for request-bound lat.v1 lease identity attestations. '
     'INSERT ... ON CONFLICT DO NOTHING closes replay before a lease mutation; '
-    'rows may be purged only after expires_at.';
+    'rows may be purged only after expires_at plus the verifier safety margin.';
 
 INSERT INTO core.schema_migrations (version, name, applied_at)
 VALUES (67, 'lease_attestation_nonces', NOW())

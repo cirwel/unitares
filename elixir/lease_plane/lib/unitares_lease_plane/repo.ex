@@ -369,7 +369,9 @@ defmodule UnitaresLeasePlane.Repo do
     WITH expired AS (
       SELECT issuer, jti
       FROM lease_plane.consumed_identity_attestations
-      WHERE expires_at < now()
+      -- Keep consumed nonces beyond token expiry so integer-second verifier
+      -- time and modest app/database clock skew cannot reopen replay.
+      WHERE expires_at < now() - interval '60 seconds'
       ORDER BY expires_at
       LIMIT $1
     )

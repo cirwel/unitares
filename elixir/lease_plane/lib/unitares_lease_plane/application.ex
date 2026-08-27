@@ -143,8 +143,18 @@ defmodule UnitaresLeasePlane.Application do
 
     Application.put_env(
       :lease_plane,
-      :allow_insecure_operator_keys,
-      System.get_env("UNITARES_LEASE_TRUST_ALLOW_INSECURE_HTTP") == "1"
+      :identity_attestation_audience,
+      UnitaresLeasePlane.IdentityBinding.parse_attestation_audience(
+        System.get_env("UNITARES_LEASE_ATTESTATION_AUDIENCE")
+      )
+    )
+
+    Application.put_env(
+      :lease_plane,
+      :insecure_operator_key_urls,
+      UnitaresLeasePlane.IdentityBinding.parse_insecure_http_urls(
+        System.get_env("UNITARES_LEASE_TRUST_INSECURE_HTTP_URLS")
+      )
     )
 
     # dialectic-on-BEAM Slice 2: per-session liveness timers. The flag gates only

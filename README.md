@@ -111,13 +111,15 @@ Four optional surfaces build on that record:
 
 Identity binding is what makes stored findings, reviews, and leases attributable
 to a process rather than to a display label. The Docker quickstart enforces this
-for every lease kind. Governance keeps the continuity credential and private
-signing key; the lease plane verifies a short-lived token bound to the exact
-method, path, and request-body hash, then consumes its nonce once. Independent
-operators federate explicitly by allowlisting issuer-to-HTTPS-key URLs through
-`UNITARES_LEASE_TRUSTED_ISSUERS`; the public key endpoint reveals no private
-credential. `legacy`, `hybrid`, and `attestation` proof modes and an optional
-surface-kind list support staged upgrades.
+for `maintenance:/` leases; other kinds remain staged until all of their
+producers carry proofs. Governance keeps the continuity credential and private
+signing key; the lease plane verifies a short-lived token bound to a
+deployment-specific audience plus the exact method, path, and request-body
+hash, then consumes its nonce once. This version accepts one explicitly trusted
+issuer. Multi-issuer federation remains blocked until lease principals persist
+both issuer and subject; active leases must be drained before changing issuer.
+`legacy`, `hybrid`, and `attestation` proof modes
+support staged upgrades.
 Operators inspect lifecycle, state, evidence, and policy history through
 MCP/HTTP APIs and the self-hosted dashboard.
 The public [`unitares-sdk`](agents/sdk/README.md) handles connection, identity,

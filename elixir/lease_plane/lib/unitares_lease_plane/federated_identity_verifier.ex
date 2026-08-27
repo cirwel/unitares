@@ -11,7 +11,6 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
   alias UnitaresLeasePlane.{OperatorKeyCache, Repo}
 
   @prefix "lat.v1."
-  @audience "unitares-lease-plane"
   @clock_skew_seconds 5
   @max_token_bytes 8_192
   @max_jwks_bytes 65_536
@@ -22,11 +21,12 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
           :ok | {:error, :invalid | :replayed | term()}
   def verify(holder_agent_uuid, token, context)
       when is_binary(holder_agent_uuid) and is_binary(token) and is_map(context) do
-    with {:ok, claims, signing_input, signature} <- parse_token(token),
+    with {:ok, audience} <- configured_audience(),
+         {:ok, claims, signing_input, signature} <- parse_token(token),
          {:ok, issuer, kid, jwks_url} <- trusted_key_location(claims),
-         {:ok, public_key} <- resolve_public_key(issuer, kid, jwks_url),
+         {:ok, public_key} <- resolve_public_key(issuer, kid, jwks_url, audience),
          true <- valid_signature?(signing_input, signature, public_key),
-         :ok <- validate_claims(claims, holder_agent_uuid, context, current_time()),
+         :ok <- validate_claims(claims, holder_agent_uuid, context, current_time(), audience),
          :ok <- consume_nonce(issuer, claims["jti"], claims["exp"]) do
       :ok
     else
@@ -72,6 +72,14 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
 
   @doc false
   def validate_claims(claims, holder_agent_uuid, context, now \\ System.system_time(:second)) do
+    case configured_audience() do
+      {:ok, audience} -> validate_claims(claims, holder_agent_uuid, context, now, audience)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc false
+  def validate_claims(claims, holder_agent_uuid, context, now, audience) do
     iat = claims["iat"]
     nbf = claims["nbf"]
     exp = claims["exp"]
@@ -81,7 +89,7 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
       claims["v"] == 1 and
         claims["typ"] == "lease-attestation" and
         claims["alg"] == "EdDSA" and
-        claims["aud"] == @audience and
+        claims["aud"] == audience and
         claims["sub"] == holder_agent_uuid and
         claims["mth"] == context.method and
         claims["pth"] == context.path and
@@ -89,7 +97,7 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
         is_integer(iat) and is_integer(nbf) and is_integer(exp) and
         nbf == iat and exp > iat and exp - iat <= 60 and
         iat <= now + @clock_skew_seconds and
-        nbf <= now + @clock_skew_seconds and exp >= now and
+        nbf <= now + @clock_skew_seconds and exp > now and
         valid_jti?(jti)
 
     if valid, do: :ok, else: {:error, :invalid}
@@ -110,6 +118,9 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
       not is_map(trusted) or map_size(trusted) == 0 ->
         {:error, :trusted_identity_issuers_unset}
 
+      map_size(trusted) > 1 ->
+        {:error, :multiple_trusted_identity_issuers_unsupported}
+
       not Map.has_key?(trusted, issuer) ->
         {:error, :invalid}
 
@@ -118,27 +129,47 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
     end
   end
 
-  defp resolve_public_key(issuer, kid, jwks_url) do
+  defp resolve_public_key(issuer, kid, jwks_url, audience) do
     case OperatorKeyCache.get(issuer, kid) do
       public_key when is_binary(public_key) -> {:ok, public_key}
-      nil -> fetch_public_key(issuer, kid, jwks_url)
+      :missing -> {:error, :invalid}
+      nil -> fetch_public_key(issuer, kid, jwks_url, audience)
     end
   end
 
   @doc false
-  def fetch_public_key(issuer, kid, jwks_url) do
+  def fetch_public_key(issuer, kid, jwks_url, audience) do
     fetcher = Application.get_env(:lease_plane, :operator_key_fetcher)
 
     result =
       cond do
         is_function(fetcher, 3) -> fetcher.(issuer, kid, jwks_url)
-        true -> fetch_public_key_http(issuer, kid, jwks_url)
+        true -> fetch_public_key_http(issuer, jwks_url, audience)
       end
 
-    case result do
-      {:ok, public_key} when is_binary(public_key) and byte_size(public_key) == 32 ->
-        OperatorKeyCache.put(issuer, kid, public_key)
-        {:ok, public_key}
+    keyset_result =
+      case result do
+        {:ok, public_key} when is_binary(public_key) and byte_size(public_key) == 32 ->
+          {:ok, %{kid => public_key}}
+
+        {:ok, keys} when is_map(keys) and map_size(keys) in 1..64 ->
+          {:ok, keys}
+
+        other ->
+          other
+      end
+
+    case keyset_result do
+      {:ok, keys} ->
+        :ok = OperatorKeyCache.put(issuer, keys)
+
+        case Map.fetch(keys, kid) do
+          {:ok, public_key} when is_binary(public_key) and byte_size(public_key) == 32 ->
+            {:ok, public_key}
+
+          _ ->
+            {:error, :invalid}
+        end
 
       {:error, :invalid} ->
         {:error, :invalid}
@@ -148,7 +179,7 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
     end
   end
 
-  defp fetch_public_key_http(issuer, kid, jwks_url) do
+  defp fetch_public_key_http(issuer, jwks_url, audience) do
     with :ok <- validate_jwks_url(jwks_url),
          request = {String.to_charlist(jwks_url), [{~c"accept", ~c"application/json"}]},
          {:ok, {{_version, 200, _reason}, _headers, body}} <-
@@ -158,11 +189,11 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
           %{
             "ok" => true,
             "issuer" => ^issuer,
-            "audience" => @audience,
+            "audience" => ^audience,
             "keys" => keys
           }} <- Jason.decode(body),
-         {:ok, public_key} <- key_from_jwks(keys, kid) do
-      {:ok, public_key}
+         {:ok, public_keys} <- keys_from_jwks(keys) do
+      {:ok, public_keys}
     else
       {:error, :invalid} -> {:error, :invalid}
       _ -> {:error, :operator_keys_unavailable}
@@ -188,9 +219,10 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
     end
   end
 
-  defp validate_jwks_url(url) when is_binary(url) do
+  @doc false
+  def validate_jwks_url(url) when is_binary(url) do
     uri = URI.parse(url)
-    allow_http = Application.get_env(:lease_plane, :allow_insecure_operator_keys, false)
+    insecure_urls = Application.get_env(:lease_plane, :insecure_operator_key_urls, MapSet.new())
 
     cond do
       uri.userinfo != nil or uri.fragment != nil or not is_binary(uri.host) ->
@@ -199,7 +231,7 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
       uri.scheme == "https" ->
         :ok
 
-      uri.scheme == "http" and allow_http ->
+      uri.scheme == "http" and MapSet.member?(insecure_urls, url) ->
         :ok
 
       true ->
@@ -207,7 +239,7 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
     end
   end
 
-  defp validate_jwks_url(_url), do: {:error, :invalid}
+  def validate_jwks_url(_url), do: {:error, :invalid}
 
   defp key_from_jwks(keys, kid) when is_list(keys) do
     case Enum.find(keys, fn
@@ -233,6 +265,24 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
   end
 
   defp key_from_jwks(_keys, _kid), do: {:error, :invalid}
+
+  defp keys_from_jwks(keys) when is_list(keys) and length(keys) in 1..64 do
+    Enum.reduce_while(keys, {:ok, %{}}, fn
+      %{"kid" => kid} = jwk, {:ok, acc}
+      when is_binary(kid) and byte_size(kid) in 1..128 ->
+        with false <- Map.has_key?(acc, kid),
+             {:ok, public_key} <- key_from_jwks([jwk], kid) do
+          {:cont, {:ok, Map.put(acc, kid, public_key)}}
+        else
+          _ -> {:halt, {:error, :invalid}}
+        end
+
+      _jwk, _acc ->
+        {:halt, {:error, :invalid}}
+    end)
+  end
+
+  defp keys_from_jwks(_keys), do: {:error, :invalid}
 
   defp valid_signature?(signing_input, signature, public_key) do
     :crypto.verify(:eddsa, :none, signing_input, signature, [public_key, :ed25519])
@@ -261,6 +311,13 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifier do
     case Application.get_env(:lease_plane, :identity_clock) do
       clock when is_function(clock, 0) -> clock.()
       _ -> System.system_time(:second)
+    end
+  end
+
+  defp configured_audience do
+    case Application.get_env(:lease_plane, :identity_attestation_audience) do
+      audience when is_binary(audience) and byte_size(audience) in 1..256 -> {:ok, audience}
+      _ -> {:error, :identity_attestation_audience_unset}
     end
   end
 

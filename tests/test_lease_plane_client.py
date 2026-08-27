@@ -264,7 +264,7 @@ def test_mixed_version_exchange_failure_falls_back_to_legacy_proof() -> None:
     assert seen[-1].headers["X-Unitares-Identity-Proof"] == raw_proof
 
 
-def test_exchange_failure_does_not_forward_continuity_proof_by_default() -> None:
+def test_exchange_failure_does_not_send_mutation_by_default() -> None:
     holder = uuid4()
     raw_proof = "v1.private-continuity.signature"
     seen: list[LeaseHTTPRequest] = []
@@ -286,14 +286,78 @@ def test_exchange_failure_does_not_forward_continuity_proof_by_default() -> None
         holder_kind="remote_heartbeat",
         ttl_s=30,
     )
-    LeasePlaneClient(transport=transport).acquire(
+    result = LeasePlaneClient(transport=transport).acquire(
         request, identity_proof=raw_proof
     )
 
-    mutation = seen[-1]
-    assert "X-Unitares-Identity-Proof" not in mutation.headers
-    assert raw_proof not in str(mutation.headers)
-    assert raw_proof not in str(mutation.json_body)
+    assert isinstance(result, AcquireServiceUnavailable)
+    assert result.reason == "identity_attestation_unavailable"
+    assert len(seen) == 1
+    assert seen[0].url.endswith("/v1/lease-holder/attest")
+
+
+def test_remote_http_governance_url_never_receives_continuity_proof() -> None:
+    raw_proof = "v1.private-continuity.signature"
+    seen: list[LeaseHTTPRequest] = []
+
+    def transport(request: LeaseHTTPRequest):
+        seen.append(request)
+        raise AssertionError(
+            "unsafe credential target must be rejected before transport"
+        )
+
+    request = AcquireRequest(
+        surface_id="maintenance:/unsafe-exchange",
+        holder_agent_uuid=uuid4(),
+        holder_class="process_instance",
+        holder_kind="remote_heartbeat",
+        ttl_s=30,
+    )
+    config = LeasePlaneClientConfig(governance_url="http://remote.example:8767")
+    result = LeasePlaneClient(config, transport=transport).acquire(
+        request, identity_proof=raw_proof
+    )
+
+    assert isinstance(result, AcquireServiceUnavailable)
+    assert result.reason == "identity_attestation_unavailable"
+    assert seen == []
+
+
+def test_explicit_internal_http_host_can_receive_exchange() -> None:
+    raw_proof = "v1.private-continuity.signature"
+    signed = "lat.v1.bound.signature"
+    seen: list[LeaseHTTPRequest] = []
+    holder = uuid4()
+
+    def transport(request: LeaseHTTPRequest):
+        seen.append(request)
+        if request.url.endswith("/v1/lease-holder/attest"):
+            return {"ok": True, "attestation": signed}
+        return {
+            "ok": True,
+            "lease": _lease_payload(holder_agent_uuid=holder),
+            "idempotent": False,
+            "drift_warning": [],
+        }
+
+    config = LeasePlaneClientConfig(
+        governance_url="http://governance-mcp:8767",
+        insecure_governance_hosts=("governance-mcp",),
+    )
+    request = AcquireRequest(
+        surface_id="maintenance:/internal-exchange",
+        holder_agent_uuid=holder,
+        holder_class="process_instance",
+        holder_kind="remote_heartbeat",
+        ttl_s=30,
+    )
+    result = LeasePlaneClient(config, transport=transport).acquire(
+        request, identity_proof=raw_proof
+    )
+
+    assert isinstance(result, AcquireOk)
+    assert seen[0].url == "http://governance-mcp:8767/v1/lease-holder/attest"
+    assert seen[1].headers["X-Unitares-Identity-Proof"] == signed
 
 
 def test_acquire_held_by_other_parses_holder_and_expiry():

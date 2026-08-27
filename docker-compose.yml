@@ -80,17 +80,16 @@ services:
       # in .env before exposing the service beyond a local evaluation machine.
       LEASE_PLANE_BEARER_TOKEN: ${LEASE_PLANE_BEARER_TOKEN:-unitares-local-lease-plane}
       UNITARES_GOVERNANCE_URL: http://governance-mcp:8767
-      # Enforce request-bound operator attestations for every lease kind. The
-      # governance service signs its own onboarding-time agent:/ presence lease,
-      # so all-kind enforcement has no continuity-token bootstrap loop.
+      # Enforce request-bound operator attestations only for the maintenance
+      # surface exercised by the coordination demo. Expand this list only after
+      # each producer for a kind has been migrated to carry identity proof.
       UNITARES_LEASE_IDENTITY_BINDING: ${UNITARES_LEASE_IDENTITY_BINDING:-enforce}
       UNITARES_LEASE_IDENTITY_PROOF_FORMAT: ${UNITARES_LEASE_IDENTITY_PROOF_FORMAT:-attestation}
-      # Empty means every kind; set a CSV only for a staged upgrade.
-      UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS: ${UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:-}
+      UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS: ${UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:-maintenance}
+      UNITARES_LEASE_ATTESTATION_AUDIENCE: ${UNITARES_LEASE_ATTESTATION_AUDIENCE:-unitares-local-lease-plane}
       UNITARES_LEASE_TRUSTED_ISSUERS: '${UNITARES_LEASE_TRUSTED_ISSUERS:-{"unitares-local":"http://governance-mcp:8767/v1/lease-holder/keys"}}'
-      # HTTP is permitted only for the private Compose network. Remote operator
-      # key URLs should be HTTPS and should leave this override disabled.
-      UNITARES_LEASE_TRUST_ALLOW_INSECURE_HTTP: "1"
+      # Exact private-Compose exception; every other HTTP key URL is rejected.
+      UNITARES_LEASE_TRUST_INSECURE_HTTP_URLS: http://governance-mcp:8767/v1/lease-holder/keys
       UNITARES_HTTP_API_TOKEN: ${UNITARES_HTTP_API_TOKEN:-}
     depends_on:
       postgres-age:
@@ -140,6 +139,10 @@ services:
       # Replace the seed and choose a globally stable issuer on shared installs.
       UNITARES_LEASE_ATTESTATION_SIGNING_KEY: ${UNITARES_LEASE_ATTESTATION_SIGNING_KEY:-AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8}
       UNITARES_LEASE_ATTESTATION_ISSUER: ${UNITARES_LEASE_ATTESTATION_ISSUER:-unitares-local}
+      UNITARES_LEASE_ATTESTATION_AUDIENCE: ${UNITARES_LEASE_ATTESTATION_AUDIENCE:-unitares-local-lease-plane}
+      # SDK continuity-proof exchanges may use HTTP only for this exact
+      # private-Compose hostname (loopback remains allowed automatically).
+      UNITARES_LEASE_INSECURE_GOVERNANCE_HOSTS: governance-mcp
       UNITARES_BUILD_SHA: ${UNITARES_BUILD_SHA:-}
       # Optional: pick embedding backend. Default falls back to PG FTS if
       # sentence-transformers / model not available at runtime.

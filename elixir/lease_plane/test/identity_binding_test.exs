@@ -85,6 +85,23 @@ defmodule UnitaresLeasePlane.IdentityBindingTest do
     assert_raise ArgumentError, fn ->
       IdentityBinding.parse_trusted_issuers(~s({"operator-a":"file:///tmp/key"}))
     end
+
+    assert_raise ArgumentError, fn ->
+      IdentityBinding.parse_trusted_issuers(
+        ~s({"operator-a":"https://a.example/keys","operator-b":"https://b.example/keys"})
+      )
+    end
+
+    assert IdentityBinding.parse_attestation_audience(" plane-a ") == "plane-a"
+    assert_raise ArgumentError, fn -> IdentityBinding.parse_attestation_audience("two words") end
+
+    assert IdentityBinding.parse_insecure_http_urls(
+             "http://governance-mcp:8767/v1/lease-holder/keys"
+           ) == MapSet.new(["http://governance-mcp:8767/v1/lease-holder/keys"])
+
+    assert_raise ArgumentError, fn ->
+      IdentityBinding.parse_insecure_http_urls("https://operator.example/keys")
+    end
   end
 
   test "attestation-only mode refuses legacy proof before any governance call" do

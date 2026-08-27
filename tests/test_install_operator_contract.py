@@ -77,6 +77,15 @@ def test_tier_one_quickstart_is_release_pinned_and_coordination_complete() -> No
     assert "UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:" in compose
     assert "UNITARES_LEASE_IDENTITY_PROOF_FORMAT:" in compose
     assert "UNITARES_LEASE_TRUSTED_ISSUERS:" in compose
+    assert (
+        "UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS: "
+        "${UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:-maintenance}"
+    ) in compose
+    assert len(
+        re.findall(r"^      UNITARES_LEASE_ATTESTATION_AUDIENCE:", compose, re.MULTILINE)
+    ) == 2
+    assert "UNITARES_LEASE_TRUST_INSECURE_HTTP_URLS:" in compose
+    assert "UNITARES_LEASE_TRUST_ALLOW_INSECURE_HTTP:" not in compose
     assert "UNITARES_LEASE_ATTESTATION_SIGNING_KEY:" in compose
     assert "request-bound" in readme
     assert "refusing replay" in manual

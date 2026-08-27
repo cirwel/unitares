@@ -25,9 +25,10 @@ live coordination boundary by onboarding two participants, rejecting A's
 request-bound attestation when it claims B's UUID, refusing replay of a captured
 attestation, acquiring one `maintenance:/` surface, refusing a second holder,
 handing ownership over through identity-checked mutations, and releasing it.
-The local proof uses one operator; the runtime supports explicitly allowlisted
-peer issuers, but this demo does not exercise a second operator or establish
-outcome benefit.
+The local proof uses one operator and a deployment-specific audience. This
+version intentionally permits one trusted issuer because lease rows do not yet
+persist issuer-qualified principals; it does not establish cross-operator trust
+or outcome benefit.
 
 Run `make demo` next to send six warmup check-ins and print the real governance
 API response shape. It verifies identity and telemetry wiring; it does not

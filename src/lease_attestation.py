@@ -44,10 +44,10 @@ except Exception:  # pragma: no cover - minimal installs intentionally omit it
 
 
 LEASE_ATTESTATION_PREFIX = "lat.v1."
-LEASE_ATTESTATION_AUDIENCE = "unitares-lease-plane"
 LEASE_ATTESTATION_VERSION = 1
 LEASE_ATTESTATION_SIGNING_KEY_ENV = "UNITARES_LEASE_ATTESTATION_SIGNING_KEY"
 LEASE_ATTESTATION_ISSUER_ENV = "UNITARES_LEASE_ATTESTATION_ISSUER"
+LEASE_ATTESTATION_AUDIENCE_ENV = "UNITARES_LEASE_ATTESTATION_AUDIENCE"
 DEFAULT_TTL_SECONDS = 30
 CLOCK_SKEW_SECONDS = 5
 
@@ -108,6 +108,19 @@ def configured_issuer(issuer: str | None = None) -> str:
     return value
 
 
+def configured_audience(audience: str | None = None) -> str:
+    """Return the exact lease-plane deployment this token may authorize."""
+    value = audience or os.getenv(LEASE_ATTESTATION_AUDIENCE_ENV)
+    if not isinstance(value, str) or not value.strip():
+        raise LeaseAttestationError(
+            f"{LEASE_ATTESTATION_AUDIENCE_ENV} is required to mint attestations"
+        )
+    value = value.strip()
+    if len(value) > 256 or any(ch.isspace() for ch in value):
+        raise LeaseAttestationError("lease-attestation audience is invalid")
+    return value
+
+
 def _public_bytes(public_key: "Ed25519PublicKey") -> bytes:
     return public_key.public_bytes_raw()
 
@@ -117,15 +130,19 @@ def key_id(public_key: "Ed25519PublicKey") -> str:
 
 
 def export_public_jwks(
-    *, signing_key: "Ed25519PrivateKey" | None = None, issuer: str | None = None
+    *,
+    signing_key: "Ed25519PrivateKey" | None = None,
+    issuer: str | None = None,
+    audience: str | None = None,
 ) -> dict[str, Any]:
     """Return the public operator key document consumed by peer lease planes."""
     key = signing_key or load_signing_key()
     canonical_issuer = configured_issuer(issuer)
+    canonical_audience = configured_audience(audience)
     public_key = key.public_key()
     return {
         "issuer": canonical_issuer,
-        "audience": LEASE_ATTESTATION_AUDIENCE,
+        "audience": canonical_audience,
         "keys": [
             {
                 "kty": "OKP",
@@ -175,6 +192,7 @@ def mint_lease_attestation(
     body_sha256: str,
     signing_key: "Ed25519PrivateKey" | None = None,
     issuer: str | None = None,
+    audience: str | None = None,
     now: int | None = None,
     ttl_seconds: int = DEFAULT_TTL_SECONDS,
     jti: str | None = None,
@@ -182,6 +200,7 @@ def mint_lease_attestation(
     """Mint one short-lived, content-bound lease mutation authorization."""
     key = signing_key or load_signing_key()
     canonical_issuer = configured_issuer(issuer)
+    canonical_audience = configured_audience(audience)
     try:
         holder = str(uuid.UUID(str(holder_agent_uuid)))
     except (TypeError, ValueError, AttributeError) as exc:
@@ -202,7 +221,7 @@ def mint_lease_attestation(
         "kid": key_id(key.public_key()),
         "iss": canonical_issuer,
         "sub": holder,
-        "aud": LEASE_ATTESTATION_AUDIENCE,
+        "aud": canonical_audience,
         "mth": validate_method(method),
         "pth": validate_path(path),
         "bsha": validate_body_sha256(body_sha256),
@@ -232,6 +251,7 @@ def verify_lease_attestation(
     method: str | None = None,
     path: str | None = None,
     body_sha256: str | None = None,
+    audience: str | None = None,
     now: int | None = None,
 ) -> VerifiedLeaseAttestation | None:
     """Reference verifier used by tests and non-BEAM integrations."""
@@ -239,6 +259,11 @@ def verify_lease_attestation(
         LEASE_ATTESTATION_PREFIX
     ):
         return None
+    try:
+        expected_audience = configured_audience(audience)
+    except LeaseAttestationError:
+        return None
+
     parts = token[len(LEASE_ATTESTATION_PREFIX) :].split(".")
     if len(parts) != 2:
         return None
@@ -252,7 +277,7 @@ def verify_lease_attestation(
         expected_issuer = jwks.get("issuer")
         if (
             claims.get("iss") != expected_issuer
-            or jwks.get("audience") != LEASE_ATTESTATION_AUDIENCE
+            or jwks.get("audience") != expected_audience
         ):
             return None
         jwk = next(
@@ -283,7 +308,7 @@ def verify_lease_attestation(
         claims.get("v") != LEASE_ATTESTATION_VERSION
         or claims.get("typ") != "lease-attestation"
         or claims.get("alg") != "EdDSA"
-        or claims.get("aud") != LEASE_ATTESTATION_AUDIENCE
+        or claims.get("aud") != expected_audience
         or not isinstance(iat, int)
         or not isinstance(nbf, int)
         or not isinstance(exp, int)
@@ -292,7 +317,7 @@ def verify_lease_attestation(
         or exp - iat > 60
         or iat > ts + CLOCK_SKEW_SECONDS
         or nbf > ts + CLOCK_SKEW_SECONDS
-        or exp < ts
+        or exp <= ts
         or not isinstance(jti, str)
         or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", jti)
     ):

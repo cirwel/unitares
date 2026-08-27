@@ -128,6 +128,7 @@ async def test_attest_exchanges_proof_for_request_bound_token_without_echo(monke
     seed = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
     monkeypatch.setenv("UNITARES_LEASE_ATTESTATION_SIGNING_KEY", seed)
     monkeypatch.setenv("UNITARES_LEASE_ATTESTATION_ISSUER", "operator-a")
+    monkeypatch.setenv("UNITARES_LEASE_ATTESTATION_AUDIENCE", "test-lease-plane")
     payload = {
         "identity_proof": proof,
         "holder_agent_uuid": HOLDER,
@@ -162,6 +163,7 @@ async def test_attest_exchanges_proof_for_request_bound_token_without_echo(monke
         method="POST",
         path="/v1/lease/acquire",
         body_sha256="a" * 64,
+        audience="test-lease-plane",
     ) is not None
 
 
@@ -172,6 +174,7 @@ async def test_attest_rejects_mismatch_and_invalid_request_claims(monkeypatch) -
         "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
     )
     monkeypatch.setenv("UNITARES_LEASE_ATTESTATION_ISSUER", "operator-a")
+    monkeypatch.setenv("UNITARES_LEASE_ATTESTATION_AUDIENCE", "test-lease-plane")
     base = {
         "identity_proof": "v1.proof.signature",
         "holder_agent_uuid": HOLDER,

@@ -8,6 +8,7 @@ handler paths that would block the anyio task group.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import logging
 import os
@@ -71,6 +72,9 @@ class LeasePlaneClientConfig:
     # Default false: a failed exchange must not copy the continuity credential
     # into the lease plane. Enable only for an intentional legacy/hybrid window.
     identity_legacy_fallback: bool = False
+    # Plain HTTP may receive a continuity credential only on loopback or at one
+    # of these exact hostnames. HTTPS remains the default for every remote host.
+    insecure_governance_hosts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -203,6 +207,61 @@ def _wire_json_bytes(json_body: dict[str, Any] | None) -> bytes | None:
     return json.dumps(json_body, separators=(",", ":")).encode("utf-8")
 
 
+def _governance_credential_base(config: LeasePlaneClientConfig) -> str | None:
+    """Resolve a governance URL without sending credentials over remote HTTP."""
+    raw = (
+        (
+            config.governance_url
+            or os.getenv("UNITARES_GOVERNANCE_URL")
+            or "http://127.0.0.1:8767"
+        )
+        .strip()
+        .rstrip("/")
+    )
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+        host = (parsed.hostname or "").lower()
+        if (
+            not host
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or parsed.scheme not in {"http", "https"}
+        ):
+            return None
+        if parsed.scheme == "https":
+            return raw
+
+        loopback = host == "localhost"
+        if not loopback:
+            try:
+                loopback = ipaddress.ip_address(host).is_loopback
+            except ValueError:
+                loopback = False
+
+        configured_hosts = {
+            item.strip().lower()
+            for item in os.getenv("UNITARES_LEASE_INSECURE_GOVERNANCE_HOSTS", "").split(
+                ","
+            )
+            if item.strip()
+        }
+        configured_hosts.update(
+            item.strip().lower() for item in config.insecure_governance_hosts
+        )
+        if loopback or host in configured_hosts:
+            return raw
+    except (TypeError, ValueError):
+        return None
+
+    logger.warning(
+        "governance credential exchange refused insecure HTTP host=%s",
+        host or "invalid",
+    )
+    return None
+
+
 class LeasePlaneClient:
     """Contract client for lease acquire/status/renew/release calls."""
 
@@ -235,6 +294,7 @@ class LeasePlaneClient:
         sleep: Callable[[float], None] | None = None,
         rng: Callable[[], float] | None = None,
         identity_proof: str | None = None,
+        identity_proof_factory: Callable[[], str] | None = None,
     ) -> AcquireResult:
         """Acquire with jittered exponential backoff on `held_by_other`.
 
@@ -256,6 +316,9 @@ class LeasePlaneClient:
             ceiling_s: maximum backoff per attempt (default 5.0s).
             sleep: injectable sleep for test determinism (default time.sleep).
             rng: injectable [0,1) random for test determinism (default random.random).
+            identity_proof_factory: creates a fresh already-minted attestation
+                for each attempt. Use this instead of ``identity_proof`` when
+                retrying with single-use ``lat.v1`` credentials.
 
         Raises:
             ValueError: max_attempts < 1, or floor_s > ceiling_s
@@ -267,6 +330,17 @@ class LeasePlaneClient:
             raise ValueError(
                 f"floor_s ({floor_s}) must be <= ceiling_s ({ceiling_s})"
             )
+        if identity_proof is not None and identity_proof_factory is not None:
+            raise ValueError("set identity_proof or identity_proof_factory, not both")
+        if (
+            max_attempts > 1
+            and identity_proof_factory is None
+            and isinstance(identity_proof, str)
+            and identity_proof.startswith("lat.v1.")
+        ):
+            raise ValueError(
+                "acquire_with_retry requires identity_proof_factory for single-use lat.v1 tokens"
+            )
 
         # AcquireHeldByOther is the only retry-triggering result type;
         # AcquireOk no longer needed here (NIT-1 fix from review pass).
@@ -275,7 +349,17 @@ class LeasePlaneClient:
         sleep_fn = sleep or time.sleep
         rand_fn = rng or random.random
 
-        result: AcquireResult = self.acquire(request, identity_proof=identity_proof)
+        def next_identity_proof() -> str | None:
+            if identity_proof_factory is not None:
+                generated = identity_proof_factory()
+                if not isinstance(generated, str) or not generated:
+                    raise ValueError("identity_proof_factory must return a non-empty string")
+                return generated
+            return identity_proof
+
+        result: AcquireResult = self.acquire(
+            request, identity_proof=next_identity_proof()
+        )
         attempt = 1
         while attempt < max_attempts and isinstance(result, AcquireHeldByOther):
             # Full-jitter exponential backoff. Cap exponent to avoid overflow.
@@ -286,7 +370,7 @@ class LeasePlaneClient:
             hint_floor = (result.retry_after_hint_ms or 0) / 1000.0
             backoff = max(backoff, hint_floor)
             sleep_fn(backoff)
-            result = self.acquire(request, identity_proof=identity_proof)
+            result = self.acquire(request, identity_proof=next_identity_proof())
             attempt += 1
         return result
 
@@ -501,11 +585,9 @@ class LeasePlaneClient:
             logger.warning("effect-grant mint skipped: payload not canonical (%s)", e)
             return None
 
-        gov_base = (
-            self.config.governance_url
-            or os.getenv("UNITARES_GOVERNANCE_URL")
-            or "http://127.0.0.1:8767"
-        ).rstrip("/")
+        gov_base = _governance_credential_base(self.config)
+        if gov_base is None:
+            return None
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         api_token = self.config.governance_api_token or os.getenv("UNITARES_HTTP_API_TOKEN")
         if api_token:
@@ -628,6 +710,12 @@ class LeasePlaneClient:
             )
             if request_proof:
                 headers["X-Unitares-Identity-Proof"] = request_proof
+            else:
+                return {
+                    "ok": False,
+                    "error": "service_unavailable",
+                    "reason": "identity_attestation_unavailable",
+                }
 
         request = LeaseHTTPRequest(
             method=method,
@@ -689,11 +777,9 @@ class LeasePlaneClient:
             return identity_proof
 
         body = _wire_json_bytes(json_body) or b""
-        gov_base = (
-            self.config.governance_url
-            or os.getenv("UNITARES_GOVERNANCE_URL")
-            or "http://127.0.0.1:8767"
-        ).rstrip("/")
+        gov_base = _governance_credential_base(self.config)
+        if gov_base is None:
+            return identity_proof if self.config.identity_legacy_fallback else None
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         api_token = self.config.governance_api_token or os.getenv("UNITARES_HTTP_API_TOKEN")
         if api_token:

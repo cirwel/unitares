@@ -142,13 +142,28 @@ defmodule UnitaresLeasePlane.IdentityBinding do
     end
   end
 
+  @spec parse_attestation_audience(String.t() | nil) :: String.t() | nil
+  def parse_attestation_audience(nil), do: nil
+  def parse_attestation_audience(""), do: nil
+
+  def parse_attestation_audience(value) when is_binary(value) do
+    audience = String.trim(value)
+
+    if byte_size(audience) in 1..256 and not String.match?(audience, ~r/\s/) do
+      audience
+    else
+      raise ArgumentError,
+            "UNITARES_LEASE_ATTESTATION_AUDIENCE must be non-empty text without whitespace"
+    end
+  end
+
   @spec parse_trusted_issuers(String.t() | nil) :: %{optional(String.t()) => String.t()}
   def parse_trusted_issuers(nil), do: %{}
   def parse_trusted_issuers(""), do: %{}
 
   def parse_trusted_issuers(value) when is_binary(value) do
     case Jason.decode(value) do
-      {:ok, %{} = issuers} when map_size(issuers) <= 64 ->
+      {:ok, %{} = issuers} when map_size(issuers) <= 1 ->
         if Enum.all?(issuers, fn {issuer, url} ->
              is_binary(issuer) and byte_size(issuer) in 1..256 and
                not String.match?(issuer, ~r/\s/) and
@@ -162,7 +177,26 @@ defmodule UnitaresLeasePlane.IdentityBinding do
 
       _ ->
         raise ArgumentError,
-              "UNITARES_LEASE_TRUSTED_ISSUERS must be a JSON object with at most 64 entries"
+              "UNITARES_LEASE_TRUSTED_ISSUERS supports at most one issuer until lease principals persist issuer + subject"
+    end
+  end
+
+  @spec parse_insecure_http_urls(String.t() | nil) :: MapSet.t(String.t())
+  def parse_insecure_http_urls(nil), do: MapSet.new()
+  def parse_insecure_http_urls(""), do: MapSet.new()
+
+  def parse_insecure_http_urls(value) when is_binary(value) do
+    urls =
+      value
+      |> String.split(",", trim: true)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    if length(urls) <= 8 and Enum.all?(urls, &valid_insecure_http_url?/1) do
+      MapSet.new(urls)
+    else
+      raise ArgumentError,
+            "UNITARES_LEASE_TRUST_INSECURE_HTTP_URLS must list at most eight exact HTTP JWKS URLs"
     end
   end
 
@@ -268,6 +302,15 @@ defmodule UnitaresLeasePlane.IdentityBinding do
 
     uri.scheme in ["http", "https"] and is_binary(uri.host) and uri.host != "" and
       is_nil(uri.userinfo) and is_nil(uri.fragment)
+  rescue
+    _ -> false
+  end
+
+  defp valid_insecure_http_url?(url) do
+    uri = URI.parse(url)
+
+    uri.scheme == "http" and is_binary(uri.host) and uri.host != "" and
+      is_nil(uri.userinfo) and is_nil(uri.fragment) and is_nil(uri.query)
   rescue
     _ -> false
   end

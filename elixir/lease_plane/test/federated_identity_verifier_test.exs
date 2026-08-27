@@ -15,7 +15,9 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifierTest do
       trusted: Application.get_env(:lease_plane, :trusted_identity_issuers),
       fetcher: Application.get_env(:lease_plane, :operator_key_fetcher),
       consumer: Application.get_env(:lease_plane, :identity_nonce_consumer),
-      clock: Application.get_env(:lease_plane, :identity_clock)
+      clock: Application.get_env(:lease_plane, :identity_clock),
+      audience: Application.get_env(:lease_plane, :identity_attestation_audience),
+      insecure_urls: Application.get_env(:lease_plane, :insecure_operator_key_urls)
     }
 
     Application.put_env(:lease_plane, :trusted_identity_issuers, %{
@@ -43,6 +45,11 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifierTest do
     end)
 
     Application.put_env(:lease_plane, :identity_clock, fn -> vector["now"] end)
+    Application.put_env(
+      :lease_plane,
+      :identity_attestation_audience,
+      vector["jwks"]["audience"]
+    )
 
     OperatorKeyCache.evict_issuer(vector["issuer"])
 
@@ -51,6 +58,8 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifierTest do
       restore_env(:operator_key_fetcher, previous.fetcher)
       restore_env(:identity_nonce_consumer, previous.consumer)
       restore_env(:identity_clock, previous.clock)
+      restore_env(:identity_attestation_audience, previous.audience)
+      restore_env(:insecure_operator_key_urls, previous.insecure_urls)
     end)
 
     {:ok, vector: vector}
@@ -98,6 +107,14 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifierTest do
                claims,
                vector["holder_agent_uuid"],
                context,
+               2_000_000_030
+             )
+
+    assert {:error, :invalid} =
+             FederatedIdentityVerifier.validate_claims(
+               claims,
+               vector["holder_agent_uuid"],
+               context,
                2_000_000_031
              )
 
@@ -139,6 +156,20 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifierTest do
              )
   end
 
+  test "runtime configuration also refuses multiple trusted issuers", %{vector: vector} do
+    Application.put_env(:lease_plane, :trusted_identity_issuers, %{
+      vector["issuer"] => "https://operator-a.example/keys",
+      "operator-b" => "https://operator-b.example/keys"
+    })
+
+    assert {:error, :multiple_trusted_identity_issuers_unsupported} =
+             FederatedIdentityVerifier.verify(
+               vector["holder_agent_uuid"],
+               vector["token"],
+               request_context(vector)
+             )
+  end
+
   test "HTTPS operator keys require CA and hostname verification" do
     https_options =
       FederatedIdentityVerifier.http_options("https://operator-a.example/v1/lease-holder/keys")
@@ -156,6 +187,85 @@ defmodule UnitaresLeasePlane.FederatedIdentityVerifierTest do
              ),
              :ssl
            )
+  end
+
+  test "HTTP key retrieval is limited to an exact configured internal URL" do
+    local_url = "http://governance-mcp:8767/v1/lease-holder/keys"
+    Application.put_env(:lease_plane, :insecure_operator_key_urls, MapSet.new([local_url]))
+
+    assert :ok = FederatedIdentityVerifier.validate_jwks_url(local_url)
+
+    assert {:error, :invalid} =
+             FederatedIdentityVerifier.validate_jwks_url(
+               "http://remote.example/v1/lease-holder/keys"
+             )
+
+    assert :ok =
+             FederatedIdentityVerifier.validate_jwks_url(
+               "https://remote.example/v1/lease-holder/keys"
+             )
+  end
+
+  test "configured destination audience is mandatory and exact", %{vector: vector} do
+    Application.put_env(:lease_plane, :identity_attestation_audience, "other-plane")
+
+    assert {:error, :invalid} =
+             FederatedIdentityVerifier.verify(
+               vector["holder_agent_uuid"],
+               vector["token"],
+               request_context(vector)
+             )
+
+    Application.delete_env(:lease_plane, :identity_attestation_audience)
+
+    assert {:error, :identity_attestation_audience_unset} =
+             FederatedIdentityVerifier.verify(
+               vector["holder_agent_uuid"],
+               vector["token"],
+               request_context(vector)
+             )
+  end
+
+  test "unknown key ids do not refetch a cached issuer document", %{vector: vector} do
+    jwk = hd(vector["jwks"]["keys"])
+    expected_kid = jwk["kid"]
+    public_key = Base.url_decode64!(jwk["x"], padding: false)
+    {:ok, fetch_count} = Agent.start_link(fn -> 0 end)
+
+    Application.put_env(:lease_plane, :operator_key_fetcher, fn _issuer, kid, _url ->
+      Agent.update(fetch_count, &(&1 + 1))
+
+      if kid == expected_kid,
+        do: {:ok, public_key},
+        else: {:error, :invalid}
+    end)
+
+    assert :ok =
+             FederatedIdentityVerifier.verify(
+               vector["holder_agent_uuid"],
+               vector["token"],
+               request_context(vector)
+             )
+
+    {:ok, claims, _input, _signature} = FederatedIdentityVerifier.parse_token(vector["token"])
+    ["lat", "v1", _payload, signature] = String.split(vector["token"], ".")
+
+    unknown_payload =
+      claims
+      |> Map.put("kid", "unknown-key-id")
+      |> Jason.encode!()
+      |> Base.url_encode64(padding: false)
+
+    unknown_token = "lat.v1.#{unknown_payload}.#{signature}"
+
+    assert {:error, :invalid} =
+             FederatedIdentityVerifier.verify(
+               vector["holder_agent_uuid"],
+               unknown_token,
+               request_context(vector)
+             )
+
+    assert Agent.get(fetch_count, & &1) == 1
   end
 
   defp request_context(vector) do
