@@ -1,0 +1,1595 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:unitares:schema:eisv-ablation-episode:v2",
+  "title": "EISV Ablation Decision Episode",
+  "description": "One immutable prediction episode for the prospective EISV incremental-value ablation study.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "study_id",
+    "episode_id",
+    "phase",
+    "study_config",
+    "identity",
+    "observation_context",
+    "instrument_validation",
+    "evaluation_assignment",
+    "eligibility",
+    "prediction",
+    "feature_snapshot",
+    "arms",
+    "production_policy",
+    "outcome",
+    "quality"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "eisv-ablation-episode.v2"
+    },
+    "study_id": {
+      "const": "eisv-incremental-value-v1"
+    },
+    "episode_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "phase": {
+      "type": "string",
+      "enum": ["pilot", "confirmatory"]
+    },
+    "study_config": {
+      "$ref": "#/$defs/studyConfig"
+    },
+    "identity": {
+      "$ref": "#/$defs/identity"
+    },
+    "observation_context": {
+      "$ref": "#/$defs/observationContext"
+    },
+    "instrument_validation": {
+      "$ref": "#/$defs/instrumentValidation"
+    },
+    "evaluation_assignment": {
+      "$ref": "#/$defs/evaluationAssignment"
+    },
+    "eligibility": {
+      "$ref": "#/$defs/eligibility"
+    },
+    "prediction": {
+      "$ref": "#/$defs/prediction"
+    },
+    "feature_snapshot": {
+      "$ref": "#/$defs/featureSnapshot"
+    },
+    "arms": {
+      "type": "array",
+      "description": "Exactly one entry for every registered shadow or production arm. A semantic validator must enforce unique arm_id values.",
+      "minItems": 12,
+      "maxItems": 12,
+      "items": {
+        "$ref": "#/$defs/armScore"
+      }
+    },
+    "production_policy": {
+      "$ref": "#/$defs/productionPolicy"
+    },
+    "outcome": {
+      "$ref": "#/$defs/outcome"
+    },
+    "quality": {
+      "$ref": "#/$defs/quality"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "eligibility": {
+            "properties": { "eligible": { "const": true } },
+            "required": ["eligible"]
+          }
+        },
+        "required": ["eligibility"]
+      },
+      "then": {
+        "properties": {
+          "instrument_validation": {
+            "properties": { "status": { "const": "pass" } },
+            "required": ["status"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "phase": { "const": "pilot" } },
+        "required": ["phase"]
+      },
+      "then": {
+        "properties": {
+          "evaluation_assignment": {
+            "properties": { "assignment": { "const": "pilot_only" } },
+            "required": ["assignment"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "phase": { "const": "confirmatory" } },
+        "required": ["phase"]
+      },
+      "then": {
+        "properties": {
+          "study_config": {
+            "properties": {
+              "preregistration_sha256": { "$ref": "#/$defs/sha256" },
+              "independence_registry_sha256": { "$ref": "#/$defs/sha256" }
+            }
+          },
+          "evaluation_assignment": {
+            "properties": {
+              "assignment": {
+                "enum": ["train", "test", "purged", "excluded"]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "nullableUnitInterval": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 1
+    },
+    "nullableNonnegativeNumber": {
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "versionMap": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "studyConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "dataset_namespace",
+        "access_policy_version",
+        "independence_resolver_version",
+        "independence_registry_sha256",
+        "config_version",
+        "feature_registry_version",
+        "scorer_bundle_version",
+        "code_revision",
+        "preregistration_sha256"
+      ],
+      "properties": {
+        "protocol_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dataset_namespace": {
+          "const": "eisv-incremental-value-v1"
+        },
+        "access_policy_version": {
+          "const": "eisv-incremental-access.v1"
+        },
+        "independence_resolver_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "independence_registry_sha256": {
+          "anyOf": [
+            { "$ref": "#/$defs/sha256" },
+            { "type": "null" }
+          ]
+        },
+        "config_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "feature_registry_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scorer_bundle_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "code_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "preregistration_sha256": {
+          "anyOf": [
+            { "$ref": "#/$defs/sha256" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agent_uuid",
+        "client_session_id",
+        "independence_unit_id",
+        "substrate_id_hash",
+        "producer_group_id",
+        "deployment_id",
+        "task_id",
+        "thread_id",
+        "model_family",
+        "harness_type",
+        "task_family",
+        "checkin_index",
+        "maturity_stage"
+      ],
+      "properties": {
+        "agent_uuid": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "client_session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "independence_unit_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable cluster key shared by identities that are not independent because they share a producer, substrate, deployment, or synchronized state."
+        },
+        "substrate_id_hash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "producer_group_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable key for identities whose observations come from the same stateful producer or synchronized process family."
+        },
+        "deployment_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "thread_id": {
+          "type": ["string", "null"]
+        },
+        "model_family": {
+          "type": "string",
+          "minLength": 1
+        },
+        "harness_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task_family": {
+          "type": "string",
+          "minLength": 1
+        },
+        "checkin_index": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maturity_stage": {
+          "type": "string",
+          "enum": ["cold_start", "behavioral_fixed", "self_relative"]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "checkin_index": { "maximum": 2 }
+            },
+            "required": ["checkin_index"]
+          },
+          "then": {
+            "properties": {
+              "maturity_stage": { "const": "cold_start" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "checkin_index": { "minimum": 3, "maximum": 24 }
+            },
+            "required": ["checkin_index"]
+          },
+          "then": {
+            "properties": {
+              "maturity_stage": { "const": "behavioral_fixed" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "checkin_index": { "minimum": 25 }
+            },
+            "required": ["checkin_index"]
+          },
+          "then": {
+            "properties": {
+              "maturity_stage": { "const": "self_relative" }
+            }
+          }
+        }
+      ]
+    },
+    "observationContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorship_class",
+        "schedule_class",
+        "scheduled_interval_seconds",
+        "previous_authored_observation_at",
+        "seconds_since_previous_authored_observation",
+        "process_instance_id",
+        "monitor_lineage_id",
+        "restart_since_previous_authored_observation",
+        "formula_discontinuity_since_previous_observation",
+        "discontinuity_codes",
+        "hydration_state",
+        "lineage_continuity"
+      ],
+      "properties": {
+        "authorship_class": {
+          "type": "string",
+          "enum": [
+            "agent_report",
+            "substrate_observation",
+            "substrate_interpretation",
+            "prediction"
+          ]
+        },
+        "schedule_class": {
+          "type": "string",
+          "enum": [
+            "interactive",
+            "scheduled_resident",
+            "automation",
+            "harness",
+            "unknown"
+          ]
+        },
+        "scheduled_interval_seconds": {
+          "type": ["number", "null"],
+          "exclusiveMinimum": 0
+        },
+        "previous_authored_observation_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "seconds_since_previous_authored_observation": {
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "process_instance_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "monitor_lineage_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "restart_since_previous_authored_observation": {
+          "type": "boolean"
+        },
+        "formula_discontinuity_since_previous_observation": {
+          "type": "boolean"
+        },
+        "discontinuity_codes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "hydration_state": {
+          "type": "string",
+          "enum": ["not_applicable", "confirmed", "uncertain", "failed"]
+        },
+        "lineage_continuity": {
+          "type": "string",
+          "enum": ["continuous", "genesis", "discontinuous", "unknown"]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "schedule_class": {
+                "enum": ["scheduled_resident", "automation"]
+              }
+            },
+            "required": ["schedule_class"]
+          },
+          "then": {
+            "properties": {
+              "scheduled_interval_seconds": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "lineage_continuity": { "const": "genesis" } },
+            "required": ["lineage_continuity"]
+          },
+          "then": {
+            "properties": {
+              "previous_authored_observation_at": { "type": "null" },
+              "seconds_since_previous_authored_observation": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "formula_discontinuity_since_previous_observation": {
+                "const": true
+              }
+            },
+            "required": ["formula_discontinuity_since_previous_observation"]
+          },
+          "then": {
+            "properties": { "discontinuity_codes": { "minItems": 1 } }
+          },
+          "else": {
+            "properties": { "discontinuity_codes": { "maxItems": 0 } }
+          }
+        }
+      ]
+    },
+    "instrumentValidation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "bundle_version",
+        "positive_control_status",
+        "negative_control_status",
+        "no_op_mutation_status",
+        "requested_arm_status",
+        "assessed_at",
+        "evidence_sha256",
+        "unassessed_reasons"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["pass", "fail", "unassessed"]
+        },
+        "bundle_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "positive_control_status": {
+          "type": "string",
+          "enum": ["pass", "fail", "unassessed"]
+        },
+        "negative_control_status": {
+          "type": "string",
+          "enum": ["pass", "fail", "unassessed"]
+        },
+        "no_op_mutation_status": {
+          "type": "string",
+          "enum": ["pass", "fail", "unassessed"]
+        },
+        "requested_arm_status": {
+          "type": "string",
+          "enum": ["pass", "fail", "unassessed"]
+        },
+        "assessed_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "evidence_sha256": {
+          "anyOf": [
+            { "$ref": "#/$defs/sha256" },
+            { "type": "null" }
+          ]
+        },
+        "unassessed_reasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "status": { "const": "pass" } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "positive_control_status": { "const": "pass" },
+              "negative_control_status": { "const": "pass" },
+              "no_op_mutation_status": { "const": "pass" },
+              "requested_arm_status": { "const": "pass" },
+              "assessed_at": { "type": "string", "format": "date-time" },
+              "evidence_sha256": { "$ref": "#/$defs/sha256" },
+              "unassessed_reasons": { "maxItems": 0 }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "status": { "const": "unassessed" } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "unassessed_reasons": { "minItems": 1 }
+            },
+            "anyOf": [
+              { "properties": { "positive_control_status": { "const": "unassessed" } } },
+              { "properties": { "negative_control_status": { "const": "unassessed" } } },
+              { "properties": { "no_op_mutation_status": { "const": "unassessed" } } },
+              { "properties": { "requested_arm_status": { "const": "unassessed" } } }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": { "status": { "const": "fail" } },
+            "required": ["status"]
+          },
+          "then": {
+            "anyOf": [
+              { "properties": { "positive_control_status": { "const": "fail" } } },
+              { "properties": { "negative_control_status": { "const": "fail" } } },
+              { "properties": { "no_op_mutation_status": { "const": "fail" } } },
+              { "properties": { "requested_arm_status": { "const": "fail" } } }
+            ]
+          }
+        }
+      ]
+    },
+    "evaluationAssignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "split_protocol_version",
+        "assignment",
+        "fold_id",
+        "assigned_at",
+        "group_keys",
+        "purge_seconds"
+      ],
+      "properties": {
+        "split_protocol_version": {
+          "const": "rolling-origin-purged.v1"
+        },
+        "assignment": {
+          "type": "string",
+          "enum": ["pilot_only", "train", "test", "purged", "excluded"]
+        },
+        "fold_id": { "type": ["string", "null"] },
+        "assigned_at": { "type": "string", "format": "date-time" },
+        "group_keys": {
+          "type": "array",
+          "prefixItems": [
+            { "const": "independence_unit_id" },
+            { "const": "task_id" }
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "purge_seconds": {
+          "type": "integer",
+          "minimum": 86400
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "assignment": { "const": "pilot_only" } },
+            "required": ["assignment"]
+          },
+          "then": {
+            "properties": { "fold_id": { "type": "null" } }
+          },
+          "else": {
+            "if": {
+              "properties": { "assignment": { "enum": ["train", "test"] } },
+              "required": ["assignment"]
+            },
+            "then": {
+              "properties": { "fold_id": { "type": "string", "minLength": 1 } }
+            }
+          }
+        }
+      ]
+    },
+    "eligibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eligible", "analysis_population", "exclusion_reasons"],
+      "properties": {
+        "eligible": {
+          "type": "boolean"
+        },
+        "analysis_population": {
+          "type": "string",
+          "enum": ["pilot", "confirmatory", "excluded"]
+        },
+        "exclusion_reasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "missing_identity",
+              "missing_independence_unit",
+              "missing_substrate_identity",
+              "missing_observation_continuity",
+              "missing_task_id",
+              "invalid_timestamp_order",
+              "incomplete_core_arms",
+              "snapshot_hash_mismatch",
+              "post_cutoff_feature_leakage",
+              "incomplete_outcome_horizon",
+              "unbound_outcome",
+              "duplicate_prediction_id",
+              "scorer_version_drift",
+              "formula_version_drift",
+              "instrument_validation_failed",
+              "instrument_unassessed",
+              "schema_invalid",
+              "operator_exclusion_with_reason"
+            ]
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "eligible": { "const": true } },
+            "required": ["eligible"]
+          },
+          "then": {
+            "properties": {
+              "exclusion_reasons": { "maxItems": 0 },
+              "analysis_population": { "enum": ["pilot", "confirmatory"] }
+            }
+          },
+          "else": {
+            "properties": {
+              "exclusion_reasons": { "minItems": 1 },
+              "analysis_population": { "const": "excluded" }
+            }
+          }
+        }
+      ]
+    },
+    "prediction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "prediction_id",
+        "generated_at",
+        "cutoff_at",
+        "horizon"
+      ],
+      "properties": {
+        "prediction_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "cutoff_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "horizon": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "close_on_task_terminal",
+            "max_observable_events",
+            "max_wall_clock_seconds"
+          ],
+          "properties": {
+            "close_on_task_terminal": {
+              "const": true
+            },
+            "max_observable_events": {
+              "const": 20
+            },
+            "max_wall_clock_seconds": {
+              "const": 86400
+            }
+          }
+        }
+      }
+    },
+    "featureSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "captured_at",
+        "snapshot_sha256",
+        "direct_evidence",
+        "behavioral",
+        "eisv",
+        "legacy",
+        "governance_context",
+        "provenance"
+      ],
+      "properties": {
+        "captured_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "snapshot_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "direct_evidence": {
+          "$ref": "#/$defs/directEvidence"
+        },
+        "behavioral": {
+          "$ref": "#/$defs/behavioralFeatures"
+        },
+        "eisv": {
+          "$ref": "#/$defs/eisvFeatures"
+        },
+        "legacy": {
+          "$ref": "#/$defs/legacyFeatures"
+        },
+        "governance_context": {
+          "$ref": "#/$defs/governanceContext"
+        },
+        "provenance": {
+          "$ref": "#/$defs/featureProvenance"
+        }
+      }
+    },
+    "directEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "confidence",
+        "confidence_source",
+        "confidence_scheme_version",
+        "calibration_status",
+        "complexity",
+        "prior_outcome_count",
+        "prior_adverse_rate",
+        "recent_tool_success_rate",
+        "recent_test_failure_rate",
+        "calibration_absolute_error",
+        "claim_evidence_coverage",
+        "external_evidence_count",
+        "retry_rate",
+        "task_progress"
+      ],
+      "properties": {
+        "confidence": { "$ref": "#/$defs/nullableUnitInterval" },
+        "confidence_source": {
+          "type": "string",
+          "enum": ["caller_provided", "derived", "missing"]
+        },
+        "confidence_scheme_version": {
+          "type": ["string", "null"]
+        },
+        "calibration_status": {
+          "type": "string",
+          "enum": ["calibrated", "miscalibrated", "unassessed", "unknown"]
+        },
+        "complexity": { "$ref": "#/$defs/nullableUnitInterval" },
+        "prior_outcome_count": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "prior_adverse_rate": { "$ref": "#/$defs/nullableUnitInterval" },
+        "recent_tool_success_rate": { "$ref": "#/$defs/nullableUnitInterval" },
+        "recent_test_failure_rate": { "$ref": "#/$defs/nullableUnitInterval" },
+        "calibration_absolute_error": { "$ref": "#/$defs/nullableUnitInterval" },
+        "claim_evidence_coverage": { "$ref": "#/$defs/nullableUnitInterval" },
+        "external_evidence_count": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "retry_rate": { "$ref": "#/$defs/nullableUnitInterval" },
+        "task_progress": { "$ref": "#/$defs/nullableUnitInterval" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "confidence_source": { "const": "derived" } },
+            "required": ["confidence_source"]
+          },
+          "then": {
+            "properties": {
+              "confidence_scheme_version": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "confidence_source": { "const": "missing" } },
+            "required": ["confidence_source"]
+          },
+          "then": {
+            "properties": {
+              "confidence": { "type": "null" },
+              "confidence_scheme_version": { "type": "null" }
+            }
+          }
+        }
+      ]
+    },
+    "behavioralFeatures": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baseline_available",
+        "reference_state",
+        "reference_version",
+        "behavioral_confidence",
+        "claim_evidence_gap",
+        "drift_norm",
+        "regime_instability",
+        "complexity_divergence",
+        "update_consistency"
+      ],
+      "properties": {
+        "baseline_available": { "type": "boolean" },
+        "reference_state": {
+          "type": "string",
+          "enum": [
+            "cold_start",
+            "behavioral_fixed",
+            "warmed_agent_baseline",
+            "historical_reconstruction",
+            "unknown"
+          ]
+        },
+        "reference_version": { "type": "string", "minLength": 1 },
+        "behavioral_confidence": { "$ref": "#/$defs/nullableUnitInterval" },
+        "claim_evidence_gap": { "$ref": "#/$defs/nullableNonnegativeNumber" },
+        "drift_norm": { "$ref": "#/$defs/nullableNonnegativeNumber" },
+        "regime_instability": { "$ref": "#/$defs/nullableNonnegativeNumber" },
+        "complexity_divergence": { "$ref": "#/$defs/nullableNonnegativeNumber" },
+        "update_consistency": { "$ref": "#/$defs/nullableUnitInterval" }
+      }
+    },
+    "eisvFeatures": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "e",
+        "i",
+        "s",
+        "v",
+        "primary_eisv_source",
+        "component_sources",
+        "component_versions",
+        "reference_state",
+        "is_baselined",
+        "behavioral_observation_count"
+      ],
+      "properties": {
+        "e": { "$ref": "#/$defs/nullableUnitInterval" },
+        "i": { "$ref": "#/$defs/nullableUnitInterval" },
+        "s": { "$ref": "#/$defs/nullableUnitInterval" },
+        "v": {
+          "type": ["number", "null"],
+          "minimum": -1,
+          "maximum": 1
+        },
+        "primary_eisv_source": {
+          "type": "string",
+          "enum": [
+            "behavioral",
+            "ode_fallback",
+            "phi_cold_start",
+            "historical_reconstruction",
+            "unknown"
+          ]
+        },
+        "component_sources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["e", "i", "s", "v"],
+          "properties": {
+            "e": { "type": "string", "minLength": 1 },
+            "i": { "type": "string", "minLength": 1 },
+            "s": { "type": "string", "minLength": 1 },
+            "v": { "type": "string", "minLength": 1 }
+          }
+        },
+        "component_versions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["e", "i", "s", "v"],
+          "properties": {
+            "e": { "type": "string", "minLength": 1 },
+            "i": { "type": "string", "minLength": 1 },
+            "s": { "type": "string", "minLength": 1 },
+            "v": { "type": "string", "minLength": 1 }
+          }
+        },
+        "reference_state": {
+          "type": "string",
+          "enum": [
+            "cold_start",
+            "behavioral_fixed",
+            "warmed_agent_baseline",
+            "historical_reconstruction",
+            "unknown"
+          ]
+        },
+        "is_baselined": { "type": "boolean" },
+        "behavioral_observation_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "legacyFeatures": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "phi",
+        "phi_formula_version",
+        "coherence",
+        "coherence_formula_version",
+        "coherence_source",
+        "coherence_role",
+        "void_active"
+      ],
+      "properties": {
+        "phi": { "$ref": "#/$defs/nullableNonnegativeNumber" },
+        "phi_formula_version": { "type": "string", "minLength": 1 },
+        "coherence": { "$ref": "#/$defs/nullableUnitInterval" },
+        "coherence_formula_version": { "type": "string", "minLength": 1 },
+        "coherence_source": {
+          "type": "string",
+          "enum": [
+            "legacy_tanh_v",
+            "manifold",
+            "behavioral_assessment",
+            "unknown_legacy",
+            "unavailable"
+          ]
+        },
+        "coherence_role": {
+          "type": "string",
+          "enum": [
+            "ode_control_feedback",
+            "eis_structural_measurement",
+            "behavioral_update_consistency",
+            "unknown",
+            "unavailable"
+          ]
+        },
+        "void_active": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "coherence_source": { "const": "legacy_tanh_v" } },
+            "required": ["coherence_source"]
+          },
+          "then": {
+            "properties": { "coherence_role": { "const": "ode_control_feedback" } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "coherence_source": { "const": "manifold" } },
+            "required": ["coherence_source"]
+          },
+          "then": {
+            "properties": { "coherence_role": { "const": "eis_structural_measurement" } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "coherence_source": { "const": "behavioral_assessment" } },
+            "required": ["coherence_source"]
+          },
+          "then": {
+            "properties": { "coherence_role": { "const": "behavioral_update_consistency" } }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "coherence_source": { "enum": ["unknown_legacy", "unavailable"] }
+            },
+            "required": ["coherence_source"]
+          },
+          "then": {
+            "properties": {
+              "coherence_role": { "enum": ["unknown", "unavailable"] }
+            }
+          }
+        }
+      ]
+    },
+    "governanceContext": {
+      "type": "object",
+      "description": "Audit-only production context. Arms A0-A6 must not consume these fields unless explicitly assigned by the protocol.",
+      "additionalProperties": false,
+      "required": [
+        "risk_score",
+        "risk_score_source",
+        "verdict",
+        "basin",
+        "margin"
+      ],
+      "properties": {
+        "risk_score": { "$ref": "#/$defs/nullableUnitInterval" },
+        "risk_score_source": { "type": ["string", "null"] },
+        "verdict": { "type": ["string", "null"] },
+        "basin": {
+          "type": ["string", "null"],
+          "enum": ["high", "low", "boundary", "unknown", null]
+        },
+        "margin": {
+          "type": ["string", "null"],
+          "enum": ["settling", "comfortable", "tight", "warning", "critical", null]
+        }
+      }
+    },
+    "featureProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "computed_by",
+        "computed_at",
+        "source_event_ids",
+        "formula_versions",
+        "contains_governance_derived_labels",
+        "contains_agent_self_reported_labels",
+        "cutoff_integrity",
+        "uses_post_cutoff_data"
+      ],
+      "properties": {
+        "computed_by": { "type": "string", "minLength": 1 },
+        "computed_at": { "type": "string", "format": "date-time" },
+        "source_event_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "formula_versions": { "$ref": "#/$defs/versionMap" },
+        "contains_governance_derived_labels": { "type": "boolean" },
+        "contains_agent_self_reported_labels": { "type": "boolean" },
+        "cutoff_integrity": {
+          "type": "string",
+          "enum": ["verified", "failed", "unknown"]
+        },
+        "uses_post_cutoff_data": { "const": false }
+      }
+    },
+    "armScore": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "arm_id",
+        "available",
+        "model_version",
+        "risk_probability",
+        "score_generated_at",
+        "suggested_action",
+        "guide_threshold",
+        "pause_threshold",
+        "input_feature_set",
+        "input_snapshot_sha256",
+        "leakage_guard_passed",
+        "unavailable_reason"
+      ],
+      "properties": {
+        "arm_id": {
+          "type": "string",
+          "enum": [
+            "a0_base_rate",
+            "a0_persistence",
+            "a1_direct_evidence",
+            "a2_behavioral_no_eisv",
+            "a3_behavioral_plus_eisv",
+            "a4_eisv_only",
+            "a5_minus_e",
+            "a5_minus_i",
+            "a5_minus_s",
+            "a5_minus_v",
+            "a6_legacy_only",
+            "a7_production"
+          ]
+        },
+        "available": { "type": "boolean" },
+        "model_version": { "type": ["string", "null"] },
+        "risk_probability": { "$ref": "#/$defs/nullableUnitInterval" },
+        "score_generated_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "suggested_action": {
+          "type": ["string", "null"],
+          "enum": ["proceed", "guide", "pause", null]
+        },
+        "guide_threshold": { "$ref": "#/$defs/nullableUnitInterval" },
+        "pause_threshold": { "$ref": "#/$defs/nullableUnitInterval" },
+        "input_feature_set": {
+          "type": "string",
+          "enum": [
+            "base_rate",
+            "persistence_baseline",
+            "direct_evidence",
+            "behavioral_no_eisv",
+            "behavioral_plus_eisv",
+            "eisv_only",
+            "behavioral_plus_eisv_minus_e",
+            "behavioral_plus_eisv_minus_i",
+            "behavioral_plus_eisv_minus_s",
+            "behavioral_plus_eisv_minus_v",
+            "legacy_only",
+            "production_policy"
+          ]
+        },
+        "input_snapshot_sha256": { "$ref": "#/$defs/sha256" },
+        "leakage_guard_passed": { "type": "boolean" },
+        "unavailable_reason": { "type": ["string", "null"] }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "available": { "const": true } },
+            "required": ["available"]
+          },
+          "then": {
+            "properties": {
+              "model_version": { "type": "string", "minLength": 1 },
+              "risk_probability": { "type": "number", "minimum": 0, "maximum": 1 },
+              "score_generated_at": { "type": "string", "format": "date-time" },
+              "suggested_action": { "type": "string", "enum": ["proceed", "guide", "pause"] },
+              "guide_threshold": { "type": "number", "minimum": 0, "maximum": 1 },
+              "pause_threshold": { "type": "number", "minimum": 0, "maximum": 1 },
+              "leakage_guard_passed": { "const": true },
+              "unavailable_reason": { "type": "null" }
+            }
+          },
+          "else": {
+            "properties": {
+              "model_version": { "type": "null" },
+              "risk_probability": { "type": "null" },
+              "score_generated_at": { "type": "null" },
+              "suggested_action": { "type": "null" },
+              "guide_threshold": { "type": "null" },
+              "pause_threshold": { "type": "null" },
+              "unavailable_reason": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      ]
+    },
+    "productionPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy_name",
+        "policy_version",
+        "action",
+        "sub_action",
+        "reason_code",
+        "risk_score",
+        "intervention_visible_to_agent",
+        "agent_delivery_status",
+        "delivered_action",
+        "enforcement_requested",
+        "enforcement_applied",
+        "actuation_id",
+        "applied_at",
+        "suppression_reason",
+        "hard_stop_triggered",
+        "safety_override_applied"
+      ],
+      "properties": {
+        "policy_name": { "type": "string", "minLength": 1 },
+        "policy_version": { "type": "string", "minLength": 1 },
+        "action": {
+          "type": "string",
+          "enum": ["proceed", "pause"],
+          "description": "Action produced by the policy before suppression, delivery, or enforcement."
+        },
+        "sub_action": {
+          "type": "string",
+          "enum": [
+            "approve",
+            "guide",
+            "reject",
+            "void_pause",
+            "coherence_pause",
+            "basin_pause",
+            "risk_pause",
+            "cirs_block",
+            "other"
+          ],
+          "description": "Policy-produced sub-action; not evidence that the action was delivered or enforced."
+        },
+        "reason_code": { "type": "string", "minLength": 1 },
+        "risk_score": { "$ref": "#/$defs/nullableUnitInterval" },
+        "intervention_visible_to_agent": { "type": "boolean" },
+        "agent_delivery_status": {
+          "type": "string",
+          "enum": ["delivered", "suppressed", "failed", "not_applicable"],
+          "description": "Whether the produced action or guidance reached the agent-facing boundary."
+        },
+        "delivered_action": {
+          "type": ["string", "null"],
+          "enum": ["proceed", "guide", "pause", null]
+        },
+        "enforcement_requested": { "type": "boolean" },
+        "enforcement_applied": { "type": "boolean" },
+        "actuation_id": { "type": ["string", "null"] },
+        "applied_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "suppression_reason": { "type": ["string", "null"] },
+        "hard_stop_triggered": { "type": "boolean" },
+        "safety_override_applied": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "enforcement_applied": { "const": true } },
+            "required": ["enforcement_applied"]
+          },
+          "then": {
+            "properties": {
+              "enforcement_requested": { "const": true },
+              "actuation_id": { "type": "string", "minLength": 1 },
+              "applied_at": { "type": "string", "format": "date-time" },
+              "suppression_reason": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "agent_delivery_status": { "const": "suppressed" } },
+            "required": ["agent_delivery_status"]
+          },
+          "then": {
+            "properties": {
+              "delivered_action": { "type": "null" },
+              "suppression_reason": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      ]
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "window_closed_at",
+        "observable_events_seen",
+        "primary_adverse_outcome",
+        "secondary_operational_negative",
+        "task_success",
+        "quality_score",
+        "censor_reason",
+        "events"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["pending", "observed", "censored"]
+        },
+        "window_closed_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "observable_events_seen": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20
+        },
+        "primary_adverse_outcome": {
+          "type": ["boolean", "null"]
+        },
+        "secondary_operational_negative": {
+          "type": ["boolean", "null"]
+        },
+        "task_success": {
+          "type": ["boolean", "null"]
+        },
+        "quality_score": { "$ref": "#/$defs/nullableUnitInterval" },
+        "censor_reason": {
+          "type": ["string", "null"],
+          "enum": [
+            "session_ended_without_terminal_event",
+            "telemetry_gap",
+            "insufficient_horizon",
+            "outcome_binding_failure",
+            "operator_terminated_collection",
+            null
+          ]
+        },
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/outcomeEvent" }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "status": { "const": "observed" } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "window_closed_at": { "type": "string", "format": "date-time" },
+              "primary_adverse_outcome": { "type": "boolean" },
+              "secondary_operational_negative": { "type": "boolean" },
+              "censor_reason": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "status": { "const": "censored" } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "window_closed_at": { "type": "string", "format": "date-time" },
+              "primary_adverse_outcome": { "type": "null" },
+              "secondary_operational_negative": { "type": "null" },
+              "task_success": { "type": "null" },
+              "quality_score": { "type": "null" },
+              "censor_reason": {
+                "type": "string",
+                "enum": [
+                  "session_ended_without_terminal_event",
+                  "telemetry_gap",
+                  "insufficient_horizon",
+                  "outcome_binding_failure",
+                  "operator_terminated_collection"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "status": { "const": "pending" } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "window_closed_at": { "type": "null" },
+              "primary_adverse_outcome": { "type": "null" },
+              "secondary_operational_negative": { "type": "null" },
+              "task_success": { "type": "null" },
+              "quality_score": { "type": "null" },
+              "censor_reason": { "type": "null" }
+            }
+          }
+        }
+      ]
+    },
+    "outcomeEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "event_type",
+        "occurred_at",
+        "negative",
+        "severe",
+        "policy_independent",
+        "counts_toward_primary",
+        "primary_qualification",
+        "verification_source",
+        "label_provenance",
+        "quality_score",
+        "detail_codes"
+      ],
+      "properties": {
+        "event_id": { "type": "string", "minLength": 1 },
+        "event_type": {
+          "type": "string",
+          "enum": [
+            "test_passed",
+            "test_failed",
+            "tool_rejected",
+            "task_completed",
+            "task_failed",
+            "drawing_completed",
+            "drawing_abandoned",
+            "trajectory_validated",
+            "trajectory_invalidated",
+            "human_correction",
+            "human_override",
+            "rollback",
+            "forced_recovery",
+            "governance_guide",
+            "governance_pause",
+            "external_negative_signal"
+          ]
+        },
+        "occurred_at": { "type": "string", "format": "date-time" },
+        "negative": { "type": "boolean" },
+        "severe": { "type": "boolean" },
+        "policy_independent": { "type": "boolean" },
+        "counts_toward_primary": { "type": "boolean" },
+        "primary_qualification": {
+          "type": ["string", "null"],
+          "enum": [
+            "terminal_task_failure",
+            "task_abandonment",
+            "trajectory_invalidated",
+            "substantive_human_error_correction",
+            "error_rollback",
+            "unresolved_test_failure_at_terminal",
+            "external_severe_signal",
+            null
+          ]
+        },
+        "verification_source": {
+          "type": "string",
+          "enum": [
+            "server_observation",
+            "external_signal",
+            "human_annotation",
+            "agent_reported_tool_result"
+          ]
+        },
+        "label_provenance": { "$ref": "#/$defs/labelProvenance" },
+        "quality_score": { "$ref": "#/$defs/nullableUnitInterval" },
+        "detail_codes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "counts_toward_primary": { "const": true } },
+            "required": ["counts_toward_primary"]
+          },
+          "then": {
+            "properties": {
+              "negative": { "const": true },
+              "severe": { "const": true },
+              "policy_independent": { "const": true },
+              "label_provenance": {
+                "type": "object",
+                "properties": {
+                  "producer_class": {
+                    "enum": ["external_system", "human", "server_primitive"]
+                  },
+                  "independence_class": { "const": "independent" },
+                  "governance_input_overlap": { "const": false }
+                }
+              },
+              "primary_qualification": {
+                "type": "string",
+                "enum": [
+                  "terminal_task_failure",
+                  "task_abandonment",
+                  "trajectory_invalidated",
+                  "substantive_human_error_correction",
+                  "error_rollback",
+                  "unresolved_test_failure_at_terminal",
+                  "external_severe_signal"
+                ]
+              },
+              "event_type": {
+                "enum": [
+                  "test_failed",
+                  "task_failed",
+                  "drawing_abandoned",
+                  "trajectory_invalidated",
+                  "human_correction",
+                  "human_override",
+                  "rollback",
+                  "external_negative_signal"
+                ]
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "primary_qualification": { "type": "null" }
+            }
+          }
+        }
+      ]
+    },
+    "labelProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "producer_class",
+        "independence_class",
+        "governance_input_overlap",
+        "source_record_id"
+      ],
+      "properties": {
+        "producer_class": {
+          "type": "string",
+          "enum": [
+            "external_system",
+            "human",
+            "server_primitive",
+            "agent_report",
+            "governance_policy",
+            "lifecycle_state",
+            "unknown"
+          ]
+        },
+        "independence_class": {
+          "type": "string",
+          "enum": [
+            "independent",
+            "governance_derived",
+            "agent_self_report",
+            "unknown"
+          ]
+        },
+        "governance_input_overlap": { "type": "boolean" },
+        "source_record_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_complete",
+        "schema_validated",
+        "duplicate_detected",
+        "leakage_detected",
+        "manual_review_required",
+        "flags",
+        "notes"
+      ],
+      "properties": {
+        "record_complete": { "type": "boolean" },
+        "schema_validated": { "type": "boolean" },
+        "duplicate_detected": { "type": "boolean" },
+        "leakage_detected": { "type": "boolean" },
+        "manual_review_required": { "type": "boolean" },
+        "flags": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "notes": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

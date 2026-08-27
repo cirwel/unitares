@@ -1,0 +1,416 @@
+{
+  "schema_version": "eisv-ablation-episode.v2",
+  "study_id": "eisv-incremental-value-v1",
+  "episode_id": "31b9ad9d-9e88-4a1d-8f72-398a39c69ac8",
+  "phase": "pilot",
+  "study_config": {
+    "protocol_version": "0.2.0",
+    "dataset_namespace": "eisv-incremental-value-v1",
+    "access_policy_version": "eisv-incremental-access.v1",
+    "independence_resolver_version": "registry-union-v1",
+    "independence_registry_sha256": null,
+    "config_version": "pilot.1",
+    "feature_registry_version": "pilot.1",
+    "scorer_bundle_version": "pilot.1",
+    "code_revision": "example-only",
+    "preregistration_sha256": null
+  },
+  "identity": {
+    "agent_uuid": "81ff549f-83e2-4166-921d-d61e6b475c44",
+    "client_session_id": "agent-81ff549f-83e",
+    "independence_unit_id": "codex-desktop-local-operator-001",
+    "substrate_id_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "producer_group_id": "codex-desktop-example-producer",
+    "deployment_id": "codex-desktop-local-2026-08",
+    "task_id": "task-example-ablation-001",
+    "thread_id": "t-a3bac16a48f9fcae",
+    "model_family": "codex",
+    "harness_type": "codex-desktop",
+    "task_family": "software-design",
+    "checkin_index": 30,
+    "maturity_stage": "self_relative"
+  },
+  "observation_context": {
+    "authorship_class": "agent_report",
+    "schedule_class": "interactive",
+    "scheduled_interval_seconds": null,
+    "previous_authored_observation_at": "2026-08-27T08:30:00Z",
+    "seconds_since_previous_authored_observation": 1800,
+    "process_instance_id": "process-codex-example-001",
+    "monitor_lineage_id": "monitor-lineage-example-001",
+    "restart_since_previous_authored_observation": false,
+    "formula_discontinuity_since_previous_observation": false,
+    "discontinuity_codes": [],
+    "hydration_state": "not_applicable",
+    "lineage_continuity": "continuous"
+  },
+  "instrument_validation": {
+    "status": "pass",
+    "bundle_version": "instrument-pilot.1",
+    "positive_control_status": "pass",
+    "negative_control_status": "pass",
+    "no_op_mutation_status": "pass",
+    "requested_arm_status": "pass",
+    "assessed_at": "2026-08-27T08:55:00Z",
+    "evidence_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "unassessed_reasons": []
+  },
+  "evaluation_assignment": {
+    "split_protocol_version": "rolling-origin-purged.v1",
+    "assignment": "pilot_only",
+    "fold_id": null,
+    "assigned_at": "2026-08-27T08:55:00Z",
+    "group_keys": ["independence_unit_id", "task_id"],
+    "purge_seconds": 86400
+  },
+  "eligibility": {
+    "eligible": true,
+    "analysis_population": "pilot",
+    "exclusion_reasons": []
+  },
+  "prediction": {
+    "prediction_id": "9568a99e-7e39-4f74-8128-14834b13b0c1",
+    "generated_at": "2026-08-27T09:00:00.200Z",
+    "cutoff_at": "2026-08-27T09:00:00Z",
+    "horizon": {
+      "close_on_task_terminal": true,
+      "max_observable_events": 20,
+      "max_wall_clock_seconds": 86400
+    }
+  },
+  "feature_snapshot": {
+    "captured_at": "2026-08-27T08:59:59.900Z",
+    "snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "direct_evidence": {
+      "confidence": 0.82,
+      "confidence_source": "caller_provided",
+      "confidence_scheme_version": null,
+      "calibration_status": "unassessed",
+      "complexity": 0.61,
+      "prior_outcome_count": 28,
+      "prior_adverse_rate": 0.11,
+      "recent_tool_success_rate": 0.88,
+      "recent_test_failure_rate": 0.17,
+      "calibration_absolute_error": 0.09,
+      "claim_evidence_coverage": 0.76,
+      "external_evidence_count": 4,
+      "retry_rate": 0.14,
+      "task_progress": 0.42
+    },
+    "behavioral": {
+      "baseline_available": true,
+      "reference_state": "warmed_agent_baseline",
+      "reference_version": "welford-agent-baseline.v1",
+      "behavioral_confidence": 0.72,
+      "claim_evidence_gap": 0.18,
+      "drift_norm": 0.31,
+      "regime_instability": 0.22,
+      "complexity_divergence": 0.16,
+      "update_consistency": 0.81
+    },
+    "eisv": {
+      "e": 0.69,
+      "i": 0.77,
+      "s": 0.29,
+      "v": -0.04,
+      "primary_eisv_source": "behavioral",
+      "component_sources": {
+        "e": "behavioral_assessment.v1",
+        "i": "behavioral_assessment.v1",
+        "s": "behavioral_assessment.v1",
+        "v": "ema_e_minus_i.v1"
+      },
+      "component_versions": {
+        "e": "behavioral-e.v1",
+        "i": "behavioral-i.v1",
+        "s": "behavioral-s.v1",
+        "v": "ema-e-minus-i.v1"
+      },
+      "reference_state": "warmed_agent_baseline",
+      "is_baselined": true,
+      "behavioral_observation_count": 30
+    },
+    "legacy": {
+      "phi": 0.25,
+      "phi_formula_version": "phi-compat.v1",
+      "coherence": 0.48,
+      "coherence_formula_version": "legacy-tanh-v.v1",
+      "coherence_source": "legacy_tanh_v",
+      "coherence_role": "ode_control_feedback",
+      "void_active": false
+    },
+    "governance_context": {
+      "risk_score": 0.42,
+      "risk_score_source": "resolved",
+      "verdict": "safe",
+      "basin": "high",
+      "margin": "comfortable"
+    },
+    "provenance": {
+      "computed_by": "eisv-ablation-snapshot.v1",
+      "computed_at": "2026-08-27T08:59:59.900Z",
+      "source_event_ids": [
+        "outcome-027",
+        "tool-result-184",
+        "checkin-030"
+      ],
+      "formula_versions": {
+        "confidence": "caller-provided.v1",
+        "behavioral": "behavioral-assessment.v1",
+        "eisv": "behavioral-eisv.v1",
+        "legacy": "legacy-ode.v1"
+      },
+      "contains_governance_derived_labels": false,
+      "contains_agent_self_reported_labels": true,
+      "cutoff_integrity": "verified",
+      "uses_post_cutoff_data": false
+    }
+  },
+  "arms": [
+    {
+      "arm_id": "a0_base_rate",
+      "available": true,
+      "model_version": "base-rate.pilot.1",
+      "risk_probability": 0.14,
+      "score_generated_at": "2026-08-27T09:00:00.300Z",
+      "suggested_action": "proceed",
+      "guide_threshold": 0.4,
+      "pause_threshold": 0.7,
+      "input_feature_set": "base_rate",
+      "input_snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "leakage_guard_passed": true,
+      "unavailable_reason": null
+    },
+    {
+      "arm_id": "a0_persistence",
+      "available": true,
+      "model_version": "persistence.pilot.1",
+      "risk_probability": 0.0,
+      "score_generated_at": "2026-08-27T09:00:00.300Z",
+      "suggested_action": "proceed",
+      "guide_threshold": 0.4,
+      "pause_threshold": 0.7,
+      "input_feature_set": "persistence_baseline",
+      "input_snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "leakage_guard_passed": true,
+      "unavailable_reason": null
+    },
+    {
+      "arm_id": "a1_direct_evidence",
+      "available": true,
+      "model_version": "logit-direct.pilot.1",
+      "risk_probability": 0.31,
+      "score_generated_at": "2026-08-27T09:00:00.300Z",
+      "suggested_action": "proceed",
+      "guide_threshold": 0.4,
+      "pause_threshold": 0.7,
+      "input_feature_set": "direct_evidence",
+      "input_snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "leakage_guard_passed": true,
+      "unavailable_reason": null
+    },
+    {
+      "arm_id": "a2_behavioral_no_eisv",
+      "available": true,
+      "model_version": "logit-behavioral.pilot.1",
+      "risk_probability": 0.35,
+      "score_generated_at": "2026-08-27T09:00:00.300Z",
+      "suggested_action": "proceed",
+      "guide_threshold": 0.4,
+      "pause_threshold": 0.7,
+      "input_feature_set": "behavioral_no_eisv",
+      "input_snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "leakage_guard_passed": true,
+      "unavailable_reason": null
+    },
+    {
+      "arm_id": "a3_behavioral_plus_eisv",
+      "available": true,
+      "model_version": "logit-behavioral-eisv.pilot.1",
+      "risk_probability": 0.43,
+      "score_generated_at": "2026-08-27T09:00:00.300Z",
+      "suggested_action": "guide",
+      "guide_threshold": 0.4,
+      "pause_threshold": 0.7,
+      "input_feature_set": "behavioral_plus_eisv",
+      "input_snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "leakage_guard_passed": true,
+      "unavailable_reason": null
+    },
+    {
+      "arm_id": "a4_eisv_only",
+      "available": true,
+      "model_version": "logit-eisv.pilot.1",
+      "risk_probability": 0.38,
+      "score_generated_at": "2026-08-27T09:00:00.300Z",
+      "suggested_action": "proceed",
+      "guide_threshold": 0.4,
+      "pause_threshold": 0.7,
+      "input_feature_set": "eisv_only",
+      "input_snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "leakage_guard_passed": true,
+      "unavailable_reason": null
+    },
+    {
+      "arm_id": "a5_minus_e",
+      "available": true,
+      "model_version": "logit-minus-e.pilot.1",
+      "risk_probability": 0.41,
+      "score_generated_at": "2026-08-27T09:00:00.300Z",
+      "suggested_action": "guide",
+      "guide_threshold": 0.4,
+      "pause_threshold": 0.7,
+      "input_feature_set": "behavioral_plus_eisv_minus_e",
+      "input_snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "leakage_guard_passed": true,
+      "unavailable_reason": null
+    },
+    {
+      "arm_id": "a5_minus_i",
+      "available": true,
+      "model_version": "logit-minus-i.pilot.1",
+      "risk_probability": 0.34,
+      "score_generated_at": "2026-08-27T09:00:00.300Z",
+      "suggested_action": "proceed",
+      "guide_threshold": 0.4,
+      "pause_threshold": 0.7,
+      "input_feature_set": "behavioral_plus_eisv_minus_i",
+      "input_snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "leakage_guard_passed": true,
+      "unavailable_reason": null
+    },
+    {
+      "arm_id": "a5_minus_s",
+      "available": true,
+      "model_version": "logit-minus-s.pilot.1",
+      "risk_probability": 0.37,
+      "score_generated_at": "2026-08-27T09:00:00.300Z",
+      "suggested_action": "proceed",
+      "guide_threshold": 0.4,
+      "pause_threshold": 0.7,
+      "input_feature_set": "behavioral_plus_eisv_minus_s",
+      "input_snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "leakage_guard_passed": true,
+      "unavailable_reason": null
+    },
+    {
+      "arm_id": "a5_minus_v",
+      "available": true,
+      "model_version": "logit-minus-v.pilot.1",
+      "risk_probability": 0.42,
+      "score_generated_at": "2026-08-27T09:00:00.300Z",
+      "suggested_action": "guide",
+      "guide_threshold": 0.4,
+      "pause_threshold": 0.7,
+      "input_feature_set": "behavioral_plus_eisv_minus_v",
+      "input_snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "leakage_guard_passed": true,
+      "unavailable_reason": null
+    },
+    {
+      "arm_id": "a6_legacy_only",
+      "available": true,
+      "model_version": "logit-legacy.pilot.1",
+      "risk_probability": 0.20,
+      "score_generated_at": "2026-08-27T09:00:00.300Z",
+      "suggested_action": "proceed",
+      "guide_threshold": 0.4,
+      "pause_threshold": 0.7,
+      "input_feature_set": "legacy_only",
+      "input_snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "leakage_guard_passed": true,
+      "unavailable_reason": null
+    },
+    {
+      "arm_id": "a7_production",
+      "available": true,
+      "model_version": "monitor-decision.v1",
+      "risk_probability": 0.42,
+      "score_generated_at": "2026-08-27T09:00:00.300Z",
+      "suggested_action": "guide",
+      "guide_threshold": 0.4,
+      "pause_threshold": 0.7,
+      "input_feature_set": "production_policy",
+      "input_snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "leakage_guard_passed": true,
+      "unavailable_reason": null
+    }
+  ],
+  "production_policy": {
+    "policy_name": "monitor_decision",
+    "policy_version": "v1",
+    "action": "proceed",
+    "sub_action": "guide",
+    "reason_code": "boundary_guidance",
+    "risk_score": 0.42,
+    "intervention_visible_to_agent": true,
+    "agent_delivery_status": "delivered",
+    "delivered_action": "guide",
+    "enforcement_requested": false,
+    "enforcement_applied": false,
+    "actuation_id": null,
+    "applied_at": null,
+    "suppression_reason": null,
+    "hard_stop_triggered": false,
+    "safety_override_applied": false
+  },
+  "outcome": {
+    "status": "observed",
+    "window_closed_at": "2026-08-27T10:15:00Z",
+    "observable_events_seen": 10,
+    "primary_adverse_outcome": true,
+    "secondary_operational_negative": true,
+    "task_success": false,
+    "quality_score": 0.2,
+    "censor_reason": null,
+    "events": [
+      {
+        "event_id": "guide-001",
+        "event_type": "governance_guide",
+        "occurred_at": "2026-08-27T09:00:00.400Z",
+        "negative": false,
+        "severe": false,
+        "policy_independent": false,
+        "counts_toward_primary": false,
+        "primary_qualification": null,
+        "verification_source": "server_observation",
+        "label_provenance": {
+          "producer_class": "governance_policy",
+          "independence_class": "governance_derived",
+          "governance_input_overlap": true,
+          "source_record_id": "guide-001"
+        },
+        "quality_score": null,
+        "detail_codes": ["production_intervention"]
+      },
+      {
+        "event_id": "outcome-031",
+        "event_type": "task_failed",
+        "occurred_at": "2026-08-27T10:15:00Z",
+        "negative": true,
+        "severe": true,
+        "policy_independent": true,
+        "counts_toward_primary": true,
+        "primary_qualification": "terminal_task_failure",
+        "verification_source": "server_observation",
+        "label_provenance": {
+          "producer_class": "server_primitive",
+          "independence_class": "independent",
+          "governance_input_overlap": false,
+          "source_record_id": "task-terminal-031"
+        },
+        "quality_score": 0.2,
+        "detail_codes": ["terminal_failure"]
+      }
+    ]
+  },
+  "quality": {
+    "record_complete": true,
+    "schema_validated": true,
+    "duplicate_detected": false,
+    "leakage_detected": false,
+    "manual_review_required": false,
+    "flags": [],
+    "notes": "Illustrative record only; scores are not empirical results."
+  }
+}
