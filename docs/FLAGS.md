@@ -19,7 +19,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**154 flags.**
+**158 flags.**
 
 | Flag | Reader fallback(s) | Purpose | Read at |
 |---|---|---|---|
@@ -113,6 +113,10 @@ index; that one is the curated decision record.
 | `UNITARES_KG_PROACTIVE_EVERY` | `'0'` | Add a cadence gate to explicit check-in KG recall; never enable it alone | src/mcp_handlers/updates/enrichments.py |
 | `UNITARES_KG_SEARCH_TIMEOUT_S` | `'0.25'` | — | src/mcp_handlers/updates/enrichments.py |
 | `UNITARES_KNOWLEDGE_BACKEND` | `'auto'` | Get global knowledge graph instance (singleton) | src/knowledge_graph.py |
+| `UNITARES_LEASE_ATTESTATION_AUDIENCE` | `None (no reader fallback)` | Return the exact lease-plane deployment this token may authorize. | src/lease_attestation.py |
+| `UNITARES_LEASE_ATTESTATION_ISSUER` | `None (no reader fallback)` | read by configured_issuer() | src/lease_attestation.py |
+| `UNITARES_LEASE_ATTESTATION_SIGNING_KEY` | `None (no reader fallback)` | Load the operator's 32-byte Ed25519 seed; never generate implicitly. | src/lease_attestation.py |
+| `UNITARES_LEASE_INSECURE_GOVERNANCE_HOSTS` | `''` | Resolve a governance URL without sending credentials over remote HTTP. | agents/sdk/src/unitares_sdk/lease_plane/client.py |
 | `UNITARES_LEASE_PLANE_URL` | `'http://127.0.0.1:8788'` | read by _lease_plane_url() | src/mcp_handlers/dialectic/governed_spawn.py |
 | `UNITARES_LINEAGE_TRANSITIVE_ARCHIVAL` | `None (no reader fallback)` | Whether transitive succession-reachability DRIVES archival (vs shadow) | src/mcp_handlers/lifecycle/stuck.py |
 | `UNITARES_LLM_MODEL` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `'gemma4:latest'` (src/mcp_handlers/support/inference_registry.py, agents/dialectic_reviewer/reviewer.py, agents/local_resident/runner.py) | Default model for local inference | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/mcp_handlers/support/inference_registry.py (+2 more) |

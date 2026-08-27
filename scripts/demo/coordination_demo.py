@@ -14,6 +14,7 @@ plane, or improved task outcomes.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -24,7 +25,7 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -143,7 +144,7 @@ class LeaseAPI:
         url = f"{self.base_url}{path}"
         if query:
             url = f"{url}?{urllib.parse.urlencode(query)}"
-        body = json.dumps(payload).encode() if payload is not None else None
+        body = _wire_json_bytes(payload)
         headers = {
             "Authorization": f"Bearer {self.bearer_token}",
             "Content-Type": "application/json",
@@ -172,6 +173,11 @@ class LeaseAPI:
         if not isinstance(decoded, dict):
             raise DemoError(f"{method} {path} returned a non-object JSON value")
         return decoded
+
+
+def _wire_json_bytes(payload: dict[str, Any] | None) -> bytes | None:
+    """The exact serializer shared by attestation minting and lease calls."""
+    return json.dumps(payload).encode() if payload is not None else None
 
 
 class GovernanceAPI:
@@ -225,6 +231,49 @@ class GovernanceAPI:
             )
         return ParticipantIdentity(agent_uuid=agent_uuid, identity_proof=identity_proof)
 
+    def attest(
+        self,
+        participant: "ParticipantIdentity",
+        method: str,
+        path: str,
+        payload: dict[str, Any],
+    ) -> str:
+        """Exchange a continuity proof for one exact lease mutation."""
+        wire_body = _wire_json_bytes(payload) or b""
+        body = json.dumps(
+            {
+                "identity_proof": participant.identity_proof,
+                "holder_agent_uuid": participant.agent_uuid,
+                "method": method,
+                "path": path,
+                "body_sha256": hashlib.sha256(wire_body).hexdigest(),
+            }
+        ).encode()
+        headers = {"Content-Type": "application/json"}
+        if self.bearer_token:
+            headers["Authorization"] = f"Bearer {self.bearer_token}"
+        request = urllib.request.Request(
+            f"{self.base_url}/v1/lease-holder/attest",
+            data=body,
+            method="POST",
+            headers=headers,
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_s) as response:
+                decoded = json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            raise DemoError(
+                f"governance attestation failed with HTTP {exc.code}"
+            ) from exc
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise DemoError("governance attestation returned non-JSON data") from exc
+
+        attestation = decoded.get("attestation") if isinstance(decoded, dict) else None
+        if not isinstance(attestation, str) or not attestation.startswith("lat.v1."):
+            error = decoded.get("error") if isinstance(decoded, dict) else "invalid_response"
+            raise DemoError(f"governance attestation failed: {error}")
+        return attestation
+
 
 def _deep_first(value: Any, keys: tuple[str, ...]) -> str | None:
     """Find a string field in a REST/MCP envelope, including JSON text blocks."""
@@ -267,6 +316,9 @@ class DemoResult:
     handoff_id: str
 
 
+AttestationMinter = Callable[[ParticipantIdentity, str, str, dict[str, Any]], str]
+
+
 def _require_ok(response: dict[str, Any], operation: str) -> dict[str, Any]:
     if response.get("ok") is not True:
         raise DemoError(f"{operation} failed: {response}")
@@ -286,6 +338,7 @@ def run_demo(
     participant_a: ParticipantIdentity,
     participant_b: ParticipantIdentity,
     surface_id: str | None = None,
+    mint_attestation: AttestationMinter | None = None,
 ) -> DemoResult:
     participant_a_uuid = participant_a.agent_uuid
     participant_b_uuid = participant_b.agent_uuid
@@ -299,6 +352,14 @@ def run_demo(
     cleanup_lease_id: str | None = None
     handoff_accepted = False
     second_lease_id: str | None = None
+
+    def proof_for(
+        participant: ParticipantIdentity, path: str, payload: dict[str, Any]
+    ) -> str:
+        if mint_attestation is None:
+            return participant.identity_proof
+        return mint_attestation(participant, "POST", path, payload)
+
     try:
         acquire_common = {
             "surface_id": surface_id,
@@ -307,15 +368,16 @@ def run_demo(
             "ttl_s": LEASE_TTL_SECONDS,
             "audit_session": audit_session,
         }
+        spoof_payload = {
+            **acquire_common,
+            "holder_agent_uuid": participant_b_uuid,
+            "intent": "coordination demo: A must not impersonate B",
+        }
         spoof = api.request(
             "POST",
             "/v1/lease/acquire",
-            {
-                **acquire_common,
-                "holder_agent_uuid": participant_b_uuid,
-                "intent": "coordination demo: A must not impersonate B",
-            },
-            identity_proof=participant_a.identity_proof,
+            spoof_payload,
+            identity_proof=proof_for(participant_a, "/v1/lease/acquire", spoof_payload),
         )
         if (
             spoof.get("ok") is not False
@@ -326,28 +388,44 @@ def run_demo(
                 f"participant A's proof was not refused for participant B: {spoof}"
             )
 
+        first_payload = {
+            **acquire_common,
+            "holder_agent_uuid": participant_a_uuid,
+            "intent": "coordination demo: participant A owns the surface",
+        }
+        first_proof = proof_for(participant_a, "/v1/lease/acquire", first_payload)
         first = api.request(
             "POST",
             "/v1/lease/acquire",
-            {
-                **acquire_common,
-                "holder_agent_uuid": participant_a_uuid,
-                "intent": "coordination demo: participant A owns the surface",
-            },
-            identity_proof=participant_a.identity_proof,
+            first_payload,
+            identity_proof=first_proof,
         )
         first_lease_id = _lease_id(first, "participant A acquire")
         cleanup_lease_id = first_lease_id
 
+        replayed = api.request(
+            "POST",
+            "/v1/lease/acquire",
+            first_payload,
+            identity_proof=first_proof,
+        )
+        if (
+            replayed.get("ok") is not False
+            or replayed.get("error") != "permission_denied"
+            or replayed.get("reason") != "identity_proof_replayed"
+        ):
+            raise DemoError(f"captured attestation was not refused on replay: {replayed}")
+
+        blocked_payload = {
+            **acquire_common,
+            "holder_agent_uuid": participant_b_uuid,
+            "intent": "coordination demo: participant B contends for the surface",
+        }
         blocked = api.request(
             "POST",
             "/v1/lease/acquire",
-            {
-                **acquire_common,
-                "holder_agent_uuid": participant_b_uuid,
-                "intent": "coordination demo: participant B contends for the surface",
-            },
-            identity_proof=participant_b.identity_proof,
+            blocked_payload,
+            identity_proof=proof_for(participant_b, "/v1/lease/acquire", blocked_payload),
         )
         if blocked.get("ok") is not False or blocked.get("error") != "held_by_other":
             raise DemoError(
@@ -358,16 +436,19 @@ def run_demo(
         if str(blocked.get("blocking_lease_id")) != first_lease_id:
             raise DemoError(f"conflict named the wrong blocking lease: {blocked}")
 
+        offer_payload = {
+            "lease_id": first_lease_id,
+            "to_holder_agent_uuid": participant_b_uuid,
+            "ttl_s": LEASE_TTL_SECONDS,
+        }
         offer = _require_ok(
             api.request(
                 "POST",
                 "/v1/lease/handoff/offer",
-                {
-                    "lease_id": first_lease_id,
-                    "to_holder_agent_uuid": participant_b_uuid,
-                    "ttl_s": LEASE_TTL_SECONDS,
-                },
-                identity_proof=participant_a.identity_proof,
+                offer_payload,
+                identity_proof=proof_for(
+                    participant_a, "/v1/lease/handoff/offer", offer_payload
+                ),
             ),
             "handoff offer",
         )
@@ -375,12 +456,15 @@ def run_demo(
         if not handoff_id:
             raise DemoError(f"handoff offer returned no handoff_id: {offer}")
 
+        accept_payload = {"handoff_id": handoff_id}
         _require_ok(
             api.request(
                 "POST",
                 "/v1/lease/handoff/accept",
-                {"handoff_id": handoff_id},
-                identity_proof=participant_b.identity_proof,
+                accept_payload,
+                identity_proof=proof_for(
+                    participant_b, "/v1/lease/handoff/accept", accept_payload
+                ),
             ),
             "handoff accept",
         )
@@ -408,12 +492,15 @@ def run_demo(
             )
         cleanup_lease_id = second_lease_id
 
+        release_payload = {"lease_id": second_lease_id, "release_reason": "normal"}
         _require_ok(
             api.request(
                 "POST",
                 "/v1/lease/release",
-                {"lease_id": second_lease_id, "release_reason": "normal"},
-                identity_proof=participant_b.identity_proof,
+                release_payload,
+                identity_proof=proof_for(
+                    participant_b, "/v1/lease/release", release_payload
+                ),
             ),
             "participant B release",
         )
@@ -430,20 +517,31 @@ def run_demo(
     finally:
         if cleanup_lease_id is not None:
             cleanup_identity = participant_b if handoff_accepted else participant_a
-            _best_effort_release(api, cleanup_lease_id, cleanup_identity.identity_proof)
+            _best_effort_release(api, cleanup_lease_id, cleanup_identity, mint_attestation)
         elif handoff_accepted and second_lease_id is None:
             # Accept closes A's lease and creates B's. If the status request
             # failed, rediscover that receiving lease before leaving.
-            _best_effort_release_surface(api, surface_id, participant_b)
+            _best_effort_release_surface(api, surface_id, participant_b, mint_attestation)
 
 
-def _best_effort_release(api: LeaseAPI, lease_id: str, identity_proof: str) -> None:
+def _best_effort_release(
+    api: LeaseAPI,
+    lease_id: str,
+    holder: ParticipantIdentity,
+    mint_attestation: AttestationMinter | None,
+) -> None:
     try:
+        payload = {"lease_id": lease_id, "release_reason": "normal"}
+        proof = (
+            mint_attestation(holder, "POST", "/v1/lease/release", payload)
+            if mint_attestation
+            else holder.identity_proof
+        )
         api.request(
             "POST",
             "/v1/lease/release",
-            {"lease_id": lease_id, "release_reason": "normal"},
-            identity_proof=identity_proof,
+            payload,
+            identity_proof=proof,
         )
     except Exception:  # noqa: BLE001 - cleanup must preserve the original error
         pass
@@ -453,6 +551,7 @@ def _best_effort_release_surface(
     api: LeaseAPI,
     surface_id: str,
     holder: ParticipantIdentity,
+    mint_attestation: AttestationMinter | None,
 ) -> None:
     try:
         status = api.request(
@@ -467,7 +566,7 @@ def _best_effort_release_surface(
         ):
             lease_id = lease.get("lease_id")
             if lease_id:
-                _best_effort_release(api, str(lease_id), holder.identity_proof)
+                _best_effort_release(api, str(lease_id), holder, mint_attestation)
     except Exception:  # noqa: BLE001 - the 60s TTL is the final cleanup bound
         pass
 
@@ -475,6 +574,7 @@ def _best_effort_release_surface(
 def print_receipt(result: DemoResult, base_url: str) -> None:
     print(f"[ok] lease plane reachable at {base_url}")
     print("[identity] A's proof cannot impersonate B")
+    print("[replay] captured request attestation is single-use")
     print(f"[acquired] participant A holds {result.surface_id}")
     print("[protected] participant B refused: held_by_other")
     print(f"[handoff] ownership moved A -> B ({result.handoff_id[:8]}...)")
@@ -482,11 +582,12 @@ def print_receipt(result: DemoResult, base_url: str) -> None:
     print("\nActivation receipt")
     print("  exclusive surface ownership: active")
     print("  governance identity binding: enforced")
+    print("  request-bound replay resistance: active")
     print("  typed collision refusal: active")
     print("  atomic handoff: active")
     print("  audit trail: persisted by the lease plane")
     print("  enforcement boundary: participating clients must acquire before acting")
-    print("  not established: cross-operator trust or improved task outcomes")
+    print("  not exercised by this local demo: cross-operator trust or improved task outcomes")
 
 
 def main() -> int:
@@ -496,7 +597,12 @@ def main() -> int:
         governance = GovernanceAPI(governance_base_url(), governance_bearer_token())
         participant_a = governance.start_participant("Coordination demo participant A")
         participant_b = governance.start_participant("Coordination demo participant B")
-        result = run_demo(api, participant_a=participant_a, participant_b=participant_b)
+        result = run_demo(
+            api,
+            participant_a=participant_a,
+            participant_b=participant_b,
+            mint_attestation=governance.attest,
+        )
     except (DemoError, urllib.error.URLError, ConnectionError, TimeoutError) as exc:
         print(
             f"Coordination demo could not complete against {base_url}.\n"

@@ -43,6 +43,9 @@ redis>=5.0.0,<9.0.0
 # Environment variable loading
 python-dotenv>=1.0.0,<2.0.0
 
+# Ed25519 operator signatures for request-bound lease attestations.
+cryptography>=41.0.0,<51.0.0
+
 # Optional embedding backend — uncomment if you want bge-m3 semantic search
 # in the container. Adds ~1.3 GB to the image.
 # sentence-transformers>=2.2.0,<6.0.0

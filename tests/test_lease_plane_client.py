@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -118,7 +120,7 @@ def test_acquire_ok_parses_idempotent_drift_warning():
 
 def test_identity_proof_is_sent_only_in_the_dedicated_header() -> None:
     holder = uuid4()
-    proof = "v1.sensitive-payload.sensitive-signature"
+    proof = "lat.v1.signed-payload.signed-signature"
     seen: dict[str, Any] = {}
 
     def transport(request: LeaseHTTPRequest):
@@ -149,7 +151,7 @@ def test_identity_proof_is_sent_only_in_the_dedicated_header() -> None:
 
 
 def test_identity_proof_threads_through_every_holder_mutation() -> None:
-    proof = "v1.proof.signature"
+    proof = "lat.v1.proof.signature"
     lease_id = uuid4()
     handoff_id = uuid4()
     seen: list[LeaseHTTPRequest] = []
@@ -182,6 +184,180 @@ def test_identity_proof_threads_through_every_holder_mutation() -> None:
         request.headers["X-Unitares-Identity-Proof"] == proof for request in seen
     )
     assert all(proof not in str(request.json_body) for request in seen)
+
+
+def test_continuity_proof_is_exchanged_for_exact_request_bound_attestation() -> None:
+    holder = uuid4()
+    raw_proof = "v1.sensitive-continuity.sensitive-signature"
+    signed = "lat.v1.request-bound.signature"
+    seen: list[LeaseHTTPRequest] = []
+
+    def transport(request: LeaseHTTPRequest):
+        seen.append(request)
+        if request.url.endswith("/v1/lease-holder/attest"):
+            return {"ok": True, "attestation": signed}
+        return {
+            "ok": True,
+            "lease": _lease_payload(holder_agent_uuid=holder),
+            "idempotent": False,
+            "drift_warning": [],
+        }
+
+    request = AcquireRequest(
+        surface_id="maintenance:/request-bound",
+        holder_agent_uuid=holder,
+        holder_class="process_instance",
+        holder_kind="remote_heartbeat",
+        ttl_s=90,
+    )
+    result = LeasePlaneClient(transport=transport).acquire(
+        request, identity_proof=raw_proof
+    )
+
+    assert isinstance(result, AcquireOk)
+    assert len(seen) == 2
+    exchange, mutation = seen
+    assert exchange.url.endswith("/v1/lease-holder/attest")
+    expected_body = request.model_dump(mode="json", exclude_none=True)
+    expected_wire = json.dumps(expected_body, separators=(",", ":")).encode()
+    assert exchange.json_body == {
+        "identity_proof": raw_proof,
+        "method": "POST",
+        "path": "/v1/lease/acquire",
+        "body_sha256": hashlib.sha256(expected_wire).hexdigest(),
+    }
+    assert mutation.headers["X-Unitares-Identity-Proof"] == signed
+    assert raw_proof not in str(mutation.headers)
+    assert raw_proof not in str(mutation.json_body)
+
+
+def test_mixed_version_exchange_failure_falls_back_to_legacy_proof() -> None:
+    holder = uuid4()
+    raw_proof = "v1.legacy.signature"
+    seen: list[LeaseHTTPRequest] = []
+
+    def transport(request: LeaseHTTPRequest):
+        seen.append(request)
+        if request.url.endswith("/v1/lease-holder/attest"):
+            return {"ok": False, "error": "not_found"}
+        return {
+            "ok": True,
+            "lease": _lease_payload(holder_agent_uuid=holder),
+            "idempotent": False,
+            "drift_warning": [],
+        }
+
+    request = AcquireRequest(
+        surface_id="file:///tmp/mixed-version",
+        holder_agent_uuid=holder,
+        holder_class="process_instance",
+        holder_kind="remote_heartbeat",
+        ttl_s=30,
+    )
+    config = LeasePlaneClientConfig(identity_legacy_fallback=True)
+    assert isinstance(
+        LeasePlaneClient(config, transport=transport).acquire(
+            request, identity_proof=raw_proof
+        ),
+        AcquireOk,
+    )
+    assert seen[-1].headers["X-Unitares-Identity-Proof"] == raw_proof
+
+
+def test_exchange_failure_does_not_send_mutation_by_default() -> None:
+    holder = uuid4()
+    raw_proof = "v1.private-continuity.signature"
+    seen: list[LeaseHTTPRequest] = []
+
+    def transport(request: LeaseHTTPRequest):
+        seen.append(request)
+        if request.url.endswith("/v1/lease-holder/attest"):
+            return {"ok": False, "error": "attestation_unavailable"}
+        return {
+            "ok": False,
+            "error": "permission_denied",
+            "reason": "identity_proof_invalid",
+        }
+
+    request = AcquireRequest(
+        surface_id="file:///tmp/no-raw-fallback",
+        holder_agent_uuid=holder,
+        holder_class="process_instance",
+        holder_kind="remote_heartbeat",
+        ttl_s=30,
+    )
+    result = LeasePlaneClient(transport=transport).acquire(
+        request, identity_proof=raw_proof
+    )
+
+    assert isinstance(result, AcquireServiceUnavailable)
+    assert result.reason == "identity_attestation_unavailable"
+    assert len(seen) == 1
+    assert seen[0].url.endswith("/v1/lease-holder/attest")
+
+
+def test_remote_http_governance_url_never_receives_continuity_proof() -> None:
+    raw_proof = "v1.private-continuity.signature"
+    seen: list[LeaseHTTPRequest] = []
+
+    def transport(request: LeaseHTTPRequest):
+        seen.append(request)
+        raise AssertionError(
+            "unsafe credential target must be rejected before transport"
+        )
+
+    request = AcquireRequest(
+        surface_id="maintenance:/unsafe-exchange",
+        holder_agent_uuid=uuid4(),
+        holder_class="process_instance",
+        holder_kind="remote_heartbeat",
+        ttl_s=30,
+    )
+    config = LeasePlaneClientConfig(governance_url="http://remote.example:8767")
+    result = LeasePlaneClient(config, transport=transport).acquire(
+        request, identity_proof=raw_proof
+    )
+
+    assert isinstance(result, AcquireServiceUnavailable)
+    assert result.reason == "identity_attestation_unavailable"
+    assert seen == []
+
+
+def test_explicit_internal_http_host_can_receive_exchange() -> None:
+    raw_proof = "v1.private-continuity.signature"
+    signed = "lat.v1.bound.signature"
+    seen: list[LeaseHTTPRequest] = []
+    holder = uuid4()
+
+    def transport(request: LeaseHTTPRequest):
+        seen.append(request)
+        if request.url.endswith("/v1/lease-holder/attest"):
+            return {"ok": True, "attestation": signed}
+        return {
+            "ok": True,
+            "lease": _lease_payload(holder_agent_uuid=holder),
+            "idempotent": False,
+            "drift_warning": [],
+        }
+
+    config = LeasePlaneClientConfig(
+        governance_url="http://governance-mcp:8767",
+        insecure_governance_hosts=("governance-mcp",),
+    )
+    request = AcquireRequest(
+        surface_id="maintenance:/internal-exchange",
+        holder_agent_uuid=holder,
+        holder_class="process_instance",
+        holder_kind="remote_heartbeat",
+        ttl_s=30,
+    )
+    result = LeasePlaneClient(config, transport=transport).acquire(
+        request, identity_proof=raw_proof
+    )
+
+    assert isinstance(result, AcquireOk)
+    assert seen[0].url == "http://governance-mcp:8767/v1/lease-holder/attest"
+    assert seen[1].headers["X-Unitares-Identity-Proof"] == signed
 
 
 def test_acquire_held_by_other_parses_holder_and_expiry():

@@ -7,11 +7,13 @@ defmodule UnitaresLeasePlane.IdentityBindingTest do
     previous_mode = Application.get_env(:lease_plane, :identity_binding_mode)
     previous_verifier = Application.get_env(:lease_plane, :identity_verifier)
     previous_kinds = Application.get_env(:lease_plane, :identity_bound_surface_kinds)
+    previous_format = Application.get_env(:lease_plane, :identity_proof_format)
 
     on_exit(fn ->
       restore_env(:identity_binding_mode, previous_mode)
       restore_env(:identity_verifier, previous_verifier)
       restore_env(:identity_bound_surface_kinds, previous_kinds)
+      restore_env(:identity_proof_format, previous_format)
     end)
 
     :ok
@@ -65,6 +67,71 @@ defmodule UnitaresLeasePlane.IdentityBindingTest do
     assert IdentityBinding.parse_mode(" enforce ") == :enforce
 
     assert_raise ArgumentError, fn -> IdentityBinding.parse_mode("enabled") end
+  end
+
+  test "proof-format and trusted-issuer parsers fail closed" do
+    assert IdentityBinding.parse_proof_format(nil) == :hybrid
+    assert IdentityBinding.parse_proof_format(" ATTESTATION ") == :attestation
+    assert_raise ArgumentError, fn -> IdentityBinding.parse_proof_format("signed-ish") end
+
+    assert IdentityBinding.parse_trusted_issuers(nil) == %{}
+
+    assert IdentityBinding.parse_trusted_issuers(
+             ~s({"operator-a":"https://operator-a.example/keys"})
+           ) == %{"operator-a" => "https://operator-a.example/keys"}
+
+    assert_raise ArgumentError, fn -> IdentityBinding.parse_trusted_issuers("[]") end
+
+    assert_raise ArgumentError, fn ->
+      IdentityBinding.parse_trusted_issuers(~s({"operator-a":"file:///tmp/key"}))
+    end
+
+    assert_raise ArgumentError, fn ->
+      IdentityBinding.parse_trusted_issuers(
+        ~s({"operator-a":"https://a.example/keys","operator-b":"https://b.example/keys"})
+      )
+    end
+
+    assert IdentityBinding.parse_attestation_audience(" plane-a ") == "plane-a"
+    assert_raise ArgumentError, fn -> IdentityBinding.parse_attestation_audience("two words") end
+
+    assert IdentityBinding.parse_insecure_http_urls(
+             "http://governance-mcp:8767/v1/lease-holder/keys"
+           ) == MapSet.new(["http://governance-mcp:8767/v1/lease-holder/keys"])
+
+    assert_raise ArgumentError, fn ->
+      IdentityBinding.parse_insecure_http_urls("https://operator.example/keys")
+    end
+  end
+
+  test "attestation-only mode refuses legacy proof before any governance call" do
+    Application.put_env(:lease_plane, :identity_binding_mode, :enforce)
+    Application.put_env(:lease_plane, :identity_proof_format, :attestation)
+    Application.delete_env(:lease_plane, :identity_verifier)
+
+    assert {:error, :identity_proof_invalid} =
+             IdentityBinding.authorize(
+               "11111111-1111-4111-8111-111111111111",
+               "v1.legacy.signature",
+               "agent",
+               %{
+                 method: "POST",
+                 path: "/v1/lease/acquire",
+                 body_sha256: String.duplicate("0", 64)
+               }
+             )
+  end
+
+  test "request context hashes exact retained body bytes" do
+    raw = ~s({"lease_id":"abc", "spacing":"is-significant"})
+    conn = Plug.Test.conn(:post, "/v1/lease/renew", raw)
+    assert {:ok, ^raw, conn} = UnitaresLeasePlane.RawBodyReader.read_body(conn, [])
+
+    assert IdentityBinding.request_context(conn) == %{
+             method: "POST",
+             path: "/v1/lease/renew",
+             body_sha256: :crypto.hash(:sha256, raw) |> Base.encode16(case: :lower)
+           }
   end
 
   test "surface-kind rollout can enforce maintenance without blocking agent presence" do

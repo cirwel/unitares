@@ -179,6 +179,61 @@ def test_acquire_with_retry_returns_service_unavailable_without_retry():
     assert sleeps == []  # no retries — service_unavailable is terminal for this method
 
 
+def test_acquire_with_retry_rejects_reused_single_use_attestation():
+    holder = uuid4()
+    calls: list[LeaseHTTPRequest] = []
+
+    def transport(request: LeaseHTTPRequest):
+        calls.append(request)
+        return _held_by_other_payload(uuid4())
+
+    client = LeasePlaneClient(transport=transport)
+    with pytest.raises(ValueError, match="identity_proof_factory"):
+        client.acquire_with_retry(
+            _make_request(holder),
+            max_attempts=2,
+            identity_proof="lat.v1.one-use.signature",
+        )
+
+    assert calls == []
+
+
+def test_acquire_with_retry_requests_a_fresh_attestation_per_attempt():
+    holder = uuid4()
+    payloads = iter([_held_by_other_payload(uuid4()), _ok_lease_payload(holder)])
+    tokens = iter(["lat.v1.first.signature", "lat.v1.second.signature"])
+    seen_proofs: list[str] = []
+
+    def transport(request: LeaseHTTPRequest):
+        seen_proofs.append(request.headers["X-Unitares-Identity-Proof"])
+        return next(payloads)
+
+    result = LeasePlaneClient(transport=transport).acquire_with_retry(
+        _make_request(holder),
+        max_attempts=2,
+        sleep=lambda _seconds: None,
+        identity_proof_factory=lambda: next(tokens),
+    )
+
+    assert isinstance(result, AcquireOk)
+    assert seen_proofs == ["lat.v1.first.signature", "lat.v1.second.signature"]
+
+
+def test_acquire_with_retry_rejects_empty_factory_output_before_transport():
+    calls: list[LeaseHTTPRequest] = []
+
+    def transport(request: LeaseHTTPRequest):
+        calls.append(request)
+        return _ok_lease_payload(uuid4())
+
+    with pytest.raises(ValueError, match="non-empty string"):
+        LeasePlaneClient(transport=transport).acquire_with_retry(
+            _make_request(uuid4()), identity_proof_factory=lambda: ""
+        )
+
+    assert calls == []
+
+
 # ---------- §7.3.5 _urllib_transport HTTP-error body-parse tests ----------
 
 

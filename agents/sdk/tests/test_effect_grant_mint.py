@@ -36,7 +36,10 @@ class RecordingTransport:
 
 def _client(transport):
     return LeasePlaneClient(
-        LeasePlaneClientConfig(governance_url="http://gov.test:8767"),
+        LeasePlaneClientConfig(
+            governance_url="http://gov.test:8767",
+            insecure_governance_hosts=("gov.test",),
+        ),
         transport=transport,
     )
 

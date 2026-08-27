@@ -37,6 +37,7 @@ def test_shared_contract_http_setup_has_runnable_dependency_contract() -> None:
     assert any(requirement.startswith("starlette") for requirement in full)
     for requirements_file in ("requirements-full.txt", "requirements-docker.txt"):
         assert "uvicorn>=0.35.0,<1.0.0" in _read(requirements_file)
+        assert "cryptography>=41.0.0,<51.0.0" in _read(requirements_file)
 
 
 def test_dev_install_provides_starlette_testclient_backend() -> None:
@@ -74,8 +75,22 @@ def test_tier_one_quickstart_is_release_pinned_and_coordination_complete() -> No
     assert "UNITARES_LEASE_PLANE_URL: http://lease-plane:8788" in compose
     assert "UNITARES_LEASE_IDENTITY_BINDING:" in compose
     assert "UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:" in compose
+    assert "UNITARES_LEASE_IDENTITY_PROOF_FORMAT:" in compose
+    assert "UNITARES_LEASE_TRUSTED_ISSUERS:" in compose
+    assert (
+        "UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS: "
+        "${UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:-maintenance}"
+    ) in compose
+    assert len(
+        re.findall(r"^      UNITARES_LEASE_ATTESTATION_AUDIENCE:", compose, re.MULTILINE)
+    ) == 2
+    assert "UNITARES_LEASE_TRUST_INSECURE_HTTP_URLS:" in compose
+    assert "UNITARES_LEASE_TRUST_ALLOW_INSECURE_HTTP:" not in compose
+    assert "UNITARES_LEASE_ATTESTATION_SIGNING_KEY:" in compose
+    assert "request-bound" in readme
+    assert "refusing replay" in manual
     assert "UNITARES_CONTINUITY_TOKEN_SECRET:" in compose
-    assert "A's signed proof is refused" in readme
+    assert "A's attestation is refused" in readme
     assert "rejecting A's" in manual
     assert "condition: service_healthy" in compose
 

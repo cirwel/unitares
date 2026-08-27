@@ -14,7 +14,7 @@ defmodule UnitaresLeasePlane.MixProject do
 
   def application do
     [
-      extra_applications: [:logger, :inets],
+      extra_applications: [:logger, :inets, :ssl],
       mod: {UnitaresLeasePlane.Application, []}
     ]
   end
