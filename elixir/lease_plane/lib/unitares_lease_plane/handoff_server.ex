@@ -50,6 +50,14 @@ defmodule UnitaresLeasePlane.HandoffServer do
     GenServer.call(__MODULE__, {:accept, handoff_id})
   end
 
+  @doc "Return the immutable recipient and source lease for an active offer."
+  @spec authorization_context(binary()) ::
+          {:ok, %{recipient_uuid: binary(), lease_id: binary()}}
+          | {:error, :not_found | :expired}
+  def authorization_context(handoff_id) when is_binary(handoff_id) do
+    GenServer.call(__MODULE__, {:authorization_context, handoff_id})
+  end
+
   @spec expire_stale :: non_neg_integer()
   def expire_stale do
     GenServer.call(__MODULE__, :expire_stale)
@@ -80,6 +88,23 @@ defmodule UnitaresLeasePlane.HandoffServer do
     case Map.fetch(state.pending, handoff_id) do
       {:ok, pending} ->
         accept_pending(pending, state)
+
+      :error ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  def handle_call({:authorization_context, handoff_id}, _from, state) do
+    case Map.fetch(state.pending, handoff_id) do
+      {:ok, pending} ->
+        if expired?(pending) do
+          state = %{state | pending: Map.delete(state.pending, handoff_id)}
+          {:reply, {:error, :expired}, state}
+        else
+          {:reply,
+           {:ok, %{recipient_uuid: pending.to_holder_agent_uuid, lease_id: pending.lease_id}},
+           state}
+        end
 
       :error ->
         {:reply, {:error, :not_found}, state}

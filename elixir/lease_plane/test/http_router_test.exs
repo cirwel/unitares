@@ -15,8 +15,16 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
   setup do
     Application.put_env(:lease_plane, :bearer_token, @bearer)
     Application.put_env(:lease_plane, :force_release_token, @force_release_token)
+    Application.put_env(:lease_plane, :identity_binding_mode, :off)
+    Application.delete_env(:lease_plane, :identity_verifier)
     surface = unique_surface_id("http")
-    on_exit(fn -> cleanup_surface(surface) end)
+
+    on_exit(fn ->
+      cleanup_surface(surface)
+      Application.put_env(:lease_plane, :identity_binding_mode, :off)
+      Application.delete_env(:lease_plane, :identity_verifier)
+    end)
+
     {:ok, surface: surface}
   end
 
@@ -41,6 +49,15 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
     :post
     |> conn(path, Jason.encode!(body))
     |> put_req_header("content-type", "application/json")
+    |> authed()
+    |> HTTPRouter.call(@opts)
+  end
+
+  defp post_json_with_proof(path, body, proof) do
+    :post
+    |> conn(path, Jason.encode!(body))
+    |> put_req_header("content-type", "application/json")
+    |> put_req_header("x-unitares-identity-proof", proof)
     |> authed()
     |> HTTPRouter.call(@opts)
   end
@@ -738,6 +755,134 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       resp = post_json("/v1/lease/handoff/accept", %{handoff_id: random_uuid()})
       assert resp.status == 404
       assert parsed(resp)["error"] == "not_found"
+    end
+  end
+
+  describe "enforced governance identity binding" do
+    setup do
+      Application.put_env(:lease_plane, :identity_binding_mode, :enforce)
+
+      Application.put_env(:lease_plane, :identity_verifier, fn holder, proof ->
+        if proof == "proof:" <> holder, do: :ok, else: {:error, :invalid}
+      end)
+
+      :ok
+    end
+
+    test "acquire binds the claimed holder and later mutations require that holder's proof",
+         ctx do
+      holder = random_uuid()
+      other = random_uuid()
+      body = acquire_body(ctx.surface, holder_agent_uuid: holder)
+
+      missing = post_json("/v1/lease/acquire", body)
+      assert missing.status == 403
+      assert parsed(missing)["reason"] == "identity_proof_invalid"
+
+      mismatched = post_json_with_proof("/v1/lease/acquire", body, "proof:" <> other)
+      assert mismatched.status == 403
+      assert parsed(mismatched)["reason"] == "identity_proof_invalid"
+
+      acquired = post_json_with_proof("/v1/lease/acquire", body, "proof:" <> holder)
+      assert acquired.status == 200
+      lease_id = parsed(acquired)["lease"]["lease_id"]
+
+      renew_without_proof = post_json("/v1/lease/renew", %{lease_id: lease_id})
+      assert renew_without_proof.status == 403
+
+      renew_with_proof =
+        post_json_with_proof("/v1/lease/renew", %{lease_id: lease_id}, "proof:" <> holder)
+
+      assert renew_with_proof.status == 200
+
+      release_as_other =
+        post_json_with_proof(
+          "/v1/lease/release",
+          %{lease_id: lease_id, release_reason: "normal"},
+          "proof:" <> other
+        )
+
+      assert release_as_other.status == 403
+
+      released =
+        post_json_with_proof(
+          "/v1/lease/release",
+          %{lease_id: lease_id, release_reason: "normal"},
+          "proof:" <> holder
+        )
+
+      assert released.status == 200
+    end
+
+    test "handoff offer requires the current holder and accept requires the recipient", ctx do
+      holder = random_uuid()
+      recipient = random_uuid()
+
+      acquired =
+        post_json_with_proof(
+          "/v1/lease/acquire",
+          acquire_body(ctx.surface, holder_agent_uuid: holder),
+          "proof:" <> holder
+        )
+
+      lease_id = parsed(acquired)["lease"]["lease_id"]
+      offer_body = %{lease_id: lease_id, to_holder_agent_uuid: recipient, ttl_s: 30}
+
+      refused_offer =
+        post_json_with_proof("/v1/lease/handoff/offer", offer_body, "proof:" <> recipient)
+
+      assert refused_offer.status == 403
+
+      offer = post_json_with_proof("/v1/lease/handoff/offer", offer_body, "proof:" <> holder)
+      assert offer.status == 200
+      handoff_id = parsed(offer)["handoff_id"]
+
+      refused_accept =
+        post_json_with_proof(
+          "/v1/lease/handoff/accept",
+          %{handoff_id: handoff_id},
+          "proof:" <> holder
+        )
+
+      assert refused_accept.status == 403
+
+      accepted =
+        post_json_with_proof(
+          "/v1/lease/handoff/accept",
+          %{handoff_id: handoff_id},
+          "proof:" <> recipient
+        )
+
+      assert accepted.status == 200
+
+      status =
+        :get
+        |> conn("/v1/lease/status?surface_id=#{URI.encode_www_form(ctx.surface)}")
+        |> authed()
+        |> HTTPRouter.call(@opts)
+
+      receiving_lease = parsed(status)["lease"]
+      assert receiving_lease["holder_agent_uuid"] == recipient
+
+      assert post_json_with_proof(
+               "/v1/lease/release",
+               %{lease_id: receiving_lease["lease_id"], release_reason: "normal"},
+               "proof:" <> recipient
+             ).status == 200
+    end
+
+    test "governance verifier outage fails closed with typed service absence", ctx do
+      Application.put_env(:lease_plane, :identity_verifier, fn _, _ -> {:error, :timeout} end)
+
+      response =
+        post_json_with_proof(
+          "/v1/lease/acquire",
+          acquire_body(ctx.surface),
+          "proof:anything"
+        )
+
+      assert response.status == 503
+      assert parsed(response)["reason"] == "identity_verification_unavailable"
     end
   end
 
