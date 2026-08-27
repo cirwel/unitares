@@ -53,7 +53,7 @@ class ResearchRunNotFound(FileNotFoundError):
 
 
 def registry_dir(root: str | Path | None = None) -> Path:
-    """Resolve the registry directory, honoring the env override."""
+    """Resolve the registry directory; unset uses ``DEFAULT_REGISTRY_DIR``."""
 
     raw = root or os.getenv(REGISTRY_ENV) or DEFAULT_REGISTRY_DIR
     return Path(raw).expanduser()
