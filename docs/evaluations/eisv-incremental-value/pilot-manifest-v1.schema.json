@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:unitares:schema:eisv-ablation-pilot-manifest:v1",
+  "title": "EISV Incremental-Value Pilot Manifest",
+  "description": "Create-only configuration for the instrumentation pilot. Pilot versions are provisional and must not be represented as a confirmatory freeze.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "study_id",
+    "dataset_namespace",
+    "phase",
+    "lifecycle_status",
+    "created_at",
+    "collection_enabled",
+    "pilot_authorization",
+    "collection_guards",
+    "artifacts",
+    "versions",
+    "arm_registry",
+    "primary_label_producer_classes",
+    "confirmatory_freeze"
+  ],
+  "properties": {
+    "schema_version": { "const": "eisv-ablation-pilot-manifest.v1" },
+    "study_id": { "const": "eisv-incremental-value-v1" },
+    "dataset_namespace": { "const": "eisv-incremental-value-v1" },
+    "phase": { "const": "pilot" },
+    "lifecycle_status": { "const": "pilot_provisional" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "collection_enabled": { "type": "boolean" },
+    "pilot_authorization": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["authorization_id", "start_not_before"],
+          "properties": {
+            "authorization_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$"
+            },
+            "start_not_before": { "type": "string", "format": "date-time" }
+          }
+        }
+      ]
+    },
+    "collection_guards": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "shadow_scores_hidden_from_agent",
+        "collection_changes_production_policy",
+        "raw_prompt_or_response_required"
+      ],
+      "properties": {
+        "shadow_scores_hidden_from_agent": { "const": true },
+        "collection_changes_production_policy": { "const": false },
+        "raw_prompt_or_response_required": { "const": false }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_path",
+        "protocol_sha256",
+        "episode_schema_path",
+        "episode_schema_sha256"
+      ],
+      "properties": {
+        "protocol_path": {
+          "const": "docs/proposals/eisv-incremental-value-ablation-v1.md"
+        },
+        "protocol_sha256": { "$ref": "#/$defs/sha256" },
+        "episode_schema_path": {
+          "const": "docs/evaluations/eisv-incremental-value/eisv-ablation-episode-v2.schema.json"
+        },
+        "episode_schema_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "versions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "access_policy_version",
+        "independence_resolver_version",
+        "config_version",
+        "feature_registry_version",
+        "scorer_bundle_version",
+        "instrument_validation_bundle_version"
+      ],
+      "properties": {
+        "protocol_version": { "type": "string", "minLength": 1 },
+        "access_policy_version": { "const": "eisv-incremental-access.v1" },
+        "independence_resolver_version": { "type": "string", "minLength": 1 },
+        "config_version": { "type": "string", "minLength": 1 },
+        "feature_registry_version": { "type": "string", "minLength": 1 },
+        "scorer_bundle_version": { "type": "string", "minLength": 1 },
+        "instrument_validation_bundle_version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "arm_registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["shadow_arm_ids", "production_arm_id"],
+      "properties": {
+        "shadow_arm_ids": {
+          "type": "array",
+          "minItems": 11,
+          "maxItems": 11,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "a0_base_rate",
+              "a0_persistence",
+              "a1_direct_evidence",
+              "a2_behavioral_no_eisv",
+              "a3_behavioral_plus_eisv",
+              "a4_eisv_only",
+              "a5_minus_e",
+              "a5_minus_i",
+              "a5_minus_s",
+              "a5_minus_v",
+              "a6_legacy_only"
+            ]
+          }
+        },
+        "production_arm_id": { "const": "a7_production" }
+      }
+    },
+    "primary_label_producer_classes": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": { "enum": ["external_system", "human", "server_primitive"] }
+    },
+    "confirmatory_freeze": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "preregistration_sha256",
+        "config_sha256",
+        "independence_registry_sha256",
+        "confirmatory_start_not_before"
+      ],
+      "properties": {
+        "status": { "const": "not_frozen" },
+        "preregistration_sha256": { "type": "null" },
+        "config_sha256": { "type": "null" },
+        "independence_registry_sha256": { "type": "null" },
+        "confirmatory_start_not_before": { "type": "null" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "collection_enabled": { "const": true } },
+        "required": ["collection_enabled"]
+      },
+      "then": {
+        "properties": { "pilot_authorization": { "type": "object" } }
+      },
+      "else": {
+        "properties": { "pilot_authorization": { "type": "null" } }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}
