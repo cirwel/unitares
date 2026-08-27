@@ -62,6 +62,7 @@ from .persistence import (
     _find_agent_by_label,
     ensure_agent_persisted,
     set_agent_label,
+    set_agent_label_resolved,
 )
 
 
@@ -2416,12 +2417,27 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             logger.info(f"[ONBOARD] Rebadged agent_id -> {refreshed_agent_id}")
 
     # Set label if requested (and different from current)
+    _label_renamed_from: Optional[str] = None
     if name and name != agent_label:
-        success = await set_agent_label(agent_uuid, name, session_key=session_key)
-        if success:
-            agent_label = name
+        # Resolved form: a collision renames this agent to `{name}_{uuid8}`,
+        # and reporting `name` regardless told the agent it holds a label the
+        # database does not have. Verified 2026-08-26 against the live server:
+        # a second mint of the same name returned display_name="ZzTestCollision"
+        # while core.agents held "ZzTestCollision_4dc58779". Every resident
+        # surface resolves by exact label, so that divergence is how a renamed
+        # resident goes missing with nothing anywhere reporting it.
+        applied = await set_agent_label_resolved(agent_uuid, name, session_key=session_key)
+        if applied:
+            if applied != name:
+                _label_renamed_from = name
+                logger.warning(
+                    "[ONBOARD] %s requested label %r but was renamed to %r "
+                    "(another active agent holds %r)",
+                    agent_uuid[:8], name, applied, name,
+                )
+            agent_label = applied
             # Refresh identity object
-            identity["label"] = name
+            identity["label"] = applied
         else:
             logger.warning(f"[ONBOARD] set_agent_label returned False for {agent_uuid[:8]}... name={name}")
             # Fallback: use the name for this response even if DB persistence failed
@@ -2739,6 +2755,26 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                     )
         except Exception:
             pass  # Never let a response annotation fail a mint.
+
+    # A collision rename is otherwise invisible to the caller: display_name
+    # now carries the applied label, but nothing said the requested one was
+    # refused. Report it so an agent (or its operator) can act, rather than
+    # discovering weeks later that a resident never matched its roster label.
+    if _label_renamed_from:
+        result["label_renamed"] = {
+            "requested": _label_renamed_from,
+            "applied": agent_label,
+            "reason": "label_taken_by_active_agent",
+            "detail": (
+                f"{_label_renamed_from!r} is already held by another active "
+                f"agent, so this identity was minted as {agent_label!r}. "
+                "Labels are cosmetic and identity is the uuid, but resident "
+                "surfaces resolve by exact label — if this agent is meant to "
+                "be the resident named "
+                f"{_label_renamed_from!r}, free that name (archive or rename "
+                "the incumbent) and bootstrap again."
+            ),
+        }
 
     # Temporal narrator — contextual time awareness (silence by default)
     try:
