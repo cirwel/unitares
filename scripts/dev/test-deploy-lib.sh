@@ -522,6 +522,80 @@ EOS
 ) && ok "[guard] deploy-status --json carries checkout; deploy-apply reads it" \
   || bad "deploy-status/deploy-apply checkout field contract"
 
+# ── restart_service: kickstart-vs-reload by plist content-hash sidecar ──
+# launchctl and sleep are shadowed by shell functions inside each subshell:
+# no live services touched, and the retry loop's sleeps cost nothing. The
+# fake logs every call so assertions read intent, not side effects.
+RS_PLIST="$SB/rs.plist"; printf 'v1\n' > "$RS_PLIST"
+
+# helper: run deploy_lib_restart_service under a scripted fake launchctl.
+#   $1 state_dir  $2 log  $3 bootout_rc  $4 bootstrap_fail_count (before success;
+#   99 = never succeeds)  $5 print_rc
+_rs_run() {
+  local state="$1" log="$2" bo_rc="$3" bs_fail="$4" pr_rc="$5"
+  (
+    set -euo pipefail; . "$LIB"
+    export UNITARES_DEPLOY_STATE_DIR="$state"
+    sleep() { :; }
+    _BS_COUNT=0
+    launchctl() {
+      echo "launchctl $*" >> "$log"
+      case "$1" in
+        kickstart) return 0 ;;
+        bootout)   return "$bo_rc" ;;
+        bootstrap)
+          _BS_COUNT=$((_BS_COUNT + 1))
+          [ "$_BS_COUNT" -gt "$bs_fail" ] && return 0 || return 1 ;;
+        print)     return "$pr_rc" ;;
+      esac
+    }
+    deploy_lib_restart_service t gui/501 test.svc "$RS_PLIST"
+  )
+}
+
+L="$SB/rs1.log"; : > "$L"
+if _rs_run "$SB/rs1" "$L" 0 0 0 >/dev/null 2>&1 \
+  && grep -q 'launchctl bootout' "$L" && grep -q 'launchctl bootstrap' "$L" \
+  && ! grep -q 'launchctl kickstart' "$L" \
+  && [[ -f "$SB/rs1/test.svc.plist.sha256" ]]; then
+  ok "restart_service: no sidecar -> RELOAD path, sidecar written"
+else bad "restart_service: no-sidecar reload path"; fi
+
+L="$SB/rs2.log"; : > "$L"
+if _rs_run "$SB/rs1" "$L" 0 0 0 >/dev/null 2>&1 \
+  && grep -q 'launchctl kickstart' "$L" && ! grep -q 'launchctl bootout' "$L"; then
+  ok "restart_service: sidecar matches -> kickstart, no reload"
+else bad "restart_service: unchanged-plist kickstart path"; fi
+
+printf 'v2-edited\n' > "$RS_PLIST"
+L="$SB/rs3.log"; : > "$L"
+new_sha_expect="$( (command -v shasum >/dev/null 2>&1 && shasum -a 256 "$RS_PLIST" || sha256sum "$RS_PLIST") | awk '{print $1}' )"
+if _rs_run "$SB/rs1" "$L" 0 0 0 >/dev/null 2>&1 \
+  && grep -q 'launchctl bootout' "$L" \
+  && [[ "$(cat "$SB/rs1/test.svc.plist.sha256")" == "$new_sha_expect" ]]; then
+  ok "restart_service: edited plist -> RELOAD, sidecar updated"
+else bad "restart_service: edited-plist reload path"; fi
+
+L="$SB/rs4.log"; : > "$L"
+if _rs_run "$SB/rs4" "$L" 0 2 0 >/dev/null 2>&1 \
+  && [[ "$(grep -c 'launchctl bootstrap' "$L")" == 3 ]]; then
+  ok "restart_service: bootstrap retried past the I/O race (2 fails then ok)"
+else bad "restart_service: bootstrap retry"; fi
+
+L="$SB/rs5.log"; : > "$L"
+out5="$(_rs_run "$SB/rs5" "$L" 1 99 0 2>&1)"; rc5=$?
+if [[ "$rc5" == 0 ]] && grep -q 'launchctl kickstart' "$L" \
+  && printf '%s' "$out5" | grep -q 'did NOT take effect' \
+  && [[ ! -f "$SB/rs5/test.svc.plist.sha256" ]]; then
+  ok "restart_service: reload impossible but still loaded -> kickstart + loud WARN, sidecar withheld"
+else bad "restart_service: still-loaded fallback (rc=$rc5)"; fi
+
+L="$SB/rs6.log"; : > "$L"
+out6="$(_rs_run "$SB/rs6" "$L" 0 99 1 2>&1)"; rc6=$?
+if [[ "$rc6" != 0 ]] && printf '%s' "$out6" | grep -q 'DOWN'; then
+  ok "restart_service: bootstrap dead + not loaded -> hard error (outage is loud)"
+else bad "restart_service: outage hard-error (rc=$rc6)"; fi
+
 echo; echo "passed=$pass failed=$fail"
 rm -rf "$SB"
 exit "$((fail > 0))"
