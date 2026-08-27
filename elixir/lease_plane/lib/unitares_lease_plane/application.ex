@@ -106,6 +106,25 @@ defmodule UnitaresLeasePlane.Application do
       Application.put_env(:lease_plane, :governance_api_token, token)
     end
 
+    # Identity attribution is a separate gate from the shared service bearer.
+    # Default off preserves existing deployments; quickstarts can enable
+    # `enforce` only when governance is reachable and callers carry proofs.
+    Application.put_env(
+      :lease_plane,
+      :identity_binding_mode,
+      UnitaresLeasePlane.IdentityBinding.parse_mode(
+        System.get_env("UNITARES_LEASE_IDENTITY_BINDING")
+      )
+    )
+
+    Application.put_env(
+      :lease_plane,
+      :identity_bound_surface_kinds,
+      UnitaresLeasePlane.IdentityBinding.parse_surface_kinds(
+        System.get_env("UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS")
+      )
+    )
+
     # dialectic-on-BEAM Slice 2: per-session liveness timers. The flag gates only
     # whether a stuck-timeout *acts* (fails the session); the watcher processes
     # and presence run regardless and are always safe.

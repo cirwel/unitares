@@ -80,6 +80,12 @@ services:
       # in .env before exposing the service beyond a local evaluation machine.
       LEASE_PLANE_BEARER_TOKEN: ${LEASE_PLANE_BEARER_TOKEN:-unitares-local-lease-plane}
       UNITARES_GOVERNANCE_URL: http://governance-mcp:8767
+      # Prove the quickstart's maintenance-surface holder attribution through
+      # governance. Other kinds stay on their existing rollout posture so the
+      # onboarding-time agent:/ presence lease has no proof bootstrap loop.
+      UNITARES_LEASE_IDENTITY_BINDING: ${UNITARES_LEASE_IDENTITY_BINDING:-enforce}
+      UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS: ${UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:-maintenance}
+      UNITARES_HTTP_API_TOKEN: ${UNITARES_HTTP_API_TOKEN:-}
     depends_on:
       postgres-age:
         condition: service_healthy
@@ -121,6 +127,9 @@ services:
       #     the container; e.g. UNITARES_BUILD_SHA=$(git rev-parse --short HEAD))
       UNITARES_OPERATOR_TOKENS: ${UNITARES_OPERATOR_TOKENS:-}
       UNITARES_HTTP_API_TOKEN: ${UNITARES_HTTP_API_TOKEN:-}
+      # Development-only signing key so onboard() can issue the identity proof
+      # exercised by the coordination demo. Override on shared/non-loopback hosts.
+      UNITARES_CONTINUITY_TOKEN_SECRET: ${UNITARES_CONTINUITY_TOKEN_SECRET:-unitares-local-continuity-secret}
       UNITARES_BUILD_SHA: ${UNITARES_BUILD_SHA:-}
       # Optional: pick embedding backend. Default falls back to PG FTS if
       # sentence-transformers / model not available at runtime.

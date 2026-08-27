@@ -49,7 +49,9 @@ def _lease_payload(
         "intent": "test",
         "acquired_at": now.isoformat(),
         "expires_at": (now + timedelta(seconds=90)).isoformat(),
-        "last_heartbeat_at": now.isoformat() if holder_kind == "remote_heartbeat" else None,
+        "last_heartbeat_at": now.isoformat()
+        if holder_kind == "remote_heartbeat"
+        else None,
         "released_at": None,
         "release_reason": None,
         "audit_session": "session-1",
@@ -69,7 +71,9 @@ def test_acquire_request_rejects_role_holder_class():
     except ValidationError as exc:
         assert "holder_class" in str(exc)
     else:
-        raise AssertionError("role holder_class must be rejected by the Python contract")
+        raise AssertionError(
+            "role holder_class must be rejected by the Python contract"
+        )
 
 
 def test_lease_record_requires_heartbeat_to_match_holder_kind():
@@ -110,6 +114,74 @@ def test_acquire_ok_parses_idempotent_drift_warning():
     assert result.idempotent is True
     assert result.drift_warning == ["ttl_s", "intent"]
     assert result.lease.holder_agent_uuid == holder
+
+
+def test_identity_proof_is_sent_only_in_the_dedicated_header() -> None:
+    holder = uuid4()
+    proof = "v1.sensitive-payload.sensitive-signature"
+    seen: dict[str, Any] = {}
+
+    def transport(request: LeaseHTTPRequest):
+        seen["headers"] = dict(request.headers)
+        seen["body"] = request.json_body
+        return {
+            "ok": True,
+            "lease": _lease_payload(holder_agent_uuid=holder),
+            "idempotent": False,
+            "drift_warning": [],
+        }
+
+    request = AcquireRequest(
+        surface_id="file:///tmp/identity-bound",
+        holder_agent_uuid=holder,
+        holder_class="process_instance",
+        holder_kind="remote_heartbeat",
+        ttl_s=90,
+    )
+    result = LeasePlaneClient(transport=transport).acquire(
+        request,
+        identity_proof=proof,
+    )
+
+    assert isinstance(result, AcquireOk)
+    assert seen["headers"]["X-Unitares-Identity-Proof"] == proof
+    assert proof not in str(seen["body"])
+
+
+def test_identity_proof_threads_through_every_holder_mutation() -> None:
+    proof = "v1.proof.signature"
+    lease_id = uuid4()
+    handoff_id = uuid4()
+    seen: list[LeaseHTTPRequest] = []
+
+    def transport(request: LeaseHTTPRequest):
+        seen.append(request)
+        if request.url.endswith("/v1/lease/handoff/offer"):
+            return {"ok": True, "handoff_id": str(handoff_id)}
+        return {"ok": True}
+
+    client = LeasePlaneClient(transport=transport)
+    client.renew(RenewRequest(lease_id=lease_id), identity_proof=proof)
+    client.heartbeat(HeartbeatRequest(lease_id=lease_id), identity_proof=proof)
+    client.release(ReleaseRequest(lease_id=lease_id), identity_proof=proof)
+    client.handoff_offer(
+        HandoffOfferRequest(
+            lease_id=lease_id,
+            to_holder_agent_uuid=uuid4(),
+            ttl_s=30,
+        ),
+        identity_proof=proof,
+    )
+    client.handoff_accept(
+        HandoffAcceptRequest(handoff_id=handoff_id),
+        identity_proof=proof,
+    )
+
+    assert len(seen) == 5
+    assert all(
+        request.headers["X-Unitares-Identity-Proof"] == proof for request in seen
+    )
+    assert all(proof not in str(request.json_body) for request in seen)
 
 
 def test_acquire_held_by_other_parses_holder_and_expiry():
@@ -333,7 +405,9 @@ def test_handoff_offer_returns_handoff_id_on_ok():
     lease_id = uuid4()
     to_holder = uuid4()
     result = LeasePlaneClient(transport=transport).handoff_offer(
-        HandoffOfferRequest(lease_id=lease_id, to_holder_agent_uuid=to_holder, ttl_s=120)
+        HandoffOfferRequest(
+            lease_id=lease_id, to_holder_agent_uuid=to_holder, ttl_s=120
+        )
     )
 
     assert isinstance(result, SimpleOk)
@@ -375,6 +449,7 @@ def test_simple_unknown_error_preserves_raw_string_in_reason():
 
 
 # --- Phase A latency instrumentation (substrate-tax measurement gate) ---
+
 
 def test_rpc_latency_recorded_on_ok_acquire():
     """ok acquire records both an aggregate and an `.ok` shard."""

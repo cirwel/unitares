@@ -100,7 +100,7 @@ index; that one is the curated decision record.
 | `UNITARES_GROUNDING_SHADOW` | `''` | Whether to shadow-compare grounded vs ungrounded canonical metrics each check-in (UNITARES_GROUNDING_SHADOW) | config/governance_config.py |
 | `UNITARES_HEALTH_PROBE_INTERVAL_SECONDS` | `None (no reader fallback)` | Periodically run the deep health check and cache the result | src/background_tasks.py |
 | `UNITARES_HOST_ADAPTER_ENABLED` | `''` | Opt-in flag | src/mcp_handlers/support/host_adapter.py |
-| `UNITARES_HTTP_API_TOKEN` | `None (no reader fallback)` | Serve the phase-space visualization | src/http_routes/dashboard.py, src/http_routes/effects.py (+14 more) |
+| `UNITARES_HTTP_API_TOKEN` | `None (no reader fallback)` | Serve the phase-space visualization | src/http_routes/dashboard.py, src/http_routes/effects.py (+15 more) |
 | `UNITARES_HTTP_CORS_ALLOW_ORIGIN` | `None (no reader fallback)` | read by _configure_middleware() | src/services/mcp_transport_service.py |
 | `UNITARES_HTTP_CORS_EXTRA_ORIGINS` | `[] (via split_csv_env)` | Optional extra CORS origins from UNITARES_HTTP_CORS_EXTRA_ORIGINS | src/mcp_listen_config.py |
 | `UNITARES_IDENTITY_ANCHOR_RECOVERY` | `'1'` | Whether pre-mint anchor/pin recovery runs (UNITARES_IDENTITY_ANCHOR_RECOVERY) | src/mcp_handlers/identity/session.py |

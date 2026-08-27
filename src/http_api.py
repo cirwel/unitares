@@ -71,6 +71,7 @@ from src.http_routes.effects import (
     _check_effect_binding,
     http_effect_veto,
 )
+from src.http_routes.lease_identity import http_verify_lease_holder
 from src.http_routes.health import (
     http_health,
     http_health_live,
@@ -301,6 +302,7 @@ def register_http_routes(
     app.routes.append(Route("/v1/tools/call", http_call_tool, methods=["POST"]))
     app.routes.append(Route("/v1/effect-grant", http_effect_grant, methods=["POST"]))
     app.routes.append(Route("/v1/effect-veto", http_effect_veto, methods=["POST"]))
+    app.routes.append(Route("/v1/lease-holder/verify", http_verify_lease_holder, methods=["POST"]))
     app.routes.append(Route("/health", http_health, methods=["GET"]))
     app.routes.append(Route("/health/live", http_health_live, methods=["GET"]))
     app.routes.append(Route("/health/ready", http_health_ready, methods=["GET"]))
