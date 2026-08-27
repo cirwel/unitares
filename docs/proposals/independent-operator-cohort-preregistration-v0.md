@@ -73,13 +73,31 @@ publication consent that explicitly covers negative results and abandonment.
 **Phase 1 also includes a plumbing check**, because the trusted-anchor
 predicate is server-derived and no operator-facing switch declares a
 producer trusted: the operator emits at least 3 outcomes through each
-declared producer and confirms they land with
-`verification_source='external_signal'`, an eligible `outcome_type`, and a
-joinable prior-state snapshot. The counts are attached to the enrollment
-record. **"Producers not wired" and "not enough volume" are distinct
-published results** — a zero-eligible-row window after a passed plumbing
-check is a volume result; without the check it would be an undiagnosable
-wiring failure published under the wrong name.
+declared producer — via the operator-gated `/v1/harness/outcome` endpoint,
+**with a caller-supplied `confidence` (or a registry-bound `prediction_id`)
+on every POST** — and confirms all five of:
+
+1. `verification_source='external_signal'` on the recorded rows;
+2. an eligible `outcome_type`;
+3. a joinable prior-state snapshot;
+4. `detail.calibration_excluded` is **false** on the recorded rows;
+5. the rows appear in `outcome_inventory.py` totals for the window.
+
+Conditions 4–5 exist because a dress rehearsal of this exact check found
+that the first three can all pass while the rows are invisible to every
+analysis surface: an outcome posted without caller confidence is stamped
+`calibration_excluded`, which the fixture classifier currently conflates
+with synthetic-fixture traffic and silently drops from all validation
+inventory (#1790). The endpoint returns `success: true` either way, so
+only conditions 4–5 catch it. Setup note: the compose file does not yet
+forward `UNITARES_OPERATOR_TOKENS` (#1791); until that lands, wiring the
+operator token requires the one-line compose edit documented there.
+
+The counts are attached to the enrollment record. **"Producers not wired"
+and "not enough volume" are distinct published results** — a
+zero-eligible-row window after a passed plumbing check is a volume result;
+without the check it would be an undiagnosable wiring failure published
+under the wrong name.
 
 **Enrollment validity minimums** (an enrollment that fails these is recorded
 but does not start a cohort window): a real workload — agents doing declared
@@ -312,6 +330,7 @@ architecture docs — a usability result carries no evidence about either.
 | contract_violation_rate = 0 | The fresh-install expectation; any violation on a release-tag install is a defect, not noise. |
 | Selective p ≤ 0.05; 400 selective-null resamples; 2000 uncertainty resamples; 3 seeds | Adopted from the #1425 stop rule's registered invocation and its recorded seed-sensitivity observations. |
 | Harness-internal minimums (100/10/30/3) | Quoted from the frozen scripts; not this protocol's choices. |
+| Dress-rehearsal reference | The full operator sequence (clone → compose up on shifted ports → demo → REST onboarding and check-in → plumbing chain verified in-database) was executed once against a fresh v2.18.0 stack before registration, in under 10 minutes wall-clock including diagnosis of #1790/#1791. Run on the maintainer's hardware by the maintainer's tooling — a feasibility reference only, **not** lane-U evidence and not counted anywhere. |
 
 ## Known limitations, documented now
 
