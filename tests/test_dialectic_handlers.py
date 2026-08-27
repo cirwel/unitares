@@ -999,6 +999,75 @@ class TestHandleSubmitAntithesis:
         assert session.reviewer_agent_id is None
 
     @pytest.mark.asyncio
+    async def test_claiming_the_open_slot_clears_a_stale_facilitation_request(
+        self, mock_server, mock_context_agent,
+    ):
+        """An arriving reviewer answers the standing request for a human.
+
+        The flag is set at THESIS when every automated review path fails at that
+        moment (reason=`no_independent_reviewer`). A reviewer then arrives
+        anyway and claims the slot here — and nothing cleared it, so the session
+        advertised "needs a human" for the rest of its life while an independent
+        reviewer worked it. Measured over the audit stream 2026-06-29 →
+        2026-08-26: 95 of 96 facilitation emits carry that reason, and 43 of the
+        44 non-probe sessions that ended flagged HAD a reviewer.
+        """
+        from src.mcp_handlers.dialectic.handlers import handle_submit_antithesis
+
+        session = _make_session(reviewer_id=None, phase=DialecticPhase.ANTITHESIS)
+        session.awaiting_facilitation = True  # set at thesis, never answered
+        persisted = AsyncMock()
+
+        with patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)), \
+             patch("src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
+                   new=AsyncMock(return_value=False)), \
+             patch("src.mcp_handlers.dialectic.reviewer._has_recently_reviewed",
+                   new=AsyncMock(return_value=False)), \
+             patch(f"{DIALECTIC}.beam_update_reviewer", new=AsyncMock(return_value=None)), \
+             patch(f"{DIALECTIC}.pg_update_reviewer", new=AsyncMock(return_value=True)), \
+             patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", persisted), \
+             patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+             patch(f"{DIALECTIC}.beam_update_phase", new=AsyncMock(return_value=None)), \
+             patch(f"{DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
+             patch(f"{DIALECTIC}.save_session", new_callable=AsyncMock), \
+             mock_context_agent:
+            await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-active",
+                "reasoning": "Independent counter-perspective on the thesis.",
+                "concerns": ["Independent concern"],
+            })
+
+        assert session.reviewer_agent_id == "agent-active"
+        assert session.awaiting_facilitation is False
+        persisted.assert_awaited_once_with(session.session_id, False)
+
+    @pytest.mark.asyncio
+    async def test_a_self_review_claim_does_not_clear_the_request(
+        self, mock_server, mock_context_agent,
+    ):
+        """The clear keys on independence: the paused agent is not an answer."""
+        from src.mcp_handlers.dialectic.handlers import handle_submit_antithesis
+
+        session = _make_session(reviewer_id="agent-paused", phase=DialecticPhase.ANTITHESIS)
+        session.awaiting_facilitation = True
+
+        with patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)), \
+             patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+             patch(f"{DIALECTIC}.beam_update_phase", new=AsyncMock(return_value=None)), \
+             patch(f"{DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
+             patch(f"{DIALECTIC}.save_session", new_callable=AsyncMock), \
+             mock_context_agent:
+            await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-paused",
+                "reasoning": "Self-authored counter-perspective.",
+                "concerns": ["Self-review concern"],
+            })
+
+        assert session.awaiting_facilitation is True
+
+    @pytest.mark.asyncio
     async def test_open_slot_rejects_recent_reciprocal_pair(
         self, mock_server, mock_context_agent,
     ):
