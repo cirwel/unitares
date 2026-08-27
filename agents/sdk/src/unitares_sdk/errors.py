@@ -102,6 +102,36 @@ class VerdictError(GovernanceError):
         super().__init__(msg)
 
 
+class IdentityGuidanceReturned(GovernanceError):
+    """The server answered an identity call with GUIDANCE, not an identity.
+
+    Governance can reply ``success: true`` while declining to act, carrying a
+    ``status`` (e.g. ``lineage_declaration_required``) plus ``hint``,
+    ``next_step`` and ``safe_options`` that say exactly what to send instead.
+    That response has no ``client_session_id``, so validating it as an
+    ``OnboardResult`` raised a pydantic "field required" error and threw every
+    word of the guidance away -- the caller saw a schema complaint about a
+    field they had never heard of.
+
+    Carries the server's own words. ``status``, ``hint``, ``next_step`` and
+    ``safe_options`` are attributes so a caller can act on them programmatically
+    rather than parsing the message."""
+
+    def __init__(self, tool: str, payload: dict):
+        self.tool = tool
+        self.payload = payload
+        self.status = payload.get("status")
+        self.hint = payload.get("hint")
+        self.next_step = payload.get("next_step")
+        self.safe_options = payload.get("safe_options") or []
+        parts = [f"{tool}: server returned guidance ({self.status!r}) instead of an identity"]
+        if self.hint:
+            parts.append(str(self.hint))
+        if self.next_step:
+            parts.append(f"Next: {self.next_step}")
+        super().__init__(" — ".join(parts))
+
+
 class ResidentRegistrationRefused(GovernanceError):
     """Raised when ``persistent=True`` was requested but the freshly minted
     identity did not receive the resident tags.
