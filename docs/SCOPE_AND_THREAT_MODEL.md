@@ -82,6 +82,19 @@ codebase and papers this is called *dialectic*.) See
 
 ## Scope and threat model
 
+**What the instrument is, stated once.** UNITARES is a state instrument, not an
+outcome oracle: it does not decide whether an output is correct or ethical, and
+it cannot detect deliberate concealment without independent evidence. The
+mathematical formulation in the companion paper is a parallel research path, not
+the deployed policy mechanism. "Operating layer" is likewise an architectural
+description and not a claim of universal enforcement: UNITARES can refuse writes
+at the surfaces it owns, and it does not trap every action an agent can take
+through its host.
+
+These four sentences used to be repeated as a tail on several README sections.
+They are stated here instead, because a caveat restated in every section reads as
+hedging and a caveat stated once in the document that owns it reads as a boundary.
+
 UNITARES exposes several adversarial boundaries rather than claiming to close
 them. Trusted external outcomes are harder for a monitored agent to forge than
 self-report, but an agent-controlled `record_result()` call is not independent

@@ -8,41 +8,30 @@
 
 An agent that runs for weeks is not the same kind of object as a chat turn. It
 accumulates claims, drifts, restarts, and gets replaced by a fresh process
-wearing the same display name. Every individual tool call can be permitted
-while the process as a whole comes apart.
+wearing the same display name. Every individual tool call can be permitted while
+the process as a whole comes apart.
 
-Most of the stack answers a different question. Evals ask whether a model is
-good enough for a task. Guardrails ask whether one action is allowed. Traces
-record what a single run did. None of them answer the question an operator
-running a fleet actually has:
+Evals ask whether a model is good enough for a task. Guardrails ask whether one
+action is allowed. Traces record what a single run did. None of them answer the
+question an operator running a fleet actually has:
 
 > **Is this the same agent as yesterday, and is it working the way it usually
 > works?**
 
-For a multi-agent fleet there is a second, immediate question: can two live
-processes contend for the same governed surface without silently colliding?
+At each checkpoint UNITARES binds the write to a process identity, records what
+the agent claims alongside whatever evidence exists, updates a longitudinal state
+estimate, and returns a policy action with a named reason. The whole chain stays
+replayable, and two live processes can contend for the same governed surface
+without silently colliding.
 
-**UNITARES coordinates that boundary and measures the longer trajectory.** At
-each checkpoint it binds the write to a process
-identity, records what the agent claims alongside whatever evidence exists,
-updates a longitudinal state estimate, and returns a policy action with a named
-reason. The whole chain stays replayable. Governance sits on top of the
-measurement rather than the other way round: the system can refuse writes at the
-surfaces it owns, and it is honest about the ones it does not.
-
-It is self-hosted and single-operator by design. MCP is the primary agent-facing
+Self-hosted and single-operator by design. MCP is the primary agent-facing
 interface; REST, the public SDK, host adapters, and the dashboard expose the same
-core. That makes it MCP-native and harness-agnostic: not MCP-only, not an agent
-framework, not a hosted platform. Plain-language definition:
+core. Plain-language definition:
 [What UNITARES is](docs/PRODUCT_DEFINITION.md).
 
-**Status:** v2.20.0. The maintainer deployment has run continuously since
-November 2025, with 71,141 stored EISV state rows and six long-running resident
-agents at the frozen snapshot. That establishes sustained single-operator
-operation under real load: attributable records and exercised runtime paths.
-Predictive utility, preventive benefit, and cross-operator generality are open
-questions, and [Evidence and limits](#evidence-and-limits) gives every claim its
-current evidence class.
+**Status:** v2.20.0. Running continuously since November 2025.
+[Evidence and limits](#evidence-and-limits) gives every claim its evidence class,
+including the open ones.
 
 <div align="center">
 
@@ -106,14 +95,7 @@ Everything else in this repository is built on one small, explicit loop.
 | **Audit, memory, and review** | The process can store an attributed finding, request structured review, and leave the claim, evidence, policy, and recovery chain available for replay. |
 
 The returned policy action, reason, next step, and enforcement record are the
-stable integration boundary. EISV coordinates are diagnostic state estimates,
-not an independent correctness verdict. A recorded pause proves neither that it
-reached every host surface nor that pausing improved the eventual outcome.
-
-Selected state values carry provenance labels. The metrics read surface enforces
-label presence today; the full `measured` / `derived` / `prior` / `unknown`
-vocabulary and wider coverage remain staged in the
-[trust contract](docs/trust-contract.md).
+stable integration boundary.
 
 Four optional surfaces build on that record:
 
@@ -121,7 +103,7 @@ Four optional surfaces build on that record:
 |---|---|
 | **Shared knowledge graph** | A provenance-aware store agents search before acting and write findings back to, with tagging, supersede, and archival lifecycle. |
 | **Structured review** | Agents request review of each other's work; theses, disagreement, and resolution are recorded rather than resolved in chat. |
-| **Reference resident agents** | Long-running sweep, audit, triage, and narration agents shipped as working examples, not as a framework to subclass. |
+| **Reference resident agents** | Long-running sweep, audit, triage, and narration agents shipped as working examples. |
 | **Elixir/OTP coordination** | Leases, handoffs, dispatch, and supervision for agents that outlive a single process. |
 
 Identity binding is what makes stored findings, reviews, and leases attributable
@@ -142,37 +124,29 @@ them.
 | **UNITARES** | What has this running process been doing, what evidence supports its claims, and what state is it in now? | Continuously, mid-run. |
 
 It is built for long-lived coding, research, operations, monitoring, and
-multi-agent processes that can instrument a check-in loop. It is usually not
+multi-agent processes that can instrument a check-in loop, and is usually not
 worth the overhead for short-lived chat turns.
 
 UNITARES is a state instrument, not an outcome oracle. It
 does not decide whether an output is correct or ethical, and it
 cannot detect deliberate concealment without independent evidence. The
 [scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md) draws that boundary
-precisely. The mathematical formulation in the companion paper is a parallel
-research path, not the deployed policy mechanism.
+precisely.
 
-## Product boundary
-
-UNITARES does not own the agent's reasoning or tool-execution loop. It governs
-that loop from outside, so Claude Code, Codex, Hermes, custom runtimes, and
-resident agents can remain different userlands while sharing one accountable
-record and policy surface.
+It governs the agent's loop from outside rather than owning it, so Claude Code,
+Codex, Hermes, custom runtimes, and resident agents stay different userlands
+while sharing one accountable record and policy surface.
 
 | Layer | Responsibility | Status |
 |---|---|---|
 | **UNITARES Core** | Identity, provenance, longitudinal state, policy and recovery, audit, knowledge, dialectic review, and coordination. | Shipped in this repository. |
 | **Public interfaces** | MCP as the primary agent-facing contract, plus REST, `unitares-sdk`, the dashboard, plugins, and host adapters. The versioned [interface contract](docs/INTERFACE_CONTRACT.md) defines the common tool-discovery seam. | Shipped; individual surfaces have their own maturity limits. |
 | **Agent userlands** | The conversational loop, model/provider selection, tool execution, scheduling, and user interaction. | Supplied by external harnesses and custom clients today. |
-| **UNITARES Resident** | A first-party, general-purpose agent userland built entirely on the public interfaces above. | Early runtime skeleton in [`unitares-resident`](https://github.com/cirwel/unitares-resident), not yet a usable general-purpose agent. It lives outside Core and receives no privileged scoring or database path. |
+| **UNITARES Resident** | A first-party, general-purpose agent userland built entirely on the public interfaces above. | Early runtime skeleton in [`unitares-resident`](https://github.com/cirwel/unitares-resident), not yet a usable general-purpose agent. It lives outside Core and imports no Core internals. |
 
-"Operating layer" is an architectural description, not a claim of universal
-enforcement. UNITARES can refuse writes at governed surfaces; it does not trap
-every action an agent can take through its host.
-
-The specialized lowercase residents under [`agents/`](agents/README.md) are
-reference clients and operational examples. They are not the general-purpose
-UNITARES Resident product and are not a framework applications must subclass.
+The lowercase residents under [`agents/`](agents/README.md) are reference
+clients and operational examples, not the Resident product and not a framework
+to subclass.
 
 ## Integrate an MCP client
 
@@ -196,10 +170,8 @@ elif result.get("state_summary", {}).get("action") == "pause":
     return_to_operator(result.get("next_action"))  # application-defined boundary
 ```
 
-A returned `pause` policy and an applied write refusal are deliberately separate
-in the response. `success=False` means the governed write was refused; a returned
-pause on an accepted response still requires the host to honor the action at any
-surface UNITARES does not control.
+`success=False` means the governed write was refused. A pause returned on an
+accepted response is the host's to honor, at surfaces UNITARES does not own.
 
 For a durable resident, preserve its identity anchor rather than minting a new
 identity on every run; the [SDK lifecycle example](agents/sdk/README.md) handles
@@ -223,8 +195,7 @@ unrelated earlier one.
 
 `list_tools()` enumerates the complete live surface and
 `describe_tool(tool_name=...)` explains any one tool. MCP, REST, the SDK, and host
-adapters use the same server; Claude Code and Codex are supported clients, not
-server-side assumptions.
+adapters all reach the same server.
 
 ## How the runtime loop works
 
@@ -232,17 +203,11 @@ server-side assumptions.
   <img src="docs/assets/flow.png" width="100%" alt="agent acts, checks in, receives state and policy, self-regulates, and leaves an audit trail">
 </div>
 
-At each checkpoint the agent reports a meaningful unit of work and its stated
-confidence. The server resolves the process identity, associates available
-outcomes, updates longitudinal state, and returns a policy action with a named
-reason. The retained record lets an operator audit both the claim and the basis
-for the response.
-
 Clients can treat the policy action, reason, and next step as the stable
-contract. Operators can optionally inspect four EISV coordinates covering work
-progress, evidence alignment, behavioral drift, and their balance. EISV is
-self-state estimation: a read of how the process is working, drawn from
-auditable, published heuristics. The
+contract. Operators can optionally inspect four EISV coordinates covering work progress,
+evidence alignment, behavioral drift, and their balance. EISV is self-state
+estimation: a read of how the process is working, drawn from auditable,
+published heuristics. The
 [computation reference](docs/EISV_COMPUTATION.md) documents formulas, warmup,
 thresholds, and source code; the
 [interpretation contract](docs/ontology/eisv-proprioception-contract.md) records
@@ -256,26 +221,18 @@ control, with no outbound dependency on a vendor service.
 The architecture exposes several of the seams a later federation experiment
 would need: process-bound identity, evidence provenance, a
 [versioned telemetry envelope](docs/ontology/eisv-telemetry-envelope-v1.md), and
-policy decisions with named reasons. One more is worth naming because it is the
-property that makes a review record resistant to the party it describes: a
-paused agent cannot clear its own session over a standing reviewer objection
-(`src/dialectic_protocol.py`). The session records the refusal and waits for
-facilitation rather than resolving.
+policy decisions with named reasons.
 
 **The blocker is named, not unknown.** Resolution attestations are HMAC keyed on
-each agent's api_key, which is a symmetric construction: a verifier needs the
-signing key to check a signature, and holding that key would also let them
-forge one. The scheme is sound for its deployed purpose, which is one operator
-attesting within their own trust boundary, and it is explicitly not
+each agent's api_key. That is symmetric: a verifier needs the signing key, and
+holding it would also let them forge a signature. Sound for its deployed purpose
+of one operator attesting inside their own trust boundary, and explicitly not
 non-repudiation. Asymmetric or DPoP-style keys were considered and shelved on
-2026-04-19. Until that decision is revisited, a record from this system cannot
-be verified by an operator who does not already trust its issuer, which is the
-whole problem a federation exchange has to solve.
-
-Whether the remaining records suffice to exchange cross-operator attestations
-without centralizing raw telemetry stays an open question on the
-**multi-principal trust** track in the [roadmap](ROADMAP.md). Cross-governor
-trust, consensus, and enforcement are not deployed guarantees today.
+2026-04-19, so until that is revisited a record from this system cannot be
+verified by an operator who does not already trust its issuer, which is the whole
+problem a federation exchange has to solve. Whether the remaining records suffice
+to exchange cross-operator attestations without centralizing raw telemetry is
+open on the **multi-principal trust** track in the [roadmap](ROADMAP.md).
 
 ## What is built
 
@@ -292,10 +249,6 @@ a prototype or a system?
 | **509 Python modules** | `src/`, `governance_core/`, and the reference residents |
 | **208 documents** | ontology, proposals, operations runbooks, and the evaluation index, with dead-reference checks in CI |
 | **7 companion repositories** | listed under [Ecosystem repositories](#ecosystem-repositories), including a published SDK, a host adapter, a Raspberry Pi testbed, and the resident userland |
-
-Evidence class for this section: **operational observation**. Surface area
-establishes that the mechanisms exist and are exercised. It does not establish
-benefit, correctness, or generality, and the section below says what does.
 
 ## Evidence and limits
 
