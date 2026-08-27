@@ -8,6 +8,7 @@ handler paths that would block the anyio task group.
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import random
@@ -153,9 +154,7 @@ def _record_lease_rpc_latency(
 
 
 def _urllib_transport(request: LeaseHTTPRequest) -> Mapping[str, Any]:
-    body = None
-    if request.json_body is not None:
-        body = json.dumps(request.json_body, separators=(",", ":")).encode("utf-8")
+    body = _wire_json_bytes(request.json_body)
 
     req = urllib.request.Request(
         request.url,
@@ -188,6 +187,17 @@ def _urllib_transport(request: LeaseHTTPRequest) -> Mapping[str, Any]:
     if not isinstance(payload, Mapping):
         return {"ok": False, "error": "schema_invalid", "detail": "response was not an object"}
     return payload
+
+
+def _wire_json_bytes(json_body: dict[str, Any] | None) -> bytes | None:
+    """Serialize exactly as the stdlib transport does.
+
+    Lease attestations hash these bytes, so the mint request and the eventual
+    mutation must share one serializer rather than merely equivalent JSON.
+    """
+    if json_body is None:
+        return None
+    return json.dumps(json_body, separators=(",", ":")).encode("utf-8")
 
 
 class LeasePlaneClient:
@@ -607,7 +617,12 @@ class LeasePlaneClient:
         if token:
             headers["Authorization"] = f"Bearer {token}"
         if identity_proof:
-            headers["X-Unitares-Identity-Proof"] = identity_proof
+            headers["X-Unitares-Identity-Proof"] = self._request_identity_attestation(
+                identity_proof,
+                method=method,
+                path=path,
+                json_body=json_body,
+            )
 
         request = LeaseHTTPRequest(
             method=method,
@@ -616,11 +631,8 @@ class LeasePlaneClient:
             json_body=json_body,
             timeout_s=self.config.timeout_s,
         )
-        _body_bytes = (
-            len(json.dumps(json_body, separators=(",", ":")).encode("utf-8"))
-            if json_body is not None
-            else None
-        )
+        wire_body = _wire_json_bytes(json_body)
+        _body_bytes = len(wire_body) if wire_body is not None else None
         _start = time.perf_counter()
         try:
             payload = self._transport(request)
@@ -652,6 +664,63 @@ class LeasePlaneClient:
             path, _start, outcome, method=method, payload_bytes=_body_bytes
         )
         return payload
+
+    def _request_identity_attestation(
+        self,
+        identity_proof: str,
+        *,
+        method: str,
+        path: str,
+        json_body: dict[str, Any] | None,
+    ) -> str:
+        """Exchange a continuity proof for one content-bound ``lat.v1`` token.
+
+        Already-minted attestations pass through for callers that own their
+        exchange lifecycle.  During mixed-version rollout an unreachable or
+        older governance service falls back to the raw proof; a lease plane in
+        attestation-only mode will then fail closed with a typed refusal.
+        """
+        if identity_proof.startswith("lat.v1."):
+            return identity_proof
+
+        body = _wire_json_bytes(json_body) or b""
+        gov_base = (
+            self.config.governance_url
+            or os.getenv("UNITARES_GOVERNANCE_URL")
+            or "http://127.0.0.1:8767"
+        ).rstrip("/")
+        headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        api_token = self.config.governance_api_token or os.getenv("UNITARES_HTTP_API_TOKEN")
+        if api_token:
+            headers["Authorization"] = f"Bearer {api_token}"
+
+        exchange = LeaseHTTPRequest(
+            method="POST",
+            url=gov_base + "/v1/lease-holder/attest",
+            headers=headers,
+            json_body={
+                "identity_proof": identity_proof,
+                "method": method.upper(),
+                "path": path,
+                "body_sha256": hashlib.sha256(body).hexdigest(),
+            },
+            timeout_s=self.config.timeout_s,
+        )
+        try:
+            response = self._transport(exchange)
+        except Exception as exc:  # noqa: BLE001 — mixed-version fallback
+            logger.debug("lease-attestation mint unreachable: %s", type(exc).__name__)
+            return identity_proof
+        if isinstance(response, Mapping) and response.get("ok") is True:
+            attestation = response.get("attestation")
+            if isinstance(attestation, str) and attestation.startswith("lat.v1."):
+                return attestation
+        if isinstance(response, Mapping):
+            logger.debug(
+                "lease-attestation mint refused: %s",
+                response.get("error") or "unknown_error",
+            )
+        return identity_proof
 
 
 class LeasePlaneDisabledClient(LeasePlaneClient):

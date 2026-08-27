@@ -28,6 +28,8 @@ Safety / non-interference:
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
 from typing import Optional
 
@@ -99,33 +101,71 @@ async def _refresh_presence(client, agent_uuid: str, client_session_id: Optional
     cached = _lease_ids.get(agent_uuid)
     if cached is not None and HeartbeatRequest is not None:
         try:
-            await loop.run_in_executor(
-                None, lambda: client.heartbeat(HeartbeatRequest(lease_id=cached))
+            heartbeat_request = HeartbeatRequest(lease_id=cached)
+            identity_proof = _mint_presence_attestation(
+                agent_uuid, "/v1/lease/heartbeat", heartbeat_request
             )
-            return
+            result = await loop.run_in_executor(
+                None,
+                lambda: client.heartbeat(
+                    heartbeat_request,
+                    identity_proof=identity_proof,
+                ),
+            )
+            if getattr(result, "ok", False):
+                return
         except Exception:
-            # Expired / reaped / unknown lease_id — drop and re-acquire below.
-            _lease_ids.pop(agent_uuid, None)
+            pass
+        # Expired, reaped, refused, or unknown lease_id — drop and re-acquire.
+        _lease_ids.pop(agent_uuid, None)
 
     if AcquireRequest is None:
         return
+    acquire_request = AcquireRequest(
+        surface_id=f"agent:/{agent_uuid}",
+        holder_agent_uuid=agent_uuid,
+        holder_class="process_instance",
+        holder_kind="remote_heartbeat",
+        ttl_s=_PRESENCE_TTL_S,
+        audit_session=client_session_id,
+    )
+    identity_proof = _mint_presence_attestation(
+        agent_uuid, "/v1/lease/acquire", acquire_request
+    )
     result = await loop.run_in_executor(
         None,
-        lambda: client.acquire(
-            AcquireRequest(
-                surface_id=f"agent:/{agent_uuid}",
-                holder_agent_uuid=agent_uuid,
-                holder_class="process_instance",
-                holder_kind="remote_heartbeat",
-                ttl_s=_PRESENCE_TTL_S,
-                audit_session=client_session_id,
-            )
-        ),
+        lambda: client.acquire(acquire_request, identity_proof=identity_proof),
     )
     # AcquireOk carries lease_id; failure variants (held_by_other, etc.) do not.
     new_id = getattr(result, "lease_id", None)
     if new_id:
         _lease_ids[agent_uuid] = str(new_id)
+
+
+def _mint_presence_attestation(agent_uuid: str, path: str, request: object) -> str | None:
+    """Mint a request-bound proof after onboarding has established the UUID.
+
+    This runs inside governance, where the operator signing key lives.  It
+    avoids the bootstrap loop that would result from asking an onboarding call
+    to present the continuity token it has not returned yet.
+    """
+    try:
+        payload = request.model_dump(mode="json", exclude_none=True)  # type: ignore[attr-defined]
+        wire_body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        from src.lease_attestation import mint_lease_attestation
+
+        return mint_lease_attestation(
+            holder_agent_uuid=agent_uuid,
+            method="POST",
+            path=path,
+            body_sha256=hashlib.sha256(wire_body).hexdigest(),
+        )
+    except Exception as exc:  # noqa: BLE001 — presence maintenance is best-effort
+        logger.debug(
+            "[AGENT_PRESENCE] lease attestation unavailable (non-fatal): %s",
+            type(exc).__name__,
+        )
+        return None
 
 
 def schedule_agent_presence_heartbeat(

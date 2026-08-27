@@ -9,13 +9,18 @@ from unittest.mock import patch
 import pytest
 from starlette.requests import Request
 
-from src.http_routes.lease_identity import http_verify_lease_holder
+from src.http_routes.lease_identity import (
+    http_attest_lease_holder,
+    http_lease_attestation_keys,
+    http_verify_lease_holder,
+)
+from src.lease_attestation import verify_lease_attestation
 
 
 HOLDER = "11111111-1111-4111-8111-111111111111"
 
 
-def _request(payload: dict[str, str]) -> Request:
+def _request(payload: dict[str, str], *, path: str = "/v1/lease-holder/verify") -> Request:
     body = json.dumps(payload).encode()
 
     async def receive() -> dict[str, object]:
@@ -25,7 +30,7 @@ def _request(payload: dict[str, str]) -> Request:
         {
             "type": "http",
             "method": "POST",
-            "path": "/v1/lease-holder/verify",
+            "path": path,
             "headers": [(b"content-type", b"application/json")],
         },
         receive,
@@ -115,3 +120,82 @@ async def test_route_requires_governance_http_auth() -> None:
         )
 
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_attest_exchanges_proof_for_request_bound_token_without_echo(monkeypatch) -> None:
+    proof = "v1.sensitive-payload.sensitive-signature"
+    seed = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    monkeypatch.setenv("UNITARES_LEASE_ATTESTATION_SIGNING_KEY", seed)
+    monkeypatch.setenv("UNITARES_LEASE_ATTESTATION_ISSUER", "operator-a")
+    payload = {
+        "identity_proof": proof,
+        "holder_agent_uuid": HOLDER,
+        "method": "POST",
+        "path": "/v1/lease/acquire",
+        "body_sha256": "a" * 64,
+    }
+
+    with (
+        patch("src.http_routes.lease_identity.access._check_http_auth", return_value=True),
+        patch(
+            "src.mcp_handlers.identity.session.extract_token_agent_uuid",
+            return_value=HOLDER,
+        ),
+        patch("src.mcp_handlers.identity.session.recertify_strong_tier", return_value=True),
+    ):
+        response = await http_attest_lease_holder(
+            _request(payload, path="/v1/lease-holder/attest")
+        )
+        keys_response = await http_lease_attestation_keys(None)
+
+    assert response.status_code == 200
+    body = json.loads(response.body)
+    keys = json.loads(keys_response.body)
+    assert proof not in response.body.decode()
+    assert body["attestation"].startswith("lat.v1.")
+    assert verify_lease_attestation(
+        body["attestation"],
+        jwks=keys,
+        holder_agent_uuid=HOLDER,
+        method="POST",
+        path="/v1/lease/acquire",
+        body_sha256="a" * 64,
+    ) is not None
+
+
+@pytest.mark.asyncio
+async def test_attest_rejects_mismatch_and_invalid_request_claims(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "UNITARES_LEASE_ATTESTATION_SIGNING_KEY",
+        "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+    )
+    monkeypatch.setenv("UNITARES_LEASE_ATTESTATION_ISSUER", "operator-a")
+    base = {
+        "identity_proof": "v1.proof.signature",
+        "holder_agent_uuid": HOLDER,
+        "method": "GET",
+        "path": "/v1/lease/acquire",
+        "body_sha256": "a" * 64,
+    }
+
+    with (
+        patch("src.http_routes.lease_identity.access._check_http_auth", return_value=True),
+        patch(
+            "src.mcp_handlers.identity.session.extract_token_agent_uuid",
+            return_value=HOLDER,
+        ),
+        patch("src.mcp_handlers.identity.session.recertify_strong_tier", return_value=True),
+    ):
+        invalid_claim = await http_attest_lease_holder(
+            _request(base, path="/v1/lease-holder/attest")
+        )
+        mismatch = await http_attest_lease_holder(
+            _request(
+                {**base, "method": "POST", "holder_agent_uuid": str(uuid.uuid4())},
+                path="/v1/lease-holder/attest",
+            )
+        )
+
+    assert invalid_claim.status_code == 422
+    assert mismatch.status_code == 403

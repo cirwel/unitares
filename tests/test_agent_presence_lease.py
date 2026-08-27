@@ -30,23 +30,32 @@ class _FakeClient:
         self.acquired = []
         self.heartbeats = []
         self.heartbeat_should_fail = False
+        self.heartbeat_ok = True
         self.acquire_lease_id = "lease-123"
+        self.identity_proofs = []
 
-    def acquire(self, req):
+    def acquire(self, req, *, identity_proof=None):
         self.acquired.append(req)
+        self.identity_proofs.append(identity_proof)
         return SimpleNamespace(lease_id=self.acquire_lease_id)
 
-    def heartbeat(self, req):
+    def heartbeat(self, req, *, identity_proof=None):
         if self.heartbeat_should_fail:
             raise RuntimeError("expired/reaped")
         self.heartbeats.append(req)
-        return SimpleNamespace(ok=True)
+        self.identity_proofs.append(identity_proof)
+        return SimpleNamespace(ok=self.heartbeat_ok)
 
 
 def _patch_models(monkeypatch, client):
     monkeypatch.setattr(apl, "_make_client", lambda: client)
     monkeypatch.setattr(apl, "AcquireRequest", _fake_req)
     monkeypatch.setattr(apl, "HeartbeatRequest", _fake_req)
+    monkeypatch.setattr(
+        apl,
+        "_mint_presence_attestation",
+        lambda agent_uuid, path, request: f"lat.v1.{agent_uuid}.{path.rsplit('/', 1)[-1]}",
+    )
 
 
 @pytest.mark.asyncio
@@ -77,6 +86,7 @@ async def test_acquire_then_cache(monkeypatch):
     assert req.holder_class == "process_instance"
     assert req.ttl_s == apl._PRESENCE_TTL_S
     assert req.audit_session == "sess-1"
+    assert client.identity_proofs == ["lat.v1.uuid-1.acquire"]
 
 
 @pytest.mark.asyncio
@@ -88,6 +98,7 @@ async def test_heartbeat_when_cached(monkeypatch):
     assert len(client.heartbeats) == 1
     assert client.heartbeats[0].lease_id == "lease-xyz"
     assert len(client.acquired) == 0                  # did NOT re-acquire
+    assert client.identity_proofs == ["lat.v1.uuid-1.heartbeat"]
 
 
 @pytest.mark.asyncio
@@ -103,12 +114,24 @@ async def test_reacquire_on_heartbeat_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_reacquire_when_heartbeat_returns_typed_failure(monkeypatch):
+    client = _FakeClient()
+    client.heartbeat_ok = False
+    _patch_models(monkeypatch, client)
+    apl._lease_ids["uuid-1"] = "stale-lease"
+    await apl.heartbeat_agent_presence("uuid-1")
+    assert len(client.heartbeats) == 1
+    assert len(client.acquired) == 1
+    assert apl._lease_ids["uuid-1"] == "lease-123"
+
+
+@pytest.mark.asyncio
 async def test_never_raises_on_client_error(monkeypatch):
     class _BoomClient:
-        def acquire(self, req):
+        def acquire(self, req, *, identity_proof=None):
             raise RuntimeError("boom")
 
-        def heartbeat(self, req):
+        def heartbeat(self, req, *, identity_proof=None):
             raise RuntimeError("boom")
 
     monkeypatch.setattr(apl, "_make_client", lambda: _BoomClient())

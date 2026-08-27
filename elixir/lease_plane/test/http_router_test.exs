@@ -884,6 +884,67 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert response.status == 503
       assert parsed(response)["reason"] == "identity_verification_unavailable"
     end
+
+    test "verifier receives method, path, and exact wire-body digest", ctx do
+      test_pid = self()
+
+      Application.put_env(:lease_plane, :identity_verifier, fn _holder, _proof, context ->
+        send(test_pid, {:identity_request_context, context})
+        :ok
+      end)
+
+      body = acquire_body(ctx.surface)
+      response = post_json_with_proof("/v1/lease/acquire", body, "proof:anything")
+      assert response.status == 200
+
+      expected_sha =
+        body
+        |> Jason.encode!()
+        |> then(&:crypto.hash(:sha256, &1))
+        |> Base.encode16(case: :lower)
+
+      assert_receive {:identity_request_context,
+                      %{
+                        method: "POST",
+                        path: "/v1/lease/acquire",
+                        body_sha256: ^expected_sha
+                      }}
+    end
+
+    test "replayed signed proof is a typed 403 refusal", ctx do
+      Application.put_env(:lease_plane, :identity_verifier, fn _, _, _ ->
+        {:error, :replayed}
+      end)
+
+      response =
+        post_json_with_proof(
+          "/v1/lease/acquire",
+          acquire_body(ctx.surface),
+          "lat.v1.payload.signature"
+        )
+
+      assert response.status == 403
+      assert parsed(response)["reason"] == "identity_proof_replayed"
+    end
+  end
+
+  describe "/v1/health identity observability" do
+    test "reports bounded identity verifier counters additively", _ctx do
+      UnitaresLeasePlane.IdentityMetrics.record(:attestation, :verified, 125)
+
+      response =
+        :get
+        |> conn("/v1/health")
+        |> authed()
+        |> HTTPRouter.call(@opts)
+
+      identity = parsed(response)["identity_binding"]
+      assert response.status == 200
+      assert is_map(identity["metrics"]["outcomes"])
+      assert identity["metrics"]["outcomes"]["verified"] >= 1
+      assert identity["metrics"]["proof_types"]["attestation"] >= 1
+      assert identity["metrics"]["latency"]["max_us"] >= 125
+    end
   end
 
   describe "404" do
