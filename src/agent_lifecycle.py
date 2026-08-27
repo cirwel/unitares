@@ -126,11 +126,20 @@ def is_agent_protected(agent_id: str, meta: AgentMetadata) -> bool:
         return True
     if "persistent" in tags or "protected" in tags:
         return True
-    # Back-compat: ``Lumen`` label as protection marker, pending migration to
-    # the generic ``persistent`` / ``protected`` tags. Drop once tagged.
-    label = getattr(meta, 'label', None) or getattr(meta, 'display_name', None) or ""
-    if label == "Lumen":
-        return True
+    # A hardcoded ``label == "Lumen"`` back-compat branch lived here until
+    # 2026-08-26. It was migration scaffolding with a stated exit condition --
+    # "drop once tagged" -- and the condition has been met: that agent carries
+    # `pioneer`, `persistent` and `pinned`, every one of which returns True
+    # above, so the branch was unreachable on the deployment it existed for.
+    #
+    # It was also the wrong shape for a framework. Protection is a property an
+    # agent EARNS through tags the server grants; deriving it from a display
+    # name meant any deployment that happened to name an agent "Lumen" got
+    # silent archival immunity it never asked for, and the one deployment the
+    # branch was written for could not tell whether its tags were working.
+    #
+    # Tag drift is now caught generically: /v1/residents/tag_audit reports a
+    # resident missing its required tags, and Vigil alarms on it.
     if getattr(meta, 'trust_tier', None) in _PROTECTED_TIERS:
         return True
     return False
