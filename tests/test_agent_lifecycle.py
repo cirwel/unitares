@@ -167,14 +167,25 @@ class TestAgentProtection:
         meta = _protection_meta(label="TrustedBot", tags=[], trust_tier="verified")
         assert is_agent_protected("some-uuid", meta) is True
 
-    def test_lumen_label_backcompat_still_protects(self):
-        """Back-compat: Lumen is protected by label until she's tagged ``persistent``.
+    def test_a_bare_label_confers_no_protection(self):
+        """⛔No display name may buy archival immunity.
 
-        When Lumen carries a ``persistent`` tag, the label path is dead code and
-        can be deleted. Until then, this guard keeps her safe from archival.
+        A hardcoded ``label == "Lumen"`` branch lived here until 2026-08-26 as
+        migration scaffolding whose stated exit condition — "drop once tagged"
+        — had been met. It was the wrong shape regardless: protection is
+        EARNED through tags the server grants, and deriving it from a name gave
+        any deployment that happened to use that name silent immunity it never
+        asked for.
         """
-        meta = _protection_meta(label="Lumen", tags=[])
-        assert is_agent_protected("lumen-uuid", meta) is True
+        for name in ("Lumen", "Vigil", "Sentinel", "Anything"):
+            meta = _protection_meta(label=name, tags=[])
+            assert is_agent_protected("some-uuid", meta) is False, name
+
+    def test_the_same_agent_is_protected_once_tagged(self):
+        """The generic path is what actually protects it, and always did."""
+        for tag in ("persistent", "protected", "pioneer"):
+            meta = _protection_meta(label="Lumen", tags=[tag])
+            assert is_agent_protected("lumen-uuid", meta) is True, tag
 
 
 # ============================================================================
