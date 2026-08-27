@@ -407,6 +407,7 @@ class GovernanceAgent:
         if self.spawn_reason is not None:
             onboard_kwargs["spawn_reason"] = self.spawn_reason
         await client.onboard(self.name, **onboard_kwargs)
+        self._verify_resident_registration(client)
         self._sync_from_client(client)
         self._save_session()
         logger.info("%s: onboarded fresh (UUID %s)", self.name, self.agent_uuid[:12] if self.agent_uuid else "?")
@@ -438,6 +439,39 @@ class GovernanceAgent:
                 "non-fatal): %r",
                 self.name, e,
             )
+
+    def _verify_resident_registration(self, client: GovernanceClient) -> None:
+        """Fail loudly at bootstrap if a ``persistent`` agent was not registered.
+
+        ``persistent``/``autonomous`` are privileged: the server grants them
+        ONLY at mint, and ONLY when ``name`` is on its ``UNITARES_RESIDENTS``
+        roster. An identity cannot self-assign them afterwards, so
+        ``_reconcile_resident_tags`` cannot repair this — it retries and warns
+        on every cycle, forever, without ever naming the roster.
+
+        The old behaviour was therefore: mint reports success, the constructor
+        says ``persistent=True``, and the orphan sweep archives the identity
+        days later. Bootstrap is the last moment the operator can still fix it
+        cheaply (add to the roster, restart, re-bootstrap), so refuse here
+        rather than run on in a state that cannot be repaired in place.
+
+        Silent on servers that predate the field — an older server is not
+        evidence of a failed registration.
+        """
+        if not self.persistent:
+            return
+        registration = getattr(client, "last_resident_registration", None)
+        if not isinstance(registration, dict):
+            return
+        if registration.get("status") == "registered":
+            return
+
+        from .errors import ResidentRegistrationRefused
+        raise ResidentRegistrationRefused(
+            f"{self.name}: minted, but NOT registered as a resident "
+            f"(status={registration.get('status')!r}). "
+            f"{registration.get('detail', '')}"
+        )
 
     async def _reconcile_resident_tags_inner(self, client: GovernanceClient) -> None:
         """Ensure a persistent resident carries the full ``RESIDENT_TAGS`` set.

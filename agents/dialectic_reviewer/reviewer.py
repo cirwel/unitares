@@ -497,8 +497,8 @@ async def call_codex_reviewer(prompt: str) -> Optional[str]:
     cli_path = resolve_host_cli("codex:host-adapter")
     if cli_path is None:
         return None
-    # Read literally (not via _env_float) so scripts/dev/flag_catalog.py's AST
-    # scan still indexes this flag — the catalog only sees direct os.getenv calls.
+    # Read literally (not via _env_float) because this timeout has bespoke clamp
+    # behavior; the flag catalog supports both direct reads and selected wrappers.
     try:
         timeout_s = float(os.getenv("UNITARES_DIALECTIC_CODEX_TIMEOUT_S", "420"))
     except (TypeError, ValueError):

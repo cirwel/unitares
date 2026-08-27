@@ -102,6 +102,25 @@ class VerdictError(GovernanceError):
         super().__init__(msg)
 
 
+class ResidentRegistrationRefused(GovernanceError):
+    """Raised when ``persistent=True`` was requested but the freshly minted
+    identity did not receive the resident tags.
+
+    This means the agent's ``name`` is not on the governance server's
+    ``UNITARES_RESIDENTS`` roster. Those tags (``persistent``,
+    ``autonomous``) are granted ONLY at mint and ONLY to roster names -- they
+    are privileged, and an identity cannot self-assign them afterwards. So an
+    off-roster resident is not protected from auto-archive and cannot be
+    repaired in place.
+
+    Raising here is deliberate. The pre-2026-08 behaviour was to mint
+    successfully, log a tag-reconcile warning on every subsequent cycle, and
+    let the orphan sweep archive the identity days later -- a silent failure
+    whose cause appeared nowhere in the message. Fix: add the name to
+    ``UNITARES_RESIDENTS`` where the governance server reads it, restart the
+    server, then bootstrap again."""
+
+
 class IdentityBootstrapRefused(GovernanceError):
     """Raised when a resident agent's anchor is missing and the agent was
     configured with refuse_fresh_onboard=True (the default for Vigil,

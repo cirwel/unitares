@@ -131,3 +131,64 @@ async def test_duplicate_active_resident_audited_once(audit_request):
     import json as _json
     data = _json.loads(resp.body.decode())
     assert data["checked"].count("Vigil") == 1
+
+
+@pytest.mark.asyncio
+async def test_ghost_holding_the_clean_name_does_not_shadow_the_real_resident(audit_request):
+    """⛔The 2026-08-26 case, live on the fleet for ~40 minutes.
+
+    An untagged ghost held the exact label `Watcher`; the real resident had
+    been renamed to `Watcher_<its own uuid8>` by the collision rename. The
+    audit resolved by exact label, found the ghost, and reported a correctly
+    tagged resident as missing BOTH required tags — which is precisely what
+    Vigil alarms on, every cycle, with no way to distinguish a real gap from a
+    shadowed one.
+
+    `Watcher_7bf970d4` sat in that shape from 2026-04-19 to 2026-06-14.
+    """
+    server = SimpleNamespace(agent_metadata={
+        "dc94fa70-6186-4862-aeb6-3fc9801263c8": _meta("Watcher", ["ephemeral"]),
+        "7bf970d4-0000-4000-8000-000000000000": _meta(
+            "Watcher_7bf970d4", ["persistent", "autonomous"]),
+    })
+    resp = await _run(server, audit_request)
+    import json as _json
+    data = _json.loads(resp.body.decode())
+    assert data["missing"] == {}, "the tagged resident must win the label"
+    assert data["checked"] == ["Watcher"]
+
+
+@pytest.mark.asyncio
+async def test_a_renamed_resident_is_still_audited_when_no_ghost_exists(audit_request):
+    """A renamed resident must not vanish from the audit entirely.
+
+    Before the fix its label was not on the roster, so it was skipped — a
+    resident with a real tag gap could go unreported indefinitely.
+    """
+    server = SimpleNamespace(agent_metadata={
+        "7bf970d4-0000-4000-8000-000000000000": _meta("Watcher_7bf970d4", ["persistent"]),
+    })
+    resp = await _run(server, audit_request)
+    import json as _json
+    data = _json.loads(resp.body.decode())
+    assert data["checked"] == ["Watcher"]
+    assert data["missing"] == {"Watcher": ["autonomous"]}
+
+
+@pytest.mark.asyncio
+async def test_unrelated_underscore_names_are_not_folded_into_a_resident(audit_request):
+    """⛔`Sentinel_backup` is its own agent, not a renamed Sentinel.
+
+    Only a suffix equal to the row's OWN uuid8 is a collision rename; matching
+    any trailing `_xxxxxxxx` would merge two real agents into one audit row.
+    """
+    server = SimpleNamespace(agent_metadata={
+        "aaaaaaaa-0000-4000-8000-000000000000": _meta("Sentinel", ["persistent", "autonomous"]),
+        "bbbbbbbb-0000-4000-8000-000000000000": _meta("Sentinel_backup", []),
+        "cccccccc-0000-4000-8000-000000000000": _meta("Sentinel_deadbeef", []),
+    })
+    resp = await _run(server, audit_request)
+    import json as _json
+    data = _json.loads(resp.body.decode())
+    assert data["checked"] == ["Sentinel"]
+    assert data["missing"] == {}

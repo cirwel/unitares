@@ -125,6 +125,9 @@ class GovernanceClient:
         # Stays None for non-resident callers; substrate emission skips
         # silently in that case.
         self.resident_name: str | None = None
+        # Set by onboard() from the server's mint response; None on servers
+        # predating the field, or when no name was supplied.
+        self.last_resident_registration: dict | None = None
         # Cached lease handle for substrate emission. Per-client-instance
         # so concurrent residents don't share state.
         from unitares_sdk._substrate import _LeaseCache
@@ -401,6 +404,11 @@ class GovernanceClient:
 
         raw = await self.call_tool("onboard", args)
         self._capture_identity(raw)
+        # Kept off the model so callers that never look still get it verbatim;
+        # OnboardResult surfaces the same dict as a typed field.
+        self.last_resident_registration = (
+            raw.get("resident_registration") if isinstance(raw, dict) else None
+        )
         # RFC §7.13: capture resident name so subsequent checkins can emit
         # substrate observations to lease_plane.surface_leases. Non-resident
         # names are stored too but substrate emission filters them out.
