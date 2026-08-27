@@ -256,17 +256,39 @@ deploy_lib_nudge_lease_plane() {
 # BY HAND leaves the sidecar stale, so the next deploy does one unnecessary
 # reload and self-heals — the safe direction.
 #
-# Failure policy, chosen loud-but-not-brittle:
-#   - bootstrap is retried (the documented first-bootstrap I/O race);
-#   - if the reload cannot complete but the service is STILL LOADED (bootout
-#     refused), fall back to kickstart and WARN that the plist change did NOT
-#     apply; the sidecar is deliberately NOT written, so the next deploy
-#     retries the reload;
-#   - if the service ended up NOT loaded (bootout done, bootstrap dead), that
-#     is an outage — hard error with the recovery command, exit 1.
+# A MISSING sidecar is not evidence the plist changed — it is evidence there
+# is no baseline (fresh machine, first run after rollout, state dir cleaned).
+# That case ADOPTS the current hash and kickstarts: absence of state is the
+# safe case, never a trigger for the heavy restart. The one-time cost is that
+# drift which predates the very first baseline is not caught; any edit after
+# it is.
+#
+# Failure policy — REFUSE, never false-success (the same doctrine as
+# deploy_lib_require_plist_target and deploy-mcp.sh's migration gate):
+#   - after bootout, WAIT for the label to actually leave the domain
+#     (launchd tears down asynchronously; `print` still reports the job,
+#     state = SIGTERMed, for seconds — an immediate bootstrap races that
+#     teardown and can leave the job unloaded entirely; observed and fixed
+#     once already in migrate-openai-gov-proxy.sh). Budget 30s, past the
+#     default 20s SIGTERM→SIGKILL grace;
+#   - still loaded after the wait (bootout refused / teardown wedged): the
+#     reload is impossible — return nonzero WITHOUT touching the service,
+#     print the by-hand recipe. The old process keeps running the old code
+#     and old definition, a consistent pair; the caller rolls its worktree
+#     back so disk does not sit ahead of the running process;
+#   - bootstrap is retried (the documented first-bootstrap I/O race); if it
+#     never succeeds the service is DOWN — hard error with the recovery
+#     command. The caller must also roll back;
+#   - after a successful reload, best-effort spot check that every
+#     EnvironmentVariables KEY from the plist is present in the loaded
+#     definition; a miss WARNS and withholds the sidecar so the next deploy
+#     retries — the motivating bug (flag in plist, absent from the running
+#     service) stays detectable instead of being latched as applied.
 #
 # usage: deploy_lib_restart_service TAG DOMAIN LABEL PLIST
 #   DOMAIN like "gui/501" (no label); LABEL the service label; PLIST its file.
+#   Callers under `set -e` must invoke it in a conditional and roll back their
+#   worktree on failure (see deploy-mcp.sh).
 # State dir override: UNITARES_DEPLOY_STATE_DIR (default ~/.unitares/deploy-state).
 
 _deploy_lib_sha256() {
@@ -282,62 +304,126 @@ _deploy_lib_sha256() {
   fi
 }
 
+# Sidecar write is best-effort BY CONTRACT: at the points it is called the
+# restart has already succeeded, so a write failure (unwritable state dir,
+# disk full) must demote to "next deploy reloads unnecessarily" — never abort
+# a deploy that already worked (a nonzero exit here would also HOLD every
+# sibling service in a deploy-apply sweep). Always returns 0.
+_deploy_lib_write_sidecar() {
+  local tag="$1" state_dir="$2" sidecar="$3" sha="$4"
+  [[ -n "$sha" ]] || return 0
+  if ! mkdir -p "$state_dir" 2>/dev/null || ! printf '%s' "$sha" > "$sidecar" 2>/dev/null; then
+    echo "[$tag] WARNING: could not record the plist-hash sidecar ($sidecar) — the next deploy will do an unnecessary reload." >&2
+  fi
+  return 0
+}
+
+_deploy_lib_label_gone() {
+  ! launchctl print "$1" >/dev/null 2>&1
+}
+
+# Best-effort post-reload check that the loaded definition carries every
+# EnvironmentVariables KEY the plist declares (keys only — one-directional, so
+# launchd-injected entries like OSLogRateLimit can never false-positive it).
+# Returns 1 only on a confirmed miss; any inability to determine (no python3,
+# unparseable plist, empty print output) returns 0 — detection, not a gate.
+_deploy_lib_env_keys_loaded() {
+  local plist="$1" target="$2" keys out k missing=""
+  command -v python3 >/dev/null 2>&1 || return 0
+  keys="$(python3 -c 'import plistlib,sys;d=plistlib.load(open(sys.argv[1],"rb"));print("\n".join((d.get("EnvironmentVariables") or {}).keys()))' "$plist" 2>/dev/null || true)"
+  [[ -n "$keys" ]] || return 0
+  out="$(launchctl print "$target" 2>/dev/null || true)"
+  [[ -n "$out" ]] || return 0
+  while IFS= read -r k; do
+    [[ -n "$k" ]] || continue
+    printf '%s' "$out" | grep -F -q -- "$k" || missing="$missing $k"
+  done <<< "$keys"
+  if [[ -n "$missing" ]]; then
+    echo "$missing"
+    return 1
+  fi
+  return 0
+}
+
 deploy_lib_restart_service() {
   local tag="$1" domain="$2" label="$3" plist="$4"
-  local state_dir sidecar cur_sha old_sha attempt
+  local state_dir sidecar cur_sha old_sha attempt err missing
   state_dir="${UNITARES_DEPLOY_STATE_DIR:-$HOME/.unitares/deploy-state}"
   sidecar="$state_dir/${label}.plist.sha256"
   cur_sha="$(_deploy_lib_sha256 "$plist" 2>/dev/null || true)"
   old_sha="$(cat "$sidecar" 2>/dev/null || true)"
 
-  if [[ -n "$cur_sha" && -n "$old_sha" && "$cur_sha" == "$old_sha" ]]; then
+  # No hash tool: drift is undetectable — keep the old, reliable behavior and
+  # say so, rather than reloading blind on every deploy.
+  if [[ -z "$cur_sha" ]]; then
+    echo "[$tag] WARNING: no sha256 tool found — plist drift is NOT being detected; kickstarting." >&2
+    launchctl kickstart -k "$domain/$label"
+    return $?
+  fi
+
+  if [[ -n "$old_sha" && "$cur_sha" == "$old_sha" ]]; then
     echo "[$tag] restarting $label (plist unchanged since last deploy restart — kickstart)"
     launchctl kickstart -k "$domain/$label"
-    return 0
+    return $?
   fi
 
+  # A missing baseline is not evidence the plist changed — adopt and kickstart
+  # (see the policy comment above). Only a MISMATCH triggers the reload.
   if [[ -z "$old_sha" ]]; then
-    echo "[$tag] restarting $label via RELOAD (no plist baseline recorded yet — bootout + bootstrap re-reads the plist)"
-  else
-    echo "[$tag] restarting $label via RELOAD (plist CHANGED since last deploy restart — kickstart would silently keep the old definition)"
+    echo "[$tag] restarting $label (no plist baseline recorded — adopting the current hash; kickstart)"
+    _deploy_lib_write_sidecar "$tag" "$state_dir" "$sidecar" "$cur_sha"
+    launchctl kickstart -k "$domain/$label"
+    return $?
   fi
+
+  echo "[$tag] restarting $label via RELOAD (plist CHANGED since last deploy restart — kickstart would silently keep the old definition)"
 
   # A bootout refusal (service not loaded, or launchd declining) is not fatal
-  # by itself — the bootstrap outcome and the loaded-state check below decide.
+  # by itself — the observed loaded-state below decides which path we are on.
   launchctl bootout "$domain/$label" 2>/dev/null || true
 
-  local bootstrap_ok=0
+  # launchd tears the job down ASYNCHRONOUSLY: `print` keeps reporting it
+  # (state = SIGTERMed) for seconds, and a bootstrap issued into that window
+  # races the teardown and can leave the job unloaded entirely (observed and
+  # first fixed in migrate-openai-gov-proxy.sh). Wait for the label to
+  # actually leave the domain: 15 × 2s = 30s, past the default 20s
+  # SIGTERM→SIGKILL grace of a plist with no ExitTimeOut.
+  if ! deploy_lib_poll 15 2 _deploy_lib_label_gone "$domain/$label"; then
+    # Still loaded after the full wait: bootout was refused or teardown is
+    # wedged. The reload is impossible right now. REFUSE — do not kickstart a
+    # half-torn-down job, do not report success for a deploy whose plist
+    # change did not apply (this script's charter is exactly "never report a
+    # false success"). The old process keeps running the old code and old
+    # definition — a consistent pair — and the caller rolls its worktree back.
+    echo "[$tag] REFUSING: $label is still loaded 30s after bootout — the reload cannot proceed." >&2
+    echo "[$tag] The plist change did NOT take effect and the deploy did NOT complete. To apply it by hand:" >&2
+    echo "[$tag]   launchctl bootout $domain/$label && sleep 2 && launchctl bootstrap $domain \"$plist\"" >&2
+    return 1
+  fi
+
+  # Known-unloaded: bootstrap re-reads the plist. Retried because the first
+  # bootstrap after a bootout has a documented I/O race. Diagnostics are
+  # captured, not discarded — a malformed plist or permission error must
+  # surface as itself, not as a generic outage.
+  err=""
   for attempt in 1 2 3; do
-    sleep 2
-    if launchctl bootstrap "$domain" "$plist" 2>/dev/null; then
-      bootstrap_ok=1
-      break
+    if err="$(launchctl bootstrap "$domain" "$plist" 2>&1)"; then
+      if missing="$(_deploy_lib_env_keys_loaded "$plist" "$domain/$label")"; then
+        _deploy_lib_write_sidecar "$tag" "$state_dir" "$sidecar" "$cur_sha"
+      else
+        echo "[$tag] WARNING: reload succeeded but these plist env keys are absent from the loaded definition:$missing" >&2
+        echo "[$tag] WARNING: withholding the plist-hash sidecar so the next deploy retries the reload." >&2
+      fi
+      return 0
     fi
-    echo "[$tag] bootstrap attempt $attempt failed (first-bootstrap I/O race is documented — retrying)" >&2
+    if [[ "$attempt" -lt 3 ]]; then
+      echo "[$tag] bootstrap attempt $attempt failed (first-bootstrap I/O race is documented — retrying)" >&2
+      sleep 2
+    fi
   done
 
-  if [[ "$bootstrap_ok" == 1 ]]; then
-    if [[ -n "$cur_sha" ]]; then
-      mkdir -p "$state_dir"
-      printf '%s' "$cur_sha" > "$sidecar"
-    fi
-    return 0
-  fi
-
-  # Bootstrap never succeeded. Two very different situations:
-  if launchctl print "$domain/$label" >/dev/null 2>&1; then
-    # Still loaded (bootout refused, bootstrap saw "already loaded"): the
-    # service survives — restart the process on the new code, but the plist
-    # change did NOT apply. Warn loudly; sidecar stays unwritten so the next
-    # deploy retries the reload.
-    echo "[$tag] WARNING: reload failed but $label is still loaded — falling back to kickstart." >&2
-    echo "[$tag] WARNING: the plist change did NOT take effect. To apply it by hand:" >&2
-    echo "[$tag]   launchctl bootout $domain/$label && sleep 2 && launchctl bootstrap $domain \"$plist\"" >&2
-    launchctl kickstart -k "$domain/$label"
-    return 0
-  fi
-
-  echo "[$tag] FAILED: $label is NOT loaded after bootout — the service is DOWN." >&2
+  echo "[$tag] FAILED: $label is NOT loaded after bootout and bootstrap keeps failing — the service is DOWN." >&2
+  echo "[$tag] last bootstrap error: ${err:-<none captured>}" >&2
   echo "[$tag] Recover with:" >&2
   echo "[$tag]   launchctl bootstrap $domain \"$plist\"" >&2
   return 1

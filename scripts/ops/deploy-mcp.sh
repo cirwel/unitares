@@ -125,7 +125,15 @@ fi
 # kickstart when the plist is unchanged since the last deploy restart; full
 # RELOAD (bootout + bootstrap) when it changed — kickstart reuses the cached
 # service definition, so a plist env edit silently never loads (2026-08-27).
-deploy_lib_restart_service "$TAG" "gui/$UID_NUM" "$LABEL" "$PLIST"
+# Called in a conditional (set -e would otherwise exit before the rollback):
+# a restart failure — reload refused with the old process still up, or the
+# service down after a dead bootstrap — rolls the worktree back to $PREV so
+# disk never sits ahead of whatever is (or is not) running, then fails loudly.
+if ! deploy_lib_restart_service "$TAG" "gui/$UID_NUM" "$LABEL" "$PLIST"; then
+  echo "[deploy-mcp] FAILED — restart did not complete (see above). Rolling the worktree back to ${PREV:0:8}." >&2
+  git -C "$DEPLOY" reset --hard "$PREV"
+  exit 1
+fi
 
 check_mcp_running_deploy_code() {
   local pid
