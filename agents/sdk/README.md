@@ -60,9 +60,12 @@ class MyResident(GovernanceAgent):
             max_log_lines=10_000,
         )
 
+    async def do_scan(self, client: GovernanceClient) -> int:
+        # Your work goes here. Returning 0 means "nothing to do this tick".
+        return 1
+
     async def run_cycle(self, client: GovernanceClient) -> CycleResult | None:
-        # Do your work here. Return a CycleResult to trigger a check-in,
-        # or None to skip (useful for "nothing to do this tick" paths).
+        # Return a CycleResult to trigger a check-in, or None to skip.
         count = await self.do_scan(client)
         if count == 0:
             return None
