@@ -74,11 +74,13 @@ the lease plane, and the server on loopback without manual database
 initialization. After cloning, the one-command install/start is
 `docker compose up -d --wait`.
 
-`make coordination-demo` gives the first observable result: participant A
-acquires one governed surface, participant B is refused with `held_by_other`,
-and ownership moves through an atomic handoff before release. The printed
-receipt also names the boundary: clients must participate in the lease plane,
-and this does not establish cross-operator trust or improved outcomes.
+`make coordination-demo` gives the first observable result: two participants
+onboard through governance, A's signed proof is refused when it claims B's
+UUID, A acquires one governed `maintenance:/` surface, B is refused with
+`held_by_other`, and ownership moves through an identity-checked atomic handoff
+before release. The printed receipt also names the boundary: clients must
+participate in the lease plane, and this does not establish cross-operator
+trust or improved outcomes.
 
 To exercise longitudinal state next, run `make demo`. It onboards a fresh
 process and sends six check-ins over the real API, printing the response shape,
@@ -125,8 +127,11 @@ Four optional surfaces build on that record:
 | **Elixir/OTP coordination** | Leases, handoffs, dispatch, and supervision for agents that outlive a single process. |
 
 Identity binding is what makes stored findings, reviews, and leases attributable
-to a process rather than to a display label. Operators inspect lifecycle, state,
-evidence, and policy history through MCP/HTTP APIs and the self-hosted dashboard.
+to a process rather than to a display label. The Docker quickstart enforces this
+for `maintenance:/` lease mutations; other surface kinds can be staged with
+`UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS` as their callers carry proofs.
+Operators inspect lifecycle, state, evidence, and policy history through
+MCP/HTTP APIs and the self-hosted dashboard.
 The public [`unitares-sdk`](agents/sdk/README.md) handles connection, identity,
 check-ins, heartbeats, and knowledge participation for resident agents.
 

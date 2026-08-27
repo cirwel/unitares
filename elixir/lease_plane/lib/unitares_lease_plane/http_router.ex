@@ -20,7 +20,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   require Logger
 
   alias UnitaresLeasePlane
-  alias UnitaresLeasePlane.Canonicalize
+  alias UnitaresLeasePlane.{Canonicalize, HandoffServer, IdentityBinding, Repo}
 
   plug(:match)
 
@@ -60,48 +60,16 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   post "/v1/lease/acquire" do
     case extract_acquire_params(conn.body_params) do
       {:ok, params} ->
-        case acquire_for_surface(params) do
-          {:ok, lease, kind} ->
-            json(conn, 200, %{
-              ok: true,
-              lease: present_lease(lease),
-              idempotent: kind == :idempotent,
-              drift_warning: []
-            })
-
-          {:error, :held_by_other, info} ->
-            # PR 5 council BLOCK fix: emit all 5 fields the v0.7 §7.3.2
-            # AcquireHeldByOther typed-absence shape requires (was 2 pre-PR-5;
-            # missing fields caused production 409s to fail Pydantic validation
-            # → degraded to AcquireSchemaInvalid → acquire_with_retry never retried).
-            now = DateTime.utc_now()
-
-            remaining_ms =
-              max(0, DateTime.diff(info.expires_at, now, :millisecond))
-
-            retry_after_hint_ms = min(remaining_ms, 5_000)
-
-            json(conn, 409, %{
-              ok: false,
-              error: "held_by_other",
-              surface_id: Map.get(info, :surface_id),
-              blocking_lease_id: Map.get(info, :blocking_lease_id),
-              held_by_uuid: info.held_by_uuid,
-              expires_at: DateTime.to_iso8601(info.expires_at),
-              retry_after_hint_ms: retry_after_hint_ms
-            })
-
-          {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint_name: name}}} ->
-            # RFC §7.13.5 typed-error contract. Map any CHECK violation to
-            # HTTP 422 schema_invalid with the constraint name as detail (one
-            # of the four §7.13 substrate_state CHECKs). MUST precede the
-            # generic {:error, reason} arm — falling through to 503 would
-            # mask a writer bug as a transient outage.
-            json(conn, 422, %{ok: false, error: "schema_invalid", detail: name})
+        case IdentityBinding.authorize(
+               params.holder_agent_uuid,
+               IdentityBinding.proof_from_conn(conn),
+               surface_kind_from_id(params.surface_id)
+             ) do
+          :ok ->
+            acquire_authorized(conn, params)
 
           {:error, reason} ->
-            Logger.error("lease plane acquire failed: #{safe_reason(reason)}")
-            json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+            identity_refusal(conn, reason)
         end
 
       {:permission_denied, reason} ->
@@ -115,6 +83,52 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
       {:error, detail} ->
         json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
+    end
+  end
+
+  defp acquire_authorized(conn, params) do
+    case acquire_for_surface(params) do
+      {:ok, lease, kind} ->
+        json(conn, 200, %{
+          ok: true,
+          lease: present_lease(lease),
+          idempotent: kind == :idempotent,
+          drift_warning: []
+        })
+
+      {:error, :held_by_other, info} ->
+        # PR 5 council BLOCK fix: emit all 5 fields the v0.7 §7.3.2
+        # AcquireHeldByOther typed-absence shape requires (was 2 pre-PR-5;
+        # missing fields caused production 409s to fail Pydantic validation
+        # → degraded to AcquireSchemaInvalid → acquire_with_retry never retried).
+        now = DateTime.utc_now()
+
+        remaining_ms =
+          max(0, DateTime.diff(info.expires_at, now, :millisecond))
+
+        retry_after_hint_ms = min(remaining_ms, 5_000)
+
+        json(conn, 409, %{
+          ok: false,
+          error: "held_by_other",
+          surface_id: Map.get(info, :surface_id),
+          blocking_lease_id: Map.get(info, :blocking_lease_id),
+          held_by_uuid: info.held_by_uuid,
+          expires_at: DateTime.to_iso8601(info.expires_at),
+          retry_after_hint_ms: retry_after_hint_ms
+        })
+
+      {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint_name: name}}} ->
+        # RFC §7.13.5 typed-error contract. Map any CHECK violation to
+        # HTTP 422 schema_invalid with the constraint name as detail (one
+        # of the four §7.13 substrate_state CHECKs). MUST precede the
+        # generic {:error, reason} arm — falling through to 503 would
+        # mask a writer bug as a transient outage.
+        json(conn, 422, %{ok: false, error: "schema_invalid", detail: name})
+
+      {:error, reason} ->
+        Logger.error("lease plane acquire failed: #{safe_reason(reason)}")
+        json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
     end
   end
 
@@ -221,7 +235,8 @@ defmodule UnitaresLeasePlane.HTTPRouter do
         json(conn, 503, %{
           ok: false,
           error: "persist_failed",
-          reason: "could not durably record the effect; nothing was written: #{inspect(persist_reason)}"
+          reason:
+            "could not durably record the effect; nothing was written: #{inspect(persist_reason)}"
         })
 
       # Write failed AND the rollback also failed — the surface is quarantined and
@@ -230,7 +245,8 @@ defmodule UnitaresLeasePlane.HTTPRouter do
         json(conn, 500, %{
           ok: false,
           error: "rollback_failed",
-          reason: "write failed and the rollback also failed; the surface is quarantined for operator review"
+          reason:
+            "write failed and the rollback also failed; the surface is quarantined for operator review"
         })
 
       {:error, detail} when is_binary(detail) ->
@@ -454,16 +470,15 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   post "/v1/lease/release" do
     case extract_release_params(conn.body_params) do
       {:ok, lease_id, reason} ->
-        case UnitaresLeasePlane.release(lease_id, reason) do
+        case authorize_active_lease(conn, lease_id) do
           :ok ->
-            json(conn, 200, %{ok: true})
+            release_authorized(conn, lease_id, reason)
 
           {:error, :not_found} ->
             json(conn, 404, %{ok: false, error: "not_found"})
 
-          {:error, reason_atom} ->
-            Logger.error("lease plane release failed: #{safe_reason(reason_atom)}")
-            json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+          {:error, identity_reason} ->
+            identity_refusal(conn, identity_reason)
         end
 
       {:permission_denied, reason} ->
@@ -504,16 +519,15 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   post "/v1/lease/handoff/offer" do
     case extract_handoff_offer_params(conn.body_params) do
       {:ok, lease_id, to_holder_agent_uuid, ttl_s} ->
-        case UnitaresLeasePlane.handoff_offer(lease_id, to_holder_agent_uuid, ttl_s) do
-          {:ok, handoff_id} ->
-            json(conn, 200, %{ok: true, handoff_id: handoff_id})
+        case authorize_active_lease(conn, lease_id) do
+          :ok ->
+            handoff_offer_authorized(conn, lease_id, to_holder_agent_uuid, ttl_s)
 
           {:error, :not_found} ->
             json(conn, 404, %{ok: false, error: "not_found"})
 
-          {:error, reason} ->
-            Logger.error("lease plane handoff offer failed: #{safe_reason(reason)}")
-            json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+          {:error, identity_reason} ->
+            identity_refusal(conn, identity_reason)
         end
 
       {:error, detail} ->
@@ -521,12 +535,26 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     end
   end
 
+  defp handoff_offer_authorized(conn, lease_id, to_holder_agent_uuid, ttl_s) do
+    case UnitaresLeasePlane.handoff_offer(lease_id, to_holder_agent_uuid, ttl_s) do
+      {:ok, handoff_id} ->
+        json(conn, 200, %{ok: true, handoff_id: handoff_id})
+
+      {:error, :not_found} ->
+        json(conn, 404, %{ok: false, error: "not_found"})
+
+      {:error, reason} ->
+        Logger.error("lease plane handoff offer failed: #{safe_reason(reason)}")
+        json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+    end
+  end
+
   post "/v1/lease/handoff/accept" do
     case extract_handoff_accept_params(conn.body_params) do
       {:ok, handoff_id} ->
-        case UnitaresLeasePlane.handoff_accept(handoff_id) do
+        case authorize_handoff_recipient(conn, handoff_id) do
           :ok ->
-            json(conn, 200, %{ok: true})
+            handoff_accept_authorized(conn, handoff_id)
 
           {:error, :not_found} ->
             json(conn, 404, %{ok: false, error: "not_found"})
@@ -534,13 +562,29 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           {:error, :expired} ->
             json(conn, 409, %{ok: false, error: "expired"})
 
-          {:error, reason} ->
-            Logger.error("lease plane handoff accept failed: #{safe_reason(reason)}")
-            json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+          {:error, identity_reason} ->
+            identity_refusal(conn, identity_reason)
         end
 
       {:error, detail} ->
         json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
+    end
+  end
+
+  defp handoff_accept_authorized(conn, handoff_id) do
+    case UnitaresLeasePlane.handoff_accept(handoff_id) do
+      :ok ->
+        json(conn, 200, %{ok: true})
+
+      {:error, :not_found} ->
+        json(conn, 404, %{ok: false, error: "not_found"})
+
+      {:error, :expired} ->
+        json(conn, 409, %{ok: false, error: "expired"})
+
+      {:error, reason} ->
+        Logger.error("lease plane handoff accept failed: #{safe_reason(reason)}")
+        json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
     end
   end
 
@@ -554,69 +598,173 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   defp renew_or_heartbeat(conn) do
     case Map.get(conn.body_params, "lease_id") do
       lease_id when is_binary(lease_id) and byte_size(lease_id) > 0 ->
-        # RFC §7.13: optional substrate_state + substrate_state_observed_at.
-        # Pair-coherence is enforced server-side by the migration-034 CHECK;
-        # client-side rejection happens in Pydantic for Python callers.
-        substrate_state = Map.get(conn.body_params, "substrate_state")
+        case authorize_active_lease(conn, lease_id) do
+          :ok ->
+            renew_authorized(conn, lease_id)
 
-        substrate_observed_at =
-          case Map.get(conn.body_params, "substrate_state_observed_at") do
-            nil ->
-              nil
+          {:error, :not_found} ->
+            json(conn, 404, %{ok: false, error: "not_found"})
 
-            iso when is_binary(iso) ->
-              case DateTime.from_iso8601(iso) do
-                {:ok, dt, _} -> dt
-                _ -> :invalid_iso
-              end
-
-            _ ->
-              :invalid_iso
-          end
-
-        cond do
-          substrate_observed_at == :invalid_iso ->
-            json(conn, 422, %{
-              ok: false,
-              error: "schema_invalid",
-              detail: "substrate_state_observed_at must be ISO-8601 timestamp"
-            })
-
-          substrate_state != nil and not is_map(substrate_state) ->
-            json(conn, 422, %{
-              ok: false,
-              error: "schema_invalid",
-              detail: "substrate_state must be a JSON object"
-            })
-
-          true ->
-            case UnitaresLeasePlane.renew(lease_id, substrate_state, substrate_observed_at) do
-              :ok ->
-                json(conn, 200, %{ok: true})
-
-              {:error, :not_found} ->
-                json(conn, 404, %{ok: false, error: "not_found"})
-
-              {:error,
-               %Postgrex.Error{postgres: %{code: :check_violation, constraint_name: name}}} ->
-                # RFC §7.13.5 typed-error contract for renew CHECK violations.
-                # MUST precede the generic 503 arm.
-                json(conn, 422, %{ok: false, error: "schema_invalid", detail: name})
-
-              {:error, reason} ->
-                Logger.error("lease plane renew failed: #{safe_reason(reason)}")
-
-                json(conn, 503, %{
-                  ok: false,
-                  error: "service_unavailable",
-                  reason: "internal error"
-                })
-            end
+          {:error, identity_reason} ->
+            identity_refusal(conn, identity_reason)
         end
 
       _ ->
         json(conn, 422, %{ok: false, error: "schema_invalid", detail: "lease_id required"})
     end
+  end
+
+  defp renew_authorized(conn, lease_id) do
+    # RFC §7.13: optional substrate_state + substrate_state_observed_at.
+    # Pair-coherence is enforced server-side by the migration-034 CHECK;
+    # client-side rejection happens in Pydantic for Python callers.
+    substrate_state = Map.get(conn.body_params, "substrate_state")
+
+    substrate_observed_at =
+      case Map.get(conn.body_params, "substrate_state_observed_at") do
+        nil ->
+          nil
+
+        iso when is_binary(iso) ->
+          case DateTime.from_iso8601(iso) do
+            {:ok, dt, _} -> dt
+            _ -> :invalid_iso
+          end
+
+        _ ->
+          :invalid_iso
+      end
+
+    cond do
+      substrate_observed_at == :invalid_iso ->
+        json(conn, 422, %{
+          ok: false,
+          error: "schema_invalid",
+          detail: "substrate_state_observed_at must be ISO-8601 timestamp"
+        })
+
+      substrate_state != nil and not is_map(substrate_state) ->
+        json(conn, 422, %{
+          ok: false,
+          error: "schema_invalid",
+          detail: "substrate_state must be a JSON object"
+        })
+
+      true ->
+        case UnitaresLeasePlane.renew(lease_id, substrate_state, substrate_observed_at) do
+          :ok ->
+            json(conn, 200, %{ok: true})
+
+          {:error, :not_found} ->
+            json(conn, 404, %{ok: false, error: "not_found"})
+
+          {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint_name: name}}} ->
+            # RFC §7.13.5 typed-error contract for renew CHECK violations.
+            # MUST precede the generic 503 arm.
+            json(conn, 422, %{ok: false, error: "schema_invalid", detail: name})
+
+          {:error, reason} ->
+            Logger.error("lease plane renew failed: #{safe_reason(reason)}")
+
+            json(conn, 503, %{
+              ok: false,
+              error: "service_unavailable",
+              reason: "internal error"
+            })
+        end
+    end
+  end
+
+  defp release_authorized(conn, lease_id, reason) do
+    case UnitaresLeasePlane.release(lease_id, reason) do
+      :ok ->
+        json(conn, 200, %{ok: true})
+
+      {:error, :not_found} ->
+        json(conn, 404, %{ok: false, error: "not_found"})
+
+      {:error, reason_atom} ->
+        Logger.error("lease plane release failed: #{safe_reason(reason_atom)}")
+        json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+    end
+  end
+
+  defp authorize_active_lease(conn, lease_id) do
+    if IdentityBinding.enabled?() do
+      case Repo.active_lease(lease_id) do
+        {:ok, lease} ->
+          IdentityBinding.authorize(
+            lease.holder_agent_uuid,
+            IdentityBinding.proof_from_conn(conn),
+            lease.surface_kind
+          )
+
+        {:error, :not_found} ->
+          {:error, :not_found}
+
+        {:error, _reason} ->
+          {:error, :identity_verification_unavailable}
+      end
+    else
+      :ok
+    end
+  end
+
+  defp authorize_handoff_recipient(conn, handoff_id) do
+    if IdentityBinding.enabled?() do
+      case HandoffServer.authorization_context(handoff_id) do
+        {:ok, %{recipient_uuid: recipient_uuid, lease_id: lease_id}} ->
+          case Repo.active_lease(lease_id) do
+            {:ok, lease} ->
+              IdentityBinding.authorize(
+                recipient_uuid,
+                IdentityBinding.proof_from_conn(conn),
+                lease.surface_kind
+              )
+
+            {:error, :not_found} ->
+              {:error, :not_found}
+
+            {:error, _reason} ->
+              {:error, :identity_verification_unavailable}
+          end
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    else
+      :ok
+    end
+  end
+
+  defp identity_refusal(conn, :identity_proof_invalid) do
+    json(conn, 403, %{
+      ok: false,
+      error: "permission_denied",
+      reason: "identity_proof_invalid"
+    })
+  end
+
+  defp identity_refusal(conn, :identity_verification_unavailable) do
+    json(conn, 503, %{
+      ok: false,
+      error: "service_unavailable",
+      reason: "identity_verification_unavailable"
+    })
+  end
+
+  defp identity_refusal(conn, _reason) do
+    json(conn, 503, %{
+      ok: false,
+      error: "service_unavailable",
+      reason: "identity_verification_unavailable"
+    })
+  end
+
+  defp surface_kind_from_id(surface_id) when is_binary(surface_id) do
+    surface_id
+    |> String.split(":", parts: 2)
+    |> hd()
   end
 
   defp extract_acquire_params(%{} = body) do

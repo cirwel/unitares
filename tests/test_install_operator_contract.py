@@ -72,6 +72,11 @@ def test_tier_one_quickstart_is_release_pinned_and_coordination_complete() -> No
     assert '"127.0.0.1:${LEASE_PLANE_HOST_PORT:-8788}:8788"' in compose
     assert "LEASE_PLANE_BASE_URL: http://lease-plane:8788" in compose
     assert "UNITARES_LEASE_PLANE_URL: http://lease-plane:8788" in compose
+    assert "UNITARES_LEASE_IDENTITY_BINDING:" in compose
+    assert "UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS:" in compose
+    assert "UNITARES_CONTINUITY_TOKEN_SECRET:" in compose
+    assert "A's signed proof is refused" in readme
+    assert "rejecting A's" in manual
     assert "condition: service_healthy" in compose
 
     makefile = _read("Makefile")

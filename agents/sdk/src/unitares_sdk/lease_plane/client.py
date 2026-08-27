@@ -202,8 +202,14 @@ class LeasePlaneClient:
         self.config = config or LeasePlaneClientConfig()
         self._transport = transport or _urllib_transport
 
-    def acquire(self, request: AcquireRequest) -> AcquireResult:
-        payload = self._request_json("POST", "/v1/lease/acquire", request.model_dump(mode="json", exclude_none=True))
+    def acquire(
+        self, request: AcquireRequest, *, identity_proof: str | None = None
+    ) -> AcquireResult:
+        payload = self._request_json(
+            "POST", "/v1/lease/acquire",
+            request.model_dump(mode="json", exclude_none=True),
+            identity_proof=identity_proof,
+        )
         return _parse_acquire(payload)
 
     def acquire_with_retry(
@@ -215,6 +221,7 @@ class LeasePlaneClient:
         ceiling_s: float = 5.0,
         sleep: Callable[[float], None] | None = None,
         rng: Callable[[], float] | None = None,
+        identity_proof: str | None = None,
     ) -> AcquireResult:
         """Acquire with jittered exponential backoff on `held_by_other`.
 
@@ -255,7 +262,7 @@ class LeasePlaneClient:
         sleep_fn = sleep or time.sleep
         rand_fn = rng or random.random
 
-        result: AcquireResult = self.acquire(request)
+        result: AcquireResult = self.acquire(request, identity_proof=identity_proof)
         attempt = 1
         while attempt < max_attempts and isinstance(result, AcquireHeldByOther):
             # Full-jitter exponential backoff. Cap exponent to avoid overflow.
@@ -266,7 +273,7 @@ class LeasePlaneClient:
             hint_floor = (result.retry_after_hint_ms or 0) / 1000.0
             backoff = max(backoff, hint_floor)
             sleep_fn(backoff)
-            result = self.acquire(request)
+            result = self.acquire(request, identity_proof=identity_proof)
             attempt += 1
         return result
 
@@ -274,15 +281,29 @@ class LeasePlaneClient:
         payload = self._request_json("GET", "/v1/lease/status", None, query={"surface_id": surface_id})
         return _parse_status(payload)
 
-    def renew(self, request: RenewRequest) -> SimpleResult:
-        payload = self._request_json("POST", "/v1/lease/renew", request.model_dump(mode="json", exclude_none=True))
+    def renew(
+        self, request: RenewRequest, *, identity_proof: str | None = None
+    ) -> SimpleResult:
+        payload = self._request_json(
+            "POST", "/v1/lease/renew",
+            request.model_dump(mode="json", exclude_none=True),
+            identity_proof=identity_proof,
+        )
         return _parse_simple(payload)
 
-    def heartbeat(self, request: HeartbeatRequest) -> SimpleResult:
-        payload = self._request_json("POST", "/v1/lease/heartbeat", request.model_dump(mode="json", exclude_none=True))
+    def heartbeat(
+        self, request: HeartbeatRequest, *, identity_proof: str | None = None
+    ) -> SimpleResult:
+        payload = self._request_json(
+            "POST", "/v1/lease/heartbeat",
+            request.model_dump(mode="json", exclude_none=True),
+            identity_proof=identity_proof,
+        )
         return _parse_simple(payload)
 
-    def release(self, request: ReleaseRequest) -> SimpleResult:
+    def release(
+        self, request: ReleaseRequest, *, identity_proof: str | None = None
+    ) -> SimpleResult:
         # §7.10 contract-layer rejection: force-release MUST go through
         # force_release(), which uses LEASE_FORCE_RELEASE_TOKEN. The standard
         # release path uses the regular bearer (LEASE_PLANE_BEARER_TOKEN /
@@ -293,7 +314,11 @@ class LeasePlaneClient:
                 error="permission_denied",
                 reason="release_reason='forced' requires force_release(); see RFC §7.10",
             )
-        payload = self._request_json("POST", "/v1/lease/release", request.model_dump(mode="json", exclude_none=True))
+        payload = self._request_json(
+            "POST", "/v1/lease/release",
+            request.model_dump(mode="json", exclude_none=True),
+            identity_proof=identity_proof,
+        )
         return _parse_simple(payload)
 
     def force_release(self, request: ForceReleaseRequest) -> SimpleResult:
@@ -319,12 +344,24 @@ class LeasePlaneClient:
         )
         return _parse_simple(payload)
 
-    def handoff_offer(self, request: HandoffOfferRequest) -> SimpleResult:
-        payload = self._request_json("POST", "/v1/lease/handoff/offer", request.model_dump(mode="json", exclude_none=True))
+    def handoff_offer(
+        self, request: HandoffOfferRequest, *, identity_proof: str | None = None
+    ) -> SimpleResult:
+        payload = self._request_json(
+            "POST", "/v1/lease/handoff/offer",
+            request.model_dump(mode="json", exclude_none=True),
+            identity_proof=identity_proof,
+        )
         return _parse_simple(payload)
 
-    def handoff_accept(self, request: HandoffAcceptRequest) -> SimpleResult:
-        payload = self._request_json("POST", "/v1/lease/handoff/accept", request.model_dump(mode="json", exclude_none=True))
+    def handoff_accept(
+        self, request: HandoffAcceptRequest, *, identity_proof: str | None = None
+    ) -> SimpleResult:
+        payload = self._request_json(
+            "POST", "/v1/lease/handoff/accept",
+            request.model_dump(mode="json", exclude_none=True),
+            identity_proof=identity_proof,
+        )
         return _parse_simple(payload)
 
     def propose_file_write(
@@ -557,6 +594,7 @@ class LeasePlaneClient:
         *,
         query: dict[str, str] | None = None,
         authorization_token: str | None = None,
+        identity_proof: str | None = None,
     ) -> Mapping[str, Any]:
         url = self.config.base_url.rstrip("/") + path
         if query:
@@ -568,6 +606,8 @@ class LeasePlaneClient:
         token = authorization_token if authorization_token is not None else self.config.bearer_token
         if token:
             headers["Authorization"] = f"Bearer {token}"
+        if identity_proof:
+            headers["X-Unitares-Identity-Proof"] = identity_proof
 
         request = LeaseHTTPRequest(
             method=method,

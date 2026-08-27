@@ -21,9 +21,11 @@ make coordination-demo
 
 After cloning, `docker compose up -d --wait` is the one-command install/start;
 there is no separate schema bootstrap. `make coordination-demo` verifies the
-live coordination boundary by acquiring one surface, refusing a second holder,
-handing ownership over, and releasing it. The proof is single-operator: it does
-not establish cross-operator trust or outcome benefit.
+live coordination boundary by onboarding two participants, rejecting A's
+signed proof when it claims B's UUID, acquiring one `maintenance:/` surface,
+refusing a second holder, handing ownership over through identity-checked
+mutations, and releasing it. The proof is single-operator: it does not establish
+cross-operator trust or outcome benefit.
 
 Run `make demo` next to send six warmup check-ins and print the real governance
 API response shape. It verifies identity and telemetry wiring; it does not

@@ -192,6 +192,15 @@ Both shapes respect `cycle_timeout_seconds` and auto-trim `log_file`.
    `IdentityBootstrapRefused` — the operator must explicitly set
    `UNITARES_FIRST_RUN=1` once to mint a new one.
 
+## Identity-bound lease calls
+
+`LeasePlaneClient` accepts `identity_proof=<continuity_token>` on `acquire`,
+`renew`, `heartbeat`, `release`, `handoff_offer`, and `handoff_accept`. The proof
+travels only in `X-Unitares-Identity-Proof`, never in the persisted request
+body. Deployments can stage enforcement by surface kind with
+`UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS`; callers for an enforced kind must
+refresh their proof through governance before it expires.
+
 ## Not in the SDK (on purpose)
 
 - `agents/common/findings.py` and `agents/common/config.py` are
