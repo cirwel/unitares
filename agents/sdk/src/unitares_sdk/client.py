@@ -64,6 +64,31 @@ _CONNECT_RETRYABLE = (
 _IDENTITY_TOOLS = frozenset({"onboard", "identity"})
 
 
+
+def _raise_if_guidance(tool: str, raw: object) -> None:
+    """Turn a guidance reply into a readable error before model validation.
+
+    Governance answers some identity calls with ``success: true`` and a
+    ``status`` describing what it wants instead -- no uuid, no
+    client_session_id. Those fields are required by the response models, so
+    validation failed with a pydantic "field required" error and the server's
+    hint / next_step / safe_options were lost. Checked here, ahead of
+    model_validate, so the caller gets the guidance rather than a schema
+    complaint.
+
+    Only a payload that is BOTH missing an identity and carrying a status is
+    treated as guidance; a normal response with an unfamiliar extra status must
+    still validate.
+    """
+    if not isinstance(raw, dict):
+        return
+    if raw.get("agent_uuid") or raw.get("uuid") or raw.get("client_session_id"):
+        return
+    if not raw.get("status"):
+        return
+    from .errors import IdentityGuidanceReturned
+    raise IdentityGuidanceReturned(tool, raw)
+
 class GovernanceClient:
     """Async client for UNITARES governance MCP server.
 
@@ -125,6 +150,9 @@ class GovernanceClient:
         # Stays None for non-resident callers; substrate emission skips
         # silently in that case.
         self.resident_name: str | None = None
+        # Set by onboard() from the server's mint response; None on servers
+        # predating the field, or when no name was supplied.
+        self.last_resident_registration: dict | None = None
         # Cached lease handle for substrate emission. Per-client-instance
         # so concurrent residents don't share state.
         from unitares_sdk._substrate import _LeaseCache
@@ -400,7 +428,13 @@ class GovernanceClient:
         args.update(kwargs)
 
         raw = await self.call_tool("onboard", args)
+        _raise_if_guidance("onboard", raw)
         self._capture_identity(raw)
+        # Kept off the model so callers that never look still get it verbatim;
+        # OnboardResult surfaces the same dict as a typed field.
+        self.last_resident_registration = (
+            raw.get("resident_registration") if isinstance(raw, dict) else None
+        )
         # RFC §7.13: capture resident name so subsequent checkins can emit
         # substrate observations to lease_plane.surface_leases. Non-resident
         # names are stored too but substrate emission filters them out.

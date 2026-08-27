@@ -102,6 +102,55 @@ class VerdictError(GovernanceError):
         super().__init__(msg)
 
 
+class IdentityGuidanceReturned(GovernanceError):
+    """The server answered an identity call with GUIDANCE, not an identity.
+
+    Governance can reply ``success: true`` while declining to act, carrying a
+    ``status`` (e.g. ``lineage_declaration_required``) plus ``hint``,
+    ``next_step`` and ``safe_options`` that say exactly what to send instead.
+    That response has no ``client_session_id``, so validating it as an
+    ``OnboardResult`` raised a pydantic "field required" error and threw every
+    word of the guidance away -- the caller saw a schema complaint about a
+    field they had never heard of.
+
+    Carries the server's own words. ``status``, ``hint``, ``next_step`` and
+    ``safe_options`` are attributes so a caller can act on them programmatically
+    rather than parsing the message."""
+
+    def __init__(self, tool: str, payload: dict):
+        self.tool = tool
+        self.payload = payload
+        self.status = payload.get("status")
+        self.hint = payload.get("hint")
+        self.next_step = payload.get("next_step")
+        self.safe_options = payload.get("safe_options") or []
+        parts = [f"{tool}: server returned guidance ({self.status!r}) instead of an identity"]
+        if self.hint:
+            parts.append(str(self.hint))
+        if self.next_step:
+            parts.append(f"Next: {self.next_step}")
+        super().__init__(" — ".join(parts))
+
+
+class ResidentRegistrationRefused(GovernanceError):
+    """Raised when ``persistent=True`` was requested but the freshly minted
+    identity did not receive the resident tags.
+
+    This means the agent's ``name`` is not on the governance server's
+    ``UNITARES_RESIDENTS`` roster. Those tags (``persistent``,
+    ``autonomous``) are granted ONLY at mint and ONLY to roster names -- they
+    are privileged, and an identity cannot self-assign them afterwards. So an
+    off-roster resident is not protected from auto-archive and cannot be
+    repaired in place.
+
+    Raising here is deliberate. The pre-2026-08 behaviour was to mint
+    successfully, log a tag-reconcile warning on every subsequent cycle, and
+    let the orphan sweep archive the identity days later -- a silent failure
+    whose cause appeared nowhere in the message. Fix: add the name to
+    ``UNITARES_RESIDENTS`` where the governance server reads it, restart the
+    server, then bootstrap again."""
+
+
 class IdentityBootstrapRefused(GovernanceError):
     """Raised when a resident agent's anchor is missing and the agent was
     configured with refuse_fresh_onboard=True (the default for Vigil,

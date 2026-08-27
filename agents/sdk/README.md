@@ -53,16 +53,19 @@ class MyResident(GovernanceAgent):
         super().__init__(
             name="MyResident",
             mcp_url="http://127.0.0.1:8767/mcp/",
-            persistent=True,               # protects from auto-archive
+            persistent=True,               # requires roster registration — see below
             refuse_fresh_onboard=True,     # explicit bootstrap required
             cycle_timeout_seconds=60.0,    # hard cap on one cycle
             log_file=Path("/tmp/my_resident.log"),
             max_log_lines=10_000,
         )
 
+    async def do_scan(self, client: GovernanceClient) -> int:
+        # Your work goes here. Returning 0 means "nothing to do this tick".
+        return 1
+
     async def run_cycle(self, client: GovernanceClient) -> CycleResult | None:
-        # Do your work here. Return a CycleResult to trigger a check-in,
-        # or None to skip (useful for "nothing to do this tick" paths).
+        # Return a CycleResult to trigger a check-in, or None to skip.
         count = await self.do_scan(client)
         if count == 0:
             return None
@@ -78,11 +81,49 @@ if __name__ == "__main__":
     asyncio.run(MyResident().run_forever(interval=60))
 ```
 
-First run: `UNITARES_FIRST_RUN=1 python my_resident.py` — this mints
-the identity and stores its UUID anchor at
-`~/.unitares/anchors/myresident.json`. Every subsequent run resumes
-that anchor automatically. Never delete anchors: if you do, set
-`UNITARES_FIRST_RUN=1` again to re-bootstrap (you will get a new UUID).
+### Register the name first
+
+**Before the first run**, add the agent's name to the governance server's
+`UNITARES_RESIDENTS` roster and restart the server:
+
+```
+UNITARES_RESIDENTS=MyResident            # comma-separated; empty by default
+```
+
+This is not optional bookkeeping. `persistent` and `autonomous` are
+*privileged* tags: the server grants them only at mint, and only when the
+name being minted is on that roster. An identity **cannot assign them to
+itself afterwards**, so a resident bootstrapped under an unlisted name is not
+protected from auto-archive and cannot be upgraded in place — the only fix is
+to register the name and bootstrap a fresh identity.
+
+The roster is empty by default and never ships a fleet, so a fresh install
+has no named residents until you declare yours.
+
+### First run
+
+`UNITARES_FIRST_RUN=1 python my_resident.py` — this mints the identity and
+stores its UUID anchor at `~/.unitares/anchors/myresident.json`. Every
+subsequent run resumes that anchor automatically. Never delete anchors: if
+you do, set `UNITARES_FIRST_RUN=1` again to re-bootstrap (you will get a new
+UUID).
+
+If the name was not on the roster, the mint raises
+`ResidentRegistrationRefused` with the exact remedy rather than starting an
+agent that quietly is not a resident. The server reports what happened in
+`OnboardResult.resident_registration`:
+
+```python
+{"status": "not_on_roster",       # or: registered | no_roster_configured
+ "requested_name": "MyResident",
+ "granted_tags": ["ephemeral"],
+ "required_tags": ["persistent", "autonomous"],
+ "roster_env": "UNITARES_RESIDENTS",
+ "detail": "..."}                 # actionable remedy
+```
+
+Pass `persistent=False` for an ordinary long-running agent that does not need
+resident semantics; no roster entry is required for that.
 
 ## Extension points
 

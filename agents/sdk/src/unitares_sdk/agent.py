@@ -406,7 +406,23 @@ class GovernanceAgent:
             onboard_kwargs["parent_agent_id"] = self.parent_agent_id
         if self.spawn_reason is not None:
             onboard_kwargs["spawn_reason"] = self.spawn_reason
-        await client.onboard(self.name, **onboard_kwargs)
+        # force_new=True because reaching here IS the deliberate bootstrap:
+        # the anchor is absent and (for refuse_fresh_onboard residents) the
+        # operator set UNITARES_FIRST_RUN=1 to say so. A BARE onboard is
+        # ambiguous to the server -- it cannot tell a first run from a resident
+        # that lost its anchor -- so it answers
+        # `status: lineage_declaration_required` with a hint, a next_step, and
+        # three safe_options. That response carries no client_session_id, so
+        # OnboardResult refused to validate and the agent died on a pydantic
+        # error naming a missing field, with every word of the server's
+        # guidance discarded.
+        #
+        # Verified 2026-08-26 against unitares-sdk 0.2.2 installed from PyPI
+        # into a clean venv: the README's own 30-line resident cannot onboard.
+        # Declaring the fresh mint is what the server asks for, and this path
+        # has already established that it is one.
+        await client.onboard(self.name, force_new=True, **onboard_kwargs)
+        self._verify_resident_registration(client)
         self._sync_from_client(client)
         self._save_session()
         logger.info("%s: onboarded fresh (UUID %s)", self.name, self.agent_uuid[:12] if self.agent_uuid else "?")
@@ -438,6 +454,39 @@ class GovernanceAgent:
                 "non-fatal): %r",
                 self.name, e,
             )
+
+    def _verify_resident_registration(self, client: GovernanceClient) -> None:
+        """Fail loudly at bootstrap if a ``persistent`` agent was not registered.
+
+        ``persistent``/``autonomous`` are privileged: the server grants them
+        ONLY at mint, and ONLY when ``name`` is on its ``UNITARES_RESIDENTS``
+        roster. An identity cannot self-assign them afterwards, so
+        ``_reconcile_resident_tags`` cannot repair this — it retries and warns
+        on every cycle, forever, without ever naming the roster.
+
+        The old behaviour was therefore: mint reports success, the constructor
+        says ``persistent=True``, and the orphan sweep archives the identity
+        days later. Bootstrap is the last moment the operator can still fix it
+        cheaply (add to the roster, restart, re-bootstrap), so refuse here
+        rather than run on in a state that cannot be repaired in place.
+
+        Silent on servers that predate the field — an older server is not
+        evidence of a failed registration.
+        """
+        if not self.persistent:
+            return
+        registration = getattr(client, "last_resident_registration", None)
+        if not isinstance(registration, dict):
+            return
+        if registration.get("status") == "registered":
+            return
+
+        from .errors import ResidentRegistrationRefused
+        raise ResidentRegistrationRefused(
+            f"{self.name}: minted, but NOT registered as a resident "
+            f"(status={registration.get('status')!r}). "
+            f"{registration.get('detail', '')}"
+        )
 
     async def _reconcile_resident_tags_inner(self, client: GovernanceClient) -> None:
         """Ensure a persistent resident carries the full ``RESIDENT_TAGS`` set.

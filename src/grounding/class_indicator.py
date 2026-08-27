@@ -60,7 +60,7 @@ def parse_resident_roster_order(raw: Optional[str]) -> tuple[str, ...]:
 
 
 def load_resident_labels() -> frozenset[str]:
-    """Resident labels for this deployment, from ``UNITARES_RESIDENTS``.
+    """Load resident labels from ``UNITARES_RESIDENTS``; unset means no residents.
 
     Read once at import into ``KNOWN_RESIDENT_LABELS`` (server processes read
     their roster at startup). Tests that vary the roster set the env var

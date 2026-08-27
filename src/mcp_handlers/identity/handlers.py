@@ -62,6 +62,7 @@ from .persistence import (
     _find_agent_by_label,
     ensure_agent_persisted,
     set_agent_label,
+    set_agent_label_resolved,
 )
 
 
@@ -2416,12 +2417,27 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             logger.info(f"[ONBOARD] Rebadged agent_id -> {refreshed_agent_id}")
 
     # Set label if requested (and different from current)
+    _label_renamed_from: Optional[str] = None
     if name and name != agent_label:
-        success = await set_agent_label(agent_uuid, name, session_key=session_key)
-        if success:
-            agent_label = name
+        # Resolved form: a collision renames this agent to `{name}_{uuid8}`,
+        # and reporting `name` regardless told the agent it holds a label the
+        # database does not have. Verified 2026-08-26 against the live server:
+        # a second mint of the same name returned display_name="ZzTestCollision"
+        # while core.agents held "ZzTestCollision_4dc58779". Every resident
+        # surface resolves by exact label, so that divergence is how a renamed
+        # resident goes missing with nothing anywhere reporting it.
+        applied = await set_agent_label_resolved(agent_uuid, name, session_key=session_key)
+        if applied:
+            if applied != name:
+                _label_renamed_from = name
+                logger.warning(
+                    "[ONBOARD] %s requested label %r but was renamed to %r "
+                    "(another active agent holds %r)",
+                    agent_uuid[:8], name, applied, name,
+                )
+            agent_label = applied
             # Refresh identity object
-            identity["label"] = name
+            identity["label"] = applied
         else:
             logger.warning(f"[ONBOARD] set_agent_label returned False for {agent_uuid[:8]}... name={name}")
             # Fallback: use the name for this response even if DB persistence failed
@@ -2434,9 +2450,12 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # than left to out-of-band SDK writes that only fire for resident
     # subclasses. Rule lives in src/grounding/onboard_classifier.py; see
  # .
+    _stamped_tags: Optional[list] = None
+    _stamp_ran = False
     if is_new:
         try:
-            await _stamp_default_tags_on_onboard(agent_uuid, name)
+            _stamped_tags = await _stamp_default_tags_on_onboard(agent_uuid, name)
+            _stamp_ran = True
         except Exception as e:
             logger.debug(f"[ONBOARD] default-stamp failed (non-fatal): {e}")
 
@@ -2713,6 +2732,50 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         model_type=model_type,
     )
 
+    # Resident registration verdict. Registering a resident has two halves --
+    # the name must be on this deployment's UNITARES_RESIDENTS roster, and the
+    # privileged tags are granted only here, only at mint -- and nothing used
+    # to connect them. An off-roster name minted an `ephemeral` identity that
+    # reported success and was archived by the orphan sweep days later, with
+    # the only signal a per-cycle SDK warning that never named the cause.
+    #
+    # Reported only on a fresh mint, which is where the decision is actually
+    # made and the only point at which it can still be changed: privileged
+    # tags cannot be added to an existing identity by that identity.
+    if _stamp_ran:
+        try:
+            from src.grounding.onboard_classifier import resident_registration
+            registration = resident_registration(name, _stamped_tags)
+            if registration:
+                result["resident_registration"] = registration
+                if registration["status"] in ("not_on_roster", "no_roster_configured"):
+                    logger.warning(
+                        "[ONBOARD] %s minted WITHOUT resident tags (%s) — %s",
+                        f"{agent_uuid[:8]}...", registration["status"], name,
+                    )
+        except Exception:
+            pass  # Never let a response annotation fail a mint.
+
+    # A collision rename is otherwise invisible to the caller: display_name
+    # now carries the applied label, but nothing said the requested one was
+    # refused. Report it so an agent (or its operator) can act, rather than
+    # discovering weeks later that a resident never matched its roster label.
+    if _label_renamed_from:
+        result["label_renamed"] = {
+            "requested": _label_renamed_from,
+            "applied": agent_label,
+            "reason": "label_taken_by_active_agent",
+            "detail": (
+                f"{_label_renamed_from!r} is already held by another active "
+                f"agent, so this identity was minted as {agent_label!r}. "
+                "Labels are cosmetic and identity is the uuid, but resident "
+                "surfaces resolve by exact label — if this agent is meant to "
+                "be the resident named "
+                f"{_label_renamed_from!r}, free that name (archive or rename "
+                "the incumbent) and bootstrap again."
+            ),
+        }
+
     # Temporal narrator — contextual time awareness (silence by default)
     try:
         from src.temporal import build_temporal_context
@@ -2884,7 +2947,9 @@ async def _create_spawned_edge_bg(
         logger.debug(f"SPAWNED edge creation failed (non-fatal): {e}")
 
 
-async def _stamp_default_tags_on_onboard(agent_uuid: str, name: Optional[str]) -> None:
+async def _stamp_default_tags_on_onboard(
+    agent_uuid: str, name: Optional[str]
+) -> Optional[list]:
     """Stamp default class tags from the onboard handler. Thin wrapper around
     ``stamp_default_class_tags`` in ``src.grounding.onboard_classifier``;
     keeps the original log line shape so onboard-specific log filters keep
@@ -2900,6 +2965,10 @@ async def _stamp_default_tags_on_onboard(agent_uuid: str, name: Optional[str]) -
         logger.info(
             f"[ONBOARD] S8a default-stamp: {agent_uuid[:8]}... tagged {stamped} (name={name!r})"
         )
+    # Returned so the mint response can report what registration actually
+    # happened. `None` is meaningful here and distinct from `[]`: it means
+    # stamping was SKIPPED because the caller supplied their own tags.
+    return stamped
 
 
 async def _seed_genesis_from_parent_bg(child_id: str, parent_id: str):
