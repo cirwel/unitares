@@ -37,7 +37,20 @@ not inferred.
       "v_formula_version": 2
     },
     "ode": {"source": "ode_diagnostic", "values": {"E": 0, "I": 0, "S": 0, "V": 0}},
-    "submitted_sensor": {"source": "physical | behavioral", "values": {}}
+    "submitted_sensor": {"source": "physical | behavioral", "values": {}},
+    "submitted_afferents": {
+      "schema": "eisv.submitted_afferents.v1",
+      "source": "physical",
+      "source_field": "afferents | body_anima | anima",
+      "measurement_role": "raw_afferents",
+      "policy_applied": false,
+      "values": {"presence": 0},
+      "provenance": {
+        "status": "caller_declared | undeclared",
+        "source": "caller-declared bounded text",
+        "role": "caller-declared bounded text"
+      }
+    }
   },
   "derivation": {
     "kind": "behavioral_sensor | caller_published_sensor | …",
@@ -57,6 +70,42 @@ live formula reads only that suffix. Outcome history is capped at twenty and
 reduced to the fields used by the formula: outcome type, bad/good flag, numeric
 score, and verification source. Free-form outcome detail, response text,
 credentials, prompts, and tool payloads are excluded.
+
+### Submitted afferents
+
+`measurement.submitted_afferents` preserves the finite numeric dimensions a
+physical caller published before projecting them into EISV. This keeps a
+separately published body channel such as presence longitudinally observable without
+mislabeling it as Valence or giving it decision authority.
+
+New callers should publish either a flat `sensor_data.afferents` mapping or:
+
+```json
+{
+  "afferents": {
+    "values": {"presence": 0.52},
+    "provenance": {
+      "schema": "sensor.afferents.v1",
+      "source": "substrate_probe",
+      "role": "physical_self_sense"
+    }
+  }
+}
+```
+
+The existing `body_anima` field and its legacy `anima` alias are compatibility
+inputs. The recorder keeps at most 16 dimensions, requires finite numeric
+values with safe identifier names, caps names and provenance text, rejects
+booleans/strings/nested payloads and secret-shaped names, and retains only
+`schema`, `source`, `role`, `scale`, and `units` provenance keys. Values remain
+in the caller's native scale; UNITARES neither clamps nor interprets them.
+Caller-declared provenance is descriptive, not verification.
+
+This field is deliberately measurement-only: it is assembled before the locked
+update, copied into the append-only envelope after policy resolution, and never
+passed to the behavioral estimator, ODE, basin classifier, or actuator. Compact
+summaries expose only source, field, dimension count/names, and the explicit
+`policy_applied` flag—not the values.
 
 `measurement.primary.source` answers which state vector is presented as the
 primary reading. `measurement.behavioral.observation_source` answers which
@@ -127,4 +176,6 @@ The envelope exposes operational measurements and their provenance. It does
 not expose hidden activations, establish machine qualia, verify a
 caller-published physical sensor, or validate the behavioral formula. Those are
 separate empirical questions. It also does not alter thresholds, verdicts,
-gap-suppression, or circuit-breaker behavior.
+gap-suppression, or circuit-breaker behavior. Recording an afferent does not
+establish that it is independent, useful, or suitable for promotion into EISV;
+those require a separately preregistered incremental-information test.
