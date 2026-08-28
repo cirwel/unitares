@@ -734,6 +734,32 @@ else bad "restart_service: sidecar-write failure tolerance (rc=$rc8)"; fi
 ) && ok "[guard] deploy-mcp.sh routes its restart through deploy_lib_restart_service (conditional call)" \
   || bad "deploy-mcp.sh restart wiring guard"
 
+# ── [guard] deploy-lease-plane.sh routes its restart through the primitive ──
+# It used a bare `launchctl kickstart -k` until #1945. kickstart reuses
+# launchd's cached service definition, so a plist env edit never loaded while
+# the script's own health probe still passed — a green deploy over an unchanged
+# process. This service is env-gated on several axes, so that is routine.
+(
+  set -euo pipefail
+  DLP="$(dirname "$LIB")/deploy-lease-plane.sh"
+  grep -q 'if ! deploy_lib_restart_service "\$TAG"' "$DLP"
+  ! grep -q '^launchctl kickstart' "$DLP"
+) && ok "[guard] deploy-lease-plane.sh routes its restart through deploy_lib_restart_service (conditional call)" \
+  || bad "deploy-lease-plane.sh restart wiring guard"
+
+# ── [guard] deploy-orchestrator.sh gates on the migration manifest ──
+# It deploys from its OWN worktree, deliberately unpinned from unitares-deploy —
+# which also removed it from deploy-mcp.sh's migration gate without removing its
+# dependency on the governance DB schema. #1961: a sweep restarted it on code
+# expecting migration 068's table while that table did not exist.
+(
+  set -euo pipefail
+  DO="$(dirname "$LIB")/deploy-orchestrator.sh"
+  grep -q 'apply_migrations.py' "$DO"
+  grep -q -- '--check' "$DO"
+) && ok "[guard] deploy-orchestrator.sh runs a migration preflight before restarting" \
+  || bad "deploy-orchestrator.sh migration preflight guard"
+
 echo; echo "passed=$pass failed=$fail"
 rm -rf "$SB"
 exit "$((fail > 0))"

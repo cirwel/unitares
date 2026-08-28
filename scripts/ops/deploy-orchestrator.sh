@@ -48,10 +48,15 @@ TAG="deploy-orch"
 
 FORCE=0
 SKIP_TESTS=0
+# --apply-migrations: apply pending DB migrations as part of the deploy (or set
+# UNITARES_DEPLOY_APPLY_MIGRATIONS=1). Default is detect-and-refuse on a gap,
+# matching deploy-mcp.sh — DDL stays a deliberate, opt-in action.
+APPLY_MIGRATIONS="${UNITARES_DEPLOY_APPLY_MIGRATIONS:-0}"
 for a in "$@"; do
   case "$a" in
     --force) FORCE=1 ;;
     --skip-tests) SKIP_TESTS=1 ;;
+    --apply-migrations) APPLY_MIGRATIONS=1 ;;
     -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
     *) echo "unknown arg: $a" >&2; exit 2 ;;
   esac
@@ -95,6 +100,48 @@ if [ "$CODE_CHANGED" = 0 ] && [ "$FORCE" = 0 ]; then
   echo "[$TAG]  shared history is not evidence it is stale. Use --force to restart anyway.)"
   # The lock releases via deploy-lib's EXIT trap; do not release it by hand.
   exit 0
+fi
+
+# ── Migration preflight (gate, not silent) ───────────────────────────────────
+# This service is deliberately NOT pinned to the shared unitares-deploy worktree
+# (see the header) — but being outside that worktree removed it from
+# deploy-mcp.sh's migration gate WITHOUT removing its dependency on the
+# governance DB schema. On 2026-08-28 a sweep restarted the orchestrator on code
+# expecting orchestration.spawn_idempotency (migration 068, #1942) while that
+# table did not exist; deploy-mcp.sh refused for the same gap in the same run,
+# so gov-mcp was protected and this service was not. Migration 068 exists
+# specifically to serve orchestrator code, so orchestrator changes and
+# governance-DB migrations will keep arriving together.
+#
+# The check runs from THIS worktree's own manifest against the live DB, so the
+# decoupling is preserved: it verifies the database it actually talks to, not
+# gov-mcp's release cadence.
+MIGRATE="$DEPLOY/scripts/dev/apply_migrations.py"
+MIGRATE_DBURL=()
+[[ -n "${UNITARES_DEPLOY_DB_URL:-}" ]] && MIGRATE_DBURL=(--db-url "$UNITARES_DEPLOY_DB_URL")
+# Expand with ${arr[@]+"${arr[@]}"}: on macOS bash 3.2 a bare "${empty[@]}"
+# trips `set -u` and aborts the deploy (the #951/#960 footgun).
+if [[ -f "$MIGRATE" ]]; then
+  echo "[$TAG] migration preflight: is the live DB in sync with this worktree's manifest?"
+  if ! python3 "$MIGRATE" --check "${MIGRATE_DBURL[@]+"${MIGRATE_DBURL[@]}"}"; then
+    if [[ "$APPLY_MIGRATIONS" == 1 ]]; then
+      echo "[$TAG] applying pending migrations (operator opt-in) BEFORE restart"
+      if ! python3 "$MIGRATE" --apply "${MIGRATE_DBURL[@]+"${MIGRATE_DBURL[@]}"}" \
+         || ! python3 "$MIGRATE" --check "${MIGRATE_DBURL[@]+"${MIGRATE_DBURL[@]}"}"; then
+        echo "[$TAG] FAILED — migrations did not reach sync; NOT restarting." >&2
+        exit 1
+      fi
+    else
+      echo "[$TAG] REFUSING: the live DB is not in sync with this worktree's migration manifest." >&2
+      echo "[$TAG] Restarting now would bring up code expecting an unapplied schema (the 068 case above)." >&2
+      echo "[$TAG] The orchestrator keeps running its current code — a consistent pair — and this deploy did NOT complete." >&2
+      echo "[$TAG] Then either apply the gap and re-deploy:" >&2
+      echo "[$TAG]     python3 $MIGRATE --apply" >&2
+      echo "[$TAG]   or re-run this deploy with migrations applied automatically:" >&2
+      echo "[$TAG]     $0 --apply-migrations" >&2
+      exit 1
+    fi
+  fi
 fi
 
 echo "[$TAG] compiling (surfaces a build error while the OLD node is still serving)"
