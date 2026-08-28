@@ -129,6 +129,16 @@ async def http_health_deep(request):
  ). If the probe has not populated
     the cache yet, returns 503 and instructs the caller to retry.
     """
+    # Gated, unlike /health, /health/live and /health/ready: the deep snapshot
+    # is the FULL diagnostic view (identity and active-session counts, Redis
+    # key cardinality by category, Pi connectivity URLs, and raw exception
+    # strings the shallow probe deliberately withholds), so it is operator
+    # detail rather than a liveness signal. Monitoring keeps using /health.
+    # Both dashboard callers already authenticate (data.js rest() -> authFetch).
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not access._check_http_auth(request, http_api_token=http_api_token):
+        return access._http_unauthorized()
+
     from src.services.health_snapshot import (
         get_snapshot,
         is_stale,

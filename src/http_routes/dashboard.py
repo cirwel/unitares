@@ -12,25 +12,51 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 
 
 from src.logging_utils import get_logger
+from src.http_routes import access
 
 
 logger = get_logger(__name__)
+
+# Files under dashboard/redesign/ that carry governance data rather than
+# presentation, and are therefore served only to an authenticated caller.
+# The deeper fix is for the fallback bundle to hold synthetic data instead of
+# a real capture; until then it is gated like the endpoints it mirrors.
+_AUTHENTICATED_ONLY_FILES = {"snapshot.js"}
 
 
 # Dashboard endpoint
 async def http_phase(request):
     """Serve the phase-space visualization"""
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    # The shell itself stays public (the sign-in page must be reachable), but
+    # the convenience token is injected ONLY for a caller that is already
+    # trusted or signed in. Injecting it unconditionally published the local
+    # bearer to any anonymous caller — over a tunnel, to the internet — which
+    # handed out the exact credential every gated route checks.
+    may_receive_token = not access.mcp_bearer_required() and access._check_http_auth(
+        request, http_api_token=http_api_token
+    )
     phase_path = Path(__file__).resolve().parents[2] / "dashboard" / "phase.html"
     if phase_path.exists():
         html = phase_path.read_text()
-        if http_api_token:
+        if http_api_token and may_receive_token:
             token_script = (
                 f'<script>if(!localStorage.getItem("unitares_api_token"))'
                 f'{{localStorage.setItem("unitares_api_token","{http_api_token}")}}</script>'
             )
             html = html.replace("</head>", f"{token_script}</head>", 1)
-        return Response(content=html, media_type="text/html")
+        # This response now VARIES by caller (the token is injected only for a
+        # trusted or signed-in one), and it can carry a credential. A shared
+        # cache in front of the server — this deployment sits behind a tunnel —
+        # must neither store it nor serve one caller's copy to another.
+        return Response(
+            content=html,
+            media_type="text/html",
+            headers={
+                "Cache-Control": "no-store",
+                "Vary": "Cookie, Authorization",
+            },
+        )
     return JSONResponse({"error": "Phase view not found", "path": str(phase_path)}, status_code=404)
 
 
@@ -90,6 +116,17 @@ async def http_dashboard_redesign(request):
         return JSONResponse({"error": "File not found", "requested": rel}, status_code=404)
     if not rel.endswith((".html", ".css", ".js", ".md")):
         return JSONResponse({"error": "File type not allowed", "requested": rel}, status_code=403)
+    # Not every file under the shell is shell. snapshot.js is a bundled capture
+    # of real governance state — resident ids and names, EISV vectors,
+    # coherence, risk, verdicts, a multi-day trajectory — i.e. the same data
+    # class the /v1/eisv/* routes are gated for, in a file the "static assets
+    # are public" rule would wave straight through. app.html loads it with a
+    # same-origin <script src>, which carries the session cookie, so a
+    # signed-in operator and a loopback caller still get it; nobody else does.
+    if rel in _AUTHENTICATED_ONLY_FILES:
+        http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+        if not access._check_http_auth(request, http_api_token=http_api_token):
+            return access._http_unauthorized()
 
     base = (Path(__file__).resolve().parents[2] / "dashboard" / "redesign").resolve()
     target = (base / rel).resolve()
@@ -120,9 +157,22 @@ async def http_dashboard_redesign(request):
         content = content.replace(
             "<head>", '<head>\n<base href="/dashboard/redesign/">', 1
         )
-        # Inject the API token so data.js authenticates live calls.
+        # Inject the API token so data.js authenticates live calls — but only
+        # for a caller already trusted (loopback/tailnet) or signed in. See
+        # http_phase above: an unconditional inject published the bearer to
+        # anonymous callers. An unauthenticated browser still gets the shell;
+        # its data calls 401 and authFetch redirects it to /auth/signin.
+        # Not in hosted posture: there the gate accepts ONLY the MCP bearer, so
+        # handing the browser UNITARES_HTTP_API_TOKEN gives it a credential
+        # every gated route rejects — and a non-empty token also suppresses
+        # data.js's 401 -> /auth/signin redirect, stranding the user on a
+        # silently stale page instead of sending them to sign in.
         http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
-        if http_api_token:
+        if (
+            http_api_token
+            and not access.mcp_bearer_required()
+            and access._check_http_auth(request, http_api_token=http_api_token)
+        ):
             token_script = (
                 f'<script>localStorage.setItem("unitares_api_token","{http_api_token}")</script>'
             )
@@ -132,7 +182,15 @@ async def http_dashboard_redesign(request):
     # version-busted. no-store guarantees a fresh entry on every load; the
     # versioned assets keep no-cache (their URL changes per deploy).
     cache = "no-store" if target.suffix == ".html" else "no-cache"
-    return Response(content=content, media_type=media, headers={"Cache-Control": cache})
+    # Vary on the credential inputs: both the entry HTML (which may carry the
+    # injected token) and snapshot.js (gated above) now differ per caller, so a
+    # shared cache must key on them rather than serve one caller's copy to the
+    # next. no-store on the HTML already prevents storage; Vary covers the rest.
+    return Response(
+        content=content,
+        media_type=media,
+        headers={"Cache-Control": cache, "Vary": "Cookie, Authorization"},
+    )
 
 
 async def http_dashboard_classic_redirect(request):

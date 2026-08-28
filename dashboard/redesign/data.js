@@ -451,7 +451,9 @@
       return withFallback(async () => {
         const [ev, act, runtime] = await Promise.all([
           authFetch("/api/events?limit=40"),
-          authFetch("/api/activity?window=60&bucket=5"),
+          authFetch("/api/activity?window=60&bucket=5").catch(() => null),  // .catch: this route is auth-gated, and an un-caught rejection here
+          // would fail the whole Promise.all — collapsing sibling panes that
+          // had succeeded, a wider break than the gate intends.
           // limit=1000 is NOT a display cap and must not be tuned down to match
           // the view's slice(0, 30). It bounds the underlying AUDIT-EVENT scan
           // in read_runtime_activity(), and both `processes` and every `summary`
