@@ -1,0 +1,56 @@
+{
+  "schema": "unitares.kg-agent-adoption.live-source-map.v0",
+  "code": {
+    "master_commit": "e20478b29ff94089f8659dfc7de684849c384561",
+    "offline_fixture_pr": 1934
+  },
+  "relation": "derived_projection",
+  "byte_equivalent": false,
+  "discovery": {
+    "id": "2026-08-27T23:46:30.942448+00:00",
+    "record_sha256": "a081661a704e9a80e4271d65f6ba2e6c1360a7583e09e9ac278e288dd8651af5"
+  },
+  "mapping_sha256": "28a43e9eb43746fffbdbcbb1cc6d78601dd0b1f07f67be259bce675fedeca083",
+  "logical_sources": [
+    {
+      "source_id": "kg-adoption-contract-v1",
+      "discovery_id": "2026-08-27T23:46:30.942448+00:00",
+      "relation": "derived_projection",
+      "byte_equivalent": false,
+      "support_field": "summary",
+      "support_fragment": "Agent-adoption contract v1: UNITARES may seek earned, reversible dependency; pilot read-only KG first, bounded orchestration second, proactive alerts last, with EISV as transparent background instrumentation.",
+      "support_sha256": "7e13810d275e7ba18339105e5e5a483c20bcff2d709e58900d172be4344cd6df",
+      "logical_source_sha256": "e30624a7c52d4c8e18d7f64efccff6962265139372db93bad81bbb7d0c0b21ce"
+    },
+    {
+      "source_id": "measurement-authority-contract",
+      "discovery_id": "2026-08-27T23:46:30.942448+00:00",
+      "relation": "derived_projection",
+      "byte_equivalent": false,
+      "support_field": "details",
+      "support_fragment": "Stop rule: a validated, preregistered failure can demote a surfacing lever or surface authority. A zero cannot retire the underlying capability until surfacing, reachability, recording, and outcome measurement are verified. Make leaving easy and staying demonstrably better.",
+      "support_sha256": "df9849b3b6eb0e3cdf1711f1f297d1d048bd5a63a7df85932f100bd389240fae",
+      "logical_source_sha256": "5bc5459ea67943d2a2d85ca19eb4a33fa3b14f62b170072aa575c6833ca2fcb1"
+    },
+    {
+      "source_id": "orchestration-reliability-finding",
+      "discovery_id": "2026-08-27T23:46:30.942448+00:00",
+      "relation": "derived_projection",
+      "byte_equivalent": false,
+      "support_field": "details",
+      "support_fragment": "2. Orchestration second, bounded/advisory until cancellation, timeout, idempotence, provenance, failure containment, and outcome-lift gates pass.",
+      "support_sha256": "03056db555be34ef52b515c42e8ed598a9fc00f14c4e72e2d391b8fe462fc514",
+      "logical_source_sha256": "e34f7f91514313dac12619e8a92c41786c458633cdc19dc8b4cdcc7aecabb441"
+    },
+    {
+      "source_id": "exit-rights-contract",
+      "discovery_id": "2026-08-27T23:46:30.942448+00:00",
+      "relation": "derived_projection",
+      "byte_equivalent": false,
+      "support_field": "details",
+      "support_fragment": "Exit rights: one-call bypass; complete documented export and restore; substitute-compatible interfaces; typed absence rather than blocked work; suppressible/attributable/replayable alerts; recurring offline and substitution drills; no silent measurement-to-actuation. Hidden identity, routing, storage, or recovery coupling fails the exit test.",
+      "support_sha256": "8732386bb7444f4ba18c920f9fa6a38a5af1fa18ac191793b1ff5f5ab7ae1d94",
+      "logical_source_sha256": "38d4ccdad7d4159fd9a49150eef46b54905839abab3f6cbdb65aa3340ffb7adb"
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "schema": "unitares.content-addressed-receipt.v0",
+  "receipt_content_sha256": "614e34650915954be2fda5727dbf26ae90a101ba12584170d04cad062357740a",
+  "content": {
+    "schema": "unitares.kg-agent-adoption.live-canary-attestation.v0",
+    "created_at": "2026-08-28T04:54:43Z",
+    "scope": "post-canary-provenance-and-delayed-observation",
+    "governed_review": {
+      "session_id": "d13aa3554f8dbccb",
+      "resolution": "resume",
+      "scope": "production_plumbing_only"
+    },
+    "claude_advisory_review": {
+      "orchestrator_execution_id": "ex-513ede34-bbcf-4813-a470-3e975586e119",
+      "prompt_sha256": "b8c0eb47c4324baaf2c3e4e77e2bb8c209ff86c38c67193fdf4443b757054413",
+      "response_sha256": "78b96ad1d19e9a52e8b35e6d4426cb2cedd6fe67cc3c564654ccc2ec2c7b8124",
+      "verdict": "hold"
+    },
+    "artifacts": {
+      "live_runner_sha256": "3817b4c0bae9f3ac337e81005ef78c4d4205cb2dd2b993e07b36eb979aa4905c",
+      "live_source_map_sha256": "9115c22e567b42a7f66c91a60058498a2c7ad984160fe6a091c821acbcf7ef0d",
+      "live_mcp_probe_sha256": "122758eb535322e33849666d4cbc23120cf3f9f474095c2ddb17c6edc6cb96e0",
+      "live_receipt_file_sha256": "eae691e7b8863f29d36c75c635d456aace9d8809a4bf76306c000f4721fb9a56",
+      "live_receipt_content_sha256": "fc4507b8af3b98a20b9ab3b795c7bbdac9144991efa1ded743c372d26e7e1608"
+    },
+    "later_observation": {
+      "canary_agent_uuid": "de0df826-9b61-4ee1-a8a9-03197ff5b3f4",
+      "canary_label": "canary_agent_adoption_de0df826",
+      "observed_at": "2026-08-28T04:48:39Z",
+      "measured_state_rows": 1,
+      "outcome_rows": 1,
+      "adoption_event_rows": 0,
+      "producer": "auto_checkin",
+      "outcome_verification_source": "agent_reported_tool_result",
+      "outcome_evidence_weight": 0.1,
+      "finding": "The receipt's immediate zero was point-in-time only; durable calibration isolation is falsified."
+    },
+    "process_binding_recovery": {
+      "restored_agent_uuid": "1b051623-b930-4659-94e1-d2b9f841ee38",
+      "restored_client_session_id": "agent-1b051623-b93",
+      "resolution_source": "agent_uuid_direct_fastpath",
+      "reason": "Prevent further background auto-checkins from attaching to the canary identity."
+    },
+    "claims": {
+      "original_live_receipt_immutable": true,
+      "additional_audit_rows_written": 0,
+      "durable_canary_isolation_proven": false,
+      "live_kg_parity_proven": false,
+      "audit_recording_path_proven": false,
+      "behavioral_evidence": false,
+      "scored_run_authorized": false
+    }
+  }
+}
