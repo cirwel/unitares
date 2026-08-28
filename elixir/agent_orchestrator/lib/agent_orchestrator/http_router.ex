@@ -29,6 +29,8 @@ defmodule AgentOrchestrator.HTTPRouter do
   orchestrator restarts; same key + a different spec returns
   `idempotency_conflict`. A retry that finds a crash-ambiguous reservation
   returns `idempotency_outcome_unknown` rather than risking a duplicate spawn.
+  Deployment order and replay operations are documented in
+  `docs/operations/agent-orchestrator-idempotency.md`.
 
   ## Trust boundary
 
