@@ -57,10 +57,10 @@
     }
   },
   "review": {
-    "status": "unreviewed",
-    "scope": null,
-    "governed_review_session": null,
-    "approved_by": null
+    "status": "offline_fixture_reviewed",
+    "scope": "offline_fixture_validation",
+    "governed_review_session": "aeb10fba0bb89400",
+    "approved_by": "759b75a3-179d-443c-96b7-3d499b812be0"
   },
   "execution": {
     "scored_live_model_runs_authorized": false,

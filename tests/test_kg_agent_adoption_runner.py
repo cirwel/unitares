@@ -96,7 +96,13 @@ def test_enrollment_matches_schema_and_validates_against_frozen_fixture():
         task_document=tasks,
     )
 
-    assert validation["review_status"] == "unreviewed"
+    assert validation["review_status"] == "offline_fixture_reviewed"
+    assert enrollment["review"] == {
+        "status": "offline_fixture_reviewed",
+        "scope": "offline_fixture_validation",
+        "governed_review_session": "aeb10fba0bb89400",
+        "approved_by": "759b75a3-179d-443c-96b7-3d499b812be0",
+    }
     assert validation["execution_authorized"] is False
     assert validation["chain_count"] == 2
     assert validation["schedule_rows"] == 14

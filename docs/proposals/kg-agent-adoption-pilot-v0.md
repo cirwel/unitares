@@ -1,6 +1,7 @@
 # KG Agent-Adoption Pilot v0
 
-**Status:** DRAFT / offline-fixture canary passed / enrollment unreviewed / no scored run authorized
+**Status:** DRAFT / offline fixture independently reviewed / live-plumbing
+canary HOLD / no scored run authorized
 
 **Decision date:** 2026-08-27
 
@@ -122,10 +123,84 @@ proves only the frozen offline fixture: 14 schedule rows across two complete
 seven-cell blocks, backend-neutral prompt/tool rendering, retrieval of every
 registered source, adversarial negative cases, runtime network/process denial,
 exact private SQLite replacement, atomic receipt interruption handling, and zero
-live-model/network/KG/audit/production-database operations. The receipt itself
-records the review HOLD and keeps the enrollment `unreviewed`; a later
-evidence-based review must independently decide whether to grant the narrower
-`offline_fixture_reviewed` status.
+live-model/network/KG/audit/production-database operations. The receipt remains
+immutable evidence of the pre-promotion state: content digest
+`b009eeddcc732be5cd463cef913c2cee218463ed3fb81d055db02d714201f9c2`
+binds enrollment digest
+`872e28cc35f8d7f280a7b4523b506a171cc8f622775b864e77b8965f90992387`
+and review HOLD session `8e76d528d0baa5ba`. Independent follow-up session
+`aeb10fba0bb89400` approved only `offline_fixture_validation`. The
+checked-in enrollment therefore changes four review metadata fields to
+`offline_fixture_reviewed` while the original receipt and digest stay
+unchanged. Any material fixture change requires another review.
+
+### Live production-plumbing canary
+
+Governed review session `d13aa3554f8dbccb` authorized one bounded canary:
+read a pinned root and run the six frozen FTS/OR/top-five queries through a
+fresh `canary_agent_adoption*` identity, prove its telemetry is excluded from
+adoption and calibration, append one neutral
+`infrastructure.audit_write_read_canary.v1` row, and preserve HOLD.
+
+The source map, captured production-plugin probe, and receipt are:
+
+- `docs/evaluations/kg-agent-adoption/live-source-map-v0.json`;
+- `docs/evaluations/kg-agent-adoption/live-mcp-probe-v0.json`;
+- `docs/evaluations/kg-agent-adoption/live-plumbing-canary-v0.receipt.json`.
+
+Receipt content digest
+`fc4507b8af3b98a20b9ab3b795c7bbdac9144991efa1ded743c372d26e7e1608`
+records adverse results instead of tuning around them:
+
+- all four logical sources are `derived_projection` mappings to one live
+  discovery with `byte_equivalent=false`;
+- that discovery was absent from the first five results for five queries and
+  ranked fifth for the sixth;
+- two details reads and six searches were attributed to
+  `canary_agent_adoption_de0df826`, while measured-state, outcome, and
+  `agent_adoption.*` event counts for that identity were zero at immediate
+  postflight;
+- exactly one audit row was appended, event
+  `5458a6e8-5288-4e2e-bce3-f0f2e4e4095a`, with null agent/session and both
+  counting flags false;
+- immediate client validation failed because PostgreSQL returned encoded JSON.
+  No retry or replacement row was written. A read-only recovery exactly
+  validated the existing row, so the receipt distinguishes persistence and
+  recovery from a passing immediate write/read canary;
+- the documented full MCP endpoint on port 8767 was unavailable. The live
+  Codex UNITARES plugin transport produced the captured probe. This transport
+  drift remains a deployment-integrity failure, not evidence of adoption.
+
+Before the bound probe, canary identity
+`1951df9d-cd64-4d49-a9b4-66935f3dee79` also completed two details reads and
+six searches, then aborted before the audit append when the same encoded
+`audit.tool_usage.payload` shape reached an object-only validator. Two later
+HTTP endpoint attempts failed before onboarding and produced no KG or audit
+operation. These attempts remain excluded by the canary label and are not
+silently folded into the bound probe's operation counts.
+
+That immediate zero was not durable. At `2026-08-28T04:48:39Z`, the slot's
+background `auto_checkin` attributed 50 runtime-window tool calls to the
+canary and wrote one measured state plus one low-trust
+`agent_reported_tool_result` completion outcome. The original receipt remains
+immutable evidence of its point-in-time read; this later observation falsifies
+durable calibration isolation. Future canaries must run in a genuinely separate
+slot/process or explicitly restore and verify the parent binding before a
+quiet-period read. The runner now labels its zero as point-in-time and never as
+durable exclusion.
+
+Therefore `logical_source_parity=false`,
+`audit_recording_path_proven=false`, `behavioral_evidence=false`, and
+`scored_run_authorized=false`. The frozen corpus, queries, tags, ranking
+parameters, and K must not be changed in response to these results.
+
+An operator-authorized Claude host review (execution
+`ex-513ede34-bbcf-4813-a470-3e975586e119`) independently agreed with HOLD and
+prioritized orchestration control-plane durability, transport integrity,
+first-read JSON fidelity, stronger source provenance, and preserving the
+retrieval misses as adverse evidence. It proposed future identity-based audit
+exclusion rather than relying on count flags; that is a prospective contract
+question because this governed run explicitly required null agent/session.
 
 ## Audit envelope
 
@@ -160,6 +235,12 @@ hardening slice therefore validates a terminal-answer envelope server-side:
 This does not make asynchronous delegation durable. Owner-scoped persistent
 results, idempotency, cancellation reconciliation, and bounded polling remain a
 separate prerequisite before exposing an async receipt.
+
+PR #1939 added execution IDs and a structural terminal envelope, but did not
+close owner-scoped result authorization, lost-ack spawn replay, restart-durable
+results, cancellation terminal receipts, or the Python timeout/reconciliation
+loop. Orchestration therefore remains manually supervised, advisory, and
+outside this adoption canary.
 
 ## Alert dependency gate
 

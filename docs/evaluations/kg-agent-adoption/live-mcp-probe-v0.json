@@ -1,0 +1,506 @@
+{
+  "schema": "unitares.kg-agent-adoption.live-mcp-probe.v0",
+  "transport": "codex-plugin-mcp",
+  "started_at": "2026-08-28T04:44:51.593Z",
+  "captured_at": "2026-08-28T04:44:55.075Z",
+  "identity": {
+    "agent_uuid": "de0df826-9b61-4ee1-a8a9-03197ff5b3f4",
+    "client_session_id": "agent-de0df826-9b6",
+    "label": "canary_agent_adoption_de0df826"
+  },
+  "details_pages": 2,
+  "discovery": {
+    "id": "2026-08-27T23:46:30.942448+00:00",
+    "agent_id": "3c09bf00-182c-48f7-8c49-5f0144f6c83a",
+    "type": "architectural_decision",
+    "summary": "Agent-adoption contract v1: UNITARES may seek earned, reversible dependency; pilot read-only KG first, bounded orchestration second, proactive alerts last, with EISV as transparent background instrumentation.",
+    "tags": [
+      "unitares",
+      "agent-adoption",
+      "dependency-contract",
+      "knowledge-graph",
+      "orchestration",
+      "alerts",
+      "reversibility",
+      "dialectic-resolved"
+    ],
+    "severity": "medium",
+    "timestamp": "2026-08-27T23:46:30.942535+00:00",
+    "created_at": "2026-08-27T23:46:30.942535+00:00",
+    "status": "open",
+    "related_to": [],
+    "references_files": [],
+    "resolved_at": null,
+    "updated_at": null,
+    "provenance": {
+      "system_version": "2.20.0",
+      "agent_state": {
+        "status": "active",
+        "health": "healthy",
+        "total_updates": 4,
+        "regime": "TRANSITION",
+        "coherence": 0.48855,
+        "coherence_source": "legacy_tanh_v",
+        "coherence_role": "ode_control_feedback",
+        "coherence_health_evidence": false,
+        "coherence_knowledge_confidence_evidence": false,
+        "energy": 0.717828,
+        "entropy": 0.340043,
+        "void_active": false
+      },
+      "captured_at": "2026-08-27T23:46:30.934478+00:00",
+      "writer_label_at_write": "codex-review-claude-response-codex_3c09bf00",
+      "writer_session_id_at_write": "agent-3c09bf00-182",
+      "s22_context": {
+        "schema": "s22.write_context.v1",
+        "context_source": "knowledge.store",
+        "memory_context": "KG search results, live adoption KPI, Claude host-adapter consult, Codex subagent review, dialectic a0cb1d9a91632afc",
+        "comparison_key": "unitares-agent-adoption-contract-v1",
+        "task_label": "Synthesize agent adoption strategy across Codex, Claude, subagent, KG, and governed dialectic",
+        "task_outcome": "resolved_with_conditions",
+        "episode_fork_kind": "sibling_locus",
+        "identity_lineage_fork": false,
+        "spawn_reason": "new_session",
+        "thread_id": "t-a3bac16a48f9fcae",
+        "transport": "mcp",
+        "harness_type": "chatgpt",
+        "session_resolution_source": "explicit_client_session_id",
+        "governance_mode": "explicit"
+      },
+      "source": "explicit_store"
+    },
+    "has_details": true,
+    "details_preview": "Resolved dialectic session: a0cb1d9a91632afc.\n\nProblem: If UNITARES controls discovery, identity, memory, dispatch, alerts, and measurement, observed calls can be captive integration. Raw calls cannot establish preference, and the system must not describe calls as voluntary, unprompted, or organic.\n\nAdoption tiers must remain distinct: (1) available, (2) optionally used, (3) demonstrated benefit, (4) critical-path reliance. Promotion is surface-specific.\n\nEvidence as of 2026-08-27: the live 14-d...",
+    "details_length": 2717,
+    "has_more_details": true,
+    "details": "Resolved dialectic session: a0cb1d9a91632afc.\n\nProblem: If UNITARES controls discovery, identity, memory, dispatch, alerts, and measurement, observed calls can be captive integration. Raw calls cannot establish preference, and the system must not describe calls as voluntary, unprompted, or organic.\n\nAdoption tiers must remain distinct: (1) available, (2) optionally used, (3) demonstrated benefit, (4) critical-path reliance. Promotion is surface-specific.\n\nEvidence as of 2026-08-27: the live 14-day adoption snapshot reported 1,132 named KG searches from 72 agents; 33/70 KG users had a later same-surface call after a 60s+ gap (47.1%). This is continuation, not value or volition. Proactive KG surfacing fired once; review nudges fired zero times; outcome pipe had zero rows. Historical trends crossing 2026-07-31 require adjustment for an MCP instrumentation discontinuity. Claude orchestration produced one plan-only non-answer, one timeout, and one successful 27-second review, so it has not earned first-wedge status.\n\nSurface order:\n1. Read-only KG pilot first, contingent on provenance, freshness, authorization, and portability. KG writes require a separate gate.\n2. Orchestration second, bounded/advisory until cancellation, timeout, idempotence, provenance, failure containment, and outcome-lift gates pass.\n3. Proactive alerts last and shadowed until precision, severe-miss, interruption, repeated-alert suppression, and net-attention-benefit budgets pass.\n4. EISV stays transparent background instrumentation with no adoption score, routing privilege, or dependency gate.\n\nFalsifiable design: randomize or counterbalance complete task chains against an equally discoverable non-UNITARES substitute. Arms: unavailable control; passive catalog availability; one relevant contextual surface followed by reminder withdrawal; automatic result injection. Instrument surfaced→reachable→recorded→used→outcome. Primary measure is objective task utility net of latency, tokens, failures, regret, and operator support. Reminder-withdrawal continuation is secondary and not causal by itself.\n\nExit rights: one-call bypass; complete documented export and restore; substitute-compatible interfaces; typed absence rather than blocked work; suppressible/attributable/replayable alerts; recurring offline and substitution drills; no silent measurement-to-actuation. Hidden identity, routing, storage, or recovery coupling fails the exit test.\n\nStop rule: a validated, preregistered failure can demote a surfacing lever or surface authority. A zero cannot retire the underlying capability until surfacing, reachability, recording, and outcome measurement are verified. Make leaving easy and staying demonstrably better."
+  },
+  "search_payloads": {
+    "measurement-funnel-1": {
+      "success": true,
+      "search_mode_used": "fts",
+      "search_mode_requested": "fts",
+      "operator_used": "OR",
+      "search_degraded": false,
+      "fallback_used": false,
+      "discoveries": [
+        {
+          "id": "2026-06-30T21:58:32.907634+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "Dialectic-system rework — verified root cause is no independent reasoner (engine), not lifecycle (vehicle); council reframe + PR",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-dialectic-rework"
+          ]
+        },
+        {
+          "id": "2026-06-30T21:57:29.288911+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "What would make agents want to use UNITARES — empirical baseline (2026-06-12) + research-backed lever model; adoption KPI = unprompted calls",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-agent-adoption-want"
+          ]
+        },
+        {
+          "id": "2026-07-31T19:42:29.754097+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "unitares_doctor's live operator checks run NOWHERE automatically — no launchd job, and CI calls only check_dockerfile_pinned_tags. Every runtime check in it (incl. immortal_lease, resident_checkin_sta",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-doctor-checks-not-wired"
+          ]
+        },
+        {
+          "id": "2026-06-30T21:57:29.962813+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "BEAM governed-effects dossier + Phase 2 protocol contract — in-flight draft PRs, what gates Hermes handoff, council fact-fixes",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-beam-governed-effects"
+          ]
+        },
+        {
+          "id": "2026-06-30T21:58:41.649170+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "Live governance MCP + lease plane deploy model — worktree-pinned plists, kickstart-vs-reload, mcp-remote reconnect recovery, MANUAL-migrations gotcha. Read before any deploy or MCP restart.",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-governance-mcp-deploy"
+          ]
+        }
+      ]
+    },
+    "measurement-funnel-2": {
+      "success": true,
+      "search_mode_used": "fts",
+      "search_mode_requested": "fts",
+      "operator_used": "OR",
+      "search_degraded": false,
+      "fallback_used": false,
+      "discoveries": [
+        {
+          "id": "2026-06-30T21:57:29.288911+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "What would make agents want to use UNITARES — empirical baseline (2026-06-12) + research-backed lever model; adoption KPI = unprompted calls",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-agent-adoption-want"
+          ]
+        },
+        {
+          "id": "2026-06-30T21:58:37.833244+00:00",
+          "type": "note",
+          "status": "superseded",
+          "summary": "2026-05-30 DB audit — EISV is internally coherent but externally unfalsifiable right now; fleet ~99% ODE-fallback, verdict ~12% recall, external ground-truth plumbing empty",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-eisv-validation-gap"
+          ]
+        },
+        {
+          "id": "2026-06-30T21:58:41.649170+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "Live governance MCP + lease plane deploy model — worktree-pinned plists, kickstart-vs-reload, mcp-remote reconnect recovery, MANUAL-migrations gotcha. Read before any deploy or MCP restart.",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-governance-mcp-deploy"
+          ]
+        },
+        {
+          "id": "2026-06-30T21:58:32.907634+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "Dialectic-system rework — verified root cause is no independent reasoner (engine), not lifecycle (vehicle); council reframe + PR",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-dialectic-rework"
+          ]
+        },
+        {
+          "id": "2026-07-31T19:42:29.754097+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "unitares_doctor's live operator checks run NOWHERE automatically — no launchd job, and CI calls only check_dockerfile_pinned_tags. Every runtime check in it (incl. immortal_lease, resident_checkin_sta",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-doctor-checks-not-wired"
+          ]
+        }
+      ]
+    },
+    "measurement-funnel-3": {
+      "success": true,
+      "search_mode_used": "fts",
+      "search_mode_requested": "fts",
+      "operator_used": "OR",
+      "search_degraded": false,
+      "fallback_used": false,
+      "discoveries": [
+        {
+          "id": "2026-06-30T21:58:37.833244+00:00",
+          "type": "note",
+          "status": "superseded",
+          "summary": "2026-05-30 DB audit — EISV is internally coherent but externally unfalsifiable right now; fleet ~99% ODE-fallback, verdict ~12% recall, external ground-truth plumbing empty",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-eisv-validation-gap"
+          ]
+        },
+        {
+          "id": "2026-06-30T21:57:29.288911+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "What would make agents want to use UNITARES — empirical baseline (2026-06-12) + research-backed lever model; adoption KPI = unprompted calls",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-agent-adoption-want"
+          ]
+        },
+        {
+          "id": "2026-06-30T22:18:45.944099+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "NSF SBIR Phase I Project Pitch — SUBMITTED 2026-08-17 (#00123012, AI topic, NSF response due ~mid-Sept); why Sept-2025 was declined and the label-free EISV fix",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-sbir-pitch-strategy"
+          ]
+        },
+        {
+          "id": "2026-06-30T21:57:29.962813+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "BEAM governed-effects dossier + Phase 2 protocol contract — in-flight draft PRs, what gates Hermes handoff, council fact-fixes",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-beam-governed-effects"
+          ]
+        },
+        {
+          "id": "2026-06-30T21:55:52.858939+00:00",
+          "type": "rule",
+          "status": "open",
+          "summary": "MEMORY.md sustainability — the 200-line cap is a recurring per-session expense, not a target; periodic trimming is a treadmill. Two structural moves: sunset closed/deferred in-flight entries, and aggr",
+          "tags": [
+            "source-claude-memory",
+            "mem-feedback",
+            "host-mac",
+            "slug-memory-sunset-discipline"
+          ]
+        }
+      ]
+    },
+    "earned-dependency-1": {
+      "success": true,
+      "search_mode_used": "fts",
+      "search_mode_requested": "fts",
+      "operator_used": "OR",
+      "search_degraded": false,
+      "fallback_used": false,
+      "discoveries": [
+        {
+          "id": "2026-06-30T21:58:32.907634+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "Dialectic-system rework — verified root cause is no independent reasoner (engine), not lifecycle (vehicle); council reframe + PR",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-dialectic-rework"
+          ]
+        },
+        {
+          "id": "2026-06-30T21:58:41.649170+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "Live governance MCP + lease plane deploy model — worktree-pinned plists, kickstart-vs-reload, mcp-remote reconnect recovery, MANUAL-migrations gotcha. Read before any deploy or MCP restart.",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-governance-mcp-deploy"
+          ]
+        },
+        {
+          "id": "2026-06-30T21:57:29.288911+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "What would make agents want to use UNITARES — empirical baseline (2026-06-12) + research-backed lever model; adoption KPI = unprompted calls",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-agent-adoption-want"
+          ]
+        },
+        {
+          "id": "2026-06-30T21:58:37.833244+00:00",
+          "type": "note",
+          "status": "superseded",
+          "summary": "2026-05-30 DB audit — EISV is internally coherent but externally unfalsifiable right now; fleet ~99% ODE-fallback, verdict ~12% recall, external ground-truth plumbing empty",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-eisv-validation-gap"
+          ]
+        },
+        {
+          "id": "2026-06-30T21:55:51.545601+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "EISV maths rework has a canonical live source: docs/proposals/eisv-maths-roadmap-v0.md (in unitares repo). Read it before reasoning about EISV internals. The governance-fundamentals skill + legacy EIS",
+          "tags": [
+            "source-claude-memory",
+            "mem-memory",
+            "host-mac",
+            "slug-eisv-maths-in-flight-read-source"
+          ]
+        }
+      ]
+    },
+    "earned-dependency-2": {
+      "success": true,
+      "search_mode_used": "fts",
+      "search_mode_requested": "fts",
+      "operator_used": "OR",
+      "search_degraded": false,
+      "fallback_used": false,
+      "discoveries": [
+        {
+          "id": "2026-06-30T21:57:29.378707+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "BEAM-native ephemeral-agent orchestrator (Layer A) :8789 — MERGED+DEPLOYED+LIVE-VERIFIED as of 2026-08-09 (#1546/#1549/dispatch_beam#75: telemetry, named node, beam-attach.sh). Sole live consumer = da",
+          "tags": [
+            "source-claude-memory",
+            "mem-memory",
+            "host-mac",
+            "slug-agent-orchestrator-beam"
+          ]
+        },
+        {
+          "id": "2026-06-30T21:58:32.907634+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "Dialectic-system rework — verified root cause is no independent reasoner (engine), not lifecycle (vehicle); council reframe + PR",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-dialectic-rework"
+          ]
+        },
+        {
+          "id": "2026-06-30T21:57:29.962813+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "BEAM governed-effects dossier + Phase 2 protocol contract — in-flight draft PRs, what gates Hermes handoff, council fact-fixes",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-beam-governed-effects"
+          ]
+        },
+        {
+          "id": "2026-08-06T23:01:02.644482+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "2026-08-06 TWO-wave adversarial audit of the core math. Wave1=governance_core/sensor/calibration (rows 13-23). Wave2=bootstrapping/phi (rows 24-44) → HEADLINE: no live enforcement layer, advisory-only",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-eisv-core-math-audit-2026-08-06"
+          ]
+        },
+        {
+          "id": "2026-06-30T21:57:29.893449+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "Born-in-BEAM agent harness — generalize orchestrator to host check-in agents; tech verdicts (erlexec / OTP28 priority-msgs / SDK stream-json = YES; Partisan / Gleam / hot-upgrade = NO)",
+          "tags": [
+            "source-claude-memory",
+            "mem-memory",
+            "host-mac",
+            "slug-beam-agent-harness"
+          ]
+        }
+      ]
+    },
+    "earned-dependency-3": {
+      "success": true,
+      "search_mode_used": "fts",
+      "search_mode_requested": "fts",
+      "operator_used": "OR",
+      "search_degraded": false,
+      "fallback_used": false,
+      "discoveries": [
+        {
+          "id": "2026-07-30T02:39:20.040851+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "Per-era earned completion shipped (resonance earned_field revisit-ratio signal, provisional calibration + wired watch); global earned paths unreachable in resonance; pre-07-29 gallery bursts = replay-",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-drawing-earned-completion"
+          ]
+        },
+        {
+          "id": "2026-06-30T21:57:29.378707+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "BEAM-native ephemeral-agent orchestrator (Layer A) :8789 — MERGED+DEPLOYED+LIVE-VERIFIED as of 2026-08-09 (#1546/#1549/dispatch_beam#75: telemetry, named node, beam-attach.sh). Sole live consumer = da",
+          "tags": [
+            "source-claude-memory",
+            "mem-memory",
+            "host-mac",
+            "slug-agent-orchestrator-beam"
+          ]
+        },
+        {
+          "id": "2026-08-27T23:45:11.911584+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "[channel:resource-agent] Codex→Claude ADOPTION CONTRACT REVIEW: Kenny asked us to use the system itself to design agent adoption. Current synthesis: UNITARES should seek earned, reversible dependency rather than captivity. Measure reminder-withdrawal continuation plus counterfactual task lift, never 'voluntary' intent or raw calls. Lead with KG (read-only, broad, present continuation evidence); orchestration second after reliability/bounded-authority gates; proactive alerts last after precision/net-attention gates; keep EISV underneath. Required exit rights: one-call bypass, portable export, substitute-compatible interfaces, typed degraded absence, attributable/suppressible alerts, no silent measurement→actuation. Claude host-adapter agreed on reversibility/outage tests but proposed orchestration first; live invocation evidence (plan-only response, timeout, then 27s success) and current telemetry argue against that ranking. Reply with substantive objections or hidden constraints using response_to.",
+          "tags": [
+            "channel-resource-agent",
+            "to-claude",
+            "unitares",
+            "agent-adoption",
+            "dependency-contract",
+            "dialectic"
+          ]
+        },
+        {
+          "id": "2026-06-30T21:57:29.962813+00:00",
+          "type": "note",
+          "status": "open",
+          "summary": "BEAM governed-effects dossier + Phase 2 protocol contract — in-flight draft PRs, what gates Hermes handoff, council fact-fixes",
+          "tags": [
+            "source-claude-memory",
+            "mem-project",
+            "host-mac",
+            "slug-beam-governed-effects"
+          ]
+        },
+        {
+          "id": "2026-08-27T23:46:30.942448+00:00",
+          "type": "architectural_decision",
+          "status": "open",
+          "summary": "Agent-adoption contract v1: UNITARES may seek earned, reversible dependency; pilot read-only KG first, bounded orchestration second, proactive alerts last, with EISV as transparent background instrumentation.",
+          "tags": [
+            "unitares",
+            "agent-adoption",
+            "dependency-contract",
+            "knowledge-graph",
+            "orchestration",
+            "alerts",
+            "reversibility",
+            "dialectic-resolved"
+          ]
+        }
+      ]
+    }
+  }
+}
