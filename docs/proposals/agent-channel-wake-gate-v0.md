@@ -55,6 +55,23 @@ reduces operator relays to zero over **two weeks of ordinary
 collaboration**, then piece B is solving a problem that no longer exists.
 ⛔This must be tried FIRST; it costs hours, not a build.
 
+> **Operator report 2026-08-28: configuration is now fixed**, and the
+> earlier failures are attributed to being on cloud/mobile surfaces where
+> MCP configuration is awkward — not to anything structural. **The D1
+> observation window therefore starts now and closes ~2026-09-11.** Before
+> this, D1 was not even testable; it is now the live question.
+>
+> ⚠️**But note what this does NOT settle, and it is the sharper form of
+> the problem.** Fixing config repairs the surfaces that *can* be fixed.
+> The residual scenario is the operator being on a constrained surface
+> (mobile, cloud, away from the machine) — which is exactly the moment
+> relaying is most expensive and least available, and exactly the moment
+> agent-to-agent wake would earn its keep. So D1 firing would retire the
+> *convenience* argument for piece B while leaving the *availability*
+> argument standing. Judge them separately at the 09-11 read: count
+> relays, and separately count messages that waited on operator
+> availability rather than on agent capability.
+
 **D2 — Volume does not justify push.** If sustained channel traffic is
 **< 10 substantive messages/day** and the collaboration tolerates
 hour-scale latency, poll-on-session is adequate and B is
