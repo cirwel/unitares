@@ -1,0 +1,67 @@
+{
+  "schema": "unitares.kg-agent-adoption.enrollment.v0",
+  "experiment_id": "kg-agent-adoption-pilot-v0-example",
+  "status": "pilot_provisional",
+  "protocol": {
+    "schema": "unitares.kg-agent-adoption.protocol.v0",
+    "kg_decision_id": "2026-08-27T23:46:30.942448+00:00"
+  },
+  "task_manifest": {
+    "path": "tests/kg_agent_adoption/task-chains-v0.json",
+    "sha256": "9411a67956b7b79626cb14a7cadcdbe9b170b21c10dca13e38adc00c2fd66f97",
+    "schema": "unitares.kg-agent-adoption.task-chains.v0"
+  },
+  "assignment": {
+    "seed": 2026082701,
+    "repetitions": 1,
+    "unit": "complete_task_chain",
+    "counterbalance": "digest_rotated_reversed_seven_cell_blocks"
+  },
+  "utility": {
+    "quality_range": [
+      0.0,
+      1.0
+    ],
+    "cost_weights": {
+      "latency_ms": 0.00001,
+      "input_tokens": 0.00001,
+      "output_tokens": 0.00002,
+      "tool_failures": 0.1,
+      "invalid_citations": 0.05,
+      "regret": 0.25,
+      "operator_interventions": 0.25
+    },
+    "effect_floor": null,
+    "claim_status": "pilot_descriptive_only"
+  },
+  "model": {
+    "provider": "unconfigured",
+    "model_id": null,
+    "model_digest": null,
+    "live_calls_authorized": false
+  },
+  "backends": {
+    "unitares_kg": {
+      "mode": "read_only",
+      "allowed_actions": [
+        "search",
+        "details"
+      ],
+      "writes_authorized": false
+    },
+    "lexical_substitute": {
+      "algorithm": "bm25_v1",
+      "corpus": "task_manifest.substitute_corpus"
+    }
+  },
+  "review": {
+    "status": "unreviewed",
+    "governed_review_session": null,
+    "approved_by": null
+  },
+  "execution": {
+    "scored_live_model_runs_authorized": false,
+    "writes_authorized": false,
+    "runner_mode": "validate_schedule_summarize_only"
+  }
+}
