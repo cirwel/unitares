@@ -194,6 +194,17 @@ Therefore `logical_source_parity=false`,
 `scored_run_authorized=false`. The frozen corpus, queries, tags, ranking
 parameters, and K must not be changed in response to these results.
 
+Follow-up runner `scripts/eval/run_kg_agent_adoption_live_canary_v1.py` closes
+the two canary-harness defects without rewriting that historical receipt. A
+fresh probe must originate from a standalone process through the direct
+loopback full-MCP endpoint on port 8767; captured Codex-plugin evidence is
+accepted only for read-only recovery and can never authorize a fresh audit
+append. Exact audit readback now goes through the application audit-query API,
+which filters by event UUID and normalizes JSON before validation instead of
+bypassing that seam with raw SQL. This is hardened plumbing, not a new result:
+no v1 live receipt exists yet, and durable calibration exclusion still requires
+an isolated quiet-period read.
+
 An operator-authorized Claude host review (execution
 `ex-513ede34-bbcf-4813-a470-3e975586e119`) independently agreed with HOLD and
 prioritized orchestration control-plane durability, transport integrity,
