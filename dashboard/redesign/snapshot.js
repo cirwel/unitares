@@ -49,6 +49,12 @@ window.SNAPSHOT = {
     agentsPresenceUnavailable: null, agentsTotal: 658,
     stuck: 2, discoveries: 1204, discoveriesToday: 12,
     dialectic: 0, systemHealth: "OK", calibration: 0.71, anomalies: 1,
+    // The offline fixture carries the same shape the live card reads: a
+    // healthy-looking trajectory_health alongside a NEGATIVE calibration
+    // verdict, which is the exact combination that made the old
+    // number-only card misleading. Keeping it here means the offline
+    // render exercises the honest path rather than a flattering one.
+    calibrated: false, calibrationStatus: "miscalibrated", calibrationSignal: "stale",
     // Non-empty on purpose: `stuck: 0` never exercises the card body, so the
     // offline page could not show (or review) the drill-down at all. Second
     // entry is deliberately NOT in agentsList below, so the offline page also

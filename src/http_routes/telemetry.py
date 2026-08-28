@@ -29,6 +29,45 @@ async def http_eisv_latest(request):
     return JSONResponse({"type": "no_data", "message": "No EISV updates yet"}, status_code=200)
 
 
+# Telemetry keys a trajectory view actually consumes. Anything outside this set
+# is diagnostic detail that belongs in the full event, not in a 10-second poll.
+_COMPACT_TELEMETRY_KEYS = (
+    "measurement_source", "behavioral_source", "submitted_source",
+    "primary_source", "behavioral_confidence", "missing_inputs",
+    "enforcement_requested", "enforcement_applied",
+)
+
+
+def _compact_eisv_event(event: dict) -> dict:
+    """Project one eisv_update down to the fields a chart reads.
+
+    Deliberately a WHITELIST, not a blacklist of the currently-large keys: a
+    new diagnostic field added upstream should not silently re-inflate a
+    polled payload. A consumer that needs more asks for the full shape.
+
+    Keys are omitted when absent rather than emitted as null, so a compact
+    event stays a strict subset of the full one and the same client code
+    parses both.
+    """
+    out: dict = {}
+    for key in ("type", "timestamp", "agent_id", "eisv", "coherence", "risk"):
+        if key in event:
+            out[key] = event[key]
+
+    telemetry = event.get("eisv_telemetry") or event.get("telemetry")
+    if isinstance(telemetry, dict):
+        trimmed = {k: telemetry[k] for k in _COMPACT_TELEMETRY_KEYS if k in telemetry}
+        if trimmed:
+            out["eisv_telemetry"] = trimmed
+
+    # `metrics` is ~1.3 KB of governance detail; the only field read off it
+    # here is the source tag the measurement-lane view falls back to.
+    metrics = event.get("metrics")
+    if isinstance(metrics, dict) and "primary_eisv_source" in metrics:
+        out["metrics"] = {"primary_eisv_source": metrics["primary_eisv_source"]}
+    return out
+
+
 async def http_eisv_recent(request):
     """Return the last N eisv_update events in chronological order.
 
@@ -44,12 +83,27 @@ async def http_eisv_recent(request):
         limit = 120
     limit = max(1, min(limit, 500))
 
+    # Opt-in projection. The default shape is unchanged: WebSocket clients and
+    # any other consumer keep the full event. `fields=compact` returns only the
+    # keys a trajectory chart reads, which is the difference between a ~6.3 KB
+    # and a ~0.5 KB event. The dashboard refreshes this view every ten seconds,
+    # so the full shape was moving ~194 KB per tick to draw twenty points, with
+    # `decision` alone (~1.9 KB/event) never read by any consumer.
+    compact = str(
+        request.query_params.get("fields", "")
+    ).strip().lower() == "compact"
+
     events: list = []
     for event in broadcaster_instance.event_history:
         if isinstance(event, dict) and event.get("type") == "eisv_update":
-            events.append(event)
+            events.append(_compact_eisv_event(event) if compact else event)
     events = events[-limit:]
-    return JSONResponse({"type": "eisv_recent", "count": len(events), "events": events})
+    return JSONResponse({
+        "type": "eisv_recent",
+        "count": len(events),
+        "fields": "compact" if compact else "full",
+        "events": events,
+    })
 
 
 _EISV_TELEMETRY_HEALTH_CACHE_TTL_SECONDS = 30.0
