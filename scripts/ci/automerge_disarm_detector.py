@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+"""Auto-merge disarm detector — surface PRs GitHub silently disarmed.
+
+The strand mode (observed on PR #1476, 2026-08-02): GitHub auto-disables
+auto-merge when a required check reports failure even transiently (timeline
+event `auto_merge_disabled`). The PR then silently drops out of every
+automated path — nothing updates it, nothing merges it, and its page looks
+like an ordinary open PR — until a human notices, which has taken days.
+
+This detector scans open, non-draft PRs whose auto-merge is currently OFF
+and checks whether their most recent auto-merge timeline event is a
+disarm. Hits are reported through ONE tracking issue updated in place
+(never one issue per PR — this is a dashboard, not an alarm bell), plus
+the job summary. Re-arming stays a human/session decision by design; the
+detector only ends the silence. A DELIBERATE hold is expressed by
+labeling the PR `automerge-hold`, which mutes it here — the mute is
+itself visible on the PR, so it is not a silent suppression.
+
+PRs that were never armed produce no auto-merge events and are correctly
+ignored — under this repo's draft-PR delivery contract that is the normal
+state, not a finding.
+
+Exit code is always 0 on completion (a red scheduled run pages nobody;
+the issue is the surface). API failures degrade visibly per
+merge_loss_common; per-PR timeline failures are listed as UNVERIFIABLE
+in the report rather than dropped.
+
+Env (set by .github/workflows/automerge-disarm.yml):
+  GITHUB_REPOSITORY  owner/name
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+
+from merge_loss_common import (
+    degraded,
+    ensure_finding_label,
+    find_open_finding,
+    fingerprint_marker,
+    gh,
+    gh_json,
+    summary,
+)
+
+GUARD = "automerge-disarm-detector"
+MARKER = fingerprint_marker(GUARD)
+TIMELINE_PAGES = 30  # safety cap only; hitting it means UNVERIFIABLE, never a stale answer
+SUPPRESS_LABEL = "automerge-hold"  # deliberate disarm: label the PR to mute it here
+
+GhError = (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError)
+
+
+class TimelineTruncated(Exception):
+    """The timeline outran the page cap — a partial read must not pass for a full one."""
+
+
+def last_automerge_event(repo: str, pr_number: int) -> dict | None:
+    """The newest auto_merge_enabled/disabled timeline event, or None.
+
+    The timeline is oldest-first, so an answer is only authoritative once
+    the final (short) page has been read. Raises TimelineTruncated when
+    the cap is hit first — the caller reports that PR as unverifiable
+    rather than trusting a stale event from the read window.
+    """
+    found: dict | None = None
+    for page in range(1, TIMELINE_PAGES + 1):
+        events = gh_json(
+            "api", f"repos/{repo}/issues/{pr_number}/timeline?per_page=100&page={page}"
+        )
+        for event in events:
+            if event.get("event") in ("auto_merge_enabled", "auto_merge_disabled"):
+                found = event  # oldest-first; keep the latest seen
+        if len(events) < 100:
+            return found
+    raise TimelineTruncated(f"timeline exceeds {TIMELINE_PAGES * 100} events")
+
+
+def main() -> int:
+    repo = os.environ["GITHUB_REPOSITORY"]
+
+    try:
+        prs = gh_json(
+            "pr", "list", "-R", repo,
+            "--state", "open",
+            "--json", "number,title,isDraft,autoMergeRequest,labels,url",
+            "--limit", "100",
+        )
+    except GhError as exc:
+        return degraded(GUARD, f"could not list open PRs ({type(exc).__name__})")
+
+    disarmed: list[str] = []
+    unverifiable: list[str] = []
+    for pr in prs:
+        if pr.get("isDraft") or pr.get("autoMergeRequest") is not None:
+            continue
+        if any(label.get("name") == SUPPRESS_LABEL for label in pr.get("labels") or []):
+            continue  # deliberate hold, explicitly labeled — not a silent strand
+        try:
+            event = last_automerge_event(repo, pr["number"])
+        except (*GhError, TimelineTruncated):
+            unverifiable.append(f"- #{pr['number']} {pr['title']} — timeline unreadable or truncated, disarm state UNKNOWN")
+            continue
+        if event is not None and event["event"] == "auto_merge_disabled":
+            disarmed.append(
+                f"- #{pr['number']} {pr['title']} — disarmed at {event.get('created_at', 'unknown time')} ({pr['url']})"
+            )
+
+    if not disarmed and not unverifiable:
+        summary(f"{GUARD}: no silently-disarmed PRs.")
+        try:
+            existing = find_open_finding(repo, MARKER)
+            if existing is not None:
+                gh(
+                    "issue", "close", str(existing), "-R", repo,
+                    "--reason", "completed",
+                    "--comment", "The disarm detector found no silently-disarmed PRs. Closing this resolved finding.",
+                )
+        except GhError as exc:
+            return degraded(GUARD, f"all clear, but closing the tracking issue failed ({type(exc).__name__})")
+        return 0
+
+    body_sections = []
+    if disarmed:
+        body_sections.append(
+            "These open, non-draft PRs had auto-merge armed and GitHub disarmed it\n"
+            "(usually a transiently-failing required check). Nothing automated will\n"
+            "touch them again until someone re-arms (`gh pr merge --auto`) or merges\n"
+            f"manually — re-arming is deliberately a human/session decision. A\n"
+            f"deliberate hold: label the PR `{SUPPRESS_LABEL}` to mute it here.\n\n" + "\n".join(disarmed)
+        )
+    if unverifiable:
+        body_sections.append("Timeline unreadable — disarm state unknown, do not read as healthy:\n\n" + "\n".join(unverifiable))
+    body = (
+        "\n\n".join(body_sections)
+        + "\n\n_Updated in place by automerge-disarm.yml on a schedule; this issue closes itself when the list empties._"
+    )
+    title = "Auto-merge silently disarmed on open PRs"
+
+    try:
+        ensure_finding_label(repo)
+        existing = find_open_finding(repo, MARKER)
+        if existing is not None:
+            gh("issue", "edit", str(existing), "-R", repo, "--body", f"{MARKER}\n{body}")
+        else:
+            gh(
+                "issue", "create", "-R", repo,
+                "--title", title,
+                "--label", "ci-finding",
+                "--body", f"{MARKER}\n{body}",
+            )
+    except GhError as exc:
+        return degraded(GUARD, f"found {len(disarmed)} disarmed / {len(unverifiable)} unverifiable PRs but could not write the tracking issue ({type(exc).__name__})")
+
+    summary(
+        f"**{GUARD}:** {len(disarmed)} disarmed, {len(unverifiable)} unverifiable — tracking issue updated."
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

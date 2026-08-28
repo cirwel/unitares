@@ -1,0 +1,34 @@
+name: Auto-merge Disarm Detector
+
+# Surfaces the silent disarm-strand mode (observed on PR #1476, 2026-08-02):
+# GitHub auto-disables auto-merge when a required check fails even
+# transiently, and the PR then drops out of every automated path with no
+# visible signal. Six-hourly scan of open non-draft PRs whose most recent
+# auto-merge timeline event is a disarm (label a PR `automerge-hold` to
+# mute a deliberate hold); hits land in ONE tracking issue
+# updated in place (a dashboard, not an alarm bell), which closes itself
+# when the list empties. Re-arming stays a human/session decision.
+#
+# GITHUB_TOKEN-only — no metered APIs (execution-cost policy).
+
+on:
+  schedule:
+    - cron: "41 */6 * * *" # every 6h; strand latency tolerance is hours-to-days
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (guard scripts only — no history needed)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Scan open PRs for silent auto-merge disarms
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/automerge_disarm_detector.py

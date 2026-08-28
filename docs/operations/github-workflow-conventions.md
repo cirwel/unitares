@@ -179,6 +179,41 @@ Two ways to unblock, whichever is preferred:
 Verify with `gh api repos/cirwel/unitares/code-scanning/default-setup` before
 assuming this note is still current.
 
+### Merge-loss guards — the detective layer
+
+Until (and after) a queue exists, three repo-side workflows make the known
+silent loss modes loud. They are detective, not preventive: each fails a run
+and files/updates a deduped `ci-finding` issue at the moment a loss becomes
+visible, instead of leaving it to be discovered weeks later. Server-side on
+purpose — client-side harness hooks bind one agent; a workflow binds every
+pusher.
+
+| Workflow | Loss mode it surfaces | When it runs |
+| --- | --- | --- |
+| `orphan-push-guard.yml` | Commits pushed to a branch after its PR merged/closed (three confirmed incidents, 2026-08-12/19) — real-time counterpart of the weekly `stranded-work.yml` audit | Pushes to `claude/**` / `codex/**` on branches cut after the workflow landed (push workflows run the pushed ref's definition; older branches keep weekly-audit coverage) |
+| `merge-content-check.yml` | A merge whose head lacks the branch's newest recorded push (the stale-head variant of PR #1610); a push that *postdates* the merge routes to the orphan-push finding instead — and since this runs from the base side, that covers old branches too | Every merged PR into master |
+| `automerge-disarm.yml` | Auto-merge silently disarmed by a transient check failure, stranding an armed PR (PR #1476). Label a PR `automerge-hold` to mute a deliberate hold | Every 6h; one tracking issue updated in place |
+
+All three share one rule (see `scripts/ci/merge_loss_common.py`): they fail
+open on API errors so a broken guard never blocks delivery, but a degraded
+run always says so — `::warning::` plus a step-summary line — because a
+guard that fails toward "healthy" is this repo's named recurring failure
+mode. Two honesty notes baked into the wording they emit: a clean
+`merge-content-check` pass says "no contradiction found", not "verified"
+(the events feed it reads lags 30s–6h and retains ~300 events, which can
+hide a final push but cannot fabricate a false alarm); and the absence of
+an `orphan-push-guard` run on an old branch is a coverage gap, not a
+clean verdict.
+
+If `orphan-push-guard` fails your push: stop pushing to that branch. The
+work is not lost — follow the cherry-pick recipe in the issue it filed
+(fresh branch off `origin/master`, new PR). A dead-branch push whose
+commits are all already landed is classified PRUNABLE and passes without
+an issue. If you are deliberately reusing a branch name for a new round
+of work, the guard fires until the new PR opens — open it and close the
+finding as a false positive (fresh `<author>/<topic>-<id>` names avoid
+this entirely).
+
 ## Quick reference
 
 | Situation | Do this |

@@ -1,0 +1,49 @@
+name: Orphan Push Guard
+
+# Real-time tripwire for the post-merge-commit loss mode: a push to an agent
+# branch whose PR already MERGED/CLOSED is work nothing will merge again
+# (three confirmed lost-commit incidents, 2026-08-12/19). The weekly
+# stranded-work audit catches this at up to 7 days' latency; this guard fails
+# the push's workflow run immediately — while the pushing session is still
+# alive to re-land — and files a deduped ci-finding issue with the recipe.
+#
+# Server-side on purpose: client-side hooks bind one harness; this binds
+# every agent and surface that can push.
+#
+# Coverage limit, stated plainly: a push-triggered workflow runs the
+# definition on the PUSHED ref, so branches cut before this file merged
+# never run it — they keep weekly-audit coverage, and merge-content-check
+# (which runs from the base side) covers their merge-adjacent pushes.
+# Absence of a run on the Actions tab is NOT a clean verdict.
+#
+# GITHUB_TOKEN-only — no metered APIs (execution-cost policy).
+
+on:
+  push:
+    branches:
+      - "claude/**"
+      - "codex/**"
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+
+concurrency:
+  group: orphan-push-guard-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (guard scripts only — no history needed)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Fail if this branch's PR already merged or closed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.ref_name }}
+          PUSHED_SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: python3 scripts/ci/orphan_push_guard.py
