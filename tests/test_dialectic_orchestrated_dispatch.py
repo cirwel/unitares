@@ -67,6 +67,22 @@ def test_build_spec_omits_parent_when_absent():
     assert "UNITARES_PARENT_AGENT_ID" not in spec["env"]
 
 
+def test_direct_idempotency_key_is_stable_and_spec_bound():
+    spec = od._build_spec(
+        "session-a",
+        {"root_cause": "rc", "proposed_conditions": ["c"], "reasoning": "r"},
+        "parent",
+    )
+
+    key = od._direct_idempotency_key("session-a", spec)
+    assert key == od._direct_idempotency_key("session-a", spec)
+    assert key != od._direct_idempotency_key("session-b", spec)
+    assert key != od._direct_idempotency_key(
+        "session-a", {**spec, "args": ["changed"]}
+    )
+    assert len(od._direct_idempotency_key("s" * 10_000, spec)) < 200
+
+
 def test_build_spec_forwards_bounded_reviewer_backend_config(monkeypatch):
     monkeypatch.setenv("UNITARES_DIALECTIC_REVIEWER_HOST", "claude")
     monkeypatch.setenv("UNITARES_DIALECTIC_CLAUDE_MODEL", "claude-opus-5")
@@ -201,6 +217,7 @@ async def test_dispatch_success_returns_payload(monkeypatch):
     assert out["agent_id"] == "ex-xyz"
     # bearer + spec actually went on the wire
     assert client.posted["headers"]["Authorization"] == "Bearer tok"
+    assert client.posted["headers"]["Idempotency-Key"].startswith("dialectic-reviewer:")
     assert client.posted["json"]["env"]["DIALECTIC_SESSION_ID"] == "sess-9"
     assert client.posted["url"].endswith("/v1/agents")
 
