@@ -259,7 +259,11 @@ def register_http_routes(
             # loop with no in-browser recovery.
             session_aware_path = (
                 path.startswith(("/v1/", "/api/", "/auth/", "/debug/"))
-                or path in ("/metrics", "/", "/dashboard", "/phase")
+                # /health/deep is gated like a data route and the dashboard
+                # fetches it, so it needs the session attached or a signed-in
+                # browser can never reach it in strict posture. The shallow
+                # health routes stay out: they are public and take no session.
+                or path in ("/metrics", "/", "/dashboard", "/phase", "/health/deep")
                 or path.startswith("/dashboard/")
             )
             if scope["type"] == "websocket" or (

@@ -19,7 +19,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**159 flags.**
+**160 flags.**
 
 | Flag | Reader fallback(s) | Purpose | Read at |
 |---|---|---|---|
@@ -160,6 +160,7 @@ index; that one is the curated decision record.
 | `UNITARES_RESIDENT_PROGRESS_MANIFEST` | `''` | Load the resident-progress registry from a JSON manifest | src/resident_progress/registry.py |
 | `UNITARES_RESIDENT_PROGRESS_PLUGINS` | `None (no reader fallback)` | True unless the deployment explicitly disabled plugin discovery. | src/resident_progress/plugins.py |
 | `UNITARES_RESIDENT_SILENCE_SECONDS` | `''` | Parse ``label=seconds`` pairs from the environment | src/http_routes/residents.py |
+| `UNITARES_REST_STRICT` | `None (no reader fallback)` | True when the REST surface runs the strict posture (bearer or session) | src/mcp_listen_config.py |
 | `UNITARES_REVIEW_NUDGE` | `''` | Return the trigger reason when an in-flow review nudge is due, else None | src/mcp_handlers/updates/enrichments.py |
 | `UNITARES_SCRIBE_DRY_RUN` | `'1'` | read by _job() | agents/triage_scribe/scribe.py |
 | `UNITARES_SCRIBE_MAX_TOKENS` | `'1600'` | read by _job() | agents/triage_scribe/scribe.py |
