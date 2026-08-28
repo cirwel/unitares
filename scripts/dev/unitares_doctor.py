@@ -1430,9 +1430,16 @@ def check_failure_label_live(db_url: str) -> CheckResult:
     that state, not that nothing failed.
     """
     name, mode = "failure_label_live", "operator"
+    # Forwarded lease.* rows carry a hardcoded success=true from the BEAM
+    # outbox forwarder — structurally incapable of failing, so they can
+    # neither evidence a live classifier nor trip it. Counted here they
+    # inflate the denominator, and in a partial outage (instrumented traffic
+    # dead, forwarder still projecting) heartbeat volume alone clears the
+    # 10k floor and fires this WARN on rows that cannot be false.
     row = _psql_row(db_url, (
         "SELECT count(*), count(*) FILTER (WHERE success = false) "
-        "FROM audit.tool_usage WHERE ts > now() - interval '7 days'"
+        "FROM audit.tool_usage WHERE ts > now() - interval '7 days' "
+        "AND tool_name NOT LIKE 'lease.%'"
     ))
     if row is None:
         return CheckResult(name, mode, Status.SKIP, "audit.tool_usage not queryable")
