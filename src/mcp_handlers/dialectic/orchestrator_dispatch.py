@@ -17,6 +17,7 @@ in-process review.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -166,6 +167,19 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
     }
 
 
+def _direct_idempotency_key(session_id: str, spec: Dict[str, Any]) -> str:
+    """Stable key for response-loss retries of one material reviewer spawn."""
+    canonical = json.dumps(
+        spec,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    material = session_id.encode("utf-8") + b"\x00" + canonical
+    digest = hashlib.sha256(material).hexdigest()
+    return f"dialectic-reviewer:{digest}"
+
+
 async def dispatch_orchestrated_review(
     session_id: str,
     thesis: Dict[str, Any],
@@ -227,12 +241,18 @@ async def dispatch_orchestrated_review(
         )
 
     url = f"{_orchestrator_url()}/v1/agents"
+    idempotency_key = _direct_idempotency_key(session_id, spec)
     try:
         import httpx
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(
-                url, json=spec, headers={"Authorization": f"Bearer {bearer}"}
+                url,
+                json=spec,
+                headers={
+                    "Authorization": f"Bearer {bearer}",
+                    "Idempotency-Key": idempotency_key,
+                },
             )
         if resp.status_code not in (200, 201, 202):
             logger.warning(

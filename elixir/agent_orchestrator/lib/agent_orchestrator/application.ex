@@ -13,8 +13,9 @@ defmodule AgentOrchestrator.Application do
       AgentOrchestrator.Supervisor            (one_for_one)
       ├── Registry  (AgentOrchestrator.Registry)   execution_id -> runner pid
       ├── ResultStore  (GenServer + ETS)            retained final results
-      └── AgentSupervisor  (DynamicSupervisor)
-          └── AgentRunner  (GenServer + Port)       restart: :temporary
+      ├── AgentSupervisor  (DynamicSupervisor)
+      │   └── AgentRunner  (GenServer + Port)       restart: :temporary
+      └── SpawnGate  (GenServer)                    keyed direct-spawn replay
 
   `ResultStore` starts before `AgentSupervisor` so its ETS table exists before
   any runner can finalize and write its result — closing the await-vs-fast-exit
@@ -50,7 +51,8 @@ defmodule AgentOrchestrator.Application do
         {Registry, keys: :unique, name: AgentOrchestrator.Registry},
         AgentOrchestrator.ResultStore,
         AgentOrchestrator.Metrics,
-        AgentOrchestrator.AgentSupervisor
+        AgentOrchestrator.AgentSupervisor,
+        AgentOrchestrator.SpawnGate
       ] ++ http_children()
 
     opts = [strategy: :one_for_one, name: AgentOrchestrator.Supervisor]

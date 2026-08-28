@@ -193,6 +193,8 @@ defmodule AgentOrchestrator.AgentRunner do
     # Monotonic (not system) time so a clock adjustment cannot produce a
     # negative or wildly wrong duration.
     :started_mono,
+    # Wall-clock timestamp for operator-facing execution inventory.
+    :started_at,
     :cmd,
     output: [],
     output_count: 0,
@@ -249,6 +251,14 @@ defmodule AgentOrchestrator.AgentRunner do
       retained_or_not_found(execution_id)
   end
 
+  @doc "Current execution metadata without captured output."
+  @spec describe(String.t()) :: {:ok, map()} | {:error, :not_found}
+  def describe(execution_id) do
+    call(execution_id, :describe)
+  catch
+    :exit, _ -> {:error, :not_found}
+  end
+
   # On a dead runner, the terminal result may have been retained by finalize/2.
   defp retained_or_not_found(execution_id) do
     case ResultStore.fetch(execution_id) do
@@ -282,6 +292,19 @@ defmodule AgentOrchestrator.AgentRunner do
   @spec list() :: [String.t()]
   def list do
     Registry.select(AgentOrchestrator.Registry, [{{:"$1", :_, :_}, [], [:"$1"]}])
+  end
+
+  @doc "List metadata for live executions without copying captured output."
+  @spec list_details() :: [map()]
+  def list_details do
+    list()
+    |> Enum.flat_map(fn execution_id ->
+      case describe(execution_id) do
+        {:ok, details} -> [details]
+        {:error, :not_found} -> []
+      end
+    end)
+    |> Enum.sort_by(& &1.execution_id)
   end
 
   @doc "Generate an immutable UUID-backed execution id."
@@ -379,7 +402,8 @@ defmodule AgentOrchestrator.AgentRunner do
                | port: port,
                  os_pid: os_pid,
                  cmd: cmd,
-                 started_mono: System.monotonic_time()
+                 started_mono: System.monotonic_time(),
+                 started_at: DateTime.utc_now() |> DateTime.to_iso8601()
              }}
 
           {:error, reason} ->
@@ -393,6 +417,9 @@ defmodule AgentOrchestrator.AgentRunner do
 
   @impl true
   def handle_call(:snapshot, _from, state), do: {:reply, {:ok, result(state)}, state}
+
+  def handle_call(:describe, _from, state),
+    do: {:reply, {:ok, execution_summary(state)}, state}
 
   def handle_call(:await, from, %{exit_status: nil} = state) do
     {:noreply, %{state | waiters: [from | state.waiters]}}
@@ -850,17 +877,26 @@ defmodule AgentOrchestrator.AgentRunner do
   end
 
   defp result(state) do
+    state
+    |> execution_summary()
+    |> Map.merge(%{
+      lease_released: state.release_status == :ok,
+      output: Enum.reverse(state.output)
+    })
+  end
+
+  defp execution_summary(state) do
     %{
       execution_id: state.execution_id,
       agent_id: state.agent_id,
+      cmd: state.cmd,
+      started_at: state.started_at,
       os_pid: state.os_pid,
       lease_id: state.lease_id,
       presence: state.presence,
       lineage: state.lineage,
       exit_status: state.exit_status,
-      running: state.exit_status == nil,
-      lease_released: state.release_status == :ok,
-      output: Enum.reverse(state.output)
+      running: state.exit_status == nil
     }
   end
 
