@@ -103,6 +103,7 @@ class AuditMixin:
         event_types: Optional[List[str]] = None,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
+        event_id: Optional[str] = None,
     ) -> tuple[str, list, int]:
         """Build the WHERE clause shared by the row query and the aggregate.
 
@@ -135,6 +136,10 @@ class AuditMixin:
         if end_time:
             conditions.append(f"ts <= ${param_idx}")
             params.append(end_time)
+            param_idx += 1
+        if event_id:
+            conditions.append(f"event_id = ${param_idx}")
+            params.append(uuid.UUID(str(event_id)))
             param_idx += 1
 
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
@@ -200,9 +205,10 @@ class AuditMixin:
         end_time: Optional[datetime] = None,
         limit: int = 1000,
         order: str = "asc",
+        event_id: Optional[str] = None,
     ) -> List[AuditEvent]:
         where_clause, params, param_idx = self._audit_event_filters(
-            agent_id, event_type, event_types, start_time, end_time
+            agent_id, event_type, event_types, start_time, end_time, event_id
         )
         order_clause = "ASC" if order.lower() == "asc" else "DESC"
 

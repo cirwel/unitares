@@ -367,8 +367,9 @@ class DatabaseBackend(ABC):
         end_time: Optional[datetime] = None,
         limit: int = 1000,
         order: str = "asc",
+        event_id: Optional[str] = None,
     ) -> List[AuditEvent]:
-        """Query audit events with filtering. Pass event_types for IN-list filtering."""
+        """Query audit events with filtering, including an exact event ID."""
         pass
 
     @abstractmethod
