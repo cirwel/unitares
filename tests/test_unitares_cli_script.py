@@ -298,6 +298,335 @@ def test_reset_removes_session_file(cli_env):
     assert not session_file.exists()
 
 
+# --- status -------------------------------------------------------------------
+# UNITARES_RELEASE_CHECK=off in every status test: the release lookup hits
+# api.github.com, which is nondeterministic under CI rate limits, and a status
+# screen must be testable offline.
+
+
+def test_status_renders_one_screen(cli_env):
+    cli_env["UNITARES_RELEASE_CHECK"] = "off"
+    result = _run(cli_env, "status")
+    # Header always leads with the /health verdict and version.
+    assert result.stdout.startswith("UNITARES ")
+    assert "· v" in result.stdout.splitlines()[0]
+    assert "db" in result.stdout.splitlines()[0]
+    # The other panels render in some form on every server — real data,
+    # "(unavailable ...)" degradation, or the residentless line — but the
+    # section labels themselves must always be present.
+    assert "Agents:" in result.stdout
+    assert "Residents" in result.stdout
+    # With the release check disabled, "unknown" must print nothing rather
+    # than guess — no fabricated currency claim.
+    assert "Release:" not in result.stdout
+
+
+def test_status_json_is_machine_readable(cli_env):
+    cli_env["UNITARES_RELEASE_CHECK"] = "off"
+    result = _run(cli_env, "status", "--json")
+    data = json.loads(result.stdout)
+    assert data["health"].get("status")
+    assert data["health"].get("version")
+    # Panels may be null on an older server but the keys are the contract.
+    assert "residents" in data
+    assert "tiers" in data
+    # A disabled check is its own state — "unknown" is reserved for a lookup
+    # that ran and failed (offline, rate-limited, unparseable tag).
+    assert data["release"]["comparison"] == "disabled"
+    assert data["release"]["latest"] is None
+
+
+def test_status_unknown_option_fails(cli_env):
+    result = _run(cli_env, "status", "--verbose", check=False)
+    assert result.returncode != 0
+    assert "unknown status option" in result.stderr
+
+
+def test_status_requires_reachable_server(cli_env):
+    """/health is the one required panel — a dead server is an error, not a
+    blank screen (and never a Python traceback)."""
+    # RFC 5737 TEST-NET-1 — guaranteed non-routable.
+    cli_env["UNITARES_URL"] = "http://192.0.2.1:9"
+    cli_env["UNITARES_TIMEOUT"] = "2"
+    cli_env["UNITARES_RELEASE_CHECK"] = "off"
+    result = _run(cli_env, "status", check=False)
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert "error" in result.stderr.lower()
+
+
+# --- status against a stub server ---------------------------------------------
+# A canned-response HTTP stub pins the paths a live governance server cannot
+# produce on demand: auth rejections, missing routes, release-tag comparisons,
+# and malformed panel payloads. No governance DB needed — these run anywhere.
+
+
+def _start_stub(routes):
+    """Serve canned JSON per path. routes: {path: (status_code, payload)}."""
+    import http.server
+    import threading
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            code, payload = routes.get(self.path, (404, {"error": "not found"}))
+            data = json.dumps(payload).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, f"http://127.0.0.1:{server.server_address[1]}"
+
+
+HEALTH_STUB = {
+    "status": "ok",
+    "version": "1.2.3",
+    "build_sha": "abc1234",
+    "uptime": {"formatted": "5m"},
+    "database": {"status": "connected"},
+}
+
+
+@pytest.fixture
+def stub_env(tmp_path):
+    """Env for stub-server tests: isolated session file and release cache so
+    no test reads another's (or the developer's) cached state."""
+    env = os.environ.copy()
+    env["UNITARES_SESSION_FILE"] = str(tmp_path / "session.json")
+    env["UNITARES_RELEASE_CACHE"] = str(tmp_path / "release-cache")
+    env["UNITARES_TIMEOUT"] = "5"
+    return env
+
+
+def test_status_panels_render_real_data(stub_env):
+    """The happy path must assert actual panel content, not just section
+    labels — a route typo degrading to '(unavailable)' must fail this test."""
+    server, url = _start_stub({
+        "/health": (200, HEALTH_STUB),
+        "/v1/residents": (200, {
+            "success": True,
+            "configured": ["ExampleResident"],
+            "residents": [{
+                "label": "ExampleResident", "status": "healthy",
+                "verdict": "proceed", "silence_seconds": 42,
+            }],
+        }),
+        "/v1/agents/tier_distribution": (200, {
+            "success": True, "tiers": {"verified": 3, "unknown": 7},
+            "total": 10, "earned": 3,
+        }),
+    })
+    try:
+        stub_env["UNITARES_URL"] = url
+        stub_env["UNITARES_RELEASE_CHECK"] = "off"
+        result = _run(stub_env, "status")
+        # "unknown" is the no-tier bucket, rendered as "untiered", not as a
+        # peer of the earned tiers.
+        assert "10 total · 3 earned · 3 verified · 7 untiered" in result.stdout
+        # Headline counts statuses (the endpoint emits one row per configured
+        # label unconditionally, so row-count vs configured is a tautology).
+        assert "1 configured · 1 healthy" in result.stdout
+        assert "LABEL" in result.stdout and "LAST SIGNAL" in result.stdout
+        assert "ExampleResident" in result.stdout
+        assert "42s ago" in result.stdout
+        assert "unavailable" not in result.stdout
+    finally:
+        server.shutdown()
+
+
+def test_status_marks_overdue_and_event_driven_silence(stub_env):
+    """A bare duration renders a 65x-overdue resident identically to an
+    expected quiet one — the endpoint ships the discriminating fields, so
+    the screen must use them."""
+    server, url = _start_stub({
+        "/health": (200, HEALTH_STUB),
+        "/v1/residents": (200, {
+            "success": True,
+            "configured": ["A", "B", "C"],
+            "residents": [
+                {"label": "A", "status": "silent", "verdict": None,
+                 "silence_seconds": 120000, "silence_threshold_seconds": 1800,
+                 "event_driven": False},
+                # Realistic: the endpoint computes status from silence vs
+                # threshold regardless of event_driven, so a quiet
+                # event-driven resident arrives marked "silent". The CLI
+                # renders the server's status verbatim and only annotates the
+                # timing — it must not overrule the server's verdict.
+                {"label": "B", "status": "silent", "verdict": "proceed",
+                 "silence_seconds": 120000, "silence_threshold_seconds": 1800,
+                 "event_driven": True},
+                {"label": "C", "status": "healthy", "verdict": "proceed",
+                 "silence_seconds": 60, "silence_threshold_seconds": 1800,
+                 "event_driven": False},
+            ],
+        }),
+    })
+    try:
+        stub_env["UNITARES_URL"] = url
+        stub_env["UNITARES_RELEASE_CHECK"] = "off"
+        out = _run(stub_env, "status").stdout
+        a_line = next(l for l in out.splitlines() if l.startswith("  A "))
+        b_line = next(l for l in out.splitlines() if l.startswith("  B "))
+        c_line = next(l for l in out.splitlines() if l.startswith("  C "))
+        assert "(over threshold)" in a_line
+        assert "(event-driven)" in b_line
+        assert "(over threshold)" not in b_line
+        assert "threshold" not in c_line and "event-driven" not in c_line
+    finally:
+        server.shutdown()
+
+
+def test_status_renders_warming_up_on_health_503(stub_env):
+    """The post-restart warmup window answers /health with 503 — the single
+    most likely moment to run a status screen must render, not error."""
+    server, url = _start_stub({
+        "/health": (503, {"status": "warming_up",
+                          "message": "Server is starting up"}),
+    })
+    try:
+        stub_env["UNITARES_URL"] = url
+        stub_env["UNITARES_RELEASE_CHECK"] = "off"
+        result = _run(stub_env, "status")
+        assert result.returncode == 0
+        assert "warming up" in result.stdout
+        assert "error" not in result.stderr.lower()
+        # --json keeps its machine-readable contract during warmup: JSON on
+        # stdout, exit 0 — never a plain-text line handed to a parser.
+        jresult = _run(stub_env, "status", "--json")
+        data = json.loads(jresult.stdout)
+        assert data["health"]["status"] == "warming_up"
+        assert data["residents"] is None and data["tiers"] is None
+    finally:
+        server.shutdown()
+
+
+def test_status_distinguishes_auth_from_missing_route(stub_env):
+    """/health is public but both panels are auth-gated: a 401 must say 'set
+    UNITARES_TOKEN', never 'unavailable on this server' — the remediations
+    differ (token vs upgrade) and misattribution sends the operator down the
+    wrong one."""
+    server, url = _start_stub({
+        "/health": (200, HEALTH_STUB),
+        "/v1/residents": (401, {"success": False, "error": "Unauthorized"}),
+        "/v1/agents/tier_distribution": (401, {"success": False, "error": "Unauthorized"}),
+    })
+    try:
+        stub_env["UNITARES_URL"] = url
+        stub_env["UNITARES_RELEASE_CHECK"] = "off"
+        result = _run(stub_env, "status")
+        assert "auth required — set UNITARES_TOKEN" in result.stdout
+        assert "unavailable on this server" not in result.stdout
+        data = json.loads(_run(stub_env, "status", "--json").stdout)
+        assert data["auth_required"] is True
+    finally:
+        server.shutdown()
+
+
+def test_status_missing_routes_degrade_as_old_server(stub_env):
+    server, url = _start_stub({"/health": (200, HEALTH_STUB)})
+    try:
+        stub_env["UNITARES_URL"] = url
+        stub_env["UNITARES_RELEASE_CHECK"] = "off"
+        result = _run(stub_env, "status")
+        assert result.stdout.count("(unavailable on this server)") == 2
+        assert "auth required" not in result.stdout
+    finally:
+        server.shutdown()
+
+
+def test_status_survives_malformed_panel_payloads(stub_env):
+    """Defensive rendering: non-dict database, null resident rows, and a
+    string configured field must not traceback."""
+    server, url = _start_stub({
+        "/health": (200, {"status": "ok", "version": "1.2.3",
+                          "uptime": "weird", "database": "connected"}),
+        "/v1/residents": (200, {"success": True, "configured": "oops",
+                                "residents": [None, {"label": "X"}]}),
+        "/v1/agents/tier_distribution": (200, {"success": True, "tiers": None}),
+    })
+    try:
+        stub_env["UNITARES_URL"] = url
+        stub_env["UNITARES_RELEASE_CHECK"] = "off"
+        result = _run(stub_env, "status")
+        assert "Traceback" not in result.stderr
+        assert "0 configured" in result.stdout
+    finally:
+        server.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("running", "tag", "comparison", "text_fragment"),
+    [
+        ("1.2.3", "v9.9.9", "behind", "v9.9.9 available (running v1.2.3)"),
+        ("1.2.3", "v1.2.3", "current", "current (v1.2.3 is latest)"),
+        ("9.9.9", "v1.2.3", "ahead", "ahead of v1.2.3 (development build)"),
+        # Unequal component counts pad with zeros: v1.2 == 1.2.0, no false
+        # ahead/behind claim from tuple-length ordering.
+        ("1.2.0", "v1.2", "current", "current (v1.2 is latest)"),
+        # Non-numeric tags degrade to unknown — no release line at all.
+        ("1.2.3", "v1.2.3-rc1", "unknown", None),
+    ],
+)
+def test_status_release_comparison(stub_env, running, tag, comparison, text_fragment):
+    server, url = _start_stub({
+        "/health": (200, {**HEALTH_STUB, "version": running}),
+        "/latest": (200, {"tag_name": tag}),
+    })
+    try:
+        stub_env["UNITARES_URL"] = url
+        stub_env["UNITARES_RELEASE_URL"] = f"{url}/latest"
+        data = json.loads(_run(stub_env, "status", "--json").stdout)
+        assert data["release"]["comparison"] == comparison
+        text = _run(stub_env, "status").stdout
+        if text_fragment is None:
+            assert "Release:" not in text
+        else:
+            assert text_fragment in text
+    finally:
+        server.shutdown()
+
+
+def test_status_release_check_result_is_cached(stub_env):
+    """watch -n5 must not burn GitHub's 60/h unauthenticated quota: after one
+    lookup, a second run within the TTL uses the cache — even if the release
+    endpoint has since become unreachable."""
+    server, url = _start_stub({
+        "/health": (200, HEALTH_STUB),
+        "/latest": (200, {"tag_name": "v9.9.9"}),
+    })
+    try:
+        stub_env["UNITARES_URL"] = url
+        stub_env["UNITARES_RELEASE_URL"] = f"{url}/latest"
+        first = _run(stub_env, "status")
+        assert "v9.9.9 available" in first.stdout
+        # Dead release endpoint, warm cache: the line must survive.
+        stub_env["UNITARES_RELEASE_URL"] = "http://192.0.2.1:9/latest"
+        second = _run(stub_env, "status")
+        assert "v9.9.9 available" in second.stdout
+    finally:
+        server.shutdown()
+
+
+def test_status_rejects_mixed_option_soup(stub_env):
+    """Every argument is validated, not just the first — `--json --verbose`
+    must fail loudly instead of silently ignoring the extra."""
+    server, url = _start_stub({"/health": (200, HEALTH_STUB)})
+    try:
+        stub_env["UNITARES_URL"] = url
+        stub_env["UNITARES_RELEASE_CHECK"] = "off"
+        result = _run(stub_env, "status", "--json", "--verbose", check=False)
+        assert result.returncode != 0
+        assert "unknown status option" in result.stderr
+    finally:
+        server.shutdown()
+
+
 def _run_parser(parser_name: str, body: dict):
     """Invoke a CLI parser function by sourcing the script and piping a
     synthetic response body. Returns the CompletedProcess.

@@ -51,6 +51,45 @@ Use `first_action` as the initial remediation hint instead of reading every comp
 
 For a deeper live read from the running server, call `health_check()` through MCP or the REST tool API. The shell script is meant to answer "is the local instance up at all?" while `health_check()` is the better source for component-level diagnosis such as Redis, calibration DB, knowledge graph, and Pi connectivity.
 
+## Status at a Glance
+
+```bash
+./scripts/unitares status          # one operator screen
+watch -n30 ./scripts/unitares status  # live view (Linux; watch is not stock macOS)
+while :; do clear; ./scripts/unitares status; sleep 30; done   # macOS equivalent
+./scripts/unitares status --json   # machine-readable, for scripts
+```
+
+One screen: server health/version/build from `/health`, release currency
+against the newest server release on GitHub, agent tier distribution, and
+the resident roster with liveness and verdicts. Pure reads — it never
+onboards, never checks in, and creates no governance identity, so it is
+safe to leave running in a loop. A 30-second cadence is the honest
+recommendation, not a limit: `/v1/residents` does a couple of database
+round-trips per configured resident on every call, so a tight loop is
+real load for no extra information.
+
+During the post-restart warmup window `/health` answers 503; `status`
+renders that as "warming up" and exits 0 rather than erroring, so a loop
+rides through a deploy cleanly.
+
+The release check is a 3-second unauthenticated GitHub API call that fails
+silently (offline or rate-limited prints nothing rather than guessing), and
+its result is cached for 30 minutes so a polling loop does not burn the
+60-requests/hour unauthenticated GitHub quota. It picks the newest release
+whose tag looks like a server version (`vX.Y.Z`), skipping the repo's
+separately-versioned `sdk-v*` release line. Disable it with `--no-release`
+or `UNITARES_RELEASE_CHECK=off` (air-gapped installs); forks should set
+`UNITARES_RELEASE_REPO` or disable it.
+
+The two panels behind `/v1/residents` and `/v1/agents/tier_distribution`
+degrade per-endpoint instead of failing the screen, and the message names
+the cause: an auth rejection (hosted posture without `UNITARES_TOKEN`)
+renders "(auth required — set UNITARES_TOKEN)", while a route that does not
+exist on an older server renders "(unavailable on this server)". The two
+remediations are different — set a token versus upgrade — so the lines are
+kept distinct.
+
 ## Identity Continuity
 
 UUID is an identity anchor, not sufficient proof that the current execution context owns that identity. The `identity()` response includes:
