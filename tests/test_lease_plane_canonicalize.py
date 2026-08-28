@@ -128,6 +128,60 @@ def test_maintenance_scheme_canonicalizes_as_cleanup_surface():
             canon.canonicalize(bad)
 
 
+def test_topic_scheme_lowercases_so_one_topic_is_one_surface():
+    """topic:/ — agent coordination key (migration 069).
+
+    Unlike resident:/ and maintenance:/, topics LOWERCASE. A topic is typed
+    from prose by a human or an agent, and "Revenue-Engine" must not become a
+    second surface (and therefore a second mailbox) beside "revenue-engine".
+    """
+    from src.lease_plane import canonicalize as canon
+    from src.lease_plane.canonicalize import CANONICAL_SCHEMES, CanonicalizeError
+
+    assert "topic" in CANONICAL_SCHEMES
+
+    assert canon.canonicalize("topic:/revenue-engine") == "topic:/revenue-engine"
+    assert canon.canonicalize("topic:/Revenue-Engine") == "topic:/revenue-engine"
+    assert canon.canonicalize("topic:/REVENUE-ENGINE/") == "topic:/revenue-engine"
+
+    # Idempotent.
+    once = canon.canonicalize("topic:/Adoption/")
+    assert canon.canonicalize(once) == once
+
+    for bad in (
+        "topic:/",
+        "topic://",
+        "topic:/with space",
+        "topic:/h#frag",
+        "topic:/a&b",
+        "topic:/q?x=1",
+    ):
+        with pytest.raises(CanonicalizeError):
+            canon.canonicalize(bad)
+
+
+def test_python_and_elixir_scheme_lists_agree():
+    """The two canonicalizers are a split-brain risk if their scheme lists drift.
+
+    Elixir's @canonical_schemes and the SDK's CANONICAL_SCHEMES are separate
+    literals in separate languages; this asserts they name the same set, which
+    is the only automated thing standing between them.
+    """
+    import re
+    from pathlib import Path
+
+    from src.lease_plane.canonicalize import CANONICAL_SCHEMES
+
+    elixir = Path(__file__).resolve().parents[1] / (
+        "elixir/lease_plane/lib/unitares_lease_plane/canonicalize.ex"
+    )
+    source = elixir.read_text(encoding="utf-8")
+    match = re.search(r"@canonical_schemes ~w\(([^)]*)\)", source)
+    assert match, "could not find @canonical_schemes in canonicalize.ex"
+
+    assert set(match.group(1).split()) == set(CANONICAL_SCHEMES)
+
+
 def test_canonicalize_error_semantics():
     """Helper raises CanonicalizeError with named reasons for bounded failure modes."""
     from src.lease_plane.canonicalize import CanonicalizeError, canonicalize

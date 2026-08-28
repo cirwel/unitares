@@ -3,6 +3,39 @@ defmodule UnitaresLeasePlane.CanonicalizeTest do
 
   alias UnitaresLeasePlane.Canonicalize
 
+  # ---------- topic:/ (migration 069) ----------
+
+  describe "topic:/" do
+    test "lowercases the key so one topic is one surface" do
+      assert {:ok, "topic:/revenue-engine"} = Canonicalize.canonicalize("topic:/Revenue-Engine")
+      assert {:ok, "topic:/revenue-engine"} = Canonicalize.canonicalize("topic:/REVENUE-ENGINE")
+    end
+
+    test "strips trailing slash" do
+      assert {:ok, "topic:/adoption"} = Canonicalize.canonicalize("topic:/adoption/")
+    end
+
+    test "rejects an empty key" do
+      assert {:error, :invalid_scheme} = Canonicalize.canonicalize("topic:/")
+      assert {:error, :invalid_scheme} = Canonicalize.canonicalize("topic://")
+    end
+
+    test "rejects reserved characters" do
+      for bad <- ["topic:/a b", "topic:/a\tb", "topic:/a\nb", "topic:/a#b", "topic:/a&b"] do
+        assert {:error, :invalid_scheme} = Canonicalize.canonicalize(bad)
+      end
+    end
+
+    test "query strings are rejected at the top level, as for every scheme" do
+      assert {:error, :reserved_query_string} = Canonicalize.canonicalize("topic:/a?x=1")
+    end
+
+    test "is idempotent" do
+      {:ok, once} = Canonicalize.canonicalize("topic:/Revenue-Engine/")
+      assert {:ok, ^once} = Canonicalize.canonicalize(once)
+    end
+  end
+
   # ---------- scheme dispatch + invalid schemes ----------
 
   describe "scheme dispatch" do
@@ -26,7 +59,7 @@ defmodule UnitaresLeasePlane.CanonicalizeTest do
 
     test "canonical_schemes/0 returns the canonical list" do
       assert Canonicalize.canonical_schemes() ==
-               ~w(file dialectic resident maintenance capture td agent)
+               ~w(file dialectic resident maintenance capture td agent topic)
     end
   end
 

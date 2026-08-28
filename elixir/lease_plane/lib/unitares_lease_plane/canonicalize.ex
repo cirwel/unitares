@@ -73,7 +73,7 @@ defmodule UnitaresLeasePlane.Canonicalize do
 
   # v0.8 canonical scheme list (RFC §7.2.1) plus follow-on schemes. Single
   # source of truth in Elixir.
-  @canonical_schemes ~w(file dialectic resident maintenance capture td agent)
+  @canonical_schemes ~w(file dialectic resident maintenance capture td agent topic)
 
   @path_max 4096
 
@@ -143,6 +143,7 @@ defmodule UnitaresLeasePlane.Canonicalize do
   defp dispatch("capture:/" <> rest), do: canonicalize_capture(rest)
   defp dispatch("td:/" <> rest), do: canonicalize_td(rest)
   defp dispatch("agent:/" <> rest), do: canonicalize_agent(rest)
+  defp dispatch("topic:/" <> rest), do: canonicalize_topic(rest)
   defp dispatch(_), do: {:error, :invalid_scheme}
 
   @doc """
@@ -356,6 +357,22 @@ defmodule UnitaresLeasePlane.Canonicalize do
       {:error, :invalid_scheme}
     else
       {:ok, "resident:/" <> String.trim_trailing(path, "/")}
+    end
+  end
+
+  # topic:/ — agent coordination key (migration 069). LOWERCASED, unlike
+  # resident:/ and maintenance:/, because a topic is typed by a human or an
+  # agent from prose ("revenue-engine", "Revenue-Engine") and two spellings of
+  # one topic must not split-brain into two surfaces or two mailboxes. Same
+  # reserved-char set as resident:/; `?` is caught at the top level.
+  defp canonicalize_topic(path) do
+    if String.match?(path, ~r/[ \t\n#&]/) do
+      {:error, :invalid_scheme}
+    else
+      case String.trim_trailing(path, "/") do
+        "" -> {:error, :invalid_scheme}
+        trimmed -> {:ok, "topic:/" <> String.downcase(trimmed)}
+      end
     end
   end
 
