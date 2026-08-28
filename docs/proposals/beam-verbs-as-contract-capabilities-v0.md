@@ -161,7 +161,7 @@ Two conventions this must follow:
 
 - **Consolidated action-router tools**, one per noun (`msg`, `lease`) — like
   `knowledge` and `dialectic` — not eight new names on a registry that already
-  carries 67 registered tools, 30 of them advertised in the default `lite`
+  carries 66 registered tools, 30 of them advertised in the default `lite`
   profile.
 - **Stakes classification is mandatory, not optional.** Every new `(tool,
   action)` pair needs an entry in `src/mcp_handlers/stakes_table.py`, which
