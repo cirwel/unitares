@@ -76,7 +76,11 @@ COMPONENTS=(
 "gateway-mcp|com.unitares.gateway-mcp|$H/projects/unitares-deploy||restart|8768"
 "sentinel-beam|com.unitares.sentinel-beam|$H/projects/unitares-deploy|elixir/sentinel|restart|"
 "wave3a-handlers|com.unitares.wave3a-handlers|$H/projects/unitares-deploy|elixir/wave3a_handlers|restart|8770"
-"lease-plane|com.unitares.lease-plane|$H/projects/unitares-deploy|elixir/lease_plane|hot-reload|8788"
+# Two pathspecs: elixir/unitares_sdk is a path dependency COMPILED INTO the
+# lease plane, so an SDK-only commit changes the running binary. nudge-lease-plane.sh
+# already checks both; counting only elixir/lease_plane here reported Δ0 for an
+# SDK change and skipped the restart that change actually needs.
+"lease-plane|com.unitares.lease-plane|$H/projects/unitares-deploy|elixir/lease_plane elixir/unitares_sdk|hot-reload|8788"
 # Phoenix on :8790, loading from the SHARED deploy worktree. Was absent from
 # this table entirely until 2026-08-13, so every ff moved its source under a
 # running BEAM with no verdict row to report it. Scoped to its own subdir for
@@ -147,8 +151,10 @@ git_head_epoch() { git -C "$1" log -1 --format=%ct 2>/dev/null; }
 # genuinely have no subdir (the Python servers, and live-from-checkout where
 # the whole checkout IS the artifact).
 behind_count() {
+  # Word-split on purpose: cpath is a pathspec LIST (see COMPONENTS). Every
+  # value is a single token with no spaces or globs.
   local cpath="${3:-.}"
-  git -C "$1" rev-list --count --full-history "HEAD..$2" -- "$cpath" 2>/dev/null || echo "?"
+  git -C "$1" rev-list --count --full-history "HEAD..$2" -- $cpath 2>/dev/null || echo "?"
 }
 # ghost = HEAD has commits not in base BY SHA, but the trees are identical
 is_ghost() {
@@ -293,7 +299,61 @@ for c in "${COMPONENTS[@]}"; do
         # follow-up; until then, an honest blank.
         br="-"; sha="-"; verdict="n/a(Pi)"
       fi ;;
-    hot-reload)         pid=$(proc_pid "$label"); verdict=$([ -n "$pid" ] && echo "HOT-RELOAD" || echo "DOWN") ;;
+    hot-reload)
+      # ⛔This branch used to be `up => HOT-RELOAD, else DOWN` and computed no
+      # staleness at all, so the lease plane — the ONLY hot-reload row — could
+      # never report CURRENT or STALE. Its running-code drift was structurally
+      # invisible: the sole staleness signal it ever got was the BEHIND(n)
+      # override below, which describes the CHECKOUT being behind origin, not
+      # the process being behind the checkout. Measured 2026-08-28: immediately
+      # after a full restart onto new code the row still read HOT-RELOAD, and it
+      # would have read exactly the same had the restart never happened.
+      #
+      # Now compares the boot sha the plane publishes on /health, the same way
+      # the restart branch does. HOT-RELOAD is kept for the case where the
+      # process predates the checkout: on this service that is a legitimate
+      # state (modules swapped in place), but it is NOT equivalent to current —
+      # `hot-reload.sh` cannot add a child to an already-started supervisor, so
+      # any change touching application.ex needs a real restart. The verdict
+      # therefore names the delta and the operator decides.
+      pid=$(proc_pid "$label")
+      if [ -z "$pid" ]; then verdict="DOWN"
+      else
+        bsha=$(build_sha "$port")
+        if [ -n "$bsha" ] && [ -n "$sha" ]; then
+          n=${#bsha}; [ "${#sha}" -lt "$n" ] && n=${#sha}
+          if [ "${bsha:0:$n}" = "${sha:0:$n}" ]; then verdict="CURRENT"
+          else
+            delta=$(git -C "$repo" rev-list --count --full-history "$bsha..$base" -- $cpath 2>/dev/null || echo "?")
+            [ -z "$delta" ] && delta="?"
+            # ⛔STALE(Δn), NOT a HOT-RELOAD(Δn) of its own. deploy-apply.sh
+            # selects work with `v.startswith("STALE") or v.startswith("BEHIND")`
+            # (deploy-apply.sh:114), so a novel verdict string would be SEEN by
+            # the operator and silently ignored by the deployer — the lease
+            # plane would stop auto-deploying entirely. Reusing STALE also
+            # inherits the existing, tested exclusion from the BEHIND promotion
+            # below, which is right for the same reason: "the running process is
+            # behind" outranks "your checkout needs a pull". The PICKUP column
+            # already says hot-reload, so naming the verdict STALE loses nothing.
+            # Δ0 = the shas differ only because the shared monorepo advanced
+            # on code this service does not compile. Restarting for that is
+            # pointless churn, and now that the hot-reload row feeds
+            # deploy-apply it would be pointless churn ON EVERY UNRELATED
+            # COMMIT. CURRENT* is the existing spelling for "process is old but
+            # its own code is unchanged", used identically by the restart branch.
+            if [ "$delta" = "0" ]; then verdict="CURRENT*"; else verdict="STALE(Δ$delta)"; fi
+          fi
+        else
+          # No build_sha on /health: an older lease plane, or a deployment with
+          # no .git to resolve one. Say so rather than printing a confident
+          # verdict derived from nothing — an unverifiable row must not read as
+          # healthy. Deliberately NOT a STALE form: we do not know that it is
+          # stale, and a permanently unreadable sha would then re-deploy on
+          # every single run. It stays promotable to BEHIND (see below), which
+          # preserves exactly the behaviour bare HOT-RELOAD had.
+          verdict="HOT-RELOAD(?)"
+        fi
+      fi ;;
     restart|restart-DEV)
       pid=$(proc_pid "$label")
       if [ -z "$pid" ]; then verdict="DOWN"
@@ -305,9 +365,15 @@ for c in "${COMPONENTS[@]}"; do
           n=${#bsha}; [ "${#sha}" -lt "$n" ] && n=${#sha}
           if [ "${bsha:0:$n}" = "${sha:0:$n}" ]; then verdict="CURRENT"
           else
-            delta=$(git -C "$repo" rev-list --count --full-history "$bsha..$base" -- "$cpath" 2>/dev/null || echo "?")
+            delta=$(git -C "$repo" rev-list --count --full-history "$bsha..$base" -- $cpath 2>/dev/null || echo "?")
             [ -z "$delta" ] && delta="?"
-            verdict="STALE(Δ$delta)"
+            # Δ0 = the shas differ only because the shared monorepo advanced
+            # on code this service does not compile. Restarting for that is
+            # pointless churn, and now that the hot-reload row feeds
+            # deploy-apply it would be pointless churn ON EVERY UNRELATED
+            # COMMIT. CURRENT* is the existing spelling for "process is old but
+            # its own code is unchanged", used identically by the restart branch.
+            if [ "$delta" = "0" ]; then verdict="CURRENT*"; else verdict="STALE(Δ$delta)"; fi
           fi
         else
           start=$(proc_start_epoch "$pid")
@@ -324,7 +390,7 @@ for c in "${COMPONENTS[@]}"; do
             # 2026-08-12: the governance MCP ran build_sha 1ac9912a against a
             # 56728eba checkout and was labelled CURRENT*.
             startiso=$(date -r "$start" "+%Y-%m-%d %H:%M:%S" 2>/dev/null)
-            delta=$(git -C "$repo" rev-list --count --full-history --since="$startiso" "$base" -- "$cpath" 2>/dev/null || echo "?")
+            delta=$(git -C "$repo" rev-list --count --full-history --since="$startiso" "$base" -- $cpath 2>/dev/null || echo "?")
             if [ "$delta" = "0" ]; then verdict="CURRENT*"; else verdict="STALE(Δ$delta)"; fi
           else verdict="CURRENT"; fi
         fi
@@ -354,7 +420,14 @@ for c in "${COMPONENTS[@]}"; do
       # and letting "your checkout needs a pull" overwrite it meant a
       # STALE(12) service displayed as BEHIND(1). The milder problem hid the
       # sharper one.
-      CURRENT|CURRENT\*|LIVE|HOT-RELOAD) verdict="BEHIND($behind)" ;;
+      #
+      # HOT-RELOAD(?) IS promoted: it means "could not verify", not "the process
+      # is behind", so it must not mask the one concrete, actionable fact we do
+      # have. This also preserves exactly what bare HOT-RELOAD did before the
+      # hot-reload branch learned to compare shas. A hot-reload row that is
+      # genuinely behind its checkout reports STALE(Δn) and is preserved by the
+      # STALE rule above, like every other service.
+      CURRENT|CURRENT\*|LIVE|HOT-RELOAD|HOT-RELOAD\(\?\)) verdict="BEHIND($behind)" ;;
     esac
   fi
   devflag=""; [ "$pickup" = "restart-DEV" ] && devflag=" [DEV]"
