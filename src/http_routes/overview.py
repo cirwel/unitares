@@ -114,6 +114,21 @@ async def http_agent_history(request):
                 "t": r["recorded_at"].isoformat(),
                 "E": r["e"], "I": r["i"], "S": r["s_entropy"], "V": r["v"],
                 "coherence": r["coherence"], "risk": r["risk_score"],
+                # The governance action and EISV verdict tier paired with this
+                # row's risk. Both are persisted into state_json by
+                # record_agent_state, so no extra column or join is needed.
+                # `action` is the decision vocabulary ('approve' | 'guide' |
+                # 'cirs_block' | 'risk_pause' | 'reject'); `verdict` is the risk
+                # tier ('safe' | 'caution' | 'high-risk'). Rows written before
+                # the action-write landed carry neither, so both may be null —
+                # consumers must not read a missing action as 'approve'.
+                #
+                # A hard action recorded here is a verdict the policy PRODUCED.
+                # It is not evidence that an intervention was delivered:
+                # gap-suppression downgrades pauses to proceed at any >150s
+                # inter-check-in gap. See /v1/enforcement/divergence.
+                "action": state_json.get("action"),
+                "verdict": state_json.get("verdict"),
                 "epistemic_class": r["epistemic_class"],
                 "telemetry_available": bool(r["telemetry_available"]),
                 "telemetry": summarize_state_eisv_telemetry(state_json),
