@@ -529,6 +529,34 @@
       }, () => (S().metrics.series[name] || []));
     },
 
+    // Fleet risk history — Chronicler's daily governance.* scrape, three series
+    // in one round-trip so risk can be drawn against the verdict pressure of the
+    // same window without the view issuing its own fetches.
+    //
+    // The risk series is the headline: with no points there is nothing to draw,
+    // so return null and let withFallback serve the snapshot. `pause`/`guide`
+    // are companions and an empty array is legitimate live data for them (a
+    // scraper registered later, or a window with no hard interventions) — they
+    // must NOT trigger the whole panel into snapshot.
+    async riskTrend(days) {
+      const d = Number.isFinite(days) ? Math.max(7, Math.min(180, Math.round(days))) : 60;
+      return withFallback(async () => {
+        const since = new Date(Date.now() - d * 86400 * 1000).toISOString();
+        const series = async (name) => {
+          const j = await authFetch("/v1/metrics/series?name=" + encodeURIComponent(name) +
+            "&since=" + encodeURIComponent(since));
+          return j && Array.isArray(j.points) ? j.points : [];
+        };
+        const [risk, pause, guide] = await Promise.all([
+          series("governance.risk.mean.7d"),
+          series("governance.pause.7d"),
+          series("governance.guide.7d"),
+        ]);
+        if (!risk.length) return null;
+        return { windowDays: d, risk, pause, guide };
+      }, () => S().riskTrend);
+    },
+
     async agentHistory(id, opts) {
       // EISV state-observation trajectory for one agent (no snapshot fallback —
       // empty if offline). Authored reports and automatic substrate rows remain
