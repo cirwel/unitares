@@ -505,6 +505,293 @@ cmd_call() {
     printf '%s' "$body" | _pretty_json
 }
 
+cmd_status() {
+    # One operator screen: server health, release currency, agent tiers,
+    # resident roster. /health is required; the other panels degrade
+    # per-endpoint so an older server still gets a status screen.
+    #
+    # Read-only by design: plain GETs, no onboard, no check-in, no
+    # X-Session-ID side effects beyond what every other read command sends.
+    # `watch -n5 unitares status` is the intended live view.
+    local json_mode=0 no_release=0 arg
+    for arg in "$@"; do
+        case "$arg" in
+            --json) json_mode=1 ;;
+            --no-release) no_release=1 ;;
+            *)
+                echo "error: unknown status option '${arg}' (--json, --no-release)" >&2
+                return 2
+                ;;
+        esac
+    done
+
+    local health residents tiers latest errbuf auth_hint=0
+    # /health is the one required panel — but its 503 during the post-restart
+    # warmup window (connection-tracker middleware) is a legitimate state, not
+    # an error, and a restart is the single most likely moment to run a status
+    # screen. Render it as such instead of dying on the raw HTTP error.
+    errbuf=$(mktemp -t unitares_cli_XXXXXX)
+    if ! health=$(_curl_get "/health" 2>"$errbuf"); then
+        if grep -q "HTTP 503 " "$errbuf" 2>/dev/null; then
+            # The body was discarded by _curl_fetch, so this cannot prove the
+            # 503 came from the warmup middleware rather than a proxy in
+            # front of the server — say so instead of over-claiming.
+            rm -f "$errbuf"
+            if [ "$json_mode" = "1" ]; then
+                printf '%s\n' '{"health": {"status": "warming_up"}, "residents": null, "tiers": null, "auth_required": false, "release": {"current": null, "latest": null, "comparison": "unknown"}}'
+            else
+                echo "UNITARES warming up — /health answered 503 (server starting, or a proxy error); retry shortly"
+            fi
+            return 0
+        fi
+        cat "$errbuf" >&2
+        rm -f "$errbuf"
+        return 1
+    fi
+    rm -f "$errbuf"
+    _check_body "$health" "/health" >/dev/null || return 1
+    # Degradable panels — but auth failures stay distinguishable from missing
+    # endpoints. /health is public while both panels are auth-gated, so in
+    # hosted posture with no UNITARES_TOKEN a healthy screen would otherwise
+    # read "(unavailable on this server)" and send the operator chasing a
+    # version mismatch when the remediation is a token.
+    errbuf=$(mktemp -t unitares_cli_XXXXXX)
+    residents=$(_curl_get "/v1/residents" 2>"$errbuf") || residents=""
+    grep -q "HTTP 40[13] " "$errbuf" 2>/dev/null && auth_hint=1
+    tiers=$(_curl_get "/v1/agents/tier_distribution" 2>"$errbuf") || tiers=""
+    grep -q "HTTP 40[13] " "$errbuf" 2>/dev/null && auth_hint=1
+    rm -f "$errbuf"
+
+    # Release currency against the newest GitHub release tag. Unauthenticated
+    # and free (execution-cost policy: nothing metered), 3s budget, and silent
+    # on ANY failure — offline, rate-limited, or disabled must never degrade
+    # the status screen, so "unknown" prints nothing rather than guessing.
+    # UNITARES_RELEASE_CHECK=off for air-gapped installs and deterministic tests.
+    #
+    # The lookup result (including a miss) is cached for 30 minutes: the
+    # documented usage is `watch -n5 unitares status`, and an uncached call at
+    # that cadence is 720 req/h against GitHub's 60/h unauthenticated limit —
+    # it would exhaust the per-IP quota in five minutes and go dark for the
+    # rest of the hour anyway. Caching the miss keeps a rate-limited hour from
+    # being made worse by continued polling.
+    local release_state="on"
+    latest=""
+    if [ "$no_release" = "1" ] || [ "${UNITARES_RELEASE_CHECK:-on}" = "off" ]; then
+        release_state="disabled"
+    else
+        local release_url cache now cached_at cached_tag
+        release_url="${UNITARES_RELEASE_URL:-https://api.github.com/repos/${UNITARES_RELEASE_REPO:-cirwel/unitares}/releases?per_page=100}"
+        # Cache key includes the effective URL: keyed by UID alone, switching
+        # UNITARES_RELEASE_REPO to a fork would reuse the other repo's cached
+        # tag and report a wrong currency verdict for up to 30 minutes.
+        cache="${UNITARES_RELEASE_CACHE:-${TMPDIR:-/tmp}/.unitares_release_check_$(id -u)_$(printf '%s' "$release_url" | cksum | cut -d' ' -f1)}"
+        now=$(date +%s)
+        cached_at=0
+        cached_tag=""
+        if [ -f "$cache" ]; then
+            read -r cached_at cached_tag < "$cache" 2>/dev/null || cached_at=0
+            case "$cached_at" in ''|*[!0-9]*) cached_at=0 ;; esac
+            # Force base 10 (a leading zero would make $((...)) parse octal
+            # and error on 08/09), and never trust a future timestamp — it
+            # would pin stale data past the TTL indefinitely.
+            cached_at=$((10#$cached_at))
+            [ "$cached_at" -gt "$now" ] && cached_at=0
+        fi
+        if [ $((now - cached_at)) -lt 1800 ]; then
+            latest="$cached_tag"
+        else
+            # /releases (not /releases/latest): this repo carries a second,
+            # separately-versioned release line (sdk-v*), and /releases/latest
+            # is date-ordered across all of them — the moment an SDK release is
+            # newest, the server line would silently vanish. Take the newest
+            # release whose tag looks like a server version instead. The
+            # parser also accepts a single release object so a URL override
+            # pointing at /releases/latest (or a test stub) still works.
+            latest=$(curl -fsS --max-time 3 "$release_url" 2>/dev/null | python3 -c '
+import json, re, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+releases = data if isinstance(data, list) else [data]
+for rel in releases:
+    if not isinstance(rel, dict) or rel.get("draft") or rel.get("prerelease"):
+        continue
+    tag = rel.get("tag_name") or ""
+    # At least two dotted components: a bare "7" or "V2" is not a server
+    # release tag (the contract is vX.Y.Z; extra components are tolerated
+    # because the comparison pads).
+    if re.fullmatch(r"[vV]?\d+\.\d+(\.\d+)*", tag):
+        print(tag)
+        break
+' 2>/dev/null) || latest=""
+            printf '%s %s\n' "$now" "$latest" > "$cache" 2>/dev/null || true
+        fi
+    fi
+
+    HEALTH="$health" RESIDENTS="$residents" TIERS="$tiers" LATEST="$latest" \
+    RELEASE_STATE="$release_state" AUTH_HINT="$auth_hint" \
+    JSON_MODE="$json_mode" python3 -c '
+import json, os, sys
+
+def load(name):
+    raw = os.environ.get(name) or ""
+    try:
+        value = json.loads(raw)
+    except Exception:
+        return None
+    return value if isinstance(value, dict) else None
+
+health = load("HEALTH")
+if health is None:
+    print("error: bad JSON from /health", file=sys.stderr)
+    sys.exit(1)
+residents = load("RESIDENTS")
+tiers = load("TIERS")
+latest = (os.environ.get("LATEST") or "").strip()
+auth_hint = os.environ.get("AUTH_HINT") == "1"
+version = str(health.get("version", "?"))
+
+def vtuple(tag):
+    parts = tag.lstrip("vV").split(".")
+    try:
+        return tuple(int(p) for p in parts)
+    except ValueError:
+        return None
+
+comparison = "disabled" if os.environ.get("RELEASE_STATE") == "disabled" else "unknown"
+if latest:
+    cur, new = vtuple(version), vtuple(latest)
+    if cur is not None and new is not None:
+        # Pad to equal length so v2.20 vs 2.20.0 compares as equal instead of
+        # producing a false ahead/behind claim from tuple-length ordering.
+        width = max(len(cur), len(new))
+        cur = cur + (0,) * (width - len(cur))
+        new = new + (0,) * (width - len(new))
+        comparison = "behind" if new > cur else ("ahead" if cur > new else "current")
+    elif latest.lstrip("vV") == version:
+        comparison = "current"
+
+if os.environ.get("JSON_MODE") == "1":
+    print(json.dumps({
+        "health": health,
+        "residents": residents,
+        "tiers": tiers,
+        "auth_required": auth_hint,
+        "release": {
+            "current": version,
+            "latest": latest or None,
+            "comparison": comparison,
+        },
+    }, indent=2))
+    sys.exit(0)
+
+build = str(health.get("build_sha", "") or "")
+uptime = health.get("uptime")
+uptime = uptime.get("formatted", "?") if isinstance(uptime, dict) else "?"
+db = health.get("database")
+db = db if isinstance(db, dict) else {}
+head = "UNITARES " + str(health.get("status", "?")) + " · v" + version
+if build:
+    head += " (" + build + ")"
+head += " · up " + str(uptime) + " · db " + str(db.get("status", "?"))
+print(head)
+
+# One message per failure cause: a 401/403 on the auth-gated panels means
+# "set UNITARES_TOKEN", while a missing route means "older server" — the two
+# remediations are different, so the lines must be too.
+unavailable = ("(auth required — set UNITARES_TOKEN)" if auth_hint
+               else "(unavailable on this server)")
+
+if comparison == "behind":
+    print("Release:   " + latest + " available (running v" + version + ")")
+elif comparison == "current":
+    print("Release:   current (" + latest + " is latest)")
+elif comparison == "ahead":
+    print("Release:   ahead of " + latest + " (development build)")
+# unknown: check disabled or unreachable — print nothing rather than guess.
+
+if tiers is not None and isinstance(tiers.get("tiers"), dict):
+    counts = tiers["tiers"]
+    # "unknown" is the no-tier bucket, not a peer tier — the endpoint computes
+    # `earned` separately to preserve exactly that distinction, so keep it out
+    # of the earned-tier list and name it for what it is.
+    order = ["verified", "established", "emerging", "provisional"]
+    parts = [str(counts[k]) + " " + k for k in order if k in counts]
+    parts += [str(v) + " " + k for k, v in counts.items()
+              if k not in order and k != "unknown"]
+    line = "Agents:    " + str(tiers.get("total", "?")) + " total"
+    if tiers.get("earned") is not None:
+        line += " · " + str(tiers["earned"]) + " earned"
+    if parts:
+        line += " · " + " · ".join(parts)
+    if counts.get("unknown") is not None:
+        line += " · " + str(counts["unknown"]) + " untiered"
+    print(line)
+else:
+    print("Agents:    " + unavailable)
+
+def ago(seconds):
+    try:
+        seconds = float(seconds)
+    except (TypeError, ValueError, OverflowError):
+        return "?"
+    if seconds < 90:
+        return str(int(seconds)) + "s ago"
+    if seconds < 5400:
+        return str(int(seconds // 60)) + "m ago"
+    return "%.1fh ago" % (seconds / 3600)
+
+if residents is None or not isinstance(residents.get("residents"), list):
+    print("Residents: " + unavailable)
+else:
+    rows = [r for r in residents["residents"] if isinstance(r, dict)]
+    configured = residents.get("configured")
+    configured = configured if isinstance(configured, list) else []
+    if not rows and not configured:
+        print("Residents: none configured (residentless install)")
+    else:
+        # Headline counts statuses, not rows: the endpoint emits one row per
+        # configured label unconditionally, so "N reporting / N configured"
+        # is a tautology that can contradict the rows right below it.
+        tally = {}
+        for row in rows:
+            key = str(row.get("status") or "?")
+            tally[key] = tally.get(key, 0) + 1
+        summary = " · ".join(
+            str(n) + " " + s
+            for s, n in sorted(tally.items(), key=lambda kv: -kv[1])
+        )
+        line = "Residents: " + str(len(configured)) + " configured"
+        if summary:
+            line += " · " + summary
+        print(line)
+        if rows:
+            print("  %-16s %-10s %-10s %s" % ("LABEL", "STATUS", "VERDICT", "LAST SIGNAL"))
+        for row in rows:
+            # The endpoint computes silence_threshold_seconds and event_driven
+            # precisely so silence can be judged; a bare duration renders a
+            # 65x-overdue resident identically to an expected quiet one.
+            signal = ago(row.get("silence_seconds"))
+            threshold = row.get("silence_threshold_seconds")
+            try:
+                overdue = (not row.get("event_driven")
+                           and float(row.get("silence_seconds")) > float(threshold))
+            except (TypeError, ValueError, OverflowError):
+                overdue = False
+            if overdue:
+                signal += " (over threshold)"
+            elif row.get("event_driven"):
+                signal += " (event-driven)"
+            print("  %-16s %-10s %-10s %s" % (
+                str(row.get("label") or "?"),
+                str(row.get("status") or "?"),
+                str(row.get("verdict") or "-"),
+                signal,
+            ))
+'
+}
+
 cmd_session() {
     echo "Agent ID:     ${AGENT_ID}"
     echo "Session file: ${SESSION_FILE}"
@@ -524,6 +811,9 @@ cmd_help() {
 UNITARES CLI — REST wrapper for the governance MCP server
 
 Commands:
+  status [--json] [--no-release]    One operator screen: server, release
+                                    currency, agent tiers, residents. Pure
+                                    reads; try: watch -n30 unitares status
   onboard [name] [purpose] [force]  Onboard a fresh identity; cached uuid is
                                     declared as parent_agent_id unless "force"
                                     is passed as 3rd arg
@@ -543,6 +833,13 @@ Environment:
   UNITARES_AGENT     Stable agent name for X-Agent-Id
   UNITARES_TOKEN     Optional bearer token
   UNITARES_TIMEOUT   curl --max-time seconds (default: 15)
+  UNITARES_RELEASE_CHECK   "off" disables the GitHub release-currency lookup
+                           in `status` (same as --no-release; air-gapped
+                           installs; the lookup always fails silently anyway
+                           and its result is cached for 30 minutes)
+  UNITARES_RELEASE_REPO    GitHub repo the release check queries
+                           (default: cirwel/unitares — forks should point
+                           this at themselves or disable the check)
 
 Examples:
   unitares diag
@@ -556,6 +853,7 @@ EOF
 # --- dispatch ----------------------------------------------------------------
 
 case "${1:-help}" in
+    status|st)   shift; cmd_status "$@" ;;
     onboard|o)   shift; cmd_onboard "$@" ;;
     update|u)    shift; cmd_update "$@" ;;
     metrics|m)   shift; cmd_metrics ;;

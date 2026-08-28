@@ -207,6 +207,24 @@ async def get_tool_usage_stats_async(
     ``audit.tool_usage`` is the authoritative sink — written on every dispatched
     call by ``append_tool_usage_async``. The JSONL sink is best-effort and has
     drifted stale, so the readers prefer this path.
+
+    ``lease.*`` rows are NOT tool calls. They are lease-plane events projected
+    into this table by the BEAM outbox forwarder
+    (``elixir/lease_plane/lib/unitares_lease_plane/audit_outbox_forwarder.ex``),
+    and the volume is overwhelmingly heartbeat traffic: ~93% of all rows are
+    ``holder_class=process_instance`` presence heartbeats from ordinary
+    session onboarding, and most of the remainder are renew heartbeats of
+    long-held ``substrate_earned`` leases — the actual coordination trace is
+    ``substrate_earned`` *acquires*, roughly one per day. Substrate emission,
+    not agent action. Counted undifferentiated, that heartbeat volume read as top
+    tool/coordination throughput (4 of the top-10 "most used tools" at one 7d
+    reading). The unfiltered aggregate therefore excludes ``lease.%`` rows
+    from ``tools``/``most_used``/``total_calls`` and reports them separately
+    under ``lease_plane``, split by ``payload->>'holder_class'`` so the volume
+    stays visible but labeled as substrate. Excluding them also converges the
+    DB and JSONL sources — the JSONL sink never receives ``lease.*`` rows. An
+    explicit ``tool_name='lease.acquire'`` (or any ``lease.*``) query still
+    answers with the raw rows.
     """
     try:
         from src.db import get_db
@@ -219,6 +237,11 @@ async def get_tool_usage_stats_async(
         if tool_name:
             params.append(tool_name)
             where.append(f"tool_name = ${len(params)}")
+        else:
+            # Forwarded lease-plane substrate rows are excluded from the
+            # aggregate and reported under ``lease_plane`` below; a scoped
+            # query for an exact lease.* tool_name still answers directly.
+            where.append("tool_name NOT LIKE 'lease.%'")
         if agent_id:
             params.append(agent_id)
             where.append(f"agent_id = ${len(params)}")
@@ -232,6 +255,25 @@ async def get_tool_usage_stats_async(
         )
         async with db.acquire() as conn:
             rows = await conn.fetch(sql, *params)
+            lease_rows = None
+            if not tool_name:
+                lease_where = [
+                    "ts > now() - ($1 * interval '1 hour')",
+                    "tool_name LIKE 'lease.%'",
+                ]
+                lease_params: List[Any] = [float(window_hours)]
+                if agent_id:
+                    lease_params.append(agent_id)
+                    lease_where.append(f"agent_id = ${len(lease_params)}")
+                lease_sql = (
+                    "SELECT tool_name, "
+                    "coalesce(payload->>'holder_class', 'unknown') AS holder_class, "
+                    "count(*)::bigint AS total_calls "
+                    "FROM audit.tool_usage "
+                    "WHERE " + " AND ".join(lease_where) + " "
+                    "GROUP BY tool_name, holder_class"
+                )
+                lease_rows = await conn.fetch(lease_sql, *lease_params)
     except Exception:
         return None
 
@@ -260,6 +302,27 @@ async def get_tool_usage_stats_async(
             "percentage_of_total": (total / total_calls * 100) if total_calls else 0.0,
         }
 
+    lease_plane: Optional[Dict[str, Any]] = None
+    if lease_rows is not None:
+        lease_events: Dict[str, Dict[str, int]] = {}
+        lease_total = 0
+        for r in sorted(lease_rows, key=lambda r: int(r["total_calls"]), reverse=True):
+            n = int(r["total_calls"])
+            lease_events.setdefault(r["tool_name"], {})[r["holder_class"]] = n
+            lease_total += n
+        lease_plane = {
+            "total_events": lease_total,
+            "events": lease_events,
+            "note": (
+                "Lease-plane events forwarded into audit.tool_usage by the "
+                "BEAM outbox forwarder — substrate emission, not tool calls. "
+                "holder_class=process_instance rows are presence heartbeats "
+                "from ordinary session onboarding; substrate_earned rows are "
+                "the actual coordination trace. Excluded from "
+                "tools/most_used/total_calls above."
+            ),
+        }
+
     sorted_tools = [(t, total) for (t, total, _ok) in counts]
     return {
         "total_calls": total_calls,
@@ -273,6 +336,9 @@ async def get_tool_usage_stats_async(
             if agent_id else None
         ),
         "source": "db",
+        # Present only on the unfiltered path (no tool_name scope): the
+        # forwarded lease-plane substrate volume, split by holder_class.
+        **({"lease_plane": lease_plane} if lease_plane is not None else {}),
         # Present only when the window reaches into the pre-instrumentation era.
         # Omitted entirely otherwise, so its presence is the signal.
         **(

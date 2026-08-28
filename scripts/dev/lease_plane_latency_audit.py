@@ -89,11 +89,19 @@ GROUP BY surface_kind
 ORDER BY n DESC
 """
 
+# Split by holder_class deliberately: ~93% of lease rows are
+# holder_class=process_instance presence heartbeats from ordinary session
+# onboarding, and most substrate_earned rows are renew heartbeats of
+# long-held leases. An undifferentiated count reads that heartbeat volume as
+# coordination throughput; the split keeps the substrate labeled as such
+# (the coordination trace is substrate_earned acquires, ~1/day).
 EVENT_TYPE_DISTRIBUTION_SQL = """
-SELECT event_type, count(*)
+SELECT event_type,
+       coalesce(holder_class, 'unknown') AS holder_class,
+       count(*)
 FROM lease_plane.lease_plane_events
 WHERE ts > now() - make_interval(days := %s)
-GROUP BY event_type
+GROUP BY event_type, coalesce(holder_class, 'unknown')
 ORDER BY count(*) DESC
 """
 
@@ -156,7 +164,11 @@ def run(days: int) -> dict[str, Any]:
             for r in hold
         ],
         "event_type_distribution": [
-            {"event_type": r["event_type"], "count": int(r["count"])}
+            {
+                "event_type": r["event_type"],
+                "holder_class": r["holder_class"],
+                "count": int(r["count"]),
+            }
             for r in etype
         ],
         "conflict_rate": round(conflict_rate, 6),
@@ -190,9 +202,11 @@ def render_text(result: dict[str, Any]) -> str:
             f"p99={r['p99_ms']:>10.1f}  p100={r['p100_ms']:>10.1f}"
         )
 
-    lines.extend(["", "Event-type distribution:"])
+    lines.extend(["", "Event-type distribution (by holder_class; process_instance = presence heartbeats):"])
     for r in result["event_type_distribution"]:
-        lines.append(f"  {r['event_type']:<35} {r['count']:>8}")
+        lines.append(
+            f"  {r['event_type']:<35} {r['holder_class']:<18} {r['count']:>8}"
+        )
 
     lines.extend(
         [

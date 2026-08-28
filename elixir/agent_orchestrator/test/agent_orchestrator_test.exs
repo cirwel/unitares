@@ -192,6 +192,44 @@ defmodule AgentOrchestratorTest do
     end
   end
 
+  describe "default-log end-of-life lines" do
+    import ExUnit.CaptureLog
+
+    test "a reaped agent logs an exited line, so started/exited log arithmetic balances" do
+      # Telemetry already reports this ending (see the reap tests above), but
+      # the raw log did not: a DELETE'd agent logged `started` and nothing
+      # else, so `grep -c started` vs `grep -c exited` diverged and read as a
+      # process leak.
+      log =
+        capture_log(fn ->
+          {:ok, id, pid} = AgentOrchestrator.run(%{cmd: "sleep", args: ["30"]})
+          :ok = AgentOrchestrator.stop(id, :test_reap)
+          # GenServer.stop is synchronous, but poll for death anyway so the
+          # capture window is closed only after terminate/2 has run.
+          assert eventually(fn -> not Process.alive?(pid) end)
+        end)
+
+      assert log =~ "exited status=nil reason=stopped (reaped while running)"
+      assert length(Regex.scan(~r/ started /, log)) == 1
+      assert length(Regex.scan(~r/ exited /, log)) == 1
+    end
+
+    test "a natural exit logs exactly one exited line — the reap path never double-logs" do
+      log =
+        capture_log(fn ->
+          {:ok, id, pid} = AgentOrchestrator.run(%{cmd: "echo", args: ["hi"]})
+          assert {:ok, %{exit_status: 0}} = AgentOrchestrator.await(id, 5_000)
+          # finalize/2 replies to waiters before {:stop, ...}, so wait for the
+          # process to be gone — terminate/2 (the reap-log site) has then run
+          # and had its chance to double-log.
+          assert eventually(fn -> not Process.alive?(pid) end)
+        end)
+
+      assert log =~ "exited status=0"
+      assert length(Regex.scan(~r/ exited /, log)) == 1
+    end
+  end
+
   describe "child stdin" do
     test "is closed by default, so a child that reads stdin exits instead of hanging" do
       # `cat` with no argument reads stdin forever. With stdin at EOF it exits 0
