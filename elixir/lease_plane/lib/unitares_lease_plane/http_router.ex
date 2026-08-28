@@ -610,6 +610,128 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     end
   end
 
+  # ---------- /v1/msg/* — agent-to-agent message transport ----------
+  #
+  # NOT part of the lease RFC's conformance surface. Leases and messages share
+  # this node (one bearer, one identity gate, one Postgrex pool) but not one
+  # contract: a lease is an exclusive claim, a message is not exclusive.
+  # Contract: docs/proposals/agent-message-transport-v0.md.
+  #
+  # TRANSPORT ONLY. Nothing here long-polls, wakes, spawns, or spends, so the
+  # disconfirmers in agent-channel-wake-gate-v0.md are untouched.
+  #
+  # ⛔BOTH routes fail closed unless identity binding is ENFORCED. The shared
+  # bearer authenticates a *deployment*, not an *agent*; without proof-bound
+  # identity, any bearer holder could send as anyone and read anyone's inbox.
+  # For a lease that is a tolerable coordination hint. For a mailbox it is a
+  # confidentiality boundary, so `UNITARES_LEASE_IDENTITY_BINDING=enforce` is
+  # a precondition rather than a hardening option.
+
+  post "/v1/msg/send" do
+    with :ok <- require_identity_enforcement(),
+         {:ok, params} <- extract_msg_send_params(conn.body_params),
+         :ok <-
+           IdentityBinding.authorize(
+             params.sender_agent_uuid,
+             IdentityBinding.proof_from_conn(conn),
+             "topic",
+             IdentityBinding.request_context(conn)
+           ) do
+      msg_send_authorized(conn, params)
+    else
+      {:error, :identity_binding_not_enforced} ->
+        json(conn, 503, %{
+          ok: false,
+          error: "service_unavailable",
+          reason: "identity_binding_not_enforced"
+        })
+
+      {:error, detail} when is_binary(detail) ->
+        json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
+
+      {:error, identity_reason} ->
+        identity_refusal(conn, identity_reason)
+    end
+  end
+
+  defp msg_send_authorized(conn, params) do
+    case Repo.send_message(params) do
+      {:ok, message} ->
+        json(conn, 200, %{ok: true, message: present_message(message)})
+
+      {:error, :parent_not_found} ->
+        json(conn, 404, %{ok: false, error: "not_found", reason: "response_to_id"})
+
+      {:error, :reply_depth_exceeded} ->
+        # A real conflict with the loop bound, not a malformed body: the same
+        # message would have been accepted earlier in the thread.
+        json(conn, 409, %{ok: false, error: "reply_depth_exceeded"})
+
+      {:error, reason}
+      when reason in [:ttl_out_of_range, :invalid_topic, :self_addressed, :envelope_not_object] ->
+        json(conn, 422, %{ok: false, error: "schema_invalid", detail: Atom.to_string(reason)})
+
+      {:error, {:constraint_violation, name}} ->
+        json(conn, 422, %{ok: false, error: "schema_invalid", detail: name})
+
+      {:error, reason} ->
+        Logger.error("lease plane msg send failed: #{safe_reason(reason)}")
+        json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+    end
+  end
+
+  post "/v1/msg/inbox" do
+    with :ok <- require_identity_enforcement(),
+         {:ok, recipient_agent_uuid, limit} <- extract_msg_inbox_params(conn.body_params),
+         # The caller names the inbox; this proves the caller IS that agent.
+         # Recipient-only read, mirroring authorize_handoff_recipient/2.
+         :ok <-
+           IdentityBinding.authorize(
+             recipient_agent_uuid,
+             IdentityBinding.proof_from_conn(conn),
+             "topic",
+             IdentityBinding.request_context(conn)
+           ) do
+      msg_inbox_authorized(conn, recipient_agent_uuid, limit)
+    else
+      {:error, :identity_binding_not_enforced} ->
+        json(conn, 503, %{
+          ok: false,
+          error: "service_unavailable",
+          reason: "identity_binding_not_enforced"
+        })
+
+      {:error, detail} when is_binary(detail) ->
+        json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
+
+      {:error, identity_reason} ->
+        identity_refusal(conn, identity_reason)
+    end
+  end
+
+  defp msg_inbox_authorized(conn, recipient_agent_uuid, limit) do
+    case Repo.inbox(recipient_agent_uuid, limit) do
+      {:ok, messages} ->
+        json(conn, 200, %{ok: true, messages: Enum.map(messages, &present_message/1)})
+
+      {:error, reason} ->
+        Logger.error("lease plane msg inbox failed: #{safe_reason(reason)}")
+        json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+    end
+  end
+
+  # Refuse rather than degrade. `:log` mode is deliberately NOT accepted here:
+  # it records what it would have refused and then serves the request, which on
+  # a mailbox means handing one agent's mail to another while writing a warning
+  # about it.
+  defp require_identity_enforcement do
+    if Application.get_env(:lease_plane, :identity_binding_mode, :off) == :enforce do
+      :ok
+    else
+      {:error, :identity_binding_not_enforced}
+    end
+  end
+
   # ---------- catch-all ----------
   match _ do
     json(conn, 404, %{ok: false, error: "not_found"})
@@ -1072,6 +1194,101 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   end
 
   defp extract_handoff_accept_params(_), do: {:error, "handoff_id required"}
+
+  @msg_ttl_max_s 604_800
+  @msg_inbox_limit_max 100
+
+  defp extract_msg_send_params(%{} = body) do
+    topic = Map.get(body, "topic")
+    sender = Map.get(body, "sender_agent_uuid")
+    recipient = Map.get(body, "recipient_agent_uuid")
+    envelope = Map.get(body, "envelope", %{})
+    response_to_id = Map.get(body, "response_to_id")
+    ttl_s = Map.get(body, "ttl_s")
+
+    cond do
+      not (is_binary(topic) and byte_size(topic) > 0) ->
+        {:error, "topic required"}
+
+      not (is_binary(sender) and byte_size(sender) > 0) ->
+        {:error, "sender_agent_uuid required"}
+
+      not (is_binary(recipient) and byte_size(recipient) > 0) ->
+        {:error, "recipient_agent_uuid required"}
+
+      not is_map(envelope) ->
+        {:error, "envelope must be a JSON object"}
+
+      not (is_nil(response_to_id) or
+               (is_binary(response_to_id) and byte_size(response_to_id) > 0)) ->
+        {:error, "response_to_id must be a message_id"}
+
+      not is_integer(ttl_s) ->
+        {:error, "ttl_s must be an integer"}
+
+      ttl_s <= 0 or ttl_s > @msg_ttl_max_s ->
+        {:error, "ttl_s must be in (0, #{@msg_ttl_max_s}]"}
+
+      true ->
+        # Canonicalize server-side, exactly as acquire does: two agents naming
+        # one topic differently must land in one conversation, and the client
+        # is not the authority on that.
+        case Canonicalize.canonicalize(topic) do
+          {:ok, canonical_topic} ->
+            {:ok,
+             %{
+               topic: canonical_topic,
+               sender_agent_uuid: sender,
+               recipient_agent_uuid: recipient,
+               envelope: envelope,
+               response_to_id: response_to_id,
+               ttl_s: ttl_s
+             }}
+
+          {:error, reason} ->
+            {:error, "topic #{reason}"}
+        end
+    end
+  end
+
+  defp extract_msg_send_params(_), do: {:error, "body must be a JSON object"}
+
+  defp extract_msg_inbox_params(%{} = body) do
+    recipient = Map.get(body, "recipient_agent_uuid")
+    limit = Map.get(body, "limit", 20)
+
+    cond do
+      not (is_binary(recipient) and byte_size(recipient) > 0) ->
+        {:error, "recipient_agent_uuid required"}
+
+      not is_integer(limit) ->
+        {:error, "limit must be an integer"}
+
+      limit <= 0 or limit > @msg_inbox_limit_max ->
+        {:error, "limit must be in (0, #{@msg_inbox_limit_max}]"}
+
+      true ->
+        {:ok, recipient, limit}
+    end
+  end
+
+  defp extract_msg_inbox_params(_), do: {:error, "body must be a JSON object"}
+
+  defp present_message(%{} = message) do
+    %{
+      message_id: message.message_id,
+      topic: message.topic,
+      sender_agent_uuid: message.sender_agent_uuid,
+      recipient_agent_uuid: message.recipient_agent_uuid,
+      envelope: message.envelope,
+      response_to_id: message.response_to_id,
+      reply_depth: message.reply_depth,
+      delivery_state: message.delivery_state,
+      created_at: iso(message.created_at),
+      expires_at: iso(message.expires_at),
+      delivered_at: iso(message.delivered_at)
+    }
+  end
 
   defp present_lease(%{} = lease) do
     %{
