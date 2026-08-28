@@ -23,13 +23,28 @@ defmodule AgentOrchestrator.AgentSupervisor do
   Spawn a supervised ephemeral agent. `spec` is passed through to
   `AgentRunner` (see its `t:spec/0`). Returns `{:ok, execution_id, pid}`.
 
-  The execution id is minted here and always overwrites any caller-supplied
-  value. `agent_id` is logical metadata and may be reused; it is never the
-  registry key or lifecycle-control handle.
+  `start_agent/1` mints the execution id here and always overwrites any
+  caller-supplied value. SpawnGate has a separate trusted internal path for an
+  id it already server-minted and durably reserved before process start.
+  `agent_id` is logical metadata and may be reused; it is never the registry
+  key or lifecycle-control handle.
   """
   @spec start_agent(map()) :: {:ok, String.t(), pid()} | {:error, term()}
   def start_agent(%{} = spec) do
     execution_id = AgentRunner.generate_execution_id()
+    start_with_execution_id(spec, execution_id)
+  end
+
+  @doc false
+  # Trusted internal path for SpawnGate: the server mints and durably reserves
+  # the id before opening the OS process. This is not caller control — the HTTP
+  # spec still cannot provide or override an execution id.
+  @spec start_reserved_agent(map(), String.t()) :: {:ok, String.t(), pid()} | {:error, term()}
+  def start_reserved_agent(%{} = spec, "ex-" <> _ = execution_id) do
+    start_with_execution_id(spec, execution_id)
+  end
+
+  defp start_with_execution_id(spec, execution_id) do
     agent_id = Map.get(spec, :agent_id) || execution_id
 
     spec =
