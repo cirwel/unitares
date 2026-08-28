@@ -242,7 +242,11 @@
         const [agentsR, kgR, dlcR, stuckR, calR, anomR, healthR, tierR] = await Promise.all([
           tc("agent", { action: "list", include_metrics: false, recent_days: 30, limit: 1, status_filter: "all" }), // summary only
           tc("knowledge", { action: "stats" }),
-          tc("dialectic", { action: "list", limit: 50 }),
+          // fields=compact: this batch reads phase/status off 50 sessions to
+          // produce two counts. The full shape ships `resolution` (~629 B each)
+          // and was 130,936 B for 1,114 B of consumed fields — on the default
+          // page. Compact is a strict subset, so the mapping below is unchanged.
+          tc("dialectic", { action: "list", limit: 50, fields: "compact" }),
           tc("detect_stuck_agents", {}),
           tc("calibration", { action: "check" }),
           tc("detect_anomalies", {}),
@@ -519,9 +523,26 @@
 
     async automations() {
       // Automation census snapshot (launchd/hermes/codex/claude/github-actions).
+      // FULL census — the Automations tab renders every item. The Overview card
+      // must NOT use this; see automationsSummary below.
       return withFallback(
         async () => authFetch("/api/automations"),
         () => ({ schema: "unitares.automation_census.v1", summary: { total: 0, by_source: {}, by_kind: {}, needs_attention: [], warnings: [] }, automations: [], stale: true })
+      );
+    },
+
+    // Counts only, for the Overview card. The full census was ~206 KB of
+    // per-automation detail (228 items) on the DEFAULT page, of which the card
+    // reads the summary block, `stale`, and an ungated COUNT — about 641 B.
+    // The server computes the ungated count under ?view=summary so no notes
+    // arrays cross the wire. Loopback hides this; a tunnel does not.
+    async automationsSummary() {
+      return withFallback(
+        async () => {
+          const j = await authFetch("/api/automations?view=summary");
+          return j && j.summary ? j : null;
+        },
+        () => ({ schema: "unitares.automation_census.v1", summary: { total: 0, by_source: {}, by_kind: {}, needs_attention: [], warnings: [] }, ungated: 0, stale: true })
       );
     },
 

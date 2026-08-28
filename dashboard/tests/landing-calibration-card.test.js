@@ -43,9 +43,9 @@ async function card(statsOverrides) {
         stuck: 0, stuckHard: 0, stuckSoft: 0, stuckList: [], degraded: 0,
       }, statsOverrides),
     }),
-    automations: async () => ({
+    automationsSummary: async () => ({
       source: "live",
-      data: { summary: { total: 0, by_kind: {}, needs_attention: [] }, automations: [] },
+      data: { summary: { total: 0, by_kind: {}, needs_attention: [] }, ungated: 0 },
     }),
   };
   dom.window.eval(landingSource);
