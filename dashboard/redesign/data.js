@@ -299,7 +299,17 @@
           // somewhere. Capped here, not in the view: a real incident flagging
           // 40 agents must not grow the card without bound.
           stuckList: stuckR ? (stuckR.stuck_agents || []).slice(0, 3).map(mapStuck) : null,
+          // The card is NAMED "Calibration", so it must carry the calibration
+          // verdict — not only trajectory_health, which is a different
+          // quantity from the same response. Shipping the number alone let a
+          // reader infer "calibrated" from a healthy-looking 0.78 while the
+          // server was answering calibration_status="miscalibrated" and
+          // tactical_signal_status="stale", and the >=0.8 green threshold
+          // would have painted it OK outright.
           calibration: calR && typeof calR.trajectory_health === "number" ? calR.trajectory_health : null,
+          calibrated: calR && typeof calR.calibrated === "boolean" ? calR.calibrated : null,
+          calibrationStatus: calR && typeof calR.calibration_status === "string" ? calR.calibration_status : null,
+          calibrationSignal: calR && typeof calR.tactical_signal_status === "string" ? calR.tactical_signal_status : null,
           anomalies: anomR && anomR.summary ? anomR.summary.total_anomalies : null,
           systemHealth: healthR ? (healthR.status === "healthy" ? "OK" : healthR.status) : null,
           systemHealthDetail: hb ? `${hb.healthy || 0} ok · ${hb.warning || 0} warn${hb.error ? " · " + hb.error + " err" : ""}` : null,
@@ -442,6 +452,12 @@
         const [ev, act, runtime] = await Promise.all([
           authFetch("/api/events?limit=40"),
           authFetch("/api/activity?window=60&bucket=5"),
+          // limit=1000 is NOT a display cap and must not be tuned down to match
+          // the view's slice(0, 30). It bounds the underlying AUDIT-EVENT scan
+          // in read_runtime_activity(), and both `processes` and every `summary`
+          // count are derived from that same bounded set — so shrinking it
+          // silently turns fleet totals into page totals (the exact failure
+          // db/mixins/audit.py:151 warns about). Leave it.
           authFetch("/v1/runtime/activity?window_hours=24&limit=1000").catch(() => null),
         ]);
         if (!ev || !ev.events) return null;
@@ -464,7 +480,15 @@
 
     async eisv() {
       return withFallback(async () => {
-        const r = await authFetch("/v1/eisv/recent?limit=120");
+        // fields=compact: this view refreshes every 10s and reads only
+        // eisv/coherence/risk/timestamp plus the measurement-source tag. The
+        // full event carries ~6.3 KB of governance detail per row (decision,
+        // drift_trends, inputs, risk_reason — zero references in this file or
+        // in sections/eisv.js), which made each tick a ~194 KB download to
+        // draw twenty points. Compact is a strict SUBSET, so the same parsing
+        // below works against either shape and a server without the parameter
+        // simply returns the full event.
+        const r = await authFetch("/v1/eisv/recent?limit=120&fields=compact");
         const evs = (r && r.events) || [];
         if (!evs.length) return null;
         // `raw` carries the unaveraged events so the section can keep
