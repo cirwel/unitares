@@ -5,7 +5,9 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
   Bind is local-only (`127.0.0.1`); a single shared bearer token from
   `~/.config/cirwel/secrets.env` (`LEASE_PLANE_BEARER_TOKEN`) gates every
-  route. Body shapes are validated by Pattern + JSON-decode errors map to
+  route except the single unauthenticated `GET /health` liveness probe
+  (see the `:liveness` plug). Body shapes are validated by Pattern +
+  JSON-decode errors map to
   `schema_invalid` per the typed-absence protocol — there is no leaky 400
   HTML page.
 
@@ -23,6 +25,16 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   alias UnitaresLeasePlane.{Canonicalize, HandoffServer, IdentityBinding, Repo}
 
   plug(:match)
+
+  # Liveness exemption — the ONLY pre-auth path. Exact match on GET /health;
+  # returns a fully static body (no DB touch, no config echo, no identity
+  # metrics), so up-and-fail-closed is distinguishable from down without a
+  # bearer. Everything else — including /v1/health, /health/*, and any other
+  # verb on /health — still hits HTTPAuth below and 401s/503s exactly as
+  # before. A static payload preserves the anti-enumeration property (only
+  # this one fixed path behaves differently pre-auth) and cannot 503 when
+  # Postgres is down, which is exactly what a liveness probe wants.
+  plug(:liveness)
 
   # HTTPAuth runs BEFORE body parsing so an unauthenticated caller cannot
   # probe endpoint existence by sending malformed JSON (which would otherwise
@@ -1117,6 +1129,29 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     |> Plug.Conn.put_resp_content_type("application/json")
     |> Plug.Conn.send_resp(status, Jason.encode!(versioned_body))
   end
+
+  # Unauthenticated liveness probe — the deliberate, single, static exception
+  # to the fail-closed posture (see the `plug(:liveness)` site for rationale).
+  # Exact match only: `["health"]` on GET. POST /health, /health/anything,
+  # /healthz and /v1/lease/health all fall through to HTTPAuth unchanged.
+  # Must halt (the private `json/3` above does not), so replicate the
+  # three-line send inline as HTTPAuth.send_json does. `protocol_version()`
+  # (the function, not the attribute) avoids attribute-ordering issues.
+  defp liveness(%Plug.Conn{method: "GET", path_info: ["health"]} = conn, _opts) do
+    body = %{
+      ok: true,
+      status: "ok",
+      service: "lease-plane",
+      protocol_version: protocol_version()
+    }
+
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.send_resp(200, Jason.encode!(body))
+    |> Plug.Conn.halt()
+  end
+
+  defp liveness(conn, _opts), do: conn
 
   defp safe_reason(%module{}), do: inspect(module)
   defp safe_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
