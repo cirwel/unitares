@@ -15,7 +15,6 @@ import pytest
 # single-purpose tools register before we read _TOOL_DEFINITIONS.
 import src.mcp_handlers.core  # noqa: F401
 import src.mcp_handlers.consolidated  # noqa: F401
-from src.mcp_handlers.research_registry import RESEARCH_REGISTRY_ACTIONS
 
 from src.mcp_handlers import stakes_table
 from src.mcp_handlers.stakes_table import (
@@ -44,10 +43,10 @@ from src.mcp_handlers.decorators import (
 _EXTERNAL_PLUGIN_TOOLS = {"pi", "pi_restart_service"}
 
 # Derive bounded action vocabularies from the registered tools. ``action_router``
-# populates ``known_actions`` directly from its live routing map; hand-rolled
-# bounded tools such as research_registry declare the same metadata explicitly.
-# A new route therefore enters this coverage check without anyone remembering to
-# update a second list here.
+# populates ``known_actions`` directly from its live routing map; a hand-rolled
+# bounded tool declares the same metadata explicitly. A new route therefore
+# enters this coverage check without anyone remembering to update a second list
+# here.
 CORE_ACTION_VOCABULARIES = {
     name: td.known_actions
     for name, td in _TOOL_DEFINITIONS.items()
@@ -55,10 +54,6 @@ CORE_ACTION_VOCABULARIES = {
     and name not in _EXTERNAL_PLUGIN_TOOLS
     and (getattr(td.handler, "__module__", "") or "").startswith("src.")
 }
-# research_registry is a hand-rolled router rather than ``action_router``.
-# Its source-level declaration also keeps this test stable when another test's
-# registry fixture changes collection order.
-CORE_ACTION_VOCABULARIES["research_registry"] = RESEARCH_REGISTRY_ACTIONS
 
 
 # ---------------------------------------------------------------------------

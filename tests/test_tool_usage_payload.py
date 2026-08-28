@@ -126,7 +126,7 @@ def test_every_action_router_declares_its_vocabulary():
 
     routers = {
         "knowledge", "agent", "calibration", "config", "export",
-        "observe", "admin", "dialectic", "research_registry", "self_recovery",
+        "observe", "admin", "dialectic", "self_recovery",
     }
     for name in routers:
         td = _TOOL_DEFINITIONS.get(name)

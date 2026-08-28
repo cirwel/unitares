@@ -148,7 +148,11 @@ def _get_routes_in(mod, source: str) -> list[tuple[str, object]]:
 # lose half its matches and still report success — the guard would quietly stop
 # guarding. When this number changes, that is a route added or removed: confirm
 # the new one is gated or belongs in PUBLIC_BY_DESIGN, then update the count.
-EXPECTED_GET_ROUTES = 54
+# 54 -> 51: the research-run registry retirement removed three GET routes
+# (/v1/research/runs, /v1/research/runs/{run_id}, /v1/research/stats). No
+# allowlist entry was left behind — they were credential-gated, not in
+# PUBLIC_BY_DESIGN.
+EXPECTED_GET_ROUTES = 51
 
 
 def test_route_registry_is_readable():
