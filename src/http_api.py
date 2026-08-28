@@ -250,9 +250,17 @@ def register_http_routes(
 
         async def __call__(self, scope: Scope, receive: Receive, send: Send):
             path = scope.get("path", "")
+            # The dashboard SHELL paths are session-aware too. They serve no
+            # data, but they decide whether to hand the browser the API token,
+            # and that decision reads dashboard_session_authenticated — which
+            # is populated only here. Without these, a signed-in operator
+            # arriving over a tunnel got the shell with no token, its data
+            # calls 401'd, and /auth/signin bounced back to "/": a redirect
+            # loop with no in-browser recovery.
             session_aware_path = (
                 path.startswith(("/v1/", "/api/", "/auth/", "/debug/"))
-                or path == "/metrics"
+                or path in ("/metrics", "/", "/dashboard", "/phase")
+                or path.startswith("/dashboard/")
             )
             if scope["type"] == "websocket" or (
                 scope["type"] == "http" and session_aware_path

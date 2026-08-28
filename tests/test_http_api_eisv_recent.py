@@ -21,7 +21,12 @@ def _make_event(agent_id, e_val, ts="2026-04-22T00:00:00+00:00"):
 
 def _client():
     app = Starlette(routes=[Route("/v1/eisv/recent", http_eisv_recent, methods=["GET"])])
-    return TestClient(app)
+    # Loopback peer: the route is auth-gated, and the local posture's
+    # trusted-network bypass is what lets these shape tests exercise the
+    # handler rather than the gate. Same construction as the already-gated
+    # /v1/runtime/activity tests. Gate behavior itself is pinned in
+    # tests/test_http_route_auth_parity.py.
+    return TestClient(app, client=("127.0.0.1", 50000))
 
 
 def test_returns_eisv_events_in_chronological_order():
