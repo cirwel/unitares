@@ -123,6 +123,7 @@
         <label class="sub">window
           <select id="telemetry-health-days"><option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option></select>
         </label>
+        <button id="telemetry-health-refresh" class="theme-toggle" title="Refresh">↻</button>
         <span id="telemetry-health-source" class="src-badge"></span>
       </div>
       <p class="sub" style="max-width:78ch">Coverage, provenance, and evidence plumbing for the append-only envelope. These are fleet instrumentation metrics; they do not score agents or establish machine experience.</p>
@@ -164,6 +165,15 @@
       DAYS = Number(event.target.value) || 30;
       load();
     });
+
+    // This section left the 10s auto-refresh tick: /v1/eisv/telemetry-health
+    // scans a 30-DAY cohort and buckets by DAY, so a 10s tick could not show
+    // anything new, while its 30s cache meant every third tick paid the
+    // recompute — 2.6ms on a hit, 1.64s on a miss (measured 2026-08-28).
+    // A manual control replaces it; the section had none, so without this the
+    // operator would have no way to update the view except re-navigating.
+    const thRefresh = document.getElementById("telemetry-health-refresh");
+    if (thRefresh) thRefresh.addEventListener("click", () => load());
   }
 
   function paintCharts(rebuild) {

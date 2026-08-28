@@ -227,12 +227,27 @@ describe("EISV telemetry health dashboard", () => {
     expect(text).not.toContain("80 / 100");
   });
 
-  it("is wired as a lazy live dashboard section with theme refresh", () => {
+  it("is wired as a lazy dashboard section with theme refresh", () => {
     expect(appSource).toContain('data-section="telemetry-health"');
     expect(appSource).toContain('data-pane="telemetry-health"');
     expect(appSource).toContain('src="./sections/telemetry-health.js"');
     expect(appSource).toContain('id === "telemetry-health" && window.TelemetryHealth');
-    expect(appSource).toContain('"telemetry-health": () => window.TelemetryHealth');
     expect(appSource).toContain("window.TelemetryHealth.retheme()");
+  });
+
+  it("is NOT on the 10s auto-refresh tick, and has a manual control instead", () => {
+    // The endpoint scans a 30-DAY cohort and buckets by DAY, so a 10s tick can
+    // show nothing new — while its 30s cache means every third tick pays the
+    // recompute: 2.6ms on a cache hit, 1.64s on a miss (measured 2026-08-28).
+    // That was a 1.6s database scan every 30 seconds for as long as the tab
+    // stayed open, buying zero fresh data. Same reasoning app.html already
+    // applies to Metrics, Automations and Risk.
+    expect(appSource).not.toContain('"telemetry-health": () => window.TelemetryHealth');
+
+    // Removing the tick without a manual control would have stranded the
+    // operator: this section shipped with no refresh affordance at all, so
+    // re-navigating was the only way to update it.
+    expect(sectionSource).toContain('id="telemetry-health-refresh"');
+    expect(sectionSource).toContain('thRefresh.addEventListener("click"');
   });
 });
