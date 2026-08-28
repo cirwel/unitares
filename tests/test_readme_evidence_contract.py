@@ -95,6 +95,24 @@ def test_readme_states_the_review_coverage_boundary() -> None:
     assert "reviewer_provenance" in NORMALIZED
 
 
+def test_readme_says_the_outside_review_zero_is_not_recorded_not_no_effect() -> None:
+    """An empty channel must not read as a measured absence of benefit.
+
+    `reviewer_provenance` is the only way subagent-council and external-model
+    review becomes countable, and no message has ever used it. Without the
+    distinction, a reader takes the empty channel for evidence that outside
+    review does not help — which is the fourth of the four states in the
+    measurement-authority rule, when this is the third ("not recorded — the
+    instrument was blind to the transport").
+
+    Pins the DISTINCTION, deliberately not the count: the count is a dated
+    snapshot and is meant to move the moment filing starts (#1841 unpinned two
+    snapshot assertions for exactly this reason).
+    """
+    assert "not recorded" in NORMALIZED
+    assert "no effect" in NORMALIZED
+
+
 def test_readme_does_not_launder_a_parse_failure_as_a_verdict() -> None:
     """One recorded dissent is a parser default, not a reviewer's judgement.
 
