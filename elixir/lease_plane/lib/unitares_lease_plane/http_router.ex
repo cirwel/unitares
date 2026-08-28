@@ -132,12 +132,19 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           retry_after_hint_ms: retry_after_hint_ms
         })
 
-      {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint_name: name}}} ->
+      {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: name}}} ->
         # RFC §7.13.5 typed-error contract. Map any CHECK violation to
         # HTTP 422 schema_invalid with the constraint name as detail (one
         # of the four §7.13 substrate_state CHECKs). MUST precede the
         # generic {:error, reason} arm — falling through to 503 would
         # mask a writer bug as a transient outage.
+        #
+        # ⛔The key is `:constraint`, NOT `:constraint_name`. Postgrex's
+        # `@metadata` is `[:table, :column, :constraint, :hint]`
+        # (`Postgrex.Error`), so the `constraint_name:` this clause matched
+        # until 2026-08-28 was never present — the clause could not match,
+        # every CHECK violation fell through to the 503 arm below, and the
+        # contract this comment describes was not the one being served.
         json(conn, 422, %{ok: false, error: "schema_invalid", detail: name})
 
       {:error, reason} ->
@@ -785,9 +792,10 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           {:error, :not_found} ->
             json(conn, 404, %{ok: false, error: "not_found"})
 
-          {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint_name: name}}} ->
+          {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: name}}} ->
             # RFC §7.13.5 typed-error contract for renew CHECK violations.
-            # MUST precede the generic 503 arm.
+            # MUST precede the generic 503 arm. `:constraint`, not
+            # `:constraint_name` — see the acquire arm above.
             json(conn, 422, %{ok: false, error: "schema_invalid", detail: name})
 
           {:error, reason} ->
@@ -957,7 +965,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
         # RFC §7.13: optional substrate_state + substrate_state_observed_at.
         # Both nullable; type-checked here. Pair-coherence + resident-kind-only
         # + sensor.status enforcement happens in the DB CHECKs (typed-error
-        # path returns 422 with constraint_name).
+        # path returns 422 with the constraint name).
         substrate_state = Map.get(body, "substrate_state")
 
         substrate_observed_at =
