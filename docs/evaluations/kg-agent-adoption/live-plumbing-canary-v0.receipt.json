@@ -1,0 +1,297 @@
+{
+  "content": {
+    "attempted_operations": {
+      "audit_append_attempts": 1,
+      "distinct_audit_rows": 1,
+      "kg_reads": 8,
+      "kg_writes": 0,
+      "live_model_calls": 0,
+      "orchestration_calls": 0,
+      "outcome_writes": 0,
+      "scored_task_steps": 0
+    },
+    "audit_canary": {
+      "append_attempts": 1,
+      "append_awaited": true,
+      "content_sha256": "eb3e20bf400ed2f20822f9e0489f6154b9f3f3ae76ece3c94a7d23ebf87e3ad5",
+      "event_id": "5458a6e8-5288-4e2e-bce3-f0f2e4e4095a",
+      "event_type": "infrastructure.audit_write_read_canary.v1",
+      "exact_readback": true,
+      "immediate_readback_exact": false,
+      "matching_rows": 1,
+      "read_awaited": true,
+      "recovery_exact_readback": true,
+      "recovery_reason": "database JSON payload required explicit decoding",
+      "recovery_used": true
+    },
+    "canary_attribution": {
+      "agent_uuid": "de0df826-9b61-4ee1-a8a9-03197ff5b3f4",
+      "all_rows_attributed": true,
+      "client_session_id": "agent-de0df826-9b6",
+      "label": "canary_agent_adoption_de0df826",
+      "partition_rule": "core.agents.label LIKE 'canary_agent_adoption%'",
+      "recorded_detail_reads": 2,
+      "recorded_rows": 8,
+      "recorded_searches": 6
+    },
+    "claims": {
+      "audit_recording_path_proven": false,
+      "audit_row_persisted_and_exactly_recovered": true,
+      "behavioral_evidence": false,
+      "canonical_root_details_reachable": true,
+      "canonical_root_top_k_for_all_queries": false,
+      "live_model_execution_authorized": false,
+      "logical_source_parity": false,
+      "offline_fixture_reviewed": true,
+      "orchestration_adoption_gate_passed": false,
+      "production_plumbing_fully_proven": false,
+      "raw_live_corpus_byte_identity": false,
+      "scored_run_authorized": false
+    },
+    "code": {
+      "master_commit": "e20478b29ff94089f8659dfc7de684849c384561",
+      "offline_fixture_pr": 1934
+    },
+    "current_digests": {
+      "live_mcp_probe_sha256": "122758eb535322e33849666d4cbc23120cf3f9f474095c2ddb17c6edc6cb96e0",
+      "live_source_map_sha256": "9115c22e567b42a7f66c91a60058498a2c7ad984160fe6a091c821acbcf7ef0d",
+      "promoted_enrollment_sha256": "38b904c7a4c5ef91edb5a54fb2bc6576e1b4f9c76f91ba6a0db1769fcdc4837b",
+      "task_manifest_sha256": "53ec990cd27f298899679adc88481a456ffd50dd23635c86c38dd005509eb91f"
+    },
+    "experiment_id": "kg-agent-adoption-pilot-v0-example",
+    "frozen": {
+      "enrollment_sha256": "872e28cc35f8d7f280a7b4523b506a171cc8f622775b864e77b8965f90992387",
+      "schedule_sha256": "8deb5ea646e88859a2bc5e93e7324c565add25797902dbe89217cdf081237e88",
+      "substitute_corpus_sha256": "ad5f24ed965f8e2a7aa9bb3c21d1ead4618450042b157e737f3a48633058e387",
+      "task_manifest_sha256": "53ec990cd27f298899679adc88481a456ffd50dd23635c86c38dd005509eb91f"
+    },
+    "hold_reasons": [
+      "four frozen logical sources are derived projections of one live root",
+      "the live root is not top-five for every frozen query",
+      "no independent frozen behavioral task/corpus run has executed",
+      "orchestration reliability gates remain incomplete",
+      "audit canary immediate validator failed; exact row recovered read-only"
+    ],
+    "live_snapshot": {
+      "discovery_id": "2026-08-27T23:46:30.942448+00:00",
+      "projection": "unitares.kg-agent-adoption.live-search-projection.v0",
+      "record_sha256": "a081661a704e9a80e4271d65f6ba2e6c1360a7583e09e9ac278e288dd8651af5"
+    },
+    "logical_mapping": {
+      "byte_equivalent": false,
+      "mapping_sha256": "28a43e9eb43746fffbdbcbb1cc6d78601dd0b1f07f67be259bce675fedeca083",
+      "relation": "derived_projection"
+    },
+    "measurement_exclusion": {
+      "contract": {
+        "agent_kg_retrieval_query_sha256": "f362a77e663a6d517e3058bc934bc7c0a569dfb1f792d88ad1ec43aca97f18e0",
+        "excluded_from_adoption_kpis": true,
+        "label": "canary_agent_adoption_de0df826",
+        "onboard_conversion_query_sha256": "4b0cc23ccc9b32a8583425eb3bfa85348a649fbd6c65ed9ea39a9376305c0c51",
+        "scheduled_label_regex_sha256": "a49b640b6f76297e3ed73ac7ad3f164b90f97a8d5a1fdb661e0f3279126cee34"
+      },
+      "postflight": {
+        "adoption_event_rows": 0,
+        "excluded_from_calibration_and_adoption_events": true,
+        "measured_state_rows": 0,
+        "outcome_rows": 0
+      }
+    },
+    "operator_authorization_ref": "operator-thread-proceed-2026-08-27",
+    "probe_transport": "codex-plugin-mcp",
+    "probes": [
+      {
+        "canonical_ranks": {
+          "2026-08-27T23:46:30.942448+00:00": null
+        },
+        "expected_discovery_ids": [
+          "2026-08-27T23:46:30.942448+00:00"
+        ],
+        "expected_logical_source_ids": [
+          "measurement-authority-contract"
+        ],
+        "passed": false,
+        "query_sha256": "40bff7810fc639d179370162f3354cc90cd4372ad9f20c4cca6b0b4f5f4ab258",
+        "returned_discovery_ids": [
+          "2026-06-30T21:58:32.907634+00:00",
+          "2026-06-30T21:57:29.288911+00:00",
+          "2026-07-31T19:42:29.754097+00:00",
+          "2026-06-30T21:57:29.962813+00:00",
+          "2026-06-30T21:58:41.649170+00:00"
+        ],
+        "returned_record_sha256s": [
+          "cfd3505f8c8ed897049b684f169065465466d6c6b3f2716778f8d301085042c4",
+          "a8c68951bda3771500d41f8d1484e2316345013b483db2acc3137c0eba968c58",
+          "5790b46e2154542af7deb2f46da25f71b8eb00ca4b71c786fe2e7cd4a7e516db",
+          "b40e0d7e5269c533ee4642c136dfb3d78f910fda6c3bd3588cc6947af926d32f",
+          "faca24006edb091e3603e5c150f4cde6931f19da1ab5e748481b55ed5a942aaa"
+        ],
+        "step_id": "measurement-funnel-1"
+      },
+      {
+        "canonical_ranks": {
+          "2026-08-27T23:46:30.942448+00:00": null
+        },
+        "expected_discovery_ids": [
+          "2026-08-27T23:46:30.942448+00:00"
+        ],
+        "expected_logical_source_ids": [
+          "measurement-authority-contract"
+        ],
+        "passed": false,
+        "query_sha256": "4e467547abd95d7a951b124520337dbfdad648a2136c8747e976b2bfef3fb068",
+        "returned_discovery_ids": [
+          "2026-06-30T21:57:29.288911+00:00",
+          "2026-06-30T21:58:37.833244+00:00",
+          "2026-06-30T21:58:41.649170+00:00",
+          "2026-06-30T21:58:32.907634+00:00",
+          "2026-07-31T19:42:29.754097+00:00"
+        ],
+        "returned_record_sha256s": [
+          "a8c68951bda3771500d41f8d1484e2316345013b483db2acc3137c0eba968c58",
+          "2a3508de4ee772b7ce4cd0dbf205b8ed08c8aa7042fcadf8f1e3bfd4bf347d6b",
+          "faca24006edb091e3603e5c150f4cde6931f19da1ab5e748481b55ed5a942aaa",
+          "cfd3505f8c8ed897049b684f169065465466d6c6b3f2716778f8d301085042c4",
+          "5790b46e2154542af7deb2f46da25f71b8eb00ca4b71c786fe2e7cd4a7e516db"
+        ],
+        "step_id": "measurement-funnel-2"
+      },
+      {
+        "canonical_ranks": {
+          "2026-08-27T23:46:30.942448+00:00": null
+        },
+        "expected_discovery_ids": [
+          "2026-08-27T23:46:30.942448+00:00"
+        ],
+        "expected_logical_source_ids": [
+          "measurement-authority-contract",
+          "kg-adoption-contract-v1"
+        ],
+        "passed": false,
+        "query_sha256": "323b5200963eb4003475ab7787d8e2ff492eafd6e512b44d321c4f646da67348",
+        "returned_discovery_ids": [
+          "2026-06-30T21:58:37.833244+00:00",
+          "2026-06-30T21:57:29.288911+00:00",
+          "2026-06-30T22:18:45.944099+00:00",
+          "2026-06-30T21:57:29.962813+00:00",
+          "2026-06-30T21:55:52.858939+00:00"
+        ],
+        "returned_record_sha256s": [
+          "2a3508de4ee772b7ce4cd0dbf205b8ed08c8aa7042fcadf8f1e3bfd4bf347d6b",
+          "a8c68951bda3771500d41f8d1484e2316345013b483db2acc3137c0eba968c58",
+          "50fc77e3a766835b36d2d0783c6cd455fdad8aeac3d150aad5a6ff9234707ce2",
+          "b40e0d7e5269c533ee4642c136dfb3d78f910fda6c3bd3588cc6947af926d32f",
+          "fb3f549f60ee8302a5a7bee4f3075520776804b744ed1d4f5eed562d17ecd221"
+        ],
+        "step_id": "measurement-funnel-3"
+      },
+      {
+        "canonical_ranks": {
+          "2026-08-27T23:46:30.942448+00:00": null
+        },
+        "expected_discovery_ids": [
+          "2026-08-27T23:46:30.942448+00:00"
+        ],
+        "expected_logical_source_ids": [
+          "kg-adoption-contract-v1"
+        ],
+        "passed": false,
+        "query_sha256": "bedf9f1d83229f35aca5dd56d6fc66a6b6c575768d563f6bbc577046631a77fd",
+        "returned_discovery_ids": [
+          "2026-06-30T21:58:32.907634+00:00",
+          "2026-06-30T21:58:41.649170+00:00",
+          "2026-06-30T21:57:29.288911+00:00",
+          "2026-06-30T21:58:37.833244+00:00",
+          "2026-06-30T21:55:51.545601+00:00"
+        ],
+        "returned_record_sha256s": [
+          "cfd3505f8c8ed897049b684f169065465466d6c6b3f2716778f8d301085042c4",
+          "faca24006edb091e3603e5c150f4cde6931f19da1ab5e748481b55ed5a942aaa",
+          "a8c68951bda3771500d41f8d1484e2316345013b483db2acc3137c0eba968c58",
+          "2a3508de4ee772b7ce4cd0dbf205b8ed08c8aa7042fcadf8f1e3bfd4bf347d6b",
+          "3cf87f160c57359035000a20b1477d1f0347d6a685cb149257b63ff4d61e27aa"
+        ],
+        "step_id": "earned-dependency-1"
+      },
+      {
+        "canonical_ranks": {
+          "2026-08-27T23:46:30.942448+00:00": null
+        },
+        "expected_discovery_ids": [
+          "2026-08-27T23:46:30.942448+00:00"
+        ],
+        "expected_logical_source_ids": [
+          "orchestration-reliability-finding"
+        ],
+        "passed": false,
+        "query_sha256": "d518a9e90ea49a423b5ad9be1f7d2bccaabaee51c5daea0f05d2f424d2dd1547",
+        "returned_discovery_ids": [
+          "2026-06-30T21:57:29.378707+00:00",
+          "2026-06-30T21:58:32.907634+00:00",
+          "2026-06-30T21:57:29.962813+00:00",
+          "2026-08-06T23:01:02.644482+00:00",
+          "2026-06-30T21:57:29.893449+00:00"
+        ],
+        "returned_record_sha256s": [
+          "57e58a65c0d6812abc1bbbec06122665b74c029b6f5c54e342b8b97a5be855c7",
+          "cfd3505f8c8ed897049b684f169065465466d6c6b3f2716778f8d301085042c4",
+          "b40e0d7e5269c533ee4642c136dfb3d78f910fda6c3bd3588cc6947af926d32f",
+          "553f138af3d8849efbf86410c437288b345ee01d4bb80194d169c85adf5cf0a9",
+          "90631a284ceb16d420c8124de28fdd5fc851c9eb0c5adff2c2fe9401d1e7d883"
+        ],
+        "step_id": "earned-dependency-2"
+      },
+      {
+        "canonical_ranks": {
+          "2026-08-27T23:46:30.942448+00:00": 5
+        },
+        "expected_discovery_ids": [
+          "2026-08-27T23:46:30.942448+00:00"
+        ],
+        "expected_logical_source_ids": [
+          "exit-rights-contract",
+          "kg-adoption-contract-v1"
+        ],
+        "passed": true,
+        "query_sha256": "fcc925b72ef43c68d87d5fa20e2cedaf323d7c3f1e62b59d41c69a676201a1b4",
+        "returned_discovery_ids": [
+          "2026-07-30T02:39:20.040851+00:00",
+          "2026-06-30T21:57:29.378707+00:00",
+          "2026-08-27T23:45:11.911584+00:00",
+          "2026-06-30T21:57:29.962813+00:00",
+          "2026-08-27T23:46:30.942448+00:00"
+        ],
+        "returned_record_sha256s": [
+          "91ac8d7429eecefc61f7b5ec3d7403d53013128196e7789f588627d296a566da",
+          "57e58a65c0d6812abc1bbbec06122665b74c029b6f5c54e342b8b97a5be855c7",
+          "f2e2a205b1ca44ba34ad5b1dadfbd9430485c65d7ef12aa4631ab5666a2dd4f2",
+          "b40e0d7e5269c533ee4642c136dfb3d78f910fda6c3bd3588cc6947af926d32f",
+          "35b851d7ebd16b6d4d3b802470dea307732674a55d64cc83cc0b124bafc0f41e"
+        ],
+        "step_id": "earned-dependency-3"
+      }
+    ],
+    "retrieval_contract": {
+      "action": "search",
+      "contract_sha256": "6f887d70adfe6844e0eb11469df97e9572269656e3a0153b57383e8ce96cfa20",
+      "include_archived": false,
+      "include_details": true,
+      "limit": 5,
+      "operator": "OR",
+      "reranker_enabled": false,
+      "search_mode": "fts",
+      "tool": "knowledge"
+    },
+    "review_basis": {
+      "approved_by": "759b75a3-179d-443c-96b7-3d499b812be0",
+      "governed_review_session": "aeb10fba0bb89400",
+      "offline_receipt_content_sha256": "b009eeddcc732be5cd463cef913c2cee218463ed3fb81d055db02d714201f9c2",
+      "scope": "offline_fixture_validation"
+    },
+    "schema": "unitares.kg-agent-adoption.live-canary.v0",
+    "scope": "production_plumbing_only",
+    "status": "hold"
+  },
+  "receipt_content_sha256": "fc4507b8af3b98a20b9ab3b795c7bbdac9144991efa1ded743c372d26e7e1608",
+  "schema": "unitares.content-addressed-receipt.v0"
+}
