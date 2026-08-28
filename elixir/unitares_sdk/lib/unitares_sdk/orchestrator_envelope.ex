@@ -15,7 +15,8 @@ defmodule UnitaresSdk.OrchestratorEnvelope do
   (`elixir/agent_orchestrator/lib/agent_orchestrator/http_router.ex`),
   including the branches the live consumers depend on:
 
-    * spawn `201` — `%{"ok" => true, "agent_id" => id}`
+    * spawn `201` v0.2 — `%{"ok" => true, "execution_id" => id, "agent_id" => id}`
+      (`agent_id`-only v0.1 replies remain accepted)
     * await/snapshot `200` — `%{"ok" => true, "result" => map}` (nested)
     * await `504` — `%{"ok" => false, "error" => "await_timeout"}`, distinct
       from `not_found` BY DESIGN so callers re-await or snapshot instead of
@@ -38,10 +39,14 @@ defmodule UnitaresSdk.OrchestratorEnvelope do
   @type result_result :: {:ok, map()} | {:error, term()}
 
   @doc """
-  Classify a spawn reply (`POST /v1/agents`). `{:ok, agent_id}` only on a
-  `201` carrying `"ok" => true` and a binary `"agent_id"`.
+  Classify a spawn reply (`POST /v1/agents`). Returns the immutable execution
+  id. v0.2's explicit `execution_id` wins; the `agent_id` fallback keeps clients
+  compatible with a v0.1 orchestrator during rolling deploys.
   """
   @spec classify_spawn(non_neg_integer(), term()) :: spawn_result()
+  def classify_spawn(201, %{"ok" => true, "execution_id" => id}) when is_binary(id),
+    do: {:ok, id}
+
   def classify_spawn(201, %{"ok" => true, "agent_id" => id}) when is_binary(id),
     do: {:ok, id}
 
@@ -55,7 +60,8 @@ defmodule UnitaresSdk.OrchestratorEnvelope do
   Classify an await/snapshot reply (`GET /v1/agents/:id`,
   `POST /v1/agents/:id/await`). On success returns the **nested** result map —
   the map that actually carries `"running"`, `"output"`, `"exit_status"`,
-  `"agent_id"`. A `200` body without a map under `"result"` is a typed error,
+  `"execution_id"` and logical `"agent_id"`. A `200` body without a map under
+  `"result"` is a typed error,
   never a success: that is the flat-read trap this module exists to close.
 
   `{:error, :await_timeout}` is a control signal, not a failure: the agent is

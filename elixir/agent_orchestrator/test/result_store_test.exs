@@ -12,6 +12,7 @@ defmodule AgentOrchestrator.ResultStoreTest do
 
   defp result_for(id) do
     %{
+      execution_id: id,
       agent_id: id,
       os_pid: 1234,
       lease_id: nil,
@@ -35,7 +36,7 @@ defmodule AgentOrchestrator.ResultStoreTest do
     assert {:ok, ^result} = ResultStore.fetch(id)
   end
 
-  test "put overwrites a prior entry for the same id (newest wins)" do
+  test "a duplicate write for the same execution id is deterministic (newest wins)" do
     id = unique_id()
     assert :ok = ResultStore.put(id, %{result_for(id) | exit_status: 1})
     assert :ok = ResultStore.put(id, %{result_for(id) | exit_status: 0})
@@ -60,6 +61,8 @@ defmodule AgentOrchestrator.ResultStoreTest do
     assert :error = ResultStore.fetch(id)
   end
 
-  defp restore_env(_key, nil), do: Application.delete_env(:agent_orchestrator, :result_retention_ms)
+  defp restore_env(_key, nil),
+    do: Application.delete_env(:agent_orchestrator, :result_retention_ms)
+
   defp restore_env(key, val), do: Application.put_env(:agent_orchestrator, key, val)
 end

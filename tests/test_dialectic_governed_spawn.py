@@ -165,6 +165,7 @@ def test_grant_binds_the_canonical_payload(monkeypatch):
     "status,body,outcome",
     [
         # fresh committed spawn → COMMITTED
+        (202, {"status": "committed", "execution_id": "ex-1"}, GovernedOutcome.COMMITTED),
         (202, {"status": "committed", "agent_id": "ag-1"}, GovernedOutcome.COMMITTED),
         # idempotent replay of a committed spawn → REFUSED (synthetic resolves
         # the session now; a still-running prior reviewer is idempotent-safe)
@@ -198,8 +199,14 @@ def test_classify_response(status, body, outcome):
 
 
 def test_classify_committed_carries_ids():
-    r = classify_response(202, {"status": "committed", "agent_id": "ag-9", "effect_id": "ef-1"})
-    assert r.agent_id == "ag-9"
+    r = classify_response(202, {
+        "status": "committed",
+        "execution_id": "ex-9",
+        "agent_id": "ag-legacy",
+        "effect_id": "ef-1",
+    })
+    assert r.execution_id == "ex-9"
+    assert r.agent_id == "ex-9"
     assert r.effect_id == "ef-1"
 
 
@@ -273,7 +280,13 @@ async def test_dispatch_routing_matrix(monkeypatch):
         ),
     )
     out = await od.dispatch_orchestrated_review(SESSION, thesis, None)
-    assert out == {"ok": True, "agent_id": "ag-gov", "effect_id": "ef-2", "governed": True}
+    assert out == {
+        "ok": True,
+        "execution_id": "ag-gov",
+        "agent_id": "ag-gov",
+        "effect_id": "ef-2",
+        "governed": True,
+    }
     assert direct_calls == []
 
     # REFUSED → None (in-process), direct path never touched
@@ -292,7 +305,11 @@ async def test_dispatch_routing_matrix(monkeypatch):
         await governed_result(GovernedSpawnResult(GovernedOutcome.UNAVAILABLE, detail="down")),
     )
     out = await od.dispatch_orchestrated_review(SESSION, thesis, None)
-    assert out == {"ok": True, "agent_id": "ag-direct"}
+    assert out == {
+        "ok": True,
+        "execution_id": "ag-direct",
+        "agent_id": "ag-direct",
+    }
     assert len(direct_calls) == 1
 
     # CONFIG_ERROR → direct fallback
@@ -302,7 +319,11 @@ async def test_dispatch_routing_matrix(monkeypatch):
         await governed_result(GovernedSpawnResult(GovernedOutcome.CONFIG_ERROR, detail="uuid")),
     )
     out = await od.dispatch_orchestrated_review(SESSION, thesis, None)
-    assert out == {"ok": True, "agent_id": "ag-direct"}
+    assert out == {
+        "ok": True,
+        "execution_id": "ag-direct",
+        "agent_id": "ag-direct",
+    }
     assert len(direct_calls) == 2
 
 
@@ -350,5 +371,9 @@ async def test_dispatch_flag_off_is_byte_identical(monkeypatch):
 
     thesis = {"root_cause": "x", "proposed_conditions": [], "reasoning": "r", "situation": "s"}
     out = await od.dispatch_orchestrated_review(SESSION, thesis, None)
-    assert out == {"ok": True, "agent_id": "ag-direct"}
+    assert out == {
+        "ok": True,
+        "execution_id": "ag-direct",
+        "agent_id": "ag-direct",
+    }
     assert called == []

@@ -80,6 +80,7 @@ _SAFE_PROVENANCE_FIELDS = (
     "privacy_class",
     "cost_class",
     "cost_usd",
+    "orchestrator_execution_id",
     "orchestrator_agent_id",
     "latency_ms",
     "tokens_used",
@@ -169,7 +170,9 @@ def _safe_failure(failure: InferenceFailure) -> dict[str, Any]:
         "execution_started": failure.execution_started,
         "possibly_running": failure.possibly_running,
     }
-    execution_id = failure.details.get("orchestrator_agent_id")
+    execution_id = failure.details.get("orchestrator_execution_id") or failure.details.get(
+        "orchestrator_agent_id"
+    )
     if failure.possibly_running and execution_id:
         safe["execution"] = {
             "id": str(execution_id)[:200],
@@ -183,6 +186,7 @@ def _failure_diagnostics(failure: InferenceFailure) -> dict[str, Any]:
     for key in (
         "adapter_status",
         "dispatch_phase",
+        "orchestrator_execution_id",
         "orchestrator_agent_id",
         "host_id",
         "exit_status",

@@ -158,6 +158,7 @@ class InferenceProvenance(_GovModel):
     response_hash: str | None = None
     finish_reason: str | None = None
     configured_by: str | None = None
+    orchestrator_execution_id: str | None = None
     orchestrator_agent_id: str | None = None
     warnings: list[str] = Field(default_factory=list)
 

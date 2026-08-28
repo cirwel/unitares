@@ -156,7 +156,9 @@ async def run_delegated_inference(
         }
     if not adapter_result.get("ok"):
         still_running = adapter_result.get("status") == "still_running"
-        orchestrator_agent_id = adapter_result.get("agent_id")
+        orchestrator_execution_id = (
+            adapter_result.get("execution_id") or adapter_result.get("agent_id")
+        )
         dispatch_phase = str(adapter_result.get("dispatch_phase") or "unknown")
         # A preflight failure or explicit HTTP rejection proves no child was
         # accepted. Every other phase is conservative: a spawn response can be
@@ -186,7 +188,8 @@ async def run_delegated_inference(
                 "host_id": host_id,
                 "adapter_status": adapter_result.get("status"),
                 "dispatch_phase": dispatch_phase,
-                "orchestrator_agent_id": orchestrator_agent_id,
+                "orchestrator_execution_id": orchestrator_execution_id,
+                "orchestrator_agent_id": orchestrator_execution_id,
                 "exit_status": adapter_result.get("exit_status"),
                 "inference_provenance": adapter_provenance,
                 "execution_started": execution_started,
@@ -236,7 +239,12 @@ async def run_delegated_inference(
         "cost_usd": adapter_provenance.get("cost_usd"),
         "accountability_class": host.get("accountability_class", "tool_evidence"),
         "requesting_agent_uuid": request.requesting_agent_uuid,
-        "orchestrator_agent_id": adapter_result.get("agent_id"),
+        "orchestrator_execution_id": (
+            adapter_result.get("execution_id") or adapter_result.get("agent_id")
+        ),
+        "orchestrator_agent_id": (
+            adapter_result.get("execution_id") or adapter_result.get("agent_id")
+        ),
         "latency_ms": adapter_provenance.get("latency_ms"),
         "tokens_used": tokens_used,
         "provider_usage": adapter_provenance.get("provider_usage") or {},

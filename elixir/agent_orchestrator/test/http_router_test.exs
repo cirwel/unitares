@@ -35,8 +35,12 @@ defmodule AgentOrchestrator.HTTPRouterTest do
   defp authed(method, path, body \\ nil) do
     conn =
       case body do
-        nil -> conn(method, path)
-        map -> conn(method, path, Jason.encode!(map)) |> put_req_header("content-type", "application/json")
+        nil ->
+          conn(method, path)
+
+        map ->
+          conn(method, path, Jason.encode!(map))
+          |> put_req_header("content-type", "application/json")
       end
 
     put_req_header(conn, "authorization", "Bearer " <> @token)
@@ -54,11 +58,15 @@ defmodule AgentOrchestrator.HTTPRouterTest do
 
     test "401 when the bearer is missing or wrong" do
       assert call(conn(:get, "/v1/health")).status == 401
-      assert call(conn(:get, "/v1/health") |> put_req_header("authorization", "Bearer nope")).status == 401
+
+      assert call(conn(:get, "/v1/health") |> put_req_header("authorization", "Bearer nope")).status ==
+               401
     end
 
     test "accepts a case-insensitive scheme" do
-      conn = call(conn(:get, "/v1/health") |> put_req_header("authorization", "bearer " <> @token))
+      conn =
+        call(conn(:get, "/v1/health") |> put_req_header("authorization", "bearer " <> @token))
+
       assert conn.status == 200
     end
   end
@@ -92,12 +100,16 @@ defmodule AgentOrchestrator.HTTPRouterTest do
     test "spawns an agent and the result is awaitable" do
       conn = call(authed(:post, "/v1/agents", %{cmd: "echo", args: ["hi there"]}))
       assert conn.status == 201
-      agent_id = body_json(conn)["agent_id"]
-      assert is_binary(agent_id)
+      spawn = body_json(conn)
+      execution_id = spawn["execution_id"]
+      assert is_binary(execution_id)
+      assert spawn["agent_id"] == execution_id
 
-      await = call(authed(:post, "/v1/agents/#{agent_id}/await", %{timeout_ms: 5_000}))
+      await = call(authed(:post, "/v1/agents/#{execution_id}/await", %{timeout_ms: 5_000}))
       assert await.status == 200
       result = body_json(await)["result"]
+      assert result["execution_id"] == execution_id
+      assert result["agent_id"] == execution_id
       assert result["exit_status"] == 0
       assert result["output"] == ["hi there"]
       assert result["running"] == false
@@ -164,7 +176,9 @@ defmodule AgentOrchestrator.HTTPRouterTest do
 
     test "422 on a malformed lineage parent uuid (runner refuses the spawn)" do
       conn =
-        call(authed(:post, "/v1/agents", %{cmd: "echo", lineage: %{parent_agent_uuid: "not-a-uuid"}}))
+        call(
+          authed(:post, "/v1/agents", %{cmd: "echo", lineage: %{parent_agent_uuid: "not-a-uuid"}})
+        )
 
       assert conn.status == 422
       assert body_json(conn)["detail"] =~ "invalid lineage"
@@ -211,13 +225,45 @@ defmodule AgentOrchestrator.HTTPRouterTest do
     end
   end
 
+  describe "execution-scoped lifecycle routes" do
+    test "list, snapshot, await, and stop use the immutable execution id" do
+      spawn = call(authed(:post, "/v1/agents", %{cmd: "sh", args: ["-c", "sleep 5"]}))
+      execution_id = body_json(spawn)["execution_id"]
+
+      listed = call(authed(:get, "/v1/executions"))
+      assert listed.status == 200
+      assert execution_id in body_json(listed)["executions"]
+
+      snapshot = call(authed(:get, "/v1/executions/#{execution_id}"))
+      assert snapshot.status == 200
+      assert body_json(snapshot)["result"]["execution_id"] == execution_id
+      assert body_json(snapshot)["result"]["running"] == true
+
+      await =
+        call(
+          authed(:post, "/v1/executions/#{execution_id}/await", %{
+            timeout_ms: 50
+          })
+        )
+
+      assert await.status == 504
+      assert body_json(await)["execution_id"] == execution_id
+
+      stop = call(authed(:delete, "/v1/executions/#{execution_id}"))
+      assert stop.status == 200
+      assert body_json(stop)["execution_id"] == execution_id
+    end
+  end
+
   describe "snapshot / stop / unknown" do
     test "404 snapshot for an unknown id" do
       assert call(authed(:get, "/v1/agents/ag-nope")).status == 404
+      assert call(authed(:get, "/v1/executions/ex-nope")).status == 404
     end
 
     test "404 stop for an unknown id" do
       assert call(authed(:delete, "/v1/agents/ag-nope")).status == 404
+      assert call(authed(:delete, "/v1/executions/ex-nope")).status == 404
     end
 
     test "404 on an unknown route" do

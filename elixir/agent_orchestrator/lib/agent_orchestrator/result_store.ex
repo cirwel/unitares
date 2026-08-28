@@ -1,6 +1,7 @@
 defmodule AgentOrchestrator.ResultStore do
   @moduledoc """
-  Short-lived retention of an ephemeral agent's FINAL result, keyed by agent_id,
+  Short-lived retention of an ephemeral agent's FINAL result, keyed by its
+  immutable execution_id,
   so a late `await`/`snapshot` survives the agent's process death instead of
   racing to `{:error, :not_found}`.
 
@@ -55,19 +56,19 @@ defmodule AgentOrchestrator.ResultStore do
   end
 
   @doc """
-  Retain `result` for `agent_id`. Called from `AgentRunner.finalize/2` before the
-  runner stops. Overwrites any prior entry for the same id (random ids make
-  collisions negligible; a re-used id keeps the newest result).
+  Retain `result` for `execution_id`. Called from `AgentRunner.finalize/2`
+  before the runner stops. Execution ids are server-generated and never reused,
+  so a later run of the same logical agent cannot overwrite this row.
   """
   @spec put(String.t(), map()) :: :ok
-  def put(agent_id, result) when is_binary(agent_id) and is_map(result) do
+  def put(execution_id, result) when is_binary(execution_id) and is_map(result) do
     # Direct write from the caller process — synchronous and ordered with the
     # finalize that issues it, so the retained result is visible the moment the
     # runner dies. Guard against a not-yet-started / torn-down table (e.g. in a
     # unit test that exercises a runner without the full app) rather than letting
     # a missing table crash the exiting runner.
     if table_ready?() do
-      :ets.insert(@table, {agent_id, result, now_ms()})
+      :ets.insert(@table, {execution_id, result, now_ms()})
     end
 
     :ok
@@ -78,13 +79,13 @@ defmodule AgentOrchestrator.ResultStore do
   (non-expired) entry exists, else `:error`.
   """
   @spec fetch(String.t()) :: {:ok, map()} | :error
-  def fetch(agent_id) when is_binary(agent_id) do
+  def fetch(execution_id) when is_binary(execution_id) do
     if table_ready?() do
-      case :ets.lookup(@table, agent_id) do
-        [{^agent_id, result, stored_at}] ->
+      case :ets.lookup(@table, execution_id) do
+        [{^execution_id, result, stored_at}] ->
           if expired?(stored_at) do
             # Lazy expiry: drop the stale row so a later sweep need not.
-            :ets.delete(@table, agent_id)
+            :ets.delete(@table, execution_id)
             :error
           else
             {:ok, result}

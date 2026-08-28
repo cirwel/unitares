@@ -173,7 +173,8 @@ def test_delegated_inference_result_preserves_multi_model_provenance():
             "cost_usd": 0.03,
             "provider_usage": {"output_tokens": 20},
             "provider_model_usage": {"claude-opus-5": {"outputTokens": 20}},
-            "orchestrator_agent_id": "orch-1",
+            "orchestrator_execution_id": "orch-execution-1",
+            "orchestrator_agent_id": "orch-execution-1",
         },
     })
     assert r.model_used is None
@@ -181,7 +182,8 @@ def test_delegated_inference_result_preserves_multi_model_provenance():
     assert r.inference is not None
     assert r.inference.model_requested == "claude-opus-5"
     assert r.inference.cost_usd == 0.03
-    assert r.inference.orchestrator_agent_id == "orch-1"
+    assert r.inference.orchestrator_execution_id == "orch-execution-1"
+    assert r.inference.orchestrator_agent_id == "orch-execution-1"
 
 
 def test_inference_hosts_result():
