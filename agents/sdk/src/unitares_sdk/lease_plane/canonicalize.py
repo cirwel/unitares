@@ -30,7 +30,14 @@ import os.path
 import tempfile
 
 # v0.8 canonical scheme list (RFC §7.2.1) plus follow-on schemes. Single source
-# of truth in code. `agent` added by migration 042; `maintenance` by migration 050.
+# of truth in code. `agent` added by migration 042; `maintenance` by migration 050;
+# `topic` by migration 069.
+#
+# SERVER FLOOR: canonicalizing a scheme here does not make a server accept it.
+# `topic:/` requires a server at migration >= 069; against an older one the
+# lease plane's own `surface_id_grammar` CHECK refuses the surface_id. That is
+# fail-closed (a typed refusal, not corruption), but it is a real version skew,
+# which is why adding a scheme is a MINOR bump rather than a patch.
 CANONICAL_SCHEMES: tuple[str, ...] = (
     "file",
     "dialectic",
@@ -39,10 +46,13 @@ CANONICAL_SCHEMES: tuple[str, ...] = (
     "capture",
     "td",
     "agent",
+    "topic",
 )
 
 # Compiled scheme-grammar regex matches migrations 026 + 042 + 049 at the DB layer.
-_SCHEME_GRAMMAR = "^(file://|dialectic:/|resident:/|maintenance:/|capture:/|td:/|agent:/)"
+_SCHEME_GRAMMAR = (
+    "^(file://|dialectic:/|resident:/|maintenance:/|capture:/|td:/|agent:/|topic:/)"
+)
 
 _PATH_MAX = 4096
 
@@ -117,6 +127,8 @@ def canonicalize(surface_id: str) -> str:
         return f"td:/{surface_id[len('td:/') :]}"
     if surface_id.startswith("agent:/"):
         return _canonicalize_agent(surface_id[len("agent:/") :])
+    if surface_id.startswith("topic:/"):
+        return _canonicalize_topic(surface_id[len("topic:/") :])
     raise CanonicalizeError(
         "invalid_scheme",
         f"surface_id does not match canonical scheme list ({CANONICAL_SCHEMES}): {surface_id!r}",
@@ -188,6 +200,25 @@ def _canonicalize_maintenance(path: str) -> str:
             f"maintenance:/ surface_id contains reserved character (?, #, &, whitespace): {path!r}",
         )
     return f"maintenance:/{path.rstrip('/')}"
+
+
+def _canonicalize_topic(path: str) -> str:
+    """topic:/ — agent coordination key; LOWERCASED; strip trailing /.
+
+    Unlike resident:/ and maintenance:/, topics are lowercased. A topic is
+    typed from prose by a human or an agent ("revenue-engine" vs
+    "Revenue-Engine"), and two spellings of one topic must not split-brain
+    into two surfaces or two mailboxes. Empty is rejected. (Migration 069.)
+    """
+    if any(ch in path for ch in (" ", "\t", "\n", "?", "#", "&")):
+        raise CanonicalizeError(
+            "invalid_scheme",
+            f"topic:/ surface_id contains reserved character (?, #, &, whitespace): {path!r}",
+        )
+    trimmed = path.rstrip("/")
+    if not trimmed:
+        raise CanonicalizeError("invalid_scheme", "topic:/ surface_id has an empty key")
+    return f"topic:/{trimmed.lower()}"
 
 
 def _canonicalize_agent(path: str) -> str:

@@ -47,9 +47,19 @@ async def test_migration_027_surface_kind_catalog_seeded():
             "SELECT surface_kind FROM lease_plane.surface_kind_catalog ORDER BY surface_kind"
         )
         kinds = [r["surface_kind"] for r in rows]
-        assert kinds == ["capture", "dialectic", "file", "maintenance", "resident", "td"], (
-            f"Expected canonical schemes seeded, got {kinds}"
-        )
+        # Exact equality on purpose: this is the guard against a scheme
+        # appearing in the catalog without a migration that also widens
+        # surface_id_grammar. Every migration that legitimately adds a kind
+        # updates this list -- `maintenance` by 050, `topic` by 069.
+        assert kinds == [
+            "capture",
+            "dialectic",
+            "file",
+            "maintenance",
+            "resident",
+            "td",
+            "topic",
+        ], f"Expected canonical schemes seeded, got {kinds}"
     finally:
         await conn.close()
 

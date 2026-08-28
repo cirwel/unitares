@@ -96,6 +96,35 @@ defmodule UnitaresLeasePlane.IdentityBinding do
   def authorize(_expected_holder_uuid, _proof, _surface_kind, _request_context),
     do: {:error, :identity_proof_invalid}
 
+  @doc """
+  Verify unconditionally, ignoring `identity_binding_mode` and
+  `identity_bound_surface_kinds`.
+
+  `authorize/4` exists to let the LEASE surfaces roll identity binding out
+  gradually: `:off` skips verification entirely and `:log` verifies, warns, and
+  serves the request anyway. That is the right posture for a lease, which is a
+  coordination hint — a wrong holder costs a redundant claim.
+
+  It is the wrong posture for a mailbox, where the same graduated modes mean
+  handing one agent's mail to another while writing a warning about it. Callers
+  guarding a confidentiality boundary use this instead, so the boundary does not
+  depend on how far along an unrelated rollout happens to be.
+
+  ⛔Do NOT reimplement this as an `authorize/4` call under a mode check. That
+  couples the boundary to `identity_bound_surface_kinds`, and narrowing that set
+  to enable one surface silently drops every OTHER surface from `:log` to
+  `:off` — stopping verification and the `IdentityMetrics` counters with it.
+  """
+  @spec authorize_strict(String.t(), String.t() | nil, request_context() | nil) ::
+          :ok | {:error, refusal()}
+  def authorize_strict(expected_holder_uuid, proof, request_context)
+      when is_binary(expected_holder_uuid) do
+    verify(expected_holder_uuid, proof, request_context)
+  end
+
+  def authorize_strict(_expected_holder_uuid, _proof, _request_context),
+    do: {:error, :identity_proof_invalid}
+
   @spec parse_mode(String.t() | nil) :: :off | :log | :enforce
   def parse_mode(nil), do: :off
   def parse_mode(""), do: :off
