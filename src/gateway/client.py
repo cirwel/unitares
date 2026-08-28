@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from typing import Any, Optional
 
@@ -92,6 +93,12 @@ class GovernanceMCPClient:
             headers["Mcp-Session-Id"] = self._mcp_session_id
         if self._external_session_id:
             headers["X-Session-ID"] = self._external_session_id
+        # The gateway proxies to the full server's /mcp. If that gate is
+        # configured, the proxy needs the bearer like any other client;
+        # unset, no header is sent and nothing changes.
+        bearer = os.environ.get("UNITARES_MCP_BEARER_TOKEN") or None
+        if bearer:
+            headers["Authorization"] = f"Bearer {bearer}"
         return headers
 
     async def _ensure_initialized(self, http: httpx.AsyncClient) -> None:
