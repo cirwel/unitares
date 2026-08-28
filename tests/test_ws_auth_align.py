@@ -46,6 +46,9 @@ class _WS:
 def _clean_env(monkeypatch):
     monkeypatch.delenv("UNITARES_MCP_BEARER_TOKENS", raising=False)
     monkeypatch.delenv("UNITARES_HTTP_API_TOKEN", raising=False)
+    # Cleared explicitly: every "local posture" assertion below depends on
+    # it being absent, and it is about to exist in this machine's env.
+    monkeypatch.delenv("UNITARES_REST_STRICT", raising=False)
     yield
 
 
@@ -114,14 +117,31 @@ def test_cookie_session_rejects_missing_or_foreign_origin(origin):
     assert _check_ws_auth(ws, http_api_token=None) is False
 
 
-def test_hosted_posture_does_not_accept_cookie_session(monkeypatch):
+def test_strict_posture_accepts_a_session_from_the_exact_rp_origin(monkeypatch):
+    """Reversed by operator decision, 2026-08-28 — see the REST twin.
+
+    The Origin pin the local branch applies is kept here rather than dropped:
+    WebSockets receive no CORS protection and sibling subdomains are
+    same-site, so a cookie alone is not sufficient evidence on this transport.
+    """
     monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "hosted-tok")
     ws = _WS(
         ip="8.8.8.8",
         dashboard_session={"operator_label": "operator"},
         origin="https://gov.cirwel.org",
     )
-    assert _check_ws_auth(ws, http_api_token=None) is False
+    assert _check_ws_auth(ws, http_api_token=None) is True
+
+
+def test_strict_posture_session_from_a_foreign_origin_is_refused(monkeypatch):
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "hosted-tok")
+    for origin in ("https://evil.example", None):
+        ws = _WS(
+            ip="8.8.8.8",
+            dashboard_session={"operator_label": "operator"},
+            origin=origin,
+        )
+        assert _check_ws_auth(ws, http_api_token=None) is False
 
 
 # ---- Hosted mode: MCP bearer configured -> strict, no IP bypass ----

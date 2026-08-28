@@ -1,5 +1,5 @@
 """Registry and overview feeds for dashboards: agent history, tier
-distribution, automations, activity, incidents, research runs,
+distribution, automations, activity, incidents,
 violation taxonomy, and silent-bootstrap observability.
 
 Split out of src/http_api.py (see that module for route registration).
@@ -190,75 +190,6 @@ async def http_automations(request):
         data["stale"] = age > 86400  # older than 24h
         return JSONResponse(data)
     except Exception as exc:  # noqa: BLE001 — read-only panel endpoint, degrade gracefully
-        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
-
-
-async def http_research_runs(request):
-    """GET /v1/research/runs - query registered agent-network research runs."""
-    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
-    if not access._check_http_auth(request, http_api_token=http_api_token):
-        return access._http_unauthorized()
-    try:
-        from src.research_registry import query_research_runs
-
-        params = request.query_params
-        try:
-            limit = int(params.get("limit", "50"))
-        except (TypeError, ValueError):
-            limit = 50
-        data = query_research_runs(
-            status=params.get("status"),
-            tag=params.get("tag"),
-            scenario_id=params.get("scenario_id"),
-            research_area=params.get("research_area"),
-            grounding=params.get("grounding"),
-            query=params.get("query"),
-            limit=limit,
-            include_details=access._http_bool(params.get("include_details")),
-        )
-        data["success"] = True
-        return JSONResponse(data)
-    except Exception as exc:  # noqa: BLE001 - read-only endpoint, degrade visibly
-        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
-
-
-async def http_research_run(request):
-    """GET /v1/research/runs/{run_id} - return one research-run record."""
-    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
-    if not access._check_http_auth(request, http_api_token=http_api_token):
-        return access._http_unauthorized()
-    run_id = request.path_params.get("run_id", "")
-    try:
-        from src.research_registry import (
-            ResearchRunNotFound,
-            grounding_status,
-            load_research_run,
-            rigor_checklist,
-        )
-
-        record = load_research_run(run_id)
-        return JSONResponse({
-            "success": True,
-            "run": record,
-            "rigor_checklist": rigor_checklist(record),
-            "grounding_status": grounding_status(record),
-        })
-    except ResearchRunNotFound as exc:
-        return JSONResponse({"success": False, "error": str(exc)}, status_code=404)
-    except Exception as exc:  # noqa: BLE001 - read-only endpoint, degrade visibly
-        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
-
-
-async def http_research_stats(request):
-    """GET /v1/research/stats - aggregate research-run registry health."""
-    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
-    if not access._check_http_auth(request, http_api_token=http_api_token):
-        return access._http_unauthorized()
-    try:
-        from src.research_registry import research_registry_stats
-
-        return JSONResponse({"success": True, "stats": research_registry_stats()})
-    except Exception as exc:  # noqa: BLE001 - read-only endpoint, degrade visibly
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 

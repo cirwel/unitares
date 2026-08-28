@@ -105,9 +105,6 @@ from src.http_routes.telemetry import (
 from src.http_routes.overview import (
     http_agent_history,
     http_automations,
-    http_research_runs,
-    http_research_run,
-    http_research_stats,
     http_tier_distribution,
     http_bootstrap_silent,
     http_incidents,
@@ -259,7 +256,11 @@ def register_http_routes(
             # loop with no in-browser recovery.
             session_aware_path = (
                 path.startswith(("/v1/", "/api/", "/auth/", "/debug/"))
-                or path in ("/metrics", "/", "/dashboard", "/phase")
+                # /health/deep is gated like a data route and the dashboard
+                # fetches it, so it needs the session attached or a signed-in
+                # browser can never reach it in strict posture. The shallow
+                # health routes stay out: they are public and take no session.
+                or path in ("/metrics", "/", "/dashboard", "/phase", "/health/deep")
                 or path.startswith("/dashboard/")
             )
             if scope["type"] == "websocket" or (
@@ -347,9 +348,6 @@ def register_http_routes(
     app.routes.append(Route("/v1/bootstrap/silent", http_bootstrap_silent, methods=["GET"]))
     app.routes.append(Route("/v1/sentinel/summary", http_sentinel_summary, methods=["GET"]))
     app.routes.append(Route("/v1/vigil/summary", http_vigil_summary, methods=["GET"]))
-    app.routes.append(Route("/v1/research/runs", http_research_runs, methods=["GET"]))
-    app.routes.append(Route("/v1/research/runs/{run_id}", http_research_run, methods=["GET"]))
-    app.routes.append(Route("/v1/research/stats", http_research_stats, methods=["GET"]))
     app.routes.append(Route("/v1/agents/tier_distribution", http_tier_distribution, methods=["GET"]))
     app.routes.append(Route("/v1/agents/{agent_id}/history", http_agent_history, methods=["GET"]))
     app.routes.append(Route("/api/automations", http_automations, methods=["GET"]))

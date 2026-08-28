@@ -154,12 +154,12 @@ index; that one is the curated decision record.
 | `UNITARES_PROXY_URL` | `None (no reader fallback)` | — | src/mcp_server_std.py |
 | `UNITARES_REPO` | `str(Path(__file__).resolve().parents[2])` | read by main() | agents/vigil_hygiene/agent.py |
 | `UNITARES_RERANKER_MODEL` | `'bge-m3'` | — | src/reranker.py |
-| `UNITARES_RESEARCH_REGISTRY_DIR` | `None (no reader fallback)` | Resolve the registry directory; unset uses ``DEFAULT_REGISTRY_DIR``. | src/research_registry.py |
 | `UNITARES_RESIDENTS` | `None (no reader fallback)` | Load resident labels from ``UNITARES_RESIDENTS``; unset means no residents | src/grounding/class_indicator.py, agents/sdk/src/unitares_sdk/_substrate.py |
 | `UNITARES_RESIDENT_AGENTS` | `''` | Figure out which agent labels to treat as residents | src/http_routes/residents.py |
 | `UNITARES_RESIDENT_PROGRESS_MANIFEST` | `''` | Load the resident-progress registry from a JSON manifest | src/resident_progress/registry.py |
 | `UNITARES_RESIDENT_PROGRESS_PLUGINS` | `None (no reader fallback)` | True unless the deployment explicitly disabled plugin discovery. | src/resident_progress/plugins.py |
 | `UNITARES_RESIDENT_SILENCE_SECONDS` | `''` | Parse ``label=seconds`` pairs from the environment | src/http_routes/residents.py |
+| `UNITARES_REST_STRICT` | `None (no reader fallback)` | True when the REST surface runs the strict posture (bearer or session) | src/mcp_listen_config.py |
 | `UNITARES_REVIEW_NUDGE` | `''` | Return the trigger reason when an in-flow review nudge is due, else None | src/mcp_handlers/updates/enrichments.py |
 | `UNITARES_SCRIBE_DRY_RUN` | `'1'` | read by _job() | agents/triage_scribe/scribe.py |
 | `UNITARES_SCRIBE_MAX_TOKENS` | `'1600'` | read by _job() | agents/triage_scribe/scribe.py |

@@ -572,11 +572,6 @@ TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
         "related_to": ["process_agent_update", "sync_state"],
         "category": "core",
     },
-    "research_registry": {
-        "depends_on": [],
-        "related_to": ["knowledge", "search_shared_memory"],
-        "category": "knowledge",
-    },
     "skills": {
         "depends_on": [],
         "related_to": ["list_tools", "describe_tool"],
