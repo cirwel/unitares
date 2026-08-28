@@ -4,7 +4,9 @@ Phase A schema tests for surface-lease-plane migration 027.
 Migration 027 (per RFC v0.8 §7.11.1) adds two tables:
 
   1. lease_plane.surface_kind_catalog — canonical registry of allowed scheme prefixes.
-     Seeded with the canonical schemes (capture, dialectic, file, maintenance, resident, td).
+     Seeded by 027 with five schemes: capture, dialectic, file, resident, td.
+     (`maintenance` arrives in 050 and `topic` in 069 — the catalog is an
+     extension point, and later migrations adding to it is it working.)
   2. lease_plane.deprecated_schemes — first-class persistence substrate for
      §7.11 deprecation procedure. FK to surface_kind_catalog so deprecation
      can only target a registered kind.
@@ -46,20 +48,59 @@ async def test_migration_027_surface_kind_catalog_seeded():
         rows = await conn.fetch(
             "SELECT surface_kind FROM lease_plane.surface_kind_catalog ORDER BY surface_kind"
         )
-        kinds = [r["surface_kind"] for r in rows]
-        # Exact equality on purpose: this is the guard against a scheme
-        # appearing in the catalog without a migration that also widens
-        # surface_id_grammar. Every migration that legitimately adds a kind
-        # updates this list -- `maintenance` by 050, `topic` by 069.
-        assert kinds == [
-            "capture",
-            "dialectic",
-            "file",
-            "maintenance",
-            "resident",
-            "td",
-            "topic",
-        ], f"Expected canonical schemes seeded, got {kinds}"
+        kinds = {r["surface_kind"] for r in rows}
+        # Subset, not equality. Equality here asserted "nobody has extended the
+        # catalog", which is not a property 027 establishes and is the opposite
+        # of what the catalog is for: it is an extension point, and 050 and 069
+        # legitimately add to it. Because governance_test is SHARED, applying an
+        # unmerged migration to it made this test fail on master and on every
+        # branch at once — an early migration's test coupled to every later one.
+        seeded_by_027 = {"capture", "dialectic", "file", "resident", "td"}
+        missing = sorted(seeded_by_027 - kinds)
+        assert not missing, (
+            f"Migration 027 seeds missing from surface_kind_catalog: {missing} "
+            f"(catalog holds {sorted(kinds)})"
+        )
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_every_catalogued_kind_has_grammar_support():
+    """No scheme may sit in the catalog without surface_id_grammar accepting it.
+
+    This is the real invariant the old equality assertion was standing in for:
+    it caught an unaccompanied catalog addition only indirectly, by the list
+    drifting. Checking the relationship directly is both stronger — it fails
+    for the actual defect rather than for any change — and immune to the
+    shared-database coupling that made the equality version brittle.
+
+    Deliberately one-directional: the grammar may be WIDER than the catalog
+    (042 admits `agent:/`, which is not a catalogued surface kind), because a
+    permissive grammar with a narrow catalog denies nothing. The dangerous
+    direction is a catalogued kind the grammar would reject.
+    """
+    await ensure_test_database_schema()
+    conn = await asyncpg.connect(TEST_DB_URL)
+    try:
+        kinds = [
+            r["surface_kind"]
+            for r in await conn.fetch(
+                "SELECT surface_kind FROM lease_plane.surface_kind_catalog"
+            )
+        ]
+        grammar = await conn.fetchval(
+            """
+            SELECT pg_get_constraintdef(oid) FROM pg_constraint
+            WHERE conname = 'surface_id_grammar'
+            """
+        )
+        assert grammar, "surface_id_grammar constraint is missing entirely"
+        ungrammatical = sorted(k for k in kinds if f"{k}:" not in grammar)
+        assert not ungrammatical, (
+            "catalogued surface kinds with no surface_id_grammar prefix: "
+            f"{ungrammatical} — a lease on one could never be created"
+        )
     finally:
         await conn.close()
 
