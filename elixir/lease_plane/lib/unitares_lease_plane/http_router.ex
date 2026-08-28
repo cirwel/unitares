@@ -1374,11 +1374,20 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   # Must halt (the private `json/3` above does not), so replicate the
   # three-line send inline as HTTPAuth.send_json does. `protocol_version()`
   # (the function, not the attribute) avoids attribute-ordering issues.
+  #
+  # `build_sha` is the boot commit, resolved once at application start and read
+  # from app env here, so the body stays static and DB-free. It is what
+  # `deploy-status.sh`'s `build_sha()` helper scrapes (it curls the
+  # unauthenticated /health, as it does for the governance MCP). Without it the
+  # lease plane could never report CURRENT or STALE at all — its `hot-reload`
+  # row was hardcoded to "up => HOT-RELOAD", so running-code drift on this one
+  # service was structurally invisible.
   defp liveness(%Plug.Conn{method: "GET", path_info: ["health"]} = conn, _opts) do
     body = %{
       ok: true,
       status: "ok",
       service: "lease-plane",
+      build_sha: UnitaresLeasePlane.BuildInfo.build_sha(),
       protocol_version: protocol_version()
     }
 

@@ -119,4 +119,45 @@ defmodule UnitaresLeasePlane.HTTPRouter.LivenessTest do
     assert resp.status == 401
     assert parsed(resp)["error"] == "permission_denied"
   end
+
+  describe "build_sha (deploy staleness signal)" do
+    test "the pre-auth /health carries a build_sha" do
+      conn =
+        :get
+        |> Plug.Test.conn("/health")
+        |> UnitaresLeasePlane.HTTPRouter.call(UnitaresLeasePlane.HTTPRouter.init([]))
+
+      assert conn.status == 200
+      body = Jason.decode!(conn.resp_body)
+
+      # deploy-status.sh's build_sha() greps this exact key off the
+      # UNAUTHENTICATED /health. Drop it and the lease-plane row silently
+      # degrades to HOT-RELOAD(?) forever, which is the invisible-drift state
+      # this field exists to end.
+      assert Map.has_key?(body, "build_sha")
+      assert is_binary(body["build_sha"])
+      assert body["build_sha"] != ""
+    end
+
+    test "the body stays static: no DB, no per-request work" do
+      # /health must answer even with Postgres unreachable, so build_sha is
+      # resolved once at boot and read from app env. Two calls must agree and
+      # neither may touch the repo.
+      call = fn ->
+        :get
+        |> Plug.Test.conn("/health")
+        |> UnitaresLeasePlane.HTTPRouter.call(UnitaresLeasePlane.HTTPRouter.init([]))
+        |> then(& Jason.decode!(&1.resp_body)["build_sha"])
+      end
+
+      assert call.() == call.()
+    end
+
+    test "resolves to a real sha or the honest 'unknown', never a crash" do
+      sha = UnitaresLeasePlane.BuildInfo.build_sha()
+      assert is_binary(sha) and sha != ""
+      assert sha == "unknown" or String.match?(sha, ~r/^[0-9a-f]{7,40}$/)
+    end
+  end
+
 end

@@ -140,6 +140,44 @@ out2="$( set -euo pipefail; . "$LIB"; deploy_lib_ff_worktree t "$REPO2" "$DEP2" 
 ) && ok "deploy-status counts merge commits (--full-history)" \
   || bad "deploy-status merge-commit staleness counting"
 
+# ── deploy-status.sh: the hot-reload row must be able to report staleness ──
+# Regression guard for a blind spot measured 2026-08-28. The hot-reload branch
+# was `pid ? HOT-RELOAD : DOWN` and computed no staleness whatsoever, so the
+# lease plane -- the only hot-reload row -- could never report CURRENT or
+# STALE. Immediately after a full restart onto brand-new code the row read
+# HOT-RELOAD, and it would have read identically had the restart never
+# happened. The only drift signal it ever received was the BEHIND(n) override,
+# which describes the CHECKOUT, not the running process.
+(
+  set -euo pipefail
+  D="$(dirname "$LIB")/deploy-status.sh"
+  # The branch must consult the published boot sha, not merely the pid.
+  awk '/^    hot-reload\)/,/;;$/' "$D" | grep -q 'build_sha "\$port"' || exit 20
+  # ...and must be able to say the process is behind the checkout.
+  awk '/^    hot-reload\)/,/;;$/' "$D" | grep -q 'HOT-RELOAD(' || exit 21
+  # A row whose sha could not be read must NOT render as a healthy verdict.
+  awk '/^    hot-reload\)/,/;;$/' "$D" | grep -q 'HOT-RELOAD(?)' || exit 22
+  # BEHIND must no longer be able to overwrite a process-level hot-reload
+  # verdict, for the same reason it never overwrites STALE.
+  grep -q 'CURRENT|CURRENT\\\*|LIVE) verdict="BEHIND' "$D" || exit 23
+) && ok "deploy-status hot-reload row reports staleness (build_sha)" \
+  || bad "deploy-status hot-reload staleness"
+
+# ── lease plane must publish the boot sha deploy-status scrapes ──
+# deploy-status's build_sha() greps the UNAUTHENTICATED /health. If the lease
+# plane stops publishing it there, the row silently degrades to HOT-RELOAD(?)
+# forever -- the same invisible-drift state, just differently spelled.
+(
+  set -euo pipefail
+  ROOT="$(cd "$(dirname "$LIB")/../.." && pwd)"
+  R="$ROOT/elixir/lease_plane/lib/unitares_lease_plane/http_router.ex"
+  # Must be inside the pre-auth liveness body, not the authed /v1/health.
+  awk '/defp liveness\(%Plug.Conn\{method: "GET", path_info: \["health"\]/,/^  end$/' "$R" \
+    | grep -q 'build_sha:' || exit 24
+  [ -f "$ROOT/elixir/lease_plane/lib/unitares_lease_plane/build_info.ex" ] || exit 25
+) && ok "lease plane publishes build_sha on the pre-auth /health" \
+  || bad "lease plane build_sha on /health"
+
 # ── deploy-status.sh: BEHIND must apply to every running/live verdict ──
 # Gating the BEHIND promotion on CURRENT made checkout drift structurally
 # invisible for anything that never reports CURRENT. live-from-checkout is set
@@ -162,8 +200,16 @@ out2="$( set -euo pipefail; . "$LIB"; deploy_lib_ff_worktree t "$REPO2" "$DEP2" 
   [ "$(promote LIVE 2)"          = "BEHIND(2)" ] || exit 20
   [ "$(promote CURRENT 5)"       = "BEHIND(5)" ] || exit 21
   [ "$(promote 'CURRENT*' 3)"    = "BEHIND(3)" ] || exit 22
-  [ "$(promote HOT-RELOAD 1)"    = "BEHIND(1)" ] || exit 23
   # preserved
+  # HOT-RELOAD moved from promoted to PRESERVED (2026-08-28), for the same
+  # reason STALE did below. The bare verdict is no longer producible: the
+  # hot-reload branch now resolves to CURRENT / HOT-RELOAD(Δn) / HOT-RELOAD(?)
+  # / DOWN, and both parenthesised forms describe the RUNNING PROCESS -- it
+  # predates the checkout, or its sha could not be read at all -- which outranks
+  # "your checkout needs a pull". A hot-reload row that IS current still
+  # promotes, via the CURRENT case above.
+  [ "$(promote 'HOT-RELOAD(Δ3)' 7)" = "HOT-RELOAD(Δ3)" ] || exit 23
+  [ "$(promote 'HOT-RELOAD(?)' 2)"  = "HOT-RELOAD(?)" ]  || exit 27
   # STALE moved from promoted to PRESERVED (2026-08-14). It is the sharper
   # fact — the RUNNING PROCESS is executing superseded code — and letting
   # "your checkout needs a pull" overwrite it made a STALE(12) service display
@@ -175,7 +221,7 @@ out2="$( set -euo pipefail; . "$LIB"; deploy_lib_ff_worktree t "$REPO2" "$DEP2" 
   [ "$(promote LIVE 0)"          = "LIVE" ]         || exit 28
   [ "$(promote LIVE '?')"        = "LIVE" ]         || exit 29
   exit 0
-) && ok "deploy-status BEHIND promotes CURRENT/LIVE/HOT-RELOAD, preserves STALE/DOWN/GHOST" \
+) && ok "deploy-status BEHIND promotes CURRENT/LIVE, preserves STALE/HOT-RELOAD(..)/DOWN/GHOST" \
   || bad "deploy-status BEHIND promotion rules"
 
 # ── behind must be scoped to the service's OWN code path ──

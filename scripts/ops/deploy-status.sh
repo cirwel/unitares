@@ -293,7 +293,42 @@ for c in "${COMPONENTS[@]}"; do
         # follow-up; until then, an honest blank.
         br="-"; sha="-"; verdict="n/a(Pi)"
       fi ;;
-    hot-reload)         pid=$(proc_pid "$label"); verdict=$([ -n "$pid" ] && echo "HOT-RELOAD" || echo "DOWN") ;;
+    hot-reload)
+      # ⛔This branch used to be `up => HOT-RELOAD, else DOWN` and computed no
+      # staleness at all, so the lease plane — the ONLY hot-reload row — could
+      # never report CURRENT or STALE. Its running-code drift was structurally
+      # invisible: the sole staleness signal it ever got was the BEHIND(n)
+      # override below, which describes the CHECKOUT being behind origin, not
+      # the process being behind the checkout. Measured 2026-08-28: immediately
+      # after a full restart onto new code the row still read HOT-RELOAD, and it
+      # would have read exactly the same had the restart never happened.
+      #
+      # Now compares the boot sha the plane publishes on /health, the same way
+      # the restart branch does. HOT-RELOAD is kept for the case where the
+      # process predates the checkout: on this service that is a legitimate
+      # state (modules swapped in place), but it is NOT equivalent to current —
+      # `hot-reload.sh` cannot add a child to an already-started supervisor, so
+      # any change touching application.ex needs a real restart. The verdict
+      # therefore names the delta and the operator decides.
+      pid=$(proc_pid "$label")
+      if [ -z "$pid" ]; then verdict="DOWN"
+      else
+        bsha=$(build_sha "$port")
+        if [ -n "$bsha" ] && [ -n "$sha" ]; then
+          n=${#bsha}; [ "${#sha}" -lt "$n" ] && n=${#sha}
+          if [ "${bsha:0:$n}" = "${sha:0:$n}" ]; then verdict="CURRENT"
+          else
+            delta=$(git -C "$repo" rev-list --count --full-history "$bsha..$base" -- "$cpath" 2>/dev/null || echo "?")
+            [ -z "$delta" ] && delta="?"
+            verdict="HOT-RELOAD(Δ$delta)"
+          fi
+        else
+          # No build_sha on /health: an older lease plane, or one that could not
+          # resolve its own sha. Say so rather than printing a confident verdict
+          # derived from nothing — an unverifiable row must not read as healthy.
+          verdict="HOT-RELOAD(?)"
+        fi
+      fi ;;
     restart|restart-DEV)
       pid=$(proc_pid "$label")
       if [ -z "$pid" ]; then verdict="DOWN"
@@ -354,7 +389,14 @@ for c in "${COMPONENTS[@]}"; do
       # and letting "your checkout needs a pull" overwrite it meant a
       # STALE(12) service displayed as BEHIND(1). The milder problem hid the
       # sharper one.
-      CURRENT|CURRENT\*|LIVE|HOT-RELOAD) verdict="BEHIND($behind)" ;;
+      #
+      # HOT-RELOAD(Δn) / HOT-RELOAD(?) are excluded for the same reason as
+      # STALE: both say something about the RUNNING PROCESS (it predates the
+      # checkout, or its sha could not be read at all), which outranks "your
+      # checkout needs a pull". Bare HOT-RELOAD is gone -- that branch now
+      # always resolves to CURRENT or a parenthesised form -- so only CURRENT
+      # from a hot-reload row reaches this override, which is correct.
+      CURRENT|CURRENT\*|LIVE) verdict="BEHIND($behind)" ;;
     esac
   fi
   devflag=""; [ "$pickup" = "restart-DEV" ] && devflag=" [DEV]"
