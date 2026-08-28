@@ -11,13 +11,28 @@ defmodule UnitaresLeasePlane.TopicMessageReaper do
   without this child in the supervision tree that comment is false.
 
   Mirrors `IdentityNonceReaper` (migration 067), which is the same shape:
-  bounded batch, periodic, no state.
+  bounded batch, periodic, no state — including the arity bug both carried:
+  `PeriodicWorker` calls `perform/1`, so exporting only `run_once/0` meant
+  this worker raised on every tick and never deleted a single row.
   """
 
+  @spec perform(map()) :: {:ok, %{purged: non_neg_integer()}} | {:error, term()}
+  def perform(_args \\ %{}) do
+    case UnitaresLeasePlane.Repo.purge_expired_messages() do
+      {:ok, count} -> {:ok, %{purged: count}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Discard-the-count wrapper kept for direct callers and tests.
+
+  `PeriodicWorker` calls `perform/1`; this is not the scheduled entrypoint.
+  """
   @spec run_once() :: :ok | {:error, term()}
   def run_once do
-    case UnitaresLeasePlane.Repo.purge_expired_messages() do
-      {:ok, _count} -> :ok
+    case perform(%{}) do
+      {:ok, _summary} -> :ok
       {:error, reason} -> {:error, reason}
     end
   end
