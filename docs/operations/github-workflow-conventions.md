@@ -64,9 +64,27 @@ is the merge gate.
   to push the branch or open the draft PR.
 - **Do not** direct-push to a shared branch.
 - **Do not** enable auto-merge by default.
-- A draft PR means "visible, not claiming merged." Marking ready and merging
-  is a deliberate human (or explicitly-instructed) action, taken only after CI
-  is green and you've confirmed no collision with an in-flight branch.
+- A draft PR means "visible, not claiming merged." **Merging** is the
+  operator's deliberate action. **Marking ready** is the working agent's:
+  the agent that owns the PR declares readiness itself, once its validation
+  actually passed — CI green, review round joined, no collision with an
+  in-flight branch.
+- **Readiness is agent-declared, never operator-inferred.** The operator
+  pressing merge in order cannot verify content and should not have to
+  guess doneness: a PR still in draft is "still working — hands off," even
+  when the diff looks finished, and nobody marks another agent's PR ready
+  on its behalf. A draft whose owner went silent is a question for the
+  owner (KG channel) first — the stranded-work audit will NOT surface it,
+  since it skips branches with an open PR. If the owner cannot return,
+  the operator may mark it ready as an explicit override, saying so in a
+  PR comment: an override with stated rationale is a decision, not the
+  blind inference this rule forbids.
+  Ordering constraints the agent knows about ("merge after #N") belong in
+  the PR body, so in-order merging acts on declared state. Rationale
+  (2026-08-27): marking agent PRs ready on inference while the agent was
+  still revising is the trigger shape of the post-merge orphan-push
+  incidents — the human gate authorizes; the evidence lives with CI,
+  reviews, and the merge-loss guards.
 
 `ship.sh` enforces this. Its default `auto` route now opens a **draft PR for
 every change** — runtime, docs, or tests:
@@ -225,7 +243,7 @@ this entirely).
 | Claude on the web harness | Already parks a draft PR on its `claude/...` branch — nothing extra needed |
 | About to touch a single-writer surface | Check for an in-flight PR first; branch from its head if one exists |
 | Operator explicitly wants auto-merge | `./scripts/dev/ship.sh --auto-merge "msg"` (not the default) |
-| PR is approved and you want it to land unattended | `gh pr ready <n> && gh pr merge --auto <n>` |
+| A READY PR should land unattended | `gh pr merge --auto <n>` (readiness was the owning agent's declaration; see section 2) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
 | Docs/tests-only, knowingly skipping the PR | `./scripts/dev/ship.sh --direct "msg"` (the opt-out) |
 
