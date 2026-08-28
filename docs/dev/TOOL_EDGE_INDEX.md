@@ -30,9 +30,9 @@ registrars advertise in each deployable mode and what `describe_tool` says
 about those names. The snapshots are immutable evidence inputs; they do not
 certify the components that produced them.
 
-- Audit bundle: `sha256:4de1ba141e387d7731a6c666662805f9e8a86438fad8c07d44a41bd95494b696` (`unitares.tool-surface-audit.v1`).
-- Dispatch snapshot: `sha256:614e592b2c044df248ae70fde60835157403d40df183d91ef33dc22d99ebc6aa`.
-- Audited source revision: `sha256:2d14751badab81f71ffd17bfb2943adb9b6f269c0c5d8a172385dcd704e28ba1` (50 files).
+- Audit bundle: `sha256:0ddd9a39b0e083b36a014b6c4ae4c18f91b6e211e6dba98e4455601a48fc0e4b` (`unitares.tool-surface-audit.v1`).
+- Dispatch snapshot: `sha256:ec1d1fa60b3b89cb5b48497213b5f7b9f1aba3f192230b11302f75e399c4e78a`.
+- Audited source revision: `sha256:584a4bfcff35c3fff2ee9f0cf1795a126b65ac8588bd28c485973b18bd2499fe` (50 files).
 - Exposure snapshot: `sha256:1ebcbbfb2693fe4c47fbb63008f1be651b7954d19988e0dda100410b451322d6`.
 - JSON contract: [`tool_surface_audit_v1.schema.json`](tool_surface_audit_v1.schema.json).
 - Reproduce with `python3 scripts/dev/tool_edge_index.py --json`; run

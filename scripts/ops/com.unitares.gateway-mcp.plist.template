@@ -54,6 +54,10 @@
 
     <key>EnvironmentVariables</key>
     <dict>
+        <!-- Set to one token accepted by UNITARES_MCP_BEARER_TOKENS on the
+             upstream governance server when its /mcp gate is enabled. -->
+        <key>UNITARES_MCP_BEARER_TOKEN</key>
+        <string></string>
         <key>PYTHONPATH</key>
         <string>__UNITARES_ROOT__/src</string>
         <key>HOME</key>
