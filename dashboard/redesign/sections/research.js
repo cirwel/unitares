@@ -100,7 +100,16 @@
               <td style="font-size:var(--text-sm);color:var(--muted)" title="${esc(r.updated_at)}">${relTime(r.updated_at)}</td>
             </tr>`).join("")
         + `</tbody></table>`
-        : `<p class="empty">${MODEL.runs.length ? "No research runs match the current filters." : "No research runs recorded yet."}</p>`)
+        : `<p class="empty">${MODEL.runs.length
+            ? "No research runs match the current filters."
+            // Zero runs is an ADOPTION state, not a broken pipe: the
+            // `research_registry` tool is registered and answers, and the
+            // registry directory is simply created on first write. Saying only
+            // "none recorded yet" left the tab reading like dead plumbing and
+            // guaranteed it stayed empty, so name the live producer instead.
+            : `No research runs recorded yet. The <span class="mono">research_registry</span> tool is live —
+               an agent records one with <span class="mono">research_registry(action="record", ...)</span>
+               and it appears here. Nothing has written to the registry yet.`}</p>`)
       + `<div style="margin-top:var(--space-3);font-size:var(--text-xs);color:var(--faint)">showing ${rows.length} of ${MODEL.runs.length}</div>`;
     wire();
   }

@@ -173,7 +173,22 @@
               ? `none open · ${typeof stats.dialecticFailed === "number" && stats.dialecticFailed ? `${stats.dialecticFailed} of ${stats.dialecticRecent} recent failed` : `${stats.dialecticRecent} recent`}`
               : "no open sessions"), href: "#dialectic" },
       { h: "System Health", num: un(stats.systemHealth) ? "—" : stats.systemHealth, sub: un(stats.systemHealth) ? "unavailable" : (stats.systemHealthDetail || "db · ws · reaper"), cls: un(stats.systemHealth) ? "" : (stats.systemHealth === "OK" ? "up" : "down"), href: "#residents" },
-      { h: "Calibration", num: num(stats.calibration), sub: un(stats.calibration) ? "unavailable" : "trajectory health", cls: stats.calibration >= 0.8 ? "up" : "" },
+      // The card's NAME promises the calibration verdict, so the verdict is
+      // what it leads with; trajectory_health is a different quantity from the
+      // same response and rides in the subtitle where it cannot be mistaken
+      // for the status. Colour follows `calibrated`, never the number: gating
+      // green on trajectory_health >= 0.8 would have painted the card OK while
+      // the server answered "miscalibrated" (live on 2026-08-28 at 0.784 —
+      // 0.016 from green). Unknown calibration stays neutral, never green.
+      { h: "Calibration",
+        num: un(stats.calibrated) ? (un(stats.calibration) ? "—" : num(stats.calibration))
+                                  : (stats.calibrated ? "calibrated" : "miscalibrated"),
+        sub: un(stats.calibrated) && un(stats.calibration) ? "unavailable"
+             : [un(stats.calibration) ? null : "trajectory health " + num(stats.calibration),
+                stats.calibrationSignal && stats.calibrationSignal !== "fresh"
+                  ? "tactical signal " + stats.calibrationSignal : null,
+               ].filter(Boolean).join(" · "),
+        cls: stats.calibrated === true ? "up" : stats.calibrated === false ? "down" : "" },
       { h: "Anomalies", num: un(stats.anomalies) ? "—" : stats.anomalies, sub: un(stats.anomalies) ? "unavailable" : (stats.anomalies ? stats.anomalies + " active" : "clear"), cls: un(stats.anomalies) ? "" : (stats.anomalies ? "down" : "up") },
     ];
     const degradeBanner = stats.degraded > 0

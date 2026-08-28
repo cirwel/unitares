@@ -80,3 +80,30 @@ async def test_adjudicate_finding_refuses_without_identity():
     with pytest.raises(RuntimeError):
         await adjudicate_finding(agent, client, "confirmed", "fp", None)
     client.call_tool.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_adjudicate_finding_stamps_the_cli_surface():
+    """Both operator routes must name themselves.
+
+    The dashboard path (src/http_routes/sentinel.py) has stamped
+    detail.adjudicated_via="dashboard" for a while; the CLI stamped nothing, so
+    an absent marker conflated "came through the CLI" with "written before the
+    marker existed". Live data on 2026-08-28 showed 17 dashboard-stamped rows
+    against 57 unmarked ones — unreadable as a surface split. Stamping both
+    ends is what any argument about retiring either surface depends on.
+    """
+    from agents.sentinel.agent import adjudicate_finding
+
+    agent = SimpleNamespace(agent_uuid="sentinel-uuid", _ensure_identity=AsyncMock())
+    client = SimpleNamespace(call_tool=AsyncMock())
+
+    args = await adjudicate_finding(agent, client, "confirmed", "fp-abc", None)
+
+    assert args["detail"]["adjudicated_via"] == "cli"
+    # The marker rides alongside the existing detail, never replacing it.
+    assert args["detail"]["fingerprint"] == "fp-abc"
+    assert args["detail"]["resolution"] == "confirmed"
+    # And it reaches the wire, not just the returned dict.
+    _tool, payload = client.call_tool.await_args.args
+    assert payload["detail"]["adjudicated_via"] == "cli"
