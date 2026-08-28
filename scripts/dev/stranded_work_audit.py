@@ -33,6 +33,13 @@ Classification per remote branch (skips master/main, archive/*, backup/*):
   ACTIVE    newest PR is OPEN, or the branch tip is younger than --active-days.
             Not reported.
 
+Every finding also carries a `reason` naming the event that produced it, and
+`post_merge_push_rate` tallies them. The classes above say what to DO about one
+branch; the tally says how often the stranding mechanism fires at all. Those
+differ, because a post-merge push strands work or does not depending on whether
+the push happened to carry anything — so counting only STRANDED counts the times
+the dice came up badly and mistakes that for the exposure.
+
 Every reported finding also carries a content-presence reading: what share of
 its commits' added lines already sit in master today. That is a TRIAGE HINT and
 never a classification input -- see `content_presence`. It exists because the
@@ -141,6 +148,43 @@ def tip_age_days(branch: str) -> int:
     return int((time.time() - ts) // 86400)
 
 
+def post_merge_push_rate(findings: list[dict]) -> dict:
+    """How often the post-merge-push mechanism fires, and what it costs.
+
+    Every branch here reached the same event: a PR merged, then something
+    pushed to the branch again. That push is what recreates the branch after
+    auto-delete-on-merge has already removed it, and it is the ONLY way work
+    strands — GitHub will not reopen the PR, so nothing tracks the new commits.
+
+    The count matters because the outcome is luck, not design. The same event
+    produces STRANDED when the push carried work that never landed, PRUNABLE
+    when it happened to carry nothing new, and INDETERMINATE when the merged
+    head is gone and the two cannot be told apart. Reporting only the STRANDED
+    tally counts the times the dice came up badly and calls that the exposure.
+
+    Not every surviving branch got here: `merged_head_never_advanced` is
+    auto-delete simply missing a branch nobody re-pushed to, and `no_pr_route`
+    never had a merge event at all. Both are hygiene, neither is this
+    mechanism, and folding them in would inflate the denominator.
+
+    Returns counts only. Nothing reads this to decide a class.
+    """
+    fired = [f for f in findings if f.get("reason") == "post_merge_push"]
+    by_class: dict[str, int] = {}
+    for f in fired:
+        by_class[f["class"]] = by_class.get(f["class"], 0) + 1
+    return {
+        "fired": len(fired),
+        "carried_stranded_work": by_class.get("STRANDED", 0),
+        "carried_nothing_new": by_class.get("PRUNABLE", 0),
+        "undetermined": by_class.get("INDETERMINATE", 0),
+        "hygiene_not_this_mechanism": sum(
+            1 for f in findings
+            if f.get("reason") in ("merged_head_never_advanced", "no_pr_route")
+        ),
+    }
+
+
 def _annotate(finding: dict, commits: list[str]) -> dict:
     """Attach the content-presence hint to a finding, leaving its class alone.
 
@@ -179,6 +223,7 @@ def audit(repo: str, active_days: int, review_days: int = 14) -> list[dict]:
                     {
                         "branch": branch,
                         "class": "PRUNABLE",
+                        "reason": "merged_head_never_advanced",
                         "detail": f"PR #{pr['number']} merged at this exact head; "
                         "auto-delete missed it (likely re-push residue)",
                     }
@@ -195,6 +240,7 @@ def audit(repo: str, active_days: int, review_days: int = 14) -> list[dict]:
                     {
                         "branch": branch,
                         "class": "INDETERMINATE",
+                        "reason": "post_merge_push",
                         "detail": f"PR #{pr['number']} merged, branch advanced "
                         f"past head {merged_head[:8]}, but that head could not "
                         "be fetched — cannot distinguish landed from stranded",
@@ -208,6 +254,7 @@ def audit(repo: str, active_days: int, review_days: int = 14) -> list[dict]:
                         {
                             "branch": branch,
                             "class": "STRANDED",
+                            "reason": "post_merge_push",
                             "detail": f"{len(unmerged)} commit(s) pushed after PR "
                             f"#{pr['number']} merged; patches NOT in master",
                         },
@@ -219,6 +266,7 @@ def audit(repo: str, active_days: int, review_days: int = 14) -> list[dict]:
                     {
                         "branch": branch,
                         "class": "PRUNABLE",
+                        "reason": "post_merge_push",
                         "detail": f"advanced past merged PR #{pr['number']} but all "
                         "patches landed in master",
                     }
@@ -234,6 +282,7 @@ def audit(repo: str, active_days: int, review_days: int = 14) -> list[dict]:
                 {
                     "branch": branch,
                     "class": "PRUNABLE",
+                    "reason": "no_pr_route",
                     "detail": "no open route needed — content is in master",
                 }
             )
@@ -254,7 +303,12 @@ def audit(repo: str, active_days: int, review_days: int = 14) -> list[dict]:
                 detail += "; " + "; ".join(reasons)
             findings.append(
                 _annotate(
-                    {"branch": branch, "class": classification, "detail": detail},
+                    {
+                        "branch": branch,
+                        "class": classification,
+                        "reason": "no_pr_route",
+                        "detail": detail,
+                    },
                     unmerged_patch_commits(branch),
                 )
             )
@@ -498,6 +552,22 @@ def main() -> int:
         print(
             f"\n{stranded} STRANDED branch(es) — real work marooned off master; "
             "re-land (fresh branch off master, cherry-pick, PR) or explicitly discard.",
+            file=sys.stderr,
+        )
+    rate = post_merge_push_rate(findings)
+    if rate["fired"]:
+        print(
+            f"\npost-merge push fired on {rate['fired']} branch(es) — a PR merged, "
+            f"then commits were pushed to the branch again, which is the only way "
+            f"work strands here.\n"
+            f"  {rate['carried_stranded_work']} carried work that never landed "
+            f"(STRANDED)\n"
+            f"  {rate['carried_nothing_new']} carried nothing new (harmless this "
+            f"time, same event)\n"
+            f"  {rate['undetermined']} undetermined (merged head unfetchable)\n"
+            f"Separately, {rate['hygiene_not_this_mechanism']} branch(es) survive "
+            f"for reasons unrelated to this mechanism (never re-pushed, or no PR "
+            f"ever) — hygiene, not exposure.",
             file=sys.stderr,
         )
     if dangling_review:

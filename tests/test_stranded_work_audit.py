@@ -219,3 +219,67 @@ class TestAnnotateDoesNotVote:
             {"branch": "b", "class": "STRANDED", "detail": "d"}, ["c1"])
         assert finding["detail"] == "d"
         assert "content_presence" not in finding
+
+
+class TestPostMergePushRate:
+    """The tally separates how often the mechanism fires from what it cost.
+
+    A post-merge push strands work or doesn't depending on whether the push
+    carried anything new — the same event, two outcomes. Counting only
+    STRANDED counts the bad rolls and reads as the exposure.
+    """
+
+    def test_counts_the_event_across_all_three_outcomes(self):
+        rate = audit.post_merge_push_rate([
+            {"class": "STRANDED", "reason": "post_merge_push"},
+            {"class": "PRUNABLE", "reason": "post_merge_push"},
+            {"class": "PRUNABLE", "reason": "post_merge_push"},
+            {"class": "INDETERMINATE", "reason": "post_merge_push"},
+        ])
+        assert rate["fired"] == 4
+        assert rate["carried_stranded_work"] == 1
+        assert rate["carried_nothing_new"] == 2
+        assert rate["undetermined"] == 1
+
+    def test_hygiene_is_excluded_from_the_denominator(self):
+        # A branch nobody re-pushed to, and one that never had a PR, did not
+        # reach this event. Folding them in would inflate `fired`.
+        rate = audit.post_merge_push_rate([
+            {"class": "STRANDED", "reason": "post_merge_push"},
+            {"class": "PRUNABLE", "reason": "merged_head_never_advanced"},
+            {"class": "PRUNABLE", "reason": "no_pr_route"},
+        ])
+        assert rate["fired"] == 1
+        assert rate["hygiene_not_this_mechanism"] == 2
+
+    def test_no_findings_is_all_zeroes(self):
+        rate = audit.post_merge_push_rate([])
+        assert rate["fired"] == 0
+        assert rate["carried_stranded_work"] == 0
+
+    def test_a_finding_without_a_reason_is_not_counted(self):
+        # Older callers, or a class added without a reason, must not silently
+        # land in the tally as if the mechanism had fired.
+        assert audit.post_merge_push_rate([{"class": "STRANDED"}])["fired"] == 0
+
+    def test_the_tally_does_not_alter_findings(self):
+        findings = [{"class": "STRANDED", "reason": "post_merge_push"}]
+        audit.post_merge_push_rate(findings)
+        assert findings == [{"class": "STRANDED", "reason": "post_merge_push"}]
+
+
+def test_every_finding_path_sets_a_reason():
+    """A finding without a `reason` is invisible to post_merge_push_rate.
+
+    The tally counts by `reason`, so a new class added without one lands
+    nowhere and shrinks `fired` — the instrument under-reporting how often the
+    mechanism fires, while still looking like it ran. That is the failure this
+    module exists to prevent, so pin it structurally rather than trusting the
+    next editor to remember.
+    """
+    import inspect
+    body = inspect.getsource(audit.audit)
+    assert body.count('"class":') == body.count('"reason":'), (
+        "a finding in audit() sets a class without a reason; it will be "
+        "excluded from post_merge_push_rate and undercount the mechanism"
+    )
