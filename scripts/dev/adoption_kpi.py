@@ -314,7 +314,17 @@ def _snapshot_queries() -> dict:
                                    AND oe.ts > now() - make_interval(days => %(days)s))
                     ) AS engaged_value,
                     (
-                        EXISTS (SELECT 1 FROM audit.tool_usage t WHERE t.agent_id = a.id::text)
+                        -- lease.* rows are lease-plane events forwarded into
+                        -- audit.tool_usage by the BEAM outbox forwarder;
+                        -- nearly all are holder_class=process_instance
+                        -- presence heartbeats from ordinary session
+                        -- onboarding — substrate emission, not agent action.
+                        -- Without the exclusion a heartbeat-only agent read
+                        -- as having done something, understating true bounce.
+                        -- (A bare percent sign in this comment would read as
+                        -- a placeholder to psycopg2, hence the wording.)
+                        EXISTS (SELECT 1 FROM audit.tool_usage t WHERE t.agent_id = a.id::text
+                                AND t.tool_name NOT LIKE 'lease.%%')
                         OR EXISTS (SELECT 1 FROM audit.outcome_events oe WHERE oe.agent_id = a.id::text
                                    AND oe.ts > now() - make_interval(days => %(days)s))
                     ) AS did_anything

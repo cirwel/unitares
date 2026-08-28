@@ -206,6 +206,22 @@ async def test_scheduled_exclusion_equals_eligible_rows_removed(live_postgres_ba
     assert result["scheduled_excluded"] == 1
 
 
+def test_did_anything_excludes_forwarded_lease_substrate():
+    """A presence-lease heartbeat row must not flip an agent out of did_nothing.
+
+    lease.* rows in audit.tool_usage are lease-plane events projected in by
+    the BEAM outbox forwarder — ~99.9% holder_class=process_instance presence
+    heartbeats from ordinary session onboarding. Substrate emission, not agent
+    action: an agent whose only rows are heartbeats has done nothing, and
+    counting the heartbeat as "did anything" understated true bounce.
+    """
+    mod = _load()
+    query = mod._snapshot_queries()["onboard_conversion"]
+    assert "AS did_anything" in query
+    did_anything = query.split("AS did_anything")[0].split("AS engaged_value")[1]
+    assert "NOT LIKE 'lease.%%'" in did_anything
+
+
 def test_the_volition_word_is_gone_from_the_filter():
     """"Elected" is the category error the module's own docstring names.
 
