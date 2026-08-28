@@ -64,9 +64,23 @@ is the merge gate.
   to push the branch or open the draft PR.
 - **Do not** direct-push to a shared branch.
 - **Do not** enable auto-merge by default.
-- A draft PR means "visible, not claiming merged." Marking ready and merging
-  is a deliberate human (or explicitly-instructed) action, taken only after CI
-  is green and you've confirmed no collision with an in-flight branch.
+- A draft PR means "visible, not claiming merged." **Merging** is the
+  operator's deliberate action. **Marking ready** is the working agent's:
+  the agent that owns the PR declares readiness itself, once its validation
+  actually passed — CI green, review round joined, no collision with an
+  in-flight branch.
+- **Readiness is agent-declared, never operator-inferred.** The operator
+  pressing merge in order cannot verify content and should not have to
+  guess doneness: a PR still in draft is "still working — hands off," even
+  when the diff looks finished, and nobody marks another agent's PR ready
+  on its behalf. A draft whose owner went silent is a question for the
+  owner (KG channel) or the stranded-work audit — not a green button.
+  Ordering constraints the agent knows about ("merge after #N") belong in
+  the PR body, so in-order merging acts on declared state. Rationale
+  (2026-08-27): marking agent PRs ready on inference while the agent was
+  still revising is the trigger shape of the post-merge orphan-push
+  incidents — the human gate authorizes; verification lives with CI,
+  reviews, and the merge-loss guards.
 
 `ship.sh` enforces this. Its default `auto` route now opens a **draft PR for
 every change** — runtime, docs, or tests:
