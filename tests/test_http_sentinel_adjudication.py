@@ -534,3 +534,104 @@ class TestDoctorFamilyWidening:
         src = inspect.getsource(sentinel_routes._adjudication_progress)
         assert "doctor_check_finding" not in src
         assert "sentinel_finding_%" in src
+
+
+# ---------------------------------------------------------------------------
+# Abstention — "I cannot determine this" is not a verdict
+# ---------------------------------------------------------------------------
+#
+# Context. audit.outcome_events declares `is_bad BOOLEAN NOT NULL` (migration
+# 004), so that table cannot represent an absence of judgement — every path out
+# of the queue asserted a truth value. Measured 2026-08-28, the record shows
+# what that produced: sentinel_finding is 17 confirmed and 0 dismissed, ever,
+# which is the all-positive generator the invariant on
+# _SENTINEL_FINDING_EVENT_TYPES forbids. Abstention gives the queue a zero-cost
+# exit that reaches neither is_bad, the falsifier, nor the ablation matrix.
+
+class TestAbstention:
+    def _patches(self, already=frozenset()):
+        return (
+            patch("src.http_routes.sentinel._adjudicated_sentinel_fingerprints",
+                  AsyncMock(return_value=set(already))),
+            patch("src.mcp_handlers.observability.outcome_events._record_outcome_event_inline",
+                  AsyncMock(return_value={"success": True})),
+        )
+
+    def test_abstain_writes_no_outcome_event(self, client):
+        """The load-bearing assertion: nothing enters the anchor channel."""
+        adjudicated, recorder = self._patches()
+        appended = AsyncMock(return_value=True)
+        with adjudicated, recorder as rec, \
+                patch("src.db.get_db", return_value=type("DB", (), {"append_audit_event": appended})()):
+            r = client.post("/v1/sentinel/adjudicate",
+                            json={"fingerprint": "fpA", "status": "abstain"},
+                            headers=_op_headers())
+        assert r.status_code == 200
+        body = r.json()
+        assert body["success"] is True
+        assert body["recorded_outcome"] is False
+        # No outcome_event, therefore no is_bad, therefore no anchor row.
+        rec.assert_not_awaited()
+
+    def test_abstain_records_a_non_label_audit_event(self, client):
+        adjudicated, recorder = self._patches()
+        appended = AsyncMock(return_value=True)
+        with adjudicated, recorder, \
+                patch("src.db.get_db", return_value=type("DB", (), {"append_audit_event": appended})()):
+            client.post("/v1/sentinel/adjudicate",
+                        json={"fingerprint": "fpB", "status": "abstain"},
+                        headers=_op_headers())
+        event = appended.call_args[0][0]
+        assert event.event_type == sentinel_routes._ADJUDICATION_ABSTAIN_EVENT_TYPE
+        assert event.payload["fingerprint"] == "fpB"
+        # The row says what it is, so a later reader cannot mistake it for a
+        # verdict that merely lacks a label.
+        assert "NOT a verdict" in event.payload["note"]
+
+    def test_abstain_event_type_cannot_reach_the_anchor_channel(self):
+        """Isolation is structural, not incidental.
+
+        The abstain event type must stay out of the finding families (or the
+        queue would re-ingest it as a finding) and out of the adjudication
+        outcome types (or _adjudication_progress and the 409 dedup would count
+        it). Both are compile-time tuples, so assert on them directly.
+        """
+        t = sentinel_routes._ADJUDICATION_ABSTAIN_EVENT_TYPE
+        assert t not in sentinel_routes._SENTINEL_FINDING_EVENT_TYPES
+        assert t not in sentinel_routes._SENTINEL_ADJUDICATION_OUTCOME_TYPES
+        # And it is not an outcome_type shape at all — the progress query keys
+        # on '%_confirmed'/'%_dismissed'.
+        assert not t.endswith(("_confirmed", "_dismissed"))
+
+    def test_abstain_still_409s_on_an_already_adjudicated_fingerprint(self, client):
+        """A real verdict outranks a later abstention; it must not be shadowed."""
+        adjudicated, recorder = self._patches(already={"fpC"})
+        with adjudicated, recorder:
+            r = client.post("/v1/sentinel/adjudicate",
+                            json={"fingerprint": "fpC", "status": "abstain"},
+                            headers=_op_headers())
+        assert r.status_code == 409
+
+    def test_abstain_requires_the_same_operator_gate(self, client):
+        r = client.post("/v1/sentinel/adjudicate",
+                        json={"fingerprint": "fpD", "status": "abstain"})
+        assert r.status_code == 403
+
+    def test_unknown_status_still_rejected(self, client):
+        r = client.post("/v1/sentinel/adjudicate",
+                        json={"fingerprint": "fpE", "status": "maybe"},
+                        headers=_op_headers())
+        assert r.status_code == 400
+        assert "abstain" in r.json()["error"]
+
+    def test_abstain_needs_no_reason(self, client):
+        """Declining must cost nothing — requiring a reason recreates the
+        friction that made confirmation the cheapest exit."""
+        adjudicated, recorder = self._patches()
+        appended = AsyncMock(return_value=True)
+        with adjudicated, recorder, \
+                patch("src.db.get_db", return_value=type("DB", (), {"append_audit_event": appended})()):
+            r = client.post("/v1/sentinel/adjudicate",
+                            json={"fingerprint": "fpF", "status": "abstain"},
+                            headers=_op_headers())
+        assert r.status_code == 200

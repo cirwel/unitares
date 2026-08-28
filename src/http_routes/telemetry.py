@@ -86,9 +86,14 @@ async def http_eisv_recent(request):
     # Opt-in projection. The default shape is unchanged: WebSocket clients and
     # any other consumer keep the full event. `fields=compact` returns only the
     # keys a trajectory chart reads, which is the difference between a ~6.3 KB
-    # and a ~0.5 KB event. The dashboard refreshes this view every ten seconds,
-    # so the full shape was moving ~194 KB per tick to draw twenty points, with
-    # `decision` alone (~1.9 KB/event) never read by any consumer.
+    # and a ~0.5 KB event — measured 343,393 B -> 29,799 B (91.3%) against the
+    # live ring buffer. `decision` alone is ~1.9 KB/event and is read by no
+    # consumer.
+    #
+    # CORRECTION (2026-08-28): an earlier version of this comment claimed the
+    # dashboard polls this "every ten seconds". It does not — that path is a
+    # fallback that runs only while the /ws/eisv socket is down. The saving is
+    # per fetch, not per tick.
     compact = str(
         request.query_params.get("fields", "")
     ).strip().lower() == "compact"
