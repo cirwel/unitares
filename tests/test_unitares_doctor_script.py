@@ -1986,3 +1986,78 @@ def test_cold_start_canary_is_detection_only(doctor):
     assert "external_signal" not in body
     assert "post_outcome" not in body
     assert "outcome_events" not in body
+
+
+# ---------------------------------------------------------------------------
+# anchor_all_positive_generator
+# ---------------------------------------------------------------------------
+#
+# src/http_routes/sentinel.py states the invariant on _SENTINEL_FINDING_EVENT_TYPES:
+# "watch that it still produces DISMISSALS. A family that only ever confirms has
+# become the all-positive generator Invariant 4 forbids." Nothing watched it,
+# because "watch that" was a comment. Measured live 2026-08-28:
+# sentinel_finding 17 confirmed / 0 dismissed since 2026-07-02, against
+# watcher_finding 2 / 55 on the same channel.
+
+def _rows(doctor, monkeypatch, rows):
+    monkeypatch.setattr(doctor, "_psql_rows", lambda *a, **k: rows)
+
+
+def test_all_positive_generator_warns_on_a_family_that_never_dismisses(doctor, monkeypatch):
+    """The live sentinel_finding shape, with a healthy family alongside it."""
+    _rows(doctor, monkeypatch, [
+        ["sentinel_finding", "17", "0"],
+        ["watcher_finding", "2", "55"],
+    ])
+    result = doctor.check_anchor_all_positive_generator("postgresql://x/y")
+    assert result.status == doctor.Status.WARN
+    assert "sentinel_finding: 17 confirmed, 0 dismissed" in result.message
+    # The healthy family must not be flagged, and should be named for contrast.
+    assert "watcher_finding" not in result.message
+    assert "watcher_finding 2/55" in result.detail
+
+
+def test_all_positive_generator_catches_the_mirror_failure(doctor, monkeypatch):
+    """A family that only ever dismisses also cannot disagree with itself."""
+    _rows(doctor, monkeypatch, [["some_finding", "0", "31"]])
+    result = doctor.check_anchor_all_positive_generator("postgresql://x/y")
+    assert result.status == doctor.Status.WARN
+    assert "0 confirmed, 31 dismissed" in result.message
+
+
+def test_all_positive_generator_does_not_fire_on_small_samples(doctor, monkeypatch):
+    """Below the floor, 'no dismissals yet' is cadence, not shape — a check that
+    cries wolf at n=3 trains operators to ignore it."""
+    _rows(doctor, monkeypatch, [["new_finding", "4", "0"]])
+    result = doctor.check_anchor_all_positive_generator("postgresql://x/y")
+    assert result.status == doctor.Status.SKIP
+    assert "n=4" in result.message
+
+
+def test_all_positive_generator_passes_when_both_verdicts_appear(doctor, monkeypatch):
+    _rows(doctor, monkeypatch, [["watcher_finding", "2", "55"]])
+    result = doctor.check_anchor_all_positive_generator("postgresql://x/y")
+    assert result.status == doctor.Status.PASS
+    assert "watcher_finding 2/55" in result.message
+
+
+def test_all_positive_generator_tells_the_operator_to_rule_out_unreachability(doctor, monkeypatch):
+    """'Never disagreed' and 'cannot disagree' are indistinguishable from a row
+    count and mean opposite things. The Sentinel CLI arm cannot in fact write a
+    dismissal (the outcome types are absent from VALID_OUTCOME_TYPES), so this
+    warning must not be read as detector quality."""
+    _rows(doctor, monkeypatch, [["sentinel_finding", "17", "0"]])
+    result = doctor.check_anchor_all_positive_generator("postgresql://x/y")
+    assert "UNREACHABLE" in result.detail
+    assert "VALID_OUTCOME_TYPES" in result.detail
+
+
+def test_all_positive_generator_skips_when_table_unavailable(doctor, monkeypatch):
+    _rows(doctor, monkeypatch, None)
+    result = doctor.check_anchor_all_positive_generator("postgresql://x/y")
+    assert result.status == doctor.Status.SKIP
+
+
+def test_all_positive_generator_is_registered_as_an_operator_check(doctor, tmp_path):
+    names = {c.name: c.mode for c in doctor.build_checks(tmp_path, "postgresql://x/y")}
+    assert names.get("anchor_all_positive_generator") == "operator"

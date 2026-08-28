@@ -480,14 +480,22 @@
 
     async eisv() {
       return withFallback(async () => {
-        // fields=compact: this view refreshes every 10s and reads only
-        // eisv/coherence/risk/timestamp plus the measurement-source tag. The
-        // full event carries ~6.3 KB of governance detail per row (decision,
-        // drift_trends, inputs, risk_reason — zero references in this file or
-        // in sections/eisv.js), which made each tick a ~194 KB download to
-        // draw twenty points. Compact is a strict SUBSET, so the same parsing
-        // below works against either shape and a server without the parameter
-        // simply returns the full event.
+        // fields=compact: this view reads only eisv/coherence/risk/timestamp
+        // plus the measurement-source tag, while the full event carries ~6.3 KB
+        // of governance detail per row (decision, drift_trends, inputs,
+        // risk_reason — zero references in this file or in sections/eisv.js).
+        // Measured against the live ring buffer: 343,393 B -> 29,799 B, 91.3%.
+        //
+        // CORRECTION (verified 2026-08-28): an earlier version of this comment
+        // said the saving recurred "every 10s per open tab". It does not.
+        // app.html's refreshTick is `if (wsStatus !== "open") refreshActive()`
+        // — a polling FALLBACK. Live updates normally arrive over /ws/eisv, so
+        // the recurring cost is only paid while the socket is down and this tab
+        // is active. The saving is real on every section load and on every
+        // fallback poll; it is not a steady-state drip.
+        //
+        // Compact is a strict SUBSET, so the same parsing below works against
+        // either shape and a server without the parameter returns the full event.
         const r = await authFetch("/v1/eisv/recent?limit=120&fields=compact");
         const evs = (r && r.events) || [];
         if (!evs.length) return null;

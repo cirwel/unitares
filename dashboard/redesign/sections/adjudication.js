@@ -99,12 +99,14 @@
         <div class="adj-msg">${esc(f.message || "(no message)")}</div>
         ${evidenceHtml(f.evidence)}
         <div class="adj-actions">
-          <button class="btn confirm" data-act="confirm">✓ Confirm — consistent with what I know</button>
+          <button class="btn confirm" data-act="confirm">✓ Confirm — I checked the evidence</button>
           <button class="btn fp" data-act="fp">✗ False positive</button>
           <span class="dismiss-group">
             <select class="reason">${opts}</select>
             <button class="btn dismiss" data-act="dismiss">Dismiss</button>
           </span>
+          <button class="btn abstain" data-act="abstain"
+            title="Records no verdict and no label. The finding returns later.">Can't determine</button>
         </div>
         <div class="adj-note" hidden></div>
       </div>`;
@@ -136,11 +138,16 @@
     try {
       const r = await window.DATA.adjudicate(fp, status, reason);
       note.hidden = false;
-      note.textContent = status === "confirmed"
-        ? "Recorded: confirmed (good label)."
-        : reason === "fp"
-          ? "Recorded: false positive (bad label)."
-          : `Recorded: dismissed (${reason}) — valid finding, not actioned.`;
+      // Abstention must not report itself as "recorded" — nothing was labelled.
+      // Saying so plainly is the whole point of offering the action.
+      note.textContent = status === "abstain"
+        ? `No verdict recorded. Hidden for ${r && r.suppressed_for_hours
+            ? Math.round(r.suppressed_for_hours / 24) + "d" : "a cooldown"}, then it returns.`
+        : status === "confirmed"
+          ? "Recorded: confirmed (good label)."
+          : reason === "fp"
+            ? "Recorded: false positive (bad label)."
+            : `Recorded: dismissed (${reason}) — valid finding, not actioned.`;
       card.classList.add("done");
       if (r && r.progress) {
         const slot = document.querySelector("#adj-progress-slot");
@@ -206,6 +213,13 @@
         const sel = card.querySelector("select.reason");
         verdict(card, "dismissed", sel ? sel.value : "unclear");
       });
+      // Abstention is not a verdict. It writes no outcome_event and no label —
+      // the item is suppressed for a cooldown and comes back. Offering it as a
+      // first-class action is the point: without a free exit, the cheapest way
+      // out of the queue was a confirmation, and the record shows exactly that
+      // (sentinel_finding: 17 confirmed, 0 dismissed, ever).
+      card.querySelector('[data-act="abstain"]').addEventListener("click", () =>
+        verdict(card, "abstain", null));
     });
   }
 
