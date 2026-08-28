@@ -4,7 +4,7 @@ description: >
   Use when an agent is participating in a UNITARES dialectic session — paused and needs to
   submit a thesis, reviewing another agent's thesis, or synthesizing conditions for resolution.
   Covers structured argumentation and convergence.
-last_verified: "2026-08-17"
+last_verified: "2026-08-28"
 freshness_days: 28
 source_files:
   - unitares/src/mcp_handlers/dialectic/handlers.py
@@ -100,6 +100,58 @@ dialectic(
 - **Reasoning**: Address the thesis directly. What does the data actually show?
 - **Concerns**: Be specific about risks. "I exceeds E by 0.3, indicating integrity debt" is useful.
 - **Observed metrics**: Include the actual EISV values backing your concerns
+
+### Stamp where the verdict came from
+
+If the review was produced **outside the server** — a Codex or other-model
+consult, a subagent council, any reviewer that is not this MCP — file it with
+`reviewer_provenance` so it becomes a governed record rather than an untracked
+opinion:
+
+```
+dialectic(
+  action: "antithesis",
+  session_id: "<session-id>",
+  concerns: ["<one per finding>"],
+  observed_metrics: {},
+  reviewer_provenance: {
+    reviewer_kind: "external_consult",   # see the caution below
+    backend: "codex-cli",
+    model_used: "<model>",
+    consult_source: "<what invoked it>"
+  }
+)
+```
+
+⛔**A misspelled `reviewer_kind` silently becomes `agent_submitted`** — the
+server falls back rather than erroring (`handlers.py`,
+`kind if kind in _REVIEWER_KINDS else "agent_submitted"`). So a typo does not
+fail loudly; it files your outside consult as if you had reviewed it yourself,
+which is the one misattribution this field exists to prevent. The agent-suppliable
+kinds are exactly `agent_submitted`, `external_consult`, and `orchestrated`
+(`in_process_synthetic` is the server's own stamp — do not send it).
+
+Recognised keys are dropped if unrecognised, and string values are truncated at
+200 characters. Useful ones beyond the example: `model_requested`,
+`models_used`, `tokens_used`, `cost_usd`, `latency_ms`, `finish_reason`,
+`fallback_from`, `warnings`, `consulted_at`.
+
+**Why this matters, measured 2026-08-28.** The unitares README records "Benefit
+from review and coordination — **Untested**", and names `reviewer_provenance` as
+how outside review becomes countable. Across all 669 recorded dialectic
+messages, 3 carry `agent_submitted` and **0 carry `external_consult`** — the
+path has never been used. Review sessions themselves are routine (136), so this
+is not a missing mechanism: it is an optional field nobody fills in. Every
+unfiled outside review leaves the record unable to move, however much review
+actually happens.
+
+- **Stamp it, don't infer it.** The field is descriptive, not identity proof.
+  Record the backend and model that actually ran.
+- **Mark failures as failures.** Set `degraded: true` when the consult errored,
+  timed out, or returned no verdict. A failed pass filed as a clean one is worse
+  than no row at all.
+- **Never backfill.** File only a review this session actually performed;
+  filing past passes after the fact fabricates governed history.
 
 If identity or session continuity looks suspect, verify with `identity()` before
 assuming the thesis belongs to the agent you think it does. An independent
