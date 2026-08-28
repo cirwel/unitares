@@ -59,3 +59,61 @@ async def test_missing_snapshot_degrades(tmp_path, monkeypatch):
     assert body["summary"]["total"] == 0
     assert body["stale"] is True
     assert any("census" in w.lower() for w in body["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_summary_view_omits_the_item_list_and_precomputes_ungated(tmp_path, monkeypatch):
+    """?view=summary serves the Overview card without the census body.
+
+    The card reads the summary block, `stale`, and a COUNT of ungated entries.
+    The full census was ~206 KB of per-automation detail (228 items live on
+    2026-08-28) for ~641 B of consumed fields — 99.7% discarded, on the DEFAULT
+    page, every load. Cheap on loopback; the whole render cost over a tunnel.
+
+    The ungated count is computed server-side precisely because counting is the
+    only thing the caller ever did with those notes arrays.
+    """
+    monkeypatch.setattr(access, "_check_http_auth", lambda *a, **k: True)
+    snap = tmp_path / "census.json"
+    snap.write_text(json.dumps({
+        "schema": "unitares.automation_census.v1",
+        "summary": {"total": 3, "by_source": {"launchd": 3}, "by_kind": {"dogfood": 1},
+                    "needs_attention": ["a"], "warnings": []},
+        "automations": [
+            {"id": "a", "notes": ["gate:ungated"]},
+            {"id": "b", "notes": ["gate:reviewed"]},
+            {"id": "c", "notes": ["gate:ungated"]},
+        ],
+    }))
+    monkeypatch.setenv("UNITARES_AUTOMATION_CENSUS_PATH", str(snap))
+
+    resp = await http_automations(SimpleNamespace(headers={}, query_params={"view": "summary"}))
+    assert resp.status_code == 200
+    body = json.loads(resp.body)
+
+    assert body["view"] == "summary"
+    assert body["summary"]["total"] == 3
+    assert body["ungated"] == 2
+    assert "stale" in body
+    # The point of the view: the payload nobody reads does not ship.
+    assert "automations" not in body
+
+
+@pytest.mark.asyncio
+async def test_default_response_is_unchanged_for_the_automations_tab(tmp_path, monkeypatch):
+    """The tab renders every item, so the default shape must not shrink."""
+    monkeypatch.setattr(access, "_check_http_auth", lambda *a, **k: True)
+    snap = tmp_path / "census.json"
+    snap.write_text(json.dumps({
+        "schema": "unitares.automation_census.v1",
+        "summary": {"total": 1, "by_source": {}, "by_kind": {}, "needs_attention": [], "warnings": []},
+        "automations": [{"id": "a", "notes": ["gate:ungated"]}],
+    }))
+    monkeypatch.setenv("UNITARES_AUTOMATION_CENSUS_PATH", str(snap))
+
+    for req in (SimpleNamespace(headers={}),
+                SimpleNamespace(headers={}, query_params={}),
+                SimpleNamespace(headers={}, query_params={"view": "nonsense"})):
+        body = json.loads((await http_automations(req)).body)
+        assert len(body["automations"]) == 1, "default shape must carry the items"
+        assert "view" not in body

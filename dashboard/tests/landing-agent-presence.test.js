@@ -44,10 +44,10 @@ describe("landing agent presence", () => {
           degraded: 0,
         },
       }),
-      automations: async () => ({
-        source: "live",
-        data: { summary: { total: 0, by_kind: {}, needs_attention: [] }, automations: [] },
-      }),
+      automationsSummary: async () => ({
+      source: "live",
+      data: { summary: { total: 0, by_kind: {}, needs_attention: [] }, ungated: 0 },
+    }),
     };
 
     dom.window.eval(landingSource);
