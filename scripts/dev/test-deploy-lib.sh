@@ -140,6 +140,82 @@ out2="$( set -euo pipefail; . "$LIB"; deploy_lib_ff_worktree t "$REPO2" "$DEP2" 
 ) && ok "deploy-status counts merge commits (--full-history)" \
   || bad "deploy-status merge-commit staleness counting"
 
+# ── deploy-status.sh: the hot-reload row must be able to report staleness ──
+# Regression guard for a blind spot measured 2026-08-28. The hot-reload branch
+# was `pid ? HOT-RELOAD : DOWN` and computed no staleness whatsoever, so the
+# lease plane -- the only hot-reload row -- could never report CURRENT or
+# STALE. Immediately after a full restart onto brand-new code the row read
+# HOT-RELOAD, and it would have read identically had the restart never
+# happened. The only drift signal it ever received was the BEHIND(n) override,
+# which describes the CHECKOUT, not the running process.
+#
+# EXTRACTED and EXECUTED, never retyped and never grepped. An earlier cut of
+# this test only grep'd the branch's source text for 'build_sha "$port"' and
+# 'verdict="STALE('. Every one of those greps passes against a swapped
+# bsha/sha, an inverted comparison, or a reversed "$bsha..$base" -- i.e. it
+# proved the code contained some words, not that it computed anything. Same
+# trap the promote() test below documents. So: run the real block against a
+# real git repo with the real commands stubbed only where they touch the host.
+(
+  set -uo pipefail
+  DS="$(dirname "$LIB")/deploy-status.sh"
+
+  # A real repo, so the delta count and the "$bsha..$base" operand order are
+  # genuinely exercised rather than mocked into agreement.
+  R="$SB/hotreload"; mkdir -p "$R"; cd "$R"
+  git init -q -b master .; git config user.email t@t; git config user.name t
+  mkdir -p svc
+  echo one > svc/f.txt; git add svc; git commit -qm c1
+  OLD=$(git rev-parse --short HEAD)
+  echo two > svc/f.txt; git commit -qam c2
+  echo three > svc/f.txt; git commit -qam c3
+  HEADSHA=$(git rev-parse --short HEAD)
+
+  body=$(sed -n '/^    hot-reload)/,/^      fi ;;$/p' "$DS")
+  eval "hotverdict() {
+    local pid_out=\"\$1\" sha_out=\"\$2\"
+    local label=svc port=9999 repo=\"$R\" base=master cpath=svc sha=\"\$3\"
+    local verdict= bsha= delta= n=
+    proc_pid() { [ -n \"\$pid_out\" ] && printf '%s' \"\$pid_out\"; }
+    build_sha() { [ -n \"\$sha_out\" ] && printf '%s' \"\$sha_out\"; }
+    case hot-reload in
+$body
+    esac
+    printf '%s' \"\$verdict\"
+  }"
+
+  # process sha == checkout sha -> CURRENT
+  [ "$(hotverdict 123 "$HEADSHA" "$HEADSHA")" = "CURRENT" ] || exit 20
+  # process sha behind the checkout -> STALE with the real commit delta (2).
+  # A reversed "$bsha..$base" would count 0 here and this would fail.
+  [ "$(hotverdict 123 "$OLD" "$HEADSHA")" = "STALE(Δ2)" ] || exit 21
+  # no build_sha published -> honestly unverifiable, never a healthy verdict
+  [ "$(hotverdict 123 "" "$HEADSHA")" = "HOT-RELOAD(?)" ] || exit 22
+  # no process -> DOWN outranks everything
+  [ "$(hotverdict "" "$HEADSHA" "$HEADSHA")" = "DOWN" ] || exit 23
+  # STALE is the required spelling: deploy-apply.sh selects work with
+  # startswith("STALE")/startswith("BEHIND") (deploy-apply.sh:114), so a
+  # bespoke verdict would be visible to the operator and invisible to the
+  # deployer -- the lease plane would silently stop auto-deploying.
+  grep -q 'startswith("STALE")' "$(dirname "$DS")/deploy-apply.sh" || exit 24
+) && ok "deploy-status hot-reload row computes CURRENT/STALE/HOT-RELOAD(?)/DOWN" \
+  || bad "deploy-status hot-reload staleness"
+
+# ── lease plane must publish the boot sha deploy-status scrapes ──
+# deploy-status's build_sha() greps the UNAUTHENTICATED /health. If the lease
+# plane stops publishing it there, the row silently degrades to HOT-RELOAD(?)
+# forever -- the same invisible-drift state, just differently spelled.
+(
+  set -euo pipefail
+  ROOT="$(cd "$(dirname "$LIB")/../.." && pwd)"
+  R="$ROOT/elixir/lease_plane/lib/unitares_lease_plane/http_router.ex"
+  # Must be inside the pre-auth liveness body, not the authed /v1/health.
+  awk '/defp liveness\(%Plug.Conn\{method: "GET", path_info: \["health"\]/,/^  end$/' "$R" \
+    | grep -q 'build_sha:' || exit 24
+  [ -f "$ROOT/elixir/lease_plane/lib/unitares_lease_plane/build_info.ex" ] || exit 25
+) && ok "lease plane publishes build_sha on the pre-auth /health" \
+  || bad "lease plane build_sha on /health"
+
 # ── deploy-status.sh: BEHIND must apply to every running/live verdict ──
 # Gating the BEHIND promotion on CURRENT made checkout drift structurally
 # invisible for anything that never reports CURRENT. live-from-checkout is set
@@ -163,7 +239,11 @@ out2="$( set -euo pipefail; . "$LIB"; deploy_lib_ff_worktree t "$REPO2" "$DEP2" 
   [ "$(promote CURRENT 5)"       = "BEHIND(5)" ] || exit 21
   [ "$(promote 'CURRENT*' 3)"    = "BEHIND(3)" ] || exit 22
   [ "$(promote HOT-RELOAD 1)"    = "BEHIND(1)" ] || exit 23
-  # preserved
+  # HOT-RELOAD(?) means "could not read the process's sha", NOT "the process is
+  # behind", so it must not mask the concrete BEHIND fact (2026-08-28). A
+  # hot-reload row that IS behind reports STALE(Δn) and is preserved below,
+  # like every other service.
+  [ "$(promote 'HOT-RELOAD(?)' 2)" = "BEHIND(2)" ] || exit 27
   # STALE moved from promoted to PRESERVED (2026-08-14). It is the sharper
   # fact — the RUNNING PROCESS is executing superseded code — and letting
   # "your checkout needs a pull" overwrite it made a STALE(12) service display
@@ -175,7 +255,7 @@ out2="$( set -euo pipefail; . "$LIB"; deploy_lib_ff_worktree t "$REPO2" "$DEP2" 
   [ "$(promote LIVE 0)"          = "LIVE" ]         || exit 28
   [ "$(promote LIVE '?')"        = "LIVE" ]         || exit 29
   exit 0
-) && ok "deploy-status BEHIND promotes CURRENT/LIVE/HOT-RELOAD, preserves STALE/DOWN/GHOST" \
+) && ok "deploy-status BEHIND promotes CURRENT/LIVE/HOT-RELOAD(?), preserves STALE/DOWN/GHOST" \
   || bad "deploy-status BEHIND promotion rules"
 
 # ── behind must be scoped to the service's OWN code path ──
