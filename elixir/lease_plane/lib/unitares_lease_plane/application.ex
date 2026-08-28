@@ -166,6 +166,10 @@ defmodule UnitaresLeasePlane.Application do
       System.get_env("UNITARES_DIALECTIC_BEAM_LIVENESS") == "1"
     )
 
+    # Resolve the boot sha before anything serves: /health reads it from app
+    # env so the pre-auth liveness body stays static and does no per-request work.
+    UnitaresLeasePlane.BuildInfo.resolve!()
+
     children =
       [
         {Postgrex, postgrex_opts()},

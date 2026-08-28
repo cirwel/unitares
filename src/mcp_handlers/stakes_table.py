@@ -155,13 +155,6 @@ _BASELINE: frozenset[tuple[str, Optional[str]]] = frozenset({
     ("dialectic", "request"),
     ("dialectic", "thesis"),
     ("dialectic", "antithesis"),
-    # research_registry
-    ("research_registry", "list"),
-    ("research_registry", "query"),
-    ("research_registry", "get"),
-    ("research_registry", "stats"),
-    ("research_registry", "export"),
-    ("research_registry", "record"),
     # single-purpose: identity lifecycle + self-governance + reads
     ("bind_session", None),
     ("call_model", None),

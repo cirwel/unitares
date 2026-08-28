@@ -1,5 +1,15 @@
 FROM elixir:1.19-slim
 
+# The image carries no .git, so the runtime `git rev-parse` in
+# UnitaresLeasePlane.BuildInfo cannot resolve anything and /health would publish
+# "unknown" forever -- leaving deploy-status stuck at HOT-RELOAD(?) for every
+# containerised deployment. Bake the sha at build time instead of asking each
+# operator to inject it. Mirrors #1792, which forwards UNITARES_BUILD_SHA
+# through docker-compose for the Python server for the same reason.
+#   docker build --build-arg UNITARES_BUILD_SHA=$(git rev-parse --short HEAD) .
+ARG UNITARES_BUILD_SHA=unknown
+ENV UNITARES_BUILD_SHA=${UNITARES_BUILD_SHA}
+
 ENV MIX_ENV=prod
 
 RUN apt-get update \

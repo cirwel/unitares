@@ -43,8 +43,6 @@ or [User Manual](../manual/README.md).
 - [`public-site.md`](public-site.md) — public landing page and ontology glossary publishing path.
 - [`dormant-capability-registry.md`](dormant-capability-registry.md) — built but
   unwired capabilities and their disposition.
-- [`research-registry.md`](research-registry.md) — agent-network research-run
-  registry and query surfaces.
 - [`kg-lineage-dashboard-handoff.md`](kg-lineage-dashboard-handoff.md) — deferred
   KG lineage dashboard handoff.
 
