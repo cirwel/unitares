@@ -56,6 +56,63 @@ async def _execute_sql_file(conn, relative_path: str) -> None:
     await conn.execute(sql)
 
 
+
+async def _report_foreign_migrations(conn) -> None:
+    """Name migrations the shared test database carries that this tree does not.
+
+    `governance_test` is SHARED across every worktree and is never reset, while
+    this bootstrap applies every migration in the CURRENT checkout. The database
+    therefore accumulates the union of every branch that has ever run tests, and
+    an unmerged branch's migration silently becomes part of the schema that
+    master's tests read.
+
+    That is not hypothetical. On 2026-08-28 migration 069
+    (`lease_plane_topic_messages`, unmerged) seeded a `topic` row into
+    `lease_plane.surface_kind_catalog`. A migration-027 test asserting the exact
+    catalog contents then failed on master and on every other branch at once —
+    for a reason present in neither the test nor the code under it. It read as a
+    flake, which is the expensive part: a cross-branch schema fact wearing the
+    costume of nondeterminism gets retried, not diagnosed.
+
+    `core.schema_migrations` already records what was applied. Nothing read it.
+    This does — loudly and by name, so the next such failure is legible at the
+    moment it happens.
+
+    Reporting only, never mutating. Dropping or rewinding a database that other
+    worktrees and agents are concurrently using would trade a confusing failure
+    for a destructive one. The remedy is the operator's call, and it is printed
+    rather than taken.
+    """
+    try:
+        rows = await conn.fetch("SELECT version, name FROM core.schema_migrations")
+    except Exception:  # noqa: BLE001 — table absent on a fresh DB; nothing to compare
+        return
+
+    on_disk = set()
+    for path in (_PROJECT_ROOT / "db/postgres/migrations").glob("*.sql"):
+        head = path.name.split("_", 1)[0]
+        if head.isdigit():
+            on_disk.add(int(head))
+
+    foreign = sorted(
+        (r["version"], r["name"]) for r in rows
+        if r["version"] is not None and int(r["version"]) not in on_disk
+    )
+    if not foreign:
+        return
+
+    listed = ", ".join(f"{v:03d}_{n}" for v, n in foreign)
+    print(
+        f"[test-db-bootstrap] WARNING: governance_test carries {len(foreign)} "
+        f"migration(s) absent from this checkout: {listed}. "
+        "The shared test database is AHEAD of this branch — another worktree "
+        "applied them. A DB-backed test failing here may be reading schema or "
+        "seed rows this branch does not create; check that before treating the "
+        "failure as flaky. To rebuild from this checkout alone: "
+        "dropdb governance_test && createdb governance_test (destructive, and "
+        "it will disrupt any other worktree mid-run)."
+    )
+
 async def ensure_test_database_schema() -> None:
     """
     Ensure governance_test has the schema expected by PostgresBackend and related tests.
@@ -119,6 +176,8 @@ async def ensure_test_database_schema() -> None:
                     f"[test-db-bootstrap] migration {migration.name} did not apply: "
                     f"{type(exc).__name__}: {exc}"
                 )
+
+        await _report_foreign_migrations(conn)
 
         # Ensure partitioned audit tables can accept inserts for current month.
         await _execute_sql_file(conn, "db/postgres/partitions.sql")
