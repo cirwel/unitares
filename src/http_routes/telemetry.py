@@ -24,6 +24,10 @@ logger = get_logger(__name__)
 # HTTP polling fallback for EISV (when WebSocket is blocked by proxy auth)
 async def http_eisv_latest(request):
     """Return the latest EISV update as JSON (polling fallback for WebSocket)."""
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not access._check_http_auth(request, http_api_token=http_api_token):
+        return access._http_unauthorized()
+
     if broadcaster_instance.last_update:
         return JSONResponse(broadcaster_instance.last_update)
     return JSONResponse({"type": "no_data", "message": "No EISV updates yet"}, status_code=200)
@@ -77,6 +81,10 @@ async def http_eisv_recent(request):
     reconnect and polling-fallback clients (when upstream proxies block the
     WS upgrade, e.g. Cloudflare tunnels without the WebSocket toggle).
     """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not access._check_http_auth(request, http_api_token=http_api_token):
+        return access._http_unauthorized()
+
     try:
         limit = int(request.query_params.get("limit", 120))
     except (TypeError, ValueError):
