@@ -35,7 +35,7 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 deploy_lib_acquire_lock "$TAG" "$DEPLOY"
 
 # Preflight parity with the sibling scripts: if the plist still loads from the
-# dev checkout, the kickstart below restarts the OLD location and the health
+# dev checkout, the restart below targets the OLD location and the health
 # probe passes against it. (Historically this script had no preflight — the
 # exact false-success gap the preflight exists to close.)
 deploy_lib_require_plist_target "$TAG" "$PLIST" "$DEPLOY" \
@@ -43,12 +43,28 @@ deploy_lib_require_plist_target "$TAG" "$PLIST" "$DEPLOY" \
   --recipe "[deploy]   sed -i '' 's|$REPO|$DEPLOY|g' \"$PLIST\"   # or re-render the plist template against $DEPLOY"
 
 deploy_lib_ff_worktree "$TAG" "$REPO" "$DEPLOY"
+PREV="$DEPLOY_LIB_PREV"
 
 echo "[deploy] compiling lease_plane (surfaces compile errors before the restart)"
 ( cd "$DEPLOY/elixir/lease_plane" && mix deps.get && mix compile )
 
+# kickstart when the plist is unchanged since the last deploy restart; full
+# RELOAD (bootout + bootstrap) when it changed. kickstart reuses launchd's
+# CACHED service definition, so a plist EnvironmentVariables edit silently
+# never loads while the health probe below still passes — a green deploy over
+# an unchanged process. This service is env-gated on several axes
+# (UNITARES_LEASE_IDENTITY_BINDING, UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS,
+# UNITARES_LEASE_TRUSTED_ISSUERS, UNITARES_LEASE_ATTESTATION_AUDIENCE, the
+# UNITARES_GOVERNED_EFFECT_EXECUTE_* set), so that is a routine operation, not a
+# rare one. #1933 moved deploy-mcp.sh onto this helper for the same reason;
+# this script was not converted then and a plist edit had to be applied by hand.
+# Called in a conditional (set -e would otherwise exit before the rollback).
 echo "[deploy] restarting $LABEL (gui domain — it is a LaunchAgent, not a system daemon)"
-launchctl kickstart -k "gui/$UID_NUM/$LABEL"
+if ! deploy_lib_restart_service "$TAG" "gui/$UID_NUM" "$LABEL" "$PLIST"; then
+  echo "[deploy] FAILED — restart did not complete (see above). Rolling the worktree back to ${PREV:0:8}." >&2
+  git -C "$DEPLOY" reset --hard "$PREV"
+  exit 1
+fi
 
 echo "[deploy] verifying health"
 TOKEN="$(
