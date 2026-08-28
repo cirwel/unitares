@@ -79,6 +79,8 @@ launchctl unload ~/Library/LaunchAgents/com.unitares.lease-plane.plist
 
 ## Health check
 
+`GET /health` (root, unversioned) is the **unauthenticated** liveness probe: `curl -s http://127.0.0.1:8788/health` returns a static `{"ok": true, "status": "ok", "service": "lease-plane", "protocol_version": "v1.0"}` with no bearer — use it to tell "up and fail-closed" apart from "down." It is the single deliberate exception to the bearer gate and exposes nothing but liveness; `/v1/health` remains bearer-gated (its payload carries identity-binding metrics).
+
 Sentinel monitors the lease plane via `GET /v1/health` (RFC §7.7).
 
 **What the probe is**
