@@ -8,11 +8,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.eisv_telemetry import (
+    AFFERENT_DIMENSION_LIMIT,
     BEHAVIORAL_SENSOR_FORMULA_VERSION,
+    EISV_AFFERENTS_SCHEMA,
     EISV_SHADOW_ABLATIONS_SCHEMA,
     EISV_TELEMETRY_SCHEMA,
     build_behavioral_derivation,
     build_eisv_telemetry_envelope,
+    build_submitted_afferents,
     summarize_eisv_telemetry,
     summarize_state_eisv_telemetry,
 )
@@ -71,7 +74,96 @@ def test_behavioral_derivation_is_bounded_exact_and_privacy_reduced():
     assert "response_text" not in json.dumps(trace)
 
 
+def test_submitted_afferents_restore_pre_projection_dimensions_without_authority():
+    afferents = build_submitted_afferents(
+        {
+            "body_anima": {
+                "warmth": 0.61,
+                "clarity": 0.82,
+                "stability": 0.77,
+                "presence": 0.43,
+                "boolean_is_not_a_measurement": True,
+                "string_is_not_a_measurement": "do not persist",
+                "nested_is_not_a_measurement": {"value": 0.4},
+                "nan_is_not_a_measurement": float("nan"),
+                "api_token": 123456,
+                "invalid/key": 0.5,
+            },
+            "state_space_provenance": {
+                "body_anima": {
+                    "source": "broker_published_anima",
+                    "role": "physical_self_sense",
+                    "secret": "must not persist",
+                }
+            },
+        },
+        submitted_source="physical",
+    )
+
+    assert afferents == {
+        "schema": EISV_AFFERENTS_SCHEMA,
+        "source": "physical",
+        "source_field": "body_anima",
+        "measurement_role": "raw_afferents",
+        "policy_applied": False,
+        "values": {
+            "clarity": 0.82,
+            "presence": 0.43,
+            "stability": 0.77,
+            "warmth": 0.61,
+        },
+        "provenance": {
+            "status": "caller_declared",
+            "source": "broker_published_anima",
+            "role": "physical_self_sense",
+        },
+    }
+    assert "secret" not in json.dumps(afferents)
+
+
+def test_canonical_afferent_shape_wins_and_dimension_count_is_bounded():
+    values = {f"dimension_{index:02d}": index / 100 for index in range(30)}
+    afferents = build_submitted_afferents(
+        {
+            "afferents": {
+                "values": values,
+                "provenance": {
+                    "schema": "sensor.afferents.v1",
+                    "source": "substrate_probe",
+                    "role": "physical_self_sense",
+                },
+            },
+            "body_anima": {"presence": 0.99},
+        },
+        submitted_source="physical",
+    )
+
+    assert afferents["source_field"] == "afferents"
+    assert len(afferents["values"]) == AFFERENT_DIMENSION_LIMIT
+    assert list(afferents["values"]) == [
+        f"dimension_{index:02d}" for index in range(AFFERENT_DIMENSION_LIMIT)
+    ]
+    assert "presence" not in afferents["values"]
+    assert afferents["provenance"] == {
+        "status": "caller_declared",
+        "schema": "sensor.afferents.v1",
+        "source": "substrate_probe",
+        "role": "physical_self_sense",
+    }
+
+
 def test_full_envelope_keeps_measurement_policy_and_actuator_separate():
+    submitted_afferents = build_submitted_afferents(
+        {
+            "body_anima": {
+                "warmth": 0.71,
+                "clarity": 0.82,
+                "stability": 0.84,
+                "presence": 0.52,
+            }
+        },
+        submitted_source="physical",
+    )
     envelope = build_eisv_telemetry_envelope(
         metrics={
             "E": 0.69, "I": 0.81, "S": 0.17, "V": -0.12,
@@ -88,6 +180,7 @@ def test_full_envelope_keeps_measurement_policy_and_actuator_separate():
         },
         submitted_sensor={"E": 0.71, "I": 0.82, "S": 0.16, "V": -0.1},
         submitted_source="physical",
+        submitted_afferents=submitted_afferents,
         derivation=_derivation(),
         policy_evaluation={"action": "proceed", "sub_action": "guide"},
         enforcement={"requested": False, "applied": False, "mode": "advisory"},
@@ -124,12 +217,20 @@ def test_full_envelope_keeps_measurement_policy_and_actuator_separate():
         "E": 0.71, "I": 0.82, "S": 0.16,
     }
     assert envelope["measurement"]["ode"]["values"]["E"] == 0.51
+    assert envelope["measurement"]["submitted_afferents"]["values"]["presence"] == 0.52
+    assert envelope["measurement"]["submitted_afferents"]["policy_applied"] is False
     assert envelope["policy_evaluation"]["action"] == "proceed"
     assert envelope["enforcement"]["applied"] is False
     assert envelope["shadow_ablations"]["schema"] == EISV_SHADOW_ABLATIONS_SCHEMA
     assert envelope["shadow_ablations"]["mode"] == "measurement_only"
     assert envelope["shadow_ablations"]["policy_applied"] is False
     summary = summarize_eisv_telemetry(envelope)
+    assert summary["afferents_recorded"] is True
+    assert summary["afferent_source"] == "physical"
+    assert summary["afferent_source_field"] == "body_anima"
+    assert summary["afferent_count"] == 4
+    assert summary["afferent_keys"] == ["clarity", "presence", "stability", "warmth"]
+    assert summary["afferent_policy_applied"] is False
     assert summary["legacy_coherence_behavioral_shadow_recorded"] is True
     assert summary["legacy_coherence_behavioral_shadow_eligible"] is True
     assert summary["legacy_coherence_confidence_shadow_recorded"] is True
@@ -349,6 +450,10 @@ async def test_post_update_persists_the_same_envelope_exposed_in_full_result():
         risk_score=0.1,
         agent_state={
             "_eisv_derivation": _derivation(),
+            "_submitted_afferents": build_submitted_afferents(
+                {"body_anima": {"presence": 0.42}},
+                submitted_source="physical",
+            ),
             "_eisv_shadow_ablations": {
                 "legacy_coherence_neutralized": {
                     "behavioral_sensor": {
@@ -370,6 +475,9 @@ async def test_post_update_persists_the_same_envelope_exposed_in_full_result():
     assert persisted is ctx.result["eisv_telemetry"]
     assert persisted["policy_evaluation"]["sub_action"] == "guide"
     assert persisted["measurement"]["behavioral"]["raw_observation"]["E"] == 0.7
+    assert persisted["measurement"]["submitted_afferents"]["values"] == {
+        "presence": 0.42
+    }
     candidate = persisted["shadow_ablations"]["candidates"][
         "legacy_coherence_neutralized"
     ]

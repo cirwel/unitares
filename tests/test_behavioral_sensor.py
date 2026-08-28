@@ -649,10 +649,48 @@ class TestPrepareUnlockedInputsContract:
         """Caller-supplied sensor_data["eisv"] lands in agent_state before the lock."""
         from src.mcp_handlers.updates.phases import prepare_unlocked_inputs
         explicit = {"E": 0.9, "I": 0.8, "S": 0.1, "V": 0.0}
-        ctx = self._make_ctx(sensor_data={"eisv": explicit})
+        ctx = self._make_ctx(sensor_data={
+            "eisv": explicit,
+            "body_anima": {
+                "warmth": 0.9,
+                "clarity": 0.8,
+                "stability": 0.9,
+                "presence": 0.4,
+            },
+            "state_space_provenance": {
+                "body_anima": {
+                    "source": "broker_published_anima",
+                    "role": "physical_self_sense",
+                }
+            },
+        })
         with patch("src.db.get_db", return_value=None):
             await prepare_unlocked_inputs(ctx)
         assert ctx.agent_state["sensor_eisv"] == explicit
+        afferents = ctx.agent_state["_submitted_afferents"]
+        assert afferents["values"]["presence"] == 0.4
+        assert afferents["policy_applied"] is False
+        assert afferents["provenance"]["role"] == "physical_self_sense"
+
+    @pytest.mark.asyncio
+    async def test_afferents_are_recorded_without_promoting_them_to_eisv(self):
+        """A raw afferent sidecar does not become a physical EISV sensor."""
+        from src.mcp_handlers.updates.phases import prepare_unlocked_inputs
+
+        ctx = self._make_ctx(sensor_data={
+            "afferents": {
+                "values": {"presence": 0.4},
+                "provenance": {"source": "substrate_probe"},
+            }
+        })
+        with patch("src.db.get_db", return_value=None):
+            await prepare_unlocked_inputs(ctx)
+
+        assert ctx.agent_state["_submitted_afferents"]["values"] == {
+            "presence": 0.4
+        }
+        assert "sensor_eisv" not in ctx.agent_state
+        assert "sensor_eisv_source" not in ctx.agent_state
 
 
 # ══════════════════════════════════════════════════
