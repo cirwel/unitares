@@ -16,7 +16,11 @@ from starlette.responses import JSONResponse
 
 
 from src.logging_utils import get_logger
-from src.mcp_listen_config import check_mcp_bearer, mcp_bearer_required
+from src.mcp_listen_config import (
+    check_mcp_bearer,
+    mcp_bearer_required,
+    rest_strict_required,
+)
 from src.dashboard_auth import (
     DASHBOARD_EXPECTED_ORIGIN,
     dashboard_session_authenticated,
@@ -154,11 +158,23 @@ def _check_ws_auth(websocket, *, http_api_token: str | None) -> bool:
         websocket.headers.get("authorization") or websocket.headers.get("Authorization")
     )
 
-    # Hosted posture: the MCP bearer governs every transport; no IP bypass.
-    # Dashboard cookies are intentionally NOT authorized into this bearer-only
-    # branch without a separate operator decision.
-    if mcp_bearer_required():
-        return check_mcp_bearer(f"Bearer {tok}" if tok else None)
+    # Strict posture: bearer, or a validated session from our exact RP origin.
+    #
+    # Same operator decision as _check_http_auth, with the Origin pin the
+    # local branch below already applies: WebSockets receive no CORS
+    # protection and sibling subdomains are same-site, so a cookie alone is
+    # not sufficient evidence on this transport.
+    if rest_strict_required():
+        # Guarded for the same reason as _check_http_auth: an unconfigured
+        # allowlist makes check_mcp_bearer answer True for everyone.
+        if mcp_bearer_required() and check_mcp_bearer(f"Bearer {tok}" if tok else None):
+            return True
+        if dashboard_session_authenticated(websocket):
+            origin = websocket.headers.get("origin") or websocket.headers.get("Origin")
+            return bool(origin) and secrets.compare_digest(
+                origin, DASHBOARD_EXPECTED_ORIGIN
+            )
+        return False
 
     # Legacy / local posture. Keep explicit tokens as break-glass, then allow
     # a DB-validated cookie only from our exact RP origin (WebSockets do not
@@ -180,9 +196,10 @@ def _check_ws_auth(websocket, *, http_api_token: str | None) -> bool:
 def _check_http_auth(request, *, http_api_token: str | None) -> bool:
     """Bearer token auth for HTTP endpoints.
 
-    Hosted mode — when ``UNITARES_MCP_BEARER_TOKENS`` is configured, the REST
-    surface inherits the strict ``/mcp`` posture: a valid bearer is required and
-    the trusted-network bypass does **not** apply. This closes a real gap: the
+    Strict mode — selected by ``UNITARES_REST_STRICT``, which defaults to
+    whether ``UNITARES_MCP_BEARER_TOKENS`` is configured: a valid MCP bearer or
+    a DB-validated dashboard session is required and the trusted-network bypass
+    does **not** apply. This closes a real gap: the
     trusted set includes every RFC1918 range (10/8, 192.168/16, 172.16/12) plus
     Tailscale, so a hosted server behind a cloud proxy (source IP typically
     ``10.x``) would otherwise bypass auth on the write path. Same token, same
@@ -192,12 +209,26 @@ def _check_http_auth(request, *, http_api_token: str | None) -> bool:
     bypass, while the rest require either ``UNITARES_HTTP_API_TOKEN`` or a
     DB-validated passkey session. An unset local token fails closed.
     """
-    # Hosted posture: the MCP bearer governs every transport; no IP bypass.
-    # Dashboard cookies are intentionally NOT authorized into this bearer-only
-    # branch without a separate operator decision.
-    if mcp_bearer_required():
+    # Strict posture: a bearer or a validated passkey session; no IP bypass.
+    #
+    # The session is admitted here by operator decision (2026-08-28). It is a
+    # DB-validated, revocable credential — strictly stronger evidence than the
+    # source-IP check that satisfies local posture — and without it strict
+    # posture has no browser story at all: a navigation cannot set an
+    # Authorization header, so the dashboard was unusable by anyone, signed in
+    # or not. The trusted-network bypass stays off, which is the gap this
+    # branch exists to close (a hosted proxy's source IP is typically 10.x).
+    # mcp_bearer_required() guards the bearer check because check_mcp_bearer
+    # returns True when NO allowlist is configured ("gate off") — correct for
+    # the /mcp gate it was written for, catastrophic here: strict posture with
+    # no bearer set would authenticate every caller. Before these two
+    # predicates were separable that state was unreachable; now it is one
+    # UNITARES_REST_STRICT=1 away, so it is checked explicitly.
+    if rest_strict_required():
         auth = request.headers.get("authorization") or request.headers.get("Authorization")
-        return check_mcp_bearer(auth)
+        if mcp_bearer_required() and check_mcp_bearer(auth):
+            return True
+        return dashboard_session_authenticated(request)
 
     # Legacy / local posture: trusted network -> bearer -> validated session.
     if _is_trusted_network(request):
