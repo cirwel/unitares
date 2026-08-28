@@ -208,13 +208,20 @@ build_sha() { # port -> sha or ""
 # from "reachable but no data".
 PI_SSH_HOST="${PI_SSH_HOST:-lumen}"
 PI_STATE_RAW="__unprobed__"
-pi_state() { # -> marker JSON (if any) + fallback short sha + __pi_ok__, or ""
+# Sets PI_STATE_RAW (never echoes): callers must NOT use command substitution,
+# or the cache assignment dies in the subshell. ServerAlive* bounds the
+# post-connect phase too — ConnectTimeout alone lets a Pi whose sshd accepts
+# but whose filesystem is wedged (dying-SD-card mode) hang this tool, and the
+# deploy flow starts by running it, precisely when the Pi is sickest.
+# __pi_dirty__ reports a dirty tree for the pre-marker fallback window, where
+# HEAD alone would assert PI-CURRENT in the original defect's exact shape.
+pi_probe() { # -> PI_STATE_RAW = marker JSON (if any) + fallback short sha + sentinels, or ""
   if [ "$PI_STATE_RAW" = "__unprobed__" ]; then
-    PI_STATE_RAW="$(ssh -o BatchMode=yes -o ConnectTimeout=2 "$PI_SSH_HOST" \
-      'cat ~/.anima/deployed_ref.json 2>/dev/null; git -C ~/anima-mcp rev-parse --short HEAD 2>/dev/null; echo __pi_ok__' \
+    PI_STATE_RAW="$(ssh -o BatchMode=yes -o ConnectTimeout=2 \
+      -o ServerAliveInterval=2 -o ServerAliveCountMax=2 "$PI_SSH_HOST" \
+      'cat ~/.anima/deployed_ref.json 2>/dev/null; git -C ~/anima-mcp rev-parse --short HEAD 2>/dev/null; [ -n "$(git -C ~/anima-mcp status --porcelain 2>/dev/null | head -1)" ] && echo __pi_dirty__; echo __pi_ok__' \
       2>/dev/null)" || PI_STATE_RAW=""
   fi
-  printf '%s' "$PI_STATE_RAW"
 }
 pi_json_str() { # raw key -> string value or "" (marker is pretty-printed JSON)
   printf '%s' "$1" | sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
@@ -243,16 +250,19 @@ for c in "${COMPONENTS[@]}"; do
     pi-deploy)
       # Never render this Mac's checkout branch@sha as if it were Pi state.
       if [ "$name" = "anima-mcp" ]; then
-        praw="$(pi_state)"
+        pi_probe; praw="$PI_STATE_RAW"
         if [[ "$praw" == *__pi_ok__* ]]; then
           p_head="$(pi_json_str "$praw" head)"
           p_branch="$(pi_json_str "$praw" branch)"
           p_dirty="$(printf '%s' "$praw" | sed -nE 's/.*"dirty"[[:space:]]*:[[:space:]]*(true|false).*/\1/p' | head -1)"
           if [ -z "$p_head" ]; then
             # Marker not shipped yet — the Pi's own git HEAD is the fallback
-            # (truthful there since deploy.sh step 1b, PR anima-mcp#217).
+            # (truthful there since deploy.sh step 1b, PR anima-mcp#217),
+            # plus the live-tree dirty sentinel, which the marker's startup
+            # snapshot replaces once it ships.
             p_head="$(printf '%s' "$praw" | sed -n 's/^\([0-9a-f]\{7,40\}\)$/\1/p' | tail -1)"
             p_branch="?"
+            [[ "$praw" == *__pi_dirty__* ]] && p_dirty="true"
           fi
           if [ -n "$p_head" ]; then
             br="$p_branch"; sha="${p_head:0:7}"
@@ -260,12 +270,16 @@ for c in "${COMPONENTS[@]}"; do
             # Empty delta = the local repo cannot resolve the Pi's sha
             # (usually: needs --fetch) — say so instead of guessing.
             delta=$(git -C "$repo" rev-list --count --full-history "$p_head..origin/main" 2>/dev/null)
+            # This row's behind column must describe the Pi, not this Mac's
+            # checkout — mixed provenance in one row is the defect this whole
+            # branch removes.
+            behind="${delta:--}"
             if [ "$p_dirty" = "true" ]; then verdict="PI-DIRTY"
             elif [ -z "$delta" ]; then verdict="PI-UNVERIFIED"
             elif [ "$delta" = "0" ]; then verdict="PI-CURRENT"
             else verdict="PI-STALE(Δ$delta)"; fi
           else
-            br="pi:?"; sha="?"; verdict="PI-UNVERIFIED"
+            br="pi:?"; sha="?"; behind="-"; verdict="PI-UNVERIFIED"
           fi
         else
           # Degrade to the local checkout, labeled so it can never again be
