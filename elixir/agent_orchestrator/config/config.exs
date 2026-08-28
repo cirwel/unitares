@@ -25,6 +25,12 @@ config :agent_orchestrator,
   result_retention_ms: 300_000,
   result_sweep_interval_ms: 60_000,
   result_store_max: 10_000,
+  # Direct-spawn idempotency is deliberately process-local and bounded to
+  # the same default window as retained results. It closes lost-response and
+  # concurrent-retry duplication without claiming restart persistence.
+  spawn_idempotency_retention_ms: 300_000,
+  spawn_idempotency_sweep_interval_ms: 60_000,
+  spawn_idempotency_max: 10_000,
   # Control surface (lib/agent_orchestrator/http_router.ex). Binds IPv4
   # 127.0.0.1 only — a single localhost trust boundary, matching the lease
   # plane (Bandit does not bind ::1, so the dotted-quad is intentional). The

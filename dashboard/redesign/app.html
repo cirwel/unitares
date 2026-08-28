@@ -112,6 +112,7 @@
     <a href="#dialectic" data-section="dialectic">Dialectic</a>
     <a href="#activity" data-section="activity">Activity</a>
     <a href="#eisv" data-section="eisv">EISV</a>
+    <a href="#risk" data-section="risk">Risk</a>
     <a href="#telemetry-health" data-section="telemetry-health">Telemetry</a>
     <a href="#research" data-section="research">Research</a>
     <a href="#metrics" data-section="metrics">Metrics</a>
@@ -179,6 +180,9 @@
       <h2 class="section-title">EISV</h2>
       <div id="eisv-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
     </section>
+    <section class="section" data-pane="risk" hidden>
+      <div id="risk-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
+    </section>
     <section class="section" data-pane="telemetry-health" hidden>
       <div id="telemetry-health-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
     </section>
@@ -226,6 +230,7 @@
 <script src="./sections/dialectic.js"></script>
 <script src="./sections/activity.js"></script>
 <script src="./sections/eisv.js"></script>
+<script src="./sections/risk.js"></script>
 <script src="./sections/telemetry-health.js"></script>
 <script src="./sections/research.js"></script>
 <script src="./sections/metrics.js"></script>
@@ -250,6 +255,7 @@ themeBtn.onclick = () => {
   if (window.EISV && window.EISV.retheme) window.EISV.retheme();
   if (window.TelemetryHealth && window.TelemetryHealth.retheme) window.TelemetryHealth.retheme();
   if (window.Metrics && window.Metrics.retheme) window.Metrics.retheme();
+  if (window.Risk && window.Risk.retheme) window.Risk.retheme();
 };
 
 // section switch
@@ -284,6 +290,7 @@ function lazyLoad(id) {
   if (id === "dialectic" && window.Dialectic) { loaded[id] = true; window.Dialectic.load(); }
   if (id === "activity" && window.Activity) { loaded[id] = true; window.Activity.load(); }
   if (id === "eisv" && window.EISV) { loaded[id] = true; window.EISV.load(); }
+  if (id === "risk" && window.Risk) { loaded[id] = true; window.Risk.load(); }
   if (id === "telemetry-health" && window.TelemetryHealth) { loaded[id] = true; window.TelemetryHealth.load(); }
   if (id === "research" && window.Research) { loaded[id] = true; window.Research.load(); }
   if (id === "metrics" && window.Metrics) { loaded[id] = true; window.Metrics.load(); }
@@ -308,11 +315,13 @@ const RELOAD = {
   residents: () => window.Residents && window.Residents.load(),
   eisv: () => window.EISV && window.EISV.load(),
   "telemetry-health": () => window.TelemetryHealth && window.TelemetryHealth.load(),
-  // Automations and Metrics are NOT auto-refreshed: Automations is a filter/
-  // search registry whose census snapshot changes rarely, and Metrics is
-  // Chronicler's DAILY scrape — a 10s tick is pointless and would rebuild the
-  // picker (closing an open dropdown) for no fresh data. Both load on nav and
-  // have a manual refresh.
+  // Automations, Metrics and Risk are NOT auto-refreshed: Automations is a
+  // filter/search registry whose census snapshot changes rarely, and Metrics
+  // and Risk both read Chronicler's DAILY scrape — a 10s tick is pointless and
+  // would rebuild the picker (closing an open dropdown) for no fresh data.
+  // Risk's per-agent panel is a whole-lifespan decimation, which a 10s tick
+  // cannot meaningfully move either. All three load on nav and have a manual
+  // refresh.
 };
 const livePill = document.getElementById("livePill");
 const liveText = document.getElementById("liveText");

@@ -2462,22 +2462,28 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                         session.paused_agent_id,
                     )
                     if dispatched:
-                        agent_id_spawned = dispatched.get("agent_id") or dispatched.get("id")
+                        execution_id_spawned = (
+                            dispatched.get("execution_id")
+                            or dispatched.get("agent_id")
+                            or dispatched.get("id")
+                        )
                         # Catch a FAST reviewer crash (bad import/url/etc, exits in
                         # <12s) and fall back to in-process inline so the session
                         # resolves now instead of stranding at antithesis. A success
                         # or still-running reviewer owns the slot → async path.
-                        if not await reviewer_crashed_fast(agent_id_spawned):
+                        if not await reviewer_crashed_fast(execution_id_spawned):
                             await _set_awaiting_facilitation(session, False)
                             result["orchestrated_review"] = True
                             result["reviewer_dispatch"] = {
-                                "agent_id": agent_id_spawned,
+                                "execution_id": execution_id_spawned,
+                                "agent_id": execution_id_spawned,
                                 "via": "agent-orchestrator",
                             }
                             await _emit_dialectic_event(
                                 "dialectic_reviewer_dispatched",
                                 session,
-                                orchestrator_agent_id=agent_id_spawned,
+                                orchestrator_execution_id=execution_id_spawned,
+                                orchestrator_agent_id=execution_id_spawned,
                                 effect_id=dispatched.get("effect_id"),
                                 governed=bool(dispatched.get("governed")),
                             )

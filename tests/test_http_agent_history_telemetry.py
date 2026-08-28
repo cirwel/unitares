@@ -144,3 +144,47 @@ def test_history_exposes_legacy_substrate_rows_without_calling_them_reports():
     assert payload["points"][0]["telemetry"]["missing_inputs"] == [
         "eisv_telemetry"
     ]
+
+
+def test_history_carries_the_action_and_verdict_paired_with_each_risk():
+    """The governance action / verdict tier persisted alongside risk_score.
+
+    Both live in state_json (record_agent_state writes them there), so the
+    endpoint reads them from the row it already selects — no extra column,
+    no join. Verified against 30d of live core.agent_state on 2026-08-27:
+    39,335 non-synthetic rows, 100% carrying action + verdict + risk_score,
+    vocabulary guide / approve / cirs_block / risk_pause.
+    """
+    row = _row()
+    row["state_json"] = {
+        **row["state_json"], "action": "risk_pause", "verdict": "high-risk",
+    }
+    db = _DB([row])
+    with patch("src.http_routes.access._check_http_auth", return_value=True), \
+         patch("src.db.get_db", return_value=db):
+        response = _client().get("/v1/agents/agent-1/history")
+
+    point = response.json()["points"][0]
+    assert point["action"] == "risk_pause"
+    assert point["verdict"] == "high-risk"
+    # The risk it is paired with must still be the persisted, pre-adjustment
+    # value — the trajectory-identity enrichment rewrites the response
+    # envelope, never this state row.
+    assert point["risk"] == 0.1
+
+
+def test_history_reports_a_missing_action_as_null_not_as_approve():
+    """Rows written before the action-write carry neither key.
+
+    Defaulting those to 'approve'/'safe' would invent a clean governance
+    record the data does not support, and would silently inflate any
+    approve-rate a consumer computes from this endpoint.
+    """
+    db = _DB([_row()])  # state_json has no action/verdict
+    with patch("src.http_routes.access._check_http_auth", return_value=True), \
+         patch("src.db.get_db", return_value=db):
+        response = _client().get("/v1/agents/agent-1/history")
+
+    point = response.json()["points"][0]
+    assert point["action"] is None
+    assert point["verdict"] is None

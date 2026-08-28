@@ -967,6 +967,14 @@ async def adjudicate_finding(
     args = build_resolution_outcome_args(
         "sentinel_finding", status, fingerprint, agent.agent_uuid, reason
     )
+    # Stamp the surface, mirroring the dashboard path in
+    # src/http_routes/sentinel.py. Without this the two operator routes were
+    # only HALF distinguishable: dashboard writes carried
+    # adjudicated_via="dashboard" and CLI writes carried nothing, so "absent"
+    # conflated "came through the CLI" with "written before the marker
+    # existed". Stamping both ends makes the split readable going forward,
+    # which is what any argument about retiring either surface needs.
+    args.setdefault("detail", {})["adjudicated_via"] = "cli"
     # record_result: advertised alias of outcome_event (raw twin dropped from
     # the lite MCP wire by #1292).
     await client.call_tool("record_result", args)
