@@ -119,4 +119,63 @@ defmodule UnitaresLeasePlane.HTTPRouter.LivenessTest do
     assert resp.status == 401
     assert parsed(resp)["error"] == "permission_denied"
   end
+
+  describe "build_sha (deploy staleness signal)" do
+    test "the pre-auth /health carries a build_sha" do
+      conn =
+        :get
+        |> Plug.Test.conn("/health")
+        |> UnitaresLeasePlane.HTTPRouter.call(UnitaresLeasePlane.HTTPRouter.init([]))
+
+      assert conn.status == 200
+      body = Jason.decode!(conn.resp_body)
+
+      # deploy-status.sh's build_sha() greps this exact key off the
+      # UNAUTHENTICATED /health. Drop it and the lease-plane row silently
+      # degrades to HOT-RELOAD(?) forever, which is the invisible-drift state
+      # this field exists to end.
+      assert Map.has_key?(body, "build_sha")
+      assert is_binary(body["build_sha"])
+      assert body["build_sha"] != ""
+    end
+
+    test "the body stays static: no DB, no per-request work" do
+      # /health must answer even with Postgres unreachable, so build_sha is
+      # resolved once at boot and read from app env. Two calls must agree and
+      # neither may touch the repo.
+      call = fn ->
+        :get
+        |> Plug.Test.conn("/health")
+        |> UnitaresLeasePlane.HTTPRouter.call(UnitaresLeasePlane.HTTPRouter.init([]))
+        |> then(& Jason.decode!(&1.resp_body)["build_sha"])
+      end
+
+      assert call.() == call.()
+    end
+
+    test "resolves the real checkout sha, not merely something non-empty" do
+      sha = UnitaresLeasePlane.BuildInfo.build_sha()
+      {expected, 0} = System.cmd("git", ["rev-parse", "--short", "HEAD"])
+      assert sha == String.trim(expected)
+    end
+
+    test "an unseeded cache reports unknown and NEVER resolves on demand" do
+      # The false-CURRENT trap: hot code loading does not re-run
+      # Application.start/2, so on a node that booted before this module existed
+      # the cache is empty. An on-demand fallback would resolve the CURRENT
+      # checkout and cache it as this node's BOOT sha, and deploy-status would
+      # then report CURRENT while the supervision tree was still the old one.
+      cached = Application.get_env(:lease_plane, :build_sha)
+
+      try do
+        Application.delete_env(:lease_plane, :build_sha)
+        assert UnitaresLeasePlane.BuildInfo.build_sha() == "unknown"
+        # ...and the call must not have populated the cache as a side effect.
+        assert Application.get_env(:lease_plane, :build_sha) == nil
+      after
+        Application.put_env(:lease_plane, :build_sha, cached)
+      end
+    end
+  end
+
 end
