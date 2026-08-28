@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "unitares-sdk"
-version = "0.2.2"
+version = "0.3.0"
 description = "Agent SDK for UNITARES governance — check-in loop, EISV state, identity anchors, and lease-plane client for long-lived AI agents"
 readme = "README.md"
 license = "Apache-2.0"
