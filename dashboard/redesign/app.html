@@ -307,7 +307,14 @@ const RELOAD = {
   activity: () => window.Activity && window.Activity.load(),
   residents: () => window.Residents && window.Residents.load(),
   eisv: () => window.EISV && window.EISV.load(),
-  "telemetry-health": () => window.TelemetryHealth && window.TelemetryHealth.load(),
+  // Telemetry is NOT auto-refreshed either, for the same reason and a measured
+  // cost. /v1/eisv/telemetry-health scans a 30-DAY cohort — its timeline buckets
+  // by DAY (31 entries) and every field is a multi-day aggregate, so a 10s tick
+  // cannot show anything new. It is cached 30s, which on a 10s tick means every
+  // third tick pays the recompute: measured 2026-08-28, 2.6ms on a cache hit and
+  // 1.64s on a miss. That is a 1.6s database scan every 30 seconds for as long
+  // as the tab is open, buying zero fresh data. Loads on nav, manual refresh.
+  //
   // Automations, Metrics and Risk are NOT auto-refreshed: Automations is a
   // filter/search registry whose census snapshot changes rarely, and Metrics
   // and Risk both read Chronicler's DAILY scrape — a 10s tick is pointless and

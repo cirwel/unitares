@@ -116,9 +116,18 @@
     // Precomputed server-side under ?view=summary — the card only ever counted
     // these, and shipping 228 notes arrays to compute one integer was the bulk
     // of the Overview's payload.
+    //
+    // Report UNCLASSIFIED, not `ungated`. `ungated` counts an explicit
+    // `gate:ungated` note that nothing writes — 0 of 228 carried it on
+    // 2026-08-28 — so the card read "0 ungated" forever, which is the most
+    // reassuring possible rendering of "no determination was made". The honest
+    // number is how many have no grounding classification at all: 123 of 228,
+    // by the same rule the Automations tab uses.
+    const aUnclassified = (auto && typeof auto.unclassified === "number") ? auto.unclassified : 0;
     const aUngated = (auto && typeof auto.ungated === "number") ? auto.ungated : 0;
-    const aWarn = aAtt > 0 || aStale || aUngated > 0;
-    const autoSub = `${aAtt} attention · ${aUngated} ungated · ${aKind.dogfood || 0} dogfood · ${aKind.ablation || 0} ablation${aStale ? " · stale" : ""}`;
+    const aWarn = aAtt > 0 || aStale || aUngated > 0 || aUnclassified > 0;
+    const autoSub = `${aAtt} attention · ${aUngated + aUnclassified} ungrounded`
+      + ` · ${aKind.dogfood || 0} dogfood · ${aKind.ablation || 0} ablation${aStale ? " · stale" : ""}`;
     // A null metric = its live source didn't answer this cycle. Show "—"
     // (unavailable), never a stale snapshot value passed off as current.
     const un = (v) => v == null;
