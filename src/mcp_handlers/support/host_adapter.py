@@ -75,6 +75,18 @@ _CLI_ENV_OVERRIDES = {
     "claude:host-adapter": "UNITARES_CLAUDE_CLI",
 }
 
+_TERMINAL_ANSWER_SCHEMA = "unitares.terminal_answer.v1"
+_TERMINAL_ANSWER_STATUSES = frozenset({"complete", "needs_input", "declined"})
+_TERMINAL_ANSWER_CONTRACT = f"""
+Return exactly one JSON object and no Markdown fence or surrounding text:
+{{"schema":"{_TERMINAL_ANSWER_SCHEMA}","status":"complete","answer":"your final answer"}}
+Use status "complete" only when answer is the final answer to the request. Use
+"needs_input" when required information is missing, and "declined" when you
+cannot answer. A plan, progress report, promise of future work, or description
+of what you would do is not a complete answer. The object must contain exactly
+the keys schema, status, and answer; answer must be a string.
+""".strip()
+
 
 def host_cli_env_var(host_id: str) -> Optional[str]:
     """The operator variable that pins this host's CLI, for recovery text.
@@ -213,6 +225,54 @@ def _parse_json_output(raw: str) -> Optional[Dict[str, Any]]:
         if isinstance(value, dict):
             return value
     return None
+
+
+def _terminal_answer_prompt(prompt: str) -> str:
+    """Add the response contract without interpolating the prompt into a shell."""
+    return f"{prompt.rstrip()}\n\n--- UNITARES response contract ---\n{_TERMINAL_ANSWER_CONTRACT}"
+
+
+def _validate_terminal_answer(text: str) -> tuple[str, Dict[str, str], Optional[str]]:
+    """Validate and unwrap the model-authored terminal-answer envelope.
+
+    Process exit and provider completion only establish that the CLI stopped.
+    They do not establish that the model supplied a final answer. This parser is
+    deliberately stricter than the provider-envelope parser above: warning text,
+    Markdown fences, extra keys, and guessed defaults all fail closed.
+    """
+    try:
+        payload = json.loads(text.strip())
+    except (json.JSONDecodeError, TypeError):
+        return "", {
+            "schema": _TERMINAL_ANSWER_SCHEMA,
+            "status": "malformed",
+        }, "Host CLI returned a malformed terminal answer envelope"
+
+    if not isinstance(payload, dict) or set(payload) != {"schema", "status", "answer"}:
+        return "", {
+            "schema": _TERMINAL_ANSWER_SCHEMA,
+            "status": "malformed",
+        }, "Host CLI returned an invalid terminal answer envelope"
+
+    schema = payload.get("schema")
+    status = payload.get("status")
+    answer = payload.get("answer")
+    if (
+        schema != _TERMINAL_ANSWER_SCHEMA
+        or status not in _TERMINAL_ANSWER_STATUSES
+        or not isinstance(answer, str)
+    ):
+        return "", {
+            "schema": _TERMINAL_ANSWER_SCHEMA,
+            "status": "malformed",
+        }, "Host CLI returned an invalid terminal answer envelope"
+
+    terminal_answer = {"schema": schema, "status": status}
+    if status != "complete":
+        return "", terminal_answer, f"Host CLI returned nonterminal answer status '{status}'"
+    if not answer.strip():
+        return "", terminal_answer, "Host CLI returned an empty complete answer"
+    return answer.strip(), terminal_answer, None
 
 
 def extract_cli_result(
@@ -357,7 +417,7 @@ async def invoke_host_adapter(
         # when the variable is absent from our own environment too.
         "env": {
             "HA_CLI": cli_path,
-            "HA_PROMPT": prompt,
+            "HA_PROMPT": _terminal_answer_prompt(prompt),
             "HA_SANDBOX": sandbox,
             "HA_MODEL": model or "",
             "USER": _current_username(),
@@ -461,8 +521,12 @@ async def invoke_host_adapter(
         if isinstance(output, str):
             output = output.splitlines()
         exit_status = result.get("exit_status")
-        text, provider_metadata = extract_cli_result(output, family=family)
+        provider_text, provider_metadata = extract_cli_result(output, family=family)
+        text, terminal_answer, terminal_answer_error = _validate_terminal_answer(
+            provider_text
+        )
         provenance.update(provider_metadata)
+        provenance["terminal_answer"] = terminal_answer
         provenance["latency_ms"] = int((time.monotonic() - started) * 1000)
         adapter_ok = exit_status == 0
         adapter_error = None
@@ -470,13 +534,14 @@ async def invoke_host_adapter(
             if provider_metadata.get("provider_is_error"):
                 adapter_ok = False
                 adapter_error = "Claude CLI reported an error result"
-            elif not text.strip():
-                adapter_ok = False
-                adapter_error = "Claude CLI returned an empty result"
+        if adapter_ok and terminal_answer_error:
+            adapter_ok = False
+            adapter_error = terminal_answer_error
         return {
             "ok": adapter_ok,
             "host_id": host_id,
             "dispatch_phase": "terminal",
+            "status": terminal_answer["status"],
             "text": text,
             "raw": "\n".join(output),
             "exit_status": exit_status,

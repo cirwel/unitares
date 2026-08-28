@@ -38,6 +38,7 @@ numbers that baseline it:
 
 Usage:
     python3 scripts/dev/adoption_kpi.py [--days 14] [--json]
+        [--experiment-id kg-adoption-pilot-v0-...]
         [--nudge-since 2026-08-17T00:00:00Z]
         [--nudge-until 2026-08-31T00:00:00Z]
         [--nudge-conversion-minutes 60]
@@ -48,7 +49,18 @@ import argparse
 import json
 import re
 import os
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+
+# This script is commonly invoked by path from the repository root. In that
+# mode Python adds ``scripts/dev`` rather than the repository itself to
+# ``sys.path``, so the resident-roster import below used to fail unless the
+# operator remembered ``PYTHONPATH=.``. Keep standalone invocation honest.
+_REPO_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 
 _REVIEW_NUDGE_CONVERSION_MINUTES = 60
@@ -326,12 +338,12 @@ def _snapshot_queries() -> dict:
               AND tool_name = 'outcome_event'
         """,
         "proactive_kg_surface": """
-            -- Proactive KG surfacing (adoption v0): emitted inside
-            -- mirror_signal.emit events as a kg_proactive_surface trigger.
-            -- `surfaced` is true only when the agent's response_mode was mirror,
-            -- so it actually saw the nudge — the rest are the shadow control.
+            -- Legacy KG candidate telemetry. These events are emitted only
+            -- inside an explicit include_memory_suggestions path, so they are
+            -- not unsolicited alerts. The historical payload.surfaced bit is
+            -- response-mode-derived even though KG discoveries pass through
+            -- every response shape; it cannot establish final delivery.
             SELECT count(*) AS fired,
-                   count(*) FILTER (WHERE (payload->>'surfaced')::boolean) AS surfaced,
                    count(DISTINCT agent_id) AS agents
             FROM audit.events
             WHERE ts > now() - make_interval(days => %(days)s)
@@ -401,19 +413,98 @@ def _snapshot_queries() -> dict:
     }
 
 
+def _experiment_queries() -> dict[str, str]:
+    """Queries for one preregistered agent-adoption experiment.
+
+    Generic ``audit.events`` is intentional. Experiment scores must not enter
+    ``audit.outcome_events`` because that table feeds governance calibration.
+    The experiment id is always an explicit equality filter: separate pilots
+    are never silently pooled.
+    """
+    return {
+        "run_receipts": """
+            SELECT count(*) AS run_receipts,
+                   coalesce(sum((payload->>'expected_steps')::int), 0)
+                       AS expected_steps,
+                   count(*) FILTER (
+                       WHERE coalesce((payload->>'preflight_passed')::boolean, false)
+                   ) AS preflight_passed_runs,
+                   count(*) FILTER (
+                       WHERE coalesce((payload->>'recording_canary_passed')::boolean, false)
+                   ) AS recording_canary_passed_runs
+            FROM audit.events
+            WHERE ts > now() - make_interval(days => %(days)s)
+              AND event_type = 'agent_adoption.run.v1'
+              AND payload->>'experiment_id' = %(experiment_id)s
+        """,
+        "cell_funnel": """
+            SELECT coalesce(payload->>'arm', 'unknown') AS arm,
+                   coalesce(payload->>'backend', 'none') AS backend,
+                   count(*) AS observed_steps,
+                   count(*) FILTER (WHERE coalesce((payload->>'eligible')::boolean, false))
+                       AS eligible_steps,
+                   count(*) FILTER (WHERE coalesce((payload->>'catalog_exposed')::boolean, false))
+                       AS catalog_exposed,
+                   count(*) FILTER (WHERE coalesce((payload->>'contextual_surface')::boolean, false))
+                       AS contextual_surface,
+                   count(*) FILTER (WHERE coalesce((payload->>'reminder_withdrawn')::boolean, false))
+                       AS reminder_withdrawn,
+                   count(*) FILTER (WHERE coalesce((payload->>'result_injected')::boolean, false))
+                       AS result_injected,
+                   count(*) FILTER (WHERE coalesce((payload->>'backend_reachable')::boolean, false))
+                       AS backend_reachable,
+                   count(*) FILTER (WHERE coalesce((payload->>'step_receipt_recorded')::boolean, false))
+                       AS step_receipt_recorded,
+                   count(*) FILTER (
+                       WHERE jsonb_array_length(coalesce(payload->'material_source_ids', '[]'::jsonb)) > 0
+                   ) AS material_source_use,
+                   count(*) FILTER (WHERE payload ? 'objective_quality')
+                       AS objective_outcomes_scored,
+                   count(*) FILTER (WHERE coalesce((payload->>'failed')::boolean, false))
+                       AS failures,
+                   count(*) FILTER (WHERE coalesce((payload->>'operator_intervention')::boolean, false))
+                       AS operator_interventions,
+                   avg((payload->>'objective_quality')::double precision)
+                       FILTER (WHERE payload ? 'objective_quality') AS mean_objective_quality,
+                   avg((payload->>'latency_ms')::double precision)
+                       FILTER (WHERE payload ? 'latency_ms') AS mean_latency_ms,
+                   avg((payload->>'tokens')::double precision)
+                       FILTER (WHERE payload ? 'tokens') AS mean_tokens,
+                   avg((payload->>'net_utility')::double precision)
+                       FILTER (WHERE payload ? 'net_utility') AS mean_net_utility,
+                   count(*) FILTER (
+                       WHERE coalesce((payload->>'post_withdrawal_retrieval')::boolean, false)
+                   ) AS post_withdrawal_retrieval
+            FROM audit.events
+            WHERE ts > now() - make_interval(days => %(days)s)
+              AND event_type = 'agent_adoption.step.v1'
+              AND payload->>'experiment_id' = %(experiment_id)s
+            GROUP BY 1, 2
+            ORDER BY 1, 2
+        """,
+    }
+
+
 def snapshot(
     days: int,
     *,
+    experiment_id: str | None = None,
     nudge_since=None,
     nudge_until=None,
     nudge_conversion_minutes: int = _REVIEW_NUDGE_CONVERSION_MINUTES,
 ) -> dict:
-    import psycopg2.extras  # type: ignore
-
     if days <= 0:
         raise ValueError("days must be positive")
+    if experiment_id is not None and not experiment_id.strip():
+        raise ValueError("experiment_id must be non-empty when supplied")
     if nudge_conversion_minutes <= 0:
         raise ValueError("nudge_conversion_minutes must be positive")
+
+    # Keep argument validation usable in lean/report-only environments where
+    # the optional PostgreSQL driver is intentionally absent.  A valid
+    # snapshot request still imports the driver immediately before DB use.
+    import psycopg2.extras  # type: ignore
+
     window_end = _normalize_utc_bound(nudge_until, name="nudge_until")
     if window_end is None:
         window_end = datetime.now(timezone.utc)
@@ -433,6 +524,7 @@ def snapshot(
         "nudge_since": window_start,
         "nudge_until": window_end,
         "nudge_conversion_minutes": nudge_conversion_minutes,
+        "experiment_id": experiment_id,
     }
     out: dict = {
         "window_days": days,
@@ -447,6 +539,22 @@ def snapshot(
             for key, sql in queries.items():
                 cur.execute(sql, query_params)
                 out[key] = dict(cur.fetchone())
+            if experiment_id is not None:
+                experiment_queries = _experiment_queries()
+                cur.execute(experiment_queries["run_receipts"], query_params)
+                run_receipts = dict(cur.fetchone())
+                cur.execute(experiment_queries["cell_funnel"], query_params)
+                cells = [dict(row) for row in cur.fetchall()]
+                observed_steps = sum(int(row["observed_steps"]) for row in cells)
+                expected_steps = int(run_receipts["expected_steps"])
+                out["agent_adoption_experiment"] = {
+                    "experiment_id": experiment_id,
+                    "run_receipts": run_receipts,
+                    "observed_steps": observed_steps,
+                    "expected_steps": expected_steps,
+                    "receipt_gap": max(expected_steps - observed_steps, 0),
+                    "cells": cells,
+                }
     cc = out["checkin_concentration"]
     cc["top2_share_pct"] = round(100 * cc["top2"] / cc["total"], 1) if cc["total"] else None
     ec = out["surface_return_rate"]
@@ -496,6 +604,13 @@ def snapshot(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--days", type=int, default=14)
+    parser.add_argument(
+        "--experiment-id",
+        help=(
+            "Report the step-separated funnel for exactly one "
+            "agent_adoption.run.v1/step.v1 experiment id"
+        ),
+    )
     parser.add_argument("--nudge-since")
     parser.add_argument("--nudge-until")
     parser.add_argument(
@@ -509,6 +624,7 @@ def main() -> int:
     try:
         snap = snapshot(
             args.days,
+            experiment_id=args.experiment_id,
             nudge_since=args.nudge_since,
             nudge_until=args.nudge_until,
             nudge_conversion_minutes=args.nudge_conversion_minutes,
@@ -548,8 +664,8 @@ def main() -> int:
     print(f"  outcome_event pipe: {op['success_pct']}% success "
           f"({op['identity_errors']} identity_errors of {op['total']})")
     pk = snap["proactive_kg_surface"]
-    print(f"  proactive KG surface: {pk['surfaced']} seen / {pk['fired']} fired "
-          f"by {pk['agents']} agents")
+    print(f"  legacy KG candidate events: {pk['fired']} emitted by "
+          f"{pk['agents']} agents; final delivery unknown")
     rn = snap["review_nudge"]
     rc = snap["review_nudge_conversion"]
     rw = snap["review_nudge_window"]
@@ -562,6 +678,20 @@ def main() -> int:
     rm = snap.get("recall_misses") or {}
     print(f"  recall misses (search no-value, #972): {rm.get('total', 0)} total "
           f"{rm.get('by_class', {})}")
+    experiment = snap.get("agent_adoption_experiment")
+    if experiment:
+        print(f"  adoption experiment {experiment['experiment_id']}: "
+              f"{experiment['observed_steps']}/{experiment['expected_steps']} "
+              f"step receipts ({experiment['receipt_gap']} missing)")
+        for cell in experiment["cells"]:
+            print(
+                "    "
+                f"{cell['arm']}/{cell['backend']}: "
+                f"{cell['observed_steps']} observed, "
+                f"{cell['material_source_use']} material-use, "
+                f"{cell['objective_outcomes_scored']} scored, "
+                f"{cell['failures']} failures"
+            )
     return 0
 
 

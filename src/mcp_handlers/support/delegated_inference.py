@@ -136,6 +136,24 @@ async def run_delegated_inference(
         model=request.model,
     )
     adapter_provenance = adapter_result.get("provenance") or {}
+    terminal_answer = adapter_provenance.get("terminal_answer")
+    validated_complete = (
+        isinstance(terminal_answer, dict)
+        and terminal_answer.get("schema") == "unitares.terminal_answer.v1"
+        and terminal_answer.get("status") == "complete"
+        and isinstance(adapter_result.get("text"), str)
+        and bool(adapter_result["text"].strip())
+    )
+    if adapter_result.get("ok") and not validated_complete:
+        # Defense in depth: a mock, stale adapter, or future transport must not
+        # bypass the semantic completion contract merely by returning ok=true.
+        adapter_result = {
+            **adapter_result,
+            "ok": False,
+            "status": "malformed",
+            "dispatch_phase": "terminal",
+            "error": "Host adapter omitted a validated terminal answer envelope",
+        }
     if not adapter_result.get("ok"):
         still_running = adapter_result.get("status") == "still_running"
         orchestrator_agent_id = adapter_result.get("agent_id")
@@ -145,7 +163,7 @@ async def run_delegated_inference(
         # lost after the orchestrator accepted it, even when no id reached us.
         fallback_safe = dispatch_phase in {"preflight", "spawn_rejected"}
         execution_started = not fallback_safe
-        terminal_result = "exit_status" in adapter_result and not still_running
+        terminal_result = dispatch_phase == "terminal" and not still_running
         possibly_running = execution_started and not terminal_result
         message = (
             f"Delegated inference exceeded its {request.timeout_s}s await window"
@@ -171,11 +189,15 @@ async def run_delegated_inference(
                 "orchestrator_agent_id": orchestrator_agent_id,
                 "exit_status": adapter_result.get("exit_status"),
                 "inference_provenance": adapter_provenance,
+                "execution_started": execution_started,
+                "possibly_running": possibly_running,
             },
             recovery={
                 "action": (
-                    "Retry with a shorter prompt or a larger timeout_s"
-                    if still_running
+                    "Do not retry yet. The delegated execution may still be running; "
+                    "ask the operator to reconcile or terminate it using the "
+                    "orchestrator controls."
+                    if possibly_running
                     else "Check the host adapter configuration and orchestrator logs"
                 ),
                 "related_tools": ["describe_inference_host", "health_check"],
@@ -223,6 +245,7 @@ async def run_delegated_inference(
         "prompt_hash": _sha256_text(request.prompt),
         "response_hash": _sha256_text(response_text),
         "finish_reason": adapter_provenance.get("finish_reason"),
+        "terminal_answer": terminal_answer,
         "configured_by": "operator",
         "warnings": adapter_provenance.get("warnings") or [],
     }
@@ -270,6 +293,8 @@ async def handle_delegate_inference(
         # DELEGATED_INFERENCE_FAILED (timeouts remain their own code).
         raw_error_code = failure.code
         raw_details = dict(failure.details)
+        raw_details["execution_started"] = failure.execution_started
+        raw_details["possibly_running"] = failure.possibly_running
         if (
             raw_error_code == "INFERENCE_HOST_UNAVAILABLE"
             and "dispatch_phase" in raw_details

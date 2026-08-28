@@ -1,0 +1,344 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unitares.local/schemas/kg-agent-adoption-enrollment-v0.json",
+  "title": "UNITARES bounded KG agent-adoption pilot enrollment v0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "experiment_id",
+    "status",
+    "protocol",
+    "task_manifest",
+    "assignment",
+    "utility",
+    "model",
+    "backends",
+    "review",
+    "execution"
+  ],
+  "properties": {
+    "schema": {
+      "const": "unitares.kg-agent-adoption.enrollment.v0"
+    },
+    "experiment_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "status": {
+      "const": "pilot_provisional"
+    },
+    "protocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "kg_decision_id"
+      ],
+      "properties": {
+        "schema": {
+          "const": "unitares.kg-agent-adoption.protocol.v0"
+        },
+        "kg_decision_id": {
+          "const": "2026-08-27T23:46:30.942448+00:00"
+        }
+      }
+    },
+    "task_manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "schema"
+      ],
+      "properties": {
+        "path": {
+          "const": "tests/kg_agent_adoption/task-chains-v0.json"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "schema": {
+          "const": "unitares.kg-agent-adoption.task-chains.v0"
+        }
+      }
+    },
+    "assignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "seed",
+        "analysis_seed",
+        "repetitions",
+        "unit",
+        "counterbalance",
+        "schedule_sha256"
+      ],
+      "properties": {
+        "seed": {
+          "type": "integer"
+        },
+        "analysis_seed": {
+          "type": "integer"
+        },
+        "repetitions": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "unit": {
+          "const": "complete_task_chain"
+        },
+        "counterbalance": {
+          "const": "digest_rotated_reversed_seven_cell_blocks"
+        },
+        "schedule_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "utility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "quality_range",
+        "cost_weights",
+        "effect_floor",
+        "claim_status"
+      ],
+      "properties": {
+        "quality_range": {
+          "const": [
+            0.0,
+            1.0
+          ]
+        },
+        "cost_weights": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "latency_ms",
+            "input_tokens",
+            "output_tokens",
+            "tool_failures",
+            "invalid_citations",
+            "regret",
+            "operator_interventions"
+          ],
+          "properties": {
+            "latency_ms": {
+              "$ref": "#/$defs/nonnegativeNumber"
+            },
+            "input_tokens": {
+              "$ref": "#/$defs/nonnegativeNumber"
+            },
+            "output_tokens": {
+              "$ref": "#/$defs/nonnegativeNumber"
+            },
+            "tool_failures": {
+              "$ref": "#/$defs/nonnegativeNumber"
+            },
+            "invalid_citations": {
+              "$ref": "#/$defs/nonnegativeNumber"
+            },
+            "regret": {
+              "$ref": "#/$defs/nonnegativeNumber"
+            },
+            "operator_interventions": {
+              "$ref": "#/$defs/nonnegativeNumber"
+            }
+          }
+        },
+        "effect_floor": {
+          "type": "null",
+          "description": "Intentionally unset for the plumbing pilot; a confirmatory floor requires a later reviewed enrollment."
+        },
+        "claim_status": {
+          "const": "pilot_descriptive_only"
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "model_id",
+        "model_digest",
+        "live_calls_authorized"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model_digest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "live_calls_authorized": {
+          "const": false
+        }
+      }
+    },
+    "backends": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unitares_kg",
+        "lexical_substitute"
+      ],
+      "properties": {
+        "unitares_kg": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "allowed_actions",
+            "writes_authorized"
+          ],
+          "properties": {
+            "mode": {
+              "const": "read_only"
+            },
+            "allowed_actions": {
+              "const": [
+                "search",
+                "details"
+              ]
+            },
+            "writes_authorized": {
+              "const": false
+            }
+          }
+        },
+        "lexical_substitute": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "algorithm",
+            "corpus"
+          ],
+          "properties": {
+            "algorithm": {
+              "const": "bm25_v1"
+            },
+            "corpus": {
+              "const": "task_manifest.substitute_corpus"
+            }
+          }
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "scope",
+        "governed_review_session",
+        "approved_by"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "unreviewed",
+            "offline_fixture_reviewed"
+          ]
+        },
+        "scope": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "offline_fixture_validation",
+            null
+          ]
+        },
+        "governed_review_session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "approved_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "offline_fixture_reviewed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "scope": {
+                "const": "offline_fixture_validation"
+              },
+              "governed_review_session": {
+                "type": "string",
+                "minLength": 1
+              },
+              "approved_by": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scored_live_model_runs_authorized",
+        "writes_authorized",
+        "runner_mode"
+      ],
+      "properties": {
+        "scored_live_model_runs_authorized": {
+          "const": false
+        },
+        "writes_authorized": {
+          "const": false
+        },
+        "runner_mode": {
+          "const": "validate_schedule_canary_summarize_only"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "nonnegativeNumber": {
+      "type": "number",
+      "minimum": 0
+    }
+  }
+}

@@ -1,0 +1,170 @@
+{
+  "schema": "unitares.kg-agent-adoption.task-chains.v0",
+  "description": "Synthetic plumbing-pilot chains for testing read-only prior-work discovery without making an adoption or efficacy claim.",
+  "substitute_corpus": [
+    {
+      "source_id": "kg-adoption-contract-v1",
+      "title": "Agent-adoption contract v1",
+      "text": "Lead with a read-only knowledge-graph pilot. Keep availability, optional use, demonstrated benefit, and critical-path reliance distinct. Compare complete task chains against an equally discoverable substitute. Use unavailable, passive catalog, one contextual surface followed by reminder withdrawal, and automatic result injection. Reminder-withdrawal continuation is secondary telemetry, not causal evidence.",
+      "tags": [
+        "agent-adoption",
+        "knowledge-graph",
+        "experiment"
+      ]
+    },
+    {
+      "source_id": "measurement-authority-contract",
+      "title": "Measurement authority contract",
+      "text": "A usage count may retire an instrument but may never retire a capability. Before interpreting a zero, distinguish never surfaced, not reachable, not recorded, and surfaced plus reachable plus recorded but unused. A validated failure may demote the lever while preserving the underlying goal.",
+      "tags": [
+        "measurement",
+        "funnel",
+        "stop-rule"
+      ]
+    },
+    {
+      "source_id": "orchestration-reliability-finding",
+      "title": "Bounded orchestration finding",
+      "text": "Orchestration remains second in the adoption order and advisory until cancellation, timeout, idempotence, provenance, failure containment, and objective outcome-lift gates pass. A timeout or plan-only result is a reliability deficit, not evidence that delegation has no value.",
+      "tags": [
+        "orchestration",
+        "reliability",
+        "advisory"
+      ]
+    },
+    {
+      "source_id": "exit-rights-contract",
+      "title": "Earned reversible dependency",
+      "text": "UNITARES may seek earned dependency only while exit remains easy: one-call bypass, complete export and restore, substitute-compatible interfaces, typed degraded absence, attributable and suppressible alerts, recurring offline drills, and no silent measurement-to-actuation path.",
+      "tags": [
+        "reversibility",
+        "portability",
+        "dependency"
+      ]
+    }
+  ],
+  "chains": [
+    {
+      "chain_id": "measurement-funnel",
+      "family": "measurement-authority",
+      "split": "pilot",
+      "steps": [
+        {
+          "step_id": "measurement-funnel-1",
+          "task": "A dashboard reports zero knowledge searches after a deployment. Choose the next action from VERIFY_FUNNEL, RETIRE_KG, or DECLARE_NO_VALUE.",
+          "eligible_for_prior_work": true,
+          "injection_query": "zero usage surfaced reachable recorded capability retirement",
+          "answer_key": {
+            "accepted_answers": [
+              "VERIFY_FUNNEL"
+            ],
+            "forbidden_answers": [
+              "RETIRE_KG",
+              "DECLARE_NO_VALUE"
+            ],
+            "material_source_ids": [
+              "measurement-authority-contract"
+            ]
+          }
+        },
+        {
+          "step_id": "measurement-funnel-2",
+          "task": "The next audit proves the tool was surfaced and reachable, but the transport recorder was blind. Choose REPAIR_RECORDING, DEMOTE_SURFACE, or RETIRE_CAPABILITY.",
+          "eligible_for_prior_work": true,
+          "injection_query": "tool surfaced reachable recorder blind zero interpretation",
+          "answer_key": {
+            "accepted_answers": [
+              "REPAIR_RECORDING"
+            ],
+            "forbidden_answers": [
+              "RETIRE_CAPABILITY"
+            ],
+            "material_source_ids": [
+              "measurement-authority-contract"
+            ]
+          }
+        },
+        {
+          "step_id": "measurement-funnel-3",
+          "task": "A preregistered, adequately instrumented test finds that one contextual reminder does not improve outcomes. Choose DEMOTE_SURFACING_LEVER, RETIRE_KG_CAPABILITY, or IGNORE_RESULT.",
+          "eligible_for_prior_work": true,
+          "injection_query": "validated failure demote contextual reminder surfacing lever preserve knowledge graph capability stop rule",
+          "answer_key": {
+            "accepted_answers": [
+              "DEMOTE_SURFACING_LEVER"
+            ],
+            "forbidden_answers": [
+              "RETIRE_KG_CAPABILITY",
+              "IGNORE_RESULT"
+            ],
+            "material_source_ids": [
+              "measurement-authority-contract",
+              "kg-adoption-contract-v1"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "chain_id": "earned-dependency",
+      "family": "dependency-and-exit",
+      "split": "pilot",
+      "steps": [
+        {
+          "step_id": "earned-dependency-1",
+          "task": "Choose the first agent-adoption wedge from READ_ONLY_KG, BOUNDED_ORCHESTRATION, PROACTIVE_ALERTS, or EISV_AUTHORITY.",
+          "eligible_for_prior_work": true,
+          "injection_query": "agent adoption first wedge read only knowledge graph",
+          "answer_key": {
+            "accepted_answers": [
+              "READ_ONLY_KG"
+            ],
+            "forbidden_answers": [
+              "PROACTIVE_ALERTS",
+              "EISV_AUTHORITY"
+            ],
+            "material_source_ids": [
+              "kg-adoption-contract-v1"
+            ]
+          }
+        },
+        {
+          "step_id": "earned-dependency-2",
+          "task": "A delegated review times out after an earlier response returned only a plan. Choose KEEP_BOUNDED_ADVISORY, PROMOTE_CRITICAL_PATH, or DECLARE_NO_DEMAND.",
+          "eligible_for_prior_work": true,
+          "injection_query": "orchestrator timeout plan only bounded advisory reliability",
+          "answer_key": {
+            "accepted_answers": [
+              "KEEP_BOUNDED_ADVISORY"
+            ],
+            "forbidden_answers": [
+              "PROMOTE_CRITICAL_PATH",
+              "DECLARE_NO_DEMAND"
+            ],
+            "material_source_ids": [
+              "orchestration-reliability-finding"
+            ]
+          }
+        },
+        {
+          "step_id": "earned-dependency-3",
+          "task": "Choose the acceptable long-term dependency posture from EARNED_REVERSIBLE_DEPENDENCY, CAPTIVE_LOCK_IN, or NO_DEPENDENCY_ALLOWED.",
+          "eligible_for_prior_work": true,
+          "injection_query": "earned reversible dependency exit rights export restore substitute",
+          "answer_key": {
+            "accepted_answers": [
+              "EARNED_REVERSIBLE_DEPENDENCY"
+            ],
+            "forbidden_answers": [
+              "CAPTIVE_LOCK_IN"
+            ],
+            "material_source_ids": [
+              "exit-rights-contract",
+              "kg-adoption-contract-v1"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
