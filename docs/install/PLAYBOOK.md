@@ -235,7 +235,7 @@ export UNITARES_MCP_ALLOWED_ORIGINS="http://<your-lan-ip>:*"
 python src/mcp_server.py --port 8767
 ```
 
-For a Cloudflare tunnel: see `docs/operations/OPERATOR_RUNBOOK.md`. Anything beyond loopback should also have `UNITARES_MCP_BEARER_TOKENS` set; otherwise REST is open.
+For a Cloudflare tunnel: see `docs/operations/OPERATOR_RUNBOOK.md`. Anything beyond loopback should also have `UNITARES_MCP_BEARER_TOKENS` set; otherwise REST is open. Note that REST posture follows `UNITARES_REST_STRICT`, which defaults to that bearer being configured — so setting the bearer closes REST too *unless* you deliberately set `UNITARES_REST_STRICT=0` to keep the trusted-network branch for local callers.
 
 ---
 

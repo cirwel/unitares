@@ -33,7 +33,7 @@ async def http_phase(request):
     # trusted or signed in. Injecting it unconditionally published the local
     # bearer to any anonymous caller — over a tunnel, to the internet — which
     # handed out the exact credential every gated route checks.
-    may_receive_token = not access.mcp_bearer_required() and access._check_http_auth(
+    may_receive_token = not access.rest_strict_required() and access._check_http_auth(
         request, http_api_token=http_api_token
     )
     phase_path = Path(__file__).resolve().parents[2] / "dashboard" / "phase.html"
@@ -162,15 +162,17 @@ async def http_dashboard_redesign(request):
         # http_phase above: an unconditional inject published the bearer to
         # anonymous callers. An unauthenticated browser still gets the shell;
         # its data calls 401 and authFetch redirects it to /auth/signin.
-        # Not in hosted posture: there the gate accepts ONLY the MCP bearer, so
-        # handing the browser UNITARES_HTTP_API_TOKEN gives it a credential
-        # every gated route rejects — and a non-empty token also suppresses
-        # data.js's 401 -> /auth/signin redirect, stranding the user on a
-        # silently stale page instead of sending them to sign in.
+        # Not in STRICT posture: there the gate honors only the MCP bearer or a
+        # validated session, so handing the browser UNITARES_HTTP_API_TOKEN
+        # gives it a credential every gated route rejects — and a non-empty
+        # token also suppresses data.js's 401 -> /auth/signin redirect,
+        # stranding the user on a silently stale page. Keyed to REST posture,
+        # not the /mcp gate: with the bearer set and UNITARES_REST_STRICT=0 the
+        # local token IS valid, and the browser should receive it.
         http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
         if (
             http_api_token
-            and not access.mcp_bearer_required()
+            and not access.rest_strict_required()
             and access._check_http_auth(request, http_api_token=http_api_token)
         ):
             token_script = (

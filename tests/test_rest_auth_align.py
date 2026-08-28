@@ -35,6 +35,9 @@ class _Req:
 def _clean_env(monkeypatch):
     monkeypatch.delenv("UNITARES_MCP_BEARER_TOKENS", raising=False)
     monkeypatch.delenv("UNITARES_HTTP_API_TOKEN", raising=False)
+    # Cleared explicitly: every "local posture" assertion below depends on
+    # it being absent, and it is about to exist in this machine's env.
+    monkeypatch.delenv("UNITARES_REST_STRICT", raising=False)
     yield
 
 
@@ -84,10 +87,40 @@ def test_local_untrusted_valid_dashboard_session_is_accepted(monkeypatch):
     assert _check_http_auth(req, http_api_token=None) is True
 
 
-def test_hosted_posture_does_not_accept_dashboard_session(monkeypatch):
+def test_strict_posture_accepts_a_validated_dashboard_session(monkeypatch):
+    """Reversed by operator decision, 2026-08-28.
+
+    This test previously asserted the opposite. Strict posture admitted only
+    the bearer, which left it with no browser story at all — a navigation
+    cannot set an Authorization header, so the dashboard was unusable by
+    anyone, signed in or not. A dashboard session is DB-validated and
+    revocable, i.e. stronger evidence than the source-IP check that satisfies
+    local posture; the trusted-network bypass stays off, which is the gap
+    strict posture actually exists to close.
+    """
     monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "hosted-tok")
     req = _Req(ip="8.8.8.8", dashboard_session={"operator_label": "operator"})
-    assert _check_http_auth(req, http_api_token=None) is False
+    assert _check_http_auth(req, http_api_token=None) is True
+
+
+def test_strict_posture_still_refuses_a_caller_with_neither(monkeypatch):
+    """The reversal admits a session — not everyone. No session, no bearer,
+    no entry, whatever the source IP."""
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "hosted-tok")
+    assert _check_http_auth(_Req(ip="8.8.8.8"), http_api_token=None) is False
+    assert _check_http_auth(_Req(ip="10.1.2.3"), http_api_token=None) is False
+
+
+def test_strict_posture_without_a_configured_bearer_admits_no_one(monkeypatch):
+    """UNITARES_REST_STRICT=1 with no allowlist must not authenticate every
+    caller: check_mcp_bearer answers True when the gate is unconfigured, which
+    is correct for /mcp and would be catastrophic here."""
+    monkeypatch.setenv("UNITARES_REST_STRICT", "1")
+    assert _check_http_auth(_Req(ip="10.1.2.3"), http_api_token=None) is False
+    assert (
+        _check_http_auth(_Req(ip="8.8.8.8", auth="Bearer anything"), http_api_token=None)
+        is False
+    )
 
 
 def test_local_untrusted_with_token_enforced(monkeypatch):

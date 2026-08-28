@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import hmac
 import os
+import logging
 import time
 from typing import List, Optional
+
+logger = logging.getLogger(__name__)
 
 from mcp.server.transport_security import TransportSecuritySettings
 
@@ -138,6 +141,55 @@ def mcp_bearer_tokens() -> List[str]:
 def mcp_bearer_required() -> bool:
     """True when a ``/mcp`` bearer allowlist is configured (gate is ON)."""
     return bool(mcp_bearer_tokens())
+
+
+_TRUTHY = {"1", "true", "yes", "on"}
+_WARNED_REST_STRICT_VALUES: set[str] = set()
+_FALSY = {"0", "false", "no", "off"}
+
+
+def rest_strict_required() -> bool:
+    """True when the REST surface runs the strict posture (bearer or session).
+
+    Separate from :func:`mcp_bearer_required` on purpose. One predicate used
+    to govern both surfaces, which made securing ``/mcp`` an all-or-nothing
+    act: configuring the bearer to close a publicly-reachable MCP endpoint
+    ALSO revoked the trusted-network branch for REST, so every resident, CLI
+    and LAN caller that never left the machine started answering 401 — and
+    the browser dashboard lost its only way in. The two surfaces have
+    different exposure and deserve different switches.
+
+    ``UNITARES_REST_STRICT`` decides, and when it is unset the answer is
+    whatever ``mcp_bearer_required()`` says — so an existing deployment that
+    set only the MCP bearer keeps exactly the posture it has today, and
+    loosening REST is an explicit ``UNITARES_REST_STRICT=0``, never a silent
+    side effect of this change.
+    """
+    # Blank counts as unset, matching env_truthy() above. os.getenv returns ""
+    # for a present-but-empty var — an ordinary state from a compose template
+    # line (`UNITARES_REST_STRICT=`) or an unset shell interpolation. Treating
+    # "" as unparseable would force strict on a deployment that configured
+    # nothing, which is precisely the lockout this function exists to prevent.
+    raw = (os.getenv("UNITARES_REST_STRICT") or "").strip()
+    if not raw:
+        return mcp_bearer_required()
+    value = raw.lower()
+    if value in _TRUTHY:
+        return True
+    if value in _FALSY:
+        return False
+    # An unparseable value must not read as "off" — fail toward the stricter
+    # posture and say so, rather than silently widening the surface. Warned
+    # once per distinct value: this function runs on every HTTP request and
+    # every WebSocket handshake, so an unconditional warning would emit at
+    # request rate for a single typo.
+    if raw not in _WARNED_REST_STRICT_VALUES:
+        _WARNED_REST_STRICT_VALUES.add(raw)
+        logger.warning(
+            "UNITARES_REST_STRICT=%r is not a boolean; treating REST as strict",
+            raw,
+        )
+    return True
 
 
 def check_mcp_bearer(
