@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 import urllib.error
 import urllib.request
@@ -410,10 +411,16 @@ class SyncGovernanceClient:
 
         data: dict | None = None
         for attempt in range(2):
+            headers = {"Content-Type": "application/json"}
+            # Same contract as the async client: present only when configured,
+            # so an ungated server sees exactly the request it saw before.
+            bearer = os.environ.get("UNITARES_MCP_BEARER_TOKEN") or None
+            if bearer:
+                headers["Authorization"] = f"Bearer {bearer}"
             req = urllib.request.Request(
                 self.rest_url,
                 data=payload,
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 method="POST",
             )
             try:

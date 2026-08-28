@@ -143,6 +143,12 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
         "UNITARES_CODEX_CLI",
         "UNITARES_LLM_MODEL",
         "UNITARES_OLLAMA_BASE_URL",
+        # The reviewer talks to gov-mcp through GovernanceClient. If that /mcp
+        # gate is configured, the child needs the bearer or every call it makes
+        # 401s — and the failure would look like a broken reviewer rather than
+        # a missing credential. Forwarded, not minted: this process does not
+        # decide the token, it only passes on what it was given.
+        "UNITARES_MCP_BEARER_TOKEN",
     )
     for name in reviewer_config:
         value = os.environ.get(name)
