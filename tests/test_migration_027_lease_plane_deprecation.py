@@ -46,9 +46,21 @@ async def test_migration_027_surface_kind_catalog_seeded():
         rows = await conn.fetch(
             "SELECT surface_kind FROM lease_plane.surface_kind_catalog ORDER BY surface_kind"
         )
-        kinds = [r["surface_kind"] for r in rows]
-        assert kinds == ["capture", "dialectic", "file", "maintenance", "resident", "td"], (
-            f"Expected canonical schemes seeded, got {kinds}"
+        kinds = {r["surface_kind"] for r in rows}
+        # SUBSET, not equality. This test owns migration 027's seed; it does not
+        # own the catalog, which is an extension point later migrations are
+        # SUPPOSED to add to (069 adds `topic` for message-transport addressing).
+        # Asserting the whole table's current contents made an early migration's
+        # test fail whenever a later one did its job — and because
+        # `governance_test` is shared, applying an unmerged branch's migration
+        # to it broke this test on master and on every other branch at once.
+        # Equality here was testing "nobody has extended the catalog", which is
+        # not a property migration 027 establishes or should defend.
+        seeded_by_027 = {"capture", "dialectic", "file", "maintenance", "resident", "td"}
+        missing = seeded_by_027 - kinds
+        assert not missing, (
+            f"Migration 027 seeds missing from surface_kind_catalog: {sorted(missing)}. "
+            f"Present: {sorted(kinds)}"
         )
     finally:
         await conn.close()
