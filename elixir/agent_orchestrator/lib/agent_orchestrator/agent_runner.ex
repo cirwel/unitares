@@ -549,13 +549,33 @@ defmodule AgentOrchestrator.AgentRunner do
     )
   end
 
+  # The reap path's counterpart to finalize/2's `exited` line, keeping the
+  # `exited` token so log arithmetic balances while status=nil + the reason
+  # mark it as a reap rather than a natural exit. Guarded like emit_stop: when
+  # the port never opened there was no `started` line, so logging an ending
+  # would skew the count the other way.
+  defp log_reaped(%{started_mono: nil}), do: :ok
+
+  defp log_reaped(state) do
+    Logger.info(
+      "execution #{state.execution_id} agent=#{state.agent_id} exited " <>
+        "status=nil reason=stopped (reaped while running)"
+    )
+  end
+
   @impl true
   def terminate(_reason, state) do
     # An agent reaped while still running (operator DELETE, app shutdown) never
     # reaches finalize/2, so before this it produced a `started` line and
-    # nothing else — the one ending with no record at all. Emit its span here,
-    # guarded on not-yet-finalized so a clean exit is never double-counted.
-    if is_nil(state.exit_status), do: emit_stop(state, nil, :stopped)
+    # nothing else — the one ending with no record at all. Emit its span AND
+    # its `exited` log line here, guarded on not-yet-finalized so a clean exit
+    # is never double-counted: without the log line, `grep -c started` vs
+    # `grep -c exited` arithmetic on the raw log diverged on every reap and
+    # read as a process leak when nothing leaked.
+    if is_nil(state.exit_status) do
+      log_reaped(state)
+      emit_stop(state, nil, :stopped)
+    end
 
     # Reap the whole process TREE when the child is still running at teardown
     # (operator stop / app shutdown — exit_status still nil). `claude`/SDK

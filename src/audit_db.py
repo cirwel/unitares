@@ -93,8 +93,9 @@ async def query_audit_events_async(
     end_time: Optional[str] = None,
     limit: int = 1000,
     order: str = "asc",
+    event_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Query audit events from PostgreSQL. Pass event_types for IN-list filtering."""
+    """Query normalized audit events, optionally by exact event ID."""
     from src.db import get_db
     db = get_db()
     if not hasattr(db, '_pool') or db._pool is None:
@@ -111,15 +112,18 @@ async def query_audit_events_async(
         end_time=end_dt,
         limit=limit,
         order=order,
+        event_id=event_id,
     )
     return [
         {
             "timestamp": e.ts.isoformat() if e.ts else None,
             "agent_id": e.agent_id,
+            "session_id": e.session_id,
             "event_type": e.event_type,
             "confidence": e.confidence,
             "details": e.payload,
             "event_id": e.event_id,
+            "raw_hash": e.raw_hash,
         }
         for e in events
     ]
