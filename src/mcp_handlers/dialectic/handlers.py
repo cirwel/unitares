@@ -1881,6 +1881,18 @@ async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[
         include_transcript = coerce_bool(
             arguments.get('include_transcript'), default=False
         )
+        # Opt-in projection for callers that only tally outcomes. The dashboard's
+        # Overview card reads phase/status off 50 sessions to show "N open" and
+        # "M of 50 recent failed", and nothing else — measured 130,936 B to
+        # compute two integers that need 1,114 B, 99.1% discarded, on the DEFAULT
+        # page on every load. `resolution` alone is ~629 B/session and is the
+        # bulk of it.
+        #
+        # A WHITELIST, so a field added upstream cannot silently re-inflate a
+        # polled response, and a strict SUBSET of the full shape, so one client
+        # parser handles either and a server without the parameter simply
+        # returns everything.
+        compact = str(arguments.get('fields') or '').strip().lower() == 'compact'
 
         sessions = await list_all_sessions(
             agent_id=agent_id,
@@ -1902,6 +1914,13 @@ async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[
                 },
                 "tip": "Use dialectic(action='list') with no filters to see all sessions"
             })
+
+        if compact:
+            keep = ("session_id", "phase", "status", "created", "paused_agent_label")
+            sessions = [
+                {k: sess[k] for k in keep if k in sess}
+                for sess in sessions
+            ]
 
         return success_response({
             "success": True,

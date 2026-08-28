@@ -188,6 +188,38 @@ async def http_automations(request):
         data["snapshot_path"] = snapshot_path
         data["snapshot_age_seconds"] = age
         data["stale"] = age > 86400  # older than 24h
+
+        # Opt-in summary view. The Overview card reads four things — the summary
+        # block, `stale`, and a COUNT of ungated entries — while the full census
+        # is ~206 KB of per-automation detail (228 items on 2026-08-28) that only
+        # the Automations tab renders. Measured: 205,933 B down to ~641 B of
+        # actually-consumed fields, 99.7% of that response discarded on the
+        # DEFAULT page, on every load. Fast on loopback, not over a tunnel.
+        #
+        # The ungated count is computed HERE rather than shipping notes arrays,
+        # because counting is the only thing the caller does with them. Default
+        # response shape is unchanged for the Automations tab.
+        # getattr: `view` is optional and absent on the normal path, so reading
+        # it must not be able to fail the request. A minimal request object with
+        # no query_params is a legitimate caller shape, and turning that into a
+        # 500 would make an opt-in projection a liability for every existing
+        # consumer of the default response.
+        _qp = getattr(request, "query_params", None) or {}
+        if str(_qp.get("view", "") or "").strip().lower() == "summary":
+            items = data.get("automations") or []
+            ungated = sum(
+                1 for it in items
+                if any(n == "gate:ungated" for n in (it.get("notes") or []))
+            )
+            return JSONResponse({
+                "schema": data.get("schema"),
+                "summary": data.get("summary"),
+                "ungated": ungated,
+                "generated_at": data.get("generated_at"),
+                "snapshot_age_seconds": age,
+                "stale": data["stale"],
+                "view": "summary",
+            })
         return JSONResponse(data)
     except Exception as exc:  # noqa: BLE001 — read-only panel endpoint, degrade gracefully
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
