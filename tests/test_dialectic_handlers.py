@@ -1925,6 +1925,54 @@ class TestHandleListDialecticSessions:
         assert data["tip"] == "Use dialectic(action='get', session_id='...') for full details"
 
     @pytest.mark.asyncio
+    async def test_compact_fields_projects_sessions_to_the_tally_keys(self, mock_context_agent):
+        """fields=compact for callers that only tally outcomes.
+
+        The dashboard Overview card reads phase/status off 50 sessions to render
+        "N open" and "M of 50 recent failed", and nothing else. Measured live
+        2026-08-28: 130,936 B to compute two integers that need 1,114 B — 99.1%
+        discarded, on the DEFAULT page, on every load, with `resolution` (~629 B
+        per session) the bulk of it.
+        """
+        from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
+
+        fat = [{
+            "session_id": "s1", "phase": "resolved", "paused_agent_label": "Lumen",
+            "created": "2026-08-28T00:00:00Z", "reviewer": "r1",
+            "resolution": {"reasoning": "x" * 600, "conditions": ["a", "b"]},
+            "topic": "y" * 80,
+        }]
+        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+                   return_value=fat), mock_context_agent:
+            result = await handle_list_dialectic_sessions({"fields": "compact"})
+
+        sess = parse_result(result)["sessions"][0]
+        # Everything the tally needs survives.
+        assert sess["phase"] == "resolved"
+        assert sess["session_id"] == "s1"
+        # The bulk does not.
+        assert "resolution" not in sess
+        assert "topic" not in sess
+        # A strict SUBSET of the full shape, so one parser handles either and a
+        # server without the parameter simply returns everything.
+        assert set(sess).issubset(set(fat[0]))
+
+    @pytest.mark.asyncio
+    async def test_default_list_shape_is_unchanged(self, mock_context_agent):
+        """The Dialectic tab renders detail, so omitting fields must not shrink."""
+        from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
+
+        fat = [{"session_id": "s1", "phase": "resolved",
+                "resolution": {"reasoning": "keep me"}, "topic": "keep me too"}]
+        for args in ({}, {"fields": "nonsense"}):
+            with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+                       return_value=fat), mock_context_agent:
+                result = await handle_list_dialectic_sessions(args)
+            sess = parse_result(result)["sessions"][0]
+            assert sess["resolution"] == {"reasoning": "keep me"}
+            assert sess["topic"] == "keep me too"
+
+    @pytest.mark.asyncio
     async def test_empty_results(self, mock_context_agent):
         """Returns empty list with helpful tip when no sessions found."""
         from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
