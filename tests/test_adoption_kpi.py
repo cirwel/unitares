@@ -1,8 +1,25 @@
 """Regression tests for scripts/dev/adoption_kpi.py."""
 
 from datetime import datetime, timezone
+from pathlib import Path
+import subprocess
+import sys
 
 import pytest
+
+
+def test_direct_script_invocation_does_not_require_pythonpath(tmp_path):
+    script = Path(__file__).parents[1] / "scripts" / "dev" / "adoption_kpi.py"
+
+    completed = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_onboard_conversion_query_counts_beam_external_outcomes():
@@ -42,6 +59,45 @@ def test_review_nudge_queries_use_exact_half_open_bounds():
         sql = queries[key]
         assert "ts >= %(nudge_since)s" in sql
         assert "ts < %(nudge_until)s" in sql
+
+
+def test_experiment_queries_are_exactly_scoped_and_keep_funnel_stages_separate():
+    from scripts.dev import adoption_kpi
+
+    queries = adoption_kpi._experiment_queries()
+    combined = "\n".join(queries.values())
+
+    assert "payload->>'experiment_id' = %(experiment_id)s" in queries["run_receipts"]
+    assert "payload->>'experiment_id' = %(experiment_id)s" in queries["cell_funnel"]
+    assert "event_type = 'agent_adoption.run.v1'" in queries["run_receipts"]
+    assert "event_type = 'agent_adoption.step.v1'" in queries["cell_funnel"]
+    for stage in (
+        "catalog_exposed",
+        "contextual_surface",
+        "backend_reachable",
+        "step_receipt_recorded",
+        "material_source_use",
+        "objective_outcomes_scored",
+    ):
+        assert stage in queries["cell_funnel"]
+    assert "GROUP BY 1, 2" in queries["cell_funnel"]
+    assert "audit.outcome_events" not in combined
+
+
+def test_experiment_query_names_observations_not_intent():
+    from scripts.dev import adoption_kpi
+
+    sql = "\n".join(adoption_kpi._experiment_queries().values()).lower()
+
+    for unsupported_intent_label in ("voluntary", "organic", "unprompted"):
+        assert unsupported_intent_label not in sql
+
+
+def test_experiment_id_rejects_empty_value_before_connecting():
+    from scripts.dev import adoption_kpi
+
+    with pytest.raises(ValueError, match="experiment_id must be non-empty"):
+        adoption_kpi.snapshot(14, experiment_id="   ")
 
 
 def test_normalize_utc_bound_requires_timezone_and_normalizes():

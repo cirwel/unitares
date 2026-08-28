@@ -61,6 +61,10 @@ async def test_delegate_inference_returns_attributed_provenance(monkeypatch):
                 "provider_usage": {"input_tokens": 10, "output_tokens": 31},
                 "provider_model_usage": {"claude-opus-5": {"outputTokens": 31}},
                 "warnings": ["multiple models"],
+                "terminal_answer": {
+                    "schema": "unitares.terminal_answer.v1",
+                    "status": "complete",
+                },
             },
         }
 
@@ -99,6 +103,10 @@ async def test_delegate_inference_returns_attributed_provenance(monkeypatch):
     assert inference["cost_usd"] == 0.02
     assert inference["prompt_hash"].startswith("sha256:")
     assert inference["response_hash"].startswith("sha256:")
+    assert inference["terminal_answer"] == {
+        "schema": "unitares.terminal_answer.v1",
+        "status": "complete",
+    }
     assert tracked["agent_uuid"] == "uuid-requester"
     assert tracked["tokens_used"] == 41
 
@@ -114,6 +122,8 @@ async def test_delegate_inference_fails_closed_when_adapter_unavailable(monkeypa
     parsed = _payload(result)
     assert parsed["success"] is False
     assert parsed["error_code"] == "INFERENCE_HOST_UNAVAILABLE"
+    assert parsed["execution_started"] is False
+    assert parsed["possibly_running"] is False
     assert "UNITARES_CLAUDE_CLI" in parsed["recovery"]["action"]
 
 
@@ -152,6 +162,10 @@ async def test_delegate_inference_surfaces_orchestrator_timeout(monkeypatch):
     assert parsed["success"] is False
     assert parsed["error_code"] == "DELEGATED_INFERENCE_TIMEOUT"
     assert parsed["orchestrator_agent_id"] == "orch-agent-timeout"
+    assert parsed["execution_started"] is True
+    assert parsed["possibly_running"] is True
+    assert parsed["recovery"]["action"].startswith("Do not retry yet.")
+    assert "reconcile or terminate" in parsed["recovery"]["action"]
 
 
 @pytest.mark.asyncio
@@ -217,6 +231,38 @@ async def test_acknowledged_spawn_without_id_is_possibly_running(monkeypatch):
     assert outcome.failure.execution_started is True
     assert outcome.failure.possibly_running is True
     assert outcome.failure.details["dispatch_phase"] == "spawn_acknowledged"
+    assert outcome.failure.details["execution_started"] is True
+    assert outcome.failure.details["possibly_running"] is True
+
+
+@pytest.mark.asyncio
+async def test_success_without_validated_terminal_answer_fails_closed(monkeypatch):
+    monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _claude_host())
+    monkeypatch.setattr(
+        di,
+        "invoke_host_adapter",
+        lambda *_args, **_kwargs: _async_value({
+            "ok": True,
+            "text": "I will inspect the repository next.",
+            "agent_id": "orch-agent-plan",
+            "exit_status": 0,
+            "provenance": {"finish_reason": "success"},
+        }),
+    )
+
+    outcome = await di.run_delegated_inference(di.DelegatedInferenceRequest(
+        prompt="review",
+        requesting_agent_uuid="requester",
+    ))
+
+    assert outcome.ok is False
+    assert outcome.failure is not None
+    assert outcome.failure.code == "DELEGATED_INFERENCE_FAILED"
+    assert outcome.failure.execution_started is True
+    assert outcome.failure.possibly_running is False
+    assert outcome.failure.details["adapter_status"] == "malformed"
+    assert outcome.failure.details["execution_started"] is True
+    assert outcome.failure.details["possibly_running"] is False
 
 
 @pytest.mark.asyncio
@@ -299,6 +345,10 @@ async def test_delegate_inference_routes_to_codex(monkeypatch):
                 "models_used": [],
                 "latency_ms": 900,
                 "warnings": ["CLI did not report an exact model identifier"],
+                "terminal_answer": {
+                    "schema": "unitares.terminal_answer.v1",
+                    "status": "complete",
+                },
             },
         }
 

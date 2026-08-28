@@ -168,9 +168,16 @@ def _enable(monkeypatch):
 
 def test_invoke_happy_path(monkeypatch):
     _enable(monkeypatch)
+    answer = {
+        "schema": "unitares.terminal_answer.v1",
+        "status": "complete",
+        "answer": "ANSWER",
+    }
     _patch_httpx(monkeypatch, [
         _FakeResp(201, {"ok": True, "agent_id": "ag-1"}),
-        _FakeResp(200, {"result": {"exit_status": 0, "output": ["codex", "ANSWER", "tokens used", "9"]}}),
+        _FakeResp(200, {"result": {"exit_status": 0, "output": [
+            "codex", json.dumps(answer), "tokens used", "9",
+        ]}}),
     ])
     r = _run(ha.invoke_host_adapter("codex:host-adapter", "hi", timeout_s=5))
     assert r["ok"] is True
@@ -185,7 +192,11 @@ def test_invoke_claude_is_safe_and_model_is_env_quoted(monkeypatch):
     _enable(monkeypatch)
     claude_payload = {
         "subtype": "success",
-        "result": "ANSWER",
+        "result": json.dumps({
+            "schema": "unitares.terminal_answer.v1",
+            "status": "complete",
+            "answer": "ANSWER",
+        }),
         "usage": {"input_tokens": 2, "output_tokens": 3},
         "modelUsage": {"claude-sonnet-4-5": {}},
     }
@@ -204,7 +215,9 @@ def test_invoke_claude_is_safe_and_model_is_env_quoted(monkeypatch):
     ))
 
     spawn_spec = state["calls"][0][1]["json"]
-    assert spawn_spec["env"]["HA_PROMPT"] == "review this"
+    assert spawn_spec["env"]["HA_PROMPT"].startswith("review this\n\n")
+    assert "unitares.terminal_answer.v1" in spawn_spec["env"]["HA_PROMPT"]
+    assert "A plan, progress report" in spawn_spec["env"]["HA_PROMPT"]
     assert spawn_spec["env"]["HA_MODEL"] == "claude-sonnet-4-5"
     assert spawn_spec["env"]["HA_CLI"] == "/usr/bin/claude"
     shell_command = spawn_spec["args"][1]
@@ -214,6 +227,11 @@ def test_invoke_claude_is_safe_and_model_is_env_quoted(monkeypatch):
     assert "--output-format json" in shell_command
     assert '"$HA_MODEL"' in shell_command
     assert r["text"] == "ANSWER"
+    assert r["status"] == "complete"
+    assert r["provenance"]["terminal_answer"] == {
+        "schema": "unitares.terminal_answer.v1",
+        "status": "complete",
+    }
     assert r["provenance"]["model_used"] == "claude-sonnet-4-5"
     assert r["provenance"]["models_used"] == ["claude-sonnet-4-5"]
 
@@ -243,6 +261,76 @@ def test_invoke_claude_provider_error_is_not_reported_as_success(monkeypatch):
     assert r["ok"] is False
     assert r["error"] == "Claude CLI reported an error result"
     assert r["provenance"]["provider_is_error"] is True
+
+
+def test_invoke_plan_only_output_fails_closed(monkeypatch):
+    _enable(monkeypatch)
+    _patch_httpx(monkeypatch, [
+        _FakeResp(201, {"ok": True, "agent_id": "ag-plan"}),
+        _FakeResp(200, {"result": {
+            "exit_status": 0,
+            "output": ["codex", "I will inspect the repository and report back."],
+        }}),
+    ])
+
+    result = _run(ha.invoke_host_adapter(
+        "codex:host-adapter",
+        "review this",
+        timeout_s=5,
+    ))
+
+    assert result["ok"] is False
+    assert result["dispatch_phase"] == "terminal"
+    assert result["status"] == "malformed"
+    assert result["text"] == ""
+    assert result["error"] == "Host CLI returned a malformed terminal answer envelope"
+
+
+def test_invoke_nonterminal_envelope_fails_closed(monkeypatch):
+    _enable(monkeypatch)
+    answer = {
+        "schema": "unitares.terminal_answer.v1",
+        "status": "needs_input",
+        "answer": "Please provide the referenced patch.",
+    }
+    claude_payload = {
+        "subtype": "success",
+        "result": json.dumps(answer),
+        "usage": {},
+        "modelUsage": {},
+    }
+    _patch_httpx(monkeypatch, [
+        _FakeResp(201, {"ok": True, "agent_id": "ag-needs-input"}),
+        _FakeResp(200, {"result": {
+            "exit_status": 0,
+            "output": [json.dumps(claude_payload)],
+        }}),
+    ])
+
+    result = _run(ha.invoke_host_adapter(
+        "claude:host-adapter",
+        "review this",
+        timeout_s=5,
+    ))
+
+    assert result["ok"] is False
+    assert result["dispatch_phase"] == "terminal"
+    assert result["status"] == "needs_input"
+    assert result["text"] == ""
+    assert result["error"] == "Host CLI returned nonterminal answer status 'needs_input'"
+
+
+def test_terminal_answer_envelope_rejects_extra_keys():
+    text, terminal_answer, error = ha._validate_terminal_answer(json.dumps({
+        "schema": "unitares.terminal_answer.v1",
+        "status": "complete",
+        "answer": "answer",
+        "plan": "first I will inspect",
+    }))
+
+    assert text == ""
+    assert terminal_answer["status"] == "malformed"
+    assert error == "Host CLI returned an invalid terminal answer envelope"
 
 
 def test_invoke_still_running_on_await_timeout(monkeypatch):

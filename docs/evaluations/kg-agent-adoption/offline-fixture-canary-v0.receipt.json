@@ -1,0 +1,277 @@
+{
+  "content": {
+    "attempted_operations": {
+      "audit_writes": 0,
+      "live_model_calls": 0,
+      "network_calls": 0,
+      "production_database_calls": 0,
+      "subprocess_calls": 0,
+      "unitares_kg_calls": 0
+    },
+    "checks": {
+      "atomic_receipt_drill": {
+        "different_overwrite_rejected": true,
+        "interrupted_publish_hidden": true,
+        "partial_temporary_removed": true,
+        "private_mode": true,
+        "residual_state": false
+      },
+      "backend_neutral_prompt_pairs": 18,
+      "byte_identical_schedule_rerun": true,
+      "exit_fixture_drill": {
+        "bundle_manifest_sha256": "d4a9e0c425f648c6dbcdbf44343b3b0db1425357c3a99c30ebfad136fedc921f",
+        "corruption_rejected": true,
+        "record_count": 4,
+        "records_sha256": "418ab3091bccebcca275b0f420e650a3d6dac429dbd18b1cdcb1e8e971e3be93",
+        "replacement_exact": true,
+        "residual_state": false,
+        "restore_idempotent": true,
+        "retrievals": [
+          {
+            "ordered_sources": [
+              {
+                "source_id": "measurement-authority-contract",
+                "source_sha256": "5bc5459ea67943d2a2d85ca19eb4a33fa3b14f62b170072aa575c6833ca2fcb1"
+              }
+            ],
+            "step_id": "measurement-funnel-1"
+          },
+          {
+            "ordered_sources": [
+              {
+                "source_id": "measurement-authority-contract",
+                "source_sha256": "5bc5459ea67943d2a2d85ca19eb4a33fa3b14f62b170072aa575c6833ca2fcb1"
+              }
+            ],
+            "step_id": "measurement-funnel-2"
+          },
+          {
+            "ordered_sources": [
+              {
+                "source_id": "kg-adoption-contract-v1",
+                "source_sha256": "e30624a7c52d4c8e18d7f64efccff6962265139372db93bad81bbb7d0c0b21ce"
+              },
+              {
+                "source_id": "measurement-authority-contract",
+                "source_sha256": "5bc5459ea67943d2a2d85ca19eb4a33fa3b14f62b170072aa575c6833ca2fcb1"
+              },
+              {
+                "source_id": "orchestration-reliability-finding",
+                "source_sha256": "e34f7f91514313dac12619e8a92c41786c458633cdc19dc8b4cdcc7aecabb441"
+              }
+            ],
+            "step_id": "measurement-funnel-3"
+          },
+          {
+            "ordered_sources": [
+              {
+                "source_id": "kg-adoption-contract-v1",
+                "source_sha256": "e30624a7c52d4c8e18d7f64efccff6962265139372db93bad81bbb7d0c0b21ce"
+              },
+              {
+                "source_id": "orchestration-reliability-finding",
+                "source_sha256": "e34f7f91514313dac12619e8a92c41786c458633cdc19dc8b4cdcc7aecabb441"
+              },
+              {
+                "source_id": "exit-rights-contract",
+                "source_sha256": "38d4ccdad7d4159fd9a49150eef46b54905839abab3f6cbdb65aa3340ffb7adb"
+              }
+            ],
+            "step_id": "earned-dependency-1"
+          },
+          {
+            "ordered_sources": [
+              {
+                "source_id": "orchestration-reliability-finding",
+                "source_sha256": "e34f7f91514313dac12619e8a92c41786c458633cdc19dc8b4cdcc7aecabb441"
+              },
+              {
+                "source_id": "exit-rights-contract",
+                "source_sha256": "38d4ccdad7d4159fd9a49150eef46b54905839abab3f6cbdb65aa3340ffb7adb"
+              },
+              {
+                "source_id": "kg-adoption-contract-v1",
+                "source_sha256": "e30624a7c52d4c8e18d7f64efccff6962265139372db93bad81bbb7d0c0b21ce"
+              }
+            ],
+            "step_id": "earned-dependency-2"
+          },
+          {
+            "ordered_sources": [
+              {
+                "source_id": "exit-rights-contract",
+                "source_sha256": "38d4ccdad7d4159fd9a49150eef46b54905839abab3f6cbdb65aa3340ffb7adb"
+              },
+              {
+                "source_id": "kg-adoption-contract-v1",
+                "source_sha256": "e30624a7c52d4c8e18d7f64efccff6962265139372db93bad81bbb7d0c0b21ce"
+              }
+            ],
+            "step_id": "earned-dependency-3"
+          }
+        ],
+        "sqlite_mode": "0600"
+      },
+      "missing_costs_fail_closed": true,
+      "negative_cases": [
+        "task_digest_mismatch",
+        "missing_registered_source",
+        "asymmetric_tool_contract",
+        "impossible_result_row",
+        "out_of_range_quality",
+        "missing_score",
+        "duplicate_schedule_row",
+        "missing_schedule_row"
+      ],
+      "offline_import_boundary": {
+        "checked_files": {
+          "scripts/dev/portable_knowledge_bundle.py": "c63d65d990e45bf00d1c611778aa9d660a6fe9be9a9158fba9ce30d87849dade",
+          "scripts/eval/kg_agent_adoption.py": "8401d9cab2ee0d3fed3e51d2e95af7bcc3d4ed172579550f07191fb84d814414",
+          "scripts/eval/run_kg_agent_adoption.py": "1b286c8c39538b9a412fb49fc12fb8eac6b75c47660b5cc473508509b7d59cfe"
+        },
+        "prohibited_imports_found": []
+      },
+      "retrieval_preflight": [
+        {
+          "ordered_sources": [
+            {
+              "source_id": "measurement-authority-contract",
+              "source_sha256": "5bc5459ea67943d2a2d85ca19eb4a33fa3b14f62b170072aa575c6833ca2fcb1"
+            }
+          ],
+          "step_id": "measurement-funnel-1"
+        },
+        {
+          "ordered_sources": [
+            {
+              "source_id": "measurement-authority-contract",
+              "source_sha256": "5bc5459ea67943d2a2d85ca19eb4a33fa3b14f62b170072aa575c6833ca2fcb1"
+            }
+          ],
+          "step_id": "measurement-funnel-2"
+        },
+        {
+          "ordered_sources": [
+            {
+              "source_id": "measurement-authority-contract",
+              "source_sha256": "5bc5459ea67943d2a2d85ca19eb4a33fa3b14f62b170072aa575c6833ca2fcb1"
+            },
+            {
+              "source_id": "kg-adoption-contract-v1",
+              "source_sha256": "e30624a7c52d4c8e18d7f64efccff6962265139372db93bad81bbb7d0c0b21ce"
+            },
+            {
+              "source_id": "orchestration-reliability-finding",
+              "source_sha256": "e34f7f91514313dac12619e8a92c41786c458633cdc19dc8b4cdcc7aecabb441"
+            }
+          ],
+          "step_id": "measurement-funnel-3"
+        },
+        {
+          "ordered_sources": [
+            {
+              "source_id": "kg-adoption-contract-v1",
+              "source_sha256": "e30624a7c52d4c8e18d7f64efccff6962265139372db93bad81bbb7d0c0b21ce"
+            },
+            {
+              "source_id": "orchestration-reliability-finding",
+              "source_sha256": "e34f7f91514313dac12619e8a92c41786c458633cdc19dc8b4cdcc7aecabb441"
+            },
+            {
+              "source_id": "exit-rights-contract",
+              "source_sha256": "38d4ccdad7d4159fd9a49150eef46b54905839abab3f6cbdb65aa3340ffb7adb"
+            }
+          ],
+          "step_id": "earned-dependency-1"
+        },
+        {
+          "ordered_sources": [
+            {
+              "source_id": "orchestration-reliability-finding",
+              "source_sha256": "e34f7f91514313dac12619e8a92c41786c458633cdc19dc8b4cdcc7aecabb441"
+            },
+            {
+              "source_id": "exit-rights-contract",
+              "source_sha256": "38d4ccdad7d4159fd9a49150eef46b54905839abab3f6cbdb65aa3340ffb7adb"
+            },
+            {
+              "source_id": "kg-adoption-contract-v1",
+              "source_sha256": "e30624a7c52d4c8e18d7f64efccff6962265139372db93bad81bbb7d0c0b21ce"
+            }
+          ],
+          "step_id": "earned-dependency-2"
+        },
+        {
+          "ordered_sources": [
+            {
+              "source_id": "exit-rights-contract",
+              "source_sha256": "38d4ccdad7d4159fd9a49150eef46b54905839abab3f6cbdb65aa3340ffb7adb"
+            },
+            {
+              "source_id": "kg-adoption-contract-v1",
+              "source_sha256": "e30624a7c52d4c8e18d7f64efccff6962265139372db93bad81bbb7d0c0b21ce"
+            }
+          ],
+          "step_id": "earned-dependency-3"
+        }
+      ],
+      "runtime_deny_all_guard": {
+        "network_blocked": true,
+        "subprocess_blocked": true
+      },
+      "schedule": {
+        "adaptive_substitution": false,
+        "blocks": 2,
+        "cells_per_block": 7,
+        "fixed_ordering": true,
+        "rows": 14,
+        "unique_row_ids": true
+      }
+    },
+    "claims": {
+      "behavioral_evidence": false,
+      "live_execution_authorized": false,
+      "live_kg_parity_proven": false,
+      "offline_fixture_passed": true,
+      "production_plumbing_proven": false,
+      "scored_execution_authorized": false
+    },
+    "dependency_versions": {
+      "python_implementation": "CPython",
+      "python_version": "3.14.0",
+      "receipt_canonicalization": "json-sort-keys-compact-utf8-v1",
+      "sqlite_version": "3.50.4"
+    },
+    "digests": {
+      "analysis_seed": 2026082702,
+      "enrollment_schema_sha256": "3c3729cac5bae04bf6346d1d53c7bdb73758ddc41c8f47665a684fec4e2ad304",
+      "enrollment_sha256": "872e28cc35f8d7f280a7b4523b506a171cc8f622775b864e77b8965f90992387",
+      "schedule_sha256": "8deb5ea646e88859a2bc5e93e7324c565add25797902dbe89217cdf081237e88",
+      "substitute_corpus_sha256": "ad5f24ed965f8e2a7aa9bb3c21d1ead4618450042b157e737f3a48633058e387",
+      "task_manifest_sha256": "53ec990cd27f298899679adc88481a456ffd50dd23635c86c38dd005509eb91f",
+      "tool_contract_sha256": "2adb6fed7e43faed9158de83ec3c5d818fa20b600c38e2008593d50e763544e6"
+    },
+    "experiment_id": "kg-agent-adoption-pilot-v0-example",
+    "review_basis": {
+      "enrollment_review_status": "unreviewed",
+      "session_id": "8e76d528d0baa5ba",
+      "verdict_at_execution": "hold"
+    },
+    "schema": "unitares.kg-agent-adoption.offline-fixture-receipt.v0",
+    "scope": "offline_fixture_validation",
+    "status": "passed",
+    "unproven_live_gates": [
+      "independent task and enrollment content",
+      "configured provider, model, and model digest",
+      "objective effect floor and power rationale",
+      "frozen-to-live UNITARES KG corpus and source-ID mapping",
+      "awaited audit.events write/read canary",
+      "fresh identity and model-context enforcement",
+      "private raw prompt/response storage",
+      "complete end-to-end event receipts",
+      "explicit operator authorization"
+    ]
+  },
+  "receipt_content_sha256": "b009eeddcc732be5cd463cef913c2cee218463ed3fb81d055db02d714201f9c2",
+  "schema": "unitares.content-addressed-receipt.v0"
+}
