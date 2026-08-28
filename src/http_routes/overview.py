@@ -400,6 +400,10 @@ async def http_incidents(request):
 # Activity sparkline endpoint
 async def http_activity(request):
     """Return check-in activity buckets for sparkline chart."""
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not access._check_http_auth(request, http_api_token=http_api_token):
+        return access._http_unauthorized()
+
     try:
         window = int(request.query_params.get("window", 60))
         bucket = int(request.query_params.get("bucket", 5))
