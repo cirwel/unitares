@@ -17,6 +17,12 @@
 #   DOWN         a launchd service that is not currently running
 #   LIVE         live-from-checkout (no restart needed; tree is live)
 #   n/a          library / Pi-deployed (no local long-running process)
+#   PI-CURRENT   (pi-deploy) the Pi itself reports the origin/main tip
+#   PI-STALE(Δn) (pi-deploy) the Pi runs n commits behind origin/main
+#   PI-DIRTY     (pi-deploy) the Pi's marker says its tree is dirty
+#   PI-UNVERIFIED       Pi answered but gave nothing this Mac can verify
+#   n/a(Pi:unreachable) ssh probe failed; the row degrades to the LOCAL
+#                       checkout, labeled so it cannot read as Pi truth
 #
 # Footgun flag: ⚠DEV = the service loads from the SHARED dev checkout
 # (~/projects/unitares); a restart deploys whatever branch is checked out there.
@@ -186,6 +192,34 @@ build_sha() { # port -> sha or ""
     | head -1
 }
 
+# --- Pi state: anima-mcp runs on the Pi, not on this Mac ---------------------
+# For pi-deploy rows the LOCAL checkout's branch@sha is a lie: this Mac's
+# ~/projects/anima-mcp sits on whatever working branch someone left there
+# while the Pi runs main. Measured 2026-08-28: the table rendered
+# codex/lumen-disk-retention@7086436 as the anima row while the Pi ran
+# main@0a7b8ea. So ask the Pi itself.
+#
+# Primary source is ~/.anima/deployed_ref.json — written by the anima server
+# at every process start, OUTSIDE the repo tree, because deploys reset/clean
+# the checkout there and the Pi's own `git log` is not trusted either. The
+# trailing rev-parse is only a fallback for the window before the marker
+# ships. One ssh, short timeout, cached for the run: this executes on every
+# `cirwel status`. The trailing sentinel makes "unreachable" distinguishable
+# from "reachable but no data".
+PI_SSH_HOST="${PI_SSH_HOST:-lumen}"
+PI_STATE_RAW="__unprobed__"
+pi_state() { # -> marker JSON (if any) + fallback short sha + __pi_ok__, or ""
+  if [ "$PI_STATE_RAW" = "__unprobed__" ]; then
+    PI_STATE_RAW="$(ssh -o BatchMode=yes -o ConnectTimeout=2 "$PI_SSH_HOST" \
+      'cat ~/.anima/deployed_ref.json 2>/dev/null; git -C ~/anima-mcp rev-parse --short HEAD 2>/dev/null; echo __pi_ok__' \
+      2>/dev/null)" || PI_STATE_RAW=""
+  fi
+  printf '%s' "$PI_STATE_RAW"
+}
+pi_json_str() { # raw key -> string value or "" (marker is pretty-printed JSON)
+  printf '%s' "$1" | sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
+}
+
 rows=()
 for c in "${COMPONENTS[@]}"; do
   IFS='|' read -r name label repo subdir pickup port <<< "$c"
@@ -202,11 +236,49 @@ for c in "${COMPONENTS[@]}"; do
   headep=$(git_head_epoch "$repo")
   ghost="no"; is_ghost "$repo" "$base" && ghost="yes"
 
-  pid=""; start=""; verdict=""
+  pid=""; start=""; verdict=""; hz=""
   case "$pickup" in
     live-from-checkout) verdict="LIVE" ;;
     library)            verdict="n/a" ;;
-    pi-deploy)          verdict="n/a(Pi)" ;;
+    pi-deploy)
+      # Never render this Mac's checkout branch@sha as if it were Pi state.
+      if [ "$name" = "anima-mcp" ]; then
+        praw="$(pi_state)"
+        if [[ "$praw" == *__pi_ok__* ]]; then
+          p_head="$(pi_json_str "$praw" head)"
+          p_branch="$(pi_json_str "$praw" branch)"
+          p_dirty="$(printf '%s' "$praw" | sed -n 's/.*"dirty"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' | head -1)"
+          if [ -z "$p_head" ]; then
+            # Marker not shipped yet — the Pi's own git HEAD is the fallback
+            # (truthful there since deploy.sh step 1b, PR anima-mcp#217).
+            p_head="$(printf '%s' "$praw" | sed -n 's/^\([0-9a-f]\{7,40\}\)$/\1/p' | tail -1)"
+            p_branch="?"
+          fi
+          if [ -n "$p_head" ]; then
+            br="$p_branch"; sha="${p_head:0:7}"
+            # Compare against the LOCAL repo's fetched origin/main tip.
+            # Empty delta = the local repo cannot resolve the Pi's sha
+            # (usually: needs --fetch) — say so instead of guessing.
+            delta=$(git -C "$repo" rev-list --count --full-history "$p_head..origin/main" 2>/dev/null)
+            if [ "$p_dirty" = "true" ]; then verdict="PI-DIRTY"
+            elif [ -z "$delta" ]; then verdict="PI-UNVERIFIED"
+            elif [ "$delta" = "0" ]; then verdict="PI-CURRENT"
+            else verdict="PI-STALE(Δ$delta)"; fi
+          else
+            br="pi:?"; sha="?"; verdict="PI-UNVERIFIED"
+          fi
+        else
+          # Degrade to the local checkout, labeled so it can never again be
+          # read as Pi truth (br/sha keep the local values computed above).
+          verdict="n/a(Pi:unreachable)"
+          hz="(local checkout, not Pi truth)"
+        fi
+      else
+        # pi-plugin has no on-Pi marker yet: printing the local branch@sha
+        # asserted a state this Mac cannot know. Wiring its own marker is a
+        # follow-up; until then, an honest blank.
+        br="-"; sha="-"; verdict="n/a(Pi)"
+      fi ;;
     hot-reload)         pid=$(proc_pid "$label"); verdict=$([ -n "$pid" ] && echo "HOT-RELOAD" || echo "DOWN") ;;
     restart|restart-DEV)
       pid=$(proc_pid "$label")
@@ -244,7 +316,10 @@ for c in "${COMPONENTS[@]}"; do
         fi
       fi ;;
   esac
-  [ "$ghost" = "yes" ] && verdict="GHOST-BRANCH"
+  # pi-deploy rows exempt: ghost describes the LOCAL checkout's branch, and
+  # letting it overwrite a PI-* verdict would re-introduce exactly the lie
+  # the Pi probe exists to fix (local-checkout state rendered as Pi state).
+  [ "$ghost" = "yes" ] && [ "$pickup" != "pi-deploy" ] && verdict="GHOST-BRANCH"
   # BEHIND means "the checkout itself is behind origin — pull before anything
   # else", so it applies to every RUNNING/LIVE verdict, not just CURRENT.
   #
@@ -270,7 +345,9 @@ for c in "${COMPONENTS[@]}"; do
   fi
   devflag=""; [ "$pickup" = "restart-DEV" ] && devflag=" [DEV]"
 
-  hz=""; [ -n "$pid" ] && hz=$(health "$port")
+  # hz is initialized before the pickup case so a pi-deploy row can preset
+  # its note; process rows still overwrite it with the live health probe.
+  [ -n "$pid" ] && hz=$(health "$port")
 
   # $repo, not $dir: this field names the git worktree a deploy fast-forwards.
   # Several services share ONE tree, and a consumer that cannot see the
