@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **agent adoption:** a disabled-by-default seven-cell shared-memory pilot contract and pure validation/scheduling/summary harness separate KG service value from information availability and surfacing; a shadow-only advisory decision core has deterministic replay/candidate IDs and typed suppression/degradation/non-delivery; an offline versioned JSONL bundle proves hash validation, idempotent SQLite restoration, and substitute retrieval without registering a production import or live alert surface.
+- **agent adoption:** a disabled-by-default seven-cell shared-memory pilot contract and pure validation/scheduling/canary/summary harness separate KG service value from information availability and surfacing; its content-addressed offline-fixture receipt binds enrollment/task/schedule/code digests, exercises retrieval and negative cases, and denies live or production claims. A shadow-only advisory decision core has deterministic replay/candidate IDs and typed suppression/degradation/non-delivery; an offline versioned JSONL bundle proves hash validation, exact private SQLite restoration, and substitute retrieval without registering a production import or live alert surface.
 
 ### Changed
 
@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **agent-adoption canary:** reject impossible or unbound result receipts, require full scheduled task-chain coverage, repair a frozen query that missed one registered material source, make substitute restore remove stale rows with `0600` storage, and validate KPI arguments before importing the optional PostgreSQL driver so lean CI environments fail for the intended reason.
 - **export contract:** stop claiming that the existing `complete_package` history export includes shared knowledge; its implementation contains metadata, history, and validation only.
 
 ---

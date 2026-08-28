@@ -71,12 +71,17 @@
       "additionalProperties": false,
       "required": [
         "seed",
+        "analysis_seed",
         "repetitions",
         "unit",
-        "counterbalance"
+        "counterbalance",
+        "schedule_sha256"
       ],
       "properties": {
         "seed": {
+          "type": "integer"
+        },
+        "analysis_seed": {
           "type": "integer"
         },
         "repetitions": {
@@ -88,6 +93,9 @@
         },
         "counterbalance": {
           "const": "digest_rotated_reversed_seven_cell_blocks"
+        },
+        "schedule_sha256": {
+          "$ref": "#/$defs/sha256"
         }
       }
     },
@@ -241,6 +249,7 @@
       "additionalProperties": false,
       "required": [
         "status",
+        "scope",
         "governed_review_session",
         "approved_by"
       ],
@@ -248,7 +257,17 @@
         "status": {
           "enum": [
             "unreviewed",
-            "reviewed"
+            "offline_fixture_reviewed"
+          ]
+        },
+        "scope": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "offline_fixture_validation",
+            null
           ]
         },
         "governed_review_session": {
@@ -269,12 +288,15 @@
           "if": {
             "properties": {
               "status": {
-                "const": "reviewed"
+                "const": "offline_fixture_reviewed"
               }
             }
           },
           "then": {
             "properties": {
+              "scope": {
+                "const": "offline_fixture_validation"
+              },
               "governed_review_session": {
                 "type": "string",
                 "minLength": 1
@@ -304,7 +326,7 @@
           "const": false
         },
         "runner_mode": {
-          "const": "validate_schedule_summarize_only"
+          "const": "validate_schedule_canary_summarize_only"
         }
       }
     }

@@ -493,14 +493,18 @@ def snapshot(
     nudge_until=None,
     nudge_conversion_minutes: int = _REVIEW_NUDGE_CONVERSION_MINUTES,
 ) -> dict:
-    import psycopg2.extras  # type: ignore
-
     if days <= 0:
         raise ValueError("days must be positive")
     if experiment_id is not None and not experiment_id.strip():
         raise ValueError("experiment_id must be non-empty when supplied")
     if nudge_conversion_minutes <= 0:
         raise ValueError("nudge_conversion_minutes must be positive")
+
+    # Keep argument validation usable in lean/report-only environments where
+    # the optional PostgreSQL driver is intentionally absent.  A valid
+    # snapshot request still imports the driver immediately before DB use.
+    import psycopg2.extras  # type: ignore
+
     window_end = _normalize_utc_bound(nudge_until, name="nudge_until")
     if window_end is None:
         window_end = datetime.now(timezone.utc)

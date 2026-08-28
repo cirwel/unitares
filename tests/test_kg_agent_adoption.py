@@ -315,5 +315,30 @@ def test_summary_rejects_task_chain_that_crosses_experiment_cells():
             net_utility=0.5,
         ),
     ]
-    with pytest.raises(ProtocolError, match="crossed experiment cells"):
+    with pytest.raises(ProtocolError, match="crossed task or experiment bindings"):
         analyze_results({"schema": RESULT_SCHEMA, "rows": rows})
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("catalog_exposed", True, "exposure flags"),
+        ("reachable", True, "unavailable arm"),
+        ("tool_invocations", -1, "non-negative integer"),
+        ("quality", 99, "within \\[0, 1\\]"),
+        ("net_utility", 99, "cannot exceed quality"),
+    ],
+)
+def test_summary_rejects_impossible_or_out_of_range_receipts(field, value, message):
+    row = _result_row(
+        "spoofed",
+        cell_id="unavailable",
+        arm="unavailable",
+        backend=None,
+        step_index=0,
+        net_utility=1.0,
+    )
+    row[field] = value
+
+    with pytest.raises(ProtocolError, match=message):
+        analyze_results({"schema": RESULT_SCHEMA, "rows": [row]})

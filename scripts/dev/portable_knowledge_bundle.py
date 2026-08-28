@@ -147,11 +147,24 @@ def validate_bundle(bundle_dir: str | Path) -> tuple[dict[str, Any], list[dict[s
 
 
 def restore_sqlite(bundle_dir: str | Path, database_path: str | Path) -> dict[str, int]:
-    """Idempotently restore a validated bundle into a narrow substitute store."""
+    """Exactly and idempotently restore a bundle into a private substitute store.
+
+    Restore means replacement, not merge: records absent from the validated
+    bundle must not survive from an older restore.  The database is a portable
+    offline artifact and is always restricted to the current user.
+    """
     _, records = validate_bundle(bundle_dir)
     database = Path(database_path)
-    database.parent.mkdir(parents=True, exist_ok=True)
+    parent_existed = database.parent.exists()
+    database.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not parent_existed:
+        os.chmod(database.parent, 0o700)
+    if not database.exists():
+        descriptor = os.open(database, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(descriptor)
+    os.chmod(database, 0o600)
     with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA journal_mode=DELETE")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS shared_memory (
@@ -164,6 +177,7 @@ def restore_sqlite(bundle_dir: str | Path, database_path: str | Path) -> dict[st
             )
             """
         )
+        connection.execute("DELETE FROM shared_memory")
         for record in records:
             connection.execute(
                 """
@@ -187,6 +201,7 @@ def restore_sqlite(bundle_dir: str | Path, database_path: str | Path) -> dict[st
                 ),
             )
         restored = connection.execute("SELECT count(*) FROM shared_memory").fetchone()[0]
+    os.chmod(database, 0o600)
     return {"bundle_records": len(records), "store_records": int(restored)}
 
 

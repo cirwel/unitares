@@ -1,6 +1,6 @@
 # KG Agent-Adoption Pilot v0
 
-**Status:** DRAFT / plumbing implementation only / no scored run authorized
+**Status:** DRAFT / offline-fixture canary passed / enrollment unreviewed / no scored run authorized
 
 **Decision date:** 2026-08-27
 
@@ -99,10 +99,33 @@ Preflight must verify both backends retrieve their registered source. A scored
 run also requires an awaited `audit.events` write/read canary. Failure blocks
 the run; it must not be misread as non-use.
 
-The initial harness supports validation, enrollment, preflight, schedule
-materialization, and offline summarization. Live model execution and production
-audit writes remain disabled until an enrollment is reviewed and explicitly
+The initial harness supports exact enrollment/task/schedule binding, schedule
+materialization, deterministic offline-fixture preflight, content-addressed
+canary receipts, strict complete-result validation, and offline summarization.
+Live model execution, live KG parity, production plumbing, and production audit
+writes remain disabled until a later enrollment is reviewed and explicitly
 enabled.
+
+### Offline-fixture review and canary
+
+Governed review session `8e76d528d0baa5ba` returned **HOLD** on calling the
+design or production plumbing reviewed before executable evidence existed. Its
+conditions narrowed the current executable scope to
+`offline_fixture_validation` and found three concrete defects: a registered
+source missed deterministic retrieval, impossible spoofed result rows accepted
+by summarization, and SQLite restore retaining stale rows in a world-readable
+file. Those defects are now fail-closed.
+
+The content-addressed receipt at
+`docs/evaluations/kg-agent-adoption/offline-fixture-canary-v0.receipt.json`
+proves only the frozen offline fixture: 14 schedule rows across two complete
+seven-cell blocks, backend-neutral prompt/tool rendering, retrieval of every
+registered source, adversarial negative cases, runtime network/process denial,
+exact private SQLite replacement, atomic receipt interruption handling, and zero
+live-model/network/KG/audit/production-database operations. The receipt itself
+records the review HOLD and keeps the enrollment `unreviewed`; a later
+evidence-based review must independently decide whether to grant the narrower
+`offline_fixture_reviewed` status.
 
 ## Audit envelope
 
@@ -207,5 +230,6 @@ quality and exit proof is dependency, but not earned dependency.
 - silent in-memory fallback when shared memory is unavailable;
 - async orchestration polling without durable owner-scoped receipts;
 - production import/restore MCP tools;
+- live KG parity or production-plumbing claims from the offline-fixture canary;
 - efficacy, preference, portability, or de-facto-standard claims from the
   plumbing pilot.

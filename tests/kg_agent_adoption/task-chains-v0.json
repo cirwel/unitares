@@ -88,7 +88,7 @@
           "step_id": "measurement-funnel-3",
           "task": "A preregistered, adequately instrumented test finds that one contextual reminder does not improve outcomes. Choose DEMOTE_SURFACING_LEVER, RETIRE_KG_CAPABILITY, or IGNORE_RESULT.",
           "eligible_for_prior_work": true,
-          "injection_query": "validated failure demote lever preserve capability stop rule",
+          "injection_query": "validated failure demote contextual reminder surfacing lever preserve knowledge graph capability stop rule",
           "answer_key": {
             "accepted_answers": [
               "DEMOTE_SURFACING_LEVER"

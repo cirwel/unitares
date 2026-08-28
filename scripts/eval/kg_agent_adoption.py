@@ -598,7 +598,45 @@ def _mean_or_none(values: Iterable[Any]) -> float | None:
     return round(fmean(parsed), 6) if parsed else None
 
 
-def _validate_result_rows(document: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _row_bool(row: Mapping[str, Any], field: str, *, index: int) -> bool:
+    value = row[field]
+    if not isinstance(value, bool):
+        raise ProtocolError(f"result row {index} {field} must be boolean")
+    return value
+
+
+def _row_nonnegative_int(row: Mapping[str, Any], field: str, *, index: int) -> int:
+    value = row[field]
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ProtocolError(
+            f"result row {index} {field} must be a non-negative integer"
+        )
+    return value
+
+
+def _row_optional_number(
+    row: Mapping[str, Any], field: str, *, index: int
+) -> float | None:
+    value = row[field]
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ProtocolError(f"result row {index} {field} must be numeric or null")
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ProtocolError(
+            f"result row {index} {field} must be numeric or null"
+        ) from exc
+
+
+def validate_result_rows(document: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Validate receipt rows before any descriptive summary is computed.
+
+    These checks deliberately bind exposure flags to the registered cell
+    semantics.  A caller cannot turn an unavailable arm into a surfaced or
+    reachable observation merely by supplying internally inconsistent JSON.
+    """
     if not isinstance(document, Mapping) or document.get("schema") != RESULT_SCHEMA:
         raise ProtocolError(f"result schema must be {RESULT_SCHEMA}")
     rows = document.get("rows")
@@ -635,20 +673,121 @@ def _validate_result_rows(document: Mapping[str, Any]) -> list[dict[str, Any]]:
         missing = required - set(row)
         if missing:
             raise ProtocolError(f"result row {index} missing fields: {sorted(missing)}")
-        expected_cell = cell_id(str(row["arm"]), row["backend"])
+        instance_id = _nonempty_string(
+            row["chain_instance_id"], where=f"result row {index} chain_instance_id"
+        )
+        _nonempty_string(row["chain_id"], where=f"result row {index} chain_id")
+        _nonempty_string(row["family"], where=f"result row {index} family")
+        repetition = _row_nonnegative_int(row, "repetition", index=index)
+        if repetition == 0:
+            raise ProtocolError(f"result row {index} repetition must be positive")
+        step_index = _row_nonnegative_int(row, "step_index", index=index)
+
+        arm = row["arm"]
+        if not isinstance(arm, str):
+            raise ProtocolError(f"result row {index} arm must be a string")
+        backend = row["backend"]
+        if backend is not None and not isinstance(backend, str):
+            raise ProtocolError(f"result row {index} backend must be a string or null")
+        expected_cell = cell_id(arm, backend)
         if row["cell_id"] != expected_cell:
             raise ProtocolError(f"result row {index} cell_id does not match arm/backend")
-        key = (str(row["chain_instance_id"]), int(row["step_index"]))
+
+        eligible = _row_bool(row, "eligible", index=index)
+        catalog_exposed = _row_bool(row, "catalog_exposed", index=index)
+        contextual_surface = _row_bool(row, "contextual_surface", index=index)
+        reminder_withdrawn = _row_bool(row, "reminder_withdrawn", index=index)
+        result_injected = _row_bool(row, "result_injected", index=index)
+        reachable = _row_bool(row, "reachable", index=index)
+        recording_verified = _row_bool(row, "recording_verified", index=index)
+        material_use = _row_bool(row, "material_use", index=index)
+        costs_complete = _row_bool(row, "costs_complete", index=index)
+        tool_invocations = _row_nonnegative_int(row, "tool_invocations", index=index)
+        tool_successes = _row_nonnegative_int(row, "tool_successes", index=index)
+        if tool_successes > tool_invocations:
+            raise ProtocolError(
+                f"result row {index} tool_successes cannot exceed tool_invocations"
+            )
+
+        expected_exposure = {
+            "catalog_exposed": arm != "unavailable",
+            "contextual_surface": (
+                arm == "surfaced_then_withdrawn" and step_index == 0 and eligible
+            ),
+            "reminder_withdrawn": (
+                arm == "surfaced_then_withdrawn" and step_index > 0 and eligible
+            ),
+            "result_injected": arm == "injected" and eligible,
+        }
+        actual_exposure = {
+            "catalog_exposed": catalog_exposed,
+            "contextual_surface": contextual_surface,
+            "reminder_withdrawn": reminder_withdrawn,
+            "result_injected": result_injected,
+        }
+        if actual_exposure != expected_exposure:
+            raise ProtocolError(
+                f"result row {index} exposure flags do not match arm/step semantics"
+            )
+        if arm == "unavailable" and (
+            reachable or tool_invocations or tool_successes or material_use
+        ):
+            raise ProtocolError(
+                f"result row {index} unavailable arm cannot be reachable or use retrieval"
+            )
+        if tool_successes and not (reachable and recording_verified):
+            raise ProtocolError(
+                f"result row {index} successful retrieval requires reachable recorded evidence"
+            )
+        if material_use and not (
+            arm != "unavailable"
+            and reachable
+            and recording_verified
+            and (result_injected or tool_successes > 0)
+        ):
+            raise ProtocolError(
+                f"result row {index} material use lacks delivered recorded evidence"
+            )
+
+        quality = _row_optional_number(row, "quality", index=index)
+        if quality is not None and not 0.0 <= quality <= 1.0:
+            raise ProtocolError(f"result row {index} quality must be within [0, 1]")
+        net_utility = _row_optional_number(row, "net_utility", index=index)
+        if costs_complete and (quality is None or net_utility is None):
+            raise ProtocolError(
+                f"result row {index} complete costs require quality and net_utility"
+            )
+        if not costs_complete and net_utility is not None:
+            raise ProtocolError(
+                f"result row {index} incomplete costs require null net_utility"
+            )
+        if net_utility is not None and quality is not None and net_utility > quality:
+            raise ProtocolError(
+                f"result row {index} net_utility cannot exceed quality"
+            )
+
+        key = (instance_id, step_index)
         if key in seen:
             raise ProtocolError(f"duplicate result step receipt: {key}")
         seen.add(key)
-        normalized.append(dict(row))
+        normalized.append(
+            dict(
+                row,
+                chain_instance_id=instance_id,
+                repetition=repetition,
+                step_index=step_index,
+                tool_invocations=tool_invocations,
+                tool_successes=tool_successes,
+                quality=quality,
+                net_utility=net_utility,
+            )
+        )
     return normalized
 
 
 def analyze_results(document: Mapping[str, Any]) -> dict[str, Any]:
     """Summarize the funnel and chain-level paired pilot contrasts."""
-    rows = _validate_result_rows(document)
+    rows = validate_result_rows(document)
     surface = [
         row
         for row in rows
@@ -691,8 +830,20 @@ def analyze_results(document: Mapping[str, Any]) -> dict[str, Any]:
     chain_summaries: list[dict[str, Any]] = []
     for instance_id, instance_rows in sorted(by_chain_instance.items()):
         first = instance_rows[0]
-        if any(row["cell_id"] != first["cell_id"] for row in instance_rows):
-            raise ProtocolError(f"chain instance {instance_id} crossed experiment cells")
+        invariant_fields = ("chain_id", "family", "repetition", "cell_id")
+        if any(
+            row[field] != first[field]
+            for row in instance_rows
+            for field in invariant_fields
+        ):
+            raise ProtocolError(
+                f"chain instance {instance_id} crossed task or experiment bindings"
+            )
+        step_indexes = sorted(int(row["step_index"]) for row in instance_rows)
+        if step_indexes != list(range(len(step_indexes))):
+            raise ProtocolError(
+                f"chain instance {instance_id} has missing or non-contiguous steps"
+            )
         chain_summaries.append(
             {
                 "chain_instance_id": instance_id,
@@ -798,5 +949,6 @@ __all__ = [
     "score_step",
     "sha256_json",
     "tools_for_arm",
+    "validate_result_rows",
     "validate_task_chains",
 ]

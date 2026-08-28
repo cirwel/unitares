@@ -8,14 +8,16 @@
   },
   "task_manifest": {
     "path": "tests/kg_agent_adoption/task-chains-v0.json",
-    "sha256": "9411a67956b7b79626cb14a7cadcdbe9b170b21c10dca13e38adc00c2fd66f97",
+    "sha256": "53ec990cd27f298899679adc88481a456ffd50dd23635c86c38dd005509eb91f",
     "schema": "unitares.kg-agent-adoption.task-chains.v0"
   },
   "assignment": {
     "seed": 2026082701,
+    "analysis_seed": 2026082702,
     "repetitions": 1,
     "unit": "complete_task_chain",
-    "counterbalance": "digest_rotated_reversed_seven_cell_blocks"
+    "counterbalance": "digest_rotated_reversed_seven_cell_blocks",
+    "schedule_sha256": "8deb5ea646e88859a2bc5e93e7324c565add25797902dbe89217cdf081237e88"
   },
   "utility": {
     "quality_range": [
@@ -56,12 +58,13 @@
   },
   "review": {
     "status": "unreviewed",
+    "scope": null,
     "governed_review_session": null,
     "approved_by": null
   },
   "execution": {
     "scored_live_model_runs_authorized": false,
     "writes_authorized": false,
-    "runner_mode": "validate_schedule_summarize_only"
+    "runner_mode": "validate_schedule_canary_summarize_only"
   }
 }
