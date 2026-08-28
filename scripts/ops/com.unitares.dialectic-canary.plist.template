@@ -43,6 +43,13 @@
     </array>
     <key>WorkingDirectory</key>
     <string>__UNITARES_ROOT__</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Set to one token accepted by UNITARES_MCP_BEARER_TOKENS when the
+             governance server's /mcp gate is enabled. -->
+        <key>UNITARES_MCP_BEARER_TOKEN</key>
+        <string></string>
+    </dict>
     <key>StartCalendarInterval</key>
     <dict>
         <key>Hour</key>
