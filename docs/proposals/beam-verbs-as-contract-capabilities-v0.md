@@ -4,6 +4,13 @@
 cutover, changes Wave 3's scope, or proposes retiring an HTTP route. It asks one
 question and proposes an answer to be argued with.
 
+**Review: none.** Written in a single pass from a reading of the tree. The
+adversarial reviews this repo normally expects on lease-plane / BEAM scope have
+not been run against it, and §5 and §6 are the two sections where that absence
+matters most — both are operator decisions this document deliberately does not
+take. Treat every claim here as unverified until someone re-derives it from the
+cited call sites.
+
 **The question.** Which lease-plane (BEAM) operations should become agent-facing
 capabilities in `unitares.interface-contract.v1`, which must stay reachable only
 as plane machinery, and what has to be settled *before* either.
