@@ -179,6 +179,32 @@ Two ways to unblock, whichever is preferred:
 Verify with `gh api repos/cirwel/unitares/code-scanning/default-setup` before
 assuming this note is still current.
 
+### Merge-loss guards — the detective layer
+
+Until (and after) a queue exists, three repo-side workflows make the known
+silent loss modes loud. They are detective, not preventive: each fails a run
+and files/updates a deduped `ci-finding` issue at the moment a loss becomes
+visible, instead of leaving it to be discovered weeks later. Server-side on
+purpose — client-side harness hooks bind one agent; a workflow binds every
+pusher.
+
+| Workflow | Loss mode it surfaces | When it runs |
+| --- | --- | --- |
+| `orphan-push-guard.yml` | Commits pushed to a branch after its PR merged/closed (three confirmed incidents, 2026-08-12/19) — real-time counterpart of the weekly `stranded-work.yml` audit | Every push to `claude/**` / `codex/**` |
+| `merge-content-check.yml` | A merge that silently lacks the branch's final pushed commit (PR #1610) | Every merged PR into master |
+| `automerge-disarm.yml` | Auto-merge silently disarmed by a transient check failure, stranding an armed PR (PR #1476) | Hourly; one tracking issue updated in place |
+
+All three share one rule (see `scripts/ci/merge_loss_common.py`): they fail
+open on API errors so a broken guard never blocks delivery, but a degraded
+run always says so — `::warning::` plus a step-summary line — because a
+guard that fails toward "healthy" is this repo's named recurring failure
+mode. A guard's green run is a verification; a degraded run is not, and
+labels itself accordingly.
+
+If `orphan-push-guard` fails your push: stop pushing to that branch. The
+work is not lost — follow the cherry-pick recipe in the issue it filed
+(fresh branch off `origin/master`, new PR).
+
 ## Quick reference
 
 | Situation | Do this |
