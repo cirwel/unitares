@@ -4,12 +4,15 @@
 cutover, changes Wave 3's scope, or proposes retiring an HTTP route. It asks one
 question and proposes an answer to be argued with.
 
-**Review: none.** Written in a single pass from a reading of the tree. The
-adversarial reviews this repo normally expects on lease-plane / BEAM scope have
-not been run against it, and §5 and §6 are the two sections where that absence
-matters most — both are operator decisions this document deliberately does not
-take. Treat every claim here as unverified until someone re-derives it from the
-cited call sites.
+**Review: one adversarial pass (2026-08-28), four blockers folded in place.**
+The document was written in a single pass from a reading of the tree; a
+subsequent review re-derived its claims from the cited call sites and raised
+four blockers, each now folded where it lands: the mint-time assurance gate
+(§2, §7), `inbox` being a consuming mutation with an unresolved ack/retry gap
+(§8, §9, §11), the contract-representability gap (§4), and a corrected risk
+statement for widening `validate_path` (§9). §5 and §6 remain operator
+decisions this document deliberately does not take. Claims outside the reviewed
+citations should still be treated as unverified until re-derived from the tree.
 
 One `consult(purpose="critique")` pass was run on 2026-08-28 (consultation
 `d1e98e34`, route `ollama` / `gemma4:latest`, `cost_class: local_free`,
@@ -72,8 +75,26 @@ Two servers, three credentials, four steps — and the identity that roots the
 whole chain was established over MCP at step 0. **The chain exists because the
 agent left the MCP session.** A capability collapses it: the identity middleware
 has already resolved the caller, governance mints internally, one hop to BEAM.
-Nothing about the verification weakens; the attestation stops being something an
-agent must orchestrate.
+The attestation stops being something an agent must orchestrate.
+
+**The collapse is only sound if the mint keeps the assurance bar the four-step
+version already sets — and "the middleware has resolved the caller" does not
+clear it.** Step 2 is not ceremony: `/v1/lease-holder/attest` refuses to mint
+unless `recertify_strong_tier` passes — a valid, *unexpired* continuity token
+whose `aid` equals the claimed holder, i.e. a caller-presented cryptographic
+proof (`src/http_routes/lease_identity.py:110-122`). A resolved MCP identity
+can be a much weaker thing: the middleware will resolve a caller from a
+server-inferred binding — a transport-fingerprint pin, a sticky-cache hit, a
+transport-injected CSID — and the assurance layer marks exactly those
+`caller_proven: false` and never-strong
+(`src/mcp_handlers/updates/phases.py:136-152`). An internal mint that signs
+whatever the middleware resolved would launder that weak binding into a strict
+BEAM proof: `authorize_strict` on the msg routes would then grant sender
+identity — and another agent's inbox — on the strength of a fingerprint guess.
+**Rule: the internal mint gates on strong, `caller_proven` assurance, the same
+bar `recertify_strong_tier` enforces on the HTTP path, and refuses anything
+less.** What the capability collapses is the agent-side orchestration, never
+the proof requirement.
 
 The reason collapsing is safe rather than merely convenient is that the
 attestation is **request-bound**: its claims cover the method, the path, and the
@@ -150,12 +171,34 @@ reason its docstring already gives (§6).
 
 ## 4. Shape
 
-A capability record in `unitares.interface-contract.v1` whose canonical
-implementation is the BEAM route — *not* a Python handler that exists only to
-forward. `src/interface_contract.py:155` (`_capability_record`) already models a
-capability as a public name + canonical implementation + per-transport spelling,
-and the contract is transport-neutral by construction (MCP, `GET /v1/tools`,
-stdio). The record is the right unit; a shim handler is not.
+The end state this document wants is a capability record in
+`unitares.interface-contract.v1` whose canonical implementation is the BEAM
+route — *not* a Python handler that exists only to forward. **That record is
+not representable today, and an earlier draft of this section overstated how
+close it is.** `_capability_record` (`src/interface_contract.py:155`) can only
+describe tools that exist in the `@mcp_tool` registry:
+`get_public_tool_definitions` filters every definition against that registry,
+the record's `implementation` field is the alias-resolved *Python tool name*,
+its `kind` is only ever `workflow_alias` or `canonical_tool`, and
+`transport_names` assigns the same public name to every transport. Nothing in
+the contract can name a BEAM route as an implementation, and nothing in the
+dispatcher can route a contract entry anywhere except a registered handler. So
+the choice is explicit, not assumed away:
+
+- **(a) Extend the contract and the dispatcher** — a new record `kind` (e.g.
+  `beam_route`) whose implementation field carries the route, plus a dispatch
+  path that forwards to it. Honest about the end state, but real surgery on
+  `interface_contract.py` and the call dispatcher, both CI-pinned artifacts
+  with a checked-in canonical serialization.
+- **(b) Accept a thin registered handler** — a `@mcp_tool` handler whose whole
+  body is mint-and-forward (§2's gate included). Representable today with zero
+  contract changes; the record then truthfully reports `canonical_tool`, and
+  the "no shim" ideal is given up openly rather than faked in a record the
+  machinery cannot honor.
+
+This document leans **(b)** for the first slice — contract machinery should be
+extended for a second consumer, not speculatively for the first — and records
+the disagreement with its own earlier draft rather than hiding it.
 
 Two conventions this must follow:
 
@@ -230,6 +273,14 @@ client, because the client's heartbeat and acquire share a code path today.
 half of `agent_presence_lease.py` that generalizes. An agent must not be handed
 `LEASE_PLANE_BEARER_TOKEN`, a signing seed, or a `lat.v1.*` attestation.
 
+**Invariant: minting requires strong, caller-proven assurance (§2).** The
+middleware having resolved *an* identity is not sufficient input to the mint.
+The internal mint gates on the bar `recertify_strong_tier` sets on the HTTP
+path today — a caller-presented, unexpired cryptographic proof — and a
+server-inferred binding (`caller_proven: false`: fingerprint pin, sticky-cache
+hit, injected CSID) is refused, not signed. A test must pin that the capability
+path cannot mint from a binding the attest route would have rejected.
+
 **Non-goal: do not let exposure silently move a surface's identity mode.** The
 lease surfaces run `IdentityBinding.authorize/4`, which is env-gated across
 `:off` / `:log` / `:enforce`, and the live plane runs `:log` — verify, warn,
@@ -252,28 +303,55 @@ terminal row in either path. **The guard is what makes the fallback safe, and it
 does not generalize.** For `lease` and `msg` mutations the failure posture is
 refuse, not fall back.
 
+**Refuse-not-fallback does not resolve the ambiguous-commit case, and `msg` has
+two of them.** `inbox` is not a read: `Repo.inbox/2` atomically claims a
+recipient's pending rows — one statement sets `delivery_state='delivered'`
+before returning them (`elixir/.../repo.ex:653-690`). A timeout between BEAM's
+commit and the caller's receipt permanently consumes mail nobody saw, and
+refusing the retry does not bring those rows back. `send` takes no
+caller-supplied idempotency key — `send_message` inserts unconditionally with a
+server-generated `message_id` (`repo.ex:595`) — so retrying an ambiguous
+timeout can post the same message twice. Neither gap is an argument for keeping
+the credential dance (the raw HTTP caller faces both today), but a capability
+makes retries *routine* — adapters retry on timeout; a human copy-pasting curl
+does not — so the first slice cannot ship on "refuse" alone. Candidates, named
+here and deliberately not chosen: a two-phase claim/ack (inbox returns rows
+under a delivery lease, a second call acknowledges, unacked rows redeliver
+after a timeout); and an idempotency key on `send` (caller-supplied, uniqueness
+enforced by the transport). Defining these semantics is part of §9 step 1's
+design work; "refuse" only covers the case where the mutation is known not to
+have happened.
+
 ## 9. Sequencing
 
 1. **`msg` first.** Newest surface, no lease state machine, already
    `authorize_strict` unconditionally, and the credential dance is at its worst
-   there. Smallest honest slice.
+   there. Smallest honest slice — though not a trivial one: §8's ack/retry
+   semantics are part of it, not deferrable past it.
 2. **`lease` second**, and only after §6 is resolved — the heartbeat/acquire
    split is real work, not a wrapper.
 3. **Dialectic**: formalize the existing flag-gated client as a contract record.
    No behavior change.
 4. **Effects and force-release**: not in scope, now or later.
 
-§5 blocks step 1. §6 blocks step 2.
+§5 and §8's ack/retry semantics block step 1. §6 blocks step 2.
 
 **Step 1 also has a concrete prerequisite this document originally missed.**
 `mint_lease_attestation` refuses any path that is not `/v1/lease/...`
 (`validate_path`, `src/lease_attestation.py:176-184`), so the server-side
 minting helper that §7's invariant depends on **cannot mint a proof for
-`/v1/msg/send` or `/v1/msg/inbox` today**. Widening that allowlist is not a
-typo fix: the path claim is what stops an attestation minted for one route being
-presented at another, so widening it enlarges every existing attestation's
-audience unless the widening is per-route rather than per-prefix. Whoever takes
-step 1 should treat this as its first design question, not its last.
+`/v1/msg/send` or `/v1/msg/inbox` today**. Be precise about what widening that
+allowlist changes, because an earlier draft overstated it: every attestation
+carries an exact `pth` claim and BEAM compares it against the exact request
+path (`federated_identity_verifier.ex:95`, `claims["pth"] == context.path`),
+so **no already-minted token gains an audience from a wider allowlist** — a
+proof minted for one route can never be presented at another, whatever the
+mint would now permit. What widening changes is the **signer's issuance
+scope**: the set of routes governance is willing to bind future proofs to.
+That is still a real security decision — per-route widening keeps the scope
+enumerable, a prefix like `/v1/msg/` does not — and whoever takes step 1
+should treat it as their first design question, for that reason rather than
+the wrong one.
 
 ## 10. What this does not do
 
@@ -302,9 +380,12 @@ step 1 should treat this as its first design question, not its last.
   `handoff` and `resolve` are all state transitions whose correctness depends on
   internal temporal logic — timeouts, supervisors, reaper cadence. Publishing
   them as capabilities makes the agent-facing contract an externalized copy of
-  the plane's state machine, and a copy is free to drift from its original. The
-  read-only verbs (`status`, `inbox`) do not carry this risk in the same way.
-  This argument does not touch `msg send`, which has no state machine behind it.
+  the plane's state machine, and a copy is free to drift from its original.
+  `status` is genuinely read-only and does not carry this risk. `inbox` was
+  mis-filed alongside it in an earlier draft: it is a consuming mutation with a
+  delivery-state transition behind it (§8) and belongs with the mutating verbs.
+  `msg send` has no state machine behind it, but §8's idempotency gap is its
+  own version of the same cost.
 - **Whether `lease` is worth exposing at all.** §6 may make it expensive enough
   that the honest answer is "`msg` yes, `lease` no." That would be a fine
   outcome for this document.
