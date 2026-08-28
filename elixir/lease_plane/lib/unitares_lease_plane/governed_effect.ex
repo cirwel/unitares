@@ -583,10 +583,10 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
     case Repo.governed_effect_by_idempotency_key(env.idempotency_key, @execute_event_type) do
       # Idempotent replay — a previously COMMITTED spawn. Return the original
-      # effect_id + agent_id; DO NOT spawn again (an agent_spawn is irreversible).
+      # effect_id + execution_id; DO NOT spawn again (an agent_spawn is irreversible).
       # Only committed rows replay: a blocked/rejected row must not permanently
       # poison its idempotency key — replaying a refusal would answer 202 with
-      # a nil agent_id forever and the veto would be evaluated exactly once per
+      # a nil execution_id forever and the veto would be evaluated exactly once per
       # key. Non-committed prior rows fall through to a fresh veto + spawn.
       {:ok, %{idempotency_digest: ^digest, payload: %{"status" => "committed"} = stored}} ->
         {:ok, execute_idempotent_body(stored)}
@@ -658,20 +658,24 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
   defp spawn_after_veto(env, digest, effect_id) do
     case OrchestratorClient.spawn_agent(orchestrator_spec(env)) do
-      {:ok, agent_id} ->
+      {:ok, execution_id} ->
         Logger.info(
-          "governed_effect execute agent_spawn effect_id=#{effect_id} agent_id=#{agent_id} " <>
+          "governed_effect execute agent_spawn effect_id=#{effect_id} " <>
+            "execution_id=#{execution_id} " <>
             "surface=#{env.surface} digest=#{binary_part(digest, 0, 12)}"
         )
 
         payload =
-          execute_audit_payload(effect_id, env, digest, "committed", %{"agent_id" => agent_id})
+          execute_audit_payload(effect_id, env, digest, "committed", %{
+            "execution_id" => execution_id,
+            "agent_id" => execution_id
+          })
 
         # The spawn already happened; record best-effort. A persist failure must
-        # NOT re-spawn, so we still return committed with the agent_id (the audit
+        # NOT re-spawn, so we still return committed with the execution_id (the audit
         # gap is logged), never an error that invites a retry.
         _ = persist_execute(env, payload)
-        {:ok, execute_body(payload, agent_id)}
+        {:ok, execute_body(payload, execution_id)}
 
       {:error, reason} ->
         Logger.warning(
@@ -760,7 +764,7 @@ defmodule UnitaresLeasePlane.GovernedEffect do
     |> Map.merge(extra)
   end
 
-  defp execute_body(payload, agent_id) do
+  defp execute_body(payload, execution_id) do
     %{
       ok: true,
       effect_id: payload["effect_id"],
@@ -768,12 +772,15 @@ defmodule UnitaresLeasePlane.GovernedEffect do
       status: "committed",
       effect_lane: @effect_lane,
       idempotency_digest: payload["idempotency_digest"],
-      agent_id: agent_id,
+      execution_id: execution_id,
+      agent_id: execution_id,
       idempotent: false
     }
   end
 
   defp execute_idempotent_body(stored) when is_map(stored) do
+    execution_id = stored["execution_id"] || stored["agent_id"]
+
     %{
       ok: true,
       effect_id: stored["effect_id"],
@@ -781,7 +788,8 @@ defmodule UnitaresLeasePlane.GovernedEffect do
       status: stored["status"] || "committed",
       effect_lane: @effect_lane,
       idempotency_digest: stored["idempotency_digest"],
-      agent_id: stored["agent_id"],
+      execution_id: execution_id,
+      agent_id: execution_id,
       idempotent: true
     }
   end

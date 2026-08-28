@@ -50,7 +50,8 @@ async def test_delegate_inference_returns_attributed_provenance(monkeypatch):
             "text": "careful answer",
             "raw": "provider envelope must not escape",
             "exit_status": 0,
-            "agent_id": "orch-agent-1",
+            "execution_id": "orch-execution-1",
+            "agent_id": "orch-execution-1",
             "provenance": {
                 "model_used": None,
                 "models_used": ["claude-haiku-4-5", "claude-opus-5"],
@@ -97,7 +98,8 @@ async def test_delegate_inference_returns_attributed_provenance(monkeypatch):
     }
     inference = parsed["inference"]
     assert inference["requesting_agent_uuid"] == "uuid-requester"
-    assert inference["orchestrator_agent_id"] == "orch-agent-1"
+    assert inference["orchestrator_execution_id"] == "orch-execution-1"
+    assert inference["orchestrator_agent_id"] == "orch-execution-1"
     assert inference["model_requested"] == "claude-opus-5"
     assert inference["model_used"] is None
     assert inference["cost_usd"] == 0.02
@@ -149,7 +151,8 @@ async def test_delegate_inference_surfaces_orchestrator_timeout(monkeypatch):
         return {
             "ok": False,
             "status": "still_running",
-            "agent_id": "orch-agent-timeout",
+            "execution_id": "orch-execution-timeout",
+            "agent_id": "orch-execution-timeout",
             "provenance": {"transport": "host_adapter"},
         }
 
@@ -161,7 +164,8 @@ async def test_delegate_inference_surfaces_orchestrator_timeout(monkeypatch):
     parsed = _payload(result)
     assert parsed["success"] is False
     assert parsed["error_code"] == "DELEGATED_INFERENCE_TIMEOUT"
-    assert parsed["orchestrator_agent_id"] == "orch-agent-timeout"
+    assert parsed["orchestrator_execution_id"] == "orch-execution-timeout"
+    assert parsed["orchestrator_agent_id"] == "orch-execution-timeout"
     assert parsed["execution_started"] is True
     assert parsed["possibly_running"] is True
     assert parsed["recovery"]["action"].startswith("Do not retry yet.")
@@ -214,7 +218,7 @@ async def test_acknowledged_spawn_without_id_is_possibly_running(monkeypatch):
         "invoke_host_adapter",
         lambda *_args, **_kwargs: _async_value({
             "ok": False,
-            "error": "spawn returned no agent_id",
+            "error": "spawn returned no execution_id or legacy agent_id",
             "dispatch_phase": "spawn_acknowledged",
             "provenance": {},
         }),

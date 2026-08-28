@@ -25,7 +25,8 @@ defmodule AgentOrchestrator.AgentRunner do
   ## Spec
 
       %{
-        agent_id: String.t() | nil,        # generated if absent
+        agent_id: String.t() | nil,        # logical metadata; defaults to execution_id
+        execution_id: String.t(),          # server-generated; caller values are ignored
         cmd: String.t(),                   # executable name or absolute path (required)
         args: [String.t()],                # argv (default [])
         env: [{String.t(), String.t()}],   # extra env for the child (default [])
@@ -175,6 +176,7 @@ defmodule AgentOrchestrator.AgentRunner do
   @uuid_re ~r/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 
   defstruct [
+    :execution_id,
     :agent_id,
     :port,
     :os_pid,
@@ -207,16 +209,16 @@ defmodule AgentOrchestrator.AgentRunner do
   # ---------- public API ----------
 
   def start_link(%{} = spec) do
-    agent_id = Map.fetch!(spec, :agent_id)
-    GenServer.start_link(__MODULE__, spec, name: via(agent_id))
+    execution_id = Map.fetch!(spec, :execution_id)
+    GenServer.start_link(__MODULE__, spec, name: via(execution_id))
   end
 
-  @doc "Block until the agent exits (or `timeout` ms). Returns `{:ok, result}` or `{:error, :timeout}`."
+  @doc "Block until an execution exits (or `timeout` ms)."
   @spec await(String.t(), timeout()) :: {:ok, map()} | {:error, :timeout | :not_found}
-  def await(agent_id, timeout \\ 30_000) do
-    case call(agent_id, :await, timeout) do
+  def await(execution_id, timeout \\ 30_000) do
+    case call(execution_id, :await, timeout) do
       # whereis/0 already saw the runner gone — fall back to the retained result.
-      {:error, :not_found} -> retained_or_not_found(agent_id)
+      {:error, :not_found} -> retained_or_not_found(execution_id)
       reply -> reply
     end
   catch
@@ -229,14 +231,14 @@ defmodule AgentOrchestrator.AgentRunner do
     # result to ResultStore before it dies (see finalize/2), so a fast agent's
     # result survives this race rather than being lost to :not_found (#581).
     :exit, _ ->
-      retained_or_not_found(agent_id)
+      retained_or_not_found(execution_id)
   end
 
   @doc "Current captured output and status without blocking."
   @spec snapshot(String.t()) :: {:ok, map()} | {:error, :not_found}
-  def snapshot(agent_id) do
-    case call(agent_id, :snapshot) do
-      {:error, :not_found} -> retained_or_not_found(agent_id)
+  def snapshot(execution_id) do
+    case call(execution_id, :snapshot) do
+      {:error, :not_found} -> retained_or_not_found(execution_id)
       reply -> reply
     end
   catch
@@ -244,21 +246,21 @@ defmodule AgentOrchestrator.AgentRunner do
     # process exiting before the snapshot lands. Fall back to the retained
     # terminal result instead of crashing the caller with the GenServer exit.
     :exit, _ ->
-      retained_or_not_found(agent_id)
+      retained_or_not_found(execution_id)
   end
 
   # On a dead runner, the terminal result may have been retained by finalize/2.
-  defp retained_or_not_found(agent_id) do
-    case ResultStore.fetch(agent_id) do
+  defp retained_or_not_found(execution_id) do
+    case ResultStore.fetch(execution_id) do
       {:ok, result} -> {:ok, result}
       :error -> {:error, :not_found}
     end
   end
 
-  @doc "Stop the agent: close the Port (terminating the child) and release its lease."
+  @doc "Stop one execution: close its Port and release its lease."
   @spec stop(String.t(), term()) :: :ok | {:error, :not_found}
-  def stop(agent_id, reason \\ :operator_stop) do
-    case whereis(agent_id) do
+  def stop(execution_id, reason \\ :operator_stop) do
+    case whereis(execution_id) do
       nil ->
         {:error, :not_found}
 
@@ -276,26 +278,25 @@ defmodule AgentOrchestrator.AgentRunner do
     end
   end
 
-  @doc "List live agent ids."
+  @doc "List live execution ids."
   @spec list() :: [String.t()]
   def list do
     Registry.select(AgentOrchestrator.Registry, [{{:"$1", :_, :_}, [], [:"$1"]}])
   end
 
-  @doc "Generate a short, collision-resistant ephemeral agent id."
-  @spec generate_agent_id() :: String.t()
-  def generate_agent_id do
-    "ag-" <> (:crypto.strong_rand_bytes(6) |> Base.url_encode64(padding: false))
-  end
+  @doc "Generate an immutable UUID-backed execution id."
+  @spec generate_execution_id() :: String.t()
+  def generate_execution_id, do: "ex-" <> uuid4()
 
   # ---------- GenServer ----------
 
   @impl true
   def init(spec) do
     Process.flag(:trap_exit, true)
+    execution_id = Map.fetch!(spec, :execution_id)
     agent_id = Map.fetch!(spec, :agent_id)
     lease_client = Map.get(spec, :lease_client, LeasePlaneClient)
-    lease_cfg = normalize_lease_cfg(Map.get(spec, :lease), agent_id)
+    lease_cfg = normalize_lease_cfg(Map.get(spec, :lease), execution_id)
 
     # Validate lineage BEFORE the lease acquire: a refused spawn must not have
     # touched the plane (no acquire-then-release churn for a config error).
@@ -315,6 +316,7 @@ defmodule AgentOrchestrator.AgentRunner do
 
               {:ok, client_session_id} ->
                 state = %__MODULE__{
+                  execution_id: execution_id,
                   agent_id: agent_id,
                   lease_client: lease_client,
                   lease_cfg: lease_cfg,
@@ -350,10 +352,12 @@ defmodule AgentOrchestrator.AgentRunner do
             cmd = Map.get(spec, :cmd)
 
             Logger.info(
-              "agent #{state.agent_id} started os_pid=#{os_pid} lease=#{lease_id || "none"} cmd=#{cmd}"
+              "execution #{state.execution_id} agent=#{state.agent_id} started " <>
+                "os_pid=#{os_pid} lease=#{lease_id || "none"} cmd=#{cmd}"
             )
 
             Telemetry.agent_start(%{
+              execution_id: state.execution_id,
               agent_id: state.agent_id,
               cmd: cmd,
               os_pid: os_pid,
@@ -447,7 +451,8 @@ defmodule AgentOrchestrator.AgentRunner do
   # exit_status (→ terminate's reap guard would skip) and nils the port.
   def handle_info(:max_runtime, %{exit_status: nil} = state) do
     Logger.warning(
-      "agent #{state.agent_id} exceeded max runtime — reaping os_pid=#{inspect(state.os_pid)}"
+      "execution #{state.execution_id} agent=#{state.agent_id} exceeded max runtime — " <>
+        "reaping os_pid=#{inspect(state.os_pid)}"
     )
 
     if is_integer(state.os_pid), do: kill_tree(state.os_pid)
@@ -472,13 +477,18 @@ defmodule AgentOrchestrator.AgentRunner do
   # ResultStore — so a fan-out caller that collects results after exit still
   # works, without retaining forever.
   defp finalize(state, status) do
-    state = if state.partial != "", do: push_line(%{state | partial: ""}, state.partial), else: state
-    Logger.info("agent #{state.agent_id} exited status=#{inspect(status)}")
+    state =
+      if state.partial != "", do: push_line(%{state | partial: ""}, state.partial), else: state
+
+    Logger.info(
+      "execution #{state.execution_id} agent=#{state.agent_id} exited status=#{inspect(status)}"
+    )
+
     emit_stop(state, status, stop_reason(status))
     release_status = maybe_release_lease(state, @release_reason)
     state = %{state | exit_status: status, port: nil, release_status: release_status}
     state = reply_waiters(state)
-    ResultStore.put(state.agent_id, result(state))
+    ResultStore.put(state.execution_id, result(state))
 
     if status == 0 do
       {:stop, :normal, state}
@@ -501,6 +511,7 @@ defmodule AgentOrchestrator.AgentRunner do
         output_lines: state.output_count
       },
       %{
+        execution_id: state.execution_id,
         agent_id: state.agent_id,
         cmd: state.cmd,
         os_pid: state.os_pid,
@@ -547,17 +558,17 @@ defmodule AgentOrchestrator.AgentRunner do
 
   # ---------- internals ----------
 
-  defp via(agent_id), do: {:via, Registry, {AgentOrchestrator.Registry, agent_id}}
+  defp via(execution_id), do: {:via, Registry, {AgentOrchestrator.Registry, execution_id}}
 
-  defp whereis(agent_id) do
-    case Registry.lookup(AgentOrchestrator.Registry, agent_id) do
+  defp whereis(execution_id) do
+    case Registry.lookup(AgentOrchestrator.Registry, execution_id) do
       [{pid, _}] -> pid
       [] -> nil
     end
   end
 
-  defp call(agent_id, msg, timeout \\ 5_000) do
-    case whereis(agent_id) do
+  defp call(execution_id, msg, timeout \\ 5_000) do
+    case whereis(execution_id) do
       nil -> {:error, :not_found}
       pid -> GenServer.call(pid, msg, timeout)
     end
@@ -568,18 +579,19 @@ defmodule AgentOrchestrator.AgentRunner do
   # to the self-healing remote_heartbeat path). `lease: false` opts out entirely.
   # A `:lease` map overrides the defaults (e.g. `required: true` to make it a
   # gating lease, or a different `surface_id`).
-  defp normalize_lease_cfg(false, _agent_id), do: nil
+  defp normalize_lease_cfg(false, _execution_id), do: nil
 
-  defp normalize_lease_cfg(nil, agent_id), do: normalize_lease_cfg(%{}, agent_id)
+  defp normalize_lease_cfg(nil, execution_id), do: normalize_lease_cfg(%{}, execution_id)
 
-  defp normalize_lease_cfg(%{} = cfg, agent_id) do
+  defp normalize_lease_cfg(%{} = cfg, execution_id) do
     %{
       # Best-effort by default: presence should NOT gate spawning. A caller that
       # genuinely needs a gating lease passes `required: true`.
       required: Map.get(cfg, :required, false),
       holder_agent_uuid: Map.get(cfg, :holder_agent_uuid) || uuid4(),
-      surface_id: Map.get(cfg, :surface_id) || "agent:/" <> agent_id,
-      ttl_s: Map.get(cfg, :ttl_s, Application.get_env(:agent_orchestrator, :default_lease_ttl_s, 300))
+      surface_id: Map.get(cfg, :surface_id) || "agent:/" <> execution_id,
+      ttl_s:
+        Map.get(cfg, :ttl_s, Application.get_env(:agent_orchestrator, :default_lease_ttl_s, 300))
     }
   end
 
@@ -589,7 +601,12 @@ defmodule AgentOrchestrator.AgentRunner do
   # live-but-not-on-the-plane (absence from the plane ≠ not running).
   defp maybe_acquire_lease(%{lease_cfg: nil}), do: {:ok, nil, :disabled}
 
-  defp maybe_acquire_lease(%{agent_id: agent_id, lease_cfg: cfg, lease_client: client}) do
+  defp maybe_acquire_lease(%{
+         execution_id: execution_id,
+         agent_id: agent_id,
+         lease_cfg: cfg,
+         lease_client: client
+       }) do
     case client.acquire(cfg.surface_id, cfg.holder_agent_uuid, "remote_heartbeat", cfg.ttl_s) do
       {:ok, lease_id} ->
         {:ok, lease_id, :registered}
@@ -607,7 +624,8 @@ defmodule AgentOrchestrator.AgentRunner do
 
           Logger.log(
             level,
-            "agent #{agent_id} presence UNREGISTERED (#{inspect(reason)}) — running " <>
+            "execution #{execution_id} agent=#{agent_id} presence UNREGISTERED " <>
+              "(#{inspect(reason)}) — running " <>
               "WITHOUT a presence row; plane-absence does NOT imply not-running"
           )
 
@@ -747,8 +765,11 @@ defmodule AgentOrchestrator.AgentRunner do
   defp candidate_env(lineage_cfg, server_url, client_session_id) do
     lineage =
       case lineage_cfg do
-        nil -> []
-        cfg -> [{@lineage_parent_var, cfg.parent_agent_uuid}, {@lineage_reason_var, cfg.spawn_reason}]
+        nil ->
+          []
+
+        cfg ->
+          [{@lineage_parent_var, cfg.parent_agent_uuid}, {@lineage_reason_var, cfg.spawn_reason}]
       end
 
     server = if server_url, do: [{@server_url_var, server_url}], else: []
@@ -793,8 +814,11 @@ defmodule AgentOrchestrator.AgentRunner do
   # fall back to the configured/default ceiling.
   defp max_runtime_ms(spec) do
     case Map.fetch(spec, :max_runtime_ms) do
-      {:ok, v} -> v
-      :error -> Application.get_env(:agent_orchestrator, :default_max_runtime_ms, @default_max_runtime_ms)
+      {:ok, v} ->
+        v
+
+      :error ->
+        Application.get_env(:agent_orchestrator, :default_max_runtime_ms, @default_max_runtime_ms)
     end
   end
 
@@ -827,6 +851,7 @@ defmodule AgentOrchestrator.AgentRunner do
 
   defp result(state) do
     %{
+      execution_id: state.execution_id,
       agent_id: state.agent_id,
       os_pid: state.os_pid,
       lease_id: state.lease_id,
@@ -871,8 +896,8 @@ defmodule AgentOrchestrator.AgentRunner do
   # the variant high bits to 10xx per §4.4.
   defp uuid4 do
     <<a::32, b::16, c::16, d::16, e::48>> = :crypto.strong_rand_bytes(16)
-    c = c &&& 0x0FFF ||| 0x4000
-    d = d &&& 0x3FFF ||| 0x8000
+    c = (c &&& 0x0FFF) ||| 0x4000
+    d = (d &&& 0x3FFF) ||| 0x8000
 
     :io_lib.format("~8.16.0b-~4.16.0b-~4.16.0b-~4.16.0b-~12.16.0b", [a, b, c, d, e])
     |> IO.iodata_to_binary()

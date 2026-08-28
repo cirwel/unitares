@@ -102,11 +102,13 @@ defmodule AgentOrchestratorTest do
       assert {:ok, _} = AgentOrchestrator.await(id, 5_000)
 
       assert_receive {:telemetry, [:agent_orchestrator, :agent, :start], _m, start_meta}
+      assert start_meta.execution_id == id
       assert start_meta.agent_id == id
       assert start_meta.cmd == "echo"
       assert is_integer(start_meta.os_pid)
 
       assert_receive {:telemetry, [:agent_orchestrator, :agent, :stop], measurements, meta}
+      assert meta.execution_id == id
       assert meta.agent_id == id
       assert meta.exit_status == 0
       assert meta.reason == :exited
@@ -162,7 +164,9 @@ defmodule AgentOrchestratorTest do
       {:ok, reap_id, _} = AgentOrchestrator.run(%{cmd: "sleep", args: ["30"]})
       assert_receive {:telemetry, [:agent_orchestrator, :agent, :start], _, %{agent_id: ^reap_id}}
       :ok = AgentOrchestrator.stop(reap_id, :test_reap)
-      assert_receive {:telemetry, [:agent_orchestrator, :agent, :stop], _, %{reason: :stopped}}, 2_000
+
+      assert_receive {:telemetry, [:agent_orchestrator, :agent, :stop], _, %{reason: :stopped}},
+                     2_000
 
       snap = Metrics.snapshot()
 
@@ -278,6 +282,105 @@ defmodule AgentOrchestratorTest do
     end
   end
 
+  describe "durable execution identity" do
+    test "logical agent ids are reusable while lifecycle controls remain execution-scoped" do
+      logical_agent_id = "worker-stable"
+
+      {:ok, first_execution, first_pid} =
+        AgentOrchestrator.run(%{
+          agent_id: logical_agent_id,
+          cmd: "sleep",
+          args: ["30"],
+          lease: false
+        })
+
+      {:ok, second_execution, second_pid} =
+        AgentOrchestrator.run(%{
+          agent_id: logical_agent_id,
+          cmd: "sleep",
+          args: ["30"],
+          lease: false
+        })
+
+      refute first_execution == second_execution
+      assert String.starts_with?(first_execution, "ex-")
+      assert String.starts_with?(second_execution, "ex-")
+
+      assert {:ok,
+              %{
+                execution_id: ^first_execution,
+                agent_id: ^logical_agent_id,
+                running: true
+              }} = AgentOrchestrator.snapshot(first_execution)
+
+      assert {:ok,
+              %{
+                execution_id: ^second_execution,
+                agent_id: ^logical_agent_id,
+                running: true
+              }} = AgentOrchestrator.snapshot(second_execution)
+
+      assert :ok = AgentOrchestrator.stop(first_execution)
+      refute Process.alive?(first_pid)
+      assert Process.alive?(second_pid)
+
+      assert {:ok, %{execution_id: ^second_execution, running: true}} =
+               AgentOrchestrator.snapshot(second_execution)
+
+      assert :ok = AgentOrchestrator.stop(second_execution)
+    end
+
+    test "a later run of the same logical agent cannot overwrite an earlier result" do
+      logical_agent_id = "worker-repeat"
+
+      {:ok, first_execution, _} =
+        AgentOrchestrator.run(%{
+          agent_id: logical_agent_id,
+          cmd: "echo",
+          args: ["first"]
+        })
+
+      assert {:ok, %{output: ["first"]}} = AgentOrchestrator.await(first_execution)
+
+      {:ok, second_execution, _} =
+        AgentOrchestrator.run(%{
+          agent_id: logical_agent_id,
+          cmd: "echo",
+          args: ["second"]
+        })
+
+      assert {:ok, %{output: ["second"]}} = AgentOrchestrator.await(second_execution)
+
+      assert {:ok,
+              %{
+                execution_id: ^first_execution,
+                agent_id: ^logical_agent_id,
+                output: ["first"]
+              }} = AgentOrchestrator.await(first_execution)
+
+      assert {:ok,
+              %{
+                execution_id: ^second_execution,
+                agent_id: ^logical_agent_id,
+                output: ["second"]
+              }} = AgentOrchestrator.await(second_execution)
+    end
+
+    test "callers cannot forge or reuse an execution id" do
+      {:ok, execution_id, _} =
+        AgentOrchestrator.run(%{
+          execution_id: "ex-caller-controlled",
+          cmd: "echo",
+          args: ["safe"]
+        })
+
+      refute execution_id == "ex-caller-controlled"
+
+      assert {:ok, %{execution_id: ^execution_id, output: ["safe"]}} =
+               AgentOrchestrator.await(execution_id)
+    end
+  end
+
   describe "fleet + registry" do
     test "list/count track live agents and stop tears one down" do
       {:ok, id, pid} = AgentOrchestrator.run(%{cmd: "sleep", args: ["30"]})
@@ -310,7 +413,9 @@ defmodule AgentOrchestratorTest do
         ])
 
       assert [{:ok, _, _}, {:ok, _, _}] = results
-      for {:ok, id, _} <- results, do: assert({:ok, %{exit_status: 0}} = AgentOrchestrator.await(id))
+
+      for {:ok, id, _} <- results,
+          do: assert({:ok, %{exit_status: 0}} = AgentOrchestrator.await(id))
     end
   end
 
@@ -333,7 +438,13 @@ defmodule AgentOrchestratorTest do
 
       assert surface_id == "agent:/" <> id
 
-      assert {:ok, %{lease_id: "stub-lease", exit_status: 0, lease_released: true, presence: :registered}} =
+      assert {:ok,
+              %{
+                lease_id: "stub-lease",
+                exit_status: 0,
+                lease_released: true,
+                presence: :registered
+              }} =
                AgentOrchestrator.await(id)
 
       assert_receive {:lease_event, {:release, "stub-lease", "normal"}}, 500
@@ -352,7 +463,11 @@ defmodule AgentOrchestratorTest do
     end
 
     test "refuses to start only when a lease is explicitly required and denied" do
-      Application.put_env(:agent_orchestrator, :stub_acquire_result, {:error, {:held_by_other, "other"}})
+      Application.put_env(
+        :agent_orchestrator,
+        :stub_acquire_result,
+        {:error, {:held_by_other, "other"}}
+      )
 
       assert {:error, {:lease_denied, {:held_by_other, "other"}}} =
                AgentOrchestrator.run(%{
@@ -486,7 +601,6 @@ defmodule AgentOrchestratorTest do
       assert {:ok, %{output: ["subagent"], exit_status: 0}} = AgentOrchestrator.await(id)
     end
   end
-
 
   describe "server-url provisioning" do
     test "provisions UNITARES_SERVER_URL into the child env" do
@@ -676,6 +790,7 @@ defmodule AgentOrchestratorTest do
       # required:false (best-effort), surface is the agent:/ presence surface.
       assert_receive {:lease_event, {:acquire, surface_id, _uuid, "remote_heartbeat", 300}}, 500
       assert surface_id == "agent:/" <> id
+
       assert {:ok, %{presence: :registered, lease_id: "stub-lease", running: true}} =
                AgentOrchestrator.snapshot(id)
 
@@ -692,6 +807,7 @@ defmodule AgentOrchestratorTest do
         })
 
       refute_receive {:lease_event, {:acquire, _, _, _, _}}, 100
+
       assert {:ok, %{presence: :disabled, lease_id: nil, running: true}} =
                AgentOrchestrator.snapshot(id)
 
@@ -800,8 +916,11 @@ defmodule AgentOrchestratorTest do
   # boolean condition.
   defp eventually_value(fun, retries \\ 100) do
     case fun.() do
-      nil -> if retries <= 0, do: nil, else: Process.sleep(10) && eventually_value(fun, retries - 1)
-      val -> val
+      nil ->
+        if retries <= 0, do: nil, else: Process.sleep(10) && eventually_value(fun, retries - 1)
+
+      val ->
+        val
     end
   end
 

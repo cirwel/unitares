@@ -173,8 +173,8 @@ def test_invoke_happy_path(monkeypatch):
         "status": "complete",
         "answer": "ANSWER",
     }
-    _patch_httpx(monkeypatch, [
-        _FakeResp(201, {"ok": True, "agent_id": "ag-1"}),
+    state = _patch_httpx(monkeypatch, [
+        _FakeResp(201, {"ok": True, "execution_id": "ex-1", "agent_id": "ex-1"}),
         _FakeResp(200, {"result": {"exit_status": 0, "output": [
             "codex", json.dumps(answer), "tokens used", "9",
         ]}}),
@@ -182,7 +182,9 @@ def test_invoke_happy_path(monkeypatch):
     r = _run(ha.invoke_host_adapter("codex:host-adapter", "hi", timeout_s=5))
     assert r["ok"] is True
     assert r["text"] == "ANSWER"
-    assert r["agent_id"] == "ag-1"
+    assert r["execution_id"] == "ex-1"
+    assert r["agent_id"] == "ex-1"
+    assert state["calls"][1][0].endswith("/v1/executions/ex-1/await")
     assert r["exit_status"] == 0
     assert r["provenance"]["model_family"] == "openai_codex"
     assert r["provenance"]["transport"] == "host_adapter"
@@ -342,6 +344,7 @@ def test_invoke_still_running_on_await_timeout(monkeypatch):
     r = _run(ha.invoke_host_adapter("codex:host-adapter", "hi", timeout_s=1))
     assert r["ok"] is False
     assert r["status"] == "still_running"
+    assert r["execution_id"] == "ag-2"
     assert r["agent_id"] == "ag-2"
 
 
@@ -377,7 +380,7 @@ def test_invoke_acknowledged_spawn_without_id_is_ambiguous(monkeypatch):
 
     assert result["ok"] is False
     assert result["dispatch_phase"] == "spawn_acknowledged"
-    assert "no agent_id" in result["error"]
+    assert "no execution_id" in result["error"]
 
 
 def test_invoke_spawn_transport_error_is_ambiguous(monkeypatch):
@@ -407,7 +410,7 @@ def test_invoke_spawn_transport_error_is_ambiguous(monkeypatch):
     assert result.get("agent_id") is None
 
 
-def test_invoke_exception_after_spawn_preserves_orchestrator_agent_id(monkeypatch):
+def test_invoke_exception_after_spawn_preserves_orchestrator_execution_id(monkeypatch):
     _enable(monkeypatch)
     state = {"calls": 0}
 
@@ -421,7 +424,7 @@ def test_invoke_exception_after_spawn_preserves_orchestrator_agent_id(monkeypatc
         async def post(self, _url, **_kwargs):
             state["calls"] += 1
             if state["calls"] == 1:
-                return _FakeResp(201, {"agent_id": "ag-preserved"})
+                return _FakeResp(201, {"execution_id": "ex-preserved"})
             raise RuntimeError("await transport failed")
 
     import httpx
@@ -434,7 +437,8 @@ def test_invoke_exception_after_spawn_preserves_orchestrator_agent_id(monkeypatc
     ))
 
     assert result["ok"] is False
-    assert result["agent_id"] == "ag-preserved"
+    assert result["execution_id"] == "ex-preserved"
+    assert result["agent_id"] == "ex-preserved"
     assert result["dispatch_phase"] == "spawned"
     assert "await transport failed" in result["error"]
 

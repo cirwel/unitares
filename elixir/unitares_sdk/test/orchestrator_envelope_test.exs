@@ -4,6 +4,15 @@ defmodule UnitaresSdk.OrchestratorEnvelopeTest do
   alias UnitaresSdk.OrchestratorEnvelope, as: Env
 
   describe "classify_spawn/2" do
+    test "v0.2 prefers execution_id over the compatibility agent_id alias" do
+      assert {:ok, "ex-durable"} =
+               Env.classify_spawn(201, %{
+                 "ok" => true,
+                 "execution_id" => "ex-durable",
+                 "agent_id" => "ag-legacy"
+               })
+    end
+
     test "201 with ok and agent_id" do
       assert {:ok, "ag-abc123"} =
                Env.classify_spawn(201, %{"ok" => true, "agent_id" => "ag-abc123"})

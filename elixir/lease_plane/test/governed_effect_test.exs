@@ -334,7 +334,7 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
       assert {:error, :governance_blocked} = GovernedEffect.handle(body)
 
       # The retry must NOT be answered as an idempotent replay of the refusal
-      # ({:ok, %{idempotent: true, agent_id: nil}} would read as success to a
+      # ({:ok, %{idempotent: true, execution_id: nil}} would read as success to a
       # producer and evaluate the veto exactly once per key, forever). It must
       # go back through the veto — here still unreachable, so blocked again,
       # with a SECOND durable row.

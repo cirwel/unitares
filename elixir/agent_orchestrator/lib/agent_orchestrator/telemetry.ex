@@ -14,14 +14,14 @@ defmodule AgentOrchestrator.Telemetry do
   `[:agent_orchestrator, :agent, :start]`
 
     * measurements — `:system_time`
-    * metadata — `:agent_id`, `:cmd`, `:os_pid`, `:lease_id`, `:presence`,
-      `:lineage`
+    * metadata — `:execution_id`, `:agent_id`, `:cmd`, `:os_pid`, `:lease_id`,
+      `:presence`, `:lineage`
 
   `[:agent_orchestrator, :agent, :stop]`
 
     * measurements — `:duration` (native units), `:output_lines`
-    * metadata — `:agent_id`, `:cmd`, `:os_pid`, `:exit_status`, `:reason`,
-      `:lease_id`
+    * metadata — `:execution_id`, `:agent_id`, `:cmd`, `:os_pid`,
+      `:exit_status`, `:reason`, `:lease_id`
 
   `:reason` distinguishes the three ways an agent ends, which the log alone
   could not:
@@ -91,7 +91,8 @@ defmodule AgentOrchestrator.Telemetry do
   @doc false
   def handle_event(@start, _measurements, meta, level) do
     Logger.log(level, fn ->
-      "telemetry agent.start #{meta.agent_id} cmd=#{meta.cmd} os_pid=#{inspect(meta.os_pid)}"
+      "telemetry execution.start #{meta.execution_id} agent=#{meta.agent_id} " <>
+        "cmd=#{meta.cmd} os_pid=#{inspect(meta.os_pid)}"
     end)
   end
 
@@ -99,7 +100,7 @@ defmodule AgentOrchestrator.Telemetry do
     ms = System.convert_time_unit(measurements.duration, :native, :millisecond)
 
     Logger.log(level, fn ->
-      "telemetry agent.stop #{meta.agent_id} reason=#{meta.reason} " <>
+      "telemetry execution.stop #{meta.execution_id} agent=#{meta.agent_id} reason=#{meta.reason} " <>
         "status=#{inspect(meta.exit_status)} lines=#{measurements.output_lines} duration_ms=#{ms}"
     end)
   end

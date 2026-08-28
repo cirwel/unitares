@@ -13,10 +13,15 @@ defmodule AgentOrchestrator.HTTPRouter do
 
       GET    /v1/health             liveness + live-agent count
       POST   /v1/agents             spawn a supervised ephemeral agent
-      GET    /v1/agents             list live agent ids
-      GET    /v1/agents/:id         snapshot (captured output + status), no block
-      POST   /v1/agents/:id/await   block until exit (or `timeout_ms`)
-      DELETE /v1/agents/:id         stop: close the port (kill child) + release lease
+      GET    /v1/executions             list live execution ids
+      GET    /v1/executions/:id         snapshot (captured output + status), no block
+      POST   /v1/executions/:id/await   block until exit (or `timeout_ms`)
+      DELETE /v1/executions/:id         stop exactly that execution
+
+  The original `/v1/agents/:id` lifecycle routes remain compatibility aliases
+  for the execution routes. `POST /v1/agents` returns both `execution_id` and
+  the legacy `agent_id` field; for HTTP-created executions those values are
+  identical. New callers should persist and use `execution_id`.
 
   ## Trust boundary
 
@@ -41,7 +46,7 @@ defmodule AgentOrchestrator.HTTPRouter do
 
   require Logger
 
-  @protocol_version "v0.1"
+  @protocol_version "v0.2"
 
   plug(:match)
 
@@ -87,15 +92,25 @@ defmodule AgentOrchestrator.HTTPRouter do
     with {:ok, spec} <- build_spec(conn.body_params),
          :ok <- check_allowed(spec.cmd) do
       case AgentOrchestrator.run(spec) do
-        {:ok, agent_id, _pid} ->
-          json(conn, 201, %{ok: true, agent_id: agent_id})
+        {:ok, execution_id, _pid} ->
+          json(conn, 201, %{
+            ok: true,
+            execution_id: execution_id,
+            # Compatibility alias for v0.1 clients. HTTP callers cannot set a
+            # logical agent_id, so this is exactly the execution handle.
+            agent_id: execution_id
+          })
 
         {:error, reason} ->
           spawn_error(conn, reason)
       end
     else
       {:error, :cmd_not_allowed, cmd} ->
-        json(conn, 403, %{ok: false, error: "permission_denied", reason: "cmd not in allowlist: #{cmd}"})
+        json(conn, 403, %{
+          ok: false,
+          error: "permission_denied",
+          reason: "cmd not in allowlist: #{cmd}"
+        })
 
       {:error, detail} ->
         json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
@@ -108,32 +123,32 @@ defmodule AgentOrchestrator.HTTPRouter do
   end
 
   get "/v1/agents/:id" do
-    case AgentOrchestrator.snapshot(id) do
-      {:ok, result} -> json(conn, 200, %{ok: true, result: present(result)})
-      {:error, :not_found} -> json(conn, 404, %{ok: false, error: "not_found"})
-    end
+    snapshot_response(conn, id)
   end
 
   post "/v1/agents/:id/await" do
-    case AgentOrchestrator.await(id, await_timeout(conn.body_params)) do
-      {:ok, result} ->
-        json(conn, 200, %{ok: true, result: present(result)})
-
-      {:error, :timeout} ->
-        # The await deadline passed; the agent may still be running. Distinct
-        # from not_found so a caller can re-await or snapshot.
-        json(conn, 504, %{ok: false, error: "await_timeout", agent_id: id})
-
-      {:error, :not_found} ->
-        json(conn, 404, %{ok: false, error: "not_found"})
-    end
+    await_response(conn, id)
   end
 
   delete "/v1/agents/:id" do
-    case AgentOrchestrator.stop(id) do
-      :ok -> json(conn, 200, %{ok: true})
-      {:error, :not_found} -> json(conn, 404, %{ok: false, error: "not_found"})
-    end
+    stop_response(conn, id)
+  end
+
+  get "/v1/executions" do
+    ids = AgentOrchestrator.list()
+    json(conn, 200, %{ok: true, executions: ids, count: length(ids)})
+  end
+
+  get "/v1/executions/:id" do
+    snapshot_response(conn, id)
+  end
+
+  post "/v1/executions/:id/await" do
+    await_response(conn, id)
+  end
+
+  delete "/v1/executions/:id" do
+    stop_response(conn, id)
   end
 
   match _ do
@@ -198,7 +213,9 @@ defmodule AgentOrchestrator.HTTPRouter do
 
   defp fetch_args(body) do
     case Map.get(body, "args") do
-      nil -> {:ok, []}
+      nil ->
+        {:ok, []}
+
       list when is_list(list) ->
         if Enum.all?(list, &is_binary/1),
           do: {:ok, list},
@@ -269,13 +286,16 @@ defmodule AgentOrchestrator.HTTPRouter do
       [
         {"required", :required, &is_boolean/1, "required must be a boolean"},
         {"surface_id", :surface_id, &nonempty_string?/1, "surface_id must be a non-empty string"},
-        {"holder_agent_uuid", :holder_agent_uuid, &nonempty_string?/1, "holder_agent_uuid must be a non-empty string"},
+        {"holder_agent_uuid", :holder_agent_uuid, &nonempty_string?/1,
+         "holder_agent_uuid must be a non-empty string"},
         {"ttl_s", :ttl_s, &positive_integer?/1, "ttl_s must be a positive integer"}
       ],
       {:ok, %{}},
       fn {json_key, atom_key, valid?, err}, {:ok, acc} ->
         case Map.fetch(cfg, json_key) do
-          :error -> {:cont, {:ok, acc}}
+          :error ->
+            {:cont, {:ok, acc}}
+
           {:ok, v} ->
             if valid?.(v),
               do: {:cont, {:ok, Map.put(acc, atom_key, v)}},
@@ -332,22 +352,42 @@ defmodule AgentOrchestrator.HTTPRouter do
   # ---------- spawn-error mapping ----------
 
   defp spawn_error(conn, {:invalid_lineage, reason}),
-    do: json(conn, 422, %{ok: false, error: "schema_invalid", detail: "invalid lineage: #{inspect(reason)}"})
+    do:
+      json(conn, 422, %{
+        ok: false,
+        error: "schema_invalid",
+        detail: "invalid lineage: #{inspect(reason)}"
+      })
 
   defp spawn_error(conn, {:invalid_server_url, reason}),
-    do: json(conn, 422, %{ok: false, error: "schema_invalid", detail: "invalid server_url: #{inspect(reason)}"})
+    do:
+      json(conn, 422, %{
+        ok: false,
+        error: "schema_invalid",
+        detail: "invalid server_url: #{inspect(reason)}"
+      })
 
   defp spawn_error(conn, {:invalid_client_session_id, reason}),
-    do: json(conn, 422, %{ok: false, error: "schema_invalid", detail: "invalid client_session_id: #{inspect(reason)}"})
+    do:
+      json(conn, 422, %{
+        ok: false,
+        error: "schema_invalid",
+        detail: "invalid client_session_id: #{inspect(reason)}"
+      })
 
   defp spawn_error(conn, {:executable_not_found, cmd}),
-    do: json(conn, 422, %{ok: false, error: "schema_invalid", detail: "executable not found: #{cmd}"})
+    do:
+      json(conn, 422, %{
+        ok: false,
+        error: "schema_invalid",
+        detail: "executable not found: #{cmd}"
+      })
 
   defp spawn_error(conn, {:lease_denied, reason}),
     do: json(conn, 409, %{ok: false, error: "lease_denied", reason: inspect(reason)})
 
   defp spawn_error(conn, {:already_running, id}),
-    do: json(conn, 409, %{ok: false, error: "already_running", agent_id: id})
+    do: json(conn, 409, %{ok: false, error: "already_running", execution_id: id})
 
   defp spawn_error(conn, reason) do
     Logger.error("agent orchestrator spawn failed: #{inspect(reason)}")
@@ -355,6 +395,40 @@ defmodule AgentOrchestrator.HTTPRouter do
   end
 
   # ---------- helpers ----------
+
+  defp snapshot_response(conn, execution_id) do
+    case AgentOrchestrator.snapshot(execution_id) do
+      {:ok, result} -> json(conn, 200, %{ok: true, result: present(result)})
+      {:error, :not_found} -> json(conn, 404, %{ok: false, error: "not_found"})
+    end
+  end
+
+  defp await_response(conn, execution_id) do
+    case AgentOrchestrator.await(execution_id, await_timeout(conn.body_params)) do
+      {:ok, result} ->
+        json(conn, 200, %{ok: true, result: present(result)})
+
+      {:error, :timeout} ->
+        # The await deadline passed; the execution may still be running.
+        # Distinct from not_found so a caller can re-await or snapshot.
+        json(conn, 504, %{
+          ok: false,
+          error: "await_timeout",
+          execution_id: execution_id,
+          agent_id: execution_id
+        })
+
+      {:error, :not_found} ->
+        json(conn, 404, %{ok: false, error: "not_found"})
+    end
+  end
+
+  defp stop_response(conn, execution_id) do
+    case AgentOrchestrator.stop(execution_id) do
+      :ok -> json(conn, 200, %{ok: true, execution_id: execution_id})
+      {:error, :not_found} -> json(conn, 404, %{ok: false, error: "not_found"})
+    end
+  end
 
   # Default 30s, clamped to (0, 120_000]. The await holds a Bandit connection
   # open, so an unbounded client-supplied timeout would let a caller pin a
@@ -370,7 +444,9 @@ defmodule AgentOrchestrator.HTTPRouter do
 
   defp check_allowed(cmd) do
     case Application.get_env(:agent_orchestrator, :cmd_allowlist) do
-      nil -> :ok
+      nil ->
+        :ok
+
       list when is_list(list) ->
         if Path.basename(cmd) in list, do: :ok, else: {:error, :cmd_not_allowed, cmd}
     end
@@ -382,6 +458,7 @@ defmodule AgentOrchestrator.HTTPRouter do
   # the response (which Plug.ErrorHandler would otherwise turn into a 503).
   defp present(result) do
     %{
+      execution_id: result.execution_id,
       agent_id: result.agent_id,
       os_pid: result.os_pid,
       lease_id: result.lease_id,

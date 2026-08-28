@@ -11,7 +11,7 @@ defmodule AgentOrchestrator.Application do
   Topology:
 
       AgentOrchestrator.Supervisor            (one_for_one)
-      ├── Registry  (AgentOrchestrator.Registry)   agent_id -> runner pid
+      ├── Registry  (AgentOrchestrator.Registry)   execution_id -> runner pid
       ├── ResultStore  (GenServer + ETS)            retained final results
       └── AgentSupervisor  (DynamicSupervisor)
           └── AgentRunner  (GenServer + Port)       restart: :temporary
