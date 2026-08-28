@@ -9,7 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_No unreleased changes yet. New entries accumulate here until the next release bump._
+### Added
+
+- **agent adoption:** a disabled-by-default seven-cell shared-memory pilot contract and pure validation/scheduling/canary/summary harness separate KG service value from information availability and surfacing; its content-addressed offline-fixture receipt binds enrollment/task/schedule/code digests, exercises retrieval and negative cases, and denies live or production claims. A shadow-only advisory decision core has deterministic replay/candidate IDs and typed suppression/degradation/non-delivery; an offline versioned JSONL bundle proves hash validation, exact private SQLite restoration, and substitute retrieval without registering a production import or live alert surface.
+
+### Changed
+
+- **adoption KPI:** support exact experiment-ID funnel reads over `agent_adoption.run.v1` / `agent_adoption.step.v1`, keep catalog/context/backend/material-use/outcome stages separate, make direct script invocation independent of `PYTHONPATH`, and relabel legacy KG mirror events as candidates whose final delivery is unknown.
+- **inference delegation:** require a versioned terminal-answer envelope from subscription CLI adapters; plan-only, malformed, empty, declined, and needs-input results now fail closed, while public errors preserve whether execution started or may still be running and no longer recommend blindly retrying ambiguous timeouts.
+
+### Fixed
+
+- **agent-adoption canary:** reject impossible or unbound result receipts, require full scheduled task-chain coverage, repair a frozen query that missed one registered material source, make substitute restore remove stale rows with `0600` storage, and validate KPI arguments before importing the optional PostgreSQL driver so lean CI environments fail for the intended reason.
+- **export contract:** stop claiming that the existing `complete_package` history export includes shared knowledge; its implementation contains metadata, history, and validation only.
 
 ---
 
