@@ -25,11 +25,27 @@ config :agent_orchestrator,
   result_retention_ms: 300_000,
   result_sweep_interval_ms: 60_000,
   result_store_max: 10_000,
-  # Direct-spawn idempotency is deliberately process-local and bounded to
-  # the same default window as retained results. It closes lost-response and
-  # concurrent-retry duplication without claiming restart persistence.
-  spawn_idempotency_retention_ms: 300_000,
+  # Keyed direct spawns use the shared Postgres database in runtime and an
+  # isolated in-memory ledger under MIX_ENV=test. Production never silently
+  # falls back to memory: if Postgres is absent, keyed spawns fail closed while
+  # unkeyed spawns keep their existing behavior. Raw keys/specs/output are not
+  # persisted — only hashes, execution ids, state, and timestamps.
+  idempotency_database_url:
+    System.get_env("AGENT_ORCHESTRATOR_DATABASE_URL") ||
+      System.get_env("GOVERNANCE_DATABASE_URL") || System.get_env("DB_POSTGRES_URL"),
+  idempotency_ledger:
+    if(config_env() == :test,
+      do: AgentOrchestrator.MemoryIdempotencyLedger,
+      else: AgentOrchestrator.PostgresIdempotencyLedger
+    ),
+  idempotency_pool_size: 2,
+  # Keep retry identity for at least 24 hours. SpawnGate extends an individual
+  # row when a caller requests a longer runtime, covering that runtime plus the
+  # five-minute result window so the protected execution cannot outlive its key.
+  # Expired rows are swept by SpawnGate.
+  spawn_idempotency_retention_ms: 86_400_000,
   spawn_idempotency_sweep_interval_ms: 60_000,
+  # Test-memory backend only; Postgres is bounded by expiry + the indexed sweep.
   spawn_idempotency_max: 10_000,
   # Control surface (lib/agent_orchestrator/http_router.ex). Binds IPv4
   # 127.0.0.1 only — a single localhost trust boundary, matching the lease

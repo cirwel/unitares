@@ -11,11 +11,14 @@ defmodule AgentOrchestrator.HTTPRouterTest do
   import Plug.Conn
 
   alias AgentOrchestrator.HTTPRouter
+  alias AgentOrchestrator.MemoryIdempotencyLedger
+  alias AgentOrchestrator.SpawnGate
 
   @opts HTTPRouter.init([])
   @token "test-bearer-token"
 
   setup do
+    MemoryIdempotencyLedger.clear()
     Application.put_env(:agent_orchestrator, :bearer_token, @token)
     # Null the lease bearer so default-on presence is a deterministic no-network
     # :no_bearer fast-fail (→ presence :unregistered) rather than hitting a plane.
@@ -86,6 +89,13 @@ defmodule AgentOrchestrator.HTTPRouterTest do
       body = body_json(conn)
       assert body["ok"] == true
       assert is_integer(body["active_agents"])
+
+      assert body["idempotency"] == %{
+               "available" => true,
+               "backend" => "memory",
+               "durable" => false
+             }
+
       assert body["protocol_version"] == HTTPRouter.protocol_version()
     end
   end
@@ -169,6 +179,38 @@ defmodule AgentOrchestrator.HTTPRouterTest do
       assert first.status == 201
       assert conflict.status == 409
       assert body_json(conflict)["error"] == "idempotency_conflict"
+    end
+
+    test "a crash-ambiguous reservation returns 409 without spawning" do
+      key = unique_key()
+      execution_id = "ex-11111111-1111-4111-8111-111111111111"
+      spec = %{cmd: "true", args: [], env: []}
+
+      digest =
+        spec
+        |> :erlang.term_to_binary([:deterministic])
+        |> then(&:crypto.hash(:sha256, &1))
+        |> Base.encode16(case: :lower)
+
+      assert {:ok, :reserved} =
+               MemoryIdempotencyLedger.reserve(
+                 SpawnGate.hash_key(key),
+                 digest,
+                 execution_id,
+                 60_000
+               )
+
+      before_count = AgentOrchestrator.count()
+
+      conn =
+        authed(:post, "/v1/agents", %{cmd: "true"})
+        |> with_idempotency_key(key)
+        |> call()
+
+      assert conn.status == 409
+      assert body_json(conn)["error"] == "idempotency_outcome_unknown"
+      assert body_json(conn)["execution_id"] == execution_id
+      assert AgentOrchestrator.count() == before_count
     end
 
     test "a failed spawn does not poison its Idempotency-Key" do
