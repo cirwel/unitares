@@ -23,6 +23,12 @@ defmodule AgentOrchestrator.HTTPRouter do
   the legacy `agent_id` field; for HTTP-created executions those values are
   identical. New callers should persist and use `execution_id`.
 
+  `POST /v1/agents` also accepts an optional `Idempotency-Key` header. Within
+  one orchestrator process, same key + same material spec replays the original
+  execution id; same key + a different spec returns `idempotency_conflict`.
+  The replay window is bounded and intentionally does not claim restart
+  persistence.
+
   ## Trust boundary
 
   Bind is local-only (`127.0.0.1`, enforced in `Application`) and every route is
@@ -37,7 +43,8 @@ defmodule AgentOrchestrator.HTTPRouter do
 
   Every response is `{ok: boolean, ...}` JSON with a `protocol_version` field.
   Errors are typed (`schema_invalid` / `permission_denied` / `not_found` /
-  `lease_denied` / `await_timeout` / `service_unavailable`) rather than leaky
+  `lease_denied` / `idempotency_conflict` / `await_timeout` /
+  `service_unavailable`) rather than leaky
   HTML — same typed-absence discipline as the lease plane router.
   """
 
@@ -90,12 +97,16 @@ defmodule AgentOrchestrator.HTTPRouter do
 
   post "/v1/agents" do
     with {:ok, spec} <- build_spec(conn.body_params),
+         {:ok, idempotency_key} <- fetch_idempotency_key(conn),
          :ok <- check_allowed(spec.cmd) do
-      case AgentOrchestrator.run(spec) do
-        {:ok, execution_id, _pid} ->
-          json(conn, 201, %{
+      case spawn(spec, idempotency_key) do
+        {:ok, execution_id, disposition} ->
+          status = if disposition == :idempotent, do: 200, else: 201
+
+          json(conn, status, %{
             ok: true,
             execution_id: execution_id,
+            idempotent: disposition == :idempotent,
             # Compatibility alias for v0.1 clients. HTTP callers cannot set a
             # logical agent_id, so this is exactly the execution handle.
             agent_id: execution_id
@@ -135,8 +146,15 @@ defmodule AgentOrchestrator.HTTPRouter do
   end
 
   get "/v1/executions" do
-    ids = AgentOrchestrator.list()
-    json(conn, 200, %{ok: true, executions: ids, count: length(ids)})
+    details = AgentOrchestrator.list_details()
+    ids = Enum.map(details, & &1.execution_id)
+
+    json(conn, 200, %{
+      ok: true,
+      executions: ids,
+      execution_details: Enum.map(details, &present_execution/1),
+      count: length(ids)
+    })
   end
 
   get "/v1/executions/:id" do
@@ -234,7 +252,7 @@ defmodule AgentOrchestrator.HTTPRouter do
 
       %{} = map ->
         if Enum.all?(map, fn {k, v} -> is_binary(k) and is_binary(v) end),
-          do: {:ok, Map.to_list(map)},
+          do: {:ok, map |> Map.to_list() |> Enum.sort()},
           else: {:error, "env must be a JSON object of string => string"}
 
       _ ->
@@ -349,6 +367,48 @@ defmodule AgentOrchestrator.HTTPRouter do
   defp put_lease(spec, :absent), do: spec
   defp put_lease(spec, value), do: Map.put(spec, :lease, value)
 
+  # ---------- idempotent spawn ----------
+
+  defp fetch_idempotency_key(conn) do
+    case Plug.Conn.get_req_header(conn, "idempotency-key") do
+      [] ->
+        {:ok, nil}
+
+      [raw] ->
+        key = String.trim(raw)
+
+        if byte_size(key) in 1..200 and String.printable?(key),
+          do: {:ok, key},
+          else: {:error, "Idempotency-Key must be 1-200 printable characters"}
+
+      _multiple ->
+        {:error, "Idempotency-Key must appear at most once"}
+    end
+  end
+
+  defp spawn(spec, nil) do
+    case AgentOrchestrator.run(spec) do
+      {:ok, execution_id, _pid} -> {:ok, execution_id, :new}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp spawn(spec, idempotency_key) do
+    digest = spawn_digest(spec)
+
+    case AgentOrchestrator.SpawnGate.start_agent(idempotency_key, digest, spec) do
+      {:ok, execution_id, _pid, disposition} -> {:ok, execution_id, disposition}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp spawn_digest(spec) do
+    spec
+    |> :erlang.term_to_binary([:deterministic])
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+  end
+
   # ---------- spawn-error mapping ----------
 
   defp spawn_error(conn, {:invalid_lineage, reason}),
@@ -388,6 +448,14 @@ defmodule AgentOrchestrator.HTTPRouter do
 
   defp spawn_error(conn, {:already_running, id}),
     do: json(conn, 409, %{ok: false, error: "already_running", execution_id: id})
+
+  defp spawn_error(conn, :idempotency_conflict),
+    do:
+      json(conn, 409, %{
+        ok: false,
+        error: "idempotency_conflict",
+        reason: "Idempotency-Key was already used for a different spawn spec"
+      })
 
   defp spawn_error(conn, reason) do
     Logger.error("agent orchestrator spawn failed: #{inspect(reason)}")
@@ -460,6 +528,8 @@ defmodule AgentOrchestrator.HTTPRouter do
     %{
       execution_id: result.execution_id,
       agent_id: result.agent_id,
+      cmd: Map.get(result, :cmd),
+      started_at: Map.get(result, :started_at),
       os_pid: result.os_pid,
       lease_id: result.lease_id,
       presence: result.presence,
@@ -468,6 +538,21 @@ defmodule AgentOrchestrator.HTTPRouter do
       running: result.running,
       lease_released: result.lease_released,
       output: result.output
+    }
+  end
+
+  defp present_execution(details) do
+    %{
+      execution_id: details.execution_id,
+      agent_id: details.agent_id,
+      cmd: details.cmd,
+      started_at: details.started_at,
+      os_pid: details.os_pid,
+      lease_id: details.lease_id,
+      presence: details.presence,
+      lineage: details.lineage,
+      exit_status: encode_status(details.exit_status),
+      running: details.running
     }
   end
 

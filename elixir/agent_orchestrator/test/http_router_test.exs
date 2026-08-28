@@ -48,6 +48,14 @@ defmodule AgentOrchestrator.HTTPRouterTest do
 
   defp body_json(conn), do: Jason.decode!(conn.resp_body)
 
+  defp with_idempotency_key(conn, key) do
+    put_req_header(conn, "idempotency-key", key)
+  end
+
+  defp unique_key do
+    "http-spawn-test-" <> Integer.to_string(System.unique_integer([:positive]))
+  end
+
   describe "auth" do
     test "503 when no bearer is configured (fail closed)" do
       Application.delete_env(:agent_orchestrator, :bearer_token)
@@ -104,12 +112,15 @@ defmodule AgentOrchestrator.HTTPRouterTest do
       execution_id = spawn["execution_id"]
       assert is_binary(execution_id)
       assert spawn["agent_id"] == execution_id
+      assert spawn["idempotent"] == false
 
       await = call(authed(:post, "/v1/agents/#{execution_id}/await", %{timeout_ms: 5_000}))
       assert await.status == 200
       result = body_json(await)["result"]
       assert result["execution_id"] == execution_id
       assert result["agent_id"] == execution_id
+      assert result["cmd"] == "echo"
+      assert is_binary(result["started_at"])
       assert result["exit_status"] == 0
       assert result["output"] == ["hi there"]
       assert result["running"] == false
@@ -117,6 +128,72 @@ defmodule AgentOrchestrator.HTTPRouterTest do
 
     test "422 when cmd is missing" do
       conn = call(authed(:post, "/v1/agents", %{args: ["x"]}))
+      assert conn.status == 422
+      assert body_json(conn)["error"] == "schema_invalid"
+    end
+
+    test "same Idempotency-Key and spec replay one execution" do
+      key = unique_key()
+      spec = %{cmd: "sh", args: ["-c", "sleep 5"]}
+
+      first =
+        authed(:post, "/v1/agents", spec)
+        |> with_idempotency_key(key)
+        |> call()
+
+      replay =
+        authed(:post, "/v1/agents", spec)
+        |> with_idempotency_key(key)
+        |> call()
+
+      assert first.status == 201
+      assert replay.status == 200
+      assert body_json(first)["idempotent"] == false
+      assert body_json(replay)["idempotent"] == true
+      assert body_json(replay)["execution_id"] == body_json(first)["execution_id"]
+    end
+
+    test "same Idempotency-Key with a different spec returns 409" do
+      key = unique_key()
+
+      first =
+        authed(:post, "/v1/agents", %{cmd: "sh", args: ["-c", "sleep 5"]})
+        |> with_idempotency_key(key)
+        |> call()
+
+      conflict =
+        authed(:post, "/v1/agents", %{cmd: "sh", args: ["-c", "sleep 6"]})
+        |> with_idempotency_key(key)
+        |> call()
+
+      assert first.status == 201
+      assert conflict.status == 409
+      assert body_json(conflict)["error"] == "idempotency_conflict"
+    end
+
+    test "a failed spawn does not poison its Idempotency-Key" do
+      key = unique_key()
+
+      failed =
+        authed(:post, "/v1/agents", %{cmd: "definitely-not-a-real-binary-xyz"})
+        |> with_idempotency_key(key)
+        |> call()
+
+      retried =
+        authed(:post, "/v1/agents", %{cmd: "true"})
+        |> with_idempotency_key(key)
+        |> call()
+
+      assert failed.status == 422
+      assert retried.status == 201
+    end
+
+    test "rejects an invalid Idempotency-Key" do
+      conn =
+        authed(:post, "/v1/agents", %{cmd: "true"})
+        |> with_idempotency_key(String.duplicate("x", 201))
+        |> call()
+
       assert conn.status == 422
       assert body_json(conn)["error"] == "schema_invalid"
     end
@@ -232,7 +309,15 @@ defmodule AgentOrchestrator.HTTPRouterTest do
 
       listed = call(authed(:get, "/v1/executions"))
       assert listed.status == 200
-      assert execution_id in body_json(listed)["executions"]
+      listed_body = body_json(listed)
+      assert execution_id in listed_body["executions"]
+
+      details = Enum.find(listed_body["execution_details"], &(&1["execution_id"] == execution_id))
+      assert details["agent_id"] == execution_id
+      assert details["cmd"] == "sh"
+      assert is_binary(details["started_at"])
+      assert details["running"] == true
+      refute Map.has_key?(details, "output")
 
       snapshot = call(authed(:get, "/v1/executions/#{execution_id}"))
       assert snapshot.status == 200

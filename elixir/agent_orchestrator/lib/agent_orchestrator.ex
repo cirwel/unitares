@@ -42,6 +42,7 @@ defmodule AgentOrchestrator do
   defdelegate snapshot(execution_id), to: AgentRunner
   defdelegate stop(execution_id, reason \\ :operator_stop), to: AgentRunner
   defdelegate list(), to: AgentRunner
+  defdelegate list_details(), to: AgentRunner
 
   @doc "Count of live supervised agents."
   @spec count() :: non_neg_integer()

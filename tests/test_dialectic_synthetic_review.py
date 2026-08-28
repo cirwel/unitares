@@ -175,7 +175,7 @@ async def test_orchestrated_dispatch_skips_in_process(server_patch):
     session.paused_agent_state = {"risk_score": 0.7859, "coherence": 0.4986}
     ACTIVE_SESSIONS[session.session_id] = session
     gen_anti = AsyncMock(return_value=_antithesis())
-    dispatch = AsyncMock(return_value={"ok": True, "agent_id": "agent-rev-1"})
+    dispatch = AsyncMock(return_value={"ok": True, "execution_id": "ex-review-1"})
     emit = AsyncMock()
 
     import contextlib
@@ -196,7 +196,8 @@ async def test_orchestrated_dispatch_skips_in_process(server_patch):
 
     data = parse_result(result)
     assert data["orchestrated_review"] is True
-    assert data["reviewer_dispatch"]["agent_id"] == "agent-rev-1"
+    assert data["reviewer_dispatch"]["execution_id"] == "ex-review-1"
+    assert data["reviewer_dispatch"]["agent_id"] == "ex-review-1"
     # The in-process reviewer must NOT have run — the orchestrator owns this review.
     gen_anti.assert_not_called()
     assert "resolved" not in data  # slot left open for the spawned reviewer
@@ -215,7 +216,8 @@ async def test_orchestrated_dispatch_skips_in_process(server_patch):
         for call in emit.await_args_list
         if call.args[0] == "dialectic_reviewer_dispatched"
     )
-    assert dispatch_event.kwargs["orchestrator_agent_id"] == "agent-rev-1"
+    assert dispatch_event.kwargs["orchestrator_execution_id"] == "ex-review-1"
+    assert dispatch_event.kwargs["orchestrator_agent_id"] == "ex-review-1"
     assert session.awaiting_facilitation is False
 
 
