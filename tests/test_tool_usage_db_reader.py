@@ -22,10 +22,19 @@ from src.audit_db import get_tool_usage_stats_async
 from src.mcp_handlers.introspection.tool_introspection import handle_list_tools
 
 
-def _mock_db(rows):
-    """A get_db() stand-in whose acquire() yields a conn returning ``rows``."""
+def _mock_db(rows, lease_rows=None):
+    """A get_db() stand-in whose acquire() yields a conn returning ``rows``.
+
+    The unfiltered reader path issues two queries: the tool aggregate and the
+    lease-plane substrate split (the only one selecting ``holder_class``).
+    Route on that marker so each query gets its own rows.
+    """
     conn = MagicMock()
-    conn.fetch = AsyncMock(return_value=rows)
+    conn.fetch = AsyncMock(
+        side_effect=lambda sql, *params: (
+            (lease_rows or []) if "holder_class" in sql else rows
+        )
+    )
     cm = MagicMock()
     cm.__aenter__ = AsyncMock(return_value=conn)
     cm.__aexit__ = AsyncMock(return_value=False)
@@ -72,6 +81,59 @@ def test_db_reader_agent_usage_only_with_agent_filter():
         )
     assert no_filter["agent_usage"] is None
     assert with_filter["agent_usage"] == {"agent-x": {"identity": 4}}
+
+
+def test_db_reader_splits_lease_plane_substrate_from_tools():
+    """Forwarded lease.* rows are substrate, not tool calls.
+
+    They are lease-plane events projected into audit.tool_usage by the BEAM
+    outbox forwarder, ~99.9% holder_class=process_instance presence
+    heartbeats. The aggregate must exclude them from tools/most_used/
+    total_calls and report them separately under ``lease_plane``, split by
+    holder_class so heartbeats stay labeled as heartbeats.
+    """
+    rows = [
+        {"tool_name": "knowledge", "total_calls": 10, "success_count": 9},
+    ]
+    lease_rows = [
+        {"tool_name": "lease.acquire", "holder_class": "process_instance", "total_calls": 45490},
+        {"tool_name": "lease.acquire", "holder_class": "substrate_earned", "total_calls": 12},
+        {"tool_name": "lease.release", "holder_class": "process_instance", "total_calls": 37616},
+    ]
+    db, conn = _mock_db(rows, lease_rows=lease_rows)
+    with patch("src.db.get_db", return_value=db):
+        stats = asyncio.run(get_tool_usage_stats_async(window_hours=24))
+
+    # The aggregate query itself excludes the forwarded substrate rows...
+    main_sql = conn.fetch.call_args_list[0].args[0]
+    assert "NOT LIKE 'lease.%'" in main_sql
+    assert stats["total_calls"] == 10
+    assert all(not t.startswith("lease.") for t in stats["tools"])
+    assert all(not m["tool"].startswith("lease.") for m in stats["most_used"])
+    # ...and the volume stays visible, labeled, split by holder_class.
+    lp = stats["lease_plane"]
+    assert lp["total_events"] == 45490 + 12 + 37616
+    assert lp["events"]["lease.acquire"] == {
+        "process_instance": 45490,
+        "substrate_earned": 12,
+    }
+    assert lp["events"]["lease.release"] == {"process_instance": 37616}
+
+
+def test_db_reader_scoped_lease_query_still_answers():
+    """An explicit tool_name='lease.acquire' query bypasses the exclusion."""
+    rows = [{"tool_name": "lease.acquire", "total_calls": 5, "success_count": 5}]
+    db, conn = _mock_db(rows)
+    with patch("src.db.get_db", return_value=db):
+        stats = asyncio.run(
+            get_tool_usage_stats_async(window_hours=24, tool_name="lease.acquire")
+        )
+
+    assert conn.fetch.call_count == 1  # no second lease-split query
+    scoped_sql = conn.fetch.call_args.args[0]
+    assert "NOT LIKE" not in scoped_sql
+    assert stats["tools"]["lease.acquire"]["total_calls"] == 5
+    assert "lease_plane" not in stats
 
 
 def test_db_reader_returns_none_when_db_unavailable():
