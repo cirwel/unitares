@@ -792,6 +792,229 @@ else:
 '
 }
 
+cmd_agent() {
+    # Drill into ONE agent: identity, current state, trajectory, composition.
+    #
+    # Built on GET /v1/agents/<id>/history, which is path-scoped and genuinely
+    # per-agent. Deliberately NOT on /v1/eisv/latest or /v1/eisv/recent: both
+    # accept an agent_id query param and silently ignore it, returning whatever
+    # the broadcaster saw last across the whole fleet. Rendering another
+    # agent's vector under this one's heading is the failure this command is
+    # shaped to avoid, so it does not read those routes at all.
+    #
+    # The echo check below is a cheap assertion, NOT a cross-check: the history
+    # endpoint returns the path segment it was given, so today it cannot
+    # disagree. It is kept because it costs nothing and would catch a future
+    # server that starts resolving the id independently — it is not evidence
+    # that this agent is who the caller asked for, and nothing here claims so.
+    local json_mode=0 arg agent=""
+    for arg in "$@"; do
+        case "$arg" in
+            --json) json_mode=1 ;;
+            -*) echo "error: unknown agent option '${arg}' (only --json)" >&2; return 2 ;;
+            *)
+                if [ -n "$agent" ]; then
+                    echo "error: give one agent id, not two ('${agent}' and '${arg}')" >&2
+                    return 2
+                fi
+                agent="$arg"
+                ;;
+        esac
+    done
+    if [ -z "$agent" ]; then
+        echo "usage: unitares agent <agent-id|resident-label> [--json]" >&2
+        return 2
+    fi
+
+    # A resident label is the handle an operator actually has in front of them
+    # (`unitares status` prints labels, not UUIDs), so accept either and let
+    # /v1/residents do the mapping. No lookup-by-label against the identity
+    # store: the roster is a display surface, and resolving a name to an
+    # identity anywhere else is how ghost-identity bugs start.
+    # Capture the failure rather than discarding it. Swallowing it meant a
+    # label that never resolved was sent on as a literal, the history endpoint
+    # found no such identity and answered 200 with total 0, and the operator
+    # was told "no governance state recorded" — a confident, specific, wrong
+    # explanation for what was actually a roster fetch that failed.
+    local residents resolved errbuf roster_failed=0
+    errbuf=$(mktemp -t unitares_cli_XXXXXX)
+    residents=$(_curl_get "/v1/residents" 2>"$errbuf") || { residents=""; roster_failed=1; }
+    local roster_err
+    roster_err=$(head -2 "$errbuf" 2>/dev/null)
+    rm -f "$errbuf"
+    resolved=$(RESIDENTS="$residents" WANT="$agent" python3 -c '
+import json, os, sys
+want = os.environ["WANT"]
+try:
+    rows = (json.loads(os.environ.get("RESIDENTS") or "{}") or {}).get("residents") or []
+except Exception:
+    rows = []
+for row in rows:
+    if not isinstance(row, dict):
+        continue
+    if str(row.get("label", "")).lower() == want.lower() and row.get("agent_id"):
+        print(row["agent_id"])
+        break
+' 2>/dev/null)
+    if [ -n "$resolved" ]; then
+        agent="$resolved"
+    elif [ "$roster_failed" = "1" ] && ! printf '%s' "$agent" | grep -Eq '^[0-9a-fA-F-]{32,36}$'; then
+        # Not a UUID and the roster is unreadable: the label cannot be resolved,
+        # and passing it on would produce an empty history that reads as "this
+        # agent never checked in".
+        echo "error: could not read /v1/residents, so the label '${agent}' cannot be resolved." >&2
+        [ -n "$roster_err" ] && echo "$roster_err" >&2
+        echo "hint: pass the agent UUID directly, or check 'unitares status'." >&2
+        return 1
+    fi
+
+    local history
+    history=$(_curl_get "/v1/agents/${agent}/history?limit=200") || return 1
+    _check_body "$history" "/v1/agents/${agent}/history" >/dev/null || return 1
+
+    HISTORY="$history" RESIDENTS="$residents" ASKED="$agent" \
+    JSON_MODE="$json_mode" python3 -c '
+import json, os, sys
+
+try:
+    hist = json.loads(os.environ["HISTORY"])
+except Exception:
+    print("error: bad JSON from the history endpoint", file=sys.stderr)
+    sys.exit(1)
+if not isinstance(hist, dict):
+    print("error: unexpected history shape", file=sys.stderr)
+    sys.exit(1)
+
+asked = os.environ["ASKED"]
+echoed = str(hist.get("agent_id") or "")
+points = [p for p in (hist.get("points") or []) if isinstance(p, dict)]
+
+# The label, if this agent is a resident. Display only.
+label = None
+try:
+    for row in (json.loads(os.environ.get("RESIDENTS") or "{}") or {}).get("residents") or []:
+        if isinstance(row, dict) and row.get("agent_id") == echoed:
+            label = row.get("label")
+            break
+except Exception:
+    pass
+
+if os.environ.get("JSON_MODE") == "1":
+    print(json.dumps({
+        "agent_id": echoed or asked,
+        "label": label,
+        "requested": asked,
+        # Named for what it is: the id came back unchanged. The endpoint
+        # echoes its path segment, so this is an assertion about the round
+        # trip, not an independent confirmation of identity.
+        "id_echoed_unchanged": bool(echoed) and echoed == asked,
+        "history": hist,
+    }, indent=2))
+    sys.exit(0)
+
+# Cannot fire against the current server, which echoes the path segment, but a
+# future one that resolves the id independently could disagree — and rendering
+# a different agent under this heading is the thing to refuse, not report.
+if echoed and echoed != asked:
+    print("error: asked for " + asked + " but the server answered about "
+          + echoed + " — refusing to render it as the requested agent",
+          file=sys.stderr)
+    sys.exit(1)
+
+head = "AGENT " + (echoed or asked)
+if label:
+    head += " · " + str(label)
+print(head)
+
+if not points:
+    total = hist.get("total")
+    if total in (0, None):
+        print("No governance state recorded for this agent.")
+        print("An identity can exist without ever checking in — minted by")
+        print("authentication, never used. That is a real state, not an error.")
+    else:
+        print("No points in this window (total on record: " + str(total) + ").")
+    sys.exit(0)
+
+latest = points[-1]
+
+def num(value, fmt="%.2f"):
+    try:
+        return fmt % float(value)
+    except (TypeError, ValueError):
+        return "?"
+
+print("State:     E " + num(latest.get("E")) + "  I " + num(latest.get("I"))
+      + "  S " + num(latest.get("S")) + "  V " + num(latest.get("V"))
+      + "  · coherence " + num(latest.get("coherence"))
+      + " · risk " + num(latest.get("risk")))
+
+verdict = latest.get("verdict") or latest.get("action") or "-"
+print("Verdict:   " + str(verdict) + " · as of " + str(latest.get("t") or "?"))
+
+# Composition, not choice: who COMPOSED these rows. A population that is 98%
+# substrate interpretation says something very different about a trajectory
+# than one that is agent-authored, and the endpoint already separates them.
+summary = hist.get("observation_summary")
+if isinstance(summary, dict):
+    parts = []
+    for key, name in (
+        ("agent_reports", "agent-authored"),
+        ("substrate_rows", "substrate"),
+        ("other_rows", "other"),
+    ):
+        value = summary.get(key)
+        if value:
+            parts.append(str(value) + " " + name)
+    if parts:
+        print("Composed:  " + " · ".join(parts)
+              + " (of " + str(summary.get("state_rows", "?")) + " rows)")
+
+count = hist.get("count")
+total = hist.get("total")
+print("History:   " + str(count) + " shown of " + str(total) + " on record")
+
+# Sparkline over the window. Flat is meaningful here — a resident that never
+# moves is a different story from one that oscillates — so a constant series
+# renders as a flat line rather than being scaled into false variation.
+def spark(series):
+    blocks = "\u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
+    values = []
+    for point in series:
+        try:
+            values.append(float(point))
+        except (TypeError, ValueError):
+            values.append(None)
+    real = [v for v in values if v is not None]
+    if not real:
+        return ""
+    low, high = min(real), max(real)
+    if high - low < 1e-9:
+        # Gaps stay gaps on this branch too. Filling every position — including
+        # the missing ones — with the flat block reports data that was never
+        # recorded, which is the same false-signal failure this function avoids
+        # on the varying branch, just for absence instead of variation.
+        return "".join(" " if v is None else blocks[3] for v in values)
+    out = []
+    for v in values:
+        if v is None:
+            out.append(" ")
+        else:
+            idx = int((v - low) / (high - low) * (len(blocks) - 1))
+            out.append(blocks[idx])
+    return "".join(out)
+
+window = points[-48:]
+for name in ("E", "I", "S", "V"):
+    line = spark([p.get(name) for p in window])
+    if line:
+        print("  " + name + "  " + line)
+if len(window) > 1:
+    print("     " + str(window[0].get("t") or "?")[:16]
+          + "  ->  " + str(window[-1].get("t") or "?")[:16])
+'
+}
+
 cmd_session() {
     echo "Agent ID:     ${AGENT_ID}"
     echo "Session file: ${SESSION_FILE}"
@@ -811,6 +1034,8 @@ cmd_help() {
 UNITARES CLI — REST wrapper for the governance MCP server
 
 Commands:
+  agent <id|label> [--json]         Drill into one agent: state, verdict,
+                                    composition, trajectory
   status [--json] [--no-release]    One operator screen: server, release
                                     currency, agent tiers, residents. Pure
                                     reads; try: watch -n30 unitares status
@@ -854,6 +1079,7 @@ EOF
 
 case "${1:-help}" in
     status|st)   shift; cmd_status "$@" ;;
+    agent|a)     shift; cmd_agent "$@" ;;
     onboard|o)   shift; cmd_onboard "$@" ;;
     update|u)    shift; cmd_update "$@" ;;
     metrics|m)   shift; cmd_metrics ;;

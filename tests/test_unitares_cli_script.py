@@ -368,7 +368,14 @@ def _start_stub(routes):
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
-            code, payload = routes.get(self.path, (404, {"error": "not found"}))
+            # Match on the path, ignoring the query string: callers legitimately
+            # append ?limit=/?window=, and a stub that 404s on those tests the
+            # stub rather than the CLI. An exact-match route still wins, so a
+            # test that wants to assert on query handling can register one.
+            bare = self.path.split("?", 1)[0]
+            code, payload = routes.get(
+                self.path, routes.get(bare, (404, {"error": "not found"}))
+            )
             data = json.dumps(payload).encode()
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
@@ -888,3 +895,200 @@ def test_call_with_invalid_json_arguments_errors_cleanly(cli_env):
     assert result.returncode != 0
     assert "Traceback" not in result.stderr
     assert "invalid JSON" in result.stderr or "error" in result.stderr.lower()
+
+
+# --- agent ---------------------------------------------------------------------
+# Drill-in for one agent. Built on GET /v1/agents/<id>/history because that route
+# is path-scoped; /v1/eisv/latest and /v1/eisv/recent accept an agent_id query
+# param and silently ignore it, returning whatever the broadcaster saw last
+# across the whole fleet (verified live 2026-08-28: `recent?agent_id=X&limit=5`
+# came back with events from four different agents). Rendering another agent's
+# vector under this one's heading is the failure this command exists to avoid.
+
+AGENT_ID = "11111111-2222-3333-4444-555555555555"
+
+
+def _history(points, agent_id=AGENT_ID, total=None, summary=None):
+    return {
+        "success": True,
+        "agent_id": agent_id,
+        "mode": "recent",
+        "count": len(points),
+        "total": total if total is not None else len(points),
+        "observation_summary": summary
+        or {"state_rows": len(points), "agent_reports": len(points),
+            "substrate_rows": 0, "other_rows": 0},
+        "points": points,
+    }
+
+
+def _point(e=0.5, i=0.5, s=0.5, v=0.0, t="2026-08-28T12:00:00+00:00", verdict="proceed"):
+    return {"E": e, "I": i, "S": s, "V": v, "coherence": 0.5, "risk": 0.1,
+            "verdict": verdict, "epistemic_class": "agent_report", "t": t}
+
+
+def test_agent_renders_state_and_trajectory(stub_env):
+    pts = [_point(e=0.1), _point(e=0.5), _point(e=0.9, verdict="guide")]
+    server, url = _start_stub({
+        f"/v1/agents/{AGENT_ID}/history": (200, _history(pts, total=99)),
+        "/v1/residents": (200, {"success": True, "configured": [], "residents": []}),
+    })
+    try:
+        stub_env["UNITARES_URL"] = url
+        out = _run(stub_env, "agent", AGENT_ID).stdout
+        assert AGENT_ID in out
+        assert "E 0.90" in out            # latest point, not the first
+        assert "guide" in out
+        assert "3 shown of 99" in out
+        assert "3 agent-authored" in out  # composition, not just a count
+    finally:
+        server.shutdown()
+
+
+def test_agent_accepts_a_resident_label(stub_env):
+    """`unitares status` prints labels, so the handle an operator has is a
+    label — but resolution goes through the roster, never a lookup-by-label
+    against the identity store."""
+    server, url = _start_stub({
+        f"/v1/agents/{AGENT_ID}/history": (200, _history([_point()])),
+        "/v1/residents": (200, {"success": True, "configured": ["Lumen"],
+                                "residents": [{"label": "Lumen", "agent_id": AGENT_ID}]}),
+    })
+    try:
+        stub_env["UNITARES_URL"] = url
+        out = _run(stub_env, "agent", "lumen").stdout   # case-insensitive
+        assert AGENT_ID in out and "Lumen" in out
+    finally:
+        server.shutdown()
+
+
+def test_agent_refuses_when_the_server_answers_about_someone_else(stub_env):
+    """The guard the whole command is shaped around: an endpoint that answers
+    about a different agent must not be rendered under the requested heading."""
+    other = "99999999-8888-7777-6666-555555555555"
+    server, url = _start_stub({
+        f"/v1/agents/{AGENT_ID}/history": (200, _history([_point()], agent_id=other)),
+        "/v1/residents": (200, {"success": True, "configured": [], "residents": []}),
+    })
+    try:
+        stub_env["UNITARES_URL"] = url
+        result = _run(stub_env, "agent", AGENT_ID, check=False)
+        assert result.returncode != 0
+        assert "refusing" in result.stderr
+        assert other in result.stderr
+    finally:
+        server.shutdown()
+
+
+def test_agent_with_no_state_says_so_plainly(stub_env):
+    """An identity can exist without ever checking in — minted by
+    authentication, never used. That is a real state, not an error."""
+    server, url = _start_stub({
+        f"/v1/agents/{AGENT_ID}/history": (200, _history([], total=0)),
+        "/v1/residents": (200, {"success": True, "configured": [], "residents": []}),
+    })
+    try:
+        stub_env["UNITARES_URL"] = url
+        result = _run(stub_env, "agent", AGENT_ID)
+        assert result.returncode == 0
+        assert "No governance state recorded" in result.stdout
+    finally:
+        server.shutdown()
+
+
+def test_agent_flat_series_renders_flat(stub_env):
+    """A resident that never moves is a different story from one that
+    oscillates, so a constant series must not be scaled into false variation."""
+    server, url = _start_stub({
+        f"/v1/agents/{AGENT_ID}/history": (200, _history([_point(e=0.5) for _ in range(6)])),
+        "/v1/residents": (200, {"success": True, "configured": [], "residents": []}),
+    })
+    try:
+        stub_env["UNITARES_URL"] = url
+        line = next(l for l in _run(stub_env, "agent", AGENT_ID).stdout.splitlines()
+                    if l.strip().startswith("E "))
+        bar = line.split()[1]
+        assert len(set(bar)) == 1, f"flat series rendered as variation: {bar!r}"
+    finally:
+        server.shutdown()
+
+
+def test_agent_json_is_machine_readable(stub_env):
+    server, url = _start_stub({
+        f"/v1/agents/{AGENT_ID}/history": (200, _history([_point()])),
+        "/v1/residents": (200, {"success": True, "configured": [], "residents": []}),
+    })
+    try:
+        stub_env["UNITARES_URL"] = url
+        data = json.loads(_run(stub_env, "agent", AGENT_ID, "--json").stdout)
+        assert data["agent_id"] == AGENT_ID
+        # Named for what it verifies: the id round-tripped unchanged. The
+        # endpoint echoes its path segment, so this is not an independent
+        # confirmation of identity and the field name must not imply one.
+        assert data["id_echoed_unchanged"] is True
+        assert data["history"]["points"]
+    finally:
+        server.shutdown()
+
+
+def test_agent_requests_the_documented_limit(stub_env):
+    """Pin the limit: nothing else asserts it, so it could drift silently.
+    Registered as an exact path+query route, which only matches if the CLI
+    sends precisely this."""
+    server, url = _start_stub({
+        f"/v1/agents/{AGENT_ID}/history?limit=200": (200, _history([_point()])),
+        "/v1/residents": (200, {"success": True, "configured": [], "residents": []}),
+    })
+    try:
+        stub_env["UNITARES_URL"] = url
+        assert _run(stub_env, "agent", AGENT_ID).returncode == 0
+    finally:
+        server.shutdown()
+
+
+def test_agent_flat_series_still_shows_gaps(stub_env):
+    """A missing reading inside an otherwise-flat run must render as a gap.
+    Filling it with the flat block reports data that was never recorded — the
+    same false signal the flat-series handling exists to prevent, for absence
+    instead of variation."""
+    pts = [_point(e=0.5), _point(e=None), _point(e=0.5)]
+    server, url = _start_stub({
+        f"/v1/agents/{AGENT_ID}/history": (200, _history(pts)),
+        "/v1/residents": (200, {"success": True, "configured": [], "residents": []}),
+    })
+    try:
+        stub_env["UNITARES_URL"] = url
+        line = next(l for l in _run(stub_env, "agent", AGENT_ID).stdout.splitlines()
+                    if l.strip().startswith("E "))
+        assert " " in line.split("E", 1)[1].strip(), f"gap was filled in: {line!r}"
+    finally:
+        server.shutdown()
+
+
+def test_agent_roster_failure_is_not_reported_as_missing_state(stub_env):
+    """If /v1/residents fails and a label was given, the label cannot resolve.
+    Passing it on yields an empty history that reads as 'never checked in' —
+    a confident, specific, wrong explanation."""
+    server, url = _start_stub({
+        "/v1/residents": (503, {"error": "unavailable"}),
+        f"/v1/agents/Lumen/history": (200, _history([], total=0)),
+    })
+    try:
+        stub_env["UNITARES_URL"] = url
+        result = _run(stub_env, "agent", "Lumen", check=False)
+        assert result.returncode != 0
+        assert "cannot be resolved" in result.stderr
+        assert "No governance state" not in result.stdout
+    finally:
+        server.shutdown()
+
+
+def test_agent_argument_errors(stub_env):
+    for args, expect in (
+        ((), "usage:"),
+        (("a", "b"), "not two"),
+        (("x", "--bogus"), "unknown agent option"),
+    ):
+        result = _run(stub_env, "agent", *args, check=False)
+        assert result.returncode != 0
+        assert expect in result.stderr

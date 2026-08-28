@@ -45,10 +45,12 @@ Usage:
 
 Env:
     UNITARES_MCP_URL              default http://127.0.0.1:8767/mcp/
+    UNITARES_MCP_BEARER_TOKEN     optional credential for a gated /mcp endpoint
     UNITARES_DIALECTIC_CANARY_LOG default <repo>/data/logs/dialectic_canary.jsonl
     GOVERNANCE_DATABASE_URL       default postgresql://postgres:postgres@localhost:5432/governance
     UNITARES_CANARY_TIMEOUT_S     default 150 (must clear the 105s one-call ceiling)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -91,11 +93,13 @@ async def call_tool(
     from mcp.client.session import ClientSession
     from mcp.client.streamable_http import streamable_http_client
 
-    from src.mcp_compat import mcp_httpx
+    from src.mcp_compat import mcp_bearer_headers, mcp_httpx
 
     # mcp 2.x's transport calls .sse() on the injected client and is written
     # against httpx2; mcp_httpx() hands back whichever library this mcp wants.
-    http_client = mcp_httpx().AsyncClient(timeout=timeout_s)
+    http_client = mcp_httpx().AsyncClient(
+        timeout=timeout_s, headers=mcp_bearer_headers()
+    )
     async with streamable_http_client(url, http_client=http_client) as streams:
         # mcp 1.x yields (read, write, get_session_id); 2.x drops the third.
         read, write = streams[0], streams[1]
