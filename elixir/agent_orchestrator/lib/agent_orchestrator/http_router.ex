@@ -23,11 +23,12 @@ defmodule AgentOrchestrator.HTTPRouter do
   the legacy `agent_id` field; for HTTP-created executions those values are
   identical. New callers should persist and use `execution_id`.
 
-  `POST /v1/agents` also accepts an optional `Idempotency-Key` header. Within
-  one orchestrator process, same key + same material spec replays the original
-  execution id; same key + a different spec returns `idempotency_conflict`.
-  The replay window is bounded and intentionally does not claim restart
-  persistence.
+  `POST /v1/agents` also accepts an optional `Idempotency-Key` header. The
+  production ledger persists only hashes + execution metadata in PostgreSQL,
+  so same key + same material spec replays the original execution id across
+  orchestrator restarts; same key + a different spec returns
+  `idempotency_conflict`. A retry that finds a crash-ambiguous reservation
+  returns `idempotency_outcome_unknown` rather than risking a duplicate spawn.
 
   ## Trust boundary
 
@@ -43,7 +44,8 @@ defmodule AgentOrchestrator.HTTPRouter do
 
   Every response is `{ok: boolean, ...}` JSON with a `protocol_version` field.
   Errors are typed (`schema_invalid` / `permission_denied` / `not_found` /
-  `lease_denied` / `idempotency_conflict` / `await_timeout` /
+  `lease_denied` / `idempotency_conflict` / `idempotency_outcome_unknown` /
+  `idempotency_unavailable` / `await_timeout` /
   `service_unavailable`) rather than leaky
   HTML — same typed-absence discipline as the lease plane router.
   """
@@ -85,7 +87,12 @@ defmodule AgentOrchestrator.HTTPRouter do
   # ---------- routes ----------
 
   get "/v1/health" do
-    json(conn, 200, %{ok: true, status: "ok", active_agents: AgentOrchestrator.count()})
+    json(conn, 200, %{
+      ok: true,
+      status: "ok",
+      active_agents: AgentOrchestrator.count(),
+      idempotency: AgentOrchestrator.SpawnGate.status()
+    })
   end
 
   # Aggregate of the lifecycle telemetry since boot. Behind the same bearer as
@@ -455,6 +462,23 @@ defmodule AgentOrchestrator.HTTPRouter do
         ok: false,
         error: "idempotency_conflict",
         reason: "Idempotency-Key was already used for a different spawn spec"
+      })
+
+  defp spawn_error(conn, {:idempotency_outcome_unknown, execution_id}),
+    do:
+      json(conn, 409, %{
+        ok: false,
+        error: "idempotency_outcome_unknown",
+        execution_id: execution_id,
+        reason: "a durable reservation exists but process-start completion is unknown"
+      })
+
+  defp spawn_error(conn, :idempotency_unavailable),
+    do:
+      json(conn, 503, %{
+        ok: false,
+        error: "idempotency_unavailable",
+        reason: "durable idempotency storage is unavailable; no process was started"
       })
 
   defp spawn_error(conn, reason) do

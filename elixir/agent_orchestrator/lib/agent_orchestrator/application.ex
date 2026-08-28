@@ -13,9 +13,10 @@ defmodule AgentOrchestrator.Application do
       AgentOrchestrator.Supervisor            (one_for_one)
       ├── Registry  (AgentOrchestrator.Registry)   execution_id -> runner pid
       ├── ResultStore  (GenServer + ETS)            retained final results
+      ├── IdempotencyDB  (Postgrex)                 durable keyed-spawn ledger
       ├── AgentSupervisor  (DynamicSupervisor)
       │   └── AgentRunner  (GenServer + Port)       restart: :temporary
-      └── SpawnGate  (GenServer)                    keyed direct-spawn replay
+      └── SpawnGate  (GenServer)                    reserve -> spawn -> started
 
   `ResultStore` starts before `AgentSupervisor` so its ETS table exists before
   any runner can finalize and write its result — closing the await-vs-fast-exit
@@ -36,6 +37,8 @@ defmodule AgentOrchestrator.Application do
 
   use Application
 
+  require Logger
+
   @impl true
   def start(_type, _args) do
     # Bearer for the control surface, sourced from env at boot. Absent → HTTPAuth
@@ -50,13 +53,52 @@ defmodule AgentOrchestrator.Application do
       [
         {Registry, keys: :unique, name: AgentOrchestrator.Registry},
         AgentOrchestrator.ResultStore,
-        AgentOrchestrator.Metrics,
+        AgentOrchestrator.Metrics
+      ] ++
+        idempotency_children() ++
+        [
         AgentOrchestrator.AgentSupervisor,
         AgentOrchestrator.SpawnGate
-      ] ++ http_children()
+        ] ++ http_children()
 
     opts = [strategy: :one_for_one, name: AgentOrchestrator.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  defp idempotency_children do
+    ledger =
+      Application.get_env(
+        :agent_orchestrator,
+        :idempotency_ledger,
+        AgentOrchestrator.PostgresIdempotencyLedger
+      )
+
+    case ledger do
+      AgentOrchestrator.MemoryIdempotencyLedger ->
+        [AgentOrchestrator.MemoryIdempotencyLedger]
+
+      AgentOrchestrator.PostgresIdempotencyLedger ->
+        postgrex_children()
+
+      _custom_ledger ->
+        []
+    end
+  end
+
+  defp postgrex_children do
+    case Application.get_env(:agent_orchestrator, :idempotency_database_url) do
+      url when is_binary(url) and url != "" ->
+        pool_size = Application.get_env(:agent_orchestrator, :idempotency_pool_size, 2)
+        [{Postgrex, url: url, pool_size: pool_size, name: AgentOrchestrator.IdempotencyDB}]
+
+      _missing ->
+        Logger.warning(
+          "agent orchestrator durable idempotency database is not configured; " <>
+            "keyed spawns will fail closed"
+        )
+
+        []
+    end
   end
 
   # Localhost-only Bandit listener for the control surface. Gated by

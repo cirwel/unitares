@@ -30,6 +30,19 @@ defmodule AgentOrchestrator.AgentSupervisor do
   @spec start_agent(map()) :: {:ok, String.t(), pid()} | {:error, term()}
   def start_agent(%{} = spec) do
     execution_id = AgentRunner.generate_execution_id()
+    start_with_execution_id(spec, execution_id)
+  end
+
+  @doc false
+  # Trusted internal path for SpawnGate: the server mints and durably reserves
+  # the id before opening the OS process. This is not caller control — the HTTP
+  # spec still cannot provide or override an execution id.
+  @spec start_reserved_agent(map(), String.t()) :: {:ok, String.t(), pid()} | {:error, term()}
+  def start_reserved_agent(%{} = spec, "ex-" <> _ = execution_id) do
+    start_with_execution_id(spec, execution_id)
+  end
+
+  defp start_with_execution_id(spec, execution_id) do
     agent_id = Map.get(spec, :agent_id) || execution_id
 
     spec =
