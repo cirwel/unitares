@@ -89,11 +89,12 @@ GROUP BY surface_kind
 ORDER BY n DESC
 """
 
-# Split by holder_class deliberately: ~99.9% of lease events are
+# Split by holder_class deliberately: ~93% of lease rows are
 # holder_class=process_instance presence heartbeats from ordinary session
-# onboarding. An undifferentiated count reads that heartbeat volume as
+# onboarding, and most substrate_earned rows are renew heartbeats of
+# long-held leases. An undifferentiated count reads that heartbeat volume as
 # coordination throughput; the split keeps the substrate labeled as such
-# (substrate_earned is the actual coordination trace).
+# (the coordination trace is substrate_earned acquires, ~1/day).
 EVENT_TYPE_DISTRIBUTION_SQL = """
 SELECT event_type,
        coalesce(holder_class, 'unknown') AS holder_class,

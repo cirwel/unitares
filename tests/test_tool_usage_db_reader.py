@@ -87,8 +87,8 @@ def test_db_reader_splits_lease_plane_substrate_from_tools():
     """Forwarded lease.* rows are substrate, not tool calls.
 
     They are lease-plane events projected into audit.tool_usage by the BEAM
-    outbox forwarder, ~99.9% holder_class=process_instance presence
-    heartbeats. The aggregate must exclude them from tools/most_used/
+    outbox forwarder, overwhelmingly heartbeats (~93% of rows are
+    holder_class=process_instance presence). The aggregate must exclude them from tools/most_used/
     total_calls and report them separately under ``lease_plane``, split by
     holder_class so heartbeats stay labeled as heartbeats.
     """

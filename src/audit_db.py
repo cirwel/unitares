@@ -207,9 +207,12 @@ async def get_tool_usage_stats_async(
     ``lease.*`` rows are NOT tool calls. They are lease-plane events projected
     into this table by the BEAM outbox forwarder
     (``elixir/lease_plane/lib/unitares_lease_plane/audit_outbox_forwarder.ex``),
-    and ~99.9% of them are ``holder_class=process_instance`` presence
-    heartbeats from ordinary session onboarding — substrate emission, not
-    agent action. Counted undifferentiated, that heartbeat volume read as top
+    and the volume is overwhelmingly heartbeat traffic: ~93% of all rows are
+    ``holder_class=process_instance`` presence heartbeats from ordinary
+    session onboarding, and most of the remainder are renew heartbeats of
+    long-held ``substrate_earned`` leases — the actual coordination trace is
+    ``substrate_earned`` *acquires*, roughly one per day. Substrate emission,
+    not agent action. Counted undifferentiated, that heartbeat volume read as top
     tool/coordination throughput (4 of the top-10 "most used tools" at one 7d
     reading). The unfiltered aggregate therefore excludes ``lease.%`` rows
     from ``tools``/``most_used``/``total_calls`` and reports them separately

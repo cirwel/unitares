@@ -210,8 +210,9 @@ def test_did_anything_excludes_forwarded_lease_substrate():
     """A presence-lease heartbeat row must not flip an agent out of did_nothing.
 
     lease.* rows in audit.tool_usage are lease-plane events projected in by
-    the BEAM outbox forwarder — ~99.9% holder_class=process_instance presence
-    heartbeats from ordinary session onboarding. Substrate emission, not agent
+    the BEAM outbox forwarder — overwhelmingly heartbeats (~93%
+    holder_class=process_instance presence from ordinary session
+    onboarding). Substrate emission, not agent
     action: an agent whose only rows are heartbeats has done nothing, and
     counting the heartbeat as "did anything" understated true bounce.
     """
