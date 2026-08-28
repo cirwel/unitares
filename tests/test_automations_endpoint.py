@@ -117,3 +117,68 @@ async def test_default_response_is_unchanged_for_the_automations_tab(tmp_path, m
         body = json.loads((await http_automations(req)).body)
         assert len(body["automations"]) == 1, "default shape must carry the items"
         assert "view" not in body
+
+
+@pytest.mark.asyncio
+async def test_summary_reports_unclassified_not_just_the_explicit_marker(tmp_path, monkeypatch):
+    """`ungated` alone is an unfair zero; `unclassified` is the honest number.
+
+    The Overview card exists to surface "nothing verifies this" — its own
+    comment says so. It counted only an explicit `gate:ungated` note, and
+    nothing writes that marker: measured 2026-08-28, 0 of 228 automations
+    carried it while 221 carried no gate note at all. So the card rendered
+    "0 ungated" permanently, which is the most reassuring possible way to say
+    "no determination was made."
+
+    Classification mirrors sections/automations.js::gateClass exactly, so the
+    Overview card and the Automations tab cannot disagree: explicit note wins,
+    then github-actions/claude are machine-gated by construction, else
+    unclassified.
+    """
+    monkeypatch.setattr(access, "_check_http_auth", lambda *a, **k: True)
+    snap = tmp_path / "census.json"
+    snap.write_text(json.dumps({
+        "schema": "unitares.automation_census.v1",
+        "summary": {"total": 5, "by_source": {}, "by_kind": {}, "needs_attention": [], "warnings": []},
+        "automations": [
+            {"id": "a", "notes": ["gate:human"], "source": "launchd"},
+            {"id": "b", "source": "github-actions"},          # machine by construction
+            {"id": "c", "source": "claude"},                  # machine by construction
+            {"id": "d", "source": "launchd"},                 # no determination
+            {"id": "e", "source": "hermes", "notes": []},     # no determination
+        ],
+    }))
+    monkeypatch.setenv("UNITARES_AUTOMATION_CENSUS_PATH", str(snap))
+
+    body = json.loads((await http_automations(
+        SimpleNamespace(headers={}, query_params={"view": "summary"}))).body)
+
+    assert body["gates"] == {"human": 1, "machine": 2, "unclassified": 2}
+    # The honest headline: two automations have no grounding determination.
+    assert body["unclassified"] == 2
+    # And the explicit-marker count is still 0 — which is exactly why reporting
+    # it alone was misleading.
+    assert body["ungated"] == 0
+
+
+@pytest.mark.asyncio
+async def test_explicit_ungated_marker_is_still_counted_when_present(tmp_path, monkeypatch):
+    """Honouring the marker is not the bug; treating its absence as safety was."""
+    monkeypatch.setattr(access, "_check_http_auth", lambda *a, **k: True)
+    snap = tmp_path / "census.json"
+    snap.write_text(json.dumps({
+        "schema": "unitares.automation_census.v1",
+        "summary": {"total": 2, "by_source": {}, "by_kind": {}, "needs_attention": [], "warnings": []},
+        "automations": [
+            {"id": "a", "notes": ["gate:ungated"], "source": "github-actions"},
+            {"id": "b", "source": "launchd"},
+        ],
+    }))
+    monkeypatch.setenv("UNITARES_AUTOMATION_CENSUS_PATH", str(snap))
+
+    body = json.loads((await http_automations(
+        SimpleNamespace(headers={}, query_params={"view": "summary"}))).body)
+
+    # An explicit note beats the source heuristic, even for github-actions.
+    assert body["ungated"] == 1
+    assert body["unclassified"] == 1

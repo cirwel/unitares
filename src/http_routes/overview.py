@@ -207,14 +207,43 @@ async def http_automations(request):
         _qp = getattr(request, "query_params", None) or {}
         if str(_qp.get("view", "") or "").strip().lower() == "summary":
             items = data.get("automations") or []
-            ungated = sum(
-                1 for it in items
-                if any(n == "gate:ungated" for n in (it.get("notes") or []))
-            )
+
+            # Classify the SAME way sections/automations.js::gateClass does, so
+            # the Overview card and the Automations tab cannot disagree about
+            # how an automation is grounded. Explicit `gate:` note wins; else
+            # github-actions and claude are machine-gated by construction; else
+            # UNCLASSIFIED — meaning no determination exists, not that one was
+            # made and came back clean.
+            #
+            # The previous version counted only explicit `gate:ungated` notes.
+            # Nothing writes that marker: measured 2026-08-28, 0 of 228 carried
+            # it while 221 carried no gate note at all. So the card reported
+            # "0 ungated" permanently — an unfair zero, reassuring precisely
+            # where its own comment says it exists to surface risk ("ungated =
+            # nothing verifies it"). Counting an absent marker is not a
+            # measurement of safety, it is a measurement of the marker.
+            def _gate(it):
+                for n in (it.get("notes") or []):
+                    if isinstance(n, str) and n.startswith("gate:"):
+                        return n[5:]
+                if it.get("source") in ("github-actions", "claude"):
+                    return "machine"
+                return "unclassified"
+
+            gates: dict[str, int] = {}
+            for it in items:
+                g = _gate(it)
+                gates[g] = gates.get(g, 0) + 1
+            ungated = gates.get("ungated", 0)
+            unclassified = gates.get("unclassified", 0)
             return JSONResponse({
                 "schema": data.get("schema"),
                 "summary": data.get("summary"),
                 "ungated": ungated,
+                # The honest headline. `ungated` stays for continuity, but it is
+                # an explicit-marker count and reads 0 on every real deployment.
+                "unclassified": unclassified,
+                "gates": gates,
                 "generated_at": data.get("generated_at"),
                 "snapshot_age_seconds": age,
                 "stale": data["stale"],
