@@ -335,13 +335,6 @@ window.SNAPSHOT = {
       operator:{ overall_status:"healthy", failing_checks:[], degraded_checks:[], first_action:"No action needed." },
       breakers:{ governance:0, redis:0 }, calibration:"healthy", dbPool:{ size:8, idle:4, max:25 }, redis:true, continuity:"redis" },
   },
-  research: {
-    runs: [],
-    count: 0,
-    totalMatched: 0,
-    warnings: [],
-    stats: { total:0, by_status:{}, by_grounding:{}, by_research_area:{}, rigor_complete:0, rigor_incomplete:0 },
-  },
   // Fleet metrics (Chronicler) — /v1/metrics/catalog + /v1/metrics/series.
   metrics: {
     catalog: [

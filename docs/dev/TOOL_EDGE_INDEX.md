@@ -20,7 +20,7 @@ wired). See
 [`dormant-capability-registry.md`](../operations/dormant-capability-registry.md)
 for the false-positive history this avoids.
 
-**57 registered tools · 8 consolidated (52 actions) · 72 aliases.**
+**56 registered tools · 8 consolidated (52 actions) · 72 aliases.**
 
 ## Content-addressed snapshots
 
@@ -30,10 +30,10 @@ registrars advertise in each deployable mode and what `describe_tool` says
 about those names. The snapshots are immutable evidence inputs; they do not
 certify the components that produced them.
 
-- Audit bundle: `sha256:1e0df22c5f660d1d0707afd67b7eaeb9fa1f43a7e9350a7496c9b2dbf9c27358` (`unitares.tool-surface-audit.v1`).
-- Dispatch snapshot: `sha256:33e754c000315d86a1f8efae364c01ebf27070775d1c5c8b4e374421179d2061`.
-- Audited source revision: `sha256:1db90b713b419768d296e6a4cb03041e5832f9ca7ca49a1b4441785745831518` (52 files).
-- Exposure snapshot: `sha256:f3a1de2a620aef9f06b35caac320e86e47ef1e3396eea5d73cce95fc8b8d85ea`.
+- Audit bundle: `sha256:d42df46eedc1ec9bfdc9d13f3a34127a1bc2b538d919a16f8060933769c9f5de` (`unitares.tool-surface-audit.v1`).
+- Dispatch snapshot: `sha256:435ced8f734f35db4e8bec51a95cee01a166b3981e952887a44077cf3ead186e`.
+- Audited source revision: `sha256:2114dd049e9c7d854c5ac46e8a9fcd65e48923ab6ba6473ba3a35dc3f3e9107c` (50 files).
+- Exposure snapshot: `sha256:1ebcbbfb2693fe4c47fbb63008f1be651b7954d19988e0dda100410b451322d6`.
 - JSON contract: [`tool_surface_audit_v1.schema.json`](tool_surface_audit_v1.schema.json).
 - Reproduce with `python3 scripts/dev/tool_edge_index.py --json`; run
   `--lint` to return non-zero when error-severity findings exist.
@@ -51,7 +51,7 @@ removal authority.
 | `lite` | 29 | 29 | — | — |
 | `operator_readonly` | 13 | 21 | — | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
 | `operator_recovery` | 17 | 25 | — | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
-| `full` | 80 | 65 | `aggregate_metrics`, `archive_agent`, `backfill_calibration_from_dialectic`, `check_calibration`, `cleanup_knowledge_graph`, `compare_agents`, `compare_me_to_similar`, `delete_agent` … +15 | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
+| `full` | 79 | 64 | `aggregate_metrics`, `archive_agent`, `backfill_calibration_from_dialectic`, `check_calibration`, `cleanup_knowledge_graph`, `compare_agents`, `compare_me_to_similar`, `delete_agent` … +15 | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
 
 ### Workflow alias views
 
@@ -153,7 +153,6 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `reassign_reviewer` | `src/mcp_handlers/dialectic/handlers.py:3375 handle_reassign_reviewer` | `src/mcp_handlers/schemas/dialectic.py:177 ReassignReviewerParams` | 15s | — |
 | `record_progress_pulse` | `src/mcp_handlers/resident_progress.py:20 handle_record_progress_pulse` | — | 5s | — |
 | `request_dialectic_review` | `src/mcp_handlers/dialectic/handlers.py:1261 handle_request_dialectic_review` | `src/mcp_handlers/schemas/dialectic.py:5 RequestDialecticReviewParams` | 105s | — |
-| `research_registry` | `src/mcp_handlers/research_registry.py:66 handle_research_registry` | `src/mcp_handlers/schemas/research.py:13 ResearchRegistryParams` | 15s | — |
 | `reset_monitor` | `src/mcp_handlers/admin/handlers.py:462 handle_reset_monitor` | `src/mcp_handlers/schemas/admin.py:110 ResetMonitorParams` | 10s | — |
 | `search_knowledge_graph` | `src/mcp_handlers/knowledge/handlers.py:2694 handle_search_knowledge_graph` | `src/mcp_handlers/schemas/knowledge.py:80 SearchKnowledgeGraphParams` | 15s | identity=pre_onboard |
 | `self_recovery` | `src/mcp_handlers/lifecycle/self_recovery.py:205 handle_self_recovery` | `src/mcp_handlers/schemas/lifecycle.py:319 SelfRecoveryParams` | 15s | — |

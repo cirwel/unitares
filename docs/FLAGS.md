@@ -19,7 +19,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**159 flags.**
+**158 flags.**
 
 | Flag | Reader fallback(s) | Purpose | Read at |
 |---|---|---|---|
@@ -154,7 +154,6 @@ index; that one is the curated decision record.
 | `UNITARES_PROXY_URL` | `None (no reader fallback)` | — | src/mcp_server_std.py |
 | `UNITARES_REPO` | `str(Path(__file__).resolve().parents[2])` | read by main() | agents/vigil_hygiene/agent.py |
 | `UNITARES_RERANKER_MODEL` | `'bge-m3'` | — | src/reranker.py |
-| `UNITARES_RESEARCH_REGISTRY_DIR` | `None (no reader fallback)` | Resolve the registry directory; unset uses ``DEFAULT_REGISTRY_DIR``. | src/research_registry.py |
 | `UNITARES_RESIDENTS` | `None (no reader fallback)` | Load resident labels from ``UNITARES_RESIDENTS``; unset means no residents | src/grounding/class_indicator.py, agents/sdk/src/unitares_sdk/_substrate.py |
 | `UNITARES_RESIDENT_AGENTS` | `''` | Figure out which agent labels to treat as residents | src/http_routes/residents.py |
 | `UNITARES_RESIDENT_PROGRESS_MANIFEST` | `''` | Load the resident-progress registry from a JSON manifest | src/resident_progress/registry.py |
