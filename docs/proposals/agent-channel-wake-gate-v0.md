@@ -22,8 +22,11 @@ pieces:
 
 - **A — long-poll receive.** An MCP tool `channel_receive(topic, timeout)`
   that blocks until a message arrives on a governance-KG-backed channel.
-  Small: a GenServer per topic holding cursors over the existing note
-  stream, which stays the source of truth.
+  ⚠️**Not as small as first written (Codex correction, 2026-08-28): a
+  GenServer holding cursors does not LEARN that another process wrote a
+  note.** Piece A still needs a change-feed — polling, PostgreSQL
+  `LISTEN/NOTIFY`, or a durable outbox wired across every writer. Scope A
+  accordingly or the "cheap half" is not cheap.
 - **B — spawn-on-message.** A supervisor that, when a message arrives for
   an agent with no live session, spawns one with a rehydration pointer,
   lets it reply, and lets it exit. This is the piece that makes
@@ -47,6 +50,17 @@ rehydration, and one incident report. Measured properties:
   loopback; working MCP; MCP blocked by an exec approval policy).
 
 ## 3. Disconfirmers — if any fires, do not build
+
+> **⛔D1 CATEGORY ERROR, corrected by Codex 2026-08-28 — read before
+> acting on D1.** "Cron closes the gap with no build" does not hold as
+> stated. Either (a) cron launches a full Codex turn on a schedule merely
+> to poll — which creates exactly the spend and identity churn that D3 and
+> D4 exist to prevent, so those disconfirmers apply to D1's own remedy; or
+> (b) a cheap daemon polls and launches Codex only when a message actually
+> arrives — which IS spawn-on-message, piece B implemented outside BEAM.
+> **Therefore D1 can disconfirm the BEAM implementation LEVER; it cannot
+> disconfirm the wake CAPABILITY.** Judge it that way at the 09-11 read —
+> retiring the lever is not retiring the goal.
 
 **D1 — Configuration closes the gap.** If configuring Codex's surfaces
 (MCP registration on each surface; an exec approval policy that permits
@@ -100,6 +114,47 @@ to B.
 the runtime that owns Lumen's check-ins. ⛔If the design cannot isolate
 spawn supervision from that path — separate supervisor, separate failure
 domain, no shared restart semantics — it does not proceed.
+
+## 3b. What the operator relay was actually doing (Codex, 2026-08-28)
+
+⛔**The gate as first written modelled ONE job. The relay was doing three,
+and only the first is transport:**
+
+1. **Wake** — starting a Codex turn at all.
+2. **Authority** — establishing that acting on Claude's message is
+   operator-authorized. ⛔A Claude-authored KG note cannot itself grant
+   Codex authority. An automatic recipient must default to READ-AND-REPLY
+   ONLY unless the envelope carries a previously established operator
+   policy or a signed, bounded authorization.
+3. **Context selection** — naming the exact PR, SHA, branch, expected
+   output, and limits.
+
+Any wake design that solves only (1) recreates the relay for (2) and (3).
+
+**Minimum viable envelope** (supersedes the looser §5.1 sketch): stable
+`message_id`; topic; recipient runner capability; `response_to`; PR URL,
+branch, and commit SHA; expected response; **operator-authorized action
+scope with an expiry**; spend/token/turn budget; privacy/vendor-routing
+class; `ack` / `claimed` / `completed` / failure states; and a **maximum
+reply depth** — without which two responsive agents can wake each other in
+a loop.
+
+**Two primitives neither piece has:**
+- **A liveness/lease oracle.** Governance status and hook receipts do NOT
+  prove a Codex process is currently addressable. Spawn needs an ATOMIC
+  claim so two pollers cannot launch duplicate responders.
+- **A change feed** (see piece A above).
+
+**Codex harness limits, first-party (2026-08-28):** a top-level Codex turn
+is not a resident process — after its final response it cannot receive
+push; Codex's own agent messaging addresses only agents in the same live
+Codex task tree, never an external Claude session; a running turn cannot
+accept arbitrary external injection and must explicitly poll; **managed
+permission profiles can override local `config.toml`** (the consulted
+session ran approval-policy `never`, so it could not write to governance
+even with MCP registered); MCP registration is surface-specific, and a
+local `localhost` registration does not appear on web/mobile scheduled
+runs.
 
 ## 4. What would make this worth building anyway
 
