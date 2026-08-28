@@ -135,6 +135,24 @@ STDIO_PROXY_STRICT = os.getenv("UNITARES_STDIO_PROXY_STRICT", "1").strip().lower
 STDIO_PROXY_HTTP_BEARER_TOKEN = os.getenv("UNITARES_STDIO_PROXY_HTTP_BEARER_TOKEN")
 
 
+def _mcp_proxy_headers() -> dict[str, str]:
+    """Authorization for the MCP-native proxy hop, when the gate is on.
+
+    STDIO_PROXY_HTTP_BEARER_TOKEN above covers only the REST proxy functions.
+    This path speaks /mcp, which is gated by UNITARES_MCP_BEARER_TOKENS, so it
+    needs that token — otherwise turning the gate on 401s every Claude Desktop
+    and Cursor session that reaches the server through this bridge, which is
+    the production path for both. Falls back to the STDIO-specific variable so
+    an operator who set only that one is not left stranded.
+    """
+    token = (
+        os.getenv("UNITARES_MCP_BEARER_TOKEN")
+        or STDIO_PROXY_HTTP_BEARER_TOKEN
+        or None
+    )
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 async def _proxy_http_list_tools() -> list[Tool]:
     """Proxy list_tools to HTTP (/v1/tools) and convert to MCP Tool objects."""
     import urllib.request
@@ -230,7 +248,9 @@ async def _proxy_list_tools() -> list[Tool]:
 
     if "/mcp" in STDIO_PROXY_URL:
         from mcp.client.streamable_http import streamable_http_client
-        async with mcp_httpx().AsyncClient(http2=False, timeout=15) as http_client:
+        async with mcp_httpx().AsyncClient(
+            http2=False, timeout=15, headers=_mcp_proxy_headers(),
+        ) as http_client:
             # mcp 1.x yields (read, write, get_session_id); 2.x drops the third.
             async with streamable_http_client(STDIO_PROXY_URL, http_client=http_client) as streams:
                 async with ClientSession(streams[0], streams[1]) as session:
@@ -253,7 +273,9 @@ async def _proxy_call_tool(name: str, arguments: dict[str, Any]) -> Sequence[Tex
 
     if "/mcp" in STDIO_PROXY_URL:
         from mcp.client.streamable_http import streamable_http_client
-        async with mcp_httpx().AsyncClient(http2=False, timeout=15) as http_client:
+        async with mcp_httpx().AsyncClient(
+            http2=False, timeout=15, headers=_mcp_proxy_headers(),
+        ) as http_client:
             # mcp 1.x yields (read, write, get_session_id); 2.x drops the third.
             async with streamable_http_client(STDIO_PROXY_URL, http_client=http_client) as streams:
                 async with ClientSession(streams[0], streams[1]) as session:

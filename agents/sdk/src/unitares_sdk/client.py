@@ -108,6 +108,7 @@ class GovernanceClient:
         uds_path: str | None = None,
         connect_timeout: float | None = None,
         connect_retries: int | None = None,
+        bearer_token: str | None = None,
     ):
         # S19 substrate-anchored residents (Vigil, Sentinel, Chronicler)
         # connect over Unix-domain socket so the kernel attests their PID
@@ -118,6 +119,17 @@ class GovernanceClient:
         # environment.
         if uds_path is None:
             uds_path = os.environ.get("UNITARES_UDS_SOCKET") or None
+
+        # Bearer for a server whose /mcp gate is configured
+        # (UNITARES_MCP_BEARER_TOKENS). Unset -> no header, so a client
+        # against an ungated server is byte-identical to before: this is
+        # additive, and turning the gate ON is the operator's separate act.
+        # Sent on the UDS transport too — that listener serves the same ASGI
+        # app, so the gate applies there as well; kernel PID attestation
+        # answers WHO, not WHETHER.
+        if bearer_token is None:
+            bearer_token = os.environ.get("UNITARES_MCP_BEARER_TOKEN") or None
+        self.bearer_token = bearer_token
 
         self.mcp_url = mcp_url
         self.timeout = timeout
@@ -234,17 +246,27 @@ class GovernanceClient:
         # client is the type this mcp's transport calls .sse() on — httpx2
         # carries uds= on AsyncHTTPTransport just as httpx 0.x does, so the
         # UDS boundary is unchanged by the move.
+        auth_headers = (
+            {"Authorization": f"Bearer {self.bearer_token}"}
+            if self.bearer_token
+            else {}
+        )
         if self.uds_path:
             transport = _httpx.AsyncHTTPTransport(uds=self.uds_path)
             self._http_client = _httpx.AsyncClient(
-                http2=False, timeout=self.timeout, transport=transport,
+                http2=False,
+                timeout=self.timeout,
+                transport=transport,
+                headers=auth_headers,
             )
             logger.info(
                 "[SDK] connecting via UDS at %s (substrate-attestation transport)",
                 self.uds_path,
             )
         else:
-            self._http_client = _httpx.AsyncClient(http2=False, timeout=self.timeout)
+            self._http_client = _httpx.AsyncClient(
+                http2=False, timeout=self.timeout, headers=auth_headers,
+            )
 
         cm = streamable_http_client(self.mcp_url, http_client=self._http_client)
         # mcp 1.x yields (read, write, get_session_id); 2.x drops the third
