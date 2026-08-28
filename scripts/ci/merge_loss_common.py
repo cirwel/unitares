@@ -88,7 +88,7 @@ def find_open_finding(repo: str, marker: str) -> int | None:
         "--label", FINDING_LABEL,
         "--state", "open",
         "--json", "number,body",
-        "--limit", "100",
+        "--limit", "200",
     )
     for issue in issues:
         if marker in (issue.get("body") or ""):

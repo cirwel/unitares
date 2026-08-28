@@ -21,6 +21,12 @@ permissions:
   pull-requests: read
   issues: write
 
+# Scheduled and manual runs must not race each other into duplicate
+# tracking issues (the create is list-then-create, not atomic).
+concurrency:
+  group: automerge-disarm-detector
+  cancel-in-progress: false
+
 jobs:
   detect:
     runs-on: ubuntu-latest

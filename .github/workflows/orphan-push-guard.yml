@@ -35,6 +35,9 @@ concurrency:
 
 jobs:
   guard:
+    # Branch deletions must not read as orphan pushes: on a delete push
+    # github.sha is not a branch tip worth guarding.
+    if: github.event.deleted == false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (guard scripts only — no history needed)

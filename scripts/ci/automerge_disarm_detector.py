@@ -86,7 +86,7 @@ def main() -> int:
             "pr", "list", "-R", repo,
             "--state", "open",
             "--json", "number,title,isDraft,autoMergeRequest,labels,url",
-            "--limit", "100",
+            "--limit", "300",
         )
     except GhError as exc:
         return degraded(GUARD, f"could not list open PRs ({type(exc).__name__})")
