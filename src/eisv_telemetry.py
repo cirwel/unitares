@@ -15,6 +15,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 import math
 from numbers import Real
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -22,11 +23,29 @@ from uuid import uuid4
 EISV_TELEMETRY_SCHEMA = "eisv.telemetry.v1"
 EISV_TELEMETRY_SUMMARY_SCHEMA = "eisv.telemetry.summary.v1"
 EISV_SHADOW_ABLATIONS_SCHEMA = "eisv.shadow_ablations.v1"
+EISV_AFFERENTS_SCHEMA = "eisv.submitted_afferents.v1"
 BEHAVIORAL_SENSOR_FORMULA_VERSION = "behavioral_sensor.v1"
 BEHAVIORAL_HISTORY_WINDOW = 10
 OUTCOME_WINDOW = 20
+AFFERENT_DIMENSION_LIMIT = 16
+AFFERENT_KEY_LENGTH_LIMIT = 64
+AFFERENT_PROVENANCE_TEXT_LIMIT = 128
 
 _EISV_KEYS = ("E", "I", "S", "V")
+_AFFERENT_SOURCE_FIELDS = ("afferents", "body_anima", "anima")
+_AFFERENT_PROVENANCE_KEYS = ("schema", "source", "role", "scale", "units")
+_AFFERENT_KEY_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_.-]*")
+_SENSITIVE_AFFERENT_KEY_PARTS = (
+    "access_key",
+    "api_key",
+    "apikey",
+    "auth",
+    "credential",
+    "password",
+    "private_key",
+    "secret",
+    "token",
+)
 
 
 def _number(value: Any) -> float | None:
@@ -67,6 +86,115 @@ def _history(values: Sequence[Any] | None, *, text: bool = False) -> list[Any]:
 def _eisv_values(values: Mapping[str, Any] | None) -> dict[str, float | None]:
     source = values if isinstance(values, Mapping) else {}
     return {key: _number(source.get(key)) for key in _EISV_KEYS}
+
+
+def _bounded_text(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    return value[:AFFERENT_PROVENANCE_TEXT_LIMIT]
+
+
+def _afferent_values(values: Mapping[str, Any] | None) -> dict[str, float]:
+    """Keep a deterministic, bounded set of finite numeric afferents."""
+    if not isinstance(values, Mapping):
+        return {}
+
+    sanitized: dict[str, float] = {}
+    for raw_key in sorted(values, key=lambda item: str(item)):
+        key = str(raw_key).strip()
+        if (
+            not key
+            or len(key) > AFFERENT_KEY_LENGTH_LIMIT
+            or _AFFERENT_KEY_PATTERN.fullmatch(key) is None
+            or any(part in key.lower() for part in _SENSITIVE_AFFERENT_KEY_PARTS)
+        ):
+            continue
+        number = _number(values[raw_key])
+        if number is None:
+            continue
+        sanitized[key] = number
+        if len(sanitized) >= AFFERENT_DIMENSION_LIMIT:
+            break
+    return sanitized
+
+
+def _afferent_provenance(
+    sensor_data: Mapping[str, Any],
+    *,
+    source_field: str,
+    inline: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Reduce caller-declared provenance to a small non-authoritative shape."""
+    state_space = sensor_data.get("state_space_provenance")
+    state_space = state_space if isinstance(state_space, Mapping) else {}
+    declared = state_space.get(source_field)
+    declared = declared if isinstance(declared, Mapping) else {}
+    if isinstance(inline, Mapping):
+        declared = {**declared, **inline}
+
+    reduced = {
+        key: text
+        for key in _AFFERENT_PROVENANCE_KEYS
+        if (text := _bounded_text(declared.get(key))) is not None
+    }
+    return {
+        "status": "caller_declared" if reduced else "undeclared",
+        **reduced,
+    }
+
+
+def build_submitted_afferents(
+    sensor_data: Mapping[str, Any] | None,
+    *,
+    submitted_source: str | None = None,
+) -> dict[str, Any] | None:
+    """Build a bounded, measurement-only record of raw submitted afferents.
+
+    New callers should use ``sensor_data["afferents"]`` with either a flat
+    numeric mapping or ``{"values": {...}, "provenance": {...}}``.  The
+    existing ``body_anima`` field and its legacy ``anima`` alias remain accepted
+    so embodied check-ins immediately retain their pre-projection dimensions.
+
+    This record is descriptive only.  It is not passed to the behavioral
+    estimator, ODE, basin classifier, or policy layer.
+    """
+    if not isinstance(sensor_data, Mapping):
+        return None
+
+    for source_field in _AFFERENT_SOURCE_FIELDS:
+        candidate = sensor_data.get(source_field)
+        if not isinstance(candidate, Mapping):
+            continue
+
+        inline_provenance = None
+        values = candidate
+        if source_field == "afferents" and isinstance(candidate.get("values"), Mapping):
+            values = candidate["values"]
+            inline = candidate.get("provenance")
+            inline_provenance = inline if isinstance(inline, Mapping) else None
+
+        sanitized = _afferent_values(values)
+        if not sanitized:
+            continue
+
+        return {
+            "schema": EISV_AFFERENTS_SCHEMA,
+            "source": submitted_source or "untagged_sensor",
+            "source_field": source_field,
+            "measurement_role": "raw_afferents",
+            "policy_applied": False,
+            "values": sanitized,
+            "provenance": _afferent_provenance(
+                sensor_data,
+                source_field=source_field,
+                inline=inline_provenance,
+            ),
+        }
+
+    return None
 
 
 def _outcome_value(outcome: Any, key: str) -> Any:
@@ -202,6 +330,7 @@ def build_eisv_telemetry_envelope(
     derivation: Mapping[str, Any] | None,
     policy_evaluation: Mapping[str, Any] | None,
     enforcement: Mapping[str, Any] | None,
+    submitted_afferents: Mapping[str, Any] | None = None,
     shadow_ablations: Mapping[str, Any] | None = None,
     observed_at: str | None = None,
     measurement_id: str | None = None,
@@ -264,6 +393,11 @@ def build_eisv_telemetry_envelope(
                 if isinstance(submitted_sensor, Mapping)
                 else None
             ),
+            "submitted_afferents": (
+                _json_safe(submitted_afferents)
+                if isinstance(submitted_afferents, Mapping)
+                else None
+            ),
         },
         "derivation": derivation_record,
         "shadow_ablations": {
@@ -296,6 +430,10 @@ def summarize_eisv_telemetry(envelope: Mapping[str, Any] | None) -> dict[str, An
     behavioral = behavioral if isinstance(behavioral, Mapping) else {}
     submitted = measurement.get("submitted_sensor")
     submitted = submitted if isinstance(submitted, Mapping) else {}
+    afferents = measurement.get("submitted_afferents")
+    afferents = afferents if isinstance(afferents, Mapping) else {}
+    afferent_values = afferents.get("values")
+    afferent_values = afferent_values if isinstance(afferent_values, Mapping) else {}
     derivation = envelope.get("derivation")
     derivation = derivation if isinstance(derivation, Mapping) else {}
     policy = envelope.get("policy_evaluation")
@@ -348,6 +486,16 @@ def summarize_eisv_telemetry(envelope: Mapping[str, Any] | None) -> dict[str, An
         "coherence_source": coherence.get("source") or "unknown",
         "coherence_role": coherence.get("role") or "unknown",
         "submitted_source": submitted_source,
+        "afferents_recorded": bool(afferent_values),
+        "afferent_source": afferents.get("source"),
+        "afferent_source_field": afferents.get("source_field"),
+        "afferent_count": len(afferent_values),
+        "afferent_keys": sorted(str(key) for key in afferent_values),
+        "afferent_policy_applied": (
+            afferents.get("policy_applied")
+            if isinstance(afferents.get("policy_applied"), bool)
+            else None
+        ),
         "behavioral_source": behavioral_source,
         "behavioral_confidence": _number(behavioral.get("confidence")),
         "missing_inputs": list(derivation.get("missing_inputs") or ()),
@@ -434,6 +582,12 @@ def summarize_state_eisv_telemetry(state_json: Mapping[str, Any] | None) -> dict
         "coherence_source": state.get("coherence_form") or "unknown_legacy",
         "coherence_role": "unknown",
         "submitted_source": submitted_source,
+        "afferents_recorded": False,
+        "afferent_source": None,
+        "afferent_source_field": None,
+        "afferent_count": None,
+        "afferent_keys": [],
+        "afferent_policy_applied": None,
         "behavioral_source": behavioral_source,
         "behavioral_confidence": confidence,
         "missing_inputs": ["eisv_telemetry"],
