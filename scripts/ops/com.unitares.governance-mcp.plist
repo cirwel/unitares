@@ -103,6 +103,11 @@
              client's "API key" field. Comma-separated allows rotation. -->
         <key>UNITARES_MCP_BEARER_TOKENS</key>
         <string></string>
+        <!-- Client credential forwarded to spawned MCP reviewers. Set it to
+             one member of the plural server allowlist above when the gate is
+             enabled; blank preserves the ungated default. -->
+        <key>UNITARES_MCP_BEARER_TOKEN</key>
+        <string></string>
         <key>PYTHONPATH</key>
         <string>/PATH/TO/UNITARES</string>
         <key>DB_BACKEND</key>

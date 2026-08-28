@@ -36,6 +36,7 @@ sites stay version-agnostic:
 from __future__ import annotations
 
 import inspect
+import os
 from typing import Any
 
 try:  # mcp 2.x
@@ -75,6 +76,7 @@ __all__ = [
     "set_tool_input_schema",
     "lowlevel_server",
     "make_lowlevel_server",
+    "mcp_bearer_headers",
     "mcp_httpx",
 ]
 
@@ -225,6 +227,21 @@ def make_lowlevel_server(
 
 
 _MCP_HTTPX: Any = None
+
+
+def mcp_bearer_headers() -> dict[str, str]:
+    """Authorization headers for raw MCP clients, when the gate is enabled.
+
+    Most callers use :class:`unitares_sdk.client.GovernanceClient`, which owns
+    this resolution itself. A few operational and evaluation tools construct
+    the transport directly so they can control timeouts or session shape. Keep
+    those callers on the same singular client-token contract instead of
+    letting a server-side gate turn scheduled probes into false reds.
+
+    Blank is treated as unset: ``Bearer `` is malformed, not a credential.
+    """
+    token = os.environ.get("UNITARES_MCP_BEARER_TOKEN") or None
+    return {"Authorization": f"Bearer {token}"} if token else {}
 
 
 def mcp_httpx() -> Any:

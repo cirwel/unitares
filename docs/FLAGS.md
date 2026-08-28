@@ -124,7 +124,7 @@ index; that one is the curated decision record.
 | `UNITARES_MCP_ALLOWED_HOSTS` | `[] (via split_csv_env)` | Build TransportSecuritySettings for FastMCP | src/mcp_listen_config.py |
 | `UNITARES_MCP_ALLOWED_ORIGINS` | `[] (via split_csv_env)` | Build TransportSecuritySettings for FastMCP | src/mcp_listen_config.py |
 | `UNITARES_MCP_ALLOW_NULL_ORIGIN` | `True` | Build TransportSecuritySettings for FastMCP | src/mcp_listen_config.py |
-| `UNITARES_MCP_BEARER_TOKEN` | `None (no reader fallback)` | Build request headers including MCP session ID if available. | src/gateway/client.py, src/mcp_handlers/dialectic/orchestrator_dispatch.py (+3 more) |
+| `UNITARES_MCP_BEARER_TOKEN` | `None (no reader fallback)` | Build request headers including MCP session ID if available. | src/gateway/client.py, src/mcp_compat.py (+4 more) |
 | `UNITARES_MCP_BEARER_TOKENS` | `[] (via split_csv_env)` | Allowlist of bearer tokens accepted on the ``/mcp`` endpoint | src/mcp_listen_config.py |
 | `UNITARES_MCP_DNS_REBIND_PROTECTION` | `''` | Whether Host/Origin validation is enforced on the MCP transports | src/mcp_listen_config.py |
 | `UNITARES_MCP_HOST` | `''` | Return the default socket bind address | src/mcp_listen_config.py |

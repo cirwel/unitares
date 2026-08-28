@@ -15,6 +15,8 @@ until an operator turns the gate on.
 from __future__ import annotations
 
 import os
+import ast
+import plistlib
 import sys
 from pathlib import Path
 
@@ -25,8 +27,10 @@ if str(SDK_SRC) not in sys.path:
     sys.path.insert(0, str(SDK_SRC))
 
 from unitares_sdk.client import GovernanceClient  # noqa: E402
+from src.mcp_compat import mcp_bearer_headers  # noqa: E402
 
 TOKEN = "gate-token-abc"  # noqa: S105 - test fixture
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture(autouse=True)
@@ -36,6 +40,7 @@ def _clean(monkeypatch):
 
 
 # --- resolution ---------------------------------------------------------------
+
 
 def test_no_token_configured_sends_nothing():
     """The additive guarantee: an ungated server sees an unchanged client."""
@@ -60,7 +65,62 @@ def test_blank_environment_value_is_no_token(monkeypatch):
     assert GovernanceClient().bearer_token is None
 
 
+def test_raw_mcp_client_headers_use_same_environment_contract(monkeypatch):
+    """Operational clients that construct transports directly use the same
+    singular client token as the SDK, gateway, and STDIO bridge."""
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKEN", TOKEN)
+    assert mcp_bearer_headers() == {"Authorization": f"Bearer {TOKEN}"}
+
+
+def test_raw_mcp_client_headers_omit_blank_token(monkeypatch):
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKEN", "")
+    assert mcp_bearer_headers() == {}
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "scripts/ops/dialectic_canary.py",
+    ],
+)
+def test_raw_mcp_transport_callers_attach_shared_bearer_headers(path):
+    """A helper unit test alone could pass while a raw transport forgot to
+    call it. Pin every known direct AsyncClient construction structurally."""
+    tree = ast.parse((REPO_ROOT / path).read_text())
+    wired = any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "AsyncClient"
+        and any(
+            kw.arg == "headers"
+            and isinstance(kw.value, ast.Call)
+            and isinstance(kw.value.func, ast.Name)
+            and kw.value.func.id == "mcp_bearer_headers"
+            for kw in node.keywords
+        )
+        for node in ast.walk(tree)
+    )
+    assert wired, f"{path} constructs an MCP HTTP client without bearer headers"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "scripts/ops/com.unitares.governance-mcp.plist",
+        "scripts/ops/com.unitares.gateway-mcp.plist.template",
+        "scripts/ops/com.unitares.vigil.plist.template",
+        "scripts/ops/com.unitares.chronicler.plist.template",
+        "scripts/ops/com.unitares.dialectic-canary.plist.template",
+    ],
+)
+def test_mcp_client_launch_templates_have_bearer_slot(path):
+    data = plistlib.loads((REPO_ROOT / path).read_bytes())
+    env = data.get("EnvironmentVariables") or {}
+    assert "UNITARES_MCP_BEARER_TOKEN" in env
+
+
 # --- the header actually reaches the transport --------------------------------
+
 
 @pytest.mark.asyncio
 async def test_header_is_attached_to_the_http_client(monkeypatch):
@@ -138,6 +198,7 @@ async def test_uds_transport_also_carries_the_bearer(monkeypatch, tmp_path):
 
 
 # --- the other MCP callers ----------------------------------------------------
+
 
 def test_gateway_client_sends_the_bearer(monkeypatch):
     monkeypatch.setenv("UNITARES_MCP_BEARER_TOKEN", TOKEN)
