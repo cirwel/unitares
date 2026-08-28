@@ -11,6 +11,16 @@ matters most — both are operator decisions this document deliberately does not
 take. Treat every claim here as unverified until someone re-derives it from the
 cited call sites.
 
+One `consult(purpose="critique")` pass was run on 2026-08-28 (consultation
+`d1e98e34`, route `ollama` / `gemma4:latest`, `cost_class: local_free`,
+degraded from `thorough` to `standard_local` because `privacy=local` forbids the
+cloud lane). **That is advisory tool evidence and explicitly not peer review** —
+the tool returns `can_satisfy_peer_review: false`, and `request_review` is the
+governed verb. Three of its findings survived checking and are folded into §2,
+§3 and §11; §9's `validate_path` prerequisite was found while checking it, not
+by it. Two of its objections were refuted against the source and are recorded in
+§13 so the next reader does not re-raise them.
+
 **The question.** Which lease-plane (BEAM) operations should become agent-facing
 capabilities in `unitares.interface-contract.v1`, which must stay reachable only
 as plane machinery, and what has to be settled *before* either.
@@ -65,20 +75,52 @@ has already resolved the caller, governance mints internally, one hop to BEAM.
 Nothing about the verification weakens; the attestation stops being something an
 agent must orchestrate.
 
+The reason collapsing is safe rather than merely convenient is that the
+attestation is **request-bound**: its claims cover the method, the path, and the
+SHA-256 of the exact body bytes, and it "cannot be replayed even within the
+validity window" (`src/lease_attestation.py:14-16`), with BEAM returning
+`:identity_proof_replayed` on a reused proof. A collapsed call therefore carries
+exactly the same binding as the four-step version — the steps were never what
+made the proof strong.
+
 There is a second-order reason, and it is the stronger one. Agent-to-agent
 messaging ran over the knowledge graph for months, and
 [`agent-message-transport-v0.md`](agent-message-transport-v0.md) documents the
 damage: on 2026-08-27, 49 of 60 KG writes were channel traffic, evicting genuine
-open findings from `scan-actors.sh`'s six-row window. Why the KG? Because the KG
-was the surface an agent could already reach. **Reachability has already driven
-substrate choice once, wrongly.** Leaving the correct substrate behind a bearer
-token and a signing dance recreates the same pressure, aimed the other way.
+open findings from `scan-actors.sh`'s six-row window.
+
+Why the KG? The honest version of this claim is weaker than it wants to be. What
+is measured is that the KG *was* the reachable surface and *was* the one used;
+the inference that reachability is what selected it is a claim about motive, and
+no telemetry establishes motive. **Read it as the best available explanation,
+not as a measured cause** — §12's first disconfirmer is precisely the test that
+would refute it. It is offered because the alternative explanations are weaker,
+not because it is proven: nobody chose the KG for its addressing, its read
+state, or its lifetime, since it has none of the three.
+
+If that reading holds, leaving the correct substrate behind a bearer token and a
+signing dance recreates the same pressure, aimed the other way.
 
 ## 3. The proposed split
 
-The discriminator is **not** "is it implemented on BEAM." It is: *is the caller
-an agent mid-loop making a governed decision, or is it plane machinery, or is it
-operator authority?*
+The discriminator is **not** "is it implemented on BEAM."
+
+It is honestly **two** tests, and an earlier draft of this section hid that by
+listing "operator authority" as though it were a third caller shape. It is not a
+caller shape — an operator is a caller like any other; what excludes
+force-release is the *authority the action requires*, which is a property of the
+operation, not of who invoked it. So, in order:
+
+1. **Does the action require an authority an agent cannot hold?** If yes, it is
+   never a capability, whoever calls it. This is what excludes force-release,
+   and it would still exclude it if only agents ever called it.
+2. **Is there an agent mid-loop who decides to do this?** If no, there is no
+   caller for a tool to serve, and it stays plane machinery.
+
+Substrate never enters either test. Keeping them separate matters because they
+disagree on at least one case: a lease *handoff* is an agent decision (test 2
+passes) whose completion is enforced by a timeout supervisor the agent does not
+control, which is why §11 flags it as the least certain row below.
 
 **Expose as capabilities** — agent decisions:
 
@@ -223,6 +265,16 @@ refuse, not fall back.
 
 §5 blocks step 1. §6 blocks step 2.
 
+**Step 1 also has a concrete prerequisite this document originally missed.**
+`mint_lease_attestation` refuses any path that is not `/v1/lease/...`
+(`validate_path`, `src/lease_attestation.py:176-184`), so the server-side
+minting helper that §7's invariant depends on **cannot mint a proof for
+`/v1/msg/send` or `/v1/msg/inbox` today**. Widening that allowlist is not a
+typo fix: the path claim is what stops an attestation minted for one route being
+presented at another, so widening it enlarges every existing attestation's
+audience unless the widening is per-route rather than per-prefix. Whoever takes
+step 1 should treat this as its first design question, not its last.
+
 ## 10. What this does not do
 
 - Does **not** propose retiring any HTTP route. The orchestrator, watchdogs, and
@@ -245,6 +297,14 @@ refuse, not fall back.
   this document. Note that latency is retired as a *decision* gate for Wave 3
   and this does not revive it; it is named as a correctness concern under stop
   sign #4, which the v0.4 resolution explicitly kept live.
+- **Whether the contract becomes a replica of the state machine.** The strongest
+  general case against exposing any mutating verb: `acquire`, `release`,
+  `handoff` and `resolve` are all state transitions whose correctness depends on
+  internal temporal logic — timeouts, supervisors, reaper cadence. Publishing
+  them as capabilities makes the agent-facing contract an externalized copy of
+  the plane's state machine, and a copy is free to drift from its original. The
+  read-only verbs (`status`, `inbox`) do not carry this risk in the same way.
+  This argument does not touch `msg send`, which has no state machine behind it.
 - **Whether `lease` is worth exposing at all.** §6 may make it expensive enough
   that the honest answer is "`msg` yes, `lease` no." That would be a fine
   outcome for this document.
@@ -260,3 +320,30 @@ refuse, not fall back.
 - If a capability wrapper is found to have changed any surface's identity mode
   (§7), this design is unsafe as written and the wrapper approach should be
   abandoned in favor of leaving the routes raw.
+
+## 13. Objections already checked and refuted
+
+Recorded so the next reader does not spend the same effort. Both came from the
+§0 advisory pass; both are wrong against the source, and saying so is cheaper
+than letting them resurface.
+
+**"Collapsing the credential dance risks a stale token used outside its intended
+window."** No. The attestation is request-bound to method, path, and body hash,
+and is non-replayable even inside its validity window
+(`src/lease_attestation.py:14-16`); BEAM answers a reused proof with
+`:identity_proof_replayed` (`identity_binding.ex`). The four steps were never
+what bound the proof to the request — the claims are.
+
+**"The KG failure was a data-modelling problem, so moving substrate does not
+address it; the proposal assumes the new plane has unbounded capacity."** The
+first half misreads the fix and the second describes a claim this document does
+not make. The damage was specifically that message bodies sat in an
+FTS-indexed `summary` column, and the replacement transport puts the body in an
+`envelope` that is **not searchable by default**, caps it at 64 KB, and bounds
+its lifetime at 7 days (`agent-message-transport-v0.md` §1, §4). Substrate and
+data model moved together, which is the whole content of that change.
+
+**What the same pass got right** is folded above rather than answered here: the
+caller-shape discriminator was concealing a second test (§3), and the
+state-machine-replica argument against exposing mutating verbs (§11) is the
+strongest general objection on the table.
