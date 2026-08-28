@@ -469,10 +469,32 @@ async def http_sentinel_backlog(request):
 
 # --- Sentinel finding adjudication (dashboard widget backend) ----------------
 #
-# The exogenous-anchor channel (#1214) made operator adjudication of Sentinel
-# findings the ground-truth feed for the EISV §6.3 falsifier — but the only
-# surface was the Sentinel CLI. These two endpoints give the dashboard a daily
-# queue + one-click verdicts. Cadence matters more than volume: outcomes join
+# The exogenous-anchor channel (#1214) added operator adjudication of Sentinel
+# findings as ONE label stratum for the EISV §6.3 falsifier. It is not "the
+# ground-truth feed", which is what this comment used to say: measured
+# 2026-08-28, operator adjudications are 73 of 3,090 rows on the external_signal
+# channel — 2.4%. The other 97.6% is machine-checked harness outcome
+# (test_passed / test_failed via the harness outcome endpoint). Stating the
+# share matters because the independence question is answerable per-stratum and
+# unanswerable if a 2.4% minority is described as the feed.
+#
+# Sensitivity, measured 2026-08-28 rather than assumed. The operator reported
+# that dashboard adjudication had been performative. Recomputing the channel
+# with those rows excluded (detail->>'adjudicated_via' = 'dashboard', stamped
+# since #1343) moves nothing that the falsifier reads:
+#
+#     cohort                       n      bad   bad_days
+#     all rows                     3095   735   37
+#     excluding via=dashboard      3078   735   37
+#
+# Every dashboard row is is_bad=false, and both bad-count and bad-day are the
+# gated quantities — so the delta is exactly zero and only n falls (0.55%).
+# Recorded as a RESULT, not as a retraction: labels are not invalidated on a
+# later report of the producer's state of mind, because a standard applied
+# after the fact is not a standard. The operator's report stands as a stated
+# limitation on this stratum; the measurement stands on its own.
+#
+# These two endpoints give the dashboard a daily queue + one-click verdicts. Cadence matters more than volume: outcomes join
 # to the last prior state snapshot, so a batch sweep collapses into ONE
 # statistical cluster — the queue is deliberately small (a few per day).
 
@@ -489,6 +511,57 @@ _SENTINEL_ADJUDICATION_OUTCOME_TYPES = tuple(
 # label; the other reasons drop a finding that was still analytically right.
 _ADJUDICATION_DISMISS_REASONS = ("fp", "out_of_scope", "wont_fix", "dup", "unclear", "stale")
 _SENTINEL_SUBSTRATE_LABEL_PREFIX = "com.unitares.sentinel"
+
+# --- Abstention -------------------------------------------------------------
+#
+# "I cannot determine this" is not a verdict, and until now there was no way to
+# say it. Every path out of the queue wrote an outcome_event, and
+# audit.outcome_events declares `is_bad BOOLEAN NOT NULL` (migration 004) — so
+# the table is structurally incapable of recording an absence of judgement. That
+# constraint is why every non-`fp` reason silently resolves to is_bad=false: not
+# a policy choice, a schema floor.
+#
+# Note this is NOT the same thing as dismiss reason `unclear`. That reason is
+# Watcher's taxonomy (agents/watcher/findings.py) and means the FINDING is
+# unclear — a statement about the finding, which downstream calibration already
+# excludes deliberately. Abstention is a statement about the OPERATOR: no
+# judgement was formed. Collapsing the two would put "I don't know" into the
+# exogenous-anchor channel wearing an external_signal label.
+#
+# So abstention lands in audit.events instead, and is kept out of BOTH:
+#   * _SENTINEL_FINDING_EVENT_TYPES  — or the queue would re-ingest it as a finding
+#   * _SENTINEL_ADJUDICATION_OUTCOME_TYPES — so _adjudication_progress() and the
+#     409 dedup never see it. The anchor-day count stays exactly as it was.
+# It can therefore never reach is_bad, the falsifier, or the ablation matrix.
+_ADJUDICATION_ABSTAIN_EVENT_TYPE = "sentinel_adjudication_abstained"
+
+# Suppression is a COOLDOWN, never permanent. Permanent suppression with no
+# label would be an outcome_event through a side door: the finding vanishes with
+# nothing on record saying a judgement was declined, which is a worse epistemic
+# state than today, not a better one. A bounded window means an abstained
+# finding returns for a second look while it is still inside the queue's own
+# lookback (default 336h), and ages out naturally if it is never judged.
+_ABSTAIN_COOLDOWN_HOURS = float(os.getenv("UNITARES_ADJUDICATION_ABSTAIN_COOLDOWN_H", "168"))
+
+
+async def _abstained_sentinel_fingerprints() -> set:
+    """Fingerprints an operator declined to judge, within the cooldown window.
+
+    Read from audit.events, NOT audit.outcome_events — abstention carries no
+    truth value and must never occupy a row in the anchor channel.
+    """
+    from src.db import get_db
+    db = get_db()
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT DISTINCT payload->>'fingerprint' AS fp
+                 FROM audit.events
+                WHERE event_type = $1
+                  AND ts > now() - ($2 || ' hours')::interval
+                  AND payload->>'fingerprint' IS NOT NULL""",
+            _ADJUDICATION_ABSTAIN_EVENT_TYPE, str(_ABSTAIN_COOLDOWN_HOURS),
+        )
+    return {r["fp"] for r in rows if r["fp"]}
 
 
 async def _adjudicated_sentinel_fingerprints() -> set:
@@ -769,10 +842,14 @@ async def http_sentinel_adjudication_queue(request):
             limit=1000,
         )
         adjudicated = await _adjudicated_sentinel_fingerprints()
+        # Two different exclusions, deliberately not merged: `adjudicated` is
+        # permanent and drives the 409; `abstained` expires and does not.
+        abstained = await _abstained_sentinel_fingerprints()
 
         seen: set = set()
         queue = []
         pending_total = 0
+        abstained_suppressed = 0
         evidence_targets = []
         for e in events:
             details = e.get("details") or {}
@@ -784,6 +861,12 @@ async def http_sentinel_adjudication_queue(request):
                 continue
             seen.add(fp)
             if fp in adjudicated:
+                continue
+            # Suppressed, not resolved. Counted and reported rather than hidden:
+            # an operator must be able to see that declined items exist, or the
+            # cooldown becomes a silent backlog.
+            if fp in abstained:
+                abstained_suppressed += 1
                 continue
             pending_total += 1
             if len(queue) < limit:
@@ -811,6 +894,10 @@ async def http_sentinel_adjudication_queue(request):
             "queue": queue,
             "pending_total": pending_total,
             "dismiss_reasons": list(_ADJUDICATION_DISMISS_REASONS),
+            # Declined items are reported, never silently dropped. Without this
+            # the cooldown would read as "queue is clear" when it is not.
+            "abstained_suppressed": abstained_suppressed,
+            "abstain_cooldown_hours": _ABSTAIN_COOLDOWN_HOURS,
             "progress": await _adjudication_progress(),
         })
     except Exception as e:
@@ -845,9 +932,10 @@ async def http_sentinel_adjudicate(request):
     reason = (str(body.get("reason") or "").strip().lower() or None)
     if not fingerprint:
         return JSONResponse({"success": False, "error": "fingerprint required"}, status_code=400)
-    if status not in ("confirmed", "dismissed"):
+    if status not in ("confirmed", "dismissed", "abstain"):
         return JSONResponse(
-            {"success": False, "error": "status must be 'confirmed' or 'dismissed'"},
+            {"success": False,
+             "error": "status must be 'confirmed', 'dismissed' or 'abstain'"},
             status_code=400,
         )
     if status == "dismissed" and reason not in _ADJUDICATION_DISMISS_REASONS:
@@ -856,6 +944,45 @@ async def http_sentinel_adjudicate(request):
              "error": f"dismissal needs a reason: {', '.join(_ADJUDICATION_DISMISS_REASONS)}"},
             status_code=400,
         )
+
+    # Abstention returns before any outcome_event is built. Declining to judge
+    # must cost nothing and record nothing in the anchor channel; the only
+    # durable trace is an audit event that suppresses the item for a cooldown.
+    if status == "abstain":
+        try:
+            if fingerprint in await _adjudicated_sentinel_fingerprints():
+                return JSONResponse(
+                    {"success": False, "error": "already adjudicated",
+                     "fingerprint": fingerprint},
+                    status_code=409,
+                )
+            import uuid as _uuid
+            from src.db import get_db
+            from src.db.base import AuditEvent
+            await get_db().append_audit_event(AuditEvent(
+                ts=datetime.now(timezone.utc),
+                event_id=str(_uuid.uuid4()),
+                event_type=_ADJUDICATION_ABSTAIN_EVENT_TYPE,
+                payload={
+                    "fingerprint": fingerprint,
+                    "reason": reason,
+                    "adjudicated_via": "dashboard",
+                    # Stated on the row so a later reader cannot mistake this
+                    # for a verdict that merely lacks a label.
+                    "note": ("operator declined to judge; NOT a verdict and NOT "
+                             "an exogenous-truth label"),
+                },
+            ))
+            return JSONResponse({
+                "success": True,
+                "fingerprint": fingerprint,
+                "status": "abstain",
+                "recorded_outcome": False,
+                "suppressed_for_hours": _ABSTAIN_COOLDOWN_HOURS,
+            })
+        except Exception as e:
+            logger.error(f"Error recording abstention for {fingerprint}: {e}")
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
     try:
         if fingerprint in await _adjudicated_sentinel_fingerprints():

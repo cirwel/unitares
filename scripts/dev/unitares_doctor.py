@@ -2123,6 +2123,103 @@ def check_signal_degeneracy(db_url: str) -> CheckResult:
                        f"all {len(healthy)} metrics vary: {', '.join(healthy)}")
 
 
+# An adjudication family must produce BOTH verdicts. src/http_routes/sentinel.py
+# states the invariant on _SENTINEL_FINDING_EVENT_TYPES: "After adding a family,
+# watch that it still produces DISMISSALS. A family that only ever confirms has
+# become the all-positive generator Invariant 4 forbids, and it poisons the
+# anchor channel rather than feeding it." Nothing watched, because "watch that"
+# was a comment. This check is the watcher.
+#
+# Measured 2026-08-28: sentinel_finding is 17 confirmed / 0 dismissed and has
+# been since 2026-07-02 — the forbidden shape, live, undetected for ~8 weeks.
+# The contrast is the point: watcher_finding ran 2 confirmed / 55 dismissed over
+# the same channel, so a ~96% dismissal rate is what a healthy family looks like
+# here and 0-of-17 is not small-sample noise.
+ALL_POSITIVE_MIN_N = 10   # below this, "no dismissals yet" is cadence, not shape
+
+
+def check_anchor_all_positive_generator(db_url: str) -> CheckResult:
+    """WARN when an adjudication family has stopped producing dismissals.
+
+    Adjudication rows are the exogenous-anchor channel the EISV falsifier reads.
+    A family that only ever confirms is not evidence that the detector is right —
+    it is a channel that cannot disagree, and a label source that cannot disagree
+    contributes no discrimination while still inflating the anchor count.
+
+    Deliberately reports SHAPE, not correctness: this check cannot know whether a
+    given confirmation was right. It knows only that a family which has never
+    once dismissed is not behaving like a verification channel. That is exactly
+    the condition the sentinel.py invariant names, and it is falsifiable from the
+    data alone — no operator testimony required.
+
+    WARN, not FAIL: the install works, the channel is degraded. Escalating to
+    FAIL here would gate deploys on a research-integrity signal, which is the
+    wrong lever.
+    """
+    name, mode = "anchor_all_positive_generator", "operator"
+    rows = _psql_rows(db_url, (
+        "SELECT regexp_replace(outcome_type, '_(confirmed|dismissed)$', '') AS family, "
+        "count(*) FILTER (WHERE outcome_type LIKE '%_confirmed') AS confirmed, "
+        "count(*) FILTER (WHERE outcome_type LIKE '%_dismissed') AS dismissed "
+        "FROM audit.outcome_events "
+        "WHERE outcome_type LIKE '%_confirmed' OR outcome_type LIKE '%_dismissed' "
+        "GROUP BY 1 ORDER BY 1"
+    ), timeout=30)
+    if rows is None:
+        return CheckResult(name, mode, Status.SKIP, "audit.outcome_events not queryable")
+    if not rows:
+        return CheckResult(name, mode, Status.SKIP, "no adjudication rows recorded yet")
+
+    degenerate, healthy, thin = [], [], []
+    for row in rows:
+        if len(row) < 3:
+            continue
+        family = row[0]
+        try:
+            confirmed, dismissed = int(row[1]), int(row[2])
+        except ValueError:
+            continue
+        total = confirmed + dismissed
+        if total < ALL_POSITIVE_MIN_N:
+            thin.append(f"{family} (n={total})")
+        elif dismissed == 0:
+            degenerate.append(f"{family}: {confirmed} confirmed, 0 dismissed")
+        elif confirmed == 0:
+            # The mirror failure. Rarer, equally disqualifying: a family that
+            # only ever dismisses is also unable to disagree with itself.
+            degenerate.append(f"{family}: 0 confirmed, {dismissed} dismissed")
+        else:
+            healthy.append(f"{family} {confirmed}/{dismissed}")
+
+    if degenerate:
+        return CheckResult(
+            name, mode, Status.WARN,
+            f"{len(degenerate)} adjudication family(ies) produce only one verdict: "
+            + "; ".join(degenerate),
+            detail=(
+                "A family that has never produced the opposite verdict is the "
+                "all-positive (or all-negative) generator the exogenous-anchor "
+                "contract forbids — see the invariant on "
+                "_SENTINEL_FINDING_EVENT_TYPES in src/http_routes/sentinel.py. "
+                "Before treating this as detector quality, rule out that the "
+                "opposite verdict is UNREACHABLE on every surface: check that the "
+                "outcome_type is present in VALID_OUTCOME_TYPES and in the "
+                "schemas/core.py Literal, and that some surface can actually "
+                "submit it. 'Never disagreed' and 'cannot disagree' look "
+                "identical from this row count and have opposite meanings. "
+                + (f"Healthy families: {', '.join(healthy)}." if healthy else "")
+                + (f" Too few to judge: {', '.join(thin)}." if thin else "")
+            ),
+        )
+    if not healthy:
+        return CheckResult(name, mode, Status.SKIP,
+                           f"no family above n={ALL_POSITIVE_MIN_N} "
+                           f"({', '.join(thin) or 'none'})")
+    return CheckResult(name, mode, Status.PASS,
+                       f"all {len(healthy)} family(ies) produce both verdicts: "
+                       + ", ".join(healthy))
+
+
 PRODUCER_MIN_N = 10          # below this there is no cadence to be silent against
 PRODUCER_MIN_ACTIVE_DAYS = 3  # a single-day burst is an incident, not a cadence
 PRODUCER_REGULAR_GAP_H = 72  # a producer must have reported at least this often
@@ -2832,6 +2929,8 @@ def build_checks(
               lambda: check_cold_start_pause_canary(db_url)),
         Check("label_join_overlap", "operator", lambda: check_label_join_overlap(db_url)),
         Check("signal_degeneracy", "operator", lambda: check_signal_degeneracy(db_url)),
+        Check("anchor_all_positive_generator", "operator",
+              lambda: check_anchor_all_positive_generator(db_url)),
         Check("finding_producer_live", "operator",
               lambda: check_finding_producer_live(db_url)),
         # Companion to the above: that one catches DIED, this one catches
