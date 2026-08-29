@@ -413,13 +413,53 @@ def audit_function(
                         )
 
 
+def _router_delegate(tool_name: str):
+    """Resolve a consolidated alias to the delegate function it routes to.
+
+    A name that is a tool_stability alias rather than a registered tool is not
+    in TOOL_HANDLERS -- dispatch rewrites it to a router, which then calls the
+    delegate. Auditing the router instead would audit all of its actions'
+    closures, which is a different and much broader assertion, so recover the
+    single delegate the name actually reaches. ``action_router`` holds its
+    routing table only as a closure, so read it the same way
+    scripts/dev/tool_edge_index.py does.
+    """
+    from src.mcp_handlers import TOOL_HANDLERS
+    from src.mcp_handlers.tool_stability import resolve_tool_alias
+
+    target_name, alias = resolve_tool_alias(tool_name)
+    if alias is None or not alias.inject_action:
+        return None
+    router = TOOL_HANDLERS.get(target_name)
+    inner = getattr(router, "__wrapped__", None)
+    if inner is None or getattr(inner, "__name__", "") != "router":
+        return None
+    try:
+        actions = inspect.getclosurevars(inner).nonlocals.get("actions")
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(actions, dict):
+        return None
+    return actions.get(alias.inject_action)
+
+
 def resolve_handler(tool_name: str) -> Tuple[Path, str]:
-    """Resolve a registered tool to (source file, function name), live."""
+    """Resolve a tool name to (source file, function name), live.
+
+    Accepts both a registered tool and a consolidated alias. The alias path
+    matters since 2026-08-29: names like get_server_info had their duplicate
+    registration retired and now reach their handler only through a router, so
+    a TOOL_HANDLERS-only lookup would fail on a handler that still ships and
+    still needs auditing.
+    """
     from src.mcp_handlers import TOOL_HANDLERS
 
-    handler = TOOL_HANDLERS.get(tool_name)
+    handler = TOOL_HANDLERS.get(tool_name) or _router_delegate(tool_name)
     if handler is None:
-        raise SystemExit(f"error: {tool_name!r} not in TOOL_HANDLERS")
+        raise SystemExit(
+            f"error: {tool_name!r} is neither in TOOL_HANDLERS nor an alias "
+            f"routing to a known action delegate"
+        )
     unwrapped = inspect.unwrap(handler)
     path = Path(inspect.getsourcefile(unwrapped)).resolve()
     return path, unwrapped.__name__

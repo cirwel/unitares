@@ -77,12 +77,35 @@ out of registration entirely (see Common Mistakes #5).
 5. Injects `client_session_id` for tools in `TOOLS_NEEDING_SESSION_INJECTION`
 6. Registers with `mcp.tool()` decorator
 
-**The both-places rule, with one softening:** a tool normally needs a `*Params`
-schema (via `TOOL_ORDER`) AND `@mcp_tool` with `register=True` (default). If a
-decorator-registered tool is missing from `TOOL_ORDER`, `get_tool_definitions`
-auto-discovers it and serves an open `additionalProperties: true` schema — the
-tool works but its params are unvalidated at the listing layer, so treat that as
-a gap to close, not a supported path.
+**The both-places rule, now enforced:** a core tool needs a `*Params` schema
+(via `TOOL_ORDER`) AND `@mcp_tool` with `register=True` (default). Omitting
+either is a startup error as of 2026-08-29 —
+`_validate_consolidated_tool_order` in `src/tool_schemas.py` refuses to build
+the tool list when a registered, non-hidden, core-handler tool is missing from
+`TOOL_ORDER`.
+
+This used to be a silent softening: `get_tool_definitions` auto-discovered the
+tool and served an open `{"properties": {}, "additionalProperties": true}`
+schema. That is worse than it sounds, because `validate_params` resolves the
+real `*Params` model **by tool name** regardless of `TOOL_ORDER` — so the wire
+advertised "any parameters accepted" and the server then rejected the call
+against a schema the caller was never shown. Six tools sat in that state. The
+guard originally covered action routers only, which is exactly how
+single-purpose tools drifted out unnoticed.
+
+If a tool is only ever reached through a consolidated router, the fix is
+`register=False`, not a `TOOL_ORDER` entry. Plugin tools are exempt from the
+guard and keep the auto-discovery path; a plugin that wants a real advertised
+schema calls `register_extra_schemas`.
+
+**One name, one home.** A name must be *either* a registered dispatch tool
+*or* a `tool_stability` alias, never both — `resolve_alias` rewrites the tool
+name before `TOOL_HANDLERS` is consulted, so a name that is both has an
+unreachable registration. Fifteen names were in that state until 2026-08-29;
+`direct_resume_if_safe` was the one where it was fatal, because its alias
+target (`quick_resume`) is itself `register=False`, so every call returned
+`tool_not_found_error`. `ALIAS_SHADOWS_REGISTERED_TOOL` in the tool-edge-index
+audit and `test_no_alias_name_is_also_a_registered_tool` both guard this now.
 
 ### Dispatch Pipeline
 
