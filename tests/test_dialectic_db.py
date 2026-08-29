@@ -1657,9 +1657,20 @@ class TestTerminalWriteGuardIsLoadBearing:
         "resolve_session",
     )
 
+    @staticmethod
+    def _squash(text):
+        """Drop whitespace so formatting is not part of the assertion.
+
+        Without this the check fails on a cosmetic reformat -- reindenting the
+        SQL, or writing ``('resolved','failed')`` without the space. Membership
+        is what must not drift; layout is not this test's business, and a test
+        that cries on a reindent gets weakened by whoever hits it.
+        """
+        return "".join(text.split())
+
     def _expected_fragment(self, instance):
         joined = ", ".join(f"'{status}'" for status in instance.TERMINAL_WRITE_GUARD)
-        return f"NOT IN ({joined})"
+        return self._squash(f"NOT IN ({joined})")
 
     def test_every_guarded_writer_carries_the_constant(self, db):
         """All five statements must spell exactly what the constant declares."""
@@ -1669,7 +1680,7 @@ class TestTerminalWriteGuardIsLoadBearing:
         expected = self._expected_fragment(instance)
 
         for name in self.GUARDED_WRITERS:
-            source = inspect.getsource(getattr(type(instance), name))
+            source = self._squash(inspect.getsource(getattr(type(instance), name)))
             assert expected in source, (
                 f"{name} does not carry {expected!r}. Either its SQL drifted from "
                 "TERMINAL_WRITE_GUARD, or the constant changed and this writer was "
@@ -1706,7 +1717,8 @@ class TestTerminalWriteGuardIsLoadBearing:
                 source = inspect.getsource(attr)
             except (TypeError, OSError):
                 continue
-            if "UPDATE core.dialectic_sessions" in source and expected in source:
+            squashed = self._squash(source)
+            if self._squash("UPDATE core.dialectic_sessions") in squashed and expected in squashed:
                 unlisted.append(name)
 
         assert not unlisted, (
