@@ -117,3 +117,94 @@ class TestBothProducersEmit:
                 f"{name} builds the reassignment payload inline; it must call "
                 "events.emit_reviewer_reassigned so the shape cannot drift"
             )
+
+
+class TestEmitWriteRefused:
+    """The refusal path must reach a durable channel, not just a counter.
+
+    `skipped_count` has counted guarded writes the database refused since #1804
+    added the terminal-state predicates, and it reached nothing durable — not
+    `audit.events`, not a metric series, and not even the sweep log line, whose
+    condition omitted it. A refusal is the direct observation of two writers
+    converging on one row, so "the sweeper has never collided" and "we could
+    never have seen a collision" were the same sentence until this event existed.
+    """
+
+    @pytest.mark.asyncio
+    async def test_payload_shape(self):
+        captured = {}
+
+        async def fake_append(payload):
+            captured.update(payload)
+
+        with patch("src.audit_db.append_audit_event_async", side_effect=fake_append):
+            await events.emit_write_refused(
+                session_id="sess-1",
+                attempted=events.ATTEMPT_REVIEWER_REASSIGNMENT,
+                paused_agent_id="a1",
+                source="sweeper",
+            )
+
+        assert captured["event_type"] == "dialectic_write_refused"
+        assert captured["agent_id"] == "a1"
+        # Top-level session_id populates the indexed column; nested-only lands
+        # it NULL and makes the row unfindable by session.
+        assert captured["session_id"] == "sess-1"
+        assert captured["details"] == {
+            "session_id": "sess-1",
+            "attempted": "reviewer_reassignment",
+            "paused_agent_id": "a1",
+            "source": "sweeper",
+        }
+
+    @pytest.mark.asyncio
+    async def test_is_fail_soft(self):
+        """An audit outage must not turn a skipped session into a failed sweep."""
+        with patch("src.audit_db.append_audit_event_async",
+                   side_effect=RuntimeError("audit down")):
+            await events.emit_write_refused(
+                session_id="sess-1",
+                attempted=events.ATTEMPT_REAP_FAILED,
+            )  # must not raise
+
+    @pytest.mark.asyncio
+    async def test_paused_agent_is_optional(self):
+        """A row with no paused agent is still a refusal worth recording."""
+        captured = {}
+
+        async def fake_append(payload):
+            captured.update(payload)
+
+        with patch("src.audit_db.append_audit_event_async", side_effect=fake_append):
+            await events.emit_write_refused(
+                session_id="sess-1",
+                attempted=events.ATTEMPT_AWAITING_FACILITATION,
+            )
+
+        assert captured["agent_id"] is None
+        assert captured["details"]["paused_agent_id"] is None
+        assert captured["details"]["source"] == "sweeper", "source defaults to the only producer"
+
+    def test_every_refusal_site_emits(self):
+        """All three guarded writes must emit — a silent one is an unobservable collision.
+
+        Counts call sites rather than asserting mere presence: the failure this
+        guards against is a fourth refusal path being added later that increments
+        the counter and emits nothing, which is exactly how the reassignment
+        stream came to be incomplete.
+        """
+        from pathlib import Path
+
+        text = (Path(events.__file__).parent / "auto_resolve.py").read_text(encoding="utf-8")
+        assert text.count("await emit_write_refused(") == text.count("skipped_count += 1"), (
+            "every skipped_count increment must be accompanied by an "
+            "emit_write_refused call; a refused write that emits nothing is "
+            "indistinguishable from a collision that never happened"
+        )
+
+    def test_shape_is_not_forked(self):
+        """The sweeper must not hand-build this payload."""
+        from pathlib import Path
+
+        text = (Path(events.__file__).parent / "auto_resolve.py").read_text(encoding="utf-8")
+        assert '"event_type": "dialectic_write_refused"' not in text

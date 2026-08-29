@@ -172,8 +172,16 @@ Verified 2026-08-29:
 - **The sweeper's only two emitters fire on success paths.** `auto_resolve.py` imports exactly
   `emit_reviewer_reassigned` and `emit_facilitation_needed` (`:15`) and calls them at `:274` and
   `:398` — both reached only when a write *succeeded*. ⛔**No emitter exists on the refusal path
-  at any of the four `skipped_count` increments.** The refusal is not under-plumbed; it is
+  at any of the `skipped_count` increments.** The refusal is not under-plumbed; it is
   unrepresented in the event vocabulary.
+  ⛔**Corrected 2026-08-29 (same day, while building the fix):** an earlier draft of this line said
+  **four** increments, citing `:186,249,390,463`. **`:186` is `skipped_count = 0`, the
+  initializer.** There are **three** refusal sites — the refused reviewer write, the refused
+  facilitation flag, and the refused reap — and the miscount reached the merged document. ⚠️Noted
+  in a document whose §1 thesis is that cite-by-line decays: the defect here was not drift but a
+  read error, and a count stated by enumerating lines invites exactly that. The three sites are
+  better named by what they attempt (`reviewer_reassignment`, `awaiting_facilitation`,
+  `reap_failed`) — which is how the emitter now discriminates them.
 - The count does reach the caller as `summary["skipped"]` (`background_tasks.py:441`), and the
   sweeper's own returned `message` string spells it (`"… {skipped_count} skipped (write refused)"`,
   `auto_resolve.py:514`). ⚠️But the caller **discards `message`** and builds its own line, gated on

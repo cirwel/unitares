@@ -56,6 +56,15 @@ logger = get_logger(__name__)
 
 REVIEWER_REASSIGNED = "dialectic_reviewer_reassigned"
 FACILITATION_NEEDED = "dialectic_facilitation_needed"
+WRITE_REFUSED = "dialectic_write_refused"
+
+# The three guarded writes the sweeper can have refused. Shared with the
+# sweeper's own `details` entries so the event payload and the returned summary
+# cannot drift apart -- they described the same three outcomes in two places
+# before this constant existed.
+ATTEMPT_REVIEWER_REASSIGNMENT = "reviewer_reassignment"
+ATTEMPT_AWAITING_FACILITATION = "awaiting_facilitation"
+ATTEMPT_REAP_FAILED = "reap_failed"
 
 
 async def emit_reviewer_reassigned(
@@ -152,4 +161,87 @@ async def emit_facilitation_needed(
     except Exception as exc:  # pragma: no cover - telemetry must not break the sweep
         logger.warning(
             "%s emit failed: session=%s err=%s", FACILITATION_NEEDED, session_id, exc
+        )
+
+
+async def emit_write_refused(
+    *,
+    session_id: str,
+    attempted: str,
+    paused_agent_id: Optional[str] = None,
+    source: str = "sweeper",
+) -> None:
+    """Record one guarded write the sweeper attempted and the database refused.
+
+    This is the direct observation of two writers converging on one row: the
+    sweeper decided a session needed a reviewer change, a facilitation flag or a
+    reap, and the terminal-state predicate rejected the write because somebody
+    else had already finished the session.
+
+    WHY THIS EXISTS
+    ---------------
+    The sweeper has counted these in `skipped_count` since #1804 added the
+    guards, and that count reached nothing durable -- not `audit.events`, not
+    `audit.coordination_measurements`, not a metric series, and not even the
+    sweep log line, whose condition omitted it. The two emitters above fire only
+    on paths where a write *succeeded*, so a refusal had no event to be emitted
+    as: it was missing from the vocabulary, not from the plumbing.
+
+    ⛔The consequence, and the reason this is a governance concern rather than a
+    logging nicety: "the sweeper has never collided with another writer" and "we
+    have never been able to see a collision" were the same observation. That is
+    measurement-authority state 3 (*not recorded*), which must never be reported
+    with the same sentence as state 4 (recorded, and genuinely zero). This
+    emitter is what separates them.
+
+    Args:
+        session_id: the session whose write was refused.
+        attempted: which guarded write was refused -- one of the three
+            ``ATTEMPT_*`` constants above.
+        paused_agent_id: the session's paused agent, when the row carried one.
+            Populates the indexed `agent_id` column, matching how
+            `emit_facilitation_needed` attributes a sweeper-raised event.
+        source: which producer observed the refusal. Only ``"sweeper"`` today;
+            the parameter exists so a second producer cannot be added without
+            declaring itself, which is exactly how the reassignment stream came
+            to be incomplete.
+
+    ⛔**Deliberately does NOT record the refusing predicate**, though the gate
+    that commissioned this event asked for one. There is no honest source for it
+    here. `DialecticDB.TERMINAL_WRITE_GUARD` is declarative only -- the three
+    `UPDATE` statements inline `('resolved', 'failed')` and never interpolate
+    the constant -- so recording it would stamp every event with a value that
+    governs no write, and hardcoding the literal would add a third copy to drift
+    against. ⛔**Nor can this event distinguish terminal-from-missing.** The
+    write helpers establish which by a follow-up `SELECT` and only *log* it;
+    they return a bare `False`. A reader who needs that distinction must go to
+    the DB-layer log, and any future attempt to answer it from this stream alone
+    must first change what those helpers return.
+
+    Fail-soft, for the same reason as the emitters above inverted: the sweep has
+    already decided to skip this session by the time this runs, so a failure
+    here costs observability, never correctness. It must never turn a skipped
+    session into a failed sweep.
+    """
+    try:
+        from src.audit_db import append_audit_event_async
+
+        await append_audit_event_async({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event_type": WRITE_REFUSED,
+            "agent_id": paused_agent_id,
+            # Top-level session_id populates the indexed audit.events column;
+            # duplicated in details for payload self-containment, as above.
+            "session_id": session_id,
+            "details": {
+                "session_id": session_id,
+                "attempted": attempted,
+                "paused_agent_id": paused_agent_id,
+                "source": source,
+            },
+        })
+    except Exception as exc:
+        logger.warning(
+            "%s audit emit failed: session=%s attempted=%s source=%s err=%s",
+            WRITE_REFUSED, session_id, attempted, source, exc,
         )

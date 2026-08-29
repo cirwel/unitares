@@ -295,6 +295,7 @@ async def test_refused_facilitation_write_is_not_narrated():
 
     mock_add_msg = AsyncMock()
     mock_mark = AsyncMock(return_value=False)
+    mock_emit_refused = AsyncMock()
 
     with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                new_callable=AsyncMock, return_value=sessions), \
@@ -302,6 +303,7 @@ async def test_refused_facilitation_write_is_not_narrated():
          patch(f"{AUTO_RESOLVE}.update_session_status_async", AsyncMock()), \
          patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async", mock_mark), \
          patch(f"{AUTO_RESOLVE}.emit_facilitation_needed", new_callable=AsyncMock), \
+         patch(f"{AUTO_RESOLVE}.emit_write_refused", mock_emit_refused), \
          patch(f"{AUTO_RESOLVE}.add_message_async", mock_add_msg), \
          patch("src.mcp_handlers.dialectic.reviewer.select_reviewer",
                new_callable=AsyncMock, return_value=None):
@@ -316,6 +318,16 @@ async def test_refused_facilitation_write_is_not_narrated():
         "action": "write_refused",
         "attempted": "awaiting_facilitation",
     }]
+    # The refusal must also reach the durable stream, not only the counter --
+    # a skipped_count nobody can query cannot distinguish "no collision" from
+    # "no instrument".
+    mock_emit_refused.assert_awaited_once()
+    assert mock_emit_refused.await_args.kwargs == {
+        "session_id": "s1",
+        "attempted": "awaiting_facilitation",
+        "paused_agent_id": "a1",
+        "source": "sweeper",
+    }
 
 
 @pytest.mark.asyncio
