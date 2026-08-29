@@ -44,6 +44,9 @@ class UpdateContext:
     result: Dict[str, Any] = field(default_factory=dict)
     monitor: Optional[Any] = None   # UNITARESMonitor instance
     agent_state: Dict[str, Any] = field(default_factory=dict)
+    # Call-local observational sidecar. It never enters agent_state, the
+    # monitor, the ODE, or policy; post-update persistence reads it directly.
+    submitted_afferents: Optional[Dict[str, Any]] = None
 
     # ── Side effects (Phase 5) ─────────────────────────────────────
     health_status: Optional[Any] = None

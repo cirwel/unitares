@@ -38,6 +38,9 @@ async def http_eisv_latest(request):
 _COMPACT_TELEMETRY_KEYS = (
     "measurement_source", "behavioral_source", "submitted_source",
     "primary_source", "behavioral_confidence", "missing_inputs",
+    "afferents_recorded", "afferent_source", "afferent_source_field",
+    "afferent_count", "afferent_valid_count", "afferent_truncated",
+    "afferent_keys", "afferent_policy_applied",
     "enforcement_requested", "enforcement_applied",
 )
 

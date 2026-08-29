@@ -35,24 +35,28 @@ _EISV_KEYS = ("E", "I", "S", "V")
 _AFFERENT_SOURCE_FIELDS = ("afferents", "body_anima", "anima")
 _AFFERENT_PROVENANCE_KEYS = ("schema", "source", "role", "scale", "units")
 _AFFERENT_KEY_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_.-]*")
-_SENSITIVE_AFFERENT_KEY_PARTS = (
-    "access_key",
-    "api_key",
+_SENSITIVE_AFFERENT_KEY_FRAGMENTS = (
+    "accesskey",
     "apikey",
     "auth",
     "credential",
+    "passcode",
     "password",
-    "private_key",
+    "privatekey",
     "secret",
     "token",
 )
+_SENSITIVE_AFFERENT_KEY_TOKENS = frozenset({"otp", "pin"})
 
 
 def _number(value: Any) -> float | None:
     """Return a finite JSON number without guessing from strings."""
     if isinstance(value, bool) or not isinstance(value, Real):
         return None
-    number = float(value)
+    try:
+        number = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
     return number if math.isfinite(number) else None
 
 
@@ -97,28 +101,43 @@ def _bounded_text(value: Any) -> str | None:
     return value[:AFFERENT_PROVENANCE_TEXT_LIMIT]
 
 
-def _afferent_values(values: Mapping[str, Any] | None) -> dict[str, float]:
-    """Keep a deterministic, bounded set of finite numeric afferents."""
+def _is_sensitive_afferent_key(key: str) -> bool:
+    """Recognize credential-shaped names across allowed key separators."""
+    tokens = [token for token in re.split(r"[^a-z0-9]+", key.lower()) if token]
+    compact = "".join(tokens)
+    return (
+        any(part in compact for part in _SENSITIVE_AFFERENT_KEY_FRAGMENTS)
+        or any(token in _SENSITIVE_AFFERENT_KEY_TOKENS for token in tokens)
+    )
+
+
+def _afferent_values(
+    values: Mapping[str, Any] | None,
+) -> tuple[dict[str, float], int]:
+    """Keep finite numeric afferents and report pre-cap valid cardinality."""
     if not isinstance(values, Mapping):
-        return {}
+        return {}, 0
 
     sanitized: dict[str, float] = {}
+    valid_count = 0
     for raw_key in sorted(values, key=lambda item: str(item)):
-        key = str(raw_key).strip()
+        if not isinstance(raw_key, str) or raw_key != raw_key.strip():
+            continue
+        key = raw_key
         if (
             not key
             or len(key) > AFFERENT_KEY_LENGTH_LIMIT
             or _AFFERENT_KEY_PATTERN.fullmatch(key) is None
-            or any(part in key.lower() for part in _SENSITIVE_AFFERENT_KEY_PARTS)
+            or _is_sensitive_afferent_key(key)
         ):
             continue
         number = _number(values[raw_key])
         if number is None:
             continue
-        sanitized[key] = number
-        if len(sanitized) >= AFFERENT_DIMENSION_LIMIT:
-            break
-    return sanitized
+        valid_count += 1
+        if len(sanitized) < AFFERENT_DIMENSION_LIMIT:
+            sanitized[key] = number
+    return sanitized, valid_count
 
 
 def _afferent_provenance(
@@ -130,16 +149,15 @@ def _afferent_provenance(
     """Reduce caller-declared provenance to a small non-authoritative shape."""
     state_space = sensor_data.get("state_space_provenance")
     state_space = state_space if isinstance(state_space, Mapping) else {}
-    declared = state_space.get(source_field)
-    declared = declared if isinstance(declared, Mapping) else {}
-    if isinstance(inline, Mapping):
-        declared = {**declared, **inline}
+    outer = state_space.get(source_field)
+    outer = outer if isinstance(outer, Mapping) else {}
+    inline = inline if isinstance(inline, Mapping) else {}
 
-    reduced = {
-        key: text
-        for key in _AFFERENT_PROVENANCE_KEYS
-        if (text := _bounded_text(declared.get(key))) is not None
-    }
+    reduced: dict[str, str] = {}
+    for key in _AFFERENT_PROVENANCE_KEYS:
+        text = _bounded_text(inline.get(key)) or _bounded_text(outer.get(key))
+        if text is not None:
+            reduced[key] = text
     return {
         "status": "caller_declared" if reduced else "undeclared",
         **reduced,
@@ -176,7 +194,7 @@ def build_submitted_afferents(
             inline = candidate.get("provenance")
             inline_provenance = inline if isinstance(inline, Mapping) else None
 
-        sanitized = _afferent_values(values)
+        sanitized, valid_count = _afferent_values(values)
         if not sanitized:
             continue
 
@@ -186,6 +204,9 @@ def build_submitted_afferents(
             "source_field": source_field,
             "measurement_role": "raw_afferents",
             "policy_applied": False,
+            "dimension_limit": AFFERENT_DIMENSION_LIMIT,
+            "valid_dimension_count": valid_count,
+            "truncated": valid_count > len(sanitized),
             "values": sanitized,
             "provenance": _afferent_provenance(
                 sensor_data,
@@ -490,6 +511,17 @@ def summarize_eisv_telemetry(envelope: Mapping[str, Any] | None) -> dict[str, An
         "afferent_source": afferents.get("source"),
         "afferent_source_field": afferents.get("source_field"),
         "afferent_count": len(afferent_values),
+        "afferent_valid_count": (
+            afferents.get("valid_dimension_count")
+            if isinstance(afferents.get("valid_dimension_count"), int)
+            and not isinstance(afferents.get("valid_dimension_count"), bool)
+            else None
+        ),
+        "afferent_truncated": (
+            afferents.get("truncated")
+            if isinstance(afferents.get("truncated"), bool)
+            else None
+        ),
         "afferent_keys": sorted(str(key) for key in afferent_values),
         "afferent_policy_applied": (
             afferents.get("policy_applied")
@@ -586,6 +618,8 @@ def summarize_state_eisv_telemetry(state_json: Mapping[str, Any] | None) -> dict
         "afferent_source": None,
         "afferent_source_field": None,
         "afferent_count": None,
+        "afferent_valid_count": None,
+        "afferent_truncated": None,
         "afferent_keys": [],
         "afferent_policy_applied": None,
         "behavioral_source": behavioral_source,
