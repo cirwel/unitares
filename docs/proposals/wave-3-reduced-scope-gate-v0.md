@@ -172,8 +172,16 @@ Verified 2026-08-29:
 - **The sweeper's only two emitters fire on success paths.** `auto_resolve.py` imports exactly
   `emit_reviewer_reassigned` and `emit_facilitation_needed` (`:15`) and calls them at `:274` and
   `:398` — both reached only when a write *succeeded*. ⛔**No emitter exists on the refusal path
-  at any of the four `skipped_count` increments.** The refusal is not under-plumbed; it is
+  at any of the `skipped_count` increments.** The refusal is not under-plumbed; it is
   unrepresented in the event vocabulary.
+  ⛔**Corrected 2026-08-29 (same day, while building the fix):** an earlier draft of this line said
+  **four** increments, citing `:186,249,390,463`. **`:186` is `skipped_count = 0`, the
+  initializer.** There are **three** refusal sites — the refused reviewer write, the refused
+  facilitation flag, and the refused reap — and the miscount reached the merged document. ⚠️Noted
+  in a document whose §1 thesis is that cite-by-line decays: the defect here was not drift but a
+  read error, and a count stated by enumerating lines invites exactly that. The three sites are
+  better named by what they attempt (`reviewer_reassignment`, `awaiting_facilitation`,
+  `reap_failed`) — which is how the emitter now discriminates them.
 - The count does reach the caller as `summary["skipped"]` (`background_tasks.py:441`), and the
   sweeper's own returned `message` string spells it (`"… {skipped_count} skipped (write refused)"`,
   `auto_resolve.py:514`). ⚠️But the caller **discards `message`** and builds its own line, gated on
@@ -391,10 +399,30 @@ are now deferred, and the instrument moved to the front.
 1. **Land the §3.1 emitter.** A new event on the refusal path (it does not exist — see §3.1), plus
    stop discarding the sweep summary's `message`. Python-only, no BEAM. ⛔This builds nothing in
    the reduced scope, so it needs no gate and does not spend the §4 build authorisation.
+   **Built in PR #2011** as `dialectic_write_refused` / `emit_write_refused`, emitted from all
+   three refusal sites. ⛔Merged is not deployed — step 3 is still owed.
 2. **Accrue the window.** ⛔≥30 days proposed, matching R1 — a proposed prior, not a settled one.
 3. **Record the deploy timestamp and commit** when the emitter ships. ⛔The reassignment metric has
    been stuck since 2026-06-11 for exactly this omission (§4, R3); do not repeat it. The window
    starts at *deploy*, not merge.
+
+   ⚠️**The slot is below, empty, because that is the failure this step exists to prevent.** The
+   2026-06-11 omission was not a refusal to record — it was that nobody had anywhere obvious to
+   write it, so the value was never captured and the window never started. An instruction without
+   a destination is how that repeats.
+
+   | | |
+   |---|---|
+   | **Deployed commit** | ⛔_not yet deployed_ |
+   | **Wall-clock deploy time (UTC)** | ⛔_not yet deployed_ |
+   | **Denominator-filter predicate** | ⛔_state it when the clock starts_ |
+
+   ⛔**No `dialectic_write_refused` row predating that timestamp may be counted**, and until the
+   row above is filled no window has started and none may be cited. ⛔Whoever runs the deploy fills
+   this in; it is not derivable afterwards — verified 2026-08-22 that the `governance` database has
+   no deploy table and no deploy-completion event, `deploy-apply.sh` is human-triggered with no
+   automation, and process-start time is not a proxy because the service is `KeepAlive`-restarted
+   independently of deploys.
 
 **Then — the decision this gate was built to inform:**
 

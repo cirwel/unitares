@@ -12,7 +12,14 @@ from typing import Dict, Any
 from src.dialectic_protocol import DialecticPhase
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
-from .events import emit_facilitation_needed, emit_reviewer_reassigned
+from .events import (
+    ATTEMPT_AWAITING_FACILITATION,
+    ATTEMPT_REAP_FAILED,
+    ATTEMPT_REVIEWER_REASSIGNMENT,
+    emit_facilitation_needed,
+    emit_reviewer_reassigned,
+    emit_write_refused,
+)
 from .session import ACTIVE_SESSIONS
 from src.dialectic_db import (
     get_active_sessions_async,
@@ -250,8 +257,14 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
                                 details.append({
                                     "session_id": session_id,
                                     "action": "write_refused",
-                                    "attempted": "reviewer_reassignment",
+                                    "attempted": ATTEMPT_REVIEWER_REASSIGNMENT,
                                 })
+                                await emit_write_refused(
+                                    session_id=session_id,
+                                    attempted=ATTEMPT_REVIEWER_REASSIGNMENT,
+                                    paused_agent_id=paused_agent_id,
+                                    source="sweeper",
+                                )
                                 continue
                             # ⛔EMIT IMMEDIATELY AFTER THE WRITE COMMITS, and
                             # before the transcript append. The (F)
@@ -391,8 +404,14 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
                             details.append({
                                 "session_id": session_id,
                                 "action": "write_refused",
-                                "attempted": "awaiting_facilitation",
+                                "attempted": ATTEMPT_AWAITING_FACILITATION,
                             })
+                            await emit_write_refused(
+                                session_id=session_id,
+                                attempted=ATTEMPT_AWAITING_FACILITATION,
+                                paused_agent_id=paused_agent_id,
+                                source="sweeper",
+                            )
                             continue
                         _sync_cached_session(session_id, awaiting_facilitation=True)
                         await emit_facilitation_needed(
@@ -464,8 +483,14 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
                     details.append({
                         "session_id": session_id,
                         "action": "write_refused",
-                        "attempted": "reap_failed",
+                        "attempted": ATTEMPT_REAP_FAILED,
                     })
+                    await emit_write_refused(
+                        session_id=session_id,
+                        attempted=ATTEMPT_REAP_FAILED,
+                        paused_agent_id=paused_agent_id,
+                        source="sweeper",
+                    )
                     continue
                 # `update_session_status` writes status AND phase; mirror the
                 # reap so a cached session in this process does not go on

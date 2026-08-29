@@ -469,11 +469,16 @@ async def dialectic_auto_resolve_sweeper_task(interval_minutes: float = 10.0):
         try:
             await asyncio.sleep(interval_seconds)
             summary = await _run_dialectic_auto_resolve_cycle()
-            if summary["failed"] or summary["reassigned"] or summary["facilitation"]:
+            # `skipped` counts guarded writes the database refused -- the
+            # direct signal that another writer had already finished the
+            # session. It was absent from both the condition and the message,
+            # so a sweep that refused EVERY write logged nothing at all.
+            if any(summary.values()):
                 logger.info(
                     f"[DIALECTIC_SWEEP] {summary['reassigned']} reassigned, "
                     f"{summary['facilitation']} awaiting facilitation, "
-                    f"{summary['failed']} failed"
+                    f"{summary['failed']} failed, "
+                    f"{summary['skipped']} skipped (write refused)"
                 )
         except asyncio.CancelledError:
             logger.info("[DIALECTIC_SWEEP] Task cancelled")
