@@ -598,14 +598,30 @@ class DialecticDB:
             """, reviewer_id, paused_agent_id, hours)
             return row is not None
 
-    async def get_active_sessions(self, limit: int = 100) -> List[Dict[str, Any]]:
-        """Get all active sessions."""
+    async def get_active_sessions(
+        self,
+        limit: int = 100,
+        *,
+        least_recently_updated_first: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Get active sessions in caller-selected maintenance order.
+
+        Interactive/startup callers retain newest-created-first ordering. The
+        stuck-session sweeper opts into least-recently-updated-first so a full
+        batch cannot continually hide the oldest, most likely stuck rows behind
+        newer active sessions.
+        """
         await self._ensure_pool()
+        order_by = (
+            "COALESCE(updated_at, created_at) ASC, created_at ASC"
+            if least_recently_updated_first
+            else "created_at DESC"
+        )
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch("""
+            rows = await conn.fetch(f"""
                 SELECT * FROM core.dialectic_sessions
                 WHERE status NOT IN ('resolved', 'failed', 'timeout', 'abandoned')
-                ORDER BY created_at DESC
+                ORDER BY {order_by}
                 LIMIT $1
             """, limit)
             return [dict(row) for row in rows]
@@ -843,9 +859,16 @@ async def resolve_session_async(session_id: str, resolution: Dict[str, Any], sta
     return await db.resolve_session(session_id, resolution, status)
 
 
-async def get_active_sessions_async(limit: int = 100) -> List[Dict[str, Any]]:
+async def get_active_sessions_async(
+    limit: int = 100,
+    *,
+    least_recently_updated_first: bool = False,
+) -> List[Dict[str, Any]]:
     db = await get_dialectic_db()
-    return await db.get_active_sessions(limit)
+    return await db.get_active_sessions(
+        limit,
+        least_recently_updated_first=least_recently_updated_first,
+    )
 
 
 async def get_sessions_awaiting_reviewer_async() -> List[Dict[str, Any]]:
