@@ -4103,16 +4103,22 @@ async def handle_knowledge_note(
         return [error_response(f"Failed to leave note: {str(exc)}")]
 
 
+# NOT deprecated (operator decision, 2026-08-29). This carried
+# deprecated=True/superseded_by="knowledge" from the #429 consolidation while
+# simultaneously sitting in LITE_MODE_TOOLS and in the CLAUDE.md/AGENTS.md
+# shared contract as a first-class workflow tool. Both cannot be true: the
+# flag suppressed it from list_tools orientation and stamped a [DEPRECATED]
+# prefix on a tool the contract tells agents to reach for. The contract wins;
+# leave_note is a supported low-friction entry point that happens to share an
+# implementation with knowledge(action='note').
 @mcp_tool(
     "leave_note",
     timeout=10.0,
-    deprecated=True,
-    superseded_by="knowledge",
 )
 async def handle_leave_note(
     arguments: Dict[str, Any],
 ) -> Sequence[TextContent]:
-    """Adapt the deprecated tool to knowledge(action='note')."""
+    """Low-friction note entry point; shares the knowledge(action='note') handler."""
     adapted_arguments = apply_param_aliases("leave_note", arguments)
     adapted_arguments["_tool_name"] = "leave_note"
     return await handle_knowledge_note(adapted_arguments)
