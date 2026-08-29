@@ -96,7 +96,7 @@ single-purpose tools drifted out unnoticed.
 If a tool is only ever reached through a consolidated router, the fix is
 `register=False`, not a `TOOL_ORDER` entry. Plugin tools are exempt from the
 guard and keep the auto-discovery path; a plugin that wants a real advertised
-schema calls `register_extra_schemas()`.
+schema calls `register_extra_schemas`.
 
 **One name, one home.** A name must be *either* a registered dispatch tool
 *or* a `tool_stability` alias, never both — `resolve_alias` rewrites the tool
