@@ -360,6 +360,15 @@ def _recovery_hint(
     The quick_resume/self_recovery thresholds are recovery-tool compatibility
     checks, not live-state alarms. The deployed coherence value is directional
     controller feedback, so it cannot independently produce a recovery warning.
+
+    Every tool this names must be one the agent can actually call. The hints
+    below said "self_recovery_review(...)" and "quick_resume()" until
+    2026-08-29; both are register=False delegates, so the recovery_hint on a
+    degraded check-in -- the field the onboarding text calls "the first
+    recovery route" -- pointed at tool_not_found_error. The reachable spelling
+    is self_recovery(action="quick"|"review"|"check"); the thresholds quoted
+    here are unchanged (_RECOVERY_RISK_CEILING still mirrors
+    QUICK_RESUME_MAX_RISK in lifecycle/self_recovery.py).
     """
     risky = risk is not None and risk >= _RECOVERY_RISK_CEILING
     attention = _needs_attention(payload)
@@ -376,8 +385,8 @@ def _recovery_hint(
     continuing = action in {"proceed", "continue", "approve", "ok", "healthy", "safe"}
     margin_hint = (
         "Policy margin is near an edge - keep scope tight, sync_state after "
-        "the next substantial step, and use self_recovery_review(reflection='...') "
-        "only if work stalls."
+        "the next substantial step, and use self_recovery(action='review', "
+        "reflection='...') only if work stalls."
     )
     # _needs_attention fires on EITHER an advisory verdict (guide/pause/reject)
     # OR a near-edge margin, but both used to return the margin-worded hint. So
@@ -388,7 +397,7 @@ def _recovery_hint(
     verdict_hint = (
         "Verdict is advisory rather than a threshold warning - read the guidance "
         "text, sync_state after the next substantial step, and use "
-        "self_recovery_review(reflection='...') only if work stalls."
+        "self_recovery(action='review', reflection='...') only if work stalls."
     )
     margin_is_near_edge = str(payload.get("margin", "")).lower() in {
         "tight", "boundary", "near_edge"
@@ -396,15 +405,15 @@ def _recovery_hint(
     if severe:
         return (
             "Working state looks degraded - pause and call "
-            "self_recovery_review(reflection='...') before continuing."
+            "self_recovery(action='review', reflection='...') before continuing."
         )
     if attention and continuing:
         return margin_hint if margin_is_near_edge else verdict_hint
     if risky:
         return (
-            "Risk is elevated - if you feel stuck, quick_resume() applies when "
-            f"risk < {_RECOVERY_RISK_CEILING:.2f} and no void is active; otherwise "
-            "self_recovery_review()."
+            "Risk is elevated - if you feel stuck, self_recovery(action='quick') "
+            f"applies when risk < {_RECOVERY_RISK_CEILING:.2f} and no void is "
+            "active; otherwise self_recovery(action='review')."
         )
     # Attention-only reach (margin/verdict flag while measured risk sits below
     # the ceiling): never emit wording that contradicts the risk value the same

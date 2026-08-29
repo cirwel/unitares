@@ -211,8 +211,63 @@ def test_sync_state_envelope_emits_recovery_hint_when_degraded():
         "metrics": {"coherence": 0.45, "risk_score": 0.75},
     }
     env = build_experience_envelope("sync_state", "process_agent_update", payload)
-    assert "self_recovery_review" in env["recovery_hint"]
+    # Asserted as "names the review path", not as a literal tool name: the
+    # literal was `self_recovery_review`, a register=False delegate, so this
+    # test passed while the hint it checked was a dead end.
+    assert "self_recovery(action='review'" in env["recovery_hint"]
     assert env["risk_summary"].startswith("risk high")
+
+
+def test_every_recovery_hint_names_a_callable_tool():
+    """recovery_hint is the first route an agent takes when degraded.
+
+    It is attached to every check-in response, so a hint naming a
+    register=False delegate is worse than the same defect on a deprecated
+    tool's migration block: the agent reaches it while already stuck. All four
+    hints said `self_recovery_review(...)` / `quick_resume()` until 2026-08-29.
+
+    Drives each branch of _recovery_hint and asserts every `name(` token it
+    emits is a registered dispatch tool or an alias.
+    """
+    import re
+
+    from src.mcp_handlers.decorators import get_tool_registry
+    from src.mcp_handlers.middleware.envelope_step import _recovery_hint
+    from src.mcp_handlers.tool_stability import list_all_aliases
+
+    callable_names = set(get_tool_registry()) | set(list_all_aliases())
+    call_token = re.compile(r"(?<![\w.])([a-z_][a-z0-9_]*)\(")
+
+    branches = {
+        "severe": ({"verdict": {"value": "pause"}}, 0.75),
+        "risky": ({"verdict": {"value": "proceed"}}, 0.55),
+        "margin_near_edge": (
+            {"verdict": {"value": "guide"}, "margin": "tight", "decision": {"action": "proceed"}},
+            0.10,
+        ),
+        "advisory_verdict": (
+            {"verdict": {"value": "guide"}, "decision": {"action": "proceed"}},
+            0.10,
+        ),
+    }
+
+    seen, broken = {}, []
+    for label, (payload, risk) in branches.items():
+        hint = _recovery_hint(payload, None, risk)
+        assert hint, f"{label}: expected a hint, got {hint!r}"
+        seen[label] = hint
+        broken += [
+            f"{label}: {name} (in {hint!r})"
+            for name in call_token.findall(hint)
+            if name not in callable_names
+        ]
+
+    assert not broken, (
+        "recovery_hint names tools an agent cannot call:\n  " + "\n  ".join(broken)
+    )
+    # The branches must stay distinguishable, or this guard would pass by
+    # checking one string four times.
+    assert len(set(seen.values())) == len(seen), seen
 
 
 def test_sync_state_envelope_does_not_warn_on_low_risk_proceed_mid_coherence():

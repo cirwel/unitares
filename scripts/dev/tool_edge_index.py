@@ -720,6 +720,24 @@ def lint_snapshots(
                 default_action=default_action,
                 known_actions=sorted(known_actions),
             )
+        # A deprecation that names an unreachable successor is worse than one
+        # that names none: the agent stops calling the working handler and
+        # calls a name that is not in TOOL_HANDLERS. Same failure the
+        # ALIAS_TARGET_MISSING check above catches on the dispatch side, one
+        # surface over -- this is what the tool *says*, not what it routes to.
+        superseded_by = tool.get("superseded_by")
+        if superseded_by and superseded_by not in tools and superseded_by not in aliases:
+            add(
+                "error",
+                "SUPERSEDED_BY_TARGET_MISSING",
+                name,
+                (
+                    "Deprecation names a successor that is neither a registered "
+                    "dispatch tool nor an alias; an agent following the hint "
+                    "gets tool_not_found_error."
+                ),
+                superseded_by=superseded_by,
+            )
 
     for mode, mode_view in sorted(exposure["modes"].items()):
         if mode_view["declared_only"]:
