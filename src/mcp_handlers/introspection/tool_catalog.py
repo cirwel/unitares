@@ -9,16 +9,10 @@ from src.governance_glossary import EISV_INLINE_SUMMARY
 # and describe_tool (via describe_tool_deprecation_block). Keeping the
 # migration string in one place avoids drift between the two surfaces.
 DEPRECATION_REGISTRY: Dict[str, Dict[str, str]] = {
-    "leave_note": {
-        "deprecated_since": "2026-05-20",
-        "superseded_by": "knowledge",
-        "migration": (
-            "MCP tool surface: call `knowledge` with action='note', "
-            "summary='...', tags=[...]. unitares_sdk callers can keep using "
-            "client.leave_note() — that method now routes through `knowledge` "
-            "internally (same audit shape, same DB row)."
-        ),
-    },
+    # leave_note was listed here from the #429 consolidation until 2026-08-29,
+    # when the operator settled that it is NOT deprecated: it is a first-class
+    # low-friction tool in LITE_MODE_TOOLS and in the shared contract. Sharing
+    # an implementation with knowledge(action='note') is not supersession.
     "request_dialectic_review": {
         "deprecated_since": "2026-01-29",
         "superseded_by": "self_recovery_review",
@@ -359,18 +353,10 @@ TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
         "category": "knowledge"
     },
     "leave_note": {
-        "deprecated": True,
-        "deprecated_since": "2026-05-20",
-        "superseded_by": "knowledge",
+        # Not deprecated (operator decision, 2026-08-29) — see DEPRECATION_REGISTRY.
         "depends_on": [],  # No deps - identity auto-binds
         "related_to": ["knowledge", "store_knowledge_graph"],
         "category": "knowledge",
-        "migration": (
-            "MCP tool surface: call `knowledge` with action='note', "
-            "summary='...', tags=[...]. unitares_sdk callers can keep using "
-            "client.leave_note() — that method now routes through `knowledge` "
-            "internally (same audit shape, same DB row)."
-        ),
     },
     "update_discovery_status_graph": {
         "depends_on": ["get_discovery_details"],
