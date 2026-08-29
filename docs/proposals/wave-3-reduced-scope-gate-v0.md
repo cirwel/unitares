@@ -153,12 +153,20 @@ scope by the signature, not cleared).
 observation of the hazard this entire reduced scope exists to repair**: a nonzero `skipped_count`
 is a sweep that tried to write a row somebody else had already finished.
 
-It goes nowhere durable. Verified 2026-08-29:
+It goes nowhere durable, and the reason is structural rather than a missing plumbing line.
+Verified 2026-08-29:
 
-- It reaches `_run_dialectic_auto_resolve_cycle` as `summary["skipped"]` (`background_tasks.py:441`).
-- The caller logs only when `summary["failed"] or summary["reassigned"] or summary["facilitation"]`
-  is truthy (`background_tasks.py:472`) — **`skipped` is not in the condition and not in the
-  message**. A sweep that refuses every write logs nothing at all.
+- **The sweeper's only two emitters fire on success paths.** `auto_resolve.py` imports exactly
+  `emit_reviewer_reassigned` and `emit_facilitation_needed` (`:15`) and calls them at `:274` and
+  `:398` — both reached only when a write *succeeded*. ⛔**No emitter exists on the refusal path
+  at any of the four `skipped_count` increments.** The refusal is not under-plumbed; it is
+  unrepresented in the event vocabulary.
+- The count does reach the caller as `summary["skipped"]` (`background_tasks.py:441`), and the
+  sweeper's own returned `message` string spells it (`"… {skipped_count} skipped (write refused)"`,
+  `auto_resolve.py:514`). ⚠️But the caller **discards `message`** and builds its own line, gated on
+  `summary["failed"] or summary["reassigned"] or summary["facilitation"]` (`background_tasks.py:472`)
+  — `skipped` is in neither the condition nor the text. A sweep that refuses every write logs
+  nothing at all.
 - No `audit.events` row, no `audit.coordination_measurements` row, no metric series. Outside
   `auto_resolve.py`, the only other `skipped_count` in `src/` is unrelated
   (`tool_registration.py:458`).
@@ -167,9 +175,12 @@ It goes nowhere durable. Verified 2026-08-29:
 collision" are the same observation today, and the measurement-authority rule forbids reporting
 them with the same sentence. State 3 — *not recorded* — is exactly what this is.
 
-**Proposed prerequisite PR (small, no BEAM):** emit `skipped_count` to a durable channel, tagged
-with the refusing predicate and the session id, and add it to the sweep log line. Then start the
-window. ⛔Nothing in this gate may be read until that channel has produced data.
+**Proposed prerequisite PR (small, no BEAM):** add an emitter on the refusal path — a new event
+alongside the existing two in `events.py`, carrying the refusing predicate, the session id and the
+`source` tag the reassignment emitter already uses — and stop discarding the sweep summary's
+`message`. ⛔Note this is **not** a plumbing fix to an existing signal: the event does not exist,
+so it must be defined, and defining it is the prerequisite's actual content. Then start the window.
+⛔Nothing in this gate may be read until that channel has produced data.
 
 ⚠️This also repairs, for free, the reassignment-metric hole that criterion 10's second half has
 been stuck on since 2026-06-11 — see §4, criterion R3.
