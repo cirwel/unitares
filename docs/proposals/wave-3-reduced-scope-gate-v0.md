@@ -9,6 +9,14 @@ removed), §6.6 (**instrument first — build the §3.1 emitter, decide the port
 and, consequentially, §6.5 (deferred, with a named reopen condition). ⛔Those rulings are settled;
 the rest of this document is not. §6.3 and §6.4 remain owed.
 
+⚠️**Implementation correction after merge.** PR #2011 supplied a positive-only
+`dialectic_write_refused` incident event. It did not supply a cycle denominator, did not count the
+early saga-inflight skips, and cannot observe the opposite ordering where the sweeper writes before
+a saga starts. The follow-up after #2008 adds a zero-inclusive `dialectic_sweep_cycle` event and
+puts both periodic and lazy resolver entry points under one task-local reentrancy flag. Those
+changes improve the instrument; they do **not** make the full dual-writer hazard measurable and do
+not start the §7 window.
+
 **What it discharges.** `wave-3-go-decision-2026-08-16.md` §4 signed GO-WITH-REDUCED-SCOPE and
 named exactly one released deliverable: *"one §11-style gate document for the reduced scope, plus
 its design pass and council review."* It also said, twice, that the signature **does not authorise
@@ -62,34 +70,43 @@ its dependencies."* **This document proposes: scope only (1).** The reasoning is
   the stuck-session subject. Porting it moves a shared mutation helper used by get / takeover /
   reassign entry points, so the change's blast radius is the whole reassignment surface, not the
   stuck-session hazard. That is a *different* port wearing this one's authorisation.
-- Path (1) alone is where the stated justification lives. The sweeper is the second, unguarded
-  writer; path (2) already routes BEAM-first with Python fallback under
-  `UNITARES_DIALECTIC_BEAM_RESOLUTION`.
-- Path (1) and path (2) are **not call-closed with each other** — the go-decision verified that
-  `auto_resolve_stuck_sessions` calls none of path (2)'s three symbols. Splitting them costs no
-  seam that is not already there.
+- Path (1) alone is where the stated justification lives. The sweeper is the second writer; its
+  three mutations have terminal-state predicates at the write tail, but no shared reservation
+  across the earlier saga check and the later write. Path (2) already routes BEAM-first with
+  Python fallback under `UNITARES_DIALECTIC_BEAM_RESOLUTION`.
+- `auto_resolve_stuck_sessions` calls none of path (2)'s three mutation symbols. That permits the
+  mutation scope to be split, but it does **not** make the resolver a periodic-only island: the
+  same function is also entered lazily from `is_agent_in_active_session`, including request-driven
+  reviewer selection. The exposure and boundary budget must count both trigger classes.
 
 ⛔If the operator prefers to keep (2), this gate does not cover it and a separate estimate is owed.
 
 ### §1.2 The unscoped dependency, stated as the central design question
 
-`auto_resolve_stuck_sessions` calls `select_reviewer` (`src/mcp_handlers/dialectic/reviewer.py:323`,
-~450 lines: authority scoring, cooldown, capability filtering), which carries a `contextvars`
-reentrancy guard (`reviewer.py:36`) that is correct **only because everything runs in one Python
-process**. The go-decision flags this "unscoped and unestimated" and it remains the single largest
-risk to the cap. Three options, with a recommendation but no ruling:
+`auto_resolve_stuck_sessions` calls `select_reviewer` (~450 lines: authority scoring, cooldown,
+capability filtering), and `select_reviewer` calls `is_agent_in_active_session` once per candidate.
+That check can lazily enter the resolver again. Before the post-#2008 correction, its
+`ContextVar` was set only by the lazy caller, so a direct/background resolver invocation entered
+with the flag clear and could fan out to one nested sweep per candidate. The shared entry-point fix
+now makes the resolver own the flag for the full invocation.
+
+⛔The `ContextVar` is a task-local **reentrancy flag**. It is not a critical-section lock, does not
+serialize concurrent Python processes, carries no reviewer-selection semantics, and cannot
+coordinate with BEAM. The go-decision's unscoped selector dependency therefore remains, but its
+risk must not be described as porting an in-process lock. Three options, with a recommendation but
+no ruling:
 
 | Option | Shape | Cost | Risk |
 |---|---|---|---|
-| **(a) Callback** | BEAM owns the sweep timer and the write; calls back into Python for each reviewer decision | smallest port | adds a boundary crossing **per decision**, straight into (B)'s budget; the reentrancy guard's process assumption survives, but BEAM is now inside its critical section |
-| **(b) Carry `select_reviewer`** | port the selector too | largest port | the `contextvars` guard needs a cross-runtime redesign; ~450 lines of scoring logic is a parity surface, and parity surfaces on this RFC have a bad record |
-| **(c) Split the timer from the decision** | BEAM owns *detection and serialization* (which sessions are stuck, who may write); Python keeps *selection* and calls BEAM to reserve before writing | smallest **semantic** change | requires the reserve-first question in §6.1 settled first |
+| **(a) Callback** | BEAM owns the sweep timer and the write; calls back into Python for each reviewer decision | smallest port | adds at least one boundary crossing **per decision**, straight into (B)'s budget; the callback must suppress Python's lazy resolver entry |
+| **(b) Carry `select_reviewer`** | port the selector too | largest port | ~450 lines of scoring logic is a parity surface, and parity surfaces on this RFC have a bad record; the task-local reentrancy flag itself is not a portable serialization primitive |
+| **(c) Split the timer from the decision** | BEAM owns *detection and serialization* (which sessions are stuck, who may write); Python keeps *selection* and calls BEAM to reserve before writing | smallest **semantic** change | reservation, and likely selection handoff, are per-decision boundary operations unless explicitly batched; requires the reassignment serialization design §6.1 reserves |
 
 ⚠️**Recommended: (c), conditional on §6.1.** It is the only one that addresses the stated hazard —
-ownership of the write — without either importing a per-decision boundary cost or porting a
-scoring surface nobody asked to move. ⛔But (c) is *not* buildable until the operator settles
-whether reserve-first extends to the reassignment path (§6.1). If it does not, (c) collapses into
-(a) or needs its own serialization design.
+ownership of the write — without porting a scoring surface nobody asked to move. It does **not**
+avoid per-decision boundary cost; §3.2 must budget that honestly unless the protocol batches it.
+⛔Under the settled §6.1 ruling, (c) needs its own reassignment serialization design rather than
+inheriting the RFC's reserve-first mechanism.
 
 ⛔**Estimate withheld deliberately.** All three options are unestimated. An estimate that named
 hours before §6.1 is settled would be an estimate of an undecided design, and the §2 cap deserves
@@ -104,28 +121,33 @@ better than a number invented to fill a cell.
 
 ⛔The original §0's disconfirmers do not transfer verbatim, and the reason is topological, not
 cosmetic. (A) and (B) were written against a **per-request** port (handler dispatch): their
-thresholds are per-call costs measured against per-call baselines. The reduced scope is a
-**periodic sweeper on a 10-minute timer** (`background_tasks.py:445`,
-`dialectic_auto_resolve_sweeper_task(interval_minutes=10.0)`). A per-call threshold applied to a
-144-invocations-per-day background task measures nothing it was designed to measure.
+thresholds are per-call costs measured against per-call baselines. The reduced resolver has two
+live trigger classes: a periodic 10-minute task and a lazy call from
+`is_agent_in_active_session`, whose volume follows review/selection traffic. A design that calls
+Python for selection or BEAM for reservation can add another per-decision crossing inside either
+trigger. One 144-cycles/day denominator therefore does not describe this workload.
 
 ### Proposed reduced disconfirmer set
 
 Each is a **proposed prior**, stated as a choice before it is applied, per the measurement-authority
 rule. None has been measured. Every measurement cell below is deliberately empty.
 
-**(b1) The hazard is not real in production.** Over a 30-day window, `skipped_count` from the sweep
-cycle is **zero** AND no session shows a reviewer or status write from the sweeper landing on a row
-BEAM had already resolved. If the dual-writer collision never occurs, the ownership repair has no
-subject and the correct action is to keep the #1804 write-tail guards and close.
-**Measurement source:** ⛔**DOES NOT EXIST — see §3.1. This disconfirmer is unmeasurable today and
-that is the gate's first prerequisite.**
+**(b1) The hazard is not real in production.** Over a 30-day window, a complete overlap instrument
+records zero collisions in **both** writer orderings, every expected periodic cycle is present,
+and every lazy invocation is attributed separately. A zero `dialectic_write_refused` count alone
+does not fire this disconfirmer: it sees the "other writer won first" ordering but misses a saga
+that starts after the early check and loses to a successful sweeper write. **Measurement source:**
+⛔**INCOMPLETE — see §3.1.** PR #2011 supplied positive refusals and the post-#2008 follow-up
+supplies the zero-inclusive cycle denominator, but no current event proves the opposite ordering
+absent.
 
 **(b2) The in-place fix closes it.** A Python-side change during the implementation window makes
-the sweeper's write path safe without porting — e.g. a single transaction spanning
-`has_inflight_saga_async` through the status write, closing the TOCTOU window at
-`auto_resolve.py:204` directly. If that lands and holds for 30 days with `skipped_count` at zero,
-the port is redundant. **Measurement source:** same channel as (b1), same prerequisite.
+the sweeper's write path safe without porting — e.g. an explicit row/advisory lock or a shared
+reservation honored by **both** writers across the saga check and status write. Merely putting the
+two statements in one ordinary PostgreSQL transaction does not close the TOCTOU window: at normal
+isolation, another transaction can still insert/start the saga between them. If a real
+serialization primitive lands and holds for 30 days under complete overlap telemetry, the port is
+redundant. **Measurement source:** same channel as (b1), same prerequisite.
 ⚠️This disconfirmer is the analogue of the original (A.2), and it is **more likely to fire here
 than (A.2) ever was**: the reduced scope's hazard is a serialization bug, and serialization bugs
 have in-process fixes. ⛔Naming that honestly is the point of a disconfirmer set.
@@ -136,9 +158,10 @@ threshold — see §3.2.** The original (B)'s ×2 / ×3 multipliers against leas
 per-request marshalling. They cannot be inherited. §3.2 proposes what replaces them and why the
 number is the operator's to set.
 
-**(b4) Reentrancy or selection semantics prove irreducible.** The port surfaces a decision the
-selector cannot make without in-process state — the `contextvars` guard being the known candidate —
-and reproducing it at the boundary reintroduces the coordination the port exists to remove.
+**(b4) Reentrancy or selection semantics prove irreducible.** The port surfaces selection state
+that cannot be preserved across the proposed boundary, or its callback/handoff causes the Python
+lazy resolver to re-enter. The `ContextVar` itself is only the known task-local recursion
+suppression mechanism; it is not evidence of locking or an irreducible selection semantic.
 **Measurement source:** design pass on §1.2's chosen option, before build. ⛔This is the reduced
 scope's structural analogue of (D), and unlike (D) it has a subject.
 
@@ -156,82 +179,67 @@ scope by the signature, not cleared).
 
 ## §3 What must exist before this gate can be read
 
-### §3.1 ⛔PREREQUISITE: the dual-writer collision is currently unobservable
+### §3.1 ⛔PREREQUISITE: incident telemetry exists; complete overlap telemetry does not
 
-**This is the gate's central finding and it blocks disconfirmers (b1) and (b2).**
+**This remains the gate's central prerequisite and blocks disconfirmers (b1) and (b2).** The
+instrument now has two complementary pieces:
 
-`auto_resolve_stuck_sessions` counts guard-refused writes in `skipped_count`
-(`auto_resolve.py:186, 249, 390, 463`, returned at `:509`) — incremented exactly where #1804's
-`AND status NOT IN ('resolved','failed')` predicate causes a no-write. That counter is **the direct
-observation of the hazard this entire reduced scope exists to repair**: a nonzero `skipped_count`
-is a sweep that tried to write a row somebody else had already finished.
+- PR #2011 added `dialectic_write_refused` at the three guarded write sites
+  (`reviewer_reassignment`, `awaiting_facilitation`, `reap_failed`) and retained `skipped_count` in
+  the periodic log. A row is positive evidence that the sweeper attempted a write and the
+  terminal predicate refused it.
+- The post-#2008 follow-up adds one `dialectic_sweep_cycle` row for every real resolver invocation,
+  including all-zero cycles. It records `trigger_source` (`periodic`, `active_session_check`, or an
+  explicit direct caller), active/stuck denominators, invalid rows, early saga-inflight skips,
+  guarded write attempts/refusals, outcomes, duration, and errors. A reentrant call suppressed by
+  the shared `ContextVar` emits no cycle because it performed no scan.
 
-It goes nowhere durable, and the reason is structural rather than a missing plumbing line.
-Verified 2026-08-29:
+Together those events distinguish "the producer ran and observed zero guarded refusals" from "no
+producer evidence exists." Coverage is still a predicate, not an assumption: a periodic window
+must account for the expected fixed-delay heartbeats and treat any unexplained gap as missing
+evidence, while lazy cycles are denominated by their own emitted rows rather than by 144/day.
 
-- **The sweeper's only two emitters fire on success paths.** `auto_resolve.py` imports exactly
-  `emit_reviewer_reassigned` and `emit_facilitation_needed` (`:15`) and calls them at `:274` and
-  `:398` — both reached only when a write *succeeded*. ⛔**No emitter exists on the refusal path
-  at any of the `skipped_count` increments.** The refusal is not under-plumbed; it is
-  unrepresented in the event vocabulary.
-  ⛔**Corrected 2026-08-29 (same day, while building the fix):** an earlier draft of this line said
-  **four** increments, citing `:186,249,390,463`. **`:186` is `skipped_count = 0`, the
-  initializer.** There are **three** refusal sites — the refused reviewer write, the refused
-  facilitation flag, and the refused reap — and the miscount reached the merged document. ⚠️Noted
-  in a document whose §1 thesis is that cite-by-line decays: the defect here was not drift but a
-  read error, and a count stated by enumerating lines invites exactly that. The three sites are
-  better named by what they attempt (`reviewer_reassignment`, `awaiting_facilitation`,
-  `reap_failed`) — which is how the emitter now discriminates them.
-- The count does reach the caller as `summary["skipped"]` (`background_tasks.py:441`), and the
-  sweeper's own returned `message` string spells it (`"… {skipped_count} skipped (write refused)"`,
-  `auto_resolve.py:514`). ⚠️But the caller **discards `message`** and builds its own line, gated on
-  `summary["failed"] or summary["reassigned"] or summary["facilitation"]` (`background_tasks.py:472`)
-  — `skipped` is in neither the condition nor the text. A sweep that refuses every write logs
-  nothing at all.
-- No `audit.events` row, no `audit.coordination_measurements` row, no metric series. Outside
-  `auto_resolve.py`, the only other `skipped_count` in `src/` is unrelated
-  (`tool_registration.py:458`).
+⛔They do **not** distinguish every dual-writer ordering:
 
-⛔**Consequence:** "the sweeper has never collided with BEAM" and "we have never been able to see a
-collision" are the same observation today, and the measurement-authority rule forbids reporting
-them with the same sentence. State 3 — *not recorded* — is exactly what this is.
+- An early `saga_inflight_skip_count` sees BEAM already owning the session when Python checks.
+- A `dialectic_write_refused` row sees another writer finish before Python's guarded write.
+- Nothing currently sees a saga begin **after** the early check and **after Python successfully
+  writes first**. A positive refusal can also mean a missing row or a competing Python writer; the
+  DB helper returns one `False` value for all of them and only logs the distinction.
 
-**Proposed prerequisite PR (small, no BEAM):** add an emitter on the refusal path — a new event
-alongside the existing two in `events.py`, carrying the refusing predicate, the session id and the
-`source` tag the reassignment emitter already uses — and stop discarding the sweep summary's
-`message`. ⛔Note this is **not** a plumbing fix to an existing signal: the event does not exist,
-so it must be defined, and defining it is the prerequisite's actual content. Then start the window.
-⛔Nothing in this gate may be read until that channel has produced data.
+Therefore a zero refusal count, even with complete cycle coverage, is a measured zero for one
+incident class — not proof that the dual-writer hazard is absent. To make (b1) readable, a later
+instrument must observe the sweeper-first ordering from the saga/reservation side, or (b2) must
+replace observation with a shared serialization primitive honored by both writers. No §7 window
+starts before that condition and deployment provenance are both present.
 
-⚠️This also repairs, for free, the reassignment-metric hole that criterion 10's second half has
-been stuck on since 2026-06-11 — see §4, criterion R3.
+⚠️The reassignment-success emitter remains useful for the separate historical metric gap, but the
+guard-refusal/cycle streams measure coordination. They are not a substitute measure of reviewer
+reassignment behavior; see §4, R3.
 
 ### §3.2 The (B) boundary budget must be re-derived, and its denominator changes
 
 ⛔**Do not inherit the ×2 / ×3 multipliers.** They compare a per-request payload against a
-per-acquire lease ack. The reduced scope has neither shape.
+per-acquire lease ack. The reduced resolver has a mixed periodic, lazy and potentially
+per-decision shape.
 
-The sweeper runs **every 10 minutes** (144 cycles/day) outside any request path, after a 90s
-startup delay. Its boundary cost is therefore **amortised over the sweep period**, and the question
-a threshold should answer is not "is a call cheap" but "does the coordination cost fit inside the
-interval with headroom." Proposed reframing, for the operator to set numbers against:
+The periodic task uses a 10-minute **fixed-delay** loop after a 90s startup delay: one invocation
+finishes before the next sleep begins, so the current Python task cannot stack its own cycles.
+That is only one cost surface. The same resolver also runs lazily on active-session checks, and
+options (a) and (c) add per-decision callbacks/reservations unless batched. Proposed reframing, for
+the operator to set numbers against:
 
 | Original (B) | Proposed reduced (b3) |
 |---|---|
-| per-call p50 vs Phase A p50 × 2 | **per-cycle wall-clock** as a fraction of the 10-minute interval |
-| per-call p99 vs Phase A p99 × 3 | **per-cycle p99** must not exceed the interval (a sweep that outruns its period stacks) |
-| 14-day window before thresholds settable | ⛔unchanged — a window is still owed, and the channel does not exist (§3.1) |
+| per-call p50 vs Phase A p50 × 2 | periodic **per-cycle wall-clock** plus lazy **per-invocation request overhead** |
+| per-call p99 vs Phase A p99 × 3 | periodic p99 as an interval/utilisation input; per-decision p99 for every unbatched callback or reservation |
+| 14-day window before thresholds settable | ⛔unchanged — a complete channel and deployment window are still owed (§3.1) |
 
-⚠️**Named asymmetry, so it is not discovered later as a surprise:** on this reframing the boundary
-cost is nearly free — 144 crossings a day amortised over 600-second intervals will pass almost any
-threshold. **That makes (b3) a weak disconfirmer for this scope, and it should be recorded as weak
-rather than dressed up as a passed gate.** The load-bearing disconfirmers here are (b1), (b2) and
-(b4). ⛔An operator reading a green (b3) should read it as "the topology made this cheap," not as
-evidence the port is warranted.
-
-⚠️Option (a) in §1.2 breaks this reframing: a per-decision callback puts a crossing back on the
-inner loop and the per-call form of (B) becomes the right one again. ⛔The threshold shape depends
-on the §1.2 choice, so §1.2 must be settled before (b3) can be numeric.
+⚠️The periodic component may be cheap when amortised over 600-second intervals, but that does not
+discount request-triggered work or per-decision crossings. The threshold shape and denominator
+depend on the §1.2 choice, so §1.2 must be settled before (b3) can be numeric. A future BEAM
+scheduler must also state whether it is fixed-delay or fixed-rate; only the latter can stack
+overlapping cycles when runtime exceeds cadence.
 
 ---
 
@@ -243,20 +251,21 @@ reduced scope generates zero rows for 3 and 5 as written. Proposed replacements,
 to keep them distinguishable from the originals:
 
 **R1 (replaces 2 — production exposure).** The BEAM-owned sweep path has run in production for
-≥30 days continuous, at the live 10-minute interval, with the Python sweeper disabled — not
-shadowed. ⛔**30 days, not 21.** The original 21 was sized against continuous request traffic; at
-144 cycles/day the sweeper needs calendar time, not request volume, and 21 days of a task that
-mostly finds nothing is not exposure. **Source:** deploy record + sweep-cycle channel (§3.1).
+≥30 days continuous, at the live 10-minute interval, with **both** Python entry points disabled —
+the periodic background task and the lazy `is_agent_in_active_session` trigger — not shadowed.
+⛔**30 days, not 21.** The original 21 was sized against continuous request traffic; at 144
+scheduled cycles/day the sweeper needs calendar time, not request volume, and a task that mostly
+finds nothing is not exposure. **Source:** deploy record + complete sweep/overlap channel (§3.1).
 
-**R2 (replaces 3 — coordination incidents).** Over R1's window: zero rows where the BEAM sweeper
-wrote a row already terminal, AND `skipped_count` on any surviving Python path is zero, AND no new
-substrate-tax pattern at the sweeper's boundary. **Source:** the §3.1 channel plus
-`audit.coordination_events` filtered to the sweeper's boundary.
-⚠️Note this criterion is only meaningful **because** §3.1's channel exists. Without it R2 is
-unfalsifiable and would pass by silence.
+**R2 (replaces 3 — coordination incidents).** Over R1's window: complete heartbeat coverage, zero
+overlaps in either writer ordering, zero guarded refusals on any explicitly permitted Python
+fallback, and no new substrate-tax pattern at the sweeper's boundary. **Source:** the complete
+§3.1 channel plus `audit.coordination_events` filtered to the sweeper's boundary. A positive-only
+event stream or a heartbeat with the sweeper-first blind spot is insufficient; R2 must not pass by
+silence.
 
-**R3 (replaces 10's reassignment half — a measure that can actually accrue).** ⛔The go-decision
-records the reassignment-rate test as *"unpinnable in principle until reassignments actually
+**R3 (disposition of criterion 10's reassignment half).** ⛔The go-decision records the
+reassignment-rate test as *"unpinnable in principle until reassignments actually
 occur"*: two reassignments in the entire dialectic history (2026-04-19, 2026-04-30), zero
 `dialectic_reviewer_reassigned` rows all-time against 4.7M events, and the clean window still not
 started because **no deploy timestamp has ever been recorded** for the
@@ -264,16 +273,14 @@ started because **no deploy timestamp has ever been recorded** for the
 The go-decision requires the smaller gate to *"either supply a different reassignment measure or
 state that (F) rests on the resolution-rate half alone."*
 
-**Proposed: supply a different measure — guard-refusal count (§3.1), not reassignment rate.** It is
-strictly better suited to what this scope changes: the hazard is *who owns the write*, and a
-guard refusal is a direct observation of two writers converging on one row, whereas a reassignment
-rate is a proxy that measures dialectic activity. ⛔It may also read zero — but a zero on the
-guard-refusal channel is a *measured* zero with a named producer, which is the distinction the
-measurement-authority rule turns on. ⛔It does not authorise retiring the reassignment metric;
-that metric is unmeasured, not disproven.
+**Disposition: (F) rests on the resolution-rate half alone until a genuine reviewer-behavior
+measure is defined and can accrue.** Guard refusals and sweep cycles belong to R2: they measure
+writer coordination, aggregate reviewer/facilitation/reap attempts, and miss successful
+reassignment churn. Reusing them here would duplicate R2 while leaving criterion 10's behavioral
+question unanswered. ⛔The reassignment metric is unmeasured, not disproven or retired.
 
-**R4 (replaces 5 — boundary cost).** Per §3.2, and ⛔not numeric until §1.2 is chosen. Recorded as
-a weak disconfirmer by construction.
+**R4 (replaces 5 — boundary cost).** Per §3.2, and ⛔not numeric until §1.2 is chosen. It must
+separately budget periodic cycles, lazy invocations, and unbatched per-decision crossings.
 
 **Inherited unchanged:** 11 (behavioral parity — the sweeper's externally visible effect on
 `core.dialectic_sessions` must be byte-equivalent) and 12 (test-class green: ExUnit + Python +
@@ -303,10 +310,12 @@ Inheriting #7 (503 rate during cutover/rollback) and #10 (cross-session shared-a
 
 - **#13** The BEAM sweeper writes a row that was already terminal. Halt immediately — this is the
   exact defect the port exists to remove, reproduced by the port.
-- **#14** Sweep-cycle p99 exceeds the 10-minute interval, or cycles begin to stack. Halt; the
-  reframed (b3) has fired in the only shape where it is strong.
-- **#15** The reentrancy guard's semantics are found to be reproduced at the boundary rather than
-  removed — i.e. BEAM ends up holding a lock Python used to hold in-process. Halt; this is (b4).
+- **#14** Sweep-cycle p99 consumes the operator-set interval budget, lazy invocation overhead
+  exceeds its request-path budget, or a future scheduler permits cycles to overlap. Halt; (b3)
+  has fired. The current Python fixed-delay loop cannot stack itself.
+- **#15** Python's lazy resolver entry remains enabled after BEAM takes ownership, or a
+  callback/handoff causes reviewer candidate checks to re-enter the resolver. Halt; this is (b4).
+  The task-local flag is recursion suppression, not the serialization design.
 - **#16** Any change to `select_reviewer`'s selection outcomes during the port. Selection was not
   authorised to move or change; a behavioural diff there is scope creep wearing a port's clothes.
 
@@ -353,14 +362,15 @@ missing-source halt to 8 and not to 7 remains inconsistent.
 
 **§6.5 Scope: path (1) only, or (1) and (2)? — ⏸️ DEFERRED, with a named reopen condition.**
 _(operator, 2026-08-29)_ ⛔**Not answered, and deliberately not sent to council either.** §6.6's
-instrument-first ruling removes this question's urgency entirely: the §3.1 emitter is Python-only
-and requires no scope decision to build. If the window returns zero collisions, **(b1) fires and
-there is no port** — at which point this question dissolves rather than gets answered.
+instrument-first ruling removes this question's urgency entirely: the §3.1 instrumentation is
+Python-only and requires no scope decision to build. If a **complete** window returns zero overlap
+in both writer orderings, **(b1) fires and there is no port** — at which point this question
+dissolves rather than gets answered. The #2011 refusal stream alone is not that window.
 
 ⛔Spending a council round on the shape of a port that may not happen is precisely the cap spend
-criterion 9's apparatus exists to prevent. **Reopen condition:** the §3.1 window reports a nonzero
-guard-refusal count, or the operator elects the port on other grounds. ⛔§1.1's recommendation of
-path (1) stands as a recommendation only and has **not** been ratified.
+criterion 9's apparatus exists to prevent. **Reopen condition:** the complete §3.1 instrument
+reports a nonzero overlap/refusal, or the operator elects the port on other grounds. ⛔§1.1's
+recommendation of path (1) stands as a recommendation only and has **not** been ratified.
 
 ⚠️The council round that *is* owed regardless is the one on this document as a whole (§8) — not
 on this question in isolation.
@@ -371,21 +381,20 @@ authorised is the §3.1 guard-refusal emitter: Python-only, no BEAM, and — bec
 in the reduced scope — **it needs no gate and does not consume the §4 build authorisation.**
 
 ⛔**This is not a deferral dressed as a decision.** It settles the question the gate could not
-answer honestly: today "the sweeper has never collided" and "we have never been able to see a
-collision" are the same sentence, so *any* verdict on the port right now would be a verdict on an
-unmeasured state. The ruling makes the four-state distinction observable before anything is
-decided on it, which is what the measurement-authority rule requires and what §3.1 shows is
-currently impossible.
+answer honestly: instrumentation must precede a verdict on the port. PR #2011 implemented the
+positive refusal half; the post-#2008 follow-up adds the cycle denominator and early-saga skip
+count. Per §3.1, the sweeper-first ordering remains blind, so the ruling's data requirement is not
+yet complete and no port verdict follows from these changes.
 
 **What it commits to:** building the instrument, and deciding afterwards on what it reports.
 **What it declines to commit to:** the port, the scope (§6.5), the §1.2 design option, and the
 serialization spec §6.1 authorised the *direction* of.
 
-⛔**Both exits stay live and neither is prejudiced.** A window of genuine zeros fires **(b1)** and
-closes the reduced scope on measured evidence. A window of real collisions makes the ownership
-case on data rather than on the structural argument alone — and **(b2)** remains available
-throughout, since the in-process fix (one transaction spanning `has_inflight_saga_async` through
-the status write) stays cheaper than the port and is not foreclosed by instrumenting.
+⛔**Both exits stay live and neither is prejudiced.** A complete window of genuine zeros fires
+**(b1)** and closes the reduced scope on measured evidence. A window of real collisions makes the
+ownership case on data rather than on the structural argument alone — and **(b2)** remains
+available throughout. That in-place fix requires an explicit lock or shared reservation honored
+by both writers; an ordinary transaction alone does not close the check/write race.
 
 ---
 
@@ -396,15 +405,16 @@ are now deferred, and the instrument moved to the front.
 
 **Now — authorised and unblocked:**
 
-1. **Land the §3.1 emitter.** A new event on the refusal path (it does not exist — see §3.1), plus
-   stop discarding the sweep summary's `message`. Python-only, no BEAM. ⛔This builds nothing in
-   the reduced scope, so it needs no gate and does not spend the §4 build authorisation.
-   **Built in PR #2011** as `dialectic_write_refused` / `emit_write_refused`, emitted from all
-   three refusal sites. ⛔Merged is not deployed — step 3 is still owed.
-2. **Accrue the window.** ⛔≥30 days proposed, matching R1 — a proposed prior, not a settled one.
-3. **Record the deploy timestamp and commit** when the emitter ships. ⛔The reassignment metric has
-   been stuck since 2026-06-11 for exactly this omission (§4, R3); do not repeat it. The window
-   starts at *deploy*, not merge.
+1. **Complete the §3.1 instrument.** PR #2011 built `dialectic_write_refused` at all three refusal
+   sites and stopped dropping the positive counter from periodic logs. The post-#2008 follow-up
+   builds `dialectic_sweep_cycle`, including all-zero cycles, trigger source, early saga skips,
+   attempts, outcomes, duration and error state; it also closes the direct/background reentrancy
+   fan-out. ⛔Still owed: an observation from the saga/reservation side for the sweeper-first
+   ordering. These Python-only observability changes build nothing in the reduced port scope and
+   do not spend the §4 build authorisation.
+2. **Deploy the complete instrument and record its timestamp and commit.** The reassignment metric
+   has been stuck since 2026-06-11 for exactly this omission (§4, R3); do not repeat it. The
+   window starts at *deploy*, not merge.
 
    ⚠️**The slot is below, empty, because that is the failure this step exists to prevent.** The
    2026-06-11 omission was not a refusal to record — it was that nobody had anywhere obvious to
@@ -415,20 +425,23 @@ are now deferred, and the instrument moved to the front.
    |---|---|
    | **Deployed commit** | ⛔_not yet deployed_ |
    | **Wall-clock deploy time (UTC)** | ⛔_not yet deployed_ |
-   | **Denominator-filter predicate** | ⛔_state it when the clock starts_ |
+   | **Denominator / coverage predicate** | ⛔_state expected periodic coverage, lazy-source treatment, and both overlap orderings when the clock starts_ |
 
-   ⛔**No `dialectic_write_refused` row predating that timestamp may be counted**, and until the
-   row above is filled no window has started and none may be cited. ⛔Whoever runs the deploy fills
+   ⛔**No incident or cycle row predating that timestamp may be counted**, and until the row above
+   is filled no window has started and none may be cited. ⛔Whoever runs the deploy fills
    this in; it is not derivable afterwards — verified 2026-08-22 that the `governance` database has
    no deploy table and no deploy-completion event, `deploy-apply.sh` is human-triggered with no
    automation, and process-start time is not a proxy because the service is `KeepAlive`-restarted
    independently of deploys.
 
+3. **Accrue the window.** ⛔≥30 days proposed, matching R1 — a proposed prior, not a settled one.
+   Neither #2011 alone nor this follow-up starts it.
+
 **Then — the decision this gate was built to inform:**
 
-4. **Read the window against (b1) and (b2).** Zeros close the reduced scope on measured evidence;
-   collisions make the ownership case on data. ⛔Whichever it is, name which of the four states it
-   rules out and how.
+4. **Read the window against (b1) and (b2).** Only coverage-complete zeros for both writer
+   orderings close the reduced scope on measured evidence; collisions make the ownership case on
+   data. ⛔Whichever it is, name which of the four states it rules out and how.
 5. **Only if the port goes live:** reopen §6.5 (scope), choose the §1.2 option, and specify the
    reassignment serialization §6.1 authorised the direction of. ⛔None of these is owed before
    step 4, and none may be started on the strength of this document.

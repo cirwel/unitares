@@ -21,21 +21,12 @@ import os
 import random
 import json
 import asyncio
-import contextvars
 
 from src.dialectic_protocol import calculate_authority_score, DialecticPhase
 from src.grounding.class_indicator import KNOWN_RESIDENT_LABELS
 from src.logging_utils import get_logger
+from .sweep_context import AUTO_RESOLVE_IN_PROGRESS as _AUTO_RESOLVE_IN_PROGRESS
 
-# Reentrancy guard for the auto-resolve pre-check inside is_agent_in_active_session.
-# select_reviewer() calls is_agent_in_active_session() once per candidate, and
-# auto_resolve_stuck_sessions() calls select_reviewer() — so without this guard a
-# single submit_antithesis first-responder check fans out to O(fleet_size) stuck-
-# session PG scans once UNITARES_AUTOSELECT_REVIEWER is enabled. ContextVar scopes
-# the guard per asyncio task-tree, so concurrent requests don't suppress each other.
-_AUTO_RESOLVE_IN_PROGRESS = contextvars.ContextVar(
-    "_dialectic_auto_resolve_in_progress", default=False
-)
 from .session import (
     SESSION_STORAGE_DIR,
     ACTIVE_SESSIONS,
@@ -202,10 +193,10 @@ async def is_agent_in_active_session(agent_id: str) -> bool:
     # QUICK WIN A: Auto-resolve stuck sessions before checking
     # This prevents "session conflict" errors when sessions are actually stuck.
     # Reentrancy-guarded: auto_resolve -> select_reviewer -> is_agent_in_active_session
-    # would otherwise recurse back here once per candidate. Run the pre-check at
-    # most once per asyncio task-tree.
+    # would otherwise recurse back here once per candidate. The resolver owns
+    # the shared ContextVar for its whole invocation; this check only avoids
+    # entering it again. The flag is task-local, not a cross-process lock.
     if not _AUTO_RESOLVE_IN_PROGRESS.get():
-        token = _AUTO_RESOLVE_IN_PROGRESS.set(True)
         try:
             from src.mcp_handlers.dialectic.auto_resolve import check_and_resolve_stuck_sessions
             resolution_result = await check_and_resolve_stuck_sessions()
@@ -214,8 +205,6 @@ async def is_agent_in_active_session(agent_id: str) -> bool:
         except Exception as e:
             # Best-effort: don't block reviewer selection if auto-resolve fails
             logger.warning(f"Auto-resolve pre-check failed in is_agent_in_active_session: {e}")
-        finally:
-            _AUTO_RESOLVE_IN_PROGRESS.reset(token)
 
     # PRIMARY: Use PostgreSQL for cross-process visibility
     # This is the key fix - CLI and SSE processes now share session state
@@ -447,4 +436,3 @@ async def select_reviewer(paused_agent_id: str,
             return agent_id
 
     return top[0][0]
-

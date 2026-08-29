@@ -61,7 +61,8 @@ async def _sweep(sessions):
     with patch(f"{AUTO}.get_active_sessions_async", new_callable=AsyncMock, return_value=sessions), \
          patch(f"{AUTO}.update_session_status_async", new=_fake_status), \
          patch(f"{AUTO}.add_message_async", new_callable=AsyncMock), \
-         patch(f"{AUTO}.has_inflight_saga_async", new_callable=AsyncMock, return_value=False):
+         patch(f"{AUTO}.has_inflight_saga_async", new_callable=AsyncMock, return_value=False), \
+         patch(f"{AUTO}.emit_sweep_cycle", new_callable=AsyncMock):
         await auto_resolve.auto_resolve_stuck_sessions()
     return failed
 

@@ -26,6 +26,13 @@ def _old_time(hours: int) -> str:
     return (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
 
+@pytest.fixture(autouse=True)
+def _no_cycle_audit_write():
+    """Cycle telemetry is asserted separately; these tests isolate DB writes."""
+    with patch(f"{AUTO_RESOLVE}.emit_sweep_cycle", new_callable=AsyncMock):
+        yield
+
+
 @pytest.mark.asyncio
 async def test_sweeper_skips_session_with_inflight_saga():
     """A stuck session with an in-flight resolution saga is NOT touched."""
@@ -58,6 +65,8 @@ async def test_sweeper_skips_session_with_inflight_saga():
     mock_add_msg.assert_not_called()
     assert result["resolved_count"] == 0
     assert result["reassigned_count"] == 0
+    assert result["saga_inflight_skip_count"] == 1
+    assert result["write_attempt_count"] == 0
 
 
 @pytest.mark.asyncio
@@ -86,6 +95,8 @@ async def test_sweeper_proceeds_when_no_inflight_saga():
 
     mock_update.assert_called_once_with("no-saga-1", "failed")
     assert result["resolved_count"] == 1
+    assert result["saga_inflight_skip_count"] == 0
+    assert result["write_attempt_count"] == 1
 
 
 @pytest.mark.asyncio
@@ -121,3 +132,4 @@ async def test_sweeper_refused_reap_posts_no_failure_message():
         "a refused write must be counted, not vanish — the skipped bucket is "
         "the durable evidence the dual-writer race fires"
     )
+    assert result["write_attempt_count"] == 1

@@ -69,3 +69,54 @@ async def test_guard_resets_after_call():
 
     assert _AUTO_RESOLVE_IN_PROGRESS.get() is False
     assert sweep.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_direct_resolver_owns_guard_during_reviewer_selection():
+    """A background/direct cycle must not fan out through its candidates.
+
+    The old guard was set only by ``is_agent_in_active_session`` before its
+    lazy call. A direct/background resolver entered with the flag false, then
+    ``select_reviewer`` called the lazy path once per candidate and recursively
+    launched another complete sweep each time.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
+    from src.mcp_handlers.dialectic.reviewer import is_agent_in_active_session
+
+    session = {
+        "session_id": "stuck-1",
+        "updated_at": (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat(),
+        "paused_agent_id": "paused",
+        "reviewer_agent_id": "gone",
+        "phase": "antithesis",
+    }
+    nested_sweep = AsyncMock(return_value={"resolved_count": 0})
+
+    async def select_two_candidates(**_kwargs):
+        await is_agent_in_active_session("candidate-1")
+        await is_agent_in_active_session("candidate-2")
+        return None
+
+    server = type("Server", (), {
+        "agent_metadata": {},
+        "load_metadata_async": AsyncMock(),
+    })()
+    with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
+               new_callable=AsyncMock, return_value=[session]), \
+         patch(f"{AUTO_RESOLVE}.has_inflight_saga_async",
+               new_callable=AsyncMock, return_value=False), \
+         patch(f"{AUTO_RESOLVE}.mcp_server", server), \
+         patch(f"{AUTO_RESOLVE}.update_session_status_async",
+               new_callable=AsyncMock, return_value=True), \
+         patch(f"{AUTO_RESOLVE}.add_message_async", new_callable=AsyncMock), \
+         patch(f"{AUTO_RESOLVE}.emit_sweep_cycle", new_callable=AsyncMock), \
+         patch(f"{AUTO_RESOLVE}.check_and_resolve_stuck_sessions", nested_sweep), \
+         patch(f"{REVIEWER}.pg_is_agent_in_active_session",
+               new_callable=AsyncMock, return_value=False), \
+         patch(f"{REVIEWER}.select_reviewer", side_effect=select_two_candidates):
+        result = await auto_resolve_stuck_sessions(trigger_source="periodic")
+
+    assert result["resolved_count"] == 1
+    nested_sweep.assert_not_awaited()

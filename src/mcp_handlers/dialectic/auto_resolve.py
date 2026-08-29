@@ -7,6 +7,7 @@ and only fails sessions after extended inactivity (4+ hours total).
 """
 
 from datetime import datetime, timedelta, timezone
+from time import monotonic
 from typing import Dict, Any
 
 from src.dialectic_protocol import DialecticPhase
@@ -18,9 +19,11 @@ from .events import (
     ATTEMPT_REVIEWER_REASSIGNMENT,
     emit_facilitation_needed,
     emit_reviewer_reassigned,
+    emit_sweep_cycle,
     emit_write_refused,
 )
 from .session import ACTIVE_SESSIONS
+from .sweep_context import AUTO_RESOLVE_IN_PROGRESS
 from src.dialectic_db import (
     get_active_sessions_async,
     update_session_status_async,
@@ -147,7 +150,7 @@ def _describe_reap(
     )
 
 
-async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
+async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
     """
     Handle sessions that are stuck/inactive.
 
@@ -159,17 +162,32 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
     Returns:
         Dict with counts of resolved/reassigned sessions and details
     """
+    active_session_count = 0
+    stuck_session_count = 0
+    invalid_session_count = 0
+    saga_inflight_skip_count = 0
+    write_attempt_count = 0
+
     try:
         now = datetime.now(timezone.utc)
         threshold_time = now - STUCK_SESSION_THRESHOLD
         fail_time = now - FACILITATION_TIMEOUT
 
         active_sessions = await get_active_sessions_async(limit=100)
+        active_session_count = len(active_sessions)
 
         if not active_sessions:
             return {
                 "resolved_count": 0,
                 "reassigned_count": 0,
+                "facilitation_count": 0,
+                "skipped_count": 0,
+                "active_session_count": 0,
+                "stuck_session_count": 0,
+                "invalid_session_count": 0,
+                "saga_inflight_skip_count": 0,
+                "write_attempt_count": 0,
+                "details": [],
                 "message": "No active sessions found"
             }
 
@@ -179,11 +197,20 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
             check_time = _parse_timestamp(session.get("updated_at") or session.get("created_at"))
             if check_time and check_time < threshold_time:
                 stuck_sessions.append(session)
+        stuck_session_count = len(stuck_sessions)
 
         if not stuck_sessions:
             return {
                 "resolved_count": 0,
                 "reassigned_count": 0,
+                "facilitation_count": 0,
+                "skipped_count": 0,
+                "active_session_count": active_session_count,
+                "stuck_session_count": 0,
+                "invalid_session_count": 0,
+                "saga_inflight_skip_count": 0,
+                "write_attempt_count": 0,
+                "details": [],
                 "message": "No stuck sessions found"
             }
 
@@ -201,6 +228,7 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
             awaiting_facilitation = bool(session.get("awaiting_facilitation"))
 
             if not session_id:
+                invalid_session_count += 1
                 continue
 
             # Saga-inflight guard (C1, council 2026-06-28): if a BEAM session
@@ -209,6 +237,7 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
             # the saga and corrupt the outcome. Fail-open (no saga infra -> no
             # skip), so this is a no-op until BEAM begins writing sagas.
             if await has_inflight_saga_async(session_id):
+                saga_inflight_skip_count += 1
                 logger.info(
                     f"Skipping stuck-session sweep for {session_id[:16]}...: "
                     "resolution saga in flight (BEAM owns this transition)"
@@ -243,6 +272,7 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
 
                     if new_reviewer:
                         try:
+                            write_attempt_count += 1
                             if not await update_session_reviewer_async(session_id, new_reviewer):
                                 # The guarded UPDATE wrote nothing — the row
                                 # is terminal (dual-writer TOCTOU during
@@ -378,6 +408,7 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
                     # `select_reviewer` retrying while a human is waited on.
                     if check_time and check_time > fail_time and not awaiting_facilitation:
                         try:
+                            write_attempt_count += 1
                             recorded = await mark_awaiting_facilitation_async(session_id)
                         except Exception as e:
                             # Guarded like the neighbouring DB writes: this
@@ -468,6 +499,7 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
 
             # Fall through: mark as FAILED (session too old or non-reassignable phase)
             try:
+                write_attempt_count += 1
                 if not await update_session_status_async(session_id, "failed"):
                     # The guarded UPDATE wrote nothing: another writer
                     # finished this session after our early saga/staleness
@@ -532,6 +564,11 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
             "reassigned_count": reassigned_count,
             "facilitation_count": facilitation_count,
             "skipped_count": skipped_count,
+            "active_session_count": active_session_count,
+            "stuck_session_count": stuck_session_count,
+            "invalid_session_count": invalid_session_count,
+            "saga_inflight_skip_count": saga_inflight_skip_count,
+            "write_attempt_count": write_attempt_count,
             "details": details,
             "message": (
                 f"Processed {len(stuck_sessions)} stuck session(s): "
@@ -545,9 +582,82 @@ async def auto_resolve_stuck_sessions() -> Dict[str, Any]:
         return {
             "resolved_count": 0,
             "reassigned_count": 0,
+            "facilitation_count": 0,
+            "skipped_count": 0,
+            "active_session_count": active_session_count,
+            "stuck_session_count": stuck_session_count,
+            "invalid_session_count": invalid_session_count,
+            "saga_inflight_skip_count": saga_inflight_skip_count,
+            "write_attempt_count": write_attempt_count,
+            "details": [],
             "error": str(e),
             "message": "Failed to auto-resolve stuck sessions"
         }
+
+
+async def auto_resolve_stuck_sessions(
+    *, trigger_source: str = "direct"
+) -> Dict[str, Any]:
+    """Run one resolver cycle under the shared task-local reentrancy guard.
+
+    Both the periodic task and the lazy active-session pre-check enter here.
+    Owning the ContextVar at this common boundary prevents reviewer selection
+    inside a direct/background cycle from recursively starting another cycle.
+    It does not serialize independent processes or replace the database write
+    guards.
+
+    Every real invocation emits one zero-inclusive cycle event. A nested call
+    is suppressed rather than counted as a cycle because it did no scan and
+    would corrupt the telemetry denominator.
+    """
+    if AUTO_RESOLVE_IN_PROGRESS.get():
+        logger.debug(
+            "Dialectic stuck-session resolver re-entry suppressed (source=%s)",
+            trigger_source,
+        )
+        return {
+            "resolved_count": 0,
+            "reassigned_count": 0,
+            "facilitation_count": 0,
+            "skipped_count": 0,
+            "active_session_count": 0,
+            "stuck_session_count": 0,
+            "invalid_session_count": 0,
+            "saga_inflight_skip_count": 0,
+            "write_attempt_count": 0,
+            "details": [],
+            "reentrant_suppressed": True,
+            "message": "Resolver re-entry suppressed",
+        }
+
+    token = AUTO_RESOLVE_IN_PROGRESS.set(True)
+    started = monotonic()
+    result: Dict[str, Any] | None = None
+    try:
+        result = await _auto_resolve_stuck_sessions()
+        return result
+    finally:
+        elapsed_ms = max(0, round((monotonic() - started) * 1000))
+        cycle = result or {}
+        try:
+            await emit_sweep_cycle(
+                trigger_source=trigger_source,
+                active_session_count=int(cycle.get("active_session_count", 0) or 0),
+                stuck_session_count=int(cycle.get("stuck_session_count", 0) or 0),
+                invalid_session_count=int(cycle.get("invalid_session_count", 0) or 0),
+                saga_inflight_skip_count=int(
+                    cycle.get("saga_inflight_skip_count", 0) or 0
+                ),
+                write_attempt_count=int(cycle.get("write_attempt_count", 0) or 0),
+                write_refused_count=int(cycle.get("skipped_count", 0) or 0),
+                resolved_count=int(cycle.get("resolved_count", 0) or 0),
+                reassigned_count=int(cycle.get("reassigned_count", 0) or 0),
+                facilitation_count=int(cycle.get("facilitation_count", 0) or 0),
+                duration_ms=elapsed_ms,
+                error=str(cycle["error"]) if cycle.get("error") else None,
+            )
+        finally:
+            AUTO_RESOLVE_IN_PROGRESS.reset(token)
 
 
 async def check_and_resolve_stuck_sessions() -> Dict[str, Any]:
@@ -559,7 +669,7 @@ async def check_and_resolve_stuck_sessions() -> Dict[str, Any]:
         Dict with resolution results
     """
     try:
-        return await auto_resolve_stuck_sessions()
+        return await auto_resolve_stuck_sessions(trigger_source="active_session_check")
     except Exception as e:
         logger.warning(f"Could not auto-resolve stuck sessions: {e}")
         return {"resolved_count": 0, "reassigned_count": 0, "error": str(e)}

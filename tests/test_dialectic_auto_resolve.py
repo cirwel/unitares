@@ -27,7 +27,8 @@ def _no_inflight_saga():
     in test_dialectic_sweeper_saga_guard.py.
     """
     with patch(f"{AUTO_RESOLVE}.has_inflight_saga_async",
-               new_callable=AsyncMock, return_value=False):
+               new_callable=AsyncMock, return_value=False), \
+         patch(f"{AUTO_RESOLVE}.emit_sweep_cycle", new_callable=AsyncMock):
         yield
 
 

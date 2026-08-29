@@ -57,6 +57,7 @@ logger = get_logger(__name__)
 REVIEWER_REASSIGNED = "dialectic_reviewer_reassigned"
 FACILITATION_NEEDED = "dialectic_facilitation_needed"
 WRITE_REFUSED = "dialectic_write_refused"
+SWEEP_CYCLE = "dialectic_sweep_cycle"
 
 # The three guarded writes the sweeper can have refused. Shared with the
 # sweeper's own `details` entries so the event payload and the returned summary
@@ -191,8 +192,13 @@ async def emit_write_refused(
     logging nicety: "the sweeper has never collided with another writer" and "we
     have never been able to see a collision" were the same observation. That is
     measurement-authority state 3 (*not recorded*), which must never be reported
-    with the same sentence as state 4 (recorded, and genuinely zero). This
-    emitter is what separates them.
+    with the same sentence as state 4 (recorded, and genuinely zero). A
+    positive refusal event establishes an observed refusal. The separate
+    zero-inclusive ``dialectic_sweep_cycle`` heartbeat establishes that the
+    producer actually ran when no refusal event exists. Neither event observes
+    the opposite ordering where the sweeper writes first and a saga starts
+    afterwards; absence of refusals must not be promoted to absence of all
+    dual-writer overlap.
 
     Args:
         session_id: the session whose write was refused.
@@ -244,4 +250,65 @@ async def emit_write_refused(
         logger.warning(
             "%s audit emit failed: session=%s attempted=%s source=%s err=%s",
             WRITE_REFUSED, session_id, attempted, source, exc,
+        )
+
+
+async def emit_sweep_cycle(
+    *,
+    trigger_source: str,
+    active_session_count: int,
+    stuck_session_count: int,
+    invalid_session_count: int,
+    saga_inflight_skip_count: int,
+    write_attempt_count: int,
+    write_refused_count: int,
+    resolved_count: int,
+    reassigned_count: int,
+    facilitation_count: int,
+    duration_ms: int,
+    error: Optional[str] = None,
+) -> None:
+    """Record every completed resolver cycle, including an all-zero cycle.
+
+    Positive-only refusal events cannot distinguish "the producer ran and saw
+    zero refusals" from "the producer never ran". This event supplies that
+    denominator and identifies the invocation source because the resolver has
+    both periodic and request-triggered entry points.
+
+    ``saga_inflight_skip_count`` records the ordering visible at the early saga
+    guard. ``write_refused_count`` records guarded writes another writer beat.
+    They are distinct because neither is a complete measure of all overlap;
+    notably, a saga that starts after the early check can still lose to a
+    successful sweeper write. Consumers must treat cycle gaps as missing
+    evidence and must not infer a collision-free system from zero counts alone.
+
+    Fail-soft: audit availability cannot decide whether session maintenance is
+    allowed to run.
+    """
+    try:
+        from src.audit_db import append_audit_event_async
+
+        await append_audit_event_async({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event_type": SWEEP_CYCLE,
+            "agent_id": None,
+            "details": {
+                "trigger_source": trigger_source,
+                "active_session_count": active_session_count,
+                "stuck_session_count": stuck_session_count,
+                "invalid_session_count": invalid_session_count,
+                "saga_inflight_skip_count": saga_inflight_skip_count,
+                "write_attempt_count": write_attempt_count,
+                "write_refused_count": write_refused_count,
+                "resolved_count": resolved_count,
+                "reassigned_count": reassigned_count,
+                "facilitation_count": facilitation_count,
+                "duration_ms": duration_ms,
+                "error": error,
+            },
+        })
+    except Exception as exc:
+        logger.warning(
+            "%s audit emit failed: source=%s err=%s",
+            SWEEP_CYCLE, trigger_source, exc,
         )

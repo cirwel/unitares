@@ -24,10 +24,12 @@ async def test_cycle_maps_autoresolve_keys():
         "facilitation_count": 3,
         "skipped_count": 1,
     }
-    with patch(AR, new=AsyncMock(return_value=fake)):
+    resolver = AsyncMock(return_value=fake)
+    with patch(AR, new=resolver):
         summary = await _run_dialectic_auto_resolve_cycle()
 
     assert summary == {"failed": 2, "reassigned": 1, "facilitation": 3, "skipped": 1}
+    resolver.assert_awaited_once_with(trigger_source="periodic")
 
 
 @pytest.mark.asyncio
