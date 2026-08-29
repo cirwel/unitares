@@ -390,8 +390,9 @@ async def test_run_reconsiders_paused_response_with_same_reviewer(monkeypatch):
             raise AssertionError(f"unexpected action: {args}")
 
         async def checkin(self, response_text, complexity=0.3, confidence=0.7, **kw):
-            calls.append(("checkin", {"response_text": response_text, **kw}))
-            return None
+            # The verdict is already durable.  Telemetry must not kill the
+            # continuation that waits for the paused agent's response.
+            raise RuntimeError("telemetry unavailable")
 
         async def disconnect(self):
             return None
