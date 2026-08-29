@@ -20,6 +20,8 @@ defmodule UnitaresLeasePlane.GovernedEffectIRConformanceTest do
   """
   use ExUnit.Case, async: true
 
+  alias UnitaresLeasePlane.GovernedEffectIR
+
   # The contract is READ, never restated. Both of these were hardcoded literals
   # in the original guard, which made them tautologies: a fermata IR change
   # could not break them. They now come from the pinned vendored schema
@@ -55,58 +57,18 @@ defmodule UnitaresLeasePlane.GovernedEffectIRConformanceTest do
 
   @custody_modes @plane_custody_modes
 
-  # plane effect_type -> {adapter, operation, required_capability, core?}
-  @effect_type_map %{
-    "file_write" => {"file", "write", "file.write", true},
-    "repo_commit" => {"file", "write", "repo.commit", true},
-    "agent_spawn" => {"tool", "spawn", "agent.spawn", false},
-    "resident_cycle" => {"tool", "cycle", "resident.cycle", false},
-    "service_restart" => {"tool", "restart", "service.restart", false}
-  }
-
-  # The UNITARES profile mapping: plane POST /v1/effects body -> fermata IR Intent.
-  defp envelope_to_ir_intent(env) do
-    {adapter, operation, capability, core?} = Map.fetch!(@effect_type_map, env["effect_type"])
-
-    profile_ext =
-      %{
-        "proposer" => env["proposer"],
-        "provenance" => Map.get(env, "provenance", %{}),
-        "required_leases" => Map.get(env, "required_leases", []),
-        "required_tier" => env["required_tier"]
-      }
-
-    profile_ext =
-      if core?, do: profile_ext, else: Map.put(profile_ext, "unitares_effect_type", env["effect_type"])
-
-    %{
-      "intent_id" => env["effect_id"],
-      "proposal_id" => env["proposal_id"],
-      "adapter" => adapter,
-      "operation" => operation,
-      "target" => env["surface"],
-      "input" => env["payload"],
-      "required_capability" => capability,
-      "idempotency_key" => env["idempotency_key"],
-      "custody_mode" => env["custody_mode"],
-      "profile" => "unitares",
-      "profile_ext" => profile_ext
-    }
-  end
-
   defp envelope(effect_type, custody_mode, required_tier) do
     %{
-      "effect_id" => "eff_#{effect_type}_#{custody_mode}",
-      "proposal_id" => "prop_#{effect_type}_#{custody_mode}",
-      "effect_type" => effect_type,
-      "surface" => "file:///abs/sandbox/note.txt",
-      "custody_mode" => custody_mode,
-      "idempotency_key" => "k-conformance-001",
-      "payload" => %{"content" => "x"},
-      "required_leases" => [%{"surface" => "file:///abs/sandbox/note.txt", "ttl_s" => 300}],
-      "proposer" => %{"agent_uuid" => "u-1"},
-      "provenance" => %{"session_id" => "s-1"},
-      "required_tier" => required_tier
+      effect_type: effect_type,
+      surface: "file:///abs/sandbox/note.txt",
+      custody_mode: custody_mode,
+      idempotency_key: "k-conformance-001",
+      payload: %{"content" => "x"},
+      required_leases: [%{"surface" => "file:///abs/sandbox/note.txt", "ttl_s" => 300}],
+      proposer_agent_uuid: "u-1",
+      provenance: %{"session_id" => "s-1"},
+      expected_tier: required_tier,
+      promotion: nil
     }
   end
 
@@ -127,7 +89,8 @@ defmodule UnitaresLeasePlane.GovernedEffectIRConformanceTest do
   for {effect_type, custody_mode, tier} <- @cases do
     test "plane #{effect_type}:#{custody_mode} maps to a valid IR Intent shape" do
       intent =
-        envelope_to_ir_intent(envelope(unquote(effect_type), unquote(custody_mode), unquote(tier)))
+        envelope(unquote(effect_type), unquote(custody_mode), unquote(tier))
+        |> GovernedEffectIR.to_intent("eff_#{unquote(effect_type)}_#{unquote(custody_mode)}")
 
       for field <- @ir_intent_required do
         v = Map.fetch!(intent, field)
@@ -140,7 +103,10 @@ defmodule UnitaresLeasePlane.GovernedEffectIRConformanceTest do
   end
 
   test "UNITARES-only effect types ride the generic tool adapter + profile_ext (never core vocab)" do
-    intent = envelope_to_ir_intent(envelope("agent_spawn", "execute", "strong"))
+    intent =
+      envelope("agent_spawn", "execute", "strong")
+      |> GovernedEffectIR.to_intent("eff-agent-spawn")
+
     assert intent["adapter"] == "tool"
     assert intent["profile"] == "unitares"
     assert intent["profile_ext"]["unitares_effect_type"] == "agent_spawn"
@@ -150,5 +116,14 @@ defmodule UnitaresLeasePlane.GovernedEffectIRConformanceTest do
     for {_type, "execute", tier} <- @cases do
       assert tier == "strong"
     end
+  end
+
+  test "durable receipt contains the canonical intent digest but not execute input" do
+    env = envelope("file_write", "execute", "strong")
+    assert {:ok, receipt} = GovernedEffectIR.receipt(env, "eff-file-write")
+    assert receipt["schema"] == "fermata.governed-effect-ir.v0"
+    assert receipt["intent_sha256"] =~ ~r/\A[0-9a-f]{64}\z/
+    refute Map.has_key?(receipt, "input")
+    refute Jason.encode!(receipt) =~ "content"
   end
 end

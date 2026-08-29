@@ -18,9 +18,12 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   is shadow custody / proposal logging, not a commit (contract §2 rhetoric
   discipline).
 
-  `execute` mode is intentionally NOT implemented here — it is gated (RCE
-  surface + the 2026-06-24 Wave-3 read). A proposal in `execute` mode returns
-  `{:error, :execute_not_implemented}` so the endpoint is honestly record-only.
+  `execute` mode is available only for explicitly enabled effect types. A
+  direct execute remains valid for compatibility. An execute that declares a
+  `promotion` is stricter: before leases, veto, or mutation, the plane loads
+  the named `record_only` predecessor and verifies effect type, surface, and
+  intended-payload SHA-256. The durable execute receipt links the exact shadow,
+  decision-standard reference, approval reference, and evidence references.
 
   ## Durable recording (contract §8)
 
@@ -35,9 +38,9 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
   The stored payload carries the `idempotency_digest`, never the raw effect
   `payload` bytes (Invariant 7) and never the proposer's `client_session_id`
-  (a credential). `proposer.agent_uuid` is recorded as attribution only — this
-  slice does not re-verify the proposer's identity tier (§2 tier-stamping is a
-  later increment), so the record makes no tier claim.
+  (a credential). Each row also carries a non-secret receipt for the production
+  mapping to fermata's Governed Effect IR; the full execute intent remains
+  transient because it contains the effect input.
 
   ## Idempotency (contract §4)
 
@@ -56,6 +59,7 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   alias UnitaresLeasePlane.EffectRepo
   alias UnitaresLeasePlane.FileWriteExecutor
   alias UnitaresLeasePlane.GovernanceVetoClient
+  alias UnitaresLeasePlane.GovernedEffectIR
   alias UnitaresLeasePlane.OrchestratorClient
   alias UnitaresLeasePlane.Repo
 
@@ -75,6 +79,7 @@ defmodule UnitaresLeasePlane.GovernedEffect do
     * `{:ok, body_map}` — a 202 body (record_only recorded, or execute committed);
     * `{:error, :execute_not_implemented}` — execute mode disabled / unsupported type;
     * `{:error, :idempotency_conflict}` — same key, different digest;
+    * `{:error, :promotion_*}` — a declared shadow promotion could not be proven;
     * `{:error, :governance_blocked}` — governance vetoed (or could not clear) the effect;
     * `{:error, :persist_failed}` / `{:error, :spawn_failed}`;
     * `{:error, detail}` — `schema_invalid` detail string.
@@ -83,6 +88,10 @@ defmodule UnitaresLeasePlane.GovernedEffect do
           {:ok, map()}
           | {:error, :execute_not_implemented}
           | {:error, :idempotency_conflict}
+          | {:error, :promotion_predecessor_not_found}
+          | {:error, :promotion_predecessor_unverifiable}
+          | {:error, :promotion_mismatch}
+          | {:error, :promotion_lookup_failed}
           | {:error, :governance_blocked}
           | {:error, :persist_failed}
           | {:error, :spawn_failed}
@@ -90,8 +99,13 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   def handle(%{} = body) do
     with {:ok, env} <- validate(body) do
       case env.custody_mode do
-        "record_only" -> record_only(env)
-        "execute" -> execute(env)
+        "record_only" ->
+          record_only(env)
+
+        "execute" ->
+          with {:ok, verified_env} <- verify_promotion(env) do
+            execute(verified_env)
+          end
       end
     end
   end
@@ -124,11 +138,14 @@ defmodule UnitaresLeasePlane.GovernedEffect do
     surface = Map.get(body, "surface")
     leases = Map.get(body, "required_leases", [])
     payload = Map.get(body, "payload", %{})
+    promotion = Map.get(body, "promotion")
+    promotion_error = promotion_shape_error(promotion, mode)
 
     # Attribution only — non-secret fields. The proposer's `client_session_id`
     # is a credential (Invariant 7) and is deliberately NOT extracted or stored.
     proposer_agent_uuid = nested_string(body, "proposer", "agent_uuid")
     provenance_session_id = nested_string(body, "provenance", "session_id")
+    provenance = sanitize_provenance(Map.get(body, "provenance"))
 
     # §7 strong-tier re-cert proof — the proposer's continuity_token, carried in
     # the `proposer` object (NOT `payload`, which `credential_shaped?` would
@@ -159,6 +176,9 @@ defmodule UnitaresLeasePlane.GovernedEffect do
       not (is_binary(surface) and byte_size(surface) > 0) ->
         {:error, "surface required (non-empty string)"}
 
+      is_binary(promotion_error) ->
+        {:error, promotion_error}
+
       not valid_leases?(leases) ->
         {:error, "required_leases must be a list of objects with a string surface"}
 
@@ -179,6 +199,8 @@ defmodule UnitaresLeasePlane.GovernedEffect do
            payload: payload || %{},
            proposer_agent_uuid: proposer_agent_uuid,
            provenance_session_id: provenance_session_id,
+           provenance: provenance,
+           promotion: normalize_promotion(promotion),
            # CREDENTIAL — transient, never persisted/logged (see comment above).
            proposer_continuity_token: proposer_continuity_token,
            # CREDENTIAL — transient §8 effect-binding proof (see comment above).
@@ -202,6 +224,45 @@ defmodule UnitaresLeasePlane.GovernedEffect do
     end
   end
 
+  @promotion_required_fields ~w(record_only_effect_id decision_standard_ref approval_ref evidence_refs)
+
+  defp promotion_shape_error(nil, _mode), do: nil
+
+  defp promotion_shape_error(_promotion, mode) when mode != "execute",
+    do: "promotion is valid only for custody_mode=execute"
+
+  defp promotion_shape_error(%{} = promotion, "execute") do
+    missing =
+      Enum.filter(@promotion_required_fields, fn field ->
+        case Map.get(promotion, field) do
+          value when field == "evidence_refs" ->
+            not (is_list(value) and value != [] and
+                   Enum.all?(value, &(is_binary(&1) and byte_size(&1) > 0)))
+
+          value ->
+            not (is_binary(value) and byte_size(value) > 0)
+        end
+      end)
+
+    if missing == [],
+      do: nil,
+      else: "promotion requires non-empty #{Enum.join(missing, ", ")}"
+  end
+
+  defp promotion_shape_error(_promotion, "execute"),
+    do: "promotion must be an object"
+
+  defp normalize_promotion(nil), do: nil
+
+  defp normalize_promotion(%{} = promotion),
+    do: Map.take(promotion, @promotion_required_fields)
+
+  defp sanitize_provenance(%{} = provenance) do
+    Map.take(provenance, ~w(harness session_id verification_source))
+  end
+
+  defp sanitize_provenance(_), do: %{}
+
   defp valid_leases?(leases) when is_list(leases) do
     Enum.all?(leases, fn
       %{"surface" => s} when is_binary(s) and byte_size(s) > 0 -> true
@@ -219,6 +280,103 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   end
 
   defp credential_shaped?(_), do: false
+
+  # ---- explicit record_only -> execute promotion continuity ----
+
+  # Direct execute remains a distinct, backwards-compatible path. Once a
+  # caller declares promotion, however, every link is mandatory and verified
+  # before the plane acquires a lease, calls governance, or touches a surface.
+  defp verify_promotion(%{promotion: nil} = env), do: {:ok, env}
+
+  defp verify_promotion(%{promotion: promotion} = env) do
+    case intended_payload_sha(env) do
+      {:ok, intended_sha} ->
+        verify_promotion_predecessor(env, promotion, intended_sha)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp verify_promotion_predecessor(env, promotion, intended_sha) do
+    predecessor_id = promotion["record_only_effect_id"]
+
+    case Repo.governed_effect_by_effect_id(predecessor_id) do
+      {:ok, nil} ->
+        {:error, :promotion_predecessor_not_found}
+
+      {:ok, predecessor} ->
+        case verify_predecessor(predecessor, env, intended_sha) do
+          :ok ->
+            predecessor_fermata = get_in(predecessor, ["fermata", "intent_sha256"])
+
+            receipt =
+              promotion
+              |> Map.put("payload_sha256", intended_sha)
+              |> Map.put("predecessor_fermata_intent_sha256", predecessor_fermata)
+              |> Map.put("continuity_verified", true)
+
+            {:ok, Map.put(env, :promotion_receipt, receipt)}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:error, _reason} ->
+        {:error, :promotion_lookup_failed}
+    end
+  end
+
+  defp intended_payload_sha(%{effect_type: "file_write", payload: payload}) do
+    case FileWriteExecutor.resolved_payload(payload) do
+      {:ok, _bytes, sha} -> {:ok, sha}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp intended_payload_sha(%{payload: payload}) do
+    case UnitaresLeasePlane.CanonicalPayload.sha256(payload) do
+      {:ok, sha} -> {:ok, sha}
+      {:error, _reason} -> {:error, :promotion_predecessor_unverifiable}
+    end
+  end
+
+  defp verify_predecessor(nil, _env, _intended_sha),
+    do: {:error, :promotion_predecessor_not_found}
+
+  defp verify_predecessor(predecessor, env, intended_sha) do
+    predecessor_sha = Map.get(predecessor, "payload_sha256")
+    predecessor_fermata = get_in(predecessor, ["fermata", "intent_sha256"])
+
+    cond do
+      predecessor["custody_mode"] != "record_only" or predecessor["status"] != "recorded" ->
+        {:error, :promotion_mismatch}
+
+      predecessor["effect_type"] != env.effect_type or predecessor["surface"] != env.surface ->
+        {:error, :promotion_mismatch}
+
+      not valid_sha256?(predecessor_sha) or not valid_sha256?(predecessor_fermata) ->
+        {:error, :promotion_predecessor_unverifiable}
+
+      String.downcase(predecessor_sha) != String.downcase(intended_sha) ->
+        {:error, :promotion_mismatch}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp valid_sha256?(value) when is_binary(value),
+    do: Regex.match?(~r/\A[0-9a-fA-F]{64}\z/, value)
+
+  defp valid_sha256?(_), do: false
+
+  defp attach_fermata_receipt(env, effect_id) do
+    case GovernedEffectIR.receipt(env, effect_id) do
+      {:ok, receipt} -> {:ok, Map.put(env, :fermata_receipt, receipt)}
+      {:error, reason} -> {:error, "fermata intent is not canonical: #{inspect(reason)}"}
+    end
+  end
 
   # ---- record_only ----
 
@@ -253,30 +411,33 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   defp persist_new(env, digest) do
     effect_id = gen_effect_id()
     observations = Enum.map(env.required_leases, &observe_lease/1)
-    audit_payload = audit_payload(effect_id, env, digest, observations)
 
-    case Repo.insert_governed_effect_event(%{
-           event_type: @record_only_event_type,
-           agent_id: env.proposer_agent_uuid,
-           session_id: env.provenance_session_id,
-           payload: audit_payload
-         }) do
-      :ok ->
-        Logger.info(
-          "governed_effect record_only effect_id=#{effect_id} surface=#{env.surface} " <>
-            "type=#{env.effect_type} digest=#{binary_part(digest, 0, 12)} " <>
-            "observations=#{inspect(observations)}"
-        )
+    with {:ok, env} <- attach_fermata_receipt(env, effect_id) do
+      audit_payload = audit_payload(effect_id, env, digest, observations)
 
-        {:ok, response_body(audit_payload, observations, false)}
+      case Repo.insert_governed_effect_event(%{
+             event_type: @record_only_event_type,
+             agent_id: env.proposer_agent_uuid,
+             session_id: env.provenance_session_id,
+             payload: audit_payload
+           }) do
+        :ok ->
+          Logger.info(
+            "governed_effect record_only effect_id=#{effect_id} surface=#{env.surface} " <>
+              "type=#{env.effect_type} digest=#{binary_part(digest, 0, 12)} " <>
+              "observations=#{inspect(observations)}"
+          )
 
-      {:error, reason} ->
-        Logger.warning(
-          "governed_effect record_only persist failed effect_id=#{effect_id} " <>
-            "surface=#{env.surface}: #{inspect(reason)}"
-        )
+          {:ok, response_body(audit_payload, observations, false)}
 
-        {:error, :persist_failed}
+        {:error, reason} ->
+          Logger.warning(
+            "governed_effect record_only persist failed effect_id=#{effect_id} " <>
+              "surface=#{env.surface}: #{inspect(reason)}"
+          )
+
+          {:error, :persist_failed}
+      end
     end
   end
 
@@ -295,8 +456,17 @@ defmodule UnitaresLeasePlane.GovernedEffect do
       "idempotency_digest" => digest,
       "required_leases" => env.required_leases,
       "observations" => observations,
-      "proposer_agent_uuid" => env.proposer_agent_uuid
+      "proposer_agent_uuid" => env.proposer_agent_uuid,
+      "fermata" => env.fermata_receipt
     }
+    |> maybe_put_payload_sha256(env)
+  end
+
+  defp maybe_put_payload_sha256(payload, env) do
+    case Map.get(env.payload, "sha256") do
+      sha when is_binary(sha) -> Map.put(payload, "payload_sha256", String.downcase(sha))
+      _ -> payload
+    end
   end
 
   # The 202 body. `observations` is passed separately so a fresh record returns
@@ -310,6 +480,7 @@ defmodule UnitaresLeasePlane.GovernedEffect do
       status: "recorded",
       effect_lane: @effect_lane,
       idempotency_digest: audit_payload["idempotency_digest"],
+      fermata: audit_payload["fermata"],
       custody_expires_at: nil,
       observations: observations,
       idempotent: idempotent?
@@ -420,66 +591,69 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
   defp file_write_under_custody(env, digest) do
     effect_id = gen_effect_id()
-    # Canonicalize lease surfaces ONCE so the acquired surface_id and the
-    # executor's canonical(path) match (the path-canonicalization seam).
-    canon_leases = canonicalize_leases(env.required_leases)
 
-    case acquire_all(canon_leases, env.proposer_agent_uuid) do
-      {:ok, acquired} ->
-        try do
-          # §6 veto re-checked HERE, on the commit path, with the lease held.
-          case GovernanceVetoClient.check(env) do
-            :allow ->
-              # Insert the durable effects.payloads row BEFORE the commit so the
-              # executor's record_pre_image UPDATE (and crash recovery) have a row
-              # to act on. record_pre_image is UPDATE-only; without this the file
-              # would commit with no rollback/pre-image record.
-              case ensure_payload_row(effect_id, env, digest) do
-                :ok ->
-                  result =
-                    FileWriteExecutor.apply_effect(effect_id, env.payload, canon_leases)
+    with {:ok, env} <- attach_fermata_receipt(env, effect_id) do
+      # Canonicalize lease surfaces ONCE so the acquired surface_id and the
+      # executor's canonical(path) match (the path-canonicalization seam).
+      canon_leases = canonicalize_leases(env.required_leases)
 
-                  {status, extra} = result_audit(result)
+      case acquire_all(canon_leases, env.proposer_agent_uuid) do
+        {:ok, acquired} ->
+          try do
+            # §6 veto re-checked HERE, on the commit path, with the lease held.
+            case governance_veto_client().check(env) do
+              :allow ->
+                # Insert the durable effects.payloads row BEFORE the commit so the
+                # executor's record_pre_image UPDATE (and crash recovery) have a row
+                # to act on. record_pre_image is UPDATE-only; without this the file
+                # would commit with no rollback/pre-image record.
+                case ensure_payload_row(effect_id, env, digest) do
+                  :ok ->
+                    result =
+                      FileWriteExecutor.apply_effect(effect_id, env.payload, canon_leases)
 
-                  _ =
-                    persist_execute(
-                      env,
-                      execute_audit_payload(effect_id, env, digest, status, extra)
-                    )
+                    {status, extra} = result_audit(result)
 
-                  result_to_reply(result, effect_id)
+                    _ =
+                      persist_execute(
+                        env,
+                        execute_audit_payload(effect_id, env, digest, status, extra)
+                      )
 
-                {:error, reason} ->
-                  _ =
-                    persist_execute(
-                      env,
-                      execute_audit_payload(effect_id, env, digest, "persist_failed", %{
-                        "error" => inspect(reason)
-                      })
-                    )
+                    result_to_reply(result, effect_id, env)
 
-                  {:error, :persist_failed}
-              end
+                  {:error, reason} ->
+                    _ =
+                      persist_execute(
+                        env,
+                        execute_audit_payload(effect_id, env, digest, "persist_failed", %{
+                          "error" => inspect(reason)
+                        })
+                      )
 
-            blocked ->
-              payload =
-                execute_audit_payload(effect_id, env, digest, "governance_blocked", %{
-                  "veto_reason" => veto_reason(blocked)
-                })
+                    {:error, :persist_failed}
+                end
 
-              _ = persist_execute(env, payload)
-              {:error, :governance_blocked}
+              blocked ->
+                payload =
+                  execute_audit_payload(effect_id, env, digest, "governance_blocked", %{
+                    "veto_reason" => veto_reason(blocked)
+                  })
+
+                _ = persist_execute(env, payload)
+                {:error, :governance_blocked}
+            end
+          after
+            release_all(acquired)
           end
-        after
-          release_all(acquired)
-        end
 
-      {:error, :held_by_other} ->
-        {:error, :lease_held}
+        {:error, :held_by_other} ->
+          {:error, :lease_held}
 
-      {:error, reason} ->
-        Logger.warning("governed_effect file_write lease acquire failed: #{inspect(reason)}")
-        {:error, :lease_acquire_failed}
+        {:error, reason} ->
+          Logger.warning("governed_effect file_write lease acquire failed: #{inspect(reason)}")
+          {:error, :lease_acquire_failed}
+      end
     end
   end
 
@@ -562,16 +736,31 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   defp result_audit({:rejected, reason}),
     do: {"rejected", %{"error" => inspect(reason)}}
 
-  defp result_to_reply({:committed, meta}, effect_id),
-    do: {:ok, %{ok: true, effect_id: effect_id, custody_mode: "execute", result: meta}}
+  defp result_to_reply({:committed, meta}, effect_id, env),
+    do:
+      {:ok,
+       %{
+         ok: true,
+         effect_id: effect_id,
+         custody_mode: "execute",
+         result: meta,
+         fermata: env.fermata_receipt,
+         promotion: Map.get(env, :promotion_receipt)
+       }}
 
-  defp result_to_reply({:rejected, reason}, _effect_id), do: {:error, reason}
+  defp result_to_reply({:rejected, reason}, _effect_id, _env), do: {:error, reason}
 
   defp stringify(map), do: Map.new(map, fn {k, v} -> {to_string(k), v} end)
 
   defp veto_reason({:blocked, r}), do: r
   defp veto_reason({:error, r}), do: "veto_unavailable:#{inspect(r)}"
   defp veto_reason(_), do: "vetoed"
+
+  # Injectable only for a full commit-path test; production always resolves to
+  # the real fail-closed HTTP client unless the test environment overrides it.
+  defp governance_veto_client do
+    Application.get_env(:lease_plane, :governance_veto_client, GovernanceVetoClient)
+  end
 
   defp execute_agent_spawn_enabled? do
     Application.get_env(:lease_plane, :execute_agent_spawn_enabled, false) == true and
@@ -617,42 +806,44 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   defp spawn_and_record(env, digest) do
     effect_id = gen_effect_id()
 
-    # §6 governance veto — BEFORE the spawn commits. The effect is committed only
-    # if governance affirmatively clears it (`:allow`). A block, a missing
-    # proposer, or an unreachable/erroring governance MCP all fail CLOSED: we do
-    # not spawn, and persist a `governance_blocked` record.
-    case GovernanceVetoClient.check(env) do
-      :allow ->
-        spawn_after_veto(env, digest, effect_id)
+    with {:ok, env} <- attach_fermata_receipt(env, effect_id) do
+      # §6 governance veto — BEFORE the spawn commits. The effect is committed only
+      # if governance affirmatively clears it (`:allow`). A block, a missing
+      # proposer, or an unreachable/erroring governance MCP all fail CLOSED: we do
+      # not spawn, and persist a `governance_blocked` record.
+      case governance_veto_client().check(env) do
+        :allow ->
+          spawn_after_veto(env, digest, effect_id)
 
-      {:blocked, reason} ->
-        Logger.info(
-          "governed_effect execute agent_spawn VETOED effect_id=#{effect_id} " <>
-            "surface=#{env.surface} reason=#{reason}"
-        )
+        {:blocked, reason} ->
+          Logger.info(
+            "governed_effect execute agent_spawn VETOED effect_id=#{effect_id} " <>
+              "surface=#{env.surface} reason=#{reason}"
+          )
 
-        payload =
-          execute_audit_payload(effect_id, env, digest, "governance_blocked", %{
-            "veto_reason" => reason
-          })
+          payload =
+            execute_audit_payload(effect_id, env, digest, "governance_blocked", %{
+              "veto_reason" => reason
+            })
 
-        _ = persist_execute(env, payload)
-        {:error, :governance_blocked}
+          _ = persist_execute(env, payload)
+          {:error, :governance_blocked}
 
-      {:error, reason} ->
-        # Fail closed: could not confirm governance clearance → do not spawn.
-        Logger.warning(
-          "governed_effect execute agent_spawn veto-unavailable effect_id=#{effect_id} " <>
-            "surface=#{env.surface}: #{inspect(reason)} — failing closed"
-        )
+        {:error, reason} ->
+          # Fail closed: could not confirm governance clearance → do not spawn.
+          Logger.warning(
+            "governed_effect execute agent_spawn veto-unavailable effect_id=#{effect_id} " <>
+              "surface=#{env.surface}: #{inspect(reason)} — failing closed"
+          )
 
-        payload =
-          execute_audit_payload(effect_id, env, digest, "governance_blocked", %{
-            "veto_reason" => "veto_unavailable:#{inspect(reason)}"
-          })
+          payload =
+            execute_audit_payload(effect_id, env, digest, "governance_blocked", %{
+              "veto_reason" => "veto_unavailable:#{inspect(reason)}"
+            })
 
-        _ = persist_execute(env, payload)
-        {:error, :governance_blocked}
+          _ = persist_execute(env, payload)
+          {:error, :governance_blocked}
+      end
     end
   end
 
@@ -759,9 +950,18 @@ defmodule UnitaresLeasePlane.GovernedEffect do
       "surface" => env.surface,
       "idempotency_key" => env.idempotency_key,
       "idempotency_digest" => digest,
-      "proposer_agent_uuid" => env.proposer_agent_uuid
+      "proposer_agent_uuid" => env.proposer_agent_uuid,
+      "fermata" => env.fermata_receipt
     }
     |> Map.merge(extra)
+    |> maybe_put_promotion_receipt(env)
+  end
+
+  defp maybe_put_promotion_receipt(payload, env) do
+    case Map.get(env, :promotion_receipt) do
+      %{} = receipt -> Map.put(payload, "promotion", receipt)
+      _ -> payload
+    end
   end
 
   defp execute_body(payload, execution_id) do
@@ -772,6 +972,8 @@ defmodule UnitaresLeasePlane.GovernedEffect do
       status: "committed",
       effect_lane: @effect_lane,
       idempotency_digest: payload["idempotency_digest"],
+      fermata: payload["fermata"],
+      promotion: payload["promotion"],
       execution_id: execution_id,
       agent_id: execution_id,
       idempotent: false
@@ -788,6 +990,8 @@ defmodule UnitaresLeasePlane.GovernedEffect do
       status: stored["status"] || "committed",
       effect_lane: @effect_lane,
       idempotency_digest: stored["idempotency_digest"],
+      fermata: stored["fermata"],
+      promotion: stored["promotion"],
       execution_id: execution_id,
       agent_id: execution_id,
       idempotent: true

@@ -112,6 +112,27 @@ defmodule UnitaresLeasePlane.GovernedEffectIntegrationTest do
     assert parsed(resp)["error"] == "not_implemented"
   end
 
+  test "promotion with an unknown shadow fails 422 before execute dispatch", ctx do
+    resp =
+      post_json(
+        "/v1/effects",
+        effect_body(ctx.surface, %{
+          custody_mode: "execute",
+          surface: "file:///tmp/promotion-missing",
+          payload: %{path: "/tmp/promotion-missing", content: "x"},
+          promotion: %{
+            record_only_effect_id: "00000000-0000-0000-0000-000000000000",
+            decision_standard_ref: "decision:loop-0",
+            approval_ref: "review:loop-0:approved",
+            evidence_refs: ["evidence:loop-0"]
+          }
+        })
+      )
+
+    assert resp.status == 422
+    assert parsed(resp)["error"] == "promotion_predecessor_not_found"
+  end
+
   test "malformed envelope → 422 schema_invalid", ctx do
     resp = post_json("/v1/effects", effect_body(ctx.surface) |> Map.delete(:idempotency_key))
     assert resp.status == 422

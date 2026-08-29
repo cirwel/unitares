@@ -3,6 +3,8 @@ file writes (route a write through the plane instead of writing directly)."""
 
 from __future__ import annotations
 
+import hashlib
+
 from unitares_sdk.lease_plane.client import LeasePlaneClient, LeasePlaneClientConfig
 
 
@@ -105,3 +107,110 @@ def test_propose_file_write_surfaces_server_error_envelope():
     # the caller can see the governance verdict; nothing was committed
     assert resp["ok"] is False
     assert resp["error"] == "governance_blocked"
+
+
+def test_record_file_write_sends_hash_only_shadow():
+    captured: dict = {}
+
+    def fake_transport(request):
+        captured["req"] = request
+        return {
+            "ok": True,
+            "effect_id": "shadow-1",
+            "custody_mode": "record_only",
+            "protocol_version": "v1.0",
+        }
+
+    resp = _client(fake_transport).record_file_write(
+        path="/tmp/governed.txt",
+        content="secret-ish proposed bytes\n",
+        proposer_uuid="11111111-1111-1111-1111-111111111111",
+        continuity_token="ctok",
+        session_id="sess-1",
+        summary="candidate retrieval-policy update",
+        idempotency_key="shadow-key-1",
+    )
+
+    assert resp["effect_id"] == "shadow-1"
+    body = captured["req"].json_body
+    assert body["custody_mode"] == "record_only"
+    assert body["payload"] == {
+        "sha256": hashlib.sha256(b"secret-ish proposed bytes\n").hexdigest(),
+        "summary": "candidate retrieval-policy update",
+    }
+    assert "content" not in body["payload"]
+
+
+def test_promoted_file_write_carries_complete_receipt():
+    captured: dict = {}
+
+    def fake_transport(request):
+        captured["req"] = request
+        return {"ok": True, "effect_id": "execute-1", "protocol_version": "v1.0"}
+
+    resp = _client(fake_transport).propose_file_write(
+        path="/tmp/governed.txt",
+        content="candidate bytes\n",
+        proposer_uuid="11111111-1111-1111-1111-111111111111",
+        continuity_token="ctok",
+        session_id="sess-1",
+        idempotency_key="execute-key-1",
+        effect_binding="off",
+        promoted_from="shadow-1",
+        decision_standard_ref="docs/evals/loop-0.md#decision-rule",
+        approval_ref="review:loop-0:approved",
+        evidence_refs=("eval:loop-0:held-out",),
+    )
+
+    assert resp["ok"] is True
+    assert captured["req"].json_body["promotion"] == {
+        "record_only_effect_id": "shadow-1",
+        "decision_standard_ref": "docs/evals/loop-0.md#decision-rule",
+        "approval_ref": "review:loop-0:approved",
+        "evidence_refs": ["eval:loop-0:held-out"],
+    }
+
+
+def test_incomplete_promotion_fails_before_transport_or_grant_mint():
+    calls = []
+
+    def fake_transport(request):
+        calls.append(request)
+        return {"ok": True, "protocol_version": "v1.0"}
+
+    resp = _client(fake_transport).propose_file_write(
+        path="/tmp/governed.txt",
+        content="candidate bytes\n",
+        proposer_uuid="u",
+        continuity_token="c",
+        session_id="s",
+        promoted_from="shadow-1",
+    )
+
+    assert resp["ok"] is False
+    assert resp["error"] == "schema_invalid"
+    assert calls == []
+
+
+def test_promotion_rejects_a_string_as_evidence_sequence():
+    calls = []
+
+    def fake_transport(request):
+        calls.append(request)
+        return {"ok": True, "protocol_version": "v1.0"}
+
+    resp = _client(fake_transport).propose_file_write(
+        path="/tmp/governed.txt",
+        content="candidate bytes\n",
+        proposer_uuid="u",
+        continuity_token="c",
+        session_id="s",
+        promoted_from="shadow-1",
+        decision_standard_ref="decision:loop-0",
+        approval_ref="review:loop-0:approved",
+        evidence_refs="evidence:loop-0",
+    )
+
+    assert resp["ok"] is False
+    assert resp["error"] == "schema_invalid"
+    assert calls == []
