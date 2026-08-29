@@ -215,17 +215,19 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # is the WIRE_NAME_NOT_IN_ORIENTATION defect, and it is worse than listing a
     # deprecated tool, which the entry marks as deprecated anyway.
     #
-    # This exemption is load-bearing for leave_note: it carries
+    # This exemption was introduced because leave_note carried
     # deprecated=True/superseded_by="knowledge" while still sitting in
-    # LITE_MODE_TOOLS and in the CLAUDE.md/AGENTS.md shared contract as a
-    # first-class workflow tool. Folding the decorator flag in without this
-    # clause silently dropped it out of the default orientation view.
-    # Reconciling that contradiction (is leave_note deprecated or not?) is a
-    # product call and deliberately not made here.
+    # LITE_MODE_TOOLS and in the shared contract as a first-class tool, so
+    # folding the decorator flag in silently dropped it from orientation. The
+    # operator has since settled that contradiction the other way -- leave_note
+    # is not deprecated and no longer carries the flag -- so the exemption is
+    # no longer load-bearing for any tool shipping today. It stays as the
+    # general rule: whatever this deployment advertises, orientation lists.
+    #
     # In the degraded path (advertised surface unavailable) fall back to the
-    # pre-2026-08-29 rule exactly -- alias keys only. Applying the decorator
-    # union without the advertised-set exemption is what would hide leave_note,
-    # so the fallback must not be the union.
+    # pre-2026-08-29 rule exactly -- alias keys only -- so an unavailable
+    # advertised set can never hide a tool that the decorator flag alone
+    # would suppress.
     DEPRECATED_TOOLS = (
         set(list_all_aliases().keys()) - set(AGENT_WORKFLOW_ALIASES)
         if advertised_names is None
