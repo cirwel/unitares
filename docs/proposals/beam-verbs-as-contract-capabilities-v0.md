@@ -9,7 +9,10 @@ was written in a single pass from a reading of the tree. The first source
 re-derivation folded four blockers where they land: the mint-time assurance
 gate (§2, §7), `inbox` being a consuming mutation with an unresolved ack/retry
 gap (§8, §9, §11), the contract-representability gap (§4), and a corrected risk
-statement for widening `validate_path` (§9). A second source re-derivation found
+statement for widening `validate_path` (§9). A third pass on 2026-08-29 added
+§8a-c: a concurrency defect that neither original candidate addressed, a third
+candidate for §8, and the gaps that section still does not cover. A second
+source re-derivation found
 four more constraints: an agent-facing lease mutation cannot inherit the live
 route's permissive `:log` authorization (§7), `status` needs an agent-visible
 scope and redaction contract (§3, §7), timer separation belongs at the
@@ -412,6 +415,72 @@ enforced by the transport). Defining these semantics is part of §9 step 1's
 design work; "refuse" only covers the case where the mutation is known not to
 have happened.
 
+### 8a. ⛔ Concurrency, not just retry — and why neither candidate above fixes it
+
+Added 2026-08-29. An earlier draft framed this section entirely around *retry*.
+That framing is incomplete, and the gap it hides is worse than the one it names.
+
+`FOR UPDATE SKIP LOCKED` gives two callers **disjoint** row sets
+(`repo.ex:642,666`), and
+[`agent-message-transport-v0.md`](agent-message-transport-v0.md) states that
+property twice as a virtue — "two pollers can never take the same message"
+(line 63), "concurrent pollers get disjoint sets" (line 125). It *is* a virtue
+for two **distinct** pollers competing over a shared queue.
+
+It is a defect when the two in-flight calls belong to the **same recipient** —
+a retry that actually landed plus a fresh poll, or two subagents sharing one
+identity. The pending rows are then **split** between the two calls. That is
+partition, not duplication: each caller holds part of the inbox, neither knows
+its view is partial, and if either response is lost its share is gone. Delivery
+is marked before the response leaves, so nothing detects it.
+
+**Neither candidate above addresses this.** A two-phase claim/ack still
+*claims*, so concurrent claims still split; an idempotency key is a write-path
+fix that never touches the read. A capability does not create the mechanism —
+a raw HTTP caller can trip it today — it makes the precondition ordinary,
+because adapters poll and retry on their own.
+
+### 8b. Third candidate: make the inbox a pure read
+
+- **(c)** `inbox` writes nothing. Rows stay visible until TTL reaps them, and
+  the caller advances a per-recipient high-water cursor. Retry is then
+  idempotent by construction — advancing to sequence N twice equals advancing
+  once — and two concurrent reads return the same rows instead of splitting
+  them.
+
+This trades at-most-once for at-least-once, which is the right direction for
+this mailbox: a recipient can deduplicate on `message_id`, and cannot un-lose.
+It also removes `inbox` from the class of consuming mutations, which is what
+§11 files against it.
+
+Its costs, to design against rather than discover: TTL becomes the only reaper,
+so a recipient that never polls grows without bound and needs a per-recipient
+depth cap enforced at send. And if (b)'s idempotency key is added, it should
+**be** or travel with `message_id`, so sender write-dedup and receiver
+read-dedup key off one token rather than two — minting two identifiers is the
+real coupling hazard between these candidates, not their ordering.
+
+Ordering, if more than one is taken: read path first. Loss is unrecoverable;
+a duplicate send is merely noisy.
+
+**Still not chosen.** (c) is recorded as a candidate on the same footing as (a)
+and (b), not as a decision — and its own §12 disconfirmer is below.
+
+### 8c. What this section still does not cover
+
+Named so the next reader does not mistake the list above for complete:
+
+- **No sender-side delivery visibility.** A sender cannot distinguish read from
+  lost, so the documented "a later poll can reconstruct it" recovery has no
+  trigger. A sent-status query is cheaper than redelivery and would make that
+  path real.
+- **"Reconstructible by a later poll" is asserted, not enforced.** Nothing stops
+  an agent putting the only copy of a decision in a 64 KB envelope. Requiring a
+  `ref` to durable state, and stating the loss semantics in the tool
+  description, would enforce what the design currently assumes.
+- **Recipient addressing.** If an address names a role rather than a process,
+  restarts and rebinds silently change who consumes.
+
 **Retry invariant: the logical operation is stable and the authorization is
 fresh.** Every retry carries the same server-enforced operation identity — a
 send idempotency key, a claim/ack token, or an existing lease operation's
@@ -504,8 +573,11 @@ the wrong one.
   them as capabilities makes the agent-facing contract an externalized copy of
   the plane's state machine, and a copy is free to drift from its original.
   `status` is genuinely read-only and does not carry this risk. `inbox` was
-  mis-filed alongside it in an earlier draft: it is a consuming mutation with a
-  delivery-state transition behind it (§8) and belongs with the mutating verbs.
+  mis-filed alongside it in an earlier draft: **as built** it is a consuming
+  mutation with a delivery-state transition behind it (§8) and belongs with the
+  mutating verbs. §8b's candidate (c) would move it back by making it write
+  nothing — which is an argument for (c), not a reason to reclassify it before
+  (c) is chosen.
   `msg send` has no state machine behind it, but §8's idempotency gap is its
   own version of the same cost.
 - **Whether `lease` is worth exposing at all.** §§6–7 and the state-machine
@@ -542,6 +614,13 @@ the wrong one.
   the caller itself carried a valid strong attestation.
 - If `lease/status` exposes the raw lease record without an explicit query scope
   and field-level contract, the read boundary failed.
+- If §8b's pure read (c) is taken and a recipient's inbox is ever observed
+  growing past its depth cap, or a caller is found re-reading from sequence
+  zero because it lost its cursor, then (c) moved the failure rather than
+  removing it and the claim-based candidates deserve another look.
+- If a partition is ever observed under (a) or (b) — one recipient, two
+  concurrent calls, each returning part of the mail — §8a was right and
+  whichever candidate was chosen did not address it.
 
 ## 13. Objections already checked and refuted
 
