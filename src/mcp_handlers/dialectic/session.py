@@ -73,6 +73,60 @@ UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT = os.getenv("UNITARES_DIALECTIC_WRITE_JSO
     "no",
 )
 
+
+def _normalize_string_list(value: Any) -> List[str]:
+    """Decode PostgreSQL JSON text and repair legacy character-split lists.
+
+    asyncpg returns JSON/JSONB values as strings unless a codec is installed.
+    The session read path used to pass that JSON string directly into
+    ``DialecticMessage.proposed_conditions``.  ``finalize_resolution`` then
+    called ``list(value)``, turning the serialized JSON into one condition per
+    character.  Two live resolutions carry that corrupt-but-recoverable shape.
+    """
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return []
+        try:
+            decoded = json.loads(stripped)
+        except (json.JSONDecodeError, TypeError):
+            return [stripped]
+        if isinstance(decoded, str) and decoded == stripped:
+            return [stripped]
+        return _normalize_string_list(decoded)
+
+    if isinstance(value, (list, tuple)):
+        items = list(value)
+        # Repair historical resolution_json rows produced by list(JSON_TEXT).
+        if len(items) > 1 and all(
+            isinstance(item, str) and len(item) == 1 for item in items
+        ):
+            joined = "".join(items).strip()
+            if joined.startswith("["):
+                try:
+                    decoded = json.loads(joined)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                else:
+                    if isinstance(decoded, list):
+                        return _normalize_string_list(decoded)
+        return [str(item).strip() for item in items if str(item).strip()]
+
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def _normalize_resolution_dict(value: Any) -> Any:
+    """Normalize the condition list in a parsed resolution payload."""
+    if not isinstance(value, dict):
+        return value
+    normalized = dict(value)
+    normalized["conditions"] = _normalize_string_list(normalized.get("conditions"))
+    return normalized
+
+
 def _reconstruct_session_from_dict(session_id: str, session_data: Dict) -> Optional[DialecticSession]:
     """Reconstruct DialecticSession from a dict (from JSON file or PostgreSQL)."""
     try:
@@ -89,17 +143,19 @@ def _reconstruct_session_from_dict(session_id: str, session_data: Dict) -> Optio
                 timestamp=msg_dict.get("timestamp", ""),
                 root_cause=msg_dict.get("root_cause"),
                 observed_metrics=msg_dict.get("observed_metrics"),
-                proposed_conditions=msg_dict.get("proposed_conditions"),
+                proposed_conditions=_normalize_string_list(
+                    msg_dict.get("proposed_conditions")
+                ),
                 reasoning=msg_dict.get("reasoning"),
                 agrees=msg_dict.get("agrees"),
-                concerns=msg_dict.get("concerns"),
+                concerns=_normalize_string_list(msg_dict.get("concerns")),
             )
             transcript.append(msg)
 
         # Reconstruct resolution if present
         resolution = None
         if session_data.get("resolution"):
-            res_dict = session_data["resolution"]
+            res_dict = _normalize_resolution_dict(session_data["resolution"])
             resolution = Resolution(
                 action=res_dict.get("action", "resume"),
                 conditions=res_dict.get("conditions", []),
@@ -370,7 +426,8 @@ async def load_session_as_dict(session_id: str) -> Optional[Dict[str, Any]]:
 
             res = row["resolution_json"]
             if res:
-                result["resolution"] = res if isinstance(res, dict) else json.loads(res)
+                parsed_resolution = res if isinstance(res, dict) else json.loads(res)
+                result["resolution"] = _normalize_resolution_dict(parsed_resolution)
 
             for msg in msg_rows:
                 reasoning = msg["reasoning"] or ""
@@ -546,11 +603,13 @@ async def list_all_sessions(
                 if resolution:
                     if isinstance(resolution, str):
                         try:
-                            summary["resolution"] = json.loads(resolution)
+                            summary["resolution"] = _normalize_resolution_dict(
+                                json.loads(resolution)
+                            )
                         except Exception:
                             pass
                     elif isinstance(resolution, dict):
-                        summary["resolution"] = resolution
+                        summary["resolution"] = _normalize_resolution_dict(resolution)
 
                 # Include transcript if requested
                 if include_transcript:

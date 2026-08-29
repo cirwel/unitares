@@ -660,22 +660,22 @@ class DialecticSession:
         # the auto-resolve sweeper selects on `updated_at < now() - 2h`. So an agent
         # retrying more often than the threshold held a blocked session `active`
         # forever: never resolved, never failed, never facilitated. Recording the
-        # FIRST attempt preserves the audit signal; refusing the rest without a
-        # write lets the session reach a terminal state.
+        # FIRST attempt for each reviewer rejection preserves the audit signal;
+        # refusing repeats without a write lets the session reach a terminal state.
         if (
             message.agrees
             and message.agent_id == self.paused_agent_id
             and objection_stands
-            and self._paused_agent_already_tried_to_clear()
+            and self._paused_agent_already_answered_current_objection()
         ):
             return {
                 "success": False,
                 "converged": False,
                 "blocked": "reviewer_objection_stands",
                 "error": (
-                    "Already refused: the reviewer's standing verdict on this session "
-                    "is a rejection and this attempt was not recorded. Retrying cannot "
-                    "change the outcome."
+                    "Already answered: the reviewer's current rejection still stands "
+                    "and this repeat was not recorded. Wait for a new reviewer verdict "
+                    "or facilitator assignment before responding again."
                 ),
                 "phase": self.phase.value,
                 "awaiting_facilitation": True,
@@ -820,17 +820,38 @@ class DialecticSession:
         )
         return not has_independent_verdict
 
-    def _paused_agent_already_tried_to_clear(self) -> bool:
-        """True when the paused agent has already filed an agreeing synthesis.
+    def _paused_agent_already_answered_current_objection(self) -> bool:
+        """True after one paused-agent response to the latest rejection.
 
-        Used to refuse repeat self-clear attempts without persisting them; see the
-        sweeper-starvation note in submit_synthesis.
+        Every reviewer rejection opens exactly one response slot.  The old scan
+        looked for *any* agreeing paused-agent synthesis in the whole transcript,
+        so a later reviewer rejection still left the agent permanently unable to
+        answer.  ``dialectic(get)`` correctly said the move was theirs, while the
+        write path refused it and required operator reassignment.
+
+        Scan only messages after the latest standing rejection.  Immediate
+        retries remain unrecorded (so they cannot starve the liveness sweeper),
+        but a genuinely new reviewer verdict starts a genuinely new round.
         """
+        self_review = self.reviewer_agent_id == self.paused_agent_id
+        latest_rejection_index = None
+        for index in range(len(self.transcript) - 1, -1, -1):
+            msg = self.transcript[index]
+            if getattr(msg, "phase", None) != "synthesis" or msg.agrees is not False:
+                continue
+            if not self_review and msg.agent_id == self.paused_agent_id:
+                continue
+            latest_rejection_index = index
+            break
+
+        if latest_rejection_index is None:
+            return False
+
         return any(
             getattr(msg, "phase", None) == "synthesis"
             and msg.agent_id == self.paused_agent_id
             and msg.agrees is True
-            for msg in self.transcript
+            for msg in self.transcript[latest_rejection_index + 1 :]
         )
 
     @staticmethod
