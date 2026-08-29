@@ -106,6 +106,9 @@ def test_submitted_afferents_restore_pre_projection_dimensions_without_authority
         "source_field": "body_anima",
         "measurement_role": "raw_afferents",
         "policy_applied": False,
+        "dimension_limit": AFFERENT_DIMENSION_LIMIT,
+        "valid_dimension_count": 4,
+        "truncated": False,
         "values": {
             "clarity": 0.82,
             "presence": 0.43,
@@ -140,6 +143,9 @@ def test_canonical_afferent_shape_wins_and_dimension_count_is_bounded():
 
     assert afferents["source_field"] == "afferents"
     assert len(afferents["values"]) == AFFERENT_DIMENSION_LIMIT
+    assert afferents["dimension_limit"] == AFFERENT_DIMENSION_LIMIT
+    assert afferents["valid_dimension_count"] == 30
+    assert afferents["truncated"] is True
     assert list(afferents["values"]) == [
         f"dimension_{index:02d}" for index in range(AFFERENT_DIMENSION_LIMIT)
     ]
@@ -149,6 +155,39 @@ def test_canonical_afferent_shape_wins_and_dimension_count_is_bounded():
         "schema": "sensor.afferents.v1",
         "source": "substrate_probe",
         "role": "physical_self_sense",
+    }
+
+
+def test_afferent_sanitizer_rejects_overflow_secrets_and_ambiguous_keys():
+    afferents = build_submitted_afferents(
+        {
+            "afferents": {
+                "values": {
+                    "presence": 0.4,
+                    "overflow": 10**400,
+                    "api-key": 123456,
+                    "private.key": 7,
+                    "otp": 654321,
+                    "pin-code": 1234,
+                    " presence": 0.9,
+                    "presence ": 0.8,
+                },
+                "provenance": {"source": "   ", "role": "physical"},
+            },
+            "state_space_provenance": {
+                "afferents": {"source": "outer_source"}
+            },
+        },
+        submitted_source="physical",
+    )
+
+    assert afferents["values"] == {"presence": 0.4}
+    assert afferents["valid_dimension_count"] == 1
+    assert afferents["truncated"] is False
+    assert afferents["provenance"] == {
+        "status": "caller_declared",
+        "source": "outer_source",
+        "role": "physical",
     }
 
 
@@ -229,6 +268,8 @@ def test_full_envelope_keeps_measurement_policy_and_actuator_separate():
     assert summary["afferent_source"] == "physical"
     assert summary["afferent_source_field"] == "body_anima"
     assert summary["afferent_count"] == 4
+    assert summary["afferent_valid_count"] == 4
+    assert summary["afferent_truncated"] is False
     assert summary["afferent_keys"] == ["clarity", "presence", "stability", "warmth"]
     assert summary["afferent_policy_applied"] is False
     assert summary["legacy_coherence_behavioral_shadow_recorded"] is True
@@ -363,12 +404,29 @@ async def test_websocket_event_carries_summary_not_full_derivation():
         },
         submitted_sensor={"E": 0.7, "I": 0.8, "S": 0.2, "V": -0.1},
         submitted_source="behavioral",
+        submitted_afferents=build_submitted_afferents(
+            {
+                "afferents": {
+                    "values": {"presence": 0.42},
+                    "provenance": {"role": "must-not-enter-event"},
+                }
+            },
+            submitted_source="physical",
+        ),
         derivation=_derivation(),
         policy_evaluation={"action": "proceed", "sub_action": "guide"},
         enforcement={"requested": False, "applied": False},
     )
     ctx = UpdateContext(
-        arguments={},
+        arguments={
+            "sensor_data": {
+                "afferents": {
+                    "presence": 0.42,
+                    "api-key": 123456,
+                    "nested": {"unbounded": "must-not-enter-event"},
+                }
+            }
+        },
         agent_uuid="agent-uuid",
         agent_id="agent-uuid",
         declared_agent_id="Agent_1",
@@ -395,7 +453,9 @@ async def test_websocket_event_carries_summary_not_full_derivation():
     event = broadcast.await_args.args[0]
     assert event["eisv_telemetry"]["measurement_source"] == "behavioral_sensor"
     assert event["eisv_telemetry"]["policy_sub_action"] == "guide"
+    assert event["eisv_telemetry"]["afferent_keys"] == ["presence"]
     assert "derivation" not in event["eisv_telemetry"]
+    assert "sensor_data" not in event
 
 
 @pytest.mark.asyncio
@@ -448,12 +508,12 @@ async def test_post_update_persists_the_same_envelope_exposed_in_full_result():
         monitor=monitor,
         health_status=SimpleNamespace(value="healthy"),
         risk_score=0.1,
+        submitted_afferents=build_submitted_afferents(
+            {"body_anima": {"presence": 0.42}},
+            submitted_source="physical",
+        ),
         agent_state={
             "_eisv_derivation": _derivation(),
-            "_submitted_afferents": build_submitted_afferents(
-                {"body_anima": {"presence": 0.42}},
-                submitted_source="physical",
-            ),
             "_eisv_shadow_ablations": {
                 "legacy_coherence_neutralized": {
                     "behavioral_sensor": {
