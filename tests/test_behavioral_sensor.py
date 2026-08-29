@@ -667,10 +667,11 @@ class TestPrepareUnlockedInputsContract:
         with patch("src.db.get_db", return_value=None):
             await prepare_unlocked_inputs(ctx)
         assert ctx.agent_state["sensor_eisv"] == explicit
-        afferents = ctx.agent_state["_submitted_afferents"]
+        afferents = ctx.submitted_afferents
         assert afferents["values"]["presence"] == 0.4
         assert afferents["policy_applied"] is False
         assert afferents["provenance"]["role"] == "physical_self_sense"
+        assert "_submitted_afferents" not in ctx.agent_state
 
     @pytest.mark.asyncio
     async def test_afferents_are_recorded_without_promoting_them_to_eisv(self):
@@ -686,11 +687,31 @@ class TestPrepareUnlockedInputsContract:
         with patch("src.db.get_db", return_value=None):
             await prepare_unlocked_inputs(ctx)
 
-        assert ctx.agent_state["_submitted_afferents"]["values"] == {
+        assert ctx.submitted_afferents["values"] == {
             "presence": 0.4
         }
+        assert "_submitted_afferents" not in ctx.agent_state
         assert "sensor_eisv" not in ctx.agent_state
         assert "sensor_eisv_source" not in ctx.agent_state
+
+    @pytest.mark.asyncio
+    async def test_afferent_telemetry_failure_cannot_abort_governance_input(self):
+        """Observability failures are isolated from the governance path."""
+        from src.mcp_handlers.updates.phases import prepare_unlocked_inputs
+
+        ctx = self._make_ctx(sensor_data={"afferents": {"presence": 0.4}})
+        with (
+            patch("src.db.get_db", return_value=None),
+            patch(
+                "src.eisv_telemetry.build_submitted_afferents",
+                side_effect=RuntimeError("telemetry failure"),
+            ),
+        ):
+            await prepare_unlocked_inputs(ctx)
+
+        assert ctx.submitted_afferents is None
+        assert ctx.agent_state["response_text"] == "test response"
+        assert "_submitted_afferents" not in ctx.agent_state
 
 
 # ══════════════════════════════════════════════════
