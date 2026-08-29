@@ -104,7 +104,12 @@ OPERATOR_READONLY_MODE_TOOLS: Set[str] = {
 
     # Governance metrics
     "get_governance_metrics",     # Check agent state
-    "get_telemetry_metrics",      # System telemetry
+    # get_telemetry_metrics dropped 2026-08-29: it was an alias to
+    # admin(action='telemetry') AND a registered tool, and the registration was
+    # retired (resolve_alias rewrote the name before handler lookup, so it was
+    # never dispatched to). This mode does not carry `admin`, but it does carry
+    # `observe`, and observe(action='telemetry') routes to the same handler --
+    # so the capability is unchanged here and only the duplicate name is gone.
 
     # System health
     "health_check",               # System status

@@ -652,11 +652,21 @@ class TestToolSchemaClientSessionId:
         "get_governance_metrics",
         "onboard",
         "identity",
+        # `dialectic` covers the whole dialectic surface. submit_thesis /
+        # submit_antithesis / submit_synthesis / request_dialectic_review were
+        # listed here alongside it until 2026-08-29, when their duplicate
+        # registrations were retired -- each is now only a tool_stability alias
+        # onto dialectic(action=...), so none is advertised on the wire and none
+        # has a schema of its own.
+        #
+        # That is not a hole in this guard. The failure this test names is
+        # "Claude.ai agents won't send it, causing attribution fragmentation",
+        # and a schema-driven client cannot call an unadvertised name at all --
+        # it reaches this work through `dialectic`, whose DialecticParams
+        # carries client_session_id and continuity_token via AgentIdentityMixin
+        # and is asserted right here. The property is checked where the traffic
+        # actually is.
         "dialectic",
-        "submit_thesis",
-        "submit_antithesis",
-        "submit_synthesis",
-        "request_dialectic_review",
     ]
 
     @pytest.mark.parametrize("tool_name", CRITICAL_TOOLS)

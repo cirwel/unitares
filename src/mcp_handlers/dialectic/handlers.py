@@ -1299,7 +1299,9 @@ def _capture_pause_evidence(monitor: Any) -> Dict[str, Any]:
         evidence["risk_attribution"] = result["risk_attribution"]
     return evidence
 
-@mcp_tool("request_dialectic_review", timeout=REQUEST_REVIEW_TIMEOUT, register=True)
+# register=False: this name is a `dialectic` alias, and resolve_alias rewrites it
+# before handler lookup -- see the "one name, one home" note in tool_stability.py.
+@mcp_tool("request_dialectic_review", timeout=REQUEST_REVIEW_TIMEOUT, register=False)
 async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Create a dialectic review session.
@@ -2318,7 +2320,9 @@ async def _run_synthetic_review(
     }
 
 
-@mcp_tool("submit_thesis", timeout=SUBMIT_THESIS_TIMEOUT, register=True)
+# register=False: this name is a `dialectic` alias, and resolve_alias rewrites it
+# before handler lookup -- see the "one name, one home" note in tool_stability.py.
+@mcp_tool("submit_thesis", timeout=SUBMIT_THESIS_TIMEOUT, register=False)
 async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Paused agent submits thesis: "What I did, what I think happened"
@@ -2644,7 +2648,9 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
     except Exception as e:
         return [error_response(f"Error submitting thesis: {str(e)}")]
 
-@mcp_tool("submit_antithesis", timeout=10.0, register=True)
+# register=False: this name is a `dialectic` alias, and resolve_alias rewrites it
+# before handler lookup -- see the "one name, one home" note in tool_stability.py.
+@mcp_tool("submit_antithesis", timeout=10.0, register=False)
 async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Reviewer agent submits antithesis: "What I observe, my concerns"
@@ -2878,7 +2884,9 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
     except Exception as e:
         return [error_response(f"Error submitting antithesis: {str(e)}")]
 
-@mcp_tool("submit_synthesis", timeout=15.0, register=True)
+# register=False: this name is a `dialectic` alias, and resolve_alias rewrites it
+# before handler lookup -- see the "one name, one home" note in tool_stability.py.
+@mcp_tool("submit_synthesis", timeout=15.0, register=False)
 async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Either agent submits synthesis proposal during negotiation.
@@ -3432,7 +3440,9 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
         return [error_response(f"Error submitting synthesis: {str(e)}")]
 
 
-@mcp_tool("reassign_reviewer", timeout=15.0, register=True)
+# register=False: this name is a `dialectic` alias, and resolve_alias rewrites it
+# before handler lookup -- see the "one name, one home" note in tool_stability.py.
+@mcp_tool("reassign_reviewer", timeout=15.0, register=False)
 async def handle_reassign_reviewer(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Reassign the reviewer for an active dialectic session.

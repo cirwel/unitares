@@ -25,19 +25,27 @@ def main() -> int:
     from src.tool_schemas import get_tool_definitions
     from src import tool_modes
     from src.mcp_handlers.tool_stability import (
-        AGENT_WORKFLOW_ALIASES,
+        list_all_aliases,
         resolve_tool_alias,
     )
 
     schema_tools = sorted({t.name for t in get_tool_definitions()})
     schema_set = set(schema_tools)
 
-    # Friendly workflow aliases (start_session, sync_state, ...) are registered as
-    # live tool names by mcp_server._register_common_aliases and so legitimately
-    # appear in TOOL_CATEGORIES, but get_tool_definitions() only returns the
-    # canonical targets they resolve to. Treat an alias as valid iff it resolves
-    # to a real schema tool; an alias pointing at nothing IS real drift.
-    alias_names = set(AGENT_WORKFLOW_ALIASES)
+    # An alias is a live, callable tool name that get_tool_definitions() does not
+    # return, because it only reports the canonical targets. Such a name
+    # legitimately appears in TOOL_CATEGORIES. Treat an alias as valid iff it
+    # resolves to a real schema tool; an alias pointing at nothing IS real drift.
+    #
+    # Scoped to AGENT_WORKFLOW_ALIASES (8 names) until 2026-08-29, which happened
+    # to be sufficient only because every consolidated alias was ALSO a
+    # registered schema tool and so passed via schema_set. Once those duplicate
+    # registrations were retired -- the alias is now the only home for names like
+    # submit_thesis and get_server_info -- the narrow scope reported nine
+    # perfectly callable names as category drift. Widening to the whole table is
+    # a strengthening, not a loosening: it checks 70 aliases for danglement
+    # instead of 8, and a dangling alias in either set still fails.
+    alias_names = set(list_all_aliases())
     valid_aliases = {a for a in alias_names if resolve_tool_alias(a)[0] in schema_set}
     dangling_aliases = sorted(alias_names - valid_aliases)
 
@@ -74,7 +82,7 @@ def main() -> int:
 
     if dangling_aliases:
         ok = False
-        print("FAIL: AGENT_WORKFLOW_ALIASES entries that do not resolve to a schema tool:")
+        print("FAIL: tool_stability alias entries that do not resolve to a schema tool:")
         for n in dangling_aliases:
             print(f"  - {n}")
 
