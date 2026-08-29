@@ -69,9 +69,28 @@ PostgreSQL, and they lack the guards BEAM's equivalents enforce:
 
 | Write | Path | Guard |
 |---|---|---|
-| reviewer | `auto_resolve.py:197` → `dialectic_db.py::update_session_reviewer` | ~~`WHERE session_id = $2` — **none**~~ *[2026-08-21: guarded `AND status NOT IN ('resolved','failed')`; caller checks the return. A write-tail stopgap only — the (B) reserve-first mechanism below remains the adopted fix and remains unbuilt]* |
+| reviewer | `auto_resolve.py:197` → `dialectic_db.py::update_session_reviewer` | ~~`WHERE session_id = $2` — **none**~~ *[2026-08-21: guarded `AND status NOT IN ('resolved','failed')`; caller checks the return. A write-tail stopgap only — ~~the (B) reserve-first mechanism below remains the adopted fix~~ **see the ⛔ note under this table, 2026-08-29**; still unbuilt either way]* |
 | status | `auto_resolve.py:269` → `dialectic_db.py::update_session_status` | ~~`WHERE session_id = $2` — **none**~~ *[2026-08-21: same guard; still writes `status = $1, phase = $1`. No-write returns False and the sweeper counts it as `skipped` instead of narrating a reap]* |
 | reviewer (BEAM) | `dialectic_saga.ex::update_reviewer/2` | `AND status NOT IN ('resolved','failed','escalated')` |
+
+⛔**(B) reserve-first is NOT the adopted fix for these two writes — operator ruling, 2026-08-29.**
+The reassignment writes get **their own serialization design**; (B) stays specified for what it was
+derived for, Invariant 5's `SYNTHESIS→RESOLVED` transition, and is not stretched over a path with
+different write sequences and a different critical section. Recorded in
+`wave-3-reduced-scope-gate-v0.md` §6.1, which the go-decision handed this question to.
+
+⚠️**The strikethrough above is the point.** This table *asserted* (B) as the fix for these rows,
+and that assertion was never derived — it was inherited. A reader reaching for reserve-first here is
+reaching for a mechanism the operator declined to extend. ⛔The serialization design those writes
+need is **not authorised by that ruling and is not owed yet**: the gate's §6.6 ruling is
+instrument-first, so the design question reopens only if the window reports collisions (gate §6.5,
+reopen condition named there).
+
+⛔**Nor is "wrap the two statements in one transaction" the fix** — recorded here because it is the
+obvious wrong answer and was proposed once. At PostgreSQL's default isolation another transaction
+can still start the saga between the check and the write, so an ordinary transaction relocates the
+TOCTOU window without closing it. Closing it needs a real serialization primitive — a row or
+advisory lock, or a reservation both writers honour. See gate §2 (b2).
 
 So the Python sweep can overwrite a session BEAM has already resolved. `has_inflight_saga_async`
 (`auto_resolve.py:162`) is checked **once, early**, then `select_reviewer` performs several DB
