@@ -32,6 +32,24 @@ class TestPydanticSchemas:
         lp = [[-0.1, -0.3, -0.8], [0.0, -20.0, -20.0]]
         assert ProcessAgentUpdateParams(response_text="T", logprobs=lp).logprobs == lp
 
+    def test_sensor_data_afferents_are_declared_on_the_public_schema(self):
+        from src.mcp_handlers.schemas.core import ProcessAgentUpdateParams
+
+        sensor_data = {
+            "afferents": {
+                "values": {"presence": 0.42},
+                "provenance": {"source": "substrate_probe"},
+            }
+        }
+        params = ProcessAgentUpdateParams(
+            response_text="T",
+            sensor_data=sensor_data,
+        )
+        assert params.sensor_data == sensor_data
+        assert "sensor_data" in ProcessAgentUpdateParams.model_json_schema()[
+            "properties"
+        ]
+
     def test_response_mode_aliases_are_canonicalized(self):
         from src.mcp_handlers.schemas.core import ProcessAgentUpdateParams
 

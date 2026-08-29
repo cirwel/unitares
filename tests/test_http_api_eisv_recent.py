@@ -98,6 +98,14 @@ def _fat_event(agent_id="a"):
         "eisv_telemetry": {
             "measurement_source": "behavioral",
             "behavioral_confidence": 0.8,
+            "afferents_recorded": True,
+            "afferent_source": "physical",
+            "afferent_source_field": "body_anima",
+            "afferent_count": 4,
+            "afferent_valid_count": 4,
+            "afferent_truncated": False,
+            "afferent_keys": ["clarity", "presence", "stability", "warmth"],
+            "afferent_policy_applied": False,
             "missing_inputs": [],
             "enforcement_requested": False,
             "enforcement_applied": False,
@@ -134,6 +142,16 @@ def test_compact_keeps_every_field_the_chart_reads():
     # The measurement-lane view reads these two and nothing else off them.
     assert event["eisv_telemetry"]["measurement_source"] == "behavioral"
     assert event["eisv_telemetry"]["behavioral_confidence"] == 0.8
+    assert event["eisv_telemetry"]["afferent_count"] == 4
+    assert event["eisv_telemetry"]["afferent_valid_count"] == 4
+    assert event["eisv_telemetry"]["afferent_truncated"] is False
+    assert event["eisv_telemetry"]["afferent_keys"] == [
+        "clarity",
+        "presence",
+        "stability",
+        "warmth",
+    ]
+    assert event["eisv_telemetry"]["afferent_policy_applied"] is False
     assert event["metrics"] == {"primary_eisv_source": "behavioral"}
 
 
@@ -148,7 +166,7 @@ def test_compact_drops_the_payload_nothing_reads():
     assert "derivation" not in event["eisv_telemetry"]
     # And the projection must actually be smaller, not merely reshaped.
     import json
-    assert len(json.dumps(event)) < len(json.dumps(_fat_event())) / 3
+    assert len(json.dumps(event)) < len(json.dumps(_fat_event())) / 2
 
 
 def test_compact_is_a_strict_subset_so_one_parser_handles_both():
