@@ -257,6 +257,7 @@ async def emit_sweep_cycle(
     *,
     trigger_source: str,
     active_session_count: int,
+    active_session_batch_truncated: bool,
     stuck_session_count: int,
     invalid_session_count: int,
     saga_inflight_skip_count: int,
@@ -275,6 +276,8 @@ async def emit_sweep_cycle(
     denominator and identifies the invocation source because the resolver has
     both periodic and request-triggered entry points.
 
+    ``active_session_count`` is the number scanned, not an unbounded table
+    count; ``active_session_batch_truncated`` says an overflow sentinel existed.
     ``saga_inflight_skip_count`` records the ordering visible at the early saga
     guard. ``write_refused_count`` records guarded writes another writer beat.
     They are distinct because neither is a complete measure of all overlap;
@@ -295,6 +298,7 @@ async def emit_sweep_cycle(
             "details": {
                 "trigger_source": trigger_source,
                 "active_session_count": active_session_count,
+                "active_session_batch_truncated": active_session_batch_truncated,
                 "stuck_session_count": stuck_session_count,
                 "invalid_session_count": invalid_session_count,
                 "saga_inflight_skip_count": saga_inflight_skip_count,

@@ -83,6 +83,40 @@ async def test_no_stuck_sessions():
 
 
 @pytest.mark.asyncio
+async def test_sweep_prioritizes_oldest_rows_and_reports_a_full_batch():
+    """A 100-row cap must not silently select the newest active sessions.
+
+    The 101st row is an overflow sentinel. It proves the scanned count is a
+    bounded batch rather than the complete active-session denominator.
+    """
+    sessions = [
+        {
+            "session_id": f"recent-{index}",
+            "updated_at": _recent_time(),
+            "paused_agent_id": f"agent-{index}",
+            "phase": "thesis",
+        }
+        for index in range(101)
+    ]
+    fetch = AsyncMock(return_value=sessions)
+    emitted = AsyncMock()
+
+    with patch(f"{AUTO_RESOLVE}.get_active_sessions_async", fetch), \
+         patch(f"{AUTO_RESOLVE}.emit_sweep_cycle", emitted):
+        from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
+        result = await auto_resolve_stuck_sessions(trigger_source="periodic")
+
+    fetch.assert_awaited_once_with(
+        limit=101,
+        least_recently_updated_first=True,
+    )
+    assert result["active_session_count"] == 100
+    assert result["active_session_batch_truncated"] is True
+    assert result["stuck_session_count"] == 0
+    assert emitted.await_args.kwargs["active_session_batch_truncated"] is True
+
+
+@pytest.mark.asyncio
 async def test_resolves_stuck_thesis_session():
     """Sessions in thesis phase inactive for >2h should be marked FAILED (no reviewer to reassign)."""
     sessions = [
