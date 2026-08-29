@@ -30,10 +30,10 @@ registrars advertise in each deployable mode and what `describe_tool` says
 about those names. The snapshots are immutable evidence inputs; they do not
 certify the components that produced them.
 
-- Audit bundle: `sha256:089b48f4fedce76c6996c28546bcbff70f2019b4661e2c733b9d3ec9a9ca285c` (`unitares.tool-surface-audit.v1`).
-- Dispatch snapshot: `sha256:0a67b8f9603cfb8053e35701b753b4d02dde969a0fe1bd9cba99213ea4282368`.
-- Audited source revision: `sha256:bc0e44fdfb4ba7106d5e417acceb044ae93e1decc1cffaefe954b418b930088f` (50 files).
-- Exposure snapshot: `sha256:7ec6174419ff0e4dd90211040da629470bbf8e7c91cedfcd6968275d14268106`.
+- Audit bundle: `sha256:b4dc4fa5c93b909ec3ad749b20468e2870f1a2fca26d8ad258befa08079c2cdf` (`unitares.tool-surface-audit.v1`).
+- Dispatch snapshot: `sha256:a063442daa817ce500c81e5a7fbf723e48de4827a7ec30ba62dc641905a19c4c`.
+- Audited source revision: `sha256:b1a1b433a09d374ba4f86249210e2db3e88bf0c173981c50d1efdbc66af1b67a` (50 files).
+- Exposure snapshot: `sha256:5177e451c28d0f993f163cda0c888c28cab7f7efe551fe72d6ac3c73af64454e`.
 - JSON contract: [`tool_surface_audit_v1.schema.json`](tool_surface_audit_v1.schema.json).
 - Reproduce with `python3 scripts/dev/tool_edge_index.py --json`; run
   `--lint` to return non-zero when error-severity findings exist.
@@ -67,7 +67,7 @@ the alias wire rejects them.
 | `search_shared_memory` | `knowledge` | 36 | — | `sha256:3be01cf1217fbaccf89e9102d10a8e0ca73910d74338f861b9d3a2a513aaaa2d` |
 | `start_session` | `onboard` | 16 | — | `sha256:89788402e8e21a8e918d6aac1339ce2537127ee3b6f9b175b89c1fefbaabc8d3` |
 | `store_finding` | `knowledge` | 13 | — | `sha256:88f13bbeed5d015e46b8fb362ae7a5656433926c7e5873b4fc7dd302fee57eaf` |
-| `sync_state` | `process_agent_update` | 22 | `agent_id`, `agent_name` | `sha256:9a96eb338278718eac4ced262db51207b748127d5716a5bcf3ec34c8bd1c2373` |
+| `sync_state` | `process_agent_update` | 23 | `agent_id`, `agent_name` | `sha256:e3f289dac008d65dac2b2d3bee12d37eb7e77d0a6f6fdeee22fec44d07cb2001` |
 | `update_finding` | `knowledge` | 13 | — | `sha256:7dd261b60503ec631b43a071201424d2fe7f6dd7b1dccb1463852334985dfc90` |
 
 ## Deterministic findings
@@ -98,13 +98,13 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `archive_orphan_agents` | `src/mcp_handlers/lifecycle/operations.py:745 handle_archive_orphan_agents` | `src/mcp_handlers/schemas/lifecycle.py:215 ArchiveOrphanAgentsParams` | 30s | — |
 | `bind_session` | `src/mcp_handlers/identity/handlers.py:1501 handle_bind_session` | `src/mcp_handlers/schemas/identity.py:221 BindSessionParams` | 5s | identity=pre_onboard |
 | `calibration` | `src/mcp_handlers/consolidated.py:245 action_router` | `src/mcp_handlers/schemas/calibration.py:67 CalibrationParams` | 60s | — |
-| `call_model` | `src/mcp_handlers/support/model_inference.py:669 handle_call_model` | `src/mcp_handlers/schemas/core.py:544 CallModelParams` | 240s | — |
-| `cirs_protocol` | `src/mcp_handlers/cirs/protocol.py:124 handle_cirs_protocol` | `src/mcp_handlers/schemas/core.py:516 CirsProtocolParams` | 15s | — |
+| `call_model` | `src/mcp_handlers/support/model_inference.py:669 handle_call_model` | `src/mcp_handlers/schemas/core.py:553 CallModelParams` | 240s | — |
+| `cirs_protocol` | `src/mcp_handlers/cirs/protocol.py:124 handle_cirs_protocol` | `src/mcp_handlers/schemas/core.py:525 CirsProtocolParams` | 15s | — |
 | `config` | `src/mcp_handlers/consolidated.py:270 action_router` | `src/mcp_handlers/schemas/admin.py:148 ConfigParams` | 15s | — |
-| `consult` | `src/mcp_handlers/support/consultation.py:694 handle_consult` | `src/mcp_handlers/schemas/core.py:601 ConsultParams` | 480s | — |
+| `consult` | `src/mcp_handlers/support/consultation.py:694 handle_consult` | `src/mcp_handlers/schemas/core.py:610 ConsultParams` | 480s | — |
 | `dashboard` | `src/mcp_handlers/admin/dashboard.py:44 handle_dashboard` | `src/mcp_handlers/schemas/dashboard.py:6 DashboardParams` | 15s | — |
-| `delegate_inference` | `src/mcp_handlers/support/delegated_inference.py:274 handle_delegate_inference` | `src/mcp_handlers/schemas/core.py:562 DelegateInferenceParams` | 480s | — |
-| `describe_inference_host` | `src/mcp_handlers/support/model_inference.py:150 handle_describe_inference_host` | `src/mcp_handlers/schemas/core.py:675 DescribeInferenceHostParams` | 5s | identity=pre_onboard |
+| `delegate_inference` | `src/mcp_handlers/support/delegated_inference.py:274 handle_delegate_inference` | `src/mcp_handlers/schemas/core.py:571 DelegateInferenceParams` | 480s | — |
+| `describe_inference_host` | `src/mcp_handlers/support/model_inference.py:150 handle_describe_inference_host` | `src/mcp_handlers/schemas/core.py:684 DescribeInferenceHostParams` | 5s | identity=pre_onboard |
 | `describe_tool` | `src/mcp_handlers/introspection/tool_introspection.py:793 handle_describe_tool` | `src/mcp_handlers/schemas/admin.py:42 DescribeToolParams` | 10s | identity=pre_onboard |
 | `detect_stuck_agents` | `src/mcp_handlers/lifecycle/stuck.py:919 handle_detect_stuck_agents` | `src/mcp_handlers/schemas/lifecycle.py:275 DetectStuckAgentsParams` | 15s | identity=pre_onboard |
 | `dialectic` | `src/mcp_handlers/consolidated.py:388 action_router` | `src/mcp_handlers/schemas/dialectic.py:137 DialecticParams` | 115s | — |
@@ -113,12 +113,12 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `get_governance_metrics` | `src/mcp_handlers/core.py:223 handle_get_governance_metrics` | `src/mcp_handlers/schemas/core.py:173 GetGovernanceMetricsParams` | 10s | identity=pre_onboard |
 | `get_thresholds` | `src/mcp_handlers/admin/config.py:16 handle_get_thresholds` | `src/mcp_handlers/schemas/admin.py:115 GetThresholdsParams` | 10s | — |
 | `get_trajectory_status` | `src/mcp_handlers/identity/handlers.py:2880 handle_get_trajectory_status` | `src/mcp_handlers/schemas/identity.py:202 GetTrajectoryStatusParams` | 10s | — |
-| `get_workspace_health` | `src/mcp_handlers/admin/handlers.py:516 handle_get_workspace_health` | `src/mcp_handlers/schemas/core.py:539 GetWorkspaceHealthParams` | 20s | — |
+| `get_workspace_health` | `src/mcp_handlers/admin/handlers.py:516 handle_get_workspace_health` | `src/mcp_handlers/schemas/core.py:548 GetWorkspaceHealthParams` | 20s | — |
 | `health_check` | `src/mcp_handlers/admin/handlers.py:336 handle_health_check` | `src/mcp_handlers/schemas/admin.py:85 HealthCheckParams` | 5s | identity=pre_onboard |
 | `identity` | `src/mcp_handlers/identity/handlers.py:1103 handle_identity_adapter` | `src/mcp_handlers/schemas/identity.py:6 IdentityParams` | 10s | identity=pre_onboard |
 | `knowledge` | `src/mcp_handlers/consolidated.py:175 action_router` | `src/mcp_handlers/schemas/knowledge.py:344 KnowledgeParams` | 120s | — |
 | `leave_note` | `src/mcp_handlers/knowledge/handlers.py:4106 handle_leave_note` | `src/mcp_handlers/schemas/knowledge.py:308 LeaveNoteParams` | 10s | deprecated→`knowledge` |
-| `list_inference_hosts` | `src/mcp_handlers/support/model_inference.py:124 handle_list_inference_hosts` | `src/mcp_handlers/schemas/core.py:657 ListInferenceHostsParams` | 5s | identity=pre_onboard |
+| `list_inference_hosts` | `src/mcp_handlers/support/model_inference.py:124 handle_list_inference_hosts` | `src/mcp_handlers/schemas/core.py:666 ListInferenceHostsParams` | 5s | identity=pre_onboard |
 | `list_process_bindings` | `src/mcp_handlers/identity/process_binding_handler.py:26 handle_list_process_bindings` | `src/mcp_handlers/schemas/identity.py:210 ListProcessBindingsParams` | 10s | — |
 | `list_tools` | `src/mcp_handlers/introspection/tool_introspection.py:128 handle_list_tools` | `src/mcp_handlers/schemas/admin.py:5 ListToolsParams` | 10s | identity=pre_onboard |
 | `mark_response_complete` | `src/mcp_handlers/lifecycle/operations.py:114 handle_mark_response_complete` | `src/mcp_handlers/schemas/lifecycle.py:251 MarkResponseCompleteParams` | 5s | — |
@@ -126,7 +126,7 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `onboard` | `src/mcp_handlers/identity/handlers.py:1995 handle_onboard_v2` | `src/mcp_handlers/schemas/identity.py:45 OnboardParams` | 15s | identity=pre_onboard |
 | `operator_resume_agent` | `src/mcp_handlers/lifecycle/self_recovery.py:553 handle_operator_resume_agent` | `src/mcp_handlers/schemas/lifecycle.py:327 OperatorResumeAgentParams` | 15s | — |
 | `outcome_correlation` | `src/mcp_handlers/observability/outcome_events.py:725 handle_outcome_correlation` | `src/mcp_handlers/schemas/observability.py:87 OutcomeCorrelationParams` | 30s | — |
-| `outcome_event` | `src/mcp_handlers/observability/outcome_events.py:585 handle_outcome_event` | `src/mcp_handlers/schemas/core.py:479 OutcomeEventParams` | 15s | — |
+| `outcome_event` | `src/mcp_handlers/observability/outcome_events.py:585 handle_outcome_event` | `src/mcp_handlers/schemas/core.py:488 OutcomeEventParams` | 15s | — |
 | `process_agent_update` | `src/mcp_handlers/core.py:436 handle_process_agent_update` | `src/mcp_handlers/schemas/core.py:303 ProcessAgentUpdateParams` | 60s | — |
 | `record_progress_pulse` | `src/mcp_handlers/resident_progress.py:20 handle_record_progress_pulse` | `src/mcp_handlers/schemas/progress_flat.py:9 RecordProgressPulseParams` | 5s | — |
 | `search_knowledge_graph` | `src/mcp_handlers/knowledge/handlers.py:2694 handle_search_knowledge_graph` | `src/mcp_handlers/schemas/knowledge.py:80 SearchKnowledgeGraphParams` | 15s | identity=pre_onboard |
@@ -188,14 +188,14 @@ runs (`from→to`, filled only when the destination is absent).
 
 | Action | Delegate | Remaps |
 |---|---|---|
-| `antithesis` | `src/mcp_handlers/dialectic/handlers.py:2612 handle_submit_antithesis` | — |
-| `get` | `src/mcp_handlers/dialectic/handlers.py:1628 handle_get_dialectic_session` | — |
-| `list` | `src/mcp_handlers/dialectic/handlers.py:1848 handle_list_dialectic_sessions` | — |
-| `quick` | `src/mcp_handlers/dialectic/handlers.py:383 handle_quick_dialectic` | — |
-| `reassign` | `src/mcp_handlers/dialectic/handlers.py:3404 handle_reassign_reviewer` | — |
-| `request` | `src/mcp_handlers/dialectic/handlers.py:1263 handle_request_dialectic_review` | — |
-| `synthesis` | `src/mcp_handlers/dialectic/handlers.py:2848 handle_submit_synthesis` | — |
-| `thesis` | `src/mcp_handlers/dialectic/handlers.py:2284 handle_submit_thesis` | — |
+| `antithesis` | `src/mcp_handlers/dialectic/handlers.py:2653 handle_submit_antithesis` | — |
+| `get` | `src/mcp_handlers/dialectic/handlers.py:1669 handle_get_dialectic_session` | — |
+| `list` | `src/mcp_handlers/dialectic/handlers.py:1889 handle_list_dialectic_sessions` | — |
+| `quick` | `src/mcp_handlers/dialectic/handlers.py:386 handle_quick_dialectic` | — |
+| `reassign` | `src/mcp_handlers/dialectic/handlers.py:3445 handle_reassign_reviewer` | — |
+| `request` | `src/mcp_handlers/dialectic/handlers.py:1304 handle_request_dialectic_review` | — |
+| `synthesis` | `src/mcp_handlers/dialectic/handlers.py:2889 handle_submit_synthesis` | — |
+| `thesis` | `src/mcp_handlers/dialectic/handlers.py:2325 handle_submit_thesis` | — |
 
 ### `export` · default `history`
 

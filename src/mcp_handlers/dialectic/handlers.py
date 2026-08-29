@@ -8,7 +8,10 @@ from typing import Dict, Any, Sequence, Optional, List
 from mcp.types import TextContent
 import asyncio
 import json
+import math
 import os
+from numbers import Real
+import re
 from datetime import datetime, timedelta, timezone
 
 # Import type definitions
@@ -1167,10 +1170,64 @@ async def _apply_reviewer_reassignment(
 
 
 _PAUSE_EVIDENCE_SCHEMA = "dialectic.pause_evidence.v1"
+_PAUSE_EISV_KEYS = ("E", "I", "S", "V")
+_PAUSE_SOURCE_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}")
+
+
+def _pause_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return None
+    try:
+        number = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _project_pause_lane(
+    lane: Any,
+    *,
+    fallback_source: str,
+    fallback_values: Any,
+) -> Dict[str, Any]:
+    lane = lane if isinstance(lane, dict) else {}
+    fallback_source = str(fallback_source)
+    if _PAUSE_SOURCE_PATTERN.fullmatch(fallback_source) is None:
+        fallback_source = "unknown"
+    source = lane.get("source")
+    if not isinstance(source, str) or _PAUSE_SOURCE_PATTERN.fullmatch(source) is None:
+        source = fallback_source
+    values = lane.get("values")
+    values = values if isinstance(values, dict) else fallback_values
+    values = values if isinstance(values, dict) else {}
+    return {
+        "source": source,
+        "values": {key: _pause_number(values.get(key)) for key in _PAUSE_EISV_KEYS},
+    }
+
+
+def _project_pause_measurement(
+    measurement: Any,
+    metrics: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Keep only decision-relevant numeric lanes for an external reviewer."""
+    measurement = measurement if isinstance(measurement, dict) else {}
+    return {
+        "primary": _project_pause_lane(
+            measurement.get("primary"),
+            fallback_source=metrics.get("primary_eisv_source") or "unknown",
+            fallback_values=metrics,
+        ),
+        "ode": _project_pause_lane(
+            measurement.get("ode"),
+            fallback_source="ode_diagnostic",
+            fallback_values=metrics.get("ode"),
+        ),
+    }
 
 
 def _capture_pause_evidence(monitor: Any) -> Dict[str, Any]:
-    """Return the exact last governance decision bundle for dialectic review.
+    """Return a bounded last-decision bundle for dialectic review.
 
     ``GovernanceState.to_dict()`` is the diagnostic ODE state. It does not carry
     the verdict-authoritative behavioral vector, final risk/verdict provenance,
@@ -1212,25 +1269,9 @@ def _capture_pause_evidence(monitor: Any) -> Dict[str, Any]:
         if isinstance(result.get("eisv_telemetry"), dict)
         else {}
     )
-    measurement = (
-        telemetry.get("measurement")
-        if isinstance(telemetry.get("measurement"), dict)
-        else {
-            "primary": {
-                "source": metrics.get("primary_eisv_source") or "unknown",
-                "values": {
-                    key: metrics.get(key) for key in ("E", "I", "S", "V")
-                },
-            },
-            "ode": {
-                "source": "ode_diagnostic",
-                "values": (
-                    dict(metrics.get("ode"))
-                    if isinstance(metrics.get("ode"), dict)
-                    else {}
-                ),
-            },
-        }
+    measurement = _project_pause_measurement(
+        telemetry.get("measurement"),
+        metrics,
     )
     policy_evaluation = (
         telemetry.get("policy_evaluation")
