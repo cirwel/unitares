@@ -114,14 +114,25 @@ class TestMcpToolDecorator:
         assert is_tool_deprecated("test_normal_tool") is False
         assert is_tool_hidden("test_normal_tool") is False
 
-    def test_leave_note_marked_deprecated(self):
-        """leave_note is the issue-#429 canonical deprecation: superseded by knowledge(action='note')."""
+    def test_leave_note_is_not_deprecated(self):
+        """leave_note is a first-class tool, not a deprecated one.
+
+        Inverted from test_leave_note_marked_deprecated on 2026-08-29 by
+        operator decision. It carried deprecated=True from the #429
+        consolidation while simultaneously sitting in LITE_MODE_TOOLS and in
+        the CLAUDE.md/AGENTS.md shared contract as a workflow tool agents are
+        told to use. The flag suppressed it from list_tools orientation and
+        stamped a [DEPRECATED] prefix on a supported entry point.
+
+        Sharing an implementation with knowledge(action='note') is not
+        supersession. This test pins the decision so the flag cannot drift back.
+        """
         # Import handler to trigger decorator registration in the live registry.
         import src.mcp_handlers.knowledge.handlers  # noqa: F401
 
-        assert is_tool_deprecated("leave_note") is True
+        assert is_tool_deprecated("leave_note") is False
         meta = get_tool_metadata("leave_note")
-        assert meta["superseded_by"] == "knowledge"
+        assert meta["superseded_by"] is None
 
     def test_deprecated_tool_call_emits_log_line(self, caplog):
         """Every call to a deprecated tool must emit a structured log line
@@ -171,18 +182,26 @@ class TestMcpToolDecorator:
 
         Pre-fix, the deprecation lived only in tool_relationships (consumed by
         list_tools) and on the decorator. describe_tool built responses from
-        get_tool_definitions only — agents calling describe_tool('leave_note')
-        got no migration hint.
+        get_tool_definitions only — agents calling describe_tool on a
+        deprecated name got no migration hint.
+
+        The sample was leave_note until 2026-08-29, when the operator settled
+        that leave_note is not deprecated. This asserts the MECHANISM, so it
+        just needs some genuinely deprecated entry; request_dialectic_review is
+        one. If DEPRECATION_REGISTRY ever empties, delete this test rather than
+        re-deprecating a tool to keep it alive.
         """
         from src.mcp_handlers.introspection.tool_introspection import (
             _describe_tool_deprecation_block,
         )
-        block = _describe_tool_deprecation_block("leave_note")
+        block = _describe_tool_deprecation_block("request_dialectic_review")
         assert block is not None
         assert block["deprecated"] is True
-        assert block["superseded_by"] == "knowledge"
-        assert "knowledge" in block["migration"]
-        assert "action='note'" in block["migration"]
+        assert block["superseded_by"] == "self_recovery_review"
+        assert "self_recovery_review" in block["migration"]
+
+        # A tool that is NOT deprecated returns None -- leave_note included.
+        assert _describe_tool_deprecation_block("leave_note") is None
 
         # Non-deprecated tool returns None
         assert _describe_tool_deprecation_block("process_agent_update") is None
