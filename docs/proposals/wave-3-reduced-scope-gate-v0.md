@@ -399,10 +399,30 @@ are now deferred, and the instrument moved to the front.
 1. **Land the §3.1 emitter.** A new event on the refusal path (it does not exist — see §3.1), plus
    stop discarding the sweep summary's `message`. Python-only, no BEAM. ⛔This builds nothing in
    the reduced scope, so it needs no gate and does not spend the §4 build authorisation.
+   **Built in PR #2011** as `dialectic_write_refused` / `emit_write_refused`, emitted from all
+   three refusal sites. ⛔Merged is not deployed — step 3 is still owed.
 2. **Accrue the window.** ⛔≥30 days proposed, matching R1 — a proposed prior, not a settled one.
 3. **Record the deploy timestamp and commit** when the emitter ships. ⛔The reassignment metric has
    been stuck since 2026-06-11 for exactly this omission (§4, R3); do not repeat it. The window
    starts at *deploy*, not merge.
+
+   ⚠️**The slot is below, empty, because that is the failure this step exists to prevent.** The
+   2026-06-11 omission was not a refusal to record — it was that nobody had anywhere obvious to
+   write it, so the value was never captured and the window never started. An instruction without
+   a destination is how that repeats.
+
+   | | |
+   |---|---|
+   | **Deployed commit** | ⛔_not yet deployed_ |
+   | **Wall-clock deploy time (UTC)** | ⛔_not yet deployed_ |
+   | **Denominator-filter predicate** | ⛔_state it when the clock starts_ |
+
+   ⛔**No `dialectic_write_refused` row predating that timestamp may be counted**, and until the
+   row above is filled no window has started and none may be cited. ⛔Whoever runs the deploy fills
+   this in; it is not derivable afterwards — verified 2026-08-22 that the `governance` database has
+   no deploy table and no deploy-completion event, `deploy-apply.sh` is human-triggered with no
+   automation, and process-start time is not a proxy because the service is `KeepAlive`-restarted
+   independently of deploys.
 
 **Then — the decision this gate was built to inform:**
 
