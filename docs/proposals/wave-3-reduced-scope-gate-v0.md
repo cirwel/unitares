@@ -25,20 +25,27 @@ gate that cleared itself is the defect the go-decision artifact was rejected for
 its five line numbers had drifted by 2026-08-29**, seven days after signature. Re-verified against
 the working tree at `bf8ce77`:
 
-| Path | Symbol | File | Signed line | Actual 2026-08-29 |
-|---|---|---|---|---|
-| (1) sweeper | `auto_resolve_stuck_sessions` | `src/mcp_handlers/dialectic/auto_resolve.py` | 102 | **143** |
-| (1) sweeper | `_parse_timestamp` | `src/mcp_handlers/dialectic/auto_resolve.py` | 32 | **37** |
-| (2) request | `check_reviewer_stuck` | `src/mcp_handlers/dialectic/handlers.py` | 211 | **249** |
-| (2) request | `_apply_reviewer_reassignment` | `src/mcp_handlers/dialectic/handlers.py` | 933 | **1028** |
-| (2) request | `check_timeout` | `src/dialectic_protocol.py` | 1216 | **1224** |
+| Path | Symbol | File | Signed 2026-08-22 | 2026-08-29 (`bf8ce77`) | 2026-08-29 (`83efd0b`) |
+|---|---|---|---|---|---|
+| (1) sweeper | `auto_resolve_stuck_sessions` | `src/mcp_handlers/dialectic/auto_resolve.py` | 102 | 143 | **143** |
+| (1) sweeper | `_parse_timestamp` | `src/mcp_handlers/dialectic/auto_resolve.py` | 32 | 37 | **37** |
+| (2) request | `check_reviewer_stuck` | `src/mcp_handlers/dialectic/handlers.py` | 211 | 249 | **252** |
+| (2) request | `_apply_reviewer_reassignment` | `src/mcp_handlers/dialectic/handlers.py` | 933 | 1028 | **1031** |
+| (2) request | `check_timeout` | `src/dialectic_protocol.py` | 1216 | 1224 | **1245** |
 
-`_apply_reviewer_reassignment` call sites, re-verified: `handlers.py:1706`, `:2681`, `:3485`
-(signed as 1589/2508/3138). The **count** of three is stable; the blast-radius finding stands.
+`_apply_reviewer_reassignment` call sites: signed as 1589/2508/3138, then 1706/2681/3485, now
+**1749/2753/3561**. The **count** of three is stable; the blast-radius finding stands.
 
-⚠️This is recorded as a property of the artifact, not as a complaint: a scope defined by line
-number decays in under a week at this repo's merge rate. **This gate defines its scope by symbol
-and call-graph reachability only**, and any future restatement should do the same.
+⚠️**The last two columns are seven days and roughly two hours apart.** The middle column was
+verified while drafting this document; `master` then advanced 48 commits — among them #1993, a
+dialectic fix — and three of the five symbols moved again before the draft could be committed.
+⛔The rows that did *not* move are the ones in files that commit range never touched
+(`auto_resolve.py`, `reviewer.py`, `background_tasks.py`), which is the mechanism, not luck.
+
+This is recorded as a property of the artifact, not as a complaint: a scope defined by line number
+decays faster than the document defining it can be written. **This gate defines its scope by symbol
+and call-graph reachability only**, and any future restatement should do the same. ⛔The table above
+is illustration of the decay, not an index to navigate by — re-derive by symbol.
 
 ### §1.1 Proposed reduction: gate path (1) only
 
