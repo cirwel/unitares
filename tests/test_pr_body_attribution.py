@@ -78,8 +78,11 @@ def test_footer_shaped_line_in_prose_is_left_alone():
     out = pba.analyze(body)
     assert out["stripped"] is False
     assert out["residual"] is True, (
-        "discussing the footer mid-body leaves a real link in the public body; "
-        "the guard should still fail and the author should use the escape hatch"
+        "discussing the footer mid-body leaves a real link in the public body, "
+        "so the guard should still fail — and there is no way to wave it "
+        "through: repo-scope.yml's `allow-register` marker exempts the REGISTER "
+        "check only, and the session check always runs. Describe the shape "
+        "instead of pasting one"
     )
 
 

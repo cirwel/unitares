@@ -33,6 +33,12 @@ footer is removed. A session link anywhere else in the body was written by the
 author, is a real leak, and must still fail the guard — so this reports it
 rather than cleaning it.
 
+That includes an *example*. `repo-scope.yml`'s `allow-register` marker exempts
+the register check only; the session check always runs, deliberately. So a PR
+that needs to discuss these shapes — this one did — must describe them in words
+rather than paste one, and keep the literal forms here and in the test
+fixtures, where the file guard allows them.
+
 Usage (body on stdin):
     python3 scripts/dev/pr_body_attribution.py < body.txt        # stripped body -> stdout
     python3 scripts/dev/pr_body_attribution.py --status < body.txt  # JSON verdict -> stdout
