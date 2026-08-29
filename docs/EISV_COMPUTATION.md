@@ -127,7 +127,20 @@ identity of EISV itself.
 - **From check-in 25 with the current constants**: `baseline_confidence >= 0.8`
   against the 30-update target, enabling self-relative z-score deviations from
   the agent's own behavioral baseline.
-- **Absolute safety floors always apply**, overriding the baseline.
+- **Absolute safety floors always apply**, overriding the baseline — but read
+  that precisely: a floor overrides the basin-gated *component* (via per-component
+  `max()`), not the *verdict*. The largest single-floor contribution equals its
+  component weight (0.30 for E or I, 0.20 for S or |V|), and each of those is
+  below the 0.35 safe/caution threshold — so one dimension at its absolute worst
+  still reads `safe` (E=0.0 alone: risk 0.30), and only E and I both near zero
+  force `high-risk` (0.30 + 0.30 = 0.60) through the floors alone. For
+  non-embodied agents the Step-1 component clamps compress this further
+  (E_obs ≥ ~0.18, I_obs ≥ 0.12), capping the all-floors-at-reachable-worst risk
+  at ~0.50 (`caution` → guide → proceeds). Verdict-level structural pauses for
+  such states come from the diagnostic-ODE side of `monitor_decision.py`
+  (basin/void/coherence pauses), which tracks the behavioral signal only through
+  the sensor spring coupling, with lag. Whether a lone floor breach should force
+  at least `caution` is an open calibration question — issue #1995.
 - Self-relative deviation risk is **gated by absolute basin health** (issue #689): inside the healthy basin a deviation from your own norm is treated as information, not danger; the gate opens only as a dimension leaves the basin toward its absolute floor. (This replaced a flat σ-floor that was false-pausing ultra-stable agents as the *principled* fix; the floor survives as defense-in-depth, bounding the z-score denominator in the boundary region — `MIN_MEANINGFUL_EISV_STD`.)
 
 Internally the assessment emits a `safe` / `caution` / `high-risk` label; that drives the binary `proceed` / `pause` action (qualified by a sub-action), which the agent reads back as `proceed` / `guide` / `pause` / `reject`.
