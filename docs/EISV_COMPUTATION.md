@@ -128,8 +128,8 @@ identity of EISV itself.
   against the 30-update target, enabling self-relative z-score deviations from
   the agent's own behavioral baseline.
 - **Absolute safety floors always apply**, overriding the baseline — but read
-  that precisely: a floor overrides the basin-gated *component* (via per-component
-  `max()`), not the *verdict*. The largest single-floor contribution equals its
+  that precisely: a floor overrides the basin-gated *component* (via a
+  per-component `max`), not the *verdict*. The largest single-floor contribution equals its
   component weight (0.30 for E or I, 0.20 for S or |V|), and each of those is
   below the 0.35 safe/caution threshold — so one dimension at its absolute worst
   still reads `safe` (E=0.0 alone: risk 0.30), and only E and I both near zero
