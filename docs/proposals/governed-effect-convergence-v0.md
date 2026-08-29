@@ -70,6 +70,12 @@ fermata: Governed Effect IR (canonical contract)
    the UNITARES profile's executor. Only its *contract surface* (envelope shape,
    states) aligns to the IR.
 
+**Implementation status (2026-08-29):** steps 1–3 are landed; the BEAM path now
+uses a production UNITARES-profile mapper rather than keeping the mapping only in
+tests. Promoted executes carry an explicit `record_only` predecessor and fail
+closed unless effect type, surface, and intended-payload SHA-256 match. Direct
+execute remains a separately visible compatibility path.
+
 ## What does NOT change
 
 - The plane's lease-plane reuse (§9), the `EffectCustodian` OTP model (§5a), the
