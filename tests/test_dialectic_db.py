@@ -1625,3 +1625,91 @@ class TestEdgeCases:
         assert result["resolution"] == resolution
         assert "paused_agent_state_json" not in result
         assert "resolution_json" not in result
+
+
+class TestTerminalWriteGuardIsLoadBearing:
+    """`TERMINAL_WRITE_GUARD` must govern the SQL it claims to govern.
+
+    The constant is declarative: every guarded ``UPDATE`` inlines
+    ``('resolved', 'failed')`` and none of them interpolates
+    ``TERMINAL_WRITE_GUARD``. So the constant and the SQL are two independent
+    copies, and before this test the only thing tying them together was a
+    docstring -- three of which say a writer "carries TERMINAL_WRITE_GUARD"
+    when nothing in the code makes that true.
+
+    ⛔This does NOT make the constant load-bearing at runtime; the SQL is still
+    a literal. What it makes load-bearing is the *claim*: change the constant
+    without changing all five statements, or add a sixth guarded writer that
+    disagrees, and CI fails here instead of the divergence being discovered by
+    a dual-writer incident.
+
+    Deliberately derives the expected fragment FROM the constant rather than
+    hardcoding it, which is the difference between this and the per-method
+    assertion above -- that one restates the literal twice and passes even if
+    both copies drift together.
+    """
+
+    GUARDED_WRITERS = (
+        "update_session_phase",
+        "update_session_reviewer",
+        "update_session_status",
+        "mark_awaiting_facilitation",
+        "resolve_session",
+    )
+
+    def _expected_fragment(self, instance):
+        joined = ", ".join(f"'{status}'" for status in instance.TERMINAL_WRITE_GUARD)
+        return f"NOT IN ({joined})"
+
+    def test_every_guarded_writer_carries_the_constant(self, db):
+        """All five statements must spell exactly what the constant declares."""
+        import inspect
+
+        instance, _pool, _conn = db
+        expected = self._expected_fragment(instance)
+
+        for name in self.GUARDED_WRITERS:
+            source = inspect.getsource(getattr(type(instance), name))
+            assert expected in source, (
+                f"{name} does not carry {expected!r}. Either its SQL drifted from "
+                "TERMINAL_WRITE_GUARD, or the constant changed and this writer was "
+                "missed -- both are how a terminal row becomes writable again."
+            )
+
+    def test_no_unlisted_writer_carries_the_guard(self, db):
+        """A sixth guarded WRITE must be declared here, not appear silently.
+
+        The failure this catches is additive: someone adds a guarded write, the
+        five above still pass, and the new one is never checked against the
+        constant again.
+
+        ⛔Keyed on methods that actually ``UPDATE`` the sessions table, not on
+        occurrences of the fragment. `is_agent_in_active_session` carries the
+        same literal as a **read** predicate (`phase NOT IN (...)`), and an
+        earlier draft of this test counted it as a sixth writer and failed.
+        That near-miss is the reason for the distinction rather than an
+        argument against it: the literal is load-bearing in two different
+        senses in one file, and only one of them is this constant's business.
+        """
+        import inspect
+
+        instance, _pool, _conn = db
+        expected = self._expected_fragment(instance)
+        cls = type(instance)
+
+        unlisted = []
+        for name in dir(cls):
+            if name.startswith("__") or name in self.GUARDED_WRITERS:
+                continue
+            attr = inspect.unwrap(getattr(cls, name, None) or (lambda: None))
+            try:
+                source = inspect.getsource(attr)
+            except (TypeError, OSError):
+                continue
+            if "UPDATE core.dialectic_sessions" in source and expected in source:
+                unlisted.append(name)
+
+        assert not unlisted, (
+            f"{unlisted} UPDATE core.dialectic_sessions carrying {expected!r} but are "
+            "not in GUARDED_WRITERS. Add them so they are checked against the constant."
+        )
