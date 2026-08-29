@@ -1379,20 +1379,6 @@ async def enrich_websocket_broadcast(ctx: UpdateContext) -> None:
             f"coherence={metrics.get('coherence')}"
         )
 
-        # Extract sensor data if present (Lumen check-ins)
-        # Accept as direct argument (preferred) or legacy parameters list format
-        broadcast_sensor_data = ctx.arguments.get("sensor_data")
-        if broadcast_sensor_data is None:
-            params_raw = ctx.arguments.get("parameters", [])
-            if isinstance(params_raw, list):
-                for p in params_raw:
-                    if isinstance(p, dict) and p.get("key") == "sensor_data":
-                        try:
-                            broadcast_sensor_data = json.loads(p.get("value"))
-                            break
-                        except Exception:
-                            pass
-
         # Extract EISV values
         eisv_nested = metrics.get("eisv", {})
         eisv_data = {
@@ -1452,9 +1438,11 @@ async def enrich_websocket_broadcast(ctx: UpdateContext) -> None:
             pass
 
         # Keep the broadcaster/ring-buffer payload compact.  The full bounded
-        # derivation envelope is persisted in core.agent_state and available in
-        # full check-in responses; the dashboard needs only source, confidence,
-        # missingness, policy, and actuator status for its source lanes.
+        # derivation envelope and raw sensor values are persisted in
+        # core.agent_state and available on authenticated full-history surfaces;
+        # the dashboard needs only source, dimension names/counts, confidence,
+        # missingness, policy, and actuator status for its source lanes. Never
+        # duplicate the original unbounded sensor_data into the event ring.
         from src.eisv_telemetry import summarize_eisv_telemetry
         eisv_telemetry = summarize_eisv_telemetry(
             ctx.response_data.get("eisv_telemetry")
@@ -1480,7 +1468,6 @@ async def enrich_websocket_broadcast(ctx: UpdateContext) -> None:
             "risk_reason": risk_adj_reason,
             "events": governance_events,
             "drift_trends": drift_trends,
-            "sensor_data": broadcast_sensor_data,
             "eisv_telemetry": eisv_telemetry,
         })
         logger.debug(f"Broadcast EISV update for agent {ctx.declared_agent_id}: eisv={eisv_data}, coherence={coherence_val}")
