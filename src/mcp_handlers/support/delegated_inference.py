@@ -62,6 +62,49 @@ async def _track_energy(
         logger.warning("Could not track delegated-inference Energy: %s", exc)
 
 
+# Truncation budget for the diagnostic excerpt below. Large enough to carry a
+# fence, a preamble, and the start of a JSON object; small enough that a runaway
+# CLI cannot flood an error payload.
+_RAW_EXCERPT_LIMIT = 2000
+
+
+def _raw_excerpt_details(adapter_result: Dict[str, Any]) -> Dict[str, Any]:
+    """Diagnostic excerpt of the CLI's own output, for envelope failures only.
+
+    `_validate_terminal_answer` fails closed on anything that is not exactly the
+    contracted JSON object, which is the right posture: guessing what a model
+    meant is how a plan gets accepted as an answer. But failing closed without
+    saying what arrived leaves the caller unable to tell a fenced-but-valid
+    payload from a refusal from a crash, and the raw text the adapter already
+    captured is thrown away one layer up.
+
+    Reported 2026-08-29: a codex:host-adapter call returned exit_status 0 after
+    ~40s of real work, and surfaced only "malformed terminal answer envelope" —
+    enough to know the lane is broken, not enough to fix it.
+
+    This adds diagnosis, never tolerance: the call still fails, the status is
+    still `malformed`, and nothing here is parsed or acted upon. The excerpt is
+    unvalidated model-authored text and is labelled as such.
+    """
+    if adapter_result.get("status") == "complete":
+        return {}
+    raw = adapter_result.get("raw")
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    excerpt = raw.strip()
+    truncated = len(excerpt) > _RAW_EXCERPT_LIMIT
+    if truncated:
+        excerpt = excerpt[:_RAW_EXCERPT_LIMIT]
+    return {
+        "adapter_raw_excerpt": excerpt,
+        "adapter_raw_excerpt_truncated": truncated,
+        "adapter_raw_excerpt_note": (
+            "Unvalidated host-CLI output, included so an envelope failure is "
+            "diagnosable. It was NOT parsed and is not an answer."
+        ),
+    }
+
+
 async def run_delegated_inference(
     request: DelegatedInferenceRequest,
 ) -> InferenceOutcome:
@@ -194,6 +237,7 @@ async def run_delegated_inference(
                 "inference_provenance": adapter_provenance,
                 "execution_started": execution_started,
                 "possibly_running": possibly_running,
+                **_raw_excerpt_details(adapter_result),
             },
             recovery={
                 "action": (

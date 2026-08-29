@@ -401,3 +401,91 @@ async def test_unavailable_codex_names_its_own_cli_variable(monkeypatch):
     action = parsed["recovery"]["action"]
     assert "UNITARES_CODEX_CLI" in action
     assert "UNITARES_CLAUDE_CLI" not in action
+
+
+@pytest.mark.asyncio
+async def test_envelope_failure_carries_a_raw_excerpt(monkeypatch):
+    """A malformed envelope must say what arrived, or it cannot be diagnosed."""
+    monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _claude_host())
+    monkeypatch.setattr(
+        di,
+        "invoke_host_adapter",
+        lambda *_args, **_kwargs: _async_value({
+            "ok": False,
+            "status": "malformed",
+            "text": "",
+            "raw": '```json\n{"schema":"x","status":"complete","answer":"hi"}\n```',
+            "agent_id": "orch-agent-fenced",
+            "exit_status": 0,
+            "error": "Host CLI returned a malformed terminal answer envelope",
+            "provenance": {"finish_reason": "success"},
+        }),
+    )
+
+    outcome = await di.run_delegated_inference(di.DelegatedInferenceRequest(
+        prompt="review",
+        requesting_agent_uuid="requester",
+    ))
+
+    assert outcome.ok is False
+    details = outcome.failure.details
+    # Still fails closed — the excerpt adds diagnosis, never tolerance.
+    assert details["adapter_status"] == "malformed"
+    assert "```json" in details["adapter_raw_excerpt"]
+    assert details["adapter_raw_excerpt_truncated"] is False
+    assert "NOT parsed" in details["adapter_raw_excerpt_note"]
+
+
+@pytest.mark.asyncio
+async def test_raw_excerpt_is_bounded(monkeypatch):
+    monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _claude_host())
+    monkeypatch.setattr(
+        di,
+        "invoke_host_adapter",
+        lambda *_args, **_kwargs: _async_value({
+            "ok": False,
+            "status": "malformed",
+            "text": "",
+            "raw": "x" * (di._RAW_EXCERPT_LIMIT + 500),
+            "agent_id": "orch-agent-flood",
+            "exit_status": 0,
+            "error": "Host CLI returned a malformed terminal answer envelope",
+            "provenance": {},
+        }),
+    )
+
+    outcome = await di.run_delegated_inference(di.DelegatedInferenceRequest(
+        prompt="review",
+        requesting_agent_uuid="requester",
+    ))
+
+    details = outcome.failure.details
+    assert len(details["adapter_raw_excerpt"]) == di._RAW_EXCERPT_LIMIT
+    assert details["adapter_raw_excerpt_truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_no_raw_excerpt_on_a_complete_answer(monkeypatch):
+    """A successful envelope needs no excerpt; the answer is the answer."""
+    monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _claude_host())
+    monkeypatch.setattr(
+        di,
+        "invoke_host_adapter",
+        lambda *_args, **_kwargs: _async_value({
+            "ok": False,
+            "status": "complete",
+            "text": "answered",
+            "raw": "some raw transcript",
+            "agent_id": "orch-agent-complete",
+            "exit_status": 1,
+            "error": "Host adapter returned a nonzero exit",
+            "provenance": {},
+        }),
+    )
+
+    outcome = await di.run_delegated_inference(di.DelegatedInferenceRequest(
+        prompt="review",
+        requesting_agent_uuid="requester",
+    ))
+
+    assert "adapter_raw_excerpt" not in outcome.failure.details

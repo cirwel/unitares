@@ -30,9 +30,9 @@ registrars advertise in each deployable mode and what `describe_tool` says
 about those names. The snapshots are immutable evidence inputs; they do not
 certify the components that produced them.
 
-- Audit bundle: `sha256:bb58805d73469527505684e37c2e8c6b05908ead7c1341ba866fec2485199bdf` (`unitares.tool-surface-audit.v1`).
-- Dispatch snapshot: `sha256:457921fecae12fe13382180fcd85b24e5e19a98d2a9f9d0964cd0c93c24984c3`.
-- Audited source revision: `sha256:f1cd299865150a074e62a2794078d0efb550b317122a35a685e4284b2cd8d067` (50 files).
+- Audit bundle: `sha256:5abacb84fd11b4aac520d30f0231e3ca875cf179cd0201bc69563c1e45df62f2` (`unitares.tool-surface-audit.v1`).
+- Dispatch snapshot: `sha256:58a4620b9ed0f61b9f86b1650c2c4b5f454cc582c8ddb984a435c6dd2bc8cfb6`.
+- Audited source revision: `sha256:9898cb73c13e2bd28c1c8e5bfda09c3b6efb8c5dd8d5f82d2135af6712e278aa` (50 files).
 - Exposure snapshot: `sha256:5177e451c28d0f993f163cda0c888c28cab7f7efe551fe72d6ac3c73af64454e`.
 - JSON contract: [`tool_surface_audit_v1.schema.json`](tool_surface_audit_v1.schema.json).
 - Reproduce with `python3 scripts/dev/tool_edge_index.py --json`; run
@@ -103,7 +103,7 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `config` | `src/mcp_handlers/consolidated.py:270 action_router` | `src/mcp_handlers/schemas/admin.py:148 ConfigParams` | 15s | — |
 | `consult` | `src/mcp_handlers/support/consultation.py:694 handle_consult` | `src/mcp_handlers/schemas/core.py:610 ConsultParams` | 480s | — |
 | `dashboard` | `src/mcp_handlers/admin/dashboard.py:44 handle_dashboard` | `src/mcp_handlers/schemas/dashboard.py:6 DashboardParams` | 15s | — |
-| `delegate_inference` | `src/mcp_handlers/support/delegated_inference.py:274 handle_delegate_inference` | `src/mcp_handlers/schemas/core.py:571 DelegateInferenceParams` | 480s | — |
+| `delegate_inference` | `src/mcp_handlers/support/delegated_inference.py:318 handle_delegate_inference` | `src/mcp_handlers/schemas/core.py:571 DelegateInferenceParams` | 480s | — |
 | `describe_inference_host` | `src/mcp_handlers/support/model_inference.py:150 handle_describe_inference_host` | `src/mcp_handlers/schemas/core.py:684 DescribeInferenceHostParams` | 5s | identity=pre_onboard |
 | `describe_tool` | `src/mcp_handlers/introspection/tool_introspection.py:795 handle_describe_tool` | `src/mcp_handlers/schemas/admin.py:42 DescribeToolParams` | 10s | identity=pre_onboard |
 | `detect_stuck_agents` | `src/mcp_handlers/lifecycle/stuck.py:919 handle_detect_stuck_agents` | `src/mcp_handlers/schemas/lifecycle.py:275 DetectStuckAgentsParams` | 15s | identity=pre_onboard |
