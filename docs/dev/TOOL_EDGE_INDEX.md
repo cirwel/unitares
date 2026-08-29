@@ -30,9 +30,9 @@ registrars advertise in each deployable mode and what `describe_tool` says
 about those names. The snapshots are immutable evidence inputs; they do not
 certify the components that produced them.
 
-- Audit bundle: `sha256:b4dc4fa5c93b909ec3ad749b20468e2870f1a2fca26d8ad258befa08079c2cdf` (`unitares.tool-surface-audit.v1`).
-- Dispatch snapshot: `sha256:a063442daa817ce500c81e5a7fbf723e48de4827a7ec30ba62dc641905a19c4c`.
-- Audited source revision: `sha256:b1a1b433a09d374ba4f86249210e2db3e88bf0c173981c50d1efdbc66af1b67a` (50 files).
+- Audit bundle: `sha256:bb58805d73469527505684e37c2e8c6b05908ead7c1341ba866fec2485199bdf` (`unitares.tool-surface-audit.v1`).
+- Dispatch snapshot: `sha256:457921fecae12fe13382180fcd85b24e5e19a98d2a9f9d0964cd0c93c24984c3`.
+- Audited source revision: `sha256:f1cd299865150a074e62a2794078d0efb550b317122a35a685e4284b2cd8d067` (50 files).
 - Exposure snapshot: `sha256:5177e451c28d0f993f163cda0c888c28cab7f7efe551fe72d6ac3c73af64454e`.
 - JSON contract: [`tool_surface_audit_v1.schema.json`](tool_surface_audit_v1.schema.json).
 - Reproduce with `python3 scripts/dev/tool_edge_index.py --json`; run
@@ -105,7 +105,7 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `dashboard` | `src/mcp_handlers/admin/dashboard.py:44 handle_dashboard` | `src/mcp_handlers/schemas/dashboard.py:6 DashboardParams` | 15s | — |
 | `delegate_inference` | `src/mcp_handlers/support/delegated_inference.py:274 handle_delegate_inference` | `src/mcp_handlers/schemas/core.py:571 DelegateInferenceParams` | 480s | — |
 | `describe_inference_host` | `src/mcp_handlers/support/model_inference.py:150 handle_describe_inference_host` | `src/mcp_handlers/schemas/core.py:684 DescribeInferenceHostParams` | 5s | identity=pre_onboard |
-| `describe_tool` | `src/mcp_handlers/introspection/tool_introspection.py:793 handle_describe_tool` | `src/mcp_handlers/schemas/admin.py:42 DescribeToolParams` | 10s | identity=pre_onboard |
+| `describe_tool` | `src/mcp_handlers/introspection/tool_introspection.py:795 handle_describe_tool` | `src/mcp_handlers/schemas/admin.py:42 DescribeToolParams` | 10s | identity=pre_onboard |
 | `detect_stuck_agents` | `src/mcp_handlers/lifecycle/stuck.py:919 handle_detect_stuck_agents` | `src/mcp_handlers/schemas/lifecycle.py:275 DetectStuckAgentsParams` | 15s | identity=pre_onboard |
 | `dialectic` | `src/mcp_handlers/consolidated.py:388 action_router` | `src/mcp_handlers/schemas/dialectic.py:137 DialecticParams` | 115s | — |
 | `direct_resume_if_safe` | `src/mcp_handlers/lifecycle/resume.py:23 handle_direct_resume_if_safe` | `src/mcp_handlers/schemas/lifecycle.py:333 DirectResumeIfSafeParams` | 10s | deprecated→`quick_resume or self_recovery_review` |
@@ -117,7 +117,7 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `health_check` | `src/mcp_handlers/admin/handlers.py:336 handle_health_check` | `src/mcp_handlers/schemas/admin.py:85 HealthCheckParams` | 5s | identity=pre_onboard |
 | `identity` | `src/mcp_handlers/identity/handlers.py:1103 handle_identity_adapter` | `src/mcp_handlers/schemas/identity.py:6 IdentityParams` | 10s | identity=pre_onboard |
 | `knowledge` | `src/mcp_handlers/consolidated.py:175 action_router` | `src/mcp_handlers/schemas/knowledge.py:344 KnowledgeParams` | 120s | — |
-| `leave_note` | `src/mcp_handlers/knowledge/handlers.py:4106 handle_leave_note` | `src/mcp_handlers/schemas/knowledge.py:308 LeaveNoteParams` | 10s | deprecated→`knowledge` |
+| `leave_note` | `src/mcp_handlers/knowledge/handlers.py:4114 handle_leave_note` | `src/mcp_handlers/schemas/knowledge.py:308 LeaveNoteParams` | 10s | — |
 | `list_inference_hosts` | `src/mcp_handlers/support/model_inference.py:124 handle_list_inference_hosts` | `src/mcp_handlers/schemas/core.py:666 ListInferenceHostsParams` | 5s | identity=pre_onboard |
 | `list_process_bindings` | `src/mcp_handlers/identity/process_binding_handler.py:26 handle_list_process_bindings` | `src/mcp_handlers/schemas/identity.py:210 ListProcessBindingsParams` | 10s | — |
 | `list_tools` | `src/mcp_handlers/introspection/tool_introspection.py:128 handle_list_tools` | `src/mcp_handlers/schemas/admin.py:5 ListToolsParams` | 10s | identity=pre_onboard |
@@ -208,17 +208,17 @@ runs (`from→to`, filled only when the destination is absent).
 
 | Action | Delegate | Remaps |
 |---|---|---|
-| `audit` | `src/mcp_handlers/knowledge/handlers.py:4334 handle_audit_knowledge_graph` | — |
-| `cleanup` | `src/mcp_handlers/knowledge/handlers.py:4121 handle_cleanup_knowledge_graph` | — |
+| `audit` | `src/mcp_handlers/knowledge/handlers.py:4340 handle_audit_knowledge_graph` | — |
+| `cleanup` | `src/mcp_handlers/knowledge/handlers.py:4127 handle_cleanup_knowledge_graph` | — |
 | `details` | `src/mcp_handlers/knowledge/handlers.py:3428 handle_get_discovery_details` | — |
 | `get` | `src/mcp_handlers/knowledge/handlers.py:2712 handle_get_knowledge_graph` | — |
 | `list` | `src/mcp_handlers/knowledge/handlers.py:2815 handle_list_knowledge_graph` | — |
 | `note` | `src/mcp_handlers/knowledge/handlers.py:4065 handle_knowledge_note` | `content`→`summary` |
 | `search` | `src/mcp_handlers/knowledge/handlers.py:2694 handle_search_knowledge_graph` | `query`→`search_query` |
-| `stats` | `src/mcp_handlers/knowledge/handlers.py:4227 handle_get_lifecycle_stats` | — |
+| `stats` | `src/mcp_handlers/knowledge/handlers.py:4233 handle_get_lifecycle_stats` | — |
 | `store` | `src/mcp_handlers/knowledge/handlers.py:1476 handle_store_knowledge_graph` | `content`→`details` |
-| `supersede` | `src/mcp_handlers/knowledge/handlers.py:4291 handle_supersede_discovery` | — |
-| `synthesize` | `src/mcp_handlers/knowledge/handlers.py:4155 handle_synthesize_knowledge_graph` | — |
+| `supersede` | `src/mcp_handlers/knowledge/handlers.py:4297 handle_supersede_discovery` | — |
+| `synthesize` | `src/mcp_handlers/knowledge/handlers.py:4161 handle_synthesize_knowledge_graph` | — |
 | `update` | `src/mcp_handlers/knowledge/handlers.py:3409 handle_update_discovery_status_graph` | `content`→`details` |
 
 ### `observe`

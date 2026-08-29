@@ -641,9 +641,13 @@ class GovernanceClient:
         tags: list[str] | None = None,
         **kwargs: Any,
     ) -> NoteResult:
-        """Leave a knowledge graph note. Routes through `knowledge(action='note')` —
-        the `leave_note` MCP tool is deprecated (issue #429) but the SDK method
-        name is retained for backward compatibility.
+        """Leave a knowledge graph note. Routes through `knowledge(action='note')`.
+
+        The `leave_note` MCP tool is NOT deprecated (operator decision,
+        2026-08-29) — it is a supported low-friction entry point sharing this
+        implementation. This method calls `knowledge` directly rather than the
+        `leave_note` tool simply because it already had that wiring; both reach
+        the same handler and produce the same audit shape and DB row.
         """
         args: dict[str, Any] = {"action": "note", "summary": summary}
         if tags is not None:

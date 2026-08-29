@@ -54,7 +54,7 @@ knowledge(
 )
 ```
 
-Notes are automatically shared with all agents. Use this when you find something useful, spot a bug, or have an insight that others should know about. The legacy `leave_note()` tool remains as a compatibility alias, but it is deprecated.
+Notes are automatically shared with all agents. Use this when you find something useful, spot a bug, or have an insight that others should know about. `leave_note()` is also supported as a lower-friction entry point to the same handler.
 
 For a structured discovery, prefer the dedicated workflow alias:
 
