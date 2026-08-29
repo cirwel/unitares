@@ -4,15 +4,20 @@
 cutover, changes Wave 3's scope, or proposes retiring an HTTP route. It asks one
 question and proposes an answer to be argued with.
 
-**Review: one adversarial pass (2026-08-28), four blockers folded in place.**
-The document was written in a single pass from a reading of the tree; a
-subsequent review re-derived its claims from the cited call sites and raised
-four blockers, each now folded where it lands: the mint-time assurance gate
-(§2, §7), `inbox` being a consuming mutation with an unresolved ack/retry gap
-(§8, §9, §11), the contract-representability gap (§4), and a corrected risk
-statement for widening `validate_path` (§9). §5 and §6 remain operator
-decisions this document deliberately does not take. Claims outside the reviewed
-citations should still be treated as unverified until re-derived from the tree.
+**Review: two adversarial passes (2026-08-28), no peer review.** The document
+was written in a single pass from a reading of the tree. The first source
+re-derivation folded four blockers where they land: the mint-time assurance
+gate (§2, §7), `inbox` being a consuming mutation with an unresolved ack/retry
+gap (§8, §9, §11), the contract-representability gap (§4), and a corrected risk
+statement for widening `validate_path` (§9). A second source re-derivation found
+four more constraints: an agent-facing lease mutation cannot inherit the live
+route's permissive `:log` authorization (§7), `status` needs an agent-visible
+scope and redaction contract (§3, §7), timer separation belongs at the
+accountable dispatch boundary rather than in a duplicate SDK client (§5, §6),
+and retries need a stable logical operation with a fresh single-use attestation
+per attempt (§8). §5 remains an operator decision this document deliberately
+does not take. Claims outside the reviewed citations should still be treated as
+unverified until re-derived from the tree.
 
 One `consult(purpose="critique")` pass was run on 2026-08-28 (consultation
 `d1e98e34`, route `ollama` / `gemma4:latest`, `cost_class: local_free`,
@@ -126,27 +131,37 @@ signing dance recreates the same pressure, aimed the other way.
 
 The discriminator is **not** "is it implemented on BEAM."
 
-It is honestly **two** tests, and an earlier draft of this section hid that by
-listing "operator authority" as though it were a third caller shape. It is not a
-caller shape — an operator is a caller like any other; what excludes
-force-release is the *authority the action requires*, which is a property of the
-operation, not of who invoked it. So, in order:
+It is honestly **three** tests. An earlier draft hid the first by listing
+"operator authority" as though it were a caller shape. It is not — an operator
+is a caller like any other; what excludes force-release is the *authority the
+action requires*, which is a property of the operation. The third test prevents
+"an agent can choose it" from externalizing every low-level state transition.
+So, in order:
 
 1. **Does the action require an authority an agent cannot hold?** If yes, it is
    never a capability, whoever calls it. This is what excludes force-release,
    and it would still exclude it if only agents ever called it.
 2. **Is there an agent mid-loop who decides to do this?** If no, there is no
    caller for a tool to serve, and it stays plane machinery.
+3. **Can the operation be expressed as stable agent intent without making the
+   caller mirror plane lifecycle or receive internal state?** If no, it is not
+   ready for exposure even when test 2 passes. A consuming inbox needs
+   acknowledgement semantics; a lease mutation needs strict object ownership;
+   a status read needs an explicit visibility contract.
 
-Substrate never enters either test. Keeping them separate matters because they
+Substrate never enters any test. Keeping them separate matters because they
 disagree on at least one case: a lease *handoff* is an agent decision (test 2
 passes) whose completion is enforced by a timeout supervisor the agent does not
 control, which is why §11 flags it as the least certain row below.
 
-**Expose as capabilities** — agent decisions:
+**Candidates for exposure** — agent decisions, subject to the blockers below:
 
-- `msg` — `send`, `inbox`
-- `lease` — `acquire`, `release`, `status`, `handoff/offer`, `handoff/accept`
+- `msg/send` — after idempotency and principal derivation are defined
+- `msg/inbox` — after claim/ack/redelivery and principal derivation are defined
+- `lease/status` — separately, after its agent-visible response is scoped and
+  redacted
+- lease mutations — `acquire`, `release`, `handoff/offer`, `handoff/accept` —
+  only after strict ownership and §6's activity-provenance boundary are real
 - dialectic session/phase/resolve — already exposed; formalize as a contract
   record rather than a flag-gated client
 
@@ -172,11 +187,13 @@ reason its docstring already gives (§6).
 ## 4. Shape
 
 The end state this document wants is a capability record in
-`unitares.interface-contract.v1` whose canonical implementation is the BEAM
-route — *not* a Python handler that exists only to forward. **That record is
-not representable today, and an earlier draft of this section overstated how
-close it is.** `_capability_record` (`src/interface_contract.py:155`) can only
-describe tools that exist in the `@mcp_tool` registry:
+`unitares.interface-contract.v1` whose coordination authority is the BEAM
+route and whose agent-facing adapter preserves governance assurance. The
+adapter is part of the security boundary, not a disposable forwarding shim.
+**That composite implementation is not representable today, and an earlier
+draft of this section overstated how close it is.** `_capability_record`
+(`src/interface_contract.py:155`) can only describe tools that exist in the
+`@mcp_tool` registry:
 `get_public_tool_definitions` filters every definition against that registry,
 the record's `implementation` field is the alias-resolved *Python tool name*,
 its `kind` is only ever `workflow_alias` or `canonical_tool`, and
@@ -186,19 +203,21 @@ dispatcher can route a contract entry anywhere except a registered handler. So
 the choice is explicit, not assumed away:
 
 - **(a) Extend the contract and the dispatcher** — a new record `kind` (e.g.
-  `beam_route`) whose implementation field carries the route, plus a dispatch
-  path that forwards to it. Honest about the end state, but real surgery on
-  `interface_contract.py` and the call dispatcher, both CI-pinned artifacts
-  with a checked-in canonical serialization.
-- **(b) Accept a thin registered handler** — a `@mcp_tool` handler whose whole
-  body is mint-and-forward (§2's gate included). Representable today with zero
-  contract changes; the record then truthfully reports `canonical_tool`, and
-  the "no shim" ideal is given up openly rather than faked in a record the
-  machinery cannot honor.
+  `beam_route`) or backend-authority field names the route while an adapter
+  still performs assurance, principal derivation, exact-byte serialization,
+  minting, and error normalization. Honest about the composite end state, but
+  real surgery on `interface_contract.py` and the call dispatcher, both
+  CI-pinned artifacts with a checked-in canonical serialization.
+- **(b) Accept a thin registered security adapter** — a `@mcp_tool` handler
+  performs those same checks and forwards the authorized operation. It is
+  representable today with zero contract changes; the record truthfully reports
+  `canonical_tool`, while BEAM remains the coordination authority.
 
 This document leans **(b)** for the first slice — contract machinery should be
-extended for a second consumer, not speculatively for the first — and records
-the disagreement with its own earlier draft rather than hiding it.
+extended for a second consumer, not speculatively for the first, and naming a
+route directly must never imply that governance's security adapter may be
+bypassed. It records the disagreement with its own earlier draft rather than
+hiding it.
 
 Two conventions this must follow:
 
@@ -247,8 +266,10 @@ a choice *before* it is applied, by the operator — not chosen silently and
 reported afterwards as the method. This document therefore does **not** pick it.
 It names it as the blocking question and proposes three candidates:
 
-- **(a)** Capability calls count; the outbox forwarder stops writing `lease.*`
-  rows for the same operations, so there is one row per logical act.
+- **(a)** One explicit capability dispatch counts once; the outbox forwarder
+  stops projecting lease-plane execution events into `audit.tool_usage`, so
+  there is one row per logical agent act. Plane events remain canonical in
+  `lease_plane.lease_plane_events` and carry correlation provenance instead.
 - **(b)** Capability calls count, forwarder rows stay, and every reader splits on
   provenance — the #1955 fix generalized rather than repeated per reader.
 - **(c)** Capability calls are recorded under a separate key entirely and never
@@ -264,8 +285,24 @@ activity tracker (the Dec `reply_to_question`/dialectic false-positive class)."
 A lease *heartbeat* is substrate, emitted on a timer, and must never look like
 agent action. A lease *acquire* is an agent decision and legitimately is one.
 **Any exposure must keep the heartbeat off the tool path even when `acquire`
-sits on it** — which means `lease` as a capability cannot simply wrap the SDK
-client, because the client's heartbeat and acquire share a code path today.
+sits on it.** The separation belongs at the accountable entrypoint, not in a
+duplicate transport client: `LeasePlaneClient.acquire()` and `.heartbeat()` are
+already distinct methods that share only the low-level `_request_json` helper.
+Sharing that helper is safe; sending scheduled maintenance through the
+registered `lease` handler is not
+(`agents/sdk/src/unitares_sdk/lease_plane/client.py`).
+
+The implementation invariant, whichever §5 accounting candidate the operator
+chooses, is:
+
+- one explicit capability dispatch may write one tool-usage row;
+- an automatic acquire, renew, heartbeat, timeout, reaper, or poll writes zero
+  tool-usage rows and never feeds loop detection or activity tracking;
+- BEAM execution events remain plane telemetry and carry a bounded origin
+  discriminator plus a logical-operation correlation ID, rather than being
+  reinterpreted as agent intent from their endpoint name; and
+- a low-level client may be shared by both entrypoints, but the tool recorder
+  and governance-activity consumers may only observe the explicit one.
 
 ## 7. Identity: what changes, what must not
 
@@ -281,14 +318,45 @@ server-inferred binding (`caller_proven: false`: fingerprint pin, sticky-cache
 hit, injected CSID) is refused, not signed. A test must pin that the capability
 path cannot mint from a binding the attest route would have rejected.
 
-**Non-goal: do not let exposure silently move a surface's identity mode.** The
-lease surfaces run `IdentityBinding.authorize/4`, which is env-gated across
-`:off` / `:log` / `:enforce`, and the live plane runs `:log` — verify, warn,
-serve anyway. The msg routes run `authorize_strict/3` unconditionally, by
-deliberate design, because the graduated modes on a mailbox mean handing one
-agent's mail to another while logging a warning about it. A capability wrapper
-must preserve each surface's declared mode exactly, and a test must pin that it
-neither promotes nor demotes one.
+**Invariant: agent-facing authorization is fail-closed even while an existing
+raw route remains in compatibility mode.** The lease surfaces run
+`IdentityBinding.authorize/4`, which is env-gated across `:off` / `:log` /
+`:enforce`, and the live plane runs `:log` — verify, warn, serve anyway. That is
+an existing server-caller rollout posture, not a safe authorization contract
+for new agent reachability. A strong attestation authenticates the caller; it
+does not authorize that caller to release or hand off another holder's lease
+when BEAM merely logs the mismatch. Existing raw-route behavior need not change
+as a side effect of exposure, but every agent-facing mutation must enforce
+holder/recipient ownership in the same serialized operation as the BEAM
+mutation. A Python preflight, or a BEAM check followed by an independently
+scheduled mutation, is insufficient because either creates a
+time-of-check/time-of-use gap. The mechanism — a strict agent route, a strict
+dispatch context, or an equivalent BEAM-side gate that passes the authenticated
+principal into the mutation — remains implementation work; fail-closed atomic
+ownership does not.
+
+**Invariant: acting-principal fields are derived, not caller-authored.** The
+agent-facing schemas do not accept `sender_agent_uuid`, the inbox's
+`recipient_agent_uuid`, or an acquire's `holder_agent_uuid`; the adapter derives
+them from the same strong caller-proven identity that gates minting. Release and
+handoff may accept opaque object IDs, but BEAM must strictly verify the current
+holder or intended recipient before mutating. The existing msg routes already
+use `authorize_strict/3`; a wrapper must preserve that strictness without asking
+the agent to restate who it is.
+
+**Blocker: define the agent-visible `lease/status` view.** The raw status route
+is bearer-authenticated but not identity-bound, and `present_lease` includes
+`holder_agent_uuid`, `holder_pid`, `audit_session`, and `substrate_state`.
+Read-only is not the same as safe to expose. Before `status` becomes a
+capability, the contract must state which surfaces a caller may query and which
+fields are returned or redacted; wrapping the raw response is not acceptable.
+
+Boundary tests must prove that weak assurance cannot mint, caller-authored
+principal fields cannot change the acting identity, every mismatched
+holder/recipient mutation refuses even while the compatibility route remains in
+`:log`, and the status capability cannot return fields outside its declared
+view. Those are conformance tests for the boundary, not a commitment to a route
+or adapter design.
 
 ## 8. Failure posture: no fallback for mutations
 
@@ -322,21 +390,37 @@ enforced by the transport). Defining these semantics is part of §9 step 1's
 design work; "refuse" only covers the case where the mutation is known not to
 have happened.
 
+**Retry invariant: the logical operation is stable and the authorization is
+fresh.** Every retry carries the same server-enforced operation identity — a
+send idempotency key, a claim/ack token, or an existing lease operation's
+stable identity — but a newly minted single-use `lat.v1.*` attestation bound to
+that attempt's exact bytes. An operation with no stable retry identity remains
+blocked until one is defined. Reusing the attestation turns lost-response
+recovery into a replay refusal; changing the operation identity turns it into a
+duplicate mutation. Tests must pin both halves together.
+
 ## 9. Sequencing
 
-1. **`msg` first.** Newest surface, no lease state machine, already
-   `authorize_strict` unconditionally, and the credential dance is at its worst
-   there. Smallest honest slice — though not a trivial one: §8's ack/retry
-   semantics are part of it, not deferrable past it.
-2. **`lease` second**, and only after §6 is resolved — the heartbeat/acquire
-   split is real work, not a wrapper.
-3. **Dialectic**: formalize the existing flag-gated client as a contract record.
+1. **`msg/send` first.** It is the smallest surface with measured reachability
+   pressure and already uses `authorize_strict`. It still waits for §5's
+   accounting choice, a server-enforced idempotency key, derived sender
+   identity, and §8's fresh-proof/stable-operation retry rule.
+2. **`msg/inbox` second.** It additionally waits for claim/ack/redelivery
+   semantics and a recipient derived from the authenticated caller.
+3. **`lease/status` separately**, only after §7 defines its visibility and
+   redacted response. Read-only does not make the raw route agent-safe.
+4. **Lease mutations later, or never.** `acquire`, `release`, and handoff wait
+   for §6's activity-provenance boundary, §7's strict BEAM-side ownership, and
+   a decision that exposing the state machine is worth its drift cost (§11).
+5. **Dialectic**: formalize the existing flag-gated client as a contract record.
    No behavior change.
-4. **Effects and force-release**: not in scope, now or later.
+6. **Effects and force-release**: not in scope, now or later.
 
-§5 and §8's ack/retry semantics block step 1. §6 blocks step 2.
+The listed preconditions block each slice independently; landing one does not
+silently authorize the next.
 
-**Step 1 also has a concrete prerequisite this document originally missed.**
+**Steps 1 and 2 also have a concrete prerequisite this document originally
+missed.**
 `mint_lease_attestation` refuses any path that is not `/v1/lease/...`
 (`validate_path`, `src/lease_attestation.py:176-184`), so the server-side
 minting helper that §7's invariant depends on **cannot mint a proof for
@@ -349,7 +433,7 @@ proof minted for one route can never be presented at another, whatever the
 mint would now permit. What widening changes is the **signer's issuance
 scope**: the set of routes governance is willing to bind future proofs to.
 That is still a real security decision — per-route widening keeps the scope
-enumerable, a prefix like `/v1/msg/` does not — and whoever takes step 1
+enumerable, a prefix like `/v1/msg/` does not — and whoever takes either step
 should treat it as their first design question, for that reason rather than
 the wrong one.
 
@@ -367,7 +451,14 @@ the wrong one.
 ## 11. Open questions
 
 - **What "tool usage" means after exposure** (§5). Operator decision. Blocking.
-- **The heartbeat/acquire split** (§6). Design work, not yet done.
+- **How §6's activity provenance is represented.** The invariant is settled:
+  explicit dispatch is agent activity and timer maintenance is not. The bounded
+  origin/correlation shape and where it is persisted remain design work.
+- **How strict lease capability authorization reaches BEAM** (§7). A new route,
+  strict dispatch context, or equivalent atomic gate are implementation choices;
+  inheriting `:log` or relying on a Python preflight are not.
+- **What `lease/status` may reveal** (§7). Query scope and the redacted response
+  are unresolved; the raw response is not the capability contract.
 - **Latency.** Agent → MCP → Python → BEAM re-introduces exactly the boundary
   the BEAM move was meant to escape, and `beam-footprint-roadmap-v0.md`'s stop
   sign #4 ("if the Ports/HTTP boundary accrues >1 distinct workaround pattern,
@@ -386,9 +477,9 @@ the wrong one.
   delivery-state transition behind it (§8) and belongs with the mutating verbs.
   `msg send` has no state machine behind it, but §8's idempotency gap is its
   own version of the same cost.
-- **Whether `lease` is worth exposing at all.** §6 may make it expensive enough
-  that the honest answer is "`msg` yes, `lease` no." That would be a fine
-  outcome for this document.
+- **Whether `lease` is worth exposing at all.** §§6–7 and the state-machine
+  drift cost may make it expensive enough that the honest answer is "`msg` yes,
+  `lease` no." That would be a fine outcome for this document.
 
 ## 12. How to know this was wrong
 
@@ -398,9 +489,13 @@ the wrong one.
 - If the §5 accounting choice has to be revisited within one month of shipping,
   the choice was made too fast and should have been an operator decision taken
   earlier, not later.
-- If a capability wrapper is found to have changed any surface's identity mode
-  (§7), this design is unsafe as written and the wrapper approach should be
-  abandoned in favor of leaving the routes raw.
+- If a timer-driven acquire, renew, heartbeat, timeout, reaper, or poll produces
+  a tool-usage row or feeds activity/loop detection, §6's boundary failed.
+- If an agent-facing mutation can commit without strict current-holder or
+  intended-recipient authorization at BEAM, §7's boundary failed — even when
+  the caller itself carried a valid strong attestation.
+- If `lease/status` exposes the raw lease record without an explicit query scope
+  and field-level contract, the read boundary failed.
 
 ## 13. Objections already checked and refuted
 
