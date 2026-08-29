@@ -1,7 +1,13 @@
 # Wave 3 reduced-scope gate (v0) — the smaller gate owed by the 2026-08-22 signature
 
-**Status:** ⛔ **PROPOSED — UNRATIFIED.** Nothing here is a decision. This document exists to
-give the operator something concrete to accept, amend or reject.
+**Status:** ⛔ **PROPOSED — UNRATIFIED as a gate.** The document as a whole still awaits operator
+signature and the council round §8 records as unheld.
+
+⚠️**But four of its open questions are now closed.** On 2026-08-29 the operator ruled on §6.1
+(reassignment gets its own serialization design), §6.2 (criterion 6 retained, halt authority
+removed), §6.6 (**instrument first — build the §3.1 emitter, decide the port on what it reports**)
+and, consequentially, §6.5 (deferred, with a named reopen condition). ⛔Those rulings are settled;
+the rest of this document is not. §6.3 and §6.4 remain owed.
 
 **What it discharges.** `wave-3-go-decision-2026-08-16.md` §4 signed GO-WITH-REDUCED-SCOPE and
 named exactly one released deliverable: *"one §11-style gate document for the reduced scope, plus
@@ -272,8 +278,10 @@ integration).
   it afterwards measures the change against itself. ⛔It is not pinnable today and no figure in
   this document may be read as pinning it. ⛔The window slides; the 2026-08-22 numbers are quoted
   with their as-of date and must not be re-quoted without it.
-- **Criterion 6.** Halts as written because `process_agent_update` p99 improved to 795ms — on the
-  axis struck 2026-06-24. Operator ruling owed (§6.2).
+- ~~**Criterion 6.**~~ ✅ **No longer halting — ruled 2026-08-29 (§6.2).** Retained as telemetry
+  with its halt authority removed. `process_agent_update` p99 (795ms as of the ruling, on the axis
+  struck 2026-06-24) is still measured and still reported; it can no longer stop anything. ⛔It was
+  not retired — do not cite it as removed.
 - **Criterion 7.** The `docs/handoffs/wave-3-mcp-sdk-spike-<date>.md` artifact exists on no ref.
   Does not fire on the merits; the artifact is owed (§6.4).
 
@@ -296,18 +304,36 @@ Inheriting #7 (503 rate during cutover/rollback) and #10 (cross-session shared-a
 
 ---
 
-## §6 ⛔What this gate does NOT settle — operator rulings owed
+## §6 Operator rulings — four settled 2026-08-29, two still owed
 
-Recorded openly rather than resolved by an agent. Each blocks something named.
+⛔**Settled by the operator on 2026-08-29**, in session, as choices stated before application
+rather than method reported afterwards. §6.1, §6.2 and §6.6 carry rulings; §6.5 is deferred by
+§6.6's ruling. §6.3 and §6.4 remain owed and are unchanged.
 
-**§6.1 Does reserve-first extend to the reassignment path?** (B) reserve-first is specified for
-Invariant 5, `SYNTHESIS→RESOLVED`. The RFC's write table *asserts* it as the fix for the
-reassignment writes, but as specified it does not cover them. ⛔The go-decision hands this
-question to the smaller gate; the gate cannot answer it, because the answer determines which
-serialization design is being gated. **Blocks:** §1.2 option (c), and therefore §3.2's threshold
-shape and R4.
+**§6.1 Does reserve-first extend to the reassignment path? — ✅ RULED: NO.** _(operator,
+2026-08-29)_ **The reassignment writes get their own serialization design.** (B) reserve-first
+stays specified for Invariant 5, `SYNTHESIS→RESOLVED` only, and is not stretched over a path with
+different write sequences and a different critical section.
 
-**§6.2 Criterion 6.** As written it halts because a struck axis improved. Ruling owed either way.
+⛔**Consequence for the RFC, which must not be lost:** the RFC's write table *asserts* (B) as the
+fix for the reassignment writes. That assertion is now **overruled** — it was never derived for
+that path. Any future reader of `beam-wave-3-handler-dispatch.md` reaching for reserve-first there
+is reaching for a mechanism this ruling declined to extend.
+
+⛔**Consequence for §1.2:** option (c) survives, and it now carries a named design debt — the
+reassignment serialization must be *specified*, not inherited. It does not collapse into (a).
+⛔That specification is **not** authorised by this ruling and is not owed yet; see §6.5.
+
+**§6.2 Criterion 6 — ✅ RULED: RETAINED, NON-HALTING.** _(operator, 2026-08-29)_ The measurement
+stays; its **halt authority is removed**. `process_agent_update` p99 is recorded as telemetry with
+no gate authority attached — the treatment the measurement-authority rule prescribes for a number
+that informs rather than decides.
+
+⛔It was **not** retired, and the distinction is load-bearing: retiring it would have deleted a
+measurement, and the rule permits retiring an *instrument* but never on the strength of what it
+reported. Keeping it non-halting removes the authority without discarding the datum. ⛔No future
+reading of criterion 6 may halt Wave 3, and no future reading may cite its removal either — it is
+still there, still measured.
 
 **§6.3 The §11.9 conjunction ambiguity.** §0(E) reads as a conjunction; the v0.3 fold reads >25%
 slip as a standalone halt. ⛔Explicitly reserved to the operator by the amendment itself.
@@ -317,33 +343,79 @@ slip as a standalone halt. ⛔Explicitly reserved to the operator by the amendme
 Both are non-gating for the reduced scope and both are still owed. ⛔Applying the
 missing-source halt to 8 and not to 7 remains inconsistent.
 
-**§6.5 Scope: path (1) only, or (1) and (2)?** §1.1 proposes (1). Operator's call.
+**§6.5 Scope: path (1) only, or (1) and (2)? — ⏸️ DEFERRED, with a named reopen condition.**
+_(operator, 2026-08-29)_ ⛔**Not answered, and deliberately not sent to council either.** §6.6's
+instrument-first ruling removes this question's urgency entirely: the §3.1 emitter is Python-only
+and requires no scope decision to build. If the window returns zero collisions, **(b1) fires and
+there is no port** — at which point this question dissolves rather than gets answered.
 
-**§6.6 Is the reduced scope worth its own cap spend at all?** ⛔Stated plainly because a gate that
-cannot ask this is decoration: (b2) is a live disconfirmer, the hazard has an in-process fix, and
-§3.2 shows the boundary-cost argument is weak by topology. The honest case for proceeding is
-**ownership and aliveness** — one writer, supervised, with the timer where the state is — not
-latency and not cost. ⛔If the operator does not want to buy that, (b2) is the exit and it is
-already named.
+⛔Spending a council round on the shape of a port that may not happen is precisely the cap spend
+criterion 9's apparatus exists to prevent. **Reopen condition:** the §3.1 window reports a nonzero
+guard-refusal count, or the operator elects the port on other grounds. ⛔§1.1's recommendation of
+path (1) stands as a recommendation only and has **not** been ratified.
+
+⚠️The council round that *is* owed regardless is the one on this document as a whole (§8) — not
+on this question in isolation.
+
+**§6.6 Is the reduced scope worth its own cap spend? — ✅ RULED: INSTRUMENT FIRST, DECIDE ON THE
+DATA.** _(operator, 2026-08-29)_ **The port is neither authorised nor declined.** What is
+authorised is the §3.1 guard-refusal emitter: Python-only, no BEAM, and — because it builds nothing
+in the reduced scope — **it needs no gate and does not consume the §4 build authorisation.**
+
+⛔**This is not a deferral dressed as a decision.** It settles the question the gate could not
+answer honestly: today "the sweeper has never collided" and "we have never been able to see a
+collision" are the same sentence, so *any* verdict on the port right now would be a verdict on an
+unmeasured state. The ruling makes the four-state distinction observable before anything is
+decided on it, which is what the measurement-authority rule requires and what §3.1 shows is
+currently impossible.
+
+**What it commits to:** building the instrument, and deciding afterwards on what it reports.
+**What it declines to commit to:** the port, the scope (§6.5), the §1.2 design option, and the
+serialization spec §6.1 authorised the *direction* of.
+
+⛔**Both exits stay live and neither is prejudiced.** A window of genuine zeros fires **(b1)** and
+closes the reduced scope on measured evidence. A window of real collisions makes the ownership
+case on data rather than on the structural argument alone — and **(b2)** remains available
+throughout, since the in-process fix (one transaction spanning `has_inflight_saga_async` through
+the status write) stays cheaper than the port and is not foreclosed by instrumenting.
 
 ---
 
 ## §7 Sequencing
 
-1. **Settle §6.1** (reserve-first scope) → unblocks §1.2.
-2. **Choose §1.2 option** → fixes the threshold shape for (b3)/R4.
-3. **Land the §3.1 prerequisite PR** (durable guard-refusal channel; Python-only, no BEAM) → makes
-   (b1), (b2), R2 and R3 measurable at all.
-4. **Accrue the window** — ⛔≥30 days proposed, matching R1; this is a proposed prior.
-5. **Pin criterion 10's resolution half** — requires a `resolved+failed` denominator ≥30, which is
-   upstream of this gate and of anything here.
-6. **Estimate**, against a settled design, and check it against the §2 cap.
-7. **Operator signature on this gate, as amended.**
-8. Only then: build.
+**Rewritten 2026-08-29 after the §6 rulings.** The old order led with two design questions; both
+are now deferred, and the instrument moved to the front.
 
-⛔Steps 1–3 are the whole of what is actionable today. ⛔Step 3 is the only one that is code, and
-it is deliberately Python-only: nothing in the reduced scope may be built before this gate is
-signed, and an observability prerequisite is not an implementation start.
+**Now — authorised and unblocked:**
+
+1. **Land the §3.1 emitter.** A new event on the refusal path (it does not exist — see §3.1), plus
+   stop discarding the sweep summary's `message`. Python-only, no BEAM. ⛔This builds nothing in
+   the reduced scope, so it needs no gate and does not spend the §4 build authorisation.
+2. **Accrue the window.** ⛔≥30 days proposed, matching R1 — a proposed prior, not a settled one.
+3. **Record the deploy timestamp and commit** when the emitter ships. ⛔The reassignment metric has
+   been stuck since 2026-06-11 for exactly this omission (§4, R3); do not repeat it. The window
+   starts at *deploy*, not merge.
+
+**Then — the decision this gate was built to inform:**
+
+4. **Read the window against (b1) and (b2).** Zeros close the reduced scope on measured evidence;
+   collisions make the ownership case on data. ⛔Whichever it is, name which of the four states it
+   rules out and how.
+5. **Only if the port goes live:** reopen §6.5 (scope), choose the §1.2 option, and specify the
+   reassignment serialization §6.1 authorised the direction of. ⛔None of these is owed before
+   step 4, and none may be started on the strength of this document.
+
+**Independent of the above, and owed regardless:**
+
+6. **Council round on this document** (§8) — unheld, and named by the go-decision §4 alongside it.
+7. **Pin criterion 10's resolution half** — needs a `resolved+failed` denominator ≥30, upstream of
+   this gate and of anything in it.
+8. **§6.3 and §6.4** — the conjunction ambiguity and the two missing handoff artifacts, both still
+   owed and neither settled here.
+
+⛔**Nothing in the reduced scope may be built until steps 4–5 have run and this gate is signed as
+amended.** An observability prerequisite is not an implementation start, and step 1 is authorised
+precisely because it is not one.
 
 ---
 
