@@ -433,7 +433,7 @@ async def _run_dialectic_auto_resolve_cycle() -> dict[str, int]:
     FAILED — the mapping here pins that naming so callers read ``failed``.
     """
     from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
-    result = await auto_resolve_stuck_sessions()
+    result = await auto_resolve_stuck_sessions(trigger_source="periodic")
     return {
         "failed": int(result.get("resolved_count", 0) or 0),
         "reassigned": int(result.get("reassigned_count", 0) or 0),

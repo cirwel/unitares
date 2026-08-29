@@ -208,3 +208,93 @@ class TestEmitWriteRefused:
 
         text = (Path(events.__file__).parent / "auto_resolve.py").read_text(encoding="utf-8")
         assert '"event_type": "dialectic_write_refused"' not in text
+
+
+class TestEmitSweepCycle:
+    """Every real cycle supplies a denominator, including the zero case."""
+
+    @pytest.mark.asyncio
+    async def test_payload_shape_includes_zeroes_and_source(self):
+        captured = {}
+
+        async def fake_append(payload):
+            captured.update(payload)
+
+        with patch("src.audit_db.append_audit_event_async", side_effect=fake_append):
+            await events.emit_sweep_cycle(
+                trigger_source="periodic",
+                active_session_count=0,
+                stuck_session_count=0,
+                invalid_session_count=0,
+                saga_inflight_skip_count=0,
+                write_attempt_count=0,
+                write_refused_count=0,
+                resolved_count=0,
+                reassigned_count=0,
+                facilitation_count=0,
+                duration_ms=7,
+            )
+
+        assert captured["event_type"] == "dialectic_sweep_cycle"
+        assert captured["agent_id"] is None
+        assert captured["details"] == {
+            "trigger_source": "periodic",
+            "active_session_count": 0,
+            "stuck_session_count": 0,
+            "invalid_session_count": 0,
+            "saga_inflight_skip_count": 0,
+            "write_attempt_count": 0,
+            "write_refused_count": 0,
+            "resolved_count": 0,
+            "reassigned_count": 0,
+            "facilitation_count": 0,
+            "duration_ms": 7,
+            "error": None,
+        }
+
+    @pytest.mark.asyncio
+    async def test_wrapper_emits_once_for_an_all_zero_cycle(self):
+        from src.mcp_handlers.dialectic import auto_resolve
+
+        result = {
+            "resolved_count": 0,
+            "reassigned_count": 0,
+            "facilitation_count": 0,
+            "skipped_count": 0,
+            "active_session_count": 0,
+            "stuck_session_count": 0,
+            "invalid_session_count": 0,
+            "saga_inflight_skip_count": 0,
+            "write_attempt_count": 0,
+        }
+        emitted = AsyncMock()
+        with patch.object(auto_resolve, "_auto_resolve_stuck_sessions",
+                          new=AsyncMock(return_value=result)), \
+             patch.object(auto_resolve, "emit_sweep_cycle", emitted):
+            returned = await auto_resolve.auto_resolve_stuck_sessions(
+                trigger_source="periodic"
+            )
+
+        assert returned is result
+        emitted.assert_awaited_once()
+        assert emitted.await_args.kwargs["trigger_source"] == "periodic"
+        assert emitted.await_args.kwargs["write_attempt_count"] == 0
+        assert emitted.await_args.kwargs["write_refused_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_emitter_is_fail_soft(self):
+        with patch("src.audit_db.append_audit_event_async",
+                   side_effect=RuntimeError("audit down")):
+            await events.emit_sweep_cycle(
+                trigger_source="active_session_check",
+                active_session_count=1,
+                stuck_session_count=1,
+                invalid_session_count=0,
+                saga_inflight_skip_count=1,
+                write_attempt_count=0,
+                write_refused_count=0,
+                resolved_count=0,
+                reassigned_count=0,
+                facilitation_count=0,
+                duration_ms=3,
+            )  # must not raise
