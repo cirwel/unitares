@@ -275,6 +275,28 @@ It names it as the blocking question and proposes three candidates:
 - **(c)** Capability calls are recorded under a separate key entirely and never
   enter the tool aggregate.
 
+### ✅ Operator decision, 2026-08-29 — (c)
+
+**Capability calls are recorded under their own key and never enter the tool
+aggregate.** Recorded as an operator choice, taken before any exposure work and
+not derived from analysis in this document.
+
+The stated reason: `audit.tool_usage` keeps meaning "an agent called a tool,"
+which is the reading `adoption_kpi` and the doctor's failure classifier already
+depend on, and no reader has to remember to split. (b) was declined precisely
+because its failure mode is the one #1955 measured — readers *forgetting* the
+split — and generalizing a fix does not stop the next reader from being written
+without it. (a) was declined for this slice as a larger coordinated change to
+the forwarder, not because it is wrong.
+
+The accepted cost, stated so nobody rediscovers it as a defect: **capability
+volume is invisible in the existing tool views until a view is built for it.**
+A zero in those views will therefore mean "not counted here," never "not used" —
+state 3 of the four the shared contract names, and not evidence of anything
+about demand.
+
+This closes §5 as a blocker on sequencing step 1. It does not close §8.
+
 ## 6. ⛔ The loop-detection hazard
 
 Distinct from §5 and worse, because it reaches a governance decision rather than
@@ -419,6 +441,13 @@ duplicate mutation. Tests must pin both halves together.
 The listed preconditions block each slice independently; landing one does not
 silently authorize the next.
 
+**Status after the 2026-08-29 operator decisions.** §5 is settled (see its
+decision block), so step 1's remaining blockers are §8's ack/retry rule, a
+server-enforced idempotency key, and derived sender identity — **§8 is now the
+single largest open item in front of step 1.** Step 2 additionally waits on
+claim/ack/redelivery. Steps 3 and 4 are deferred by the same decision, not
+cancelled.
+
 **Steps 1 and 2 also have a concrete prerequisite this document originally
 missed.**
 `mint_lease_attestation` refuses any path that is not `/v1/lease/...`
@@ -450,7 +479,9 @@ the wrong one.
 
 ## 11. Open questions
 
-- **What "tool usage" means after exposure** (§5). Operator decision. Blocking.
+- ~~**What "tool usage" means after exposure** (§5).~~ **Settled 2026-08-29** by
+  operator decision (c): capability calls get their own key and never enter the
+  tool aggregate. See §5. No longer blocking.
 - **How §6's activity provenance is represented.** The invariant is settled:
   explicit dispatch is agent activity and timer maintenance is not. The bounded
   origin/correlation shape and where it is persisted remain design work.
@@ -480,6 +511,21 @@ the wrong one.
 - **Whether `lease` is worth exposing at all.** §§6–7 and the state-machine
   drift cost may make it expensive enough that the honest answer is "`msg` yes,
   `lease` no." That would be a fine outcome for this document.
+  **Operator decision, 2026-08-29: `msg` proceeds now; `lease` stays a later
+  slice, deliberately not cancelled.**
+
+  **The operator's stated reason is a footprint argument, not a cost one:**
+  exposing the lease verbs as capabilities would propagate BEAM further, and
+  that expansion is the thing being held back. This is a different reason from
+  the ones this document had assembled — §§6–7's design cost and the
+  state-machine drift risk — and it is the reason of record. Those remain true
+  and remain live design work; they are not why the slice was deferred.
+
+  The distinction matters for anyone who later argues the deferral away. Solving
+  §6 and §7 would remove the *cost* objection while leaving the *footprint*
+  objection untouched, so a future "the blockers are cleared, ship it" does not
+  follow from clearing them. The question above therefore stays genuinely open,
+  and deferring the slice is not a quiet yes to it.
 
 ## 12. How to know this was wrong
 

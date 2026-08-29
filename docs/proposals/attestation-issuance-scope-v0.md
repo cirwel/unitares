@@ -71,6 +71,12 @@ sites that exist right now.
 
 ## 4. Proposal: scope belongs to the mint site, not to the signer
 
+> **✅ Ratified by operator decision, 2026-08-29.** This section is the accepted
+> model, not a candidate. The alternative in §7's second bullet — one named
+> scope shared by several sites — was considered and declined, because sharing a
+> scope is the failure §3 describes. Implementation still lands with the mint
+> site that needs it, per §6; ratifying the model does not authorize inert code.
+
 Issuance scope should be a property of *who is asking governance to sign*, not a
 single list the whole process shares.
 
