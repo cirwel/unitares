@@ -194,11 +194,20 @@ class TestMcpToolDecorator:
         from src.mcp_handlers.introspection.tool_introspection import (
             _describe_tool_deprecation_block,
         )
+        from src.mcp_handlers.decorators import get_tool_registry
+        from src.mcp_handlers.tool_stability import list_all_aliases
+
         block = _describe_tool_deprecation_block("request_dialectic_review")
         assert block is not None
         assert block["deprecated"] is True
-        assert block["superseded_by"] == "self_recovery_review"
-        assert "self_recovery_review" in block["migration"]
+        # Asserted as "names a tool the agent can call", not as a literal: the
+        # literal was `self_recovery_review`, a register=False delegate, so
+        # this test pinned a migration hint that returned tool_not_found_error.
+        # test_every_deprecation_surface_names_a_callable_tool covers the whole
+        # registry; this keeps the sample honest.
+        callable_names = set(get_tool_registry()) | set(list_all_aliases())
+        assert block["superseded_by"] in callable_names
+        assert block["superseded_by"] in block["migration"]
 
         # A tool that is NOT deprecated returns None -- leave_note included.
         assert _describe_tool_deprecation_block("leave_note") is None
