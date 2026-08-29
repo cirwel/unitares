@@ -20,17 +20,23 @@ from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 
 logger = get_logger(__name__)
 
-@mcp_tool("direct_resume_if_safe", timeout=10.0, deprecated=True, superseded_by="quick_resume or self_recovery_review")
+@mcp_tool("direct_resume_if_safe", timeout=10.0, deprecated=True, superseded_by="self_recovery")
 async def handle_direct_resume_if_safe(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """⚠️ DEPRECATED: Use quick_resume() or self_recovery_review() instead.
+    """⚠️ DEPRECATED: Use self_recovery() instead.
 
-    This tool is deprecated in favor of clearer recovery paths:
-    - quick_resume() - for clearly safe states (risk < 0.40, no void, no reflection needed)
-    - self_recovery_review() - for moderate states with reflection (risk < 0.65, no void)
+    This tool is deprecated in favor of clearer recovery paths, all reached
+    through the one registered entry point:
+    - self_recovery(action="quick")  - clearly safe states (risk < 0.40, no void, no reflection needed)
+    - self_recovery(action="review") - moderate states with reflection (risk < 0.65, no void)
+    - self_recovery(action="check")  - read-only: which of the two this state qualifies for
 
     Migration guidance:
-    - If risk < 0.40 and no void is active → use quick_resume()
-    - Otherwise → use self_recovery_review(reflection="...")
+    - If risk < 0.40 and no void is active → use self_recovery(action="quick")
+    - Otherwise → use self_recovery(action="review", reflection="...")
+
+    Named for the callable tool deliberately: quick_resume / self_recovery_review
+    are register=False delegates of self_recovery, so an agent that followed the
+    old wording got tool_not_found_error. See the note in tool_catalog.py.
 
     This tool will be removed in v2.0. Current threshold: risk < 0.60, no void.
 
@@ -151,11 +157,12 @@ async def handle_direct_resume_if_safe(arguments: Dict[str, Any]) -> Sequence[Te
         "deprecation_warning": {
             "tool": "direct_resume_if_safe",
             "status": "deprecated",
-            "message": "This tool is deprecated. Use quick_resume() or self_recovery_review() instead.",
+            "message": "This tool is deprecated. Use self_recovery() instead.",
             "migration": {
-                "if_risk_lt_0_40_and_no_void": "Use quick_resume() - fastest path, no reflection needed",
-                "otherwise": "Use self_recovery_review(reflection='...') - requires reflection but allows recovery at lower thresholds",
-                "related_tools": ["quick_resume", "self_recovery_review", "check_recovery_options"]
+                "if_risk_lt_0_40_and_no_void": "Use self_recovery(action='quick') - fastest path, no reflection needed",
+                "otherwise": "Use self_recovery(action='review', reflection='...') - requires reflection but allows recovery at lower thresholds",
+                "diagnostic": "Use self_recovery(action='check') - read-only, reports which action this state qualifies for",
+                "related_tools": ["self_recovery"]
             },
             "removal_version": "v2.0"
         }
