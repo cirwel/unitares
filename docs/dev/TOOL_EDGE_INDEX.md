@@ -30,9 +30,9 @@ registrars advertise in each deployable mode and what `describe_tool` says
 about those names. The snapshots are immutable evidence inputs; they do not
 certify the components that produced them.
 
-- Audit bundle: `sha256:b4dc4fa5c93b909ec3ad749b20468e2870f1a2fca26d8ad258befa08079c2cdf` (`unitares.tool-surface-audit.v1`).
-- Dispatch snapshot: `sha256:a063442daa817ce500c81e5a7fbf723e48de4827a7ec30ba62dc641905a19c4c`.
-- Audited source revision: `sha256:b1a1b433a09d374ba4f86249210e2db3e88bf0c173981c50d1efdbc66af1b67a` (50 files).
+- Audit bundle: `sha256:c56e1bb580ed03809c62df907a61556967518ea745877db7dfe8aa401c45e337` (`unitares.tool-surface-audit.v1`).
+- Dispatch snapshot: `sha256:6b42cfdcb9b255ffbd924983eba363d1b1cc6b2e8ecbd6cee68a4bc53288230a`.
+- Audited source revision: `sha256:cad3c484650ce6e70af116ddc92d4059e99f360069e9f2eed1049cb1df9e9c79` (50 files).
 - Exposure snapshot: `sha256:5177e451c28d0f993f163cda0c888c28cab7f7efe551fe72d6ac3c73af64454e`.
 - JSON contract: [`tool_surface_audit_v1.schema.json`](tool_surface_audit_v1.schema.json).
 - Reproduce with `python3 scripts/dev/tool_edge_index.py --json`; run
@@ -108,7 +108,7 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `describe_tool` | `src/mcp_handlers/introspection/tool_introspection.py:793 handle_describe_tool` | `src/mcp_handlers/schemas/admin.py:42 DescribeToolParams` | 10s | identity=pre_onboard |
 | `detect_stuck_agents` | `src/mcp_handlers/lifecycle/stuck.py:919 handle_detect_stuck_agents` | `src/mcp_handlers/schemas/lifecycle.py:275 DetectStuckAgentsParams` | 15s | identity=pre_onboard |
 | `dialectic` | `src/mcp_handlers/consolidated.py:388 action_router` | `src/mcp_handlers/schemas/dialectic.py:137 DialecticParams` | 115s | — |
-| `direct_resume_if_safe` | `src/mcp_handlers/lifecycle/resume.py:23 handle_direct_resume_if_safe` | `src/mcp_handlers/schemas/lifecycle.py:333 DirectResumeIfSafeParams` | 10s | deprecated→`quick_resume or self_recovery_review` |
+| `direct_resume_if_safe` | `src/mcp_handlers/lifecycle/resume.py:23 handle_direct_resume_if_safe` | `src/mcp_handlers/schemas/lifecycle.py:333 DirectResumeIfSafeParams` | 10s | deprecated→`self_recovery` |
 | `export` | `src/mcp_handlers/consolidated.py:292 action_router` | `src/mcp_handlers/schemas/export.py:34 ExportParams` | 45s | — |
 | `get_governance_metrics` | `src/mcp_handlers/core.py:223 handle_get_governance_metrics` | `src/mcp_handlers/schemas/core.py:173 GetGovernanceMetricsParams` | 10s | identity=pre_onboard |
 | `get_thresholds` | `src/mcp_handlers/admin/config.py:16 handle_get_thresholds` | `src/mcp_handlers/schemas/admin.py:115 GetThresholdsParams` | 10s | — |

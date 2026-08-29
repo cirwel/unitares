@@ -8,6 +8,27 @@ from src.governance_glossary import EISV_INLINE_SUMMARY
 # Deprecation registry surfaced by both list_tools (via TOOL_RELATIONSHIPS)
 # and describe_tool (via describe_tool_deprecation_block). Keeping the
 # migration string in one place avoids drift between the two surfaces.
+#
+# A MIGRATION TARGET MUST BE CALLABLE (2026-08-29)
+# ------------------------------------------------------------------
+# Every name a deprecation surface tells an agent to call -- `superseded_by`,
+# and every `name(` token inside `migration` -- must be a register=True
+# dispatch tool or an alias of one. Naming a register=False delegate reads as
+# advice and behaves as a dead end: the agent calls it and gets
+# tool_not_found_error, with the deprecated tool's own working handler sitting
+# right there unused.
+#
+# Both entries below were in that state. `direct_resume_if_safe` pointed at
+# `quick_resume` and `request_dialectic_review` at `self_recovery_review`;
+# neither is registered -- both are internal delegates of `self_recovery`,
+# reachable only as `self_recovery(action="quick"|"review")`. Same defect class
+# as the dangling `direct_resume_if_safe -> quick_resume` alias removed in
+# #1994, one surface over: that fix repaired what the alias *dispatched* to and
+# left what the deprecation block *says* untouched.
+#
+# Guarded by SUPERSEDED_BY_TARGET_MISSING / MIGRATION_TARGET_MISSING in
+# scripts/dev/tool_edge_index.py and by
+# test_every_deprecation_surface_names_a_callable_tool.
 DEPRECATION_REGISTRY: Dict[str, Dict[str, str]] = {
     "leave_note": {
         "deprecated_since": "2026-05-20",
@@ -21,15 +42,21 @@ DEPRECATION_REGISTRY: Dict[str, Dict[str, str]] = {
     },
     "request_dialectic_review": {
         "deprecated_since": "2026-01-29",
-        "superseded_by": "self_recovery_review",
-        "migration": "Use self_recovery_review(reflection='...') instead",
+        "superseded_by": "dialectic",
+        "migration": (
+            "Use dialectic(action='request', issue_description='...') instead. "
+            "For a solo recovery that needs no peer, self_recovery(action='review', "
+            "reflection='...') is the lighter path."
+        ),
     },
     "direct_resume_if_safe": {
         "deprecated_since": "2026-01-29",
-        "superseded_by": "quick_resume",
+        "superseded_by": "self_recovery",
         "migration": (
-            "Use quick_resume() if risk < 0.40 and no void is active; "
-            "otherwise use self_recovery_review(reflection='...')"
+            "Use self_recovery(action='quick') if risk < 0.40 and no void is "
+            "active; otherwise use self_recovery(action='review', "
+            "reflection='...'). self_recovery(action='check') reports which of "
+            "the two the current state qualifies for."
         ),
     },
 }
@@ -186,23 +213,14 @@ TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
         "related_to": ["process_agent_update", "get_agent_metadata"],
         "category": "lifecycle"
     },
-    "request_dialectic_review": {
-        "deprecated": True,
-        "deprecated_since": "2026-01-29",
-        "superseded_by": "self_recovery_review",
-        "depends_on": ["get_agent_metadata"],
-        "related_to": ["self_recovery_review", "dialectic"],
-        "category": "lifecycle",
-        "migration": "Use self_recovery_review(reflection='...') instead"
-    },
     "direct_resume_if_safe": {
         "deprecated": True,
         "deprecated_since": "2026-01-29",
-        "superseded_by": "quick_resume",
+        "superseded_by": "self_recovery",
         "depends_on": [],
-        "related_to": ["quick_resume", "self_recovery_review", "check_recovery_options"],
+        "related_to": ["self_recovery"],
         "category": "lifecycle",
-        "migration": "Use quick_resume() if risk < 0.40 and no void is active; otherwise use self_recovery_review(reflection='...')"
+        "migration": "Use self_recovery(action='quick') if risk < 0.40 and no void is active; otherwise use self_recovery(action='review', reflection='...')"
     },
     "self_recovery_review": {
         "depends_on": ["get_governance_metrics"],

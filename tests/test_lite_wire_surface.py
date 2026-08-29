@@ -224,3 +224,65 @@ def test_no_alias_name_is_also_a_registered_tool():
         "these names are both an alias and a registered dispatch tool, so "
         f"their registration is unreachable: {both}"
     )
+
+
+def test_every_deprecation_surface_names_a_callable_tool():
+    """A deprecation may only tell an agent to call a name it can call.
+
+    Sibling of the alias guard above, one surface over. That one checks what a
+    name *dispatches* to; this one checks what a deprecation *says*. Both
+    failures look identical to the agent -- tool_not_found_error while the
+    deprecated tool's own handler sits unused -- but only the first was caught.
+
+    `direct_resume_if_safe` said "use quick_resume()" and
+    `request_dialectic_review` said "use self_recovery_review(...)"; both
+    targets are register=False delegates of `self_recovery`, so both hints were
+    dead ends. Registered tools and aliases both count as callable; a
+    register=False delegate does not.
+
+    Scans `superseded_by` and every unqualified `name(` token in `migration`
+    text. A dotted reference (`client.leave_note()`) is an SDK method, not a
+    tool name, and is deliberately not matched.
+    """
+    import re
+
+    from src.mcp_handlers.decorators import get_tool_registry, get_tool_definition
+    from src.mcp_handlers.introspection.tool_catalog import (
+        DEPRECATION_REGISTRY,
+        TOOL_RELATIONSHIPS,
+    )
+    from src.mcp_handlers.tool_stability import list_all_aliases
+
+    callable_names = set(get_tool_registry()) | set(list_all_aliases())
+    call_token = re.compile(r"(?<![\w.])([a-z_][a-z0-9_]*)\(")
+
+    def check(surface, tool, field, names):
+        return [
+            f"{surface}[{tool!r}].{field} -> {n}"
+            for n in names
+            if n and n not in callable_names
+        ]
+
+    broken = []
+    for tool, entry in DEPRECATION_REGISTRY.items():
+        broken += check("DEPRECATION_REGISTRY", tool, "superseded_by",
+                        [entry.get("superseded_by")])
+        broken += check("DEPRECATION_REGISTRY", tool, "migration",
+                        call_token.findall(entry.get("migration", "")))
+    for tool, entry in TOOL_RELATIONSHIPS.items():
+        if not entry.get("deprecated"):
+            continue
+        broken += check("TOOL_RELATIONSHIPS", tool, "superseded_by",
+                        [entry.get("superseded_by")])
+        broken += check("TOOL_RELATIONSHIPS", tool, "migration",
+                        call_token.findall(entry.get("migration", "")))
+    for name in get_tool_registry():
+        definition = get_tool_definition(name)
+        broken += check("@mcp_tool", name, "superseded_by",
+                        [definition.superseded_by if definition else None])
+
+    assert not broken, (
+        "these deprecation surfaces name a tool that is neither registered nor "
+        "an alias, so an agent following the hint gets tool_not_found_error:\n  "
+        + "\n  ".join(sorted(broken))
+    )
