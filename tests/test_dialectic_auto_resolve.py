@@ -477,6 +477,47 @@ async def test_handles_get_sessions_error():
     assert "error" in result
 
 
+@pytest.mark.asyncio
+async def test_late_cycle_error_preserves_earlier_committed_counts():
+    """A later row failure must not turn an already-committed reap into zero."""
+    sessions = [
+        {
+            "session_id": "reaped-before-error",
+            "updated_at": _old_time(5),
+            "paused_agent_id": "a1",
+            "phase": "thesis",
+            "reviewer_agent_id": None,
+        },
+        {
+            "session_id": "saga-check-errors",
+            "updated_at": _old_time(5),
+            "paused_agent_id": "a2",
+            "phase": "thesis",
+            "reviewer_agent_id": None,
+        },
+    ]
+    emitted = AsyncMock()
+
+    with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
+               new_callable=AsyncMock, return_value=sessions), \
+         patch(f"{AUTO_RESOLVE}.has_inflight_saga_async",
+               new_callable=AsyncMock,
+               side_effect=[False, RuntimeError("saga backend down")]), \
+         patch(f"{AUTO_RESOLVE}.update_session_status_async",
+               new_callable=AsyncMock, return_value=True), \
+         patch(f"{AUTO_RESOLVE}.add_message_async", new_callable=AsyncMock), \
+         patch(f"{AUTO_RESOLVE}.emit_sweep_cycle", emitted):
+        from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
+        result = await auto_resolve_stuck_sessions(trigger_source="periodic")
+
+    assert result["resolved_count"] == 1
+    assert result["write_attempt_count"] == 1
+    assert result["details"][0]["session_id"] == "reaped-before-error"
+    assert result["error"] == "saga backend down"
+    assert emitted.await_args.kwargs["resolved_count"] == 1
+    assert emitted.await_args.kwargs["error"] == "saga backend down"
+
+
 # --- check_and_resolve_stuck_sessions Tests ---
 
 

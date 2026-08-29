@@ -172,6 +172,11 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
     invalid_session_count = 0
     saga_inflight_skip_count = 0
     write_attempt_count = 0
+    resolved_count = 0
+    reassigned_count = 0
+    facilitation_count = 0
+    skipped_count = 0
+    details = []
 
     try:
         now = datetime.now(timezone.utc)
@@ -231,12 +236,6 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
                 "details": [],
                 "message": "No stuck sessions found"
             }
-
-        resolved_count = 0
-        reassigned_count = 0
-        facilitation_count = 0
-        skipped_count = 0
-        details = []
 
         for session in stuck_sessions:
             session_id = session.get("session_id")
@@ -599,17 +598,20 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error auto-resolving stuck sessions: {e}", exc_info=True)
         return {
-            "resolved_count": 0,
-            "reassigned_count": 0,
-            "facilitation_count": 0,
-            "skipped_count": 0,
+            # Earlier iterations may already have committed. Preserve their
+            # outcome evidence instead of turning a partial cycle into an
+            # all-zero one because a later row aborted the scan.
+            "resolved_count": resolved_count,
+            "reassigned_count": reassigned_count,
+            "facilitation_count": facilitation_count,
+            "skipped_count": skipped_count,
             "active_session_count": active_session_count,
             "active_session_batch_truncated": active_session_batch_truncated,
             "stuck_session_count": stuck_session_count,
             "invalid_session_count": invalid_session_count,
             "saga_inflight_skip_count": saga_inflight_skip_count,
             "write_attempt_count": write_attempt_count,
-            "details": [],
+            "details": details,
             "error": str(e),
             "message": "Failed to auto-resolve stuck sessions"
         }

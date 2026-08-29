@@ -197,7 +197,8 @@ instrument now has two complementary pieces:
   least-recently-updated rows first and fetches one overflow sentinel, so a full batch cannot
   silently masquerade as a table-wide denominator or continually hide the oldest stuck rows behind
   newer activity. A reentrant call suppressed by the shared `ContextVar` emits no cycle because it
-  performed no scan.
+  performed no scan. If a later row aborts a cycle after earlier writes committed, the error-bearing
+  cycle preserves those earlier outcome counts rather than reporting a false all-zero result.
 
 Together those events distinguish "the producer ran and observed zero guarded refusals" from "no
 producer evidence exists." Coverage is still a predicate, not an assumption: a periodic window
