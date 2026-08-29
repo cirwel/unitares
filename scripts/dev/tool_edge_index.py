@@ -665,6 +665,18 @@ def lint_snapshots(
         )
 
     for name, alias in sorted(aliases.items()):
+        if name in tools:
+            add(
+                "error",
+                "ALIAS_SHADOWS_REGISTERED_TOOL",
+                name,
+                (
+                    "Name is both an alias and a registered dispatch tool; "
+                    "resolve_alias rewrites it before handler lookup, so its "
+                    "own registration is unreachable."
+                ),
+                target=alias["new_name"],
+            )
         target = tools.get(alias["new_name"])
         if target is None:
             add(

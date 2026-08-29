@@ -67,6 +67,22 @@ class ToolLifecycle:
 _CHECKIN_COMPLEXITY_NORMALIZER = normalize_unit_interval("complexity")
 _SEARCH_SHARED_MEMORY_NORMALIZER = normalize_compact_search_details
 
+# ONE NAME, ONE HOME (2026-08-29)
+# ------------------------------------------------------------------
+# A name must be EITHER a key in this table OR a register=True dispatch tool,
+# never both. resolve_alias (middleware/params_step.py) rewrites the tool name
+# before run_tool_dispatch_pipeline consults TOOL_HANDLERS, so a name that is
+# both has a registration nothing can ever reach.
+#
+# Fifteen names were in that state. Fourteen were merely redundant -- the alias
+# routed to a consolidated router that delegates back to the very handler the
+# dead registration pointed at -- and their registrations are now register=False
+# (admin group in admin/handlers.py, dialectic group in dialectic/handlers.py).
+# The fifteenth, direct_resume_if_safe, was broken rather than redundant,
+# because its alias target was itself register=False; see the note below.
+#
+# Guarded by ALIAS_SHADOWS_REGISTERED_TOOL in scripts/dev/tool_edge_index.py and
+# by test_no_alias_name_is_also_a_registered_tool.
 _TOOL_ALIASES: Dict[str, ToolAlias] = {
     # Identity tools - all point to identity() (the primary identity tool)
     # NOTE: who_am_i has its own handler in admin.py, so NOT aliased
@@ -196,15 +212,27 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     # NOTE: who_am_i is NOT aliased - it has its own handler in admin.py
 
     # Recovery tools - consolidated recovery hierarchy (Jan 2026)
-    # direct_resume_if_safe is deprecated in favor of clearer recovery paths
-    "direct_resume_if_safe": ToolAlias(
-        old_name="direct_resume_if_safe",
-        new_name="quick_resume",  # Default to quick_resume, but suggest self_recovery_review if thresholds not met
-        reason="deprecated",
-        deprecated_since=datetime(2026, 1, 29),
-        migration_note="Use quick_resume() if risk < 0.40 and no void is active; otherwise use self_recovery_review(reflection='...')"
-    ),
-    
+    #
+    # direct_resume_if_safe is deliberately NOT aliased. It carried
+    # new_name="quick_resume" until 2026-08-29, and quick_resume is
+    # register=False (it is a self_recovery delegate, not a dispatch tool), so
+    # every call resolved to a name absent from TOOL_HANDLERS and died on
+    # tool_not_found_error -- the tool's own registered handler was shadowed by
+    # its alias and never ran. The repo's own audit reported this as
+    # ALIAS_TARGET_MISSING at error severity.
+    #
+    # Retargeting to self_recovery(action="quick") would have been the smaller
+    # diff and the wrong fix: quick_resume resumes only at risk < 0.40, while
+    # this handler resumes at risk < 0.60, so the 0.40-0.60 no-reflection band
+    # would have silently disappeared. Dropping the alias restores the declared
+    # behavior; deprecation is still declared on the @mcp_tool decorator
+    # (deprecated=True, superseded_by=...), which stamps the [DEPRECATED]
+    # description prefix and keeps the tool out of orientation in any mode that
+    # does not advertise it.
+    #
+    # Retiring the 0.40-0.60 band is a live option, but it is a behavior change
+    # and belongs to the operator, not to a bug fix.
+
     # Dialectic tools - legacy creation remains archived (except request_dialectic_review restored)
     "request_exploration_session": ToolAlias(
         old_name="request_exploration_session",
@@ -280,8 +308,21 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
         migration_note="Use admin(action='server_info')", inject_action="server_info"),
     "get_connection_status": ToolAlias(old_name="get_connection_status", new_name="admin", reason="consolidated",
         migration_note="Use admin(action='connections')", inject_action="connections"),
-    "get_workspace_health": ToolAlias(old_name="get_workspace_health", new_name="admin", reason="consolidated",
-        migration_note="Use admin(action='workspace_health')", inject_action="workspace_health"),
+    # get_workspace_health is deliberately NOT aliased to admin, and it is the
+    # one member of the admin group that keeps register=True.
+    #
+    # The other eight admin-group names resolved through this table to
+    # admin(action=...) while ALSO being registered dispatch tools, which made
+    # their own registration unreachable (resolve_alias rewrites the name before
+    # TOOL_HANDLERS is consulted). Retiring those registrations costs nothing
+    # because every mode that advertises them also advertises `admin`.
+    #
+    # This one is different: operator_readonly and operator_recovery advertise
+    # `get_workspace_health` and do NOT carry `admin`, and no other router
+    # reaches the handler (unlike get_telemetry_metrics, which observe() also
+    # routes). Retiring its registration would delete the capability from those
+    # modes, not just a duplicate name -- so the alias goes instead and the
+    # standalone tool stays. admin(action="workspace_health") is unaffected.
     "get_tool_usage_stats": ToolAlias(old_name="get_tool_usage_stats", new_name="admin", reason="consolidated",
         migration_note="Use admin(action='tool_usage')", inject_action="tool_usage"),
     "get_telemetry_metrics": ToolAlias(old_name="get_telemetry_metrics", new_name="admin", reason="consolidated",
