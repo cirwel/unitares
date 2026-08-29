@@ -398,6 +398,15 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
         default=None,
         description="Trajectory identity signature from anima-mcp."
     )
+    sensor_data: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Optional caller-published sensor measurements. Use `eisv` for a "
+            "physical E/I/S/V reading and `afferents` for bounded raw numeric "
+            "dimensions such as presence. Raw afferents are recorded as "
+            "measurement-only telemetry and never become verdict inputs."
+        ),
+    )
     agent_name: Optional[str] = Field(
         default=None,
         description="Your display name for identity reconnection."

@@ -44,6 +44,9 @@ not inferred.
       "source_field": "afferents | body_anima | anima",
       "measurement_role": "raw_afferents",
       "policy_applied": false,
+      "dimension_limit": 16,
+      "valid_dimension_count": 1,
+      "truncated": false,
       "values": {"presence": 0},
       "provenance": {
         "status": "caller_declared | undeclared",
@@ -95,17 +98,21 @@ New callers should publish either a flat `sensor_data.afferents` mapping or:
 
 The existing `body_anima` field and its legacy `anima` alias are compatibility
 inputs. The recorder keeps at most 16 dimensions, requires finite numeric
-values with safe identifier names, caps names and provenance text, rejects
-booleans/strings/nested payloads and secret-shaped names, and retains only
-`schema`, `source`, `role`, `scale`, and `units` provenance keys. Values remain
-in the caller's native scale; UNITARES neither clamps nor interprets them.
-Caller-declared provenance is descriptive, not verification.
+values with safe, whitespace-unambiguous identifier names, caps names and
+provenance text, rejects booleans/strings/nested payloads and secret-shaped
+names across allowed separators, and retains only `schema`, `source`, `role`,
+`scale`, and `units` provenance keys. `valid_dimension_count` reports the valid
+pre-cap cardinality and `truncated` reports whether the 16-dimension cap omitted
+any valid dimensions. Values remain in the caller's native scale; UNITARES
+neither clamps nor interprets them. Caller-declared provenance is descriptive,
+not verification.
 
 This field is deliberately measurement-only: it is assembled before the locked
-update, copied into the append-only envelope after policy resolution, and never
-passed to the behavioral estimator, ODE, basin classifier, or actuator. Compact
-summaries expose only source, field, dimension count/names, and the explicit
-`policy_applied` flag—not the values.
+update into a dedicated call-local sidecar outside `agent_state`, copied into
+the append-only envelope after policy resolution, and never passed to the
+behavioral estimator, ODE, basin classifier, or actuator. Compact summaries
+expose only source, field, retained and valid dimension counts/names, truncation,
+and the explicit `policy_applied` flag—not the values.
 
 `measurement.primary.source` answers which state vector is presented as the
 primary reading. `measurement.behavioral.observation_source` answers which
@@ -122,7 +129,11 @@ remains `ode_fallback` so the displayed ODE values are not mislabeled.
 - `GET /v1/agents/{agent_id}/history` returns a compact per-point `telemetry`
   projection. Add `include_telemetry=true` to include each full envelope.
 - `/v1/eisv/recent` and WebSocket `eisv_update` events carry only the compact
-  summary so the broadcaster ring buffer stays bounded.
+  summary so the broadcaster ring buffer stays bounded. Raw `sensor_data` is
+  never duplicated onto either broadcast surface.
+- Dialectic pause evidence projects only the finite numeric `primary` and `ode`
+  EISV lanes with bounded source identifiers. Raw sensors, submitted afferents,
+  and caller-declared provenance are excluded from reviewer prompts.
 - `GET /v1/eisv/telemetry-health?days=30` returns a cached, read-only fleet
   aggregate over measured state rows. The dashboard's **Telemetry** tab uses
   this surface for rollout coverage, primary/consumed source rates, warmup,
