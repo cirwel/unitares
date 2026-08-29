@@ -11,6 +11,17 @@ prevent it at creation time, so `repo-scope.yml`'s session-link check fails on
 the first run of every agent-opened PR, and the only fix is to hand-edit the
 description afterwards.
 
+Harnesses do not all emit the same shape. A second one in current use is a
+credit line followed by the bare session URL on its own line:
+
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+    https://claude.ai/code/session_XXXX
+
+The URL there is neither italic nor markdown-linked, so the original pattern
+never saw it. Both shapes are recognised now, and a body carrying both has both
+removed — stripping the first exposes the second as the new trailing content.
+
 Silencing that check is the wrong repair — the link would still sit in the
 public PR body, which is the exact thing the guard exists to prevent. So this
 removes the footer instead, and the workflow writes the stripped body back to
@@ -54,15 +65,39 @@ FOOTER_NO_RULE = re.compile(
     r"\n+_[^\n]*?claude\.ai/code/session[^\n]*?_[ \t]*\s*$",
     re.IGNORECASE,
 )
+# The credit-line-then-bare-URL shape. Two lines, both required: a line naming
+# Claude Code as the generator, then a line that is nothing but the session URL.
+# Requiring the credit line is what keeps this narrow — a trailing session URL
+# on its own, with no attribution above it, is left in place and still fails the
+# guard, because nothing marks it as harness output rather than the author's.
+FOOTER_CREDIT_THEN_URL = re.compile(
+    r"\n+(?:-{3,}[ \t]*\n+)?"
+    r"[^\n]*generated[ \t]+(?:with|by)[^\n]*claude[ \t]+code[^\n]*\n+"
+    r"<?https?://[^\s<>]*claude\.ai/code/session[^\s<>]*>?[ \t]*\s*$",
+    re.IGNORECASE,
+)
+
+FOOTERS = (FOOTER, FOOTER_NO_RULE, FOOTER_CREDIT_THEN_URL)
 
 
 def strip_footer(body: str) -> tuple[str, bool]:
-    """Return (body_without_trailing_attribution_footer, was_stripped)."""
-    for pattern in (FOOTER, FOOTER_NO_RULE):
-        stripped = pattern.sub("", body)
-        if stripped != body:
-            return stripped.rstrip() + "\n", True
-    return body, False
+    """Return (body_without_trailing_attribution_footers, was_stripped).
+
+    Loops rather than stripping once: a harness can append more than one footer
+    (the observed case emits the credit-then-URL pair *and* the italic footer),
+    and removing the last one is what makes the one before it trailing. Each
+    pass strictly shortens the body, so this terminates.
+    """
+    was_stripped = False
+    while True:
+        for pattern in FOOTERS:
+            stripped = pattern.sub("", body)
+            if stripped != body:
+                body = stripped.rstrip() + "\n"
+                was_stripped = True
+                break
+        else:
+            return body, was_stripped
 
 
 def analyze(body: str) -> dict:

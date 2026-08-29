@@ -114,6 +114,70 @@ def test_cli_status_and_strip_modes_agree():
     assert "A thing." in stripped.stdout
 
 
+# --- the credit-line-then-bare-URL footer shape -----------------------------
+#
+# Not every harness emits the italic one-liner. The shape below puts the URL on
+# its own line, unlinked and unitalicised, which the original patterns could not
+# see — so it survived the strip and failed the guard as if the author had
+# written it. Same rules apply: only a trailing footer goes, and the tests pin
+# both directions.
+
+CREDIT = "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+
+
+def test_strips_credit_line_then_bare_url():
+    body = f"## What changed\n\nA thing.\n\n{CREDIT}\n\n{SESSION}\n"
+    out = pba.analyze(body)
+    assert out["stripped"] is True
+    assert out["residual"] is False
+    assert "A thing." in out["body"]
+    assert "claude.ai/code/session" not in out["body"]
+
+
+def test_strips_both_footers_when_a_harness_appends_both():
+    """The observed 2026-08-29 case: the pair, then the italic footer.
+
+    Removing only the last one leaves the pair trailing and still leaking, so
+    the strip has to keep going until nothing footer-shaped remains.
+    """
+    body = (
+        f"## What changed\n\nA thing.\n\n- [x] checklist\n\n"
+        f"{CREDIT}\n\n{SESSION}\n\n---\n{FOOTER}"
+    )
+    out = pba.analyze(body)
+    assert out["stripped"] is True
+    assert out["residual"] is False
+    assert out["body"].rstrip().endswith("- [x] checklist")
+
+
+def test_bare_trailing_url_without_a_credit_line_is_not_stripped():
+    """Narrowness: nothing marks a lone URL as harness output.
+
+    Without the attribution line above it this is indistinguishable from a link
+    the author chose to end the description with, so it stays and the guard
+    fails — the author uses the escape hatch or edits it out.
+    """
+    body = f"## What\n\nA thing.\n\n{SESSION}\n"
+    out = pba.analyze(body)
+    assert out["stripped"] is False
+    assert out["residual"] is True
+
+
+def test_credit_pair_mid_body_is_not_laundered():
+    """Only a trailing footer is a footer — mid-body it is prose, and a leak."""
+    body = f"## Why\n\n{CREDIT}\n\n{SESSION}\n\nMore prose after it.\n"
+    out = pba.analyze(body)
+    assert out["stripped"] is False
+    assert out["residual"] is True
+
+
+def test_credit_pair_does_not_mask_an_author_written_link():
+    body = f"## Why\n\nContext at {SESSION}.\n\n{CREDIT}\n\n{SESSION}\n"
+    out = pba.analyze(body)
+    assert out["stripped"] is True
+    assert out["residual"] is True
+
+
 def test_regex_matches_the_guard_it_serves():
     """Drift guard: the script and repo-scope.yml must agree on what counts.
 
@@ -124,4 +188,26 @@ def test_regex_matches_the_guard_it_serves():
     assert "claude\\.ai/code/session|Claude-Session:" in workflow, (
         "repo-scope.yml's session pattern changed — update SESSION_LINK in "
         "scripts/dev/pr_body_attribution.py to match"
+    )
+
+
+def test_workflow_reads_the_live_body_not_the_frozen_payload():
+    """Drift guard for the replay bug fixed alongside these patterns.
+
+    `github.event.pull_request.body` is frozen when the event fires. This step
+    writes what it reads back to the PR, so sourcing it from the payload means a
+    re-run replays a stale copy over the live description and restores content
+    the author has since removed — observed on #1987, where a re-run put back
+    the very link the author had just deleted. Reading live via the API is also
+    the only way the lint can judge what is actually published.
+    """
+    workflow = (REPO / ".github/workflows/repo-scope.yml").read_text(encoding="utf-8")
+    normalize = workflow.split("Normalize PR body", 1)[1].split("- name:", 1)[0]
+    assert "pulls.get" in normalize, (
+        "the normalize step must fetch the PR body live; without it a re-run "
+        "replays the frozen event payload over the live description"
+    )
+    assert "github.event.pull_request.body" not in normalize, (
+        "the normalize step must not source the body from the event payload — "
+        "it is frozen at event time and this step writes what it reads back"
     )
