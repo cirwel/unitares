@@ -136,10 +136,21 @@ rule. None has been measured. Every measurement cell below is deliberately empty
 records zero collisions in **both** writer orderings, every expected periodic cycle is present,
 and every lazy invocation is attributed separately. A zero `dialectic_write_refused` count alone
 does not fire this disconfirmer: it sees the "other writer won first" ordering but misses a saga
-that starts after the early check and loses to a successful sweeper write. **Measurement source:**
-⛔**INCOMPLETE — see §3.1.** PR #2011 supplied positive refusals and the post-#2008 follow-up
-supplies the zero-inclusive cycle denominator, but no current event proves the opposite ordering
-absent.
+that starts after the early check and loses to a successful sweeper write.
+
+**Measurement source:** ⛔**INSTRUMENTED, NOT YET MEASURED — see §3.1.** All three orderings now
+emit: `saga_inflight_skip_count` (BEAM first, caught at the early check),
+`dialectic_write_refused` (BEAM first, caught at the write), and `dialectic_write_overlap`
+(sweeper first, caught by a post-write probe), each denominated by `dialectic_sweep_cycle`.
+⛔**This does not make (b1) firable on a clean window.** Three conditions are unmet:
+
+1. ⛔**No window has started.** Deployment provenance is still owed — §7 step 3, slot empty.
+2. ⛔**The probe bounds the interval rather than closing it.** A saga starting after the probe is
+   unobserved, so a clean window is evidence over a bounded interval. Firing (b1) means accepting
+   that bound as sufficient — an operator judgement, not a measurement result, and one that should
+   be stated as a choice before the window is read rather than after.
+3. ⛔**`overlap_probe_failed_count` must be read beside the detected count.** A window with
+   non-trivial probe failures has not measured overlap regardless of how many zeros it shows.
 
 **(b2) The in-place fix closes it.** A Python-side change during the implementation window makes
 the sweeper's write path safe without porting — e.g. an explicit row/advisory lock or a shared
@@ -179,7 +190,7 @@ scope by the signature, not cleared).
 
 ## §3 What must exist before this gate can be read
 
-### §3.1 ⛔PREREQUISITE: incident telemetry exists; complete overlap telemetry does not
+### §3.1 ⛔PREREQUISITE: all three orderings are now instrumented; the interval is bounded, not closed
 
 **This remains the gate's central prerequisite and blocks disconfirmers (b1) and (b2).** The
 instrument now has two complementary pieces:
@@ -199,19 +210,34 @@ producer evidence exists." Coverage is still a predicate, not an assumption: a p
 must account for the expected fixed-delay heartbeats and treat any unexplained gap as missing
 evidence, while lazy cycles are denominated by their own emitted rows rather than by 144/day.
 
-⛔They do **not** distinguish every dual-writer ordering:
+The three dual-writer orderings, and which of them is now observed:
 
 - An early `saga_inflight_skip_count` sees BEAM already owning the session when Python checks.
 - A `dialectic_write_refused` row sees another writer finish before Python's guarded write.
-- Nothing currently sees a saga begin **after** the early check and **after Python successfully
-  writes first**. A positive refusal can also mean a missing row or a competing Python writer; the
-  DB helper returns one `False` value for all of them and only logs the distinction.
+- ✅**The sweeper-first ordering is now instrumented.** A `dialectic_write_overlap` row is emitted
+  when a probe taken immediately after a *successful* guarded write finds a non-terminal saga the
+  early check did not. This was the case the previous revision recorded as seen by nothing.
 
-Therefore a zero refusal count, even with complete cycle coverage, is a measured zero for one
-incident class — not proof that the dual-writer hazard is absent. To make (b1) readable, a later
-instrument must observe the sweeper-first ordering from the saga/reservation side, or (b2) must
-replace observation with a shared serialization primitive honored by both writers. No §7 window
-starts before that condition and deployment provenance are both present.
+⛔**That third instrument narrows the unmeasured interval; it does not empty it.** The probe closes
+the window between the early check and just after the write. It cannot close the window after
+itself, so a saga starting later is still unobserved. **A zero overlap count is therefore evidence
+about a bounded interval, not proof of a collision-free system.** Only a serialization primitive
+both writers honour removes the interval instead of measuring it — that is (b2), still unbuilt, and
+the instrument-first ruling does not authorise it.
+
+⛔**A failed probe is not an observed absence, and the counts are separate for that reason.**
+`has_inflight_saga` fails open — correct for a write gate, since no saga infrastructure means
+nothing to race — and an instrument inheriting that would report "no saga" when it could not look.
+`probe_inflight_saga` returns `None` in that case, and the cycle event carries
+`overlap_probe_failed_count` beside `overlap_detected_count`. ⛔Read the pair or neither: a window
+with a non-trivial probe-failure count has not measured overlap, whatever its detected count says.
+
+⚠️A positive refusal can still also mean a missing row or a competing Python writer; the DB helper
+returns one `False` for all of them and only logs the distinction. That ambiguity is unchanged.
+
+Therefore a zero refusal count, even with complete cycle coverage and complete probe coverage,
+remains a measured zero over a bounded interval rather than proof the hazard is absent. No §7
+window starts before probe coverage and deployment provenance are both present.
 
 ⚠️The reassignment-success emitter remains useful for the separate historical metric gap, but the
 guard-refusal/cycle streams measure coordination. They are not a substitute measure of reviewer

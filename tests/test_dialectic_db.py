@@ -1725,3 +1725,49 @@ class TestTerminalWriteGuardIsLoadBearing:
             f"{unlisted} UPDATE core.dialectic_sessions carrying {expected!r} but are "
             "not in GUARDED_WRITERS. Add them so they are checked against the constant."
         )
+
+
+class TestProbeInflightSagaTriState:
+    """`has_inflight_saga` fails open; `probe_inflight_saga` must not.
+
+    Fail-open is right for a write gate — no saga infrastructure means nothing
+    to race, so the sweep should proceed. It is wrong for an instrument: a probe
+    that answers "no saga" when it could not look turns an outage into evidence
+    of a collision-free system.
+    """
+
+    @pytest.mark.asyncio
+    async def test_probe_reports_present(self, db):
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(return_value={"?column?": 1})
+        assert await instance.probe_inflight_saga("s1") is True
+
+    @pytest.mark.asyncio
+    async def test_probe_reports_absent(self, db):
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(return_value=None)
+        assert await instance.probe_inflight_saga("s1") is False
+
+    @pytest.mark.asyncio
+    async def test_probe_reports_unanswerable_as_none(self, db):
+        """The third state — not False, which would be a fabricated absence."""
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(side_effect=RuntimeError("relation absent"))
+
+        result = await instance.probe_inflight_saga("s1")
+
+        assert result is None, (
+            "an unanswerable probe must be None; returning False would let a "
+            "saga-table outage count as an observed absence of overlap"
+        )
+
+    @pytest.mark.asyncio
+    async def test_write_gate_still_fails_open(self, db):
+        """The guard's behaviour is unchanged — it must still proceed on error."""
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(side_effect=RuntimeError("relation absent"))
+
+        assert await instance.has_inflight_saga("s1") is False, (
+            "the write gate must keep failing open; only the instrument "
+            "distinguishes 'could not look' from 'nothing there'"
+        )

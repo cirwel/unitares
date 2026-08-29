@@ -645,3 +645,72 @@ async def test_a_failed_flag_write_does_not_discard_the_cycle():
     assert "error" not in result, "the cycle must not be reported as a failure"
     assert result["resolved_count"] == 1, "the committed reap keeps its count"
     assert result["facilitation_count"] == 0, "the request was never recorded"
+
+
+class TestSweeperFirstOverlapProbe:
+    """A successful guarded write is re-probed for a saga that arrived late.
+
+    ⛔The distinction these tests defend is between "probed, found nothing" and
+    "could not probe". Collapsing them would let a saga-table outage read as a
+    collision-free window, which is the manufactured zero the whole instrument
+    exists to prevent.
+    """
+
+    @pytest.mark.asyncio
+    async def test_detected_emits_and_counts(self):
+        from src.mcp_handlers.dialectic import auto_resolve as ar
+
+        emit = AsyncMock()
+        with patch(f"{AUTO_RESOLVE}.probe_inflight_saga_async",
+                   new_callable=AsyncMock, return_value=True), \
+             patch(f"{AUTO_RESOLVE}.emit_write_overlap", emit):
+            outcome = await ar._probe_write_overlap("s1", "reap_failed", "a1")
+
+        assert outcome == "detected"
+        emit.assert_awaited_once()
+        assert emit.await_args.kwargs == {
+            "session_id": "s1",
+            "attempted": "reap_failed",
+            "paused_agent_id": "a1",
+            "source": "sweeper",
+        }
+
+    @pytest.mark.asyncio
+    async def test_clean_does_not_emit(self):
+        """An observed absence is a real datum, and it is not an incident."""
+        from src.mcp_handlers.dialectic import auto_resolve as ar
+
+        emit = AsyncMock()
+        with patch(f"{AUTO_RESOLVE}.probe_inflight_saga_async",
+                   new_callable=AsyncMock, return_value=False), \
+             patch(f"{AUTO_RESOLVE}.emit_write_overlap", emit):
+            outcome = await ar._probe_write_overlap("s1", "reap_failed", "a1")
+
+        assert outcome == "clean"
+        emit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_unanswerable_probe_is_not_clean(self):
+        """None means the probe could not look. It must not read as absence."""
+        from src.mcp_handlers.dialectic import auto_resolve as ar
+
+        emit = AsyncMock()
+        with patch(f"{AUTO_RESOLVE}.probe_inflight_saga_async",
+                   new_callable=AsyncMock, return_value=None), \
+             patch(f"{AUTO_RESOLVE}.emit_write_overlap", emit):
+            outcome = await ar._probe_write_overlap("s1", "reap_failed", "a1")
+
+        assert outcome == "probe_failed", "a failed probe is not an observed absence"
+        emit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_raising_probe_is_not_clean_either(self):
+        """A raise is the same epistemic state as None, not a clean read."""
+        from src.mcp_handlers.dialectic import auto_resolve as ar
+
+        with patch(f"{AUTO_RESOLVE}.probe_inflight_saga_async",
+                   new_callable=AsyncMock, side_effect=RuntimeError("pool gone")), \
+             patch(f"{AUTO_RESOLVE}.emit_write_overlap", new_callable=AsyncMock):
+            outcome = await ar._probe_write_overlap("s1", "reap_failed", "a1")
+
+        assert outcome == "probe_failed"

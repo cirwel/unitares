@@ -57,6 +57,7 @@ logger = get_logger(__name__)
 REVIEWER_REASSIGNED = "dialectic_reviewer_reassigned"
 FACILITATION_NEEDED = "dialectic_facilitation_needed"
 WRITE_REFUSED = "dialectic_write_refused"
+WRITE_OVERLAP = "dialectic_write_overlap"
 SWEEP_CYCLE = "dialectic_sweep_cycle"
 
 # The three guarded writes the sweeper can have refused. Shared with the
@@ -262,6 +263,8 @@ async def emit_sweep_cycle(
     saga_inflight_skip_count: int,
     write_attempt_count: int,
     write_refused_count: int,
+    overlap_detected_count: int,
+    overlap_probe_failed_count: int,
     resolved_count: int,
     reassigned_count: int,
     facilitation_count: int,
@@ -277,10 +280,24 @@ async def emit_sweep_cycle(
 
     ``saga_inflight_skip_count`` records the ordering visible at the early saga
     guard. ``write_refused_count`` records guarded writes another writer beat.
-    They are distinct because neither is a complete measure of all overlap;
-    notably, a saga that starts after the early check can still lose to a
-    successful sweeper write. Consumers must treat cycle gaps as missing
-    evidence and must not infer a collision-free system from zero counts alone.
+    ``overlap_detected_count`` records the third ordering -- the early check was
+    clean, the guarded write succeeded, and a saga appeared anyway -- which the
+    first two cannot see and which this docstring previously named as uncovered.
+
+    ⛔Both overlap counts are **required**, deliberately. A default of zero lets
+    a caller that never probed report the same thing as a caller that probed and
+    found nothing, which is the manufactured zero this whole event exists to
+    prevent.
+
+    ⛔``overlap_probe_failed_count`` is the denominator that keeps
+    ``overlap_detected_count`` honest. The probe can fail (saga table absent,
+    pool exhausted), and a failed probe is not an observed absence. A window
+    whose probe-failure count is non-trivial has not measured overlap, however
+    many zeros the detected count shows. Read the two together or neither.
+
+    Consumers must treat cycle gaps as missing evidence and must not infer a
+    collision-free system from zero counts alone: even a fully probed window
+    leaves the interval after each probe unobserved -- see `emit_write_overlap`.
 
     Fail-soft: audit availability cannot decide whether session maintenance is
     allowed to run.
@@ -299,6 +316,8 @@ async def emit_sweep_cycle(
                 "invalid_session_count": invalid_session_count,
                 "saga_inflight_skip_count": saga_inflight_skip_count,
                 "write_attempt_count": write_attempt_count,
+                "overlap_detected_count": overlap_detected_count,
+                "overlap_probe_failed_count": overlap_probe_failed_count,
                 "write_refused_count": write_refused_count,
                 "resolved_count": resolved_count,
                 "reassigned_count": reassigned_count,
@@ -311,4 +330,69 @@ async def emit_sweep_cycle(
         logger.warning(
             "%s audit emit failed: source=%s err=%s",
             SWEEP_CYCLE, trigger_source, exc,
+        )
+
+
+async def emit_write_overlap(
+    *,
+    session_id: str,
+    attempted: str,
+    paused_agent_id: Optional[str] = None,
+    source: str = "sweeper",
+) -> None:
+    """Record the one dual-writer ordering nothing else could see.
+
+    THE ORDERING THIS COVERS
+    ------------------------
+    `saga_inflight_skip_count` sees BEAM already owning a session when Python
+    checks. `dialectic_write_refused` sees another writer finish before Python's
+    guarded write lands. Neither sees the third case, named in `emit_sweep_cycle`
+    and in gate §3.1: the early saga check finds nothing, Python's guarded write
+    **succeeds**, and a saga begins anyway. Python has written first and BEAM is
+    now acting on a row it did not own when the sweeper decided.
+
+    This is emitted when a probe taken immediately after a successful guarded
+    write finds a non-terminal saga that the early check did not.
+
+    ⛔WHAT IT CANNOT ESTABLISH, stated because a zero here is going to be quoted.
+    The probe closes the window between the early check and just after the write;
+    it cannot close the window after itself. A saga starting later is unobserved,
+    so **absence of these rows narrows the unmeasured interval, it does not
+    empty it.** Only a serialization primitive both writers honour removes the
+    interval rather than measuring it — gate §2 (b2), which remains unbuilt and
+    is not authorised by the instrument-first ruling.
+
+    ⛔A failed probe is NOT an absent overlap. The caller counts those
+    separately; see `probe_inflight_saga`, which returns None rather than
+    inheriting the write gate's fail-open False.
+
+    Args:
+        session_id: the session whose write landed before a saga appeared.
+        attempted: which guarded write succeeded -- an ``ATTEMPT_*`` constant.
+        paused_agent_id: the session's paused agent, when the row carried one.
+        source: which producer observed it. Only ``"sweeper"`` today.
+
+    Fail-soft: the write has already committed, so a failure here costs
+    observability, never correctness.
+    """
+    try:
+        from src.audit_db import append_audit_event_async
+
+        await append_audit_event_async({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event_type": WRITE_OVERLAP,
+            "agent_id": paused_agent_id,
+            "session_id": session_id,
+            "details": {
+                "session_id": session_id,
+                "attempted": attempted,
+                "paused_agent_id": paused_agent_id,
+                "source": source,
+                "ordering": "sweeper_wrote_first",
+            },
+        })
+    except Exception as exc:
+        logger.warning(
+            "%s audit emit failed: session=%s attempted=%s source=%s err=%s",
+            WRITE_OVERLAP, session_id, attempted, source, exc,
         )

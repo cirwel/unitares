@@ -8,7 +8,7 @@ and only fails sessions after extended inactivity (4+ hours total).
 
 from datetime import datetime, timedelta, timezone
 from time import monotonic
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from src.dialectic_protocol import DialecticPhase
 from src.logging_utils import get_logger
@@ -21,6 +21,7 @@ from .events import (
     emit_reviewer_reassigned,
     emit_sweep_cycle,
     emit_write_refused,
+    emit_write_overlap,
 )
 from .session import ACTIVE_SESSIONS
 from .sweep_context import AUTO_RESOLVE_IN_PROGRESS
@@ -32,6 +33,7 @@ from src.dialectic_db import (
     mark_awaiting_facilitation_async,
     add_message_async,
     has_inflight_saga_async,
+    probe_inflight_saga_async,
 )
 
 logger = get_logger(__name__)
@@ -150,6 +152,53 @@ def _describe_reap(
     )
 
 
+async def _probe_write_overlap(
+    session_id: str,
+    attempted: str,
+    paused_agent_id: Optional[str],
+) -> str:
+    """Re-check for a saga immediately after a guarded write succeeded.
+
+    The early saga guard ran before `select_reviewer` and several DB round
+    trips. If a saga appears between that check and here, the sweeper wrote
+    first and BEAM is now acting on a row it did not own when the sweeper
+    decided -- the one dual-writer ordering neither the early skip count nor
+    the refusal event can see.
+
+    Returns ``"detected"``, ``"clean"``, or ``"probe_failed"``. ⛔The third is
+    not the second: `probe_inflight_saga_async` returns None when it could not
+    look, and counting that as clean would turn an outage into evidence of a
+    collision-free system.
+
+    Never raises. A measurement failure must not fail a sweep whose write has
+    already committed.
+    """
+    try:
+        found = await probe_inflight_saga_async(session_id)
+    except Exception as exc:
+        logger.warning(
+            f"overlap probe raised for {session_id[:16]}...: {exc}"
+        )
+        return "probe_failed"
+
+    if found is None:
+        return "probe_failed"
+    if not found:
+        return "clean"
+
+    logger.info(
+        f"Session {session_id[:16]} saga appeared AFTER a successful sweeper "
+        f"{attempted} write — sweeper-first overlap"
+    )
+    await emit_write_overlap(
+        session_id=session_id,
+        attempted=attempted,
+        paused_agent_id=paused_agent_id,
+        source="sweeper",
+    )
+    return "detected"
+
+
 async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
     """
     Handle sessions that are stuck/inactive.
@@ -167,6 +216,8 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
     invalid_session_count = 0
     saga_inflight_skip_count = 0
     write_attempt_count = 0
+    overlap_detected_count = 0
+    overlap_probe_failed_count = 0
 
     try:
         now = datetime.now(timezone.utc)
@@ -187,6 +238,8 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
                 "invalid_session_count": 0,
                 "saga_inflight_skip_count": 0,
                 "write_attempt_count": 0,
+                "overlap_detected_count": 0,
+                "overlap_probe_failed_count": 0,
                 "details": [],
                 "message": "No active sessions found"
             }
@@ -210,6 +263,8 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
                 "invalid_session_count": 0,
                 "saga_inflight_skip_count": 0,
                 "write_attempt_count": 0,
+                "overlap_detected_count": 0,
+                "overlap_probe_failed_count": 0,
                 "details": [],
                 "message": "No stuck sessions found"
             }
@@ -314,6 +369,13 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
                             # stale reviewer. `persisted ⇒ recorded` is the
                             # direction this metric needs; the converse is
                             # already guaranteed by the refusal check above.
+                            _overlap = await _probe_write_overlap(
+                                session_id, ATTEMPT_REVIEWER_REASSIGNMENT, paused_agent_id
+                            )
+                            if _overlap == "detected":
+                                overlap_detected_count += 1
+                            elif _overlap == "probe_failed":
+                                overlap_probe_failed_count += 1
                             await emit_reviewer_reassigned(
                                 session_id=session_id,
                                 old_reviewer_id=reviewer_agent_id,
@@ -445,6 +507,13 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
                             )
                             continue
                         _sync_cached_session(session_id, awaiting_facilitation=True)
+                        _overlap = await _probe_write_overlap(
+                            session_id, ATTEMPT_AWAITING_FACILITATION, paused_agent_id
+                        )
+                        if _overlap == "detected":
+                            overlap_detected_count += 1
+                        elif _overlap == "probe_failed":
+                            overlap_probe_failed_count += 1
                         await emit_facilitation_needed(
                             session_id=session_id,
                             paused_agent_id=paused_agent_id,
@@ -531,6 +600,13 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
                 # guarded reviewer write is then refused by the row it never
                 # reopened — the standing request answered in memory only.
                 _sync_cached_session(session_id, phase="failed")
+                _overlap = await _probe_write_overlap(
+                    session_id, ATTEMPT_REAP_FAILED, paused_agent_id
+                )
+                if _overlap == "detected":
+                    overlap_detected_count += 1
+                elif _overlap == "probe_failed":
+                    overlap_probe_failed_count += 1
                 failure_reason = _describe_reap(
                     phase=phase,
                     awaiting_facilitation=awaiting_facilitation,
@@ -569,6 +645,8 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
             "invalid_session_count": invalid_session_count,
             "saga_inflight_skip_count": saga_inflight_skip_count,
             "write_attempt_count": write_attempt_count,
+            "overlap_detected_count": overlap_detected_count,
+            "overlap_probe_failed_count": overlap_probe_failed_count,
             "details": details,
             "message": (
                 f"Processed {len(stuck_sessions)} stuck session(s): "
@@ -589,6 +667,8 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
             "invalid_session_count": invalid_session_count,
             "saga_inflight_skip_count": saga_inflight_skip_count,
             "write_attempt_count": write_attempt_count,
+            "overlap_detected_count": overlap_detected_count,
+            "overlap_probe_failed_count": overlap_probe_failed_count,
             "details": [],
             "error": str(e),
             "message": "Failed to auto-resolve stuck sessions"
@@ -625,6 +705,8 @@ async def auto_resolve_stuck_sessions(
             "invalid_session_count": 0,
             "saga_inflight_skip_count": 0,
             "write_attempt_count": 0,
+            "overlap_detected_count": 0,
+            "overlap_probe_failed_count": 0,
             "details": [],
             "reentrant_suppressed": True,
             "message": "Resolver re-entry suppressed",
@@ -650,6 +732,12 @@ async def auto_resolve_stuck_sessions(
                 ),
                 write_attempt_count=int(cycle.get("write_attempt_count", 0) or 0),
                 write_refused_count=int(cycle.get("skipped_count", 0) or 0),
+                overlap_detected_count=int(
+                    cycle.get("overlap_detected_count", 0) or 0
+                ),
+                overlap_probe_failed_count=int(
+                    cycle.get("overlap_probe_failed_count", 0) or 0
+                ),
                 resolved_count=int(cycle.get("resolved_count", 0) or 0),
                 reassigned_count=int(cycle.get("reassigned_count", 0) or 0),
                 facilitation_count=int(cycle.get("facilitation_count", 0) or 0),

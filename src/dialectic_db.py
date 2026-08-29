@@ -475,6 +475,24 @@ class DialecticDB:
         Fail-open: any error (e.g. the saga table absent in a bare test schema)
         returns False. That is safe — if no saga infrastructure is live, BEAM is
         not writing sagas, so there is nothing to race.
+
+        ⛔Fail-open is correct for a **write gate** and wrong for an
+        **instrument**: a probe that reports "no saga" when it could not look
+        manufactures exactly the clean zero the measurement-authority rule
+        forbids. `probe_inflight_saga` below is the honest form; this stays
+        boolean because its caller is deciding whether to skip a session.
+        """
+        return await self.probe_inflight_saga(session_id) is True
+
+    async def probe_inflight_saga(self, session_id: str) -> Optional[bool]:
+        """`has_inflight_saga` without the fail-open, for measurement.
+
+        Returns True (a non-terminal saga exists), False (none exists, and the
+        query ran), or **None** (the query could not be answered). The third
+        state is the whole point: a caller counting overlaps must be able to
+        record "not observed" separately from "observed absent", because
+        collapsing them is how an outage becomes evidence of a collision-free
+        system.
         """
         await self._ensure_pool()
         try:
@@ -490,9 +508,9 @@ class DialecticDB:
                     session_id,
                 )
                 return row is not None
-        except Exception as e:  # pragma: no cover - defensive fail-open
+        except Exception as e:
             logger.debug(f"has_inflight_saga check failed for {session_id[:16]}...: {e}")
-            return False
+            return None
 
     async def add_message(
         self,
@@ -794,6 +812,11 @@ async def is_agent_in_active_session_async(agent_id: str) -> bool:
 async def has_inflight_saga_async(session_id: str) -> bool:
     db = await get_dialectic_db()
     return await db.has_inflight_saga(session_id)
+
+
+async def probe_inflight_saga_async(session_id: str) -> Optional[bool]:
+    db = await get_dialectic_db()
+    return await db.probe_inflight_saga(session_id)
 
 
 async def has_recently_reviewed_async(reviewer_id: str, paused_agent_id: str, hours: int = 24) -> bool:

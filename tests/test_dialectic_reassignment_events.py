@@ -229,6 +229,8 @@ class TestEmitSweepCycle:
                 saga_inflight_skip_count=0,
                 write_attempt_count=0,
                 write_refused_count=0,
+                overlap_detected_count=0,
+                overlap_probe_failed_count=0,
                 resolved_count=0,
                 reassigned_count=0,
                 facilitation_count=0,
@@ -245,6 +247,8 @@ class TestEmitSweepCycle:
             "saga_inflight_skip_count": 0,
             "write_attempt_count": 0,
             "write_refused_count": 0,
+            "overlap_detected_count": 0,
+            "overlap_probe_failed_count": 0,
             "resolved_count": 0,
             "reassigned_count": 0,
             "facilitation_count": 0,
@@ -293,8 +297,55 @@ class TestEmitSweepCycle:
                 saga_inflight_skip_count=1,
                 write_attempt_count=0,
                 write_refused_count=0,
+                overlap_detected_count=0,
+                overlap_probe_failed_count=0,
                 resolved_count=0,
                 reassigned_count=0,
                 facilitation_count=0,
                 duration_ms=3,
+            )  # must not raise
+
+
+class TestEmitWriteOverlap:
+    """The sweeper-first ordering: early check clean, write lands, saga appears.
+
+    Neither the early `saga_inflight_skip_count` nor `dialectic_write_refused`
+    can see this case, and `emit_sweep_cycle`'s own docstring named it as
+    uncovered before this event existed.
+    """
+
+    @pytest.mark.asyncio
+    async def test_payload_shape(self):
+        captured = {}
+
+        async def fake_append(payload):
+            captured.update(payload)
+
+        with patch("src.audit_db.append_audit_event_async", side_effect=fake_append):
+            await events.emit_write_overlap(
+                session_id="sess-1",
+                attempted=events.ATTEMPT_REAP_FAILED,
+                paused_agent_id="a1",
+                source="sweeper",
+            )
+
+        assert captured["event_type"] == "dialectic_write_overlap"
+        assert captured["agent_id"] == "a1"
+        assert captured["session_id"] == "sess-1"
+        assert captured["details"] == {
+            "session_id": "sess-1",
+            "attempted": "reap_failed",
+            "paused_agent_id": "a1",
+            "source": "sweeper",
+            "ordering": "sweeper_wrote_first",
+        }
+
+    @pytest.mark.asyncio
+    async def test_is_fail_soft(self):
+        """The write already committed; telemetry must not unwind it."""
+        with patch("src.audit_db.append_audit_event_async",
+                   side_effect=RuntimeError("audit down")):
+            await events.emit_write_overlap(
+                session_id="sess-1",
+                attempted=events.ATTEMPT_REVIEWER_REASSIGNMENT,
             )  # must not raise
