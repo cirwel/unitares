@@ -18,7 +18,7 @@ governance database directly, or receive a privileged measurement path.
 | `sentinel/` | Reference **fleet-monitor** resident — continuous, WebSocket-driven.          |
 | `chronicler/` | Reference **archive** resident — daily external-source capture.            |
 | `watcher/`  | Reference **code-watcher** resident — wired into Claude Code's PostToolUse hook. |
-| `governance-reviewer.md` | Claude Code **subagent definition** (frontmatter + prompt, `memory: project`). Not auto-discovered here — install into `~/.claude/agents/` or ship via the gov-plugin; see the "Subagent definitions and per-agent memory" section of `CLAUDE.md`. |
+| `governance-reviewer.md` | Claude Code **subagent definition** (frontmatter + prompt, `memory: project`). Not auto-discovered here — install into `~/.claude/agents/` or ship via the gov-plugin (`scripts/dev/sync-plugin-agents.sh`); see the "Subagent definitions and per-agent memory" section of `CLAUDE.md`. |
 
 ## Running your own
 
