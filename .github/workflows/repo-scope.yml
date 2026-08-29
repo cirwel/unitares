@@ -62,11 +62,20 @@ jobs:
       # tests/test_pr_body_attribution.py): ONLY a trailing attribution footer is
       # removed. A session link the author wrote into the description survives
       # and still fails below — this must not become a laundering step.
+      #
+      # The body is read LIVE from the API, never from
+      # `github.event.pull_request.body`. That payload is frozen at the moment
+      # the event fired, and this step writes what it reads back to the PR — so
+      # on a re-run the frozen copy is replayed over the live description and
+      # RESTORES whatever the author has since removed. Observed 2026-08-29 on
+      # #1987: an author edited the leaked link out, a re-run put it back, and
+      # the guard then failed on content the workflow itself had just restored.
+      # Reading live is also what the guard is actually about — the rule is that
+      # the link must not sit in the published body, which is a fact about the
+      # PR now, not about the PR when the webhook fired.
       - name: Normalize PR body (remove harness-appended attribution footer)
         if: github.event_name == 'pull_request'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        env:
-          PR_BODY: ${{ github.event.pull_request.body }}
         with:
           script: |
             const fs = require('fs');
@@ -75,7 +84,12 @@ jobs:
             const run = (args, input) =>
               execFileSync('python3', args, { input, encoding: 'utf8' });
 
-            let body = process.env.PR_BODY || '';
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+            });
+            let body = pr.body || '';
             const status = JSON.parse(run([script, '--status'], body));
 
             if (status.stripped) {
