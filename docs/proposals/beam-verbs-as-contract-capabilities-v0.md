@@ -512,9 +512,20 @@ the wrong one.
   drift cost may make it expensive enough that the honest answer is "`msg` yes,
   `lease` no." That would be a fine outcome for this document.
   **Operator decision, 2026-08-29: `msg` proceeds now; `lease` stays a later
-  slice, deliberately not cancelled.** So §§6–7 remain live design work rather
-  than closed sections, and the question above stays genuinely open — deferring
-  the slice is not a quiet yes to it.
+  slice, deliberately not cancelled.**
+
+  **The operator's stated reason is a footprint argument, not a cost one:**
+  exposing the lease verbs as capabilities would propagate BEAM further, and
+  that expansion is the thing being held back. This is a different reason from
+  the ones this document had assembled — §§6–7's design cost and the
+  state-machine drift risk — and it is the reason of record. Those remain true
+  and remain live design work; they are not why the slice was deferred.
+
+  The distinction matters for anyone who later argues the deferral away. Solving
+  §6 and §7 would remove the *cost* objection while leaving the *footprint*
+  objection untouched, so a future "the blockers are cleared, ship it" does not
+  follow from clearing them. The question above therefore stays genuinely open,
+  and deferring the slice is not a quiet yes to it.
 
 ## 12. How to know this was wrong
 
