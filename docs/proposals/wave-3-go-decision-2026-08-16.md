@@ -245,6 +245,12 @@ work it releases must itself be bounded:
 ⛔Building begins only after that gate exists and is met. ⛔No implementation PR may cite
 this signature as its authority.
 
+**Gate document drafted 2026-08-29 (unratified):** `docs/proposals/wave-3-reduced-scope-gate-v0.md`.
+It proposes scoping to path (1) only, rederives criteria 2/3/5 and the (B) budget for a periodic
+topology, and reports one blocking prerequisite — the sweeper's guard-refusal count
+(`skipped_count`) reaches no durable channel, so the dual-writer hazard this scope exists to repair
+is unobservable today. ⛔It is a proposal awaiting operator signature, not a met gate.
+
 ### The scope, stated exactly — it is TWO runtime paths, not one
 
 ⛔**An earlier draft presented five symbols as a single slice. They are not call-closed.**

@@ -130,6 +130,11 @@ Standing properties of the slice:
 no exit criteria, no re-derived (B) boundary budget for the new topology, no stop-sign revision.
 ⛔Signing V0.6 authorises the *scope*, not an implementation start; the smaller gate is owed first.
 
+⚠️**Update 2026-08-29 — the owed gate now has a draft, still unratified:**
+`docs/proposals/wave-3-reduced-scope-gate-v0.md` supplies a reduced disconfirmer set, rederived
+exit criteria and a re-derived boundary budget, and records why the original (B) multipliers do not
+transfer to a 10-minute periodic sweeper. ⛔It is a proposal, and it does not authorise building.
+
 ⚠️**§14's prereq lint does not bind this slice.** ⛔**Corrected 2026-08-22 — the engagement
 condition was previously stated backwards here.** `scripts/dev/check-wave3-ode-prereq.sh:24-27`
 exits 0 with "gate not engaged (pass)" when `elixir/handler_dispatch` is **absent**, so the lint
