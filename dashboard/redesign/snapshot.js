@@ -25,19 +25,19 @@ window.SNAPSHOT = {
   // offline stand-in for one agent.
   agentHistory: {
     "mcp_20260428_69a1a4f7": [
-      { t:"2026-06-06", E:0.55, I:0.84, S:0.11, V:-0.30, coherence:0.51, risk:0.10 },
-      { t:"2026-06-07", E:0.53, I:0.84, S:0.12, V:-0.33, coherence:0.51, risk:0.11 },
-      { t:"2026-06-08", E:0.50, I:0.83, S:0.12, V:-0.36, coherence:0.50, risk:0.12 },
-      { t:"2026-06-09", E:0.48, I:0.84, S:0.13, V:-0.39, coherence:0.50, risk:0.13 },
-      { t:"2026-06-10", E:0.46, I:0.83, S:0.13, V:-0.41, coherence:0.50, risk:0.14 },
-      { t:"2026-06-11", E:0.44, I:0.83, S:0.14, V:-0.43, coherence:0.50, risk:0.15 },
-      { t:"2026-06-12", E:0.42, I:0.83, S:0.14, V:-0.45, coherence:0.50, risk:0.16 },
-      { t:"2026-06-13", E:0.40, I:0.83, S:0.14, V:-0.47, coherence:0.50, risk:0.17 },
-      { t:"2026-06-14", E:0.38, I:0.83, S:0.15, V:-0.48, coherence:0.50, risk:0.18 },
-      { t:"2026-06-15", E:0.36, I:0.83, S:0.15, V:-0.49, coherence:0.50, risk:0.18 },
-      { t:"2026-06-16", E:0.35, I:0.83, S:0.15, V:-0.50, coherence:0.50, risk:0.19 },
-      { t:"2026-06-17", E:0.33, I:0.83, S:0.15, V:-0.51, coherence:0.50, risk:0.19 },
-      { t:"2026-06-18", E:0.32, I:0.83, S:0.15, V:-0.51, coherence:0.50, risk:0.19 },
+      { t:"2026-06-06", E:0.55, I:0.84, S:0.11, V:-0.30, coherence:0.51, risk:0.10, action:"approve", verdict:"safe" },
+      { t:"2026-06-07", E:0.53, I:0.84, S:0.12, V:-0.33, coherence:0.51, risk:0.11, action:"approve", verdict:"safe" },
+      { t:"2026-06-08", E:0.50, I:0.83, S:0.12, V:-0.36, coherence:0.50, risk:0.12, action:"guide", verdict:"safe" },
+      { t:"2026-06-09", E:0.48, I:0.84, S:0.13, V:-0.39, coherence:0.50, risk:0.13, action:"guide", verdict:"safe" },
+      { t:"2026-06-10", E:0.46, I:0.83, S:0.13, V:-0.41, coherence:0.50, risk:0.14, action:"guide", verdict:"safe" },
+      { t:"2026-06-11", E:0.44, I:0.83, S:0.14, V:-0.43, coherence:0.50, risk:0.15, action:"guide", verdict:"caution" },
+      { t:"2026-06-12", E:0.42, I:0.83, S:0.14, V:-0.45, coherence:0.50, risk:0.16, action:"guide", verdict:"caution" },
+      { t:"2026-06-13", E:0.40, I:0.83, S:0.14, V:-0.47, coherence:0.50, risk:0.17, action:"guide", verdict:"caution" },
+      { t:"2026-06-14", E:0.38, I:0.83, S:0.15, V:-0.48, coherence:0.50, risk:0.18, action:"guide", verdict:"caution" },
+      { t:"2026-06-15", E:0.36, I:0.83, S:0.15, V:-0.49, coherence:0.50, risk:0.18, action:"guide", verdict:"caution" },
+      { t:"2026-06-16", E:0.35, I:0.83, S:0.15, V:-0.50, coherence:0.50, risk:0.19, action:"guide", verdict:"caution" },
+      { t:"2026-06-17", E:0.33, I:0.83, S:0.15, V:-0.51, coherence:0.50, risk:0.19, action:"risk_pause", verdict:"high-risk" },
+      { t:"2026-06-18", E:0.32, I:0.83, S:0.15, V:-0.51, coherence:0.50, risk:0.19, action:"guide", verdict:"caution" },
       { t:"2026-06-19", E:0.31, I:0.83, S:0.15, V:-0.52, coherence:0.50, risk:0.19 },
     ],
   },
@@ -49,6 +49,12 @@ window.SNAPSHOT = {
     agentsPresenceUnavailable: null, agentsTotal: 658,
     stuck: 2, discoveries: 1204, discoveriesToday: 12,
     dialectic: 0, systemHealth: "OK", calibration: 0.71, anomalies: 1,
+    // The offline fixture carries the same shape the live card reads: a
+    // healthy-looking trajectory_health alongside a NEGATIVE calibration
+    // verdict, which is the exact combination that made the old
+    // number-only card misleading. Keeping it here means the offline
+    // render exercises the honest path rather than a flattering one.
+    calibrated: false, calibrationStatus: "miscalibrated", calibrationSignal: "stale",
     // Non-empty on purpose: `stuck: 0` never exercises the card body, so the
     // offline page could not show (or review) the drill-down at all. Second
     // entry is deliberately NOT in agentsList below, so the offline page also
@@ -329,13 +335,6 @@ window.SNAPSHOT = {
       operator:{ overall_status:"healthy", failing_checks:[], degraded_checks:[], first_action:"No action needed." },
       breakers:{ governance:0, redis:0 }, calibration:"healthy", dbPool:{ size:8, idle:4, max:25 }, redis:true, continuity:"redis" },
   },
-  research: {
-    runs: [],
-    count: 0,
-    totalMatched: 0,
-    warnings: [],
-    stats: { total:0, by_status:{}, by_grounding:{}, by_research_area:{}, rigor_complete:0, rigor_incomplete:0 },
-  },
   // Fleet metrics (Chronicler) — /v1/metrics/catalog + /v1/metrics/series.
   metrics: {
     catalog: [
@@ -414,5 +413,48 @@ window.SNAPSHOT = {
       { week: "07-27", produced: 8, delivered: 0 },
     ],
     note: "A produced pause verdict is not a delivered enforcement action.",
+  },
+  // Offline stand-in for the Risk section. Live reads Chronicler's daily
+  // governance.* scrape via /v1/metrics/series; these points only need the
+  // right SHAPE — risk near the floor, pause in the tens, guide in the
+  // thousands — so the dual-axis pressure chart is exercised offline.
+  riskTrend: {
+    windowDays: 30,
+      risk: [
+        {ts:"2026-05-21T08:00:00Z",value:0.03},{ts:"2026-05-22T08:00:00Z",value:0.0383},{ts:"2026-05-23T08:00:00Z",value:0.0452},
+        {ts:"2026-05-24T08:00:00Z",value:0.0498},{ts:"2026-05-25T08:00:00Z",value:0.0516},{ts:"2026-05-26T08:00:00Z",value:0.0512},
+        {ts:"2026-05-27T08:00:00Z",value:0.0493},{ts:"2026-05-28T08:00:00Z",value:0.047},{ts:"2026-05-29T08:00:00Z",value:0.0453},
+        {ts:"2026-05-30T08:00:00Z",value:0.0446},{ts:"2026-05-31T08:00:00Z",value:0.0445},{ts:"2026-06-01T08:00:00Z",value:0.0443},
+        {ts:"2026-06-02T08:00:00Z",value:0.0431},{ts:"2026-06-03T08:00:00Z",value:0.04},{ts:"2026-06-04T08:00:00Z",value:0.0347},
+        {ts:"2026-06-05T08:00:00Z",value:0.0276},{ts:"2026-06-06T08:00:00Z",value:0.0196},{ts:"2026-06-07T08:00:00Z",value:0.0122},
+        {ts:"2026-06-08T08:00:00Z",value:0.008},{ts:"2026-06-09T08:00:00Z",value:0.008},{ts:"2026-06-10T08:00:00Z",value:0.008},
+        {ts:"2026-06-11T08:00:00Z",value:0.008},{ts:"2026-06-12T08:00:00Z",value:0.0111},{ts:"2026-06-13T08:00:00Z",value:0.0158},
+        {ts:"2026-06-14T08:00:00Z",value:0.0198},{ts:"2026-06-15T08:00:00Z",value:0.0226},{ts:"2026-06-16T08:00:00Z",value:0.0244},
+        {ts:"2026-06-17T08:00:00Z",value:0.0257},{ts:"2026-06-18T08:00:00Z",value:0.0276},{ts:"2026-06-19T08:00:00Z",value:0.0308},
+      ],
+      pause: [
+        {ts:"2026-05-21T08:00:00Z",value:13},{ts:"2026-05-22T08:00:00Z",value:14},{ts:"2026-05-23T08:00:00Z",value:19},
+        {ts:"2026-05-24T08:00:00Z",value:23},{ts:"2026-05-25T08:00:00Z",value:19},{ts:"2026-05-26T08:00:00Z",value:19},
+        {ts:"2026-05-27T08:00:00Z",value:25},{ts:"2026-05-28T08:00:00Z",value:21},{ts:"2026-05-29T08:00:00Z",value:15},
+        {ts:"2026-05-30T08:00:00Z",value:15},{ts:"2026-05-31T08:00:00Z",value:14},{ts:"2026-06-01T08:00:00Z",value:7},
+        {ts:"2026-06-02T08:00:00Z",value:9},{ts:"2026-06-03T08:00:00Z",value:4},{ts:"2026-06-04T08:00:00Z",value:2},
+        {ts:"2026-06-05T08:00:00Z",value:2},{ts:"2026-06-06T08:00:00Z",value:5},{ts:"2026-06-07T08:00:00Z",value:7},
+        {ts:"2026-06-08T08:00:00Z",value:6},{ts:"2026-06-09T08:00:00Z",value:10},{ts:"2026-06-10T08:00:00Z",value:12},
+        {ts:"2026-06-11T08:00:00Z",value:19},{ts:"2026-06-12T08:00:00Z",value:20},{ts:"2026-06-13T08:00:00Z",value:19},
+        {ts:"2026-06-14T08:00:00Z",value:25},{ts:"2026-06-15T08:00:00Z",value:23},{ts:"2026-06-16T08:00:00Z",value:18},
+        {ts:"2026-06-17T08:00:00Z",value:17},{ts:"2026-06-18T08:00:00Z",value:19},{ts:"2026-06-19T08:00:00Z",value:16},
+      ],
+      guide: [
+        {ts:"2026-05-21T08:00:00Z",value:2400},{ts:"2026-05-22T08:00:00Z",value:2677},{ts:"2026-05-23T08:00:00Z",value:2942},
+        {ts:"2026-05-24T08:00:00Z",value:3184},{ts:"2026-05-25T08:00:00Z",value:3397},{ts:"2026-05-26T08:00:00Z",value:3581},
+        {ts:"2026-05-27T08:00:00Z",value:3741},{ts:"2026-05-28T08:00:00Z",value:3885},{ts:"2026-05-29T08:00:00Z",value:4027},
+        {ts:"2026-05-30T08:00:00Z",value:4178},{ts:"2026-05-31T08:00:00Z",value:4350},{ts:"2026-06-01T08:00:00Z",value:4550},
+        {ts:"2026-06-02T08:00:00Z",value:4779},{ts:"2026-06-03T08:00:00Z",value:5035},{ts:"2026-06-04T08:00:00Z",value:5308},
+        {ts:"2026-06-05T08:00:00Z",value:5587},{ts:"2026-06-06T08:00:00Z",value:5859},{ts:"2026-06-07T08:00:00Z",value:6113},
+        {ts:"2026-06-08T08:00:00Z",value:6339},{ts:"2026-06-09T08:00:00Z",value:6536},{ts:"2026-06-10T08:00:00Z",value:6706},
+        {ts:"2026-06-11T08:00:00Z",value:6856},{ts:"2026-06-12T08:00:00Z",value:6997},{ts:"2026-06-13T08:00:00Z",value:7142},
+        {ts:"2026-06-14T08:00:00Z",value:7304},{ts:"2026-06-15T08:00:00Z",value:7491},{ts:"2026-06-16T08:00:00Z",value:7707},
+        {ts:"2026-06-17T08:00:00Z",value:7952},{ts:"2026-06-18T08:00:00Z",value:8218},{ts:"2026-06-19T08:00:00Z",value:8496},
+      ],
   },
 };

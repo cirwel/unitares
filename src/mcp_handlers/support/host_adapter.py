@@ -9,7 +9,7 @@ are preserved when the CLI exposes them; subscription-backed does not mean zero-
 
 Architecture (the load-bearing decision): strong models run for *minutes*, so they
 are dispatched **asynchronously via the agent-orchestrator** (`POST /v1/agents` →
-`POST /v1/agents/:id/await`), NOT through the synchronous 30s ``call_model`` tool.
+`POST /v1/executions/:id/await`), NOT through the synchronous 30s ``call_model`` tool.
 This is the §5.6 lesson — strong-heterogeneous reasoners route via BEAM coordination,
 never a blocking compute endpoint. The orchestrator owns lifecycle (kill_tree,
 max_runtime); this module only builds the spec and relays the result.
@@ -352,8 +352,8 @@ async def invoke_host_adapter(
     """Invoke a strong-heterogeneous model host via the orchestrator. Async, fail-safe.
 
     Returns a dict:
-      {ok: bool, host_id, text, raw, exit_status, agent_id, provenance, [error|status]}
-    ``status="still_running"`` (with ``agent_id``) is returned on await-timeout so a
+      {ok: bool, host_id, text, raw, exit_status, execution_id, agent_id, provenance, [error|status]}
+    ``status="still_running"`` (with ``execution_id``) is returned on await-timeout so a
     caller can poll the orchestrator rather than block — strong models can exceed any
     single budget. Never raises.
     """
@@ -461,7 +461,7 @@ async def invoke_host_adapter(
         "via": "agent_orchestrator",
         "model_requested": model,
     }
-    agent_id: Optional[str] = None
+    execution_id: Optional[str] = None
     try:
         import httpx
 
@@ -479,20 +479,21 @@ async def invoke_host_adapter(
                 "provenance": provenance,
             }
         dispatch_phase = "spawn_acknowledged"
-        agent_id = (sp.json() or {}).get("agent_id")
-        if not agent_id:
+        spawn_payload = sp.json() or {}
+        execution_id = spawn_payload.get("execution_id") or spawn_payload.get("agent_id")
+        if not execution_id:
             return {
                 "ok": False,
                 "host_id": host_id,
                 "dispatch_phase": dispatch_phase,
-                "error": "spawn returned no agent_id",
+                "error": "spawn returned no execution_id or legacy agent_id",
                 "provenance": provenance,
             }
 
         dispatch_phase = "spawned"
         async with httpx.AsyncClient(timeout=timeout_s + 15.0) as client:
             aw = await client.post(
-                f"{base}/v1/agents/{agent_id}/await",
+                f"{base}/v1/executions/{execution_id}/await",
                 json={"timeout_ms": int(timeout_s * 1000)},
                 headers=headers,
             )
@@ -502,8 +503,9 @@ async def invoke_host_adapter(
                 "host_id": host_id,
                 "dispatch_phase": "await_timeout",
                 "status": "still_running",
-                "agent_id": agent_id,
-                "hint": f"poll {base}/v1/agents/{agent_id}/await",
+                "execution_id": execution_id,
+                "agent_id": execution_id,
+                "hint": f"poll {base}/v1/executions/{execution_id}/await",
                 "provenance": provenance,
             }
         if aw.status_code != 200:
@@ -512,7 +514,8 @@ async def invoke_host_adapter(
                 "host_id": host_id,
                 "dispatch_phase": "await_failed",
                 "error": f"await {aw.status_code}: {aw.text[:200]}",
-                "agent_id": agent_id,
+                "execution_id": execution_id,
+                "agent_id": execution_id,
                 "provenance": provenance,
             }
 
@@ -545,7 +548,8 @@ async def invoke_host_adapter(
             "text": text,
             "raw": "\n".join(output),
             "exit_status": exit_status,
-            "agent_id": agent_id,
+            "execution_id": execution_id,
+            "agent_id": execution_id,
             "provenance": provenance,
             **({"error": adapter_error} if adapter_error else {}),
         }
@@ -557,5 +561,9 @@ async def invoke_host_adapter(
             "dispatch_phase": dispatch_phase,
             "error": f"orchestrator dispatch failed: {exc!r}",
             "provenance": provenance,
-            **({"agent_id": agent_id} if agent_id else {}),
+            **(
+                {"execution_id": execution_id, "agent_id": execution_id}
+                if execution_id
+                else {}
+            ),
         }

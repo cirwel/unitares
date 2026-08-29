@@ -47,6 +47,10 @@
              named residents (user-agnostic install). -->
         <key>UNITARES_RESIDENTS</key>
         <string>Lumen,Vigil,Sentinel,Watcher,Steward,Chronicler</string>
+        <!-- Set to one token accepted by the governance server's
+             UNITARES_MCP_BEARER_TOKENS allowlist when that gate is enabled. -->
+        <key>UNITARES_MCP_BEARER_TOKEN</key>
+        <string></string>
         <key>PYTHONPATH</key>
         <string>__UNITARES_ROOT__</string>
         <key>PATH</key>

@@ -24,9 +24,55 @@ logger = get_logger(__name__)
 # HTTP polling fallback for EISV (when WebSocket is blocked by proxy auth)
 async def http_eisv_latest(request):
     """Return the latest EISV update as JSON (polling fallback for WebSocket)."""
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not access._check_http_auth(request, http_api_token=http_api_token):
+        return access._http_unauthorized()
+
     if broadcaster_instance.last_update:
         return JSONResponse(broadcaster_instance.last_update)
     return JSONResponse({"type": "no_data", "message": "No EISV updates yet"}, status_code=200)
+
+
+# Telemetry keys a trajectory view actually consumes. Anything outside this set
+# is diagnostic detail that belongs in the full event, not in a 10-second poll.
+_COMPACT_TELEMETRY_KEYS = (
+    "measurement_source", "behavioral_source", "submitted_source",
+    "primary_source", "behavioral_confidence", "missing_inputs",
+    "afferents_recorded", "afferent_source", "afferent_source_field",
+    "afferent_count", "afferent_valid_count", "afferent_truncated",
+    "afferent_keys", "afferent_policy_applied",
+    "enforcement_requested", "enforcement_applied",
+)
+
+
+def _compact_eisv_event(event: dict) -> dict:
+    """Project one eisv_update down to the fields a chart reads.
+
+    Deliberately a WHITELIST, not a blacklist of the currently-large keys: a
+    new diagnostic field added upstream should not silently re-inflate a
+    polled payload. A consumer that needs more asks for the full shape.
+
+    Keys are omitted when absent rather than emitted as null, so a compact
+    event stays a strict subset of the full one and the same client code
+    parses both.
+    """
+    out: dict = {}
+    for key in ("type", "timestamp", "agent_id", "eisv", "coherence", "risk"):
+        if key in event:
+            out[key] = event[key]
+
+    telemetry = event.get("eisv_telemetry") or event.get("telemetry")
+    if isinstance(telemetry, dict):
+        trimmed = {k: telemetry[k] for k in _COMPACT_TELEMETRY_KEYS if k in telemetry}
+        if trimmed:
+            out["eisv_telemetry"] = trimmed
+
+    # `metrics` is ~1.3 KB of governance detail; the only field read off it
+    # here is the source tag the measurement-lane view falls back to.
+    metrics = event.get("metrics")
+    if isinstance(metrics, dict) and "primary_eisv_source" in metrics:
+        out["metrics"] = {"primary_eisv_source": metrics["primary_eisv_source"]}
+    return out
 
 
 async def http_eisv_recent(request):
@@ -38,18 +84,42 @@ async def http_eisv_recent(request):
     reconnect and polling-fallback clients (when upstream proxies block the
     WS upgrade, e.g. Cloudflare tunnels without the WebSocket toggle).
     """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not access._check_http_auth(request, http_api_token=http_api_token):
+        return access._http_unauthorized()
+
     try:
         limit = int(request.query_params.get("limit", 120))
     except (TypeError, ValueError):
         limit = 120
     limit = max(1, min(limit, 500))
 
+    # Opt-in projection. The default shape is unchanged: WebSocket clients and
+    # any other consumer keep the full event. `fields=compact` returns only the
+    # keys a trajectory chart reads, which is the difference between a ~6.3 KB
+    # and a ~0.5 KB event — measured 343,393 B -> 29,799 B (91.3%) against the
+    # live ring buffer. `decision` alone is ~1.9 KB/event and is read by no
+    # consumer.
+    #
+    # CORRECTION (2026-08-28): an earlier version of this comment claimed the
+    # dashboard polls this "every ten seconds". It does not — that path is a
+    # fallback that runs only while the /ws/eisv socket is down. The saving is
+    # per fetch, not per tick.
+    compact = str(
+        request.query_params.get("fields", "")
+    ).strip().lower() == "compact"
+
     events: list = []
     for event in broadcaster_instance.event_history:
         if isinstance(event, dict) and event.get("type") == "eisv_update":
-            events.append(event)
+            events.append(_compact_eisv_event(event) if compact else event)
     events = events[-limit:]
-    return JSONResponse({"type": "eisv_recent", "count": len(events), "events": events})
+    return JSONResponse({
+        "type": "eisv_recent",
+        "count": len(events),
+        "fields": "compact" if compact else "full",
+        "events": events,
+    })
 
 
 _EISV_TELEMETRY_HEALTH_CACHE_TTL_SECONDS = 30.0

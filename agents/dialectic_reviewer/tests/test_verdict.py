@@ -104,8 +104,10 @@ def test_prompt_separates_server_captured_governance_evidence_from_agent_claims(
             },
         )
     )
-    assert "SERVER-CAPTURED GOVERNANCE EVIDENCE AT SESSION OPEN" in prompt
-    assert "not authored by the paused agent" in prompt
+    assert "SERVER-CAPTURED GOVERNANCE RECORD AT SESSION OPEN" in prompt
+    assert "bounded to decision-relevant fields" in prompt
+    assert "primary measurements may derive from caller-published sensor inputs" in prompt
+    assert "not authored by the paused agent" not in prompt
     assert "policy_evaluation.action/enforcement" in prompt
     assert '"risk_score": 0.7859' in prompt
     assert '"coherence": 0.4986' in prompt
@@ -388,8 +390,9 @@ async def test_run_reconsiders_paused_response_with_same_reviewer(monkeypatch):
             raise AssertionError(f"unexpected action: {args}")
 
         async def checkin(self, response_text, complexity=0.3, confidence=0.7, **kw):
-            calls.append(("checkin", {"response_text": response_text, **kw}))
-            return None
+            # The verdict is already durable.  Telemetry must not kill the
+            # continuation that waits for the paused agent's response.
+            raise RuntimeError("telemetry unavailable")
 
         async def disconnect(self):
             return None

@@ -5,7 +5,9 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
   Bind is local-only (`127.0.0.1`); a single shared bearer token from
   `~/.config/cirwel/secrets.env` (`LEASE_PLANE_BEARER_TOKEN`) gates every
-  route. Body shapes are validated by Pattern + JSON-decode errors map to
+  route except the single unauthenticated `GET /health` liveness probe
+  (see the `:liveness` plug). Body shapes are validated by Pattern +
+  JSON-decode errors map to
   `schema_invalid` per the typed-absence protocol — there is no leaky 400
   HTML page.
 
@@ -23,6 +25,16 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   alias UnitaresLeasePlane.{Canonicalize, HandoffServer, IdentityBinding, Repo}
 
   plug(:match)
+
+  # Liveness exemption — the ONLY pre-auth path. Exact match on GET /health;
+  # returns a fully static body (no DB touch, no config echo, no identity
+  # metrics), so up-and-fail-closed is distinguishable from down without a
+  # bearer. Everything else — including /v1/health, /health/*, and any other
+  # verb on /health — still hits HTTPAuth below and 401s/503s exactly as
+  # before. A static payload preserves the anti-enumeration property (only
+  # this one fixed path behaves differently pre-auth) and cannot 503 when
+  # Postgres is down, which is exactly what a liveness probe wants.
+  plug(:liveness)
 
   # HTTPAuth runs BEFORE body parsing so an unauthenticated caller cannot
   # probe endpoint existence by sending malformed JSON (which would otherwise
@@ -120,12 +132,19 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           retry_after_hint_ms: retry_after_hint_ms
         })
 
-      {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint_name: name}}} ->
+      {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: name}}} ->
         # RFC §7.13.5 typed-error contract. Map any CHECK violation to
         # HTTP 422 schema_invalid with the constraint name as detail (one
         # of the four §7.13 substrate_state CHECKs). MUST precede the
         # generic {:error, reason} arm — falling through to 503 would
         # mask a writer bug as a transient outage.
+        #
+        # ⛔The key is `:constraint`, NOT `:constraint_name`. Postgrex's
+        # `@metadata` is `[:table, :column, :constraint, :hint]`
+        # (`Postgrex.Error`), so the `constraint_name:` this clause matched
+        # until 2026-08-28 was never present — the clause could not match,
+        # every CHECK violation fell through to the 503 arm below, and the
+        # contract this comment describes was not the one being served.
         json(conn, 422, %{ok: false, error: "schema_invalid", detail: name})
 
       {:error, reason} ->
@@ -598,6 +617,111 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     end
   end
 
+  # ---------- /v1/msg/* — agent-to-agent message transport ----------
+  #
+  # NOT part of the lease RFC's conformance surface. Leases and messages share
+  # this node (one bearer, one identity gate, one Postgrex pool) but not one
+  # contract: a lease is an exclusive claim, a message is not exclusive.
+  # Contract: docs/proposals/agent-message-transport-v0.md.
+  #
+  # TRANSPORT ONLY. Nothing here long-polls, wakes, spawns, or spends, so the
+  # disconfirmers in agent-channel-wake-gate-v0.md are untouched.
+  #
+  # ⛔BOTH routes verify identity UNCONDITIONALLY, via
+  # `IdentityBinding.authorize_strict/3` rather than `authorize/4`. The shared
+  # bearer authenticates a *deployment*, not an *agent*; without proof-bound
+  # identity any bearer holder could send as anyone and read anyone's inbox.
+  #
+  # An earlier cut gated these routes on `identity_binding_mode == :enforce`.
+  # That was wrong twice over. It made the mailbox's confidentiality boundary a
+  # function of an unrelated lease rollout — the live plane runs `:log`, so both
+  # routes would have 503'd unconditionally — and the documented remedy
+  # (`UNITARES_LEASE_IDENTITY_BOUND_SURFACE_KINDS=topic`) would have narrowed
+  # `required_for_surface?/1` so that every OTHER lease surface silently fell
+  # from `:log` to `:off`, stopping verification and its metrics. Enabling a
+  # mailbox with no callers must not stand down lease identity telemetry.
+
+  post "/v1/msg/send" do
+    with {:ok, params} <- extract_msg_send_params(conn.body_params),
+         :ok <-
+           IdentityBinding.authorize_strict(
+             params.sender_agent_uuid,
+             IdentityBinding.proof_from_conn(conn),
+             IdentityBinding.request_context(conn)
+           ) do
+      msg_send_authorized(conn, params)
+    else
+      {:error, detail} when is_binary(detail) ->
+        json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
+
+      {:error, identity_reason} ->
+        identity_refusal(conn, identity_reason)
+    end
+  end
+
+  defp msg_send_authorized(conn, params) do
+    case Repo.send_message(params) do
+      {:ok, message} ->
+        json(conn, 200, %{ok: true, message: present_message(message)})
+
+      {:error, :parent_not_found} ->
+        json(conn, 404, %{ok: false, error: "not_found", reason: "response_to_id"})
+
+      {:error, :reply_depth_exceeded} ->
+        # A real conflict with the loop bound, not a malformed body: the same
+        # message would have been accepted earlier in the thread.
+        json(conn, 409, %{ok: false, error: "reply_depth_exceeded"})
+
+      # Without this the sender picks a reply's topic freely, so a third agent
+      # can answer into an A<->B thread and silently relocate the whole
+      # conversation onto a topic its participants are not reading.
+      {:error, :topic_mismatch} ->
+        json(conn, 409, %{ok: false, error: "topic_mismatch"})
+
+      {:error, reason}
+      when reason in [:ttl_out_of_range, :invalid_topic, :self_addressed, :envelope_not_object] ->
+        json(conn, 422, %{ok: false, error: "schema_invalid", detail: Atom.to_string(reason)})
+
+      {:error, {:constraint_violation, name}} ->
+        json(conn, 422, %{ok: false, error: "schema_invalid", detail: name})
+
+      {:error, reason} ->
+        Logger.error("lease plane msg send failed: #{safe_reason(reason)}")
+        json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+    end
+  end
+
+  post "/v1/msg/inbox" do
+    with {:ok, recipient_agent_uuid, limit} <- extract_msg_inbox_params(conn.body_params),
+         # The caller names the inbox; this proves the caller IS that agent.
+         # Recipient-only read, mirroring authorize_handoff_recipient/2.
+         :ok <-
+           IdentityBinding.authorize_strict(
+             recipient_agent_uuid,
+             IdentityBinding.proof_from_conn(conn),
+             IdentityBinding.request_context(conn)
+           ) do
+      msg_inbox_authorized(conn, recipient_agent_uuid, limit)
+    else
+      {:error, detail} when is_binary(detail) ->
+        json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
+
+      {:error, identity_reason} ->
+        identity_refusal(conn, identity_reason)
+    end
+  end
+
+  defp msg_inbox_authorized(conn, recipient_agent_uuid, limit) do
+    case Repo.inbox(recipient_agent_uuid, limit) do
+      {:ok, messages} ->
+        json(conn, 200, %{ok: true, messages: Enum.map(messages, &present_message/1)})
+
+      {:error, reason} ->
+        Logger.error("lease plane msg inbox failed: #{safe_reason(reason)}")
+        json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
+    end
+  end
+
   # ---------- catch-all ----------
   match _ do
     json(conn, 404, %{ok: false, error: "not_found"})
@@ -668,9 +792,10 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           {:error, :not_found} ->
             json(conn, 404, %{ok: false, error: "not_found"})
 
-          {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint_name: name}}} ->
+          {:error, %Postgrex.Error{postgres: %{code: :check_violation, constraint: name}}} ->
             # RFC §7.13.5 typed-error contract for renew CHECK violations.
-            # MUST precede the generic 503 arm.
+            # MUST precede the generic 503 arm. `:constraint`, not
+            # `:constraint_name` — see the acquire arm above.
             json(conn, 422, %{ok: false, error: "schema_invalid", detail: name})
 
           {:error, reason} ->
@@ -840,7 +965,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
         # RFC §7.13: optional substrate_state + substrate_state_observed_at.
         # Both nullable; type-checked here. Pair-coherence + resident-kind-only
         # + sensor.status enforcement happens in the DB CHECKs (typed-error
-        # path returns 422 with constraint_name).
+        # path returns 422 with the constraint name).
         substrate_state = Map.get(body, "substrate_state")
 
         substrate_observed_at =
@@ -1061,6 +1186,130 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
   defp extract_handoff_accept_params(_), do: {:error, "handoff_id required"}
 
+  @msg_ttl_max_s 604_800
+  @msg_inbox_limit_max 100
+  # Plug.Parsers caps the whole body; this caps the part that gets stored, so a
+  # single message cannot become the thing that fills the table.
+  @msg_envelope_max_bytes 64_000
+
+  # `Repo.uuid_to_binary/1` has clauses only for a 16-byte binary and a
+  # well-formed 36-char UUID; anything else raises FunctionClauseError, which
+  # Plug.ErrorHandler renders as 503 service_unavailable. A caller's typo is not
+  # an outage, so shape-check here and return 422. `recipient_agent_uuid` and
+  # `response_to_id` are never identity-verified (only the sender is), so they
+  # reach the repo unvalidated unless this does it.
+  defp valid_uuid?(
+         <<a::binary-size(8), ?-, b::binary-size(4), ?-, c::binary-size(4), ?-,
+           d::binary-size(4), ?-, e::binary-size(12)>>
+       ) do
+    match?({:ok, _}, Base.decode16(a <> b <> c <> d <> e, case: :mixed))
+  end
+
+  defp valid_uuid?(_), do: false
+
+  defp extract_msg_send_params(%{} = body) do
+    topic = Map.get(body, "topic")
+    sender = Map.get(body, "sender_agent_uuid")
+    recipient = Map.get(body, "recipient_agent_uuid")
+    envelope = Map.get(body, "envelope", %{})
+    response_to_id = Map.get(body, "response_to_id")
+    ttl_s = Map.get(body, "ttl_s")
+
+    cond do
+      not (is_binary(topic) and byte_size(topic) > 0) ->
+        {:error, "topic required"}
+
+      not (is_binary(sender) and byte_size(sender) > 0) ->
+        {:error, "sender_agent_uuid required"}
+
+      not (is_binary(recipient) and byte_size(recipient) > 0) ->
+        {:error, "recipient_agent_uuid required"}
+
+      not valid_uuid?(sender) ->
+        {:error, "sender_agent_uuid must be a UUID"}
+
+      not valid_uuid?(recipient) ->
+        {:error, "recipient_agent_uuid must be a UUID"}
+
+      not is_map(envelope) ->
+        {:error, "envelope must be a JSON object"}
+
+      byte_size(Jason.encode!(envelope)) > @msg_envelope_max_bytes ->
+        {:error, "envelope exceeds #{@msg_envelope_max_bytes} bytes"}
+
+      not (is_nil(response_to_id) or valid_uuid?(response_to_id)) ->
+        {:error, "response_to_id must be a UUID"}
+
+      not is_integer(ttl_s) ->
+        {:error, "ttl_s must be an integer"}
+
+      ttl_s <= 0 or ttl_s > @msg_ttl_max_s ->
+        {:error, "ttl_s must be in (0, #{@msg_ttl_max_s}]"}
+
+      true ->
+        # Canonicalize server-side, exactly as acquire does: two agents naming
+        # one topic differently must land in one conversation, and the client
+        # is not the authority on that.
+        case Canonicalize.canonicalize(topic) do
+          {:ok, canonical_topic} ->
+            {:ok,
+             %{
+               topic: canonical_topic,
+               sender_agent_uuid: sender,
+               recipient_agent_uuid: recipient,
+               envelope: envelope,
+               response_to_id: response_to_id,
+               ttl_s: ttl_s
+             }}
+
+          {:error, reason} ->
+            {:error, "topic #{reason}"}
+        end
+    end
+  end
+
+  defp extract_msg_send_params(_), do: {:error, "body must be a JSON object"}
+
+  defp extract_msg_inbox_params(%{} = body) do
+    recipient = Map.get(body, "recipient_agent_uuid")
+    limit = Map.get(body, "limit", 20)
+
+    cond do
+      not (is_binary(recipient) and byte_size(recipient) > 0) ->
+        {:error, "recipient_agent_uuid required"}
+
+      not valid_uuid?(recipient) ->
+        {:error, "recipient_agent_uuid must be a UUID"}
+
+      not is_integer(limit) ->
+        {:error, "limit must be an integer"}
+
+      limit <= 0 or limit > @msg_inbox_limit_max ->
+        {:error, "limit must be in (0, #{@msg_inbox_limit_max}]"}
+
+      true ->
+        {:ok, recipient, limit}
+    end
+  end
+
+  defp extract_msg_inbox_params(_), do: {:error, "body must be a JSON object"}
+
+  defp present_message(%{} = message) do
+    %{
+      message_id: message.message_id,
+      topic: message.topic,
+      sender_agent_uuid: message.sender_agent_uuid,
+      recipient_agent_uuid: message.recipient_agent_uuid,
+      envelope: message.envelope,
+      response_to_id: message.response_to_id,
+      reply_depth: message.reply_depth,
+      delivery_state: message.delivery_state,
+      created_at: iso(message.created_at),
+      expires_at: iso(message.expires_at),
+      delivered_at: iso(message.delivered_at)
+    }
+  end
+
   defp present_lease(%{} = lease) do
     %{
       lease_id: lease.lease_id,
@@ -1117,6 +1366,38 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     |> Plug.Conn.put_resp_content_type("application/json")
     |> Plug.Conn.send_resp(status, Jason.encode!(versioned_body))
   end
+
+  # Unauthenticated liveness probe — the deliberate, single, static exception
+  # to the fail-closed posture (see the `plug(:liveness)` site for rationale).
+  # Exact match only: `["health"]` on GET. POST /health, /health/anything,
+  # /healthz and /v1/lease/health all fall through to HTTPAuth unchanged.
+  # Must halt (the private `json/3` above does not), so replicate the
+  # three-line send inline as HTTPAuth.send_json does. `protocol_version()`
+  # (the function, not the attribute) avoids attribute-ordering issues.
+  #
+  # `build_sha` is the boot commit, resolved once at application start and read
+  # from app env here, so the body stays static and DB-free. It is what
+  # `deploy-status.sh`'s `build_sha()` helper scrapes (it curls the
+  # unauthenticated /health, as it does for the governance MCP). Without it the
+  # lease plane could never report CURRENT or STALE at all — its `hot-reload`
+  # row was hardcoded to "up => HOT-RELOAD", so running-code drift on this one
+  # service was structurally invisible.
+  defp liveness(%Plug.Conn{method: "GET", path_info: ["health"]} = conn, _opts) do
+    body = %{
+      ok: true,
+      status: "ok",
+      service: "lease-plane",
+      build_sha: UnitaresLeasePlane.BuildInfo.build_sha(),
+      protocol_version: protocol_version()
+    }
+
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.send_resp(200, Jason.encode!(body))
+    |> Plug.Conn.halt()
+  end
+
+  defp liveness(conn, _opts), do: conn
 
   defp safe_reason(%module{}), do: inspect(module)
   defp safe_reason(reason) when is_atom(reason), do: Atom.to_string(reason)

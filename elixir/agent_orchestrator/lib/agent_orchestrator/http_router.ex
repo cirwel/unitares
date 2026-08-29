@@ -13,10 +13,24 @@ defmodule AgentOrchestrator.HTTPRouter do
 
       GET    /v1/health             liveness + live-agent count
       POST   /v1/agents             spawn a supervised ephemeral agent
-      GET    /v1/agents             list live agent ids
-      GET    /v1/agents/:id         snapshot (captured output + status), no block
-      POST   /v1/agents/:id/await   block until exit (or `timeout_ms`)
-      DELETE /v1/agents/:id         stop: close the port (kill child) + release lease
+      GET    /v1/executions             list live execution ids
+      GET    /v1/executions/:id         snapshot (captured output + status), no block
+      POST   /v1/executions/:id/await   block until exit (or `timeout_ms`)
+      DELETE /v1/executions/:id         stop exactly that execution
+
+  The original `/v1/agents/:id` lifecycle routes remain compatibility aliases
+  for the execution routes. `POST /v1/agents` returns both `execution_id` and
+  the legacy `agent_id` field; for HTTP-created executions those values are
+  identical. New callers should persist and use `execution_id`.
+
+  `POST /v1/agents` also accepts an optional `Idempotency-Key` header. The
+  production ledger persists only hashes + execution metadata in PostgreSQL,
+  so same key + same material spec replays the original execution id across
+  orchestrator restarts; same key + a different spec returns
+  `idempotency_conflict`. A retry that finds a crash-ambiguous reservation
+  returns `idempotency_outcome_unknown` rather than risking a duplicate spawn.
+  Deployment order and replay operations are documented in
+  `docs/operations/agent-orchestrator-idempotency.md`.
 
   ## Trust boundary
 
@@ -32,7 +46,9 @@ defmodule AgentOrchestrator.HTTPRouter do
 
   Every response is `{ok: boolean, ...}` JSON with a `protocol_version` field.
   Errors are typed (`schema_invalid` / `permission_denied` / `not_found` /
-  `lease_denied` / `await_timeout` / `service_unavailable`) rather than leaky
+  `lease_denied` / `idempotency_conflict` / `idempotency_outcome_unknown` /
+  `idempotency_unavailable` / `await_timeout` /
+  `service_unavailable`) rather than leaky
   HTML — same typed-absence discipline as the lease plane router.
   """
 
@@ -41,7 +57,7 @@ defmodule AgentOrchestrator.HTTPRouter do
 
   require Logger
 
-  @protocol_version "v0.1"
+  @protocol_version "v0.2"
 
   plug(:match)
 
@@ -73,7 +89,12 @@ defmodule AgentOrchestrator.HTTPRouter do
   # ---------- routes ----------
 
   get "/v1/health" do
-    json(conn, 200, %{ok: true, status: "ok", active_agents: AgentOrchestrator.count()})
+    json(conn, 200, %{
+      ok: true,
+      status: "ok",
+      active_agents: AgentOrchestrator.count(),
+      idempotency: AgentOrchestrator.SpawnGate.status()
+    })
   end
 
   # Aggregate of the lifecycle telemetry since boot. Behind the same bearer as
@@ -85,17 +106,31 @@ defmodule AgentOrchestrator.HTTPRouter do
 
   post "/v1/agents" do
     with {:ok, spec} <- build_spec(conn.body_params),
+         {:ok, idempotency_key} <- fetch_idempotency_key(conn),
          :ok <- check_allowed(spec.cmd) do
-      case AgentOrchestrator.run(spec) do
-        {:ok, agent_id, _pid} ->
-          json(conn, 201, %{ok: true, agent_id: agent_id})
+      case spawn(spec, idempotency_key) do
+        {:ok, execution_id, disposition} ->
+          status = if disposition == :idempotent, do: 200, else: 201
+
+          json(conn, status, %{
+            ok: true,
+            execution_id: execution_id,
+            idempotent: disposition == :idempotent,
+            # Compatibility alias for v0.1 clients. HTTP callers cannot set a
+            # logical agent_id, so this is exactly the execution handle.
+            agent_id: execution_id
+          })
 
         {:error, reason} ->
           spawn_error(conn, reason)
       end
     else
       {:error, :cmd_not_allowed, cmd} ->
-        json(conn, 403, %{ok: false, error: "permission_denied", reason: "cmd not in allowlist: #{cmd}"})
+        json(conn, 403, %{
+          ok: false,
+          error: "permission_denied",
+          reason: "cmd not in allowlist: #{cmd}"
+        })
 
       {:error, detail} ->
         json(conn, 422, %{ok: false, error: "schema_invalid", detail: detail})
@@ -108,32 +143,39 @@ defmodule AgentOrchestrator.HTTPRouter do
   end
 
   get "/v1/agents/:id" do
-    case AgentOrchestrator.snapshot(id) do
-      {:ok, result} -> json(conn, 200, %{ok: true, result: present(result)})
-      {:error, :not_found} -> json(conn, 404, %{ok: false, error: "not_found"})
-    end
+    snapshot_response(conn, id)
   end
 
   post "/v1/agents/:id/await" do
-    case AgentOrchestrator.await(id, await_timeout(conn.body_params)) do
-      {:ok, result} ->
-        json(conn, 200, %{ok: true, result: present(result)})
-
-      {:error, :timeout} ->
-        # The await deadline passed; the agent may still be running. Distinct
-        # from not_found so a caller can re-await or snapshot.
-        json(conn, 504, %{ok: false, error: "await_timeout", agent_id: id})
-
-      {:error, :not_found} ->
-        json(conn, 404, %{ok: false, error: "not_found"})
-    end
+    await_response(conn, id)
   end
 
   delete "/v1/agents/:id" do
-    case AgentOrchestrator.stop(id) do
-      :ok -> json(conn, 200, %{ok: true})
-      {:error, :not_found} -> json(conn, 404, %{ok: false, error: "not_found"})
-    end
+    stop_response(conn, id)
+  end
+
+  get "/v1/executions" do
+    details = AgentOrchestrator.list_details()
+    ids = Enum.map(details, & &1.execution_id)
+
+    json(conn, 200, %{
+      ok: true,
+      executions: ids,
+      execution_details: Enum.map(details, &present_execution/1),
+      count: length(ids)
+    })
+  end
+
+  get "/v1/executions/:id" do
+    snapshot_response(conn, id)
+  end
+
+  post "/v1/executions/:id/await" do
+    await_response(conn, id)
+  end
+
+  delete "/v1/executions/:id" do
+    stop_response(conn, id)
   end
 
   match _ do
@@ -198,7 +240,9 @@ defmodule AgentOrchestrator.HTTPRouter do
 
   defp fetch_args(body) do
     case Map.get(body, "args") do
-      nil -> {:ok, []}
+      nil ->
+        {:ok, []}
+
       list when is_list(list) ->
         if Enum.all?(list, &is_binary/1),
           do: {:ok, list},
@@ -217,7 +261,7 @@ defmodule AgentOrchestrator.HTTPRouter do
 
       %{} = map ->
         if Enum.all?(map, fn {k, v} -> is_binary(k) and is_binary(v) end),
-          do: {:ok, Map.to_list(map)},
+          do: {:ok, map |> Map.to_list() |> Enum.sort()},
           else: {:error, "env must be a JSON object of string => string"}
 
       _ ->
@@ -269,13 +313,16 @@ defmodule AgentOrchestrator.HTTPRouter do
       [
         {"required", :required, &is_boolean/1, "required must be a boolean"},
         {"surface_id", :surface_id, &nonempty_string?/1, "surface_id must be a non-empty string"},
-        {"holder_agent_uuid", :holder_agent_uuid, &nonempty_string?/1, "holder_agent_uuid must be a non-empty string"},
+        {"holder_agent_uuid", :holder_agent_uuid, &nonempty_string?/1,
+         "holder_agent_uuid must be a non-empty string"},
         {"ttl_s", :ttl_s, &positive_integer?/1, "ttl_s must be a positive integer"}
       ],
       {:ok, %{}},
       fn {json_key, atom_key, valid?, err}, {:ok, acc} ->
         case Map.fetch(cfg, json_key) do
-          :error -> {:cont, {:ok, acc}}
+          :error ->
+            {:cont, {:ok, acc}}
+
           {:ok, v} ->
             if valid?.(v),
               do: {:cont, {:ok, Map.put(acc, atom_key, v)}},
@@ -329,25 +376,112 @@ defmodule AgentOrchestrator.HTTPRouter do
   defp put_lease(spec, :absent), do: spec
   defp put_lease(spec, value), do: Map.put(spec, :lease, value)
 
+  # ---------- idempotent spawn ----------
+
+  defp fetch_idempotency_key(conn) do
+    case Plug.Conn.get_req_header(conn, "idempotency-key") do
+      [] ->
+        {:ok, nil}
+
+      [raw] ->
+        key = String.trim(raw)
+
+        if byte_size(key) in 1..200 and String.printable?(key),
+          do: {:ok, key},
+          else: {:error, "Idempotency-Key must be 1-200 printable characters"}
+
+      _multiple ->
+        {:error, "Idempotency-Key must appear at most once"}
+    end
+  end
+
+  defp spawn(spec, nil) do
+    case AgentOrchestrator.run(spec) do
+      {:ok, execution_id, _pid} -> {:ok, execution_id, :new}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp spawn(spec, idempotency_key) do
+    digest = spawn_digest(spec)
+
+    case AgentOrchestrator.SpawnGate.start_agent(idempotency_key, digest, spec) do
+      {:ok, execution_id, _pid, disposition} -> {:ok, execution_id, disposition}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp spawn_digest(spec) do
+    spec
+    |> :erlang.term_to_binary([:deterministic])
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+  end
+
   # ---------- spawn-error mapping ----------
 
   defp spawn_error(conn, {:invalid_lineage, reason}),
-    do: json(conn, 422, %{ok: false, error: "schema_invalid", detail: "invalid lineage: #{inspect(reason)}"})
+    do:
+      json(conn, 422, %{
+        ok: false,
+        error: "schema_invalid",
+        detail: "invalid lineage: #{inspect(reason)}"
+      })
 
   defp spawn_error(conn, {:invalid_server_url, reason}),
-    do: json(conn, 422, %{ok: false, error: "schema_invalid", detail: "invalid server_url: #{inspect(reason)}"})
+    do:
+      json(conn, 422, %{
+        ok: false,
+        error: "schema_invalid",
+        detail: "invalid server_url: #{inspect(reason)}"
+      })
 
   defp spawn_error(conn, {:invalid_client_session_id, reason}),
-    do: json(conn, 422, %{ok: false, error: "schema_invalid", detail: "invalid client_session_id: #{inspect(reason)}"})
+    do:
+      json(conn, 422, %{
+        ok: false,
+        error: "schema_invalid",
+        detail: "invalid client_session_id: #{inspect(reason)}"
+      })
 
   defp spawn_error(conn, {:executable_not_found, cmd}),
-    do: json(conn, 422, %{ok: false, error: "schema_invalid", detail: "executable not found: #{cmd}"})
+    do:
+      json(conn, 422, %{
+        ok: false,
+        error: "schema_invalid",
+        detail: "executable not found: #{cmd}"
+      })
 
   defp spawn_error(conn, {:lease_denied, reason}),
     do: json(conn, 409, %{ok: false, error: "lease_denied", reason: inspect(reason)})
 
   defp spawn_error(conn, {:already_running, id}),
-    do: json(conn, 409, %{ok: false, error: "already_running", agent_id: id})
+    do: json(conn, 409, %{ok: false, error: "already_running", execution_id: id})
+
+  defp spawn_error(conn, :idempotency_conflict),
+    do:
+      json(conn, 409, %{
+        ok: false,
+        error: "idempotency_conflict",
+        reason: "Idempotency-Key was already used for a different spawn spec"
+      })
+
+  defp spawn_error(conn, {:idempotency_outcome_unknown, execution_id}),
+    do:
+      json(conn, 409, %{
+        ok: false,
+        error: "idempotency_outcome_unknown",
+        execution_id: execution_id,
+        reason: "a durable reservation exists but process-start completion is unknown"
+      })
+
+  defp spawn_error(conn, :idempotency_unavailable),
+    do:
+      json(conn, 503, %{
+        ok: false,
+        error: "idempotency_unavailable",
+        reason: "durable idempotency storage is unavailable; no process was started"
+      })
 
   defp spawn_error(conn, reason) do
     Logger.error("agent orchestrator spawn failed: #{inspect(reason)}")
@@ -355,6 +489,40 @@ defmodule AgentOrchestrator.HTTPRouter do
   end
 
   # ---------- helpers ----------
+
+  defp snapshot_response(conn, execution_id) do
+    case AgentOrchestrator.snapshot(execution_id) do
+      {:ok, result} -> json(conn, 200, %{ok: true, result: present(result)})
+      {:error, :not_found} -> json(conn, 404, %{ok: false, error: "not_found"})
+    end
+  end
+
+  defp await_response(conn, execution_id) do
+    case AgentOrchestrator.await(execution_id, await_timeout(conn.body_params)) do
+      {:ok, result} ->
+        json(conn, 200, %{ok: true, result: present(result)})
+
+      {:error, :timeout} ->
+        # The await deadline passed; the execution may still be running.
+        # Distinct from not_found so a caller can re-await or snapshot.
+        json(conn, 504, %{
+          ok: false,
+          error: "await_timeout",
+          execution_id: execution_id,
+          agent_id: execution_id
+        })
+
+      {:error, :not_found} ->
+        json(conn, 404, %{ok: false, error: "not_found"})
+    end
+  end
+
+  defp stop_response(conn, execution_id) do
+    case AgentOrchestrator.stop(execution_id) do
+      :ok -> json(conn, 200, %{ok: true, execution_id: execution_id})
+      {:error, :not_found} -> json(conn, 404, %{ok: false, error: "not_found"})
+    end
+  end
 
   # Default 30s, clamped to (0, 120_000]. The await holds a Bandit connection
   # open, so an unbounded client-supplied timeout would let a caller pin a
@@ -370,7 +538,9 @@ defmodule AgentOrchestrator.HTTPRouter do
 
   defp check_allowed(cmd) do
     case Application.get_env(:agent_orchestrator, :cmd_allowlist) do
-      nil -> :ok
+      nil ->
+        :ok
+
       list when is_list(list) ->
         if Path.basename(cmd) in list, do: :ok, else: {:error, :cmd_not_allowed, cmd}
     end
@@ -382,7 +552,10 @@ defmodule AgentOrchestrator.HTTPRouter do
   # the response (which Plug.ErrorHandler would otherwise turn into a 503).
   defp present(result) do
     %{
+      execution_id: result.execution_id,
       agent_id: result.agent_id,
+      cmd: Map.get(result, :cmd),
+      started_at: Map.get(result, :started_at),
       os_pid: result.os_pid,
       lease_id: result.lease_id,
       presence: result.presence,
@@ -391,6 +564,21 @@ defmodule AgentOrchestrator.HTTPRouter do
       running: result.running,
       lease_released: result.lease_released,
       output: result.output
+    }
+  end
+
+  defp present_execution(details) do
+    %{
+      execution_id: details.execution_id,
+      agent_id: details.agent_id,
+      cmd: details.cmd,
+      started_at: details.started_at,
+      os_pid: details.os_pid,
+      lease_id: details.lease_id,
+      presence: details.presence,
+      lineage: details.lineage,
+      exit_status: encode_status(details.exit_status),
+      running: details.running
     }
   end
 

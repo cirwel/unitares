@@ -238,8 +238,9 @@ def build_review_prompt(thesis: Thesis) -> str:
         "a valid, expected outcome when the root-cause analysis is shallow, the "
         "conditions don't address the root cause, or the agent is rationalizing.\n\n"
         f"PAUSED AGENT'S SITUATION:\n{thesis.situation or '(not provided)'}\n\n"
-        "SERVER-CAPTURED GOVERNANCE EVIDENCE AT SESSION OPEN "
-        f"(not authored by the paused agent):\n{pause_evidence}\n"
+        "SERVER-CAPTURED GOVERNANCE RECORD AT SESSION OPEN "
+        "(bounded to decision-relevant fields; primary measurements may derive "
+        f"from caller-published sensor inputs):\n{pause_evidence}\n"
         "Treat it as available only when evidence_status says available, and use "
         "policy_evaluation.action/enforcement—not the diagnostic ODE vector—to "
         "determine what the server actually decided.\n\n"
@@ -840,18 +841,31 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
         # discipline). On disagreement the process remains alive, but this
         # records meaningful work even if the orchestrator later reaps it.
         # SDK checkin() maps to the server's process_agent_update.
-        await client.checkin(
-            response_text=(
-                f"dialectic review submitted: agrees={verdict.agrees}"
-                + (" (degraded fallback)" if verdict.degraded else "")
-                + f"; {_reviewer_audit_text(provenance)}"
-            ),
-            complexity=0.4,
-            confidence=0.6 if not verdict.degraded else 0.3,
-            # The VERDICT is model-produced, but this check-in text is an
-            # f-string over verdict fields, so the substrate composed the row.
-            epistemic_class="substrate_interpretation",
-        )
+        try:
+            await client.checkin(
+                response_text=(
+                    f"dialectic review submitted: agrees={verdict.agrees}"
+                    + (" (degraded fallback)" if verdict.degraded else "")
+                    + f"; {_reviewer_audit_text(provenance)}"
+                ),
+                complexity=0.4,
+                confidence=0.6 if not verdict.degraded else 0.3,
+                # The VERDICT is model-produced, but this check-in text is an
+                # f-string over verdict fields, so the substrate composed the row.
+                epistemic_class="substrate_interpretation",
+            )
+        except Exception as exc:  # noqa: BLE001 — verdict is already durable
+            # A check-in is diagnostic evidence, not part of the dialectic
+            # authority path.  One live reviewer exited non-zero here after its
+            # rejection was committed, 30 minutes before the paused response;
+            # the promised continuation therefore died and the operator had to
+            # facilitate.  Preserve the durable verdict and keep the reviewer
+            # alive to reconsider instead of making telemetry a lifecycle gate.
+            logger.warning(
+                "Dialectic reviewer check-in failed after verdict persistence; "
+                "continuing the review: %r",
+                exc,
+            )
         if not verdict.agrees and not (
             isinstance(synthesis_result, dict)
             and synthesis_result.get("success") is False

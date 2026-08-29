@@ -33,6 +33,19 @@ Reference fingerprints in the commit message — Watcher's audit trail lives in 
 python3 scripts/dev/session_end_stash.py
 ```
 
+### Subagent definitions and per-agent memory
+
+`agents/governance-reviewer.md` is a Claude Code subagent definition (YAML frontmatter + system prompt). It lives under `agents/`, deliberately **not** under a tracked `.claude/agents/`: committing vendor agent config is a standing no in this repo — `check-repo-scope.sh` hard-fails any `.gitignore` re-include of `.claude/` (Rule 0, the rejected-PR-#1039 vector) and any tracked `.claude/` file (Rule 1). Claude Code does not discover the definition at this path; install it by copying or symlinking into `~/.claude/agents/`, or ship it through the gov-plugin's `agents/` directory — the plugin repo is the canonical adapter bundle, exactly as with skills. `scripts/dev/sync-plugin-agents.sh` mirrors the canonical definitions into a local plugin checkout (`--check` for drift-only; a diverged committed plugin copy is refused with a diff rather than silently reverted).
+
+The definition carries `memory: project`, so once installed the subagent gets a persistent memory directory at `<project>/.claude/agent-memory/governance-reviewer/`: Claude Code injects the first 200 lines (or 25KB) of its `MEMORY.md` into the subagent's context and the subagent curates the files itself. Because `.claude/` is gitignored, that memory is **machine-local by design** — it survives sessions on one machine and is never committed. Use `memory: user` (`~/.claude/agent-memory/<name>/`) instead for craft that should follow a machine across projects.
+
+Two boundaries to hold:
+
+- **A memory file is not identity.** Reading memory is data inheritance (`docs/ontology/harness-substrate-plurality.md`); a subagent with its own memory directory is still a short dispatched subagent under the Strict Identity contract below — it usually should not onboard, and if it does, `spawn_reason="subagent"` with `parent_agent_id` applies unchanged.
+- **Memory is that subagent's private craft, not shared findings.** Durable cross-agent findings go to the knowledge graph (search before writing), runbooks go to `docs/`. Agent memory holds only what that one subagent needs across sessions.
+
+Claude Code's agent-teams feature (teammates with mailboxes and a shared task list) is experimental and opt-in: enable it per-machine via `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in local settings, never in tracked config. Team runtime state lives under `~/.claude/teams/` and `~/.claude/tasks/` — outside the repo, never committed.
+
 ### Machine-local overlay
 
 `.claude/CLAUDE.md` is gitignored and layers on deployment-specific details (bind address, LaunchAgent paths, `governance_core` source symlink). Read both files; the overlay wins on conflicts.
@@ -40,7 +53,7 @@ python3 scripts/dev/session_end_stash.py
 ### What Claude should NOT reference
 
 - `commands/*.md` — those are **Codex** slash commands, not Claude commands.
-- `.unitares/session.json` — that's the Codex continuity cache. Claude's continuity comes from the hook chain + `~/.claude/projects/.../memory/MEMORY.md`.
+- `.unitares/session.json` — that's the Codex continuity cache. Claude's continuity comes from the hook chain + `~/.claude/projects/.../memory/MEMORY.md`; subagent continuity comes from `.claude/agent-memory/<agent-name>/` (see above).
 
 <!-- BEGIN SHARED CONTRACT — keep byte-identical across AGENTS.md and CLAUDE.md; scripts/dev/check-shared-contract.sh enforces parity -->
 

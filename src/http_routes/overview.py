@@ -1,5 +1,5 @@
 """Registry and overview feeds for dashboards: agent history, tier
-distribution, automations, activity, incidents, research runs,
+distribution, automations, activity, incidents,
 violation taxonomy, and silent-bootstrap observability.
 
 Split out of src/http_api.py (see that module for route registration).
@@ -114,6 +114,21 @@ async def http_agent_history(request):
                 "t": r["recorded_at"].isoformat(),
                 "E": r["e"], "I": r["i"], "S": r["s_entropy"], "V": r["v"],
                 "coherence": r["coherence"], "risk": r["risk_score"],
+                # The governance action and EISV verdict tier paired with this
+                # row's risk. Both are persisted into state_json by
+                # record_agent_state, so no extra column or join is needed.
+                # `action` is the decision vocabulary ('approve' | 'guide' |
+                # 'cirs_block' | 'risk_pause' | 'reject'); `verdict` is the risk
+                # tier ('safe' | 'caution' | 'high-risk'). Rows written before
+                # the action-write landed carry neither, so both may be null —
+                # consumers must not read a missing action as 'approve'.
+                #
+                # A hard action recorded here is a verdict the policy PRODUCED.
+                # It is not evidence that an intervention was delivered:
+                # gap-suppression downgrades pauses to proceed at any >150s
+                # inter-check-in gap. See /v1/enforcement/divergence.
+                "action": state_json.get("action"),
+                "verdict": state_json.get("verdict"),
                 "epistemic_class": r["epistemic_class"],
                 "telemetry_available": bool(r["telemetry_available"]),
                 "telemetry": summarize_state_eisv_telemetry(state_json),
@@ -173,77 +188,69 @@ async def http_automations(request):
         data["snapshot_path"] = snapshot_path
         data["snapshot_age_seconds"] = age
         data["stale"] = age > 86400  # older than 24h
+
+        # Opt-in summary view. The Overview card reads four things — the summary
+        # block, `stale`, and a COUNT of ungated entries — while the full census
+        # is ~206 KB of per-automation detail (228 items on 2026-08-28) that only
+        # the Automations tab renders. Measured: 205,933 B down to ~641 B of
+        # actually-consumed fields, 99.7% of that response discarded on the
+        # DEFAULT page, on every load. Fast on loopback, not over a tunnel.
+        #
+        # The ungated count is computed HERE rather than shipping notes arrays,
+        # because counting is the only thing the caller does with them. Default
+        # response shape is unchanged for the Automations tab.
+        # getattr: `view` is optional and absent on the normal path, so reading
+        # it must not be able to fail the request. A minimal request object with
+        # no query_params is a legitimate caller shape, and turning that into a
+        # 500 would make an opt-in projection a liability for every existing
+        # consumer of the default response.
+        _qp = getattr(request, "query_params", None) or {}
+        if str(_qp.get("view", "") or "").strip().lower() == "summary":
+            items = data.get("automations") or []
+
+            # Classify the SAME way sections/automations.js::gateClass does, so
+            # the Overview card and the Automations tab cannot disagree about
+            # how an automation is grounded. Explicit `gate:` note wins; else
+            # github-actions and claude are machine-gated by construction; else
+            # UNCLASSIFIED — meaning no determination exists, not that one was
+            # made and came back clean.
+            #
+            # The previous version counted only explicit `gate:ungated` notes.
+            # Nothing writes that marker: measured 2026-08-28, 0 of 228 carried
+            # it while 221 carried no gate note at all. So the card reported
+            # "0 ungated" permanently — an unfair zero, reassuring precisely
+            # where its own comment says it exists to surface risk ("ungated =
+            # nothing verifies it"). Counting an absent marker is not a
+            # measurement of safety, it is a measurement of the marker.
+            def _gate(it):
+                for n in (it.get("notes") or []):
+                    if isinstance(n, str) and n.startswith("gate:"):
+                        return n[5:]
+                if it.get("source") in ("github-actions", "claude"):
+                    return "machine"
+                return "unclassified"
+
+            gates: dict[str, int] = {}
+            for it in items:
+                g = _gate(it)
+                gates[g] = gates.get(g, 0) + 1
+            ungated = gates.get("ungated", 0)
+            unclassified = gates.get("unclassified", 0)
+            return JSONResponse({
+                "schema": data.get("schema"),
+                "summary": data.get("summary"),
+                "ungated": ungated,
+                # The honest headline. `ungated` stays for continuity, but it is
+                # an explicit-marker count and reads 0 on every real deployment.
+                "unclassified": unclassified,
+                "gates": gates,
+                "generated_at": data.get("generated_at"),
+                "snapshot_age_seconds": age,
+                "stale": data["stale"],
+                "view": "summary",
+            })
         return JSONResponse(data)
     except Exception as exc:  # noqa: BLE001 — read-only panel endpoint, degrade gracefully
-        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
-
-
-async def http_research_runs(request):
-    """GET /v1/research/runs - query registered agent-network research runs."""
-    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
-    if not access._check_http_auth(request, http_api_token=http_api_token):
-        return access._http_unauthorized()
-    try:
-        from src.research_registry import query_research_runs
-
-        params = request.query_params
-        try:
-            limit = int(params.get("limit", "50"))
-        except (TypeError, ValueError):
-            limit = 50
-        data = query_research_runs(
-            status=params.get("status"),
-            tag=params.get("tag"),
-            scenario_id=params.get("scenario_id"),
-            research_area=params.get("research_area"),
-            grounding=params.get("grounding"),
-            query=params.get("query"),
-            limit=limit,
-            include_details=access._http_bool(params.get("include_details")),
-        )
-        data["success"] = True
-        return JSONResponse(data)
-    except Exception as exc:  # noqa: BLE001 - read-only endpoint, degrade visibly
-        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
-
-
-async def http_research_run(request):
-    """GET /v1/research/runs/{run_id} - return one research-run record."""
-    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
-    if not access._check_http_auth(request, http_api_token=http_api_token):
-        return access._http_unauthorized()
-    run_id = request.path_params.get("run_id", "")
-    try:
-        from src.research_registry import (
-            ResearchRunNotFound,
-            grounding_status,
-            load_research_run,
-            rigor_checklist,
-        )
-
-        record = load_research_run(run_id)
-        return JSONResponse({
-            "success": True,
-            "run": record,
-            "rigor_checklist": rigor_checklist(record),
-            "grounding_status": grounding_status(record),
-        })
-    except ResearchRunNotFound as exc:
-        return JSONResponse({"success": False, "error": str(exc)}, status_code=404)
-    except Exception as exc:  # noqa: BLE001 - read-only endpoint, degrade visibly
-        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
-
-
-async def http_research_stats(request):
-    """GET /v1/research/stats - aggregate research-run registry health."""
-    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
-    if not access._check_http_auth(request, http_api_token=http_api_token):
-        return access._http_unauthorized()
-    try:
-        from src.research_registry import research_registry_stats
-
-        return JSONResponse({"success": True, "stats": research_registry_stats()})
-    except Exception as exc:  # noqa: BLE001 - read-only endpoint, degrade visibly
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
@@ -385,6 +392,10 @@ async def http_incidents(request):
 # Activity sparkline endpoint
 async def http_activity(request):
     """Return check-in activity buckets for sparkline chart."""
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not access._check_http_auth(request, http_api_token=http_api_token):
+        return access._http_unauthorized()
+
     try:
         window = int(request.query_params.get("window", 60))
         bucket = int(request.query_params.get("bucket", 5))

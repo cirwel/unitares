@@ -166,6 +166,10 @@ defmodule UnitaresLeasePlane.Application do
       System.get_env("UNITARES_DIALECTIC_BEAM_LIVENESS") == "1"
     )
 
+    # Resolve the boot sha before anything serves: /health reads it from app
+    # env so the pre-auth liveness body stays static and does no per-request work.
+    UnitaresLeasePlane.BuildInfo.resolve!()
+
     children =
       [
         {Postgrex, postgrex_opts()},
@@ -242,6 +246,12 @@ defmodule UnitaresLeasePlane.Application do
          worker: UnitaresLeasePlane.IdentityNonceReaper,
          interval_ms: 60_000,
          initial_delay_ms: 15_000},
+        {UnitaresLeasePlane.PeriodicWorker,
+         id: UnitaresLeasePlane.TopicMessageReaper,
+         name: UnitaresLeasePlane.TopicMessageReaperScheduler,
+         worker: UnitaresLeasePlane.TopicMessageReaper,
+         interval_ms: Application.get_env(:lease_plane, :topic_message_reaper_interval_ms, 60_000),
+         initial_delay_ms: 20_000},
         {UnitaresLeasePlane.PeriodicWorker,
          id: UnitaresLeasePlane.HandoffTimeout,
          name: UnitaresLeasePlane.HandoffTimeoutScheduler,

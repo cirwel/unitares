@@ -11,10 +11,12 @@ defmodule AgentOrchestrator.Application do
   Topology:
 
       AgentOrchestrator.Supervisor            (one_for_one)
-      ├── Registry  (AgentOrchestrator.Registry)   agent_id -> runner pid
+      ├── Registry  (AgentOrchestrator.Registry)   execution_id -> runner pid
       ├── ResultStore  (GenServer + ETS)            retained final results
-      └── AgentSupervisor  (DynamicSupervisor)
-          └── AgentRunner  (GenServer + Port)       restart: :temporary
+      ├── IdempotencyDB  (Postgrex)                 durable keyed-spawn ledger
+      ├── AgentSupervisor  (DynamicSupervisor)
+      │   └── AgentRunner  (GenServer + Port)       restart: :temporary
+      └── SpawnGate  (GenServer)                    reserve -> spawn -> started
 
   `ResultStore` starts before `AgentSupervisor` so its ETS table exists before
   any runner can finalize and write its result — closing the await-vs-fast-exit
@@ -35,6 +37,8 @@ defmodule AgentOrchestrator.Application do
 
   use Application
 
+  require Logger
+
   @impl true
   def start(_type, _args) do
     # Bearer for the control surface, sourced from env at boot. Absent → HTTPAuth
@@ -49,12 +53,92 @@ defmodule AgentOrchestrator.Application do
       [
         {Registry, keys: :unique, name: AgentOrchestrator.Registry},
         AgentOrchestrator.ResultStore,
-        AgentOrchestrator.Metrics,
-        AgentOrchestrator.AgentSupervisor
-      ] ++ http_children()
+        AgentOrchestrator.Metrics
+      ] ++
+        idempotency_children() ++
+        [
+          AgentOrchestrator.AgentSupervisor,
+          AgentOrchestrator.SpawnGate
+        ] ++ http_children()
 
     opts = [strategy: :one_for_one, name: AgentOrchestrator.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  defp idempotency_children do
+    ledger =
+      Application.get_env(
+        :agent_orchestrator,
+        :idempotency_ledger,
+        AgentOrchestrator.PostgresIdempotencyLedger
+      )
+
+    case ledger do
+      AgentOrchestrator.MemoryIdempotencyLedger ->
+        [AgentOrchestrator.MemoryIdempotencyLedger]
+
+      AgentOrchestrator.PostgresIdempotencyLedger ->
+        postgrex_children()
+
+      _custom_ledger ->
+        []
+    end
+  end
+
+  defp postgrex_children do
+    case Application.get_env(:agent_orchestrator, :idempotency_database_url) do
+      url when is_binary(url) and url != "" ->
+        pool_size = Application.get_env(:agent_orchestrator, :idempotency_pool_size, 2)
+        parsed = parse_database_url(url)
+
+        [
+          {Postgrex,
+           hostname: parsed.host,
+           port: parsed.port,
+           username: parsed.username,
+           password: parsed.password,
+           database: parsed.database,
+           pool_size: pool_size,
+           name: AgentOrchestrator.IdempotencyDB}
+        ]
+
+      _missing ->
+        Logger.warning(
+          "agent orchestrator durable idempotency database is not configured; " <>
+            "keyed spawns will fail closed"
+        )
+
+        []
+    end
+  end
+
+  @doc false
+  def parse_database_url("postgresql://" <> _ = url), do: parse_database_url(URI.parse(url))
+  def parse_database_url("postgres://" <> _ = url), do: parse_database_url(URI.parse(url))
+
+  def parse_database_url(%URI{scheme: scheme} = uri) when scheme in ["postgresql", "postgres"] do
+    {username, password} =
+      case uri.userinfo do
+        nil ->
+          raise ArgumentError, "idempotency database URL must include a username"
+
+        userinfo ->
+          case String.split(userinfo, ":", parts: 2) do
+            [user, pass] -> {URI.decode(user), URI.decode(pass)}
+            [user] -> {URI.decode(user), ""}
+          end
+      end
+
+    host = uri.host || raise(ArgumentError, "idempotency database URL missing host")
+    port = uri.port || 5432
+
+    database =
+      case uri.path do
+        "/" <> name when name != "" -> name
+        _ -> raise ArgumentError, "idempotency database URL missing database name"
+      end
+
+    %{username: username, password: password, host: host, port: port, database: database}
   end
 
   # Localhost-only Bandit listener for the control surface. Gated by

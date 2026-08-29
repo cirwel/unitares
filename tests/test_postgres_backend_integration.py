@@ -887,6 +887,40 @@ class TestAuditOperations:
         assert e.payload["key"] == "value"
         assert e.raw_hash == "abc123"
 
+    @pytest.mark.asyncio
+    async def test_query_audit_event_by_exact_id_returns_normalized_payload(
+        self,
+        backend,
+    ):
+        from src.db.base import AuditEvent
+
+        expected_id = str(uuid.uuid4())
+        await backend.append_audit_event(
+            AuditEvent(
+                ts=_now(),
+                event_id=expected_id,
+                event_type="exact_readback",
+                payload={"nested": {"ok": True}},
+            )
+        )
+        await backend.append_audit_event(
+            AuditEvent(
+                ts=_now(),
+                event_id=str(uuid.uuid4()),
+                event_type="exact_readback",
+                payload={"nested": {"ok": False}},
+            )
+        )
+
+        events = await backend.query_audit_events(
+            event_id=expected_id,
+            limit=2,
+        )
+
+        assert len(events) == 1
+        assert events[0].event_id == expected_id
+        assert events[0].payload == {"nested": {"ok": True}}
+
 
 # ============================================================================
 # Calibration Operations

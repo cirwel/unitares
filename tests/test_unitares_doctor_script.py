@@ -657,6 +657,142 @@ def test_dockerfile_pinned_tags_ignores_build_stage_refs(doctor, tmp_path):
     assert result.status == doctor.Status.PASS
 
 
+# --- generated-doc freshness -------------------------------------------------
+#
+# The contract these pin: a generator's exit code is a verdict only when the
+# generator actually reached one. "The producer ran and found drift" and "the
+# producer never ran" must not be reported with the same sentence — and they
+# cannot be told apart by return code, since Python exits 1 on an unhandled
+# exception and on a SyntaxError alike.
+
+
+def _generator(tmp_path: Path, body: str) -> Path:
+    """Write a fake `--check` generator into an otherwise empty repo root."""
+    (tmp_path / "scripts" / "dev").mkdir(parents=True, exist_ok=True)
+    script = tmp_path / "scripts" / "dev" / "gen.py"
+    script.write_text(textwrap.dedent(body), encoding="utf-8")
+    return script
+
+
+def _freshness(doctor, tmp_path: Path, **kwargs):
+    return doctor._check_generated_doc_fresh(
+        "gen_fresh", tmp_path, "scripts/dev/gen.py", "docs/GEN.md", **kwargs
+    )
+
+
+def test_generated_doc_fresh_passes_on_exit_zero(doctor, tmp_path):
+    _generator(tmp_path, """
+        print("docs/GEN.md is up to date.")
+    """)
+    result = _freshness(doctor, tmp_path)
+    assert result.status == doctor.Status.PASS
+    assert result.message == "docs/GEN.md is up to date"
+
+
+def test_generated_doc_fresh_fails_on_drift_verdict(doctor, tmp_path):
+    _generator(tmp_path, """
+        import sys
+        print("docs/GEN.md is stale — run: python3 scripts/dev/gen.py", file=sys.stderr)
+        sys.exit(1)
+    """)
+    result = _freshness(doctor, tmp_path)
+    assert result.status == doctor.Status.FAIL
+    assert result.message == "docs/GEN.md is stale"
+    assert "run: python3 scripts/dev/gen.py" in result.detail
+
+
+def test_generated_doc_fresh_reports_unknown_when_generator_raises(doctor, tmp_path):
+    """An unhandled exception exits 1 — the same code as a drift verdict.
+
+    Reporting it as staleness would claim the doc was compared. It was not.
+    """
+    _generator(tmp_path, """
+        raise RuntimeError("boom")
+    """)
+    result = _freshness(doctor, tmp_path)
+    assert result.status == doctor.Status.WARN
+    assert "UNKNOWN" in result.message
+    assert "stale" not in result.message
+    assert "RuntimeError" in result.detail
+
+
+def test_generated_doc_fresh_reports_unknown_on_syntax_error(doctor, tmp_path):
+    """The 2026-08-29 case: the generator never began executing.
+
+    A SyntaxError raised while *compiling* the generator prints no `Traceback`
+    header, so the crash has to be recognised from the trailing exception line.
+    Nothing inside the generator could have caught this, which is exactly why
+    the caller has to.
+    """
+    _generator(tmp_path, """
+        def broken(:
+    """)
+    result = _freshness(doctor, tmp_path)
+    assert result.status == doctor.Status.WARN
+    assert "UNKNOWN" in result.message
+    assert "SyntaxError" in result.detail
+
+
+def test_generated_doc_fresh_skips_on_documented_cannot_look(doctor, tmp_path):
+    _generator(tmp_path, """
+        import sys
+        print("cannot import the handler package", file=sys.stderr)
+        sys.exit(2)
+    """)
+    result = _freshness(doctor, tmp_path, cannot_look_message="handler package not importable")
+    assert result.status == doctor.Status.SKIP
+    assert result.message == "handler package not importable"
+
+
+def test_generated_doc_fresh_exit_two_is_unknown_without_a_documented_meaning(doctor, tmp_path):
+    """A generator with no exit-2 path has not declined; it has malfunctioned."""
+    _generator(tmp_path, """
+        import sys
+        sys.exit(2)
+    """)
+    result = _freshness(doctor, tmp_path)
+    assert result.status == doctor.Status.WARN
+    assert "UNKNOWN" in result.message
+
+
+def test_generated_doc_fresh_unrecognised_exit_code_is_unknown(doctor, tmp_path):
+    _generator(tmp_path, """
+        import sys
+        sys.exit(7)
+    """)
+    result = _freshness(doctor, tmp_path)
+    assert result.status == doctor.Status.WARN
+    assert "exited 7" in result.detail
+
+
+def test_generated_doc_fresh_skips_when_generator_absent(doctor, tmp_path):
+    result = _freshness(doctor, tmp_path)
+    assert result.status == doctor.Status.SKIP
+    assert "gen.py not present" == result.message
+
+
+def test_generator_crashed_ignores_exception_names_inside_a_verdict(doctor):
+    """Only the trailing line decides.
+
+    tool_edge_index.py prints a diff of the drifted document, and that document
+    legitimately names exception types. Matching anywhere in the stream would
+    turn a real drift verdict into a false UNKNOWN.
+    """
+    verdict = (
+        "-  ValueError: raised when the action is unknown\n"
+        "+  KeyError: raised when the action is unknown\n"
+        "docs/dev/TOOL_EDGE_INDEX.md is stale — run: python3 scripts/dev/tool_edge_index.py\n"
+    )
+    assert doctor._generator_crashed(verdict) is False
+    assert doctor._generator_crashed("Traceback (most recent call last):\n  ...\n") is True
+
+
+def test_freshness_checks_stay_registered(doctor):
+    names = {c.name for c in doctor.build_checks(REPO_ROOT, "postgresql://x/y")}
+    assert "flags_catalog_fresh" in names
+    assert "tool_edge_index_fresh" in names
+
+
 def test_check_class_anchors_fresh_runs_and_classifies(doctor):
     """Against the real anchor dicts the freshness check returns a valid result
     (PASS/WARN), is registered, and reports per-class age."""
@@ -1986,3 +2122,78 @@ def test_cold_start_canary_is_detection_only(doctor):
     assert "external_signal" not in body
     assert "post_outcome" not in body
     assert "outcome_events" not in body
+
+
+# ---------------------------------------------------------------------------
+# anchor_all_positive_generator
+# ---------------------------------------------------------------------------
+#
+# src/http_routes/sentinel.py states the invariant on _SENTINEL_FINDING_EVENT_TYPES:
+# "watch that it still produces DISMISSALS. A family that only ever confirms has
+# become the all-positive generator Invariant 4 forbids." Nothing watched it,
+# because "watch that" was a comment. Measured live 2026-08-28:
+# sentinel_finding 17 confirmed / 0 dismissed since 2026-07-02, against
+# watcher_finding 2 / 55 on the same channel.
+
+def _rows(doctor, monkeypatch, rows):
+    monkeypatch.setattr(doctor, "_psql_rows", lambda *a, **k: rows)
+
+
+def test_all_positive_generator_warns_on_a_family_that_never_dismisses(doctor, monkeypatch):
+    """The live sentinel_finding shape, with a healthy family alongside it."""
+    _rows(doctor, monkeypatch, [
+        ["sentinel_finding", "17", "0"],
+        ["watcher_finding", "2", "55"],
+    ])
+    result = doctor.check_anchor_all_positive_generator("postgresql://x/y")
+    assert result.status == doctor.Status.WARN
+    assert "sentinel_finding: 17 confirmed, 0 dismissed" in result.message
+    # The healthy family must not be flagged, and should be named for contrast.
+    assert "watcher_finding" not in result.message
+    assert "watcher_finding 2/55" in result.detail
+
+
+def test_all_positive_generator_catches_the_mirror_failure(doctor, monkeypatch):
+    """A family that only ever dismisses also cannot disagree with itself."""
+    _rows(doctor, monkeypatch, [["some_finding", "0", "31"]])
+    result = doctor.check_anchor_all_positive_generator("postgresql://x/y")
+    assert result.status == doctor.Status.WARN
+    assert "0 confirmed, 31 dismissed" in result.message
+
+
+def test_all_positive_generator_does_not_fire_on_small_samples(doctor, monkeypatch):
+    """Below the floor, 'no dismissals yet' is cadence, not shape — a check that
+    cries wolf at n=3 trains operators to ignore it."""
+    _rows(doctor, monkeypatch, [["new_finding", "4", "0"]])
+    result = doctor.check_anchor_all_positive_generator("postgresql://x/y")
+    assert result.status == doctor.Status.SKIP
+    assert "n=4" in result.message
+
+
+def test_all_positive_generator_passes_when_both_verdicts_appear(doctor, monkeypatch):
+    _rows(doctor, monkeypatch, [["watcher_finding", "2", "55"]])
+    result = doctor.check_anchor_all_positive_generator("postgresql://x/y")
+    assert result.status == doctor.Status.PASS
+    assert "watcher_finding 2/55" in result.message
+
+
+def test_all_positive_generator_tells_the_operator_to_rule_out_unreachability(doctor, monkeypatch):
+    """'Never disagreed' and 'cannot disagree' are indistinguishable from a row
+    count and mean opposite things. The Sentinel CLI arm cannot in fact write a
+    dismissal (the outcome types are absent from VALID_OUTCOME_TYPES), so this
+    warning must not be read as detector quality."""
+    _rows(doctor, monkeypatch, [["sentinel_finding", "17", "0"]])
+    result = doctor.check_anchor_all_positive_generator("postgresql://x/y")
+    assert "UNREACHABLE" in result.detail
+    assert "VALID_OUTCOME_TYPES" in result.detail
+
+
+def test_all_positive_generator_skips_when_table_unavailable(doctor, monkeypatch):
+    _rows(doctor, monkeypatch, None)
+    result = doctor.check_anchor_all_positive_generator("postgresql://x/y")
+    assert result.status == doctor.Status.SKIP
+
+
+def test_all_positive_generator_is_registered_as_an_operator_check(doctor, tmp_path):
+    names = {c.name: c.mode for c in doctor.build_checks(tmp_path, "postgresql://x/y")}
+    assert names.get("anchor_all_positive_generator") == "operator"

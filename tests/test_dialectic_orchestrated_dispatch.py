@@ -67,6 +67,22 @@ def test_build_spec_omits_parent_when_absent():
     assert "UNITARES_PARENT_AGENT_ID" not in spec["env"]
 
 
+def test_direct_idempotency_key_is_stable_and_spec_bound():
+    spec = od._build_spec(
+        "session-a",
+        {"root_cause": "rc", "proposed_conditions": ["c"], "reasoning": "r"},
+        "parent",
+    )
+
+    key = od._direct_idempotency_key("session-a", spec)
+    assert key == od._direct_idempotency_key("session-a", spec)
+    assert key != od._direct_idempotency_key("session-b", spec)
+    assert key != od._direct_idempotency_key(
+        "session-a", {**spec, "args": ["changed"]}
+    )
+    assert len(od._direct_idempotency_key("s" * 10_000, spec)) < 200
+
+
 def test_build_spec_forwards_bounded_reviewer_backend_config(monkeypatch):
     monkeypatch.setenv("UNITARES_DIALECTIC_REVIEWER_HOST", "claude")
     monkeypatch.setenv("UNITARES_DIALECTIC_CLAUDE_MODEL", "claude-opus-5")
@@ -186,16 +202,22 @@ async def test_dispatch_returns_none_without_bearer(monkeypatch):
 @pytest.mark.asyncio
 async def test_dispatch_success_returns_payload(monkeypatch):
     monkeypatch.setenv("AGENT_ORCHESTRATOR_BEARER_TOKEN", "tok")
-    # The orchestrator's real success shape is {"ok": true, "agent_id": ...}.
-    client = _FakeClient(_FakeResp(201, {"ok": True, "agent_id": "agent-xyz", "protocol_version": "v0.1"}))
+    client = _FakeClient(_FakeResp(201, {
+        "ok": True,
+        "execution_id": "ex-xyz",
+        "agent_id": "ex-xyz",
+        "protocol_version": "v0.2",
+    }))
     _patch_httpx(monkeypatch, client)
 
     out = await od.dispatch_orchestrated_review(
         "sess-9", {"root_cause": "rc", "proposed_conditions": ["c"], "reasoning": "r"}, "parent"
     )
-    assert out["agent_id"] == "agent-xyz"
+    assert out["execution_id"] == "ex-xyz"
+    assert out["agent_id"] == "ex-xyz"
     # bearer + spec actually went on the wire
     assert client.posted["headers"]["Authorization"] == "Bearer tok"
+    assert client.posted["headers"]["Idempotency-Key"].startswith("dialectic-reviewer:")
     assert client.posted["json"]["env"]["DIALECTIC_SESSION_ID"] == "sess-9"
     assert client.posted["url"].endswith("/v1/agents")
 
@@ -222,8 +244,10 @@ async def test_dispatch_exception_returns_none(monkeypatch):
 async def test_crashed_fast_true_on_nonzero_exit(monkeypatch):
     """Reviewer exited non-zero within the window → crashed → caller falls back."""
     monkeypatch.setenv("AGENT_ORCHESTRATOR_BEARER_TOKEN", "tok")
-    _patch_httpx(monkeypatch, _FakeClient(_FakeResp(200, {"ok": True, "result": {"exit_status": 1}})))
+    client = _FakeClient(_FakeResp(200, {"ok": True, "result": {"exit_status": 1}}))
+    _patch_httpx(monkeypatch, client)
     assert await od.reviewer_crashed_fast("ag-1", await_seconds=0.01) is True
+    assert client.posted["url"].endswith("/v1/executions/ag-1/await")
 
 
 @pytest.mark.asyncio

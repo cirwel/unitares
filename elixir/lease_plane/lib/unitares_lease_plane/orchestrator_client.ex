@@ -6,7 +6,7 @@ defmodule UnitaresLeasePlane.OrchestratorClient do
   Uses Erlang stdlib `:httpc` (no new dependency). Localhost, bearer-gated. The
   orchestrator owns the OS-process spawn, OTP supervision, lease-binding, and
   lineage provisioning — this client only forwards a validated spawn spec and
-  returns the assigned `agent_id`. The orchestrator's own bearer (`check_allowed`
+  returns the assigned `execution_id`. The orchestrator's own bearer (`check_allowed`
   cmd allowlist + `AGENT_ORCHESTRATOR_BEARER_TOKEN`) is the second gate behind
   the lease plane's per-type execute flag; if either the URL or bearer is
   unconfigured we fail closed.
@@ -16,7 +16,7 @@ defmodule UnitaresLeasePlane.OrchestratorClient do
 
   @doc """
   POST a spawn spec to `<orchestrator>/v1/agents`. Returns the orchestrator's
-  assigned `agent_id` on 201, or a typed error. Never raises on transport
+  assigned `execution_id` on 201, or a typed error. Never raises on transport
   failure — the caller decides effect status from the result.
   """
   @spec spawn_agent(map()) :: {:ok, String.t()} | {:error, term()}

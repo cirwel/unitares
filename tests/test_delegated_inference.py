@@ -50,7 +50,8 @@ async def test_delegate_inference_returns_attributed_provenance(monkeypatch):
             "text": "careful answer",
             "raw": "provider envelope must not escape",
             "exit_status": 0,
-            "agent_id": "orch-agent-1",
+            "execution_id": "orch-execution-1",
+            "agent_id": "orch-execution-1",
             "provenance": {
                 "model_used": None,
                 "models_used": ["claude-haiku-4-5", "claude-opus-5"],
@@ -97,7 +98,8 @@ async def test_delegate_inference_returns_attributed_provenance(monkeypatch):
     }
     inference = parsed["inference"]
     assert inference["requesting_agent_uuid"] == "uuid-requester"
-    assert inference["orchestrator_agent_id"] == "orch-agent-1"
+    assert inference["orchestrator_execution_id"] == "orch-execution-1"
+    assert inference["orchestrator_agent_id"] == "orch-execution-1"
     assert inference["model_requested"] == "claude-opus-5"
     assert inference["model_used"] is None
     assert inference["cost_usd"] == 0.02
@@ -149,7 +151,8 @@ async def test_delegate_inference_surfaces_orchestrator_timeout(monkeypatch):
         return {
             "ok": False,
             "status": "still_running",
-            "agent_id": "orch-agent-timeout",
+            "execution_id": "orch-execution-timeout",
+            "agent_id": "orch-execution-timeout",
             "provenance": {"transport": "host_adapter"},
         }
 
@@ -161,7 +164,8 @@ async def test_delegate_inference_surfaces_orchestrator_timeout(monkeypatch):
     parsed = _payload(result)
     assert parsed["success"] is False
     assert parsed["error_code"] == "DELEGATED_INFERENCE_TIMEOUT"
-    assert parsed["orchestrator_agent_id"] == "orch-agent-timeout"
+    assert parsed["orchestrator_execution_id"] == "orch-execution-timeout"
+    assert parsed["orchestrator_agent_id"] == "orch-execution-timeout"
     assert parsed["execution_started"] is True
     assert parsed["possibly_running"] is True
     assert parsed["recovery"]["action"].startswith("Do not retry yet.")
@@ -214,7 +218,7 @@ async def test_acknowledged_spawn_without_id_is_possibly_running(monkeypatch):
         "invoke_host_adapter",
         lambda *_args, **_kwargs: _async_value({
             "ok": False,
-            "error": "spawn returned no agent_id",
+            "error": "spawn returned no execution_id or legacy agent_id",
             "dispatch_phase": "spawn_acknowledged",
             "provenance": {},
         }),
@@ -397,3 +401,91 @@ async def test_unavailable_codex_names_its_own_cli_variable(monkeypatch):
     action = parsed["recovery"]["action"]
     assert "UNITARES_CODEX_CLI" in action
     assert "UNITARES_CLAUDE_CLI" not in action
+
+
+@pytest.mark.asyncio
+async def test_envelope_failure_carries_a_raw_excerpt(monkeypatch):
+    """A malformed envelope must say what arrived, or it cannot be diagnosed."""
+    monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _claude_host())
+    monkeypatch.setattr(
+        di,
+        "invoke_host_adapter",
+        lambda *_args, **_kwargs: _async_value({
+            "ok": False,
+            "status": "malformed",
+            "text": "",
+            "raw": '```json\n{"schema":"x","status":"complete","answer":"hi"}\n```',
+            "agent_id": "orch-agent-fenced",
+            "exit_status": 0,
+            "error": "Host CLI returned a malformed terminal answer envelope",
+            "provenance": {"finish_reason": "success"},
+        }),
+    )
+
+    outcome = await di.run_delegated_inference(di.DelegatedInferenceRequest(
+        prompt="review",
+        requesting_agent_uuid="requester",
+    ))
+
+    assert outcome.ok is False
+    details = outcome.failure.details
+    # Still fails closed — the excerpt adds diagnosis, never tolerance.
+    assert details["adapter_status"] == "malformed"
+    assert "```json" in details["adapter_raw_excerpt"]
+    assert details["adapter_raw_excerpt_truncated"] is False
+    assert "NOT parsed" in details["adapter_raw_excerpt_note"]
+
+
+@pytest.mark.asyncio
+async def test_raw_excerpt_is_bounded(monkeypatch):
+    monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _claude_host())
+    monkeypatch.setattr(
+        di,
+        "invoke_host_adapter",
+        lambda *_args, **_kwargs: _async_value({
+            "ok": False,
+            "status": "malformed",
+            "text": "",
+            "raw": "x" * (di._RAW_EXCERPT_LIMIT + 500),
+            "agent_id": "orch-agent-flood",
+            "exit_status": 0,
+            "error": "Host CLI returned a malformed terminal answer envelope",
+            "provenance": {},
+        }),
+    )
+
+    outcome = await di.run_delegated_inference(di.DelegatedInferenceRequest(
+        prompt="review",
+        requesting_agent_uuid="requester",
+    ))
+
+    details = outcome.failure.details
+    assert len(details["adapter_raw_excerpt"]) == di._RAW_EXCERPT_LIMIT
+    assert details["adapter_raw_excerpt_truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_no_raw_excerpt_on_a_complete_answer(monkeypatch):
+    """A successful envelope needs no excerpt; the answer is the answer."""
+    monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _claude_host())
+    monkeypatch.setattr(
+        di,
+        "invoke_host_adapter",
+        lambda *_args, **_kwargs: _async_value({
+            "ok": False,
+            "status": "complete",
+            "text": "answered",
+            "raw": "some raw transcript",
+            "agent_id": "orch-agent-complete",
+            "exit_status": 1,
+            "error": "Host adapter returned a nonzero exit",
+            "provenance": {},
+        }),
+    )
+
+    outcome = await di.run_delegated_inference(di.DelegatedInferenceRequest(
+        prompt="review",
+        requesting_agent_uuid="requester",
+    ))
+
+    assert "adapter_raw_excerpt" not in outcome.failure.details

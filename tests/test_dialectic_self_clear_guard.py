@@ -120,6 +120,41 @@ class TestSelfClearBlocked:
         assert len(s.transcript) == recorded, "no retry may be persisted"
         assert s.phase != DialecticPhase.RESOLVED
 
+    def test_each_new_reviewer_rejection_opens_one_new_response_slot(self):
+        """A renewed verdict starts a new round; it is not a retry.
+
+        The old whole-transcript scan refused this second response even though
+        ``dialectic(get)`` reported that the paused agent owed it.  The only
+        escape was operator reassignment.
+        """
+        s = _session_at_synthesis()
+        s.submit_synthesis(_synthesis(REVIEWER, agrees=False))
+
+        first = s.submit_synthesis(
+            _synthesis(PAUSED, agrees=True, ts="2026-08-09T00:03:00Z")
+        )
+        assert first["blocked"] == "reviewer_objection_stands"
+        assert first["success"] is True
+
+        renewed = s.submit_synthesis(
+            _synthesis(REVIEWER, agrees=False, ts="2026-08-09T00:04:00Z")
+        )
+        assert renewed["success"] is True
+        assert renewed["converged"] is False
+
+        second = s.submit_synthesis(
+            _synthesis(PAUSED, agrees=True, ts="2026-08-09T00:05:00Z")
+        )
+        assert second["blocked"] == "reviewer_objection_stands"
+        assert second["success"] is True, "a new rejection reopens one response slot"
+
+        recorded = len(s.transcript)
+        repeat = s.submit_synthesis(
+            _synthesis(PAUSED, agrees=True, ts="2026-08-09T00:06:00Z")
+        )
+        assert repeat["success"] is False
+        assert len(s.transcript) == recorded
+
     def test_reassigning_the_reviewer_cannot_erase_a_standing_objection(self):
         """`_apply_reviewer_reassignment` repoints reviewer_agent_id and clears the
         facilitation flag. A guard keyed on the CURRENT reviewer id would orphan the

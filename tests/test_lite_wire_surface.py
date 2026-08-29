@@ -168,3 +168,59 @@ def test_workflow_aliases_are_lite_visible():
         "Workflow aliases advertised on the wire but absent from LITE_MODE_TOOLS "
         f"(would over-advertise in lite mode): {leaked}"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["minimal", "lite", "operator_readonly", "full"])
+async def test_orientation_compact_view_matches_the_wire(monkeypatch, mode):
+    """list_tools' default view must equal what this deployment advertises.
+
+    Orientation and the wire are filtered by different things, and until
+    2026-08-29 neither direction agreed. The compact view filtered on the
+    hardcoded LITE_MODE_TOOLS constant while the wire is filtered by
+    GOVERNANCE_TOOL_MODE, so under operator_readonly list_tools named 19 tools
+    the wire would not dispatch and hid 3 it would. A schema-driven MCP client
+    can only call advertised names, so an orientation surface that disagrees
+    with the wire either invents tools or conceals them.
+
+    This pins BOTH directions in every deployable mode. It is not a claim that
+    unadvertised tools are unwanted: list_tools(lite=false) still lists them,
+    flagged advertised=false, with a `not_advertised` block saying why.
+    """
+    import json
+
+    import src.tool_modes as tool_modes
+    from src.interface_contract import get_public_tool_definitions
+    from src.mcp_handlers.introspection import tool_introspection
+
+    monkeypatch.setattr(tool_modes, "TOOL_MODE", mode, raising=False)
+
+    result = await tool_introspection.handle_list_tools({"lite": True})
+    shown = {tool["name"] for tool in json.loads(result[0].text)["tools"]}
+    wire = {tool.name for tool in get_public_tool_definitions(mode)}
+
+    assert shown == wire, (
+        f"{mode}: list_tools default view disagrees with the MCP wire.\n"
+        f"  named but not dispatchable: {sorted(shown - wire)}\n"
+        f"  advertised but hidden:      {sorted(wire - shown)}"
+    )
+
+
+def test_no_alias_name_is_also_a_registered_tool():
+    """A name is either a registered dispatch tool or an alias, never both.
+
+    resolve_alias rewrites the tool name before TOOL_HANDLERS is consulted, so
+    a name that is both has an unreachable registration. That is how
+    direct_resume_if_safe died: it was registered AND aliased to quick_resume,
+    which is register=False, so every call resolved to a name absent from
+    TOOL_HANDLERS and returned tool_not_found_error while the tool's own
+    handler sat there unused.
+    """
+    from src.mcp_handlers.decorators import get_tool_registry
+    from src.mcp_handlers.tool_stability import list_all_aliases
+
+    both = sorted(set(list_all_aliases()) & set(get_tool_registry()))
+    assert not both, (
+        "these names are both an alias and a registered dispatch tool, so "
+        f"their registration is unreachable: {both}"
+    )

@@ -20,7 +20,7 @@ wired). See
 [`dormant-capability-registry.md`](../operations/dormant-capability-registry.md)
 for the false-positive history this avoids.
 
-**57 registered tools · 8 consolidated (52 actions) · 72 aliases.**
+**43 registered tools · 8 consolidated (52 actions) · 70 aliases.**
 
 ## Content-addressed snapshots
 
@@ -30,10 +30,10 @@ registrars advertise in each deployable mode and what `describe_tool` says
 about those names. The snapshots are immutable evidence inputs; they do not
 certify the components that produced them.
 
-- Audit bundle: `sha256:ceb4570da9f56596c6f44d8f9aa918d0f378143d8fcac9af4441487db0ddaba5` (`unitares.tool-surface-audit.v1`).
-- Dispatch snapshot: `sha256:c73e60b358e967c18c1aca7061372587a665777d0fe3db56db6159dc8268df1f`.
-- Audited source revision: `sha256:051e570a7a207aa745b282446f906dc34dac40d5ca8e7bc95390ea382b46268a` (52 files).
-- Exposure snapshot: `sha256:f3a1de2a620aef9f06b35caac320e86e47ef1e3396eea5d73cce95fc8b8d85ea`.
+- Audit bundle: `sha256:f588a0b94f191fbdb408cc84b56f916724270a1ff61ccf31cc23b4b06f844826` (`unitares.tool-surface-audit.v1`).
+- Dispatch snapshot: `sha256:af6992a67536f4b22860aceaf2da034cb81c0b250fd4546745b3ed1c2161d148`.
+- Audited source revision: `sha256:92560aff73ba94f3098ca082847de4c9412acc5f11ad5af837c104c038d8a474` (50 files).
+- Exposure snapshot: `sha256:5177e451c28d0f993f163cda0c888c28cab7f7efe551fe72d6ac3c73af64454e`.
 - JSON contract: [`tool_surface_audit_v1.schema.json`](tool_surface_audit_v1.schema.json).
 - Reproduce with `python3 scripts/dev/tool_edge_index.py --json`; run
   `--lint` to return non-zero when error-severity findings exist.
@@ -49,9 +49,9 @@ removal authority.
 |---|---:|---:|---|---|
 | `minimal` | 6 | 11 | — | `record_result`, `request_review`, `search_shared_memory`, `store_finding`, `update_finding` |
 | `lite` | 29 | 29 | — | — |
-| `operator_readonly` | 13 | 21 | — | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
-| `operator_recovery` | 17 | 25 | — | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
-| `full` | 80 | 65 | `aggregate_metrics`, `archive_agent`, `backfill_calibration_from_dialectic`, `check_calibration`, `cleanup_knowledge_graph`, `compare_agents`, `compare_me_to_similar`, `delete_agent` … +15 | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
+| `operator_readonly` | 12 | 20 | — | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
+| `operator_recovery` | 16 | 24 | — | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
+| `full` | 66 | 51 | `aggregate_metrics`, `archive_agent`, `backfill_calibration_from_dialectic`, `check_calibration`, `cleanup_knowledge_graph`, `compare_agents`, `compare_me_to_similar`, `delete_agent` … +15 | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
 
 ### Workflow alias views
 
@@ -67,17 +67,16 @@ the alias wire rejects them.
 | `search_shared_memory` | `knowledge` | 36 | — | `sha256:3be01cf1217fbaccf89e9102d10a8e0ca73910d74338f861b9d3a2a513aaaa2d` |
 | `start_session` | `onboard` | 16 | — | `sha256:89788402e8e21a8e918d6aac1339ce2537127ee3b6f9b175b89c1fefbaabc8d3` |
 | `store_finding` | `knowledge` | 13 | — | `sha256:88f13bbeed5d015e46b8fb362ae7a5656433926c7e5873b4fc7dd302fee57eaf` |
-| `sync_state` | `process_agent_update` | 22 | `agent_id`, `agent_name` | `sha256:9a96eb338278718eac4ced262db51207b748127d5716a5bcf3ec34c8bd1c2373` |
+| `sync_state` | `process_agent_update` | 23 | `agent_id`, `agent_name` | `sha256:e3f289dac008d65dac2b2d3bee12d37eb7e77d0a6f6fdeee22fec44d07cb2001` |
 | `update_finding` | `knowledge` | 13 | — | `sha256:7dd261b60503ec631b43a071201424d2fe7f6dd7b1dccb1463852334985dfc90` |
 
 ## Deterministic findings
 
-**1 errors · 7 warnings · 15 informational.** Findings make drift reviewable;
+**0 errors · 7 warnings · 0 informational.** Findings make drift reviewable;
 they are not self-issued approval or remediation instructions.
 
 | Severity | Code | Subject | Finding | Evidence |
 |---|---|---|---|---|
-| error | `ALIAS_TARGET_MISSING` | `direct_resume_if_safe` | Alias target is not a registered dispatch tool. | {"target": "quick_resume"} |
 | warning | `DESCRIBE_SCHEMA_WIDER_THAN_WIRE` | `check_working_state` | describe_tool advertises parameters the alias wire schema rejects. | {"properties": ["agent_id"]} |
 | warning | `DESCRIBE_SCHEMA_WIDER_THAN_WIRE` | `sync_state` | describe_tool advertises parameters the alias wire schema rejects. | {"properties": ["agent_id", "agent_name"]} |
 | warning | `MODE_DECLARED_UNADVERTISED` | `full` | The mode declares names the production registrar would not advertise. | {"names": ["aggregate_metrics", "archive_agent", "backfill_calibration_from_dialectic", "check_calibration", "cleanup_knowledge_graph", "compare_agents", "compare_me_to_similar", "delete_agent", "detect_anomalies", "export_to_file", "get_a… |
@@ -85,21 +84,6 @@ they are not self-issued approval or remediation instructions.
 | warning | `MODE_UNDECLARED_ADVERTISED` | `minimal` | The production registrar advertises names absent from the mode declaration. | {"names": ["record_result", "request_review", "search_shared_memory", "store_finding", "update_finding"]} |
 | warning | `MODE_UNDECLARED_ADVERTISED` | `operator_readonly` | The production registrar advertises names absent from the mode declaration. | {"names": ["check_working_state", "record_result", "request_review", "search_shared_memory", "start_session", "store_finding", "sync_state", "update_finding"]} |
 | warning | `MODE_UNDECLARED_ADVERTISED` | `operator_recovery` | The production registrar advertises names absent from the mode declaration. | {"names": ["check_working_state", "record_result", "request_review", "search_shared_memory", "start_session", "store_finding", "sync_state", "update_finding"]} |
-| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `cleanup_stale_locks` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
-| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `debug_request_context` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
-| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `direct_resume_if_safe` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
-| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `get_connection_status` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
-| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `get_server_info` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
-| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `get_telemetry_metrics` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
-| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `get_tool_usage_stats` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
-| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `get_workspace_health` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
-| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `reassign_reviewer` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
-| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `request_dialectic_review` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
-| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `reset_monitor` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
-| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `submit_antithesis` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
-| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `submit_synthesis` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
-| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `submit_thesis` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
-| info | `WIRE_NAME_NOT_IN_ORIENTATION` | `validate_file_path` | The full MCP wire catalog advertises a name hidden by list_tools. | — |
 
 ## Tools
 
@@ -112,58 +96,44 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `agent` | `src/mcp_handlers/consolidated.py:216 action_router` | `src/mcp_handlers/schemas/lifecycle.py:308 AgentParams` | 20s | — |
 | `archive_old_test_agents` | `src/mcp_handlers/lifecycle/operations.py:647 handle_archive_old_test_agents` | `src/mcp_handlers/schemas/lifecycle.py:184 ArchiveOldTestAgentsParams` | 20s | — |
 | `archive_orphan_agents` | `src/mcp_handlers/lifecycle/operations.py:745 handle_archive_orphan_agents` | `src/mcp_handlers/schemas/lifecycle.py:215 ArchiveOrphanAgentsParams` | 30s | — |
-| `bind_session` | `src/mcp_handlers/identity/handlers.py:1501 handle_bind_session` | `src/mcp_handlers/schemas/identity.py:210 BindSessionParams` | 5s | identity=pre_onboard |
+| `bind_session` | `src/mcp_handlers/identity/handlers.py:1501 handle_bind_session` | `src/mcp_handlers/schemas/identity.py:221 BindSessionParams` | 5s | identity=pre_onboard |
 | `calibration` | `src/mcp_handlers/consolidated.py:245 action_router` | `src/mcp_handlers/schemas/calibration.py:67 CalibrationParams` | 60s | — |
-| `call_model` | `src/mcp_handlers/support/model_inference.py:669 handle_call_model` | `src/mcp_handlers/schemas/core.py:544 CallModelParams` | 240s | — |
-| `cirs_protocol` | `src/mcp_handlers/cirs/protocol.py:124 handle_cirs_protocol` | `src/mcp_handlers/schemas/core.py:516 CirsProtocolParams` | 15s | — |
-| `cleanup_stale_locks` | `src/mcp_handlers/admin/handlers.py:481 handle_cleanup_stale_locks` | `src/mcp_handlers/schemas/admin.py:133 CleanupStaleLocksParams` | 15s | — |
+| `call_model` | `src/mcp_handlers/support/model_inference.py:669 handle_call_model` | `src/mcp_handlers/schemas/core.py:553 CallModelParams` | 240s | — |
+| `cirs_protocol` | `src/mcp_handlers/cirs/protocol.py:124 handle_cirs_protocol` | `src/mcp_handlers/schemas/core.py:525 CirsProtocolParams` | 15s | — |
 | `config` | `src/mcp_handlers/consolidated.py:270 action_router` | `src/mcp_handlers/schemas/admin.py:148 ConfigParams` | 15s | — |
-| `consult` | `src/mcp_handlers/support/consultation.py:690 handle_consult` | `src/mcp_handlers/schemas/core.py:601 ConsultParams` | 480s | — |
+| `consult` | `src/mcp_handlers/support/consultation.py:694 handle_consult` | `src/mcp_handlers/schemas/core.py:610 ConsultParams` | 480s | — |
 | `dashboard` | `src/mcp_handlers/admin/dashboard.py:44 handle_dashboard` | `src/mcp_handlers/schemas/dashboard.py:6 DashboardParams` | 15s | — |
-| `debug_request_context` | `src/mcp_handlers/admin/handlers.py:525 handle_debug_request_context` | `src/mcp_handlers/schemas/admin.py:144 DebugRequestContextParams` | 5s | — |
-| `delegate_inference` | `src/mcp_handlers/support/delegated_inference.py:266 handle_delegate_inference` | `src/mcp_handlers/schemas/core.py:562 DelegateInferenceParams` | 480s | — |
-| `describe_inference_host` | `src/mcp_handlers/support/model_inference.py:150 handle_describe_inference_host` | `src/mcp_handlers/schemas/core.py:675 DescribeInferenceHostParams` | 5s | identity=pre_onboard |
-| `describe_tool` | `src/mcp_handlers/introspection/tool_introspection.py:670 handle_describe_tool` | `src/mcp_handlers/schemas/admin.py:42 DescribeToolParams` | 10s | identity=pre_onboard |
+| `delegate_inference` | `src/mcp_handlers/support/delegated_inference.py:318 handle_delegate_inference` | `src/mcp_handlers/schemas/core.py:571 DelegateInferenceParams` | 480s | — |
+| `describe_inference_host` | `src/mcp_handlers/support/model_inference.py:150 handle_describe_inference_host` | `src/mcp_handlers/schemas/core.py:684 DescribeInferenceHostParams` | 5s | identity=pre_onboard |
+| `describe_tool` | `src/mcp_handlers/introspection/tool_introspection.py:793 handle_describe_tool` | `src/mcp_handlers/schemas/admin.py:42 DescribeToolParams` | 10s | identity=pre_onboard |
 | `detect_stuck_agents` | `src/mcp_handlers/lifecycle/stuck.py:919 handle_detect_stuck_agents` | `src/mcp_handlers/schemas/lifecycle.py:275 DetectStuckAgentsParams` | 15s | identity=pre_onboard |
 | `dialectic` | `src/mcp_handlers/consolidated.py:388 action_router` | `src/mcp_handlers/schemas/dialectic.py:137 DialecticParams` | 115s | — |
 | `direct_resume_if_safe` | `src/mcp_handlers/lifecycle/resume.py:23 handle_direct_resume_if_safe` | `src/mcp_handlers/schemas/lifecycle.py:333 DirectResumeIfSafeParams` | 10s | deprecated→`quick_resume or self_recovery_review` |
 | `export` | `src/mcp_handlers/consolidated.py:292 action_router` | `src/mcp_handlers/schemas/export.py:34 ExportParams` | 45s | — |
-| `get_connection_status` | `src/mcp_handlers/admin/handlers.py:702 handle_get_connection_status` | `src/mcp_handlers/schemas/admin.py:105 GetConnectionStatusParams` | 5s | — |
 | `get_governance_metrics` | `src/mcp_handlers/core.py:223 handle_get_governance_metrics` | `src/mcp_handlers/schemas/core.py:173 GetGovernanceMetricsParams` | 10s | identity=pre_onboard |
-| `get_server_info` | `src/mcp_handlers/admin/handlers.py:144 handle_get_server_info` | `src/mcp_handlers/schemas/admin.py:76 GetServerInfoParams` | 10s | identity=pre_onboard |
-| `get_telemetry_metrics` | `src/mcp_handlers/admin/handlers.py:403 handle_get_telemetry_metrics` | `src/mcp_handlers/schemas/admin.py:91 GetTelemetryMetricsParams` | 15s | — |
 | `get_thresholds` | `src/mcp_handlers/admin/config.py:16 handle_get_thresholds` | `src/mcp_handlers/schemas/admin.py:115 GetThresholdsParams` | 10s | — |
-| `get_tool_usage_stats` | `src/mcp_handlers/admin/handlers.py:260 handle_get_tool_usage_stats` | `src/mcp_handlers/schemas/admin.py:98 GetToolUsageStatsParams` | 15s | — |
 | `get_trajectory_status` | `src/mcp_handlers/identity/handlers.py:2880 handle_get_trajectory_status` | `src/mcp_handlers/schemas/identity.py:202 GetTrajectoryStatusParams` | 10s | — |
-| `get_workspace_health` | `src/mcp_handlers/admin/handlers.py:506 handle_get_workspace_health` | `src/mcp_handlers/schemas/core.py:539 GetWorkspaceHealthParams` | 20s | — |
-| `health_check` | `src/mcp_handlers/admin/handlers.py:332 handle_health_check` | `src/mcp_handlers/schemas/admin.py:85 HealthCheckParams` | 5s | identity=pre_onboard |
+| `get_workspace_health` | `src/mcp_handlers/admin/handlers.py:516 handle_get_workspace_health` | `src/mcp_handlers/schemas/core.py:548 GetWorkspaceHealthParams` | 20s | — |
+| `health_check` | `src/mcp_handlers/admin/handlers.py:336 handle_health_check` | `src/mcp_handlers/schemas/admin.py:85 HealthCheckParams` | 5s | identity=pre_onboard |
 | `identity` | `src/mcp_handlers/identity/handlers.py:1103 handle_identity_adapter` | `src/mcp_handlers/schemas/identity.py:6 IdentityParams` | 10s | identity=pre_onboard |
 | `knowledge` | `src/mcp_handlers/consolidated.py:175 action_router` | `src/mcp_handlers/schemas/knowledge.py:344 KnowledgeParams` | 120s | — |
 | `leave_note` | `src/mcp_handlers/knowledge/handlers.py:4106 handle_leave_note` | `src/mcp_handlers/schemas/knowledge.py:308 LeaveNoteParams` | 10s | deprecated→`knowledge` |
-| `list_inference_hosts` | `src/mcp_handlers/support/model_inference.py:124 handle_list_inference_hosts` | `src/mcp_handlers/schemas/core.py:657 ListInferenceHostsParams` | 5s | identity=pre_onboard |
-| `list_process_bindings` | `src/mcp_handlers/identity/process_binding_handler.py:26 handle_list_process_bindings` | — | 10s | — |
-| `list_tools` | `src/mcp_handlers/introspection/tool_introspection.py:100 handle_list_tools` | `src/mcp_handlers/schemas/admin.py:5 ListToolsParams` | 10s | identity=pre_onboard |
+| `list_inference_hosts` | `src/mcp_handlers/support/model_inference.py:124 handle_list_inference_hosts` | `src/mcp_handlers/schemas/core.py:666 ListInferenceHostsParams` | 5s | identity=pre_onboard |
+| `list_process_bindings` | `src/mcp_handlers/identity/process_binding_handler.py:26 handle_list_process_bindings` | `src/mcp_handlers/schemas/identity.py:210 ListProcessBindingsParams` | 10s | — |
+| `list_tools` | `src/mcp_handlers/introspection/tool_introspection.py:128 handle_list_tools` | `src/mcp_handlers/schemas/admin.py:5 ListToolsParams` | 10s | identity=pre_onboard |
 | `mark_response_complete` | `src/mcp_handlers/lifecycle/operations.py:114 handle_mark_response_complete` | `src/mcp_handlers/schemas/lifecycle.py:251 MarkResponseCompleteParams` | 5s | — |
 | `observe` | `src/mcp_handlers/consolidated.py:311 action_router` | `src/mcp_handlers/schemas/observability.py:58 ObserveParams` | 15s | — |
 | `onboard` | `src/mcp_handlers/identity/handlers.py:1995 handle_onboard_v2` | `src/mcp_handlers/schemas/identity.py:45 OnboardParams` | 15s | identity=pre_onboard |
 | `operator_resume_agent` | `src/mcp_handlers/lifecycle/self_recovery.py:553 handle_operator_resume_agent` | `src/mcp_handlers/schemas/lifecycle.py:327 OperatorResumeAgentParams` | 15s | — |
 | `outcome_correlation` | `src/mcp_handlers/observability/outcome_events.py:725 handle_outcome_correlation` | `src/mcp_handlers/schemas/observability.py:87 OutcomeCorrelationParams` | 30s | — |
-| `outcome_event` | `src/mcp_handlers/observability/outcome_events.py:585 handle_outcome_event` | `src/mcp_handlers/schemas/core.py:479 OutcomeEventParams` | 15s | — |
+| `outcome_event` | `src/mcp_handlers/observability/outcome_events.py:585 handle_outcome_event` | `src/mcp_handlers/schemas/core.py:488 OutcomeEventParams` | 15s | — |
 | `process_agent_update` | `src/mcp_handlers/core.py:436 handle_process_agent_update` | `src/mcp_handlers/schemas/core.py:303 ProcessAgentUpdateParams` | 60s | — |
-| `reassign_reviewer` | `src/mcp_handlers/dialectic/handlers.py:3369 handle_reassign_reviewer` | `src/mcp_handlers/schemas/dialectic.py:177 ReassignReviewerParams` | 15s | — |
-| `record_progress_pulse` | `src/mcp_handlers/resident_progress.py:20 handle_record_progress_pulse` | — | 5s | — |
-| `request_dialectic_review` | `src/mcp_handlers/dialectic/handlers.py:1261 handle_request_dialectic_review` | `src/mcp_handlers/schemas/dialectic.py:5 RequestDialecticReviewParams` | 105s | — |
-| `research_registry` | `src/mcp_handlers/research_registry.py:66 handle_research_registry` | `src/mcp_handlers/schemas/research.py:13 ResearchRegistryParams` | 15s | — |
-| `reset_monitor` | `src/mcp_handlers/admin/handlers.py:462 handle_reset_monitor` | `src/mcp_handlers/schemas/admin.py:110 ResetMonitorParams` | 10s | — |
+| `record_progress_pulse` | `src/mcp_handlers/resident_progress.py:20 handle_record_progress_pulse` | `src/mcp_handlers/schemas/progress_flat.py:9 RecordProgressPulseParams` | 5s | — |
 | `search_knowledge_graph` | `src/mcp_handlers/knowledge/handlers.py:2694 handle_search_knowledge_graph` | `src/mcp_handlers/schemas/knowledge.py:80 SearchKnowledgeGraphParams` | 15s | identity=pre_onboard |
 | `self_recovery` | `src/mcp_handlers/lifecycle/self_recovery.py:205 handle_self_recovery` | `src/mcp_handlers/schemas/lifecycle.py:319 SelfRecoveryParams` | 15s | — |
 | `set_thresholds` | `src/mcp_handlers/admin/config.py:45 handle_set_thresholds` | `src/mcp_handlers/schemas/admin.py:119 SetThresholdsParams` | 15s | — |
 | `simulate_update` | `src/mcp_handlers/core.py:266 handle_simulate_update` | `src/mcp_handlers/schemas/core.py:195 SimulateUpdateParams` | 30s | — |
 | `skills` | `src/mcp_handlers/introspection/skills.py:193 handle_skills` | `src/mcp_handlers/schemas/skills.py:15 SkillsParams` | 10s | identity=pre_onboard |
-| `submit_antithesis` | `src/mcp_handlers/dialectic/handlers.py:2581 handle_submit_antithesis` | `src/mcp_handlers/schemas/dialectic.py:73 SubmitAntithesisParams` | 10s | — |
-| `submit_synthesis` | `src/mcp_handlers/dialectic/handlers.py:2815 handle_submit_synthesis` | `src/mcp_handlers/schemas/dialectic.py:106 SubmitSynthesisParams` | 15s | — |
-| `submit_thesis` | `src/mcp_handlers/dialectic/handlers.py:2261 handle_submit_thesis` | `src/mcp_handlers/schemas/dialectic.py:64 SubmitThesisParams` | 90s | — |
-| `validate_file_path` | `src/mcp_handlers/admin/handlers.py:631 handle_validate_file_path` | `src/mcp_handlers/schemas/core.py:534 ValidateFilePathParams` | 5s | — |
 | `verify_trajectory_identity` | `src/mcp_handlers/identity/handlers.py:2821 handle_verify_trajectory_identity` | `src/mcp_handlers/schemas/identity.py:206 VerifyTrajectoryIdentityParams` | 10s | — |
 
 ## Action routing
@@ -177,15 +147,15 @@ runs (`from→to`, filled only when the destination is absent).
 
 | Action | Delegate | Remaps |
 |---|---|---|
-| `cleanup_locks` | `src/mcp_handlers/admin/handlers.py:481 handle_cleanup_stale_locks` | — |
-| `connections` | `src/mcp_handlers/admin/handlers.py:702 handle_get_connection_status` | — |
-| `debug_context` | `src/mcp_handlers/admin/handlers.py:525 handle_debug_request_context` | — |
-| `reset_monitor` | `src/mcp_handlers/admin/handlers.py:462 handle_reset_monitor` | — |
-| `server_info` | `src/mcp_handlers/admin/handlers.py:144 handle_get_server_info` | — |
-| `telemetry` | `src/mcp_handlers/admin/handlers.py:403 handle_get_telemetry_metrics` | — |
-| `tool_usage` | `src/mcp_handlers/admin/handlers.py:260 handle_get_tool_usage_stats` | — |
-| `validate_path` | `src/mcp_handlers/admin/handlers.py:631 handle_validate_file_path` | — |
-| `workspace_health` | `src/mcp_handlers/admin/handlers.py:506 handle_get_workspace_health` | — |
+| `cleanup_locks` | `src/mcp_handlers/admin/handlers.py:491 handle_cleanup_stale_locks` | — |
+| `connections` | `src/mcp_handlers/admin/handlers.py:718 handle_get_connection_status` | — |
+| `debug_context` | `src/mcp_handlers/admin/handlers.py:537 handle_debug_request_context` | — |
+| `reset_monitor` | `src/mcp_handlers/admin/handlers.py:470 handle_reset_monitor` | — |
+| `server_info` | `src/mcp_handlers/admin/handlers.py:146 handle_get_server_info` | — |
+| `telemetry` | `src/mcp_handlers/admin/handlers.py:409 handle_get_telemetry_metrics` | — |
+| `tool_usage` | `src/mcp_handlers/admin/handlers.py:264 handle_get_tool_usage_stats` | — |
+| `validate_path` | `src/mcp_handlers/admin/handlers.py:645 handle_validate_file_path` | — |
+| `workspace_health` | `src/mcp_handlers/admin/handlers.py:516 handle_get_workspace_health` | — |
 
 ### `agent`
 
@@ -218,14 +188,14 @@ runs (`from→to`, filled only when the destination is absent).
 
 | Action | Delegate | Remaps |
 |---|---|---|
-| `antithesis` | `src/mcp_handlers/dialectic/handlers.py:2581 handle_submit_antithesis` | — |
-| `get` | `src/mcp_handlers/dialectic/handlers.py:1626 handle_get_dialectic_session` | — |
-| `list` | `src/mcp_handlers/dialectic/handlers.py:1846 handle_list_dialectic_sessions` | — |
-| `quick` | `src/mcp_handlers/dialectic/handlers.py:383 handle_quick_dialectic` | — |
-| `reassign` | `src/mcp_handlers/dialectic/handlers.py:3369 handle_reassign_reviewer` | — |
-| `request` | `src/mcp_handlers/dialectic/handlers.py:1261 handle_request_dialectic_review` | — |
-| `synthesis` | `src/mcp_handlers/dialectic/handlers.py:2815 handle_submit_synthesis` | — |
-| `thesis` | `src/mcp_handlers/dialectic/handlers.py:2261 handle_submit_thesis` | — |
+| `antithesis` | `src/mcp_handlers/dialectic/handlers.py:2653 handle_submit_antithesis` | — |
+| `get` | `src/mcp_handlers/dialectic/handlers.py:1669 handle_get_dialectic_session` | — |
+| `list` | `src/mcp_handlers/dialectic/handlers.py:1889 handle_list_dialectic_sessions` | — |
+| `quick` | `src/mcp_handlers/dialectic/handlers.py:386 handle_quick_dialectic` | — |
+| `reassign` | `src/mcp_handlers/dialectic/handlers.py:3445 handle_reassign_reviewer` | — |
+| `request` | `src/mcp_handlers/dialectic/handlers.py:1304 handle_request_dialectic_review` | — |
+| `synthesis` | `src/mcp_handlers/dialectic/handlers.py:2889 handle_submit_synthesis` | — |
+| `thesis` | `src/mcp_handlers/dialectic/handlers.py:2325 handle_submit_thesis` | — |
 
 ### `export` · default `history`
 
@@ -263,7 +233,7 @@ runs (`from→to`, filled only when the destination is absent).
 | `compare` | `src/mcp_handlers/observability/handlers.py:247 handle_compare_agents` | — |
 | `outcome_evidence` | `src/mcp_handlers/observability/handlers.py:1171 handle_outcome_evidence` | — |
 | `similar` | `src/mcp_handlers/observability/handlers.py:421 handle_compare_me_to_similar` | — |
-| `telemetry` | `src/mcp_handlers/admin/handlers.py:403 handle_get_telemetry_metrics` | — |
+| `telemetry` | `src/mcp_handlers/admin/handlers.py:409 handle_get_telemetry_metrics` | — |
 
 ## Aliases
 
@@ -289,7 +259,6 @@ the caller had passed it.
 | `debug_request_context` | `admin` | `debug_context` | consolidated |
 | `delete_agent` | `agent` | `delete` | consolidated |
 | `detect_anomalies` | `observe` | `anomalies` | consolidated |
-| `direct_resume_if_safe` | `quick_resume` | — | deprecated |
 | `export_to_file` | `export` | `file` | consolidated |
 | `find_similar_discoveries_graph` | `search_knowledge_graph` | — | consolidated |
 | `get_agent_api_key` | `identity` | — | deprecated |
@@ -305,7 +274,6 @@ the caller had passed it.
 | `get_system_history` | `export` | `history` | consolidated |
 | `get_telemetry_metrics` | `admin` | `telemetry` | consolidated |
 | `get_tool_usage_stats` | `admin` | `tool_usage` | consolidated |
-| `get_workspace_health` | `admin` | `workspace_health` | consolidated |
 | `hello` | `identity` | — | consolidated |
 | `init` | `onboard` | — | intuitive_alias |
 | `list_agents` | `agent` | `list` | consolidated |
@@ -348,7 +316,7 @@ the caller had passed it.
 
 ## Coverage
 
-- Schema models defined but bound to no registered tool: **35**.
+- Schema models defined but bound to no registered tool: **48**.
   Expected — `_load_pydantic_schemas` collects every `*Params` class in the
   schema modules, including nested and per-action models that never carry a
   tool's own name.

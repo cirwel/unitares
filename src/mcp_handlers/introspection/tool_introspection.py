@@ -97,6 +97,34 @@ def _format_lite_parameter(
         return f"{field_name}: {field_type} (default: {default})"
     return f"{field_name}: {field_type}"
 
+def _not_advertised_summary(tools_list, mode: str) -> dict:
+    """Registered tools this deployment's mode keeps off the MCP wire.
+
+    Reported, never silently dropped. A name here is dispatchable by name
+    (TOOL_HANDLERS is not mode-filtered, so the REST transport and any caller
+    that already knows the name still reach it) but absent from tools/list, so
+    a schema-driven MCP client cannot discover or call it. That is a property
+    of the deployment's tool mode -- "never surfaced" and "not reachable from
+    this transport" -- and must not be read as evidence that a capability is
+    unused.
+    """
+    names = sorted(t["name"] for t in tools_list if not t.get("advertised", True))
+    return {
+        "count": len(names),
+        "tools": names,
+        "mode": mode,
+        "reason": (
+            f"registered and dispatchable by name, but GOVERNANCE_TOOL_MODE="
+            f"{mode} does not advertise them on the MCP wire"
+        ),
+        "note": (
+            "Absence from the wire is a mode setting, not a signal about the "
+            "tool. Widen GOVERNANCE_TOOL_MODE or add the name to that mode's "
+            "set to expose it."
+        ),
+    }
+
+
 @mcp_tool("list_tools", timeout=10.0, requires_identity="pre_onboard")
 async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """List all available governance tools with descriptions and categories
@@ -126,14 +154,83 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     progressive = coerce_bool(arguments.get("progressive"), False)
     
     # Import public-surface metadata from their single sources of truth.
-    from src.interface_contract import get_interface_contract_summary
+    from src.interface_contract import (
+        get_interface_contract_summary,
+        get_public_tool_definitions,
+    )
     from src.tool_modes import TOOL_MODE, TOOL_TIERS
     interface_contract = get_interface_contract_summary(TOOL_MODE)
 
-    # Deprecated tools - hidden from list_tools by default
-    # Source of truth: tool_stability.py (aliases handle routing)
+    # The names THIS deployment actually advertises on the MCP wire.
+    #
+    # Orientation used to ignore the deployment mode entirely: the default
+    # (lite=true) view filtered against the hardcoded LITE_MODE_TOOLS constant
+    # and the lite=false view filtered against nothing, while the wire is
+    # filtered by TOOL_MODE. Both directions were wrong. Measured 2026-08-29:
+    #   GOVERNANCE_TOOL_MODE=lite, lite=false ......... 21 names shown that the
+    #                                                   wire will not dispatch
+    #   GOVERNANCE_TOOL_MODE=operator_readonly, default  19 of 28 shown names
+    #                                                   not dispatchable, and 3
+    #                                                   advertised tools hidden
+    # A client that can only call advertised names reads a name here and gets
+    # "Unknown tool"; the reverse case hides tools the deployment does offer.
+    #
+    # Nothing is dropped on the strength of this: every entry carries an
+    # `advertised` flag, and lite=false still lists the unadvertised names with
+    # a reason. A tool absent from the wire is not thereby unwanted -- it is a
+    # tool this deployment's mode did not register, which is exactly the
+    # "never surfaced / not reachable" distinction the measurement-authority
+    # rules require us to keep visible rather than silently collapse to zero.
+    try:
+        advertised_names = {
+            tool.name for tool in get_public_tool_definitions(TOOL_MODE)
+        } or None
+    except Exception:
+        advertised_names = None
+    # `or None` above is deliberate: an EMPTY advertised set means the surface
+    # could not be determined, not that this deployment offers nothing. A real
+    # server always advertises at least list_tools/describe_tool
+    # (should_include_tool force-includes them in every mode). Treating empty as
+    # authoritative would return `shown: 0` and blank out orientation entirely,
+    # which is a far worse failure than over-listing. Both this and the except
+    # branch fall through to the pre-2026-08-29 behavior below.
+
+    # Deprecated tools - hidden from list_tools by default.
+    # Two independent sources, and both are needed:
+    #   - tool_stability.py alias keys: legacy names that resolve elsewhere.
+    #   - @mcp_tool(deprecated=True): a tool that keeps its OWN handler while
+    #     declaring itself superseded. Alias membership used to be the only
+    #     source, which quietly made "is deprecated" mean "has an alias" --
+    #     so dropping a deprecated tool's alias promoted it INTO orientation.
+    #     direct_resume_if_safe hit exactly that when its broken alias was
+    #     removed (2026-08-29).
     from ..tool_stability import list_all_aliases
-    DEPRECATED_TOOLS = set(list_all_aliases().keys()) - set(AGENT_WORKFLOW_ALIASES)
+    from ..decorators import _TOOL_DEFINITIONS
+    _deprecated = (
+        set(list_all_aliases().keys())
+        | {n for n, td in _TOOL_DEFINITIONS.items() if td.deprecated}
+    ) - set(AGENT_WORKFLOW_ALIASES)
+    # ...but never hide a name this deployment actually advertises. Orientation
+    # describes the callable surface; a tool on the wire that list_tools omits
+    # is the WIRE_NAME_NOT_IN_ORIENTATION defect, and it is worse than listing a
+    # deprecated tool, which the entry marks as deprecated anyway.
+    #
+    # This exemption is load-bearing for leave_note: it carries
+    # deprecated=True/superseded_by="knowledge" while still sitting in
+    # LITE_MODE_TOOLS and in the CLAUDE.md/AGENTS.md shared contract as a
+    # first-class workflow tool. Folding the decorator flag in without this
+    # clause silently dropped it out of the default orientation view.
+    # Reconciling that contradiction (is leave_note deprecated or not?) is a
+    # product call and deliberately not made here.
+    # In the degraded path (advertised surface unavailable) fall back to the
+    # pre-2026-08-29 rule exactly -- alias keys only. Applying the decorator
+    # union without the advertised-set exemption is what would hide leave_note,
+    # so the fallback must not be the union.
+    DEPRECATED_TOOLS = (
+        set(list_all_aliases().keys()) - set(AGENT_WORKFLOW_ALIASES)
+        if advertised_names is None
+        else _deprecated - advertised_names
+    )
 
     tool_relationships = tool_catalog.TOOL_RELATIONSHIPS
     workflows = tool_catalog.WORKFLOWS
@@ -194,8 +291,20 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         tool_info = {
             "name": tool_name,
             "description": description,
-            "tier": tool_tier
+            "tier": tool_tier,
+            # False = registered and dispatchable by name, but NOT on this
+            # deployment's MCP wire, so a schema-driven client cannot call it.
+            "advertised": (
+                True if advertised_names is None else tool_name in advertised_names
+            ),
         }
+        if tool_name in _deprecated:
+            tool_info["deprecated"] = True
+            superseded_by = getattr(
+                _TOOL_DEFINITIONS.get(tool_name), "superseded_by", None
+            )
+            if superseded_by:
+                tool_info["superseded_by"] = superseded_by
         # Add operation type (read/write/admin) from tool_modes
         from src.tool_modes import TOOL_OPERATIONS
         tool_info["op"] = TOOL_OPERATIONS.get(tool_name, "read")  # Default to read
@@ -272,10 +381,22 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 "op": t.get("op", "read"),  # read/write/admin
                 "category": t.get("category"),
                 "category_icon": t.get("category_icon"),
-                "category_name": t.get("category_name")
+                "category_name": t.get("category_name"),
+                "advertised": t.get("advertised", True),
             }
             for t in tools_list
-            if t["name"] in LITE_MODE_TOOLS
+            # The compact view shows what this deployment can actually
+            # dispatch. It filtered on the hardcoded LITE_MODE_TOOLS constant
+            # until 2026-08-29, which was only ever right when the deployment
+            # happened to run GOVERNANCE_TOOL_MODE=lite -- under
+            # operator_readonly it hid 3 advertised tools and listed 19 that
+            # were not on the wire. LITE_MODE_TOOLS remains the fallback for
+            # the degraded case where the advertised surface cannot be built.
+            if (
+                t["name"] in LITE_MODE_TOOLS
+                if advertised_names is None
+                else t.get("advertised", True)
+            )
         ]
         # Sort by workflow order (onboard first) or usage if progressive enabled
         if progressive and usage_data:
@@ -332,6 +453,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             "interface_contract": interface_contract,
             "total_available": len(tools_list),
             "shown": len(lite_tools),
+            "not_advertised": _not_advertised_summary(tools_list, TOOL_MODE),
             # Tier summary for quick understanding of tool importance
             "tier_summary": {
                 "essential": {
@@ -461,6 +583,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         "server_version": mcp_server.SERVER_VERSION,
         "interface_contract": interface_contract,
         "tools": tools_list,
+        "not_advertised": _not_advertised_summary(tools_list, TOOL_MODE),
         "tiers": {
             "essential": list(TOOL_TIERS["essential"]),
             "common": list(TOOL_TIERS["common"]),

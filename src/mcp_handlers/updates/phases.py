@@ -870,6 +870,7 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
         "complexity": ctx.complexity,
         "epistemic_class": ctx.epistemic_class,
     }
+    ctx.submitted_afferents = None
     try:
         from src.provenance_context import (
             build_s22_write_context,
@@ -901,6 +902,22 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
     # behavioral sensor below.
     sensor_data = ctx.arguments.get("sensor_data")
     if sensor_data and isinstance(sensor_data, dict):
+        from src.eisv_telemetry import build_submitted_afferents
+
+        try:
+            # Structurally separate raw afferents from the dictionary passed to
+            # the monitor. Telemetry failures must not abort a governance update.
+            ctx.submitted_afferents = build_submitted_afferents(
+                sensor_data,
+                submitted_source="physical",
+            )
+        except Exception as exc:
+            logger.warning(
+                "Submitted afferent telemetry skipped for %s...: %s",
+                (ctx.agent_id or "")[:8],
+                exc,
+            )
+
         sensor_eisv = sensor_data.get("eisv")
         if sensor_eisv and isinstance(sensor_eisv, dict):
             ctx.agent_state["sensor_eisv"] = sensor_eisv
@@ -1947,6 +1964,7 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
             behavioral_snapshot=behavioral_snapshot,
             submitted_sensor=ctx.agent_state.get("sensor_eisv"),
             submitted_source=ctx.agent_state.get("sensor_eisv_source"),
+            submitted_afferents=ctx.submitted_afferents,
             derivation=ctx.agent_state.get("_eisv_derivation"),
             policy_evaluation=ctx.result.get("policy_evaluation"),
             enforcement=ctx.result.get("enforcement"),

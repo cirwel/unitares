@@ -8,7 +8,10 @@ from typing import Dict, Any, Sequence, Optional, List
 from mcp.types import TextContent
 import asyncio
 import json
+import math
 import os
+from numbers import Real
+import re
 from datetime import datetime, timedelta, timezone
 
 # Import type definitions
@@ -1167,10 +1170,64 @@ async def _apply_reviewer_reassignment(
 
 
 _PAUSE_EVIDENCE_SCHEMA = "dialectic.pause_evidence.v1"
+_PAUSE_EISV_KEYS = ("E", "I", "S", "V")
+_PAUSE_SOURCE_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}")
+
+
+def _pause_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return None
+    try:
+        number = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _project_pause_lane(
+    lane: Any,
+    *,
+    fallback_source: str,
+    fallback_values: Any,
+) -> Dict[str, Any]:
+    lane = lane if isinstance(lane, dict) else {}
+    fallback_source = str(fallback_source)
+    if _PAUSE_SOURCE_PATTERN.fullmatch(fallback_source) is None:
+        fallback_source = "unknown"
+    source = lane.get("source")
+    if not isinstance(source, str) or _PAUSE_SOURCE_PATTERN.fullmatch(source) is None:
+        source = fallback_source
+    values = lane.get("values")
+    values = values if isinstance(values, dict) else fallback_values
+    values = values if isinstance(values, dict) else {}
+    return {
+        "source": source,
+        "values": {key: _pause_number(values.get(key)) for key in _PAUSE_EISV_KEYS},
+    }
+
+
+def _project_pause_measurement(
+    measurement: Any,
+    metrics: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Keep only decision-relevant numeric lanes for an external reviewer."""
+    measurement = measurement if isinstance(measurement, dict) else {}
+    return {
+        "primary": _project_pause_lane(
+            measurement.get("primary"),
+            fallback_source=metrics.get("primary_eisv_source") or "unknown",
+            fallback_values=metrics,
+        ),
+        "ode": _project_pause_lane(
+            measurement.get("ode"),
+            fallback_source="ode_diagnostic",
+            fallback_values=metrics.get("ode"),
+        ),
+    }
 
 
 def _capture_pause_evidence(monitor: Any) -> Dict[str, Any]:
-    """Return the exact last governance decision bundle for dialectic review.
+    """Return a bounded last-decision bundle for dialectic review.
 
     ``GovernanceState.to_dict()`` is the diagnostic ODE state. It does not carry
     the verdict-authoritative behavioral vector, final risk/verdict provenance,
@@ -1212,25 +1269,9 @@ def _capture_pause_evidence(monitor: Any) -> Dict[str, Any]:
         if isinstance(result.get("eisv_telemetry"), dict)
         else {}
     )
-    measurement = (
-        telemetry.get("measurement")
-        if isinstance(telemetry.get("measurement"), dict)
-        else {
-            "primary": {
-                "source": metrics.get("primary_eisv_source") or "unknown",
-                "values": {
-                    key: metrics.get(key) for key in ("E", "I", "S", "V")
-                },
-            },
-            "ode": {
-                "source": "ode_diagnostic",
-                "values": (
-                    dict(metrics.get("ode"))
-                    if isinstance(metrics.get("ode"), dict)
-                    else {}
-                ),
-            },
-        }
+    measurement = _project_pause_measurement(
+        telemetry.get("measurement"),
+        metrics,
     )
     policy_evaluation = (
         telemetry.get("policy_evaluation")
@@ -1258,7 +1299,9 @@ def _capture_pause_evidence(monitor: Any) -> Dict[str, Any]:
         evidence["risk_attribution"] = result["risk_attribution"]
     return evidence
 
-@mcp_tool("request_dialectic_review", timeout=REQUEST_REVIEW_TIMEOUT, register=True)
+# register=False: this name is a `dialectic` alias, and resolve_alias rewrites it
+# before handler lookup -- see the "one name, one home" note in tool_stability.py.
+@mcp_tool("request_dialectic_review", timeout=REQUEST_REVIEW_TIMEOUT, register=False)
 async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Create a dialectic review session.
@@ -1881,6 +1924,18 @@ async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[
         include_transcript = coerce_bool(
             arguments.get('include_transcript'), default=False
         )
+        # Opt-in projection for callers that only tally outcomes. The dashboard's
+        # Overview card reads phase/status off 50 sessions to show "N open" and
+        # "M of 50 recent failed", and nothing else — measured 130,936 B to
+        # compute two integers that need 1,114 B, 99.1% discarded, on the DEFAULT
+        # page on every load. `resolution` alone is ~629 B/session and is the
+        # bulk of it.
+        #
+        # A WHITELIST, so a field added upstream cannot silently re-inflate a
+        # polled response, and a strict SUBSET of the full shape, so one client
+        # parser handles either and a server without the parameter simply
+        # returns everything.
+        compact = str(arguments.get('fields') or '').strip().lower() == 'compact'
 
         sessions = await list_all_sessions(
             agent_id=agent_id,
@@ -1902,6 +1957,13 @@ async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[
                 },
                 "tip": "Use dialectic(action='list') with no filters to see all sessions"
             })
+
+        if compact:
+            keep = ("session_id", "phase", "status", "created", "paused_agent_label")
+            sessions = [
+                {k: sess[k] for k in keep if k in sess}
+                for sess in sessions
+            ]
 
         return success_response({
             "success": True,
@@ -2258,7 +2320,9 @@ async def _run_synthetic_review(
     }
 
 
-@mcp_tool("submit_thesis", timeout=SUBMIT_THESIS_TIMEOUT, register=True)
+# register=False: this name is a `dialectic` alias, and resolve_alias rewrites it
+# before handler lookup -- see the "one name, one home" note in tool_stability.py.
+@mcp_tool("submit_thesis", timeout=SUBMIT_THESIS_TIMEOUT, register=False)
 async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Paused agent submits thesis: "What I did, what I think happened"
@@ -2462,22 +2526,28 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                         session.paused_agent_id,
                     )
                     if dispatched:
-                        agent_id_spawned = dispatched.get("agent_id") or dispatched.get("id")
+                        execution_id_spawned = (
+                            dispatched.get("execution_id")
+                            or dispatched.get("agent_id")
+                            or dispatched.get("id")
+                        )
                         # Catch a FAST reviewer crash (bad import/url/etc, exits in
                         # <12s) and fall back to in-process inline so the session
                         # resolves now instead of stranding at antithesis. A success
                         # or still-running reviewer owns the slot → async path.
-                        if not await reviewer_crashed_fast(agent_id_spawned):
+                        if not await reviewer_crashed_fast(execution_id_spawned):
                             await _set_awaiting_facilitation(session, False)
                             result["orchestrated_review"] = True
                             result["reviewer_dispatch"] = {
-                                "agent_id": agent_id_spawned,
+                                "execution_id": execution_id_spawned,
+                                "agent_id": execution_id_spawned,
                                 "via": "agent-orchestrator",
                             }
                             await _emit_dialectic_event(
                                 "dialectic_reviewer_dispatched",
                                 session,
-                                orchestrator_agent_id=agent_id_spawned,
+                                orchestrator_execution_id=execution_id_spawned,
+                                orchestrator_agent_id=execution_id_spawned,
                                 effect_id=dispatched.get("effect_id"),
                                 governed=bool(dispatched.get("governed")),
                             )
@@ -2578,7 +2648,9 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
     except Exception as e:
         return [error_response(f"Error submitting thesis: {str(e)}")]
 
-@mcp_tool("submit_antithesis", timeout=10.0, register=True)
+# register=False: this name is a `dialectic` alias, and resolve_alias rewrites it
+# before handler lookup -- see the "one name, one home" note in tool_stability.py.
+@mcp_tool("submit_antithesis", timeout=10.0, register=False)
 async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Reviewer agent submits antithesis: "What I observe, my concerns"
@@ -2812,7 +2884,9 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
     except Exception as e:
         return [error_response(f"Error submitting antithesis: {str(e)}")]
 
-@mcp_tool("submit_synthesis", timeout=15.0, register=True)
+# register=False: this name is a `dialectic` alias, and resolve_alias rewrites it
+# before handler lookup -- see the "one name, one home" note in tool_stability.py.
+@mcp_tool("submit_synthesis", timeout=15.0, register=False)
 async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Either agent submits synthesis proposal during negotiation.
@@ -3366,7 +3440,9 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
         return [error_response(f"Error submitting synthesis: {str(e)}")]
 
 
-@mcp_tool("reassign_reviewer", timeout=15.0, register=True)
+# register=False: this name is a `dialectic` alias, and resolve_alias rewrites it
+# before handler lookup -- see the "one name, one home" note in tool_stability.py.
+@mcp_tool("reassign_reviewer", timeout=15.0, register=False)
 async def handle_reassign_reviewer(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     Reassign the reviewer for an active dialectic session.

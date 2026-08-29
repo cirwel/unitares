@@ -45,8 +45,12 @@ def _load_pydantic_schemas():
         "src.mcp_handlers.schemas.identity",
         "src.mcp_handlers.schemas.admin",
         "src.mcp_handlers.schemas.dashboard",
-        "src.mcp_handlers.schemas.research",
         "src.mcp_handlers.schemas.skills",  # S15-a
+        # progress_flat was missing from this list until 2026-08-29, so
+        # record_progress_pulse fell through to the auto-discovery branch below
+        # and advertised an empty stub schema even though the handler validates
+        # against RecordProgressPulseParams on every call.
+        "src.mcp_handlers.schemas.progress_flat",
         *_EXTRA_SCHEMA_MODULES,
     ]
     all_schemas = {}
@@ -83,6 +87,18 @@ def get_pydantic_schemas():
 # Only tools in this list are exposed via MCP. Pydantic schemas for
 # sub-actions (e.g., store_knowledge_graph) exist but are dispatched
 # internally by consolidated tools (e.g., knowledge).
+# Names retired from this list on 2026-08-29 because they are tool_stability
+# aliases that rewrite to a router (admin / dialectic) before handler lookup:
+# cleanup_stale_locks, debug_request_context, get_connection_status,
+# get_server_info, get_telemetry_metrics, get_tool_usage_stats, reset_monitor,
+# validate_file_path, request_dialectic_review, submit_thesis,
+# submit_antithesis, submit_synthesis. Their handlers are unchanged and still
+# reached through the router; only the duplicate wire name is gone.
+# (reassign_reviewer belongs to the same group and also went register=False,
+# but it was never in this list -- it was reaching the wire through the
+# auto-discovery branch with a stub schema.)
+# get_workspace_health is deliberately NOT in that set -- see the note in
+# tool_stability.py.
 TOOL_ORDER = [
     "check_calibration",
     "update_calibration_ground_truth",
@@ -90,24 +106,15 @@ TOOL_ORDER = [
     "rebuild_calibration",
     "health_check",
     "get_workspace_health",
-    "get_telemetry_metrics",
-    "get_tool_usage_stats",
-    "get_server_info",
-    "get_connection_status",
     "process_agent_update",
     "get_governance_metrics",
     "get_system_history",
     "export_to_file",
-    "reset_monitor",
     "list_agents",
     "delete_agent",
     "get_agent_metadata",
     "mark_response_complete",
     "detect_stuck_agents",
-    "request_dialectic_review",
-    "submit_thesis",
-    "submit_antithesis",
-    "submit_synthesis",
     "archive_agent",
     "update_agent_metadata",
     "archive_old_test_agents",
@@ -124,8 +131,6 @@ TOOL_ORDER = [
     "list_tools",
     "describe_tool",
     "skills",
-    "cleanup_stale_locks",
-    "validate_file_path",
     "store_knowledge_graph",
     "search_knowledge_graph",
     "get_knowledge_graph",
@@ -143,9 +148,7 @@ TOOL_ORDER = [
     "onboard",
     "identity",
     "bind_session",
-    "debug_request_context",
     "knowledge",
-    "research_registry",
     "agent",
     "calibration",
     "config",
@@ -158,6 +161,18 @@ TOOL_ORDER = [
     "dialectic",
     "dashboard",
     "admin",
+    # Added 2026-08-29. These were registered dispatch tools absent from this
+    # list, so get_tool_definitions fell through to the auto-discovery branch
+    # and advertised {"properties": {}, "additionalProperties": true} -- while
+    # validate_params still enforced the real *Params model by tool name. The
+    # wire said "any parameters accepted" and the server then rejected the call.
+    # _validate_advertised_schema_coverage below now refuses to let this recur.
+    "direct_resume_if_safe",
+    "get_trajectory_status",
+    "verify_trajectory_identity",
+    "list_process_bindings",
+    "outcome_correlation",
+    "record_progress_pulse",
 ]
 
 
@@ -172,14 +187,33 @@ def _is_extra_schema_model(schema_model: type[BaseModel] | None) -> bool:
     )
 
 
+def _is_core_handler(definition) -> bool:
+    """Whether a tool's handler ships in this repo rather than a plugin."""
+    module = getattr(getattr(definition, "handler", None), "__module__", "") or ""
+    return module == "src" or module.startswith("src.")
+
+
 def _validate_consolidated_tool_order(
     schemas: dict[str, type[BaseModel]],
 ) -> None:
-    """Fail when a core action router would fall through to a stub schema.
+    """Fail when a core tool would be advertised with a stub schema.
 
-    Plugin action routers are allowed outside the core ordering when their
-    Pydantic model arrived through ``register_extra_schemas``. Their schemas are
-    applied in the decorator-discovery path below.
+    ``get_tool_definitions`` auto-discovers any registered tool missing from
+    ``TOOL_ORDER`` and serves it ``{"properties": {}, "additionalProperties":
+    true}``. That is a silent contract break rather than a graceful fallback:
+    ``validate_params`` resolves the real ``*Params`` model by tool name
+    regardless of ``TOOL_ORDER``, so the wire advertises "any parameters
+    accepted" and the server then rejects the call against a schema the caller
+    was never shown. Six core tools sat in that state until 2026-08-29.
+
+    Scope is deliberately every registered core tool, not just action routers.
+    The check used to cover ``known_actions is not None`` only, which is why
+    single-purpose tools (get_trajectory_status, outcome_correlation,
+    record_progress_pulse, ...) drifted out unnoticed.
+
+    Plugin tools are exempt and keep the auto-discovery path: a plugin that
+    wants a real advertised schema calls ``register_extra_schemas()``, and one
+    that does not should not be able to hard-fail server startup.
     """
     from src.mcp_handlers.decorators import _TOOL_DEFINITIONS
 
@@ -187,17 +221,18 @@ def _validate_consolidated_tool_order(
     missing = sorted(
         name
         for name, definition in _TOOL_DEFINITIONS.items()
-        if definition.known_actions is not None
-        and not definition.hidden
+        if not definition.hidden
         and name not in ordered
+        and _is_core_handler(definition)
         and not _is_extra_schema_model(schemas.get(name))
     )
     if missing:
         raise RuntimeError(
-            "Registered action-routed tools are missing from TOOL_ORDER and "
-            "would be advertised with empty stub schemas: "
-            f"{missing}. Add each core tool to TOOL_ORDER with a matching "
-            "*Params model; plugins must call register_extra_schemas()."
+            "Registered core tools are missing from TOOL_ORDER and would be "
+            f"advertised with empty stub schemas: {missing}. Add each to "
+            "TOOL_ORDER with a matching *Params model (or set register=False "
+            "if the tool is only reached through a router); plugins must call "
+            "register_extra_schemas()."
         )
 
 

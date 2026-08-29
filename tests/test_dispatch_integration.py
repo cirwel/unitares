@@ -53,6 +53,26 @@ def _extract_text(result) -> str:
     return result[0].text
 
 
+def _require_registered(tool_name: str, handlers) -> None:
+    """Assert a first-party tool is present in TOOL_HANDLERS.
+
+    These dispatch tests exist to catch registration regressions, so an absent
+    tool IS the failure they are looking for, not a reason to opt out. The
+    registry is filled at import time from the ``@mcp_tool`` decorator registry
+    (``src/mcp_handlers/__init__.py``), so an import failure in a handler module
+    or a dropped decorator empties it silently. Skipping on absence would report
+    that regression as a green run.
+    """
+    assert tool_name in handlers, (
+        f"{tool_name!r} is not registered in TOOL_HANDLERS. It is a first-party "
+        f"@mcp_tool and must always be present; absence means the decorator "
+        f"registry did not populate it -- an import failure in its handler "
+        f"module, or a lost @mcp_tool decorator. "
+        f"{len(handlers)} tools registered."
+    )
+
+
+
 # ============================================================================
 # 1. DispatchContext dataclass
 # ============================================================================
@@ -565,9 +585,7 @@ class TestDispatchToolIntegration:
         """Known tool dispatches correctly and returns result."""
         from src.mcp_handlers import dispatch_tool, TOOL_HANDLERS
 
-        # Pick a tool we know exists in the registry
-        if "health_check" not in TOOL_HANDLERS:
-            pytest.skip("health_check not in TOOL_HANDLERS")
+        _require_registered("health_check", TOOL_HANDLERS)
 
         # Mock the handler to return a predictable result
         from mcp.types import TextContent
@@ -621,8 +639,7 @@ class TestDispatchToolIntegration:
         from src.mcp_handlers import dispatch_tool, TOOL_HANDLERS
 
         # "status" is an alias for "get_governance_metrics"
-        if "get_governance_metrics" not in TOOL_HANDLERS:
-            pytest.skip("get_governance_metrics not in TOOL_HANDLERS")
+        _require_registered("get_governance_metrics", TOOL_HANDLERS)
 
         from mcp.types import TextContent
         expected = [TextContent(type="text", text='{"resolved": "via_alias"}')]
@@ -639,8 +656,7 @@ class TestDispatchToolIntegration:
         """kwargs unwrapping works through the full pipeline."""
         from src.mcp_handlers import dispatch_tool, TOOL_HANDLERS
 
-        if "health_check" not in TOOL_HANDLERS:
-            pytest.skip("health_check not in TOOL_HANDLERS")
+        _require_registered("health_check", TOOL_HANDLERS)
 
         from mcp.types import TextContent
         expected = [TextContent(type="text", text='{"unwrapped": true}')]
@@ -669,8 +685,7 @@ class TestDispatchToolIntegration:
         """None arguments are converted to empty dict."""
         from src.mcp_handlers import dispatch_tool, TOOL_HANDLERS
 
-        if "health_check" not in TOOL_HANDLERS:
-            pytest.skip("health_check not in TOOL_HANDLERS")
+        _require_registered("health_check", TOOL_HANDLERS)
 
         from mcp.types import TextContent
         expected = [TextContent(type="text", text='{}')]
@@ -694,8 +709,7 @@ class TestDispatchToolIntegration:
         """Consolidated alias (e.g., list_agents -> agent(action='list')) injects action param."""
         from src.mcp_handlers import dispatch_tool, TOOL_HANDLERS
 
-        if "agent" not in TOOL_HANDLERS:
-            pytest.skip("agent not in TOOL_HANDLERS")
+        _require_registered("agent", TOOL_HANDLERS)
 
         from mcp.types import TextContent
         expected = [TextContent(type="text", text='{"action": "list"}')]

@@ -17,6 +17,7 @@ in-process review.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -142,6 +143,12 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
         "UNITARES_CODEX_CLI",
         "UNITARES_LLM_MODEL",
         "UNITARES_OLLAMA_BASE_URL",
+        # The reviewer talks to gov-mcp through GovernanceClient. If that /mcp
+        # gate is configured, the child needs the bearer or every call it makes
+        # 401s — and the failure would look like a broken reviewer rather than
+        # a missing credential. Forwarded, not minted: this process does not
+        # decide the token, it only passes on what it was given.
+        "UNITARES_MCP_BEARER_TOKEN",
     )
     for name in reviewer_config:
         value = os.environ.get(name)
@@ -166,6 +173,19 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
     }
 
 
+def _direct_idempotency_key(session_id: str, spec: Dict[str, Any]) -> str:
+    """Stable key for response-loss retries of one material reviewer spawn."""
+    canonical = json.dumps(
+        spec,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    material = session_id.encode("utf-8") + b"\x00" + canonical
+    digest = hashlib.sha256(material).hexdigest()
+    return f"dialectic-reviewer:{digest}"
+
+
 async def dispatch_orchestrated_review(
     session_id: str,
     thesis: Dict[str, Any],
@@ -174,7 +194,7 @@ async def dispatch_orchestrated_review(
     timeout: float = 10.0,
 ) -> Optional[Dict[str, Any]]:
     """POST a reviewer-spawn spec to the orchestrator. Returns its JSON (the spawned
-    agent id/status) on success, or None on ANY failure (caller falls back to the
+    execution id/status) on success, or None on ANY failure (caller falls back to the
     in-process synthetic reviewer)."""
     bearer = os.environ.get("AGENT_ORCHESTRATOR_BEARER_TOKEN")
     if not bearer:
@@ -201,14 +221,16 @@ async def dispatch_orchestrated_review(
     if governed_spawn_enabled():
         governed = await governed_dispatch(session_id, spec)
         if governed.outcome is GovernedOutcome.COMMITTED:
+            execution_id = governed.execution_id or governed.agent_id
             logger.info(
-                "[DIALECTIC] governed reviewer spawned for session %s: agent_id=%s "
+                "[DIALECTIC] governed reviewer spawned for session %s: execution_id=%s "
                 "effect_id=%s",
-                session_id[:16], governed.agent_id, governed.effect_id,
+                session_id[:16], execution_id, governed.effect_id,
             )
             return {
                 "ok": True,
-                "agent_id": governed.agent_id,
+                "execution_id": execution_id,
+                "agent_id": execution_id,
                 "effect_id": governed.effect_id,
                 "governed": True,
             }
@@ -225,12 +247,18 @@ async def dispatch_orchestrated_review(
         )
 
     url = f"{_orchestrator_url()}/v1/agents"
+    idempotency_key = _direct_idempotency_key(session_id, spec)
     try:
         import httpx
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(
-                url, json=spec, headers={"Authorization": f"Bearer {bearer}"}
+                url,
+                json=spec,
+                headers={
+                    "Authorization": f"Bearer {bearer}",
+                    "Idempotency-Key": idempotency_key,
+                },
             )
         if resp.status_code not in (200, 201, 202):
             logger.warning(
@@ -239,10 +267,18 @@ async def dispatch_orchestrated_review(
             )
             return None
         data = resp.json()
-        # The orchestrator returns {"ok": true, "agent_id": ...} (not "id").
+        execution_id = data.get("execution_id") or data.get("agent_id") or data.get("id")
+        if not execution_id:
+            logger.warning(
+                "[DIALECTIC] orchestrator acknowledged spawn without an execution id; "
+                "falling back"
+            )
+            return None
+        data["execution_id"] = execution_id
+        data.setdefault("agent_id", execution_id)
         logger.info(
             "[DIALECTIC] orchestrated reviewer spawned for session %s: %s",
-            session_id[:16], data.get("agent_id") or data.get("id") or data,
+            session_id[:16], execution_id,
         )
         return data
     except Exception as exc:  # noqa: BLE001 — any failure degrades to in-process
@@ -253,7 +289,7 @@ async def dispatch_orchestrated_review(
 
 
 async def reviewer_crashed_fast(
-    agent_id: str,
+    execution_id: str,
     *,
     await_seconds: float = 15.0,
 ) -> bool:
@@ -275,12 +311,12 @@ async def reviewer_crashed_fast(
     A reviewer that crashes AFTER this window (mid-model, rare) still relies on
     the slower reap — acceptable; this closes the common case.
     """
-    if not agent_id:
+    if not execution_id:
         return False
     bearer = os.environ.get("AGENT_ORCHESTRATOR_BEARER_TOKEN")
     if not bearer:
         return False
-    url = f"{_orchestrator_url()}/v1/agents/{agent_id}/await"
+    url = f"{_orchestrator_url()}/v1/executions/{execution_id}/await"
     try:
         import httpx
 
@@ -300,7 +336,7 @@ async def reviewer_crashed_fast(
         if crashed:
             logger.warning(
                 "[DIALECTIC] orchestrated reviewer %s exited %s without resolving; "
-                "falling back to in-process", agent_id, exit_status,
+                "falling back to in-process", execution_id, exit_status,
             )
         return bool(crashed)
     except Exception as exc:  # noqa: BLE001 — can't tell ⇒ leave it to the reviewer

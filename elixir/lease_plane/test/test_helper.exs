@@ -1,5 +1,12 @@
 ExUnit.start()
 
+# build_sha/0 deliberately does NOT resolve on demand (see BuildInfo's moduledoc:
+# an on-demand fallback would let a hot-reloaded node cache the CURRENT checkout
+# as its boot sha and report CURRENT with a stale supervision tree). The app is
+# started with no children in :test, so seed the cache the way Application.start/2
+# would.
+UnitaresLeasePlane.BuildInfo.resolve!()
+
 # Tests in this suite hit a real Postgres governance DB. Boot only the pieces
 # we need; the Application module is started in :test mode with no children
 # (see config/test.exs and Application.start/2's start_application gate).

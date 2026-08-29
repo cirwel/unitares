@@ -22,7 +22,7 @@ gain. Do not cite it as one.
 Failure routing (load-bearing — each bucket chosen deliberately):
 
 - ``COMMITTED``  — 202 with ``status=="committed"`` and a non-empty
-  ``agent_id``. The reviewer is running, governed.
+  ``execution_id`` (or a legacy ``agent_id``). The reviewer is running, governed.
 - ``REFUSED``    — the governed surface answered and the answer is either a
   refusal or an ambiguous outcome. Callers must degrade to the IN-PROCESS
   synthetic reviewer and must NOT fall back to a direct orchestrator spawn:
@@ -84,6 +84,7 @@ class GovernedOutcome(Enum):
 @dataclass
 class GovernedSpawnResult:
     outcome: GovernedOutcome
+    execution_id: Optional[str] = None
     agent_id: Optional[str] = None
     effect_id: Optional[str] = None
     detail: str = ""
@@ -244,11 +245,12 @@ def classify_response(status_code: int, body: Dict[str, Any]) -> GovernedSpawnRe
     """Map a /v1/effects response onto the outcome buckets (pure; unit-tested)."""
     if status_code == 202:
         status = body.get("status")
-        agent_id = body.get("agent_id")
-        if status == "committed" and agent_id and not body.get("idempotent"):
+        execution_id = body.get("execution_id") or body.get("agent_id")
+        if status == "committed" and execution_id and not body.get("idempotent"):
             return GovernedSpawnResult(
                 GovernedOutcome.COMMITTED,
-                agent_id=str(agent_id),
+                execution_id=str(execution_id),
+                agent_id=str(execution_id),
                 effect_id=body.get("effect_id"),
             )
         # Idempotent replay (a prior dispatch for this exact spec already ran)

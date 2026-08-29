@@ -179,6 +179,41 @@ class TestReconstructSessionFromDict:
         assert session.phase == DialecticPhase.SYNTHESIS
         assert session.synthesis_round == 1
 
+    def test_reconstruction_decodes_json_condition_columns(self):
+        """PG JSON text must not become one condition per character."""
+        from src.mcp_handlers.dialectic.session import _reconstruct_session_from_dict
+
+        transcript = [
+            _make_transcript_entry(
+                phase="synthesis",
+                agent_id="agent_a",
+                proposed_conditions=json.dumps(["Condition one", "Condition two"]),
+            )
+        ]
+        session = _reconstruct_session_from_dict(
+            "sess_json_conditions",
+            _make_session_dict(phase="synthesis", transcript=transcript),
+        )
+
+        assert session.transcript[0].proposed_conditions == [
+            "Condition one",
+            "Condition two",
+        ]
+
+    def test_reconstruction_repairs_legacy_character_split_resolution(self):
+        """Existing corrupt resolution rows remain readable without a DB rewrite."""
+        from src.mcp_handlers.dialectic.session import _reconstruct_session_from_dict
+
+        encoded = json.dumps(["Condition one", "Condition two"])
+        resolution = _make_resolution_dict()
+        resolution["conditions"] = list(encoded)
+        session = _reconstruct_session_from_dict(
+            "sess_char_resolution",
+            _make_session_dict(phase="resolved", resolution=resolution),
+        )
+
+        assert session.resolution.conditions == ["Condition one", "Condition two"]
+
     def test_reconstruction_restores_awaiting_facilitation(self):
         """#1259: the flag must round-trip through reconstruction. The ctor
         defaults it False, so if reconstruct drops it a loaded session looks

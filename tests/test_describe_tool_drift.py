@@ -42,17 +42,27 @@ def test_loaded_process_update_description_never_teaches_v_as_void():
     assert '"V": "Valence"' in description
 
 
-def test_get_server_info_schema_tool_is_dispatch_registered():
-    """A tool advertised by MCP schemas must also resolve at dispatch time."""
+def test_every_advertised_tool_resolves_at_dispatch():
+    """A tool advertised by MCP schemas must also resolve at dispatch time.
+
+    Generalized from a get_server_info-only assertion (2026-08-29). The
+    original pinned one name against the #431/#433 incident; the invariant it
+    was really protecting applies to the whole advertised surface, so assert it
+    there instead of on one sentinel.
+    """
     from src.mcp_handlers import TOOL_HANDLERS
+    from src.mcp_handlers.tool_stability import list_all_aliases
     from src.tool_schemas import get_tool_definitions
 
-    schema_names = {tool.name for tool in get_tool_definitions(verbosity="full")}
-
-    assert "get_server_info" in schema_names
-    assert "get_server_info" in TOOL_HANDLERS, (
-        "get_server_info is advertised in tool schemas and health_check docs; "
-        "it must be dispatch-registered, not an unknown tool at call time"
+    aliases = list_all_aliases()
+    unresolvable = sorted(
+        tool.name
+        for tool in get_tool_definitions(verbosity="full")
+        if tool.name not in TOOL_HANDLERS and tool.name not in aliases
+    )
+    assert not unresolvable, (
+        "these names are advertised in tool schemas but resolve to nothing at "
+        f"dispatch time (agents would hit 'Unknown tool'): {unresolvable}"
     )
 
 
@@ -292,16 +302,27 @@ async def test_health_check_describe_mentions_agent_signature():
         )
 
 
-def test_get_server_info_is_registered():
+def test_get_server_info_is_callable():
     """get_server_info is cross-referenced from health_check's describe text.
     PR #433 left it register=False with the comment 're-enabled separately
-    per #431'. This is that re-enable."""
-    from src.mcp_handlers.decorators import list_registered_tools
-    assert "get_server_info" in list_registered_tools(include_hidden=True), (
-        "get_server_info must be registered; describe_tool advertises it as "
+    per #431'; this guards that the NAME keeps working.
+
+    Asserted on callability rather than registration since 2026-08-29.
+    get_server_info is now an alias to admin(action='server_info') and its own
+    registration was retired -- resolve_alias rewrote the name before handler
+    lookup, so that registration was never dispatched to anyway. What the #431
+    incident was about is agents reading the docs, calling the name, and
+    hitting 'Unknown tool'. That is what this checks.
+    """
+    from src.mcp_handlers import TOOL_HANDLERS
+    from src.mcp_handlers.tool_stability import resolve_tool_alias
+
+    resolved, _alias = resolve_tool_alias("get_server_info")
+    assert resolved in TOOL_HANDLERS, (
+        "get_server_info must stay callable; describe_tool advertises it as "
         "a related/alternative tool from health_check, get_connection_status, "
-        "get_workspace_health, and the admin toolset banner. If unregistered, "
-        "agents reading the docs call the name and hit 'Unknown tool'."
+        "get_workspace_health, and the admin toolset banner. If it resolves "
+        "nowhere, agents reading the docs call the name and hit 'Unknown tool'."
     )
 
 

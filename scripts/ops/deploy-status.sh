@@ -17,6 +17,12 @@
 #   DOWN         a launchd service that is not currently running
 #   LIVE         live-from-checkout (no restart needed; tree is live)
 #   n/a          library / Pi-deployed (no local long-running process)
+#   PI-CURRENT   (pi-deploy) the Pi itself reports the origin/main tip
+#   PI-STALE(Δn) (pi-deploy) the Pi runs n commits behind origin/main
+#   PI-DIRTY     (pi-deploy) the Pi's marker says its tree is dirty
+#   PI-UNVERIFIED       Pi answered but gave nothing this Mac can verify
+#   n/a(Pi:unreachable) ssh probe failed; the row degrades to the LOCAL
+#                       checkout, labeled so it cannot read as Pi truth
 #
 # Footgun flag: ⚠DEV = the service loads from the SHARED dev checkout
 # (~/projects/unitares); a restart deploys whatever branch is checked out there.
@@ -70,7 +76,11 @@ COMPONENTS=(
 "gateway-mcp|com.unitares.gateway-mcp|$H/projects/unitares-deploy||restart|8768"
 "sentinel-beam|com.unitares.sentinel-beam|$H/projects/unitares-deploy|elixir/sentinel|restart|"
 "wave3a-handlers|com.unitares.wave3a-handlers|$H/projects/unitares-deploy|elixir/wave3a_handlers|restart|8770"
-"lease-plane|com.unitares.lease-plane|$H/projects/unitares-deploy|elixir/lease_plane|hot-reload|8788"
+# Two pathspecs: elixir/unitares_sdk is a path dependency COMPILED INTO the
+# lease plane, so an SDK-only commit changes the running binary. nudge-lease-plane.sh
+# already checks both; counting only elixir/lease_plane here reported Δ0 for an
+# SDK change and skipped the restart that change actually needs.
+"lease-plane|com.unitares.lease-plane|$H/projects/unitares-deploy|elixir/lease_plane elixir/unitares_sdk|hot-reload|8788"
 # Phoenix on :8790, loading from the SHARED deploy worktree. Was absent from
 # this table entirely until 2026-08-13, so every ff moved its source under a
 # running BEAM with no verdict row to report it. Scoped to its own subdir for
@@ -141,8 +151,10 @@ git_head_epoch() { git -C "$1" log -1 --format=%ct 2>/dev/null; }
 # genuinely have no subdir (the Python servers, and live-from-checkout where
 # the whole checkout IS the artifact).
 behind_count() {
+  # Word-split on purpose: cpath is a pathspec LIST (see COMPONENTS). Every
+  # value is a single token with no spaces or globs.
   local cpath="${3:-.}"
-  git -C "$1" rev-list --count --full-history "HEAD..$2" -- "$cpath" 2>/dev/null || echo "?"
+  git -C "$1" rev-list --count --full-history "HEAD..$2" -- $cpath 2>/dev/null || echo "?"
 }
 # ghost = HEAD has commits not in base BY SHA, but the trees are identical
 is_ghost() {
@@ -186,6 +198,41 @@ build_sha() { # port -> sha or ""
     | head -1
 }
 
+# --- Pi state: anima-mcp runs on the Pi, not on this Mac ---------------------
+# For pi-deploy rows the LOCAL checkout's branch@sha is a lie: this Mac's
+# ~/projects/anima-mcp sits on whatever working branch someone left there
+# while the Pi runs main. Measured 2026-08-28: the table rendered
+# codex/lumen-disk-retention@7086436 as the anima row while the Pi ran
+# main@0a7b8ea. So ask the Pi itself.
+#
+# Primary source is ~/.anima/deployed_ref.json — written by the anima server
+# at every process start, OUTSIDE the repo tree, because deploys reset/clean
+# the checkout there and the Pi's own `git log` is not trusted either. The
+# trailing rev-parse is only a fallback for the window before the marker
+# ships. One ssh, short timeout, cached for the run: this executes on every
+# `cirwel status`. The trailing sentinel makes "unreachable" distinguishable
+# from "reachable but no data".
+PI_SSH_HOST="${PI_SSH_HOST:-lumen}"
+PI_STATE_RAW="__unprobed__"
+# Sets PI_STATE_RAW (never echoes): callers must NOT use command substitution,
+# or the cache assignment dies in the subshell. ServerAlive* bounds the
+# post-connect phase too — ConnectTimeout alone lets a Pi whose sshd accepts
+# but whose filesystem is wedged (dying-SD-card mode) hang this tool, and the
+# deploy flow starts by running it, precisely when the Pi is sickest.
+# __pi_dirty__ reports a dirty tree for the pre-marker fallback window, where
+# HEAD alone would assert PI-CURRENT in the original defect's exact shape.
+pi_probe() { # -> PI_STATE_RAW = marker JSON (if any) + fallback short sha + sentinels, or ""
+  if [ "$PI_STATE_RAW" = "__unprobed__" ]; then
+    PI_STATE_RAW="$(ssh -o BatchMode=yes -o ConnectTimeout=2 \
+      -o ServerAliveInterval=2 -o ServerAliveCountMax=2 "$PI_SSH_HOST" \
+      'cat ~/.anima/deployed_ref.json 2>/dev/null; git -C ~/anima-mcp rev-parse --short HEAD 2>/dev/null; [ -n "$(git -C ~/anima-mcp status --porcelain 2>/dev/null | head -1)" ] && echo __pi_dirty__; echo __pi_ok__' \
+      2>/dev/null)" || PI_STATE_RAW=""
+  fi
+}
+pi_json_str() { # raw key -> string value or "" (marker is pretty-printed JSON)
+  printf '%s' "$1" | sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
+}
+
 rows=()
 for c in "${COMPONENTS[@]}"; do
   IFS='|' read -r name label repo subdir pickup port <<< "$c"
@@ -202,12 +249,111 @@ for c in "${COMPONENTS[@]}"; do
   headep=$(git_head_epoch "$repo")
   ghost="no"; is_ghost "$repo" "$base" && ghost="yes"
 
-  pid=""; start=""; verdict=""
+  pid=""; start=""; verdict=""; hz=""
   case "$pickup" in
     live-from-checkout) verdict="LIVE" ;;
     library)            verdict="n/a" ;;
-    pi-deploy)          verdict="n/a(Pi)" ;;
-    hot-reload)         pid=$(proc_pid "$label"); verdict=$([ -n "$pid" ] && echo "HOT-RELOAD" || echo "DOWN") ;;
+    pi-deploy)
+      # Never render this Mac's checkout branch@sha as if it were Pi state.
+      if [ "$name" = "anima-mcp" ]; then
+        pi_probe; praw="$PI_STATE_RAW"
+        if [[ "$praw" == *__pi_ok__* ]]; then
+          p_head="$(pi_json_str "$praw" head)"
+          p_branch="$(pi_json_str "$praw" branch)"
+          p_dirty="$(printf '%s' "$praw" | sed -nE 's/.*"dirty"[[:space:]]*:[[:space:]]*(true|false).*/\1/p' | head -1)"
+          if [ -z "$p_head" ]; then
+            # Marker not shipped yet — the Pi's own git HEAD is the fallback
+            # (truthful there since deploy.sh step 1b, PR anima-mcp#217),
+            # plus the live-tree dirty sentinel, which the marker's startup
+            # snapshot replaces once it ships.
+            p_head="$(printf '%s' "$praw" | sed -n 's/^\([0-9a-f]\{7,40\}\)$/\1/p' | tail -1)"
+            p_branch="?"
+            [[ "$praw" == *__pi_dirty__* ]] && p_dirty="true"
+          fi
+          if [ -n "$p_head" ]; then
+            br="$p_branch"; sha="${p_head:0:7}"
+            # Compare against the LOCAL repo's fetched origin/main tip.
+            # Empty delta = the local repo cannot resolve the Pi's sha
+            # (usually: needs --fetch) — say so instead of guessing.
+            delta=$(git -C "$repo" rev-list --count --full-history "$p_head..origin/main" 2>/dev/null)
+            # This row's behind column must describe the Pi, not this Mac's
+            # checkout — mixed provenance in one row is the defect this whole
+            # branch removes.
+            behind="${delta:--}"
+            if [ "$p_dirty" = "true" ]; then verdict="PI-DIRTY"
+            elif [ -z "$delta" ]; then verdict="PI-UNVERIFIED"
+            elif [ "$delta" = "0" ]; then verdict="PI-CURRENT"
+            else verdict="PI-STALE(Δ$delta)"; fi
+          else
+            br="pi:?"; sha="?"; behind="-"; verdict="PI-UNVERIFIED"
+          fi
+        else
+          # Degrade to the local checkout, labeled so it can never again be
+          # read as Pi truth (br/sha keep the local values computed above).
+          verdict="n/a(Pi:unreachable)"
+          hz="(local checkout, not Pi truth)"
+        fi
+      else
+        # pi-plugin has no on-Pi marker yet: printing the local branch@sha
+        # asserted a state this Mac cannot know. Wiring its own marker is a
+        # follow-up; until then, an honest blank.
+        br="-"; sha="-"; verdict="n/a(Pi)"
+      fi ;;
+    hot-reload)
+      # ⛔This branch used to be `up => HOT-RELOAD, else DOWN` and computed no
+      # staleness at all, so the lease plane — the ONLY hot-reload row — could
+      # never report CURRENT or STALE. Its running-code drift was structurally
+      # invisible: the sole staleness signal it ever got was the BEHIND(n)
+      # override below, which describes the CHECKOUT being behind origin, not
+      # the process being behind the checkout. Measured 2026-08-28: immediately
+      # after a full restart onto new code the row still read HOT-RELOAD, and it
+      # would have read exactly the same had the restart never happened.
+      #
+      # Now compares the boot sha the plane publishes on /health, the same way
+      # the restart branch does. HOT-RELOAD is kept for the case where the
+      # process predates the checkout: on this service that is a legitimate
+      # state (modules swapped in place), but it is NOT equivalent to current —
+      # `hot-reload.sh` cannot add a child to an already-started supervisor, so
+      # any change touching application.ex needs a real restart. The verdict
+      # therefore names the delta and the operator decides.
+      pid=$(proc_pid "$label")
+      if [ -z "$pid" ]; then verdict="DOWN"
+      else
+        bsha=$(build_sha "$port")
+        if [ -n "$bsha" ] && [ -n "$sha" ]; then
+          n=${#bsha}; [ "${#sha}" -lt "$n" ] && n=${#sha}
+          if [ "${bsha:0:$n}" = "${sha:0:$n}" ]; then verdict="CURRENT"
+          else
+            delta=$(git -C "$repo" rev-list --count --full-history "$bsha..$base" -- $cpath 2>/dev/null || echo "?")
+            [ -z "$delta" ] && delta="?"
+            # ⛔STALE(Δn), NOT a HOT-RELOAD(Δn) of its own. deploy-apply.sh
+            # selects work with `v.startswith("STALE") or v.startswith("BEHIND")`
+            # (deploy-apply.sh:114), so a novel verdict string would be SEEN by
+            # the operator and silently ignored by the deployer — the lease
+            # plane would stop auto-deploying entirely. Reusing STALE also
+            # inherits the existing, tested exclusion from the BEHIND promotion
+            # below, which is right for the same reason: "the running process is
+            # behind" outranks "your checkout needs a pull". The PICKUP column
+            # already says hot-reload, so naming the verdict STALE loses nothing.
+            # Δ0 = the shas differ only because the shared monorepo advanced
+            # on code this service does not compile. Restarting for that is
+            # pointless churn, and now that the hot-reload row feeds
+            # deploy-apply it would be pointless churn ON EVERY UNRELATED
+            # COMMIT. CURRENT* is the existing spelling for "process is old but
+            # its own code is unchanged", used identically by the restart branch.
+            if [ "$delta" = "0" ]; then verdict="CURRENT*"; else verdict="STALE(Δ$delta)"; fi
+          fi
+        else
+          # No build_sha on /health: an older lease plane, or a deployment with
+          # no .git to resolve one. Say so rather than printing a confident
+          # verdict derived from nothing — an unverifiable row must not read as
+          # healthy. Deliberately NOT a STALE form: we do not know that it is
+          # stale, and a permanently unreadable sha would then re-deploy on
+          # every single run. It stays promotable to BEHIND (see below), which
+          # preserves exactly the behaviour bare HOT-RELOAD had.
+          verdict="HOT-RELOAD(?)"
+        fi
+      fi ;;
     restart|restart-DEV)
       pid=$(proc_pid "$label")
       if [ -z "$pid" ]; then verdict="DOWN"
@@ -219,9 +365,15 @@ for c in "${COMPONENTS[@]}"; do
           n=${#bsha}; [ "${#sha}" -lt "$n" ] && n=${#sha}
           if [ "${bsha:0:$n}" = "${sha:0:$n}" ]; then verdict="CURRENT"
           else
-            delta=$(git -C "$repo" rev-list --count --full-history "$bsha..$base" -- "$cpath" 2>/dev/null || echo "?")
+            delta=$(git -C "$repo" rev-list --count --full-history "$bsha..$base" -- $cpath 2>/dev/null || echo "?")
             [ -z "$delta" ] && delta="?"
-            verdict="STALE(Δ$delta)"
+            # Δ0 = the shas differ only because the shared monorepo advanced
+            # on code this service does not compile. Restarting for that is
+            # pointless churn, and now that the hot-reload row feeds
+            # deploy-apply it would be pointless churn ON EVERY UNRELATED
+            # COMMIT. CURRENT* is the existing spelling for "process is old but
+            # its own code is unchanged", used identically by the restart branch.
+            if [ "$delta" = "0" ]; then verdict="CURRENT*"; else verdict="STALE(Δ$delta)"; fi
           fi
         else
           start=$(proc_start_epoch "$pid")
@@ -238,13 +390,16 @@ for c in "${COMPONENTS[@]}"; do
             # 2026-08-12: the governance MCP ran build_sha 1ac9912a against a
             # 56728eba checkout and was labelled CURRENT*.
             startiso=$(date -r "$start" "+%Y-%m-%d %H:%M:%S" 2>/dev/null)
-            delta=$(git -C "$repo" rev-list --count --full-history --since="$startiso" "$base" -- "$cpath" 2>/dev/null || echo "?")
+            delta=$(git -C "$repo" rev-list --count --full-history --since="$startiso" "$base" -- $cpath 2>/dev/null || echo "?")
             if [ "$delta" = "0" ]; then verdict="CURRENT*"; else verdict="STALE(Δ$delta)"; fi
           else verdict="CURRENT"; fi
         fi
       fi ;;
   esac
-  [ "$ghost" = "yes" ] && verdict="GHOST-BRANCH"
+  # pi-deploy rows exempt: ghost describes the LOCAL checkout's branch, and
+  # letting it overwrite a PI-* verdict would re-introduce exactly the lie
+  # the Pi probe exists to fix (local-checkout state rendered as Pi state).
+  [ "$ghost" = "yes" ] && [ "$pickup" != "pi-deploy" ] && verdict="GHOST-BRANCH"
   # BEHIND means "the checkout itself is behind origin — pull before anything
   # else", so it applies to every RUNNING/LIVE verdict, not just CURRENT.
   #
@@ -265,12 +420,21 @@ for c in "${COMPONENTS[@]}"; do
       # and letting "your checkout needs a pull" overwrite it meant a
       # STALE(12) service displayed as BEHIND(1). The milder problem hid the
       # sharper one.
-      CURRENT|CURRENT\*|LIVE|HOT-RELOAD) verdict="BEHIND($behind)" ;;
+      #
+      # HOT-RELOAD(?) IS promoted: it means "could not verify", not "the process
+      # is behind", so it must not mask the one concrete, actionable fact we do
+      # have. This also preserves exactly what bare HOT-RELOAD did before the
+      # hot-reload branch learned to compare shas. A hot-reload row that is
+      # genuinely behind its checkout reports STALE(Δn) and is preserved by the
+      # STALE rule above, like every other service.
+      CURRENT|CURRENT\*|LIVE|HOT-RELOAD|HOT-RELOAD\(\?\)) verdict="BEHIND($behind)" ;;
     esac
   fi
   devflag=""; [ "$pickup" = "restart-DEV" ] && devflag=" [DEV]"
 
-  hz=""; [ -n "$pid" ] && hz=$(health "$port")
+  # hz is initialized before the pickup case so a pi-deploy row can preset
+  # its note; process rows still overwrite it with the live health probe.
+  [ -n "$pid" ] && hz=$(health "$port")
 
   # $repo, not $dir: this field names the git worktree a deploy fast-forwards.
   # Several services share ONE tree, and a consumer that cannot see the

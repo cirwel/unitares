@@ -113,9 +113,21 @@
     const aAtt = (asum.needs_attention || []).length;
     const aStale = !!(auto && auto.stale);
     // Ungated = nothing verifies it (the role-reversal risk) — surface it here.
-    const aUngated = ((auto && auto.automations) || []).filter((it) => (it.notes || []).some((n) => n === "gate:ungated")).length;
-    const aWarn = aAtt > 0 || aStale || aUngated > 0;
-    const autoSub = `${aAtt} attention · ${aUngated} ungated · ${aKind.dogfood || 0} dogfood · ${aKind.ablation || 0} ablation${aStale ? " · stale" : ""}`;
+    // Precomputed server-side under ?view=summary — the card only ever counted
+    // these, and shipping 228 notes arrays to compute one integer was the bulk
+    // of the Overview's payload.
+    //
+    // Report UNCLASSIFIED, not `ungated`. `ungated` counts an explicit
+    // `gate:ungated` note that nothing writes — 0 of 228 carried it on
+    // 2026-08-28 — so the card read "0 ungated" forever, which is the most
+    // reassuring possible rendering of "no determination was made". The honest
+    // number is how many have no grounding classification at all: 123 of 228,
+    // by the same rule the Automations tab uses.
+    const aUnclassified = (auto && typeof auto.unclassified === "number") ? auto.unclassified : 0;
+    const aUngated = (auto && typeof auto.ungated === "number") ? auto.ungated : 0;
+    const aWarn = aAtt > 0 || aStale || aUngated > 0 || aUnclassified > 0;
+    const autoSub = `${aAtt} attention · ${aUngated + aUnclassified} ungrounded`
+      + ` · ${aKind.dogfood || 0} dogfood · ${aKind.ablation || 0} ablation${aStale ? " · stale" : ""}`;
     // A null metric = its live source didn't answer this cycle. Show "—"
     // (unavailable), never a stale snapshot value passed off as current.
     const un = (v) => v == null;
@@ -157,7 +169,20 @@
       + (typeof stats.stuck === "number" && stats.stuck > stuckList.length
         ? `<a href="#agents" class="stuck-more">+${stats.stuck - stuckList.length} more</a>` : "");
     const cards = [
-      { h: "Fleet Coherence", id: "fleetcoh", num: num(fleet.coh), sub: fleet.sub, cls: "up", rule: true, href: "#residents" },
+      // Class DERIVED, not hardcoded. This was `cls: "up"` from the original
+      // redesign scaffold — the only card of nine that did not compute its own
+      // state — so it painted green unconditionally. Live on 2026-08-28 it read
+      // green while its own subtitle said "1 not checking in" and the attention
+      // band beside it said "Doctor past check-in threshold".
+      //
+      // Neutral (""), never green, is the honest default here: the number is a
+      // fleet mean of a metric whose between-agent sd is ~0.008, so it cannot
+      // move enough to earn a health colour, and eisv.js states the standing
+      // policy — "a neutral surface rather than converting observations into
+      // red/green verdicts". What CAN be stated is cadence, which the subtitle
+      // already computes: amber when a resident has stopped checking in.
+      { h: "Fleet Coherence", id: "fleetcoh", num: num(fleet.coh), sub: fleet.sub,
+        cls: fleet.part.down.length ? "down" : "", rule: true, href: "#residents" },
       // Name the denominator's window: this card reads a 30-day registry
       // window, the Agents tab a 14-day one, tier_distribution ever-seen —
       // three honest totals that read as contradictions when unlabelled.
@@ -173,7 +198,22 @@
               ? `none open · ${typeof stats.dialecticFailed === "number" && stats.dialecticFailed ? `${stats.dialecticFailed} of ${stats.dialecticRecent} recent failed` : `${stats.dialecticRecent} recent`}`
               : "no open sessions"), href: "#dialectic" },
       { h: "System Health", num: un(stats.systemHealth) ? "—" : stats.systemHealth, sub: un(stats.systemHealth) ? "unavailable" : (stats.systemHealthDetail || "db · ws · reaper"), cls: un(stats.systemHealth) ? "" : (stats.systemHealth === "OK" ? "up" : "down"), href: "#residents" },
-      { h: "Calibration", num: num(stats.calibration), sub: un(stats.calibration) ? "unavailable" : "trajectory health", cls: stats.calibration >= 0.8 ? "up" : "" },
+      // The card's NAME promises the calibration verdict, so the verdict is
+      // what it leads with; trajectory_health is a different quantity from the
+      // same response and rides in the subtitle where it cannot be mistaken
+      // for the status. Colour follows `calibrated`, never the number: gating
+      // green on trajectory_health >= 0.8 would have painted the card OK while
+      // the server answered "miscalibrated" (live on 2026-08-28 at 0.784 —
+      // 0.016 from green). Unknown calibration stays neutral, never green.
+      { h: "Calibration",
+        num: un(stats.calibrated) ? (un(stats.calibration) ? "—" : num(stats.calibration))
+                                  : (stats.calibrated ? "calibrated" : "miscalibrated"),
+        sub: un(stats.calibrated) && un(stats.calibration) ? "unavailable"
+             : [un(stats.calibration) ? null : "trajectory health " + num(stats.calibration),
+                stats.calibrationSignal && stats.calibrationSignal !== "fresh"
+                  ? "tactical signal " + stats.calibrationSignal : null,
+               ].filter(Boolean).join(" · "),
+        cls: stats.calibrated === true ? "up" : stats.calibrated === false ? "down" : "" },
       { h: "Anomalies", num: un(stats.anomalies) ? "—" : stats.anomalies, sub: un(stats.anomalies) ? "unavailable" : (stats.anomalies ? stats.anomalies + " active" : "clear"), cls: un(stats.anomalies) ? "" : (stats.anomalies ? "down" : "up") },
     ];
     const degradeBanner = stats.degraded > 0
@@ -289,7 +329,12 @@
     const fleet = fleetSummary(residents);
     const numEl = el.querySelector(".num"), subEl = el.querySelector(".sub");
     if (numEl) numEl.textContent = num(fleet.coh);
-    if (subEl) subEl.textContent = fleet.sub; // same string renderStats produces
+    if (subEl) {
+      subEl.textContent = fleet.sub; // same string renderStats produces
+      // and the same class rule — otherwise the 10s refresh updates the words
+      // while leaving the colour frozen at whatever the first render set.
+      subEl.className = "sub " + (fleet.part.down.length ? "down" : "");
+    }
   }
 
   // Apply one pushed eisv_update to the residents strip directly — no refetch.
@@ -338,7 +383,7 @@
 
   // Full first render — light (residents/pulse/health) + heavy (stats) together.
   async function render() {
-    const [health, residents, stats, auto] = await Promise.all([DATA.health(), DATA.residents(), DATA.stats(), DATA.automations()]);
+    const [health, residents, stats, auto] = await Promise.all([DATA.health(), DATA.residents(), DATA.stats(), DATA.automationsSummary()]);
     seedResidents(residents.data, residents.source);
     const view = viewResidents();
     applyHealth(health);
@@ -361,7 +406,7 @@
   // Heavy refresh (slow cadence) — the 7-tool headline batch; reuse the resident
   // model for fleet coherence rather than refetching it.
   async function refreshStats() {
-    const [stats, auto] = await Promise.all([DATA.stats(), DATA.automations()]);
+    const [stats, auto] = await Promise.all([DATA.stats(), DATA.automationsSummary()]);
     if (!RMODEL.length) { const residents = await DATA.residents(); seedResidents(residents.data, residents.source); }
     renderStats(stats.data, viewResidents(), lastSource, auto.data);
   }

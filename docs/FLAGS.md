@@ -19,7 +19,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**158 flags.**
+**160 flags.**
 
 | Flag | Reader fallback(s) | Purpose | Read at |
 |---|---|---|---|
@@ -36,6 +36,7 @@ index; that one is the curated decision record.
 | `GOVERNANCE_VERIFICATION_FLOOR_SHADOW` | `'true'` | — | config/governance_config.py |
 | `GOVERNANCE_WARMUP_STRUCTURAL_GRACE` | `'true'` | — | config/governance_config.py |
 | `STRICT_IDENTITY_REQUIRED` | `''` | True iff STRICT_IDENTITY_REQUIRED env var is set to a truthy value | src/mcp_handlers/identity_bootstrap.py |
+| `UNITARES_ADJUDICATION_ABSTAIN_COOLDOWN_H` | `'168'` | — | src/http_routes/sentinel.py |
 | `UNITARES_AGENT_LOCK_BACKEND` | `'advisory'` | Execute the extracted process_agent_update workflow for a prepared UpdateContext. | src/services/update_workflow_service.py, src/state_locking.py |
 | `UNITARES_AIC_SIGNING_KEY` | `None (no reader fallback)` | Load the server signing key from a seed, or from the env var | src/identity/agent_identity_credential.py |
 | `UNITARES_ANCHORS_DIR` | `None (no reader fallback)` | Return the anchors directory path | src/identity/substrate.py |
@@ -66,7 +67,7 @@ index; that one is the curated decision record.
 | `UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `'420'` (agents/dialectic_reviewer/host_backends.py) | Run Claude safely and return exact provider-reported model provenance | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_DIALECTIC_CODEX_TIMEOUT_S` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `'420'` (agents/dialectic_reviewer/reviewer.py) | Run the review on Codex (``codex exec``, ChatGPT-subscription CLI) — the capable-heterogeneous reviewer path (2026-07-02 planted-flaw probe: | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_DIALECTIC_CONTINUATION_POLL_S` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `DEFAULT_CONTINUATION_POLL_S` (agents/dialectic_reviewer/reviewer.py) | Run bounded objection → response → reconsideration rounds | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
-| `UNITARES_DIALECTIC_CONTINUATION_WAIT_S` | varies: `'3600'` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:83); `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:147); `DEFAULT_CONTINUATION_WAIT_S` (agents/dialectic_reviewer/reviewer.py) | Lifetime cap for one spawned reviewer | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
+| `UNITARES_DIALECTIC_CONTINUATION_WAIT_S` | varies: `'3600'` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:84); `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:154); `DEFAULT_CONTINUATION_WAIT_S` (agents/dialectic_reviewer/reviewer.py) | Lifetime cap for one spawned reviewer | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_DIALECTIC_DISPATCHER_UUID` | `None (no reader fallback)` | The standing dispatcher identity's UUID (operator-provisioned) | src/mcp_handlers/dialectic/governed_spawn.py |
 | `UNITARES_DIALECTIC_EXTERNAL_API_KEY` | `''` | Default variable holding the external reviewer's API key | agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV` | `''` | Run the review on an operator-configured OpenAI-compatible endpoint | agents/dialectic_reviewer/host_backends.py |
@@ -123,6 +124,7 @@ index; that one is the curated decision record.
 | `UNITARES_MCP_ALLOWED_HOSTS` | `[] (via split_csv_env)` | Build TransportSecuritySettings for FastMCP | src/mcp_listen_config.py |
 | `UNITARES_MCP_ALLOWED_ORIGINS` | `[] (via split_csv_env)` | Build TransportSecuritySettings for FastMCP | src/mcp_listen_config.py |
 | `UNITARES_MCP_ALLOW_NULL_ORIGIN` | `True` | Build TransportSecuritySettings for FastMCP | src/mcp_listen_config.py |
+| `UNITARES_MCP_BEARER_TOKEN` | `None (no reader fallback)` | Build request headers including MCP session ID if available. | src/gateway/client.py, src/mcp_compat.py (+4 more) |
 | `UNITARES_MCP_BEARER_TOKENS` | `[] (via split_csv_env)` | Allowlist of bearer tokens accepted on the ``/mcp`` endpoint | src/mcp_listen_config.py |
 | `UNITARES_MCP_DNS_REBIND_PROTECTION` | `''` | Whether Host/Origin validation is enforced on the MCP transports | src/mcp_listen_config.py |
 | `UNITARES_MCP_HOST` | `''` | Return the default socket bind address | src/mcp_listen_config.py |
@@ -153,12 +155,12 @@ index; that one is the curated decision record.
 | `UNITARES_PROXY_URL` | `None (no reader fallback)` | — | src/mcp_server_std.py |
 | `UNITARES_REPO` | `str(Path(__file__).resolve().parents[2])` | read by main() | agents/vigil_hygiene/agent.py |
 | `UNITARES_RERANKER_MODEL` | `'bge-m3'` | — | src/reranker.py |
-| `UNITARES_RESEARCH_REGISTRY_DIR` | `None (no reader fallback)` | Resolve the registry directory; unset uses ``DEFAULT_REGISTRY_DIR``. | src/research_registry.py |
 | `UNITARES_RESIDENTS` | `None (no reader fallback)` | Load resident labels from ``UNITARES_RESIDENTS``; unset means no residents | src/grounding/class_indicator.py, agents/sdk/src/unitares_sdk/_substrate.py |
 | `UNITARES_RESIDENT_AGENTS` | `''` | Figure out which agent labels to treat as residents | src/http_routes/residents.py |
 | `UNITARES_RESIDENT_PROGRESS_MANIFEST` | `''` | Load the resident-progress registry from a JSON manifest | src/resident_progress/registry.py |
 | `UNITARES_RESIDENT_PROGRESS_PLUGINS` | `None (no reader fallback)` | True unless the deployment explicitly disabled plugin discovery. | src/resident_progress/plugins.py |
 | `UNITARES_RESIDENT_SILENCE_SECONDS` | `''` | Parse ``label=seconds`` pairs from the environment | src/http_routes/residents.py |
+| `UNITARES_REST_STRICT` | `None (no reader fallback)` | True when the REST surface runs the strict posture (bearer or session) | src/mcp_listen_config.py |
 | `UNITARES_REVIEW_NUDGE` | `''` | Return the trigger reason when an in-flow review nudge is due, else None | src/mcp_handlers/updates/enrichments.py |
 | `UNITARES_SCRIBE_DRY_RUN` | `'1'` | read by _job() | agents/triage_scribe/scribe.py |
 | `UNITARES_SCRIBE_MAX_TOKENS` | `'1600'` | read by _job() | agents/triage_scribe/scribe.py |

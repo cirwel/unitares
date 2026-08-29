@@ -101,7 +101,10 @@
     }
   }
 
-  const S = () => window.SNAPSHOT;
+  // Never throws. snapshot.js can legitimately be absent (it is auth-gated and
+  // a <script src> carries no bearer token), and a fallback that raises turns a
+  // recoverable "no offline copy" into a dead page.
+  const S = () => window.SNAPSHOT || {};
 
   function eisvMeasurementSource(event) {
     const telemetry = (event && (event.eisv_telemetry || event.telemetry)) || {};
@@ -235,14 +238,17 @@
     //   dialectic     ← dialectic(list)         anomalies   ← detect_anomalies
     //   systemHealth  ← /health/deep
     async stats() {
-      const snap = S().stats;
       const tc = (n, a) => callTool(n, a).catch(() => null);
       const rest = (p) => authFetch(p).catch(() => null);
       return withFallback(async () => {
         const [agentsR, kgR, dlcR, stuckR, calR, anomR, healthR, tierR] = await Promise.all([
           tc("agent", { action: "list", include_metrics: false, recent_days: 30, limit: 1, status_filter: "all" }), // summary only
           tc("knowledge", { action: "stats" }),
-          tc("dialectic", { action: "list", limit: 50 }),
+          // fields=compact: this batch reads phase/status off 50 sessions to
+          // produce two counts. The full shape ships `resolution` (~629 B each)
+          // and was 130,936 B for 1,114 B of consumed fields — on the default
+          // page. Compact is a strict subset, so the mapping below is unchanged.
+          tc("dialectic", { action: "list", limit: 50, fields: "compact" }),
           tc("detect_stuck_agents", {}),
           tc("calibration", { action: "check" }),
           tc("detect_anomalies", {}),
@@ -299,13 +305,44 @@
           // somewhere. Capped here, not in the view: a real incident flagging
           // 40 agents must not grow the card without bound.
           stuckList: stuckR ? (stuckR.stuck_agents || []).slice(0, 3).map(mapStuck) : null,
+          // The card is NAMED "Calibration", so it must carry the calibration
+          // verdict — not only trajectory_health, which is a different
+          // quantity from the same response. Shipping the number alone let a
+          // reader infer "calibrated" from a healthy-looking 0.78 while the
+          // server was answering calibration_status="miscalibrated" and
+          // tactical_signal_status="stale", and the >=0.8 green threshold
+          // would have painted it OK outright.
           calibration: calR && typeof calR.trajectory_health === "number" ? calR.trajectory_health : null,
+          calibrated: calR && typeof calR.calibrated === "boolean" ? calR.calibrated : null,
+          calibrationStatus: calR && typeof calR.calibration_status === "string" ? calR.calibration_status : null,
+          calibrationSignal: calR && typeof calR.tactical_signal_status === "string" ? calR.tactical_signal_status : null,
           anomalies: anomR && anomR.summary ? anomR.summary.total_anomalies : null,
           systemHealth: healthR ? (healthR.status === "healthy" ? "OK" : healthR.status) : null,
           systemHealthDetail: hb ? `${hb.healthy || 0} ok · ${hb.warning || 0} warn${hb.error ? " · " + hb.error + " err" : ""}` : null,
           degraded: [agentsR, kgR, dlcR, stuckR, calR, anomR, healthR, tierR].filter((x) => !x).length,
         };
-      }, () => snap);
+      // LAZY, deliberately. This used to read `const snap = S().stats` as the
+      // first statement of stats(), before any try — so it touched the snapshot
+      // even when every live call was about to succeed.
+      //
+      // That is fatal over the tunnel. snapshot.js is auth-gated ON PURPOSE (it
+      // bundles resident ids, EISV vectors, verdicts — the same data class
+      // /v1/eisv/* is gated for) and app.html loads it with a plain
+      // <script src>, which sends COOKIES and not the bearer token. So an
+      // operator authenticated by bearer gets 200 on every REST call and 401 on
+      // snapshot.js: window.SNAPSHOT stays undefined, `S().stats` throws
+      // TypeError, and because render() awaits Promise.all the whole Overview
+      // dies before renderStats runs — while refresh() (health + residents only,
+      // both lazily-fallen-back) keeps painting the resident strip and pulse.
+      //
+      // Observed exactly that on 2026-08-28: resident fleet and pulse visible,
+      // all nine headline cards missing. An unreachable FALLBACK must never be
+      // able to break the path that did not need it.
+      // `|| {}` so a MISSING snapshot degrades to a card grid of "—" rather than
+      // handing renderStats an undefined it dereferences. Making S() non-throwing
+      // only moved the crash one frame down; the consumer needs a shape, not a
+      // hole.
+      }, () => S().stats || {});
     },
 
     async agents() {
@@ -441,7 +478,15 @@
       return withFallback(async () => {
         const [ev, act, runtime] = await Promise.all([
           authFetch("/api/events?limit=40"),
-          authFetch("/api/activity?window=60&bucket=5"),
+          authFetch("/api/activity?window=60&bucket=5").catch(() => null),  // .catch: this route is auth-gated, and an un-caught rejection here
+          // would fail the whole Promise.all — collapsing sibling panes that
+          // had succeeded, a wider break than the gate intends.
+          // limit=1000 is NOT a display cap and must not be tuned down to match
+          // the view's slice(0, 30). It bounds the underlying AUDIT-EVENT scan
+          // in read_runtime_activity(), and both `processes` and every `summary`
+          // count are derived from that same bounded set — so shrinking it
+          // silently turns fleet totals into page totals (the exact failure
+          // db/mixins/audit.py:151 warns about). Leave it.
           authFetch("/v1/runtime/activity?window_hours=24&limit=1000").catch(() => null),
         ]);
         if (!ev || !ev.events) return null;
@@ -464,7 +509,23 @@
 
     async eisv() {
       return withFallback(async () => {
-        const r = await authFetch("/v1/eisv/recent?limit=120");
+        // fields=compact: this view reads only eisv/coherence/risk/timestamp
+        // plus the measurement-source tag, while the full event carries ~6.3 KB
+        // of governance detail per row (decision, drift_trends, inputs,
+        // risk_reason — zero references in this file or in sections/eisv.js).
+        // Measured against the live ring buffer: 343,393 B -> 29,799 B, 91.3%.
+        //
+        // CORRECTION (verified 2026-08-28): an earlier version of this comment
+        // said the saving recurred "every 10s per open tab". It does not.
+        // app.html's refreshTick is `if (wsStatus !== "open") refreshActive()`
+        // — a polling FALLBACK. Live updates normally arrive over /ws/eisv, so
+        // the recurring cost is only paid while the socket is down and this tab
+        // is active. The saving is real on every section load and on every
+        // fallback poll; it is not a steady-state drip.
+        //
+        // Compact is a strict SUBSET, so the same parsing below works against
+        // either shape and a server without the parameter returns the full event.
+        const r = await authFetch("/v1/eisv/recent?limit=120&fields=compact");
         const evs = (r && r.events) || [];
         if (!evs.length) return null;
         // `raw` carries the unaveraged events so the section can keep
@@ -485,29 +546,27 @@
 
     async automations() {
       // Automation census snapshot (launchd/hermes/codex/claude/github-actions).
+      // FULL census — the Automations tab renders every item. The Overview card
+      // must NOT use this; see automationsSummary below.
       return withFallback(
         async () => authFetch("/api/automations"),
         () => ({ schema: "unitares.automation_census.v1", summary: { total: 0, by_source: {}, by_kind: {}, needs_attention: [], warnings: [] }, automations: [], stale: true })
       );
     },
 
-    async researchRuns() {
-      // Agent-network research-run registry: scenario, topology, population,
-      // interventions, grounding anchors, outcomes, and artifacts.
-      return withFallback(async () => {
-        const [runs, stats] = await Promise.all([
-          authFetch("/v1/research/runs?limit=200"),
-          authFetch("/v1/research/stats").catch(() => null),
-        ]);
-        if (!runs || !Array.isArray(runs.runs)) return null;
-        return {
-          runs: runs.runs,
-          count: runs.count,
-          totalMatched: runs.total_matched,
-          warnings: runs.warnings || [],
-          stats: stats && stats.stats ? stats.stats : {},
-        };
-      }, () => S().research || { runs: [], count: 0, totalMatched: 0, warnings: [], stats: { total: 0, by_status: {}, by_grounding: {}, by_research_area: {}, rigor_complete: 0, rigor_incomplete: 0 } });
+    // Counts only, for the Overview card. The full census was ~206 KB of
+    // per-automation detail (228 items) on the DEFAULT page, of which the card
+    // reads the summary block, `stale`, and an ungated COUNT — about 641 B.
+    // The server computes the ungated count under ?view=summary so no notes
+    // arrays cross the wire. Loopback hides this; a tunnel does not.
+    async automationsSummary() {
+      return withFallback(
+        async () => {
+          const j = await authFetch("/api/automations?view=summary");
+          return j && j.summary ? j : null;
+        },
+        () => ({ schema: "unitares.automation_census.v1", summary: { total: 0, by_source: {}, by_kind: {}, needs_attention: [], warnings: [] }, ungated: 0, stale: true })
+      );
     },
 
     async metricsCatalog() {
@@ -527,6 +586,34 @@
         const j = await authFetch("/v1/metrics/series?name=" + encodeURIComponent(name) + "&since=" + encodeURIComponent(since));
         return j && Array.isArray(j.points) ? j.points : null;
       }, () => (S().metrics.series[name] || []));
+    },
+
+    // Fleet risk history — Chronicler's daily governance.* scrape, three series
+    // in one round-trip so risk can be drawn against the verdict pressure of the
+    // same window without the view issuing its own fetches.
+    //
+    // The risk series is the headline: with no points there is nothing to draw,
+    // so return null and let withFallback serve the snapshot. `pause`/`guide`
+    // are companions and an empty array is legitimate live data for them (a
+    // scraper registered later, or a window with no hard interventions) — they
+    // must NOT trigger the whole panel into snapshot.
+    async riskTrend(days) {
+      const d = Number.isFinite(days) ? Math.max(7, Math.min(180, Math.round(days))) : 60;
+      return withFallback(async () => {
+        const since = new Date(Date.now() - d * 86400 * 1000).toISOString();
+        const series = async (name) => {
+          const j = await authFetch("/v1/metrics/series?name=" + encodeURIComponent(name) +
+            "&since=" + encodeURIComponent(since));
+          return j && Array.isArray(j.points) ? j.points : [];
+        };
+        const [risk, pause, guide] = await Promise.all([
+          series("governance.risk.mean.7d"),
+          series("governance.pause.7d"),
+          series("governance.guide.7d"),
+        ]);
+        if (!risk.length) return null;
+        return { windowDays: d, risk, pause, guide };
+      }, () => S().riskTrend);
     },
 
     async agentHistory(id, opts) {
