@@ -101,7 +101,10 @@
     }
   }
 
-  const S = () => window.SNAPSHOT;
+  // Never throws. snapshot.js can legitimately be absent (it is auth-gated and
+  // a <script src> carries no bearer token), and a fallback that raises turns a
+  // recoverable "no offline copy" into a dead page.
+  const S = () => window.SNAPSHOT || {};
 
   function eisvMeasurementSource(event) {
     const telemetry = (event && (event.eisv_telemetry || event.telemetry)) || {};
@@ -235,7 +238,6 @@
     //   dialectic     ← dialectic(list)         anomalies   ← detect_anomalies
     //   systemHealth  ← /health/deep
     async stats() {
-      const snap = S().stats;
       const tc = (n, a) => callTool(n, a).catch(() => null);
       const rest = (p) => authFetch(p).catch(() => null);
       return withFallback(async () => {
@@ -319,7 +321,28 @@
           systemHealthDetail: hb ? `${hb.healthy || 0} ok · ${hb.warning || 0} warn${hb.error ? " · " + hb.error + " err" : ""}` : null,
           degraded: [agentsR, kgR, dlcR, stuckR, calR, anomR, healthR, tierR].filter((x) => !x).length,
         };
-      }, () => snap);
+      // LAZY, deliberately. This used to read `const snap = S().stats` as the
+      // first statement of stats(), before any try — so it touched the snapshot
+      // even when every live call was about to succeed.
+      //
+      // That is fatal over the tunnel. snapshot.js is auth-gated ON PURPOSE (it
+      // bundles resident ids, EISV vectors, verdicts — the same data class
+      // /v1/eisv/* is gated for) and app.html loads it with a plain
+      // <script src>, which sends COOKIES and not the bearer token. So an
+      // operator authenticated by bearer gets 200 on every REST call and 401 on
+      // snapshot.js: window.SNAPSHOT stays undefined, `S().stats` throws
+      // TypeError, and because render() awaits Promise.all the whole Overview
+      // dies before renderStats runs — while refresh() (health + residents only,
+      // both lazily-fallen-back) keeps painting the resident strip and pulse.
+      //
+      // Observed exactly that on 2026-08-28: resident fleet and pulse visible,
+      // all nine headline cards missing. An unreachable FALLBACK must never be
+      // able to break the path that did not need it.
+      // `|| {}` so a MISSING snapshot degrades to a card grid of "—" rather than
+      // handing renderStats an undefined it dereferences. Making S() non-throwing
+      // only moved the crash one frame down; the consumer needs a shape, not a
+      // hole.
+      }, () => S().stats || {});
     },
 
     async agents() {
