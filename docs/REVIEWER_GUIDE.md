@@ -51,7 +51,7 @@ referenced files.
 |---|---|---|
 | Check-in / EISV / verdict loop | **Live** | `src/behavioral_assessment.py`, `src/behavioral_state.py`; flow in [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md) |
 | Self-relative (z-score vs own Welford baseline) scoring | **Live** | `behavioral_assessment.py` module docstring + `SIGMA_*` constants (provenance documented inline) |
-| Dialectic review (thesis / antithesis / synthesis, reviewer selection) | **Live** | `src/mcp_handlers/dialectic/handlers.py` — `submit_thesis` / `submit_antithesis` / `submit_synthesis` / `request_dialectic_review`, all in `TOOL_ORDER`. Not a stub. |
+| Dialectic review (thesis / antithesis / synthesis, reviewer selection) | **Live** | `src/mcp_handlers/dialectic/handlers.py` — `submit_thesis` / `submit_antithesis` / `submit_synthesis` / `request_dialectic_review`, reached as `dialectic(action='thesis'/'antithesis'/'synthesis'/'request')` and by their own names via the alias table. Not a stub. |
 | Knowledge graph (discoveries, edges, FTS) | **Live, advisory** | Committed schema `db/postgres/knowledge_schema.sql` + migration `002_knowledge_schema.sql`; tools `knowledge()`, `store_knowledge_graph`, `search_knowledge_graph`. AGE relational store is canonical; AGE graph is advisory. |
 | HTTP write/decision endpoints | **Live** | `src/http_api.py` — `POST /v1/effect-veto`, `POST /v1/tools/call`, `POST /api/findings`, `POST /v1/substrate/observe`. The **dashboard UI** is read-only by design; the **API** mutates. |
 | ODE / thermodynamic model | **Live but diagnostic only** | Runs in parallel; does **not** drive verdicts (behavioral path overrides). See [`EISV_COMPUTATION.md`](EISV_COMPUTATION.md). |

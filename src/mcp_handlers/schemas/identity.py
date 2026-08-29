@@ -207,6 +207,17 @@ class VerifyTrajectoryIdentityParams(AgentIdentityMixin):
     """Parameters for verify_trajectory_identity"""
 
 
+class ListProcessBindingsParams(AgentIdentityMixin):
+    """Parameters for list_process_bindings."""
+    agent_uuid: Optional[str] = Field(
+        default=None,
+        description=(
+            "Agent whose live execution-context bindings to list. Defaults to "
+            "the caller's bound agent."
+        ),
+    )
+
+
 class BindSessionParams(AgentIdentityMixin):
     """Bind current MCP session to an existing agent identity via client_session_id."""
     resume: Union[bool, str, None] = Field(
