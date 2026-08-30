@@ -21,10 +21,10 @@
     } catch { return null; }
   }
 
-  // Scheduled probe families, by paused-agent label. The daily canary ALWAYS
-  // ends `failed` by design — its real verdict lives in dialectic_canary.jsonl,
-  // not in the session row — so counting probes alongside organic sessions
-  // makes the failure count tick up ~1/day for a reason that is not a defect.
+  // Scheduled probe families, by paused-agent label. The daily canary is
+  // synthetic traffic and now requires a terminal `resolved` verdict before
+  // its JSONL result is green. Counting probes alongside organic sessions
+  // would still distort review volume and outcome rates.
   // canary_dialectic_* and RP*/AgreeRateProbe are different families testing
   // different things; neither is organic traffic.
   function isProbe(label) {

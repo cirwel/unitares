@@ -4,6 +4,8 @@ Catches the regression class that triggered spec rev 3 — a documented
 contract drifting from actual behavior because nothing tests the description.
 """
 
+import json
+
 import pytest
 
 
@@ -50,10 +52,14 @@ def test_every_advertised_tool_resolves_at_dispatch():
     was really protecting applies to the whole advertised surface, so assert it
     there instead of on one sentinel.
     """
-    from src.mcp_handlers import TOOL_HANDLERS
+    from src.mcp_handlers import TOOL_HANDLERS, refresh_tool_handlers_from_registry
     from src.mcp_handlers.tool_stability import list_all_aliases
     from src.tool_schemas import get_tool_definitions
 
+    # Mirror the production post-plugin bootstrap step, then inspect the actual
+    # mapping the dispatcher reads. Decorator-registry membership alone is not
+    # proof that an advertised name can be called.
+    refresh_tool_handlers_from_registry()
     aliases = list_all_aliases()
     unresolvable = sorted(
         tool.name
@@ -67,9 +73,63 @@ def test_every_advertised_tool_resolves_at_dispatch():
 
 
 @pytest.mark.asyncio
+async def test_list_tools_syncs_late_plugin_handler_into_real_dispatch():
+    """A plugin registered after the first handler snapshot becomes callable.
+
+    This is the exact embedded/full-suite order that exposed
+    ``pi_restart_service``: decorator registration happened after
+    ``TOOL_HANDLERS`` initialization. Exercise orientation and then the real
+    dispatch mapping, not a union used only by the assertion.
+    """
+    from mcp.types import TextContent
+
+    from src.mcp_handlers import TOOL_HANDLERS
+    from src.mcp_handlers.decorators import _TOOL_DEFINITIONS, mcp_tool
+    from src.mcp_handlers.introspection.tool_introspection import handle_list_tools
+    from src.services.tool_dispatch_service import run_tool_dispatch_pipeline
+
+    tool_name = "late_plugin_dispatch_probe"
+    assert tool_name not in TOOL_HANDLERS
+    assert tool_name not in _TOOL_DEFINITIONS
+
+    try:
+
+        @mcp_tool(tool_name, requires_identity="pre_onboard")
+        async def late_plugin_handler(arguments):
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps({"success": True, "echo": arguments.get("probe")}),
+                )
+            ]
+
+        assert tool_name not in TOOL_HANDLERS
+        catalog = json.loads((await handle_list_tools({"lite": False}))[0].text)
+        assert tool_name in {tool["name"] for tool in catalog["tools"]}
+        assert tool_name in TOOL_HANDLERS
+
+        result = await run_tool_dispatch_pipeline(
+            name=tool_name,
+            arguments={"probe": "reached-real-dispatch"},
+            pre_steps=[],
+            post_steps=[],
+        )
+        assert json.loads(result[0].text) == {
+            "success": True,
+            "echo": "reached-real-dispatch",
+        }
+    finally:
+        TOOL_HANDLERS.pop(tool_name, None)
+        _TOOL_DEFINITIONS.pop(tool_name, None)
+
+
+@pytest.mark.asyncio
 async def test_process_agent_update_describe_mentions_prediction_id():
     from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
-    result = await handle_describe_tool({"tool_name": "process_agent_update", "lite": False})
+
+    result = await handle_describe_tool(
+        {"tool_name": "process_agent_update", "lite": False}
+    )
     body = result[0].text  # MCP TextContent
     assert "prediction_id" in body, (
         "describe_tool returns block must document prediction_id "
@@ -80,7 +140,10 @@ async def test_process_agent_update_describe_mentions_prediction_id():
 @pytest.mark.asyncio
 async def test_process_agent_update_describe_mentions_warnings():
     from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
-    result = await handle_describe_tool({"tool_name": "process_agent_update", "lite": False})
+
+    result = await handle_describe_tool(
+        {"tool_name": "process_agent_update", "lite": False}
+    )
     body = result[0].text
     assert "warnings" in body, (
         "describe_tool returns block must document warnings "
@@ -91,7 +154,10 @@ async def test_process_agent_update_describe_mentions_warnings():
 @pytest.mark.asyncio
 async def test_process_agent_update_describe_mentions_recent_tool_results():
     from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
-    result = await handle_describe_tool({"tool_name": "process_agent_update", "lite": False})
+
+    result = await handle_describe_tool(
+        {"tool_name": "process_agent_update", "lite": False}
+    )
     body = result[0].text
     assert "recent_tool_results" in body, (
         "describe_tool block must document recent_tool_results "
@@ -104,7 +170,9 @@ async def test_process_agent_update_lite_mentions_current_parameters():
     import json
     from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
 
-    result = await handle_describe_tool({"tool_name": "process_agent_update", "lite": True})
+    result = await handle_describe_tool(
+        {"tool_name": "process_agent_update", "lite": True}
+    )
     data = json.loads(result[0].text)
     params = "\n".join(data["parameters"])
 
@@ -272,7 +340,10 @@ async def test_outcome_event_describe_mentions_current_types_and_provenance():
 @pytest.mark.asyncio
 async def test_process_agent_update_describe_mentions_s22_h5_fields():
     from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
-    result = await handle_describe_tool({"tool_name": "process_agent_update", "lite": False})
+
+    result = await handle_describe_tool(
+        {"tool_name": "process_agent_update", "lite": False}
+    )
     body = result[0].text
     for field in ("harness_type", "comparison_key", "task_label", "task_outcome"):
         assert field in body, f"describe_tool must document S22 H5 field {field}"
@@ -293,6 +364,7 @@ async def test_health_check_describe_mentions_agent_signature():
     which would mask the docs gap if we asserted on the raw body."""
     import json as _json
     from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
+
     result = await handle_describe_tool({"tool_name": "health_check", "lite": False})
     description = _json.loads(result[0].text)["tool"]["description"]
     for field in ("agent_signature", "server_time", "_cache"):
@@ -339,9 +411,7 @@ def test_no_new_describe_cross_refs_to_unreachable_tools():
     from src.mcp_handlers.decorators import list_registered_tools
     from src.mcp_handlers.tool_stability import list_all_aliases
 
-    descriptions = json.loads(
-        pathlib.Path("src/tool_descriptions.json").read_text()
-    )
+    descriptions = json.loads(pathlib.Path("src/tool_descriptions.json").read_text())
     registered = set(list_registered_tools(include_hidden=True))
     aliased = set(list_all_aliases().keys())
 
@@ -359,9 +429,23 @@ def test_no_new_describe_cross_refs_to_unreachable_tools():
     # Tokens that look like tool names but aren't (markdown words, status
     # values, action names that live behind a consolidated tool).
     not_tools = {
-        "status", "metrics", "checkin", "log", "update", "register", "init",
-        "session", "hello", "authenticate", "login", "start", "state",
-        "quick_start", "my_status", "check_status", "bind_identity",
+        "status",
+        "metrics",
+        "checkin",
+        "log",
+        "update",
+        "register",
+        "init",
+        "session",
+        "hello",
+        "authenticate",
+        "login",
+        "start",
+        "state",
+        "quick_start",
+        "my_status",
+        "check_status",
+        "bind_identity",
         "recall_identity",
     }
 
