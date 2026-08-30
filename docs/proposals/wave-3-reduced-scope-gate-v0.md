@@ -136,10 +136,21 @@ rule. None has been measured. Every measurement cell below is deliberately empty
 records zero collisions in **both** writer orderings, every expected periodic cycle is present,
 and every lazy invocation is attributed separately. A zero `dialectic_write_refused` count alone
 does not fire this disconfirmer: it sees the "other writer won first" ordering but misses a saga
-that starts after the early check and loses to a successful sweeper write. **Measurement source:**
-⛔**INCOMPLETE — see §3.1.** PR #2011 supplied positive refusals and the post-#2008 follow-up
-supplies the zero-inclusive cycle denominator, but no current event proves the opposite ordering
-absent.
+that starts after the early check and loses to a successful sweeper write.
+
+**Measurement source:** ⛔**INSTRUMENTED, NOT YET MEASURED — see §3.1.** All three orderings now
+emit: `saga_inflight_skip_count` (BEAM first, caught at the early check),
+`dialectic_write_refused` (BEAM first, caught at the write), and `dialectic_write_overlap`
+(sweeper first, caught by a post-write probe), each denominated by `dialectic_sweep_cycle`.
+⛔**This does not make (b1) firable on a clean window.** Three conditions are unmet:
+
+1. ⛔**No window has started.** Deployment provenance is still owed — §7 step 3, slot empty.
+2. ⛔**The probe bounds the interval rather than closing it.** A saga starting after the probe is
+   unobserved, so a clean window is evidence over a bounded interval. Firing (b1) means accepting
+   that bound as sufficient — an operator judgement, not a measurement result, and one that should
+   be stated as a choice before the window is read rather than after.
+3. ⛔**`overlap_probe_failed_count` must be read beside the detected count.** A window with
+   non-trivial probe failures has not measured overlap regardless of how many zeros it shows.
 
 **(b2) The in-place fix closes it.** A Python-side change during the implementation window makes
 the sweeper's write path safe without porting — e.g. an explicit row/advisory lock or a shared
@@ -179,7 +190,7 @@ scope by the signature, not cleared).
 
 ## §3 What must exist before this gate can be read
 
-### §3.1 ⛔PREREQUISITE: incident telemetry exists; complete overlap telemetry does not
+### §3.1 ⛔PREREQUISITE: all three orderings are now instrumented; the interval is bounded, not closed
 
 **This remains the gate's central prerequisite and blocks disconfirmers (b1) and (b2).** The
 instrument now has two complementary pieces:
@@ -205,19 +216,34 @@ producer evidence exists." Coverage is still a predicate, not an assumption: a p
 must account for the expected fixed-delay heartbeats and treat any unexplained gap as missing
 evidence, while lazy cycles are denominated by their own emitted rows rather than by 144/day.
 
-⛔They do **not** distinguish every dual-writer ordering:
+The three dual-writer orderings, and which of them is now observed:
 
 - An early `saga_inflight_skip_count` sees BEAM already owning the session when Python checks.
 - A `dialectic_write_refused` row sees another writer finish before Python's guarded write.
-- Nothing currently sees a saga begin **after** the early check and **after Python successfully
-  writes first**. A positive refusal can also mean a missing row or a competing Python writer; the
-  DB helper returns one `False` value for all of them and only logs the distinction.
+- ✅**The sweeper-first ordering is now instrumented.** A `dialectic_write_overlap` row is emitted
+  when a probe taken immediately after a *successful* guarded write finds a non-terminal saga the
+  early check did not. This was the case the previous revision recorded as seen by nothing.
 
-Therefore a zero refusal count, even with complete cycle coverage, is a measured zero for one
-incident class — not proof that the dual-writer hazard is absent. To make (b1) readable, a later
-instrument must observe the sweeper-first ordering from the saga/reservation side, or (b2) must
-replace observation with a shared serialization primitive honored by both writers. No §7 window
-starts before that condition and deployment provenance are both present.
+⛔**That third instrument narrows the unmeasured interval; it does not empty it.** The probe closes
+the window between the early check and just after the write. It cannot close the window after
+itself, so a saga starting later is still unobserved. **A zero overlap count is therefore evidence
+about a bounded interval, not proof of a collision-free system.** Only a serialization primitive
+both writers honour removes the interval instead of measuring it — that is (b2), still unbuilt, and
+the instrument-first ruling does not authorise it.
+
+⛔**A failed probe is not an observed absence, and the counts are separate for that reason.**
+`has_inflight_saga` fails open — correct for a write gate, since no saga infrastructure means
+nothing to race — and an instrument inheriting that would report "no saga" when it could not look.
+`probe_inflight_saga` returns `None` in that case, and the cycle event carries
+`overlap_probe_failed_count` beside `overlap_detected_count`. ⛔Read the pair or neither: a window
+with a non-trivial probe-failure count has not measured overlap, whatever its detected count says.
+
+⚠️A positive refusal can still also mean a missing row or a competing Python writer; the DB helper
+returns one `False` for all of them and only logs the distinction. That ambiguity is unchanged.
+
+Therefore a zero refusal count, even with complete cycle coverage and complete probe coverage,
+remains a measured zero over a bounded interval rather than proof the hazard is absent. No §7
+window starts before probe coverage and deployment provenance are both present.
 
 ⚠️The reassignment-success emitter remains useful for the separate historical metric gap, but the
 guard-refusal/cycle streams measure coordination. They are not a substitute measure of reviewer
@@ -304,7 +330,13 @@ integration).
   struck 2026-06-24) is still measured and still reported; it can no longer stop anything. ⛔It was
   not retired — do not cite it as removed.
 - **Criterion 7.** The `docs/handoffs/wave-3-mcp-sdk-spike-<date>.md` artifact exists on no ref.
-  Does not fire on the merits; the artifact is owed (§6.4).
+  Does not fire on the merits; the artifact is owed (§6.4). ⚠️**Desk evidence refreshed
+  2026-08-30, and the supporting fact had gone stale:** `anubis-mcp` is **v2.0.0 (2026-08-07)**,
+  not v1.6.2 — HTTP+SSE transports removed, protocol floor moved to 2025-03-26. ⛔The verdict is
+  unchanged and now better evidenced (five releases in late July 2026 plus a major in August is
+  decisive against "no maintainer responsiveness"), but **desk evidence cannot discharge
+  criterion 7**, which requires a hands-on streaming spike. Full refresh in
+  `beam-wave-3-handler-dispatch.md` §v0.3.5 item 3.
 
 ---
 
@@ -365,6 +397,91 @@ slip as a standalone halt. ⛔Explicitly reserved to the operator by the amendme
 `wave-3-state-ownership-redteam-<date>.md` / `-prep-` contradiction (criterion 8, original scope).
 Both are non-gating for the reduced scope and both are still owed. ⛔Applying the
 missing-source halt to 8 and not to 7 remains inconsistent.
+
+⛔**CORRECTION 2026-08-30 — "exists on no ref" is not evidence about these artifacts, and three
+documents rest on it as though it were.** `docs/handoffs/` is **gitignored**
+(`.gitignore:186`, under a comment declaring "retired/handoff docs" deliberately local-only). A
+file at that path **can never appear on any ref**, by repo policy.
+
+That makes the observation unfalsifiable in one direction:
+
+- `git log --all` returning nothing for `docs/handoffs/wave-3-*` is **guaranteed**, not found.
+- A GitHub API 404 for that path is **guaranteed**, not found.
+- ⛔Neither distinguishes *"the red-team never happened"* from *"the red-team happened and its
+  artifact sits on the operator's machine, exactly where repo policy says handoff docs live."*
+
+⚠️**This is the four-state confusion the measurement-authority rule exists to prevent**, applied to
+the gate's own reasoning: a policy artifact read as evidence about work. State 3 (*not recorded,
+and by design cannot be*) presented as state 4 (*genuinely absent*).
+
+**Where it propagates.** `beam-wave-3-handler-dispatch.md:15` and
+`wave-3-go-decision-2026-08-16.md:300` both say the (D) halt "is satisfied by its first clause
+alone" **on exactly this observation** — the latter citing `git log --all` across 245 remote
+branches and a GitHub API 404 as two independent verifications. They are not independent; they
+are two ways of observing the same `.gitignore` line.
+
+⛔**What this does NOT establish.** It does not show the red-team happened, and it does not lift
+the (D) halt — whose other clauses are untouched, and which criterion 8's dissolution made
+historical for the reduced scope anyway. It establishes only that **the first clause's evidence
+was never capable of bearing the weight put on it**, and that anyone re-reading (D) must ask the
+operator whether the artifact exists locally rather than re-running a query whose answer is fixed.
+
+⛔**Both artifacts remain owed.** Criterion 7 wants a hands-on spike, which no desk pass can
+supply; criterion 8's contradiction is an adjudication, not a file.
+
+⚠️**CORRECTION 2026-08-30 (second) — criterion 7's spike is blocked on network policy, not on the
+absence of a toolchain.** The refresh above said, and PR #2031's body repeated, that there is "no
+Elixir toolchain in the session." That was an assumption stated as a fact, and it is false: a
+working toolchain was built in-session — **Elixir 1.18.4 on Erlang/OTP 25** — verified by
+executing a program, not by reading a version string. (Distro `apt` ships Elixir 1.14, below
+`anubis_mcp` 2.0.0's `~> 1.18` floor; the upstream release zip clears it.)
+
+Two blockers survive the toolchain, and both are environment policy rather than facts about the
+SDK:
+
+| Blocker | Observed | Consequence |
+|---|---|---|
+| **Hex package hosts unreachable** | `hex.pm` → **200**; `repo.hex.pm` → **000**; `builds.hex.pm` → **000**. The agent proxy's status endpoint records `connect_rejected` — *"gateway answered 403 to CONNECT (policy denial or upstream failure)"* — for both. Its direct-allow list carries `pypi.org`, `registry.npmjs.org`, `index.crates.io`, `proxy.golang.org`, `jsr.io`; **no hex host**. | `mix local.hex`, `mix local.rebar` and `mix deps.get` all fail. `anubis_mcp` cannot be fetched, so it cannot be compiled or exercised. |
+| **Third-party source not attachable** | `add_repo cloudwalk/anubis-mcp` refused — *"cross-tier adds are not supported in v1"*, the session already holding `cirwel` sources. A direct `git clone` of the same public repo is refused by the session's git proxy. | The fallback of vendoring the dependency tree from git instead of hex is closed too. |
+
+⛔**What this does NOT change.** (C)'s verdict is untouched, and criterion 7's status is untouched:
+the streaming clause is still untested and the artifact is still owed. Nothing here is spike
+evidence, and no artifact at `wave-3-mcp-sdk-spike-<date>.md` was written — writing one on this
+session's work would be fabrication, which is why none exists.
+
+⛔**What it does change is the reason on record**, and that is the difference between a dead end
+and a request: the spike needs **`repo.hex.pm` and `builds.hex.pm` added to the environment's
+network policy**, or a session started with **`cloudwalk/anubis-mcp` as its initial source**.
+Either is an operator action of minutes. The previous phrasing implied a capability gap that does
+not exist, and would have left criterion 7 looking permanently unreachable from any agent session.
+
+⚠️A near relative of the `.gitignore` finding above: *not reachable* (state 2) reported as though
+the capability were simply absent. The first was caught by reading the policy; this one only by
+testing the assumption instead of restating it.
+
+⛔**CORRECTION 2026-08-30 (third, superseding the ask in the second) — the project already has an
+Elixir CI lane with hex access, so the spike never needed an operator network-policy change.**
+The correction above asked for `repo.hex.pm` / `builds.hex.pm` on the agent proxy's allow list. That
+ask was **wrong**, and wrong in the same way as the two errors it was correcting: a limitation of
+the session reported as a limitation of the project, without reading the repository.
+
+`.github/workflows/elixir-tests.yml` runs `mix deps.get` + `mix test` on GitHub runners for five
+apps — `unitares_sdk` (Elixir 1.15 **and** 1.19, OTP 27), `agent_orchestrator`, `dialectic_live`,
+`sentinel`, `lease_plane` — pulling `phoenix`, `req`, `finch`, `postgrex`, `bandit` and the rest
+from hex. It is green on `master`. **Hex is reachable from CI; only this session's proxy blocks it.**
+
+⛔**So criterion 7's ask is a CI job, not a policy grant.** A spike lands as a scratch mix app plus
+a job in that workflow, on the lane that already exists. ⚠️One design constraint the gate should
+record now rather than at the spike: (C)'s streaming clause names *Anthropic* streaming, and the
+execution-cost policy forbids a metered API on the required path — so the spike must exercise
+`anubis_mcp` against a local or stubbed peer, or run as an opt-in job that no-ops without a key.
+**Which of those is a choice, and it is the operator's.**
+
+⚠️**Found while verifying this: `elixir/wave3a_handlers` is in no workflow at all.** 83 tests, a
+live service (`scripts/ops/com.unitares.wave3a-handlers.plist.template`) with a Python-side proxy
+(`src/wave3a_beam_proxy.py`), and **zero** CI references — every other app under `elixir/` has a
+job. That is precisely the drift gap `elixir-tests.yml`'s own header says it was written to close.
+⛔Recorded here as a finding, not fixed here: it is a CI change, not a gate document's business.
 
 **§6.5 Scope: path (1) only, or (1) and (2)? — ⏸️ DEFERRED, with a named reopen condition.**
 _(operator, 2026-08-29)_ ⛔**Not answered, and deliberately not sent to council either.** §6.6's
