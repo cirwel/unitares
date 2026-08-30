@@ -103,7 +103,7 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `config` | `src/mcp_handlers/consolidated.py:270 action_router` | `src/mcp_handlers/schemas/admin.py:148 ConfigParams` | 15s | — |
 | `consult` | `src/mcp_handlers/support/consultation.py:735 handle_consult` | `src/mcp_handlers/schemas/core.py:610 ConsultParams` | 480s | — |
 | `dashboard` | `src/mcp_handlers/admin/dashboard.py:44 handle_dashboard` | `src/mcp_handlers/schemas/dashboard.py:6 DashboardParams` | 15s | — |
-| `delegate_inference` | `src/mcp_handlers/support/delegated_inference.py:351 handle_delegate_inference` | `src/mcp_handlers/schemas/core.py:571 DelegateInferenceParams` | 480s | — |
+| `delegate_inference` | `src/mcp_handlers/support/delegated_inference.py:352 handle_delegate_inference` | `src/mcp_handlers/schemas/core.py:571 DelegateInferenceParams` | 480s | — |
 | `describe_inference_host` | `src/mcp_handlers/support/model_inference.py:150 handle_describe_inference_host` | `src/mcp_handlers/schemas/core.py:684 DescribeInferenceHostParams` | 5s | identity=pre_onboard |
 | `describe_tool` | `src/mcp_handlers/introspection/tool_introspection.py:800 handle_describe_tool` | `src/mcp_handlers/schemas/admin.py:42 DescribeToolParams` | 10s | identity=pre_onboard |
 | `detect_stuck_agents` | `src/mcp_handlers/lifecycle/stuck.py:919 handle_detect_stuck_agents` | `src/mcp_handlers/schemas/lifecycle.py:275 DetectStuckAgentsParams` | 15s | identity=pre_onboard |

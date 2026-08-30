@@ -581,9 +581,9 @@ class DelegateInferenceParams(AgentIdentityMixin):
         description=(
             "Long-running host adapter to invoke. Both subscription-CLI "
             "adapters are reachable here; each is opt-in and unavailable "
-            "until the operator enables it. Claude stays the default because "
-            "its CLI reports exact model identifiers and usage, which Codex "
-            "does not."
+            "until the operator enables it. Claude remains the compatibility "
+            "default; Codex app-server consults also report selected/effective "
+            "model identifiers, reroutes, and usage."
         ),
     )
     model: Optional[str] = Field(

@@ -3,9 +3,10 @@
 This wires the `codex:host-adapter` / `claude:host-adapter` registry placeholders
 (see ``inference_registry.py``) into a *working* path. It does NOT add a metered
 model-API dependency (CLAUDE.md execution-cost policy): it drives the operator's
-**subscription-auth CLIs** — ``codex exec`` (ChatGPT subscription, ``~/.codex/auth.json``)
-and ``claude -p`` (Claude subscription). Provider-reported usage and cost metadata
-are preserved when the CLI exposes them; subscription-backed does not mean zero-cost.
+**subscription-auth CLIs** — Codex app-server with a ``codex exec`` compatibility
+fallback (ChatGPT subscription, ``~/.codex/auth.json``), and ``claude -p`` (Claude
+subscription). Provider-reported usage and cost metadata are preserved when the
+CLI exposes them; subscription-backed does not mean zero-cost.
 
 Architecture (the load-bearing decision): strong models run for *minutes*, so they
 are dispatched **asynchronously via the agent-orchestrator** (`POST /v1/agents` →
@@ -24,6 +25,7 @@ import getpass
 import json
 import os
 import shutil
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -31,6 +33,25 @@ from typing import Any, Dict, List, Optional
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+_CODEX_EXEC_COMMAND = (
+    'if [ -n "$HA_MODEL" ]; then '
+    'exec "$HA_CLI" exec --ignore-user-config --ephemeral --json '
+    '--sandbox "$HA_SANDBOX" --skip-git-repo-check '
+    '-m "$HA_MODEL" "$HA_PROMPT" </dev/null; '
+    'else exec "$HA_CLI" exec --ignore-user-config --ephemeral --json '
+    '--sandbox "$HA_SANDBOX" --skip-git-repo-check '
+    '"$HA_PROMPT" </dev/null; fi'
+)
+
+_CODEX_INSTRUMENTED_COMMAND = (
+    'if [ "$HA_CODEX_APP_SERVER" = "1" ]; then '
+    '"$HA_PYTHON" "$HA_CODEX_APP_SERVER_CLIENT"; app_server_status=$?; '
+    'if [ "$app_server_status" -ne 75 ]; then exit "$app_server_status"; fi; '
+    'fi; '
+    f"{_CODEX_EXEC_COMMAND}"
+)
 
 # host_id -> (CLI binary, sh -c template, model family). Subscription-auth CLIs only.
 #
@@ -43,22 +64,12 @@ logger = logging.getLogger(__name__)
 _HOST_COMMANDS = {
     "codex:host-adapter": (
         "codex",
-        # Keep this bounded advisory run independent of the operator's normal
-        # Codex session state. In particular, config.toml can add MCP tools and
-        # hooks whose progress output corrupts the answer boundary, while a
-        # persisted rollout turns a one-shot consult into durable chat state.
-        # JSONL gives the adapter a typed agent_message event instead of making
-        # it scrape the human transcript. Authentication still comes from
-        # CODEX_HOME when --ignore-user-config is set.
-        (
-            'if [ -n "$HA_MODEL" ]; then '
-            'exec "$HA_CLI" exec --ignore-user-config --ephemeral --json '
-            '--sandbox "$HA_SANDBOX" --skip-git-repo-check '
-            '-m "$HA_MODEL" "$HA_PROMPT" </dev/null; '
-            'else exec "$HA_CLI" exec --ignore-user-config --ephemeral --json '
-            '--sandbox "$HA_SANDBOX" --skip-git-repo-check '
-            '"$HA_PROMPT" </dev/null; fi'
-        ),
+        # App-server reports the selected model and explicit service reroutes.
+        # The one-shot client exits 75 only before a turn request is sent, which
+        # is the sole point where retrying through exec JSONL cannot duplicate
+        # inference. The fallback keeps older Codex CLIs usable and retains the
+        # typed agent_message boundary from the original adapter.
+        _CODEX_INSTRUMENTED_COMMAND,
         "openai_codex",
     ),
     "claude:host-adapter": (
@@ -80,6 +91,7 @@ _CLI_ENV_OVERRIDES = {
 }
 
 _TERMINAL_ANSWER_SCHEMA = "unitares.terminal_answer.v1"
+_CODEX_APP_SERVER_RESULT_SCHEMA = "unitares.codex_app_server_result.v1"
 _TERMINAL_ANSWER_STATUSES = frozenset({"complete", "needs_input", "declined"})
 _TERMINAL_ANSWER_CONTRACT = f"""
 Return exactly one JSON object and no Markdown fence or surrounding text:
@@ -173,6 +185,13 @@ def host_adapter_enabled() -> bool:
     )
 
 
+def codex_app_server_instrumentation_enabled() -> bool:
+    """Whether Codex consults use model-aware app-server before exec fallback."""
+    return os.environ.get(
+        "UNITARES_CODEX_APP_SERVER_INSTRUMENTATION", "1"
+    ).strip().lower() not in ("0", "false", "no", "off")
+
+
 def _orchestrator_url() -> str:
     return os.environ.get("AGENT_ORCHESTRATOR_URL", "http://127.0.0.1:8789").rstrip("/")
 
@@ -204,7 +223,13 @@ def codex_answer_region_located(raw: str) -> bool:
     diagnosable during rollout.
     """
     lines = raw.splitlines()
-    return bool(_codex_agent_messages(lines)) or any(
+    app_server_answer = any(
+        payload.get("schema") == _CODEX_APP_SERVER_RESULT_SCHEMA
+        and isinstance(payload.get("text"), str)
+        and bool(payload["text"].strip())
+        for payload in _codex_jsonl_payloads(lines)
+    )
+    return app_server_answer or bool(_codex_agent_messages(lines)) or any(
         line.strip() == _CODEX_ANSWER_MARKER for line in lines
     )
 
@@ -236,9 +261,60 @@ def _codex_agent_messages(output_lines: List[str]) -> List[str]:
     return messages
 
 
+def _extract_codex_app_server_result(
+    payload: Dict[str, Any],
+) -> tuple[str, Dict[str, Any]]:
+    """Normalize the one-shot app-server client's richer result envelope."""
+    text = payload.get("text")
+    if not isinstance(text, str):
+        text = ""
+    warnings = payload.get("warnings")
+    if not isinstance(warnings, list):
+        warnings = []
+    warnings = [value for value in warnings if isinstance(value, str)]
+    models_used = payload.get("models_used")
+    if not isinstance(models_used, list):
+        models_used = []
+    models_used = [value for value in models_used if isinstance(value, str)]
+    usage = payload.get("provider_usage")
+    if not isinstance(usage, dict):
+        usage = {}
+    reroutes = payload.get("model_reroutes")
+    if not isinstance(reroutes, list):
+        reroutes = []
+    errors = payload.get("errors")
+    if not isinstance(errors, list):
+        errors = []
+
+    return text, {
+        "model_used": payload.get("model_used"),
+        "models_used": models_used,
+        "model_selected": payload.get("model_selected"),
+        "model_effective": payload.get("model_effective"),
+        "model_provider": payload.get("model_provider"),
+        "service_tier": payload.get("service_tier"),
+        "model_reroutes": reroutes,
+        "model_reporting_status": payload.get("model_reporting_status"),
+        "provider_usage": usage,
+        "tokens_used": payload.get("tokens_used", 0),
+        "finish_reason": payload.get("finish_reason"),
+        "provider_thread_id": payload.get("thread_id"),
+        "provider_turn_id": payload.get("turn_id"),
+        "provider_user_agent": payload.get("provider_user_agent"),
+        "codex_cli_version": payload.get("codex_cli_version"),
+        "provider_errors": [value for value in errors if isinstance(value, str)],
+        "codex_transport": "app_server",
+        "warnings": warnings,
+    }
+
+
 def _extract_codex_jsonl(output_lines: List[str]) -> tuple[str, Dict[str, Any]]:
     """Extract the final Codex answer and usage from documented JSONL events."""
     payloads = _codex_jsonl_payloads(output_lines)
+    for payload in reversed(payloads):
+        if payload.get("schema") == _CODEX_APP_SERVER_RESULT_SCHEMA:
+            return _extract_codex_app_server_result(payload)
+
     messages = _codex_agent_messages(output_lines)
     usage: Dict[str, Any] = {}
     completed = False
@@ -256,16 +332,22 @@ def _extract_codex_jsonl(output_lines: List[str]) -> tuple[str, Dict[str, Any]]:
             value for value in (input_tokens, output_tokens) if isinstance(value, int)
         )
         return messages[-1], {
+            "model_used": None,
             "models_used": [],
+            "model_reporting_status": "unavailable_from_exec_jsonl",
             "provider_usage": usage,
             "tokens_used": tokens_used,
             "finish_reason": "completed" if completed else None,
+            "codex_transport": "exec_jsonl",
             "warnings": ["CLI did not report an exact model identifier"],
         }
 
     # Compatibility for a pre-JSONL transcript during a rolling deployment.
     return _extract_text(output_lines, family="openai_codex"), {
+        "model_used": None,
         "models_used": [],
+        "model_reporting_status": "unavailable_from_legacy_transcript",
+        "codex_transport": "legacy_transcript",
         "warnings": [
             "Codex CLI returned no typed agent_message event; used legacy transcript parsing",
             "CLI did not report an exact model identifier",
@@ -505,6 +587,16 @@ async def invoke_host_adapter(
             "HA_PROMPT": _terminal_answer_prompt(prompt),
             "HA_SANDBOX": sandbox,
             "HA_MODEL": model or "",
+            "HA_CODEX_APP_SERVER": (
+                "1"
+                if host_id == "codex:host-adapter"
+                and codex_app_server_instrumentation_enabled()
+                else "0"
+            ),
+            "HA_CODEX_APP_SERVER_CLIENT": str(
+                Path(__file__).with_name("codex_app_server_client.py")
+            ),
+            "HA_PYTHON": sys.executable,
             "USER": _current_username(),
             # Neutralise console-API credentials so this stays a SUBSCRIPTION
             # lane by construction. The orchestrator merges this map over its
@@ -529,6 +621,7 @@ async def invoke_host_adapter(
             # lane's exit 1 into exit 0 with a subscription-billed result.
             "ANTHROPIC_API_KEY": "",
             "ANTHROPIC_AUTH_TOKEN": "",
+            "OPENAI_API_KEY": "",
         },
         "lease": False,  # read-only advisor lane, no presence/lineage
         "max_runtime_ms": int(timeout_s * 1000) + 30_000,  # orchestrator backstop
@@ -545,6 +638,7 @@ async def invoke_host_adapter(
         "cost_class": "subscription_backed",
         "via": "agent_orchestrator",
         "model_requested": model,
+        "model_selection_source": "caller" if model else "cli_default",
     }
     execution_id: Optional[str] = None
     try:
@@ -622,6 +716,11 @@ async def invoke_host_adapter(
             if provider_metadata.get("provider_is_error"):
                 adapter_ok = False
                 adapter_error = "Claude CLI reported an error result"
+        elif family == "openai_codex":
+            provider_errors = provider_metadata.get("provider_errors")
+            if isinstance(provider_errors, list) and provider_errors:
+                adapter_ok = False
+                adapter_error = f"Codex app-server reported: {provider_errors[-1]}"
         if adapter_ok and terminal_answer_error:
             adapter_ok = False
             adapter_error = terminal_answer_error

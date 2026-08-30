@@ -19,7 +19,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**160 flags.**
+**161 flags.**
 
 | Flag | Reader fallback(s) | Purpose | Read at |
 |---|---|---|---|
@@ -53,6 +53,7 @@ index; that one is the curated decision record.
 | `UNITARES_CALL_MODEL_TIMEOUT` | `None (no reader fallback)` | Wall-clock budget for one call_model round-trip | src/mcp_handlers/support/model_inference.py |
 | `UNITARES_CLASS_CALIBRATION` | `''` | Merge a deployment-local per-class calibration overlay into the class-keyed dicts, if ``UNITARES_CLASS_CALIBRATION`` names a JSON file | config/governance_config.py |
 | `UNITARES_CLAUDE_CLI` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (src/mcp_handlers/support/host_adapter.py) | Return the operator-pinned CLI path for a known adapter, if any. | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/mcp_handlers/support/host_adapter.py |
+| `UNITARES_CODEX_APP_SERVER_INSTRUMENTATION` | `'1'` | Whether Codex consults use model-aware app-server before exec fallback. | src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_CODEX_CLI` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (src/mcp_handlers/support/host_adapter.py) | Return the operator-pinned CLI path for a known adapter, if any. | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_COHERENCE_GATE_SHADOW` | `''` | Whether to record the behavioral-V-vs-legacy-gate comparison | src/coherence_gate_shadow.py |
 | `UNITARES_COHORT_PRIOR` | `None (no reader fallback)` | Whether cohort-prior warm-start is active at all | src/cohort_prior.py |
