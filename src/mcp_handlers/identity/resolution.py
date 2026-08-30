@@ -15,6 +15,12 @@ import re
 
 from src.logging_utils import get_logger
 from src.db import get_db
+from src.identity.onboard_provenance import (
+    OnboardOrigin,
+    OnboardOriginBasis,
+    normalize_onboard_origin,
+    normalize_onboard_origin_basis,
+)
 from .persistence import (
     _get_redis,
     _cache_session,
@@ -735,6 +741,10 @@ async def resolve_session_identity(
 
     thread_position: Optional[int] = None,
 
+    onboard_origin: Optional[OnboardOrigin] = None,
+
+    onboard_origin_basis: Optional[OnboardOriginBasis] = None,
+
 ) -> Dict[str, Any]:
 
     """
@@ -769,6 +779,12 @@ async def resolve_session_identity(
                    membership before persistence.
 
         thread_position: Node position in the thread, when already claimed.
+
+        onboard_origin: Descriptive onboard entry path. Persisted only when
+                        this call creates an identity; never used as proof.
+
+        onboard_origin_basis: Whether the origin was explicitly supplied by
+                              an adapter or inferred from an unmarked call.
 
         resume: If True, reuse existing identity from cache/DB (PATH 1/2).
 
@@ -1500,6 +1516,14 @@ async def resolve_session_identity(
                 "model_type": model_type,
                 "total_updates": 0,  # Initialize counter for persistence
             }
+            if onboard_origin is not None:
+                identity_metadata["onboard_origin"] = normalize_onboard_origin(
+                    onboard_origin
+                )
+                if onboard_origin_basis is not None:
+                    identity_metadata["onboard_origin_basis"] = (
+                        normalize_onboard_origin_basis(onboard_origin_basis)
+                    )
             if thread_id:
                 identity_metadata["thread_id"] = thread_id
             if thread_position is not None:

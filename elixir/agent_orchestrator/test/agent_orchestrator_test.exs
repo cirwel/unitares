@@ -231,6 +231,25 @@ defmodule AgentOrchestratorTest do
   end
 
   describe "child stdin" do
+    test "waits for EOF after exit status so late output is not discarded" do
+      {:ok, id, pid} =
+        AgentOrchestrator.run(%{cmd: "sleep", args: ["30"], max_runtime_ms: 5_000})
+
+      %{port: port} = :sys.get_state(pid)
+
+      # Erlang documents no ordering between these two messages. Drive the
+      # formerly lossy order deterministically: status first, then one last
+      # output line, then the EOF drain barrier.
+      send(pid, {port, {:exit_status, 0}})
+      assert {:ok, %{running: true, exit_status: nil}} = AgentOrchestrator.snapshot(id)
+
+      send(pid, {port, {:data, {:eol, "terminal answer"}}})
+      send(pid, {port, :eof})
+
+      assert {:ok, %{output: ["terminal answer"], exit_status: 0, running: false}} =
+               AgentOrchestrator.await(id, 5_000)
+    end
+
     test "is closed by default, so a child that reads stdin exits instead of hanging" do
       # `cat` with no argument reads stdin forever. With stdin at EOF it exits 0
       # immediately; with an open pipe it would sit until the max-runtime kill.

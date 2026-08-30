@@ -15,6 +15,12 @@ import os
 
 from src.logging_utils import get_logger
 from src.db import get_db
+from src.identity.onboard_provenance import (
+    OnboardOrigin,
+    OnboardOriginBasis,
+    normalize_onboard_origin,
+    normalize_onboard_origin_basis,
+)
 
 from config.governance_config import GovernanceConfig
 
@@ -536,6 +542,8 @@ async def ensure_agent_persisted(
     spawn_reason: Optional[str] = None,
     thread_id: Optional[str] = None,
     thread_position: Optional[int] = None,
+    onboard_origin: Optional[OnboardOrigin] = None,
+    onboard_origin_basis: Optional[OnboardOriginBasis] = None,
 ) -> bool:
     """
     Persist agent to PostgreSQL if not already persisted.
@@ -550,6 +558,10 @@ async def ensure_agent_persisted(
         spawn_reason: Why this fork was created
         thread_id: Thread this agent belongs to
         thread_position: Node position within thread
+        onboard_origin: Descriptive onboard entry path. Written only when this
+            call creates the identity row; never used as identity proof.
+        onboard_origin_basis: Whether the origin was explicitly supplied by
+            the adapter or inferred from an unmarked ordinary call.
 
     Returns:
         True if newly persisted, False if already existed
@@ -647,6 +659,14 @@ async def ensure_agent_persisted(
                 "thread_position": thread_position,
                 "node_index": thread_position,  # AgentMetadata uses node_index
             }
+            if onboard_origin is not None:
+                identity_metadata["onboard_origin"] = normalize_onboard_origin(
+                    onboard_origin
+                )
+                if onboard_origin_basis is not None:
+                    identity_metadata["onboard_origin_basis"] = (
+                        normalize_onboard_origin_basis(onboard_origin_basis)
+                    )
             if public_agent_id and public_agent_id != agent_uuid:
                 identity_metadata["public_agent_id"] = public_agent_id
                 identity_metadata["agent_id"] = public_agent_id
