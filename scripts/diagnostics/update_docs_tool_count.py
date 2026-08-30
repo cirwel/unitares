@@ -18,20 +18,17 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 
-def load_tool_count() -> int:
-    """Count via the runtime registry; degrade to 0 when deps are missing.
+def load_tool_count():
+    """Count via the runtime registry, as an available-or-not `ToolCount`.
 
     Imported at call time (not module level) so the doc-validation CI runner,
-    which installs no project dependencies, warns and skips instead of
+    which installs no project dependencies, reports unavailable instead of
     crashing — and so tests can patch the counter on its defining module.
     """
-    from scripts.diagnostics.count_tools import get_total_count
+    from scripts.diagnostics.count_tools import resolve_tool_count
 
-    try:
-        return get_total_count()
-    except ModuleNotFoundError as exc:
-        print(f"WARNING: Tool count unavailable ({exc})", file=sys.stderr)
-        return 0
+    return resolve_tool_count()
+
 
 # Files that reference tool count
 DOC_FILES = [
@@ -101,18 +98,46 @@ def main():
     parser = argparse.ArgumentParser(description="Update tool count in documentation")
     parser.add_argument('--check', action='store_true', help='Check for mismatches (no changes)')
     parser.add_argument('--update', action='store_true', help='Update all documentation files')
+    parser.add_argument(
+        '--require-registry',
+        action='store_true',
+        help=(
+            'Fail instead of skipping when the runtime registry is unavailable. '
+            'Use where dependencies ARE installed, so an unavailable count is a '
+            'real breakage rather than an accepted degradation.'
+        ),
+    )
     args = parser.parse_args()
 
-    actual_count = load_tool_count()
+    result = load_tool_count()
+
+    if not result.available:
+        # No count was taken. Never compare an absent count against the docs
+        # and never write one into them — and say plainly that this run
+        # enforced nothing, so a green step is not read as a passed check.
+        if args.require_registry:
+            print(
+                f"❌ Tool count unavailable ({result.reason}); "
+                "--require-registry treats that as a failure"
+            )
+            sys.exit(1)
+        print(f"WARNING: Tool count unavailable ({result.reason})", file=sys.stderr)
+        print(
+            f"⏭️  Tool count unavailable ({result.reason}) — "
+            "doc tool-count check SKIPPED. This run enforced nothing; the "
+            "count is enforced by the `smoke` job in the Tests workflow, "
+            "which installs the runtime dependencies."
+        )
+        sys.exit(0)
+
+    actual_count = result.total
     print(f"Actual tool count: {actual_count}")
 
-    if actual_count == 0:
-        if args.update:
-            # Never write a zero count into the docs.
-            print("❌ Refusing to update docs with a zero tool count")
-            sys.exit(1)
-        print("Tool count check skipped (no tools detected in this environment)")
-        sys.exit(0)
+    if actual_count == 0 and args.update:
+        # A registry that imports but registers nothing is still not something
+        # worth writing into reader-facing docs.
+        print("❌ Refusing to update docs with a zero tool count")
+        sys.exit(1)
 
     if args.check or not args.update:
         # Check mode
