@@ -2092,6 +2092,8 @@ class TestProcessAgentUpdateExtended:
         mock_server.monitors = {agent_uuid: mock_monitor}
 
         p = self._common_patches(mock_server, agent_uuid=agent_uuid)
+        # Deliberately patch the legacy path: the compatibility alias must
+        # reach the canonical module imported by the runtime enrichment.
         with self._apply_patches(p), \
              patch("src.eisv_validator.validate_governance_response", side_effect=ValueError("Missing V metric")):
 
