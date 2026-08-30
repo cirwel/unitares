@@ -9,7 +9,6 @@ from sdk_release_sync import (  # noqa: E402
     advertised_versions,
     assess,
     declared_version,
-    tagged_versions,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -89,12 +88,15 @@ def test_stale_and_missing_public_claims_are_both_visible():
     }
 
 
-def test_current_repository_state_is_synchronized_without_network():
+def test_current_repository_version_and_claims_are_synchronized_without_network():
     declared = declared_version(REPO_ROOT)
     report = assess(
         declared=declared,
         published="0.3.0",
-        tagged=tagged_versions(REPO_ROOT),
+        # The general test workflow intentionally uses a shallow, tagless checkout.
+        # Tag parsing is exercised through assess() above; the scheduled sentinel's
+        # workflow contract below separately requires fetch-depth: 0.
+        tagged={declared},
         advertised=advertised_versions(REPO_ROOT),
     )
     assert report["synced"] is True
