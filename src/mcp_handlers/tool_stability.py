@@ -400,7 +400,13 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     # ==========================================================================
     "start_session": ToolAlias(
         old_name="start_session", new_name="onboard", reason="intuitive_alias",
-        migration_note="Primary workflow name for starting a session; implemented by onboard().",
+        migration_note=(
+            "Primary workflow name for starting a session; implemented by "
+            "onboard(). Common case: force_new=true alone — save the returned "
+            "uuid and client_session_id. parent_agent_id is for a real handoff "
+            "from an exited predecessor, not for a session sharing the "
+            "workspace with one still running."
+        ),
         experience=True),
     "sync_state": ToolAlias(
         old_name="sync_state", new_name="process_agent_update", reason="intuitive_alias",
