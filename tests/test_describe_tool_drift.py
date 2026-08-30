@@ -51,14 +51,20 @@ def test_every_advertised_tool_resolves_at_dispatch():
     there instead of on one sentinel.
     """
     from src.mcp_handlers import TOOL_HANDLERS
+    from src.mcp_handlers.decorators import get_tool_registry
     from src.mcp_handlers.tool_stability import list_all_aliases
     from src.tool_schemas import get_tool_definitions
 
+    # Plugin tests may register entry-point handlers after mcp_handlers took its
+    # first registry snapshot. Production copies this decorator registry into
+    # TOOL_HANDLERS immediately after loading plugins. Inspect that eventual
+    # dispatch surface without mutating process-global state inside this test.
+    dispatchable = set(TOOL_HANDLERS) | set(get_tool_registry())
     aliases = list_all_aliases()
     unresolvable = sorted(
         tool.name
         for tool in get_tool_definitions(verbosity="full")
-        if tool.name not in TOOL_HANDLERS and tool.name not in aliases
+        if tool.name not in dispatchable and tool.name not in aliases
     )
     assert not unresolvable, (
         "these names are advertised in tool schemas but resolve to nothing at "
