@@ -14,7 +14,11 @@ from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from ..context import get_context_resolved_agent_id
 from ..decorators import mcp_tool
 from ..utils import error_response, require_argument, success_response
-from .host_adapter import host_cli_env_var, invoke_host_adapter
+from .host_adapter import (
+    codex_answer_region_located,
+    host_cli_env_var,
+    invoke_host_adapter,
+)
 from .inference_registry import get_inference_host, sha256_text as _sha256_text
 from .inference_outcome import InferenceOutcome
 
@@ -66,6 +70,13 @@ async def _track_energy(
 # fence, a preamble, and the start of a JSON object; small enough that a runaway
 # CLI cannot flood an error payload.
 _RAW_EXCERPT_LIMIT = 2000
+# When the budget binds, keep both ends. A head-only excerpt is structurally
+# blind to the one region a terminal-answer failure is ever about: a CLI
+# transcript opens with a banner and an echo of the prompt, and the answer — or
+# its absence — is at the tail. Spending the whole budget on the head reliably
+# shows the least informative bytes in the file.
+_RAW_EXCERPT_HEAD = 500
+_RAW_EXCERPT_TAIL = _RAW_EXCERPT_LIMIT - _RAW_EXCERPT_HEAD
 
 
 def _raw_excerpt_details(adapter_result: Dict[str, Any]) -> Dict[str, Any]:
@@ -91,18 +102,40 @@ def _raw_excerpt_details(adapter_result: Dict[str, Any]) -> Dict[str, Any]:
     raw = adapter_result.get("raw")
     if not isinstance(raw, str) or not raw.strip():
         return {}
-    excerpt = raw.strip()
-    truncated = len(excerpt) > _RAW_EXCERPT_LIMIT
+    full = raw.strip()
+    truncated = len(full) > _RAW_EXCERPT_LIMIT
     if truncated:
-        excerpt = excerpt[:_RAW_EXCERPT_LIMIT]
-    return {
+        elided = len(full) - _RAW_EXCERPT_LIMIT
+        excerpt = (
+            full[:_RAW_EXCERPT_HEAD]
+            + f"\n... [{elided} characters elided] ...\n"
+            + full[-_RAW_EXCERPT_TAIL:]
+        )
+    else:
+        excerpt = full
+    details: Dict[str, Any] = {
         "adapter_raw_excerpt": excerpt,
         "adapter_raw_excerpt_truncated": truncated,
         "adapter_raw_excerpt_note": (
             "Unvalidated host-CLI output, included so an envelope failure is "
             "diagnosable. It was NOT parsed and is not an answer."
+            + (" Head and tail of the output; the middle is elided." if truncated else "")
         ),
     }
+    provenance = adapter_result.get("provenance")
+    family = provenance.get("model_family") if isinstance(provenance, dict) else None
+    if family == "openai_codex":
+        located = codex_answer_region_located(full)
+        details["adapter_answer_region_located"] = located
+        if not located:
+            details["adapter_answer_region_note"] = (
+                "No 'codex' marker line in the transcript, so no answer region "
+                "was isolated and the whole transcript reached the envelope "
+                "validator. This is NOT the model returning a bad envelope — it "
+                "is the adapter never finding an assistant turn. Check whether "
+                "the CLI produced one at all before changing the envelope contract."
+            )
+    return details
 
 
 async def run_delegated_inference(
