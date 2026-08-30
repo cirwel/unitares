@@ -144,6 +144,10 @@ from src.monitor_metrics import (
 )
 from src.behavioral_state import BehavioralEISV
 from src.behavioral_assessment import assess_behavioral_state
+from src.behavioral_floor_observability import (
+    build_absolute_floor_observation,
+    unavailable_absolute_floor_observation,
+)
 from src.behavioral_sensor import compute_behavioral_sensor_eisv
 from src.coherence_provenance import (
     LEGACY_COHERENCE_SOURCE,
@@ -1550,6 +1554,23 @@ class UNITARESMonitor:
             drift_vector=drift_vector,
         )
 
+        # Issue #1995: measure the absolute-floor geometry only after the
+        # behavioral verdict and policy decision are final.  This observation
+        # is telemetry-only, zero-inclusive, and fail-open: neither a breach nor
+        # an instrumentation failure may alter risk, verdict, or enforcement.
+        try:
+            absolute_floor_observation = build_absolute_floor_observation(
+                self._behavioral_state,
+                behavioral_assessment,
+            )
+        except Exception:
+            logger.debug(
+                "absolute-floor observation skipped",
+                exc_info=True,
+            )
+            absolute_floor_observation = unavailable_absolute_floor_observation()
+        self._last_absolute_floor_observation = absolute_floor_observation
+
         # Log decision via audit logger (for accountability and transparency).
         # Records the un-suppressed decision so operators can later analyze
         # whether suppression masked real drift; gap_suppressed flag in details.
@@ -1588,6 +1609,7 @@ class UNITARESMonitor:
                     'risk': behavioral_assessment.risk,
                     'components': behavioral_assessment.components,
                     'baselined': self._behavioral_state.is_baselined,
+                    'absolute_floor_observation': absolute_floor_observation,
                 },
             }
         )
