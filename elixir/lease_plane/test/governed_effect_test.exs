@@ -1,6 +1,7 @@
 defmodule UnitaresLeasePlane.AllowGovernanceVeto do
   @moduledoc false
   def check(_env), do: :allow
+  def verify_identity_tier(_env), do: {:ok, "strong"}
 end
 
 defmodule UnitaresLeasePlane.GovernedEffectTest do
@@ -57,6 +58,54 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
     test "malformed required_leases → schema_invalid" do
       assert {:error, detail} = GovernedEffect.handle(base(%{"required_leases" => [%{"x" => 1}]}))
       assert detail =~ "required_leases"
+
+      assert {:error, detail} =
+               GovernedEffect.handle(
+                 base(%{"required_leases" => [%{"surface" => "file:///tmp/x", "ttl_s" => "300"}]})
+               )
+
+      assert detail =~ "required_leases"
+    end
+
+    test "promotion references are bounded non-secret identifiers" do
+      oversized = String.duplicate("x", 513)
+
+      body =
+        base(%{
+          "custody_mode" => "execute",
+          "promotion" => %{
+            "record_only_effect_id" => "shadow:1",
+            "decision_standard_ref" => "docs/decision#rule",
+            "approval_ref" => oversized,
+            "evidence_refs" => ["evidence:1"]
+          }
+        })
+
+      assert {:error, detail} = GovernedEffect.handle(body)
+      assert detail =~ "approval_ref"
+
+      too_many =
+        put_in(
+          body,
+          ["promotion", "approval_ref"],
+          "review:approved"
+        )
+        |> put_in(["promotion", "evidence_refs"], Enum.map(1..17, &"evidence:#{&1}"))
+
+      assert {:error, detail} = GovernedEffect.handle(too_many)
+      assert detail =~ "evidence_refs"
+
+      credential_cases = [
+        {"decision_standard_ref", "Bearer secret-value"},
+        {"approval_ref", "continuity_token=secret-value"},
+        {"evidence_refs", ["ghp_secret-value"]}
+      ]
+
+      Enum.each(credential_cases, fn {field, value} ->
+        unsafe = put_in(body, ["promotion", field], value)
+        assert {:error, detail} = GovernedEffect.handle(unsafe)
+        assert detail =~ field
+      end)
     end
 
     test "non-object body → error" do
@@ -169,6 +218,31 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
       refute payload_text =~ "SECRET-continuity-payload"
       refute payload_text =~ "continuity_token"
     end
+
+    test "required leases persist only the surface and ttl allowlist" do
+      key = tracked_key()
+      surface = "dialectic:/lease-scrub-#{System.unique_integer([:positive])}"
+
+      assert {:ok, _} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => key,
+                   "required_leases" => [
+                     %{
+                       "surface" => surface,
+                       "ttl_s" => 300,
+                       "authorization" => "Bearer SECRET-lease-field",
+                       "unexpected" => "drop-me"
+                     }
+                   ]
+                 })
+               )
+
+      assert [row] = governed_effect_rows(key)
+      assert row["required_leases"] == [%{"surface" => surface, "ttl_s" => 300}]
+      refute Jason.encode!(row) =~ "SECRET-lease-field"
+      refute Jason.encode!(row) =~ "drop-me"
+    end
   end
 
   describe "idempotency (contract §4)" do
@@ -242,7 +316,10 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
                      "sha256" => sha256(content),
                      "summary" => "loop-0 reversible file update"
                    },
-                   "proposer" => %{"agent_uuid" => proposer},
+                   "proposer" => %{
+                     "agent_uuid" => proposer,
+                     "continuity_token" => "test-strong-shadow-proof"
+                   },
                    "provenance" => %{
                      "session_id" => "loop-0-shadow",
                      "verification_source" => "external_test"
@@ -270,6 +347,8 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
       assert File.read!(path) == content
       assert executed.promotion["record_only_effect_id"] == shadow.effect_id
       assert executed.promotion["payload_sha256"] == sha256(content)
+      assert executed.promotion["predecessor_reverified_tier"] == "strong"
+      assert executed.promotion["predecessor_proposer_agent_uuid"] == proposer
       assert executed.promotion["continuity_verified"]
       assert executed.fermata["proposal_id"] == shadow.effect_id
 
@@ -306,7 +385,10 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
                      "sha256" => sha256("shadowed bytes\n"),
                      "summary" => "mismatch denial case"
                    },
-                   "proposer" => %{"agent_uuid" => proposer}
+                   "proposer" => %{
+                     "agent_uuid" => proposer,
+                     "continuity_token" => "test-strong-shadow-proof"
+                   }
                  })
                )
 
@@ -327,10 +409,291 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
       assert execute_rows(execute_key) == []
     end
 
+    test "surface A cannot promote bytes to payload path and lease surface B" do
+      shadow_key = tracked_key()
+      execute_key = tracked_key()
+      proposer = "00000000-0000-0000-0000-0000000000aa"
+      content = "same bytes, different target\n"
+
+      path_a =
+        Path.join(System.tmp_dir!(), "unitares-promotion-a-#{System.unique_integer([:positive])}")
+
+      path_b =
+        Path.join(System.tmp_dir!(), "unitares-promotion-b-#{System.unique_integer([:positive])}")
+
+      surface_a = "file://#{path_a}"
+      surface_b = "file://#{path_b}"
+
+      on_exit(fn ->
+        File.rm(path_a)
+        File.rm(path_b)
+      end)
+
+      set_file_write_flags(true)
+
+      assert {:ok, shadow} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => shadow_key,
+                   "surface" => surface_a,
+                   "required_leases" => [%{"surface" => surface_a, "ttl_s" => 300}],
+                   "payload" => %{"sha256" => sha256(content), "summary" => "surface A"},
+                   "proposer" => %{
+                     "agent_uuid" => proposer,
+                     "continuity_token" => "test-strong-shadow-proof"
+                   }
+                 })
+               )
+
+      assert {:error, :surface_path_mismatch} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => execute_key,
+                   "custody_mode" => "execute",
+                   "surface" => surface_a,
+                   "required_leases" => [%{"surface" => surface_b, "ttl_s" => 300}],
+                   "payload" => %{"path" => path_b, "content" => content},
+                   "proposer" => %{"agent_uuid" => proposer},
+                   "promotion" => promotion(shadow.effect_id)
+                 })
+               )
+
+      refute File.exists?(path_a)
+      refute File.exists?(path_b)
+      assert execute_rows(execute_key) == []
+    end
+
+    test "an unstamped shadow is recorded as unverified but cannot be promoted" do
+      shadow_key = tracked_key()
+      execute_key = tracked_key()
+      proposer = "00000000-0000-0000-0000-0000000000aa"
+      content = "unverified shadow\n"
+
+      path =
+        Path.join(System.tmp_dir!(), "unitares-unverified-#{System.unique_integer([:positive])}")
+
+      surface = "file://#{path}"
+
+      on_exit(fn -> File.rm(path) end)
+      set_file_write_flags(true)
+
+      assert {:ok, shadow} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => shadow_key,
+                   "surface" => surface,
+                   "required_leases" => [%{"surface" => surface, "ttl_s" => 300}],
+                   "payload" => %{"sha256" => sha256(content), "summary" => "no proof"},
+                   "proposer" => %{"agent_uuid" => proposer}
+                 })
+               )
+
+      assert shadow.identity_assurance_tier == "unverified"
+
+      assert {:error, :promotion_predecessor_unverifiable} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => execute_key,
+                   "custody_mode" => "execute",
+                   "surface" => surface,
+                   "required_leases" => [%{"surface" => surface, "ttl_s" => 300}],
+                   "payload" => %{"path" => path, "content" => content},
+                   "proposer" => %{"agent_uuid" => proposer},
+                   "promotion" => promotion(shadow.effect_id)
+                 })
+               )
+
+      refute File.exists?(path)
+      assert execute_rows(execute_key) == []
+    end
+
+    test "an unexpected predecessor Fermata receipt field cannot be promoted" do
+      shadow_key = tracked_key()
+      execute_key = tracked_key()
+      proposer = "00000000-0000-0000-0000-0000000000aa"
+      content = "tampered receipt\n"
+
+      path =
+        Path.join(
+          System.tmp_dir!(),
+          "unitares-fermata-tamper-#{System.unique_integer([:positive])}"
+        )
+
+      surface = "file://#{path}"
+
+      on_exit(fn -> File.rm(path) end)
+      set_file_write_flags(true)
+
+      assert {:ok, shadow} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => shadow_key,
+                   "surface" => surface,
+                   "required_leases" => [%{"surface" => surface, "ttl_s" => 300}],
+                   "payload" => %{"sha256" => sha256(content), "summary" => "tamper"},
+                   "proposer" => %{
+                     "agent_uuid" => proposer,
+                     "continuity_token" => "test-strong-shadow-proof"
+                   }
+                 })
+               )
+
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "UPDATE audit.events SET payload = " <>
+          "jsonb_set(payload, '{fermata,unexpected}', '\"tampered\"'::jsonb) " <>
+          "WHERE event_type = 'governed_effect.record_only' AND payload->>'effect_id' = $1",
+        [shadow.effect_id]
+      )
+
+      assert {:error, :promotion_predecessor_unverifiable} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => execute_key,
+                   "custody_mode" => "execute",
+                   "surface" => surface,
+                   "required_leases" => [%{"surface" => surface, "ttl_s" => 300}],
+                   "payload" => %{"path" => path, "content" => content},
+                   "proposer" => %{"agent_uuid" => proposer},
+                   "promotion" => promotion(shadow.effect_id)
+                 })
+               )
+
+      refute File.exists?(path)
+      assert execute_rows(execute_key) == []
+    end
+
+    test "execute idempotency rejects direct-to-promoted and predecessor collisions" do
+      direct_key = tracked_key()
+      promoted_key = tracked_key()
+      reused_predecessor_key = tracked_key()
+      shadow_a_key = tracked_key()
+      shadow_b_key = tracked_key()
+      proposer = "00000000-0000-0000-0000-0000000000aa"
+      content = "idempotency-bound promotion\n"
+
+      path =
+        Path.join(
+          System.tmp_dir!(),
+          "unitares-idem-promotion-#{System.unique_integer([:positive])}"
+        )
+
+      surface = "file://#{path}"
+
+      on_exit(fn -> File.rm(path) end)
+      set_file_write_flags(true)
+
+      execute_body =
+        base(%{
+          "custody_mode" => "execute",
+          "surface" => surface,
+          "required_leases" => [%{"surface" => surface, "ttl_s" => 300}],
+          "payload" => %{"path" => path, "content" => content},
+          "proposer" => %{"agent_uuid" => proposer}
+        })
+
+      assert {:ok, _direct} =
+               GovernedEffect.handle(Map.put(execute_body, "idempotency_key", direct_key))
+
+      shadow = fn key ->
+        GovernedEffect.handle(
+          base(%{
+            "idempotency_key" => key,
+            "surface" => surface,
+            "required_leases" => [%{"surface" => surface, "ttl_s" => 300}],
+            "payload" => %{"sha256" => sha256(content), "summary" => "idempotency"},
+            "proposer" => %{
+              "agent_uuid" => proposer,
+              "continuity_token" => "test-strong-shadow-proof"
+            }
+          })
+        )
+      end
+
+      assert {:ok, shadow_a} = shadow.(shadow_a_key)
+      assert {:ok, shadow_b} = shadow.(shadow_b_key)
+
+      direct_as_promotion =
+        execute_body
+        |> Map.put("idempotency_key", direct_key)
+        |> Map.put("promotion", promotion(shadow_a.effect_id))
+
+      assert {:error, :idempotency_conflict} = GovernedEffect.handle(direct_as_promotion)
+
+      promoted_a =
+        execute_body
+        |> Map.put("idempotency_key", promoted_key)
+        |> Map.put("promotion", promotion(shadow_a.effect_id))
+
+      assert {:ok, first} = GovernedEffect.handle(promoted_a)
+      assert first.promotion["record_only_effect_id"] == shadow_a.effect_id
+
+      assert {:ok, replay} = GovernedEffect.handle(promoted_a)
+      assert replay.idempotent
+      assert replay.promotion == first.promotion
+
+      promoted_b = Map.put(promoted_a, "promotion", promotion(shadow_b.effect_id))
+      assert {:error, :idempotency_conflict} = GovernedEffect.handle(promoted_b)
+      assert [_one] = execute_rows(promoted_key)
+
+      reused_predecessor = Map.put(promoted_a, "idempotency_key", reused_predecessor_key)
+
+      assert {:error, :promotion_already_consumed} =
+               GovernedEffect.handle(reused_predecessor)
+
+      assert execute_rows(reused_predecessor_key) == []
+    end
+
+    test "direct file_write preserves legacy float payload compatibility without a false receipt" do
+      execute_key = tracked_key()
+      proposer = "00000000-0000-0000-0000-0000000000aa"
+      content = "legacy direct payload\n"
+
+      path =
+        Path.join(
+          System.tmp_dir!(),
+          "unitares-direct-float-#{System.unique_integer([:positive])}"
+        )
+
+      surface = "file://#{path}"
+
+      on_exit(fn -> File.rm(path) end)
+      set_file_write_flags(true)
+
+      assert {:ok, executed} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => execute_key,
+                   "custody_mode" => "execute",
+                   "surface" => surface,
+                   "required_leases" => [
+                     %{"surface" => surface, "ttl_s" => 300, "extra" => "dropped"}
+                   ],
+                   "payload" => %{
+                     "path" => path,
+                     "content" => content,
+                     "legacy_ratio" => 1.25
+                   },
+                   "proposer" => %{"agent_uuid" => proposer}
+                 })
+               )
+
+      assert File.read!(path) == content
+      assert executed.fermata["schema"] == "unitares.fermata-receipt-unavailable.v1"
+      assert executed.fermata["reason"] == "float_in_payload"
+      refute Map.has_key?(executed.fermata, "intent_sha256")
+
+      assert [row] = execute_rows(execute_key)
+      refute Jason.encode!(row) =~ "legacy_ratio"
+      refute Jason.encode!(row) =~ "dropped"
+    end
+
     test "missing predecessor and incomplete receipts fail closed" do
       execute_key = tracked_key()
       path = Path.join(System.tmp_dir!(), "unitares-promotion-missing")
       surface = "file://#{path}"
+
+      set_file_write_flags(false)
 
       incomplete =
         base(%{
@@ -660,11 +1023,13 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
     previous = %{
       execute: Application.get_env(:lease_plane, :execute_file_write_enabled),
       commit: Application.get_env(:lease_plane, :execute_file_write_commit_enabled),
+      promotion: Application.get_env(:lease_plane, :governed_effect_promotion_enabled),
       veto: Application.get_env(:lease_plane, :governance_veto_client)
     }
 
     Application.put_env(:lease_plane, :execute_file_write_enabled, true)
     Application.put_env(:lease_plane, :execute_file_write_commit_enabled, commit?)
+    Application.put_env(:lease_plane, :governed_effect_promotion_enabled, true)
 
     Application.put_env(
       :lease_plane,
@@ -675,6 +1040,7 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
     on_exit(fn ->
       restore(:execute_file_write_enabled, previous.execute)
       restore(:execute_file_write_commit_enabled, previous.commit)
+      restore(:governed_effect_promotion_enabled, previous.promotion)
       restore(:governance_veto_client, previous.veto)
     end)
   end

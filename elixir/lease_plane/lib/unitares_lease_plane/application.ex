@@ -80,6 +80,16 @@ defmodule UnitaresLeasePlane.Application do
       System.get_env("UNITARES_GOVERNED_EFFECT_EXECUTE_FILE_WRITE_COMMIT") == "1"
     )
 
+    # Explicit record_only -> execute continuity remains independently gated.
+    # A deploy may exercise direct execute without accepting promotion claims;
+    # the promotion gate is enabled only after the continuity review conditions
+    # (exact target binding, tier stamp, replay identity) are satisfied there.
+    Application.put_env(
+      :lease_plane,
+      :governed_effect_promotion_enabled,
+      System.get_env("UNITARES_GOVERNED_EFFECT_PROMOTION") == "1"
+    )
+
     validate_execute_type_flags!()
 
     Application.put_env(
