@@ -106,6 +106,89 @@ class TestImbalance:
         assert result.components["high_V"] == 0.0
 
 
+def _healthy_baseline_then_override(**overrides):
+    """A settled, fully-baselined healthy state (E=I=0.7, S=0.15, past
+    BehavioralEISV's ~30-update warmup) with one or more raw fields
+    force-set afterward.
+
+    Valid ONLY for fields that genuinely don't covary with the others
+    through the real update() pipeline -- S is such a field. Do NOT use
+    this to override E or I alone: V = EMA(E - I) is derived, not an
+    independent input (governance_monitor.py, the sole producer, never
+    sets V directly), so setting E or I without also moving V desyncs the
+    state from anything the real pipeline can produce. Overriding E AND I
+    together (to the same target) is fine -- that mirrors a real
+    synchronized decline, which never opens the E/I gap that drives V.
+    """
+    state = _make_state(E=0.7, I=0.7, S=0.15, updates=40)
+    for field, value in overrides.items():
+        setattr(state, field, value)
+    return state
+
+
+def _sustained(E, I, S, updates=60):
+    """A state reached by actually calling update() from a healthy
+    baseline -- the only way governance_monitor.py ever drives
+    BehavioralEISV, so this is what a real settling agent looks like
+    (unlike _healthy_baseline_then_override's raw field override)."""
+    state = _make_state(E=0.7, I=0.7, S=0.15, updates=60)
+    for _ in range(updates):
+        state.update(E, I, S)
+    return state
+
+
+class TestAbsoluteFloorsBoundComponentsNotVerdict:
+    """Each absolute floor bounds only its own component's contribution to
+    composite risk (0.30 max for E/I, 0.20 max for S/|V|), both below
+    RISK_SAFE_THRESHOLD (0.35) -- a documented arithmetic property (issue
+    #1995), not a defect fixed here.
+
+    That does NOT mean any lone dimension can be driven to its floor while
+    the verdict stays "safe". E and I are coupled through V = EMA(E - I):
+    a sustained one-sided collapse in E or I widens the gap and typically
+    breaches the V ceiling too, reaching "caution" via two components. S is
+    genuinely independent and is the one dimension whose floor is provably
+    reachable alone. Whether the E/I/V coupling case should escalate
+    further is an open calibration question for the operator -- these
+    tests document current behavior, they don't decide it.
+    """
+
+    def test_S_alone_at_ceiling_stays_safe(self):
+        state = _healthy_baseline_then_override(S=1.0)
+        result = assess_behavioral_state(state, rho=0.5)
+        assert result.verdict == "safe"
+        assert result.risk == pytest.approx(0.20, abs=0.01)
+        assert result.components["high_V"] == 0.0
+
+    def test_E_collapse_with_I_still_healthy_reaches_caution_via_V(self):
+        # NOT a lone-floor-breach case: I holding its own healthy baseline
+        # while E collapses opens the E/I gap, so high_V fires too.
+        state = _sustained(E=0.0, I=0.7, S=0.15)
+        result = assess_behavioral_state(state, rho=0.5)
+        assert result.verdict == "caution"
+        assert result.components["low_E"] > 0.25
+        assert result.components["high_V"] > 0.0
+
+    def test_E_collapse_alone_stays_safe_only_in_the_narrow_I_corridor(self):
+        # A real, reachable lone-E-floor-breach case: I settles moderately
+        # reduced too (but above its own floor), keeping |E-I| under the V
+        # ceiling. Outside roughly I in [0.30, ~0.62] this stops holding.
+        state = _sustained(E=0.0, I=0.5, S=0.15)
+        result = assess_behavioral_state(state, rho=0.5)
+        assert result.verdict == "safe"
+        assert result.risk == pytest.approx(0.30, abs=0.02)
+        assert result.components["high_V"] == 0.0
+
+    def test_E_and_I_collapse_together_reaches_high_risk(self):
+        # Moving together keeps the E/I gap (and so V) at zero, so both
+        # floors fire in full and nothing else does.
+        state = _healthy_baseline_then_override(E=0.0, I=0.0)
+        result = assess_behavioral_state(state, rho=0.5)
+        assert result.verdict == "high-risk"
+        assert result.risk == pytest.approx(0.60, abs=0.01)
+        assert result.components["high_V"] == 0.0
+
+
 class TestRhoSignals:
     """Update coherence (rho) signals."""
 
