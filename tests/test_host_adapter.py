@@ -19,6 +19,13 @@ def test_enabled_flag(monkeypatch):
     assert ha.host_adapter_enabled() is True
 
 
+def test_codex_app_server_instrumentation_defaults_on_with_opt_out(monkeypatch):
+    monkeypatch.delenv("UNITARES_CODEX_APP_SERVER_INSTRUMENTATION", raising=False)
+    assert ha.codex_app_server_instrumentation_enabled() is True
+    monkeypatch.setenv("UNITARES_CODEX_APP_SERVER_INSTRUMENTATION", "0")
+    assert ha.codex_app_server_instrumentation_enabled() is False
+
+
 def test_available_requires_flag_cli_and_bearer(monkeypatch):
     monkeypatch.setenv("UNITARES_HOST_ADAPTER_ENABLED", "1")
     monkeypatch.setenv("AGENT_ORCHESTRATOR_BEARER_TOKEN", "tok")
@@ -100,7 +107,57 @@ def test_extract_codex_jsonl_uses_final_agent_message_and_exact_usage():
     assert metadata["provider_usage"] == {"input_tokens": 4, "output_tokens": 5}
     assert metadata["tokens_used"] == 9
     assert metadata["finish_reason"] == "completed"
+    assert metadata["model_reporting_status"] == "unavailable_from_exec_jsonl"
+    assert metadata["codex_transport"] == "exec_jsonl"
     assert ha.codex_answer_region_located("\n".join(output)) is True
+
+
+def test_extract_codex_app_server_result_preserves_model_provenance():
+    answer = {
+        "schema": "unitares.terminal_answer.v1",
+        "status": "complete",
+        "answer": "reported",
+    }
+    payload = {
+        "schema": "unitares.codex_app_server_result.v1",
+        "text": json.dumps(answer),
+        "thread_id": "thread-1",
+        "turn_id": "turn-1",
+        "model_selected": "gpt-5.6-sol",
+        "model_effective": "gpt-5.6-terra",
+        "model_used": "gpt-5.6-terra",
+        "models_used": ["gpt-5.6-terra"],
+        "model_provider": "openai",
+        "service_tier": "priority",
+        "model_reroutes": [{
+            "fromModel": "gpt-5.6-sol",
+            "toModel": "gpt-5.6-terra",
+        }],
+        "model_reporting_status": "reported_by_app_server",
+        "provider_usage": {"input_tokens": 4, "output_tokens": 5},
+        "tokens_used": 9,
+        "finish_reason": "completed",
+        "provider_user_agent": "unitares_host_adapter/0.151.0",
+        "codex_cli_version": "0.151.0",
+        "warnings": [],
+        "errors": [],
+    }
+
+    text, metadata = ha.extract_cli_result(
+        [json.dumps(payload)],
+        family="openai_codex",
+    )
+
+    assert json.loads(text) == answer
+    assert metadata["model_used"] == "gpt-5.6-terra"
+    assert metadata["models_used"] == ["gpt-5.6-terra"]
+    assert metadata["model_selected"] == "gpt-5.6-sol"
+    assert metadata["model_effective"] == "gpt-5.6-terra"
+    assert metadata["model_reroutes"] == payload["model_reroutes"]
+    assert metadata["provider_thread_id"] == "thread-1"
+    assert metadata["provider_turn_id"] == "turn-1"
+    assert metadata["codex_transport"] == "app_server"
+    assert ha.codex_answer_region_located(json.dumps(payload)) is True
 
 
 def test_extract_claude_json_preserves_exact_models_usage_and_cost():
@@ -575,6 +632,8 @@ def test_codex_model_request_is_passed_to_the_cli(monkeypatch):
     assert shell_command.count("--json") == 2
     assert shell_command.count('--sandbox "$HA_SANDBOX"') == 2
     assert shell_command.count("--skip-git-repo-check") == 2
+    assert '"$HA_PYTHON" "$HA_CODEX_APP_SERVER_CLIENT"' in shell_command
+    assert 'app_server_status" -ne 75' in shell_command
 
 
 def test_codex_cli_env_var_is_named_for_its_own_host():
@@ -643,6 +702,52 @@ def test_spawn_spec_neutralises_console_api_credentials(monkeypatch):
     # rejected before it reaches Port.open.
     assert env["ANTHROPIC_API_KEY"] == ""
     assert env["ANTHROPIC_AUTH_TOKEN"] == ""
+    assert env["OPENAI_API_KEY"] == ""
+
+
+def test_codex_spawn_spec_enables_instrumented_client_and_records_selection(monkeypatch):
+    _enable(monkeypatch)
+    answer = {
+        "schema": "unitares.terminal_answer.v1",
+        "status": "complete",
+        "answer": "done",
+    }
+    state = _patch_httpx(monkeypatch, [
+        _FakeResp(201, {"execution_id": "ex-instrumented"}),
+        _FakeResp(200, {"result": {"exit_status": 0, "output": [json.dumps({
+            "schema": "unitares.codex_app_server_result.v1",
+            "text": json.dumps(answer),
+            "model_selected": "gpt-5.6-sol",
+            "model_effective": "gpt-5.6-sol",
+            "model_used": "gpt-5.6-sol",
+            "models_used": ["gpt-5.6-sol"],
+            "model_provider": "openai",
+            "model_reroutes": [],
+            "model_reporting_status": "reported_by_app_server",
+            "provider_usage": {},
+            "tokens_used": 0,
+            "finish_reason": "completed",
+            "warnings": [],
+            "errors": [],
+        })]}}),
+    ])
+
+    result = _run(ha.invoke_host_adapter(
+        "codex:host-adapter",
+        "answer",
+        timeout_s=5,
+        model="gpt-5.6-sol",
+    ))
+
+    spawn_spec = state["calls"][0][1]["json"]
+    assert spawn_spec["env"]["HA_CODEX_APP_SERVER"] == "1"
+    assert spawn_spec["env"]["HA_PYTHON"] == ha.sys.executable
+    assert spawn_spec["env"]["HA_CODEX_APP_SERVER_CLIENT"].endswith(
+        "codex_app_server_client.py"
+    )
+    assert result["provenance"]["model_selection_source"] == "caller"
+    assert result["provenance"]["model_used"] == "gpt-5.6-sol"
+    assert result["provenance"]["codex_transport"] == "app_server"
 
 
 def test_current_username_falls_back_to_env_when_lookup_raises(monkeypatch):

@@ -320,7 +320,7 @@ def test_schema_accepts_the_codex_host_id():
     assert DelegateInferenceParams(
         prompt="hi", host_id="codex:host-adapter"
     ).host_id == "codex:host-adapter"
-    # Claude stays the default: its CLI reports exact model ids, Codex's does not.
+    # Preserve the established explicit-tool default; consult handles reciprocity.
     assert DelegateInferenceParams(prompt="hi").host_id == "claude:host-adapter"
     with pytest.raises(ValidationError):
         DelegateInferenceParams(prompt="hi", host_id="ollama:local")
@@ -330,8 +330,8 @@ def test_schema_accepts_the_codex_host_id():
 async def test_delegate_inference_routes_to_codex(monkeypatch):
     """A codex call reaches the adapter and is reported as its own host.
 
-    The Codex CLI reports no model identifier, so provenance carries the
-    warning instead of a model id — the evidence must not imply otherwise.
+    The exec JSONL compatibility path reports no model identifier, so its
+    provenance carries a warning instead of implying a model id.
     """
     monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _codex_host())
     monkeypatch.setattr(di, "get_context_resolved_agent_id", lambda: "uuid-requester")

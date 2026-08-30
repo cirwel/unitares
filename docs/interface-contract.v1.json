@@ -8,7 +8,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "8c55263453f33537de9a88ef8b1694031d02cc4eeb3406214345d5c6524e9298",
+  "surface_sha256": "5074da3de8f0c6653f634fd40b51fd1bbedc06e5febf732c35149fe5e9b23680",
   "capabilities": [
     {
       "name": "start_session",
@@ -201,7 +201,7 @@
       "name": "delegate_inference",
       "implementation": "delegate_inference",
       "kind": "canonical_tool",
-      "input_schema_sha256": "baf9894d79a4314efa8194fcda292d70f81b846a753ef1994283ad063c1a7d7c",
+      "input_schema_sha256": "5fd250e425ba38575fdcc4bd5f2bbf2207db8fd57cc3aa2c815dbce2016ebadb",
       "transport_names": {
         "mcp_streamable_http": "delegate_inference",
         "rest_v1_tools": "delegate_inference",
