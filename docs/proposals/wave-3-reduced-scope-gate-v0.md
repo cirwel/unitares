@@ -330,7 +330,13 @@ integration).
   struck 2026-06-24) is still measured and still reported; it can no longer stop anything. ⛔It was
   not retired — do not cite it as removed.
 - **Criterion 7.** The `docs/handoffs/wave-3-mcp-sdk-spike-<date>.md` artifact exists on no ref.
-  Does not fire on the merits; the artifact is owed (§6.4).
+  Does not fire on the merits; the artifact is owed (§6.4). ⚠️**Desk evidence refreshed
+  2026-08-30, and the supporting fact had gone stale:** `anubis-mcp` is **v2.0.0 (2026-08-07)**,
+  not v1.6.2 — HTTP+SSE transports removed, protocol floor moved to 2025-03-26. ⛔The verdict is
+  unchanged and now better evidenced (five releases in late July 2026 plus a major in August is
+  decisive against "no maintainer responsiveness"), but **desk evidence cannot discharge
+  criterion 7**, which requires a hands-on streaming spike. Full refresh in
+  `beam-wave-3-handler-dispatch.md` §v0.3.5 item 3.
 
 ---
 
@@ -391,6 +397,91 @@ slip as a standalone halt. ⛔Explicitly reserved to the operator by the amendme
 `wave-3-state-ownership-redteam-<date>.md` / `-prep-` contradiction (criterion 8, original scope).
 Both are non-gating for the reduced scope and both are still owed. ⛔Applying the
 missing-source halt to 8 and not to 7 remains inconsistent.
+
+⛔**CORRECTION 2026-08-30 — "exists on no ref" is not evidence about these artifacts, and three
+documents rest on it as though it were.** `docs/handoffs/` is **gitignored**
+(`.gitignore:186`, under a comment declaring "retired/handoff docs" deliberately local-only). A
+file at that path **can never appear on any ref**, by repo policy.
+
+That makes the observation unfalsifiable in one direction:
+
+- `git log --all` returning nothing for `docs/handoffs/wave-3-*` is **guaranteed**, not found.
+- A GitHub API 404 for that path is **guaranteed**, not found.
+- ⛔Neither distinguishes *"the red-team never happened"* from *"the red-team happened and its
+  artifact sits on the operator's machine, exactly where repo policy says handoff docs live."*
+
+⚠️**This is the four-state confusion the measurement-authority rule exists to prevent**, applied to
+the gate's own reasoning: a policy artifact read as evidence about work. State 3 (*not recorded,
+and by design cannot be*) presented as state 4 (*genuinely absent*).
+
+**Where it propagates.** `beam-wave-3-handler-dispatch.md:15` and
+`wave-3-go-decision-2026-08-16.md:300` both say the (D) halt "is satisfied by its first clause
+alone" **on exactly this observation** — the latter citing `git log --all` across 245 remote
+branches and a GitHub API 404 as two independent verifications. They are not independent; they
+are two ways of observing the same `.gitignore` line.
+
+⛔**What this does NOT establish.** It does not show the red-team happened, and it does not lift
+the (D) halt — whose other clauses are untouched, and which criterion 8's dissolution made
+historical for the reduced scope anyway. It establishes only that **the first clause's evidence
+was never capable of bearing the weight put on it**, and that anyone re-reading (D) must ask the
+operator whether the artifact exists locally rather than re-running a query whose answer is fixed.
+
+⛔**Both artifacts remain owed.** Criterion 7 wants a hands-on spike, which no desk pass can
+supply; criterion 8's contradiction is an adjudication, not a file.
+
+⚠️**CORRECTION 2026-08-30 (second) — criterion 7's spike is blocked on network policy, not on the
+absence of a toolchain.** The refresh above said, and PR #2031's body repeated, that there is "no
+Elixir toolchain in the session." That was an assumption stated as a fact, and it is false: a
+working toolchain was built in-session — **Elixir 1.18.4 on Erlang/OTP 25** — verified by
+executing a program, not by reading a version string. (Distro `apt` ships Elixir 1.14, below
+`anubis_mcp` 2.0.0's `~> 1.18` floor; the upstream release zip clears it.)
+
+Two blockers survive the toolchain, and both are environment policy rather than facts about the
+SDK:
+
+| Blocker | Observed | Consequence |
+|---|---|---|
+| **Hex package hosts unreachable** | `hex.pm` → **200**; `repo.hex.pm` → **000**; `builds.hex.pm` → **000**. The agent proxy's status endpoint records `connect_rejected` — *"gateway answered 403 to CONNECT (policy denial or upstream failure)"* — for both. Its direct-allow list carries `pypi.org`, `registry.npmjs.org`, `index.crates.io`, `proxy.golang.org`, `jsr.io`; **no hex host**. | `mix local.hex`, `mix local.rebar` and `mix deps.get` all fail. `anubis_mcp` cannot be fetched, so it cannot be compiled or exercised. |
+| **Third-party source not attachable** | `add_repo cloudwalk/anubis-mcp` refused — *"cross-tier adds are not supported in v1"*, the session already holding `cirwel` sources. A direct `git clone` of the same public repo is refused by the session's git proxy. | The fallback of vendoring the dependency tree from git instead of hex is closed too. |
+
+⛔**What this does NOT change.** (C)'s verdict is untouched, and criterion 7's status is untouched:
+the streaming clause is still untested and the artifact is still owed. Nothing here is spike
+evidence, and no artifact at `wave-3-mcp-sdk-spike-<date>.md` was written — writing one on this
+session's work would be fabrication, which is why none exists.
+
+⛔**What it does change is the reason on record**, and that is the difference between a dead end
+and a request: the spike needs **`repo.hex.pm` and `builds.hex.pm` added to the environment's
+network policy**, or a session started with **`cloudwalk/anubis-mcp` as its initial source**.
+Either is an operator action of minutes. The previous phrasing implied a capability gap that does
+not exist, and would have left criterion 7 looking permanently unreachable from any agent session.
+
+⚠️A near relative of the `.gitignore` finding above: *not reachable* (state 2) reported as though
+the capability were simply absent. The first was caught by reading the policy; this one only by
+testing the assumption instead of restating it.
+
+⛔**CORRECTION 2026-08-30 (third, superseding the ask in the second) — the project already has an
+Elixir CI lane with hex access, so the spike never needed an operator network-policy change.**
+The correction above asked for `repo.hex.pm` / `builds.hex.pm` on the agent proxy's allow list. That
+ask was **wrong**, and wrong in the same way as the two errors it was correcting: a limitation of
+the session reported as a limitation of the project, without reading the repository.
+
+`.github/workflows/elixir-tests.yml` runs `mix deps.get` + `mix test` on GitHub runners for five
+apps — `unitares_sdk` (Elixir 1.15 **and** 1.19, OTP 27), `agent_orchestrator`, `dialectic_live`,
+`sentinel`, `lease_plane` — pulling `phoenix`, `req`, `finch`, `postgrex`, `bandit` and the rest
+from hex. It is green on `master`. **Hex is reachable from CI; only this session's proxy blocks it.**
+
+⛔**So criterion 7's ask is a CI job, not a policy grant.** A spike lands as a scratch mix app plus
+a job in that workflow, on the lane that already exists. ⚠️One design constraint the gate should
+record now rather than at the spike: (C)'s streaming clause names *Anthropic* streaming, and the
+execution-cost policy forbids a metered API on the required path — so the spike must exercise
+`anubis_mcp` against a local or stubbed peer, or run as an opt-in job that no-ops without a key.
+**Which of those is a choice, and it is the operator's.**
+
+⚠️**Found while verifying this: `elixir/wave3a_handlers` is in no workflow at all.** 83 tests, a
+live service (`scripts/ops/com.unitares.wave3a-handlers.plist.template`) with a Python-side proxy
+(`src/wave3a_beam_proxy.py`), and **zero** CI references — every other app under `elixir/` has a
+job. That is precisely the drift gap `elixir-tests.yml`'s own header says it was written to close.
+⛔Recorded here as a finding, not fixed here: it is a CI change, not a gate document's business.
 
 **§6.5 Scope: path (1) only, or (1) and (2)? — ⏸️ DEFERRED, with a named reopen condition.**
 _(operator, 2026-08-29)_ ⛔**Not answered, and deliberately not sent to council either.** §6.6's

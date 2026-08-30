@@ -341,8 +341,36 @@ halt/reopen decision remain the operator-led red-team's**, per (D).
    was forked/rebranded to **`anubis-mcp`**, which is the live path — v1.6.2 (2026-06-09), spec
    **2025-06-18 + 2025-11-25 (Tasks)**, StreamableHTTP + OAuth 2.1. **(C) does not fire** (a current,
    spec-fresh, streaming-capable SDK exists), but §6's SDK assumptions and the (C) clause's named
-   versions should re-pin to `anubis-mcp` (≥v1.6.2) at the implementation gate. Optional hands-on
-   Anthropic-streaming code spike remains to close that clause beyond desk evidence.
+   versions should re-pin to `anubis-mcp` (~~≥v1.6.2~~ **≥v2.0.0** — see below) at the
+   implementation gate. Optional hands-on Anthropic-streaming code spike remains to close that
+   clause beyond desk evidence.
+
+   ⚠️**Desk evidence refreshed 2026-08-30.** ⛔Recorded inline here rather than as a handoff
+   file, because `docs/handoffs/` is gitignored (`.gitignore:186`) and a document nobody can read
+   from the repository is not a record — see the gate's §6.4, where that same fact turns out to
+   undercut the (D) halt's first clause. The version above is stale by a major release: `anubis-mcp` is **v2.0.0 (2026-08-07)**, carrying two breaking changes —
+   deprecated **HTTP+SSE transports removed**, and **2024-11-05 dropped** with the floor moved to
+   **2025-03-26**. ⛔**(C) still does not fire, and is now better evidenced**: five releases in
+   late July 2026 plus a major in August is decisive against "no maintainer responsiveness", and a
+   floor moving forward is the opposite of spec drift. ⛔**The streaming clause remains
+   untested** — that is exactly what the hands-on spike this paragraph calls optional would
+   close, and no desk pass can reach it. ⚠️Unrecorded elsewhere: `anubis-mcp` is
+   **LGPL-3.0** against this repo's Apache-2.0; LGPL permits linking, so this is an open question
+   rather than a finding, but (C)'s criteria never mention licensing at all.
+
+   ⚠️**Why the hands-on spike still has not run (2026-08-30).** Not for want of a toolchain —
+   Elixir 1.18.4 / OTP 25 was built and executed in-session. `repo.hex.pm` and `builds.hex.pm` are
+   absent from the agent proxy's allow list (CONNECT answered 403), so `mix deps.get` cannot fetch
+   `anubis_mcp`; and `cloudwalk/anubis-mcp` cannot be attached as a session source to vendor it
+   from git instead. ⛔Both are environment policy, not properties of the SDK, and both are
+   operator-liftable — see the gate's §6.4 second correction for the exact asks.
+
+   ⛔**Superseded the same day:** that ask was wrong. `.github/workflows/elixir-tests.yml` already
+   runs `mix deps.get` + `mix test` on GitHub runners for five apps under `elixir/`, pulling from
+   hex and green on `master` — **hex is reachable from CI; only the agent session's proxy blocks
+   it.** The spike is a CI job on an existing lane, not a policy grant. Gate §6.4 third correction
+   carries the detail, including the execution-cost constraint on (C)'s *Anthropic*-streaming
+   clause.
 
 ## What changed in v0.3.4 (vs v0.3.3)
 
