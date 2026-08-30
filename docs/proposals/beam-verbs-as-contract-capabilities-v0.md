@@ -583,6 +583,42 @@ confirms is not doing the job; this one changed four claims and improved a
 fifth — the duplicate-responder trade now in §8b, which no earlier pass caught
 because the earlier passes and the author shared the same framing.
 
+**Resolved 2026-08-30T02:30Z, `action: resume`.** The reviewer ratified on the
+stated ground that the response "satisfies the central objection through
+independently described tree evidence, not mere assent." It also noted that the
+author's condition list was *abbreviated*, and that ratification is subject to
+the fuller set below. That distinction is the reason this subsection exists: an
+agreement reached by deferring would have resolved the session just as cleanly
+and left the document wrong.
+
+### 8f. Ratified conditions — binding on the `msg` slices
+
+These are the resolution's conditions, not suggestions. The first three are
+discharged by the corrections above; the last three are obligations on work not
+yet done, and the **test lists are part of the condition**, not commentary.
+
+1. ✅ Correct §8's citations, the inbox-loss wording, and the retry premise.
+2. ✅ Restate the retry argument as conditional — required *if* ambiguous-result
+   retries are promised, not because capability exposure creates them.
+3. ✅ Record (c)'s duplicate-responder trade and correct the storage claim.
+4. ⬜ **Keep authorization separate from operation identity.** A retry retains
+   the operation key and the exact material request, but mints a fresh
+   single-use `lat.v1` attestation. Tests required: concurrent sends,
+   response-loss retry, digest conflict, **idempotency storage unavailable**,
+   and attestation replay. The storage-unavailable case is the one most easily
+   forgotten — an idempotency layer that fails open silently is worse than none,
+   because callers will have been told retries are safe.
+5. ⬜ **Choose the consumer and delivery contract before exposing `msg/inbox`.**
+   For (c): a stable total order and a caller-presented cursor; reads must not
+   advance it; any cumulative advance only after durable processing of a
+   contiguous prefix. Tests required: duplicate responders, same-cursor
+   concurrency, lost responses, cursor loss, pagination, TTL expiry.
+6. ⬜ **If (a) is selected**, declare whether a recipient is a single logical
+   consumer or supports competing consumers, and require a stable claim
+   operation ID, fenced claim generations, late-ack rejection, redelivery, and
+   either one active batch per recipient or an explicit disjoint-delivery
+   contract.
+
 ## 9. Sequencing
 
 1. **`msg/send` first, and independently.** It is the smallest surface with
