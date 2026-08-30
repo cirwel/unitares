@@ -113,6 +113,17 @@ defmodule UnitaresLeasePlane.GovernedEffectIntegrationTest do
   end
 
   test "promotion with an unknown shadow fails 422 before execute dispatch", ctx do
+    previous = Application.get_env(:lease_plane, :governed_effect_promotion_enabled)
+    Application.put_env(:lease_plane, :governed_effect_promotion_enabled, true)
+
+    on_exit(fn ->
+      if is_nil(previous) do
+        Application.delete_env(:lease_plane, :governed_effect_promotion_enabled)
+      else
+        Application.put_env(:lease_plane, :governed_effect_promotion_enabled, previous)
+      end
+    end)
+
     resp =
       post_json(
         "/v1/effects",

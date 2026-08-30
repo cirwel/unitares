@@ -59,6 +59,37 @@ defmodule UnitaresLeasePlane.GovernanceVetoClient do
   end
 
   @doc """
+  Re-verify and return the proposer's server-reported identity tier without
+  treating the governance verdict as identity evidence.
+
+  The current `/v1/effect-veto` proof route can establish only `strong` or
+  `unverified`; `strong` satisfies the record_only `>= medium` floor. This
+  helper deliberately ignores `vetoed` while still requiring HTTP 200,
+  `tier_ok: true`, and a recognized tier. Callers fail closed to an unverified,
+  non-promotable shadow on every other response.
+  """
+  @spec verify_identity_tier(map()) :: {:ok, String.t()} | {:error, term()}
+  def verify_identity_tier(%{proposer_agent_uuid: uuid})
+      when not is_binary(uuid) or uuid == "" do
+    {:error, :proposer_required}
+  end
+
+  def verify_identity_tier(env) do
+    with {:ok, base} <- base_url() do
+      body = Jason.encode!(build_veto_body(env))
+      url = String.to_charlist(base <> "/v1/effect-veto")
+      request = {url, veto_headers(), ~c"application/json", body}
+      http_opts = [timeout: timeout_ms(), connect_timeout: 2_000]
+
+      case :httpc.request(:post, request, http_opts, body_format: :binary) do
+        {:ok, {{_v, 200, _r}, _h, resp}} -> parse_identity_tier(resp)
+        {:ok, {{_v, status, _r}, _h, resp}} -> {:error, {:veto_status, status, truncate(resp)}}
+        {:error, reason} -> {:error, {:veto_unreachable, reason}}
+      end
+    end
+  end
+
+  @doc """
   Build the veto request body (pre-encode) from an effect env. §7 proof: the
   proposer's `continuity_token` is forwarded when present, and the key is
   OMITTED entirely when absent/blank — so an unauthenticated proposer is judged
@@ -129,6 +160,22 @@ defmodule UnitaresLeasePlane.GovernanceVetoClient do
       {:ok, %{"vetoed" => false}} -> :allow
       {:ok, other} -> {:error, {:veto_bad_body, other}}
       {:error, _} -> {:error, :veto_bad_json}
+    end
+  end
+
+  defp parse_identity_tier(resp) do
+    case Jason.decode(resp) do
+      {:ok, %{"tier_ok" => true, "tier" => tier}} when tier in ~w(medium strong) ->
+        {:ok, tier}
+
+      {:ok, %{"tier_ok" => false}} ->
+        {:error, :identity_unverified}
+
+      {:ok, other} ->
+        {:error, {:veto_bad_identity_body, other}}
+
+      {:error, _} ->
+        {:error, :veto_bad_json}
     end
   end
 

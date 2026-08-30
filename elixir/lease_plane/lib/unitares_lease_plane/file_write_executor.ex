@@ -42,6 +42,18 @@ defmodule UnitaresLeasePlane.FileWriteExecutor do
     end
   end
 
+  @doc false
+  def resolved_target_surface(payload, leases) do
+    with raw when is_binary(raw) <- Map.get(payload, "path") || {:error, :path_required},
+         {:ok, canonical} <- Canonicalize.canonicalize("file://" <> raw),
+         true <- canonical in lease_surfaces(leases) || {:error, :surface_path_mismatch} do
+      {:ok, canonical}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :surface_path_mismatch}
+    end
+  end
+
   @impl true
   def apply_effect(effect_id, payload, leases) do
     with {:ok, path} <- resolve_path(payload, leases),
@@ -125,13 +137,8 @@ defmodule UnitaresLeasePlane.FileWriteExecutor do
   # --- validation (the path the dry-run proves) ------------------------------
 
   defp resolve_path(payload, leases) do
-    with raw when is_binary(raw) <- Map.get(payload, "path") || {:error, :path_required},
-         {:ok, canonical} <- Canonicalize.canonicalize("file://" <> raw),
-         true <- canonical in lease_surfaces(leases) || {:error, :surface_path_mismatch} do
+    with {:ok, canonical} <- resolved_target_surface(payload, leases) do
       {:ok, strip_scheme(canonical)}
-    else
-      {:error, reason} -> {:error, reason}
-      _ -> {:error, :surface_path_mismatch}
     end
   end
 
@@ -174,7 +181,9 @@ defmodule UnitaresLeasePlane.FileWriteExecutor do
   # Injectable seams (default real File / EffectRepo) so the live commit AND
   # every step of the compensation can be fault-injected in tests — the dialectic
   # precondition for the live-write path.
-  defp file_ops, do: Application.get_env(:lease_plane, :effect_file_ops, UnitaresLeasePlane.EffectFileOps)
+  defp file_ops,
+    do: Application.get_env(:lease_plane, :effect_file_ops, UnitaresLeasePlane.EffectFileOps)
+
   defp repo, do: Application.get_env(:lease_plane, :effect_repo, UnitaresLeasePlane.EffectRepo)
 
   defp commit_enabled?,

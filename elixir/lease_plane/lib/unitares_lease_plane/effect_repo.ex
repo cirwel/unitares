@@ -54,6 +54,43 @@ defmodule UnitaresLeasePlane.EffectRepo do
   end
 
   @doc """
+  Atomically claim one deterministic promotion effect id.
+
+  Unlike `insert_effect_payload/1`, this distinguishes the winning INSERT from
+  `ON CONFLICT DO NOTHING`. Promotion derives this id from its predecessor, so
+  the existing primary key becomes the single-consumer gate across processes
+  and idempotency keys before any mutation occurs.
+  """
+  @spec claim_promotion_payload(map()) :: :inserted | :already | {:error, term()}
+  def claim_promotion_payload(p) do
+    sql = """
+    INSERT INTO effects.payloads
+      (effect_id, effect_type, payload_bytes, payload_sha256, required_leases,
+       proposer_agent_uuid, idempotency_key, idempotency_digest)
+    VALUES ($1, $2, $3, $4, ($5::text)::jsonb, $6, $7, $8)
+    ON CONFLICT (effect_id) DO NOTHING
+    RETURNING effect_id
+    """
+
+    params = [
+      p.effect_id,
+      p.effect_type,
+      p.payload_bytes,
+      p.payload_sha256,
+      Jason.encode!(Map.get(p, :required_leases, [])),
+      Map.get(p, :proposer_agent_uuid),
+      p.idempotency_key,
+      p.idempotency_digest
+    ]
+
+    case Postgrex.query(DB, sql, params) do
+      {:ok, %{num_rows: 1}} -> :inserted
+      {:ok, %{num_rows: 0}} -> :already
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
   Record the rollback pre-image and flip rollback_state -> 'pending'. The
   `WHERE rollback_state IS NULL` guard makes a double-call (e.g. a restarted
   custodian re-running apply) a no-op rather than clobbering a captured
