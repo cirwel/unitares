@@ -1,0 +1,79 @@
+name: SDK release sync
+
+# Core owns release intent and publication; Resident separately owns whether
+# its dependency range covers the latest PyPI artifact. Run this ten minutes
+# before Resident's Monday 09:17 UTC drift check so the two findings describe
+# distinct seams instead of duplicating one another.
+on:
+  schedule:
+    - cron: "7 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout with SDK tags
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Compare declared, tagged, published, and advertised versions
+        id: sync
+        run: |
+          python3 scripts/ci/sdk_release_sync.py --json | tee sdk-sync.json
+          echo "synced=$(jq -r '.synced' sdk-sync.json)" >> "$GITHUB_OUTPUT"
+          {
+            echo '## SDK release sync'
+            echo '```json'
+            cat sdk-sync.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open or update the release-sync issue
+        if: steps.sync.outputs.synced != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create ci-finding --description "Opened by a CI audit/collector" \
+            --color D93F0B 2>/dev/null || true
+          marker='<!-- finding-fingerprint: sdk-release-sync -->'
+          body_file=$(mktemp)
+          {
+            echo "$marker"
+            echo 'The SDK release surfaces disagree. This is a reminder, not an automatic release.'
+            echo
+            echo '```json'
+            cat sdk-sync.json
+            echo '```'
+            echo
+            echo 'Resolve by converging the in-tree version, `sdk-v*` tag, PyPI artifact, and public compatibility claims.'
+            echo
+            echo '_Filed by `.github/workflows/sdk-release-sync.yml`._'
+          } > "$body_file"
+          existing=$(gh issue list --label ci-finding --state open \
+            --search 'sdk-release-sync in:body' \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file "$body_file"
+          else
+            gh issue create --title "SDK release surfaces are out of sync" \
+              --label ci-finding --body-file "$body_file"
+          fi
+
+      - name: Close the resolved release-sync issue
+        if: steps.sync.outputs.synced == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing=$(gh issue list --label ci-finding --state open \
+            --search 'sdk-release-sync in:body' \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" --reason completed \
+              --comment "The declared version, release tag, PyPI artifact, and public claims now agree."
+          fi
