@@ -1129,6 +1129,7 @@ def build_experience_envelope(
             "corroboration_grade",
             "evidence_weight",
             "claim_risk",
+            "corroboration_reasons",
         )
         snapshot = payload.get("eisv_snapshot")
         if isinstance(snapshot, dict):
