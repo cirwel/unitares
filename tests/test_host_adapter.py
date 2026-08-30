@@ -74,6 +74,35 @@ def test_extract_text_non_codex_passthrough():
     assert ha._extract_text(out, family="anthropic_claude") == "the claude answer\nsecond line"
 
 
+def test_extract_codex_jsonl_uses_final_agent_message_and_exact_usage():
+    first = {"schema": "unitares.terminal_answer.v1", "status": "complete", "answer": "old"}
+    final = {"schema": "unitares.terminal_answer.v1", "status": "complete", "answer": "final"}
+    output = [
+        "Reading additional input from stdin...",
+        json.dumps({"type": "thread.started", "thread_id": "thread-1"}),
+        json.dumps({
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": json.dumps(first)},
+        }),
+        json.dumps({
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": json.dumps(final)},
+        }),
+        json.dumps({
+            "type": "turn.completed",
+            "usage": {"input_tokens": 4, "output_tokens": 5},
+        }),
+    ]
+
+    text, metadata = ha.extract_cli_result(output, family="openai_codex")
+
+    assert json.loads(text) == final
+    assert metadata["provider_usage"] == {"input_tokens": 4, "output_tokens": 5}
+    assert metadata["tokens_used"] == 9
+    assert metadata["finish_reason"] == "completed"
+    assert ha.codex_answer_region_located("\n".join(output)) is True
+
+
 def test_extract_claude_json_preserves_exact_models_usage_and_cost():
     payload = {
         "subtype": "success",
@@ -176,7 +205,14 @@ def test_invoke_happy_path(monkeypatch):
     state = _patch_httpx(monkeypatch, [
         _FakeResp(201, {"ok": True, "execution_id": "ex-1", "agent_id": "ex-1"}),
         _FakeResp(200, {"result": {"exit_status": 0, "output": [
-            "codex", json.dumps(answer), "tokens used", "9",
+            json.dumps({
+                "type": "item.completed",
+                "item": {"type": "agent_message", "text": json.dumps(answer)},
+            }),
+            json.dumps({
+                "type": "turn.completed",
+                "usage": {"input_tokens": 4, "output_tokens": 5},
+            }),
         ]}}),
     ])
     r = _run(ha.invoke_host_adapter("codex:host-adapter", "hi", timeout_s=5))
@@ -188,6 +224,7 @@ def test_invoke_happy_path(monkeypatch):
     assert r["exit_status"] == 0
     assert r["provenance"]["model_family"] == "openai_codex"
     assert r["provenance"]["transport"] == "host_adapter"
+    assert r["provenance"]["tokens_used"] == 9
 
 
 def test_invoke_claude_is_safe_and_model_is_env_quoted(monkeypatch):
@@ -271,7 +308,13 @@ def test_invoke_plan_only_output_fails_closed(monkeypatch):
         _FakeResp(201, {"ok": True, "agent_id": "ag-plan"}),
         _FakeResp(200, {"result": {
             "exit_status": 0,
-            "output": ["codex", "I will inspect the repository and report back."],
+            "output": [json.dumps({
+                "type": "item.completed",
+                "item": {
+                    "type": "agent_message",
+                    "text": "I will inspect the repository and report back.",
+                },
+            })],
         }}),
     ])
 
@@ -527,11 +570,11 @@ def test_codex_model_request_is_passed_to_the_cli(monkeypatch):
     _cli, shell_command, family = ha._HOST_COMMANDS["codex:host-adapter"]
     assert family == "openai_codex"
     assert '-m "$HA_MODEL"' in shell_command
-    # The no-model branch stays byte-identical to the command verified live.
-    assert (
-        'exec "$HA_CLI" exec --sandbox "$HA_SANDBOX" '
-        '--skip-git-repo-check "$HA_PROMPT" </dev/null'
-    ) in shell_command
+    assert shell_command.count("--ignore-user-config") == 2
+    assert shell_command.count("--ephemeral") == 2
+    assert shell_command.count("--json") == 2
+    assert shell_command.count('--sandbox "$HA_SANDBOX"') == 2
+    assert shell_command.count("--skip-git-repo-check") == 2
 
 
 def test_codex_cli_env_var_is_named_for_its_own_host():
