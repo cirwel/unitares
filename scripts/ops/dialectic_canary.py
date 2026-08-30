@@ -476,8 +476,16 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
             poll_interval_s=_poll_interval_s(),
         )
         terminal = review_payload(terminal_payload)
+        # A completed transport call is not necessarily a successful persisted
+        # read: the MCP envelope or the dialectic handler can return
+        # ``success=False`` while still carrying stale-looking phase/verdict
+        # fields. Promote terminal evidence only after both layers succeeded
+        # and the persisted session is the one requested.
         persisted_terminal_verified = (
-            completed > 0 and terminal.get("session_id") == raw_review["session_id"]
+            completed > 0
+            and terminal_payload.get("success") is True
+            and terminal.get("success") is True
+            and terminal.get("session_id") == raw_review["session_id"]
         )
         if persisted_terminal_verified:
             resolution = terminal.get("resolution")
@@ -492,9 +500,9 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
             record["whose_move"] = terminal.get("whose_move")
         else:
             # Never promote the context-only request response into terminal
-            # evidence. A failed first read or mismatched session has no
-            # verified persisted phase/verdict, even if request_review returned
-            # an optimistic resolved/resume shape.
+            # evidence. A failed first read, completed error response, or
+            # mismatched session has no verified persisted phase/verdict, even
+            # if either response carries an optimistic resolved/resume shape.
             record["terminal_phase"] = "unverified"
             record["review_verdict"] = None
             record["whose_move"] = None

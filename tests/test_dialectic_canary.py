@@ -603,6 +603,74 @@ async def test_run_logs_unverified_telemetry_for_mismatched_session(
     assert "unverified session_id" in record["detail"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "get_payload",
+    [
+        {
+            "success": False,
+            "error": "persisted read failed",
+            "session_id": "sess-1",
+            "phase": "resolved",
+            "resolution": {"action": "resume"},
+            "whose_move": "nobody",
+        },
+        {
+            "success": True,
+            "raw_governance": {
+                "success": False,
+                "error": "persisted handler read failed",
+                "session_id": "sess-1",
+                "phase": "resolved",
+                "resolution": {"action": "resume"},
+                "whose_move": "nobody",
+            },
+        },
+    ],
+    ids=["flat", "enveloped"],
+)
+async def test_run_rejects_unsuccessful_completed_persisted_read(
+    monkeypatch, tmp_path, get_payload
+):
+    async def fake_call_tool(url, tool_name, arguments, timeout_s):
+        if tool_name == "start_session":
+            return {
+                "success": True,
+                "agent_uuid": "agent-uuid",
+                "client_session_id": "agent-csid",
+                "raw_governance": {
+                    "success": True,
+                    "uuid": "agent-uuid",
+                    "client_session_id": "agent-csid",
+                    "display_name": "canary_dialectic_test",
+                },
+            }
+        if tool_name == "request_review":
+            return {
+                "success": True,
+                "session_id": "sess-1",
+                "phase": "antithesis",
+                "one_call_review": True,
+                "thesis_recorded": True,
+            }
+        assert tool_name == "dialectic"
+        return get_payload
+
+    monkeypatch.setattr(canary, "call_tool", fake_call_tool)
+    log_path = tmp_path / "canary.jsonl"
+    rc = await canary.run("http://example.test/mcp/", log_path=log_path, skip_db=True)
+
+    assert rc == 1
+    record = json.loads(log_path.read_text().strip())
+    assert record["terminal_phase"] == "unverified"
+    assert record["review_verdict"] is None
+    assert record["whose_move"] is None
+    assert record["terminal_poll_attempt_count"] == 1
+    assert record["terminal_poll_completed_count"] == 1
+    assert isinstance(record["terminal_latency_s"], float)
+    assert "dialectic get failed" in record["detail"]
+
+
 def test_positive_float_env_rejects_invalid_and_nonpositive(monkeypatch):
     monkeypatch.setenv("UNITARES_CANARY_VERDICT_TIMEOUT_S", "not-a-number")
     assert canary._verdict_timeout_s() == 120.0
