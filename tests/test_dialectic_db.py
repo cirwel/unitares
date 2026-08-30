@@ -1158,6 +1158,21 @@ class TestGetActiveSessions:
         call_args = conn.fetch.call_args[0]
         assert call_args[1] == 10
 
+    @pytest.mark.asyncio
+    async def test_get_active_sessions_can_prioritize_least_recently_updated(self, db):
+        """Maintenance callers must be able to reach old rows in a full batch."""
+        instance, pool, conn = db
+        conn.fetch = AsyncMock(return_value=[])
+
+        await instance.get_active_sessions(
+            limit=101,
+            least_recently_updated_first=True,
+        )
+
+        sql = " ".join(conn.fetch.await_args.args[0].split())
+        assert "ORDER BY COALESCE(updated_at, created_at) ASC, created_at ASC" in sql
+        assert conn.fetch.await_args.args[1] == 101
+
 
 # ============================================================================
 # DialecticDB.get_sessions_awaiting_reviewer
@@ -1479,8 +1494,25 @@ class TestConvenienceWrappers:
 
         result = await get_active_sessions_async(limit=50)
 
-        mock_singleton.get_active_sessions.assert_awaited_once_with(50)
+        mock_singleton.get_active_sessions.assert_awaited_once_with(
+            50,
+            least_recently_updated_first=False,
+        )
         assert result == []
+
+    @pytest.mark.asyncio
+    async def test_get_active_sessions_async_forwards_maintenance_order(self, mock_singleton):
+        mock_singleton.get_active_sessions = AsyncMock(return_value=[])
+
+        await get_active_sessions_async(
+            limit=101,
+            least_recently_updated_first=True,
+        )
+
+        mock_singleton.get_active_sessions.assert_awaited_once_with(
+            101,
+            least_recently_updated_first=True,
+        )
 
     @pytest.mark.asyncio
     async def test_get_sessions_awaiting_reviewer_async(self, mock_singleton):

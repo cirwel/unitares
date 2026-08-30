@@ -45,6 +45,10 @@ STUCK_SESSION_THRESHOLD = timedelta(hours=2)
 # Extended threshold before marking FAILED (gives human time to facilitate)
 FACILITATION_TIMEOUT = timedelta(hours=4)
 
+# Fetch one extra row so a full maintenance batch is distinguishable from the
+# complete active set. The overflow row is not processed in this cycle.
+SWEEP_BATCH_SIZE = 100
+
 
 def _parse_timestamp(value) -> datetime | None:
     """Parse a timestamp value into a timezone-aware datetime."""
@@ -212,19 +216,36 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
         Dict with counts of resolved/reassigned sessions and details
     """
     active_session_count = 0
+    active_session_batch_truncated = False
     stuck_session_count = 0
     invalid_session_count = 0
     saga_inflight_skip_count = 0
     write_attempt_count = 0
     overlap_detected_count = 0
     overlap_probe_failed_count = 0
+    resolved_count = 0
+    reassigned_count = 0
+    facilitation_count = 0
+    skipped_count = 0
+    details = []
 
     try:
         now = datetime.now(timezone.utc)
         threshold_time = now - STUCK_SESSION_THRESHOLD
         fail_time = now - FACILITATION_TIMEOUT
 
-        active_sessions = await get_active_sessions_async(limit=100)
+        active_sessions = await get_active_sessions_async(
+            limit=SWEEP_BATCH_SIZE + 1,
+            least_recently_updated_first=True,
+        )
+        active_session_batch_truncated = len(active_sessions) > SWEEP_BATCH_SIZE
+        if active_session_batch_truncated:
+            active_sessions = active_sessions[:SWEEP_BATCH_SIZE]
+            logger.warning(
+                "Dialectic sweep active-session batch truncated at %s rows; "
+                "least-recently-updated rows were prioritized",
+                SWEEP_BATCH_SIZE,
+            )
         active_session_count = len(active_sessions)
 
         if not active_sessions:
@@ -234,6 +255,7 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
                 "facilitation_count": 0,
                 "skipped_count": 0,
                 "active_session_count": 0,
+                "active_session_batch_truncated": False,
                 "stuck_session_count": 0,
                 "invalid_session_count": 0,
                 "saga_inflight_skip_count": 0,
@@ -259,6 +281,7 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
                 "facilitation_count": 0,
                 "skipped_count": 0,
                 "active_session_count": active_session_count,
+                "active_session_batch_truncated": active_session_batch_truncated,
                 "stuck_session_count": 0,
                 "invalid_session_count": 0,
                 "saga_inflight_skip_count": 0,
@@ -268,12 +291,6 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
                 "details": [],
                 "message": "No stuck sessions found"
             }
-
-        resolved_count = 0
-        reassigned_count = 0
-        facilitation_count = 0
-        skipped_count = 0
-        details = []
 
         for session in stuck_sessions:
             session_id = session.get("session_id")
@@ -641,6 +658,7 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
             "facilitation_count": facilitation_count,
             "skipped_count": skipped_count,
             "active_session_count": active_session_count,
+            "active_session_batch_truncated": active_session_batch_truncated,
             "stuck_session_count": stuck_session_count,
             "invalid_session_count": invalid_session_count,
             "saga_inflight_skip_count": saga_inflight_skip_count,
@@ -658,18 +676,22 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error auto-resolving stuck sessions: {e}", exc_info=True)
         return {
-            "resolved_count": 0,
-            "reassigned_count": 0,
-            "facilitation_count": 0,
-            "skipped_count": 0,
+            # Earlier iterations may already have committed. Preserve their
+            # outcome evidence instead of turning a partial cycle into an
+            # all-zero one because a later row aborted the scan.
+            "resolved_count": resolved_count,
+            "reassigned_count": reassigned_count,
+            "facilitation_count": facilitation_count,
+            "skipped_count": skipped_count,
             "active_session_count": active_session_count,
+            "active_session_batch_truncated": active_session_batch_truncated,
             "stuck_session_count": stuck_session_count,
             "invalid_session_count": invalid_session_count,
             "saga_inflight_skip_count": saga_inflight_skip_count,
             "write_attempt_count": write_attempt_count,
             "overlap_detected_count": overlap_detected_count,
             "overlap_probe_failed_count": overlap_probe_failed_count,
-            "details": [],
+            "details": details,
             "error": str(e),
             "message": "Failed to auto-resolve stuck sessions"
         }
@@ -701,6 +723,7 @@ async def auto_resolve_stuck_sessions(
             "facilitation_count": 0,
             "skipped_count": 0,
             "active_session_count": 0,
+            "active_session_batch_truncated": False,
             "stuck_session_count": 0,
             "invalid_session_count": 0,
             "saga_inflight_skip_count": 0,
@@ -725,6 +748,9 @@ async def auto_resolve_stuck_sessions(
             await emit_sweep_cycle(
                 trigger_source=trigger_source,
                 active_session_count=int(cycle.get("active_session_count", 0) or 0),
+                active_session_batch_truncated=bool(
+                    cycle.get("active_session_batch_truncated", False)
+                ),
                 stuck_session_count=int(cycle.get("stuck_session_count", 0) or 0),
                 invalid_session_count=int(cycle.get("invalid_session_count", 0) or 0),
                 saga_inflight_skip_count=int(

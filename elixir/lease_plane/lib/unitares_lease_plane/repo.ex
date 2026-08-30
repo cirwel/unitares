@@ -996,6 +996,33 @@ defmodule UnitaresLeasePlane.Repo do
     end
   end
 
+  @doc """
+  Load one `record_only` governed-effect payload by its durable `effect_id`.
+
+  This is the shadow-promotion lookup. It intentionally reads only the
+  `governed_effect.record_only` channel, so an execute/audit identifier cannot
+  be laundered into a promotion predecessor. Returns the string-keyed payload,
+  `nil` when absent, or an error.
+  """
+  @spec governed_effect_by_effect_id(String.t()) ::
+          {:ok, map() | nil} | {:error, term()}
+  def governed_effect_by_effect_id(effect_id) when is_binary(effect_id) do
+    sql = """
+    SELECT payload::text
+    FROM audit.events
+    WHERE event_type = 'governed_effect.record_only'
+      AND payload->>'effect_id' = $1
+    ORDER BY ts DESC
+    LIMIT 1
+    """
+
+    case Postgrex.query(DB, sql, [effect_id]) do
+      {:ok, %{rows: []}} -> {:ok, nil}
+      {:ok, %{rows: [[payload_text]]}} -> {:ok, decode_payload(payload_text)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   # ---------- helpers ----------
 
   defp log_event(conn, event_type, lease, payload \\ nil) do

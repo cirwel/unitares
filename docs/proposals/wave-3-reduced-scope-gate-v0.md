@@ -199,11 +199,17 @@ instrument now has two complementary pieces:
   (`reviewer_reassignment`, `awaiting_facilitation`, `reap_failed`) and retained `skipped_count` in
   the periodic log. A row is positive evidence that the sweeper attempted a write and the
   terminal predicate refused it.
-- The post-#2008 follow-up adds one `dialectic_sweep_cycle` row for every real resolver invocation,
-  including all-zero cycles. It records `trigger_source` (`periodic`, `active_session_check`, or an
-  explicit direct caller), active/stuck denominators, invalid rows, early saga-inflight skips,
-  guarded write attempts/refusals, outcomes, duration, and errors. A reentrant call suppressed by
-  the shared `ContextVar` emits no cycle because it performed no scan.
+- The post-#2008 follow-up attempts one `dialectic_sweep_cycle` row for every real resolver
+  invocation, including all-zero cycles. Audit writes are fail-soft, so an unavailable audit sink
+  leaves a heartbeat gap rather than blocking maintenance. A present row records `trigger_source`
+  (`periodic`, `active_session_check`, or an explicit direct caller), scanned active/stuck counts,
+  whether the 100-row maintenance batch was truncated, invalid rows, early saga-inflight skips,
+  guarded write attempts/refusals, outcomes, duration, and errors. The sweeper requests
+  least-recently-updated rows first and fetches one overflow sentinel, so a full batch cannot
+  silently masquerade as a table-wide denominator or continually hide the oldest stuck rows behind
+  newer activity. A reentrant call suppressed by the shared `ContextVar` emits no cycle because it
+  performed no scan. If a later row aborts a cycle after earlier writes committed, the error-bearing
+  cycle preserves those earlier outcome counts rather than reporting a false all-zero result.
 
 Together those events distinguish "the producer ran and observed zero guarded refusals" from "no
 producer evidence exists." Coverage is still a predicate, not an assumption: a periodic window

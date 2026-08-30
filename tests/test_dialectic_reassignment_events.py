@@ -224,6 +224,7 @@ class TestEmitSweepCycle:
             await events.emit_sweep_cycle(
                 trigger_source="periodic",
                 active_session_count=0,
+                active_session_batch_truncated=False,
                 stuck_session_count=0,
                 invalid_session_count=0,
                 saga_inflight_skip_count=0,
@@ -242,6 +243,7 @@ class TestEmitSweepCycle:
         assert captured["details"] == {
             "trigger_source": "periodic",
             "active_session_count": 0,
+            "active_session_batch_truncated": False,
             "stuck_session_count": 0,
             "invalid_session_count": 0,
             "saga_inflight_skip_count": 0,
@@ -266,6 +268,7 @@ class TestEmitSweepCycle:
             "facilitation_count": 0,
             "skipped_count": 0,
             "active_session_count": 0,
+            "active_session_batch_truncated": False,
             "stuck_session_count": 0,
             "invalid_session_count": 0,
             "saga_inflight_skip_count": 0,
@@ -292,6 +295,7 @@ class TestEmitSweepCycle:
             await events.emit_sweep_cycle(
                 trigger_source="active_session_check",
                 active_session_count=1,
+                active_session_batch_truncated=False,
                 stuck_session_count=1,
                 invalid_session_count=0,
                 saga_inflight_skip_count=1,

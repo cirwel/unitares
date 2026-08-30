@@ -153,12 +153,11 @@ defmodule UnitaresLeasePlane.HTTPRouter do
     end
   end
 
-  # ---------- /v1/effects (governed-effect record_only shadow) ----------
-  # Phase 3 thin slice of docs/proposals/governed-effect-plane-v0.md. An agent
-  # PROPOSES an effect; in record_only mode the plane observes (never acquires)
-  # the declared required_leases and returns a durable effect_id + the
-  # would-acquire observation. Nothing is enforced; execute mode is gated and
-  # returns 501. See UnitaresLeasePlane.GovernedEffect.
+  # ---------- /v1/effects (governed-effect record / execute / promote) ----------
+  # record_only observes without acquiring. Enabled execute types own custody.
+  # A declared promotion additionally proves its named record_only predecessor
+  # and exact payload hash, then records decision-standard, approval, and
+  # evidence references before any lease or mutation. See GovernedEffect.
   post "/v1/effects" do
     case UnitaresLeasePlane.GovernedEffect.handle(conn.body_params) do
       {:ok, body} ->
@@ -168,7 +167,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
         json(conn, 501, %{
           ok: false,
           error: "not_implemented",
-          reason: "execute mode not yet enabled; record_only only"
+          reason: "execute mode is disabled or unsupported for this effect type"
         })
 
       {:error, :idempotency_conflict} ->
@@ -176,6 +175,29 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           ok: false,
           error: "idempotency_conflict",
           reason: "idempotency_key already used for a materially different effect"
+        })
+
+      {:error, :promotion_mismatch} ->
+        json(conn, 409, %{
+          ok: false,
+          error: "promotion_mismatch",
+          reason:
+            "execute effect type, surface, or payload hash does not match the record_only predecessor"
+        })
+
+      {:error, reason}
+      when reason in [:promotion_predecessor_not_found, :promotion_predecessor_unverifiable] ->
+        json(conn, 422, %{
+          ok: false,
+          error: Atom.to_string(reason),
+          reason: "the declared record_only predecessor cannot support promotion"
+        })
+
+      {:error, :promotion_lookup_failed} ->
+        json(conn, 503, %{
+          ok: false,
+          error: "promotion_lookup_failed",
+          reason: "the promotion predecessor could not be verified; nothing was committed"
         })
 
       {:error, :persist_failed} ->
@@ -1199,8 +1221,8 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   # `response_to_id` are never identity-verified (only the sender is), so they
   # reach the repo unvalidated unless this does it.
   defp valid_uuid?(
-         <<a::binary-size(8), ?-, b::binary-size(4), ?-, c::binary-size(4), ?-,
-           d::binary-size(4), ?-, e::binary-size(12)>>
+         <<a::binary-size(8), ?-, b::binary-size(4), ?-, c::binary-size(4), ?-, d::binary-size(4),
+           ?-, e::binary-size(12)>>
        ) do
     match?({:ok, _}, Base.decode16(a <> b <> c <> d <> e, case: :mixed))
   end

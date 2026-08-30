@@ -40,9 +40,11 @@ def ir_validator() -> Draft202012Validator:
     return Draft202012Validator(schema)
 
 
-# --- the UNITARES profile mapping (executable spec) --------------------------
+# --- the UNITARES profile mapping (cross-language executable mirror) ----------
 # plane effect envelope (governed-effect-plane-v0.md §3) -> fermata IR Intent.
-# Kept here as the encoded spec; a runtime mapper module is a later step.
+# The production BEAM mapper is GovernedEffectIR; this Python mirror validates
+# the same projection against fermata's full JSON Schema so cross-runtime drift
+# breaks CI instead of silently changing the live receipt shape.
 _CORE_EFFECT_TYPES = {
     "file_write": ("file", "write", "file.write"),
     "repo_commit": ("file", "write", "repo.commit"),

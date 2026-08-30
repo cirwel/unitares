@@ -7,6 +7,8 @@ handler paths that would block the anyio task group.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import ipaddress
 import json
@@ -19,7 +21,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -473,6 +475,10 @@ class LeasePlaneClient:
         idempotency_key: str | None = None,
         encoding: str | None = None,
         effect_binding: str = "auto",
+        promoted_from: str | None = None,
+        decision_standard_ref: str | None = None,
+        approval_ref: str | None = None,
+        evidence_refs: Sequence[str] = (),
     ) -> Mapping[str, Any]:
         """Propose a governed ``file_write`` effect on the lease plane.
 
@@ -503,12 +509,55 @@ class LeasePlaneClient:
           error envelope WITHOUT proposing (no side effects). For producers
           that must never submit an unbound effect once enforcement is on.
         - ``"off"``: never mint (exact legacy envelope).
+
+        A promoted execute names the exact ``record_only`` predecessor through
+        ``promoted_from`` and must also name a decision standard, approval, and
+        at least one evidence reference. The plane verifies the intended
+        content hash before acquiring a lease or touching the file.
+        Omitting ``promoted_from`` preserves the existing direct-execute path.
         """
         if effect_binding not in ("auto", "require", "off"):
             return {
                 "ok": False,
                 "error": "schema_invalid",
                 "detail": f"effect_binding must be auto|require|off, got {effect_binding!r}",
+            }
+
+        evidence_refs_valid_type = not isinstance(evidence_refs, (str, bytes))
+        refs = list(evidence_refs) if evidence_refs_valid_type else []
+        promotion_args_present = any(
+            value
+            for value in (
+                promoted_from,
+                decision_standard_ref,
+                approval_ref,
+                refs,
+                not evidence_refs_valid_type,
+            )
+        )
+        promotion: dict[str, Any] | None = None
+        if promotion_args_present:
+            if not (
+                evidence_refs_valid_type
+                and promoted_from
+                and decision_standard_ref
+                and approval_ref
+                and refs
+                and all(isinstance(ref, str) and ref for ref in refs)
+            ):
+                return {
+                    "ok": False,
+                    "error": "schema_invalid",
+                    "detail": (
+                        "promotion requires promoted_from, decision_standard_ref, "
+                        "approval_ref, and non-empty evidence_refs"
+                    ),
+                }
+            promotion = {
+                "record_only_effect_id": promoted_from,
+                "decision_standard_ref": decision_standard_ref,
+                "approval_ref": approval_ref,
+                "evidence_refs": refs,
             }
 
         fs_path = path[len("file://") :] if path.startswith("file://") else path
@@ -549,6 +598,70 @@ class LeasePlaneClient:
             "required_leases": [{"surface": surface, "ttl_s": ttl_s}],
             "payload": payload,
             "proposer": proposer,
+            "provenance": {"session_id": session_id},
+            "idempotency_key": idem,
+        }
+        if promotion is not None:
+            body["promotion"] = promotion
+        return self._request_json("POST", "/v1/effects", body)
+
+    def record_file_write(
+        self,
+        *,
+        path: str,
+        content: str,
+        proposer_uuid: str,
+        continuity_token: str,
+        session_id: str,
+        summary: str,
+        ttl_s: int = 300,
+        idempotency_key: str | None = None,
+        encoding: str | None = None,
+    ) -> Mapping[str, Any]:
+        """Record a non-committing ``file_write`` intent for later promotion.
+
+        The shadow carries only the intended content SHA-256 and a bounded
+        human-readable summary; raw bytes are never sent to the record-only
+        audit path. A successful response's ``effect_id`` is the
+        ``promoted_from`` value for a later exact-payload execute.
+        """
+        if not summary or len(summary.encode("utf-8")) > 512:
+            return {
+                "ok": False,
+                "error": "schema_invalid",
+                "detail": "summary must be a non-empty UTF-8 string of at most 512 bytes",
+            }
+
+        try:
+            content_bytes = (
+                base64.b64decode(content, validate=True)
+                if encoding == "base64"
+                else content.encode("utf-8")
+            )
+        except (binascii.Error, ValueError):
+            return {
+                "ok": False,
+                "error": "schema_invalid",
+                "detail": "content is not valid base64",
+            }
+
+        fs_path = path[len("file://") :] if path.startswith("file://") else path
+        surface = f"file://{fs_path}"
+        idem = idempotency_key or f"fw-shadow-{uuid.uuid4().hex}"
+
+        body = {
+            "effect_type": "file_write",
+            "custody_mode": "record_only",
+            "surface": surface,
+            "required_leases": [{"surface": surface, "ttl_s": ttl_s}],
+            "payload": {
+                "sha256": hashlib.sha256(content_bytes).hexdigest(),
+                "summary": summary,
+            },
+            "proposer": {
+                "agent_uuid": proposer_uuid,
+                "continuity_token": continuity_token,
+            },
             "provenance": {"session_id": session_id},
             "idempotency_key": idem,
         }

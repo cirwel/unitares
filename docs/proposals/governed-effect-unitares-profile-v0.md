@@ -1,14 +1,17 @@
 # UNITARES Profile of the Governed Effect IR (v0)
 
-**Status:** spec (convergence step 2). Companion to
+**Status:** profile + runtime mapper implemented. Companion to
 [`governed-effect-convergence-v0.md`](./governed-effect-convergence-v0.md) and the
 Governed-Effect Plane contract ([`governed-effect-plane-v0.md`](./governed-effect-plane-v0.md)).
 
 This defines the **UNITARES profile** of fermata's canonical Governed Effect IR:
 how this plane's effect envelope (`POST /v1/effects`, plane §3) maps onto fermata's
 IR, and the profile policy that sits *on top of* the portable IR. The pinned IR
-schema lives at `tests/fixtures/vendored/`; the parity test
-(`tests/test_governed_effect_ir_parity.py`) asserts this mapping produces valid IR.
+schema lives at `tests/vendored/`; the Python parity test
+(`tests/test_governed_effect_ir_parity.py`) and the BEAM conformance test
+(`elixir/lease_plane/test/governed_effect_ir_conformance_test.exs`) assert this
+mapping produces valid IR. Production mapping lives in
+`elixir/lease_plane/lib/unitares_lease_plane/governed_effect_ir.ex`.
 
 The portable core stays portable: nothing UNITARES-specific (identity tiers, the
 UNITARES effect types, lease custody) goes in the core IR — it all rides
@@ -26,6 +29,7 @@ UNITARES effect types, lease custody) goes in the core IR — it all rides
 | `proposer` `{agent_uuid, client_session_id}` | `profile_ext.proposer` | UNITARES identity proof — not a core IR concept |
 | `provenance` | `profile_ext.provenance` | harness/session/verification source |
 | `required_leases` | `profile_ext.required_leases` | lease-plane custody — UNITARES-specific, profile only |
+| continuity-verified `promotion` receipt | `profile_ext.promotion` | record-only predecessor and exact payload hash, plus decision-standard, approval, and evidence refs |
 | (derived) | `required_capability` | e.g. `"file.write"` from effect_type |
 | (constant) | `profile: "unitares"` | declares the profile |
 
@@ -59,10 +63,20 @@ agnostic about (plane §2):
 These policy rules are profile-enforced (the parity test pins the `strong`-for-execute
 rule); they are NOT part of fermata's portable contract.
 
+## Runtime receipt boundary
+
+The production mapper constructs the full fermata Intent before a record or
+execute crosses its durable boundary. Execute input may contain effect bytes, so
+the full Intent is transient. Audit rows store a non-secret `fermata` receipt
+(`intent_id`, `proposal_id`, adapter/operation/capability, profile, and canonical
+Intent SHA-256), while the existing execute payload store retains the bounded raw
+bytes under its scrub and rollback contract.
+
+A promoted execute uses its `record_only_effect_id` as the fermata `proposal_id`,
+making the shadow→execute lineage explicit without adding UNITARES vocabulary to
+the portable core.
+
 ## What this is not
 
-- Not a runtime mapper implementation. The mapping is specified here and encoded
-  in the parity test; a code mapper (and the runtime `record_only` behavior in
-  fermata) are later steps.
 - Not a change to the plane's internals — `EffectCustodian`, the lease plane, and
   `effects.payloads` storage are unchanged. This is the contract-alignment layer.

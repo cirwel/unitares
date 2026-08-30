@@ -1,3 +1,8 @@
+defmodule UnitaresLeasePlane.AllowGovernanceVeto do
+  @moduledoc false
+  def check(_env), do: :allow
+end
+
 defmodule UnitaresLeasePlane.GovernedEffectTest do
   # async: false — record_only now durably writes to the live audit.events
   # stream (contract §8). Each persisting test registers cleanup by key.
@@ -29,6 +34,9 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
   defp tracked_base(overrides \\ %{}) do
     base(Map.merge(%{"idempotency_key" => tracked_key()}, overrides))
   end
+
+  defp sha256(bytes),
+    do: :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
 
   describe "validation" do
     test "missing idempotency_key → schema_invalid detail" do
@@ -204,6 +212,145 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
 
       assert {:ok, body} = GovernedEffect.handle(base(%{"idempotency_key" => key}))
       refute body.idempotent
+    end
+  end
+
+  describe "record_only -> execute promotion continuity" do
+    test "a promoted file_write commits only the exact shadowed bytes and records the receipt" do
+      shadow_key = tracked_key()
+      execute_key = tracked_key()
+
+      path =
+        Path.join(System.tmp_dir!(), "unitares-promotion-#{System.unique_integer([:positive])}")
+
+      surface = "file://#{path}"
+      content = "promoted bytes\n"
+      proposer = "00000000-0000-0000-0000-0000000000aa"
+
+      on_exit(fn -> File.rm(path) end)
+      set_file_write_flags(true)
+
+      assert {:ok, shadow} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => shadow_key,
+                   "custody_mode" => "record_only",
+                   "effect_type" => "file_write",
+                   "surface" => surface,
+                   "required_leases" => [%{"surface" => surface, "ttl_s" => 300}],
+                   "payload" => %{
+                     "sha256" => sha256(content),
+                     "summary" => "loop-0 reversible file update"
+                   },
+                   "proposer" => %{"agent_uuid" => proposer},
+                   "provenance" => %{
+                     "session_id" => "loop-0-shadow",
+                     "verification_source" => "external_test"
+                   }
+                 })
+               )
+
+      assert shadow.fermata["schema"] == "fermata.governed-effect-ir.v0"
+
+      assert {:ok, executed} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => execute_key,
+                   "custody_mode" => "execute",
+                   "effect_type" => "file_write",
+                   "surface" => surface,
+                   "required_leases" => [%{"surface" => surface, "ttl_s" => 300}],
+                   "payload" => %{"path" => path, "content" => content},
+                   "proposer" => %{"agent_uuid" => proposer},
+                   "provenance" => %{"session_id" => "loop-0-execute"},
+                   "promotion" => promotion(shadow.effect_id)
+                 })
+               )
+
+      assert File.read!(path) == content
+      assert executed.promotion["record_only_effect_id"] == shadow.effect_id
+      assert executed.promotion["payload_sha256"] == sha256(content)
+      assert executed.promotion["continuity_verified"]
+      assert executed.fermata["proposal_id"] == shadow.effect_id
+
+      assert [row] = execute_rows(execute_key)
+      assert row["status"] == "committed"
+      assert row["promotion"]["approval_ref"] == "review:loop-0:approved"
+      assert row["fermata"]["intent_sha256"] == executed.fermata["intent_sha256"]
+
+      assert {:ok, stored} = UnitaresLeasePlane.EffectRepo.get_payload(executed.effect_id)
+      assert stored.payload_sha256 == sha256(content)
+      assert stored.committed_at
+    end
+
+    test "hash mismatch fails before lease, veto, or file mutation" do
+      shadow_key = tracked_key()
+      execute_key = tracked_key()
+
+      path =
+        Path.join(System.tmp_dir!(), "unitares-promotion-#{System.unique_integer([:positive])}")
+
+      surface = "file://#{path}"
+      proposer = "00000000-0000-0000-0000-0000000000aa"
+
+      on_exit(fn -> File.rm(path) end)
+      set_file_write_flags(true)
+
+      assert {:ok, shadow} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => shadow_key,
+                   "surface" => surface,
+                   "required_leases" => [%{"surface" => surface, "ttl_s" => 300}],
+                   "payload" => %{
+                     "sha256" => sha256("shadowed bytes\n"),
+                     "summary" => "mismatch denial case"
+                   },
+                   "proposer" => %{"agent_uuid" => proposer}
+                 })
+               )
+
+      assert {:error, :promotion_mismatch} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => execute_key,
+                   "custody_mode" => "execute",
+                   "surface" => surface,
+                   "required_leases" => [%{"surface" => surface, "ttl_s" => 300}],
+                   "payload" => %{"path" => path, "content" => "different bytes\n"},
+                   "proposer" => %{"agent_uuid" => proposer},
+                   "promotion" => promotion(shadow.effect_id)
+                 })
+               )
+
+      refute File.exists?(path)
+      assert execute_rows(execute_key) == []
+    end
+
+    test "missing predecessor and incomplete receipts fail closed" do
+      execute_key = tracked_key()
+      path = Path.join(System.tmp_dir!(), "unitares-promotion-missing")
+      surface = "file://#{path}"
+
+      incomplete =
+        base(%{
+          "idempotency_key" => execute_key,
+          "custody_mode" => "execute",
+          "surface" => surface,
+          "payload" => %{"path" => path, "content" => "x"},
+          "promotion" => %{"record_only_effect_id" => "missing"}
+        })
+
+      assert {:error, detail} = GovernedEffect.handle(incomplete)
+      assert detail =~ "decision_standard_ref"
+
+      complete = %{
+        incomplete
+        | "promotion" => promotion("00000000-0000-0000-0000-000000000000")
+      }
+
+      assert {:error, :promotion_predecessor_not_found} = GovernedEffect.handle(complete)
+      assert execute_rows(execute_key) == []
     end
   end
 
@@ -498,6 +645,38 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
 
       refute Map.has_key?(body, "proposer_effect_grant")
     end
+  end
+
+  defp promotion(record_only_effect_id) do
+    %{
+      "record_only_effect_id" => record_only_effect_id,
+      "decision_standard_ref" => "docs/evals/loop-0.md#decision-rule",
+      "approval_ref" => "review:loop-0:approved",
+      "evidence_refs" => ["test:governed-effect-promotion"]
+    }
+  end
+
+  defp set_file_write_flags(commit?) do
+    previous = %{
+      execute: Application.get_env(:lease_plane, :execute_file_write_enabled),
+      commit: Application.get_env(:lease_plane, :execute_file_write_commit_enabled),
+      veto: Application.get_env(:lease_plane, :governance_veto_client)
+    }
+
+    Application.put_env(:lease_plane, :execute_file_write_enabled, true)
+    Application.put_env(:lease_plane, :execute_file_write_commit_enabled, commit?)
+
+    Application.put_env(
+      :lease_plane,
+      :governance_veto_client,
+      UnitaresLeasePlane.AllowGovernanceVeto
+    )
+
+    on_exit(fn ->
+      restore(:execute_file_write_enabled, previous.execute)
+      restore(:execute_file_write_commit_enabled, previous.commit)
+      restore(:governance_veto_client, previous.veto)
+    end)
   end
 
   # Toggle the execute flag + orchestrator + governance-veto config for one test,

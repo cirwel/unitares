@@ -7,6 +7,8 @@ O(fleet_size) PG scans once UNITARES_AUTOSELECT_REVIEWER is enabled. The guard
 runs the sweep at most once per asyncio task-tree.
 """
 
+import asyncio
+
 import pytest
 from unittest.mock import AsyncMock, patch
 
@@ -120,3 +122,50 @@ async def test_direct_resolver_owns_guard_during_reviewer_selection():
 
     assert result["resolved_count"] == 1
     nested_sweep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_top_level_tasks_do_not_suppress_each_other():
+    """ContextVar ownership is isolated across independent asyncio tasks."""
+    from src.mcp_handlers.dialectic import auto_resolve
+
+    entered = 0
+    both_entered = asyncio.Event()
+    cycle = {
+        "resolved_count": 0,
+        "reassigned_count": 0,
+        "facilitation_count": 0,
+        "skipped_count": 0,
+        "active_session_count": 0,
+        "active_session_batch_truncated": False,
+        "stuck_session_count": 0,
+        "invalid_session_count": 0,
+        "saga_inflight_skip_count": 0,
+        "write_attempt_count": 0,
+    }
+
+    async def overlapping_cycle():
+        nonlocal entered
+        entered += 1
+        if entered == 2:
+            both_entered.set()
+        await both_entered.wait()
+        return cycle.copy()
+
+    emitted = AsyncMock()
+    with patch.object(auto_resolve, "_auto_resolve_stuck_sessions",
+                      side_effect=overlapping_cycle), \
+         patch.object(auto_resolve, "emit_sweep_cycle", emitted):
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                auto_resolve.auto_resolve_stuck_sessions(trigger_source="periodic"),
+                auto_resolve.auto_resolve_stuck_sessions(
+                    trigger_source="active_session_check"
+                ),
+            ),
+            timeout=1,
+        )
+
+    assert entered == 2
+    assert emitted.await_count == 2
+    assert all("reentrant_suppressed" not in result for result in results)
