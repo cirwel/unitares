@@ -102,6 +102,7 @@ async def test_lean_read_mode_returns_one_line_discovery_digest():
         "status": "open",
         "tags": ["identity", "source-claude-memory"],
         "relevance": 0.42,
+        "relevance_basis": "semantic_similarity",
     }]
 
 
@@ -164,3 +165,82 @@ def test_exact_initial_read_actions_are_mode_enabled():
         "_lean_knowledge_read_response",
         False,
     )
+
+
+@pytest.mark.asyncio
+async def test_lean_never_reports_rank_as_relevance():
+    """RRF scores are 1/(60+rank) — identical for every query, so surfacing one
+    as `relevance` made a flat miss look exactly like an exact hit."""
+    payload = _full_identity_payload()
+    payload.update({
+        "query": "identity",
+        "count": 1,
+        "rrf_scores": {"d1": 0.0164},
+    })
+    handler = AsyncMock(return_value=_text_payload(payload))
+    shaped = json.loads((await _knowledge_read_response_mode(handler)(
+        {"response_mode": "lean"}))[0].text)
+
+    hit = shaped["discoveries"][0]
+    assert "relevance" not in hit
+    assert hit["relevance_basis"] == "lexical_rank_only"
+    # Not lost — just no longer impersonating a quality score.
+    assert hit["fusion_score"] == 0.0164
+
+
+@pytest.mark.asyncio
+async def test_similarity_is_not_shadowed_by_the_fusion_score():
+    """The live defect: rrf_scores sat ahead of similarity_scores in a
+    first-match-wins list, so the cosine in the same payload was never read."""
+    payload = _full_identity_payload()
+    payload.update({
+        "query": "identity",
+        "count": 1,
+        "rrf_scores": {"d1": 0.0164},
+        "similarity_scores": {"d1": 0.31},
+    })
+    handler = AsyncMock(return_value=_text_payload(payload))
+    shaped = json.loads((await _knowledge_read_response_mode(handler)(
+        {"response_mode": "lean"}))[0].text)
+
+    hit = shaped["discoveries"][0]
+    assert hit["relevance"] == 0.31
+    assert hit["relevance_basis"] == "semantic_similarity"
+    assert hit["fusion_score"] == 0.0164
+
+
+@pytest.mark.asyncio
+async def test_reranker_outranks_semantic_similarity():
+    payload = _full_identity_payload()
+    payload.update({
+        "query": "identity",
+        "count": 1,
+        "rerank_scores": {"d1": 0.88},
+        "similarity_scores": {"d1": 0.31},
+        "rrf_scores": {"d1": 0.0164},
+    })
+    handler = AsyncMock(return_value=_text_payload(payload))
+    shaped = json.loads((await _knowledge_read_response_mode(handler)(
+        {"response_mode": "lean"}))[0].text)
+
+    hit = shaped["discoveries"][0]
+    assert hit["relevance"] == 0.88
+    assert hit["relevance_basis"] == "cross_encoder_rerank"
+
+
+@pytest.mark.asyncio
+async def test_two_unrelated_queries_are_distinguishable():
+    """The regression in one assertion: before the fix both of these returned
+    relevance 0.0164 and were indistinguishable."""
+    async def shape(scores):
+        payload = _full_identity_payload()
+        payload.update({"query": "q", "count": 1, **scores})
+        handler = AsyncMock(return_value=_text_payload(payload))
+        out = await _knowledge_read_response_mode(handler)({"response_mode": "lean"})
+        return json.loads(out[0].text)["discoveries"][0]
+
+    good = await shape({"rrf_scores": {"d1": 0.0164}, "similarity_scores": {"d1": 0.83}})
+    poor = await shape({"rrf_scores": {"d1": 0.0164}, "similarity_scores": {"d1": 0.09}})
+
+    assert good["fusion_score"] == poor["fusion_score"] == 0.0164
+    assert good["relevance"] != poor["relevance"]
