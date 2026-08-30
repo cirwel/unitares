@@ -117,7 +117,7 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `health_check` | `src/mcp_handlers/admin/handlers.py:336 handle_health_check` | `src/mcp_handlers/schemas/admin.py:85 HealthCheckParams` | 5s | identity=pre_onboard |
 | `identity` | `src/mcp_handlers/identity/handlers.py:1107 handle_identity_adapter` | `src/mcp_handlers/schemas/identity.py:7 IdentityParams` | 10s | identity=pre_onboard |
 | `knowledge` | `src/mcp_handlers/consolidated.py:175 action_router` | `src/mcp_handlers/schemas/knowledge.py:344 KnowledgeParams` | 120s | — |
-| `leave_note` | `src/mcp_handlers/knowledge/handlers.py:4114 handle_leave_note` | `src/mcp_handlers/schemas/knowledge.py:308 LeaveNoteParams` | 10s | — |
+| `leave_note` | `src/mcp_handlers/knowledge/handlers.py:4140 handle_leave_note` | `src/mcp_handlers/schemas/knowledge.py:308 LeaveNoteParams` | 10s | — |
 | `list_inference_hosts` | `src/mcp_handlers/support/model_inference.py:124 handle_list_inference_hosts` | `src/mcp_handlers/schemas/core.py:666 ListInferenceHostsParams` | 5s | identity=pre_onboard |
 | `list_process_bindings` | `src/mcp_handlers/identity/process_binding_handler.py:26 handle_list_process_bindings` | `src/mcp_handlers/schemas/identity.py:222 ListProcessBindingsParams` | 10s | — |
 | `list_tools` | `src/mcp_handlers/introspection/tool_introspection.py:128 handle_list_tools` | `src/mcp_handlers/schemas/admin.py:5 ListToolsParams` | 10s | identity=pre_onboard |
@@ -129,7 +129,7 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `outcome_event` | `src/mcp_handlers/observability/outcome_events.py:586 handle_outcome_event` | `src/mcp_handlers/schemas/core.py:488 OutcomeEventParams` | 15s | — |
 | `process_agent_update` | `src/mcp_handlers/core.py:436 handle_process_agent_update` | `src/mcp_handlers/schemas/core.py:303 ProcessAgentUpdateParams` | 60s | — |
 | `record_progress_pulse` | `src/mcp_handlers/resident_progress.py:20 handle_record_progress_pulse` | `src/mcp_handlers/schemas/progress_flat.py:9 RecordProgressPulseParams` | 5s | — |
-| `search_knowledge_graph` | `src/mcp_handlers/knowledge/handlers.py:2694 handle_search_knowledge_graph` | `src/mcp_handlers/schemas/knowledge.py:80 SearchKnowledgeGraphParams` | 15s | identity=pre_onboard |
+| `search_knowledge_graph` | `src/mcp_handlers/knowledge/handlers.py:2720 handle_search_knowledge_graph` | `src/mcp_handlers/schemas/knowledge.py:80 SearchKnowledgeGraphParams` | 15s | identity=pre_onboard |
 | `self_recovery` | `src/mcp_handlers/lifecycle/self_recovery.py:205 handle_self_recovery` | `src/mcp_handlers/schemas/lifecycle.py:319 SelfRecoveryParams` | 15s | — |
 | `set_thresholds` | `src/mcp_handlers/admin/config.py:45 handle_set_thresholds` | `src/mcp_handlers/schemas/admin.py:119 SetThresholdsParams` | 15s | — |
 | `simulate_update` | `src/mcp_handlers/core.py:266 handle_simulate_update` | `src/mcp_handlers/schemas/core.py:195 SimulateUpdateParams` | 30s | — |
@@ -208,18 +208,18 @@ runs (`from→to`, filled only when the destination is absent).
 
 | Action | Delegate | Remaps |
 |---|---|---|
-| `audit` | `src/mcp_handlers/knowledge/handlers.py:4340 handle_audit_knowledge_graph` | — |
-| `cleanup` | `src/mcp_handlers/knowledge/handlers.py:4127 handle_cleanup_knowledge_graph` | — |
-| `details` | `src/mcp_handlers/knowledge/handlers.py:3428 handle_get_discovery_details` | — |
-| `get` | `src/mcp_handlers/knowledge/handlers.py:2712 handle_get_knowledge_graph` | — |
-| `list` | `src/mcp_handlers/knowledge/handlers.py:2815 handle_list_knowledge_graph` | — |
-| `note` | `src/mcp_handlers/knowledge/handlers.py:4065 handle_knowledge_note` | `content`→`summary` |
-| `search` | `src/mcp_handlers/knowledge/handlers.py:2694 handle_search_knowledge_graph` | `query`→`search_query` |
-| `stats` | `src/mcp_handlers/knowledge/handlers.py:4233 handle_get_lifecycle_stats` | — |
-| `store` | `src/mcp_handlers/knowledge/handlers.py:1476 handle_store_knowledge_graph` | `content`→`details` |
-| `supersede` | `src/mcp_handlers/knowledge/handlers.py:4297 handle_supersede_discovery` | — |
-| `synthesize` | `src/mcp_handlers/knowledge/handlers.py:4161 handle_synthesize_knowledge_graph` | — |
-| `update` | `src/mcp_handlers/knowledge/handlers.py:3409 handle_update_discovery_status_graph` | `content`→`details` |
+| `audit` | `src/mcp_handlers/knowledge/handlers.py:4366 handle_audit_knowledge_graph` | — |
+| `cleanup` | `src/mcp_handlers/knowledge/handlers.py:4153 handle_cleanup_knowledge_graph` | — |
+| `details` | `src/mcp_handlers/knowledge/handlers.py:3454 handle_get_discovery_details` | — |
+| `get` | `src/mcp_handlers/knowledge/handlers.py:2738 handle_get_knowledge_graph` | — |
+| `list` | `src/mcp_handlers/knowledge/handlers.py:2841 handle_list_knowledge_graph` | — |
+| `note` | `src/mcp_handlers/knowledge/handlers.py:4091 handle_knowledge_note` | `content`→`summary` |
+| `search` | `src/mcp_handlers/knowledge/handlers.py:2720 handle_search_knowledge_graph` | `query`→`search_query` |
+| `stats` | `src/mcp_handlers/knowledge/handlers.py:4259 handle_get_lifecycle_stats` | — |
+| `store` | `src/mcp_handlers/knowledge/handlers.py:1502 handle_store_knowledge_graph` | `content`→`details` |
+| `supersede` | `src/mcp_handlers/knowledge/handlers.py:4323 handle_supersede_discovery` | — |
+| `synthesize` | `src/mcp_handlers/knowledge/handlers.py:4187 handle_synthesize_knowledge_graph` | — |
+| `update` | `src/mcp_handlers/knowledge/handlers.py:3435 handle_update_discovery_status_graph` | `content`→`details` |
 
 ### `observe`
 

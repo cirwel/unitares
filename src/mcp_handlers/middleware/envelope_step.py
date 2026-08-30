@@ -533,8 +533,15 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
                     # the mirror path scores its hits as `relevance`; without it
                     # a suggestion arrives with no indication of match strength
                     "relevance",
+                    # …and without the basis the caller cannot tell a cosine
+                    # from a cross-encoder from nothing at all. A suggestion
+                    # carrying `lexical_rank_only` has NO quality number by
+                    # design; that must reach the reader, not be inferred from
+                    # a missing key.
+                    "relevance_basis",
                     "score",
                     "rrf_score",
+                    "fusion_score",
                 )
                 or item
             )
