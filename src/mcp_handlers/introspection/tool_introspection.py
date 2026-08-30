@@ -138,8 +138,13 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         progressive (bool): If true, order tools by usage frequency (most used first). Works with all filter modes. Default false.
     """
     
-    # Get actual registered tools from TOOL_HANDLERS registry
-    from src.mcp_handlers import TOOL_HANDLERS
+    # Get actual registered tools from TOOL_HANDLERS registry. Entry-point
+    # plugins can be registered after this module took its initial snapshot
+    # (notably in embedded/test hosts); synchronize the decorator registry
+    # first so orientation never advertises a tool the dispatcher cannot yet
+    # resolve. The normal server bootstrap performs the same idempotent step.
+    from src.mcp_handlers import TOOL_HANDLERS, refresh_tool_handlers_from_registry
+    refresh_tool_handlers_from_registry()
     from ..tool_stability import AGENT_WORKFLOW_ALIASES
     registered_tool_names = sorted(set(TOOL_HANDLERS.keys()) | set(AGENT_WORKFLOW_ALIASES))
     
