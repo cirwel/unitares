@@ -459,6 +459,30 @@ not exist, and would have left criterion 7 looking permanently unreachable from 
 the capability were simply absent. The first was caught by reading the policy; this one only by
 testing the assumption instead of restating it.
 
+⛔**CORRECTION 2026-08-30 (third, superseding the ask in the second) — the project already has an
+Elixir CI lane with hex access, so the spike never needed an operator network-policy change.**
+The correction above asked for `repo.hex.pm` / `builds.hex.pm` on the agent proxy's allow list. That
+ask was **wrong**, and wrong in the same way as the two errors it was correcting: a limitation of
+the session reported as a limitation of the project, without reading the repository.
+
+`.github/workflows/elixir-tests.yml` runs `mix deps.get` + `mix test` on GitHub runners for five
+apps — `unitares_sdk` (Elixir 1.15 **and** 1.19, OTP 27), `agent_orchestrator`, `dialectic_live`,
+`sentinel`, `lease_plane` — pulling `phoenix`, `req`, `finch`, `postgrex`, `bandit` and the rest
+from hex. It is green on `master`. **Hex is reachable from CI; only this session's proxy blocks it.**
+
+⛔**So criterion 7's ask is a CI job, not a policy grant.** A spike lands as a scratch mix app plus
+a job in that workflow, on the lane that already exists. ⚠️One design constraint the gate should
+record now rather than at the spike: (C)'s streaming clause names *Anthropic* streaming, and the
+execution-cost policy forbids a metered API on the required path — so the spike must exercise
+`anubis_mcp` against a local or stubbed peer, or run as an opt-in job that no-ops without a key.
+**Which of those is a choice, and it is the operator's.**
+
+⚠️**Found while verifying this: `elixir/wave3a_handlers` is in no workflow at all.** 83 tests, a
+live service (`scripts/ops/com.unitares.wave3a-handlers.plist.template`) with a Python-side proxy
+(`src/wave3a_beam_proxy.py`), and **zero** CI references — every other app under `elixir/` has a
+job. That is precisely the drift gap `elixir-tests.yml`'s own header says it was written to close.
+⛔Recorded here as a finding, not fixed here: it is a CI change, not a gate document's business.
+
 **§6.5 Scope: path (1) only, or (1) and (2)? — ⏸️ DEFERRED, with a named reopen condition.**
 _(operator, 2026-08-29)_ ⛔**Not answered, and deliberately not sent to council either.** §6.6's
 instrument-first ruling removes this question's urgency entirely: the §3.1 instrumentation is
