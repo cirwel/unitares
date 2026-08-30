@@ -569,6 +569,7 @@ Return exactly one JSON object and no Markdown fence or surrounding text:
 {"schema":"unitares.terminal_answer.v1","status":"complete","answer":"your final answer"}
 """
 
+<<<<<<< HEAD
 _CODEX_JSONL_WITH_ANSWER = "\n".join([
     json.dumps({"type": "thread.started", "thread_id": "thread-1"}),
     json.dumps({
@@ -581,6 +582,8 @@ _CODEX_JSONL_WITH_ANSWER = "\n".join([
     }),
 ])
 
+=======
+>>>>>>> origin/master
 
 @pytest.mark.asyncio
 async def test_codex_failure_reports_a_located_answer_region(monkeypatch):
@@ -595,6 +598,7 @@ async def test_codex_failure_reports_a_located_answer_region(monkeypatch):
 
 
 @pytest.mark.asyncio
+<<<<<<< HEAD
 async def test_codex_jsonl_failure_reports_a_located_answer_region(monkeypatch):
     """The typed agent_message event is the primary answer boundary."""
     details = await _codex_failure_details(monkeypatch, _CODEX_JSONL_WITH_ANSWER)
@@ -605,6 +609,8 @@ async def test_codex_jsonl_failure_reports_a_located_answer_region(monkeypatch):
 
 
 @pytest.mark.asyncio
+=======
+>>>>>>> origin/master
 async def test_codex_failure_distinguishes_a_missing_answer_region(monkeypatch):
     """Marker absent: no assistant turn was found at all.
 

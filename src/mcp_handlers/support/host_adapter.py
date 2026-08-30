@@ -197,6 +197,7 @@ _CODEX_ANSWER_MARKER = "codex"
 
 
 def codex_answer_region_located(raw: str) -> bool:
+<<<<<<< HEAD
     """True when Codex output carries a typed or legacy answer region.
 
     Current adapters consume the JSONL ``agent_message`` event. The legacy bare
@@ -271,6 +272,19 @@ def _extract_codex_jsonl(output_lines: List[str]) -> tuple[str, Dict[str, Any]]:
             "CLI did not report an exact model identifier",
         ],
     }
+=======
+    """True when a codex transcript carries the marker that precedes the answer.
+
+    Without it ``_extract_text`` falls through and hands the WHOLE transcript to
+    the envelope validator, which then fails for a reason that has nothing to do
+    with what the model wrote. The two states must not reach the caller as one
+    sentence: a malformed envelope means the model answered badly; a missing
+    marker means no answer region was found at all — no assistant turn in the
+    transcript, or a CLI whose transcript format moved out from under this
+    parser. Same error today, opposite fixes.
+    """
+    return any(line.strip() == _CODEX_ANSWER_MARKER for line in raw.splitlines())
+>>>>>>> origin/master
 
 
 def _extract_text(output_lines: List[str], *, family: str) -> str:
