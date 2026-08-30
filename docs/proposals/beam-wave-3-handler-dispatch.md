@@ -358,6 +358,20 @@ halt/reopen decision remain the operator-led red-team's**, per (D).
    **LGPL-3.0** against this repo's Apache-2.0; LGPL permits linking, so this is an open question
    rather than a finding, but (C)'s criteria never mention licensing at all.
 
+   ⚠️**Why the hands-on spike still has not run (2026-08-30).** Not for want of a toolchain —
+   Elixir 1.18.4 / OTP 25 was built and executed in-session. `repo.hex.pm` and `builds.hex.pm` are
+   absent from the agent proxy's allow list (CONNECT answered 403), so `mix deps.get` cannot fetch
+   `anubis_mcp`; and `cloudwalk/anubis-mcp` cannot be attached as a session source to vendor it
+   from git instead. ⛔Both are environment policy, not properties of the SDK, and both are
+   operator-liftable — see the gate's §6.4 second correction for the exact asks.
+
+   ⛔**Superseded the same day:** that ask was wrong. `.github/workflows/elixir-tests.yml` already
+   runs `mix deps.get` + `mix test` on GitHub runners for five apps under `elixir/`, pulling from
+   hex and green on `master` — **hex is reachable from CI; only the agent session's proxy blocks
+   it.** The spike is a CI job on an existing lane, not a policy grant. Gate §6.4 third correction
+   carries the detail, including the execution-cost constraint on (C)'s *Anthropic*-streaming
+   clause.
+
 ## What changed in v0.3.4 (vs v0.3.3)
 
 19. **§11 criterion 10 pinned (prereq PR #9 executed, 2026-06-11).** The (F) baseline is formally unpinnable — trailing 30-day window held 1 session vs the ≥30 the haltspec requires — so the pin records the halt condition plus 90d/all-time context rates. The deeper finding: (F)'s reassignment-rate metric had no measurement source (reassignments were transcript-only; zero matching `audit.events` rows all-time). `_apply_reviewer_reassignment` now emits `dialectic_reviewer_reassigned`, making the threshold settable from the emission's deploy forward. Volume recovery (dialectic-rework arc) is upstream of any future re-pin.

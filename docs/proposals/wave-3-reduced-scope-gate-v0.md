@@ -445,6 +445,60 @@ operator whether the artifact exists locally rather than re-running a query whos
 ⛔**Both artifacts remain owed.** Criterion 7 wants a hands-on spike, which no desk pass can
 supply; criterion 8's contradiction is an adjudication, not a file.
 
+⚠️**CORRECTION 2026-08-30 (second) — criterion 7's spike is blocked on network policy, not on the
+absence of a toolchain.** The refresh above said, and PR #2031's body repeated, that there is "no
+Elixir toolchain in the session." That was an assumption stated as a fact, and it is false: a
+working toolchain was built in-session — **Elixir 1.18.4 on Erlang/OTP 25** — verified by
+executing a program, not by reading a version string. (Distro `apt` ships Elixir 1.14, below
+`anubis_mcp` 2.0.0's `~> 1.18` floor; the upstream release zip clears it.)
+
+Two blockers survive the toolchain, and both are environment policy rather than facts about the
+SDK:
+
+| Blocker | Observed | Consequence |
+|---|---|---|
+| **Hex package hosts unreachable** | `hex.pm` → **200**; `repo.hex.pm` → **000**; `builds.hex.pm` → **000**. The agent proxy's status endpoint records `connect_rejected` — *"gateway answered 403 to CONNECT (policy denial or upstream failure)"* — for both. Its direct-allow list carries `pypi.org`, `registry.npmjs.org`, `index.crates.io`, `proxy.golang.org`, `jsr.io`; **no hex host**. | `mix local.hex`, `mix local.rebar` and `mix deps.get` all fail. `anubis_mcp` cannot be fetched, so it cannot be compiled or exercised. |
+| **Third-party source not attachable** | `add_repo cloudwalk/anubis-mcp` refused — *"cross-tier adds are not supported in v1"*, the session already holding `cirwel` sources. A direct `git clone` of the same public repo is refused by the session's git proxy. | The fallback of vendoring the dependency tree from git instead of hex is closed too. |
+
+⛔**What this does NOT change.** (C)'s verdict is untouched, and criterion 7's status is untouched:
+the streaming clause is still untested and the artifact is still owed. Nothing here is spike
+evidence, and no artifact at `wave-3-mcp-sdk-spike-<date>.md` was written — writing one on this
+session's work would be fabrication, which is why none exists.
+
+⛔**What it does change is the reason on record**, and that is the difference between a dead end
+and a request: the spike needs **`repo.hex.pm` and `builds.hex.pm` added to the environment's
+network policy**, or a session started with **`cloudwalk/anubis-mcp` as its initial source**.
+Either is an operator action of minutes. The previous phrasing implied a capability gap that does
+not exist, and would have left criterion 7 looking permanently unreachable from any agent session.
+
+⚠️A near relative of the `.gitignore` finding above: *not reachable* (state 2) reported as though
+the capability were simply absent. The first was caught by reading the policy; this one only by
+testing the assumption instead of restating it.
+
+⛔**CORRECTION 2026-08-30 (third, superseding the ask in the second) — the project already has an
+Elixir CI lane with hex access, so the spike never needed an operator network-policy change.**
+The correction above asked for `repo.hex.pm` / `builds.hex.pm` on the agent proxy's allow list. That
+ask was **wrong**, and wrong in the same way as the two errors it was correcting: a limitation of
+the session reported as a limitation of the project, without reading the repository.
+
+`.github/workflows/elixir-tests.yml` runs `mix deps.get` + `mix test` on GitHub runners for five
+apps — `unitares_sdk` (Elixir 1.15 **and** 1.19, OTP 27), `agent_orchestrator`, `dialectic_live`,
+`sentinel`, `lease_plane` — pulling `phoenix`, `req`, `finch`, `postgrex`, `bandit` and the rest
+from hex. It is green on `master`. **Hex is reachable from CI; only this session's proxy blocks it.**
+
+⛔**So criterion 7's ask is a CI job, not a policy grant.** A spike lands as a scratch mix app plus
+a job in that workflow, on the lane that already exists. ⚠️One design constraint the gate should
+record now rather than at the spike: (C)'s streaming clause names *Anthropic* streaming, and the
+execution-cost policy forbids a metered API on the required path — so the spike must exercise
+`anubis_mcp` against a local or stubbed peer, or run as an opt-in job that no-ops without a key.
+**Which of those is a choice, and it is the operator's.**
+
+⚠️**Found while verifying this: `elixir/wave3a_handlers` is in no workflow at all.** 83 tests, a
+live service (`scripts/ops/com.unitares.wave3a-handlers.plist.template`) with a Python-side proxy
+(`src/wave3a_beam_proxy.py`), and **zero** CI references — every other app under `elixir/` has a
+job. That is precisely the drift gap `elixir-tests.yml`'s own header says it was written to close.
+⛔Recorded here as a finding, not fixed here: it is a CI change, not a gate document's business.
+
 **§6.5 Scope: path (1) only, or (1) and (2)? — ⏸️ DEFERRED, with a named reopen condition.**
 _(operator, 2026-08-29)_ ⛔**Not answered, and deliberately not sent to council either.** §6.6's
 instrument-first ruling removes this question's urgency entirely: the §3.1 instrumentation is
