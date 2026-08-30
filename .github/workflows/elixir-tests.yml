@@ -23,6 +23,16 @@ name: Elixir Tests
 # an audit-partition timezone bug turned this job red on every branch, and a
 # db-only PR fixing it would have shown the `lease_plane` check as ABSENT rather
 # than green — the fix could not be validated by the job it repairs.
+#
+# `wave3a_handlers` was CI-blind since it landed (156f3c0, PR #1887): 83 tests
+# across 8 files, zero workflow references. It is not a scratch app — it is
+# deployed (scripts/ops/com.unitares.wave3a-handlers.plist.template) and its
+# Python-side proxy (src/wave3a_beam_proxy.py) sits on the request path. This
+# closes the CI-blindness (a regression now gets a red job) but, like every
+# other job in this file, is NOT a required status check on master today — see
+# issue tracking that gap. Self-contained suite, no DB (Plug.Test against the
+# router, no Bandit boot); zero `path:` deps, unlike `agent_orchestrator`
+# (which depends on `unitares_sdk` + `postgrex` but is still DB-free in test).
 on:
   merge_group:
   push:
@@ -33,6 +43,7 @@ on:
       - 'elixir/unitares_sdk/**'
       - 'elixir/agent_orchestrator/**'
       - 'elixir/dialectic_live/**'
+      - 'elixir/wave3a_handlers/**'
       - 'db/postgres/**'
       - '.github/workflows/elixir-tests.yml'
   pull_request:
@@ -43,6 +54,7 @@ on:
       - 'elixir/unitares_sdk/**'
       - 'elixir/agent_orchestrator/**'
       - 'elixir/dialectic_live/**'
+      - 'elixir/wave3a_handlers/**'
       - 'db/postgres/**'
       - '.github/workflows/elixir-tests.yml'
 
@@ -202,6 +214,47 @@ jobs:
     - name: Run tests
       # No DB service: test_helper.exs excludes :db-tagged integration tests
       # when Postgres is unreachable, so the pure-logic suite runs green.
+      run: mix test
+
+  # wave3a_handlers is the first inbound-HTTP MCP listener on BEAM (RFC
+  # docs/proposals/resolved/beam-wave-3a-read-only-handlers.md). No DB, no
+  # path: deps (plug/bandit/finch/jason/meck, all hex) — self-contained like
+  # agent_orchestrator, so a plain mix test job closes the gap. The suite
+  # drives the router via Plug.Test without booting Bandit; `meck` stubs the
+  # outbound probe client.
+  wave3a_handlers:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: elixir/wave3a_handlers
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
+
+    - name: Set up Elixir / OTP
+      uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+      with:
+        otp-version: '27'
+        elixir-version: '1.19'
+
+    - name: Cache deps and build
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: |
+          elixir/wave3a_handlers/deps
+          elixir/wave3a_handlers/_build
+        key: ${{ runner.os }}-mix-wave3a_handlers-${{ hashFiles('elixir/wave3a_handlers/mix.lock', 'elixir/wave3a_handlers/mix.exs') }}
+        restore-keys: |
+          ${{ runner.os }}-mix-wave3a_handlers-
+
+    - name: Install dependencies
+      run: mix deps.get
+
+    - name: Run tests
       run: mix test
 
   lease_plane:
