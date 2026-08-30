@@ -48,7 +48,7 @@ The assessment emits an internal `safe` / `caution` / `high-risk` label, which b
 | `pause` | needs attention | Stop, reflect | self-recovery or dialectic ([§5.5](#55-recovery-self-recovery--dialectic)) |
 | `reject` | significant concern | Human input or dialectic | dialectic |
 
-Total risk is the **sum of named components** (`low_E`, `low_I`, high-`S`, `|V|`, …), each with an explicit weight — no sigmoid/phi black box, so you can trace exactly why a verdict fired ([`src/behavioral_assessment.py`](../../src/behavioral_assessment.py)). **Absolute safety floors always apply**, overriding the self-relative baseline; and self-relative deviation risk is *gated by absolute basin health* — inside the healthy basin, deviation from your own norm is treated as information, not danger.
+Total risk is the **sum of named components** (`low_E`, `low_I`, high-`S`, `|V|`, …), each with an explicit weight — no sigmoid/phi black box, so you can trace exactly why a verdict fired ([`src/behavioral_assessment.py`](../../src/behavioral_assessment.py)). **Absolute safety floors always apply to their named component**, overriding the self-relative component via `max`; they are not a verdict floor, so one breached dimension can still leave the behavioral verdict `safe`. The full result reports this separately under `behavioral.assessment.absolute_floor_observation`; it is telemetry, not a policy input. Self-relative deviation risk is also *gated by absolute basin health* — inside the healthy basin, deviation from your own norm is treated as information, not danger.
 
 **Margin** (`comfortable` / `tight` / `critical`) rides along with the verdict, telling you how close the agent is to a basin boundary even while the verdict is still `proceed`.
 

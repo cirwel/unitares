@@ -129,18 +129,38 @@ identity of EISV itself.
   the agent's own behavioral baseline.
 - **Absolute safety floors always apply**, overriding the baseline — but read
   that precisely: a floor overrides the basin-gated *component* (via a
-  per-component `max`), not the *verdict*. The largest single-floor contribution equals its
-  component weight (0.30 for E or I, 0.20 for S or |V|), and each of those is
-  below the 0.35 safe/caution threshold — so one dimension at its absolute worst
-  still reads `safe` (E=0.0 alone: risk 0.30), and only E and I both near zero
-  force `high-risk` (0.30 + 0.30 = 0.60) through the floors alone. For
-  non-embodied agents the Step-1 component clamps compress this further
-  (E_obs ≥ ~0.18, I_obs ≥ 0.12), capping the all-floors-at-reachable-worst risk
-  at ~0.50 (`caution` → guide → proceeds). Verdict-level structural pauses for
-  such states come from the diagnostic-ODE side of `monitor_decision.py`
-  (basin/void/coherence pauses), which tracks the behavioral signal only through
-  the sensor spring coupling, with lag. Whether a lone floor breach should force
-  at least `caution` is an open calibration question — issue #1995.
+  per-component `max`), not the *verdict*. The largest single-floor contribution
+  equals its component weight (0.30 for E or I, 0.20 for S or |V|), and each is
+  below the 0.35 safe/caution threshold. S is genuinely independent, so S=1.0
+  alone still reads `safe` at risk 0.20. E and I are coupled to V through
+  `V = EMA(E - I)`: a sustained one-sided E or I collapse normally widens that
+  gap and can also fire `high_V`, while a lone E/I breach remains `safe` only in
+  the reachable corridor where the other dimension is reduced enough to keep
+  |V| at or below its ceiling. E and I both near zero force `high-risk`
+  (0.30 + 0.30 = 0.60) through the floors alone. For non-embodied agents the
+  Step-1 component clamps compress this further (E_obs ≥ ~0.18, I_obs ≥ 0.12),
+  capping the all-floors-at-reachable-worst risk at ~0.50 (`caution` → guide →
+  proceeds). Verdict-level structural pauses for such states come from the
+  diagnostic-ODE side of `monitor_decision.py` (basin/void/coherence pauses),
+  which tracks the behavioral signal only through the sensor spring coupling,
+  with lag. Whether a lone floor breach should force at least `caution` is an
+  open calibration question — issue #1995.
+- Issue #1995 is measured without changing that policy. Every check-in adds a
+  versioned `behavioral.absolute_floor_observation.v1` object to the full result
+  at `behavioral.assessment.absolute_floor_observation` and to the existing
+  `auto_attest` audit row at
+  `details.behavioral.absolute_floor_observation`. The row snapshots the floor
+  and verdict thresholds, breached dimensions, behavioral authority context,
+  and whether a breach coincided with a `safe` behavioral verdict. It is
+  explicitly `telemetry_only` with `policy_effect: none`; no risk, policy, or
+  enforcement input consumes it. Zero-breach rows remain present so the audit
+  has a denominator, failed evaluation is `evaluated: false` (unknown, not
+  zero), and dry-run rows use `measurement_scope: simulation` with
+  `eligible_for_production_counter: false`. A production count therefore
+  filters for `evaluated` and `eligible_for_production_counter`; use
+  `behavioral_verdict_authoritative` as an additional cohort filter when the
+  question is specifically about final behavioral authority rather than all
+  behavioral assessments.
 - Self-relative deviation risk is **gated by absolute basin health** (issue #689): inside the healthy basin a deviation from your own norm is treated as information, not danger; the gate opens only as a dimension leaves the basin toward its absolute floor. (This replaced a flat σ-floor that was false-pausing ultra-stable agents as the *principled* fix; the floor survives as defense-in-depth, bounding the z-score denominator in the boundary region — `MIN_MEANINGFUL_EISV_STD`.)
 
 Internally the assessment emits a `safe` / `caution` / `high-risk` label; that drives the binary `proceed` / `pause` action (qualified by a sub-action), which the agent reads back as `proceed` / `guide` / `pause` / `reject`.
