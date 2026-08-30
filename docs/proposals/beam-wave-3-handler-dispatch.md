@@ -341,8 +341,22 @@ halt/reopen decision remain the operator-led red-team's**, per (D).
    was forked/rebranded to **`anubis-mcp`**, which is the live path — v1.6.2 (2026-06-09), spec
    **2025-06-18 + 2025-11-25 (Tasks)**, StreamableHTTP + OAuth 2.1. **(C) does not fire** (a current,
    spec-fresh, streaming-capable SDK exists), but §6's SDK assumptions and the (C) clause's named
-   versions should re-pin to `anubis-mcp` (≥v1.6.2) at the implementation gate. Optional hands-on
-   Anthropic-streaming code spike remains to close that clause beyond desk evidence.
+   versions should re-pin to `anubis-mcp` (~~≥v1.6.2~~ **≥v2.0.0** — see below) at the
+   implementation gate. Optional hands-on Anthropic-streaming code spike remains to close that
+   clause beyond desk evidence.
+
+   ⚠️**Desk evidence refreshed 2026-08-30.** ⛔Recorded inline here rather than as a handoff
+   file, because `docs/handoffs/` is gitignored (`.gitignore:186`) and a document nobody can read
+   from the repository is not a record — see the gate's §6.4, where that same fact turns out to
+   undercut the (D) halt's first clause. The version above is stale by a major release: `anubis-mcp` is **v2.0.0 (2026-08-07)**, carrying two breaking changes —
+   deprecated **HTTP+SSE transports removed**, and **2024-11-05 dropped** with the floor moved to
+   **2025-03-26**. ⛔**(C) still does not fire, and is now better evidenced**: five releases in
+   late July 2026 plus a major in August is decisive against "no maintainer responsiveness", and a
+   floor moving forward is the opposite of spec drift. ⛔**The streaming clause remains
+   untested** — that is exactly what the hands-on spike this paragraph calls optional would
+   close, and no desk pass can reach it. ⚠️Unrecorded elsewhere: `anubis-mcp` is
+   **LGPL-3.0** against this repo's Apache-2.0; LGPL permits linking, so this is an open question
+   rather than a finding, but (C)'s criteria never mention licensing at all.
 
 ## What changed in v0.3.4 (vs v0.3.3)
 

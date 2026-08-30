@@ -330,7 +330,13 @@ integration).
   struck 2026-06-24) is still measured and still reported; it can no longer stop anything. ⛔It was
   not retired — do not cite it as removed.
 - **Criterion 7.** The `docs/handoffs/wave-3-mcp-sdk-spike-<date>.md` artifact exists on no ref.
-  Does not fire on the merits; the artifact is owed (§6.4).
+  Does not fire on the merits; the artifact is owed (§6.4). ⚠️**Desk evidence refreshed
+  2026-08-30, and the supporting fact had gone stale:** `anubis-mcp` is **v2.0.0 (2026-08-07)**,
+  not v1.6.2 — HTTP+SSE transports removed, protocol floor moved to 2025-03-26. ⛔The verdict is
+  unchanged and now better evidenced (five releases in late July 2026 plus a major in August is
+  decisive against "no maintainer responsiveness"), but **desk evidence cannot discharge
+  criterion 7**, which requires a hands-on streaming spike. Full refresh in
+  `beam-wave-3-handler-dispatch.md` §v0.3.5 item 3.
 
 ---
 
@@ -391,6 +397,37 @@ slip as a standalone halt. ⛔Explicitly reserved to the operator by the amendme
 `wave-3-state-ownership-redteam-<date>.md` / `-prep-` contradiction (criterion 8, original scope).
 Both are non-gating for the reduced scope and both are still owed. ⛔Applying the
 missing-source halt to 8 and not to 7 remains inconsistent.
+
+⛔**CORRECTION 2026-08-30 — "exists on no ref" is not evidence about these artifacts, and three
+documents rest on it as though it were.** `docs/handoffs/` is **gitignored**
+(`.gitignore:186`, under a comment declaring "retired/handoff docs" deliberately local-only). A
+file at that path **can never appear on any ref**, by repo policy.
+
+That makes the observation unfalsifiable in one direction:
+
+- `git log --all` returning nothing for `docs/handoffs/wave-3-*` is **guaranteed**, not found.
+- A GitHub API 404 for that path is **guaranteed**, not found.
+- ⛔Neither distinguishes *"the red-team never happened"* from *"the red-team happened and its
+  artifact sits on the operator's machine, exactly where repo policy says handoff docs live."*
+
+⚠️**This is the four-state confusion the measurement-authority rule exists to prevent**, applied to
+the gate's own reasoning: a policy artifact read as evidence about work. State 3 (*not recorded,
+and by design cannot be*) presented as state 4 (*genuinely absent*).
+
+**Where it propagates.** `beam-wave-3-handler-dispatch.md:15` and
+`wave-3-go-decision-2026-08-16.md:300` both say the (D) halt "is satisfied by its first clause
+alone" **on exactly this observation** — the latter citing `git log --all` across 245 remote
+branches and a GitHub API 404 as two independent verifications. They are not independent; they
+are two ways of observing the same `.gitignore` line.
+
+⛔**What this does NOT establish.** It does not show the red-team happened, and it does not lift
+the (D) halt — whose other clauses are untouched, and which criterion 8's dissolution made
+historical for the reduced scope anyway. It establishes only that **the first clause's evidence
+was never capable of bearing the weight put on it**, and that anyone re-reading (D) must ask the
+operator whether the artifact exists locally rather than re-running a query whose answer is fixed.
+
+⛔**Both artifacts remain owed.** Criterion 7 wants a hands-on spike, which no desk pass can
+supply; criterion 8's contradiction is an adjudication, not a file.
 
 **§6.5 Scope: path (1) only, or (1) and (2)? — ⏸️ DEFERRED, with a named reopen condition.**
 _(operator, 2026-08-29)_ ⛔**Not answered, and deliberately not sent to council either.** §6.6's
