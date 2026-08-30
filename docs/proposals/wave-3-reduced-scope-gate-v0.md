@@ -429,6 +429,36 @@ operator whether the artifact exists locally rather than re-running a query whos
 ⛔**Both artifacts remain owed.** Criterion 7 wants a hands-on spike, which no desk pass can
 supply; criterion 8's contradiction is an adjudication, not a file.
 
+⚠️**CORRECTION 2026-08-30 (second) — criterion 7's spike is blocked on network policy, not on the
+absence of a toolchain.** The refresh above said, and PR #2031's body repeated, that there is "no
+Elixir toolchain in the session." That was an assumption stated as a fact, and it is false: a
+working toolchain was built in-session — **Elixir 1.18.4 on Erlang/OTP 25** — verified by
+executing a program, not by reading a version string. (Distro `apt` ships Elixir 1.14, below
+`anubis_mcp` 2.0.0's `~> 1.18` floor; the upstream release zip clears it.)
+
+Two blockers survive the toolchain, and both are environment policy rather than facts about the
+SDK:
+
+| Blocker | Observed | Consequence |
+|---|---|---|
+| **Hex package hosts unreachable** | `hex.pm` → **200**; `repo.hex.pm` → **000**; `builds.hex.pm` → **000**. The agent proxy's status endpoint records `connect_rejected` — *"gateway answered 403 to CONNECT (policy denial or upstream failure)"* — for both. Its direct-allow list carries `pypi.org`, `registry.npmjs.org`, `index.crates.io`, `proxy.golang.org`, `jsr.io`; **no hex host**. | `mix local.hex`, `mix local.rebar` and `mix deps.get` all fail. `anubis_mcp` cannot be fetched, so it cannot be compiled or exercised. |
+| **Third-party source not attachable** | `add_repo cloudwalk/anubis-mcp` refused — *"cross-tier adds are not supported in v1"*, the session already holding `cirwel` sources. A direct `git clone` of the same public repo is refused by the session's git proxy. | The fallback of vendoring the dependency tree from git instead of hex is closed too. |
+
+⛔**What this does NOT change.** (C)'s verdict is untouched, and criterion 7's status is untouched:
+the streaming clause is still untested and the artifact is still owed. Nothing here is spike
+evidence, and no artifact at `wave-3-mcp-sdk-spike-<date>.md` was written — writing one on this
+session's work would be fabrication, which is why none exists.
+
+⛔**What it does change is the reason on record**, and that is the difference between a dead end
+and a request: the spike needs **`repo.hex.pm` and `builds.hex.pm` added to the environment's
+network policy**, or a session started with **`cloudwalk/anubis-mcp` as its initial source**.
+Either is an operator action of minutes. The previous phrasing implied a capability gap that does
+not exist, and would have left criterion 7 looking permanently unreachable from any agent session.
+
+⚠️A near relative of the `.gitignore` finding above: *not reachable* (state 2) reported as though
+the capability were simply absent. The first was caught by reading the policy; this one only by
+testing the assumption instead of restating it.
+
 **§6.5 Scope: path (1) only, or (1) and (2)? — ⏸️ DEFERRED, with a named reopen condition.**
 _(operator, 2026-08-29)_ ⛔**Not answered, and deliberately not sent to council either.** §6.6's
 instrument-first ruling removes this question's urgency entirely: the §3.1 instrumentation is
