@@ -246,6 +246,7 @@ class UNITARESMonitor:
         # Behavioral EISV: observation-first state (no ODE, no attractor)
         self._behavioral_state = BehavioralEISV()
         self._last_behavioral_verdict: Optional[str] = None  # safe/caution/high-risk
+        self._last_absolute_floor_observation: Optional[Dict[str, Any]] = None
         # Final decision-time pair after behavioral/Φ resolution and any
         # verification floor.  This is the authority read APIs must replay;
         # ``state.risk_history`` remains Φ-derived telemetry and can disagree.
@@ -1069,6 +1070,11 @@ class UNITARESMonitor:
         saved_last_resolved_risk = getattr(self, "_last_resolved_risk", None)
         saved_last_resolved_verdict = getattr(self, "_last_resolved_verdict", None)
         saved_last_behavioral_verdict = getattr(self, "_last_behavioral_verdict", None)
+        saved_last_absolute_floor_observation = getattr(
+            self,
+            "_last_absolute_floor_observation",
+            None,
+        )
         
         try:
             # OPTIMIZED: Shallow copy + selective deep copy
@@ -1122,6 +1128,9 @@ class UNITARESMonitor:
             self._last_resolved_risk = saved_last_resolved_risk
             self._last_resolved_verdict = saved_last_resolved_verdict
             self._last_behavioral_verdict = saved_last_behavioral_verdict
+            self._last_absolute_floor_observation = (
+                saved_last_absolute_floor_observation
+            )
     
     def process_update(self, agent_state: Dict, confidence: Optional[float] = None, task_type: str = "mixed") -> Dict:
         """
@@ -1550,6 +1559,40 @@ class UNITARESMonitor:
             drift_vector=drift_vector,
         )
 
+        # Issue #1995: measure the absolute-floor geometry after the behavioral
+        # verdict and primary policy decision have already been computed.  This
+        # observation is telemetry-only, zero-inclusive, and fail-open: neither
+        # a breach nor an instrumentation failure may alter risk, verdict, or
+        # enforcement.  Import lazily so an optional-instrument refactor cannot
+        # prevent the governance monitor itself from loading.
+        measurement_scope = "simulation" if self._simulation_active else "live"
+        try:
+            from src.behavioral_floor_observability import (
+                build_absolute_floor_observation,
+            )
+
+            absolute_floor_observation = build_absolute_floor_observation(
+                self._behavioral_state,
+                behavioral_assessment,
+                measurement_scope=measurement_scope,
+                resolved_verdict_source=verdict_source,
+            )
+        except Exception:
+            logger.debug(
+                "absolute-floor observation skipped",
+                exc_info=True,
+            )
+            absolute_floor_observation = {
+                "schema": "behavioral.absolute_floor_observation.v1",
+                "evaluated": False,
+                "measurement_role": "telemetry_only",
+                "policy_effect": "none",
+                "measurement_scope": measurement_scope,
+                "eligible_for_production_counter": False,
+                "unavailable_reason": "evaluation_failed",
+            }
+        self._last_absolute_floor_observation = absolute_floor_observation
+
         # Log decision via audit logger (for accountability and transparency).
         # Records the un-suppressed decision so operators can later analyze
         # whether suppression masked real drift; gap_suppressed flag in details.
@@ -1588,6 +1631,7 @@ class UNITARESMonitor:
                     'risk': behavioral_assessment.risk,
                     'components': behavioral_assessment.components,
                     'baselined': self._behavioral_state.is_baselined,
+                    'absolute_floor_observation': absolute_floor_observation,
                 },
             }
         )

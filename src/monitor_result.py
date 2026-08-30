@@ -559,6 +559,11 @@ def build_result(
                 'coherence_role': BEHAVIORAL_UPDATE_CONSISTENCY_ROLE,
                 'components': behavioral_assessment.components,
                 'guidance': behavioral_assessment.guidance,
+                'absolute_floor_observation': getattr(
+                    monitor,
+                    '_last_absolute_floor_observation',
+                    None,
+                ),
             },
         }
         if monitor._behavioral_state.is_baselined and behavioral_assessment.health != "healthy":
