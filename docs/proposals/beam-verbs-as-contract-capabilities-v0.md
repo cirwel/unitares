@@ -399,21 +399,42 @@ refuse, not fall back.
 **Refuse-not-fallback does not resolve the ambiguous-commit case, and `msg` has
 two of them.** `inbox` is not a read: `Repo.inbox/2` atomically claims a
 recipient's pending rows — one statement sets `delivery_state='delivered'`
-before returning them (`elixir/.../repo.ex:653-690`). A timeout between BEAM's
-commit and the caller's receipt permanently consumes mail nobody saw, and
-refusing the retry does not bring those rows back. `send` takes no
-caller-supplied idempotency key — `send_message` inserts unconditionally with a
-server-generated `message_id` (`repo.ex:595`) — so retrying an ambiguous
-timeout can post the same message twice. Neither gap is an argument for keeping
-the credential dance (the raw HTTP caller faces both today), but a capability
-makes retries *routine* — adapters retry on timeout; a human copy-pasting curl
-does not — so the first slice cannot ship on "refuse" alone. Candidates, named
-here and deliberately not chosen: a two-phase claim/ack (inbox returns rows
-under a delivery lease, a second call acknowledges, unacked rows redeliver
-after a timeout); and an idempotency key on `send` (caller-supplied, uniqueness
-enforced by the transport). Defining these semantics is part of §9 step 1's
-design work; "refuse" only covers the case where the mutation is known not to
-have happened.
+before returning them, using `FOR UPDATE SKIP LOCKED`
+(`elixir/.../repo.ex:653-690`). A timeout between BEAM's commit and the
+caller's receipt makes that mail **unreachable through the normal inbox query**
+until `purge_expired_messages` reaps it at TTL (`repo.ex:692-717`); refusing
+the retry does not bring those rows back into the inbox. The rows are not
+physically destroyed at commit, which matters: a design that reads by cursor
+rather than by claim can still see them. `send` takes no caller-supplied
+idempotency key — `send_message` omits `message_id` on insert
+(`repo.ex:603-610`) and migration 069 line 103 supplies
+`DEFAULT gen_random_uuid()` — so retrying an ambiguous timeout can post the
+same message twice.
+
+Neither gap is an argument for keeping the credential dance: the raw HTTP
+caller faces both today. **But the reason the earlier draft gave for urgency
+was wrong, and it is worth stating plainly rather than quietly deleting.** That
+draft asserted a capability makes retries *routine* — "adapters retry on
+timeout; a human copy-pasting curl does not" — as though it were an observed
+property of this plane. It is not. No `msg` adapter exists. The one existing
+caller refuses to retry by design: `_call_beam` in `src/wave3a_beam_proxy.py`
+documents itself as *"No retries — §3.2 is 'single attempt, hard timeout,
+fallback to Python.'"* And the lease SDK retries exactly one condition —
+`agents/sdk/src/unitares_sdk/lease_plane/client.py:301,312-313`, *"Only
+`held_by_other` triggers retry"* — never an ambiguous timeout.
+
+The honest form of the argument is **conditional**: idempotency is required *if
+and when* ambiguous-result retries are promised to a caller. That is a choice
+about the adapter we have not built yet, not a fact about the plane as it
+stands. It still has to be settled before `msg/send` ships, because the
+capability's contract is what creates the expectation — but it is a decision to
+make, not a hazard already present.
+
+Candidates, named here and deliberately not chosen: a two-phase claim/ack
+(inbox returns rows under a delivery lease, a second call acknowledges, unacked
+rows redeliver after a timeout); and an idempotency key on `send`
+(caller-supplied, uniqueness enforced by the transport). "Refuse" only covers
+the case where the mutation is known not to have happened.
 
 ### 8a. ⛔ Concurrency, not just retry — and why neither candidate above fixes it
 
@@ -453,12 +474,33 @@ this mailbox: a recipient can deduplicate on `message_id`, and cannot un-lose.
 It also removes `inbox` from the class of consuming mutations, which is what
 §11 files against it.
 
-Its costs, to design against rather than discover: TTL becomes the only reaper,
-so a recipient that never polls grows without bound and needs a per-recipient
-depth cap enforced at send. And if (b)'s idempotency key is added, it should
-**be** or travel with `message_id`, so sender write-dedup and receiver
-read-dedup key off one token rather than two — minting two identifiers is the
-real coupling hazard between these candidates, not their ordering.
+**What it gives up, which an earlier draft of this subsection did not say.**
+The atomic claim was not only a defect — it *prevented duplicate responders*.
+Framing `SKIP LOCKED` purely as a partition bug (§8a) describes what it costs
+one recipient with two in-flight calls, and omits what it buys: exactly one
+consumer acts on a given row. (c) does not remove a hazard, it substitutes one
+for another — partition becomes duplication, and two concurrent readers can
+both act. Whether that is acceptable depends on a consumer model this RFC has
+not declared: a single logical consumer per recipient can deduplicate on
+`message_id`, competing consumers cannot. (c) also needs a **stable total
+order** for a high-water cursor to mean anything, and the current schema does
+not provide one.
+
+A cursor only closes the loss window if the *caller* holds it, or the server
+advances it after durable processing. A server-side cursor advanced during
+delivery recreates the original ambiguity exactly, and should be rejected
+outright or treated as an explicit cumulative ack — not adopted by default
+because it looks simpler.
+
+Its costs, to design against rather than discover: a recipient that never polls
+grows without bound and needs a per-recipient depth cap enforced at send. Note
+this is a **visibility and scan-pressure** cost, not a new retention cost — an
+earlier draft overstated it. Delivered rows are already retained until TTL
+today (`repo.ex:692-717`), so pure read does not lengthen how long rows live.
+And if (b)'s idempotency key is added, it should **be** or travel with
+`message_id`, so sender write-dedup and receiver read-dedup key off one token
+rather than two — minting two identifiers is the real coupling hazard between
+these candidates, not their ordering.
 
 Ordering, if more than one is taken: read path first. Loss is unrecoverable;
 a duplicate send is merely noisy.
@@ -490,14 +532,116 @@ blocked until one is defined. Reusing the attestation turns lost-response
 recovery into a replay refusal; changing the operation identity turns it into a
 duplicate mutation. Tests must pin both halves together.
 
+### 8d. Prior art for (b) — and one piece to avoid
+
+Added 2026-08-30 from the review recorded in §8e. Verified directly rather than
+taken from the verdict.
+
+- **Reuse:** `elixir/agent_orchestrator/lib/agent_orchestrator/postgres_idempotency_ledger.ex`
+  already implements the shape (b) needs — `INSERT ... ON CONFLICT (key_hash)
+  DO UPDATE`, a `spec_digest` compared against the stored one, and
+  `RETURNING spec_digest, execution_id, state` so the caller learns whether it
+  reserved or replayed. Preferably simplified into the message insert's own
+  transaction rather than run as a second round trip.
+- **Do not reuse:** governed-effect dedup. Its own docstring
+  (`governed_effect.ex`) states that dedup is *"best-effort at the shadow stage
+  — `audit.events` has no unique constraint on the key, so a true concurrent
+  double-propose can still produce two rows; constraint-backed uniqueness
+  arrives with the Phase 4 table."* Same-key-same-digest replay and
+  same-key-different-digest conflict are the right semantics, but the
+  enforcement is not there yet, so it cannot back a uniqueness guarantee.
+- **`lat.v1` attestations:** per-attempt authorization only. They are
+  request-bound and single-use by design, which is precisely why they cannot
+  double as operation identity — see the retry invariant in §8c.
+- **Dialectic saga invariants** (payload hashing, one in-flight claim, guarded
+  replay) are worth borrowing only if (a) is selected.
+
+### 8e. Review record — 2026-08-30
+
+Dialectic session `4de62e1513fff9ff`, reviewer `DialecticReviewer_d0711023`,
+backend `codex:host-adapter`, `degraded: false`. Verdict: **rejected**, with
+the paused agent's agreement recorded and the session left open — a paused
+agent cannot clear its own session over a standing rejection.
+
+Four findings, each re-derived against `origin/master` `4e1b652b` before being
+written into this document:
+
+1. **The retry premise was unsupported.** Corrected in §8 above. This was the
+   load-bearing claim of the section and it was an assumption about adapters in
+   general presented as a fact about this plane.
+2. **§8b and §9 contradicted each other** on whether (c) was adopted. Corrected
+   in §9 above. Neither (a) nor (c) has been chosen.
+3. **"Permanently consumes" overstated the failure.** Rows persist to TTL;
+   the loss is of inbox visibility. Corrected in §8 above, and it slightly
+   *favours* (c).
+4. **Citation precision** on the server-generated `message_id`. Corrected in §8
+   above.
+
+Recorded here because the errors were in text this RFC had already carried
+through two prior adversarial passes and one merge. A reviewer that only
+confirms is not doing the job; this one changed four claims and improved a
+fifth — the duplicate-responder trade now in §8b, which no earlier pass caught
+because the earlier passes and the author shared the same framing.
+
+**Resolved 2026-08-30T02:30Z, `action: resume`.** The reviewer ratified on the
+stated ground that the response "satisfies the central objection through
+independently described tree evidence, not mere assent." It also noted that the
+author's condition list was *abbreviated*, and that ratification is subject to
+the fuller set below. That distinction is the reason this subsection exists: an
+agreement reached by deferring would have resolved the session just as cleanly
+and left the document wrong.
+
+### 8f. Ratified conditions — binding on the `msg` slices
+
+These are the resolution's conditions, not suggestions. The first three are
+discharged by the corrections above; the last three are obligations on work not
+yet done, and the **test lists are part of the condition**, not commentary.
+
+1. ✅ Correct §8's citations, the inbox-loss wording, and the retry premise.
+2. ✅ Restate the retry argument as conditional — required *if* ambiguous-result
+   retries are promised, not because capability exposure creates them.
+3. ✅ Record (c)'s duplicate-responder trade and correct the storage claim.
+4. ⬜ **Keep authorization separate from operation identity.** A retry retains
+   the operation key and the exact material request, but mints a fresh
+   single-use `lat.v1` attestation. Tests required: concurrent sends,
+   response-loss retry, digest conflict, **idempotency storage unavailable**,
+   and attestation replay. The storage-unavailable case is the one most easily
+   forgotten — an idempotency layer that fails open silently is worse than none,
+   because callers will have been told retries are safe.
+5. ⬜ **Choose the consumer and delivery contract before exposing `msg/inbox`.**
+   For (c): a stable total order and a caller-presented cursor; reads must not
+   advance it; any cumulative advance only after durable processing of a
+   contiguous prefix. Tests required: duplicate responders, same-cursor
+   concurrency, lost responses, cursor loss, pagination, TTL expiry.
+6. ⬜ **If (a) is selected**, declare whether a recipient is a single logical
+   consumer or supports competing consumers, and require a stable claim
+   operation ID, fenced claim generations, late-ack rejection, redelivery, and
+   either one active batch per recipient or an explicit disjoint-delivery
+   contract.
+
 ## 9. Sequencing
 
-1. **`msg/send` first.** It is the smallest surface with measured reachability
-   pressure and already uses `authorize_strict`. It still waits for §5's
-   accounting choice, a server-enforced idempotency key, derived sender
-   identity, and §8's fresh-proof/stable-operation retry rule.
-2. **`msg/inbox` second.** It additionally waits for claim/ack/redelivery
-   semantics and a recipient derived from the authenticated caller.
+1. **`msg/send` first, and independently.** It is the smallest surface with
+   measured reachability pressure and already uses `authorize_strict`. It waits
+   on §5's accounting choice, derived sender identity, and §8's
+   fresh-proof/stable-operation retry rule — but **not** on choosing between
+   (a) and (c). Send and inbox are independent problems that an earlier draft
+   of §8 wrongly welded together. What `send` needs is its retry contract
+   settled: if ambiguous-result retries are supported, an operation key scoped
+   to the derived sender, a canonical request digest, and atomic uniqueness
+   coupled to the message insert — same key and digest returning the original
+   `message_id`, a different digest conflicting, concurrent identical sends
+   producing exactly one row.
+2. **`msg/inbox` second, and only after the delivery contract is chosen.** It
+   additionally waits on a recipient derived from the authenticated caller, and
+   on an explicit choice between the documented at-most-once pointer mailbox and
+   an at-least-once contract. **This step previously presupposed
+   claim/ack/redelivery — that is, candidate (a) — while §8b records (c) as
+   still unchosen. The two contradicted each other; neither has been decided.**
+   Whichever is taken carries its own obligations: (c) needs a stable total
+   order and a client-presented cursor with no server-side advance; (a) needs a
+   declared single-vs-competing consumer model, a stable claim operation ID,
+   fenced claim generation, and late-ack rejection.
 3. **`lease/status` separately**, only after §7 defines its visibility and
    redacted response. Read-only does not make the raw route agent-safe.
 4. **Lease mutations later, or never.** `acquire`, `release`, and handoff wait
