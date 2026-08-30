@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dialectic one-call canary — end-to-end liveness probe for the review surface.
+"""Dialectic one-call canary — terminal liveness probe for the review surface.
 
 Originally the positive control for the #1387 adoption kill-gate. That gate is
 RETIRED (2026-08-18, operator): a usage count may retire an instrument, never a
@@ -32,7 +32,10 @@ the gate measures, end-to-end, on a schedule:
      exist. #1442's failure mode left neither — a response-level check alone
      would have needed the timeout error to say so, and pre-#1424 no
      telemetry said anything.
-  4. append one JSONL line per run; exit 0/1 (launchd surfaces the log).
+  4. poll the read-only ``dialectic(action='get')`` path until the independent
+     review reaches a terminal, resolved verdict. A successful reviewer spawn
+     is progress, not proof that the review completed.
+  5. append one JSONL line per run; exit 0/1 (launchd surfaces the log).
 
 Gate contract (#1387 amendment, 2026-08-01): the kill read is valid only if
 this canary is green through the measurement window. Organic zero + green
@@ -49,6 +52,8 @@ Env:
     UNITARES_DIALECTIC_CANARY_LOG default <repo>/data/logs/dialectic_canary.jsonl
     GOVERNANCE_DATABASE_URL       default postgresql://postgres:postgres@localhost:5432/governance
     UNITARES_CANARY_TIMEOUT_S     default 150 (must clear the 105s one-call ceiling)
+    UNITARES_CANARY_VERDICT_TIMEOUT_S default 120 (terminal-review wait)
+    UNITARES_CANARY_POLL_INTERVAL_S   default 2 (read-only poll cadence)
 """
 
 from __future__ import annotations
@@ -70,6 +75,7 @@ DEFAULT_LOG = REPO_ROOT / "data" / "logs" / "dialectic_canary.jsonl"
 DEFAULT_URL = os.environ.get("UNITARES_MCP_URL", "http://127.0.0.1:8767/mcp/")
 CANARY_NAME = "canary_dialectic"
 LABEL_PREFIX = "canary_"
+TERMINAL_PHASES = {"resolved", "failed", "escalated", "timeout", "abandoned"}
 
 
 def _timeout_s() -> float:
@@ -78,6 +84,23 @@ def _timeout_s() -> float:
         return float(raw) if raw else 150.0
     except ValueError:
         return 150.0
+
+
+def _positive_float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    try:
+        value = float(raw) if raw else default
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _verdict_timeout_s() -> float:
+    return _positive_float_env("UNITARES_CANARY_VERDICT_TIMEOUT_S", 120.0)
+
+
+def _poll_interval_s() -> float:
+    return _positive_float_env("UNITARES_CANARY_POLL_INTERVAL_S", 2.0)
 
 
 async def call_tool(
@@ -162,6 +185,83 @@ def evaluate_review(payload: Dict[str, Any]) -> Tuple[bool, str]:
     if raw.get("one_call_review") is not True:
         return False, "one_call_review branch did not run"
     return True, "ok"
+
+
+def evaluate_terminal_review(
+    payload: Dict[str, Any],
+) -> Tuple[bool, bool, str]:
+    """Return ``(terminal, ok, detail)`` for a dialectic session read.
+
+    A non-terminal phase tells the poller to keep waiting. Any response error
+    or terminal phase other than ``resolved`` is a completed red result. A
+    resolved row must carry an action in its resolution payload; otherwise the
+    row says terminal without preserving the verdict this canary is meant to
+    prove.
+    """
+    if payload.get("success") is not True:
+        return True, False, f"dialectic get failed: {payload.get('error', payload)}"
+    raw = review_payload(payload)
+    if raw.get("success") is not True:
+        return True, False, f"dialectic get failed: {raw.get('error', raw)}"
+
+    phase = str(raw.get("phase") or raw.get("status") or "").strip().lower()
+    if phase not in TERMINAL_PHASES:
+        return False, False, f"review still in phase {phase or 'unknown'}"
+    if phase != "resolved":
+        return True, False, f"review ended in terminal phase {phase!r}, not 'resolved'"
+
+    resolution = raw.get("resolution")
+    action = resolution.get("action") if isinstance(resolution, dict) else None
+    if not action:
+        return True, False, "resolved review carries no resolution action"
+    return True, True, "ok"
+
+
+async def wait_for_terminal_review(
+    *,
+    url: str,
+    session_id: str,
+    client_session_id: str,
+    initial_payload: Dict[str, Any],
+    timeout_s: float,
+    poll_interval_s: float,
+) -> Tuple[Dict[str, Any], bool, str, int]:
+    """Poll the read-only session view until a terminal verdict or deadline."""
+    payload = initial_payload
+    polls = 0
+    deadline = time.monotonic() + timeout_s
+    while True:
+        terminal, ok, detail = evaluate_terminal_review(payload)
+        if terminal:
+            return payload, ok, detail, polls
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raw = review_payload(payload)
+            phase = raw.get("phase") or raw.get("status") or "unknown"
+            return (
+                payload,
+                False,
+                f"review did not reach a terminal verdict within {timeout_s:.1f}s "
+                f"(last phase {phase!r})",
+                polls,
+            )
+
+        await asyncio.sleep(min(poll_interval_s, remaining))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            continue
+        payload = await call_tool(
+            url,
+            "dialectic",
+            {
+                "action": "get",
+                "session_id": session_id,
+                "client_session_id": client_session_id,
+            },
+            timeout_s=min(15.0, max(1.0, remaining)),
+        )
+        polls += 1
 
 
 def db_ground_truth(session_id: str) -> Tuple[bool, str]:
@@ -259,6 +359,30 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
             if not ok:
                 record["detail"] = detail
                 return 1
+
+        record["stage"] = "await_terminal_review"
+        terminal_payload, ok, detail, polls = await wait_for_terminal_review(
+            url=url,
+            session_id=raw_review["session_id"],
+            client_session_id=csid,
+            initial_payload=review,
+            timeout_s=_verdict_timeout_s(),
+            poll_interval_s=_poll_interval_s(),
+        )
+        terminal = review_payload(terminal_payload)
+        resolution = terminal.get("resolution")
+        record["terminal_phase"] = terminal.get("phase") or terminal.get("status")
+        record["review_verdict"] = (
+            resolution.get("action")
+            if isinstance(resolution, dict)
+            else terminal.get("review_verdict")
+        )
+        record["whose_move"] = terminal.get("whose_move")
+        record["terminal_poll_count"] = polls
+        record["terminal_latency_s"] = round(time.monotonic() - t0, 2)
+        if not ok:
+            record["detail"] = detail
+            return 1
 
         record["stage"] = "done"
         record["ok"] = True

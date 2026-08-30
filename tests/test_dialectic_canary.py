@@ -1,13 +1,16 @@
-"""Unit tests for the dialectic canary's pure evaluators (#1387 positive control).
+"""Unit tests for the dialectic canary's evaluators and terminal poller.
 
 The canary's value is that its checks encode the three historical false-zero
-shapes; these tests pin each shape to the verdict it must produce.
+shapes and prove that a reviewer spawn is not reported green before the review
+records a terminal verdict.
 """
 from __future__ import annotations
 
 import importlib.util
 import sys
 from pathlib import Path
+
+import pytest
 
 CANARY_PATH = (
     Path(__file__).resolve().parents[1] / "scripts" / "ops" / "dialectic_canary.py"
@@ -107,3 +110,143 @@ class TestEvaluateReview:
         ok, detail = canary.evaluate_review(self._base(one_call_review=None))
         assert not ok
         assert "one_call_review" in detail
+
+
+class TestEvaluateTerminalReview:
+    def test_resolved_with_action_is_green(self):
+        terminal, ok, detail = canary.evaluate_terminal_review({
+            "success": True,
+            "session_id": "sess-1",
+            "phase": "resolved",
+            "resolution": {"action": "resume"},
+        })
+        assert terminal
+        assert ok
+        assert detail == "ok"
+
+    def test_enveloped_resolved_payload_is_green(self):
+        terminal, ok, _ = canary.evaluate_terminal_review({
+            "success": True,
+            "raw_governance": {
+                "success": True,
+                "session_id": "sess-1",
+                "phase": "resolved",
+                "resolution": {"action": "revise"},
+            },
+        })
+        assert terminal
+        assert ok
+
+    def test_non_terminal_phase_keeps_polling(self):
+        terminal, ok, detail = canary.evaluate_terminal_review({
+            "success": True,
+            "session_id": "sess-1",
+            "phase": "synthesis",
+        })
+        assert not terminal
+        assert not ok
+        assert "synthesis" in detail
+
+    @pytest.mark.parametrize("phase", ["failed", "timeout", "abandoned", "escalated"])
+    def test_non_resolved_terminal_phase_is_red(self, phase):
+        terminal, ok, detail = canary.evaluate_terminal_review({
+            "success": True,
+            "session_id": "sess-1",
+            "phase": phase,
+        })
+        assert terminal
+        assert not ok
+        assert phase in detail
+
+    def test_resolved_without_action_is_red(self):
+        terminal, ok, detail = canary.evaluate_terminal_review({
+            "success": True,
+            "session_id": "sess-1",
+            "phase": "resolved",
+            "resolution": {},
+        })
+        assert terminal
+        assert not ok
+        assert "no resolution action" in detail
+
+    def test_get_error_is_terminal_red(self):
+        terminal, ok, detail = canary.evaluate_terminal_review({
+            "success": False,
+            "error": "db down",
+        })
+        assert terminal
+        assert not ok
+        assert "db down" in detail
+
+
+@pytest.mark.asyncio
+async def test_wait_for_terminal_review_polls_until_resolved(monkeypatch):
+    responses = [
+        {"success": True, "session_id": "sess-1", "phase": "synthesis"},
+        {
+            "success": True,
+            "session_id": "sess-1",
+            "phase": "resolved",
+            "resolution": {"action": "resume"},
+        },
+    ]
+    calls = []
+
+    async def fake_call_tool(url, tool_name, arguments, timeout_s):
+        calls.append((url, tool_name, arguments, timeout_s))
+        return responses.pop(0)
+
+    monkeypatch.setattr(canary, "call_tool", fake_call_tool)
+    payload, ok, detail, polls = await canary.wait_for_terminal_review(
+        url="http://example.test/mcp/",
+        session_id="sess-1",
+        client_session_id="agent-csid",
+        initial_payload={
+            "success": True,
+            "session_id": "sess-1",
+            "phase": "antithesis",
+        },
+        timeout_s=10.0,
+        poll_interval_s=0.0,
+    )
+
+    assert ok
+    assert detail == "ok"
+    assert polls == 2
+    assert payload["phase"] == "resolved"
+    assert [call[1] for call in calls] == ["dialectic", "dialectic"]
+    assert calls[0][2] == {
+        "action": "get",
+        "session_id": "sess-1",
+        "client_session_id": "agent-csid",
+    }
+
+
+@pytest.mark.asyncio
+async def test_wait_for_terminal_review_times_out_without_polling():
+    payload, ok, detail, polls = await canary.wait_for_terminal_review(
+        url="http://example.test/mcp/",
+        session_id="sess-1",
+        client_session_id="agent-csid",
+        initial_payload={
+            "success": True,
+            "session_id": "sess-1",
+            "phase": "antithesis",
+        },
+        timeout_s=0.0,
+        poll_interval_s=0.0,
+    )
+
+    assert not ok
+    assert "did not reach" in detail
+    assert polls == 0
+    assert payload["phase"] == "antithesis"
+
+
+def test_positive_float_env_rejects_invalid_and_nonpositive(monkeypatch):
+    monkeypatch.setenv("UNITARES_CANARY_VERDICT_TIMEOUT_S", "not-a-number")
+    assert canary._verdict_timeout_s() == 120.0
+    monkeypatch.setenv("UNITARES_CANARY_VERDICT_TIMEOUT_S", "0")
+    assert canary._verdict_timeout_s() == 120.0
+    monkeypatch.setenv("UNITARES_CANARY_VERDICT_TIMEOUT_S", "45")
+    assert canary._verdict_timeout_s() == 45.0
