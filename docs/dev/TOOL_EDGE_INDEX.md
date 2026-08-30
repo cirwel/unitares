@@ -30,10 +30,10 @@ registrars advertise in each deployable mode and what `describe_tool` says
 about those names. The snapshots are immutable evidence inputs; they do not
 certify the components that produced them.
 
-- Audit bundle: `sha256:90b0824071b0f20bfff045bc0a6f0ad355f3770018a5629582d3e9d6856e38ae` (`unitares.tool-surface-audit.v1`).
-- Dispatch snapshot: `sha256:f26904f88b8812e927fdae25fbbba7fea678796baa03d34685915751fae04fdb`.
-- Audited source revision: `sha256:0d60e78bbed5230a32e548dfd1d1ce8cc23c7e982f43bc258744cdd44070713f` (50 files).
-- Exposure snapshot: `sha256:cf3ca9b60582773e469a13fb98dee9d55e8a15216026f3f9d5bb82baa869be71`.
+- Provenance digests (audit bundle, dispatch/exposure snapshots, audited
+  source revision) are emitted by `--json` rather than inlined here: they
+  are whole-tree hashes that roll on every source edit, which made this
+  file conflict between any two branches that touched handler code.
 - JSON contract: [`tool_surface_audit_v1.schema.json`](tool_surface_audit_v1.schema.json).
 - Reproduce with `python3 scripts/dev/tool_edge_index.py --json`; run
   `--lint` to return non-zero when error-severity findings exist.
