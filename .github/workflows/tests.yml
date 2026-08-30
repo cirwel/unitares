@@ -403,10 +403,21 @@ jobs:
         from pathlib import Path
         import governance_core
         import src
+        import src.eisv_format as legacy_formatting
+        import src.eisv_validator as legacy_validation
+        import src.eisv.formatting as canonical_formatting
+        import src.eisv.validation as canonical_validation
         from src.versioning import load_version_from_file
 
         installed_version = version("governance-mcp")
         assert installed_version != "0.0.0"
+        assert legacy_formatting is canonical_formatting
+        assert legacy_validation is canonical_validation
+        assert legacy_formatting.EISVMetrics is canonical_formatting.EISVMetrics
+        assert (
+            legacy_validation.IncompleteEISVError
+            is canonical_validation.IncompleteEISVError
+        )
         package_root = Path(src.__file__).resolve().parent.parent
         assert load_version_from_file(package_root) == installed_version
         assert files("src").joinpath("tool_descriptions.json").is_file()

@@ -11,10 +11,10 @@ import importlib.util
 from pathlib import Path
 
 # Add project root to path
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).parents[2]
 sys.path.insert(0, str(project_root))
 
-from src.eisv_format import (
+from src.eisv.formatting import (
     EISVMetrics,
     EISVTrajectory,
     format_eisv_compact,
@@ -23,7 +23,7 @@ from src.eisv_format import (
     validate_eisv_complete,
     eisv_from_dict
 )
-from src.eisv_validator import (
+from src.eisv.validation import (
     validate_governance_response,
     validate_csv_row,
     IncompleteEISVError
@@ -260,6 +260,10 @@ class TestCompletenessScript:
     def test_should_check_file_skips_generated_and_worktree_paths(self):
         script = _load_check_script()
         assert script.should_check_file(Path("/repo/src/state.py")) is True
+        assert script.should_check_file(Path("/repo/src/eisv/formatting.py")) is False
+        assert script.should_check_file(Path("/repo/src/eisv/validation.py")) is False
+        assert script.should_check_file(Path("/repo/src/other/formatting.py")) is True
+        assert script.should_check_file(Path("/repo/src/eisv_format.py")) is True
         assert script.should_check_file(Path("/repo/.venv/lib/site-packages/pkg.py")) is False
         assert script.should_check_file(Path("/repo/.claude/worktrees/task/docs/note.md")) is False
         assert script.should_check_file(Path("/repo/htmlcov/index.json")) is False

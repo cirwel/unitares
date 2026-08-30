@@ -1,5 +1,5 @@
 """
-Tests for src/eisv_validator.py - EISV response validation.
+Tests for src.eisv.validation - EISV response validation.
 
 All functions are pure (input -> output). No mocking needed.
 """
@@ -8,10 +8,10 @@ import pytest
 import sys
 from pathlib import Path
 
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).parents[2]
 sys.path.insert(0, str(project_root))
 
-from src.eisv_validator import (
+from src.eisv.validation import (
     IncompleteEISVError,
     validate_eisv_in_dict,
     validate_governance_response,
