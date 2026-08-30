@@ -171,11 +171,27 @@ def _lean_search_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(discoveries, list):
         return payload
 
-    score_maps = [
-        payload.get("rerank_scores"),
-        payload.get("rrf_scores"),
-        payload.get("similarity_scores"),
-    ]
+    # `relevance` must mean match QUALITY, never rank wearing a score's clothes.
+    #
+    # RRF assigns 1/(k + rank); at the default k=60 that makes rank 1 score
+    # 0.0164, rank 2 0.0161, rank 3 0.0159 — for every query, whether the top
+    # hit is exact or unrelated. Measured live 2026-08-29: two unrelated
+    # queries returned byte-identical score triples, one of them a flat miss.
+    # `rrf_fuse`'s docstring calls the scores "comparable across queries", and
+    # they are — in the useless sense that rank 1 is always 1/61.
+    #
+    # The bug was ordering: rrf_scores sat AHEAD of similarity_scores in a
+    # first-match-wins list, and the cross-encoder that would have outranked
+    # both is flag-off by default (UNITARES_ENABLE_RERANKER). So the common
+    # path picked the rank-derived number and never reached the cosine
+    # similarity sitting in the same payload, which does carry match strength.
+    #
+    # Quality signals only, best first. The fusion score is still reported,
+    # under a name that says what it is.
+    quality_maps = (
+        ("cross_encoder_rerank", payload.get("rerank_scores")),
+        ("semantic_similarity", payload.get("similarity_scores")),
+    )
     lean_discoveries = []
     for discovery in discoveries:
         if not isinstance(discovery, dict):
@@ -190,10 +206,20 @@ def _lean_search_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(lean.get("tags"), list):
             lean["tags"] = lean["tags"][:12]
         discovery_id = discovery.get("id") or discovery.get("discovery_id")
-        for score_map in score_maps:
+        for basis, score_map in quality_maps:
             if isinstance(score_map, dict) and discovery_id in score_map:
                 lean["relevance"] = score_map[discovery_id]
+                lean["relevance_basis"] = basis
                 break
+        else:
+            # A lexical-only hit has no quality number anywhere in the payload.
+            # Omitting `relevance` is the point: substituting the rank-derived
+            # RRF value here is what made a miss indistinguishable from a hit.
+            lean["relevance_basis"] = "lexical_rank_only"
+
+        fusion = payload.get("rrf_scores")
+        if isinstance(fusion, dict) and discovery_id in fusion:
+            lean["fusion_score"] = fusion[discovery_id]
         lean_discoveries.append(lean)
 
     lean_payload = {
