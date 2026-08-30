@@ -162,21 +162,52 @@ class TestEnsureAgentPersisted:
 
     @pytest.mark.asyncio
     async def test_skips_already_persisted(self):
-        """When agent already exists in PG, returns False without writing."""
+        """An existing row keeps its original onboard provenance."""
         from src.mcp_handlers.identity.handlers import ensure_agent_persisted
 
         mock_db = AsyncMock()
         mock_db.init = AsyncMock()
         mock_db.get_agent.return_value = {"id": "uuid-existing"}
         mock_db.get_identity.return_value = SimpleNamespace(
-            identity_id="existing-ident", metadata={}
+            identity_id="existing-ident",
+            metadata={"onboard_origin": "harness_backstop"},
         )
 
         with patch("src.mcp_handlers.identity.persistence.get_db", return_value=mock_db):
-            result = await ensure_agent_persisted("uuid-existing", "session-existing")
+            result = await ensure_agent_persisted(
+                "uuid-existing", "session-existing", onboard_origin="agent"
+            )
 
         assert result is False
         mock_db.upsert_agent.assert_not_called()
+        mock_db.upsert_identity.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_persists_onboard_origin_without_reinterpreting_source(self):
+        """Creation origin and persistence timing are separate metadata axes."""
+        from src.mcp_handlers.identity.handlers import ensure_agent_persisted
+
+        mock_db = AsyncMock()
+        mock_db.get_agent.return_value = None
+        mock_db.get_identity.side_effect = [
+            None,
+            SimpleNamespace(identity_id="new-ident", metadata={}),
+        ]
+        mock_db.create_session.return_value = True
+
+        with patch("src.mcp_handlers.identity.persistence.get_db", return_value=mock_db):
+            result = await ensure_agent_persisted(
+                "uuid-backstop",
+                "session-backstop",
+                onboard_origin="harness_backstop",
+                onboard_origin_basis="explicit_argument",
+            )
+
+        assert result is True
+        metadata = mock_db.upsert_identity.await_args.kwargs["metadata"]
+        assert metadata["source"] == "lazy_creation"
+        assert metadata["onboard_origin"] == "harness_backstop"
+        assert metadata["onboard_origin_basis"] == "explicit_argument"
 
     @pytest.mark.asyncio
     async def test_repairs_missing_agent_row_when_identity_exists(self):
@@ -1876,9 +1907,19 @@ class TestHandleOnboardV2:
             None,  # resolve_session_identity PG lookup
             None,  # ensure_agent_persisted check
             SimpleNamespace(identity_id="new-ident", metadata={}),  # after upsert
+            SimpleNamespace(
+                identity_id="new-ident",
+                metadata={
+                    "onboard_origin": "harness_backstop",
+                    "onboard_origin_basis": "explicit_argument",
+                },
+            ),  # response reads durable provenance
         ]
 
-        result = await handle_onboard_v2({"client_session_id": "onboard-new"})
+        result = await handle_onboard_v2({
+            "client_session_id": "onboard-new",
+            "onboard_origin": "harness_backstop",
+        })
         data = parse_result(result)
 
         # #734: onboard now defaults to response_mode="minimal" — a lean
@@ -1892,6 +1933,16 @@ class TestHandleOnboardV2:
         assert "client_session_id" in data
         assert "identity_assurance" in data
         assert "next_step" in data
+        assert data["onboard_origin"] == "harness_backstop"
+        assert data["onboard_origin_basis"] == "explicit_argument"
+        identity_writes = [
+            call.kwargs["metadata"]
+            for call in mock_db.upsert_identity.await_args_list
+            if call.kwargs.get("metadata", {}).get("source") == "lazy_creation"
+        ]
+        assert len(identity_writes) == 1
+        assert identity_writes[0]["onboard_origin"] == "harness_backstop"
+        assert identity_writes[0]["onboard_origin_basis"] == "explicit_argument"
         # Descriptive ontology + extras moved behind response_mode="full".
         assert "identity_context" not in data
         assert "session_resolution_source" not in data
@@ -2228,7 +2279,12 @@ class TestHandleOnboardV2:
             "display_agent_id": "Claude_20260207",
         }
         mock_db.get_identity.return_value = SimpleNamespace(
-            identity_id="i1", metadata={"agent_id": "Claude_20260207"}
+            identity_id="i1",
+            metadata={
+                "agent_id": "Claude_20260207",
+                "onboard_origin": "harness_backstop",
+                "onboard_origin_basis": "explicit_argument",
+            },
         )
         mock_db.get_agent_label.return_value = "ExistingAgent"
         mock_db.get_agent_status = AsyncMock(return_value="active")
@@ -2241,6 +2297,10 @@ class TestHandleOnboardV2:
         assert data["is_new"] is False
         assert data["uuid"] == existing_uuid
         assert data["identity_resolution_outcome"] == "resumed"
+        # Creation provenance comes from the row, not this resume call's
+        # ordinary default of "agent".
+        assert data["onboard_origin"] == "harness_backstop"
+        assert data["onboard_origin_basis"] == "explicit_argument"
 
     @pytest.mark.asyncio
     async def test_onboard_then_identity_with_stable_session_id_keeps_same_uuid(self, patch_onboard_deps, mock_db, mock_redis, mock_raw_redis):
@@ -2401,6 +2461,17 @@ class TestHandleOnboardV2:
 
         assert data["success"] is True
         assert data["is_new"] is True  # force_new_applied moved behind verbose=true
+        # The mock row has no stored provenance, so the response must not echo
+        # the requested/default marker as if persistence had confirmed it.
+        assert "onboard_origin" not in data
+        identity_writes = [
+            call.kwargs["metadata"]
+            for call in mock_db.upsert_identity.await_args_list
+            if call.kwargs.get("metadata", {}).get("source") == "identity_v2"
+        ]
+        assert len(identity_writes) == 1
+        assert identity_writes[0]["onboard_origin"] == "agent"
+        assert identity_writes[0]["onboard_origin_basis"] == "default_unmarked_call"
 
     @pytest.mark.asyncio
     async def test_onboard_emits_identity_resolution_observed(

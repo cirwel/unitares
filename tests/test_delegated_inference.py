@@ -460,8 +460,9 @@ async def test_raw_excerpt_is_bounded(monkeypatch):
     ))
 
     details = outcome.failure.details
-    assert len(details["adapter_raw_excerpt"]) == di._RAW_EXCERPT_LIMIT
+    excerpt = details["adapter_raw_excerpt"]
     assert details["adapter_raw_excerpt_truncated"] is True
+    assert di._RAW_EXCERPT_LIMIT <= len(excerpt) <= di._RAW_EXCERPT_LIMIT + 64
 
 
 @pytest.mark.asyncio
@@ -489,3 +490,160 @@ async def test_no_raw_excerpt_on_a_complete_answer(monkeypatch):
     ))
 
     assert "adapter_raw_excerpt" not in outcome.failure.details
+
+
+async def _codex_failure_details(monkeypatch, raw):
+    monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _codex_host())
+    monkeypatch.setattr(
+        di,
+        "invoke_host_adapter",
+        lambda *_args, **_kwargs: _async_value({
+            "ok": False,
+            "status": "malformed",
+            "text": "",
+            "raw": raw,
+            "agent_id": "orch-agent-codex",
+            "exit_status": 0,
+            "error": "Host CLI returned a malformed terminal answer envelope",
+            "provenance": {"model_family": "openai_codex"},
+        }),
+    )
+    outcome = await di.run_delegated_inference(di.DelegatedInferenceRequest(
+        prompt="review",
+        host_id="codex:host-adapter",
+        requesting_agent_uuid="requester",
+    ))
+    assert outcome.ok is False
+    return outcome.failure.details
+
+
+@pytest.mark.asyncio
+async def test_truncated_excerpt_keeps_the_tail(monkeypatch):
+    """The answer, or its absence, is at the END of a CLI transcript.
+
+    A head-only excerpt spends the whole budget on the banner and the echoed
+    prompt — the two regions guaranteed to say nothing about why the envelope
+    failed.
+    """
+    raw = "BANNER_START" + ("x" * (di._RAW_EXCERPT_LIMIT + 500)) + "ANSWER_END"
+    details = await _codex_failure_details(monkeypatch, raw)
+
+    excerpt = details["adapter_raw_excerpt"]
+    assert details["adapter_raw_excerpt_truncated"] is True
+    assert excerpt.startswith("BANNER_START")
+    assert excerpt.endswith("ANSWER_END")
+    assert "elided" in excerpt
+    assert "Head and tail" in details["adapter_raw_excerpt_note"]
+
+
+# Shaped like a real `codex exec` transcript (see
+# agents/dialectic_reviewer/tests/test_codex_backend.py): banner, echoed prompt,
+# then a bare `codex` marker line immediately before the assistant turn.
+_CODEX_TRANSCRIPT_WITH_ANSWER = """OpenAI Codex v0.151.0
+--------
+workdir: /tmp/x
+model: gpt-5.6-sol
+--------
+user
+Reply with exactly the word: alive
+
+--- UNITARES response contract ---
+Return exactly one JSON object and no Markdown fence or surrounding text:
+{"schema":"unitares.terminal_answer.v1","status":"complete","answer":"your final answer"}
+codex
+I think the answer is alive.
+tokens used
+1,234
+"""
+
+_CODEX_TRANSCRIPT_NO_ANSWER = """OpenAI Codex v0.151.0
+--------
+workdir: /tmp/x
+model: gpt-5.6-sol
+--------
+user
+Reply with exactly the word: alive
+
+--- UNITARES response contract ---
+Return exactly one JSON object and no Markdown fence or surrounding text:
+{"schema":"unitares.terminal_answer.v1","status":"complete","answer":"your final answer"}
+"""
+
+_CODEX_JSONL_WITH_ANSWER = "\n".join([
+    json.dumps({"type": "thread.started", "thread_id": "thread-1"}),
+    json.dumps({
+        "type": "item.completed",
+        "item": {"type": "agent_message", "text": "not a valid terminal envelope"},
+    }),
+    json.dumps({
+        "type": "turn.completed",
+        "usage": {"input_tokens": 4, "output_tokens": 5},
+    }),
+])
+
+
+@pytest.mark.asyncio
+async def test_codex_failure_reports_a_located_answer_region(monkeypatch):
+    """Marker present: the model answered, and answered badly. Fix the prompt."""
+    details = await _codex_failure_details(
+        monkeypatch, _CODEX_TRANSCRIPT_WITH_ANSWER
+    )
+
+    assert details["adapter_status"] == "malformed"
+    assert details["adapter_answer_region_located"] is True
+    assert "adapter_answer_region_note" not in details
+
+
+@pytest.mark.asyncio
+async def test_codex_jsonl_failure_reports_a_located_answer_region(monkeypatch):
+    """The typed agent_message event is the primary answer boundary."""
+    details = await _codex_failure_details(monkeypatch, _CODEX_JSONL_WITH_ANSWER)
+
+    assert details["adapter_status"] == "malformed"
+    assert details["adapter_answer_region_located"] is True
+    assert "adapter_answer_region_note" not in details
+
+
+@pytest.mark.asyncio
+async def test_codex_failure_distinguishes_a_missing_answer_region(monkeypatch):
+    """Marker absent: no assistant turn was found at all.
+
+    Same `malformed` error as the case above, opposite fix — so the two must not
+    reach the caller as one sentence.
+    """
+    details = await _codex_failure_details(
+        monkeypatch, _CODEX_TRANSCRIPT_NO_ANSWER
+    )
+
+    assert details["adapter_status"] == "malformed"
+    assert details["adapter_answer_region_located"] is False
+    assert "NOT the model returning a bad envelope" in (
+        details["adapter_answer_region_note"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_answer_region_signal_is_codex_only(monkeypatch):
+    """`claude -p` prints the answer directly; it has no marker to look for."""
+    monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _claude_host())
+    monkeypatch.setattr(
+        di,
+        "invoke_host_adapter",
+        lambda *_args, **_kwargs: _async_value({
+            "ok": False,
+            "status": "malformed",
+            "text": "",
+            "raw": "here is a plan, not an answer",
+            "agent_id": "orch-agent-claude",
+            "exit_status": 0,
+            "error": "Host CLI returned a malformed terminal answer envelope",
+            "provenance": {"model_family": "anthropic_claude"},
+        }),
+    )
+
+    outcome = await di.run_delegated_inference(di.DelegatedInferenceRequest(
+        prompt="review",
+        requesting_agent_uuid="requester",
+    ))
+
+    assert "adapter_answer_region_located" not in outcome.failure.details

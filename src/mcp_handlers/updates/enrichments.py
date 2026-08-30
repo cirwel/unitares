@@ -1161,7 +1161,7 @@ async def enrich_pending_dialectic(ctx: UpdateContext) -> None:
 def enrich_eisv_validation(ctx: UpdateContext) -> None:
     """Ensure all four EISV metrics are present (prevents selection bias)."""
     try:
-        from src.eisv_validator import validate_governance_response
+        from src.eisv.validation import validate_governance_response
         validate_governance_response(ctx.response_data)
     except ImportError:
         pass

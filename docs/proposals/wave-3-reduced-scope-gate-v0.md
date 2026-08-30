@@ -3,19 +3,21 @@
 **Status:** ⛔ **PROPOSED — UNRATIFIED as a gate.** The document as a whole still awaits operator
 signature and the council round §8 records as unheld.
 
-⚠️**But four of its open questions are now closed.** On 2026-08-29 the operator ruled on §6.1
+⚠️**But six of its open questions are now closed.** On 2026-08-29 the operator ruled on §6.1
 (reassignment gets its own serialization design), §6.2 (criterion 6 retained, halt authority
 removed), §6.6 (**instrument first — build the §3.1 emitter, decide the port on what it reports**)
-and, consequentially, §6.5 (deferred, with a named reopen condition). ⛔Those rulings are settled;
-the rest of this document is not. §6.3 and §6.4 remain owed.
+and, consequentially, §6.5 (deferred, with a named reopen condition). In the same operator
+session, §6.3 settled the opportunity-cost ambiguity and new §6.7 ruled on the bounded
+post-write probe. ⛔Those rulings are settled; the rest of this document is not. §6.4 remains
+owed.
 
 ⚠️**Implementation correction after merge.** PR #2011 supplied a positive-only
-`dialectic_write_refused` incident event. It did not supply a cycle denominator, did not count the
-early saga-inflight skips, and cannot observe the opposite ordering where the sweeper writes before
-a saga starts. The follow-up after #2008 adds a zero-inclusive `dialectic_sweep_cycle` event and
-puts both periodic and lazy resolver entry points under one task-local reentrancy flag. Those
-changes improve the instrument; they do **not** make the full dual-writer hazard measurable and do
-not start the §7 window.
+`dialectic_write_refused` incident event. The follow-up after #2008 added a zero-inclusive
+`dialectic_sweep_cycle` event, counted early saga-inflight skips, and put both periodic and lazy
+resolver entry points under one task-local reentrancy flag. PR #2022 then added
+`dialectic_write_overlap`, a post-write probe for the sweeper-first ordering. All three orderings
+now emit, but the post-write probe bounds the interval rather than closing it; §6.7 rules that a
+clean bounded window cannot fire (b1). None of these merges starts the §7 window.
 
 **What it discharges.** `wave-3-go-decision-2026-08-16.md` §4 signed GO-WITH-REDUCED-SCOPE and
 named exactly one released deliverable: *"one §11-style gate document for the reduced scope, plus
@@ -25,8 +27,9 @@ This is the first half of that deliverable — the gate document. The design pas
 review are not in it and are not claimed.
 
 **What it does not do.** It does not authorise building. It does not clear, lift or re-read the
-(D) halt on the original scope. It does not rule on the operator questions §6 lists as owed. A
-gate that cleared itself is the defect the go-decision artifact was rejected for once already.
+(D) halt on the original scope. It does not settle the artifact question §6.4 still lists as
+owed. A gate that cleared itself is the defect the go-decision artifact was rejected for once
+already.
 
 **Clock.** The §4 authorisation started 2026-08-22 and projected ~15–25h against the §2 cap of
 ~112h38m. This document is drafted 2026-08-29.
@@ -136,10 +139,23 @@ rule. None has been measured. Every measurement cell below is deliberately empty
 records zero collisions in **both** writer orderings, every expected periodic cycle is present,
 and every lazy invocation is attributed separately. A zero `dialectic_write_refused` count alone
 does not fire this disconfirmer: it sees the "other writer won first" ordering but misses a saga
-that starts after the early check and loses to a successful sweeper write. **Measurement source:**
-⛔**INCOMPLETE — see §3.1.** PR #2011 supplied positive refusals and the post-#2008 follow-up
-supplies the zero-inclusive cycle denominator, but no current event proves the opposite ordering
-absent.
+that starts after the early check and loses to a successful sweeper write.
+
+**Measurement source:** ⛔**INSTRUMENTED, NOT YET MEASURED — see §3.1.** All three orderings now
+emit: `saga_inflight_skip_count` (BEAM first, caught at the early check),
+`dialectic_write_refused` (BEAM first, caught at the write), and `dialectic_write_overlap`
+(sweeper first, caught by a post-write probe), each denominated by `dialectic_sweep_cycle`.
+⛔**This does not make (b1) firable on a clean window.** Three conditions are unmet:
+
+1. ⛔**No window has started.** Deployment provenance is still owed — §7 step 3, slot empty.
+2. ⛔**The probe bounds the interval rather than closing it.** A saga starting after the probe is
+   unobserved, so a clean window is evidence over a bounded interval. §6.7 rules that this bound
+   is insufficient: a clean window does **not** fire (b1). The remaining tail must be observed
+   continuously or correlated from the saga/reservation side before a zero can carry that
+   authority.
+3. ⛔**`overlap_probe_failed_count` must be read beside the detected count.** Any failed probe on
+   a successful guarded write breaks absence evidence; it is not an observed zero and cannot be
+   averaged away by clean probes elsewhere in the window.
 
 **(b2) The in-place fix closes it.** A Python-side change during the implementation window makes
 the sweeper's write path safe without porting — e.g. an explicit row/advisory lock or a shared
@@ -165,9 +181,11 @@ suppression mechanism; it is not evidence of locking or an irreducible selection
 **Measurement source:** design pass on §1.2's chosen option, before build. ⛔This is the reduced
 scope's structural analogue of (D), and unlike (D) it has a subject.
 
-**(b5) Opportunity cost.** Unchanged in form from §0(E) and inherited as-is, with the §2 cap
-(~112h38m) as the ledger. ⛔The §11.9 conjunction-vs-standalone ambiguity is **not** resolved here;
-it is an operator ruling and is listed in §6.
+**(b5) Opportunity cost.** Per §6.3, a projected slip exceeding 25% of the original deadline
+window for either named calendar item is a **standalone halt**, regardless of projected Wave 3
+duration. The §2 cap (~112h38m) remains required reporting and may compel rescoping, but cannot
+excuse a named-item halt. Exceeding the cap is not, by this ruling alone, an independent halt; that
+would require a separate amendment.
 
 ⛔**Not carried forward, with reasons:** (A.1)'s ODE-floor gate (its subject is
 `process_agent_update` p99, an axis struck 2026-06-24 and belonging to a port this scope excludes);
@@ -179,7 +197,7 @@ scope by the signature, not cleared).
 
 ## §3 What must exist before this gate can be read
 
-### §3.1 ⛔PREREQUISITE: incident telemetry exists; complete overlap telemetry does not
+### §3.1 ⛔PREREQUISITE: all three orderings are now instrumented; the interval is bounded, not closed
 
 **This remains the gate's central prerequisite and blocks disconfirmers (b1) and (b2).** The
 instrument now has two complementary pieces:
@@ -205,19 +223,36 @@ producer evidence exists." Coverage is still a predicate, not an assumption: a p
 must account for the expected fixed-delay heartbeats and treat any unexplained gap as missing
 evidence, while lazy cycles are denominated by their own emitted rows rather than by 144/day.
 
-⛔They do **not** distinguish every dual-writer ordering:
+The three dual-writer orderings, and which of them is now observed:
 
 - An early `saga_inflight_skip_count` sees BEAM already owning the session when Python checks.
 - A `dialectic_write_refused` row sees another writer finish before Python's guarded write.
-- Nothing currently sees a saga begin **after** the early check and **after Python successfully
-  writes first**. A positive refusal can also mean a missing row or a competing Python writer; the
-  DB helper returns one `False` value for all of them and only logs the distinction.
+- ✅**The sweeper-first ordering is now instrumented.** A `dialectic_write_overlap` row is emitted
+  when a probe taken immediately after a *successful* guarded write finds a non-terminal saga the
+  early check did not. This was the case the previous revision recorded as seen by nothing.
 
-Therefore a zero refusal count, even with complete cycle coverage, is a measured zero for one
-incident class — not proof that the dual-writer hazard is absent. To make (b1) readable, a later
-instrument must observe the sweeper-first ordering from the saga/reservation side, or (b2) must
-replace observation with a shared serialization primitive honored by both writers. No §7 window
-starts before that condition and deployment provenance are both present.
+⛔**That third instrument narrows the unmeasured interval; it does not empty it.** The probe closes
+the window between the early check and just after the write. It cannot close the window after
+itself, so a saga starting later is still unobserved. **A zero overlap count is therefore evidence
+about a bounded interval, not proof of a collision-free system.** §6.7 rules that the bound is
+insufficient to fire (b1). Only continuous/correlated observation of the remaining tail makes (b1)
+readable; a serialization primitive both writers honour removes the interval instead of measuring
+it — that is (b2), still unbuilt, and the instrument-first ruling does not authorise it.
+
+⛔**A failed probe is not an observed absence, and the counts are separate for that reason.**
+`has_inflight_saga` fails open — correct for a write gate, since no saga infrastructure means
+nothing to race — and an instrument inheriting that would report "no saga" when it could not look.
+`probe_inflight_saga` returns `None` in that case, and the cycle event carries
+`overlap_probe_failed_count` beside `overlap_detected_count`. ⛔Read the pair or neither: any
+failed probe on a successful guarded write is missing absence evidence, whatever the detected
+count says.
+
+⚠️A positive refusal can still also mean a missing row or a competing Python writer; the DB helper
+returns one `False` for all of them and only logs the distinction. That ambiguity is unchanged.
+
+Therefore a zero refusal count, even with complete cycle coverage and complete probe coverage,
+remains a measured zero over a bounded interval rather than proof the hazard is absent. No §7
+window starts before probe coverage and deployment provenance are both present.
 
 ⚠️The reassignment-success emitter remains useful for the separate historical metric gap, but the
 guard-refusal/cycle streams measure coordination. They are not a substitute measure of reviewer
@@ -267,8 +302,8 @@ finds nothing is not exposure. **Source:** deploy record + complete sweep/overla
 overlaps in either writer ordering, zero guarded refusals on any explicitly permitted Python
 fallback, and no new substrate-tax pattern at the sweeper's boundary. **Source:** the complete
 §3.1 channel plus `audit.coordination_events` filtered to the sweeper's boundary. A positive-only
-event stream or a heartbeat with the sweeper-first blind spot is insufficient; R2 must not pass by
-silence.
+event stream or a bounded post-write probe with an unobserved tail is insufficient; R2 must not
+pass by silence.
 
 **R3 (disposition of criterion 10's reassignment half).** ⛔The go-decision records the
 reassignment-rate test as *"unpinnable in principle until reassignments actually
@@ -304,7 +339,13 @@ integration).
   struck 2026-06-24) is still measured and still reported; it can no longer stop anything. ⛔It was
   not retired — do not cite it as removed.
 - **Criterion 7.** The `docs/handoffs/wave-3-mcp-sdk-spike-<date>.md` artifact exists on no ref.
-  Does not fire on the merits; the artifact is owed (§6.4).
+  Does not fire on the merits; the artifact is owed (§6.4). ⚠️**Desk evidence refreshed
+  2026-08-30, and the supporting fact had gone stale:** `anubis-mcp` is **v2.0.0 (2026-08-07)**,
+  not v1.6.2 — HTTP+SSE transports removed, protocol floor moved to 2025-03-26. ⛔The verdict is
+  unchanged and now better evidenced (five releases in late July 2026 plus a major in August is
+  decisive against "no maintainer responsiveness"), but **desk evidence cannot discharge
+  criterion 7**, which requires a hands-on streaming spike. Full refresh in
+  `beam-wave-3-handler-dispatch.md` §v0.3.5 item 3.
 
 ---
 
@@ -327,11 +368,11 @@ Inheriting #7 (503 rate during cutover/rollback) and #10 (cross-session shared-a
 
 ---
 
-## §6 Operator rulings — four settled 2026-08-29, two still owed
+## §6 Operator rulings — six settled 2026-08-29, one still owed
 
 ⛔**Settled by the operator on 2026-08-29**, in session, as choices stated before application
-rather than method reported afterwards. §6.1, §6.2 and §6.6 carry rulings; §6.5 is deferred by
-§6.6's ruling. §6.3 and §6.4 remain owed and are unchanged.
+rather than method reported afterwards. §6.1, §6.2, §6.3, §6.6 and §6.7 carry rulings;
+§6.5 is deferred by §6.6's ruling. §6.4 remains owed.
 
 **§6.1 Does reserve-first extend to the reassignment path? — ✅ RULED: NO.** _(operator,
 2026-08-29)_ **The reassignment writes get their own serialization design.** (B) reserve-first
@@ -358,25 +399,119 @@ reported. Keeping it non-halting removes the authority without discarding the da
 reading of criterion 6 may halt Wave 3, and no future reading may cite its removal either — it is
 still there, still measured.
 
-**§6.3 The §11.9 conjunction ambiguity.** §0(E) reads as a conjunction; the v0.3 fold reads >25%
-slip as a standalone halt. ⛔Explicitly reserved to the operator by the amendment itself.
+**§6.3 The §11.9 conjunction ambiguity — ✅ RULED: THE STANDALONE SLIP HALT GOVERNS.**
+_(operator, 2026-08-29)_ A projected slip exceeding 25% of the original deadline window for either
+named calendar item halts Wave 3 regardless of projected Wave 3 duration. The v0.3 fold stated
+that rule explicitly in response to an architect BLOCK; the stale conjunction in §0(E) cannot let
+a shorter implementation excuse a sacrificed item.
+
+⛔The `Wave 1 elapsed × 3` comparison remains required reporting and may compel rescoping. This
+ruling does **not** make an over-cap projection an independent halt; doing that would require a
+separate amendment. Neither the cap nor an acceptance memorandum can waive the named-item halt.
 
 **§6.4 The two missing handoff artifacts.** `wave-3-mcp-sdk-spike-<date>.md` (criterion 7) and the
 `wave-3-state-ownership-redteam-<date>.md` / `-prep-` contradiction (criterion 8, original scope).
 Both are non-gating for the reduced scope and both are still owed. ⛔Applying the
 missing-source halt to 8 and not to 7 remains inconsistent.
 
+⛔**CORRECTION 2026-08-30 — "exists on no ref" is not evidence about these artifacts, and three
+documents rest on it as though it were.** `docs/handoffs/` is **gitignored**
+(`.gitignore:186`, under a comment declaring "retired/handoff docs" deliberately local-only). A
+file at that path **can never appear on any ref**, by repo policy.
+
+That makes the observation unfalsifiable in one direction:
+
+- `git log --all` returning nothing for `docs/handoffs/wave-3-*` is **guaranteed**, not found.
+- A GitHub API 404 for that path is **guaranteed**, not found.
+- ⛔Neither distinguishes *"the red-team never happened"* from *"the red-team happened and its
+  artifact sits on the operator's machine, exactly where repo policy says handoff docs live."*
+
+⚠️**This is the four-state confusion the measurement-authority rule exists to prevent**, applied to
+the gate's own reasoning: a policy artifact read as evidence about work. State 3 (*not recorded,
+and by design cannot be*) presented as state 4 (*genuinely absent*).
+
+**Where it propagates.** `beam-wave-3-handler-dispatch.md:15` and
+`wave-3-go-decision-2026-08-16.md:300` both say the (D) halt "is satisfied by its first clause
+alone" **on exactly this observation** — the latter citing `git log --all` across 245 remote
+branches and a GitHub API 404 as two independent verifications. They are not independent; they
+are two ways of observing the same `.gitignore` line.
+
+⛔**What this does NOT establish.** It does not show the red-team happened, and it does not lift
+the (D) halt — whose other clauses are untouched, and which criterion 8's dissolution made
+historical for the reduced scope anyway. It establishes only that **the first clause's evidence
+was never capable of bearing the weight put on it**, and that anyone re-reading (D) must ask the
+operator whether the artifact exists locally rather than re-running a query whose answer is fixed.
+
+⛔**Both artifacts remain owed.** Criterion 7 wants a hands-on spike, which no desk pass can
+supply; criterion 8's contradiction is an adjudication, not a file.
+
+⚠️**CORRECTION 2026-08-30 (second) — criterion 7's spike is blocked on network policy, not on the
+absence of a toolchain.** The refresh above said, and PR #2031's body repeated, that there is "no
+Elixir toolchain in the session." That was an assumption stated as a fact, and it is false: a
+working toolchain was built in-session — **Elixir 1.18.4 on Erlang/OTP 25** — verified by
+executing a program, not by reading a version string. (Distro `apt` ships Elixir 1.14, below
+`anubis_mcp` 2.0.0's `~> 1.18` floor; the upstream release zip clears it.)
+
+Two blockers survive the toolchain, and both are environment policy rather than facts about the
+SDK:
+
+| Blocker | Observed | Consequence |
+|---|---|---|
+| **Hex package hosts unreachable** | `hex.pm` → **200**; `repo.hex.pm` → **000**; `builds.hex.pm` → **000**. The agent proxy's status endpoint records `connect_rejected` — *"gateway answered 403 to CONNECT (policy denial or upstream failure)"* — for both. Its direct-allow list carries `pypi.org`, `registry.npmjs.org`, `index.crates.io`, `proxy.golang.org`, `jsr.io`; **no hex host**. | `mix local.hex`, `mix local.rebar` and `mix deps.get` all fail. `anubis_mcp` cannot be fetched, so it cannot be compiled or exercised. |
+| **Third-party source not attachable** | `add_repo cloudwalk/anubis-mcp` refused — *"cross-tier adds are not supported in v1"*, the session already holding `cirwel` sources. A direct `git clone` of the same public repo is refused by the session's git proxy. | The fallback of vendoring the dependency tree from git instead of hex is closed too. |
+
+⛔**What this does NOT change.** (C)'s verdict is untouched, and criterion 7's status is untouched:
+the streaming clause is still untested and the artifact is still owed. Nothing here is spike
+evidence, and no artifact at `wave-3-mcp-sdk-spike-<date>.md` was written — writing one on this
+session's work would be fabrication, which is why none exists.
+
+⛔**What it does change is the reason on record**, and that is the difference between a dead end
+and a request: the spike needs **`repo.hex.pm` and `builds.hex.pm` added to the environment's
+network policy**, or a session started with **`cloudwalk/anubis-mcp` as its initial source**.
+Either is an operator action of minutes. The previous phrasing implied a capability gap that does
+not exist, and would have left criterion 7 looking permanently unreachable from any agent session.
+
+⚠️A near relative of the `.gitignore` finding above: *not reachable* (state 2) reported as though
+the capability were simply absent. The first was caught by reading the policy; this one only by
+testing the assumption instead of restating it.
+
+⛔**CORRECTION 2026-08-30 (third, superseding the ask in the second) — the project already has an
+Elixir CI lane with hex access, so the spike never needed an operator network-policy change.**
+The correction above asked for `repo.hex.pm` / `builds.hex.pm` on the agent proxy's allow list. That
+ask was **wrong**, and wrong in the same way as the two errors it was correcting: a limitation of
+the session reported as a limitation of the project, without reading the repository.
+
+`.github/workflows/elixir-tests.yml` runs `mix deps.get` + `mix test` on GitHub runners for five
+apps — `unitares_sdk` (Elixir 1.15 **and** 1.19, OTP 27), `agent_orchestrator`, `dialectic_live`,
+`sentinel`, `lease_plane` — pulling `phoenix`, `req`, `finch`, `postgrex`, `bandit` and the rest
+from hex. It is green on `master`. **Hex is reachable from CI; only this session's proxy blocks it.**
+
+⛔**So criterion 7's ask is a CI job, not a policy grant.** A spike lands as a scratch mix app plus
+a job in that workflow, on the lane that already exists. ⚠️One design constraint the gate should
+record now rather than at the spike: (C)'s streaming clause names *Anthropic* streaming, and the
+execution-cost policy forbids a metered API on the required path — so the spike must exercise
+`anubis_mcp` against a local or stubbed peer, or run as an opt-in job that no-ops without a key.
+**Which of those is a choice, and it is the operator's.**
+
+⚠️**Found while verifying this: `elixir/wave3a_handlers` is in no workflow at all.** 83 tests, a
+live service (`scripts/ops/com.unitares.wave3a-handlers.plist.template`) with a Python-side proxy
+(`src/wave3a_beam_proxy.py`), and **zero** CI references — every other app under `elixir/` has a
+job. That is precisely the drift gap `elixir-tests.yml`'s own header says it was written to close.
+⛔Recorded here as a finding, not fixed here: it is a CI change, not a gate document's business.
+
 **§6.5 Scope: path (1) only, or (1) and (2)? — ⏸️ DEFERRED, with a named reopen condition.**
 _(operator, 2026-08-29)_ ⛔**Not answered, and deliberately not sent to council either.** §6.6's
 instrument-first ruling removes this question's urgency entirely: the §3.1 instrumentation is
-Python-only and requires no scope decision to build. If a **complete** window returns zero overlap
-in both writer orderings, **(b1) fires and there is no port** — at which point this question
-dissolves rather than gets answered. The #2011 refusal stream alone is not that window.
+Python-only and requires no scope decision to build. §6.7 now makes the clean-window exit more
+specific: a clean **bounded** window does not fire (b1), so it neither reopens this scope question
+nor dissolves it. A later continuously/correlated instrument may make (b1) readable; a shared
+serialization primitive may instead fire (b2) and dissolve the port question.
 
 ⛔Spending a council round on the shape of a port that may not happen is precisely the cap spend
-criterion 9's apparatus exists to prevent. **Reopen condition:** the complete §3.1 instrument
-reports a nonzero overlap/refusal, or the operator elects the port on other grounds. ⛔§1.1's
-recommendation of path (1) stands as a recommendation only and has **not** been ratified.
+criterion 9's apparatus exists to prevent. **Reopen condition:** a nonzero overlap/refusal is
+observed, the operator elects the port on other grounds, or a tail-complete replacement instrument
+makes (b1) readable. ⛔§1.1's recommendation of path (1) stands as a recommendation only and has
+**not** been ratified.
 
 ⚠️The council round that *is* owed regardless is the one on this document as a whole (§8) — not
 on this question in isolation.
@@ -389,18 +524,36 @@ in the reduced scope — **it needs no gate and does not consume the §4 build a
 ⛔**This is not a deferral dressed as a decision.** It settles the question the gate could not
 answer honestly: instrumentation must precede a verdict on the port. PR #2011 implemented the
 positive refusal half; the post-#2008 follow-up adds the cycle denominator and early-saga skip
-count. Per §3.1, the sweeper-first ordering remains blind, so the ruling's data requirement is not
-yet complete and no port verdict follows from these changes.
+count; PR #2022 adds the post-write sweeper-first probe. Per §3.1 and §6.7, that probe bounds the
+unmeasured interval but leaves a post-probe tail, so no no-port verdict follows from clean bounded
+counts.
 
 **What it commits to:** building the instrument, and deciding afterwards on what it reports.
 **What it declines to commit to:** the port, the scope (§6.5), the §1.2 design option, and the
 serialization spec §6.1 authorised the *direction* of.
 
-⛔**Both exits stay live and neither is prejudiced.** A complete window of genuine zeros fires
-**(b1)** and closes the reduced scope on measured evidence. A window of real collisions makes the
-ownership case on data rather than on the structural argument alone — and **(b2)** remains
-available throughout. That in-place fix requires an explicit lock or shared reservation honored
-by both writers; an ordinary transaction alone does not close the check/write race.
+⛔**Both exits stay live and neither is prejudiced.** A window of real collisions makes the
+ownership case on data rather than on the structural argument alone. A genuine zero can fire
+**(b1)** only after the remaining tail is observed continuously or correlated from the
+saga/reservation side. **(b2)** remains available throughout: that in-place fix requires an
+explicit lock or shared reservation honored by both writers; an ordinary transaction alone does
+not close the check/write race.
+
+**§6.7 Is the bounded post-write interval sufficient for (b1)? — ✅ RULED: NO.** _(operator,
+2026-08-29)_ `dialectic_write_overlap` is useful incidence telemetry, but its point probe cannot
+establish that the production hazard is absent: a saga can still begin after the probe. A clean
+30-day window therefore means *no collision observed inside the sampled interval*, not *the
+hazard is not real*.
+
+⛔A zero `dialectic_write_overlap` count may not fire (b1) or close the reduced scope while the
+post-probe tail remains unobserved. Any failed probe on a successful guarded write is also missing
+absence evidence, not a zero. (b1) becomes readable only when the remaining tail is covered
+continuously or correlated from the saga/reservation side. A shared serialization primitive is
+the separate (b2) exit, not evidence that retrospectively makes the bounded probe complete.
+
+⚠️This ruling does not discard the probe. Positive overlaps still answer the instrument-first
+question, and clean bounded counts remain useful telemetry. It removes only the authority of that
+bounded zero to prove absence.
 
 ---
 
@@ -415,9 +568,10 @@ are now deferred, and the instrument moved to the front.
    sites and stopped dropping the positive counter from periodic logs. The post-#2008 follow-up
    builds `dialectic_sweep_cycle`, including all-zero cycles, trigger source, early saga skips,
    attempts, outcomes, duration and error state; it also closes the direct/background reentrancy
-   fan-out. ⛔Still owed: an observation from the saga/reservation side for the sweeper-first
-   ordering. These Python-only observability changes build nothing in the reduced port scope and
-   do not spend the §4 build authorisation.
+   fan-out. PR #2022 adds the post-write `dialectic_write_overlap` point probe. ⛔Still owed for
+   a firable (b1): continuous or correlated observation from the saga/reservation side covering
+   the post-probe tail. These Python-only observability changes build nothing in the reduced port
+   scope and do not spend the §4 build authorisation.
 2. **Deploy the complete instrument and record its timestamp and commit.** The reassignment metric
    has been stuck since 2026-06-11 for exactly this omission (§4, R3); do not repeat it. The
    window starts at *deploy*, not merge.
@@ -441,13 +595,15 @@ are now deferred, and the instrument moved to the front.
    independently of deploys.
 
 3. **Accrue the window.** ⛔≥30 days proposed, matching R1 — a proposed prior, not a settled one.
-   Neither #2011 alone nor this follow-up starts it.
+   Neither merge nor a clean bounded window starts or closes (b1); deployment provenance starts
+   the clock, and §6.7 limits what its eventual zeros may decide.
 
 **Then — the decision this gate was built to inform:**
 
-4. **Read the window against (b1) and (b2).** Only coverage-complete zeros for both writer
-   orderings close the reduced scope on measured evidence; collisions make the ownership case on
-   data. ⛔Whichever it is, name which of the four states it rules out and how.
+4. **Read the window against (b1) and (b2).** Collisions make the ownership case on data. Clean
+   bounded zeros remain informational and do not close the reduced scope; only a tail-complete
+   observation can fire (b1), while a shared serialization primitive may independently fire (b2).
+   ⛔Whichever result is cited, name which of the four states it rules out and how.
 5. **Only if the port goes live:** reopen §6.5 (scope), choose the §1.2 option, and specify the
    reassignment serialization §6.1 authorised the direction of. ⛔None of these is owed before
    step 4, and none may be started on the strength of this document.
@@ -457,8 +613,7 @@ are now deferred, and the instrument moved to the front.
 6. **Council round on this document** (§8) — unheld, and named by the go-decision §4 alongside it.
 7. **Pin criterion 10's resolution half** — needs a `resolved+failed` denominator ≥30, upstream of
    this gate and of anything in it.
-8. **§6.3 and §6.4** — the conjunction ambiguity and the two missing handoff artifacts, both still
-   owed and neither settled here.
+8. **§6.4** — the two missing handoff artifacts remain owed; §6.3 is settled above.
 
 ⛔**Nothing in the reduced scope may be built until steps 4–5 have run and this gate is signed as
 amended.** An observability prerequisite is not an implementation start, and step 1 is authorised

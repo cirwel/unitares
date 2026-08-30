@@ -82,8 +82,16 @@ transport, hashes, usage, latency, requester identity, and orchestrator id.
 | standard | cloud_allowed | either | Local-first standard lane; approved cloud fallback is permitted |
 | thorough | local | false | Fail: policy cannot be satisfied |
 | thorough | local | true | Explicitly degrade to standard local |
-| thorough | cloud_allowed | false | Operator-authorized Claude host adapter |
-| thorough | cloud_allowed | true | Claude; standard local fallback only after proven pre-execution unavailability |
+| thorough | cloud_allowed | false | Reciprocal strong-model host: Claude-family caller → Codex; all other/unknown callers → Claude |
+| thorough | cloud_allowed | true | Reciprocal strong-model host; standard local fallback only after proven pre-execution unavailability |
+
+The reciprocal choice is derived from transport-captured harness provenance,
+not from public `consult` arguments: callers cannot name a host through this
+facade. The harness hint is descriptive rather than an authority signal. It
+selects between two operator-enabled routes with the same privacy, cost, and
+accountability class; an unavailable or unknown hint defaults to Claude. The
+resolved host is enforced again as a postcondition before any advice is
+returned, so backend routing drift fails closed.
 
 Fallback is forbidden after execution starts or may have started. In
 particular, a lost spawn acknowledgement, a successful spawn response without
