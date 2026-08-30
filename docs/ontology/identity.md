@@ -39,6 +39,38 @@ Vocabulary boundary:
 - `lineage` means "inherits work from," not "is identical to."
 - `continuity_token` is an advanced same-live-process rebind proof.
 
+### Onboard provenance is descriptive telemetry
+
+New identity rows created through `onboard` record
+`metadata.onboard_origin`. Its values describe the client entry path:
+
+- `agent`: an ordinary explicit `onboard` / `start_session` tool call. This is
+  the unmarked default path.
+- `harness_backstop`: the governance adapter provisioned an identity after a
+  turn ended without an explicit onboard.
+- `orchestrated_resume`: the adapter used its stable orchestrated-anchor resume
+  path. The separate `identity_resolution_outcome` says whether that attempt
+  actually resumed an existing identity or minted one.
+
+This field is caller-declared observability context, not authenticated
+authorship. It never changes identity assurance, authorization, lineage,
+governance policy, or verdicts. It is written only when the identity row is
+created, so a later resume cannot rewrite the origin; legacy identities and
+identities created outside onboard may have no value.
+
+The companion `metadata.onboard_origin_basis` makes the remaining inference
+visible. `explicit_argument` means an adapter supplied the marker;
+`default_unmarked_call` means the server classified an otherwise-unmarked
+ordinary tool call as `agent`. Treat the latter cohort as an inferred upper
+bound on agent-authored onboarding, not verified authorship. During a staged
+upgrade, deploy marker-producing adapters before the server begins recording
+this default so stale backstop calls do not contaminate that cohort.
+
+`metadata.source` remains a separate persistence-timing diagnostic:
+`identity_v2` means the normal resolver wrote the row immediately, while
+`lazy_creation` means a later write persisted an already-live identity on
+demand. Neither value identifies who initiated onboarding.
+
 ## Identifier reference: which one do I pass, when?
 
 A single agent surfaces many identifiers (`uuid`, `agent_id`,

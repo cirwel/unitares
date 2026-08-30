@@ -1,5 +1,6 @@
 from typing import Optional, Union
 from pydantic import Field, model_validator
+from src.identity.onboard_provenance import OnboardOrigin
 from .mixins import AgentIdentityMixin
 from .core import BootstrapStateParams
 
@@ -55,8 +56,8 @@ class OnboardParams(AgentIdentityMixin):
       `parent_agent_id` + `spawn_reason`.
     - Advanced / adapter-only: `name` (cosmetic), `model_type`, `client_hint`,
       `resume`, `orchestrated`, `thread_id`, `trajectory_signature`,
-      `process_fingerprint`, `initial_state`, `response_mode`. Ordinary
-      interactive callers should not need these.
+      `process_fingerprint`, `initial_state`, `response_mode`,
+      `onboard_origin`. Ordinary interactive callers should not need these.
 
     See docs/ontology/identity.md ("Strict Identity, Simple Contract" + the
     identifier reference table) for which identifier to pass when.
@@ -163,6 +164,17 @@ class OnboardParams(AgentIdentityMixin):
             "ontology (identity_context + nested registry/label/harness blocks "
             "and the descriptive session_resolution_source / "
             "continuity_token_supported / date_context fields)."
+        ),
+    )
+    onboard_origin: Optional[OnboardOrigin] = Field(
+        default=None,
+        description=(
+            "Adapter-supplied observability label for the onboard entry path: "
+            "agent, harness_backstop, or orchestrated_resume. This is "
+            "descriptive caller context, not identity proof, and never affects "
+            "assurance, authorization, lineage, or governance policy. Ordinary "
+            "interactive callers should omit it; the ordinary unmarked call "
+            "path is recorded as agent with basis=default_unmarked_call."
         ),
     )
 
