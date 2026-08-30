@@ -200,6 +200,22 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           reason: "the promotion predecessor could not be verified; nothing was committed"
         })
 
+      {:error, :promotion_already_consumed} ->
+        json(conn, 409, %{
+          ok: false,
+          error: "promotion_already_consumed",
+          reason: "the record_only predecessor already owns a commit-bearing promotion"
+        })
+
+      {:error, reason}
+      when reason in [:promotion_not_enabled, :promotion_effect_type_not_supported] ->
+        json(conn, 501, %{
+          ok: false,
+          error: Atom.to_string(reason),
+          reason:
+            "declared promotion is disabled or unsupported; direct execute remains available"
+        })
+
       {:error, :persist_failed} ->
         json(conn, 503, %{
           ok: false,

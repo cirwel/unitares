@@ -40,7 +40,10 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   `payload` bytes (Invariant 7) and never the proposer's `client_session_id`
   (a credential). Each row also carries a non-secret receipt for the production
   mapping to fermata's Governed Effect IR; the full execute intent remains
-  transient because it contains the effect input.
+  transient because it contains the effect input. A legacy payload outside the
+  cross-language canonical subset keeps direct execution compatible but gets
+  an explicit unavailable marker, never a false Fermata digest; such a shadow
+  is not promotable.
 
   ## Idempotency (contract §4)
 
@@ -91,6 +94,7 @@ defmodule UnitaresLeasePlane.GovernedEffect do
           | {:error, :promotion_predecessor_not_found}
           | {:error, :promotion_predecessor_unverifiable}
           | {:error, :promotion_mismatch}
+          | {:error, :promotion_already_consumed}
           | {:error, :promotion_lookup_failed}
           | {:error, :governance_blocked}
           | {:error, :persist_failed}
@@ -113,9 +117,12 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   def handle(_), do: {:error, "body must be a JSON object"}
 
   @doc """
-  Canonical idempotency digest: `sha256(effect_type ‖ surface ‖ custody_mode ‖
-  payload_hash)`, hex. Excludes `provenance`/`proposer` so a retry from a new
-  session is not treated as "materially different" (contract §4).
+  Canonical idempotency digest: direct requests retain
+  `sha256(effect_type ‖ surface ‖ custody_mode ‖ payload_hash)`, hex. A declared
+  promotion additionally binds its verified receipt, so a direct execute or a
+  different predecessor can never replay as the requested promotion. Excludes
+  `provenance`/`proposer` so a retry from a new session is not treated as
+  "materially different" (contract §4).
   """
   @spec idempotency_digest(map()) :: String.t()
   def idempotency_digest(%{} = env) do
@@ -123,10 +130,22 @@ defmodule UnitaresLeasePlane.GovernedEffect do
       :crypto.hash(:sha256, Jason.encode!(Map.get(env, :payload, %{})))
       |> Base.encode16(case: :lower)
 
-    [env.effect_type, env.surface, env.custody_mode, payload_hash]
-    |> Enum.join(" ")
-    |> then(&:crypto.hash(:sha256, &1))
-    |> Base.encode16(case: :lower)
+    base_digest =
+      [env.effect_type, env.surface, env.custody_mode, payload_hash]
+      |> Enum.join(" ")
+      |> then(&:crypto.hash(:sha256, &1))
+      |> Base.encode16(case: :lower)
+
+    case promotion_identity_digest(env) do
+      nil ->
+        # Preserve byte-for-byte compatibility with pre-promotion direct
+        # execute and record_only idempotency rows.
+        base_digest
+
+      promotion_digest ->
+        :crypto.hash(:sha256, base_digest <> " promotion " <> promotion_digest)
+        |> Base.encode16(case: :lower)
+    end
   end
 
   # ---- validation ----
@@ -195,7 +214,7 @@ defmodule UnitaresLeasePlane.GovernedEffect do
            custody_mode: mode,
            effect_type: type,
            surface: surface,
-           required_leases: leases,
+           required_leases: sanitize_required_leases(leases),
            payload: payload || %{},
            proposer_agent_uuid: proposer_agent_uuid,
            provenance_session_id: provenance_session_id,
@@ -225,6 +244,8 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   end
 
   @promotion_required_fields ~w(record_only_effect_id decision_standard_ref approval_ref evidence_refs)
+  @promotion_ref_max_bytes 512
+  @promotion_max_evidence_refs 16
 
   defp promotion_shape_error(nil, _mode), do: nil
 
@@ -237,25 +258,62 @@ defmodule UnitaresLeasePlane.GovernedEffect do
         case Map.get(promotion, field) do
           value when field == "evidence_refs" ->
             not (is_list(value) and value != [] and
-                   Enum.all?(value, &(is_binary(&1) and byte_size(&1) > 0)))
+                   length(value) <= @promotion_max_evidence_refs and
+                   Enum.all?(value, &valid_promotion_ref?/1))
 
           value ->
-            not (is_binary(value) and byte_size(value) > 0)
+            not valid_promotion_ref?(value)
         end
       end)
 
     if missing == [],
       do: nil,
-      else: "promotion requires non-empty #{Enum.join(missing, ", ")}"
+      else: "promotion requires bounded non-empty reference fields: #{Enum.join(missing, ", ")}"
   end
 
   defp promotion_shape_error(_promotion, "execute"),
     do: "promotion must be an object"
 
+  defp valid_promotion_ref?(value) when is_binary(value) do
+    byte_size(value) > 0 and byte_size(value) <= @promotion_ref_max_bytes and
+      String.valid?(value) and not Regex.match?(~r/[\x00-\x20\x7F]/, value) and
+      not credential_like_reference?(value)
+  end
+
+  defp valid_promotion_ref?(_), do: false
+
+  defp credential_like_reference?(value) do
+    Regex.match?(
+      ~r/\A(?:bearer|basic)\s|\A(?:v1\.|sk-|ghp_|github_pat_)|(?:authorization|api[_-]?key|continuity[_-]?token|access[_-]?token)=/i,
+      value
+    )
+  end
+
   defp normalize_promotion(nil), do: nil
 
   defp normalize_promotion(%{} = promotion),
     do: Map.take(promotion, @promotion_required_fields)
+
+  defp promotion_identity_digest(env) do
+    case Map.get(env, :promotion_receipt) || Map.get(env, :promotion) do
+      %{} = promotion ->
+        # A fixed-position array avoids map-order dependence while binding both
+        # the caller-declared references and the server-derived continuity
+        # hashes/tier. Validation constrains these values to JSON primitives.
+        fields =
+          @promotion_required_fields ++
+            ~w(payload_sha256 predecessor_fermata_intent_sha256 predecessor_reverified_tier predecessor_proposer_agent_uuid continuity_verified)
+
+        fields
+        |> Enum.map(&Map.get(promotion, &1))
+        |> Jason.encode!()
+        |> then(&:crypto.hash(:sha256, &1))
+        |> Base.encode16(case: :lower)
+
+      _ ->
+        nil
+    end
+  end
 
   defp sanitize_provenance(%{} = provenance) do
     Map.take(provenance, ~w(harness session_id verification_source))
@@ -265,12 +323,29 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
   defp valid_leases?(leases) when is_list(leases) do
     Enum.all?(leases, fn
-      %{"surface" => s} when is_binary(s) and byte_size(s) > 0 -> true
-      _ -> false
+      %{"surface" => s} = lease when is_binary(s) and byte_size(s) > 0 ->
+        case Map.get(lease, "ttl_s") do
+          nil -> true
+          ttl when is_integer(ttl) and ttl > 0 -> true
+          _ -> false
+        end
+
+      _ ->
+        false
     end)
   end
 
   defp valid_leases?(_), do: false
+
+  defp sanitize_required_leases(leases) do
+    Enum.map(leases, fn lease ->
+      %{"surface" => Map.get(lease, "surface")}
+      |> maybe_put_lease_ttl(Map.get(lease, "ttl_s"))
+    end)
+  end
+
+  defp maybe_put_lease_ttl(lease, nil), do: lease
+  defp maybe_put_lease_ttl(lease, ttl), do: Map.put(lease, "ttl_s", ttl)
 
   defp credential_shaped?(payload) when is_map(payload) do
     Enum.any?(Map.keys(payload), fn k ->
@@ -281,6 +356,47 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
   defp credential_shaped?(_), do: false
 
+  # The executable target is one invariant, not three caller-controlled labels.
+  # For file_write execute, canonical envelope surface == canonical payload.path
+  # == the sole required lease surface. Bind this before lease acquisition,
+  # governance, custody, or mutation so the audit row describes the surface
+  # that was actually touched.
+  defp bind_execution_target(%{custody_mode: "execute", effect_type: "file_write"} = env) do
+    with {:ok, envelope_surface} <- Canonicalize.canonicalize(env.surface),
+         {:ok, leases} <- canonical_file_write_leases(env.required_leases),
+         {:ok, target_surface} <-
+           FileWriteExecutor.resolved_target_surface(env.payload, leases),
+         true <- envelope_surface == target_surface,
+         [%{"surface" => ^target_surface}] <- leases do
+      {:ok, %{env | surface: target_surface, required_leases: leases}}
+    else
+      _ -> {:error, :surface_path_mismatch}
+    end
+  end
+
+  defp bind_execution_target(env), do: {:ok, env}
+
+  defp canonical_file_write_leases(leases) when is_list(leases) do
+    Enum.reduce_while(leases, {:ok, []}, fn lease, {:ok, acc} ->
+      surface = Map.get(lease, "surface") || Map.get(lease, :surface)
+
+      case Canonicalize.canonicalize(surface) do
+        {:ok, canonical} ->
+          normalized = %{"surface" => canonical, "ttl_s" => lease_ttl(lease)}
+          {:cont, {:ok, [normalized | acc]}}
+
+        {:error, _} ->
+          {:halt, {:error, :surface_path_mismatch}}
+      end
+    end)
+    |> case do
+      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp canonical_file_write_leases(_), do: {:error, :surface_path_mismatch}
+
   # ---- explicit record_only -> execute promotion continuity ----
 
   # Direct execute remains a distinct, backwards-compatible path. Once a
@@ -289,13 +405,28 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   defp verify_promotion(%{promotion: nil} = env), do: {:ok, env}
 
   defp verify_promotion(%{promotion: promotion} = env) do
-    case intended_payload_sha(env) do
-      {:ok, intended_sha} ->
-        verify_promotion_predecessor(env, promotion, intended_sha)
+    cond do
+      not promotion_enabled?() ->
+        {:error, :promotion_not_enabled}
 
-      {:error, reason} ->
-        {:error, reason}
+      env.effect_type != "file_write" ->
+        # Only the reversible, exact-target file_write path has the continuity
+        # and compensation proof required for promotion today.
+        {:error, :promotion_effect_type_not_supported}
+
+      true ->
+        case intended_payload_sha(env) do
+          {:ok, intended_sha} ->
+            verify_promotion_predecessor(env, promotion, intended_sha)
+
+          {:error, reason} ->
+            {:error, reason}
+        end
     end
+  end
+
+  defp promotion_enabled? do
+    Application.get_env(:lease_plane, :governed_effect_promotion_enabled, false) == true
   end
 
   defp verify_promotion_predecessor(env, promotion, intended_sha) do
@@ -314,6 +445,11 @@ defmodule UnitaresLeasePlane.GovernedEffect do
               promotion
               |> Map.put("payload_sha256", intended_sha)
               |> Map.put("predecessor_fermata_intent_sha256", predecessor_fermata)
+              |> Map.put("predecessor_reverified_tier", predecessor["reverified_tier"])
+              |> Map.put(
+                "predecessor_proposer_agent_uuid",
+                predecessor["proposer_agent_uuid"]
+              )
               |> Map.put("continuity_verified", true)
 
             {:ok, Map.put(env, :promotion_receipt, receipt)}
@@ -346,16 +482,21 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
   defp verify_predecessor(predecessor, env, intended_sha) do
     predecessor_sha = Map.get(predecessor, "payload_sha256")
-    predecessor_fermata = get_in(predecessor, ["fermata", "intent_sha256"])
+    predecessor_tier = Map.get(predecessor, "reverified_tier")
 
     cond do
       predecessor["custody_mode"] != "record_only" or predecessor["status"] != "recorded" ->
         {:error, :promotion_mismatch}
 
-      predecessor["effect_type"] != env.effect_type or predecessor["surface"] != env.surface ->
+      predecessor["effect_type"] != env.effect_type or
+          not same_canonical_surface?(predecessor["surface"], env.surface) ->
         {:error, :promotion_mismatch}
 
-      not valid_sha256?(predecessor_sha) or not valid_sha256?(predecessor_fermata) ->
+      predecessor_tier not in ~w(medium strong) or
+          not valid_proposer?(%{proposer_agent_uuid: predecessor["proposer_agent_uuid"]}) ->
+        {:error, :promotion_predecessor_unverifiable}
+
+      not valid_sha256?(predecessor_sha) or not valid_fermata_predecess?(predecessor) ->
         {:error, :promotion_predecessor_unverifiable}
 
       String.downcase(predecessor_sha) != String.downcase(intended_sha) ->
@@ -371,16 +512,65 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
   defp valid_sha256?(_), do: false
 
+  defp same_canonical_surface?(left, right) when is_binary(left) and is_binary(right) do
+    case {Canonicalize.canonicalize(left), Canonicalize.canonicalize(right)} do
+      {{:ok, canonical}, {:ok, canonical}} -> true
+      _ -> left == right
+    end
+  end
+
+  defp same_canonical_surface?(_, _), do: false
+
+  defp valid_fermata_predecess?(predecessor) do
+    receipt = Map.get(predecessor, "fermata")
+
+    expected_keys =
+      ~w(adapter intent_id intent_sha256 operation profile proposal_id required_capability schema)
+
+    is_map(receipt) and
+      Enum.sort(Map.keys(receipt)) == expected_keys and
+      receipt["schema"] == "fermata.governed-effect-ir.v0" and
+      receipt["profile"] == "unitares" and
+      receipt["intent_id"] == predecessor["effect_id"] and
+      receipt["proposal_id"] == predecessor["effect_id"] and
+      valid_sha256?(receipt["intent_sha256"]) and
+      valid_fermata_effect_mapping?(predecessor["effect_type"], receipt)
+  end
+
+  defp valid_fermata_effect_mapping?("file_write", receipt) do
+    receipt["adapter"] == "file" and receipt["operation"] == "write" and
+      receipt["required_capability"] == "file.write"
+  end
+
+  defp valid_fermata_effect_mapping?(_, _), do: false
+
   defp attach_fermata_receipt(env, effect_id) do
     case GovernedEffectIR.receipt(env, effect_id) do
-      {:ok, receipt} -> {:ok, Map.put(env, :fermata_receipt, receipt)}
-      {:error, reason} -> {:error, "fermata intent is not canonical: #{inspect(reason)}"}
+      {:ok, receipt} ->
+        {:ok, Map.put(env, :fermata_receipt, receipt)}
+
+      {:error, reason} when is_nil(env.promotion) ->
+        # Preserve pre-Fermata direct/record-only payload compatibility without
+        # inventing a runtime-local digest. The marker is non-secret and cannot
+        # pass valid_fermata_predecess?/1, so it never becomes promotion proof.
+        unavailable = %{
+          "schema" => "unitares.fermata-receipt-unavailable.v1",
+          "profile" => "unitares",
+          "intent_id" => effect_id,
+          "reason" => to_string(reason)
+        }
+
+        {:ok, Map.put(env, :fermata_receipt, unavailable)}
+
+      {:error, reason} ->
+        {:error, "fermata intent is not canonical: #{inspect(reason)}"}
     end
   end
 
   # ---- record_only ----
 
   defp record_only(env) do
+    env = Map.put(env, :reverified_tier, reverify_record_only_tier(env))
     digest = idempotency_digest(env)
 
     case Repo.governed_effect_by_idempotency_key(env.idempotency_key) do
@@ -457,6 +647,7 @@ defmodule UnitaresLeasePlane.GovernedEffect do
       "required_leases" => env.required_leases,
       "observations" => observations,
       "proposer_agent_uuid" => env.proposer_agent_uuid,
+      "reverified_tier" => env.reverified_tier,
       "fermata" => env.fermata_receipt
     }
     |> maybe_put_payload_sha256(env)
@@ -481,6 +672,7 @@ defmodule UnitaresLeasePlane.GovernedEffect do
       effect_lane: @effect_lane,
       idempotency_digest: audit_payload["idempotency_digest"],
       fermata: audit_payload["fermata"],
+      identity_assurance_tier: audit_payload["reverified_tier"],
       custody_expires_at: nil,
       observations: observations,
       idempotent: idempotent?
@@ -489,6 +681,18 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
   defp idempotent_body(stored) when is_map(stored) do
     response_body(stored, Map.get(stored, "observations", []), true)
+  end
+
+  defp reverify_record_only_tier(env) do
+    with true <- valid_proposer?(env),
+         token when is_binary(token) and token != "" <- env.proposer_continuity_token,
+         client <- governance_veto_client(),
+         true <- function_exported?(client, :verify_identity_tier, 1),
+         {:ok, tier} when tier in ~w(medium strong) <- client.verify_identity_tier(env) do
+      tier
+    else
+      _ -> "unverified"
+    end
   end
 
   # ---- execute (agent_spawn → live orchestrator) ----
@@ -542,36 +746,41 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   @min_execute_ttl_s 120
 
   defp execute_file_write(env) do
-    cond do
-      # Validate the proposer BEFORE acquiring any lease — otherwise a nil or
-      # malformed uuid crashes uuid_to_binary inside Repo.acquire and surfaces as
-      # an opaque 500 instead of a clean client error.
-      not valid_proposer?(env) ->
-        {:error, :proposer_invalid}
+    with {:ok, env} <- bind_execution_target(env) do
+      cond do
+        # Validate the proposer BEFORE acquiring any lease — otherwise a nil or
+        # malformed uuid crashes uuid_to_binary inside Repo.acquire and surfaces as
+        # an opaque 500 instead of a clean client error.
+        not valid_proposer?(env) ->
+          {:error, :proposer_invalid}
 
-      not min_ttl_ok?(env) ->
-        {:error, :lease_ttl_too_short}
+        not min_ttl_ok?(env) ->
+          {:error, :lease_ttl_too_short}
 
-      true ->
-        digest = idempotency_digest(env)
+        true ->
+          digest = idempotency_digest(env)
 
-        case Repo.governed_effect_by_idempotency_key(env.idempotency_key, @execute_event_type) do
-          {:ok, %{idempotency_digest: ^digest, payload: stored}} ->
-            {:ok, execute_idempotent_body(stored)}
+          case Repo.governed_effect_by_idempotency_key(
+                 env.idempotency_key,
+                 @execute_event_type
+               ) do
+            {:ok, %{idempotency_digest: ^digest, payload: stored}} ->
+              {:ok, execute_idempotent_body(stored)}
 
-          {:ok, %{idempotency_digest: other}} when is_binary(other) ->
-            {:error, :idempotency_conflict}
+            {:ok, %{idempotency_digest: other}} when is_binary(other) ->
+              {:error, :idempotency_conflict}
 
-          {:ok, nil} ->
-            file_write_under_custody(env, digest)
+            {:ok, nil} ->
+              file_write_under_custody(env, digest)
 
-          {:error, reason} ->
-            Logger.warning(
-              "governed_effect file_write idempotency lookup failed: #{inspect(reason)}"
-            )
+            {:error, reason} ->
+              Logger.warning(
+                "governed_effect file_write idempotency lookup failed: #{inspect(reason)}"
+              )
 
-            {:error, :idempotency_lookup_failed}
-        end
+              {:error, :idempotency_lookup_failed}
+          end
+      end
     end
   end
 
@@ -590,7 +799,7 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   defp lease_ttl(_), do: nil
 
   defp file_write_under_custody(env, digest) do
-    effect_id = gen_effect_id()
+    effect_id = effect_id_for(env)
 
     with {:ok, env} <- attach_fermata_receipt(env, effect_id) do
       # Canonicalize lease surfaces ONCE so the acquired surface_id and the
@@ -621,6 +830,12 @@ defmodule UnitaresLeasePlane.GovernedEffect do
                       )
 
                     result_to_reply(result, effect_id, env)
+
+                  {:error, :promotion_already_consumed} ->
+                    # The deterministic predecessor-derived effect id already
+                    # owns a payload row. This caller lost the atomic claim;
+                    # refuse before FileWriteExecutor can observe or mutate.
+                    {:error, :promotion_already_consumed}
 
                   {:error, reason} ->
                     _ =
@@ -663,7 +878,7 @@ defmodule UnitaresLeasePlane.GovernedEffect do
     if file_write_commit_enabled?() do
       case FileWriteExecutor.resolved_payload(env.payload) do
         {:ok, bytes, sha} ->
-          EffectRepo.insert_effect_payload(%{
+          params = %{
             effect_id: effect_id,
             effect_type: env.effect_type,
             payload_bytes: bytes,
@@ -672,7 +887,19 @@ defmodule UnitaresLeasePlane.GovernedEffect do
             proposer_agent_uuid: env.proposer_agent_uuid,
             idempotency_key: env.idempotency_key,
             idempotency_digest: digest
-          })
+          }
+
+          case Map.get(env, :promotion_receipt) do
+            %{} ->
+              case EffectRepo.claim_promotion_payload(params) do
+                :inserted -> :ok
+                :already -> {:error, :promotion_already_consumed}
+                {:error, _} = error -> error
+              end
+
+            _ ->
+              EffectRepo.insert_effect_payload(params)
+          end
 
         {:error, reason} ->
           {:error, reason}
@@ -1040,4 +1267,25 @@ defmodule UnitaresLeasePlane.GovernedEffect do
     parts = [<<a::32>>, <<b::16>>, <<c::16>>, <<d::16>>, <<e::48>>]
     Enum.map_join(parts, "-", &Base.encode16(&1, case: :lower))
   end
+
+  defp effect_id_for(%{promotion_receipt: %{"record_only_effect_id" => predecessor}})
+       when is_binary(predecessor) do
+    # One predecessor maps to one execute identity, independent of the caller's
+    # idempotency key. effects.payloads(effect_id PK) then atomically admits a
+    # single commit-bearing promotion across BEAM processes.
+    hex =
+      :crypto.hash(:sha256, "unitares:promotion:" <> predecessor)
+      |> Base.encode16(case: :lower)
+
+    [
+      binary_part(hex, 0, 8),
+      binary_part(hex, 8, 4),
+      binary_part(hex, 12, 4),
+      binary_part(hex, 16, 4),
+      binary_part(hex, 20, 12)
+    ]
+    |> Enum.join("-")
+  end
+
+  defp effect_id_for(_env), do: gen_effect_id()
 end
