@@ -116,6 +116,16 @@ The SDK has its own version series in `agents/sdk/pyproject.toml`.
 5. Verify the PyPI files and test `pip install unitares-sdk==X.Y.Z` in a clean
    environment before changing the README from the version-pinned Git install.
 
+Two scheduled checks keep the cross-repository release seam visible after the
+interactive release is over. Core's `SDK release sync` workflow runs Mondays at
+09:07 UTC and compares the in-tree version, `sdk-v*` tag, PyPI artifact, and
+public compatibility claims; it opens one deduplicated `ci-finding` issue and
+closes it after convergence. Ten minutes later, `unitares-resident` runs its own
+`SDK drift` workflow and reports when its dependency range excludes the latest
+PyPI release. Neither check publishes or updates dependencies automatically.
+They preserve the human release and compatibility decisions while preventing a
+quietly untagged version or stale consumer pin from becoming invisible.
+
 PyPI names and released versions are permanent public state. Never publish from
 an unmerged PR or reuse a released version number.
 

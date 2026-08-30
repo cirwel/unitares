@@ -934,11 +934,20 @@ def render(
         "about those names. The snapshots are immutable evidence inputs; they do not",
         "certify the components that produced them.",
         "",
-        f"- Audit bundle: `{audit['content_hash']}` (`{audit['schema']}`).",
-        f"- Dispatch snapshot: `{dispatch['content_hash']}`.",
-        f"- Audited source revision: `{dispatch['source_revision']}` "
-        f"({len(dispatch['source_files'])} files).",
-        f"- Exposure snapshot: `{exposure['content_hash']}`.",
+        # The four digests (audit bundle, dispatch, exposure, audited source
+        # revision) are NOT inlined here, deliberately. They are whole-tree
+        # hashes, so any source edit rolls all of them -- which turned this
+        # committed file into a conflict between ANY two branches that touched
+        # handler code, even when their real index changes did not overlap.
+        # Measured 2026-08-29 on #2028 vs #2033: the digest block was the ONLY
+        # line range #2033 changed, and dropping it made the three-way merge
+        # clean. They stay authoritative in `--json`, which is what the schema
+        # governs and what any verifier should read; nothing consumed them from
+        # this markdown. Do not re-inline them.
+        "- Provenance digests (audit bundle, dispatch/exposure snapshots, audited",
+        "  source revision) are emitted by `--json` rather than inlined here: they",
+        "  are whole-tree hashes that roll on every source edit, which made this",
+        "  file conflict between any two branches that touched handler code.",
         "- JSON contract: "
         "[`tool_surface_audit_v1.schema.json`](tool_surface_audit_v1.schema.json).",
         "- Reproduce with `python3 scripts/dev/tool_edge_index.py --json`; run",

@@ -12,13 +12,13 @@ advertise `pip install unitares-sdk==0.2.1` under a column reading "Published
 Python client" while PyPI still served 0.2.0. The command errored. Every check
 was green, because every check was comparing the repository to itself.
 
-This one compares an advertised version to the tag that publishes it. The tag is
-the right reference: `publish-sdk.yml` fires on `sdk-v*` and refuses a tag whose
-version differs from `pyproject.toml`, so a tagged version is one that was
-actually pushed to PyPI, while a declared version is only one someone intends to
-push. Checking the registry directly would be better still, but a gate that
-needs the network to pass fails for reasons that have nothing to do with the
-claim.
+This pull-request gate compares an advertised version to the tag that attempts
+to publish it. `publish-sdk.yml` fires on `sdk-v*` and refuses a tag whose
+version differs from `pyproject.toml`, while a declared version is only one
+someone intends to push. A tag does not prove the workflow or registry upload
+succeeded. The scheduled `sdk-release-sync.yml` check therefore compares the
+registry directly and files a deduplicated issue on disagreement. Keeping this
+PR gate network-free avoids failing unrelated changes on a registry outage.
 
 Requires tags: run it where the checkout has them (fetch-depth: 0). It fails
 rather than skips when they are missing, because "I could not check" and "the
