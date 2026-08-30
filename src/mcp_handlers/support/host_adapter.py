@@ -187,6 +187,25 @@ def host_adapter_available(host_id: str) -> bool:
     return bool(os.environ.get("AGENT_ORCHESTRATOR_BEARER_TOKEN"))
 
 
+# The bare marker line ``codex exec`` prints immediately before the assistant
+# turn. Everything above the LAST one is banner, echoed prompt, and exec traces.
+_CODEX_ANSWER_MARKER = "codex"
+
+
+def codex_answer_region_located(raw: str) -> bool:
+    """True when a codex transcript carries the marker that precedes the answer.
+
+    Without it ``_extract_text`` falls through and hands the WHOLE transcript to
+    the envelope validator, which then fails for a reason that has nothing to do
+    with what the model wrote. The two states must not reach the caller as one
+    sentence: a malformed envelope means the model answered badly; a missing
+    marker means no answer region was found at all — no assistant turn in the
+    transcript, or a CLI whose transcript format moved out from under this
+    parser. Same error today, opposite fixes.
+    """
+    return any(line.strip() == _CODEX_ANSWER_MARKER for line in raw.splitlines())
+
+
 def _extract_text(output_lines: List[str], *, family: str) -> str:
     """Best-effort: pull the model's answer out of the captured CLI stdout.
 
@@ -199,7 +218,7 @@ def _extract_text(output_lines: List[str], *, family: str) -> str:
     if family == "openai_codex":
         marker_idx = None
         for i, ln in enumerate(lines):
-            if ln.strip() == "codex":
+            if ln.strip() == _CODEX_ANSWER_MARKER:
                 marker_idx = i
         if marker_idx is not None:
             tail = lines[marker_idx + 1 :]

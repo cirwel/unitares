@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dialectic one-call canary — end-to-end liveness probe for the review surface.
+"""Dialectic one-call canary — terminal liveness probe for the review surface.
 
 Originally the positive control for the #1387 adoption kill-gate. That gate is
 RETIRED (2026-08-18, operator): a usage count may retire an instrument, never a
@@ -28,11 +28,15 @@ the gate measures, end-to-end, on a schedule:
      the canary fails loudly instead of silently polluting the organic count.
   2. call one-call request_review (issue_description + reasoning + root_cause
      + proposed_conditions) and evaluate the response shape.
-  3. ground-truth the DB: the session row AND the thesis message row must
-     exist. #1442's failure mode left neither — a response-level check alone
-     would have needed the timeout error to say so, and pre-#1424 no
-     telemetry said anything.
-  4. append one JSONL line per run; exit 0/1 (launchd surfaces the log).
+  3. ground-truth the DB: the session row, thesis message row, AND successful
+     request_review entry in ``audit.tool_usage`` (the source read by
+     adoption_kpi.py) must exist. #1442's failure mode left neither dialectic
+     row — a response-level check alone would have needed the timeout error to
+     say so, and pre-#1424 no usage telemetry said anything.
+  4. poll the read-only ``dialectic(action='get')`` path until the independent
+     review reaches a terminal, resolved verdict. A successful reviewer spawn
+     is progress, not proof that the review completed.
+  5. append one JSONL line per run; exit 0/1 (launchd surfaces the log).
 
 Gate contract (#1387 amendment, 2026-08-01): the kill read is valid only if
 this canary is green through the measurement window. Organic zero + green
@@ -49,6 +53,8 @@ Env:
     UNITARES_DIALECTIC_CANARY_LOG default <repo>/data/logs/dialectic_canary.jsonl
     GOVERNANCE_DATABASE_URL       default postgresql://postgres:postgres@localhost:5432/governance
     UNITARES_CANARY_TIMEOUT_S     default 150 (must clear the 105s one-call ceiling)
+    UNITARES_CANARY_VERDICT_TIMEOUT_S default 120 (terminal-review wait)
+    UNITARES_CANARY_POLL_INTERVAL_S   default 2 (read-only poll cadence)
 """
 
 from __future__ import annotations
@@ -70,6 +76,7 @@ DEFAULT_LOG = REPO_ROOT / "data" / "logs" / "dialectic_canary.jsonl"
 DEFAULT_URL = os.environ.get("UNITARES_MCP_URL", "http://127.0.0.1:8767/mcp/")
 CANARY_NAME = "canary_dialectic"
 LABEL_PREFIX = "canary_"
+TERMINAL_PHASES = {"resolved", "failed", "escalated", "timeout", "abandoned"}
 
 
 def _timeout_s() -> float:
@@ -78,6 +85,23 @@ def _timeout_s() -> float:
         return float(raw) if raw else 150.0
     except ValueError:
         return 150.0
+
+
+def _positive_float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    try:
+        value = float(raw) if raw else default
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _verdict_timeout_s() -> float:
+    return _positive_float_env("UNITARES_CANARY_VERDICT_TIMEOUT_S", 120.0)
+
+
+def _poll_interval_s() -> float:
+    return _positive_float_env("UNITARES_CANARY_POLL_INTERVAL_S", 2.0)
 
 
 async def call_tool(
@@ -97,25 +121,25 @@ async def call_tool(
 
     # mcp 2.x's transport calls .sse() on the injected client and is written
     # against httpx2; mcp_httpx() hands back whichever library this mcp wants.
-    http_client = mcp_httpx().AsyncClient(
+    async with mcp_httpx().AsyncClient(
         timeout=timeout_s, headers=mcp_bearer_headers()
-    )
-    async with streamable_http_client(url, http_client=http_client) as streams:
-        # mcp 1.x yields (read, write, get_session_id); 2.x drops the third.
-        read, write = streams[0], streams[1]
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            result = await session.call_tool(tool_name, arguments)
-            for content in result.content:
-                text = getattr(content, "text", None)
-                if not text:
-                    continue
-                try:
-                    data = json.loads(text)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(data, dict):
-                    return data
+    ) as http_client:
+        async with streamable_http_client(url, http_client=http_client) as streams:
+            # mcp 1.x yields (read, write, get_session_id); 2.x drops the third.
+            read, write = streams[0], streams[1]
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.call_tool(tool_name, arguments)
+                for content in result.content:
+                    text = getattr(content, "text", None)
+                    if not text:
+                        continue
+                    try:
+                        data = json.loads(text)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(data, dict):
+                        return data
     return {"success": False, "error": "no JSON content in tool response"}
 
 
@@ -164,8 +188,169 @@ def evaluate_review(payload: Dict[str, Any]) -> Tuple[bool, str]:
     return True, "ok"
 
 
-def db_ground_truth(session_id: str) -> Tuple[bool, str]:
-    """The response can lie by omission; the rows cannot. #1442 left NO rows."""
+def evaluate_terminal_review(
+    payload: Dict[str, Any],
+) -> Tuple[bool, bool, str]:
+    """Return ``(terminal, ok, detail)`` for a dialectic session read.
+
+    A non-terminal phase tells the poller to keep waiting. Any response error
+    or terminal phase other than ``resolved`` is a completed red result. A
+    resolved row must carry an action in its resolution payload; otherwise the
+    row says terminal without preserving the verdict this canary is meant to
+    prove.
+    """
+    if payload.get("success") is not True:
+        return True, False, f"dialectic get failed: {payload.get('error', payload)}"
+    raw = review_payload(payload)
+    if raw.get("success") is not True:
+        return True, False, f"dialectic get failed: {raw.get('error', raw)}"
+
+    phase = str(raw.get("phase") or raw.get("status") or "").strip().lower()
+    if phase not in TERMINAL_PHASES:
+        return False, False, f"review still in phase {phase or 'unknown'}"
+    if phase != "resolved":
+        return True, False, f"review ended in terminal phase {phase!r}, not 'resolved'"
+
+    resolution = raw.get("resolution")
+    action = resolution.get("action") if isinstance(resolution, dict) else None
+    if not action:
+        return True, False, "resolved review carries no resolution action"
+    return True, True, "ok"
+
+
+async def wait_for_terminal_review(
+    *,
+    url: str,
+    session_id: str,
+    client_session_id: str,
+    initial_payload: Dict[str, Any],
+    timeout_s: float,
+    poll_interval_s: float,
+) -> Tuple[Dict[str, Any], bool, str, int, int]:
+    """Poll the persisted session view until a terminal verdict or deadline.
+
+    Returns payload, ok, detail, attempted polls, and completed polls. The
+    request response is context only: even when it already says ``resolved``,
+    green requires at least one successful ``dialectic(action='get')`` read.
+    """
+    payload = initial_payload
+    attempts = 0
+    completed = 0
+    if not client_session_id:
+        return (
+            payload,
+            False,
+            "cannot poll the persisted review without client_session_id",
+            attempts,
+            completed,
+        )
+
+    deadline = time.monotonic() + timeout_s
+    while True:
+        # Only a completed read-back can make the canary green. The initial
+        # request payload may carry an optimistic resolved shape before the
+        # session/message transaction is visible through the read path.
+        if completed:
+            terminal, ok, detail = evaluate_terminal_review(payload)
+            if terminal:
+                return payload, ok, detail, attempts, completed
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raw = review_payload(payload)
+            phase = raw.get("phase") or raw.get("status") or "unknown"
+            return (
+                payload,
+                False,
+                f"review did not reach a terminal verdict within {timeout_s:.1f}s "
+                f"(last phase {phase!r})",
+                attempts,
+                completed,
+            )
+
+        # The first persisted read is immediate. Cadence applies only between
+        # completed, non-terminal reads so an already-resolved session does not
+        # pay an artificial poll interval before it can prove persistence.
+        if completed:
+            await asyncio.sleep(min(poll_interval_s, remaining))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                continue
+
+        attempts += 1
+        call_timeout_s = min(15.0, remaining)
+        try:
+            # The outer deadline covers the whole fresh-transport call,
+            # including ClientSession/HTTP client cleanup. The transport sees
+            # the exact remaining budget too; no one-second floor can overrun
+            # a near-expired verdict window.
+            payload = await asyncio.wait_for(
+                call_tool(
+                    url,
+                    "dialectic",
+                    {
+                        "action": "get",
+                        "session_id": session_id,
+                        "client_session_id": client_session_id,
+                        # Polling is observational. Timeout maintenance belongs
+                        # to the dedicated sweeper, never this liveness probe.
+                        "check_timeout": False,
+                    },
+                    timeout_s=call_timeout_s,
+                ),
+                timeout=remaining,
+            )
+        except asyncio.TimeoutError:
+            raw = review_payload(payload)
+            phase = raw.get("phase") or raw.get("status") or "unknown"
+            remaining_after_timeout = deadline - time.monotonic()
+            if remaining_after_timeout <= 0:
+                timeout_detail = (
+                    f"dialectic get attempt {attempts} exhausted the verdict "
+                    f"deadline (last phase {phase!r})"
+                )
+            else:
+                timeout_detail = (
+                    f"dialectic get attempt {attempts} transport timed out with "
+                    f"{remaining_after_timeout:.2f}s remaining before the verdict "
+                    f"deadline (last phase {phase!r})"
+                )
+            return (
+                payload,
+                False,
+                timeout_detail,
+                attempts,
+                completed,
+            )
+        except Exception as exc:  # noqa: BLE001 — return red telemetry, never skip it
+            raw = review_payload(payload)
+            phase = raw.get("phase") or raw.get("status") or "unknown"
+            return (
+                payload,
+                False,
+                f"dialectic get attempt {attempts} failed with "
+                f"{type(exc).__name__}: {exc} (last phase {phase!r})",
+                attempts,
+                completed,
+            )
+        completed += 1
+        persisted = review_payload(payload)
+        observed_session_id = persisted.get("session_id")
+        if observed_session_id != session_id:
+            return (
+                payload,
+                False,
+                "dialectic get returned an unverified session_id "
+                f"{observed_session_id!r}; expected {session_id!r}",
+                attempts,
+                completed,
+            )
+
+
+def db_ground_truth(
+    session_id: str, agent_uuid: str, client_session_id: str
+) -> Tuple[bool, str]:
+    """Verify persistence and the usage instrument the adoption report reads."""
     import psycopg2  # type: ignore
 
     dsn = os.environ.get(
@@ -187,6 +372,18 @@ def db_ground_truth(session_id: str) -> Tuple[bool, str]:
             )
             if (cur.fetchone() or [0])[0] < 1:
                 return False, "session row exists but no thesis message row"
+            cur.execute(
+                "SELECT 1 FROM audit.tool_usage "
+                "WHERE agent_id = %s AND session_id = %s "
+                "AND tool_name = 'request_review' AND success "
+                "AND payload->>'action' = 'request'",
+                (agent_uuid, client_session_id),
+            )
+            if cur.fetchone() is None:
+                return False, (
+                    "session and thesis rows exist but audit.tool_usage has no "
+                    "successful request_review event for the canary identity/session"
+                )
     return True, "ok"
 
 
@@ -202,6 +399,15 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
         "ok": False,
         "stage": "onboard",
         "url": url,
+        # Always present, including early red paths. ``not_started``/None and
+        # zero counts are more honest than omitting the terminal evidence and
+        # forcing operators to guess whether polling happened.
+        "terminal_phase": "not_started",
+        "review_verdict": None,
+        "terminal_poll_attempt_count": 0,
+        "terminal_poll_completed_count": 0,
+        "terminal_poll_count": 0,
+        "terminal_latency_s": None,
     }
     started = time.monotonic()
     timeout_s = _timeout_s()
@@ -222,6 +428,12 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
 
         record["stage"] = "request_review"
         csid = onboard.get("client_session_id") or raw.get("client_session_id")
+        if not csid:
+            record["detail"] = (
+                "onboard returned no client_session_id; refusing to request or "
+                "poll a review without explicit identity continuity"
+            )
+            return 1
         t0 = time.monotonic()
         review = await call_tool(
             url,
@@ -238,7 +450,20 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
                     "counts is not silently measuring broken plumbing."
                 ),
                 "root_cause": "canary probe — no real incident",
-                "proposed_conditions": ["log the probe result", "exit"],
+                "proposed_conditions": [
+                    (
+                        "verify audit.tool_usage recorded the successful "
+                        "request_review call in the same source adoption_kpi.py reads"
+                    ),
+                    (
+                        "verify the dialectic session and thesis persisted and a "
+                        "matching terminal session verdict is readable"
+                    ),
+                    (
+                        "retain the asserted canary_ synthetic label exclusion, "
+                        "append the timestamped JSONL result, and exit"
+                    ),
+                ],
             },
             timeout_s=timeout_s,
         )
@@ -246,8 +471,11 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
         ok, detail = evaluate_review(review)
         raw_review = review_payload(review)
         record["session_id"] = raw_review.get("session_id")
-        record["review_verdict"] = raw_review.get("review_verdict")
-        record["whose_move"] = raw_review.get("whose_move")
+        record["request_review_phase"] = raw_review.get("phase") or raw_review.get(
+            "status"
+        )
+        record["request_review_verdict"] = raw_review.get("review_verdict")
+        record["request_review_whose_move"] = raw_review.get("whose_move")
         record["orchestrated"] = raw_review.get("orchestrated_review")
         if not ok:
             record["detail"] = detail
@@ -255,10 +483,68 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
 
         if not skip_db:
             record["stage"] = "db_ground_truth"
-            ok, detail = db_ground_truth(raw_review["session_id"])
+            ok, detail = db_ground_truth(
+                raw_review["session_id"], record["agent_uuid"], csid
+            )
             if not ok:
                 record["detail"] = detail
                 return 1
+
+        record["stage"] = "await_terminal_review"
+        (
+            terminal_payload,
+            ok,
+            detail,
+            attempts,
+            completed,
+        ) = await wait_for_terminal_review(
+            url=url,
+            session_id=raw_review["session_id"],
+            client_session_id=csid,
+            initial_payload=review,
+            timeout_s=_verdict_timeout_s(),
+            poll_interval_s=_poll_interval_s(),
+        )
+        terminal = review_payload(terminal_payload)
+        # A completed transport call is not necessarily a successful persisted
+        # read: the MCP envelope or the dialectic handler can return
+        # ``success=False`` while still carrying stale-looking phase/verdict
+        # fields. Promote terminal evidence only after both layers succeeded
+        # and the persisted session is the one requested.
+        persisted_terminal_verified = (
+            completed > 0
+            and terminal_payload.get("success") is True
+            and terminal.get("success") is True
+            and terminal.get("session_id") == raw_review["session_id"]
+        )
+        if persisted_terminal_verified:
+            resolution = terminal.get("resolution")
+            record["terminal_phase"] = (
+                terminal.get("phase") or terminal.get("status") or "unknown"
+            )
+            record["review_verdict"] = (
+                resolution.get("action")
+                if isinstance(resolution, dict)
+                else terminal.get("review_verdict")
+            )
+            record["whose_move"] = terminal.get("whose_move")
+        else:
+            # Never promote the context-only request response into terminal
+            # evidence. A failed first read, completed error response, or
+            # mismatched session has no verified persisted phase/verdict, even
+            # if either response carries an optimistic resolved/resume shape.
+            record["terminal_phase"] = "unverified"
+            record["review_verdict"] = None
+            record["whose_move"] = None
+        record["terminal_poll_attempt_count"] = attempts
+        record["terminal_poll_completed_count"] = completed
+        # Compatibility for existing log/dashboard readers: this remains the
+        # count of completed read-backs, never attempted calls.
+        record["terminal_poll_count"] = completed
+        record["terminal_latency_s"] = round(time.monotonic() - t0, 2)
+        if not ok:
+            record["detail"] = detail
+            return 1
 
         record["stage"] = "done"
         record["ok"] = True

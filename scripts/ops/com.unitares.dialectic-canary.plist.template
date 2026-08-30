@@ -3,8 +3,9 @@
   launchd manifest for the dialectic one-call canary (end-to-end liveness probe).
 
   Runs scripts/ops/dialectic_canary.py once a day: onboards a canary_ identity
-  over /mcp, exercises one-call request_review end-to-end, ground-truths the
-  session + thesis rows in Postgres, appends one JSONL line to
+  over /mcp, exercises one-call request_review, ground-truths the session +
+  thesis rows and the successful audit.tool_usage event in Postgres, and polls
+  the read-only session view to a terminal verdict before appending one JSONL line to
   data/logs/dialectic_canary.jsonl. The #1387 kill-gate it was built for is
   RETIRED (2026-08-18) — a usage count may retire an instrument, never a
   capability. The probe stays because it is the only scheduled end-to-end
