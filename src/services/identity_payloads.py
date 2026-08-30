@@ -320,6 +320,8 @@ def build_onboard_response_data(
     response_mode: str = "full",
     model_type: Optional[str] = None,
     runtime_provenance: Optional[Mapping[str, Any]] = None,
+    onboard_origin: Optional[str] = None,
+    onboard_origin_basis: Optional[str] = None,
 ) -> dict:
     """Build the onboard() response payload.
 
@@ -468,6 +470,10 @@ def build_onboard_response_data(
         }
         if identity_resolution_outcome:
             minimal["identity_resolution_outcome"] = identity_resolution_outcome
+        if onboard_origin is not None:
+            minimal["onboard_origin"] = onboard_origin
+        if onboard_origin_basis is not None:
+            minimal["onboard_origin_basis"] = onboard_origin_basis
         if lineage_state is not None:
             minimal["lineage_state"] = lineage_state
         if continuity_token:
@@ -504,6 +510,10 @@ def build_onboard_response_data(
     }
     if identity_resolution_outcome:
         result["identity_resolution_outcome"] = identity_resolution_outcome
+    if onboard_origin is not None:
+        result["onboard_origin"] = onboard_origin
+    if onboard_origin_basis is not None:
+        result["onboard_origin_basis"] = onboard_origin_basis
     # S1-a (2026-04-24): surface ownership_proof_version at top level so log
     # consumers and dashboards don't have to dig into the token payload or
  # rely on verbose=True.

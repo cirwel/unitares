@@ -8,6 +8,15 @@ class TestPydanticSchemas:
     full coverage of the type coercions and bounds checking previously handled 
     by manual validators."""
 
+    def test_onboard_origin_is_a_closed_observability_enum(self):
+        from src.mcp_handlers.schemas.identity import OnboardParams
+
+        assert OnboardParams().onboard_origin is None
+        for origin in ("agent", "harness_backstop", "orchestrated_resume"):
+            assert OnboardParams(onboard_origin=origin).onboard_origin == origin
+        with pytest.raises(ValidationError):
+            OnboardParams(onboard_origin="trusted_harness")
+
     def test_lite_alias_coerces_compact_for_bool_and_string(self):
         """`lite` is documented as an alias for response_mode='compact'. It must
         honor a real JSON bool, not only the string form (which was the bug —
