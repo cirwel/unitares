@@ -7,9 +7,9 @@ defmodule AgentOrchestrator.ResultStore do
 
   ## Why this exists
 
-  `AgentRunner` stops itself the instant its Port reports exit (it is
-  `restart: :temporary`). A fast agent — `echo`, a sub-second tool worker — can
-  therefore be gone before the orchestrator's `await` even reaches its mailbox:
+  `AgentRunner` stops itself once its Port has reported both exit status and
+  output EOF (it is `restart: :temporary`). A fast agent — `echo`, a sub-second
+  tool worker — can therefore be gone before the orchestrator's `await` even reaches its mailbox:
   `whereis/0` returns `nil`, or the `GenServer.call` exits `:noproc` mid-flight.
   Pre-existing since #581, the final result was simply lost on that race; the
   documented workaround was "await before it exits or snapshot during the run,"

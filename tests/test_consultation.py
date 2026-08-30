@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.mcp_compat import get_tool_input_schema
+from src.mcp_handlers.context import SessionSignals
 from src.mcp_handlers.decorators import (
     get_call_identity_requirement,
     get_tool_registry,
@@ -64,7 +65,13 @@ def _completed(
             "provider_kind": (
                 "ollama"
                 if route == "ollama"
-                else "hf" if route == "huggingface" else "claude_host_adapter"
+                else "hf"
+                if route == "huggingface"
+                else (
+                    "codex_host_adapter"
+                    if host_id == "codex:host-adapter"
+                    else "claude_host_adapter"
+                )
             ),
             "transport": (
                 "openai_compatible_http" if route == "ollama" else "host_adapter"
@@ -304,7 +311,64 @@ async def test_thorough_cloud_uses_only_delegated_service(monkeypatch):
     assert "route" not in parsed["delivery"]
     assert parsed["authority"]["on_record"] is False
     thorough.assert_awaited_once()
+    assert thorough.await_args.args[0].host_id == "claude:host-adapter"
     standard.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_thorough_cloud_routes_a_claude_caller_to_codex(monkeypatch):
+    standard = AsyncMock()
+    thorough = AsyncMock(return_value=_completed(
+        route="agent_orchestrator",
+        host_id="codex:host-adapter",
+        privacy_class="operator_authorized_external",
+        task_type="review",
+    ))
+    monkeypatch.setattr(co, "run_model_inference", standard)
+    monkeypatch.setattr(co, "run_delegated_inference", thorough)
+    monkeypatch.setattr(
+        co,
+        "get_session_signals",
+        lambda: SessionSignals(reported_harness_type="claude-code"),
+    )
+
+    parsed = _payload(await co.handle_consult({
+        "brief": "Critique this",
+        "purpose": "critique",
+        "effort": "thorough",
+        "privacy": "cloud_allowed",
+        "response_mode": "full",
+    }))
+
+    assert parsed["success"] is True
+    assert thorough.await_args.args[0].host_id == "codex:host-adapter"
+    assert parsed["diagnostics"]["host_id"] == "codex:host-adapter"
+    standard.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_thorough_reciprocal_route_fails_closed_on_backend_drift(monkeypatch):
+    thorough = AsyncMock(return_value=_completed(
+        route="agent_orchestrator",
+        host_id="claude:host-adapter",
+        privacy_class="operator_authorized_external",
+    ))
+    monkeypatch.setattr(co, "run_delegated_inference", thorough)
+    monkeypatch.setattr(
+        co,
+        "get_session_signals",
+        lambda: SessionSignals(client_hint="claude_desktop"),
+    )
+
+    parsed = _payload(await co.handle_consult({
+        "brief": "Deep analysis",
+        "effort": "thorough",
+        "privacy": "cloud_allowed",
+    }))
+
+    assert thorough.await_args.args[0].host_id == "codex:host-adapter"
+    assert parsed["success"] is False
+    assert parsed["error_code"] == "CONSULT_ROUTE_POSTCONDITION_FAILED"
 
 
 @pytest.mark.asyncio

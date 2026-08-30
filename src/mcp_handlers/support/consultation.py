@@ -13,7 +13,10 @@ from uuid import uuid4
 
 from mcp.types import TextContent
 
-from src.mcp_handlers.context import get_context_resolved_agent_id
+from src.mcp_handlers.context import (
+    get_context_resolved_agent_id,
+    get_session_signals,
+)
 
 from ..decorators import mcp_tool
 from ..utils import error_response, require_argument, success_response
@@ -69,6 +72,21 @@ _THOROUGH_TASK_TYPES = {
     "generate": "reasoning",
 }
 
+_THOROUGH_HOST_ROUTES = {
+    "claude:host-adapter": (
+        "agent_orchestrator",
+        "claude:host-adapter",
+        "claude_host_adapter",
+        "operator_authorized_external",
+    ),
+    "codex:host-adapter": (
+        "agent_orchestrator",
+        "codex:host-adapter",
+        "codex_host_adapter",
+        "operator_authorized_external",
+    ),
+}
+
 _SAFE_PROVENANCE_FIELDS = (
     "host_id",
     "provider_kind",
@@ -102,6 +120,8 @@ class ConsultRequest:
     privacy: str = "local"
     allow_degraded: bool = False
     response_mode: str = "compact"
+    # Derived from transport provenance by handle_consult, never caller input.
+    thorough_host_id: str = "claude:host-adapter"
     consultation_id: str = field(default_factory=lambda: str(uuid4()))
 
 
@@ -126,6 +146,25 @@ class ConsultationOutcome:
 def _constructed_prompt(request: ConsultRequest) -> str:
     instruction = _PURPOSE_INSTRUCTIONS[request.purpose]
     return f"{instruction}\n\nConsultation brief:\n{request.brief}"
+
+
+def _thorough_host_for_caller() -> str:
+    """Choose the reciprocal strong-model lane from descriptive harness data.
+
+    A Claude-family caller gets Codex; every other or unknown caller gets
+    Claude. Both routes have the same privacy/cost/accountability class and are
+    operator-enabled, so this hint selects between already-authorized peers; it
+    never grants authority. The public consult schema exposes no host control.
+    """
+    signals = get_session_signals()
+    if signals is None:
+        return "claude:host-adapter"
+
+    for value in (signals.reported_harness_type, signals.client_hint):
+        normalized = str(value or "").strip().lower().replace("_", "-")
+        if normalized == "claude" or normalized.startswith("claude-"):
+            return "codex:host-adapter"
+    return "claude:host-adapter"
 
 
 def _safe_provenance(
@@ -333,6 +372,7 @@ async def _run_thorough(
     return await run_delegated_inference(DelegatedInferenceRequest(
         prompt=prompt,
         requesting_agent_uuid=request.requester_uuid,
+        host_id=request.thorough_host_id,
         task_type=_THOROUGH_TASK_TYPES[request.purpose],
         timeout_s=240,
     ))
@@ -341,6 +381,8 @@ async def _run_thorough(
 def _delivery_postcondition_error(
     outcome: InferenceOutcome,
     delivery_policy: str,
+    *,
+    thorough_host_id: str,
 ) -> tuple[str, str] | None:
     """Fail closed when a backend result violates the facade's resolved route."""
     inference = outcome.inference
@@ -355,12 +397,6 @@ def _delivery_postcondition_error(
         standard_local,
         ("huggingface", "hf:router", "hf", "external_cloud"),
     }
-    thorough_external = (
-        "agent_orchestrator",
-        "claude:host-adapter",
-        "claude_host_adapter",
-        "operator_authorized_external",
-    )
     if delivery_policy == "standard_local" and actual != standard_local:
         return (
             "CONSULT_PRIVACY_POSTCONDITION_FAILED",
@@ -374,6 +410,7 @@ def _delivery_postcondition_error(
             "CONSULT_ROUTE_POSTCONDITION_FAILED",
             "standard inference resolved outside the approved local-first routes",
         )
+    thorough_external = _THOROUGH_HOST_ROUTES.get(thorough_host_id)
     if delivery_policy == "thorough_external" and actual != thorough_external:
         return (
             "CONSULT_ROUTE_POSTCONDITION_FAILED",
@@ -425,7 +462,11 @@ def _success(
             failure_details={"reason": "non_advisory_accountability_class"},
             degradation=degradation,
         )
-    postcondition_error = _delivery_postcondition_error(outcome, delivery_policy)
+    postcondition_error = _delivery_postcondition_error(
+        outcome,
+        delivery_policy,
+        thorough_host_id=request.thorough_host_id,
+    )
     if postcondition_error:
         code, reason = postcondition_error
         return _failed(
@@ -711,6 +752,7 @@ async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         privacy=str(arguments.get("privacy", "local")),
         allow_degraded=coerce_bool(arguments.get("allow_degraded"), default=False),
         response_mode=str(arguments.get("response_mode", "compact")),
+        thorough_host_id=_thorough_host_for_caller(),
     )
     if requester_uuid is None:
         outcome = _failed(
