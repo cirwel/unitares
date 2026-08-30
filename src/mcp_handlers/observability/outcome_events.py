@@ -549,6 +549,7 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
         "corroboration_grade": detail.get("corroboration_grade"),
         "evidence_weight": detail.get("evidence_weight"),
         "claim_risk": detail.get("claim_risk"),
+        "corroboration_reasons": detail.get("corroboration_reasons"),
         "claimed_fields": detail.get("claimed_fields"),
         "verified_fields": detail.get("verified_fields"),
         "unverified_fields": detail.get("unverified_fields"),
