@@ -5,7 +5,10 @@ Assessment is auditable — you can trace exactly why a verdict was issued.
 
 After warmup, scoring switches from fixed universal thresholds to
 self-relative z-score deviations from the agent's own behavioral baseline.
-Absolute safety floors always apply regardless of baseline.
+Absolute safety floors always apply regardless of baseline, but each floor
+bounds only its own component's contribution to composite risk — not the
+verdict. See the constants block below for what that does and does not
+guarantee (issue #1995).
 
 Self-relative deviation risk is gated by absolute basin health (issue #689):
 inside the healthy basin a deviation from your own norm is information, not
@@ -45,11 +48,22 @@ class AssessmentResult:
 RISK_SAFE_THRESHOLD = 0.35
 RISK_CAUTION_THRESHOLD = 0.60
 
-# Absolute safety floors — always active, override baseline.
-# These catch states that are genuinely dangerous regardless of an agent's
-# characteristic operating point. Set between "extreme" and the fixed-
-# threshold triggers (0.4 for E/I, 0.5 for S) to provide meaningful
-# backstop for agents whose baseline normalizes persistently bad states.
+# Absolute safety floors — always active, override baseline. Set between
+# "extreme" and the fixed-threshold triggers (0.4 for E/I, 0.5 for S) so a
+# persistently-bad baseline can't fully absorb them.
+#
+# Each floor bounds only its OWN component's contribution to composite risk
+# (max per component, weights below), not the verdict: the largest single-
+# floor contribution is 0.30 (E or I) or 0.20 (S or |V|), each below
+# RISK_SAFE_THRESHOLD (0.35) — so a lone dimension at its absolute worst
+# still reads "safe", and only two floors together (e.g. E and I both near
+# zero) reach "high-risk" through the floors alone. This is a documented
+# property of the arithmetic, not something fixed here; a same-check-in,
+# dimension-independent backstop for a genuinely dangerous single-floor
+# state is the basin/void/coherence pause layer in governance_monitor.py,
+# which tracks this signal through the sensor spring coupling with lag, not
+# a same-check-in guarantee. Whether a lone floor breach should force at
+# least "caution" is an open calibration question — issue #1995.
 ABSOLUTE_E_FLOOR = 0.30
 ABSOLUTE_I_FLOOR = 0.30
 ABSOLUTE_S_CEILING = 0.70
@@ -158,7 +172,8 @@ def assess_behavioral_state(
     """Assess agent health from behavioral EISV + auxiliary signals.
 
     Uses self-relative scoring after warmup, fixed thresholds before.
-    Absolute safety floors always apply.
+    Absolute safety floors always apply, per-component (see the module-level
+    note on what that does and does not guarantee at the verdict level).
 
     Args:
         state: Current behavioral EISV state
@@ -367,8 +382,10 @@ def _score_self_relative(
 def _score_absolute_floors(state: BehavioralEISV) -> Dict[str, float]:
     """Absolute safety floors — always active, override baseline.
 
-    These catch genuinely dangerous states that no amount of baseline
-    normalization should mask.
+    Each floor bounds only its own component's contribution to composite
+    risk (max per component); it does not by itself guarantee a verdict
+    escalation. See the constants block above for what that does and does
+    not cover (issue #1995).
     """
     components: Dict[str, float] = {}
 

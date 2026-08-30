@@ -106,6 +106,64 @@ class TestImbalance:
         assert result.components["high_V"] == 0.0
 
 
+def _healthy_baseline_then_override(**overrides):
+    """A settled, healthy baseline (z ~ 0 on every dimension) with one or
+    more raw fields force-set afterward — isolates a single dimension's
+    absolute-floor contribution without also perturbing the others' self-
+    relative z-scores or creating an incidental E/I imbalance (high_V)."""
+    state = _make_state(E=0.7, I=0.7, S=0.15)
+    for field, value in overrides.items():
+        setattr(state, field, value)
+    return state
+
+
+class TestAbsoluteFloorsBoundComponentsNotVerdict:
+    """Documents a real arithmetic property (issue #1995), not a defect fixed
+    here: each absolute floor bounds only its own component's contribution
+    to composite risk (0.30 max for E/I, 0.20 max for S/|V|), all below
+    RISK_SAFE_THRESHOLD (0.35). So a single dimension at its absolute worst
+    cannot by itself move the verdict off "safe" — two floors together can.
+    Whether a lone breach should force at least "caution" is an open
+    calibration question for the operator, not something these tests decide.
+    """
+
+    def test_E_alone_at_floor_stays_safe(self):
+        state = _healthy_baseline_then_override(E=0.0)
+        result = assess_behavioral_state(state, rho=0.5)
+        assert result.verdict == "safe"
+        assert result.risk == pytest.approx(0.30, abs=0.01)
+
+    def test_I_alone_at_floor_stays_safe(self):
+        state = _healthy_baseline_then_override(I=0.0)
+        result = assess_behavioral_state(state, rho=0.5)
+        assert result.verdict == "safe"
+        assert result.risk == pytest.approx(0.30, abs=0.01)
+
+    def test_S_alone_at_ceiling_stays_safe(self):
+        state = _healthy_baseline_then_override(S=1.0)
+        result = assess_behavioral_state(state, rho=0.5)
+        assert result.verdict == "safe"
+        assert result.risk == pytest.approx(0.20, abs=0.01)
+
+    def test_V_alone_at_ceiling_stays_safe(self):
+        state = _healthy_baseline_then_override(V=1.0)
+        result = assess_behavioral_state(state, rho=0.5)
+        assert result.verdict == "safe"
+        assert result.risk == pytest.approx(0.20, abs=0.01)
+
+    def test_E_and_I_both_at_floor_reaches_high_risk(self):
+        state = _healthy_baseline_then_override(E=0.0, I=0.0)
+        result = assess_behavioral_state(state, rho=0.5)
+        assert result.verdict == "high-risk"
+        assert result.risk == pytest.approx(0.60, abs=0.01)
+
+    def test_E_floor_and_V_ceiling_together_reach_only_caution(self):
+        state = _healthy_baseline_then_override(E=0.0, V=1.0)
+        result = assess_behavioral_state(state, rho=0.5)
+        assert result.verdict == "caution"
+        assert result.risk == pytest.approx(0.50, abs=0.01)
+
+
 class TestRhoSignals:
     """Update coherence (rho) signals."""
 
