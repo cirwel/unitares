@@ -569,6 +569,18 @@ Return exactly one JSON object and no Markdown fence or surrounding text:
 {"schema":"unitares.terminal_answer.v1","status":"complete","answer":"your final answer"}
 """
 
+_CODEX_JSONL_WITH_ANSWER = "\n".join([
+    json.dumps({"type": "thread.started", "thread_id": "thread-1"}),
+    json.dumps({
+        "type": "item.completed",
+        "item": {"type": "agent_message", "text": "not a valid terminal envelope"},
+    }),
+    json.dumps({
+        "type": "turn.completed",
+        "usage": {"input_tokens": 4, "output_tokens": 5},
+    }),
+])
+
 
 @pytest.mark.asyncio
 async def test_codex_failure_reports_a_located_answer_region(monkeypatch):
@@ -576,6 +588,16 @@ async def test_codex_failure_reports_a_located_answer_region(monkeypatch):
     details = await _codex_failure_details(
         monkeypatch, _CODEX_TRANSCRIPT_WITH_ANSWER
     )
+
+    assert details["adapter_status"] == "malformed"
+    assert details["adapter_answer_region_located"] is True
+    assert "adapter_answer_region_note" not in details
+
+
+@pytest.mark.asyncio
+async def test_codex_jsonl_failure_reports_a_located_answer_region(monkeypatch):
+    """The typed agent_message event is the primary answer boundary."""
+    details = await _codex_failure_details(monkeypatch, _CODEX_JSONL_WITH_ANSWER)
 
     assert details["adapter_status"] == "malformed"
     assert details["adapter_answer_region_located"] is True

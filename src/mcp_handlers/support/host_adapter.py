@@ -43,17 +43,21 @@ logger = logging.getLogger(__name__)
 _HOST_COMMANDS = {
     "codex:host-adapter": (
         "codex",
-        # The no-model branch is byte-identical to the command verified live on
-        # 2026-06-30, so an operator who names no model runs exactly what was
-        # proven. `-m` is only ever added when a caller explicitly asks for a
-        # model — previously that request was accepted, recorded in provenance
-        # as `model_requested`, and then silently dropped.
+        # Keep this bounded advisory run independent of the operator's normal
+        # Codex session state. In particular, config.toml can add MCP tools and
+        # hooks whose progress output corrupts the answer boundary, while a
+        # persisted rollout turns a one-shot consult into durable chat state.
+        # JSONL gives the adapter a typed agent_message event instead of making
+        # it scrape the human transcript. Authentication still comes from
+        # CODEX_HOME when --ignore-user-config is set.
         (
             'if [ -n "$HA_MODEL" ]; then '
-            'exec "$HA_CLI" exec --sandbox "$HA_SANDBOX" --skip-git-repo-check '
+            'exec "$HA_CLI" exec --ignore-user-config --ephemeral --json '
+            '--sandbox "$HA_SANDBOX" --skip-git-repo-check '
             '-m "$HA_MODEL" "$HA_PROMPT" </dev/null; '
-            'else exec "$HA_CLI" exec --sandbox "$HA_SANDBOX" '
-            '--skip-git-repo-check "$HA_PROMPT" </dev/null; fi'
+            'else exec "$HA_CLI" exec --ignore-user-config --ephemeral --json '
+            '--sandbox "$HA_SANDBOX" --skip-git-repo-check '
+            '"$HA_PROMPT" </dev/null; fi'
         ),
         "openai_codex",
     ),
@@ -193,17 +197,80 @@ _CODEX_ANSWER_MARKER = "codex"
 
 
 def codex_answer_region_located(raw: str) -> bool:
-    """True when a codex transcript carries the marker that precedes the answer.
+    """True when Codex output carries a typed or legacy answer region.
 
-    Without it ``_extract_text`` falls through and hands the WHOLE transcript to
-    the envelope validator, which then fails for a reason that has nothing to do
-    with what the model wrote. The two states must not reach the caller as one
-    sentence: a malformed envelope means the model answered badly; a missing
-    marker means no answer region was found at all — no assistant turn in the
-    transcript, or a CLI whose transcript format moved out from under this
-    parser. Same error today, opposite fixes.
+    Current adapters consume the JSONL ``agent_message`` event. The legacy bare
+    marker remains recognized so failures from older deployed CLIs stay
+    diagnosable during rollout.
     """
-    return any(line.strip() == _CODEX_ANSWER_MARKER for line in raw.splitlines())
+    lines = raw.splitlines()
+    return bool(_codex_agent_messages(lines)) or any(
+        line.strip() == _CODEX_ANSWER_MARKER for line in lines
+    )
+
+
+def _codex_jsonl_payloads(output_lines: List[str]) -> List[Dict[str, Any]]:
+    """Parse only complete JSONL event lines, ignoring stderr diagnostics."""
+    payloads: List[Dict[str, Any]] = []
+    for line in output_lines:
+        try:
+            value = json.loads(line.strip())
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(value, dict):
+            payloads.append(value)
+    return payloads
+
+
+def _codex_agent_messages(output_lines: List[str]) -> List[str]:
+    messages: List[str] = []
+    for payload in _codex_jsonl_payloads(output_lines):
+        if payload.get("type") != "item.completed":
+            continue
+        item = payload.get("item")
+        if not isinstance(item, dict) or item.get("type") != "agent_message":
+            continue
+        text = item.get("text")
+        if isinstance(text, str) and text.strip():
+            messages.append(text)
+    return messages
+
+
+def _extract_codex_jsonl(output_lines: List[str]) -> tuple[str, Dict[str, Any]]:
+    """Extract the final Codex answer and usage from documented JSONL events."""
+    payloads = _codex_jsonl_payloads(output_lines)
+    messages = _codex_agent_messages(output_lines)
+    usage: Dict[str, Any] = {}
+    completed = False
+    for payload in payloads:
+        if payload.get("type") == "turn.completed":
+            completed = True
+            candidate = payload.get("usage")
+            if isinstance(candidate, dict):
+                usage = candidate
+
+    if messages:
+        input_tokens = usage.get("input_tokens")
+        output_tokens = usage.get("output_tokens")
+        tokens_used = sum(
+            value for value in (input_tokens, output_tokens) if isinstance(value, int)
+        )
+        return messages[-1], {
+            "models_used": [],
+            "provider_usage": usage,
+            "tokens_used": tokens_used,
+            "finish_reason": "completed" if completed else None,
+            "warnings": ["CLI did not report an exact model identifier"],
+        }
+
+    # Compatibility for a pre-JSONL transcript during a rolling deployment.
+    return _extract_text(output_lines, family="openai_codex"), {
+        "models_used": [],
+        "warnings": [
+            "Codex CLI returned no typed agent_message event; used legacy transcript parsing",
+            "CLI did not report an exact model identifier",
+        ],
+    }
 
 
 def _extract_text(output_lines: List[str], *, family: str) -> str:
@@ -301,11 +368,10 @@ def extract_cli_result(
 ) -> tuple[str, Dict[str, Any]]:
     """Return answer text plus exact provider metadata when available."""
     raw = "\n".join(line.rstrip("\n") for line in output_lines)
+    if family == "openai_codex":
+        return _extract_codex_jsonl(output_lines)
     if family != "anthropic_claude":
-        return _extract_text(output_lines, family=family), {
-            "models_used": [],
-            "warnings": ["CLI did not report an exact model identifier"],
-        }
+        return _extract_text(output_lines, family=family), {"warnings": []}
 
     payload = _parse_json_output(raw)
     if payload is None:
