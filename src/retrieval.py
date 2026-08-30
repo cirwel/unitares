@@ -83,8 +83,20 @@ def rrf_fuse(
            it's the boring-correct value and barely needs tuning.
 
     Returns:
-        [(doc_id, rrf_score)] sorted by score desc. Scores are small
-        (typically < 0.1) but comparable across queries.
+        [(doc_id, rrf_score)] sorted by score desc.
+
+        ⚠️ These scores are a function of RANK ONLY — they carry no information
+        about match quality. At the default k=60 the top three results score
+        1/61, 1/62, 1/63 (0.0164, 0.0161, 0.0159) for EVERY query, whether the
+        top hit is exact or unrelated. They are "comparable across queries"
+        only in that useless sense.
+
+        So never surface one as a relevance/confidence number to a caller. Use
+        `similarity_scores` (cosine) or `rerank_scores` (cross-encoder) for
+        match strength, and report absence rather than substituting rank —
+        see `_lean_search_payload` in mcp_handlers/knowledge/handlers.py, which
+        made exactly this substitution and rendered a flat miss indistinguishable
+        from a hit.
     """
     scores: Dict[str, float] = {}
     for ranked in ranked_lists:
