@@ -13,11 +13,13 @@ defmodule AgentOrchestrator.AgentRunner do
     1. `init/1` optionally acquires a `remote_heartbeat` lease for the agent's
        `agent:<id>` surface. If a lease is configured (`:required`) and the
        acquire fails, the agent refuses to start (admission control, fail closed).
-    2. The Port is opened with `:exit_status` and line framing; stdout+stderr are
-       captured into a bounded buffer.
-    3. On `{:exit_status, status}` the lease is released and the runner stops
-       `:normal` (status 0) or `{:shutdown, {:exit_status, n}}` (non-zero). Being
-       `restart: :temporary`, the supervisor does not resurrect it.
+    2. The Port is opened with `:exit_status`, `:eof`, and line framing;
+       stdout+stderr are captured into a bounded buffer.
+    3. Only after BOTH `{:exit_status, status}` and `{port, :eof}` arrive is the
+       lease released and the runner stopped `:normal` (status 0) or
+       `{:shutdown, {:exit_status, n}}` (non-zero). Erlang does not specify the
+       order of those Port messages, so the EOF is the drain barrier that keeps
+       late output from being discarded.
     4. `terminate/2` releases the lease on any shutdown path (kill, app stop), so
        the lease is freed promptly rather than waiting out its TTL — the TTL is
        the backstop for a crash that skips `terminate/2`, not the normal path.
@@ -188,6 +190,7 @@ defmodule AgentOrchestrator.AgentRunner do
     # itself is consumed in init/1 and never stored.
     :lineage,
     :exit_status,
+    :pending_exit_status,
     :release_status,
     # Monotonic timestamp of a successful spawn, for the telemetry stop span.
     # Monotonic (not system) time so a clock adjustment cannot produce a
@@ -200,6 +203,7 @@ defmodule AgentOrchestrator.AgentRunner do
     output_count: 0,
     max_output_lines: @default_max_lines,
     partial: "",
+    eof_received: false,
     waiters: []
   ]
 
@@ -446,17 +450,22 @@ defmodule AgentOrchestrator.AgentRunner do
     end
   end
 
-  # exit_status is the authoritative terminal signal. Match on any port and
-  # not-yet-finalized rather than requiring state.port to still equal the
-  # reference — the linked-port {:EXIT} and {:exit_status} can arrive in either
-  # order, and if {:EXIT} cleared state.port first, requiring a match here would
-  # drop the status, hang waiters, and never release the lease.
+  # `:exit_status` and `:eof` are independent Port messages whose ordering is
+  # unspecified. Keep the numeric status pending until EOF proves stdout/stderr
+  # has drained; finalizing on status alone can discard the assistant's last
+  # line even after a clean process exit.
   def handle_info({port, {:exit_status, status}}, %{exit_status: nil} = state)
       when is_port(port) do
-    finalize(state, status)
+    maybe_finalize_after_drain(%{state | pending_exit_status: status})
   end
 
   def handle_info({_port, {:exit_status, _status}}, state), do: {:noreply, state}
+
+  def handle_info({port, :eof}, %{port: port, exit_status: nil} = state) do
+    maybe_finalize_after_drain(%{state | eof_received: true})
+  end
+
+  def handle_info({_port, :eof}, state), do: {:noreply, state}
 
   # Linked Port EXIT. If exit_status already finalized us, this is just cleanup.
   # If it has NOT (EXIT won the race, or the port died without a status),
@@ -492,6 +501,17 @@ defmodule AgentOrchestrator.AgentRunner do
   def handle_info(:max_runtime, state), do: {:noreply, state}
 
   def handle_info(_msg, state), do: {:noreply, state}
+
+  defp maybe_finalize_after_drain(%{eof_received: true, pending_exit_status: status} = state)
+       when not is_nil(status) do
+    # With the :eof Port option, EOF deliberately leaves the port open. Close
+    # it only after the numeric status is also known, then publish the complete
+    # output as one terminal result.
+    safe_close(state.port)
+    finalize(%{state | port: nil}, status)
+  end
+
+  defp maybe_finalize_after_drain(state), do: {:noreply, state}
 
   # Terminal finalize: flush any partial line, release the lease, record the
   # exit status, reply to waiters, retain the result, and stop. `status` is an
@@ -714,6 +734,9 @@ defmodule AgentOrchestrator.AgentRunner do
           [
             :binary,
             :exit_status,
+            # EOF is the output-drain barrier. Its ordering relative to
+            # exit_status is unspecified, so AgentRunner waits for both.
+            :eof,
             :stderr_to_stdout,
             {:line, @line_max_bytes},
             {:args, exec_args}
