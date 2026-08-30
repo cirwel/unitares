@@ -902,7 +902,13 @@ def build_experience_envelope(
             "sync_state(response_text='...', complexity=0.5, "
             "client_session_id=...) as you work."
         )
-        state_summary = _lift(payload, "lineage_state", "session_key")
+        state_summary = _lift(
+            payload,
+            "lineage_state",
+            "session_key",
+            "onboard_origin",
+            "onboard_origin_basis",
+        )
         predecessor = (
             payload.get("thread_context", {}).get("predecessor", {})
             if isinstance(payload.get("thread_context"), dict)
