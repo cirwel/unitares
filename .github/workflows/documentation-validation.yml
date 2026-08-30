@@ -28,7 +28,12 @@ jobs:
         python scripts/dev/check_ci_python_version_sync.py
         python scripts/diagnostics/check_ci_python_matrix_sync.py
 
-    - name: Validate tool count synchronization
+    - name: Validate tool count synchronization (skips without runtime deps)
+      # This job deliberately installs no project dependencies, so the runtime
+      # registry cannot be imported and this step SKIPS rather than enforces.
+      # It is kept for the case where deps become available; the binding
+      # enforcement lives in the `smoke` job of the Tests workflow, which runs
+      # the same script with --require-registry against a real registry.
       env:
         PYTHONPATH: ${{ github.workspace }}/scripts:${{ github.workspace }}
       run: |
@@ -63,18 +68,55 @@ jobs:
         script: |
           const { execSync } = require('child_process');
 
-          // Get tool count
-          const toolCount = execSync('python scripts/diagnostics/count_tools.py').toString().trim();
+          // Read the count through --json, which carries an explicit
+          // `available` flag. This runner installs no project dependencies, so
+          // the count is normally UNAVAILABLE — and unavailable must never
+          // render as a number. The previous version captured stdout only,
+          // dropping the stderr warning and publishing the sentinel `0` under
+          // a green heading, which reads as "this repo advertises zero tools":
+          // instrumentation failing toward healthy instead of toward unknown.
+          let count;
+          try {
+            count = JSON.parse(
+              execSync('python scripts/diagnostics/count_tools.py --json').toString()
+            );
+          } catch (err) {
+            count = {
+              available: false,
+              reason: `the counter did not produce a count (${String(err.message).split('\n')[0]})`,
+            };
+          }
+
           const version = execSync('python scripts/ops/version_manager.py').toString().trim().split('\n')[0].replace('Current version: ', '');
 
-          // Create comment
-          const comment = `## ✅ Documentation Validation Passed
+          const toolCountLine = count.available
+            ? `**Tool Count:** ${count.total} tools`
+            : `**Tool Count:** unavailable — the runtime registry could not be read here (\`${count.reason}\`)`;
 
-          **Tool Count:** ${toolCount} tools
-          **Version:** ${version}
+          const body = [
+            '## ✅ Documentation Validation Passed',
+            '',
+            toolCountLine,
+            `**Version:** ${version}`,
+            '',
+            'Passed the CI/Python, version-consistency, and reader-facing',
+            'documentation-health checks.',
+          ];
 
-          Passed the CI/Python, tool-inventory, version-consistency, and
-          reader-facing documentation-health checks.`;
+          if (count.available) {
+            body.push('The tool-inventory check passed against the live registry.');
+          } else {
+            body.push(
+              '',
+              '> **The tool-inventory check was skipped, not passed.** This runner',
+              '> installs no project dependencies, so the tool count could not be',
+              '> taken and no number above is an inventory. The count is enforced',
+              '> by the `smoke` job in the Tests workflow, which installs the',
+              '> runtime dependencies and fails on an unavailable registry.'
+            );
+          }
+
+          const comment = body.join('\n');
 
           github.rest.issues.createComment({
             issue_number: context.issue.number,
