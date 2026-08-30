@@ -137,6 +137,16 @@ jobs:
       run: |
         python scripts/diagnostics/count_tools.py --json
 
+    - name: Validate documentation tool count against the live registry
+      # The binding tool-inventory gate. The documentation-validation workflow
+      # installs no dependencies, so its own --check can only SKIP: it compares
+      # nothing and enforces nothing. This job has the full runtime tree, so
+      # the count here is real, and --require-registry turns an unimportable
+      # registry into a failure rather than a silent skip — the check must fail
+      # toward "unknown", never toward "healthy".
+      run: |
+        python scripts/diagnostics/update_docs_tool_count.py --check --require-registry
+
   test_shard:
     name: test shard (${{ matrix.shard }})
     runs-on: ubuntu-latest
