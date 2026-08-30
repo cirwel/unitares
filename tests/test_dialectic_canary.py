@@ -11,6 +11,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -208,6 +209,71 @@ class TestEvaluateTerminalReview:
         assert terminal
         assert not ok
         assert "db down" in detail
+
+
+class _FakeCursor:
+    def __init__(self, rows):
+        self.rows = iter(rows)
+        self.executed = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def execute(self, query, params):
+        self.executed.append((query, params))
+
+    def fetchone(self):
+        return next(self.rows)
+
+
+class _FakeConnection:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def cursor(self):
+        return self._cursor
+
+
+def test_db_ground_truth_verifies_usage_in_adoption_source(monkeypatch):
+    cursor = _FakeCursor([(1,), (1,), (1,)])
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg2",
+        SimpleNamespace(connect=lambda _dsn: _FakeConnection(cursor)),
+    )
+
+    ok, detail = canary.db_ground_truth("sess-1", "agent-uuid", "agent-csid")
+
+    assert ok
+    assert detail == "ok"
+    usage_query, usage_params = cursor.executed[-1]
+    assert "FROM audit.tool_usage" in usage_query
+    assert "tool_name = 'request_review'" in usage_query
+    assert "payload->>'action' = 'request'" in usage_query
+    assert usage_params == ("agent-uuid", "agent-csid")
+
+
+def test_db_ground_truth_rejects_missing_usage_event(monkeypatch):
+    cursor = _FakeCursor([(1,), (1,), None])
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg2",
+        SimpleNamespace(connect=lambda _dsn: _FakeConnection(cursor)),
+    )
+
+    ok, detail = canary.db_ground_truth("sess-1", "agent-uuid", "agent-csid")
+
+    assert not ok
+    assert "audit.tool_usage" in detail
 
 
 @pytest.mark.asyncio

@@ -28,10 +28,11 @@ the gate measures, end-to-end, on a schedule:
      the canary fails loudly instead of silently polluting the organic count.
   2. call one-call request_review (issue_description + reasoning + root_cause
      + proposed_conditions) and evaluate the response shape.
-  3. ground-truth the DB: the session row AND the thesis message row must
-     exist. #1442's failure mode left neither — a response-level check alone
-     would have needed the timeout error to say so, and pre-#1424 no
-     telemetry said anything.
+  3. ground-truth the DB: the session row, thesis message row, AND successful
+     request_review entry in ``audit.tool_usage`` (the source read by
+     adoption_kpi.py) must exist. #1442's failure mode left neither dialectic
+     row — a response-level check alone would have needed the timeout error to
+     say so, and pre-#1424 no usage telemetry said anything.
   4. poll the read-only ``dialectic(action='get')`` path until the independent
      review reaches a terminal, resolved verdict. A successful reviewer spawn
      is progress, not proof that the review completed.
@@ -346,8 +347,10 @@ async def wait_for_terminal_review(
             )
 
 
-def db_ground_truth(session_id: str) -> Tuple[bool, str]:
-    """The response can lie by omission; the rows cannot. #1442 left NO rows."""
+def db_ground_truth(
+    session_id: str, agent_uuid: str, client_session_id: str
+) -> Tuple[bool, str]:
+    """Verify persistence and the usage instrument the adoption report reads."""
     import psycopg2  # type: ignore
 
     dsn = os.environ.get(
@@ -369,6 +372,18 @@ def db_ground_truth(session_id: str) -> Tuple[bool, str]:
             )
             if (cur.fetchone() or [0])[0] < 1:
                 return False, "session row exists but no thesis message row"
+            cur.execute(
+                "SELECT 1 FROM audit.tool_usage "
+                "WHERE agent_id = %s AND session_id = %s "
+                "AND tool_name = 'request_review' AND success "
+                "AND payload->>'action' = 'request'",
+                (agent_uuid, client_session_id),
+            )
+            if cur.fetchone() is None:
+                return False, (
+                    "session and thesis rows exist but audit.tool_usage has no "
+                    "successful request_review event for the canary identity/session"
+                )
     return True, "ok"
 
 
@@ -435,7 +450,20 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
                     "counts is not silently measuring broken plumbing."
                 ),
                 "root_cause": "canary probe — no real incident",
-                "proposed_conditions": ["log the probe result", "exit"],
+                "proposed_conditions": [
+                    (
+                        "verify audit.tool_usage recorded the successful "
+                        "request_review call in the same source adoption_kpi.py reads"
+                    ),
+                    (
+                        "verify the dialectic session and thesis persisted and a "
+                        "matching terminal session verdict is readable"
+                    ),
+                    (
+                        "retain the asserted canary_ synthetic label exclusion, "
+                        "append the timestamped JSONL result, and exit"
+                    ),
+                ],
             },
             timeout_s=timeout_s,
         )
@@ -455,7 +483,9 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
 
         if not skip_db:
             record["stage"] = "db_ground_truth"
-            ok, detail = db_ground_truth(raw_review["session_id"])
+            ok, detail = db_ground_truth(
+                raw_review["session_id"], record["agent_uuid"], csid
+            )
             if not ok:
                 record["detail"] = detail
                 return 1
