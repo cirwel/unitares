@@ -3,19 +3,21 @@
 **Status:** ⛔ **PROPOSED — UNRATIFIED as a gate.** The document as a whole still awaits operator
 signature and the council round §8 records as unheld.
 
-⚠️**But four of its open questions are now closed.** On 2026-08-29 the operator ruled on §6.1
+⚠️**But six of its open questions are now closed.** On 2026-08-29 the operator ruled on §6.1
 (reassignment gets its own serialization design), §6.2 (criterion 6 retained, halt authority
 removed), §6.6 (**instrument first — build the §3.1 emitter, decide the port on what it reports**)
-and, consequentially, §6.5 (deferred, with a named reopen condition). ⛔Those rulings are settled;
-the rest of this document is not. §6.3 and §6.4 remain owed.
+and, consequentially, §6.5 (deferred, with a named reopen condition). In the same operator
+session, §6.3 settled the opportunity-cost ambiguity and new §6.7 ruled on the bounded
+post-write probe. ⛔Those rulings are settled; the rest of this document is not. §6.4 remains
+owed.
 
 ⚠️**Implementation correction after merge.** PR #2011 supplied a positive-only
-`dialectic_write_refused` incident event. It did not supply a cycle denominator, did not count the
-early saga-inflight skips, and cannot observe the opposite ordering where the sweeper writes before
-a saga starts. The follow-up after #2008 adds a zero-inclusive `dialectic_sweep_cycle` event and
-puts both periodic and lazy resolver entry points under one task-local reentrancy flag. Those
-changes improve the instrument; they do **not** make the full dual-writer hazard measurable and do
-not start the §7 window.
+`dialectic_write_refused` incident event. The follow-up after #2008 added a zero-inclusive
+`dialectic_sweep_cycle` event, counted early saga-inflight skips, and put both periodic and lazy
+resolver entry points under one task-local reentrancy flag. PR #2022 then added
+`dialectic_write_overlap`, a post-write probe for the sweeper-first ordering. All three orderings
+now emit, but the post-write probe bounds the interval rather than closing it; §6.7 rules that a
+clean bounded window cannot fire (b1). None of these merges starts the §7 window.
 
 **What it discharges.** `wave-3-go-decision-2026-08-16.md` §4 signed GO-WITH-REDUCED-SCOPE and
 named exactly one released deliverable: *"one §11-style gate document for the reduced scope, plus
@@ -25,8 +27,9 @@ This is the first half of that deliverable — the gate document. The design pas
 review are not in it and are not claimed.
 
 **What it does not do.** It does not authorise building. It does not clear, lift or re-read the
-(D) halt on the original scope. It does not rule on the operator questions §6 lists as owed. A
-gate that cleared itself is the defect the go-decision artifact was rejected for once already.
+(D) halt on the original scope. It does not settle the artifact question §6.4 still lists as
+owed. A gate that cleared itself is the defect the go-decision artifact was rejected for once
+already.
 
 **Clock.** The §4 authorisation started 2026-08-22 and projected ~15–25h against the §2 cap of
 ~112h38m. This document is drafted 2026-08-29.
@@ -146,11 +149,13 @@ emit: `saga_inflight_skip_count` (BEAM first, caught at the early check),
 
 1. ⛔**No window has started.** Deployment provenance is still owed — §7 step 3, slot empty.
 2. ⛔**The probe bounds the interval rather than closing it.** A saga starting after the probe is
-   unobserved, so a clean window is evidence over a bounded interval. Firing (b1) means accepting
-   that bound as sufficient — an operator judgement, not a measurement result, and one that should
-   be stated as a choice before the window is read rather than after.
-3. ⛔**`overlap_probe_failed_count` must be read beside the detected count.** A window with
-   non-trivial probe failures has not measured overlap regardless of how many zeros it shows.
+   unobserved, so a clean window is evidence over a bounded interval. §6.7 rules that this bound
+   is insufficient: a clean window does **not** fire (b1). The remaining tail must be observed
+   continuously or correlated from the saga/reservation side before a zero can carry that
+   authority.
+3. ⛔**`overlap_probe_failed_count` must be read beside the detected count.** Any failed probe on
+   a successful guarded write breaks absence evidence; it is not an observed zero and cannot be
+   averaged away by clean probes elsewhere in the window.
 
 **(b2) The in-place fix closes it.** A Python-side change during the implementation window makes
 the sweeper's write path safe without porting — e.g. an explicit row/advisory lock or a shared
@@ -176,9 +181,11 @@ suppression mechanism; it is not evidence of locking or an irreducible selection
 **Measurement source:** design pass on §1.2's chosen option, before build. ⛔This is the reduced
 scope's structural analogue of (D), and unlike (D) it has a subject.
 
-**(b5) Opportunity cost.** Unchanged in form from §0(E) and inherited as-is, with the §2 cap
-(~112h38m) as the ledger. ⛔The §11.9 conjunction-vs-standalone ambiguity is **not** resolved here;
-it is an operator ruling and is listed in §6.
+**(b5) Opportunity cost.** Per §6.3, a projected slip exceeding 25% of the original deadline
+window for either named calendar item is a **standalone halt**, regardless of projected Wave 3
+duration. The §2 cap (~112h38m) remains required reporting and may compel rescoping, but cannot
+excuse a named-item halt. Exceeding the cap is not, by this ruling alone, an independent halt; that
+would require a separate amendment.
 
 ⛔**Not carried forward, with reasons:** (A.1)'s ODE-floor gate (its subject is
 `process_agent_update` p99, an axis struck 2026-06-24 and belonging to a port this scope excludes);
@@ -227,16 +234,18 @@ The three dual-writer orderings, and which of them is now observed:
 ⛔**That third instrument narrows the unmeasured interval; it does not empty it.** The probe closes
 the window between the early check and just after the write. It cannot close the window after
 itself, so a saga starting later is still unobserved. **A zero overlap count is therefore evidence
-about a bounded interval, not proof of a collision-free system.** Only a serialization primitive
-both writers honour removes the interval instead of measuring it — that is (b2), still unbuilt, and
-the instrument-first ruling does not authorise it.
+about a bounded interval, not proof of a collision-free system.** §6.7 rules that the bound is
+insufficient to fire (b1). Only continuous/correlated observation of the remaining tail makes (b1)
+readable; a serialization primitive both writers honour removes the interval instead of measuring
+it — that is (b2), still unbuilt, and the instrument-first ruling does not authorise it.
 
 ⛔**A failed probe is not an observed absence, and the counts are separate for that reason.**
 `has_inflight_saga` fails open — correct for a write gate, since no saga infrastructure means
 nothing to race — and an instrument inheriting that would report "no saga" when it could not look.
 `probe_inflight_saga` returns `None` in that case, and the cycle event carries
-`overlap_probe_failed_count` beside `overlap_detected_count`. ⛔Read the pair or neither: a window
-with a non-trivial probe-failure count has not measured overlap, whatever its detected count says.
+`overlap_probe_failed_count` beside `overlap_detected_count`. ⛔Read the pair or neither: any
+failed probe on a successful guarded write is missing absence evidence, whatever the detected
+count says.
 
 ⚠️A positive refusal can still also mean a missing row or a competing Python writer; the DB helper
 returns one `False` for all of them and only logs the distinction. That ambiguity is unchanged.
@@ -293,8 +302,8 @@ finds nothing is not exposure. **Source:** deploy record + complete sweep/overla
 overlaps in either writer ordering, zero guarded refusals on any explicitly permitted Python
 fallback, and no new substrate-tax pattern at the sweeper's boundary. **Source:** the complete
 §3.1 channel plus `audit.coordination_events` filtered to the sweeper's boundary. A positive-only
-event stream or a heartbeat with the sweeper-first blind spot is insufficient; R2 must not pass by
-silence.
+event stream or a bounded post-write probe with an unobserved tail is insufficient; R2 must not
+pass by silence.
 
 **R3 (disposition of criterion 10's reassignment half).** ⛔The go-decision records the
 reassignment-rate test as *"unpinnable in principle until reassignments actually
@@ -359,11 +368,11 @@ Inheriting #7 (503 rate during cutover/rollback) and #10 (cross-session shared-a
 
 ---
 
-## §6 Operator rulings — four settled 2026-08-29, two still owed
+## §6 Operator rulings — six settled 2026-08-29, one still owed
 
 ⛔**Settled by the operator on 2026-08-29**, in session, as choices stated before application
-rather than method reported afterwards. §6.1, §6.2 and §6.6 carry rulings; §6.5 is deferred by
-§6.6's ruling. §6.3 and §6.4 remain owed and are unchanged.
+rather than method reported afterwards. §6.1, §6.2, §6.3, §6.6 and §6.7 carry rulings;
+§6.5 is deferred by §6.6's ruling. §6.4 remains owed.
 
 **§6.1 Does reserve-first extend to the reassignment path? — ✅ RULED: NO.** _(operator,
 2026-08-29)_ **The reassignment writes get their own serialization design.** (B) reserve-first
@@ -390,8 +399,15 @@ reported. Keeping it non-halting removes the authority without discarding the da
 reading of criterion 6 may halt Wave 3, and no future reading may cite its removal either — it is
 still there, still measured.
 
-**§6.3 The §11.9 conjunction ambiguity.** §0(E) reads as a conjunction; the v0.3 fold reads >25%
-slip as a standalone halt. ⛔Explicitly reserved to the operator by the amendment itself.
+**§6.3 The §11.9 conjunction ambiguity — ✅ RULED: THE STANDALONE SLIP HALT GOVERNS.**
+_(operator, 2026-08-29)_ A projected slip exceeding 25% of the original deadline window for either
+named calendar item halts Wave 3 regardless of projected Wave 3 duration. The v0.3 fold stated
+that rule explicitly in response to an architect BLOCK; the stale conjunction in §0(E) cannot let
+a shorter implementation excuse a sacrificed item.
+
+⛔The `Wave 1 elapsed × 3` comparison remains required reporting and may compel rescoping. This
+ruling does **not** make an over-cap projection an independent halt; doing that would require a
+separate amendment. Neither the cap nor an acceptance memorandum can waive the named-item halt.
 
 **§6.4 The two missing handoff artifacts.** `wave-3-mcp-sdk-spike-<date>.md` (criterion 7) and the
 `wave-3-state-ownership-redteam-<date>.md` / `-prep-` contradiction (criterion 8, original scope).
@@ -432,14 +448,16 @@ supply; criterion 8's contradiction is an adjudication, not a file.
 **§6.5 Scope: path (1) only, or (1) and (2)? — ⏸️ DEFERRED, with a named reopen condition.**
 _(operator, 2026-08-29)_ ⛔**Not answered, and deliberately not sent to council either.** §6.6's
 instrument-first ruling removes this question's urgency entirely: the §3.1 instrumentation is
-Python-only and requires no scope decision to build. If a **complete** window returns zero overlap
-in both writer orderings, **(b1) fires and there is no port** — at which point this question
-dissolves rather than gets answered. The #2011 refusal stream alone is not that window.
+Python-only and requires no scope decision to build. §6.7 now makes the clean-window exit more
+specific: a clean **bounded** window does not fire (b1), so it neither reopens this scope question
+nor dissolves it. A later continuously/correlated instrument may make (b1) readable; a shared
+serialization primitive may instead fire (b2) and dissolve the port question.
 
 ⛔Spending a council round on the shape of a port that may not happen is precisely the cap spend
-criterion 9's apparatus exists to prevent. **Reopen condition:** the complete §3.1 instrument
-reports a nonzero overlap/refusal, or the operator elects the port on other grounds. ⛔§1.1's
-recommendation of path (1) stands as a recommendation only and has **not** been ratified.
+criterion 9's apparatus exists to prevent. **Reopen condition:** a nonzero overlap/refusal is
+observed, the operator elects the port on other grounds, or a tail-complete replacement instrument
+makes (b1) readable. ⛔§1.1's recommendation of path (1) stands as a recommendation only and has
+**not** been ratified.
 
 ⚠️The council round that *is* owed regardless is the one on this document as a whole (§8) — not
 on this question in isolation.
@@ -452,18 +470,36 @@ in the reduced scope — **it needs no gate and does not consume the §4 build a
 ⛔**This is not a deferral dressed as a decision.** It settles the question the gate could not
 answer honestly: instrumentation must precede a verdict on the port. PR #2011 implemented the
 positive refusal half; the post-#2008 follow-up adds the cycle denominator and early-saga skip
-count. Per §3.1, the sweeper-first ordering remains blind, so the ruling's data requirement is not
-yet complete and no port verdict follows from these changes.
+count; PR #2022 adds the post-write sweeper-first probe. Per §3.1 and §6.7, that probe bounds the
+unmeasured interval but leaves a post-probe tail, so no no-port verdict follows from clean bounded
+counts.
 
 **What it commits to:** building the instrument, and deciding afterwards on what it reports.
 **What it declines to commit to:** the port, the scope (§6.5), the §1.2 design option, and the
 serialization spec §6.1 authorised the *direction* of.
 
-⛔**Both exits stay live and neither is prejudiced.** A complete window of genuine zeros fires
-**(b1)** and closes the reduced scope on measured evidence. A window of real collisions makes the
-ownership case on data rather than on the structural argument alone — and **(b2)** remains
-available throughout. That in-place fix requires an explicit lock or shared reservation honored
-by both writers; an ordinary transaction alone does not close the check/write race.
+⛔**Both exits stay live and neither is prejudiced.** A window of real collisions makes the
+ownership case on data rather than on the structural argument alone. A genuine zero can fire
+**(b1)** only after the remaining tail is observed continuously or correlated from the
+saga/reservation side. **(b2)** remains available throughout: that in-place fix requires an
+explicit lock or shared reservation honored by both writers; an ordinary transaction alone does
+not close the check/write race.
+
+**§6.7 Is the bounded post-write interval sufficient for (b1)? — ✅ RULED: NO.** _(operator,
+2026-08-29)_ `dialectic_write_overlap` is useful incidence telemetry, but its point probe cannot
+establish that the production hazard is absent: a saga can still begin after the probe. A clean
+30-day window therefore means *no collision observed inside the sampled interval*, not *the
+hazard is not real*.
+
+⛔A zero `dialectic_write_overlap` count may not fire (b1) or close the reduced scope while the
+post-probe tail remains unobserved. Any failed probe on a successful guarded write is also missing
+absence evidence, not a zero. (b1) becomes readable only when the remaining tail is covered
+continuously or correlated from the saga/reservation side. A shared serialization primitive is
+the separate (b2) exit, not evidence that retrospectively makes the bounded probe complete.
+
+⚠️This ruling does not discard the probe. Positive overlaps still answer the instrument-first
+question, and clean bounded counts remain useful telemetry. It removes only the authority of that
+bounded zero to prove absence.
 
 ---
 
@@ -478,9 +514,10 @@ are now deferred, and the instrument moved to the front.
    sites and stopped dropping the positive counter from periodic logs. The post-#2008 follow-up
    builds `dialectic_sweep_cycle`, including all-zero cycles, trigger source, early saga skips,
    attempts, outcomes, duration and error state; it also closes the direct/background reentrancy
-   fan-out. ⛔Still owed: an observation from the saga/reservation side for the sweeper-first
-   ordering. These Python-only observability changes build nothing in the reduced port scope and
-   do not spend the §4 build authorisation.
+   fan-out. PR #2022 adds the post-write `dialectic_write_overlap` point probe. ⛔Still owed for
+   a firable (b1): continuous or correlated observation from the saga/reservation side covering
+   the post-probe tail. These Python-only observability changes build nothing in the reduced port
+   scope and do not spend the §4 build authorisation.
 2. **Deploy the complete instrument and record its timestamp and commit.** The reassignment metric
    has been stuck since 2026-06-11 for exactly this omission (§4, R3); do not repeat it. The
    window starts at *deploy*, not merge.
@@ -504,13 +541,15 @@ are now deferred, and the instrument moved to the front.
    independently of deploys.
 
 3. **Accrue the window.** ⛔≥30 days proposed, matching R1 — a proposed prior, not a settled one.
-   Neither #2011 alone nor this follow-up starts it.
+   Neither merge nor a clean bounded window starts or closes (b1); deployment provenance starts
+   the clock, and §6.7 limits what its eventual zeros may decide.
 
 **Then — the decision this gate was built to inform:**
 
-4. **Read the window against (b1) and (b2).** Only coverage-complete zeros for both writer
-   orderings close the reduced scope on measured evidence; collisions make the ownership case on
-   data. ⛔Whichever it is, name which of the four states it rules out and how.
+4. **Read the window against (b1) and (b2).** Collisions make the ownership case on data. Clean
+   bounded zeros remain informational and do not close the reduced scope; only a tail-complete
+   observation can fire (b1), while a shared serialization primitive may independently fire (b2).
+   ⛔Whichever result is cited, name which of the four states it rules out and how.
 5. **Only if the port goes live:** reopen §6.5 (scope), choose the §1.2 option, and specify the
    reassignment serialization §6.1 authorised the direction of. ⛔None of these is owed before
    step 4, and none may be started on the strength of this document.
@@ -520,8 +559,7 @@ are now deferred, and the instrument moved to the front.
 6. **Council round on this document** (§8) — unheld, and named by the go-decision §4 alongside it.
 7. **Pin criterion 10's resolution half** — needs a `resolved+failed` denominator ≥30, upstream of
    this gate and of anything in it.
-8. **§6.3 and §6.4** — the conjunction ambiguity and the two missing handoff artifacts, both still
-   owed and neither settled here.
+8. **§6.4** — the two missing handoff artifacts remain owed; §6.3 is settled above.
 
 ⛔**Nothing in the reduced scope may be built until steps 4–5 have run and this gate is signed as
 amended.** An observability prerequisite is not an implementation start, and step 1 is authorised
