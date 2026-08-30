@@ -24,6 +24,10 @@ from ..decorators import mcp_tool
 from ..support.coerce import coerce_bool
 
 from config.governance_config import GovernanceConfig
+from src.identity.onboard_provenance import (
+    normalize_onboard_origin,
+    normalize_onboard_origin_basis,
+)
 from src.services.identity_payloads import (
     build_identity_diag_payload,
     build_identity_response_data,
@@ -1881,6 +1885,37 @@ def _build_tool_mode_info(verbose: bool):
     return tool_mode_info
 
 
+async def _get_recorded_onboard_provenance(
+    agent_uuid: str,
+) -> tuple[Optional[str], Optional[str]]:
+    """Read creation-time onboard provenance for an existing identity.
+
+    This is a fail-soft observability read.  Missing legacy metadata remains
+    absent, and malformed caller-declared history is never reinterpreted.
+    """
+
+    try:
+        identity = await get_db().get_identity(agent_uuid)
+        metadata = getattr(identity, "metadata", None)
+        if not isinstance(metadata, dict) or "onboard_origin" not in metadata:
+            return None, None
+        origin = normalize_onboard_origin(metadata["onboard_origin"])
+        raw_basis = metadata.get("onboard_origin_basis")
+        basis = (
+            normalize_onboard_origin_basis(raw_basis)
+            if raw_basis is not None
+            else None
+        )
+        return origin, basis
+    except Exception as exc:
+        logger.debug(
+            "Could not read recorded onboard origin for %s...: %s",
+            agent_uuid[:8],
+            exc,
+        )
+        return None, None
+
+
 async def _apply_r2_lineage_state(agent_uuid: str, lineage_for_response):
     """R2 PR 3: read the post-pre-check lineage state from the row so
     the response surfaces both the per-call decision (lineage_state)
@@ -2013,6 +2048,16 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 
     arguments = arguments or {}
     normalize_client_session_id_argument(arguments)
+
+    try:
+        onboard_origin = normalize_onboard_origin(arguments.get("onboard_origin"))
+    except ValueError as exc:
+        return error_response(str(exc))
+    onboard_origin_basis = (
+        "explicit_argument"
+        if arguments.get("onboard_origin") is not None
+        else "default_unmarked_call"
+    )
 
     # S13 v2-ontology gate (see _s13_freshness_gate): may refuse the bare
     # call under STRICT_IDENTITY_REQUIRED, or default force_new=true in place.
@@ -2326,6 +2371,8 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 spawn_reason=_spawn_reason,
                 thread_id=_thread_id,
                 thread_position=_thread_position,
+                onboard_origin=onboard_origin,
+                onboard_origin_basis=onboard_origin_basis,
             )
             if newly_persisted:
                 logger.info(f"[ONBOARD] Persisted fresh identity {agent_uuid[:8]}... to PostgreSQL")
@@ -2378,6 +2425,8 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 spawn_reason=_spawn_reason,
                 thread_id=_thread_id,
                 thread_position=_thread_position,
+                onboard_origin=onboard_origin,
+                onboard_origin_basis=onboard_origin_basis,
             )
             agent_uuid = identity["agent_uuid"]
             agent_id = identity.get("agent_id", agent_uuid)
@@ -2682,6 +2731,14 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     _lineage_for_response, _r2_provisional_lineage = await _apply_r2_lineage_state(
         agent_uuid, _lineage_for_response
     )
+    # Return storage truth, never merely echo the caller's requested marker.
+    # Both creation writers have completed by this point. If persistence
+    # failed, raced with a legacy row, or the row lacks provenance, omission is
+    # more honest than telling an adapter the value was recorded.
+    (
+        recorded_onboard_origin,
+        recorded_onboard_origin_basis,
+    ) = await _get_recorded_onboard_provenance(agent_uuid)
 
     result = build_onboard_response_data(
         agent_uuid=agent_uuid,
@@ -2708,6 +2765,8 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         response_mode=response_mode,
         model_type=model_type,
         runtime_provenance=runtime_provenance,
+        onboard_origin=recorded_onboard_origin,
+        onboard_origin_basis=recorded_onboard_origin_basis,
     )
 
     await _maybe_write_bootstrap_checkin(arguments, agent_uuid, client_hint, result)

@@ -172,6 +172,21 @@ def test_onboard_envelope_surfaces_predecessor():
     assert env["raw_governance"] is payload
 
 
+def test_onboard_envelope_surfaces_recorded_creation_origin():
+    payload = {
+        "success": True,
+        "uuid": "u-new",
+        "lineage_state": "no_lineage_declared",
+        "onboard_origin": "harness_backstop",
+        "onboard_origin_basis": "explicit_argument",
+    }
+
+    env = build_experience_envelope("start_session", "onboard", payload)
+
+    assert env["state_summary"]["onboard_origin"] == "harness_backstop"
+    assert env["state_summary"]["onboard_origin_basis"] == "explicit_argument"
+
+
 def test_sync_state_envelope_summarizes_decision_and_risk():
     payload = {
         "success": True,

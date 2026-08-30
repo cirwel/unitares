@@ -30,10 +30,10 @@ registrars advertise in each deployable mode and what `describe_tool` says
 about those names. The snapshots are immutable evidence inputs; they do not
 certify the components that produced them.
 
-- Audit bundle: `sha256:2ffb5852b36c1cf83dacef2737d2a903a8e8d7c9c31b3a7a4b515e24e7cb4f07` (`unitares.tool-surface-audit.v1`).
-- Dispatch snapshot: `sha256:6f7e365aa898de21d24c134c4fa33d7d061cc6d62985e80ad1134c99d3815651`.
-- Audited source revision: `sha256:f70892dd4c63227f3d234700aede6d3cfc09e4fdb7153e77612391a9961edf23` (50 files).
-- Exposure snapshot: `sha256:5177e451c28d0f993f163cda0c888c28cab7f7efe551fe72d6ac3c73af64454e`.
+- Audit bundle: `sha256:238a7184c19e2dba1bc8174f5d9ddb13f50c76c47020a0f7f0cdf34b5a705bcb` (`unitares.tool-surface-audit.v1`).
+- Dispatch snapshot: `sha256:cd0b3f0ddcbf52b4fc731309b57f596a51ad6c629163e247d06be762e04a54ee`.
+- Audited source revision: `sha256:bcfbd81948bbfb403dfa9cc103f4db11d13818b044e24f892789ba42e2920a38` (50 files).
+- Exposure snapshot: `sha256:cf3ca9b60582773e469a13fb98dee9d55e8a15216026f3f9d5bb82baa869be71`.
 - JSON contract: [`tool_surface_audit_v1.schema.json`](tool_surface_audit_v1.schema.json).
 - Reproduce with `python3 scripts/dev/tool_edge_index.py --json`; run
   `--lint` to return non-zero when error-severity findings exist.
@@ -65,7 +65,7 @@ the alias wire rejects them.
 | `record_result` | `outcome_event` | 14 | — | `sha256:ac61fb102158b83af68cc22d039b0d0a318dda30ebf1522dc49745d4335549ec` |
 | `request_review` | `dialectic` | 9 | — | `sha256:5e1ead2e73cef1572c89d4a27317a209e47485dbd97f68733b41be2b66ae6508` |
 | `search_shared_memory` | `knowledge` | 36 | — | `sha256:3be01cf1217fbaccf89e9102d10a8e0ca73910d74338f861b9d3a2a513aaaa2d` |
-| `start_session` | `onboard` | 16 | — | `sha256:89788402e8e21a8e918d6aac1339ce2537127ee3b6f9b175b89c1fefbaabc8d3` |
+| `start_session` | `onboard` | 17 | — | `sha256:065571b13476a3270911f36542b7082c38ab653dffaae415cdaa0cdc9f88db41` |
 | `store_finding` | `knowledge` | 13 | — | `sha256:88f13bbeed5d015e46b8fb362ae7a5656433926c7e5873b4fc7dd302fee57eaf` |
 | `sync_state` | `process_agent_update` | 23 | `agent_id`, `agent_name` | `sha256:e3f289dac008d65dac2b2d3bee12d37eb7e77d0a6f6fdeee22fec44d07cb2001` |
 | `update_finding` | `knowledge` | 13 | — | `sha256:7dd261b60503ec631b43a071201424d2fe7f6dd7b1dccb1463852334985dfc90` |
@@ -96,7 +96,7 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `agent` | `src/mcp_handlers/consolidated.py:216 action_router` | `src/mcp_handlers/schemas/lifecycle.py:308 AgentParams` | 20s | — |
 | `archive_old_test_agents` | `src/mcp_handlers/lifecycle/operations.py:647 handle_archive_old_test_agents` | `src/mcp_handlers/schemas/lifecycle.py:184 ArchiveOldTestAgentsParams` | 20s | — |
 | `archive_orphan_agents` | `src/mcp_handlers/lifecycle/operations.py:745 handle_archive_orphan_agents` | `src/mcp_handlers/schemas/lifecycle.py:215 ArchiveOrphanAgentsParams` | 30s | — |
-| `bind_session` | `src/mcp_handlers/identity/handlers.py:1501 handle_bind_session` | `src/mcp_handlers/schemas/identity.py:221 BindSessionParams` | 5s | identity=pre_onboard |
+| `bind_session` | `src/mcp_handlers/identity/handlers.py:1505 handle_bind_session` | `src/mcp_handlers/schemas/identity.py:233 BindSessionParams` | 5s | identity=pre_onboard |
 | `calibration` | `src/mcp_handlers/consolidated.py:245 action_router` | `src/mcp_handlers/schemas/calibration.py:67 CalibrationParams` | 60s | — |
 | `call_model` | `src/mcp_handlers/support/model_inference.py:669 handle_call_model` | `src/mcp_handlers/schemas/core.py:553 CallModelParams` | 240s | — |
 | `cirs_protocol` | `src/mcp_handlers/cirs/protocol.py:124 handle_cirs_protocol` | `src/mcp_handlers/schemas/core.py:525 CirsProtocolParams` | 15s | — |
@@ -112,18 +112,18 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `export` | `src/mcp_handlers/consolidated.py:292 action_router` | `src/mcp_handlers/schemas/export.py:34 ExportParams` | 45s | — |
 | `get_governance_metrics` | `src/mcp_handlers/core.py:223 handle_get_governance_metrics` | `src/mcp_handlers/schemas/core.py:173 GetGovernanceMetricsParams` | 10s | identity=pre_onboard |
 | `get_thresholds` | `src/mcp_handlers/admin/config.py:16 handle_get_thresholds` | `src/mcp_handlers/schemas/admin.py:115 GetThresholdsParams` | 10s | — |
-| `get_trajectory_status` | `src/mcp_handlers/identity/handlers.py:2880 handle_get_trajectory_status` | `src/mcp_handlers/schemas/identity.py:202 GetTrajectoryStatusParams` | 10s | — |
+| `get_trajectory_status` | `src/mcp_handlers/identity/handlers.py:2939 handle_get_trajectory_status` | `src/mcp_handlers/schemas/identity.py:214 GetTrajectoryStatusParams` | 10s | — |
 | `get_workspace_health` | `src/mcp_handlers/admin/handlers.py:516 handle_get_workspace_health` | `src/mcp_handlers/schemas/core.py:548 GetWorkspaceHealthParams` | 20s | — |
 | `health_check` | `src/mcp_handlers/admin/handlers.py:336 handle_health_check` | `src/mcp_handlers/schemas/admin.py:85 HealthCheckParams` | 5s | identity=pre_onboard |
-| `identity` | `src/mcp_handlers/identity/handlers.py:1103 handle_identity_adapter` | `src/mcp_handlers/schemas/identity.py:6 IdentityParams` | 10s | identity=pre_onboard |
+| `identity` | `src/mcp_handlers/identity/handlers.py:1107 handle_identity_adapter` | `src/mcp_handlers/schemas/identity.py:7 IdentityParams` | 10s | identity=pre_onboard |
 | `knowledge` | `src/mcp_handlers/consolidated.py:175 action_router` | `src/mcp_handlers/schemas/knowledge.py:344 KnowledgeParams` | 120s | — |
 | `leave_note` | `src/mcp_handlers/knowledge/handlers.py:4114 handle_leave_note` | `src/mcp_handlers/schemas/knowledge.py:308 LeaveNoteParams` | 10s | — |
 | `list_inference_hosts` | `src/mcp_handlers/support/model_inference.py:124 handle_list_inference_hosts` | `src/mcp_handlers/schemas/core.py:666 ListInferenceHostsParams` | 5s | identity=pre_onboard |
-| `list_process_bindings` | `src/mcp_handlers/identity/process_binding_handler.py:26 handle_list_process_bindings` | `src/mcp_handlers/schemas/identity.py:210 ListProcessBindingsParams` | 10s | — |
+| `list_process_bindings` | `src/mcp_handlers/identity/process_binding_handler.py:26 handle_list_process_bindings` | `src/mcp_handlers/schemas/identity.py:222 ListProcessBindingsParams` | 10s | — |
 | `list_tools` | `src/mcp_handlers/introspection/tool_introspection.py:128 handle_list_tools` | `src/mcp_handlers/schemas/admin.py:5 ListToolsParams` | 10s | identity=pre_onboard |
 | `mark_response_complete` | `src/mcp_handlers/lifecycle/operations.py:114 handle_mark_response_complete` | `src/mcp_handlers/schemas/lifecycle.py:251 MarkResponseCompleteParams` | 5s | — |
 | `observe` | `src/mcp_handlers/consolidated.py:311 action_router` | `src/mcp_handlers/schemas/observability.py:58 ObserveParams` | 15s | — |
-| `onboard` | `src/mcp_handlers/identity/handlers.py:1995 handle_onboard_v2` | `src/mcp_handlers/schemas/identity.py:45 OnboardParams` | 15s | identity=pre_onboard |
+| `onboard` | `src/mcp_handlers/identity/handlers.py:2030 handle_onboard_v2` | `src/mcp_handlers/schemas/identity.py:46 OnboardParams` | 15s | identity=pre_onboard |
 | `operator_resume_agent` | `src/mcp_handlers/lifecycle/self_recovery.py:553 handle_operator_resume_agent` | `src/mcp_handlers/schemas/lifecycle.py:327 OperatorResumeAgentParams` | 15s | — |
 | `outcome_correlation` | `src/mcp_handlers/observability/outcome_events.py:725 handle_outcome_correlation` | `src/mcp_handlers/schemas/observability.py:87 OutcomeCorrelationParams` | 30s | — |
 | `outcome_event` | `src/mcp_handlers/observability/outcome_events.py:585 handle_outcome_event` | `src/mcp_handlers/schemas/core.py:488 OutcomeEventParams` | 15s | — |
@@ -134,7 +134,7 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `set_thresholds` | `src/mcp_handlers/admin/config.py:45 handle_set_thresholds` | `src/mcp_handlers/schemas/admin.py:119 SetThresholdsParams` | 15s | — |
 | `simulate_update` | `src/mcp_handlers/core.py:266 handle_simulate_update` | `src/mcp_handlers/schemas/core.py:195 SimulateUpdateParams` | 30s | — |
 | `skills` | `src/mcp_handlers/introspection/skills.py:193 handle_skills` | `src/mcp_handlers/schemas/skills.py:15 SkillsParams` | 10s | identity=pre_onboard |
-| `verify_trajectory_identity` | `src/mcp_handlers/identity/handlers.py:2821 handle_verify_trajectory_identity` | `src/mcp_handlers/schemas/identity.py:206 VerifyTrajectoryIdentityParams` | 10s | — |
+| `verify_trajectory_identity` | `src/mcp_handlers/identity/handlers.py:2880 handle_verify_trajectory_identity` | `src/mcp_handlers/schemas/identity.py:218 VerifyTrajectoryIdentityParams` | 10s | — |
 
 ## Action routing
 
