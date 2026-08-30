@@ -5,6 +5,7 @@ Tests the DialecticDB class methods, singleton get_dialectic_db(), and convenien
 async wrappers. All asyncpg pool/connection interactions are mocked.
 """
 
+import re
 import json
 import asyncio
 import pytest
@@ -1803,3 +1804,76 @@ class TestProbeInflightSagaTriState:
             "the write gate must keep failing open; only the instrument "
             "distinguishes 'could not look' from 'nothing there'"
         )
+
+
+class TestSagaProbeStatesMatchTheMigration:
+    """The probe's non-terminal state list must match migration 049.
+
+    `probe_inflight_saga` hardcodes four states. Migration 049 declares the same
+    four, twice, as partial-index predicates. Nothing ties them together, so a
+    fifth non-terminal state added to the schema would leave the probe blind to
+    it — and blind in the worst direction: sagas in the new state would read as
+    "no saga", so an overlap would be recorded as `clean` rather than
+    `detected`.
+
+    ⛔That failure is silent by construction. It cannot show up as
+    `overlap_probe_failed_count`, because the query still succeeds; it just
+    answers a narrower question than the schema now asks. This test is the only
+    thing that would notice.
+    """
+
+    MIGRATION = Path(__file__).resolve().parents[1] / (
+        "db/postgres/migrations/049_wave3_session_resolution_sagas.sql"
+    )
+
+    @staticmethod
+    def _states(sql_fragment):
+        """The quoted state literals inside a `state IN (...)` clause."""
+        m = re.search(r"state\s+IN\s*\(([^)]*)\)", sql_fragment, re.IGNORECASE | re.DOTALL)
+        assert m, f"no `state IN (...)` clause found in: {sql_fragment[:120]!r}"
+        return frozenset(re.findall(r"'([a-z_]+)'", m.group(1)))
+
+    def test_probe_states_match_the_partial_index_predicate(self):
+        import inspect
+        from src.dialectic_db import DialecticDB
+
+        migration = self.MIGRATION.read_text(encoding="utf-8")
+        assert "idx_saga_one_pending_per_session" in migration, (
+            "migration 049 no longer declares the pending-saga index this test "
+            "derives the non-terminal state set from"
+        )
+
+        # The WHERE clause of the one-pending-per-session unique index is the
+        # schema's own statement of "in flight".
+        #
+        # ⛔Anchored on the CREATE statement, not on the bare index name: the
+        # name also appears in the migration's header comment, and splitting on
+        # its first occurrence lands in prose whose next `state IN (...)` is the
+        # CHECK constraint listing ALL six states, terminal ones included. An
+        # earlier draft of this test did exactly that and reported a mismatch
+        # against its own extraction bug.
+        create = re.search(
+            r"CREATE\s+UNIQUE\s+INDEX[^;]*idx_saga_one_pending_per_session[^;]*;",
+            migration,
+            re.IGNORECASE | re.DOTALL,
+        )
+        assert create, "the one-pending-per-session unique index statement is gone"
+        schema_states = self._states(create.group(0))
+
+        probe_states = self._states(inspect.getsource(DialecticDB.probe_inflight_saga))
+
+        assert probe_states == schema_states, (
+            f"probe_inflight_saga looks for {sorted(probe_states)} but migration 049 "
+            f"treats {sorted(schema_states)} as in-flight. A state in the schema and "
+            "not in the probe reads as 'no saga', which records a real overlap as "
+            "clean — silently, since the query still succeeds."
+        )
+
+    def test_terminal_states_are_excluded_on_purpose(self):
+        """pg_committed / reverted are terminal and must NOT block the sweeper."""
+        import inspect
+        from src.dialectic_db import DialecticDB
+
+        probe_states = self._states(inspect.getsource(DialecticDB.probe_inflight_saga))
+        assert "pg_committed" not in probe_states
+        assert "reverted" not in probe_states
