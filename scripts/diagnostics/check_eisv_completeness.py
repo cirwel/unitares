@@ -38,8 +38,6 @@ INCOMPLETE_PATTERNS = [
 # Files to skip (known false positives or intentional examples)
 SKIP_FILES = {
     'check_eisv_completeness.py',  # This file
-    'eisv_format.py',  # Enforcement infrastructure (has examples)
-    'eisv_validator.py',  # Enforcement infrastructure (has validation sets)
     'mcp_server_std.py',  # MCP server (complete eisv_labels dicts)
     'dynamics.py',  # Core dynamics (complete State constructors)
     'README.md',  # Documentation (complete examples)
@@ -48,6 +46,14 @@ SKIP_FILES = {
     'test_eisv_completeness.py',  # Test file with intentional incomplete examples
     'test_agent_update.py',  # Test file with intentional comment
     'MCP_SERVER_RENAME_ROLLBACK_20251201.md',  # Historical doc
+}
+
+# Path-scoped exclusions for enforcement modules with intentional incomplete
+# examples. Basename exclusions such as ``formatting.py`` would hide unrelated
+# modules from this repository-wide scanner.
+SKIP_PATH_SUFFIXES = {
+    ('src', 'eisv', 'formatting.py'),
+    ('src', 'eisv', 'validation.py'),
 }
 
 # Directories to skip
@@ -78,6 +84,9 @@ def should_check_file(filepath: Path) -> bool:
     """Determine if file should be checked for EISV completeness."""
     # Skip if in skip list
     if filepath.name in SKIP_FILES:
+        return False
+
+    if any(filepath.parts[-len(suffix):] == suffix for suffix in SKIP_PATH_SUFFIXES):
         return False
 
     if any(part in SKIP_DIRS for part in filepath.parts):

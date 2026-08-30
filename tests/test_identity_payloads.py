@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from src.services.identity_payloads import (
     build_identity_response_context,
     build_identity_diag_payload,
@@ -744,6 +746,22 @@ def test_onboard_minimal_mode_drops_nested_ontology_and_verbose_extras():
     assert "workflow" not in payload
     assert "tool_mode" not in payload
     assert "system_activity" not in payload
+
+
+@pytest.mark.parametrize("response_mode", ["minimal", "full"])
+def test_onboard_response_surfaces_recorded_creation_origin(response_mode):
+    payload = build_onboard_response_data(
+        **_onboard_kwargs(
+            response_mode=response_mode,
+            onboard_origin="harness_backstop",
+            onboard_origin_basis="explicit_argument",
+        )
+    )
+
+    assert payload["onboard_origin"] == "harness_backstop"
+    assert payload["onboard_origin_basis"] == "explicit_argument"
+    assert "onboard_origin" not in payload["identity_assurance"]
+    assert "onboard_origin_basis" not in payload["identity_assurance"]
 
 
 def test_next_step_prefers_client_session_id_and_scopes_token_to_rebind():

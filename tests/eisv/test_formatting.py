@@ -1,5 +1,5 @@
 """
-Tests for src/eisv_format.py - EISV metric formatting utilities.
+Tests for src.eisv.formatting - EISV metric formatting utilities.
 
 All functions are pure (input -> output). No mocking needed.
 """
@@ -8,10 +8,10 @@ import pytest
 import sys
 from pathlib import Path
 
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).parents[2]
 sys.path.insert(0, str(project_root))
 
-from src.eisv_format import (
+from src.eisv.formatting import (
     EISVMetrics,
     EISVTrajectory,
     format_eisv_compact,

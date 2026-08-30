@@ -491,11 +491,11 @@ class TestRateLimiter:
 # ==================== EISV Validator Tests ====================
 
 class TestEISVValidator:
-    """Tests for src/eisv_validator.py"""
+    """Tests for src.eisv.validation."""
 
     def test_validate_eisv_in_dict_valid(self):
         """Test validation passes for complete EISV"""
-        from src.eisv_validator import validate_eisv_in_dict
+        from src.eisv.validation import validate_eisv_in_dict
 
         valid_data = {'E': 0.8, 'I': 1.0, 'S': 0.03, 'V': -0.07}
         warnings = validate_eisv_in_dict(valid_data, "test")
@@ -504,7 +504,7 @@ class TestEISVValidator:
 
     def test_validate_eisv_in_dict_missing(self):
         """Test validation fails for missing EISV"""
-        from src.eisv_validator import validate_eisv_in_dict, IncompleteEISVError
+        from src.eisv.validation import validate_eisv_in_dict, IncompleteEISVError
 
         # Missing V
         incomplete = {'E': 0.8, 'I': 1.0, 'S': 0.03}
@@ -517,7 +517,7 @@ class TestEISVValidator:
 
     def test_validate_eisv_in_dict_none_values(self):
         """Test validation fails for None values"""
-        from src.eisv_validator import validate_eisv_in_dict, IncompleteEISVError
+        from src.eisv.validation import validate_eisv_in_dict, IncompleteEISVError
 
         none_data = {'E': 0.8, 'I': 1.0, 'S': 0.03, 'V': None}
 
@@ -528,7 +528,7 @@ class TestEISVValidator:
 
     def test_validate_governance_response_valid(self):
         """Test governance response validation with valid response"""
-        from src.eisv_validator import validate_governance_response
+        from src.eisv.validation import validate_governance_response
 
         valid_response = {
             'success': True,
@@ -540,7 +540,7 @@ class TestEISVValidator:
 
     def test_validate_governance_response_no_metrics(self):
         """Test governance response validation without metrics section"""
-        from src.eisv_validator import validate_governance_response
+        from src.eisv.validation import validate_governance_response
 
         no_metrics = {'success': True, 'error': 'something went wrong'}
 
@@ -549,7 +549,7 @@ class TestEISVValidator:
 
     def test_validate_governance_response_invalid(self):
         """Test governance response validation with invalid metrics"""
-        from src.eisv_validator import validate_governance_response, IncompleteEISVError
+        from src.eisv.validation import validate_governance_response, IncompleteEISVError
 
         invalid_response = {
             'success': True,
@@ -561,7 +561,7 @@ class TestEISVValidator:
 
     def test_validate_governance_response_with_labels(self):
         """Test governance response validation with eisv_labels"""
-        from src.eisv_validator import validate_governance_response
+        from src.eisv.validation import validate_governance_response
 
         response_with_labels = {
             'success': True,
@@ -574,7 +574,7 @@ class TestEISVValidator:
 
     def test_validate_csv_row(self):
         """Test CSV row validation"""
-        from src.eisv_validator import validate_csv_row, IncompleteEISVError
+        from src.eisv.validation import validate_csv_row, IncompleteEISVError
 
         valid_row = {'E': 0.8, 'I': 1.0, 'S': 0.03, 'V': -0.07, 'timestamp': '2026-01-01'}
         validate_csv_row(valid_row, row_num=1)
@@ -585,7 +585,7 @@ class TestEISVValidator:
 
     def test_validate_state_file(self):
         """Test state file validation"""
-        from src.eisv_validator import validate_state_file, IncompleteEISVError
+        from src.eisv.validation import validate_state_file, IncompleteEISVError
 
         valid_state = {'E': 0.8, 'I': 1.0, 'S': 0.03, 'V': -0.07, 'agent_id': 'test'}
         validate_state_file(valid_state, filename="test.json")
@@ -596,7 +596,7 @@ class TestEISVValidator:
 
     def test_auto_validate_response_valid(self):
         """Test auto validation with valid response"""
-        from src.eisv_validator import auto_validate_response
+        from src.eisv.validation import auto_validate_response
 
         valid_response = {
             'success': True,
@@ -609,7 +609,7 @@ class TestEISVValidator:
 
     def test_auto_validate_response_invalid(self):
         """Test auto validation with invalid response"""
-        from src.eisv_validator import auto_validate_response, IncompleteEISVError
+        from src.eisv.validation import auto_validate_response, IncompleteEISVError
 
         invalid_response = {
             'success': True,
@@ -621,7 +621,7 @@ class TestEISVValidator:
 
     def test_incomplete_eisv_error(self):
         """Test IncompleteEISVError exception"""
-        from src.eisv_validator import IncompleteEISVError
+        from src.eisv.validation import IncompleteEISVError
 
         error = IncompleteEISVError("Test error message")
         assert str(error) == "Test error message"
