@@ -30,9 +30,9 @@ registrars advertise in each deployable mode and what `describe_tool` says
 about those names. The snapshots are immutable evidence inputs; they do not
 certify the components that produced them.
 
-- Audit bundle: `sha256:2ffb5852b36c1cf83dacef2737d2a903a8e8d7c9c31b3a7a4b515e24e7cb4f07` (`unitares.tool-surface-audit.v1`).
-- Dispatch snapshot: `sha256:6f7e365aa898de21d24c134c4fa33d7d061cc6d62985e80ad1134c99d3815651`.
-- Audited source revision: `sha256:f70892dd4c63227f3d234700aede6d3cfc09e4fdb7153e77612391a9961edf23` (50 files).
+- Audit bundle: `sha256:9debbaafad4057005e8e541422e42c13f3f43f57cb917f38a8d0e2d21d324c3b` (`unitares.tool-surface-audit.v1`).
+- Dispatch snapshot: `sha256:86e036c272e028e130a2cecee278cff941c465b407f8b3c8c752d2e1742a4ce7`.
+- Audited source revision: `sha256:b42106b3716058b8e8537e308efd642359a78176c1e8cb251a3ce938f6e30f0b` (50 files).
 - Exposure snapshot: `sha256:5177e451c28d0f993f163cda0c888c28cab7f7efe551fe72d6ac3c73af64454e`.
 - JSON contract: [`tool_surface_audit_v1.schema.json`](tool_surface_audit_v1.schema.json).
 - Reproduce with `python3 scripts/dev/tool_edge_index.py --json`; run
@@ -125,8 +125,8 @@ the generated router — see [Action routing](#action-routing) for its delegates
 | `observe` | `src/mcp_handlers/consolidated.py:311 action_router` | `src/mcp_handlers/schemas/observability.py:58 ObserveParams` | 15s | — |
 | `onboard` | `src/mcp_handlers/identity/handlers.py:1995 handle_onboard_v2` | `src/mcp_handlers/schemas/identity.py:45 OnboardParams` | 15s | identity=pre_onboard |
 | `operator_resume_agent` | `src/mcp_handlers/lifecycle/self_recovery.py:553 handle_operator_resume_agent` | `src/mcp_handlers/schemas/lifecycle.py:327 OperatorResumeAgentParams` | 15s | — |
-| `outcome_correlation` | `src/mcp_handlers/observability/outcome_events.py:725 handle_outcome_correlation` | `src/mcp_handlers/schemas/observability.py:87 OutcomeCorrelationParams` | 30s | — |
-| `outcome_event` | `src/mcp_handlers/observability/outcome_events.py:585 handle_outcome_event` | `src/mcp_handlers/schemas/core.py:488 OutcomeEventParams` | 15s | — |
+| `outcome_correlation` | `src/mcp_handlers/observability/outcome_events.py:726 handle_outcome_correlation` | `src/mcp_handlers/schemas/observability.py:87 OutcomeCorrelationParams` | 30s | — |
+| `outcome_event` | `src/mcp_handlers/observability/outcome_events.py:586 handle_outcome_event` | `src/mcp_handlers/schemas/core.py:488 OutcomeEventParams` | 15s | — |
 | `process_agent_update` | `src/mcp_handlers/core.py:436 handle_process_agent_update` | `src/mcp_handlers/schemas/core.py:303 ProcessAgentUpdateParams` | 60s | — |
 | `record_progress_pulse` | `src/mcp_handlers/resident_progress.py:20 handle_record_progress_pulse` | `src/mcp_handlers/schemas/progress_flat.py:9 RecordProgressPulseParams` | 5s | — |
 | `search_knowledge_graph` | `src/mcp_handlers/knowledge/handlers.py:2694 handle_search_knowledge_graph` | `src/mcp_handlers/schemas/knowledge.py:80 SearchKnowledgeGraphParams` | 15s | identity=pre_onboard |
