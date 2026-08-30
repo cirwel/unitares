@@ -120,25 +120,25 @@ async def call_tool(
 
     # mcp 2.x's transport calls .sse() on the injected client and is written
     # against httpx2; mcp_httpx() hands back whichever library this mcp wants.
-    http_client = mcp_httpx().AsyncClient(
+    async with mcp_httpx().AsyncClient(
         timeout=timeout_s, headers=mcp_bearer_headers()
-    )
-    async with streamable_http_client(url, http_client=http_client) as streams:
-        # mcp 1.x yields (read, write, get_session_id); 2.x drops the third.
-        read, write = streams[0], streams[1]
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            result = await session.call_tool(tool_name, arguments)
-            for content in result.content:
-                text = getattr(content, "text", None)
-                if not text:
-                    continue
-                try:
-                    data = json.loads(text)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(data, dict):
-                    return data
+    ) as http_client:
+        async with streamable_http_client(url, http_client=http_client) as streams:
+            # mcp 1.x yields (read, write, get_session_id); 2.x drops the third.
+            read, write = streams[0], streams[1]
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.call_tool(tool_name, arguments)
+                for content in result.content:
+                    text = getattr(content, "text", None)
+                    if not text:
+                        continue
+                    try:
+                        data = json.loads(text)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(data, dict):
+                        return data
     return {"success": False, "error": "no JSON content in tool response"}
 
 
@@ -225,15 +225,34 @@ async def wait_for_terminal_review(
     initial_payload: Dict[str, Any],
     timeout_s: float,
     poll_interval_s: float,
-) -> Tuple[Dict[str, Any], bool, str, int]:
-    """Poll the read-only session view until a terminal verdict or deadline."""
+) -> Tuple[Dict[str, Any], bool, str, int, int]:
+    """Poll the persisted session view until a terminal verdict or deadline.
+
+    Returns payload, ok, detail, attempted polls, and completed polls. The
+    request response is context only: even when it already says ``resolved``,
+    green requires at least one successful ``dialectic(action='get')`` read.
+    """
     payload = initial_payload
-    polls = 0
+    attempts = 0
+    completed = 0
+    if not client_session_id:
+        return (
+            payload,
+            False,
+            "cannot poll the persisted review without client_session_id",
+            attempts,
+            completed,
+        )
+
     deadline = time.monotonic() + timeout_s
     while True:
-        terminal, ok, detail = evaluate_terminal_review(payload)
-        if terminal:
-            return payload, ok, detail, polls
+        # Only a completed read-back can make the canary green. The initial
+        # request payload may carry an optimistic resolved shape before the
+        # session/message transaction is visible through the read path.
+        if completed:
+            terminal, ok, detail = evaluate_terminal_review(payload)
+            if terminal:
+                return payload, ok, detail, attempts, completed
 
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -244,24 +263,62 @@ async def wait_for_terminal_review(
                 False,
                 f"review did not reach a terminal verdict within {timeout_s:.1f}s "
                 f"(last phase {phase!r})",
-                polls,
+                attempts,
+                completed,
             )
 
-        await asyncio.sleep(min(poll_interval_s, remaining))
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            continue
-        payload = await call_tool(
-            url,
-            "dialectic",
-            {
-                "action": "get",
-                "session_id": session_id,
-                "client_session_id": client_session_id,
-            },
-            timeout_s=min(15.0, max(1.0, remaining)),
-        )
-        polls += 1
+        # The first persisted read is immediate. Cadence applies only between
+        # completed, non-terminal reads so an already-resolved session does not
+        # pay an artificial poll interval before it can prove persistence.
+        if completed:
+            await asyncio.sleep(min(poll_interval_s, remaining))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                continue
+
+        attempts += 1
+        call_timeout_s = min(15.0, remaining)
+        try:
+            # The outer deadline covers the whole fresh-transport call,
+            # including ClientSession/HTTP client cleanup. The transport sees
+            # the exact remaining budget too; no one-second floor can overrun
+            # a near-expired verdict window.
+            payload = await asyncio.wait_for(
+                call_tool(
+                    url,
+                    "dialectic",
+                    {
+                        "action": "get",
+                        "session_id": session_id,
+                        "client_session_id": client_session_id,
+                    },
+                    timeout_s=call_timeout_s,
+                ),
+                timeout=remaining,
+            )
+        except asyncio.TimeoutError:
+            raw = review_payload(payload)
+            phase = raw.get("phase") or raw.get("status") or "unknown"
+            return (
+                payload,
+                False,
+                f"dialectic get attempt {attempts} exhausted the verdict deadline "
+                f"(last phase {phase!r})",
+                attempts,
+                completed,
+            )
+        except Exception as exc:  # noqa: BLE001 — return red telemetry, never skip it
+            raw = review_payload(payload)
+            phase = raw.get("phase") or raw.get("status") or "unknown"
+            return (
+                payload,
+                False,
+                f"dialectic get attempt {attempts} failed with "
+                f"{type(exc).__name__}: {exc} (last phase {phase!r})",
+                attempts,
+                completed,
+            )
+        completed += 1
 
 
 def db_ground_truth(session_id: str) -> Tuple[bool, str]:
@@ -302,6 +359,15 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
         "ok": False,
         "stage": "onboard",
         "url": url,
+        # Always present, including early red paths. ``not_started``/None and
+        # zero counts are more honest than omitting the terminal evidence and
+        # forcing operators to guess whether polling happened.
+        "terminal_phase": "not_started",
+        "review_verdict": None,
+        "terminal_poll_attempt_count": 0,
+        "terminal_poll_completed_count": 0,
+        "terminal_poll_count": 0,
+        "terminal_latency_s": None,
     }
     started = time.monotonic()
     timeout_s = _timeout_s()
@@ -322,6 +388,12 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
 
         record["stage"] = "request_review"
         csid = onboard.get("client_session_id") or raw.get("client_session_id")
+        if not csid:
+            record["detail"] = (
+                "onboard returned no client_session_id; refusing to request or "
+                "poll a review without explicit identity continuity"
+            )
+            return 1
         t0 = time.monotonic()
         review = await call_tool(
             url,
@@ -346,7 +418,7 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
         ok, detail = evaluate_review(review)
         raw_review = review_payload(review)
         record["session_id"] = raw_review.get("session_id")
-        record["review_verdict"] = raw_review.get("review_verdict")
+        record["request_review_verdict"] = raw_review.get("review_verdict")
         record["whose_move"] = raw_review.get("whose_move")
         record["orchestrated"] = raw_review.get("orchestrated_review")
         if not ok:
@@ -361,7 +433,13 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
                 return 1
 
         record["stage"] = "await_terminal_review"
-        terminal_payload, ok, detail, polls = await wait_for_terminal_review(
+        (
+            terminal_payload,
+            ok,
+            detail,
+            attempts,
+            completed,
+        ) = await wait_for_terminal_review(
             url=url,
             session_id=raw_review["session_id"],
             client_session_id=csid,
@@ -371,14 +449,20 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
         )
         terminal = review_payload(terminal_payload)
         resolution = terminal.get("resolution")
-        record["terminal_phase"] = terminal.get("phase") or terminal.get("status")
+        record["terminal_phase"] = (
+            terminal.get("phase") or terminal.get("status") or "unknown"
+        )
         record["review_verdict"] = (
             resolution.get("action")
             if isinstance(resolution, dict)
             else terminal.get("review_verdict")
         )
         record["whose_move"] = terminal.get("whose_move")
-        record["terminal_poll_count"] = polls
+        record["terminal_poll_attempt_count"] = attempts
+        record["terminal_poll_completed_count"] = completed
+        # Compatibility for existing log/dashboard readers: this remains the
+        # count of completed read-backs, never attempted calls.
+        record["terminal_poll_count"] = completed
         record["terminal_latency_s"] = round(time.monotonic() - t0, 2)
         if not ok:
             record["detail"] = detail
