@@ -291,6 +291,9 @@ async def wait_for_terminal_review(
                         "action": "get",
                         "session_id": session_id,
                         "client_session_id": client_session_id,
+                        # Polling is observational. Timeout maintenance belongs
+                        # to the dedicated sweeper, never this liveness probe.
+                        "check_timeout": False,
                     },
                     timeout_s=call_timeout_s,
                 ),
@@ -299,11 +302,22 @@ async def wait_for_terminal_review(
         except asyncio.TimeoutError:
             raw = review_payload(payload)
             phase = raw.get("phase") or raw.get("status") or "unknown"
+            remaining_after_timeout = deadline - time.monotonic()
+            if remaining_after_timeout <= 0:
+                timeout_detail = (
+                    f"dialectic get attempt {attempts} exhausted the verdict "
+                    f"deadline (last phase {phase!r})"
+                )
+            else:
+                timeout_detail = (
+                    f"dialectic get attempt {attempts} transport timed out with "
+                    f"{remaining_after_timeout:.2f}s remaining before the verdict "
+                    f"deadline (last phase {phase!r})"
+                )
             return (
                 payload,
                 False,
-                f"dialectic get attempt {attempts} exhausted the verdict deadline "
-                f"(last phase {phase!r})",
+                timeout_detail,
                 attempts,
                 completed,
             )
@@ -319,6 +333,17 @@ async def wait_for_terminal_review(
                 completed,
             )
         completed += 1
+        persisted = review_payload(payload)
+        observed_session_id = persisted.get("session_id")
+        if observed_session_id != session_id:
+            return (
+                payload,
+                False,
+                "dialectic get returned an unverified session_id "
+                f"{observed_session_id!r}; expected {session_id!r}",
+                attempts,
+                completed,
+            )
 
 
 def db_ground_truth(session_id: str) -> Tuple[bool, str]:
@@ -418,8 +443,11 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
         ok, detail = evaluate_review(review)
         raw_review = review_payload(review)
         record["session_id"] = raw_review.get("session_id")
+        record["request_review_phase"] = raw_review.get("phase") or raw_review.get(
+            "status"
+        )
         record["request_review_verdict"] = raw_review.get("review_verdict")
-        record["whose_move"] = raw_review.get("whose_move")
+        record["request_review_whose_move"] = raw_review.get("whose_move")
         record["orchestrated"] = raw_review.get("orchestrated_review")
         if not ok:
             record["detail"] = detail
@@ -448,16 +476,28 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
             poll_interval_s=_poll_interval_s(),
         )
         terminal = review_payload(terminal_payload)
-        resolution = terminal.get("resolution")
-        record["terminal_phase"] = (
-            terminal.get("phase") or terminal.get("status") or "unknown"
+        persisted_terminal_verified = (
+            completed > 0 and terminal.get("session_id") == raw_review["session_id"]
         )
-        record["review_verdict"] = (
-            resolution.get("action")
-            if isinstance(resolution, dict)
-            else terminal.get("review_verdict")
-        )
-        record["whose_move"] = terminal.get("whose_move")
+        if persisted_terminal_verified:
+            resolution = terminal.get("resolution")
+            record["terminal_phase"] = (
+                terminal.get("phase") or terminal.get("status") or "unknown"
+            )
+            record["review_verdict"] = (
+                resolution.get("action")
+                if isinstance(resolution, dict)
+                else terminal.get("review_verdict")
+            )
+            record["whose_move"] = terminal.get("whose_move")
+        else:
+            # Never promote the context-only request response into terminal
+            # evidence. A failed first read or mismatched session has no
+            # verified persisted phase/verdict, even if request_review returned
+            # an optimistic resolved/resume shape.
+            record["terminal_phase"] = "unverified"
+            record["review_verdict"] = None
+            record["whose_move"] = None
         record["terminal_poll_attempt_count"] = attempts
         record["terminal_poll_completed_count"] = completed
         # Compatibility for existing log/dashboard readers: this remains the
