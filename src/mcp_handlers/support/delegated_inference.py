@@ -129,8 +129,9 @@ def _raw_excerpt_details(adapter_result: Dict[str, Any]) -> Dict[str, Any]:
         details["adapter_answer_region_located"] = located
         if not located:
             details["adapter_answer_region_note"] = (
-                "No typed Codex agent_message event or legacy 'codex' marker "
-                "was found, so no assistant answer region was isolated. This "
+                "No Codex app-server answer, typed agent_message event, or "
+                "legacy 'codex' marker was found, so no assistant answer region "
+                "was isolated. This "
                 "is NOT the model returning a bad envelope — it is the adapter "
                 "never finding an assistant turn. Check whether the CLI produced "
                 "one at all before changing the envelope contract."
