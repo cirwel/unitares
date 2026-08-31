@@ -333,16 +333,13 @@ def _reporting_window(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 def _suppress_count_map(
     values: Mapping[str, int], minimum_cell_count: int
 ) -> dict[str, int]:
+    if any(0 < int(value) < minimum_cell_count for value in values.values()):
+        return {}
     visible = {
         str(key): int(value)
         for key, value in values.items()
         if int(value) >= minimum_cell_count
     }
-    suppressed = sum(
-        int(value) for value in values.values() if 0 < int(value) < minimum_cell_count
-    )
-    if suppressed:
-        visible["__suppressed__"] = suppressed
     return dict(sorted(visible.items()))
 
 
@@ -867,24 +864,37 @@ def _load_combine_receipts(ledger_dir: Path) -> list[dict[str, Any]]:
         if value.get("schema_version") != RECEIPT_SCHEMA:
             raise FederationViolation(f"unknown artifact in combine ledger: {path}")
         _validate_schema(value, RECEIPT_SCHEMA_PATH)
+        unsigned = dict(value)
+        recorded_digest = str(unsigned.pop("receipt_sha256"))
+        if not hmac.compare_digest(recorded_digest, _sha256_bytes(_canonical_json(unsigned))):
+            raise FederationViolation(f"combine receipt integrity digest mismatch: {path}")
         receipts.append(value)
     return receipts
 
 
 def _package_acceptance_records(
-    packages: Sequence[Mapping[str, Any]], package_hashes: Mapping[str, str]
+    registry: Mapping[str, Any],
+    packages: Sequence[Mapping[str, Any]],
+    package_hashes: Mapping[str, str],
+    sites: Mapping[str, Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    return [
-        {
+    records: list[dict[str, Any]] = []
+    for package in packages:
+        site_id = str(package["site_id"])
+        release_subject = {
+            "federation_id": str(registry["federation_id"]),
+            "federation_unit_id": str(sites[site_id]["federation_unit_id"]),
+        }
+        records.append({
             "site_id": str(package["site_id"]),
-            "package_sha256": package_hashes[str(package["site_id"])],
+            "release_subject_sha256": _sha256_bytes(_canonical_json(release_subject)),
+            "package_sha256": package_hashes[site_id],
             "payload_sha256": str(package["payload_sha256"]),
             "package_nonce": str(package["package_nonce"]),
             "export_sequence": int(package["export_sequence"]),
             "generated_at": str(package["generated_at"]),
-        }
-        for package in packages
-    ]
+        })
+    return records
 
 
 def _replay_errors(
@@ -900,7 +910,7 @@ def _replay_errors(
     pilot_run_id = str(registry["pilot_run_id"])
     registry_hash = _sha256_bytes(_canonical_json(registry))
     prior_packages: list[Mapping[str, Any]] = []
-    prior_acceptance_by_site: dict[str, list[datetime]] = defaultdict(list)
+    prior_acceptance_by_subject: dict[str, list[datetime]] = defaultdict(list)
     for receipt in receipts:
         if receipt.get("coordinator_ledger_id") != registry["coordinator_ledger_id"]:
             errors.append("combine receipt belongs to a different coordinator ledger")
@@ -916,7 +926,9 @@ def _replay_errors(
             str(receipt["requested_at"]), field="requested_at"
         )
         for row in receipt_packages:
-            prior_acceptance_by_site[str(row["site_id"])].append(receipt_accepted_at)
+            prior_acceptance_by_subject[str(row["release_subject_sha256"])].append(
+                receipt_accepted_at
+            )
     seen_hashes = {str(row["package_sha256"]) for row in prior_packages}
     seen_nonces = {str(row["package_nonce"]) for row in prior_packages}
     minimum_interval = int(
@@ -924,23 +936,28 @@ def _replay_errors(
     )
     for _package, current in zip(packages, package_records, strict=True):
         site_id = str(current["site_id"])
+        release_subject = str(current["release_subject_sha256"])
         if current["package_sha256"] in seen_hashes:
             errors.append(f"site {site_id!r} package is an exact replay")
         if current["package_nonce"] in seen_nonces:
             errors.append(f"site {site_id!r} package nonce was already accepted")
-        prior_site = [row for row in prior_packages if row.get("site_id") == site_id]
-        if not prior_site:
+        prior_subject = [
+            row
+            for row in prior_packages
+            if row.get("release_subject_sha256") == release_subject
+        ]
+        if not prior_subject:
             continue
-        if len(prior_site) >= int(
+        if len(prior_subject) >= int(
             registry["privacy_policy"]["maximum_exports_per_site"]
         ):
             errors.append(
-                f"site {site_id!r} exceeds the single-release pilot-run policy"
+                f"site {site_id!r} exceeds the federation-lifetime single-release policy"
             )
-        max_sequence = max(int(row["export_sequence"]) for row in prior_site)
+        max_sequence = max(int(row["export_sequence"]) for row in prior_subject)
         if int(current["export_sequence"]) <= max_sequence:
             errors.append(f"site {site_id!r} export_sequence is stale or conflicting")
-        latest_acceptance = max(prior_acceptance_by_site[site_id])
+        latest_acceptance = max(prior_acceptance_by_subject[release_subject])
         if (accepted_at - latest_acceptance).total_seconds() < minimum_interval:
             errors.append(f"site {site_id!r} violates the minimum export interval")
     return errors
@@ -976,6 +993,7 @@ def _record_combine_receipt(
         "report_sha256": report_sha256,
         "packages": sorted(packages, key=lambda row: str(row["site_id"])),
     }
+    body["receipt_sha256"] = _sha256_bytes(_canonical_json(body))
     _create_only(receipt_path, _pretty_json(body), mode=0o600)
     return receipt_path
 
@@ -1106,7 +1124,9 @@ def combine_site_packages(
     }
     _validate_schema(report, REPORT_SCHEMA_PATH)
     report_payload = _pretty_json(report)
-    package_records = _package_acceptance_records(ordered, package_hashes)
+    package_records = _package_acceptance_records(
+        registry, ordered, package_hashes, sites
+    )
     with _combine_ledger_lock(ledger_dir):
         if output_path.exists():
             raise FederationViolation(

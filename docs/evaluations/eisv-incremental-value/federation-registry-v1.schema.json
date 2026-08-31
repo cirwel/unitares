@@ -63,7 +63,7 @@
           },
           "federation_unit_id": {
             "$ref": "#/$defs/id",
-            "description": "Deployment/operator grouping used for concentration reporting."
+            "description": "Stable release subject and deployment/operator grouping. It MUST survive site aliases and key rotation within a federation."
           }
         }
       }

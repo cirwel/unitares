@@ -254,16 +254,27 @@ def test_every_sub_k_inventory_stratum_is_suppressed() -> None:
     assert protected["usable_primary_adverse_outcomes"] is None
     assert protected["usable_primary_adverse_rate"] is None
     assert protected["primary_outcome_suppressed"] is True
-    assert protected["schedule_class_counts"] == {
-        "__suppressed__": 1,
-        "interactive": 3,
-    }
-    assert protected["maturity_stage_counts"] == {
-        "__suppressed__": 1,
-        "self_relative": 3,
-    }
+    assert protected["schedule_class_counts"] == {}
+    assert protected["maturity_stage_counts"] == {}
     assert "independence_unit_cluster_sizes" not in protected
     assert "task_cluster_sizes" not in protected
+
+
+def test_all_but_one_visible_closed_enum_partition_is_fully_withheld() -> None:
+    schedule_counts = {
+        "interactive": 2,
+        "scheduled_resident": 2,
+        "automation": 2,
+        "harness": 2,
+        "unknown": 1,
+    }
+    maturity_counts = {
+        "cold_start": 2,
+        "behavioral_fixed": 2,
+        "self_relative": 1,
+    }
+    assert federation._suppress_count_map(schedule_counts, 2) == {}
+    assert federation._suppress_count_map(maturity_counts, 2) == {}
 
 
 def test_tampered_signature_is_rejected(tmp_path: Path) -> None:
@@ -595,6 +606,65 @@ def test_unknown_or_tampered_ledger_artifact_fails_closed(tmp_path: Path) -> Non
         )
 
 
+def test_schema_valid_receipt_modification_fails_integrity_check(
+    tmp_path: Path,
+) -> None:
+    linkage = tmp_path / "linkage.key"
+    federation.generate_linkage_key(linkage)
+    package, public, manifest = _export(
+        tmp_path, site_id="site-one", episodes=[], linkage_key=linkage
+    )
+    registry = _registry(manifest, [_site_entry("site-one", public)])
+    ledger = tmp_path / "combine-ledger"
+    federation.combine_site_packages(
+        registry,
+        [package],
+        read_id="combine-first",
+        ledger_dir=ledger,
+        output_path=tmp_path / "first.json",
+    )
+    receipt_path = next(ledger.glob("*.json"))
+    receipt = contract.load_json(receipt_path)
+    receipt["requested_at"] = "2026-08-30T00:00:00+00:00"
+    _write_json(receipt_path, receipt)
+    with pytest.raises(federation.FederationViolation, match="integrity digest"):
+        federation.combine_site_packages(
+            registry,
+            [package],
+            read_id="combine-after-tamper",
+            ledger_dir=ledger,
+            output_path=tmp_path / "after-tamper.json",
+        )
+
+
+def test_deleted_latest_receipt_is_outside_intact_ledger_guarantee(
+    tmp_path: Path,
+) -> None:
+    linkage = tmp_path / "linkage.key"
+    federation.generate_linkage_key(linkage)
+    package, public, manifest = _export(
+        tmp_path, site_id="site-one", episodes=[], linkage_key=linkage
+    )
+    registry = _registry(manifest, [_site_entry("site-one", public)])
+    ledger = tmp_path / "combine-ledger"
+    federation.combine_site_packages(
+        registry,
+        [package],
+        read_id="combine-before-rollback",
+        ledger_dir=ledger,
+        output_path=tmp_path / "before-rollback.json",
+    )
+    next(ledger.glob("*.json")).unlink()
+    report = federation.combine_site_packages(
+        registry,
+        [package],
+        read_id="combine-after-rollback",
+        ledger_dir=ledger,
+        output_path=tmp_path / "after-rollback.json",
+    )
+    assert report["decision_authority"] == "NONE"
+
+
 def test_cadence_uses_coordinator_acceptance_time() -> None:
     manifest = contract.load_json(pilot.DEFAULT_MANIFEST_PATH)
     registry = _registry(
@@ -625,6 +695,7 @@ def test_cadence_uses_coordinator_acceptance_time() -> None:
         "packages": [
             {
                 "site_id": "site-one",
+                "release_subject_sha256": "0" * 64,
                 "package_sha256": "a" * 64,
                 "payload_sha256": "b" * 64,
                 "package_nonce": "c" * 32,
@@ -635,6 +706,7 @@ def test_cadence_uses_coordinator_acceptance_time() -> None:
     }
     current = {
         "site_id": "site-one",
+        "release_subject_sha256": "0" * 64,
         "package_sha256": "d" * 64,
         "payload_sha256": "e" * 64,
         "package_nonce": "f" * 32,
@@ -649,6 +721,63 @@ def test_cadence_uses_coordinator_acceptance_time() -> None:
         accepted_at=accepted_at,
     )
     assert "minimum export interval" in "; ".join(errors)
+
+
+def test_changed_export_is_rejected_across_run_rollover_and_site_alias(
+    tmp_path: Path,
+) -> None:
+    linkage = tmp_path / "linkage.key"
+    federation.generate_linkage_key(linkage)
+    private, public = _site_keys(tmp_path, "stable-site")
+    root_one, manifest = _prepare_store(tmp_path, "run-one", [])
+    site_one = _site_entry("site-one", public)
+    site_one["federation_unit_id"] = "stable-unit"
+    registry_one = _registry(manifest, [site_one])
+    package_one = federation.export_site_package(
+        root_one,
+        registry=registry_one,
+        site_id="site-one",
+        export_sequence=1,
+        read_id="export-run-one",
+        ledger_dir=tmp_path / "site-ledger-one",
+        signing_key_path=private,
+        linkage_key_path=linkage,
+        output_path=tmp_path / "package-run-one.json",
+    )
+    ledger = tmp_path / "combine-ledger"
+    federation.combine_site_packages(
+        registry_one,
+        [package_one],
+        read_id="combine-run-one",
+        ledger_dir=ledger,
+        output_path=tmp_path / "report-run-one.json",
+    )
+
+    root_two, _ = _prepare_store(tmp_path, "run-two", [])
+    site_alias = _site_entry("site-alias", public)
+    site_alias["federation_unit_id"] = "stable-unit"
+    registry_two = _registry(manifest, [site_alias])
+    registry_two["pilot_run_id"] = "pilot-run-two"
+    registry_two["registry_version"] = "registry-test-v2"
+    package_two = federation.export_site_package(
+        root_two,
+        registry=registry_two,
+        site_id="site-alias",
+        export_sequence=2,
+        read_id="export-run-two",
+        ledger_dir=tmp_path / "site-ledger-two",
+        signing_key_path=private,
+        linkage_key_path=linkage,
+        output_path=tmp_path / "package-run-two.json",
+    )
+    with pytest.raises(federation.FederationViolation, match="federation-lifetime"):
+        federation.combine_site_packages(
+            registry_two,
+            [package_two],
+            read_id="combine-run-two",
+            ledger_dir=ledger,
+            output_path=tmp_path / "report-run-two.json",
+        )
 
 
 def test_second_release_is_rejected_even_with_fresh_sequence(tmp_path: Path) -> None:

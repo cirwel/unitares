@@ -7,7 +7,7 @@
   "required": [
     "schema_version", "study_id", "read_id", "requested_at",
     "federation_id", "pilot_run_id", "coordinator_ledger_id",
-    "registry_sha256", "report_sha256", "packages"
+    "registry_sha256", "report_sha256", "packages", "receipt_sha256"
   ],
   "properties": {
     "schema_version": { "const": "eisv-federation-combine-receipt.v1" },
@@ -19,6 +19,10 @@
     "coordinator_ledger_id": { "$ref": "#/$defs/id" },
     "registry_sha256": { "$ref": "#/$defs/sha256" },
     "report_sha256": { "$ref": "#/$defs/sha256" },
+    "receipt_sha256": {
+      "$ref": "#/$defs/sha256",
+      "description": "SHA-256 of the canonical receipt with this field omitted."
+    },
     "packages": {
       "type": "array",
       "minItems": 1,
@@ -26,11 +30,12 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "site_id", "package_sha256", "payload_sha256", "package_nonce",
+          "site_id", "release_subject_sha256", "package_sha256", "payload_sha256", "package_nonce",
           "export_sequence", "generated_at"
         ],
         "properties": {
           "site_id": { "$ref": "#/$defs/id" },
+          "release_subject_sha256": { "$ref": "#/$defs/sha256" },
           "package_sha256": { "$ref": "#/$defs/sha256" },
           "payload_sha256": { "$ref": "#/$defs/sha256" },
           "package_nonce": { "type": "string", "pattern": "^[a-f0-9]{32}$" },

@@ -409,12 +409,23 @@ false replication. `federation_unit_id` is retained separately for deployment
 and operator concentration reporting.
 
 The v1 privacy policy is deliberately single-release. A non-empty site cannot
-export until its denominator reaches the registry `minimum_cell_count`; each
-site may have only one accepted package in a pilot run. Within an eligible
-release, every status, schedule, maturity, outcome, complement, linkage, and
-task cell below that floor is removed or coarsened into an unlabeled suppressed
-count. Local cluster-size vectors are not exported. Episode reporting times are
-bucketed to UTC calendar days. These controls prevent singleton disclosure and
+export until its denominator reaches the registry `minimum_cell_count`. Each
+stable `federation_unit_id` may have only one accepted package for the lifetime
+of a `federation_id`, even if the pilot-run identifier, registry version,
+site identifier, or signing key changes. The coordinator stores an opaque hash
+of that federation/release-subject pair in every receipt. A registry authority
+MUST preserve `federation_unit_id` across site aliases and key rotation; a
+second release requires a new federation/privacy domain and independent
+privacy review, not merely a run rollover.
+
+Within an eligible release, status and outcome partitions are withheld when a
+cell or its complement is below the floor. Schedule and maturity are closed
+categorical partitions: if any positive cell is below the floor, the entire
+partition is withheld, including the suppressed total, so the omitted label
+cannot be reconstructed from visible complements. Low-frequency linkage and
+task cells remain unlabeled conservative suppressed totals. Local cluster-size
+vectors are not exported. Episode reporting times are bucketed to UTC calendar
+days. These controls prevent singleton disclosure and same-federation
 longitudinal differencing; they do not provide differential privacy.
 
 The federation output is still `PILOT_AGGREGATE_ONLY` with
@@ -438,12 +449,12 @@ tokens, and rare intersections are observable metadata.
 | Threat | Protocol posture |
 |---|---|
 | Package alteration or an unregistered sender | Prevented by registry-bound Ed25519 verification. A signature authenticates bytes and key possession; it does **not** prove truth, completeness, or non-equivocation. |
-| Exact replay, stale/conflicting sequence, cross-run substitution, or registry substitution | Detected and rejected by the append-only coordinator ledger. Signed context binds federation, pilot run, site, registry digest, linkage-key epoch, reporting window, monotonic sequence, nonce, source receipt, contract fingerprint, and payload digest. Registry changes inside one pilot run fail closed. |
+| Exact replay, stale/conflicting sequence, cross-run substitution, registry substitution, or site re-registration | Detected and rejected by the append-only coordinator ledger. Signed context binds federation, pilot run, site, registry digest, linkage-key epoch, reporting window, monotonic sequence, nonce, source receipt, contract fingerprint, and payload digest. Registry changes inside one pilot run fail closed. A receipt also binds an opaque hash of `federation_id` plus stable `federation_unit_id`; that subject receives one release across run rollover, site aliases, and key rotation. This depends on the trusted registry authority preserving the unit identifier. |
 | Shared substrate presented through multiple sites | Detected when linkage tokens match; otherwise conservatively grouped when the registry declares a shared-state domain. Registry declarations remain operator attestations, not measured facts. |
-| Low-frequency token intersection or differencing | A non-empty site release below `k` is rejected. Every labeled inventory, outcome/complement, schedule, maturity, linkage, and task cell below `k` is suppressed or coarsened; timestamps are day-bucketed. Exactly one package per site per pilot run is accepted, preventing longitudinal differencing. Suppressed counts remain in denominators and conservative cluster fallbacks. Stable tokens and above-threshold aggregate metadata still create bounded within-run linkability; this residual is accepted and must be disclosed. |
+| Low-frequency token intersection or differencing | A non-empty site release below `k` is rejected. Status and outcome/complement cells fail closed; a rare schedule or maturity cell withholds its entire closed categorical partition; rare linkage and task cells are coarsened into unlabeled conservative totals; timestamps are day-bucketed. Exactly one package per stable federation release subject is accepted across run rollover and site aliases. Stable tokens and above-threshold aggregate metadata still create bounded within-release linkability; this residual is accepted and must be disclosed. |
 | Cross-federation linkage | Prevented cryptographically at the token layer by including `federation_id` in every HMAC input, even if an operator mistakenly reuses key bytes. Distinct federation keys remain mandatory defense in depth. |
 | Malicious site fabricates internally consistent counts | Not prevented. Signatures identify the submitting site only. Independent source audits or secure computation are required before any scientific use. |
-| Coordinator omits a site or equivocates between reports | Required-site omission is rejected locally. The receipt binds the named coordinator ledger, registry, package hashes, and report hash. Replay, cadence, and single-release guarantees hold only for one intact trusted ledger. Copying, deleting, rolling back, or splitting that ledger is outside the guarantee: cross-coordinator transparency or an external witness log is not implemented and remains an accepted limitation. |
+| Coordinator omits a site, changes a receipt, or equivocates between reports | Required-site omission is rejected locally. The receipt binds the named coordinator ledger, release-subject hash, registry, package hashes, report hash, and a canonical receipt integrity digest. Schema-valid byte changes that do not also rewrite the digest fail closed. The digest is not a signature: a privileged coordinator can recompute it. Replay, cadence, and single-release guarantees hold only for one intact trusted ledger. Tests intentionally demonstrate that deleting the latest receipt (a rollback) or using a split ledger permits reacceptance. Copying, deleting, rolling back, rewriting, or splitting the ledger is outside the guarantee; cross-coordinator transparency or an external witness log is not implemented and remains an accepted limitation. |
 | Coordinator guesses raw identifiers | The coordinator does not receive the HMAC key. A compromised site or leaked linkage key can enable dictionary attacks against low-entropy identifiers; key compromise invalidates the linkage epoch. |
 
 The independent observational unit is the connected component over local
