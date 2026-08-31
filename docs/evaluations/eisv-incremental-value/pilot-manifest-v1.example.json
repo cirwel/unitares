@@ -14,12 +14,12 @@
   },
   "artifacts": {
     "protocol_path": "docs/proposals/eisv-incremental-value-ablation-v1.md",
-    "protocol_sha256": "c1c7a326dd276cfedae98af46a68c8dd95b588c91630cbe7db8ea28513bca142",
+    "protocol_sha256": "8e01c1e0ff23bd9b6b71d41a624d9c2120ec734461c5d9d8113109f58c2ceff9",
     "episode_schema_path": "docs/evaluations/eisv-incremental-value/eisv-ablation-episode-v2.schema.json",
     "episode_schema_sha256": "bca7c96c552c57a23b8ca0aaa9841adae21de1a9a97de419cfbf448c2bb85e73"
   },
   "versions": {
-    "protocol_version": "0.2.0",
+    "protocol_version": "0.3.0",
     "access_policy_version": "eisv-incremental-access.v1",
     "independence_resolver_version": "registry-union-v1",
     "config_version": "pilot.1",
