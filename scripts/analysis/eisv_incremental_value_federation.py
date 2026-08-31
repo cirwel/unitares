@@ -53,6 +53,7 @@ EVALUATION_DIR = (
 PACKAGE_SCHEMA_PATH = EVALUATION_DIR / "federation-site-package-v1.schema.json"
 REGISTRY_SCHEMA_PATH = EVALUATION_DIR / "federation-registry-v1.schema.json"
 REPORT_SCHEMA_PATH = EVALUATION_DIR / "federation-pilot-report-v1.schema.json"
+RECEIPT_SCHEMA_PATH = EVALUATION_DIR / "federation-combine-receipt-v1.schema.json"
 PACKAGE_SCHEMA = "eisv-federation-site-package.v1"
 REGISTRY_SCHEMA = "eisv-federation-registry.v1"
 REPORT_SCHEMA = "eisv-federation-pilot-report.v1"
@@ -318,11 +319,76 @@ def _reporting_window(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         for row in records
         if row.get("outcome_window_closed_at") is not None
     ]
+
+    def day_bucket(value: datetime) -> str:
+        return value.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+
     return {
-        "first_prediction_at": min(predictions).isoformat() if predictions else None,
-        "last_prediction_at": max(predictions).isoformat() if predictions else None,
-        "latest_outcome_close_at": max(closes).isoformat() if closes else None,
+        "first_prediction_at": day_bucket(min(predictions)) if predictions else None,
+        "last_prediction_at": day_bucket(max(predictions)) if predictions else None,
+        "latest_outcome_close_at": day_bucket(max(closes)) if closes else None,
     }
+
+
+def _suppress_count_map(
+    values: Mapping[str, int], minimum_cell_count: int
+) -> dict[str, int]:
+    visible = {
+        str(key): int(value)
+        for key, value in values.items()
+        if int(value) >= minimum_cell_count
+    }
+    suppressed = sum(
+        int(value) for value in values.values() if 0 < int(value) < minimum_cell_count
+    )
+    if suppressed:
+        visible["__suppressed__"] = suppressed
+    return dict(sorted(visible.items()))
+
+
+def _privacy_protect_inventory(
+    inventory: Mapping[str, Any], minimum_cell_count: int
+) -> dict[str, Any]:
+    protected = dict(inventory)
+    denominator = int(protected["episode_denominator"])
+    if 0 < denominator < minimum_cell_count:
+        raise FederationViolation(
+            "site release denominator is below minimum_cell_count"
+        )
+    protected.pop("paired_loss_difference_sd", None)
+    protected.pop("independence_unit_cluster_sizes", None)
+    protected.pop("task_cluster_sizes", None)
+    status_fields = (
+        "pending_episodes",
+        "censored_episodes",
+        "unscorable_observed_episodes",
+        "usable_episodes",
+    )
+    if any(0 < int(protected[field]) < minimum_cell_count for field in status_fields):
+        for field in status_fields:
+            protected[field] = None
+        protected["suppressed_status_episode_count"] = denominator
+    else:
+        protected["suppressed_status_episode_count"] = 0
+    usable = int(inventory["usable_episodes"])
+    primary = int(inventory["usable_primary_adverse_outcomes"])
+    complement = usable - primary
+    outcome_suppressed = (
+        protected["usable_episodes"] is None
+        or 0 < primary < minimum_cell_count
+        or 0 < complement < minimum_cell_count
+    )
+    protected["primary_outcome_suppressed"] = outcome_suppressed
+    if outcome_suppressed:
+        protected["usable_primary_adverse_outcomes"] = None
+        protected["usable_primary_adverse_rate"] = None
+    protected["schedule_class_counts"] = _suppress_count_map(
+        inventory["schedule_class_counts"], minimum_cell_count
+    )
+    protected["maturity_stage_counts"] = _suppress_count_map(
+        inventory["maturity_stage_counts"], minimum_cell_count
+    )
+    return protected
 
 
 def _public_key_base64(key: Ed25519PrivateKey) -> str:
@@ -374,8 +440,10 @@ def export_site_package(
     fingerprint = contract_fingerprint(manifest)
     if fingerprint != registry["expected_contract"]:
         raise FederationViolation(f"site {site_id!r} contract mismatch")
-    inventory = pilot.inventory_from_records(records, access_receipt=receipt.name)
-    del inventory["paired_loss_difference_sd"]
+    inventory = _privacy_protect_inventory(
+        pilot.inventory_from_records(records, access_receipt=receipt.name),
+        int(registry["privacy_policy"]["minimum_cell_count"]),
+    )
     linkage_key = _load_linkage_key(linkage_key_path)
     minimum_cell_count = int(registry["privacy_policy"]["minimum_cell_count"])
     (
@@ -485,22 +553,35 @@ def site_package_semantic_errors(package: Mapping[str, Any]) -> list[str]:
     inventory = package["inventory"]
     linkage = package["linkage"]
     denominator = int(inventory["episode_denominator"])
+    minimum_cell_count = int(linkage["minimum_cell_count"])
+    if 0 < denominator < minimum_cell_count:
+        errors.append("site release denominator is below minimum_cell_count")
     partition_total = sum(
-        int(inventory[field])
+        int(inventory[field] or 0)
         for field in (
             "pending_episodes",
             "censored_episodes",
             "unscorable_observed_episodes",
             "usable_episodes",
         )
-    )
+    ) + int(inventory["suppressed_status_episode_count"])
     if partition_total != denominator:
         errors.append("inventory status partitions do not equal episode_denominator")
-    primary = int(inventory["usable_primary_adverse_outcomes"])
-    usable = int(inventory["usable_episodes"])
-    if primary > usable:
+    primary_value = inventory["usable_primary_adverse_outcomes"]
+    usable_value = inventory["usable_episodes"]
+    outcome_suppressed = bool(inventory["primary_outcome_suppressed"])
+    if outcome_suppressed and (
+        primary_value is not None
+        or inventory["usable_primary_adverse_rate"] is not None
+    ):
+        errors.append("suppressed primary outcome still exposes a count or rate")
+    if not outcome_suppressed and (primary_value is None or usable_value is None):
+        errors.append("unsuppressed primary outcome lacks usable counts")
+    primary = int(primary_value or 0)
+    usable = int(usable_value or 0)
+    if not outcome_suppressed and primary > usable:
         errors.append("usable_primary_adverse_outcomes exceeds usable_episodes")
-    expected_rate = primary / usable if usable else None
+    expected_rate = primary / usable if usable and not outcome_suppressed else None
     actual_rate = inventory["usable_primary_adverse_rate"]
     if actual_rate is None and expected_rate is not None:
         errors.append("usable_primary_adverse_rate is missing")
@@ -513,6 +594,11 @@ def site_package_semantic_errors(package: Mapping[str, Any]) -> list[str]:
     for field in ("schedule_class_counts", "maturity_stage_counts"):
         if sum(int(value) for value in inventory[field].values()) != denominator:
             errors.append(f"{field} does not equal episode_denominator")
+        if any(
+            key != "__suppressed__" and 0 < int(value) < minimum_cell_count
+            for key, value in inventory[field].items()
+        ):
+            errors.append(f"{field} contains a cell below minimum_cell_count")
     for field, rows, suppressed_field in (
         (
             "independence_clusters",
@@ -524,10 +610,7 @@ def site_package_semantic_errors(package: Mapping[str, Any]) -> list[str]:
         visible = sum(int(row["episode_count"]) for row in rows)
         if visible + int(linkage[suppressed_field]) != denominator:
             errors.append(f"{field} does not equal episode_denominator")
-        if any(
-            int(row["episode_count"]) < int(linkage["minimum_cell_count"])
-            for row in rows
-        ):
+        if any(int(row["episode_count"]) < minimum_cell_count for row in rows):
             errors.append(f"{field} contains a cell below minimum_cell_count")
     cluster_tokens = [
         str(row["cluster_token"]) for row in linkage["independence_clusters"]
@@ -560,6 +643,11 @@ def site_package_semantic_errors(package: Mapping[str, Any]) -> list[str]:
             str(last), field="last_prediction_at"
         ):
             errors.append("reporting window predictions are reversed")
+    for field, value in window.items():
+        if value is not None:
+            parsed = _parse_utc(str(value), field=field)
+            if any((parsed.hour, parsed.minute, parsed.second, parsed.microsecond)):
+                errors.append(f"{field} is not UTC-day bucketed")
     unsigned = dict(package)
     unsigned.pop("attestation", None)
     claimed_payload = unsigned.pop("payload_sha256", None)
@@ -778,6 +866,7 @@ def _load_combine_receipts(ledger_dir: Path) -> list[dict[str, Any]]:
         value = contract.load_json(path)
         if value.get("schema_version") != RECEIPT_SCHEMA:
             raise FederationViolation(f"unknown artifact in combine ledger: {path}")
+        _validate_schema(value, RECEIPT_SCHEMA_PATH)
         receipts.append(value)
     return receipts
 
@@ -803,26 +892,37 @@ def _replay_errors(
     packages: Sequence[Mapping[str, Any]],
     package_records: Sequence[Mapping[str, Any]],
     receipts: Sequence[Mapping[str, Any]],
+    *,
+    accepted_at: datetime,
 ) -> list[str]:
     errors: list[str] = []
     federation_id = str(registry["federation_id"])
     pilot_run_id = str(registry["pilot_run_id"])
     registry_hash = _sha256_bytes(_canonical_json(registry))
     prior_packages: list[Mapping[str, Any]] = []
+    prior_acceptance_by_site: dict[str, list[datetime]] = defaultdict(list)
     for receipt in receipts:
+        if receipt.get("coordinator_ledger_id") != registry["coordinator_ledger_id"]:
+            errors.append("combine receipt belongs to a different coordinator ledger")
         if (
             receipt.get("federation_id") == federation_id
             and receipt.get("pilot_run_id") == pilot_run_id
             and receipt.get("registry_sha256") != registry_hash
         ):
             errors.append("registry snapshot changed within one pilot run")
-        prior_packages.extend(receipt.get("packages", []))
+        receipt_packages = receipt.get("packages", [])
+        prior_packages.extend(receipt_packages)
+        receipt_accepted_at = _parse_utc(
+            str(receipt["requested_at"]), field="requested_at"
+        )
+        for row in receipt_packages:
+            prior_acceptance_by_site[str(row["site_id"])].append(receipt_accepted_at)
     seen_hashes = {str(row["package_sha256"]) for row in prior_packages}
     seen_nonces = {str(row["package_nonce"]) for row in prior_packages}
     minimum_interval = int(
         registry["privacy_policy"]["minimum_export_interval_seconds"]
     )
-    for package, current in zip(packages, package_records, strict=True):
+    for _package, current in zip(packages, package_records, strict=True):
         site_id = str(current["site_id"])
         if current["package_sha256"] in seen_hashes:
             errors.append(f"site {site_id!r} package is an exact replay")
@@ -831,15 +931,17 @@ def _replay_errors(
         prior_site = [row for row in prior_packages if row.get("site_id") == site_id]
         if not prior_site:
             continue
+        if len(prior_site) >= int(
+            registry["privacy_policy"]["maximum_exports_per_site"]
+        ):
+            errors.append(
+                f"site {site_id!r} exceeds the single-release pilot-run policy"
+            )
         max_sequence = max(int(row["export_sequence"]) for row in prior_site)
         if int(current["export_sequence"]) <= max_sequence:
             errors.append(f"site {site_id!r} export_sequence is stale or conflicting")
-        latest_generated = max(
-            _parse_utc(str(row["generated_at"]), field="generated_at")
-            for row in prior_site
-        )
-        generated = _parse_utc(str(package["generated_at"]), field="generated_at")
-        if (generated - latest_generated).total_seconds() < minimum_interval:
+        latest_acceptance = max(prior_acceptance_by_site[site_id])
+        if (accepted_at - latest_acceptance).total_seconds() < minimum_interval:
             errors.append(f"site {site_id!r} violates the minimum export interval")
     return errors
 
@@ -850,6 +952,7 @@ def _record_combine_receipt(
     ledger_dir: Path,
     federation_id: str,
     pilot_run_id: str,
+    coordinator_ledger_id: str,
     registry_sha256: str,
     packages: Sequence[Mapping[str, Any]],
     report_sha256: str,
@@ -868,6 +971,7 @@ def _record_combine_receipt(
         "requested_at": requested_at.astimezone(timezone.utc).isoformat(),
         "federation_id": federation_id,
         "pilot_run_id": pilot_run_id,
+        "coordinator_ledger_id": coordinator_ledger_id,
         "registry_sha256": registry_sha256,
         "report_sha256": report_sha256,
         "packages": sorted(packages, key=lambda row: str(row["site_id"])),
@@ -919,10 +1023,16 @@ def combine_site_packages(
         "usable_episodes",
         "usable_primary_adverse_outcomes",
     )
-    totals = {
-        field: sum(int(package["inventory"][field]) for package in ordered)
-        for field in total_fields
-    }
+    totals: dict[str, int | None] = {}
+    for field in total_fields:
+        values = [package["inventory"][field] for package in ordered]
+        totals[field] = (
+            None if any(value is None for value in values) else sum(map(int, values))
+        )
+    totals["suppressed_status_episode_count"] = sum(
+        int(package["inventory"]["suppressed_status_episode_count"])
+        for package in ordered
+    )
     site_counts = {
         str(package["site_id"]): int(package["inventory"]["episode_denominator"])
         for package in ordered
@@ -930,7 +1040,13 @@ def combine_site_packages(
     federation_unit_counts: Counter[str] = Counter()
     for site_id, count in site_counts.items():
         federation_unit_counts[str(sites[site_id]["federation_unit_id"])] += count
-    now = requested_at or datetime.now(timezone.utc)
+    trusted_now = datetime.now(timezone.utc)
+    now = requested_at or trusted_now
+    now = now.astimezone(timezone.utc)
+    if abs((now - trusted_now).total_seconds()) > 300:
+        raise FederationViolation(
+            "combine requested_at differs from the trusted clock by more than 5 minutes"
+        )
     registry_hash = _sha256_bytes(_canonical_json(registry))
     receipt_name = f"{hashlib.sha256(read_id.encode()).hexdigest()}.json"
     report: dict[str, Any] = {
@@ -950,9 +1066,15 @@ def combine_site_packages(
         "federation_unit_count": len(federation_unit_counts),
         "totals": totals,
         "usable_primary_adverse_rate": (
-            totals["usable_primary_adverse_outcomes"] / totals["usable_episodes"]
+            int(totals["usable_primary_adverse_outcomes"])
+            / int(totals["usable_episodes"])
             if totals["usable_episodes"]
+            and totals["usable_primary_adverse_outcomes"] is not None
             else None
+        ),
+        "primary_outcome_suppressed": any(
+            bool(package["inventory"]["primary_outcome_suppressed"])
+            for package in ordered
         ),
         "independence_unit_cluster_sizes": independence_sizes,
         "task_cluster_sizes": task_sizes,
@@ -995,6 +1117,7 @@ def combine_site_packages(
             ordered,
             package_records,
             _load_combine_receipts(ledger_dir),
+            accepted_at=now,
         )
         if replay_errors:
             raise FederationViolation("; ".join(replay_errors))
@@ -1003,6 +1126,7 @@ def combine_site_packages(
             ledger_dir=ledger_dir,
             federation_id=str(registry["federation_id"]),
             pilot_run_id=str(registry["pilot_run_id"]),
+            coordinator_ledger_id=str(registry["coordinator_ledger_id"]),
             registry_sha256=registry_hash,
             packages=package_records,
             report_sha256=_sha256_bytes(report_payload),

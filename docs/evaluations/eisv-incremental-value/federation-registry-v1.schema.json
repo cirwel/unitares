@@ -7,7 +7,8 @@
   "required": [
     "schema_version", "study_id", "dataset_namespace", "phase",
     "federation_id", "pilot_run_id", "registry_version", "created_at",
-    "linkage_key_id", "privacy_policy", "expected_contract", "sites"
+    "linkage_key_id", "coordinator_ledger_id", "privacy_policy",
+    "expected_contract", "sites"
   ],
   "properties": {
     "schema_version": { "const": "eisv-federation-registry.v1" },
@@ -19,13 +20,18 @@
     "registry_version": { "$ref": "#/$defs/id" },
     "created_at": { "type": "string", "format": "date-time" },
     "linkage_key_id": { "$ref": "#/$defs/id" },
+    "coordinator_ledger_id": { "$ref": "#/$defs/id" },
     "privacy_policy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["minimum_cell_count", "minimum_export_interval_seconds"],
+      "required": [
+        "minimum_cell_count", "minimum_export_interval_seconds",
+        "maximum_exports_per_site"
+      ],
       "properties": {
         "minimum_cell_count": { "type": "integer", "minimum": 2 },
-        "minimum_export_interval_seconds": { "type": "integer", "minimum": 3600 }
+        "minimum_export_interval_seconds": { "type": "integer", "minimum": 3600 },
+        "maximum_exports_per_site": { "const": 1 }
       }
     },
     "expected_contract": { "$ref": "#/$defs/contract" },

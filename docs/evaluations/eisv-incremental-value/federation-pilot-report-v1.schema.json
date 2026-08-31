@@ -10,7 +10,8 @@
     "dataset_namespace", "federation_id", "pilot_run_id", "registry_version",
     "generated_at", "combine_receipt", "registry_sha256",
     "site_package_sha256", "site_count", "federation_unit_count", "totals",
-    "usable_primary_adverse_rate", "independence_unit_cluster_sizes",
+    "usable_primary_adverse_rate", "primary_outcome_suppressed",
+    "independence_unit_cluster_sizes",
     "task_cluster_sizes", "schedule_class_counts", "maturity_stage_counts",
     "concentration", "cross_site_linkage", "privacy",
     "paired_score_outcome_access", "required_next_step"
@@ -40,18 +41,20 @@
       "required": [
         "episode_denominator", "pending_episodes", "censored_episodes",
         "unscorable_observed_episodes", "usable_episodes",
-        "usable_primary_adverse_outcomes"
+        "suppressed_status_episode_count", "usable_primary_adverse_outcomes"
       ],
       "properties": {
         "episode_denominator": { "$ref": "#/$defs/count" },
-        "pending_episodes": { "$ref": "#/$defs/count" },
-        "censored_episodes": { "$ref": "#/$defs/count" },
-        "unscorable_observed_episodes": { "$ref": "#/$defs/count" },
-        "usable_episodes": { "$ref": "#/$defs/count" },
-        "usable_primary_adverse_outcomes": { "$ref": "#/$defs/count" }
+        "pending_episodes": { "$ref": "#/$defs/nullableCount" },
+        "censored_episodes": { "$ref": "#/$defs/nullableCount" },
+        "unscorable_observed_episodes": { "$ref": "#/$defs/nullableCount" },
+        "usable_episodes": { "$ref": "#/$defs/nullableCount" },
+        "suppressed_status_episode_count": { "$ref": "#/$defs/count" },
+        "usable_primary_adverse_outcomes": { "$ref": "#/$defs/nullableCount" }
       }
     },
     "usable_primary_adverse_rate": { "$ref": "#/$defs/nullableUnit" },
+    "primary_outcome_suppressed": { "type": "boolean" },
     "independence_unit_cluster_sizes": { "$ref": "#/$defs/clusterSizes" },
     "task_cluster_sizes": { "$ref": "#/$defs/clusterSizes" },
     "schedule_class_counts": { "$ref": "#/$defs/countMap" },
@@ -106,6 +109,7 @@
     "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$" },
     "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "count": { "type": "integer", "minimum": 0 },
+    "nullableCount": { "type": ["integer", "null"], "minimum": 0 },
     "nullableUnit": {
       "type": ["number", "null"], "minimum": 0, "maximum": 1
     },

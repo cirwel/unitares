@@ -57,8 +57,8 @@
         "schema_version", "status", "study_id", "access_receipt",
         "episode_denominator", "pending_episodes", "censored_episodes",
         "unscorable_observed_episodes", "usable_episodes",
-        "usable_primary_adverse_outcomes", "usable_primary_adverse_rate",
-        "independence_unit_cluster_sizes", "task_cluster_sizes",
+        "suppressed_status_episode_count", "usable_primary_adverse_outcomes",
+        "usable_primary_adverse_rate", "primary_outcome_suppressed",
         "schedule_class_counts", "maturity_stage_counts",
         "paired_score_outcome_access"
       ],
@@ -68,16 +68,16 @@
         "study_id": { "const": "eisv-incremental-value-v1" },
         "access_receipt": { "type": "string", "pattern": "^[a-f0-9]{64}\\.json$" },
         "episode_denominator": { "$ref": "#/$defs/count" },
-        "pending_episodes": { "$ref": "#/$defs/count" },
-        "censored_episodes": { "$ref": "#/$defs/count" },
-        "unscorable_observed_episodes": { "$ref": "#/$defs/count" },
-        "usable_episodes": { "$ref": "#/$defs/count" },
-        "usable_primary_adverse_outcomes": { "$ref": "#/$defs/count" },
+        "pending_episodes": { "$ref": "#/$defs/nullableCount" },
+        "censored_episodes": { "$ref": "#/$defs/nullableCount" },
+        "unscorable_observed_episodes": { "$ref": "#/$defs/nullableCount" },
+        "usable_episodes": { "$ref": "#/$defs/nullableCount" },
+        "suppressed_status_episode_count": { "$ref": "#/$defs/count" },
+        "usable_primary_adverse_outcomes": { "$ref": "#/$defs/nullableCount" },
         "usable_primary_adverse_rate": {
           "type": ["number", "null"], "minimum": 0, "maximum": 1
         },
-        "independence_unit_cluster_sizes": { "$ref": "#/$defs/clusterSizes" },
-        "task_cluster_sizes": { "$ref": "#/$defs/clusterSizes" },
+        "primary_outcome_suppressed": { "type": "boolean" },
         "schedule_class_counts": { "$ref": "#/$defs/countMap" },
         "maturity_stage_counts": { "$ref": "#/$defs/countMap" },
         "paired_score_outcome_access": {
@@ -158,6 +158,7 @@
     "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$" },
     "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "count": { "type": "integer", "minimum": 0 },
+    "nullableCount": { "type": ["integer", "null"], "minimum": 0 },
     "nullableDateTime": {
       "anyOf": [
         { "type": "string", "format": "date-time" },

@@ -14,7 +14,7 @@
   },
   "artifacts": {
     "protocol_path": "docs/proposals/eisv-incremental-value-ablation-v1.md",
-    "protocol_sha256": "95bf8cb30b07bef421bf7d3d52978958e632c69d521fbb3352cadd2c3c4f9cf0",
+    "protocol_sha256": "890b8ba9c293eb50d80c61bb2f9c5677b80c829c389dafc5917b703cbaf3835d",
     "episode_schema_path": "docs/evaluations/eisv-incremental-value/eisv-ablation-episode-v2.schema.json",
     "episode_schema_sha256": "bca7c96c552c57a23b8ca0aaa9841adae21de1a9a97de419cfbf448c2bb85e73"
   },

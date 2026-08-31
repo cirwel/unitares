@@ -408,6 +408,15 @@ matches, preventing two frontends over one stateful deployment from becoming
 false replication. `federation_unit_id` is retained separately for deployment
 and operator concentration reporting.
 
+The v1 privacy policy is deliberately single-release. A non-empty site cannot
+export until its denominator reaches the registry `minimum_cell_count`; each
+site may have only one accepted package in a pilot run. Within an eligible
+release, every status, schedule, maturity, outcome, complement, linkage, and
+task cell below that floor is removed or coarsened into an unlabeled suppressed
+count. Local cluster-size vectors are not exported. Episode reporting times are
+bucketed to UTC calendar days. These controls prevent singleton disclosure and
+longitudinal differencing; they do not provide differential privacy.
+
 The federation output is still `PILOT_AGGREGATE_ONLY` with
 `decision_authority=NONE`. It contains denominator, censoring, label-supply,
 cluster-geometry, maturity, schedule, and concentration summaries only.
@@ -431,10 +440,10 @@ tokens, and rare intersections are observable metadata.
 | Package alteration or an unregistered sender | Prevented by registry-bound Ed25519 verification. A signature authenticates bytes and key possession; it does **not** prove truth, completeness, or non-equivocation. |
 | Exact replay, stale/conflicting sequence, cross-run substitution, or registry substitution | Detected and rejected by the append-only coordinator ledger. Signed context binds federation, pilot run, site, registry digest, linkage-key epoch, reporting window, monotonic sequence, nonce, source receipt, contract fingerprint, and payload digest. Registry changes inside one pilot run fail closed. |
 | Shared substrate presented through multiple sites | Detected when linkage tokens match; otherwise conservatively grouped when the registry declares a shared-state domain. Registry declarations remain operator attestations, not measured facts. |
-| Low-frequency token intersection or differencing | Reduced by registry-enforced minimum-cell suppression and minimum export cadence. Suppressed counts remain in denominators and conservative cluster fallbacks. Stable tokens and aggregate metadata still create bounded within-run linkability; this residual is accepted and must be disclosed. |
+| Low-frequency token intersection or differencing | A non-empty site release below `k` is rejected. Every labeled inventory, outcome/complement, schedule, maturity, linkage, and task cell below `k` is suppressed or coarsened; timestamps are day-bucketed. Exactly one package per site per pilot run is accepted, preventing longitudinal differencing. Suppressed counts remain in denominators and conservative cluster fallbacks. Stable tokens and above-threshold aggregate metadata still create bounded within-run linkability; this residual is accepted and must be disclosed. |
 | Cross-federation linkage | Prevented cryptographically at the token layer by including `federation_id` in every HMAC input, even if an operator mistakenly reuses key bytes. Distinct federation keys remain mandatory defense in depth. |
 | Malicious site fabricates internally consistent counts | Not prevented. Signatures identify the submitting site only. Independent source audits or secure computation are required before any scientific use. |
-| Coordinator omits a site or equivocates between reports | Required-site omission is rejected locally. The receipt binds the registry, package hashes, and report hash. Cross-coordinator transparency or an external witness log is not implemented and remains an accepted limitation. |
+| Coordinator omits a site or equivocates between reports | Required-site omission is rejected locally. The receipt binds the named coordinator ledger, registry, package hashes, and report hash. Replay, cadence, and single-release guarantees hold only for one intact trusted ledger. Copying, deleting, rolling back, or splitting that ledger is outside the guarantee: cross-coordinator transparency or an external witness log is not implemented and remains an accepted limitation. |
 | Coordinator guesses raw identifiers | The coordinator does not receive the HMAC key. A compromised site or leaked linkage key can enable dictionary attacks against low-entropy identifiers; key compromise invalidates the linkage epoch. |
 
 The independent observational unit is the connected component over local
@@ -448,8 +457,9 @@ combined report publishes cluster sizes and concentration, not an iid row
 count.
 
 Each federation registry is an immutable run snapshot with a `pilot_run_id`,
-registry version, linkage-key identifier, privacy floor, export cadence, exact
-contract fingerprint, and site-key validity/revocation state. Linkage keys are
+registry version, linkage-key identifier, coordinator-ledger identifier,
+privacy floor, one-export-per-site ceiling, export cadence, exact contract
+fingerprint, and site-key validity/revocation state. Linkage keys are
 federation-scoped, distinct from signing keys, stored mode `0600`, distributed
 out of band, and never written to packages or receipts. A leaked linkage key
 retires that linkage epoch and requires a new pilot run; rotation is not

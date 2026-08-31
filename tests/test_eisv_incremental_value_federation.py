@@ -122,9 +122,11 @@ def _registry(manifest: dict[str, Any], sites: list[dict[str, Any]]) -> dict[str
         "registry_version": "registry-test-v1",
         "created_at": "2026-08-27T10:00:00Z",
         "linkage_key_id": "linkage-test-v1",
+        "coordinator_ledger_id": "coordinator-ledger-test-v1",
         "privacy_policy": {
             "minimum_cell_count": 2,
             "minimum_export_interval_seconds": 3600,
+            "maximum_exports_per_site": 1,
         },
         "expected_contract": federation.contract_fingerprint(manifest),
         "sites": sites,
@@ -177,7 +179,7 @@ def test_generated_secrets_are_private_and_create_only(tmp_path: Path) -> None:
         federation.generate_linkage_key(linkage)
 
 
-def test_small_cells_are_suppressed_without_raw_values(tmp_path: Path) -> None:
+def test_singleton_site_release_is_rejected(tmp_path: Path) -> None:
     linkage = tmp_path / "linkage.key"
     federation.generate_linkage_key(linkage)
     episode = _episode(
@@ -187,12 +189,33 @@ def test_small_cells_are_suppressed_without_raw_values(tmp_path: Path) -> None:
         producer_group="producer-secret",
         task_id="task-secret",
     )
+    with pytest.raises(federation.FederationViolation, match="denominator is below"):
+        _export(tmp_path, site_id="site-one", episodes=[episode], linkage_key=linkage)
+    assert not (tmp_path / "package-site-one-1.json").exists()
+
+
+def test_valid_release_and_receipts_contain_no_raw_values(tmp_path: Path) -> None:
+    linkage = tmp_path / "linkage.key"
+    federation.generate_linkage_key(linkage)
+    episodes = [
+        _episode(
+            index,
+            independence_unit="local-cluster-secret",
+            substrate_hash="a" * 64,
+            producer_group="producer-secret",
+            task_id="task-secret",
+        )
+        for index in (0, 1)
+    ]
     package, _, _ = _export(
-        tmp_path, site_id="site-one", episodes=[episode], linkage_key=linkage
+        tmp_path, site_id="site-one", episodes=episodes, linkage_key=linkage
     )
-    encoded = json.dumps(package)
+    exported = json.dumps(package)
+    receipt_text = "".join(
+        path.read_text() for path in (tmp_path / "ledger-site-one").glob("*.json")
+    )
     for secret in (
-        episode["identity"]["agent_uuid"],
+        episodes[0]["identity"]["agent_uuid"],
         "local-cluster-secret",
         "producer-secret",
         "task-secret",
@@ -200,10 +223,47 @@ def test_small_cells_are_suppressed_without_raw_values(tmp_path: Path) -> None:
         "risk_probability",
         '"arms"',
     ):
-        assert secret not in encoded
-    assert package["linkage"]["independence_clusters"] == []
-    assert package["linkage"]["task_clusters"] == []
-    assert package["linkage"]["suppressed_independence_episode_count"] == 1
+        assert secret not in exported
+        assert secret not in receipt_text
+
+
+def test_every_sub_k_inventory_stratum_is_suppressed() -> None:
+    inventory = {
+        "schema_version": pilot.INVENTORY_SCHEMA,
+        "status": "PILOT_AGGREGATE_ONLY",
+        "study_id": contract.STUDY_ID,
+        "access_receipt": "a" * 64 + ".json",
+        "episode_denominator": 4,
+        "pending_episodes": 1,
+        "censored_episodes": 0,
+        "unscorable_observed_episodes": 0,
+        "usable_episodes": 3,
+        "usable_primary_adverse_outcomes": 1,
+        "usable_primary_adverse_rate": 1 / 3,
+        "independence_unit_cluster_sizes": [1, 3],
+        "task_cluster_sizes": [4],
+        "schedule_class_counts": {"interactive": 3, "scheduled": 1},
+        "maturity_stage_counts": {"cold": 1, "self_relative": 3},
+        "paired_loss_difference_sd": None,
+        "paired_score_outcome_access": "NOT_AUTHORIZED_BY_PILOT_INSTRUMENTATION",
+    }
+    protected = federation._privacy_protect_inventory(inventory, 2)
+    assert protected["pending_episodes"] is None
+    assert protected["usable_episodes"] is None
+    assert protected["suppressed_status_episode_count"] == 4
+    assert protected["usable_primary_adverse_outcomes"] is None
+    assert protected["usable_primary_adverse_rate"] is None
+    assert protected["primary_outcome_suppressed"] is True
+    assert protected["schedule_class_counts"] == {
+        "__suppressed__": 1,
+        "interactive": 3,
+    }
+    assert protected["maturity_stage_counts"] == {
+        "__suppressed__": 1,
+        "self_relative": 3,
+    }
+    assert "independence_unit_cluster_sizes" not in protected
+    assert "task_cluster_sizes" not in protected
 
 
 def test_tampered_signature_is_rejected(tmp_path: Path) -> None:
@@ -217,7 +277,19 @@ def test_tampered_signature_is_rejected(tmp_path: Path) -> None:
         task_id="task-one",
     )
     package, public, manifest = _export(
-        tmp_path, site_id="site-one", episodes=[episode], linkage_key=linkage
+        tmp_path,
+        site_id="site-one",
+        episodes=[
+            episode,
+            _episode(
+                1,
+                independence_unit="cluster-one",
+                substrate_hash="a" * 64,
+                producer_group="producer-one",
+                task_id="task-one",
+            ),
+        ],
+        linkage_key=linkage,
     )
     registry = _registry(manifest, [_site_entry("site-one", public)])
     package["attestation"]["signature_base64"] = "A" * 88
@@ -236,7 +308,19 @@ def test_registry_snapshot_substitution_is_rejected(tmp_path: Path) -> None:
         task_id="task-one",
     )
     package, public, manifest = _export(
-        tmp_path, site_id="site-one", episodes=[episode], linkage_key=linkage
+        tmp_path,
+        site_id="site-one",
+        episodes=[
+            episode,
+            _episode(
+                1,
+                independence_unit="cluster-one",
+                substrate_hash="a" * 64,
+                producer_group="producer-one",
+                task_id="task-one",
+            ),
+        ],
+        linkage_key=linkage,
     )
     registry = _registry(manifest, [_site_entry("site-one", public)])
     registry["registry_version"] = "registry-test-v2"
@@ -471,20 +555,116 @@ def test_exact_replay_is_rejected_by_durable_ledger(tmp_path: Path) -> None:
         )
 
 
-def test_conflicting_sequence_is_rejected(tmp_path: Path) -> None:
+def test_split_coordinators_are_outside_single_ledger_guarantee(
+    tmp_path: Path,
+) -> None:
+    linkage = tmp_path / "linkage.key"
+    federation.generate_linkage_key(linkage)
+    package, public, manifest = _export(
+        tmp_path, site_id="site-one", episodes=[], linkage_key=linkage
+    )
+    registry = _registry(manifest, [_site_entry("site-one", public)])
+    for suffix in ("a", "b"):
+        report = federation.combine_site_packages(
+            registry,
+            [package],
+            read_id=f"combine-ledger-{suffix}",
+            ledger_dir=tmp_path / f"combine-ledger-{suffix}",
+            output_path=tmp_path / f"combined-{suffix}.json",
+        )
+        assert report["decision_authority"] == "NONE"
+
+
+def test_unknown_or_tampered_ledger_artifact_fails_closed(tmp_path: Path) -> None:
+    linkage = tmp_path / "linkage.key"
+    federation.generate_linkage_key(linkage)
+    package, public, manifest = _export(
+        tmp_path, site_id="site-one", episodes=[], linkage_key=linkage
+    )
+    registry = _registry(manifest, [_site_entry("site-one", public)])
+    ledger = tmp_path / "combine-ledger"
+    ledger.mkdir()
+    _write_json(ledger / "tampered.json", {"schema_version": "unknown"})
+    with pytest.raises(federation.FederationViolation, match="unknown artifact"):
+        federation.combine_site_packages(
+            registry,
+            [package],
+            read_id="combine-tampered-ledger",
+            ledger_dir=ledger,
+            output_path=tmp_path / "combined.json",
+        )
+
+
+def test_cadence_uses_coordinator_acceptance_time() -> None:
+    manifest = contract.load_json(pilot.DEFAULT_MANIFEST_PATH)
+    registry = _registry(
+        manifest,
+        [
+            {
+                **_site_entry(
+                    "site-one",
+                    {
+                        "key_id": "key-site-one",
+                        "public_key_base64": "A" * 44,
+                    },
+                ),
+                "public_key_base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            }
+        ],
+    )
+    accepted_at = datetime.now(timezone.utc)
+    prior = {
+        "schema_version": federation.RECEIPT_SCHEMA,
+        "coordinator_ledger_id": registry["coordinator_ledger_id"],
+        "federation_id": registry["federation_id"],
+        "pilot_run_id": registry["pilot_run_id"],
+        "registry_sha256": federation._sha256_bytes(
+            federation._canonical_json(registry)
+        ),
+        "requested_at": accepted_at.isoformat(),
+        "packages": [
+            {
+                "site_id": "site-one",
+                "package_sha256": "a" * 64,
+                "payload_sha256": "b" * 64,
+                "package_nonce": "c" * 32,
+                "export_sequence": 1,
+                "generated_at": "2020-01-01T00:00:00Z",
+            }
+        ],
+    }
+    current = {
+        "site_id": "site-one",
+        "package_sha256": "d" * 64,
+        "payload_sha256": "e" * 64,
+        "package_nonce": "f" * 32,
+        "export_sequence": 2,
+        "generated_at": "2030-01-01T00:00:00Z",
+    }
+    errors = federation._replay_errors(
+        registry,
+        [{}],
+        [current],
+        [prior],
+        accepted_at=accepted_at,
+    )
+    assert "minimum export interval" in "; ".join(errors)
+
+
+def test_second_release_is_rejected_even_with_fresh_sequence(tmp_path: Path) -> None:
     linkage = tmp_path / "linkage.key"
     federation.generate_linkage_key(linkage)
     root, manifest = _prepare_store(tmp_path, "site-one", [])
     private, public = _site_keys(tmp_path, "site-one")
     registry = _registry(manifest, [_site_entry("site-one", public)])
     packages = []
-    for suffix in ("first", "second"):
+    for sequence, suffix in enumerate(("first", "second"), start=1):
         packages.append(
             federation.export_site_package(
                 root,
                 registry=registry,
                 site_id="site-one",
-                export_sequence=1,
+                export_sequence=sequence,
                 read_id=f"export-{suffix}",
                 ledger_dir=tmp_path / "site-ledger",
                 signing_key_path=private,
@@ -502,7 +682,7 @@ def test_conflicting_sequence_is_rejected(tmp_path: Path) -> None:
         output_path=tmp_path / "first.json",
         requested_at=None,
     )
-    with pytest.raises(federation.FederationViolation, match="stale or conflicting"):
+    with pytest.raises(federation.FederationViolation, match="single-release"):
         federation.combine_site_packages(
             registry,
             [packages[1]],
@@ -570,8 +750,10 @@ def test_token_collision_is_rejected_semantically() -> None:
             "censored_episodes": 0,
             "unscorable_observed_episodes": 0,
             "usable_episodes": 4,
+            "suppressed_status_episode_count": 0,
             "usable_primary_adverse_outcomes": 0,
             "usable_primary_adverse_rate": 0.0,
+            "primary_outcome_suppressed": False,
             "schedule_class_counts": {"scheduled": 4},
             "maturity_stage_counts": {"closed": 4},
             "access_receipt": "receipt.json",
