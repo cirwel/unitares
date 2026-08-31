@@ -120,6 +120,10 @@ Notable validation reports:
 | Script | Description |
 |--------|-------------|
 | `eisv_skeptic_report.py` | Falsifiable report comparing EISV/prior-state predictive lift against simple outcome baselines. |
+| `eisv_incremental_value_contract.py` | Validates prospective 12-arm decision episodes and enforces immutable analysis-read receipts. |
+| `eisv_incremental_value_pilot.py` | Operates the disabled-by-default, immutable local pilot store and score-free inventory. |
+| `eisv_incremental_value_federation.py` | Signs score-free site packages and combines them with registry-bound cross-site independence/task linkage. |
+| `eisv_incremental_value_power.py` | Produces planning-only sample-size sensitivity estimates from declared assumptions. |
 
 ### `client/`
 Client-side utilities including the Ollama MCP bridge and session/freshness helpers.

@@ -2,7 +2,7 @@
 
 - Status: draft; no cohort enrolled and no experiment scheduled
 - Study ID: `eisv-incremental-value-v1`
-- Protocol version: `0.2.0`
+- Protocol version: `0.3.0`
 - Dataset namespace: `eisv-incremental-value-v1`
 - Access policy: `eisv-incremental-access.v1`
 - Schema: `docs/evaluations/eisv-incremental-value/eisv-ablation-episode-v2.schema.json`
@@ -386,6 +386,106 @@ and outcome inventory after an immutable access receipt; it neither enumerates
 raw episodes nor pairs arm scores with outcomes. The implementation does not
 enroll a cohort, schedule collection, or query production data.
 
+### Federated pilot execution
+
+Pilot geometry may be combined across independently operated deployments with
+`scripts/analysis/eisv_incremental_value_federation.py`. Federation does not
+centralize episode records. Each site reads its local score-free structural
+sidecars through the same immutable pilot-instrumentation receipt, replaces
+local independence, substrate, producer, and task identifiers with
+federation-scoped HMAC linkage tokens, and signs the resulting package with a
+registry-bound Ed25519 site key. Raw episodes, arm scores, agent identifiers,
+and local cluster identifiers do not leave the site.
+
+The coordinator accepts only packages whose site key, namespaces, and complete
+protocol/config/scorer fingerprint match an explicit federation registry. It
+rejects missing required sites, duplicate site packages, altered signatures,
+and contract drift before aggregation. Shared substrate or producer tokens are
+unioned across sites; shared task tokens are combined across sites. The
+registry also carries a `shared_state_domain`: every local cluster from sites
+in the same domain is conservatively unioned even when no linkage token
+matches, preventing two frontends over one stateful deployment from becoming
+false replication. `federation_unit_id` is retained separately for deployment
+and operator concentration reporting.
+
+The v1 privacy policy is deliberately single-release. A non-empty site cannot
+export until its denominator reaches the registry `minimum_cell_count`. Each
+stable `federation_unit_id` may have only one accepted package for the lifetime
+of a `federation_id`, even if the pilot-run identifier, registry version,
+site identifier, or signing key changes. The coordinator stores an opaque hash
+of that federation/release-subject pair in every receipt. A registry authority
+MUST preserve `federation_unit_id` across site aliases and key rotation; a
+second release requires a new federation/privacy domain and independent
+privacy review, not merely a run rollover.
+
+Within an eligible release, status and outcome partitions are withheld when a
+cell or its complement is below the floor. Schedule and maturity are closed
+categorical partitions: if any positive cell is below the floor, the entire
+partition is withheld, including the suppressed total, so the omitted label
+cannot be reconstructed from visible complements. Low-frequency linkage and
+task cells remain unlabeled conservative suppressed totals. Local cluster-size
+vectors are not exported. Episode reporting times are bucketed to UTC calendar
+days. These controls prevent singleton disclosure and same-federation
+longitudinal differencing; they do not provide differential privacy.
+
+The federation output is still `PILOT_AGGREGATE_ONLY` with
+`decision_authority=NONE`. It contains denominator, censoring, label-supply,
+cluster-geometry, maturity, schedule, and concentration summaries only.
+Federation does not authorize paired arm-score/outcome access, estimate the
+A2-vs-A3 effect, enroll a cohort, or create a confirmatory freeze. Site signing
+keys and the shared linkage key are generated as private create-only files; the
+registry distributes public signing keys, while the linkage key is delivered
+to sites out of band and never enters a package.
+
+#### Federation threat model and trust boundary
+
+Federation reduces central data exposure; it does not make participating sites
+truthful. The coordinator is assumed honest in protocol execution but may be
+curious about site metadata. A site may be buggy, compromised, or malicious.
+Sites may collude. Signing and linkage keys may be stolen. Identifiers may be
+low entropy. Package cadence, sizes, timestamps, cell cardinalities, stable
+tokens, and rare intersections are observable metadata.
+
+| Threat | Protocol posture |
+|---|---|
+| Package alteration or an unregistered sender | Prevented by registry-bound Ed25519 verification. A signature authenticates bytes and key possession; it does **not** prove truth, completeness, or non-equivocation. |
+| Exact replay, stale/conflicting sequence, cross-run substitution, registry substitution, or site re-registration | Detected and rejected by the append-only coordinator ledger. Signed context binds federation, pilot run, site, registry digest, linkage-key epoch, reporting window, monotonic sequence, nonce, source receipt, contract fingerprint, and payload digest. Registry changes inside one pilot run fail closed. A receipt also binds an opaque hash of `federation_id` plus stable `federation_unit_id`; that subject receives one release across run rollover, site aliases, and key rotation. This depends on the trusted registry authority preserving the unit identifier. |
+| Shared substrate presented through multiple sites | Detected when linkage tokens match; otherwise conservatively grouped when the registry declares a shared-state domain. Registry declarations remain operator attestations, not measured facts. |
+| Low-frequency token intersection or differencing | A non-empty site release below `k` is rejected. Status and outcome/complement cells fail closed; a rare schedule or maturity cell withholds its entire closed categorical partition; rare linkage and task cells are coarsened into unlabeled conservative totals; timestamps are day-bucketed. Exactly one package per stable federation release subject is accepted across run rollover and site aliases. Stable tokens and above-threshold aggregate metadata still create bounded within-release linkability; this residual is accepted and must be disclosed. |
+| Cross-federation linkage | Prevented cryptographically at the token layer by including `federation_id` in every HMAC input, even if an operator mistakenly reuses key bytes. Distinct federation keys remain mandatory defense in depth. |
+| Malicious site fabricates internally consistent counts | Not prevented. Signatures identify the submitting site only. Independent source audits or secure computation are required before any scientific use. |
+| Coordinator omits a site, changes a receipt, or equivocates between reports | Required-site omission is rejected locally. The receipt binds the named coordinator ledger, release-subject hash, registry, package hashes, report hash, and a canonical receipt integrity digest. Schema-valid byte changes that do not also rewrite the digest fail closed. The digest is not a signature: a privileged coordinator can recompute it. Replay, cadence, and single-release guarantees hold only for one intact trusted ledger. Tests intentionally demonstrate that deleting the latest receipt (a rollback) or using a split ledger permits reacceptance. Copying, deleting, rolling back, rewriting, or splitting the ledger is outside the guarantee; cross-coordinator transparency or an external witness log is not implemented and remains an accepted limitation. |
+| Coordinator guesses raw identifiers | The coordinator does not receive the HMAC key. A compromised site or leaked linkage key can enable dictionary attacks against low-entropy identifiers; key compromise invalidates the linkage epoch. |
+
+The independent observational unit is the connected component over local
+independence clusters after union by shared substrate token, shared stateful
+producer token, and cross-site `shared_state_domain`. A site, UUID, package,
+row, or signature is never an independent replicate. Tasks form a second
+connected partition by federation-scoped task token. Suppressed cells cannot
+be used to increase effective sample size: they remain explicit and are
+grouped conservatively by the declared site/state and task namespaces. The
+combined report publishes cluster sizes and concentration, not an iid row
+count.
+
+Each federation registry is an immutable run snapshot with a `pilot_run_id`,
+registry version, linkage-key identifier, coordinator-ledger identifier,
+privacy floor, one-export-per-site ceiling, export cadence, exact contract
+fingerprint, and site-key validity/revocation state. Linkage keys are
+federation-scoped, distinct from signing keys, stored mode `0600`, distributed
+out of band, and never written to packages or receipts. A leaked linkage key
+retires that linkage epoch and requires a new pilot run; rotation is not
+silently mixed into an existing run. Site signing keys are independently
+revocable and time bounded. Rotation likewise requires a new registry snapshot
+and pilot run so previously accepted packages remain interpretable.
+
+The package and combined-report schemas are closed (`additionalProperties:
+false`) and validate `PILOT_AGGREGATE_ONLY` and `decision_authority=NONE` as
+constants. The report schema contains no effect estimate, variance, confidence
+interval, p-value, model ranking, arm score, or A2-vs-A3 comparison field.
+Unknown fields fail validation rather than being ignored. No confirmatory or
+promotion consumer currently accepts this artifact type; adding one requires a
+separate registered protocol and review.
+
 The power analysis must preserve unique outcome IDs, paired arm rows, observed
 class balance, censored and unscorable trials in the denominator, and the
 observed independence-unit/task cluster geometry. It must model the paired
@@ -547,6 +647,14 @@ Before the pilot is enabled:
   missing freeze hashes fail before data access; and
 - validate every confirmatory fold uses a 24-hour-or-longer purge and keeps
   independence units and tasks on one side of the split.
+- prove federated packages contain no raw episodes, arm scores, agent IDs, or
+  local cluster identifiers;
+- verify every federated package against a registry-bound site key and exact
+  protocol/config/scorer fingerprint before using its counts;
+- reject altered, duplicate, unregistered, or missing-required-site packages;
+  and
+- union shared substrate, producer, task, and declared shared-state domains
+  across deployments before reporting cluster geometry or concentration.
 
 ## Amendments
 
@@ -558,6 +666,9 @@ invalid.
 
 ### Version history
 
+- `0.3.0` — adds the signed, privacy-preserving federated pilot exchange and
+  conservative cross-site independence/task linkage contract. Federation
+  remains score-free and carries no confirmatory or policy authority.
 - `0.2.0` — adds failure-informed independence, continuity, label-provenance,
   policy-delivery, persistence-baseline, formula-versioning, and instrument-
   assessability requirements before pilot implementation.
