@@ -10,7 +10,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "eslint": "^10.8.0",
+    "eslint": "^10.9.1",
     "globals": "^17.11.0",
     "jsdom": "^30.0.1",
     "prettier": "^3.9.6",
