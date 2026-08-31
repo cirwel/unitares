@@ -28,7 +28,7 @@
 # COLLECT most of the suite, not merely to pass it), but the install that
 # caused it looked clean. On an existing environment, pin explicitly:
 #
-#   pip install "mcp==1.29.0" -r requirements-full.txt -c constraints.txt
+#   pip install "mcp==2.1.1" -r requirements-full.txt -c constraints.txt
 #
 # or rebuild the venv. `pip check` will not catch it: the newer version
 # satisfies every declared range, which is exactly why this file exists.
@@ -49,4 +49,4 @@
 #
 # The pin stays at 1.29.0 until that last item is an operator decision made
 # with a deploy, not a merge: bumping it here changes what production installs.
-mcp==1.29.0
+mcp==2.1.1
