@@ -279,10 +279,12 @@ def _structural_record(episode: Mapping[str, Any]) -> dict[str, Any]:
         "task_id": identity["task_id"],
         "schedule_class": episode["observation_context"]["schedule_class"],
         "maturity_stage": identity["maturity_stage"],
+        "prediction_cutoff_at": episode["prediction"]["cutoff_at"],
         "eligible": episode["eligibility"]["eligible"],
         "instrument_validation_status": episode["instrument_validation"]["status"],
         "record_complete": episode["quality"]["record_complete"],
         "outcome_status": outcome["status"],
+        "outcome_window_closed_at": outcome["window_closed_at"],
         "primary_adverse_outcome": outcome["primary_adverse_outcome"],
         "config_version": episode["study_config"]["config_version"],
         "feature_registry_version": episode["study_config"][
@@ -386,16 +388,22 @@ def _cluster_sizes(records: Sequence[Mapping[str, Any]], key: str) -> list[int]:
     return sorted(Counter(str(row[key]) for row in records).values())
 
 
-def inventory(
+def read_federation_material(
     root: Path,
     *,
     read_id: str,
     ledger_dir: Path,
     requested_at: datetime | None = None,
-) -> dict[str, Any]:
-    """Return score-free aggregate pilot geometry after an access receipt."""
+) -> tuple[dict[str, Any], list[dict[str, Any]], Path]:
+    """Read score-free pilot material for a local federated export.
 
-    _load_installed_manifest(root)
+    The detailed structural rows never leave this process.  The federation
+    exporter converts their identifiers to keyed linkage tokens before writing
+    a site package.  Keeping this read here ensures it uses the same access
+    receipt and installed-manifest checks as the ordinary inventory command.
+    """
+
+    manifest = _load_installed_manifest(root)
     request = contract.ReadRequest(
         read_id=read_id,
         namespace=contract.DATASET_NAMESPACE,
@@ -406,7 +414,15 @@ def inventory(
         requested_at=requested_at or datetime.now(timezone.utc),
     )
     receipt = contract.record_access_receipt(request, ledger_dir=ledger_dir)
-    records = _load_structural_records(root)
+    return manifest, _load_structural_records(root), receipt
+
+
+def inventory_from_records(
+    records: Sequence[Mapping[str, Any]], *, access_receipt: str
+) -> dict[str, Any]:
+    """Build the score-free pilot inventory from already authorized rows."""
+
+    records = list(records)
     censored = [row for row in records if row["outcome_status"] == "censored"]
     pending = [row for row in records if row["outcome_status"] == "pending"]
     observed = [row for row in records if row["outcome_status"] == "observed"]
@@ -423,7 +439,7 @@ def inventory(
         "schema_version": INVENTORY_SCHEMA,
         "status": "PILOT_AGGREGATE_ONLY",
         "study_id": contract.STUDY_ID,
-        "access_receipt": receipt.name,
+        "access_receipt": access_receipt,
         "episode_denominator": len(records),
         "pending_episodes": len(pending),
         "censored_episodes": len(censored),
@@ -431,7 +447,9 @@ def inventory(
         "usable_episodes": len(usable),
         "usable_primary_adverse_outcomes": primary,
         "usable_primary_adverse_rate": primary / len(usable) if usable else None,
-        "independence_unit_cluster_sizes": _cluster_sizes(records, "independence_unit_id"),
+        "independence_unit_cluster_sizes": _cluster_sizes(
+            records, "independence_unit_id"
+        ),
         "task_cluster_sizes": _cluster_sizes(records, "task_id"),
         "schedule_class_counts": dict(
             sorted(Counter(row["schedule_class"] for row in records).items())
@@ -442,6 +460,24 @@ def inventory(
         "paired_loss_difference_sd": None,
         "paired_score_outcome_access": "NOT_AUTHORIZED_BY_PILOT_INSTRUMENTATION",
     }
+
+
+def inventory(
+    root: Path,
+    *,
+    read_id: str,
+    ledger_dir: Path,
+    requested_at: datetime | None = None,
+) -> dict[str, Any]:
+    """Return score-free aggregate pilot geometry after an access receipt."""
+
+    _, records, receipt = read_federation_material(
+        root,
+        read_id=read_id,
+        ledger_dir=ledger_dir,
+        requested_at=requested_at,
+    )
+    return inventory_from_records(records, access_receipt=receipt.name)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
