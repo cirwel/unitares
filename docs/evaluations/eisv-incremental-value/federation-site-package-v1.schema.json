@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:unitares:schema:eisv-federation-site-package:v1",
+  "title": "EISV Incremental-Value Federated Pilot Site Package",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "status", "decision_authority", "study_id",
+    "dataset_namespace", "phase", "federation_id", "pilot_run_id",
+    "registry_snapshot_sha256", "linkage_key_id", "site_id",
+    "identity_namespace", "task_namespace", "export_sequence", "package_nonce",
+    "generated_at", "reporting_window", "local_read", "contract", "inventory",
+    "linkage", "privacy", "payload_sha256", "attestation"
+  ],
+  "properties": {
+    "schema_version": { "const": "eisv-federation-site-package.v1" },
+    "status": { "const": "PILOT_AGGREGATE_ONLY" },
+    "decision_authority": { "const": "NONE" },
+    "study_id": { "const": "eisv-incremental-value-v1" },
+    "dataset_namespace": { "const": "eisv-incremental-value-v1" },
+    "phase": { "const": "pilot" },
+    "federation_id": { "$ref": "#/$defs/id" },
+    "pilot_run_id": { "$ref": "#/$defs/id" },
+    "registry_snapshot_sha256": { "$ref": "#/$defs/sha256" },
+    "linkage_key_id": { "$ref": "#/$defs/id" },
+    "site_id": { "$ref": "#/$defs/id" },
+    "identity_namespace": { "$ref": "#/$defs/id" },
+    "task_namespace": { "$ref": "#/$defs/id" },
+    "export_sequence": { "type": "integer", "minimum": 1 },
+    "package_nonce": { "type": "string", "pattern": "^[a-f0-9]{32}$" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "reporting_window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["first_prediction_at", "last_prediction_at", "latest_outcome_close_at"],
+      "properties": {
+        "first_prediction_at": { "$ref": "#/$defs/nullableDateTime" },
+        "last_prediction_at": { "$ref": "#/$defs/nullableDateTime" },
+        "latest_outcome_close_at": { "$ref": "#/$defs/nullableDateTime" }
+      }
+    },
+    "local_read": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["read_id", "receipt_name", "receipt_sha256"],
+      "properties": {
+        "read_id": { "$ref": "#/$defs/id" },
+        "receipt_name": { "type": "string", "pattern": "^[a-f0-9]{64}\\.json$" },
+        "receipt_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "contract": { "$ref": "#/$defs/contract" },
+    "inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "status", "study_id", "access_receipt",
+        "episode_denominator", "pending_episodes", "censored_episodes",
+        "unscorable_observed_episodes", "usable_episodes",
+        "usable_primary_adverse_outcomes", "usable_primary_adverse_rate",
+        "independence_unit_cluster_sizes", "task_cluster_sizes",
+        "schedule_class_counts", "maturity_stage_counts",
+        "paired_score_outcome_access"
+      ],
+      "properties": {
+        "schema_version": { "const": "eisv-ablation-pilot-inventory.v1" },
+        "status": { "const": "PILOT_AGGREGATE_ONLY" },
+        "study_id": { "const": "eisv-incremental-value-v1" },
+        "access_receipt": { "type": "string", "pattern": "^[a-f0-9]{64}\\.json$" },
+        "episode_denominator": { "$ref": "#/$defs/count" },
+        "pending_episodes": { "$ref": "#/$defs/count" },
+        "censored_episodes": { "$ref": "#/$defs/count" },
+        "unscorable_observed_episodes": { "$ref": "#/$defs/count" },
+        "usable_episodes": { "$ref": "#/$defs/count" },
+        "usable_primary_adverse_outcomes": { "$ref": "#/$defs/count" },
+        "usable_primary_adverse_rate": {
+          "type": ["number", "null"], "minimum": 0, "maximum": 1
+        },
+        "independence_unit_cluster_sizes": { "$ref": "#/$defs/clusterSizes" },
+        "task_cluster_sizes": { "$ref": "#/$defs/clusterSizes" },
+        "schedule_class_counts": { "$ref": "#/$defs/countMap" },
+        "maturity_stage_counts": { "$ref": "#/$defs/countMap" },
+        "paired_score_outcome_access": {
+          "const": "NOT_AUTHORIZED_BY_PILOT_INSTRUMENTATION"
+        }
+      }
+    },
+    "linkage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm", "minimum_cell_count", "independence_clusters",
+        "suppressed_independence_episode_count", "task_clusters",
+        "suppressed_task_episode_count"
+      ],
+      "properties": {
+        "algorithm": { "const": "hmac-sha256-v1" },
+        "minimum_cell_count": { "type": "integer", "minimum": 2 },
+        "independence_clusters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["cluster_token", "episode_count", "substrate_tokens", "producer_tokens"],
+            "properties": {
+              "cluster_token": { "$ref": "#/$defs/sha256" },
+              "episode_count": { "type": "integer", "minimum": 1 },
+              "substrate_tokens": { "$ref": "#/$defs/tokens" },
+              "producer_tokens": { "$ref": "#/$defs/tokens" }
+            }
+          }
+        },
+        "suppressed_independence_episode_count": { "$ref": "#/$defs/count" },
+        "task_clusters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["task_token", "episode_count"],
+            "properties": {
+              "task_token": { "$ref": "#/$defs/sha256" },
+              "episode_count": { "type": "integer", "minimum": 1 }
+            }
+          }
+        },
+        "suppressed_task_episode_count": { "$ref": "#/$defs/count" }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "raw_episodes_exported", "arm_scores_exported",
+        "raw_identifiers_exported", "linkage_tokens_are_federation_scoped",
+        "small_cells_suppressed"
+      ],
+      "properties": {
+        "raw_episodes_exported": { "const": false },
+        "arm_scores_exported": { "const": false },
+        "raw_identifiers_exported": { "const": false },
+        "linkage_tokens_are_federation_scoped": { "const": true },
+        "small_cells_suppressed": { "const": true }
+      }
+    },
+    "payload_sha256": { "$ref": "#/$defs/sha256" },
+    "attestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "key_id", "signature_base64"],
+      "properties": {
+        "algorithm": { "const": "ed25519-v1" },
+        "key_id": { "$ref": "#/$defs/id" },
+        "signature_base64": { "type": "string", "minLength": 80, "maxLength": 100 }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "count": { "type": "integer", "minimum": 0 },
+    "nullableDateTime": {
+      "anyOf": [
+        { "type": "string", "format": "date-time" },
+        { "type": "null" }
+      ]
+    },
+    "clusterSizes": {
+      "type": "array", "items": { "type": "integer", "minimum": 1 }
+    },
+    "tokens": {
+      "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/sha256" }
+    },
+    "countMap": {
+      "type": "object", "additionalProperties": { "$ref": "#/$defs/count" }
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_sha256", "episode_schema_sha256", "protocol_version",
+        "access_policy_version", "independence_resolver_version", "config_version",
+        "feature_registry_version", "scorer_bundle_version",
+        "instrument_validation_bundle_version"
+      ],
+      "properties": {
+        "protocol_sha256": { "$ref": "#/$defs/sha256" },
+        "episode_schema_sha256": { "$ref": "#/$defs/sha256" },
+        "protocol_version": { "type": "string", "minLength": 1 },
+        "access_policy_version": { "const": "eisv-incremental-access.v1" },
+        "independence_resolver_version": { "type": "string", "minLength": 1 },
+        "config_version": { "type": "string", "minLength": 1 },
+        "feature_registry_version": { "type": "string", "minLength": 1 },
+        "scorer_bundle_version": { "type": "string", "minLength": 1 },
+        "instrument_validation_bundle_version": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

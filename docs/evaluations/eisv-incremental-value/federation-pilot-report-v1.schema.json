@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:unitares:schema:eisv-federation-pilot-report:v1",
+  "title": "EISV Federated Pilot Descriptive Report",
+  "description": "Closed score-free inventory schema. It deliberately has no effect estimate, uncertainty interval, p-value, ranking, arm score, or policy verdict field.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "status", "decision_authority", "study_id",
+    "dataset_namespace", "federation_id", "pilot_run_id", "registry_version",
+    "generated_at", "combine_receipt", "registry_sha256",
+    "site_package_sha256", "site_count", "federation_unit_count", "totals",
+    "usable_primary_adverse_rate", "independence_unit_cluster_sizes",
+    "task_cluster_sizes", "schedule_class_counts", "maturity_stage_counts",
+    "concentration", "cross_site_linkage", "privacy",
+    "paired_score_outcome_access", "required_next_step"
+  ],
+  "properties": {
+    "schema_version": { "const": "eisv-federation-pilot-report.v1" },
+    "status": { "const": "PILOT_AGGREGATE_ONLY" },
+    "decision_authority": { "const": "NONE" },
+    "study_id": { "const": "eisv-incremental-value-v1" },
+    "dataset_namespace": { "const": "eisv-incremental-value-v1" },
+    "federation_id": { "$ref": "#/$defs/id" },
+    "pilot_run_id": { "$ref": "#/$defs/id" },
+    "registry_version": { "$ref": "#/$defs/id" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "combine_receipt": { "type": "string", "pattern": "^[a-f0-9]{64}\\.json$" },
+    "registry_sha256": { "$ref": "#/$defs/sha256" },
+    "site_package_sha256": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/sha256" }
+    },
+    "site_count": { "type": "integer", "minimum": 1 },
+    "federation_unit_count": { "type": "integer", "minimum": 1 },
+    "totals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "episode_denominator", "pending_episodes", "censored_episodes",
+        "unscorable_observed_episodes", "usable_episodes",
+        "usable_primary_adverse_outcomes"
+      ],
+      "properties": {
+        "episode_denominator": { "$ref": "#/$defs/count" },
+        "pending_episodes": { "$ref": "#/$defs/count" },
+        "censored_episodes": { "$ref": "#/$defs/count" },
+        "unscorable_observed_episodes": { "$ref": "#/$defs/count" },
+        "usable_episodes": { "$ref": "#/$defs/count" },
+        "usable_primary_adverse_outcomes": { "$ref": "#/$defs/count" }
+      }
+    },
+    "usable_primary_adverse_rate": { "$ref": "#/$defs/nullableUnit" },
+    "independence_unit_cluster_sizes": { "$ref": "#/$defs/clusterSizes" },
+    "task_cluster_sizes": { "$ref": "#/$defs/clusterSizes" },
+    "schedule_class_counts": { "$ref": "#/$defs/countMap" },
+    "maturity_stage_counts": { "$ref": "#/$defs/countMap" },
+    "concentration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maximum_site_episode_share", "maximum_federation_unit_episode_share",
+        "maximum_independence_unit_episode_share", "maximum_task_episode_share"
+      ],
+      "properties": {
+        "maximum_site_episode_share": { "$ref": "#/$defs/nullableUnit" },
+        "maximum_federation_unit_episode_share": { "$ref": "#/$defs/nullableUnit" },
+        "maximum_independence_unit_episode_share": { "$ref": "#/$defs/nullableUnit" },
+        "maximum_task_episode_share": { "$ref": "#/$defs/nullableUnit" }
+      }
+    },
+    "cross_site_linkage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "independence_token_unions", "shared_state_domain_unions",
+        "task_token_unions"
+      ],
+      "properties": {
+        "independence_token_unions": { "$ref": "#/$defs/count" },
+        "shared_state_domain_unions": { "$ref": "#/$defs/count" },
+        "task_token_unions": { "$ref": "#/$defs/count" }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "raw_episodes_received", "arm_scores_received",
+        "raw_identifiers_received", "only_signed_site_aggregates_accepted"
+      ],
+      "properties": {
+        "raw_episodes_received": { "const": false },
+        "arm_scores_received": { "const": false },
+        "raw_identifiers_received": { "const": false },
+        "only_signed_site_aggregates_accepted": { "const": true }
+      }
+    },
+    "paired_score_outcome_access": {
+      "const": "NOT_AUTHORIZED_BY_PILOT_INSTRUMENTATION"
+    },
+    "required_next_step": { "const": "SEPARATELY_REVIEWED_REGISTERED_ANALYSIS" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{2,127}$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "count": { "type": "integer", "minimum": 0 },
+    "nullableUnit": {
+      "type": ["number", "null"], "minimum": 0, "maximum": 1
+    },
+    "clusterSizes": {
+      "type": "array", "items": { "type": "integer", "minimum": 1 }
+    },
+    "countMap": {
+      "type": "object", "additionalProperties": { "$ref": "#/$defs/count" }
+    }
+  }
+}
