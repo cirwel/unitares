@@ -780,6 +780,66 @@ def test_changed_export_is_rejected_across_run_rollover_and_site_alias(
         )
 
 
+def test_same_batch_aliases_for_one_release_subject_are_rejected_atomically(
+    tmp_path: Path,
+) -> None:
+    linkage = tmp_path / "linkage.key"
+    federation.generate_linkage_key(linkage)
+    private_a, public_a = _site_keys(tmp_path, "site-a")
+    private_b, public_b = _site_keys(tmp_path, "site-b")
+    overlapping = {
+        "independence_unit": "shared-unit",
+        "substrate_hash": "a" * 64,
+        "producer_group": "shared-producer",
+        "task_id": "shared-task",
+    }
+    root_a, manifest = _prepare_store(
+        tmp_path,
+        "site-a",
+        [_episode(0, **overlapping), _episode(1, **overlapping)],
+    )
+    root_b, _ = _prepare_store(
+        tmp_path,
+        "site-b",
+        [_episode(1, **overlapping), _episode(2, **overlapping)],
+    )
+    site_a = _site_entry("site-a", public_a)
+    site_b = _site_entry("site-b", public_b)
+    site_a["federation_unit_id"] = "stable-unit"
+    site_b["federation_unit_id"] = "stable-unit"
+    registry = _registry(manifest, [site_a, site_b])
+    packages = []
+    for site_id, root, private in (
+        ("site-a", root_a, private_a),
+        ("site-b", root_b, private_b),
+    ):
+        packages.append(
+            federation.export_site_package(
+                root,
+                registry=registry,
+                site_id=site_id,
+                export_sequence=1,
+                read_id=f"export-{site_id}",
+                ledger_dir=tmp_path / f"site-ledger-{site_id}",
+                signing_key_path=private,
+                linkage_key_path=linkage,
+                output_path=tmp_path / f"package-{site_id}.json",
+            )
+        )
+    ledger = tmp_path / "combine-ledger"
+    output = tmp_path / "combined.json"
+    with pytest.raises(federation.FederationViolation, match="release subject"):
+        federation.combine_site_packages(
+            registry,
+            packages,
+            read_id="combine-same-subject-aliases",
+            ledger_dir=ledger,
+            output_path=output,
+        )
+    assert not output.exists()
+    assert not list(ledger.glob("*.json"))
+
+
 def test_second_release_is_rejected_even_with_fresh_sequence(tmp_path: Path) -> None:
     linkage = tmp_path / "linkage.key"
     federation.generate_linkage_key(linkage)

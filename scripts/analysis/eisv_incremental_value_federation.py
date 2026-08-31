@@ -931,6 +931,17 @@ def _replay_errors(
             )
     seen_hashes = {str(row["package_sha256"]) for row in prior_packages}
     seen_nonces = {str(row["package_nonce"]) for row in prior_packages}
+    current_subject_sites: dict[str, list[str]] = defaultdict(list)
+    for row in package_records:
+        current_subject_sites[str(row["release_subject_sha256"])].append(
+            str(row["site_id"])
+        )
+    for site_ids in current_subject_sites.values():
+        if len(site_ids) > 1:
+            errors.append(
+                "multiple current packages share one federation release subject: "
+                f"{sorted(site_ids)}"
+            )
     minimum_interval = int(
         registry["privacy_policy"]["minimum_export_interval_seconds"]
     )
