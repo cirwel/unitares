@@ -36,6 +36,8 @@ or [User Manual](../manual/README.md).
 ## Runtime services and residents
 
 - [`resident-roster.md`](resident-roster.md) — configured resident set.
+- [`cloud-deploy-runbook.md`](cloud-deploy-runbook.md) — hosting the governance
+  stack off the primary machine: exposure, off-site backups, cutover.
 - [`redis-retirement-soak-runbook.md`](redis-retirement-soak-runbook.md) —
   staged Redis mirror-retirement checks and rollback gates.
 - [`lease-plane-operator-runbook.md`](lease-plane-operator-runbook.md) — Elixir
