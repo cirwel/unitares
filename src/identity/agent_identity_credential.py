@@ -137,6 +137,24 @@ def load_signing_key(seed_b64u: Optional[str] = None) -> "Ed25519PrivateKey":
         raise AICError(f"Invalid AIC signing seed: {exc}") from exc
 
 
+def load_signing_key_if_configured() -> Optional["Ed25519PrivateKey"]:
+    """Return the server signing key when the env var is set, else ``None``.
+
+    ``None`` means "attestations disabled" — nothing configured, nothing to
+    sign with. A seed that is configured but unusable still raises
+    ``AICError``: a typo must be loud, not a silent downgrade to disabled.
+    Consumers that must never fail on attestation plumbing (the dialectic
+    resolution receipt, ``src/dialectic_receipt.py``) catch that and degrade
+    with a warning.
+    """
+    import os
+
+    seed_b64u = os.getenv(_SIGNING_KEY_ENV)
+    if not seed_b64u:
+        return None
+    return load_signing_key(seed_b64u)
+
+
 def _public_bytes(key: "Ed25519PublicKey") -> bytes:
     return key.public_bytes_raw()
 

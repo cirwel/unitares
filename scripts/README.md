@@ -127,6 +127,9 @@ Notable validation reports:
 
 ### `client/`
 Client-side utilities including the Ollama MCP bridge and session/freshness helpers.
+`verify_resolution_receipt.py` verifies a deployment-signed dialectic resolution
+receipt (`drr.v1`) offline from a record and a JWKS — no server, database, or agent
+key — and exports the public JWKS for a configured attestation key.
 
 ### `diagnostics/`
 Diagnostic scripts for debugging server and agent issues. Notable operator

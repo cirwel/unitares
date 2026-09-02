@@ -176,6 +176,18 @@ their own trust boundary. A second principal is exactly the party who cannot be
 given the key, so a resolution record is not today independently verifiable by
 an operator who does not already trust its issuer.
 
+One opt-in step across that line now exists: a deployment-signed **receipt**
+(`drr.v1`, [`src/dialectic_receipt.py`](../src/dialectic_receipt.py)), an
+Ed25519 signature by the deployment's attestation key over the stored
+resolution record, which a peer holding only the pinned public key verifies
+offline with [`scripts/client/verify_resolution_receipt.py`](../scripts/client/verify_resolution_receipt.py).
+It is inert unless `UNITARES_AIC_SIGNING_KEY` is set, it leaves the symmetric
+agent-level scheme unchanged, and it moves the boundary by exactly one
+claim: a peer can verify *which deployment issued* a record, still not that
+either party intended it. It is the witness-receipt construction named below,
+built as one option, not as a ruling on which semantics a federation needs
+([`proposals/dialectic-resolution-receipt-v0.md`](proposals/dialectic-resolution-receipt-v0.md)).
+
 This is a statement of the deployed boundary, not an argument that issuer
 non-repudiation is the only route across it. Constructions exist that supply
 useful exchange semantics without it: a transparency log can establish
