@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 # Only the newest revision of a branch is actionable. Cancel superseded runs so
-# an active PR does not consume eight database-backed runners for stale commits.
+# an active PR does not consume sixteen database-backed runners for stale commits.
 concurrency:
   group: tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -51,7 +51,7 @@ jobs:
       run: |
         python scripts/dev/check_ci_python_version_sync.py
 
-    - name: Validate CI matrix matches pyproject requires-python
+    - name: Validate the interpreter contract (floor, production marker, Dockerfile, ops templates, CI matrix)
       run: |
         python scripts/diagnostics/check_ci_python_matrix_sync.py
 
@@ -148,14 +148,32 @@ jobs:
         python scripts/diagnostics/update_docs_tool_count.py --check --require-registry
 
   test_shard:
-    name: test shard (${{ matrix.shard }})
+    name: test shard (${{ matrix.python-version }}, ${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # The leg whose coverage data feeds the repository floor. Kept at the
+      # requires-python floor so adding interpreters cannot change what the
+      # floor measures: a line reachable only under one interpreter would
+      # otherwise count. tests/test_ci_test_gate.py pins this to the floor.
+      COVERAGE_LEG: '3.12'
 
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.12']
+        # 3.12 is the .python-version dev default and the requires-python
+        # floor. 3.14 is the production interpreter: constraints.txt declares
+        # it (`# production-python:`), the Dockerfile base image and the
+        # LaunchAgent templates under scripts/ops carry it, and
+        # check_ci_python_matrix_sync.py holds all of those and this list to
+        # one value, and checks that the setup-python step below consumes
+        # the matrix. Until 2026-09-02 the pytest suite ran on 3.12 only;
+        # the only 3.14 exercise CI had was docker-quickstart's demo, which
+        # runs no tests. The floor leg is the coverage leg (COVERAGE_LEG);
+        # the production leg is pass/fail evidence. Every leg feeds the
+        # required `test (3.12)` context below, so a 3.14 regression blocks
+        # merge.
+        python-version: ['3.12', '3.14']
         # Top-level tests are split by filename using recent Actions timing.
         # The eight groups target roughly 2-3 minutes of test execution each;
         # nested tests and agents keep a dedicated shard. Each job gets its own
@@ -222,7 +240,7 @@ jobs:
 
     - name: Run ${{ matrix.shard }} tests with coverage
       env:
-        COVERAGE_FILE: .coverage.${{ matrix.shard }}
+        COVERAGE_FILE: .coverage.${{ matrix.python-version }}.${{ matrix.shard }}
       run: |
         case "${{ matrix.shard }}" in
           tests-a-b)
@@ -255,16 +273,19 @@ jobs:
             ;;
         esac
 
+        covargs=()
+        if [ "${{ matrix.python-version }}" = "$COVERAGE_LEG" ]; then
+          covargs=(--cov=src --cov=agents/sdk/src/unitares_sdk --cov=agents --cov-report=)
+        fi
         python -m pytest "${targets[@]}" -q -ra \
-          --cov=src --cov=agents/sdk/src/unitares_sdk --cov=agents \
-          --cov-report= --durations=25 --durations-min=0.5
+          "${covargs[@]}" --durations=25 --durations-min=0.5
 
     - name: Upload shard coverage data
-      if: always()
+      if: ${{ always() && matrix.python-version == env.COVERAGE_LEG }}
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
-        name: coverage-data-${{ matrix.shard }}
-        path: .coverage.${{ matrix.shard }}
+        name: coverage-data-${{ matrix.python-version }}-${{ matrix.shard }}
+        path: .coverage.${{ matrix.python-version }}.${{ matrix.shard }}
         include-hidden-files: true
         if-no-files-found: warn
         retention-days: 1
@@ -272,11 +293,23 @@ jobs:
   test:
     # Preserve the branch-protection context while the expensive work fans out
     # above. `always()` plus the explicit shard guard ensures a failed matrix
-    # leg cannot turn this required check into a harmless skip.
+    # leg cannot turn this required check into a harmless skip. The context
+    # name is fixed by branch protection; since 2026-09-02 it gates every
+    # interpreter leg of the matrix, not only 3.12, and the per-leg step
+    # below names the leg that failed. Renaming the context means updating
+    # the protection rule in the same change.
     name: test (3.12)
     if: ${{ always() }}
     needs: test_shard
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read   # list this run's jobs (the per-leg check below)
+    env:
+      COVERAGE_LEG: '3.12'
+      # versions x shards in the test_shard matrix; tests/test_ci_test_gate.py
+      # recomputes it from the matrix so the two cannot drift.
+      EXPECTED_SHARD_LEGS: '16'
 
     steps:
     - name: Require every test shard to pass
@@ -284,6 +317,30 @@ jobs:
       run: |
         echo "one or more test shards failed or were cancelled" >&2
         exit 1
+
+    - name: Require every shard leg of this attempt to pass
+      # `needs.test_shard.result` is one value collapsed over sixteen legs.
+      # GitHub lets a single failed leg be re-run alone, and that re-run can
+      # report the job as success while another leg's failure from the
+      # earlier attempt still stands (github.com/orgs/community/discussions/26822).
+      # elixir-tests.yml avoids the trap by not using a matrix; the shard
+      # job is a matrix by design, so instead ask the Actions API for the
+      # latest attempt of every job in this run and require all shard legs
+      # present and successful. A missing leg is a failure, not a pass.
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh api --paginate \
+          "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?filter=latest&per_page=100" \
+          --jq '.jobs[] | select(.name | startswith("test shard (")) | "\(.conclusion)\t\(.name)"' \
+          > shard-legs.tsv
+        cat shard-legs.tsv
+        legs=$(wc -l < shard-legs.tsv | tr -d ' ')
+        bad=$(grep -vc '^success' shard-legs.tsv || true)
+        if [ "$legs" != "$EXPECTED_SHARD_LEGS" ] || [ "$bad" != "0" ]; then
+          echo "expected $EXPECTED_SHARD_LEGS successful shard legs in this attempt, saw $legs with $bad not successful" >&2
+          exit 1
+        fi
 
     - name: Checkout code
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -301,7 +358,10 @@ jobs:
     - name: Download shard coverage data
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
       with:
-        pattern: coverage-data-*
+        # Only the coverage leg's data: the floor keeps its 3.12 meaning and
+        # `coverage combine` sees eight distinct files rather than sixteen of
+        # which byte-identical pairs would be skipped as duplicates.
+        pattern: coverage-data-${{ env.COVERAGE_LEG }}-*
         path: coverage-data
         merge-multiple: true
 
