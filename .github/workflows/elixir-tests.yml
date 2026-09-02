@@ -1,86 +1,122 @@
 name: Elixir Tests
 
-# Closes the BEAM-vs-Python drift gap: the active Sentinel is the Elixir runtime
-# (com.unitares.sentinel-beam), but until this workflow nothing ran its test
-# suite in CI — so a regression in the BEAM forced-release poller (or any other
-# elixir/sentinel module) could merge unvalidated. This runs `mix test` for the
-# Sentinel app on every PR that touches it.
+# The BEAM apps under elixir/ (sentinel, lease_plane, unitares_sdk,
+# agent_orchestrator, dialectic_live, wave3a_handlers) each get their own
+# `mix test` job here. Several are deployed runtime (the active Sentinel is the
+# Elixir forced-release poller; the lease plane carries the RCE `file_write`
+# execute path; wave3a_handlers sits on the request path), so a regression in
+# any of them must not be able to merge unvalidated.
 #
-# Scope note: the `sentinel` job is DB-free — its test_helper.exs auto-detects
-# Postgres and EXCLUDES :db-tagged integration tests when the DB is unreachable.
+# HOW THE GATE WORKS (#2040). None of the per-app jobs is, or can be, a
+# required status check on master: a job that does not run reports NO status,
+# and branch protection treats a missing required context as pending forever.
+# So this workflow is NOT path-filtered at the trigger level. Instead:
 #
-# The `lease_plane` job IS DB-backed: its test_helper.exs raises without a live
-# governance DB + the lease_plane.*/effects.*/audit.*/core.* schema. Before this
-# job, the entire BEAM lease-plane — including the RCE `file_write` execute path
-# (commit / §5b rollback / the effects.payloads contract tests) — ran only
-# locally and never gated a merge. It stands up the real Postgres+AGE image used
-# by the documented quickstart (docker-initdb.sh applies every migration during
-# init, before the healthcheck passes) and runs the full suite.
-
-# `db/postgres/**` is in the filter because the `lease_plane` job runs against the
-# real governance schema built by docker-initdb.sh — so a change under db/postgres
-# can break it while nothing runs to catch that. 2026-08-01 is the worked example:
-# an audit-partition timezone bug turned this job red on every branch, and a
-# db-only PR fixing it would have shown the `lease_plane` check as ABSENT rather
-# than green — the fix could not be validated by the job it repairs.
+#   elixir-changes  always runs; scripts/ci/elixir_paths_changed.py decides
+#                   whether the change reaches any suite (an undeterminable
+#                   change set counts as relevant, never as skippable).
+#   <app jobs>      run when the detector says relevant, and also when the
+#                   detector job itself did not succeed -- a flaky detector
+#                   costs a full run, never a skipped suite. Otherwise they
+#                   are skipped at zero cost.
+#   elixir-gate     always runs last (if: always()); scripts/ci/elixir_gate.py
+#                   passes only when every app job succeeded, or was skipped
+#                   because a SUCCESSFUL detector said nothing relevant
+#                   changed. THIS is the single context to require on master.
+#                   Failure, cancellation, or a suite that did not run when it
+#                   had to all fail it.
 #
-# `wave3a_handlers` was CI-blind since it landed (156f3c0, PR #1887): 83 tests
-# across 8 files, zero workflow references. It is not a scratch app — it is
-# deployed (scripts/ops/com.unitares.wave3a-handlers.plist.template) and its
-# Python-side proxy (src/wave3a_beam_proxy.py) sits on the request path. This
-# closes the CI-blindness (a regression now gets a red job) but, like every
-# other job in this file, is NOT a required status check on master today — see
-# issue tracking that gap. Self-contained suite, no DB (Plug.Test against the
-# router, no Bandit boot); zero `path:` deps, unlike `agent_orchestrator`
-# (which depends on `unitares_sdk` + `postgrex` but is still DB-free in test).
+# Relevant surfaces (kept in step with RELEVANT_PREFIXES / RELEVANT_FILES in
+# scripts/ci/elixir_paths_changed.py; tests/test_elixir_ci_gate.py pins the
+# list against this file's working-directory and docker compose usage):
+#   elixir/sentinel, elixir/lease_plane, elixir/unitares_sdk,
+#   elixir/agent_orchestrator, elixir/dialectic_live, elixir/wave3a_handlers,
+#   db/postgres, tests/vectors, tests/vendored (cross-runtime fixtures the
+#   lease_plane suite reads), docker-compose.yml, Dockerfile, .dockerignore,
+#   .github/workflows/elixir-tests.yml, scripts/ci/elixir_paths_changed.py,
+#   scripts/ci/elixir_gate.py
+#
+# Break-glass: master has enforce_admins on, so a required elixir-gate that is
+# red on every branch (the 2026-08-01 audit-partition shape) is cleared by a
+# fix whose suites pass, or by temporarily removing the context from the
+# required list -- the same escape every required context here has.
+#
+# Scope notes per job:
+# - `sentinel` is DB-free: its test_helper.exs auto-detects Postgres and
+#   EXCLUDES :db-tagged integration tests when the DB is unreachable.
+# - `lease_plane` IS DB-backed: its test_helper.exs raises without a live
+#   governance DB + the lease_plane.*/effects.*/audit.*/core.* schema. It stands
+#   up the real Postgres+AGE image used by the documented quickstart
+#   (docker-initdb.sh applies every migration during init, before the
+#   healthcheck passes) and runs the full suite. `db/postgres` is therefore a
+#   relevant surface: 2026-08-01 is the worked example, when an audit-partition
+#   timezone bug turned this job red on every branch and a db-only fix could
+#   not be validated by the job it repaired.
+# - `wave3a_handlers` was CI-blind from 156f3c0 (PR #1887) until #2043: 83
+#   tests across 8 files with zero workflow references, while deployed
+#   (scripts/ops/com.unitares.wave3a-handlers.plist.template) with its Python
+#   proxy (src/wave3a_beam_proxy.py) on the request path. Self-contained suite,
+#   no DB; zero `path:` deps, unlike `agent_orchestrator`.
 on:
   merge_group:
   push:
     branches: [ master, main ]
-    paths:
-      - 'elixir/sentinel/**'
-      - 'elixir/lease_plane/**'
-      - 'elixir/unitares_sdk/**'
-      - 'elixir/agent_orchestrator/**'
-      - 'elixir/dialectic_live/**'
-      - 'elixir/wave3a_handlers/**'
-      - 'db/postgres/**'
-      - '.github/workflows/elixir-tests.yml'
   pull_request:
     branches: [ master, main ]
-    paths:
-      - 'elixir/sentinel/**'
-      - 'elixir/lease_plane/**'
-      - 'elixir/unitares_sdk/**'
-      - 'elixir/agent_orchestrator/**'
-      - 'elixir/dialectic_live/**'
-      - 'elixir/wave3a_handlers/**'
-      - 'db/postgres/**'
-      - '.github/workflows/elixir-tests.yml'
+
+# Superseded runs on the same ref are cancelled (same shape as tests.yml): this
+# workflow now fires on every push, and strict up-to-date auto-updates re-push
+# every armed PR after each merge.
+concurrency:
+  group: elixir-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 # Least-privilege: these jobs only read the repo and run tests.
 permissions:
   contents: read
 
 jobs:
+  # Always runs. Decides whether the change reaches any Elixir suite; the app
+  # jobs below key off its `relevant` output. Undeterminable ⇒ relevant; a
+  # failed detector ⇒ the app jobs run anyway (see their `if:`).
+  elixir_changes:
+    name: elixir-changes
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.detect.outputs.relevant }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
+
+    - name: Detect whether this change reaches the Elixir suites
+      id: detect
+      # Only the two commits are needed for a tree-to-tree diff; the script
+      # fetches the base at depth 1 when the checkout does not already have it.
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        HEAD_SHA: ${{ github.sha }}
+      run: python3 scripts/ci/elixir_paths_changed.py --event "$EVENT_NAME" --base "$BASE_SHA" --head "$HEAD_SHA"
+
   # The SDK is the shared BEAM governance contract, consumed across repos
   # (dispatch_beam, anima-mcp) by git ref. A regression here breaks clients
   # this repo's CI cannot see, so it gates on the loosest floor it claims to
   # support (Elixir 1.15) as well as current — a dep that silently requires a
   # newer Elixir than its mix.exs declares is a broken contract.
-  unitares_sdk:
+  #
+  # Two explicit jobs rather than one matrix: the gate reads one collapsed
+  # `needs.<job>.result` per job, and a selectively re-run matrix leg can
+  # report success for the whole job while another leg's earlier failure
+  # still stands (github.com/orgs/community/discussions/26822). Distinct job
+  # ids give the gate one result per Elixir version.
+  unitares_sdk_floor:
+    needs: elixir_changes
+    # Runs when the detector says relevant, AND when the detector itself did
+    # not succeed (then nothing can vouch for a skip, so everything runs).
+    if: ${{ !cancelled() && (needs.elixir_changes.result != 'success' || needs.elixir_changes.outputs.relevant == 'true') }}
     runs-on: ubuntu-latest
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Declared floor. OTP 27 is the real floor: the SDK uses Erlang's
-          # :json rather than Elixir's, precisely so 1.15 consumers can adopt it.
-          - elixir: '1.15'
-            otp: '27'
-          - elixir: '1.19'
-            otp: '27'
 
     defaults:
       run:
@@ -92,19 +128,46 @@ jobs:
       with:
         persist-credentials: false
 
-    - name: Set up Elixir / OTP
+    - name: Set up Elixir / OTP (declared floor)
+      # OTP 27 is the real floor: the SDK uses Erlang's :json rather than
+      # Elixir's, precisely so 1.15 consumers can adopt it.
       uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
       with:
-        otp-version: ${{ matrix.otp }}
-        elixir-version: ${{ matrix.elixir }}
+        otp-version: '27'
+        elixir-version: '1.15'
 
     - name: Run tests
       # No deps.get: the SDK has zero third-party runtime dependencies, and a
       # deps step here would hide the day one of them appears.
       run: mix test
 
+  unitares_sdk:
+    needs: elixir_changes
+    # Runs when the detector says relevant, AND when the detector itself did
+    # not succeed (then nothing can vouch for a skip, so everything runs).
+    if: ${{ !cancelled() && (needs.elixir_changes.result != 'success' || needs.elixir_changes.outputs.relevant == 'true') }}
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: elixir/unitares_sdk
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
+
+    - name: Set up Elixir / OTP (current)
+      uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+      with:
+        otp-version: '27'
+        elixir-version: '1.19'
+
+    - name: Run tests
+      run: mix test
+
     - name: Check formatting
-      if: matrix.elixir == '1.19'
       run: mix format --check-formatted
 
   # agent_orchestrator consumes unitares_sdk (LeasePlaneEnvelope only — its
@@ -113,6 +176,10 @@ jobs:
   # unseen. Its suite is self-contained (spawns /bin/echo-class processes,
   # no DB), so a plain mix test job closes the gap.
   agent_orchestrator:
+    needs: elixir_changes
+    # Runs when the detector says relevant, AND when the detector itself did
+    # not succeed (then nothing can vouch for a skip, so everything runs).
+    if: ${{ !cancelled() && (needs.elixir_changes.result != 'success' || needs.elixir_changes.outputs.relevant == 'true') }}
     runs-on: ubuntu-latest
 
     defaults:
@@ -140,9 +207,13 @@ jobs:
   # dialectic_live consumes unitares_sdk (Envelope only — its transport stays
   # Req). It had no job before; it also had no governance tests before, so
   # there was nothing for a job to protect. Both are true now: a change to the
-  # shared envelope can blank this app's session pane, and the path filter
-  # above fires this job on SDK changes as well as its own.
+  # shared envelope can blank this app's session pane, and the `changes`
+  # detector treats SDK changes as relevant, so this job runs on them too.
   dialectic_live:
+    needs: elixir_changes
+    # Runs when the detector says relevant, AND when the detector itself did
+    # not succeed (then nothing can vouch for a skip, so everything runs).
+    if: ${{ !cancelled() && (needs.elixir_changes.result != 'success' || needs.elixir_changes.outputs.relevant == 'true') }}
     runs-on: ubuntu-latest
 
     defaults:
@@ -180,6 +251,10 @@ jobs:
       run: mix test
 
   sentinel:
+    needs: elixir_changes
+    # Runs when the detector says relevant, AND when the detector itself did
+    # not succeed (then nothing can vouch for a skip, so everything runs).
+    if: ${{ !cancelled() && (needs.elixir_changes.result != 'success' || needs.elixir_changes.outputs.relevant == 'true') }}
     runs-on: ubuntu-latest
 
     defaults:
@@ -223,6 +298,10 @@ jobs:
   # drives the router via Plug.Test without booting Bandit; `meck` stubs the
   # outbound probe client.
   wave3a_handlers:
+    needs: elixir_changes
+    # Runs when the detector says relevant, AND when the detector itself did
+    # not succeed (then nothing can vouch for a skip, so everything runs).
+    if: ${{ !cancelled() && (needs.elixir_changes.result != 'success' || needs.elixir_changes.outputs.relevant == 'true') }}
     runs-on: ubuntu-latest
 
     defaults:
@@ -258,6 +337,10 @@ jobs:
       run: mix test
 
   lease_plane:
+    needs: elixir_changes
+    # Runs when the detector says relevant, AND when the detector itself did
+    # not succeed (then nothing can vouch for a skip, so everything runs).
+    if: ${{ !cancelled() && (needs.elixir_changes.result != 'success' || needs.elixir_changes.outputs.relevant == 'true') }}
     runs-on: ubuntu-latest
 
     steps:
@@ -307,3 +390,21 @@ jobs:
     - name: Tear down
       if: always()
       run: docker compose down -v
+
+  # The one context to require on master (#2040). Runs even when the app jobs
+  # were skipped or failed, so it always reports a status.
+  elixir-gate:
+    name: elixir-gate
+    needs: [elixir_changes, unitares_sdk_floor, unitares_sdk, agent_orchestrator, dialectic_live, sentinel, wave3a_handlers, lease_plane]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
+
+    - name: Pass only if every suite succeeded, or was skipped because nothing relevant changed
+      env:
+        NEEDS_JSON: ${{ toJSON(needs) }}
+      run: python3 scripts/ci/elixir_gate.py
