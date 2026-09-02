@@ -41,18 +41,28 @@ review found that this reversed E1 as this packet specifies it and the
 governed reviewer's condition, changed a value the coherence-shadow contract
 declares fixed after its zero had been inspected, and would have moved every
 instrument's output on a deploy with no version marker. The shipped shape
-therefore keeps `registered` as the shared default and makes `corrected`
+therefore kept `registered` as the shared default at that time and made `corrected`
 opt-in (`--fixture-rule corrected`, named in every report and receipt). The
 federation gain that survives is the mechanism itself: the switch, the
 writer's reasons, the attrition counters, and a registered read that cannot
 be moved by any default.
 
-Left for the operator, as a follow-up and not a blocker: whether
-non-protocol instruments should default to `corrected`, and whether the
-independent-operator cohort protocol's plumbing check (which requires
-`calibration_excluded` to be false on posted rows) should be restated in terms
-of validation visibility. Also still the operator's judgment: whether a
-corrected instrument counts as the reopening premise if condition 3 fails.
+**Follow-up decisions, 2026-09-02, delegated and governed.** The operator then
+delegated the follow-ups outright ("make a decision or use consult or dialectic
+to solve if non-obvious"); they were decided in governed session
+`e4ebf589a1c79b9d`, whose reviewer ratified two as proposed and corrected the
+third. D1: the shared default is `corrected` for the non-protocol instruments
+(inventory, skeptic report, telemetry-health summary, exploratory reads);
+protocol-bound reads never take the default. D2: the independent-operator
+cohort protocol registers its lane-P read under `corrected` by a dated
+protocol amendment (v0.1 of that preregistration) made before any enrollment, its plumbing check is restated as
+visibility plus an honest `calibration_excluded`, and a registered read's rule
+comes from an immutable protocol manifest in the ablation matrix, never from
+the CLI argument. D3, as corrected by the reviewer: the coherence-shadow v0
+contract is preserved untouched, zero result included, and a distinct
+prospective v0.1 read with the corrected rule and an amendment-time cutoff is
+registered beside it. Still the operator's judgment: whether a corrected
+instrument counts as the reopening premise if condition 3 fails.
 
 ## The question, as a fork
 
@@ -112,7 +122,9 @@ stop rules by name. R2 to R4 remain available with their costs stated.
   calibration gate. Because the instruments run from `master` and the
   registered command has no frozen-predicate mode, the corrected
   classification ships behind a switch in the shared wrapper the instruments
-  call (`--fixture-rule registered|corrected`, default `registered`). A
+  call (`--fixture-rule registered|corrected`; default `registered` when
+  shipped, `corrected` for the non-protocol instruments since the follow-up
+  decision below). A
   registered read rejects any other value, the frozen prospective-cohort
   contract pins the registered reading at its call site, and `corrected` is
   opt-in everywhere else (see *Selection*). R1's sensitivity cohort is the registered
@@ -134,8 +146,8 @@ stop rules by name. R2 to R4 remain available with their costs stated.
   change item 2 of the legacy-coherence dependency shadow's fixed defaults
   (`legacy-coherence-dependency-ablation-v0.md`, a prospective contract
   registered on 2026-08-12 that has accrued no rows): that read keeps the
-  registered rule by default, and a corrected run is a deviation that document
-  says must be disclosed if cited. A narrower variant,
+  registered rule (the script's `--contract v0`, which refuses the corrected
+  rule); the corrected read is the distinct prospective v0.1 contract.
   scoping the admission to `detail.recorded_via = "harness_outcome_endpoint"`
   rows, is possible but admits only one producer path.
 - **E2: the producer contract, stated honestly.** Today's contract (#1790 fix

@@ -621,8 +621,10 @@ def build_calibration_summary(
     """Aggregate strict outcome-linked risk into clustered descriptive bins.
 
     ``fixture_rule`` selects how a server-stamped ``calibration_excluded`` is
-    read; ``scraped_only_rows`` counts rows whose only exclusion is a scraped
-    confidence, which the registered rule drops and the corrected rule keeps.
+    read (default ``corrected`` since 2026-09-02, a disclosed one-time step
+    change in ``strict_outcomes`` and ``fixtures_excluded``); ``scraped_only_rows``
+    counts rows whose only exclusion is a scraped confidence, which the
+    registered rule drops and the corrected rule keeps.
     """
     fixtures_excluded = 0
     scraped_only_rows = 0

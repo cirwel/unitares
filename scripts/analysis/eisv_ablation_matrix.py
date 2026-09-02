@@ -70,6 +70,7 @@ from scripts.analysis.outcome_inventory import (
 from src.grounding.outcome_anchors import (
     DEFAULT_FIXTURE_RULE,
     FIXTURE_RULES,
+    CORRECTED_FIXTURE_RULE,
     REGISTERED_FIXTURE_RULE,
     anchored_outcomes_predicate,
     normalize_fixture_rule,
@@ -79,6 +80,64 @@ DEFAULT_EXCLUDED_HARNESS_LANES = ("beam",)
 READ_PROTOCOLS = ("registered", "exploratory", "reproduction")
 CONTAMINATING_READ_PROTOCOLS = frozenset({"exploratory", "reproduction"})
 READ_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,127}")
+
+
+@dataclass(frozen=True)
+class RegisteredReadProtocol:
+    """One pre-registered read protocol and the fixture rule it fixed at registration."""
+
+    name: str
+    read_id_pattern: re.Pattern[str]
+    fixture_rule: str
+    registered_in: str
+    # When set, the pattern carries a ``seed`` group and the read must pass the
+    # same value as --uncertainty-seed: the predeclared read id and the seed it
+    # names are one thing, not two.
+    binds_uncertainty_seed: bool = False
+
+
+# The protocol manifest. A `--read-protocol registered` read must match exactly
+# one entry, and the entry, not the CLI argument and not the shared default,
+# decides its fixture rule. Registering a protocol, or changing the rule one
+# runs under, is a pull request against this tuple and the document it names;
+# nothing at run time can move it (decision session e4ebf589a1c79b9d, 2026-09-02).
+REGISTERED_READ_MANIFEST: tuple[RegisteredReadProtocol, ...] = (
+    RegisteredReadProtocol(
+        name="eisv-outcome-grounding-stop-rule-v0",
+        # The registered command's read id, plus the retry form the stop rule
+        # requires (`-retry-<n>`, disclosed). The pre-declared sensitivity cohort
+        # (`...-sensitivity`) is a reproduction read and matches nothing here.
+        read_id_pattern=re.compile(r"eisv-outcome-grounding-2026-12-01(?:-retry-[0-9]+)?"),
+        fixture_rule=REGISTERED_FIXTURE_RULE,
+        registered_in="docs/proposals/eisv-outcome-grounding-stop-rule-v0.md",
+    ),
+    RegisteredReadProtocol(
+        name="independent-operator-cohort-v0.1",
+        # The protocol predeclares seeds 0, 1 and 2 and denies further slices;
+        # the participant segment cannot itself contain a day58 marker.
+        read_id_pattern=re.compile(r"operator-(?:(?!-day58-)[A-Za-z0-9._:-])+-day58-seed-(?P<seed>[012])"),
+        fixture_rule=CORRECTED_FIXTURE_RULE,
+        registered_in="docs/proposals/independent-operator-cohort-preregistration-v0.md",
+        binds_uncertainty_seed=True,
+    ),
+)
+
+
+def registered_read_protocol(read_id: str | None) -> RegisteredReadProtocol | None:
+    """The manifest entry a read id belongs to, or None when it names no registered protocol.
+
+    Exactly one entry may match; an id that matches two is a manifest defect
+    and is refused rather than resolved by tuple order.
+    """
+    if not read_id:
+        return None
+    matches = [entry for entry in REGISTERED_READ_MANIFEST if entry.read_id_pattern.fullmatch(read_id)]
+    if len(matches) > 1:
+        raise ReadProtocolError(
+            f"read id {read_id!r} matches more than one registered protocol "
+            f"({', '.join(e.name for e in matches)}); fix REGISTERED_READ_MANIFEST"
+        )
+    return matches[0] if matches else None
 DEFAULT_READ_LEDGER_DIR = Path(
     os.environ.get(
         "UNITARES_OUTCOME_READ_LEDGER_DIR",
@@ -988,12 +1047,29 @@ def validate_read_protocol(
             )
         if args.as_of is None:
             errors.append("registered reads require a frozen --as-of boundary")
-        if getattr(args, "fixture_rule", None) not in (None, REGISTERED_FIXTURE_RULE):
+        entry = registered_read_protocol(args.read_id)
+        if entry is None:
             errors.append(
-                "registered reads run with the registered fixture rule; the "
-                "pre-declared sensitivity cohort is a separate "
-                "--read-protocol reproduction --fixture-rule corrected read"
+                "registered reads must name a protocol in REGISTERED_READ_MANIFEST; "
+                f"read id {args.read_id!r} matches none. Register the protocol by "
+                "pull request before its first registered read"
             )
+        else:
+            if getattr(args, "fixture_rule", None) not in (None, entry.fixture_rule):
+                errors.append(
+                    f"registered reads run with the {entry.fixture_rule} fixture rule "
+                    f"their protocol registered ({entry.name}); the pre-declared "
+                    "sensitivity cohort is a separate --read-protocol reproduction "
+                    "--fixture-rule corrected read"
+                )
+            if entry.binds_uncertainty_seed:
+                declared = int(entry.read_id_pattern.fullmatch(args.read_id).group("seed"))
+                if getattr(args, "uncertainty_seed", None) != declared:
+                    errors.append(
+                        f"read id {args.read_id!r} predeclares uncertainty seed {declared}; "
+                        f"--uncertainty-seed must be {declared}, not "
+                        f"{getattr(args, 'uncertainty_seed', None)!r}"
+                    )
     elif (
         args.read_protocol in CONTAMINATING_READ_PROTOCOLS
         and not args.acknowledge_contamination
@@ -1008,16 +1084,30 @@ def validate_read_protocol(
 def effective_fixture_rule(args: argparse.Namespace) -> str:
     """The fixture rule a read runs under.
 
-    A registered read is pinned to the rule it was registered with and rejects
-    any other value, so no default change can alter its cohort. Every other
-    protocol takes the explicit ``--fixture-rule`` or the shared default, which
-    is also ``registered``; the pre-declared sensitivity cohort passes
-    ``--fixture-rule corrected`` explicitly.
+    A registered read takes the rule its protocol fixed in
+    ``REGISTERED_READ_MANIFEST`` and rejects any other value, so neither a CLI
+    argument nor a default change can alter its cohort. A reproduction read
+    reproduces the frozen 2026-08-09 artifact, generated under the registered
+    rule, unless an explicit ``--fixture-rule`` says otherwise (the pre-declared
+    sensitivity cohort passes ``corrected``). Every other read takes the explicit
+    rule or the shared default.
     """
-    if getattr(args, "read_protocol", None) == "registered":
-        return REGISTERED_FIXTURE_RULE
+    protocol = getattr(args, "read_protocol", None)
+    if protocol == "registered":
+        entry = registered_read_protocol(getattr(args, "read_id", None))
+        if entry is None:
+            # Fail closed: an unregistered id has no rule, not a default one.
+            raise ReadProtocolError(
+                f"read id {getattr(args, 'read_id', None)!r} names no protocol in "
+                "REGISTERED_READ_MANIFEST"
+            )
+        return entry.fixture_rule
     explicit = getattr(args, "fixture_rule", None)
-    return normalize_fixture_rule(explicit) if explicit else DEFAULT_FIXTURE_RULE
+    if explicit:
+        return normalize_fixture_rule(explicit)
+    if protocol == "reproduction":
+        return REGISTERED_FIXTURE_RULE
+    return DEFAULT_FIXTURE_RULE
 
 
 def record_read_receipt(
@@ -1048,6 +1138,12 @@ def record_read_receipt(
         "not_before": args.not_before.isoformat() if args.not_before else None,
         "as_of": args.as_of.isoformat() if args.as_of else None,
         "contamination_acknowledged": bool(args.acknowledge_contamination),
+        "registered_protocol": (
+            entry.name
+            if args.read_protocol == "registered"
+            and (entry := registered_read_protocol(args.read_id)) is not None
+            else None
+        ),
         "parameters": {
             "scopes": list(args.scopes),
             "windows": list(args.windows),
@@ -1237,11 +1333,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=None,
         help=(
             "How the server-stamped calibration_excluded flag is read. Registered "
-            "reads are pinned to 'registered' (the predicate they were registered "
-            "with) and reject anything else; every other protocol defaults to it "
-            "too. 'corrected' keeps rows whose only exclusion is a scraped "
-            "confidence and must be asked for explicitly. Recorded in the read "
-            "receipt and the report header."
+            "reads take the rule their protocol fixed in REGISTERED_READ_MANIFEST "
+            "and reject anything else; reproduction reads default to 'registered' "
+            "(the frozen artifact's rule); exploratory reads default to 'corrected', "
+            "which keeps rows whose only exclusion is a scraped confidence. "
+            "Recorded in the read receipt and the report header."
         ),
     )
     parser.add_argument("--scopes", type=_parse_scope_list, default="strict,task")

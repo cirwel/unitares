@@ -766,10 +766,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         choices=FIXTURE_RULES,
         default=DEFAULT_FIXTURE_RULE,
         help=(
-            "How the server-stamped calibration_excluded flag is read: 'registered' "
-            "(default) treats it as a fixture marker whatever its cause, the "
-            "pre-registered read's predicate; 'corrected' keeps rows whose only "
-            "exclusion is a scraped confidence."
+            "How the server-stamped calibration_excluded flag is read: 'corrected' "
+            "(default since 2026-09-02) keeps rows whose only exclusion is a scraped "
+            "confidence; 'registered' treats the flag as a fixture marker whatever "
+            "its cause, the pre-registered read's predicate, and reproduces the "
+            "counts this report gave before that date."
         ),
     )
     return parser.parse_args(argv)
@@ -799,8 +800,9 @@ async def main_async(args: argparse.Namespace) -> int:
             f"\nscraped_only_rows_kept: {attrition.get('scraped_only_rows_kept', 0)}"
             "\n  (calibration_excluded_only = rows the registered rule drops solely"
             " because the server scraped their confidence, #1790; Phase-5 shadow"
-            " rows are not in it. --fixture-rule corrected keeps them as validation"
-            " evidence while calibration still does not train on them.)"
+            " rows are not in it. The corrected rule, the default since 2026-09-02,"
+            " keeps them as validation evidence while calibration still does not"
+            " train on them; --fixture-rule registered reproduces the earlier counts.)"
         )
     if args.output:
         output_path = Path(args.output)

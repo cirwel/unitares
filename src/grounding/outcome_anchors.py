@@ -90,16 +90,19 @@ _EXPLICIT_FIXTURE_FLAGS = _CONTROLLED_FIXTURE_FLAGS - {"calibration_excluded"}
 #   their calibration path does not consult it, so this rule does not reach
 #   them. For rows recorded through the outcome_event recorder, calibration
 #   still never trains on an excluded row: this rule changes what the
-#   validation instruments count, not what calibration learns from. Opt-in
-#   (`--fixture-rule corrected`): the shared default stays `registered`, so no
-#   cohort or statistic moves on a deploy (report headers and additive summary
-#   keys do change) and the pre-registered read keeps the predicate it was
-#   registered with; the packet's Selection block records why the default was
-#   not flipped.
+#   validation instruments count, not what calibration learns from.
+#   Shared default since 2026-09-02 (decision session e4ebf589a1c79b9d):
+#   `corrected`, for the non-protocol instruments (inventory, skeptic report,
+#   telemetry-health summary, exploratory reads). Protocol-bound reads never
+#   take the default: registered reads get their rule from the ablation
+#   matrix's REGISTERED_READ_MANIFEST, reproduction reads of the frozen
+#   2026-08-09 artifact and the frozen prospective-cohort contract pin
+#   `registered`, and the coherence-shadow v0 contract pins it too. The
+#   flip was a disclosed one-time step change in telemetry counts.
 REGISTERED_FIXTURE_RULE = "registered"
 CORRECTED_FIXTURE_RULE = "corrected"
 FIXTURE_RULES = (REGISTERED_FIXTURE_RULE, CORRECTED_FIXTURE_RULE)
-DEFAULT_FIXTURE_RULE = REGISTERED_FIXTURE_RULE
+DEFAULT_FIXTURE_RULE = CORRECTED_FIXTURE_RULE
 
 # Prediction sources where the SERVER supplied the confidence, not the caller.
 # The writer keys the scraped-confidence exclusion on these (see
