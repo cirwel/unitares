@@ -332,8 +332,12 @@ async def save_session(session: DialecticSession, *, defer_terminal: bool = Fals
                 seal_resolution_for_persistence(session, session.resolution, status=status)
                 if session.resolution else None
             )
+            # getattr: callers may pass duck-typed resolution objects that
+            # predate the receipt field.
             terminal_minted = bool(
-                session.resolution is not None and session.resolution.receipt and not had_receipt
+                session.resolution is not None
+                and getattr(session.resolution, "receipt", "")
+                and not had_receipt
             )
             # save_session is the catch-all flush that resolves the session in the
             # orchestrated-reviewer flow (verified 2026-06-28 by the pg_committed
