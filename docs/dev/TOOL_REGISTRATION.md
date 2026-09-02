@@ -214,6 +214,10 @@ Add backward-compat aliases in `tool_stability.py`:
 )
 ```
 
+`source_module` is also accepted but is not for hand-authored tools — only
+`action_router` passes it, to record the module that declared the router rather
+than `decorators.py`. See *Plugin tools vs. this repo's tools* below.
+
 (`rate_limit_exempt` was removed 2026-06-12; rate limiting is handled uniformly
 by the middleware step.)
 
@@ -228,6 +232,44 @@ Use `register=False` for handlers that are:
 *rewrites the call* to the alias's `new_name` (a registered tool) and injects the
 action. `TOOL_HANDLERS` is populated only from `_TOOL_DEFINITIONS`, so an alias
 whose `new_name` is itself `register=False` would hit `tool_not_found_error`.
+
+---
+
+## Plugin tools vs. this repo's tools
+
+`_TOOL_DEFINITIONS` describes **the running process, not the repo**. An
+entry-point plugin (`governance_mcp.plugins`, e.g. the out-of-repo
+`unitares-pi-plugin`) registers into the same dict through the same
+`@mcp_tool` / `action_router` calls, so "registered" alone cannot answer "does
+this repo ship it".
+
+Every `ToolDefinition` therefore records `source_module`, the import path of
+the module that **declared** the tool. It is filled in automatically:
+
+- `@mcp_tool` records `func.__module__`.
+- `action_router` records its **caller's** module. A router's handler is built
+  inside `mcp_handlers/decorators.py`, so `handler.__module__` names governance
+  for every router, a plugin's included — do not use it for provenance.
+
+`decorators.list_plugin_registered_tools()` returns everything declared outside `src.` /
+`governance_core.`. Two consumers:
+
+- `tool_schemas._is_core_handler` — only a tool this repo ships must appear in
+  `TOOL_ORDER`; a plugin keeps the auto-discovery path and supplies its own
+  schemas via `tool_schemas.register_extra_schemas()`.
+- `tests/conftest.py::first_party_tool_surface` — a fixture that lifts foreign
+  registrations out for the duration of a test, so a surface-drift assertion
+  compares the surface this repo ships. `tests/test_describe_tool_drift.py` and
+  `tests/test_lite_wire_surface.py` use it module-wide. Without it those tests
+  depended on collection/import order: `tests/test_pi_orchestration.py` imports
+  the pi plugin's handlers at module scope, so pytest **collection** fires that
+  package's decorators before any test runs, while `TOOL_HANDLERS` snapshots
+  the registry when `src.mcp_handlers` is imported. They failed on
+  `pi_restart_service` / `pi` in full local runs on machines with the plugin
+  installed and passed everywhere else, CI included.
+
+If you add a test that asserts something about the whole tool surface, request
+that fixture.
 
 ---
 

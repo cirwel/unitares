@@ -335,6 +335,58 @@ def _isolate_db_backend(monkeypatch):
     storage_module._db_ready_cache.clear()
 
 
+@pytest.fixture
+def first_party_tool_surface():
+    """Assert governance tool contracts against THIS repo's tools only.
+
+    The decorator registry describes the process, not the repo. An
+    externally-installed ``governance_mcp.plugins`` package registers into the
+    same ``_TOOL_DEFINITIONS`` dict, and on a developer machine that has one
+    installed it gets there without anybody asking: ``tests/test_pi_orchestration.py``
+    imports ``unitares_pi_plugin.handlers`` at module scope, so pytest
+    COLLECTION fires that package's ``@mcp_tool`` decorators before the first
+    test runs, and several other tests call the plugin's ``register()`` to
+    exercise its router. ``TOOL_HANDLERS``, meanwhile, snapshots the registry
+    when ``src.mcp_handlers`` is imported. The tool surface a drift test then
+    observes depends on which of those happened first — so
+    ``test_every_advertised_tool_resolves_at_dispatch`` and
+    ``test_orientation_compact_view_matches_the_wire`` failed on
+    ``pi_restart_service`` / ``pi`` in a full local run while passing in every
+    narrow slice, and CI (no plugin installed) never saw it.
+
+    Lifting foreign registrations out for the duration keeps the assertions
+    exact rather than weakening them to a subset comparison: what the test
+    asserts is the surface this repo ships, which is the surface its
+    TOOL_ORDER, mode sets and orientation code are written against. Whether a
+    plugin's own tools are coherent is the plugin's suite to answer.
+
+    Restores with ``setdefault`` so a tool the test itself registers under a
+    lifted name wins.
+    """
+    from src.mcp_handlers import TOOL_HANDLERS
+    from src.mcp_handlers.decorators import (
+        _TOOL_DEFINITIONS,
+        list_plugin_registered_tools,
+    )
+
+    foreign = list_plugin_registered_tools()
+    lifted_definitions = {
+        name: _TOOL_DEFINITIONS.pop(name)
+        for name in foreign
+        if name in _TOOL_DEFINITIONS
+    }
+    lifted_handlers = {
+        name: TOOL_HANDLERS.pop(name) for name in foreign if name in TOOL_HANDLERS
+    }
+    try:
+        yield
+    finally:
+        for name, definition in lifted_definitions.items():
+            _TOOL_DEFINITIONS.setdefault(name, definition)
+        for name, handler in lifted_handlers.items():
+            TOOL_HANDLERS.setdefault(name, handler)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _isolate_tool_usage_tracker(tmp_path_factory):
     """
