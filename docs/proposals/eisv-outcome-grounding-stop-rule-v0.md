@@ -132,6 +132,21 @@ the December report must disclose the interim accesses, identify any analysis,
 label, scope, collection, or narrative choices they affected, and include a
 read-specific power analysis. It may not claim clean single-read blinding.
 
+## Interim access — disclosed 2026-09-02
+
+While preparing the decision packet
+[`outcome-fixture-conflation-decision-packet-v0.md`](outcome-fixture-conflation-decision-packet-v0.md),
+an agent session ran `scripts/analysis/legacy_coherence_dependency_shadow.py`
+three times against the live database: the default 365-day `task` scope,
+`--window-days 21` in `task` scope, and `--window-days 21 --scope strict`. The
+script reads the matching live outcome rows from the database and then applies
+the fixture predicate; it computes discrimination statistics and carries no
+read-protocol guard. All three runs returned 0 eligible outcomes after that
+filter, so no discrimination result was computed or exposed. `scripts/analysis/outcome_inventory.py`
+was also run, which the falsification audit permits. This changes no cutoff,
+cohort, threshold or condition; it is recorded so the December report can
+list every known interim access.
+
 ## Power-characterisation correction — disclosed 2026-08-23
 
 The first database-free power audit reused `(agent, prior-state snapshot)`
