@@ -251,12 +251,12 @@ the module that **declared** the tool. It is filled in automatically:
   inside `mcp_handlers/decorators.py`, so `handler.__module__` names governance
   for every router, a plugin's included — do not use it for provenance.
 
-`list_plugin_registered_tools()` returns everything declared outside `src.` /
+`decorators.list_plugin_registered_tools()` returns everything declared outside `src.` /
 `governance_core.`. Two consumers:
 
 - `tool_schemas._is_core_handler` — only a tool this repo ships must appear in
   `TOOL_ORDER`; a plugin keeps the auto-discovery path and supplies its own
-  schemas via `register_extra_schemas()`.
+  schemas via `tool_schemas.register_extra_schemas()`.
 - `tests/conftest.py::first_party_tool_surface` — a fixture that lifts foreign
   registrations out for the duration of a test, so a surface-drift assertion
   compares the surface this repo ships. `tests/test_describe_tool_drift.py` and
