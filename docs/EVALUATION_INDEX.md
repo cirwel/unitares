@@ -52,6 +52,7 @@ Don't rebuild discrimination analysis — these exist and are current:
   lift the same machinery could have separated, by planting a known effect in a
   synthetic cohort of a given shape. Run it before reading any `NON_DETECTION`
   result as evidence of absence. No database, no credentials, deterministic.
+- **`scripts/analysis/legacy_coherence_dependency_shadow.py`** ✓ — the legacy-coherence dependency shadow read (`docs/proposals/legacy-coherence-dependency-ablation-v0.md`): contract v0 registered 2026-08-12 (registered fixture rule, item 2 as registered, `--contract v0`), contract v0.1 registered 2026-09-02 (corrected rule, outcomes at or after 2026-09-03T00:00Z, pinned parameters, one-shot receipt, `--contract v0.1 --read-id ...`).
 
 **Reading either output:** `AUC delta`, `Null max p95`, and `Selective p`
 decide whether a selected lift clears its matching null. Before making a claim,

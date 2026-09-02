@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from datetime import datetime as _dt, timezone as _tz
 
 from scripts.analysis.legacy_coherence_dependency_shadow import (
     MIN_BAD_CLUSTERS,
@@ -150,16 +151,65 @@ def test_report_names_non_actuation_and_recursive_replay_boundary():
     assert "WAIT_SAMPLE_FLOOR" in report
 
 
+def shadow_module_cutoff():
+    from scripts.analysis.legacy_coherence_dependency_shadow import V0_1_AMENDMENT_CUTOFF
+
+    return V0_1_AMENDMENT_CUTOFF
+
+
 def test_report_header_names_the_fixture_rule_and_its_contract_standing():
     from scripts.analysis.legacy_coherence_dependency_shadow import build_report
 
     registered = build_report([], scope="task", window_days=21, lead_minutes=30.0, fixture_rule="registered")
+    assert "Contract:" not in registered
     assert "Fixture rule: `registered` (the contract's item 2 as registered)" in registered
-    corrected = build_report([], scope="task", window_days=21, lead_minutes=30.0, fixture_rule="corrected")
-    assert "Fixture rule: `corrected` (a disclosed deviation from the contract's item 2)" in corrected
+    v01 = build_report([], scope="task", window_days=21, lead_minutes=30.0, fixture_rule="corrected", contract="v0.1", not_before=shadow_module_cutoff())
+    assert "Contract: `v0.1`" in v01 and "Fixture rule: `corrected` (the v0.1 contract's rule)" in v01
+    with pytest.raises(ValueError):
+        build_report([], scope="task", window_days=21, lead_minutes=30.0, fixture_rule="corrected", contract="v0.1")
+    deviation = build_report([], scope="task", window_days=21, lead_minutes=30.0, fixture_rule="corrected")
+    assert "Fixture rule: `corrected` (a disclosed deviation from the contract's item 2)" in deviation
 
 
 def test_cli_threads_one_fixture_rule_into_fetch_and_report(monkeypatch, tmp_path):
+    from scripts.analysis import legacy_coherence_dependency_shadow as shadow_module
+
+    calls: list = []
+
+    async def fake_fetch_rows(_db_url, **kwargs):
+        # The receipt must already exist when the database is first touched.
+        assert list((tmp_path / "ledger").glob("*.json")), "receipt written after database access"
+        calls.append(kwargs)
+        return []
+
+    monkeypatch.setattr(shadow_module, "fetch_rows", fake_fetch_rows)
+    monkeypatch.setattr(shadow_module, "_utcnow", lambda: _dt(2026, 10, 2, tzinfo=_tz.utc))
+    _canonical_ledger(monkeypatch, tmp_path)
+    out = tmp_path / "shadow.md"
+    rc = shadow_module.main(
+        [
+            "--db-url", "postgresql://unused", "--contract", "v0.1", "--output", str(out),
+            "--read-id", "legacy-coherence-dependency-v0.1-1",
+            "--as-of", "2026-10-01T00:00:00Z",
+        ]
+    )
+    assert rc == 0
+    # v0.1 reads its own cohort under the corrected rule, then the same window
+    # under the registered rule for the provenance block; both carry the cutoff.
+    text = out.read_text(encoding="utf-8")
+    assert [c["fixture_rule"] for c in calls] == ["corrected", "registered"]
+    assert {c["not_before"] for c in calls} == {shadow_module.V0_1_AMENDMENT_CUTOFF}
+    # One boundary for both fetches.
+    assert calls[0]["as_of"] is not None and calls[0]["as_of"] == calls[1]["as_of"]
+    assert "Read ID: `legacy-coherence-dependency-v0.1-1`" in text
+    assert "Admitted window: 2026-09-03T00:00:00+00:00 to 2026-10-01T00:00:00+00:00" in text
+    text = out.read_text(encoding="utf-8")
+    assert "Contract: `v0.1`" in text
+    assert "Fixture rule: `corrected` (the v0.1 contract's rule)" in text
+    assert "Registered-rule sensitivity (provenance only)" in text
+
+
+def test_v0_is_pinned_to_the_registered_rule_and_refuses_to_move(monkeypatch, tmp_path, capsys):
     from scripts.analysis import legacy_coherence_dependency_shadow as shadow_module
 
     seen: dict = {}
@@ -169,10 +219,253 @@ def test_cli_threads_one_fixture_rule_into_fetch_and_report(monkeypatch, tmp_pat
         return []
 
     monkeypatch.setattr(shadow_module, "fetch_rows", fake_fetch_rows)
-    out = tmp_path / "shadow.md"
+    out = tmp_path / "v0.md"
+    assert shadow_module.main(["--db-url", "postgresql://unused", "--output", str(out)]) == 0
+    assert seen["fixture_rule"] == "registered"
+    assert seen["not_before"] is None
+    assert seen["as_of"] is None  # v0 keeps its live window, as before
+    text = out.read_text(encoding="utf-8")
+    assert "Contract:" not in text  # v0 output is unchanged by v0.1's existence
+    assert "Fixture rule: `registered` (the contract's item 2 as registered)" in text
+    # v0 cannot be run under the corrected rule: that is v0.1, a different read.
+    rc = shadow_module.main(["--db-url", "postgresql://unused", "--fixture-rule", "corrected"])
+    assert rc == 2
+    assert "Run the other contract" in capsys.readouterr().err
+    assert shadow_module.contract_fixture_rule("v0") == "registered"
+    assert shadow_module.contract_fixture_rule("v0.1") == "corrected"
+    with pytest.raises(ValueError):
+        shadow_module.contract_fixture_rule("v2")
+
+
+def test_v0_1_cutoff_excludes_pre_amendment_outcomes(monkeypatch):
+    """The v0.1 read admits no outcome from before its amendment instant."""
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+
+    from scripts.analysis import legacy_coherence_dependency_shadow as shadow_module
+
+    cutoff = shadow_module.V0_1_AMENDMENT_CUTOFF
+    assert cutoff == datetime(2026, 9, 3, tzinfo=timezone.utc)
+    assert shadow_module.contract_not_before("v0.1") == cutoff
+    assert shadow_module.contract_not_before("v0") is None
+
+    class _Record(dict):
+        pass
+
+    def record(ts):
+        return _Record(ts=ts, detail={"kind": "live"})
+
+    captured = {}
+
+    class _Conn:
+        async def fetch(self, *_args):
+            return [record(cutoff - timedelta(seconds=1)), record(cutoff), record(cutoff + timedelta(days=1))]
+
+        async def close(self):
+            return None
+
+    class _FakeAsyncpg:
+        async def connect(self, _dsn):
+            return _Conn()
+
+    import sys as _sys
+
+    monkeypatch.setitem(_sys.modules, "asyncpg", _FakeAsyncpg())
+
+    def fake_row_from_record(rec):
+        captured.setdefault("rows", []).append(rec["ts"])
+        return rec["ts"]
+
+    monkeypatch.setattr(shadow_module, "_row_from_record", fake_row_from_record)
+    rows = asyncio.run(
+        shadow_module.fetch_rows(
+            "postgresql://unused", window_days=365, lead_minutes=30.0, outcome_types=("task_failed",),
+            fixture_rule="corrected", not_before=cutoff,
+        )
+    )
+    assert rows == [cutoff, cutoff + timedelta(days=1)]
+
+
+def _v0_1_argv(tmp_path, read_id="legacy-coherence-dependency-v0.1-1", *extra):
+    return [
+        "--db-url", "postgresql://unused", "--contract", "v0.1", "--read-id", read_id,
+        "--as-of", "2026-10-01T00:00:00Z", *extra,
+    ]
+
+
+def _canonical_ledger(monkeypatch, tmp_path):
+    """Point the canonical ledger at a temp dir so tests exercise the canonical path."""
+    from scripts.analysis import legacy_coherence_dependency_shadow as shadow_module
+
+    monkeypatch.setattr(shadow_module, "DEFAULT_READ_LEDGER_DIR", tmp_path / "ledger")
+
+
+def test_v0_1_is_receipted_one_shot_and_pinned(monkeypatch, tmp_path, capsys):
+    import json as _json
+
+    from scripts.analysis import legacy_coherence_dependency_shadow as shadow_module
+
+    async def fake_fetch_rows(_db_url, **kwargs):
+        return []
+
+    monkeypatch.setattr(shadow_module, "fetch_rows", fake_fetch_rows)
+    monkeypatch.setattr(shadow_module, "_utcnow", lambda: _dt(2026, 10, 2, tzinfo=_tz.utc))
+    _canonical_ledger(monkeypatch, tmp_path)
+    assert shadow_module.main(_v0_1_argv(tmp_path, "legacy-coherence-dependency-v0.1-1", "--output", str(tmp_path / "a.md"))) == 0
+    receipts = list((tmp_path / "ledger").glob("*.json"))
+    assert len(receipts) == 1
+    receipt = _json.loads(receipts[0].read_text(encoding="utf-8"))
+    assert receipt["contract"] == "v0.1" and receipt["fixture_rule"] == "corrected"
+    assert receipt["not_before"] == shadow_module.V0_1_AMENDMENT_CUTOFF.isoformat()
+    assert receipt["read_id"] == "legacy-coherence-dependency-v0.1-1"
+    # The same id cannot read twice.
+    assert shadow_module.main(_v0_1_argv(tmp_path, "legacy-coherence-dependency-v0.1-1")) == 2
+    assert "already has a receipt" in capsys.readouterr().err
+    # Pins and guards.
+    for extra, message in [
+        (("--scope", "strict"), "pins --scope task"),
+        (("--lead-minutes", "5"), "pins --lead-minutes"),
+        (("--min-bad-clusters", "10"), "pins --min-bad-clusters"),
+    ]:
+        assert shadow_module.main(_v0_1_argv(tmp_path, "legacy-coherence-dependency-v0.1-2", *extra)) == 2
+        assert message in capsys.readouterr().err
+    assert shadow_module.main([
+        "--db-url", "postgresql://unused", "--contract", "v0.1", "--read-id", "legacy-coherence-dependency-v0.1-3",
+        "--as-of", "2026-09-01T00:00:00Z",
+    ]) == 2
+    assert "before its amendment cutoff" in capsys.readouterr().err
+    assert shadow_module.main(["--db-url", "postgresql://unused", "--contract", "v0.1", "--as-of", "2026-10-01T00:00:00Z"]) == 2
+    assert "require --read-id" in capsys.readouterr().err
+    # No receipt was written by any refused read.
+    assert len(list((tmp_path / "ledger").glob("*.json"))) == 1
+
+
+def test_cutoff_fails_closed_on_missing_ts_and_reads_naive_ts_as_utc(monkeypatch):
+    import asyncio
+    import sys as _sys
+    from datetime import timedelta
+
+    from scripts.analysis import legacy_coherence_dependency_shadow as shadow_module
+
+    cutoff = shadow_module.V0_1_AMENDMENT_CUTOFF
+    records = [
+        {"ts": None, "detail": {"kind": "live"}},
+        {"ts": (cutoff + timedelta(days=1)).replace(tzinfo=None), "detail": {"kind": "live"}},
+        {"ts": (cutoff - timedelta(days=1)).replace(tzinfo=None), "detail": {"kind": "live"}},
+    ]
+
+    class _Conn:
+        async def fetch(self, *_args):
+            return records
+
+        async def close(self):
+            return None
+
+    class _FakeAsyncpg:
+        async def connect(self, _dsn):
+            return _Conn()
+
+    monkeypatch.setitem(_sys.modules, "asyncpg", _FakeAsyncpg())
+    monkeypatch.setattr(shadow_module, "_row_from_record", lambda rec: rec["ts"])
+    rows = asyncio.run(
+        shadow_module.fetch_rows(
+            "postgresql://unused", window_days=365, lead_minutes=30.0, outcome_types=("task_failed",),
+            fixture_rule="corrected", not_before=cutoff,
+        )
+    )
+    # The naive value is admitted as UTC and the row keeps the aware timestamp.
+    assert rows == [cutoff + timedelta(days=1)]
+
+
+def test_v0_1_pins_every_inherited_default_and_its_read_id_namespace(monkeypatch, tmp_path, capsys):
+    from datetime import datetime, timezone
+
+    from scripts.analysis import legacy_coherence_dependency_shadow as shadow_module
+
+    async def fake_fetch_rows(_db_url, **kwargs):
+        return []
+
+    monkeypatch.setattr(shadow_module, "fetch_rows", fake_fetch_rows)
+    _canonical_ledger(monkeypatch, tmp_path)
+    base = ["--db-url", "postgresql://unused", "--contract", "v0.1", "--as-of", "2026-10-01T00:00:00Z"]
+    for read_id in ("legacy-coherence-dependency-v0.1-0", "eisv-outcome-grounding-2026-12-01", "shadow-run", "legacy-coherence-dependency-v0.1-01"):
+        assert shadow_module.main([*base, "--read-id", read_id]) == 2
+        assert "legacy-coherence-dependency-v0.1-<n>" in capsys.readouterr().err
+    for extra, message in [
+        (("--window-days", "30"), "pins --window-days 365"),
+        (("--resamples", "10"), "pins --resamples"),
+        (("--seed", "7"), "pins --seed 0"),
+    ]:
+        assert shadow_module.main([*base, "--read-id", "legacy-coherence-dependency-v0.1-9", *extra]) == 2
+        assert message in capsys.readouterr().err
+    # A boundary in the future at access time is refused too.
+    monkeypatch.setattr(shadow_module, "_utcnow", lambda: datetime(2026, 9, 20, tzinfo=timezone.utc))
+    assert shadow_module.main([*base, "--read-id", "legacy-coherence-dependency-v0.1-9"]) == 2
+    assert "in the future" in capsys.readouterr().err
+    assert not list((tmp_path / "ledger").glob("*.json"))
+
+
+def test_v0_1_freezes_one_boundary_when_no_as_of_is_given(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+
+    from scripts.analysis import legacy_coherence_dependency_shadow as shadow_module
+
+    calls: list = []
+
+    async def fake_fetch_rows(_db_url, **kwargs):
+        calls.append(kwargs)
+        return []
+
+    frozen = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(shadow_module, "fetch_rows", fake_fetch_rows)
+    monkeypatch.setattr(shadow_module, "_utcnow", lambda: frozen)
+    _canonical_ledger(monkeypatch, tmp_path)
     rc = shadow_module.main(
-        ["--db-url", "postgresql://unused", "--fixture-rule", "corrected", "--output", str(out)]
+        ["--db-url", "postgresql://unused", "--contract", "v0.1", "--read-id", "legacy-coherence-dependency-v0.1-5",
+         "--output", str(tmp_path / "r.md")]
     )
     assert rc == 0
-    assert seen["fixture_rule"] == "corrected"
-    assert "Fixture rule: `corrected` (a disclosed deviation from the contract's item 2)" in out.read_text(encoding="utf-8")
+    assert [c["as_of"] for c in calls] == [frozen, frozen]
+
+
+def test_v0_1_refuses_a_noncanonical_ledger_unless_the_deviation_is_acknowledged(monkeypatch, tmp_path, capsys):
+    import json as _json
+
+    from scripts.analysis import legacy_coherence_dependency_shadow as shadow_module
+
+    async def fake_fetch_rows(_db_url, **kwargs):
+        return []
+
+    monkeypatch.setattr(shadow_module, "fetch_rows", fake_fetch_rows)
+    monkeypatch.setattr(shadow_module, "_utcnow", lambda: _dt(2026, 10, 2, tzinfo=_tz.utc))
+    _canonical_ledger(monkeypatch, tmp_path)
+    other = tmp_path / "elsewhere"
+    argv = _v0_1_argv(tmp_path, "legacy-coherence-dependency-v0.1-7", "--read-ledger-dir", str(other), "--output", str(tmp_path / "d.md"))
+    assert shadow_module.main(argv) == 2
+    assert "canonical outcome-read ledger" in capsys.readouterr().err
+    assert not other.exists() or not list(other.glob("*.json"))
+    assert shadow_module.main([*argv, "--acknowledge-noncanonical-ledger"]) == 0
+    receipt = _json.loads(next(other.glob("*.json")).read_text(encoding="utf-8"))
+    assert receipt["ledger_canonical"] is False
+    assert receipt["protocol_deviation"] == "noncanonical read ledger (acknowledged)"
+    assert "Protocol deviation: noncanonical read ledger (acknowledged)" in (tmp_path / "d.md").read_text(encoding="utf-8")
+    # The canonical path records no deviation.
+    assert shadow_module.main(_v0_1_argv(tmp_path, "legacy-coherence-dependency-v0.1-8", "--output", str(tmp_path / "c.md"))) == 0
+    canonical = _json.loads(next((tmp_path / "ledger").glob("*.json")).read_text(encoding="utf-8"))
+    assert canonical["ledger_canonical"] is True and canonical["protocol_deviation"] is None
+    assert "Protocol deviation" not in (tmp_path / "c.md").read_text(encoding="utf-8")
+
+
+def test_v0_1_sensitivity_block_carries_the_full_channel_table():
+    from scripts.analysis.legacy_coherence_dependency_shadow import V0_1_AMENDMENT_CUTOFF, build_report
+
+    report = build_report(
+        [], scope="task", window_days=365, lead_minutes=30.0, fixture_rule="corrected", contract="v0.1",
+        not_before=V0_1_AMENDMENT_CUTOFF, as_of=_dt(2026, 10, 1, tzinfo=_tz.utc), registered_sensitivity=[],
+        read_id="legacy-coherence-dependency-v0.1-1",
+    )
+    head, _, sens = report.partition("## Registered-rule sensitivity (provenance only)")
+    assert sens, "no sensitivity block"
+    table_header = next(line for line in head.splitlines() if line.startswith("| ") and "---" not in line and "channel" in line.lower())
+    assert table_header in sens  # the same table, counts and statistics and uncertainty, not statuses alone
+    assert "Trusted non-fixture outcomes fetched: 0" in sens
