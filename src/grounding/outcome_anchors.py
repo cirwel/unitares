@@ -63,6 +63,65 @@ _CONTROLLED_FIXTURE_FLAGS = frozenset({
 })
 _CONTROLLED_FIXTURE_BINDINGS = frozenset({"synthetic_negative_control"})
 _CONTROLLED_FIXTURE_TEST_NAMES = frozenset({"clean_control", "overconfidence_probe"})
+# Every explicit fixture marker except ``calibration_excluded``, which the
+# outcome writer also stamps for two non-fixture causes (see the rules below).
+_EXPLICIT_FIXTURE_FLAGS = _CONTROLLED_FIXTURE_FLAGS - {"calibration_excluded"}
+
+# Fixture rules.
+#
+# ``calibration_excluded`` is stamped by the outcome writer for three causes:
+# the row declares itself a controlled fixture, it is a Phase-5 ``shadow_write``
+# row, or the server had to scrape the confidence (the caller sent none and no
+# registered prediction resolved). All three must keep calibration from
+# training on the row. Only the first two are fixture traffic. Reading the flag
+# as a fixture marker dropped every scraped-confidence row from the validation
+# instruments (issue #1790; decision packet
+# docs/proposals/outcome-fixture-conflation-decision-packet-v0.md).
+#
+# ``registered``: the flag is a fixture marker, whatever its cause. This is the
+#   predicate the 2026-12-01 pre-registered read was registered with, and the
+#   frozen 2026-08-09 read applied. Protocol-bound reads pin it.
+# ``corrected``: the flag is a fixture marker unless the exclusion is solely a
+#   scraped confidence. Rows recorded through the outcome_event recorder say
+#   why they were excluded (``calibration_exclusion_reasons``); rows written
+#   before that key existed are classified by ``prediction_source``. Rows the
+#   Phase-5 writers insert through ``record_outcome_event`` directly carry
+#   neither key: they are never excluded by the flag under either rule, and
+#   their calibration path does not consult it, so this rule does not reach
+#   them. For rows recorded through the outcome_event recorder, calibration
+#   still never trains on an excluded row: this rule changes what the
+#   validation instruments count, not what calibration learns from. Opt-in
+#   (`--fixture-rule corrected`): the shared default stays `registered`, so no
+#   cohort or statistic moves on a deploy (report headers and additive summary
+#   keys do change) and the pre-registered read keeps the predicate it was
+#   registered with; the packet's Selection block records why the default was
+#   not flipped.
+REGISTERED_FIXTURE_RULE = "registered"
+CORRECTED_FIXTURE_RULE = "corrected"
+FIXTURE_RULES = (REGISTERED_FIXTURE_RULE, CORRECTED_FIXTURE_RULE)
+DEFAULT_FIXTURE_RULE = REGISTERED_FIXTURE_RULE
+
+# Prediction sources where the SERVER supplied the confidence, not the caller.
+# The writer keys the scraped-confidence exclusion on these (see
+# outcome_events.py for the measurement behind the rule).
+SCRAPED_PREDICTION_SOURCES = frozenset({
+    "prev_confidence_fallback",
+    "audit_trail_fallback",
+})
+EXCLUSION_REASONS_KEY = "calibration_exclusion_reasons"
+EXCLUSION_REASON_FIXTURE = "controlled_fixture"
+EXCLUSION_REASON_SHADOW = "shadow_write"
+EXCLUSION_REASON_SCRAPED = "scraped_confidence"
+
+
+def normalize_fixture_rule(rule: object) -> str:
+    """Return a valid fixture rule or raise; an unknown rule never passes silently."""
+    text = str(rule).strip().lower() if rule is not None else ""
+    if text not in FIXTURE_RULES:
+        raise ValueError(
+            f"unknown fixture rule {rule!r}; expected one of {', '.join(FIXTURE_RULES)}"
+        )
+    return text
 
 
 def _truthy_fixture_flag(value: object) -> bool:
@@ -75,28 +134,85 @@ def _truthy_fixture_flag(value: object) -> bool:
     return False
 
 
+def _parse_detail(detail: Mapping[str, object] | str | None) -> Mapping[str, object] | None:
+    if isinstance(detail, str):
+        try:
+            parsed = json.loads(detail)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, Mapping) else None
+    return detail if isinstance(detail, Mapping) else None
+
+
+def has_explicit_fixture_marker(detail: Mapping[str, object] | str | None) -> bool:
+    """True when the row carries a fixture marker other than ``calibration_excluded``."""
+    parsed = _parse_detail(detail)
+    if parsed is None:
+        return False
+    if any(_truthy_fixture_flag(parsed.get(flag)) for flag in _EXPLICIT_FIXTURE_FLAGS):
+        return True
+    if parsed.get("prediction_binding") in _CONTROLLED_FIXTURE_BINDINGS:
+        return True
+    return parsed.get("test_name") in _CONTROLLED_FIXTURE_TEST_NAMES
+
+
+def is_scraped_only_exclusion(detail: Mapping[str, object] | str | None) -> bool:
+    """True when the row IS excluded and the exclusion is attributable solely to a scraped confidence.
+
+    A row that is not excluded at all (``calibration_excluded`` falsy) is never
+    scraped-only, whatever its ``prediction_source`` says. Rows written since
+    the writer records ``calibration_exclusion_reasons`` are judged by that
+    list. Older rows are judged by ``prediction_source``: the writer only ever
+    scraped from the two fallback sources. Any explicit fixture marker or a
+    ``shadow_write`` flag wins over both, so a fixture that also happened to be
+    scraped stays a fixture. One historical shape stays ambiguous: a
+    caller-supplied bare ``calibration_excluded`` fixture that was also scraped
+    before reasons existed reads as scraped-only here.
+    """
+    parsed = _parse_detail(detail)
+    if parsed is None:
+        return False
+    if not _truthy_fixture_flag(parsed.get("calibration_excluded")):
+        return False
+    if has_explicit_fixture_marker(parsed):
+        return False
+    if _truthy_fixture_flag(parsed.get("shadow_write")):
+        return False
+    reasons = parsed.get(EXCLUSION_REASONS_KEY)
+    if isinstance(reasons, (list, tuple)):
+        return {str(reason) for reason in reasons} == {EXCLUSION_REASON_SCRAPED}
+    if _truthy_fixture_flag(parsed.get("confidence_scraped")):
+        return True
+    return parsed.get("prediction_source") in SCRAPED_PREDICTION_SOURCES
+
+
 def is_structurally_controlled_fixture(
     detail: Mapping[str, object] | str | None,
+    *,
+    rule: str = DEFAULT_FIXTURE_RULE,
 ) -> bool:
     """Return whether immutable outcome detail marks a controlled fixture.
 
     This deliberately ignores mutable identity metadata and free-form purpose.
     It is safe for prospective/frozen evidence consumers that need fixture
     attrition without letting the measured subject opt itself out later.
+
+    ``rule`` selects how ``calibration_excluded`` is read (see the module
+    comment): ``registered`` treats it as a fixture marker whatever its cause;
+    ``corrected`` treats it as one unless the exclusion is solely a scraped
+    confidence. An unknown rule raises rather than defaulting.
     """
-    if isinstance(detail, str):
-        try:
-            parsed = json.loads(detail)
-        except json.JSONDecodeError:
-            return False
-        detail = parsed if isinstance(parsed, Mapping) else None
-    if not isinstance(detail, Mapping):
+    rule = normalize_fixture_rule(rule)
+    parsed = _parse_detail(detail)
+    if parsed is None:
         return False
-    if any(_truthy_fixture_flag(detail.get(flag)) for flag in _CONTROLLED_FIXTURE_FLAGS):
+    if has_explicit_fixture_marker(parsed):
         return True
-    if detail.get("prediction_binding") in _CONTROLLED_FIXTURE_BINDINGS:
-        return True
-    return detail.get("test_name") in _CONTROLLED_FIXTURE_TEST_NAMES
+    if _truthy_fixture_flag(parsed.get("calibration_excluded")):
+        if rule == REGISTERED_FIXTURE_RULE:
+            return True
+        return not is_scraped_only_exclusion(parsed)
+    return False
 
 
 def tier_for_source(verification_source: Optional[str]) -> AnchorTier:

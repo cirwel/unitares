@@ -132,6 +132,44 @@ the December report must disclose the interim accesses, identify any analysis,
 label, scope, collection, or narrative choices they affected, and include a
 read-specific power analysis. It may not claim clean single-read blinding.
 
+## Pre-declared sensitivity cohort — declared 2026-09-02
+
+The registered read runs with the fixture rule it was registered with: the
+`registered` rule, under which a server-stamped `calibration_excluded` classifies
+the row as fixture traffic whatever its cause. `eisv_ablation_matrix.py` pins
+that rule for `--read-protocol registered` and rejects any other value, the
+shared default is the same rule, and the registered command now names it
+explicitly so the contract depends on no code default.
+
+Declared now, before the read: the December report will present, beside the
+registered result and **without authority**, the same command run a second time
+under the corrected rule (a scraped confidence excludes a row from calibration,
+not from evidence):
+
+```
+python3 scripts/analysis/eisv_ablation_matrix.py \
+    --read-protocol reproduction \
+    --read-id eisv-outcome-grounding-2026-12-01-sensitivity \
+    --acknowledge-contamination \
+    --fixture-rule corrected \
+    --scopes task --windows 365 --leads 0,30 \
+    --anchor-scope trusted --exclude-harness-lanes beam \
+    --as-of "$READ_CUTOFF" \
+    --uncertainty-resamples 2000 --selective-null-resamples 400
+```
+
+Same `READ_CUTOFF`, its own receipt, reported as a sensitivity analysis. The
+registered predicate decides the four PASS conditions. If condition 3 fails on
+the registered cohort, whether a corrected instrument and producer contract are
+the "materially different measurement process" the reopening clause requires
+is the operator's judgment, not a consequence of this declaration.
+
+Selection record: the decision packet
+[`outcome-fixture-conflation-decision-packet-v0.md`](outcome-fixture-conflation-decision-packet-v0.md)
+offered four branches; on 2026-09-02 the operator delegated the selection to the
+working agent ("proceed on your own accord, best for federation") and branch R1,
+this declaration, was selected under that criterion.
+
 ## Interim access — disclosed 2026-09-02
 
 While preparing the decision packet
@@ -189,9 +227,15 @@ python3 scripts/analysis/eisv_ablation_matrix.py \
     --acknowledge-contamination \
     --scopes task --windows 365 --leads 0,30 \
     --anchor-scope trusted --exclude-harness-lanes beam \
+    --fixture-rule registered \
     --as-of "$READ_CUTOFF" \
     --uncertainty-resamples 2000 --selective-null-resamples 400
 ```
+
+(`--fixture-rule registered` added 2026-09-02: it names the fixture predicate
+the read was registered with, which the CLI already pins for registered reads,
+so the execution contract does not depend on a code default. It changes no
+cohort.)
 
 The CLI validates this declaration and writes an atomic access receipt before
 the database query. It refuses an early read, a future `--as-of`, an undeclared

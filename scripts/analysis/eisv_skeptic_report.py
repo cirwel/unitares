@@ -40,7 +40,11 @@ from scripts.analysis.outcome_inventory import (
     attach_identity_metadata,
     is_controlled_validation_fixture,
 )
-from src.grounding.outcome_anchors import anchored_outcomes_predicate
+from src.grounding.outcome_anchors import (
+    DEFAULT_FIXTURE_RULE,
+    FIXTURE_RULES,
+    anchored_outcomes_predicate,
+)
 
 
 DEFAULT_DB_URL = os.environ.get(
@@ -1114,6 +1118,7 @@ def build_report(
     train_fraction: float,
     generated_at: datetime | None = None,
     as_of: datetime | None = None,
+    fixture_rule: str | None = None,
 ) -> str:
     generated_at = generated_at or datetime.now(timezone.utc)
     rows = sorted(rows, key=lambda r: r.ts)
@@ -1147,6 +1152,8 @@ def build_report(
     a(f"Outcome scope: `{scope}`")
     a(f"Prior-state lead: {lead_minutes:g} minutes before outcome")
     a(f"Train/test split: chronological {train_fraction:.0%}/{1 - train_fraction:.0%}")
+    if fixture_rule:
+        a(f"Fixture rule: `{fixture_rule}`")
     if as_of is not None:
         a(f"Data boundary: `{as_of.astimezone(timezone.utc).isoformat()}` (frozen)")
     a("")
@@ -1510,6 +1517,7 @@ async def fetch_rows(
     as_of: datetime | None = None,
     exclude_controlled_fixtures: bool = True,
     include_identity_metadata: bool = True,
+    fixture_rule: str = DEFAULT_FIXTURE_RULE,
 ) -> list[OutcomeRow]:
     """Fetch outcome rows with optional frozen boundary and fixture retention.
 
@@ -1710,6 +1718,7 @@ async def fetch_rows(
         if not is_controlled_validation_fixture(
             row.detail,
             include_declared_purpose=False,
+            rule=fixture_rule,
         )
     ]
 
@@ -1734,6 +1743,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--db-url", default=DEFAULT_DB_URL)
+    parser.add_argument(
+        "--fixture-rule",
+        choices=FIXTURE_RULES,
+        default=DEFAULT_FIXTURE_RULE,
+        help=(
+            "How the server-stamped calibration_excluded flag is read: 'registered' "
+            "(default) treats it as a fixture marker whatever its cause; 'corrected' "
+            "keeps rows whose only exclusion is a scraped confidence."
+        ),
+    )
     parser.add_argument(
         "--scope",
         choices=("strict", "task"),
@@ -1779,6 +1798,7 @@ async def main_async(args: argparse.Namespace) -> int:
         anchor_predicate=anchor_predicate,
         as_of=args.as_of,
         include_identity_metadata=args.as_of is None,
+        fixture_rule=args.fixture_rule,
     )
     report = build_report(
         rows,
@@ -1787,6 +1807,7 @@ async def main_async(args: argparse.Namespace) -> int:
         lead_minutes=args.lead_minutes,
         train_fraction=args.train_fraction,
         as_of=args.as_of,
+        fixture_rule=args.fixture_rule,
     )
     if args.output:
         path = Path(args.output)

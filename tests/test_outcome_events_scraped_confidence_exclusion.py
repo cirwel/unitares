@@ -172,3 +172,35 @@ async def test_synthetic_fixture_exclusion_is_unaffected():
     assert persisted["prediction_source"] == "argument"   # not the scraped path
     assert persisted["calibration_excluded"] is True      # excluded anyway
     checker.record_prediction.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_scraped_row_records_its_exclusion_reason():
+    """2026-09-02: the writer says WHY a row is excluded, so readers can tell a
+    scraped confidence (live evidence, no calibration training) from fixture
+    traffic without reading `calibration_excluded` as a fixture marker."""
+    persisted, *_ = await _run({}, latest_confidence=0.6)
+    assert persisted["prediction_source"] == "audit_trail_fallback"
+    assert persisted["calibration_excluded"] is True
+    assert persisted["calibration_exclusion_reasons"] == ["scraped_confidence"]
+    assert persisted["confidence_scraped"] is True
+
+
+@pytest.mark.asyncio
+async def test_caller_confidence_row_records_no_exclusion_reason():
+    persisted, *_ = await _run({"confidence": 0.8})
+    assert persisted["calibration_excluded"] is False
+    assert persisted["calibration_exclusion_reasons"] == []
+    assert persisted["confidence_scraped"] is False
+
+
+@pytest.mark.asyncio
+async def test_fixture_row_records_the_fixture_reason_even_when_scraped():
+    persisted, *_ = await _run(
+        {"detail": {"synthetic_calibration_fixture": True}}, latest_confidence=0.6
+    )
+    assert persisted["calibration_excluded"] is True
+    assert set(persisted["calibration_exclusion_reasons"]) == {
+        "controlled_fixture",
+        "scraped_confidence",
+    }

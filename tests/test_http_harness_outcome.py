@@ -220,3 +220,20 @@ class TestValidationVisibility:
         body = r.json()
         assert "calibration_excluded" not in body
         assert "validation_visibility" not in body
+
+
+class TestPredictionIdIsNotForwarded:
+    """2026-09-02: the endpoint takes an operator-asserted agent_uuid with no
+    work correlation, so a forwarded prediction_id could bind any open
+    prediction of that agent to an unrelated outcome and train calibration on
+    it. The field is ignored on purpose; record_result is the bound path."""
+
+    def test_prediction_id_in_the_body_is_not_forwarded(self, client):
+        with _recorder() as recorder:
+            r = client.post(
+                "/v1/harness/outcome",
+                json=_body(prediction_id="pred-123"),
+                headers=_op_headers(),
+            )
+        assert r.status_code == 200
+        assert "prediction_id" not in recorder.call_args.args[0]

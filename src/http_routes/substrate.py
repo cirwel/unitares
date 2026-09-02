@@ -295,12 +295,21 @@ async def http_harness_outcome(request):
     records the row against ``agent_uuid`` as given and does not attempt
     session resolution, so the caller owns pointing at the right identity.
 
-    Validation visibility (#1790): supply ``confidence`` (or a registry-bound
-    ``prediction_id``) on every POST. Without it the server scrapes a
-    confidence, stamps the row ``calibration_excluded``, and the fixture
-    classifiers drop it from ALL validation inventory — the write still
-    succeeds. The response carries ``calibration_excluded`` and a
-    ``validation_visibility`` warning when this happens.
+    Validation visibility (#1790): a producer with no prediction of its own,
+    such as a test hook, sends no ``confidence``. The server then scrapes one
+    and stamps the row ``calibration_excluded`` so calibration does not train
+    on it. The validation instruments drop such rows under their default
+    ``registered`` fixture rule and keep them under ``--fixture-rule
+    corrected``; the row is recorded either way, with its reason.
+    Inventing a confidence to avoid the flag would be the scraped-confidence
+    defect moved client-side. ``prediction_id`` is deliberately NOT accepted
+    here: this endpoint takes an operator-asserted ``agent_uuid`` with no
+    work or session correlation, so forwarding an id would let any open
+    prediction of that agent be bound to an unrelated outcome and train
+    calibration on it (the laundering PR #1445 removed). An agent with a
+    registered prediction records its outcome through ``record_result`` on
+    its own bound session. The response carries ``calibration_excluded`` and
+    a ``validation_visibility`` note when the flag was stamped.
     """
     signals = access._build_http_session_signals(request)
     from src.mcp_handlers.identity.operator import is_operator_caller
@@ -376,6 +385,8 @@ async def http_harness_outcome(request):
             )
         args["confidence"] = confidence
 
+    # `prediction_id` in the body is ignored on purpose; see the docstring.
+
     if body.get("is_bad") is not None:
         args["is_bad"] = bool(body["is_bad"])
     if body.get("outcome_score") is not None:
@@ -418,11 +429,13 @@ async def http_harness_outcome(request):
                 "prev_confidence_fallback", "audit_trail_fallback",
             ):
                 resp["validation_visibility"] = (
-                    "excluded from validation inventory: no caller-supplied "
-                    "confidence, so the server scraped one "
-                    f"({payload.get('prediction_source')}). Supply `confidence` "
-                    "(or a registry-bound `prediction_id`) to record "
-                    "validation-visible rows."
+                    "calibration_excluded: no caller-supplied confidence, so the "
+                    f"server scraped one ({payload.get('prediction_source')}); "
+                    "calibration will not train on this row. Validation instruments "
+                    "drop it under their default registered fixture rule and keep it "
+                    "under --fixture-rule corrected; the reason is recorded. Do not "
+                    "invent a confidence to avoid this flag; an agent with a "
+                    "registered prediction records through record_result instead."
                 )
             else:
                 resp["validation_visibility"] = (
