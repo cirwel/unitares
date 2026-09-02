@@ -638,3 +638,22 @@ def test_read_contract_rejects_symlinked_report_output_before_reading(
     assert result == 2
     assert contract_path.read_bytes() == original
     assert "must not alias" in capsys.readouterr().err
+
+
+def test_frozen_cohort_contract_keeps_the_registered_fixture_rule():
+    """2026-09-02: fixture rules exist and the shared default may move; the
+    cohort contract froze its predicate before rules existed, so this script
+    pins the registered reading whatever the default is, and a scraped-only row
+    stays a fixture here until a CONTRACT_VERSION bump adopts the corrected rule."""
+    live = _row(0)
+    scraped = OutcomeRow(
+        **{
+            **_row(1).__dict__,
+            "detail": {"calibration_excluded": True, "prediction_source": "audit_trail_fallback"},
+        }
+    )
+    summary = build_cohort_summary([live, scraped], scope="task", window_days=90, lead_minutes=30)
+    assert summary.funnel is not None
+    assert summary.funnel.fetched_outcomes == 2
+    assert summary.funnel.nonfixture_outcomes == 1  # the scraped row stays a fixture under the pinned rule
+    assert summary.total_outcomes == 1

@@ -893,3 +893,149 @@ def test_cluster_sort_key_is_a_total_order_and_keeps_none_last():
     # Reversing the input must not change the result — a total order, not an
     # accident of insertion sequence.
     assert sorted(keys[::-1], key=matrix_module._cluster_sort_key) == ordered
+
+
+# --- Fixture rule (2026-09-02) ----------------------------------------------
+
+
+def _scraped_only_row(idx: int) -> OutcomeRow:
+    row = _row(idx, bad=True, risk=0.8)
+    return OutcomeRow(
+        **{
+            **row.__dict__,
+            "verification_source": "external_signal",
+            "detail": {"calibration_excluded": True, "prediction_source": "audit_trail_fallback"},
+        }
+    )
+
+
+def test_filter_rows_for_validation_honours_the_fixture_rule():
+    live = _row(0, bad=False, risk=0.1)
+    scraped = _scraped_only_row(1)
+    fixture = OutcomeRow(**{**_row(2, bad=True, risk=0.9).__dict__, "detail": {"synthetic_calibration_fixture": True}})
+
+    # The shared default is the registered rule; corrected is opt-in.
+    assert filter_rows_for_validation([live, scraped, fixture]) == [live]
+    assert filter_rows_for_validation([live, scraped, fixture], fixture_rule="registered") == [live]
+    assert filter_rows_for_validation([live, scraped, fixture], fixture_rule="corrected") == [live, scraped]
+    with pytest.raises(ValueError):
+        filter_rows_for_validation([live], fixture_rule="lenient")
+
+
+def test_registered_reads_pin_the_registered_fixture_rule(tmp_path):
+    base = [
+        "--read-protocol", "registered",
+        "--read-id", "eisv-outcome-grounding-test",
+        "--not-before", "2026-01-01T00:00:00Z",
+        "--as-of", "2026-06-01T00:00:00Z",
+        "--read-ledger-dir", str(tmp_path),
+    ]
+    pinned = matrix_module.parse_args(base)
+    assert pinned.fixture_rule is None
+    assert matrix_module.effective_fixture_rule(pinned) == "registered"
+    matrix_module.validate_read_protocol(pinned, now=datetime(2026, 9, 1, tzinfo=timezone.utc))
+
+    explicit = matrix_module.parse_args([*base, "--fixture-rule", "registered"])
+    assert matrix_module.effective_fixture_rule(explicit) == "registered"
+
+    corrected = matrix_module.parse_args([*base, "--fixture-rule", "corrected"])
+    assert matrix_module.effective_fixture_rule(corrected) == "registered"
+    with pytest.raises(matrix_module.ReadProtocolError, match="registered fixture rule"):
+        matrix_module.validate_read_protocol(corrected, now=datetime(2026, 9, 1, tzinfo=timezone.utc))
+
+
+def test_other_protocols_default_to_registered_and_record_the_rule(tmp_path):
+    # The shared default is the registered rule for every protocol; the
+    # sensitivity cohort asks for `corrected` explicitly.
+    reproduction = matrix_module.parse_args(
+        ["--read-protocol", "reproduction", "--read-id", "repro-test", "--acknowledge-contamination",
+         "--read-ledger-dir", str(tmp_path)]
+    )
+    assert matrix_module.effective_fixture_rule(reproduction) == "registered"
+    args = matrix_module.parse_args(
+        ["--read-protocol", "reproduction", "--read-id", "sensitivity-test", "--acknowledge-contamination",
+         "--fixture-rule", "corrected", "--read-ledger-dir", str(tmp_path)]
+    )
+    assert matrix_module.effective_fixture_rule(args) == "corrected"
+    exploratory = matrix_module.parse_args(
+        ["--read-protocol", "exploratory", "--read-id", "explore-test", "--acknowledge-contamination",
+         "--read-ledger-dir", str(tmp_path)]
+    )
+    assert matrix_module.effective_fixture_rule(exploratory) == "registered"
+
+    receipt_path, _ = matrix_module.record_read_receipt(
+        args, exclude_harness_lanes=("beam",), now=datetime(2026, 9, 1, tzinfo=timezone.utc)
+    )
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["parameters"]["fixture_rule"] == "corrected"
+
+
+def test_report_header_names_the_fixture_rule():
+    report = matrix_module.format_matrix_report(
+        [],
+        excluded_harness_lanes=(),
+        read_protocol="reproduction",
+        read_id="sensitivity-test",
+        fixture_rule="corrected",
+    )
+    assert "Fixture rule: `corrected`" in report
+    assert "not the registered predicate" in report
+    registered = matrix_module.format_matrix_report(
+        [], excluded_harness_lanes=(), fixture_rule="registered"
+    )
+    assert "Fixture rule: `registered`" in registered
+    assert "pre-registered predicate" in registered
+
+
+def test_registered_read_receipt_records_the_registered_rule(tmp_path):
+    args = matrix_module.parse_args(
+        [
+            "--read-protocol", "registered",
+            "--read-id", "eisv-outcome-grounding-receipt-test",
+            "--not-before", "2026-01-01T00:00:00Z",
+            "--as-of", "2026-06-01T00:00:00Z",
+            "--read-ledger-dir", str(tmp_path),
+        ]
+    )
+    receipt_path, _ = matrix_module.record_read_receipt(
+        args, exclude_harness_lanes=("beam",), now=datetime(2026, 9, 1, tzinfo=timezone.utc)
+    )
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["read_protocol"] == "registered"
+    assert receipt["parameters"]["fixture_rule"] == "registered"
+
+
+@pytest.mark.parametrize(
+    "argv, expected",
+    [
+        (["--read-protocol", "registered", "--read-id", "eisv-outcome-grounding-wiring-test",
+          "--not-before", "2026-01-01T00:00:00Z", "--as-of", "2026-06-01T00:00:00Z"], "registered"),
+        (["--read-protocol", "reproduction", "--read-id", "eisv-outcome-grounding-wiring-sensitivity",
+          "--acknowledge-contamination", "--fixture-rule", "corrected", "--as-of", "2026-06-01T00:00:00Z"], "corrected"),
+    ],
+)
+def test_cli_threads_one_fixture_rule_into_selection_receipt_and_report(monkeypatch, tmp_path, argv, expected):
+    seen: dict = {}
+
+    async def fake_build_matrix_from_db(_db_url, **kwargs):
+        seen["build"] = kwargs
+        return []
+
+    def fake_format_matrix_report(rows, **kwargs):
+        seen["report"] = kwargs
+        return "stub report"
+
+    monkeypatch.setattr(matrix_module, "build_matrix_from_db", fake_build_matrix_from_db)
+    monkeypatch.setattr(matrix_module, "format_matrix_report", fake_format_matrix_report)
+    out = tmp_path / "matrix.md"
+    args = matrix_module.parse_args(
+        argv + ["--db-url", "postgresql://unused", "--read-ledger-dir", str(tmp_path), "--output", str(out)]
+    )
+    rc = asyncio.run(matrix_module.main_async(args))
+    assert rc == 0
+    assert seen["build"]["fixture_rule"] == expected
+    assert seen["report"]["fixture_rule"] == expected
+    receipts = [p for p in tmp_path.rglob("*.json")]
+    assert receipts, "no read receipt written"
+    receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
+    assert receipt["parameters"]["fixture_rule"] == expected

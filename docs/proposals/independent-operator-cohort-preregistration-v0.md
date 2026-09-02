@@ -74,8 +74,8 @@ publication consent that explicitly covers negative results and abandonment.
 predicate is server-derived and no operator-facing switch declares a
 producer trusted: the operator emits at least 3 outcomes through each
 declared producer — via the operator-gated `/v1/harness/outcome` endpoint,
-**with a caller-supplied `confidence` (or a registry-bound `prediction_id`)
-on every POST** — and confirms all five of:
+**with a caller-supplied `confidence` on every POST** — and confirms all
+five of:
 
 1. `verification_source='external_signal'` on the recorded rows;
 2. an eligible `outcome_type`;
@@ -89,7 +89,16 @@ analysis surface: an outcome posted without caller confidence is stamped
 `calibration_excluded`, which the fixture classifier currently conflates
 with synthetic-fixture traffic and silently drops from all validation
 inventory (#1790). The endpoint returns `success: true` either way, so
-only conditions 4–5 catch it. Setup note: the compose file does not yet
+only conditions 4–5 catch it. *Plumbing correction, 2026-09-02:* an earlier
+version of this check said a registry-bound `prediction_id` could stand in
+for the confidence. It cannot: `/v1/harness/outcome` ignores `prediction_id`
+by design (an operator-asserted `agent_uuid` must not be able to bind an
+unrelated outcome to an open prediction), so only a caller-supplied
+`confidence` keeps a row out of the stamp. Since PR #2062 the fixture
+classifiers also take `--fixture-rule`; the registered default still drops
+stamped rows, and `corrected` keeps rows whose only exclusion is a scraped
+confidence, so condition 4 remains the producer-side check this protocol
+relies on. Setup note: the compose file does not yet
 forward `UNITARES_OPERATOR_TOKENS` (#1791); until that lands, wiring the
 operator token requires the one-line compose edit documented there.
 

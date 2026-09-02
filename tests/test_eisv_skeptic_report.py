@@ -519,3 +519,30 @@ def test_auc_delta_is_symmetric_and_keeps_the_legacy_raw_number():
     assert baseline.auc_fitted is not None
     # The legacy asymmetric number is retained but distinct in general.
     assert risk_delta.auc_delta_raw is not None
+
+
+def test_cli_threads_one_fixture_rule_into_fetch_and_report(monkeypatch, tmp_path):
+    import asyncio
+
+    from scripts.analysis import eisv_skeptic_report as skeptic_module
+
+    seen: dict = {}
+
+    async def fake_fetch_rows(_db_url, **kwargs):
+        seen["fetch"] = kwargs
+        return []
+
+    def fake_build_report(rows, **kwargs):
+        seen["report"] = kwargs
+        return "stub report"
+
+    monkeypatch.setattr(skeptic_module, "fetch_rows", fake_fetch_rows)
+    monkeypatch.setattr(skeptic_module, "build_report", fake_build_report)
+    out = tmp_path / "skeptic.md"
+    args = skeptic_module.parse_args(
+        ["--db-url", "postgresql://unused", "--fixture-rule", "corrected", "--output", str(out)]
+    )
+    rc = asyncio.run(skeptic_module.main_async(args))
+    assert rc == 0
+    assert seen["fetch"]["fixture_rule"] == "corrected"
+    assert seen["report"]["fixture_rule"] == "corrected"

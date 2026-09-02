@@ -760,3 +760,31 @@ association is `UNIDENTIFIED`, not a structural negative result. The verified
 self-referential topology and the 31% storage-coercion artifact remain citable
 as separate mechanism and data-quality findings. Canonical correction:
 `falsification-inference-containment-2026-08-22.md`.
+
+---
+
+## 2026-09-02 — Outcome fixture conflation: packet resolved by delegated selection
+
+**Driver.** `calibration_excluded` (stamped for a scraped confidence since #1445,
+2026-08-01) is also a standalone fixture marker (reader since 2026-06-16, structural
+set since #1562), so the discrimination instruments dropped every instrument-visible
+trusted `external_signal` row after the frozen 2026-08-09 cutoff (951 of 951 on
+2026-09-02). Decision packet: `docs/proposals/outcome-fixture-conflation-decision-packet-v0.md`
+(PR #2061; council + two Codex passes; recommendation moved from retroactive
+correction to run-as-registered during review).
+
+**Operator decision (2026-09-02):** delegated the selection to the working agent —
+"proceed on your own accord, best for federation."
+
+**Agent selection under that delegation: R1.** The registered 2026-12-01 read runs
+with its registered predicate (pinned by `--read-protocol registered`, now also named
+in the registered command); a corrected-rule sensitivity cohort is pre-declared
+beside it without authority. Engineering: the writer stamps
+`calibration_exclusion_reasons`, `calibration_excluded` stays the calibration gate
+for rows recorded through the outcome_event recorder (the Phase-5 writers that insert
+directly carry neither key and are outside E1), the instruments take `--fixture-rule` (default `registered`; `corrected` opt-in
+and named in every report), the frozen prospective-cohort contract pins the
+registered reading. A proposed default flip to `corrected` for non-protocol
+instruments was withdrawn on review (packet, *Selection*) and is left to the
+operator as a follow-up. Still the operator's: whether a corrected instrument is the
+reopening premise if condition 3 fails (stop rule, reopening clause).
