@@ -243,7 +243,11 @@ of one operator attesting inside their own trust boundary, and explicitly not
 non-repudiation. Asymmetric or DPoP-style keys were considered and shelved on
 2026-04-19, so until that is revisited a record from this system cannot be
 verified by an operator who does not already trust its issuer, which is the whole
-problem a federation exchange has to solve. Whether the remaining records suffice
+problem a federation exchange has to solve. An opt-in deployment-signed receipt
+over each resolution record ([`src/dialectic_receipt.py`](src/dialectic_receipt.py))
+lets a peer holding the pinned public key verify which deployment issued a record
+without holding any agent key; party-level non-repudiation is still not claimed.
+Whether the remaining records suffice
 to exchange cross-operator attestations without centralizing raw telemetry is
 open on the **multi-principal trust** track in the [roadmap](ROADMAP.md).
 

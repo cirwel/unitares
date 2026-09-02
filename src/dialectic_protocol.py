@@ -160,6 +160,7 @@ from enum import Enum
 import json
 import hashlib
 import hmac
+import logging
 import numpy as np
 
 
@@ -180,6 +181,9 @@ class DialecticPhase(Enum):
     SYNTHESIS = "synthesis"
     RESOLVED = "resolved"
     FAILED = "failed"
+
+
+logger = logging.getLogger(__name__)
 
 
 class ResolutionAction(Enum):
@@ -294,6 +298,12 @@ class Resolution:
             signed with each agent's api_key. v2 signatures verify via
             verify_signatures(); v1 cannot be verified because the source
             message was not preserved.
+        receipt: Optional deployment-signed receipt (``drr.v1``) over the
+            stored record — an Ed25519 signature by the deployment's
+            attestation key that a peer verifies with the pinned public key
+            alone, no api_key required. Empty when the deployment has no
+            attestation key configured. Issuer-level, not party-level,
+            non-repudiation; see ``src/dialectic_receipt.py``.
 
     The v2 attestation closes council 2026-05-06 NEW-2 — until then the
     bilateral cryptographic claim was effectively single-signer-with-two-
@@ -309,6 +319,7 @@ class Resolution:
     signature_b: str  # Agent B's signature
     timestamp: str
     signature_version: int = 1  # v2 = canonical-payload bilateral; default 1 for backward-compat decode of legacy on-disk rows
+    receipt: str = ""  # drr.v1 deployment-signed receipt over the stored record; "" when no attestation key is configured (src/dialectic_receipt.py)
 
     def to_dict(self) -> Dict:
         """
@@ -373,7 +384,9 @@ class Resolution:
         public-key signature; do not treat this as non-repudiation. For
         non-repudiation we'd need DPoP / asymmetric keys (decided shelved
  2026-04-19; and project memory
-        identity-audit-2026-04-19).
+        identity-audit-2026-04-19). Issuer-level non-repudiation of the
+        stored record is a separate, opt-in construction: the deployment-
+        signed receipt in ``src/dialectic_receipt.py`` (Resolution.receipt).
         """
         if not api_key:
             return ""
@@ -1124,6 +1137,15 @@ class DialecticSession:
 
         timestamp = datetime.now(timezone.utc).isoformat()
 
+        # Store conditions in the exact shape the read path serves back
+        # (stripped, empties dropped — see _normalize_string_list in
+        # mcp_handlers/dialectic/session.py). Anything else and the canonical
+        # payload signed here differs from the one recomputed after a reload,
+        # so verify_signatures() silently fails on a genuine bilateral row.
+        merged["conditions"] = [
+            str(c).strip() for c in (merged.get("conditions") or []) if str(c).strip()
+        ]
+
         # Build the prototype with empty signatures, compute the canonical
         # payload bytes, then sign with each agent's own api_key. This
         # guarantees both signatures are over the same payload (closes
@@ -1142,6 +1164,27 @@ class DialecticSession:
         payload = proto.canonical_payload()
         proto.signature_a = Resolution.compute_signature(payload, api_key_a)
         proto.signature_b = Resolution.compute_signature(payload, api_key_b)
+
+        # Deployment-signed receipt (drr.v1): the deployment's Ed25519
+        # signature over the stored record, verifiable by a peer holding the
+        # pinned public key and no agent key. Minted only when the deployment
+        # has an attestation key; finalization is a liveness path for a
+        # paused agent, so attestation plumbing must never fail it.
+        try:
+            from src.dialectic_receipt import attach_receipt_if_configured
+
+            attach_receipt_if_configured(
+                proto,
+                session_id=self.session_id,
+                paused_agent_id=self.paused_agent_id,
+                reviewer_agent_id=self.reviewer_agent_id,
+            )
+        except Exception as exc:  # pragma: no cover - defensive; the helper degrades internally
+            logger.warning(
+                "dialectic receipt: unexpected failure for session %s (%s); "
+                "resolution stored without receipt",
+                self.session_id, exc,
+            )
 
         self.resolution = proto
         return proto

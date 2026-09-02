@@ -118,6 +118,14 @@ def _normalize_string_list(value: Any) -> List[str]:
     return [str(value).strip()] if str(value).strip() else []
 
 
+def _coerce_signature_version(value: Any) -> int:
+    """Stored rows predate the field (-> 1); JSON round-trips may stringify it."""
+    try:
+        return int(value) if value is not None else 1
+    except (TypeError, ValueError):
+        return 1
+
+
 def _normalize_resolution_dict(value: Any) -> Any:
     """Normalize the condition list in a parsed resolution payload."""
     if not isinstance(value, dict):
@@ -164,6 +172,12 @@ def _reconstruct_session_from_dict(session_id: str, session_data: Dict) -> Optio
                 signature_a=res_dict.get("signature_a", ""),
                 signature_b=res_dict.get("signature_b", ""),
                 timestamp=res_dict.get("timestamp", datetime.now().isoformat()),
+                # Carry the attestation fields through a reload. Dropping them
+                # silently downgraded every reloaded v2 resolution to "legacy
+                # v1" (verify_signatures() -> False) and would strip the
+                # deployment receipt a peer verifies against.
+                signature_version=_coerce_signature_version(res_dict.get("signature_version")),
+                receipt=res_dict.get("receipt") or "",
             )
 
         # Phase
