@@ -8,6 +8,12 @@ import json
 
 import pytest
 
+# Every assertion here is about the tool surface THIS repo ships. On a machine
+# with a governance_mcp.plugins package installed, that package's tools land in
+# the same decorator registry (see the fixture's docstring in conftest.py), and
+# whether a given test saw them came down to collection/import order.
+pytestmark = pytest.mark.usefixtures("first_party_tool_surface")
+
 
 def _assert_eisv_contract(text: str) -> None:
     assert "E=Energy [0,1]" in text
