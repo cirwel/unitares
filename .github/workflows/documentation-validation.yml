@@ -23,8 +23,13 @@ jobs:
       with:
         python-version: '3.12'
 
-    - name: Validate CI/Python version sync
+    - name: Validate CI/Python version sync and the interpreter contract
+      # check_ci_python_matrix_sync.py parses tests.yml, so it needs PyYAML
+      # (a core dependency; pinned as in pyproject). This job installs
+      # nothing else on purpose, and the checker fails rather than skips when
+      # it cannot import what it needs.
       run: |
+        python -m pip install "PyYAML>=6.0.0,<7.0.0"
         python scripts/dev/check_ci_python_version_sync.py
         python scripts/diagnostics/check_ci_python_matrix_sync.py
 
