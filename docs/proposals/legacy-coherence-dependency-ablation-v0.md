@@ -120,12 +120,16 @@ enforces the ones it can: `--contract v0.1` pins task scope, the 30-minute
 lead and the 150-bad-cluster floor, refuses a boundary before the cutoff, and
 is one-shot: it requires a predeclared `--read-id` (`legacy-coherence-dependency-v0.1-<n>`,
 n from 1, a retry is the next n, disclosed) and writes an atomic receipt to
-the shared outcome-read ledger before touching the database, refusing an id
-that already has one. `--contract v0` (the default) runs the registered read
-and refuses `--fixture-rule corrected`. Every v0.1 report names its read id,
-its admitted window, and carries the same window under the registered rule as
-a *Registered-rule sensitivity* block, provenance only, never equivalent
-evidence. A pre-amendment outcome enters a
+the canonical shared outcome-read ledger before touching the database,
+refusing an id that already has one; a read against any other ledger is
+refused unless `--acknowledge-noncanonical-ledger` is passed, in which case the
+receipt and the report record a protocol deviation. `--contract v0` (the
+default) runs the registered read and refuses `--fixture-rule corrected`.
+Every v0.1 report names its read id and its admitted window, and carries the
+same window under the registered rule as a *Registered-rule sensitivity*
+block: the full per-channel table (paired rows, bad rows, clusters, bad
+clusters, deltas, AUCs, the cluster-bootstrap interval, status) and the Brier
+figures, provenance only, never equivalent evidence. A pre-amendment outcome enters a
 v0.1 read only with an explicit operator statement in this document accepting
 a protocol deviation and the loss of preregistered confirmatory standing.
 

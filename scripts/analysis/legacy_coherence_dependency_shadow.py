@@ -511,8 +511,20 @@ def validate_v0_1_read(args: argparse.Namespace, *, as_of: datetime, now: dateti
         )
     if as_of > checked_at:
         problems.append("v0.1 cannot read a boundary in the future at access time")
+    if not ledger_is_canonical(args.read_ledger_dir) and not getattr(args, "acknowledge_noncanonical_ledger", False):
+        problems.append(
+            "v0.1's one-shot receipt lives in the canonical outcome-read ledger "
+            f"({DEFAULT_READ_LEDGER_DIR}); another --read-ledger-dir cannot enforce it. Use the "
+            "canonical ledger, or pass --acknowledge-noncanonical-ledger to record the read as a "
+            "protocol deviation"
+        )
     if problems:
         raise ShadowReadError("; ".join(problems))
+
+
+def ledger_is_canonical(ledger_dir: str | os.PathLike[str]) -> bool:
+    """True when the receipt ledger is the shared canonical one (the ablation matrix's)."""
+    return Path(ledger_dir).expanduser().resolve() == Path(DEFAULT_READ_LEDGER_DIR).expanduser().resolve()
 
 
 def record_shadow_read_receipt(
@@ -540,6 +552,10 @@ def record_shadow_read_receipt(
         "not_before": V0_1_AMENDMENT_CUTOFF.isoformat(),
         "as_of": as_of.isoformat(),
         "recorded_at": recorded_at.isoformat(),
+        "ledger_canonical": ledger_is_canonical(args.read_ledger_dir),
+        "protocol_deviation": (
+            None if ledger_is_canonical(args.read_ledger_dir) else "noncanonical read ledger (acknowledged)"
+        ),
         "parameters": {
             "scope": args.scope,
             "window_days": args.window_days,
@@ -561,6 +577,23 @@ def record_shadow_read_receipt(
     return receipt_path
 
 
+def _channel_table(reads: Sequence[ChannelRead]) -> list[str]:
+    """The per-channel capture and statistics table, one rendering for every block."""
+    return [
+        "| channel | paired rows | bad rows | clusters | bad clusters | mean candidate−deployed | median |Δ| | p95 |Δ| | deployed AUC | candidate AUC | ΔAUC | cluster-bootstrap 95% CI | status |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
+        *(
+            f"| {read.channel} | {read.rows} | {read.bad_rows} | {read.clusters} "
+            f"| {read.bad_clusters} | {_fmt(read.mean_signed_delta)} "
+            f"| {_fmt(read.median_abs_delta)} | {_fmt(read.p95_abs_delta)} "
+            f"| {_fmt(read.deployed_auc)} | {_fmt(read.candidate_auc)} "
+            f"| {_fmt(read.candidate_minus_deployed_auc)} "
+            f"| {_fmt_ci(read.auc_delta_ci95)} | {read.status} |"
+            for read in reads
+        ),
+    ]
+
+
 def build_report(
     rows: Sequence[ShadowOutcomeRow],
     *,
@@ -576,6 +609,7 @@ def build_report(
     not_before: datetime | None = None,
     registered_sensitivity: Sequence[ShadowOutcomeRow] | None = None,
     read_id: str | None = None,
+    protocol_deviation: str | None = None,
 ) -> str:
     """Render the read. ``registered_sensitivity`` (v0.1 only) is the same window under
     the registered rule, reported alongside as provenance, never as equivalent evidence."""
@@ -617,7 +651,7 @@ def build_report(
         *([f"Contract: `{contract}`" + (
             " (prospective read registered 2026-08-12; item 2 as registered)" if contract == "v0"
             else f" (distinct prospective read registered 2026-09-02; outcomes at or after {not_before.isoformat()})"
-        ), *([f"Read ID: `{read_id}`"] if read_id else []), ""] if contract else []),
+        ), *([f"Read ID: `{read_id}`"] if read_id else []), *([f"Protocol deviation: {protocol_deviation}"] if protocol_deviation else []), ""] if contract else []),
         *admitted,
         *(
             [
@@ -689,7 +723,16 @@ def build_report(
                 "v0.1 result as sensitivity and provenance, not as equivalent evidence.",
                 "",
                 f"- Trusted non-fixture outcomes fetched: {len(registered_sensitivity)}",
-                *(f"- {read.channel}: {read.status}" for read in sens_reads),
+                f"- Instrumented rows: {len([r for r in registered_sensitivity if r.shadow_schema == EISV_SHADOW_ABLATIONS_SCHEMA])}",
+                "",
+                *_channel_table(sens_reads),
+                "",
+                *(
+                    f"- {read.channel} Brier: deployed {_fmt(read.deployed_brier)}, "
+                    f"candidate {_fmt(read.candidate_brier)}, improvement {_fmt(read.brier_improvement)}"
+                    for read in sens_reads
+                    if read.deployed_brier is not None or read.candidate_brier is not None
+                ),
             ]
         )
     return "\n".join(lines)
@@ -783,6 +826,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_READ_LEDGER_DIR,
         help="Where v0.1 read receipts are written (shared with the ablation matrix).",
     )
+    parser.add_argument(
+        "--acknowledge-noncanonical-ledger",
+        action="store_true",
+        help="v0.1 only: accept a --read-ledger-dir other than the canonical ledger and record the read as a protocol deviation.",
+    )
     parser.add_argument("--min-bad-clusters", type=int, default=MIN_BAD_CLUSTERS)
     parser.add_argument("--resamples", type=int, default=DEFAULT_RESAMPLES)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
@@ -858,6 +906,11 @@ async def main_async(args: argparse.Namespace) -> int:
         not_before=not_before,
         registered_sensitivity=registered_sensitivity,
         read_id=args.read_id if args.contract == "v0.1" else None,
+        protocol_deviation=(
+            "noncanonical read ledger (acknowledged)"
+            if args.contract == "v0.1" and not ledger_is_canonical(args.read_ledger_dir)
+            else None
+        ),
     )
     if args.output:
         path = Path(args.output)

@@ -184,11 +184,12 @@ def test_cli_threads_one_fixture_rule_into_fetch_and_report(monkeypatch, tmp_pat
 
     monkeypatch.setattr(shadow_module, "fetch_rows", fake_fetch_rows)
     monkeypatch.setattr(shadow_module, "_utcnow", lambda: _dt(2026, 10, 2, tzinfo=_tz.utc))
+    _canonical_ledger(monkeypatch, tmp_path)
     out = tmp_path / "shadow.md"
     rc = shadow_module.main(
         [
             "--db-url", "postgresql://unused", "--contract", "v0.1", "--output", str(out),
-            "--read-id", "legacy-coherence-dependency-v0.1-1", "--read-ledger-dir", str(tmp_path / "ledger"),
+            "--read-id", "legacy-coherence-dependency-v0.1-1",
             "--as-of", "2026-10-01T00:00:00Z",
         ]
     )
@@ -288,8 +289,15 @@ def test_v0_1_cutoff_excludes_pre_amendment_outcomes(monkeypatch):
 def _v0_1_argv(tmp_path, read_id="legacy-coherence-dependency-v0.1-1", *extra):
     return [
         "--db-url", "postgresql://unused", "--contract", "v0.1", "--read-id", read_id,
-        "--read-ledger-dir", str(tmp_path / "ledger"), "--as-of", "2026-10-01T00:00:00Z", *extra,
+        "--as-of", "2026-10-01T00:00:00Z", *extra,
     ]
+
+
+def _canonical_ledger(monkeypatch, tmp_path):
+    """Point the canonical ledger at a temp dir so tests exercise the canonical path."""
+    from scripts.analysis import legacy_coherence_dependency_shadow as shadow_module
+
+    monkeypatch.setattr(shadow_module, "DEFAULT_READ_LEDGER_DIR", tmp_path / "ledger")
 
 
 def test_v0_1_is_receipted_one_shot_and_pinned(monkeypatch, tmp_path, capsys):
@@ -302,6 +310,7 @@ def test_v0_1_is_receipted_one_shot_and_pinned(monkeypatch, tmp_path, capsys):
 
     monkeypatch.setattr(shadow_module, "fetch_rows", fake_fetch_rows)
     monkeypatch.setattr(shadow_module, "_utcnow", lambda: _dt(2026, 10, 2, tzinfo=_tz.utc))
+    _canonical_ledger(monkeypatch, tmp_path)
     assert shadow_module.main(_v0_1_argv(tmp_path, "legacy-coherence-dependency-v0.1-1", "--output", str(tmp_path / "a.md"))) == 0
     receipts = list((tmp_path / "ledger").glob("*.json"))
     assert len(receipts) == 1
@@ -322,10 +331,10 @@ def test_v0_1_is_receipted_one_shot_and_pinned(monkeypatch, tmp_path, capsys):
         assert message in capsys.readouterr().err
     assert shadow_module.main([
         "--db-url", "postgresql://unused", "--contract", "v0.1", "--read-id", "legacy-coherence-dependency-v0.1-3",
-        "--read-ledger-dir", str(tmp_path / "ledger"), "--as-of", "2026-09-01T00:00:00Z",
+        "--as-of", "2026-09-01T00:00:00Z",
     ]) == 2
     assert "before its amendment cutoff" in capsys.readouterr().err
-    assert shadow_module.main(["--db-url", "postgresql://unused", "--contract", "v0.1", "--read-ledger-dir", str(tmp_path / "ledger"), "--as-of", "2026-10-01T00:00:00Z"]) == 2
+    assert shadow_module.main(["--db-url", "postgresql://unused", "--contract", "v0.1", "--as-of", "2026-10-01T00:00:00Z"]) == 2
     assert "require --read-id" in capsys.readouterr().err
     # No receipt was written by any refused read.
     assert len(list((tmp_path / "ledger").glob("*.json"))) == 1
@@ -377,7 +386,8 @@ def test_v0_1_pins_every_inherited_default_and_its_read_id_namespace(monkeypatch
         return []
 
     monkeypatch.setattr(shadow_module, "fetch_rows", fake_fetch_rows)
-    base = ["--db-url", "postgresql://unused", "--contract", "v0.1", "--read-ledger-dir", str(tmp_path / "ledger"), "--as-of", "2026-10-01T00:00:00Z"]
+    _canonical_ledger(monkeypatch, tmp_path)
+    base = ["--db-url", "postgresql://unused", "--contract", "v0.1", "--as-of", "2026-10-01T00:00:00Z"]
     for read_id in ("legacy-coherence-dependency-v0.1-0", "eisv-outcome-grounding-2026-12-01", "shadow-run", "legacy-coherence-dependency-v0.1-01"):
         assert shadow_module.main([*base, "--read-id", read_id]) == 2
         assert "legacy-coherence-dependency-v0.1-<n>" in capsys.readouterr().err
@@ -409,9 +419,53 @@ def test_v0_1_freezes_one_boundary_when_no_as_of_is_given(monkeypatch, tmp_path)
     frozen = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(shadow_module, "fetch_rows", fake_fetch_rows)
     monkeypatch.setattr(shadow_module, "_utcnow", lambda: frozen)
+    _canonical_ledger(monkeypatch, tmp_path)
     rc = shadow_module.main(
         ["--db-url", "postgresql://unused", "--contract", "v0.1", "--read-id", "legacy-coherence-dependency-v0.1-5",
-         "--read-ledger-dir", str(tmp_path / "ledger"), "--output", str(tmp_path / "r.md")]
+         "--output", str(tmp_path / "r.md")]
     )
     assert rc == 0
     assert [c["as_of"] for c in calls] == [frozen, frozen]
+
+
+def test_v0_1_refuses_a_noncanonical_ledger_unless_the_deviation_is_acknowledged(monkeypatch, tmp_path, capsys):
+    import json as _json
+
+    from scripts.analysis import legacy_coherence_dependency_shadow as shadow_module
+
+    async def fake_fetch_rows(_db_url, **kwargs):
+        return []
+
+    monkeypatch.setattr(shadow_module, "fetch_rows", fake_fetch_rows)
+    monkeypatch.setattr(shadow_module, "_utcnow", lambda: _dt(2026, 10, 2, tzinfo=_tz.utc))
+    _canonical_ledger(monkeypatch, tmp_path)
+    other = tmp_path / "elsewhere"
+    argv = _v0_1_argv(tmp_path, "legacy-coherence-dependency-v0.1-7", "--read-ledger-dir", str(other), "--output", str(tmp_path / "d.md"))
+    assert shadow_module.main(argv) == 2
+    assert "canonical outcome-read ledger" in capsys.readouterr().err
+    assert not other.exists() or not list(other.glob("*.json"))
+    assert shadow_module.main([*argv, "--acknowledge-noncanonical-ledger"]) == 0
+    receipt = _json.loads(next(other.glob("*.json")).read_text(encoding="utf-8"))
+    assert receipt["ledger_canonical"] is False
+    assert receipt["protocol_deviation"] == "noncanonical read ledger (acknowledged)"
+    assert "Protocol deviation: noncanonical read ledger (acknowledged)" in (tmp_path / "d.md").read_text(encoding="utf-8")
+    # The canonical path records no deviation.
+    assert shadow_module.main(_v0_1_argv(tmp_path, "legacy-coherence-dependency-v0.1-8", "--output", str(tmp_path / "c.md"))) == 0
+    canonical = _json.loads(next((tmp_path / "ledger").glob("*.json")).read_text(encoding="utf-8"))
+    assert canonical["ledger_canonical"] is True and canonical["protocol_deviation"] is None
+    assert "Protocol deviation" not in (tmp_path / "c.md").read_text(encoding="utf-8")
+
+
+def test_v0_1_sensitivity_block_carries_the_full_channel_table():
+    from scripts.analysis.legacy_coherence_dependency_shadow import V0_1_AMENDMENT_CUTOFF, build_report
+
+    report = build_report(
+        [], scope="task", window_days=365, lead_minutes=30.0, fixture_rule="corrected", contract="v0.1",
+        not_before=V0_1_AMENDMENT_CUTOFF, as_of=_dt(2026, 10, 1, tzinfo=_tz.utc), registered_sensitivity=[],
+        read_id="legacy-coherence-dependency-v0.1-1",
+    )
+    head, _, sens = report.partition("## Registered-rule sensitivity (provenance only)")
+    assert sens, "no sensitivity block"
+    table_header = next(line for line in head.splitlines() if line.startswith("| ") and "---" not in line and "channel" in line.lower())
+    assert table_header in sens  # the same table, counts and statistics and uncertainty, not statuses alone
+    assert "Trusted non-fixture outcomes fetched: 0" in sens
