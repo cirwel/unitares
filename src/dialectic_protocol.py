@@ -269,6 +269,16 @@ class DialecticMessage:
         ).hexdigest()
 
 
+def canonical_conditions(conditions) -> List[str]:
+    """Conditions as the read path serves them: stringified, stripped, empties dropped.
+
+    Mirrors ``_normalize_string_list`` for well-formed lists so that anything
+    signed over conditions survives a PostgreSQL round trip. Order is kept;
+    callers that need order-independence sort the result.
+    """
+    return [str(c).strip() for c in (conditions or []) if str(c).strip()]
+
+
 @dataclass
 class Resolution:
     """
@@ -340,10 +350,23 @@ class Resolution:
         computed at finalization time. Lists are sorted for determinism so
         the same set of conditions always hashes identically regardless of
         merge ordering.
+
+        Conditions are canonicalized the way the PostgreSQL read path serves
+        them back (``_normalize_string_list`` in
+        ``mcp_handlers/dialectic/session.py``: each entry stripped of
+        surrounding whitespace, empty entries dropped). Without this, a
+        resolution finalized with a padded condition signed one payload and,
+        once the session was reloaded, verified against another — so
+        ``verify_signatures()`` failed on a genuine bilateral row. Strip-and-
+        drop is the identity on clean conditions, so signatures over clean
+        rows are byte-for-byte unchanged; rows signed before this change
+        whose conditions carried padding never verified after a reload and
+        still do not (same honest degradation as v1). The stored conditions
+        themselves are NOT modified here — only the bytes that are signed.
         """
         payload = {
             "action": self.action,
-            "conditions": sorted(self.conditions or []),
+            "conditions": sorted(canonical_conditions(self.conditions)),
             "root_cause": self.root_cause,
             "reasoning": self.reasoning,
             "timestamp": self.timestamp,
