@@ -29,11 +29,14 @@ signs a receipt third parties verify.
 
 ## What is built
 
-The third construction, as code that is inert until a key exists. When the
-deployment holds an attestation key (`UNITARES_AIC_SIGNING_KEY`, the AIC
-prototype's server-to-world key), the terminal `resolved` write countersigns the
-stored resolution record with Ed25519 and attaches the receipt to the record
-itself (`resolution_json`, so no migration and no new endpoint). A peer verifies
+The third construction, as code that is inert until two settings exist: a
+dedicated issuance gate (`UNITARES_DIALECTIC_RESOLUTION_RECEIPTS`, default off,
+so configuring the identity-attestation key for another purpose can never
+switch receipts on as a side effect) and the key itself
+(`UNITARES_AIC_SIGNING_KEY`, the AIC prototype's server-to-world key). With
+both set, the terminal `resolved` write countersigns the stored resolution
+record with Ed25519 and attaches the receipt to the record itself
+(`resolution_json`, so no migration and no new endpoint). A peer verifies
 it with the deployment's public key and nothing else:
 
 ```bash
@@ -47,11 +50,17 @@ Design points that came out of review rather than the first draft:
   before the hard-limit gate, the self-review guard and execution; a receipt
   there would sign candidates governance then rejected. The receipt is attached
   only by the terminal `resolved` write (`save_session` and the explicit handler
-  sites), never by a `failed` write, and it is cleared if the row is not written.
-- **The digest names its fields.** The receipt carries `record_fields` and
-  `record_sha256` over exactly those fields, so later schema additions do not
-  invalidate earlier receipts, and a missing covered field is a mismatch. The
-  encoding is RFC 8785 (JCS) compatible for this record shape.
+  sites), never by a `failed` write, and `discard_receipt_unless_written` drops
+  it on every unconfirmed outcome at every site: a False return, a raised
+  exception, or no writer reached. A BEAM-committed write counts as confirmed
+  because `beam_resolve` returns a result only after the row is written.
+- **The digest names its fields.** `record_fields` (which must cover the eight
+  resolution fields) plus `record_sha256` over exactly those fields, RFC 8785
+  compatible for this record shape; later schema additions do not invalidate
+  earlier receipts, a missing covered field is a mismatch, and a type change is
+  detected. The receipt's own `signature_version` and `both_signatures_present`
+  claims are checked against the record, so a correctly signed but internally
+  inconsistent receipt is rejected.
 - **The profile is enforced, not asserted.** The verifier rejects a correctly
   signed token whose `alg`, `stance`, `authorizes` or `status` claim is anything
   but `EdDSA`, `descriptive`, `[]`, `resolved`, and rejects a `kid` that does not
@@ -59,11 +68,13 @@ Design points that came out of review rather than the first draft:
 - **The issuer is named.** `iss` reuses the lease plane's declared issuer
   (`UNITARES_LEASE_ATTESTATION_ISSUER`), so a receipt names the same deployment
   its lease attestations do; the verifier can pin it with `--issuer`.
-- **Nothing changes without a key.** With no key the stored record has no
-  `receipt` field, `Resolution.hash()` is the pre-receipt formula, and stored
-  conditions are untouched. With a key, the record is written in the served
-  shape (the read path's own normalization) so the stored JSON and every served
-  copy are byte-identical; the parties' HMACs are invariant under that shape.
+- **The receipt never touches the record.** Sealing signs the persistence
+  candidate exactly as it stands; stored conditions are never altered by
+  attestation, on or off. The digest admits one documented equivalence, string
+  conditions stripped and empty strings dropped, which is precisely what the
+  server's read path does when it serves a record, so the stored row and the
+  served copy verify identically. With issuance off there is no `receipt`
+  field, and `Resolution.hash()` is the pre-receipt formula.
 
 ## What a valid receipt proves, and what it does not
 
@@ -89,7 +100,15 @@ resolution's standing.
    could mint receipts indistinguishable from genuine ones. The AIC module's own
    docstring names a non-exportable keystore as the real-deployment option. It is
    not built. Enabling before it exists would make the receipt's central claim,
-   "which deployment", mean "which UID on that machine".
+   "which deployment", mean "which UID on that machine". The dedicated issuance
+   flag keeps that failure from arriving by accident: a key configured for
+   identity attestations alone does not turn receipts on.
+
+   The wake criteria, stated once so the registry and this packet agree:
+   non-exportable custody for the key; an independent channel for a peer to
+   pin the public key; retained and published key history; and a revocation
+   or transparency policy that bounds back-dating. Nothing short of all four
+   makes `verified: true` mean what a peer will read it to mean.
 2. **Key history.** `export_public_jwks` emits one key. The verifier accepts
    several JWKS documents so a retired key stays usable, but nothing publishes or
    retains history on the issuing side; a rotation without it turns every prior
@@ -120,25 +139,31 @@ principal to pin it.
 ## Canonical form
 
 `record_sha256` is SHA-256 over the UTF-8 JSON encoding of `{field:
-record[field]}` for the fields listed in `record_fields`, keys sorted by code
-point, separators `,` and `:` with no whitespace, non-ASCII emitted raw. For this
-record shape (fixed ASCII keys; string, integer and list-of-string values; no
-floats) that is byte-identical to RFC 8785. The signed message is the ASCII
-bytes of `"drr.v1." + payload_b64url`; the receipt is `"drr.v1." +
-payload_b64url + "." + signature_b64url`, unpadded base64url throughout. Claims:
-`v`, `typ`, `alg`, `stance`, `authorizes`, `status`, `kid`, `iss`, `iat`,
-`session_id`, `paused_agent_id`, `reviewer_agent_id`, `record_fields`,
-`record_sha256`, `signature_version`, `both_signatures_present`.
+record[field]}` for the fields listed in `record_fields`, which must include the
+eight resolution fields, keys sorted by code point, separators `,` and `:` with
+no whitespace, non-ASCII emitted raw. Before encoding, string entries of
+`conditions` are stripped and empty strings dropped (the read path's own
+normalization, so stored and served copies agree); no other value is altered
+and types are never coerced. For this record shape (fixed ASCII keys; string,
+integer and list-of-string values; no floats) that is byte-identical to RFC
+8785. The signed message is the ASCII bytes of `"drr.v1." + payload_b64url`;
+the receipt is `"drr.v1." + payload_b64url + "." + signature_b64url`, unpadded
+base64url throughout. Claims: `v`, `typ`, `alg`, `stance`, `authorizes`,
+`status`, `kid`, `iss`, `iat`, `session_id`, `paused_agent_id`,
+`reviewer_agent_id`, `record_fields`, `record_sha256`, `signature_version`,
+`both_signatures_present`; the last two must agree with the record.
 
 ## Failure behavior
 
 A configured-but-unusable seed logs a WARNING and the resolution persists without
-a receipt; persisting a resolution is a liveness path for a paused agent. If the
-terminal row is not written (missing, or already terminal in another state) the
-in-memory receipt is cleared. One edge remains: at the two LLM-assisted sites a
-persistence exception after minting leaves the receipt on the in-memory object
-until the session is next reloaded from PostgreSQL; the stored row, which is what
-a peer is handed, never carries a receipt for a record that was not written.
+a receipt; persisting a resolution is a liveness path for a paused agent. A
+receipt minted for a terminal write that is not confirmed is discarded at every
+site: a False return (row missing, or already terminal in another state), a
+raised exception, or a path that never reached a writer. `save_session` clears
+it before its secondary JSON snapshot runs, so the offline snapshot never
+carries a receipt for a row that was not written. Failure-injection tests cover
+the False, exception, and BEAM-committed outcomes, at `save_session` and at the
+synthesis handler's terminal write.
 
 ## Non-goals
 

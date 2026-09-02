@@ -51,14 +51,18 @@ from src.identity.agent_identity_credential import (  # noqa: E402
 )
 from src.mcp_handlers.dialectic import session as session_mod  # noqa: E402
 from src.mcp_handlers.dialectic.session import (  # noqa: E402
+    _normalize_resolution_dict,
     _reconstruct_session_from_dict,
+    discard_receipt_unless_written,
     save_session,
     seal_resolution_for_persistence,
 )
 
 KEY_ENV = "UNITARES_AIC_SIGNING_KEY"
+FLAG_ENV = "UNITARES_DIALECTIC_RESOLUTION_RECEIPTS"
 ISSUER_ENV = "UNITARES_LEASE_ATTESTATION_ISSUER"
 ISSUER = "governance.test-deployment.example"
+DIALECTIC = "src.mcp_handlers.dialectic.handlers"
 
 
 @pytest.fixture
@@ -68,13 +72,23 @@ def seed():
 
 @pytest.fixture
 def configured_key(monkeypatch, seed):
+    """Issuance on, key and issuer configured: the only state that mints."""
+    monkeypatch.setenv(FLAG_ENV, "1")
     monkeypatch.setenv(KEY_ENV, seed)
     monkeypatch.setenv(ISSUER_ENV, ISSUER)
     return load_signing_key(seed)
 
 
 @pytest.fixture
+def key_without_flag(monkeypatch, seed):
+    monkeypatch.delenv(FLAG_ENV, raising=False)
+    monkeypatch.setenv(KEY_ENV, seed)
+    return load_signing_key(seed)
+
+
+@pytest.fixture
 def no_key(monkeypatch):
+    monkeypatch.delenv(FLAG_ENV, raising=False)
     monkeypatch.delenv(KEY_ENV, raising=False)
     monkeypatch.delenv(ISSUER_ENV, raising=False)
 
@@ -142,6 +156,18 @@ def test_no_key_changes_nothing(no_key):
     assert res.verify_signatures("key-a", "key-b") is True
 
 
+def test_key_without_issuance_flag_mints_nothing(key_without_flag):
+    s, res, record = _sealed()
+    assert res.receipt == "" and "receipt" not in record
+    assert res.hash() == _legacy_hash(res)
+
+
+def test_flag_without_key_mints_nothing(monkeypatch, no_key):
+    monkeypatch.setenv(FLAG_ENV, "1")
+    s, res, record = _sealed()
+    assert res.receipt == "" and "receipt" not in record
+
+
 def test_finalize_never_mints_even_with_a_key(configured_key):
     s = _converged_session()
     res = s.finalize_resolution("key-a", "key-b")
@@ -164,13 +190,19 @@ def test_resolved_terminal_write_mints_a_bound_receipt(configured_key):
     s, res, record = _sealed()
     assert res.receipt.startswith(RECEIPT_PREFIX)
     assert record["receipt"] == res.receipt
-    # the record is stored in the served shape, so stored == served exactly
-    assert res.conditions == ["agreed", "padded"]
-    assert res.verify_signatures("key-a", "key-b") is True  # HMAC invariant under that shape
+    # sealing never touches the record: the padded candidate is stored as-is
+    assert "  padded  " in res.conditions and "" in res.conditions
+    assert record["conditions"] == res.conditions
+    assert res.verify_signatures("key-a", "key-b") is True
 
     jwks = export_public_jwks(configured_key)
     claims = verify_resolution_receipt(res.receipt, record, jwks=jwks,
                                        expected_session_id=s.session_id, expected_issuer=ISSUER)
+    # ...and the copy the server serves (conditions stripped, empties dropped)
+    # verifies against the same receipt through the digest's one equivalence.
+    served = _normalize_resolution_dict(json.loads(json.dumps(record)))
+    assert served["conditions"] == ["agreed", "padded"]
+    verify_resolution_receipt(res.receipt, served, jwks=jwks, expected_session_id=s.session_id)
     assert claims["session_id"] == s.session_id
     assert claims["iss"] == ISSUER
     assert claims["paused_agent_id"] == "agent-a"
@@ -194,17 +226,19 @@ def test_sealing_is_idempotent(configured_key):
 
 
 def test_invalid_seed_degrades_with_warning_and_touches_nothing(monkeypatch, caplog):
+    monkeypatch.setenv(FLAG_ENV, "1")
     monkeypatch.setenv(KEY_ENV, "definitely-not-a-seed")
     s = _converged_session()
     res = s.finalize_resolution("key-a", "key-b")
     with caplog.at_level(logging.WARNING, logger="src.dialectic_receipt"):
         record = seal_resolution_for_persistence(s, res, status="resolved")
     assert res.receipt == "" and "receipt" not in record
-    assert "  padded  " in res.conditions  # before_mint never ran
+    assert "  padded  " in res.conditions
     assert any("configured but unusable" in r.getMessage() for r in caplog.records)
 
 
 def test_no_issuer_configured_yields_null_iss(monkeypatch, seed):
+    monkeypatch.setenv(FLAG_ENV, "1")
     monkeypatch.setenv(KEY_ENV, seed)
     monkeypatch.delenv(ISSUER_ENV, raising=False)
     s, res, record = _sealed()
@@ -247,12 +281,20 @@ def test_schema_evolution_does_not_invalidate_old_receipts(configured_key):
     assert exc.value.code == "record_mismatch" and "root_cause" in str(exc.value)
 
 
-def test_canonical_form_is_exact():
+def test_canonical_form_is_exact_except_condition_whitespace():
     fields = ["action", "conditions"]
+    # types are never coerced
     assert record_sha256({"action": "resume", "conditions": [1]}, fields) != \
         record_sha256({"action": "resume", "conditions": ["1"]}, fields)
-    assert record_sha256({"action": "resume", "conditions": [" a"]}, fields) != \
+    # the one admitted equivalence: string conditions stripped, empties dropped
+    assert record_sha256({"action": "resume", "conditions": [" a", ""]}, fields) == \
         record_sha256({"action": "resume", "conditions": ["a"]}, fields)
+    # ...and only for conditions
+    assert record_sha256({"action": "resume ", "conditions": ["a"]}, fields) != \
+        record_sha256({"action": "resume", "conditions": ["a"]}, fields)
+    # order of conditions is committed as stored
+    assert record_sha256({"action": "resume", "conditions": ["a", "b"]}, fields) != \
+        record_sha256({"action": "resume", "conditions": ["b", "a"]}, fields)
     # key order and uncovered keys do not matter; the receipt key never does
     a = {"conditions": ["x"], "action": "resume", "receipt": "drr.v1.a.b", "extra": 1}
     b = {"action": "resume", "conditions": ["x"]}
@@ -297,6 +339,7 @@ def test_wrong_key_and_corrupted_signature(configured_key):
     {"status": "failed"},
     {"record_fields": []},
     {"record_fields": "action"},
+    {"record_fields": ["action", "conditions"]},
     {"session_id": ""},
 ])
 def test_receipt_profile_is_enforced_even_when_correctly_signed(configured_key, override):
@@ -305,6 +348,18 @@ def test_receipt_profile_is_enforced_even_when_correctly_signed(configured_key, 
     with pytest.raises(ReceiptError) as exc:
         verify_resolution_receipt(forged, record, public_key=configured_key.public_key())
     assert exc.value.code == "profile_mismatch"
+
+
+@pytest.mark.parametrize("override", [
+    {"signature_version": 1},
+    {"both_signatures_present": False},
+])
+def test_redundant_claims_must_agree_with_the_record(configured_key, override):
+    s, res, record = _sealed()
+    forged = _resign(res.receipt, configured_key, **override)
+    with pytest.raises(ReceiptError) as exc:
+        verify_resolution_receipt(forged, record, public_key=configured_key.public_key())
+    assert exc.value.code == "claim_mismatch"
 
 
 def test_false_kid_under_a_raw_public_key_is_rejected(configured_key):
@@ -367,9 +422,9 @@ def test_mint_requires_session_id_and_fields(configured_key):
                                 reviewer_agent_id=None, signing_key=configured_key)
     assert exc.value.code == "missing_session_id"
     with pytest.raises(ReceiptError) as exc:
-        mint_resolution_receipt({"receipt": "x"}, session_id="s", paused_agent_id="a",
+        mint_resolution_receipt({"action": "resume"}, session_id="s", paused_agent_id="a",
                                 reviewer_agent_id=None, signing_key=configured_key)
-    assert exc.value.code == "record_mismatch"
+    assert exc.value.code == "record_mismatch" and "required" in str(exc.value)
 
 
 # ── reload path ────────────────────────────────────────────────────────────
@@ -387,12 +442,11 @@ def test_receipt_survives_jsonb_round_trip_and_reload(configured_key):
     reloaded = _reconstruct_session_from_dict(s.session_id, session_doc)
     assert reloaded.resolution.receipt == res.receipt
     assert reloaded.resolution.signature_version == 2
-    assert reloaded.resolution.conditions == ["agreed", "padded"]
+    assert reloaded.resolution.conditions == ["agreed", "padded"]  # read-path normalization
     assert reloaded.resolution.verify_signatures("key-a", "key-b") is True
     verify_resolution_receipt(reloaded.resolution.receipt, reloaded.resolution.to_dict(),
                               jwks=export_public_jwks(configured_key),
                               expected_session_id=reloaded.session_id)
-    assert reloaded.resolution.hash() == res.hash()
 
 
 def test_reload_of_legacy_row_has_no_receipt_and_defaults_to_v1():
@@ -462,6 +516,154 @@ async def test_save_session_clears_receipt_when_the_row_is_not_written(configure
         s, res = _resolved_session_for_save()
         await save_session(s)
         assert res.receipt == "" and "receipt" not in res.to_dict()
+
+
+@pytest.mark.asyncio
+async def test_save_session_clears_receipt_when_the_write_raises(configured_key, monkeypatch):
+    monkeypatch.setattr(session_mod, "UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT", False)
+    with patch("src.dialectic_db.resolve_session_async", AsyncMock(side_effect=RuntimeError("pg down"))), \
+         patch("src.mcp_handlers.dialectic.beam_resolve_client.beam_resolve", AsyncMock(return_value=None)):
+        s, res = _resolved_session_for_save()
+        await save_session(s)  # save_session swallows the error and logs it
+        assert res.receipt == "" and "receipt" not in res.to_dict()
+
+
+@pytest.mark.asyncio
+async def test_save_session_keeps_receipt_when_beam_committed_the_row(configured_key, monkeypatch):
+    monkeypatch.setattr(session_mod, "UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT", False)
+    pg = AsyncMock(return_value=True)
+    beam = AsyncMock(return_value={"status": "resolved", "saga": "committed"})
+    with patch("src.dialectic_db.resolve_session_async", pg), \
+         patch("src.mcp_handlers.dialectic.beam_resolve_client.beam_resolve", beam):
+        s, res = _resolved_session_for_save()
+        await save_session(s)
+        pg.assert_not_awaited()
+        assert beam.await_args.kwargs["resolution"]["receipt"] == res.receipt
+        assert res.receipt.startswith(RECEIPT_PREFIX)
+
+
+@pytest.mark.asyncio
+async def test_save_session_leaves_a_pre_existing_receipt_alone_on_a_conflicting_replay(configured_key, monkeypatch):
+    monkeypatch.setattr(session_mod, "UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT", False)
+    with patch("src.dialectic_db.resolve_session_async", AsyncMock(return_value=True)), \
+         patch("src.mcp_handlers.dialectic.beam_resolve_client.beam_resolve", AsyncMock(return_value=None)):
+        s, res = _resolved_session_for_save()
+        await save_session(s)
+        earlier = res.receipt
+    with patch("src.dialectic_db.resolve_session_async", AsyncMock(return_value=False)), \
+         patch("src.mcp_handlers.dialectic.beam_resolve_client.beam_resolve", AsyncMock(return_value=None)):
+        await save_session(s)
+        assert res.receipt == earlier  # minted by a confirmed write, not this attempt
+
+
+def test_discard_helper_semantics():
+    r = Resolution(action="resume", conditions=["c"], root_cause="", reasoning="",
+                   signature_a="", signature_b="", timestamp="t", receipt="drr.v1.x.y")
+    discard_receipt_unless_written(r, written=True, had_receipt=False)
+    assert r.receipt == "drr.v1.x.y"
+    discard_receipt_unless_written(r, written=False, had_receipt=True)
+    assert r.receipt == "drr.v1.x.y"
+    discard_receipt_unless_written(r, written=False, had_receipt=False)
+    assert r.receipt == ""
+    discard_receipt_unless_written(None, written=False, had_receipt=False)  # no-op
+
+
+# ── the synthesis handler's terminal write ─────────────────────────────────
+
+
+def _handler_session_and_server():
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    from datetime import datetime as _dt
+
+    def meta(status):
+        return SimpleNamespace(status=status, label="Test", api_key=f"key-{status}",
+                               last_update=_dt.now().isoformat(), paused_at=None, structured_id=None)
+    server = MagicMock()
+    server.agent_metadata = {"agent-paused": meta("paused"), "agent-reviewer": meta("active")}
+    server.monitors = {}
+    server.load_metadata = MagicMock()
+    server.load_metadata_async = AsyncMock()
+    server.project_root = str(project_root)
+    session = DialecticSession(paused_agent_id="agent-paused", reviewer_agent_id="agent-reviewer",
+                               dispute_type="verification")
+    session.phase = DialecticPhase.SYNTHESIS
+    session.synthesis_round = 1
+    return session, server
+
+
+async def _drive_synthesis_to_terminal_write(pg_mock, beam_mock):
+    from src.mcp_handlers.dialectic.handlers import ACTIVE_SESSIONS, handle_submit_synthesis
+
+    session, server = _handler_session_and_server()
+    ACTIVE_SESSIONS[session.session_id] = session
+
+    async def _quiet_save(session, *, defer_terminal=False):
+        return None
+
+    try:
+        with patch(f"{DIALECTIC}.mcp_server", server), \
+             patch("src.mcp_handlers.shared.get_mcp_server", return_value=server), \
+             patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
+             patch(f"{DIALECTIC}.save_session", new=_quiet_save), \
+             patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+             patch(f"{DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
+             patch(f"{DIALECTIC}.pg_resolve_session", pg_mock), \
+             patch(f"{DIALECTIC}.beam_update_phase", new_callable=AsyncMock, return_value=None), \
+             patch(f"{DIALECTIC}.beam_resolve", beam_mock), \
+             patch(f"{DIALECTIC}.execute_resolution", new_callable=AsyncMock, return_value={"success": True}), \
+             patch("src.mcp_handlers.context.get_context_agent_id", return_value="agent-paused"):
+            await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-paused",
+                "proposed_conditions": ["Lower threshold to 0.5"],
+                "root_cause": "Complexity spike",
+                "reasoning": "Agreeing to the reviewer's conditions",
+                "agrees": True,
+                "api_key": "key-paused",
+            })
+    finally:
+        ACTIVE_SESSIONS.pop(session.session_id, None)
+    assert session.phase == DialecticPhase.RESOLVED and session.resolution is not None
+    return session
+
+
+@pytest.mark.asyncio
+async def test_synthesis_terminal_write_receipts_on_confirmed_write(configured_key):
+    pg = AsyncMock(return_value=True)
+    session = await _drive_synthesis_to_terminal_write(pg, AsyncMock(return_value=None))
+    stored = pg.await_args.kwargs["resolution"]
+    assert stored["receipt"] == session.resolution.receipt
+    assert session.resolution.receipt.startswith(RECEIPT_PREFIX)
+    verify_resolution_receipt(stored["receipt"], stored, jwks=export_public_jwks(configured_key),
+                              expected_session_id=session.session_id)
+
+
+@pytest.mark.asyncio
+async def test_synthesis_terminal_write_clears_receipt_on_false_and_on_exception(configured_key):
+    session = await _drive_synthesis_to_terminal_write(AsyncMock(return_value=False), AsyncMock(return_value=None))
+    assert session.resolution.receipt == ""
+    session = await _drive_synthesis_to_terminal_write(AsyncMock(side_effect=RuntimeError("pg down")),
+                                                       AsyncMock(return_value=None))
+    assert session.resolution.receipt == ""
+
+
+@pytest.mark.asyncio
+async def test_synthesis_terminal_write_keeps_receipt_when_beam_commits(configured_key):
+    pg = AsyncMock(return_value=True)
+    beam = AsyncMock(return_value={"saga": "committed"})
+    session = await _drive_synthesis_to_terminal_write(pg, beam)
+    pg.assert_not_awaited()
+    assert beam.await_args.kwargs["resolution"]["receipt"] == session.resolution.receipt
+    assert session.resolution.receipt.startswith(RECEIPT_PREFIX)
+
+
+@pytest.mark.asyncio
+async def test_synthesis_terminal_write_mints_nothing_without_the_flag(key_without_flag):
+    pg = AsyncMock(return_value=True)
+    session = await _drive_synthesis_to_terminal_write(pg, AsyncMock(return_value=None))
+    assert "receipt" not in pg.await_args.kwargs["resolution"]
+    assert session.resolution.receipt == ""
 
 
 @pytest.mark.asyncio

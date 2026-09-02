@@ -178,10 +178,10 @@ an operator who does not already trust its issuer.
 
 A deployment-countersigned receipt over the stored resolution record
 (`drr.v1`, [`src/dialectic_receipt.py`](../src/dialectic_receipt.py)) is
-wired at the terminal `resolved` write and dormant: it mints only when the
-deployment holds an Ed25519 attestation key, and the only custody available
-here today is a same-UID plist secret, which the identity plan rules out for
-attestation. When enabled it lets a peer holding the pinned public key verify
+wired at the terminal `resolved` write and dormant: it mints only when a
+dedicated issuance flag is on and the deployment holds an Ed25519 attestation
+key, and the only custody available here today is a same-UID plist secret,
+which the identity plan rules out for attestation. When enabled it lets a peer holding the pinned public key verify
 which key's holder persisted exactly that record, offline
 ([`scripts/client/verify_resolution_receipt.py`](../scripts/client/verify_resolution_receipt.py));
 it leaves the symmetric agent-level scheme unchanged and claims nothing about

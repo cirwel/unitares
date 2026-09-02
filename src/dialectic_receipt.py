@@ -43,27 +43,38 @@ here, and this module does not pretend otherwise.
 
 Posture
 -------
-Off by default. A receipt is minted only when ``UNITARES_AIC_SIGNING_KEY`` is
-configured, only at the terminal ``resolved`` write (never at finalization,
-which precedes the hard-limit and self-review gates), and never for a
-``failed`` write. With no key nothing changes: no field is added to the stored
-record and ``Resolution.hash()`` is unchanged. A configured-but-unusable key
-logs a warning and stores the resolution without a receipt: persisting a
-resolution is a liveness path for a paused agent and must not fail on
-attestation plumbing. An absent receipt therefore means "no usable
-attestation key at the terminal write"; it says nothing about the record.
+Off by default, behind two settings: ``UNITARES_DIALECTIC_RESOLUTION_RECEIPTS``
+(a dedicated issuance gate, so that configuring the identity-attestation key
+for another purpose cannot switch receipts on) and ``UNITARES_AIC_SIGNING_KEY``
+(the key). A receipt is minted only at the terminal ``resolved`` write (never
+at finalization, which precedes the hard-limit and self-review gates), never
+for a ``failed`` write, and it is cleared again unless that write is confirmed.
+The receipt never modifies the record it signs; with issuance off nothing
+changes at all: no field is added to the stored record and
+``Resolution.hash()`` is unchanged. A configured-but-unusable key logs a
+warning and stores the resolution without a receipt: persisting a resolution
+is a liveness path for a paused agent and must not fail on attestation
+plumbing. An absent receipt therefore means "issuance off, or no usable key,
+or the write was not confirmed"; it says nothing about the record.
 
 Canonical form (for a verifier in any language)
 -----------------------------------------------
-The receipt names the fields it covers (``record_fields``). ``record_sha256``
-is SHA-256 over the UTF-8 JSON encoding of ``{field: record[field]}`` for
-exactly those fields, with keys sorted by code point, separators ``,`` and
-``:`` with no whitespace, and non-ASCII characters emitted raw (not escaped).
-For this record shape — fixed ASCII keys; string, integer and list-of-string
-values; no floats — that is byte-identical to RFC 8785 (JCS). Fields present
-in the record but not listed are ignored, so later schema additions do not
-invalidate earlier receipts; a listed field missing from the presented record
-is a mismatch. The signed message is the ASCII bytes of
+The receipt names the fields it covers (``record_fields``), which must include
+the eight drr.v1 resolution fields. ``record_sha256`` is SHA-256 over the UTF-8
+JSON encoding of ``{field: record[field]}`` for exactly those fields, with keys
+sorted by code point, separators ``,`` and ``:`` with no whitespace, and
+non-ASCII characters emitted raw (not escaped). For this record shape — fixed
+ASCII keys; string, integer and list-of-string values; no floats — that is
+byte-identical to RFC 8785 (JCS). One equivalence is admitted before encoding:
+string entries of ``conditions`` are stripped of surrounding whitespace and
+empty strings are dropped, which is exactly what the server's read path does
+when it serves a record, so the stored row and the served copy hash
+identically without the receipt ever touching the stored record; no other
+value is altered and types are never coerced. Fields present in the record but
+not listed are ignored, so later schema additions do not invalidate earlier
+receipts; a listed field missing from the presented record is a mismatch, and
+the receipt's own ``signature_version`` and ``both_signatures_present`` claims
+must agree with the record. The signed message is the ASCII bytes of
 ``"drr.v1." + payload_b64url``; the receipt is
 ``"drr.v1." + payload_b64url + "." + signature_b64url`` with unpadded
 base64url throughout.
@@ -74,8 +85,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import time
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from src.identity.agent_identity_credential import (
     AICError,
@@ -105,7 +117,22 @@ RECEIPT_VERSION = 1
 RECEIPT_TYP = "dialectic_resolution_receipt"
 RECEIPT_FIELD = "receipt"
 RECEIPT_STATUS = "resolved"
+RECEIPTS_ENV = "UNITARES_DIALECTIC_RESOLUTION_RECEIPTS"
+REQUIRED_RECORD_FIELDS = (
+    "action", "conditions", "reasoning", "root_cause",
+    "signature_a", "signature_b", "signature_version", "timestamp",
+)
 _PROFILE = {"alg": "EdDSA", "stance": "descriptive", "authorizes": [], "status": RECEIPT_STATUS}
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def receipts_enabled() -> bool:
+    """Mint dialectic resolution receipts (drr.v1) at the terminal resolved write; default off, and the AIC attestation key must be configured as well.
+
+    A dedicated gate, so that configuring the identity-attestation key for some
+    other purpose can never switch receipt issuance on as a side effect.
+    """
+    return (os.getenv(RECEIPTS_ENV) or "").strip().lower() in _TRUTHY
 
 
 class ReceiptError(ValueError):
@@ -124,12 +151,34 @@ def covered_fields(record: Mapping[str, Any]) -> List[str]:
     return sorted(k for k in record.keys() if k != RECEIPT_FIELD)
 
 
+def _canonical_conditions(value: Any) -> Any:
+    """String conditions stripped, empty strings dropped; every other item untouched.
+
+    This is the one equivalence the digest admits, and it exists so the row as
+    stored and the copy the server serves (whose read path applies exactly this
+    stripping) hash identically without the receipt ever altering the stored
+    record. Types are never coerced: ``[1]`` and ``["1"]`` remain different.
+    """
+    if not isinstance(value, (list, tuple)):
+        return value
+    out = []
+    for item in value:
+        if isinstance(item, str):
+            item = item.strip()
+            if not item:
+                continue
+        out.append(item)
+    return out
+
+
 def canonical_record_bytes(record: Mapping[str, Any], fields: Sequence[str]) -> bytes:
     """The exact bytes a receipt commits to. See the module docstring."""
     missing = [f for f in fields if f not in record]
     if missing:
         raise ReceiptError("record_mismatch", f"record lacks covered field(s): {', '.join(missing)}")
     reduced = {f: record[f] for f in fields}
+    if "conditions" in reduced:
+        reduced["conditions"] = _canonical_conditions(reduced["conditions"])
     return json.dumps(reduced, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
@@ -181,8 +230,9 @@ def mint_resolution_receipt(
     if not session_id:
         raise ReceiptError("missing_session_id", "a receipt must be bound to a session id")
     fields = covered_fields(record)
-    if not fields:
-        raise ReceiptError("record_mismatch", "record has no fields to cover")
+    missing = [f for f in REQUIRED_RECORD_FIELDS if f not in fields]
+    if missing:
+        raise ReceiptError("record_mismatch", f"record lacks required field(s): {', '.join(missing)}")
     payload: Dict[str, Any] = {
         "v": RECEIPT_VERSION,
         "typ": RECEIPT_TYP,
@@ -211,19 +261,19 @@ def attach_receipt_if_configured(
     session_id: str,
     paused_agent_id: str,
     reviewer_agent_id: Optional[str],
-    before_mint: Optional[Callable[[], None]] = None,
 ) -> str:
-    """Mint and attach a receipt when the deployment has an attestation key.
+    """Mint and attach a receipt when issuance is on and the key is configured.
 
-    ``before_mint`` runs only once a usable key is confirmed, so a caller can
-    put the record into its final stored shape exactly when a receipt will
-    commit to it and leave the record untouched otherwise.
+    Both ``UNITARES_DIALECTIC_RESOLUTION_RECEIPTS`` and the attestation key are
+    required; either absent means ``""``. The record is never modified.
 
-    Returns the receipt, or ``""`` when no key is configured or minting could
-    not proceed. Never raises: a resolution must persist even if attestation
-    plumbing is broken, and the failure is logged at WARNING so it is not
-    silent.
+    Returns the receipt, or ``""`` when issuance is off, no key is configured,
+    or minting could not proceed. Never raises: a resolution must persist even
+    if attestation plumbing is broken, and the failure is logged at WARNING so
+    it is not silent.
     """
+    if not receipts_enabled():
+        return ""
     try:
         signing_key = load_signing_key_if_configured()
     except AICError as exc:
@@ -236,8 +286,6 @@ def attach_receipt_if_configured(
     if signing_key is None:
         return ""
     try:
-        if before_mint is not None:
-            before_mint()
         record = dict(resolution.to_dict())
         record.pop(RECEIPT_FIELD, None)
         receipt = mint_resolution_receipt(
@@ -306,6 +354,8 @@ def _check_profile(claims: Mapping[str, Any]) -> None:
     fields = claims.get("record_fields")
     if not isinstance(fields, list) or not fields or not all(isinstance(f, str) for f in fields):
         raise ReceiptError("profile_mismatch", "record_fields must be a non-empty list of field names")
+    if not set(REQUIRED_RECORD_FIELDS) <= set(fields):
+        raise ReceiptError("profile_mismatch", "record_fields must cover the drr.v1 resolution fields")
     if not isinstance(claims.get("record_sha256"), str) or not isinstance(claims.get("kid"), str):
         raise ReceiptError("profile_mismatch", "record_sha256 and kid must be strings")
     if not isinstance(claims.get("session_id"), str) or not claims.get("session_id"):
@@ -340,6 +390,8 @@ def verify_resolution_receipt(
     ``invalid_signature``   signature does not verify under that key
     ``record_mismatch``     signature verifies, but the covered fields differ
                             from what was signed (tampered or wrong record)
+    ``claim_mismatch``      a redundant claim (``signature_version``,
+                            ``both_signatures_present``) contradicts the record
     ``session_mismatch``    ``expected_session_id`` differs from the claim
     ``issuer_mismatch``     ``expected_issuer`` differs from the claim
 
@@ -390,6 +442,10 @@ def verify_resolution_receipt(
             "record_mismatch",
             "signature is authentic but the covered fields are not the ones that were signed",
         )
+    if claims.get("signature_version") != record.get("signature_version"):
+        raise ReceiptError("claim_mismatch", "signature_version claim disagrees with the record")
+    if claims.get("both_signatures_present") != (bool(record.get("signature_a")) and bool(record.get("signature_b"))):
+        raise ReceiptError("claim_mismatch", "both_signatures_present claim disagrees with the record")
     if expected_session_id is not None and claims["session_id"] != str(expected_session_id):
         raise ReceiptError(
             "session_mismatch",

@@ -68,6 +68,7 @@ logger = get_logger(__name__)
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 # Import session persistence from new module
 from .session import (
+    discard_receipt_unless_written,
     seal_resolution_for_persistence,
     save_session,
     load_session,
@@ -2302,15 +2303,17 @@ async def _run_synthetic_review(
         try:
             resolution_obj = session.finalize_resolution(api_key_a, "")
             session.resolution = resolution_obj
-            await pg_resolve_session(
+            written = await pg_resolve_session(
                 session_id=session.session_id,
                 resolution=seal_resolution_for_persistence(session, resolution_obj, status="resolved"),
                 status="resolved",
             )
+            discard_receipt_unless_written(resolution_obj, written=bool(written), had_receipt=False)
             session.awaiting_facilitation = False
             resolved = True
             await _emit_dialectic_event("dialectic_resolved", session, action="resume")
         except Exception as e:
+            discard_receipt_unless_written(session.resolution, written=False, had_receipt=False)
             logger.warning("[DIALECTIC] Synthetic resolution finalize failed: %s", e)
 
     return {
@@ -3307,20 +3310,19 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                             # have all passed: this is the acceptance point, so
                             # this is where the deployment receipt is minted.
                             sealed = seal_resolution_for_persistence(session, resolution, status="resolved")
-                            result["resolution"] = sealed
                             beam_result = await beam_resolve(
                                 session_id=session_id,
                                 paused_agent_id=session.paused_agent_id,
                                 reviewer_agent_id=session.reviewer_agent_id,
                                 resolution=sealed,
                             )
+                            written = beam_result is not None
                             if beam_result is None:
-                                written = await pg_resolve_session(session_id=session_id, resolution=sealed, status="resolved")
-                                if written is False:
-                                    resolution.receipt = ""
-                                    result["resolution"] = resolution.to_dict()
+                                written = bool(await pg_resolve_session(session_id=session_id, resolution=sealed, status="resolved"))
+                            discard_receipt_unless_written(resolution, written=written, had_receipt=False)
+                            result["resolution"] = resolution.to_dict()
                         except Exception as e:
-                            resolution.receipt = ""
+                            discard_receipt_unless_written(resolution, written=False, had_receipt=False)
                             result["resolution"] = resolution.to_dict()
                             logger.warning(f"Could not resolve session in PostgreSQL: {e}")
                     except Exception as e:
@@ -3826,11 +3828,12 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
             )
             resolution_obj = session.finalize_resolution(api_key_a, "")
             session.resolution = resolution_obj
-            await pg_resolve_session(
+            written = await pg_resolve_session(
                 session_id=session_id,
                 resolution=seal_resolution_for_persistence(session, resolution_obj, status="resolved"),
                 status="resolved",
             )
+            discard_receipt_unless_written(resolution_obj, written=bool(written), had_receipt=False)
             logger.info(f"LLM dialectic session {session_id} resolved via protocol")
             await _emit_dialectic_event("dialectic_resolved", session, action="resume")
         else:
@@ -3845,6 +3848,7 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
         # Store in ACTIVE_SESSIONS regardless so the verdict is recorded.
         ACTIVE_SESSIONS[session_id] = session
     except Exception as e:
+        discard_receipt_unless_written(getattr(session, "resolution", None), written=False, had_receipt=False)
         logger.warning(f"Could not persist LLM dialectic session: {e}")
 
     response_data = {
