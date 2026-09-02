@@ -45,8 +45,10 @@
 #          constrained sdk-package install hard-errors on the conflict).
 #   [done] a green mcp-newest lane — the advisory job resolves mcp 2.x and
 #          tests/test_mcp_dependency_canary.py passes against it.
-#   [    ] the production interpreter bump, deployed alongside the flip.
+#   [done] the production interpreter bump — live py3.14 moved 1.29.0 -> 2.1.1
+#          and :8767/:8768 restarted via `cirwel update` on 2026-09-02.
 #
-# The pin stays at 1.29.0 until that last item is an operator decision made
-# with a deploy, not a merge: bumping it here changes what production installs.
+# The pin moves only together with the production interpreter, as an operator
+# decision made with a deploy, not a merge: bumping it here changes what
+# production installs.
 mcp==2.1.1
