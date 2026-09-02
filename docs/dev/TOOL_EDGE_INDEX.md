@@ -61,13 +61,13 @@ the alias wire rejects them.
 
 | Public name | Canonical | Wire params | Describe-only | Wire schema hash |
 |---|---|---:|---|---|
-| `check_working_state` | `get_governance_metrics` | 4 | `agent_id` | `sha256:a8e33c1dd59c22f2a56c1226d49dc6bdc6690de25ada64fa9884759c9e384108` |
-| `record_result` | `outcome_event` | 14 | — | `sha256:d26fa896239cef0f04a3e3c7d9171685921970883b623cef0d806d68ec68f8ec` |
-| `request_review` | `dialectic` | 9 | — | `sha256:f809ccdbb6809046f7383b29801ebfed64fe707f932e609ab2376d661cf49ab7` |
-| `search_shared_memory` | `knowledge` | 36 | — | `sha256:5d7c9d3ae9b8215d4eaeb9fd9f9d8bb21e390d6dc92b4d11559c81f27d1124f2` |
-| `start_session` | `onboard` | 17 | — | `sha256:9c77a2475438ce95be2c104ddcc48df7314cfbe9a20caa8a4ba7215f6eb477e1` |
+| `check_working_state` | `get_governance_metrics` | 4 | `agent_id` | `sha256:b7b0c68eff57d9bac4aa5a861a5f3228c94af4357a3fb8603bb6d09975f29e09` |
+| `record_result` | `outcome_event` | 14 | — | `sha256:ac61fb102158b83af68cc22d039b0d0a318dda30ebf1522dc49745d4335549ec` |
+| `request_review` | `dialectic` | 9 | — | `sha256:5e1ead2e73cef1572c89d4a27317a209e47485dbd97f68733b41be2b66ae6508` |
+| `search_shared_memory` | `knowledge` | 36 | — | `sha256:3be01cf1217fbaccf89e9102d10a8e0ca73910d74338f861b9d3a2a513aaaa2d` |
+| `start_session` | `onboard` | 17 | — | `sha256:065571b13476a3270911f36542b7082c38ab653dffaae415cdaa0cdc9f88db41` |
 | `store_finding` | `knowledge` | 13 | — | `sha256:88f13bbeed5d015e46b8fb362ae7a5656433926c7e5873b4fc7dd302fee57eaf` |
-| `sync_state` | `process_agent_update` | 23 | `agent_id`, `agent_name` | `sha256:357b4eb62f507c2581a4269fda6aca40036af21054c270bddee4f84cab0c30a9` |
+| `sync_state` | `process_agent_update` | 23 | `agent_id`, `agent_name` | `sha256:e3f289dac008d65dac2b2d3bee12d37eb7e77d0a6f6fdeee22fec44d07cb2001` |
 | `update_finding` | `knowledge` | 13 | — | `sha256:7dd261b60503ec631b43a071201424d2fe7f6dd7b1dccb1463852334985dfc90` |
 
 ## Deterministic findings
