@@ -66,7 +66,9 @@ are cron-driven vs interactive); intended outcome producers; the release tag
 and commit sha under test; the sha256 of
 `scripts/analysis/eisv_ablation_matrix.py` and
 `scripts/analysis/eisv_skeptic_report.py` at that tag (the lane-P read is
-conditional on these hashes — a changed harness voids the read); the
+conditional on these hashes — a changed harness voids the read); the fixture
+rule the lane-P read registers (`corrected`, amendment v0.1 below) with the
+amendment version and the three predeclared read IDs; the
 `identity_id` of the Quickstart demo agent (see Demo traffic below); and a
 publication consent that explicitly covers negative results and abandonment.
 
@@ -74,13 +76,17 @@ publication consent that explicitly covers negative results and abandonment.
 predicate is server-derived and no operator-facing switch declares a
 producer trusted: the operator emits at least 3 outcomes through each
 declared producer — via the operator-gated `/v1/harness/outcome` endpoint,
-**with a caller-supplied `confidence` on every POST** — and confirms all
+**with a caller-supplied `confidence` on every POST from a producer that has
+a genuine one, and none from a producer that does not** — and confirms all
 five of:
 
 1. `verification_source='external_signal'` on the recorded rows;
 2. an eligible `outcome_type`;
 3. a joinable prior-state snapshot;
-4. `detail.calibration_excluded` is **false** on the recorded rows;
+4. the rows are visible in `outcome_inventory.py --fixture-rule corrected`
+   totals for the window, and `detail.calibration_excluded` honestly reflects
+   whether the producer supplied a confidence (a producer with no genuine
+   confidence sends none and is stamped; it must not invent one);
 5. the rows appear in `outcome_inventory.py` totals for the window.
 
 Conditions 4–5 exist because a dress rehearsal of this exact check found
@@ -95,12 +101,26 @@ for the confidence. It cannot: `/v1/harness/outcome` ignores `prediction_id`
 by design (an operator-asserted `agent_uuid` must not be able to bind an
 unrelated outcome to an open prediction), so only a caller-supplied
 `confidence` keeps a row out of the stamp. Since PR #2062 the fixture
-classifiers also take `--fixture-rule`; the registered default still drops
-stamped rows, and `corrected` keeps rows whose only exclusion is a scraped
-confidence, so condition 4 remains the producer-side check this protocol
-relies on. Setup note: the compose file does not yet
+classifiers take `--fixture-rule`, and since amendment v0.1 below this
+protocol's lane-P read runs under `corrected`, so condition 4 is stated as
+visibility under that rule plus an honest stamp. Setup note: the compose file does not yet
 forward `UNITARES_OPERATOR_TOKENS` (#1791); until that lands, wiring the
 operator token requires the one-line compose edit documented there.
+
+**Amendment v0.1, 2026-09-02, made before any enrollment, window start or
+lane-P access.** The lane-P read runs under the `corrected` fixture rule: a row
+whose only exclusion is a server-scraped confidence is validation evidence,
+while calibration still does not train on it. For the lane-P instrument the
+rule is not a run-time choice: `eisv_ablation_matrix.py` fixes it in
+`REGISTERED_READ_MANIFEST` for read IDs of the form
+`operator-<participant>-day58-seed-<s>` with `s` in {0, 1, 2}, requires
+`--uncertainty-seed` to equal the `s` the ID names, rejects any other rule or
+ID, and records the rule and the protocol name in the read receipt.
+`eisv_skeptic_report.py` is descriptive, gates nothing, and follows the shared
+default (`corrected` since 2026-09-02), which the enrollment record notes.
+Condition 4 above was restated to match. Decision record: governed session `e4ebf589a1c79b9d`;
+mechanism: PR #2062 and its follow-up. Rows written before this amendment are
+not affected because no cohort window has started.
 
 The counts are attached to the enrollment record. **"Producers not wired"
 and "not enough volume" are distinct published results** — a
@@ -227,6 +247,7 @@ python3 scripts/analysis/eisv_ablation_matrix.py \
   --not-before <day-58 UTC instant> \
   --scopes task --windows 58 --leads 0,30 \
   --anchor-scope trusted --as-of <day-58 UTC instant> \
+  --fixture-rule corrected \
   --selective-null-resamples 400 --uncertainty-resamples 2000 \
   --uncertainty-seed <s>        # s in {0, 1, 2}
 ```

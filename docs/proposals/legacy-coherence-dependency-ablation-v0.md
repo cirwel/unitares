@@ -95,11 +95,39 @@ fixture predicate at registration, two days after `calibration_excluded`
 (which the writer also stamps for a scraped confidence) entered that
 predicate's fixture set, so under item 2 as registered every trusted row whose
 confidence the server had scraped is excluded; the read had joined 0 outcomes
-when this was found. Item 2 keeps its registered meaning: the read's
-`--fixture-rule` flag defaults to `registered`. Running it with `corrected`
-keeps rows whose only exclusion is a scraped confidence and is a deviation
-from this contract that the report names and that must be disclosed here if
-its result is ever cited. Record: `outcome-fixture-conflation-decision-packet-v0.md`.
+when this was found. Item 2 keeps its registered meaning: the script's
+`--contract v0` (the default) runs the registered rule and refuses
+`--fixture-rule corrected`; the corrected reading is the distinct v0.1
+contract below, never a deviation of v0. Record:
+`outcome-fixture-conflation-decision-packet-v0.md`.
+
+### v0.1 — a distinct prospective read, registered 2026-09-02
+
+v0 above is preserved as registered, its zero-eligibility result included, and
+is not converted: its eligibility count had been inspected, and eligibility is
+part of the sampling pipeline, so re-reading the same cohort under a wider rule
+would be a forking path (governed decision session `e4ebf589a1c79b9d`). v0.1 is
+a separate prospective read with two differences and nothing else changed:
+
+1. item 2 reads under the `corrected` fixture rule (a row whose only exclusion
+   is a server-scraped confidence is evidence; calibration still never trains
+   on it);
+2. only outcomes at or after the amendment cutoff, `2026-09-03T00:00:00Z`,
+   enter the read, so nothing inspected before the amendment can.
+
+Items 1 and 3 to 9 are inherited unchanged, margin included, and the script
+enforces the ones it can: `--contract v0.1` pins task scope, the 30-minute
+lead and the 150-bad-cluster floor, refuses a boundary before the cutoff, and
+is one-shot: it requires a predeclared `--read-id` (`legacy-coherence-dependency-v0.1-<n>`,
+n from 1, a retry is the next n, disclosed) and writes an atomic receipt to
+the shared outcome-read ledger before touching the database, refusing an id
+that already has one. `--contract v0` (the default) runs the registered read
+and refuses `--fixture-rule corrected`. Every v0.1 report names its read id,
+its admitted window, and carries the same window under the registered rule as
+a *Registered-rule sensitivity* block, provenance only, never equivalent
+evidence. A pre-amendment outcome enters a
+v0.1 read only with an explicit operator statement in this document accepting
+a protocol deviation and the loss of preregistered confirmatory standing.
 
 Confidence Brier scores are reported as a calibration diagnostic, but this
 contract deliberately does not invent a post-hoc Brier promotion margin. A

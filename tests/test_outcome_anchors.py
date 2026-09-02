@@ -191,7 +191,7 @@ def test_scraped_only_rows_are_fixtures_under_registered_but_not_corrected():
     }
     assert is_structurally_controlled_fixture(scraped, rule="registered") is True
     assert is_structurally_controlled_fixture(scraped, rule="corrected") is False
-    assert is_structurally_controlled_fixture(scraped) is True  # registered is the default
+    assert is_structurally_controlled_fixture(scraped) is False  # corrected is the default
     assert is_scraped_only_exclusion(scraped) is True
     # A row that was never excluded is not scraped-only, whatever its source.
     assert is_scraped_only_exclusion({"calibration_excluded": False, "prediction_source": "audit_trail_fallback"}) is False

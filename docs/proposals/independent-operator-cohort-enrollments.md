@@ -28,6 +28,8 @@ Copy this block for a phase-1 enrollment PR; every field is required, and
 - Declared outcome producers: <e.g. CI runner, test harness, review tool>
 - Under test: <release tag> @ <commit sha>
 - Harness sha256: eisv_ablation_matrix.py=<sha256>, eisv_skeptic_report.py=<sha256>
+- Protocol amendment: v0.1 (2026-09-02); lane-P fixture rule: corrected (fixed by REGISTERED_READ_MANIFEST)
+- Lane-P read IDs: operator-<pseudonym>-day58-seed-0, operator-<pseudonym>-day58-seed-1, operator-<pseudonym>-day58-seed-2 (`--uncertainty-seed` equals the seed each names)
 - Demo identity_id: <id> (rows deleted before window start: <UTC timestamp>)
 - Plumbing check: <producer -> eligible-row count, per producer>
 - Publication consent: <explicit sentence covering negative results and
