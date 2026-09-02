@@ -162,7 +162,10 @@ jobs:
       fail-fast: false
       matrix:
         # 3.12 is the .python-version dev default and the requires-python
-        # floor. 3.14 is the production interpreter: constraints.txt declares
+        # floor. 3.14 is the production interpreter's minor series (the
+        # LaunchAgent runs 3.14.0, the Docker digest pins its own patch, and
+        # setup-python resolves the newest 3.14.x; patch parity is not
+        # claimed): constraints.txt declares
         # it (`# production-python:`), the Dockerfile base image and the
         # LaunchAgent templates under scripts/ops carry it, and
         # check_ci_python_matrix_sync.py holds all of those and this list to
@@ -327,6 +330,11 @@ jobs:
       # job is a matrix by design, so instead ask the Actions API for the
       # latest attempt of every job in this run and require all shard legs
       # present and successful. A missing leg is a failure, not a pass.
+      # Partial re-runs: `filter=latest` lists the jobs of the newest attempt.
+      # Legs that were not re-run either appear there with their earlier
+      # conclusion or are absent; absence fails the count check, so a
+      # partial re-run can only pass when every leg is present and green.
+      # When in doubt, re-run all jobs rather than a single failed leg.
       env:
         GH_TOKEN: ${{ github.token }}
       run: |

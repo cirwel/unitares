@@ -25,6 +25,12 @@
 # therefore fails CI until this line moves with it. Move it in the same PR
 # that deploys an interpreter bump -- the same rule as the pins below.
 #
+# The marker names a minor series, not a patch: the LaunchAgent runs 3.14.0,
+# the Docker digest pins its own 3.14.x, and CI's setup-python resolves the
+# newest 3.14.x. The contract is minor-series compatibility; patch-level
+# parity with either production surface is not claimed and is the disclosed
+# residual.
+#
 # How to apply this file, and the one way it silently does not work:
 #
 #   pip install -r requirements-full.txt -c constraints.txt

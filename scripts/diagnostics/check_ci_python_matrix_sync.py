@@ -21,6 +21,10 @@ Four facts have to agree, and the CI matrix has to exercise them:
   step must actually consume the matrix (a literal there would run every leg
   on one interpreter while the matrix still reads as covered).
 
+Every comparison is on the minor series (major.minor): the LaunchAgent, the
+Docker digest and setup-python each resolve their own 3.14.x patch, so
+patch-level parity is neither checked nor claimed.
+
 Every read failure is a failed check, never a passed one. Until 2026-09-02 only
 the floor rule existed, the matrix was read by a bare regex over the whole
 file, and the pytest suite ran on 3.12 alone while every deployment surface was
