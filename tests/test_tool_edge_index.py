@@ -17,9 +17,11 @@ disagree.
 
 import copy
 import json
+import os
 import pathlib
 import subprocess
 import sys
+import types
 
 import pytest
 
@@ -41,11 +43,21 @@ def audit_snapshot(collected):
 
 
 def test_every_registered_tool_is_indexed(collected):
-    """The index must cover the whole registry, not a subset of it."""
-    from src.mcp_handlers.decorators import _TOOL_DEFINITIONS
+    """The index must cover the whole shipped registry, not a subset of it.
+
+    Tools declared outside this repo's packages — an entry-point plugin's, or a
+    probe a test module registered — are not shipped, and are the one thing
+    the index is required to leave out (see the generator's *Reproducibility*
+    note, factor 1).
+    """
+    from src.mcp_handlers.decorators import (
+        _TOOL_DEFINITIONS,
+        list_plugin_registered_tools,
+    )
 
     tools, _aliases, _failures, _unbound = collected
-    assert {t.name for t in tools} == set(_TOOL_DEFINITIONS), (
+    first_party = set(_TOOL_DEFINITIONS) - set(list_plugin_registered_tools())
+    assert {t.name for t in tools} == first_party, (
         "indexed tools diverge from the live registry — a tool is missing from "
         "the only readable map of dispatch"
     )
@@ -223,3 +235,183 @@ def test_committed_index_is_fresh():
         f"run: python3 scripts/dev/tool_edge_index.py\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Reproducibility: the committed index must come out identical from every
+# supported interpreter. Each factor the generator's docstring names has a
+# guard here; the cross-interpreter diff itself is a manual check recorded in
+# the PR that introduced these (five Python/pydantic/mcp combinations).
+# ---------------------------------------------------------------------------
+
+
+def _declare_in_module(module_name: str, source: str) -> types.ModuleType:
+    """Execute ``source`` as if it lived in ``module_name``.
+
+    ``@mcp_tool`` records ``func.__module__`` as the tool's declaring module,
+    which is what separates a plugin's registration from this repo's.
+    """
+    from src.mcp_handlers.decorators import action_router, mcp_tool
+
+    module = types.ModuleType(module_name)
+    module.__dict__.update(mcp_tool=mcp_tool, action_router=action_router)
+    exec(source, module.__dict__)
+    return module
+
+
+def test_generator_refuses_entry_point_plugins_at_the_loader(collected):
+    """Factor 1, first fence: the loader flag is set before any handler import,
+    so an installed ``governance_mcp.plugins`` package can never register."""
+    assert os.environ.get("UNITARES_DISABLE_PLUGINS") == "1"
+
+
+def test_tools_registered_outside_the_repo_are_not_indexed():
+    """Factor 1, second fence: a tool whose declaring module is not one of this
+    repo's packages is left out of both the dispatch tables and the wire
+    catalog, even when it is sitting in the live registry."""
+    from src.mcp_handlers import TOOL_HANDLERS
+    from src.mcp_handlers.decorators import _TOOL_DEFINITIONS
+    import src.tool_registration as tool_registration
+
+    name = "test_edge_index_foreign_probe"
+    _declare_in_module(
+        "fake_governance_plugin.handlers",
+        f"@mcp_tool({name!r})\n"
+        "async def handle_probe(arguments):\n"
+        "    return []\n",
+    )
+    try:
+        assert name in _TOOL_DEFINITIONS, "probe did not register; test is inert"
+        tools, _aliases, failures, _unbound = tei.collect()
+        assert not failures
+        assert name not in {tool.name for tool in tools}
+        catalog, collection_failures = tei._collect_wire_catalog()
+        assert not collection_failures
+        assert name not in catalog
+        assert "start_session" in catalog, "the fence removed more than the probe"
+    finally:
+        _TOOL_DEFINITIONS.pop(name, None)
+        TOOL_HANDLERS.pop(name, None)
+        cache = getattr(tool_registration, "_tool_wrappers_cache", None)
+        if isinstance(cache, dict):
+            cache.pop(name, None)
+
+
+def _reverse_unions(node):
+    """Flip every anyOf/oneOf/allOf in place — the drift factor 2 produces."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in ("anyOf", "oneOf", "allOf") and isinstance(value, list):
+                value.reverse()
+            _reverse_unions(value)
+    elif isinstance(node, list):
+        for item in node:
+            _reverse_unions(item)
+    return node
+
+
+def test_schema_hash_is_invariant_to_union_member_order():
+    """Factor 2: ``bool | str | None`` renders as [boolean, string, null] or
+    [string, boolean, null] depending on typing's Union cache; the two accept
+    the same documents and must hash the same. A real change must not."""
+    schema = {
+        "type": "object",
+        "title": "start_sessionArguments",
+        "properties": {
+            "force_new": {
+                "anyOf": [{"type": "boolean"}, {"type": "string"}, {"type": "null"}],
+                "default": None,
+                "title": "Force New",
+            }
+        },
+    }
+    flipped = _reverse_unions(copy.deepcopy(schema))
+    assert flipped != schema, "fixture did not flip; the test is inert"
+    assert tei.normalize_schema(schema) == tei.normalize_schema(flipped)
+    assert tei.schema_hash(schema) == tei.schema_hash(flipped)
+
+    changed = copy.deepcopy(schema)
+    changed["properties"]["force_new"]["anyOf"][0]["type"] = "integer"
+    assert tei.schema_hash(changed) != tei.schema_hash(schema)
+
+
+def test_normalize_schema_drops_titles_but_keeps_a_parameter_named_title():
+    """``title`` is a schema keyword at schema level and a parameter name under
+    ``properties``; only the former is presentation. Literal data (``default``)
+    is never rewritten, whatever keys it happens to contain."""
+    schema = {
+        "title": "xArguments",
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "title": "Title", "default": {"title": "kept"}}
+        },
+        "required": ["title"],
+    }
+    normalized = tei.normalize_schema(schema)
+    assert "title" not in normalized
+    assert normalized["properties"] == {
+        "title": {"type": "string", "default": {"title": "kept"}}
+    }
+    assert normalized["required"] == ["title"]
+    assert tei.normalize_schema(normalized) == normalized, "must be idempotent"
+
+
+def test_every_printed_schema_hash_survives_the_typing_union_cache(audit_snapshot):
+    """Factor 2 on the real catalog: every hash the index prints must be the
+    same whichever way the interpreter ordered union members, and must be the
+    hash of the recorded schema's normalized form (so a verifier can recompute
+    it from the JSON)."""
+    views = audit_snapshot["exposure"]["tools"]
+    assert views
+    exercised = False
+    for view in views:
+        assert tei.schema_hash(view["input_schema"]) == view["input_schema_hash"]
+        assert (
+            tei.schema_hash(view["describe_input_schema"])
+            == view["describe_input_schema_hash"]
+        )
+        flipped = _reverse_unions(copy.deepcopy(view["input_schema"]))
+        exercised |= flipped != view["input_schema"]
+        assert tei.schema_hash(flipped) == view["input_schema_hash"], view["name"]
+    assert exercised, (
+        "no union-typed parameter on the wire; the invariance this guards was "
+        "never exercised"
+    )
+
+
+def test_stale_report_names_the_differing_lines_and_ends_with_the_verdict():
+    """Factor 3: a stale verdict must say WHICH lines differ and under what
+    interpreter. The verdict stays LAST because the doctor classifies the run
+    by its last line (``unitares_doctor._generator_crashed``)."""
+    import unitares_doctor
+
+    current = "line one\nline two\nline three\n"
+    generated = "line one\nline 2\nline three\n"
+    report = tei.stale_report(current, generated)
+    lines = report.splitlines()
+    assert "-line two" in lines
+    assert "+line 2" in lines
+    assert any(line.startswith("  python ") for line in lines)
+    assert any(line.startswith("  mcp ") for line in lines)
+    assert any(line.startswith("  pydantic ") for line in lines)
+    assert lines[-1] == (
+        "docs/dev/TOOL_EDGE_INDEX.md is stale — run: python3 scripts/dev/tool_edge_index.py"
+    )
+    assert unitares_doctor._generator_crashed(report) is False
+
+
+def test_stale_report_truncates_a_runaway_diff_but_keeps_the_verdict_last():
+    current = "\n".join(f"old {i}" for i in range(400))
+    generated = "\n".join(f"new {i}" for i in range(400))
+    report = tei.stale_report(current, generated, limit=20)
+    lines = report.splitlines()
+    assert any("more diff lines" in line for line in lines)
+    assert lines[-1] == tei.STALE_VERDICT
+
+
+def test_pinned_mcp_version_is_read_from_constraints():
+    """The banner compares the running mcp against the pin the committed index
+    is generated under; that pin must be readable, or the comparison is mute."""
+    pinned = tei.pinned_mcp_version()
+    assert pinned, "constraints.txt no longer pins mcp — update environment_lines()"
+    assert any(line.startswith("mcp ") for line in tei.environment_lines())
