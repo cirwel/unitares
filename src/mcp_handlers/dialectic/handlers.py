@@ -68,6 +68,7 @@ logger = get_logger(__name__)
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 # Import session persistence from new module
 from .session import (
+    seal_resolution_for_persistence,
     save_session,
     load_session,
     load_session_as_dict,
@@ -2303,7 +2304,7 @@ async def _run_synthetic_review(
             session.resolution = resolution_obj
             await pg_resolve_session(
                 session_id=session.session_id,
-                resolution=resolution_obj.to_dict(),
+                resolution=seal_resolution_for_persistence(session, resolution_obj, status="resolved"),
                 status="resolved",
             )
             session.awaiting_facilitation = False
@@ -3302,15 +3303,25 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                         # guard still prevents an overwrite. (dialectic-on-BEAM
                         # Slice 1.2)
                         try:
+                            # Hard limits, the self-review guard and execution
+                            # have all passed: this is the acceptance point, so
+                            # this is where the deployment receipt is minted.
+                            sealed = seal_resolution_for_persistence(session, resolution, status="resolved")
+                            result["resolution"] = sealed
                             beam_result = await beam_resolve(
                                 session_id=session_id,
                                 paused_agent_id=session.paused_agent_id,
                                 reviewer_agent_id=session.reviewer_agent_id,
-                                resolution=resolution.to_dict(),
+                                resolution=sealed,
                             )
                             if beam_result is None:
-                                await pg_resolve_session(session_id=session_id, resolution=resolution.to_dict(), status="resolved")
+                                written = await pg_resolve_session(session_id=session_id, resolution=sealed, status="resolved")
+                                if written is False:
+                                    resolution.receipt = ""
+                                    result["resolution"] = resolution.to_dict()
                         except Exception as e:
+                            resolution.receipt = ""
+                            result["resolution"] = resolution.to_dict()
                             logger.warning(f"Could not resolve session in PostgreSQL: {e}")
                     except Exception as e:
                         # Execution failed - mark FAILED, not resolved
@@ -3817,7 +3828,7 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
             session.resolution = resolution_obj
             await pg_resolve_session(
                 session_id=session_id,
-                resolution=resolution_obj.to_dict(),
+                resolution=seal_resolution_for_persistence(session, resolution_obj, status="resolved"),
                 status="resolved",
             )
             logger.info(f"LLM dialectic session {session_id} resolved via protocol")

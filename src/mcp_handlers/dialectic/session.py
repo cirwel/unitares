@@ -135,6 +135,47 @@ def _normalize_resolution_dict(value: Any) -> Any:
     return normalized
 
 
+def seal_resolution_for_persistence(session, resolution, *, status: str) -> Dict[str, Any]:
+    """The record the terminal write persists, receipted when the deployment can.
+
+    With no attestation key configured this is exactly ``resolution.to_dict()``
+    and nothing is touched. When ``UNITARES_AIC_SIGNING_KEY`` is set and the
+    session is being written as ``resolved``, two things happen, in order:
+
+    1. The record's conditions are put into the served shape (the same
+       ``_normalize_string_list`` the read path applies), so the stored JSON and
+       every served copy are byte-identical and the receipt can commit to
+       exactly that record. The parties' symmetric signatures are invariant
+       under this step (see ``Resolution.canonical_payload``), and the
+       hard-limit gate and execution have already run on the raw candidate.
+    2. The deployment receipt is minted over the record and attached to the
+       object, so the in-memory session and the stored row agree.
+
+    Never for a ``failed`` write, and never for a candidate that has not
+    reached the terminal write: a receipt means "this deployment persisted
+    this record as resolved", nothing earlier.
+    """
+    if status != "resolved" or resolution is None or getattr(resolution, "receipt", ""):
+        return resolution.to_dict() if resolution is not None else None
+    try:
+        from src.dialectic_receipt import attach_receipt_if_configured
+    except Exception as exc:  # pragma: no cover - import failure must not block the write
+        logger.warning(f"dialectic receipt: module unavailable ({exc}); persisting without receipt")
+        return resolution.to_dict()
+
+    def _serve_shape() -> None:
+        resolution.conditions = _normalize_string_list(resolution.conditions)
+
+    attach_receipt_if_configured(
+        resolution,
+        session_id=session.session_id,
+        paused_agent_id=getattr(session, "paused_agent_id", None) or "",
+        reviewer_agent_id=getattr(session, "reviewer_agent_id", None),
+        before_mint=_serve_shape,
+    )
+    return resolution.to_dict()
+
+
 def _reconstruct_session_from_dict(session_id: str, session_data: Dict) -> Optional[DialecticSession]:
     """Reconstruct DialecticSession from a dict (from JSON file or PostgreSQL)."""
     try:
@@ -177,6 +218,7 @@ def _reconstruct_session_from_dict(session_id: str, session_data: Dict) -> Optio
                 # to "legacy v1", so verify_signatures() returned False on
                 # genuine bilateral rows once the session left memory.
                 signature_version=_coerce_signature_version(res_dict.get("signature_version")),
+                receipt=res_dict.get("receipt") or "",
             )
 
         # Phase
@@ -277,8 +319,12 @@ async def save_session(session: DialecticSession, *, defer_terminal: bool = Fals
             # here, and update_session_phase refuses terminal values).
             pass
         elif session.phase in (DialecticPhase.RESOLVED, DialecticPhase.FAILED):
-            resolution_dict = session.resolution.to_dict() if session.resolution else None
             status = session.phase.value if session.phase == DialecticPhase.RESOLVED else "failed"
+            had_receipt = bool(getattr(session.resolution, "receipt", "")) if session.resolution else False
+            resolution_dict = (
+                seal_resolution_for_persistence(session, session.resolution, status=status)
+                if session.resolution else None
+            )
             # save_session is the catch-all flush that resolves the session in the
             # orchestrated-reviewer flow (verified 2026-06-28 by the pg_committed
             # saga it produces: it, not the explicit handle_submit_synthesis sites,
@@ -294,11 +340,16 @@ async def save_session(session: DialecticSession, *, defer_terminal: bool = Fals
                 status=status,
             )
             if beam_done is None:
-                await pg_resolve_session(
+                written = await pg_resolve_session(
                     session_id=session.session_id,
                     resolution=resolution_dict,
                     status=status,
                 )
+                if written is False and session.resolution is not None and not had_receipt:
+                    # The row was not written (missing, or already terminal in
+                    # a different state): a receipt minted for this attempt
+                    # attests nothing that was stored.
+                    session.resolution.receipt = ""
         else:
             round_ = getattr(session, "synthesis_round", None)
             beam_ph = await beam_update_phase(
