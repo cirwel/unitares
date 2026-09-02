@@ -13,6 +13,18 @@
 # job tests the newest in-range resolution WITHOUT these constraints, so
 # coverage of upcoming versions is a deliberate lane, not an accident.
 #
+# production-python: 3.14
+#
+# The marker line above is the operator's declaration of the interpreter
+# production runs. scripts/diagnostics/check_ci_python_matrix_sync.py (the
+# CI smoke job, and tests/test_ci_test_gate.py) holds three other surfaces
+# to it: the Dockerfile base image, any framework interpreter hardcoded in
+# a scripts/ops LaunchAgent template, and the tests.yml matrix, which must
+# include it so the suite runs on what production runs and not only on the
+# .python-version dev default. A Dependabot bump of the Dockerfile base
+# therefore fails CI until this line moves with it. Move it in the same PR
+# that deploys an interpreter bump -- the same rule as the pins below.
+#
 # How to apply this file, and the one way it silently does not work:
 #
 #   pip install -r requirements-full.txt -c constraints.txt
