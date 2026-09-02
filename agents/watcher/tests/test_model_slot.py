@@ -29,6 +29,16 @@ import pytest
 from agents.watcher.agent import ModelBusy, model_slot
 from agents.watcher._util import watcher_state_dir
 
+# Children must see the parent's environment at the moment they start: the
+# autouse fixture isolates the slot with UNITARES_WATCHER_DATA_DIR, and the
+# lock is keyed on that path. "fork" (Linux default through 3.13) and "spawn"
+# (macOS) both do. Python 3.14 made "forkserver" the Linux default, and a
+# forkserver keeps the environment it was started with, so a child forked for
+# the second test locks the first test's tmp path while the parent locks its
+# own, and the waiter test passes through in 0.00s. Ask for "spawn" explicitly
+# on every platform; the Event/Queue must come from the same context.
+_MP = multiprocessing.get_context("spawn")
+
 
 def test_slot_uses_isolated_watcher_state(_watcher_isolation) -> None:
     """The suite must never acquire the operator's production model lock."""
@@ -87,8 +97,8 @@ def test_waiter_blocks_until_holder_releases() -> None:
     instead is not enough — macOS spawns (re-importing this module), so the
     parent can win the race and the test passes while proving nothing.
     """
-    holding = multiprocessing.Event()
-    proc = multiprocessing.Process(target=_hold_slot, args=(1.5, holding))
+    holding = _MP.Event()
+    proc = _MP.Process(target=_hold_slot, args=(1.5, holding))
     proc.start()
     assert holding.wait(timeout=60), "child never acquired the slot"
 
@@ -109,8 +119,8 @@ def _hold_slot(seconds: float, holding) -> None:
 
 def _acquire_in_child_expecting_busy(wait_s: int) -> None:
     """Acquire from a child process; re-raise ModelBusy in the parent."""
-    queue: multiprocessing.Queue = multiprocessing.Queue()
-    proc = multiprocessing.Process(target=_try_acquire, args=(wait_s, queue))
+    queue: multiprocessing.Queue = _MP.Queue()
+    proc = _MP.Process(target=_try_acquire, args=(wait_s, queue))
     proc.start()
     proc.join(timeout=wait_s + 20)
     outcome = queue.get(timeout=5) if not queue.empty() else "no-result"
