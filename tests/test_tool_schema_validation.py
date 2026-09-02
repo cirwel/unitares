@@ -149,6 +149,35 @@ class TestToolOrderSchemaSync:
         with pytest.raises(RuntimeError, match=r"missing from TOOL_ORDER.*config"):
             tool_schemas.get_tool_definitions()
 
+    def test_plugin_router_does_not_trip_the_core_tool_order_guard(self):
+        """A plugin's action router is not a core tool missing from TOOL_ORDER.
+
+        Plugins are exempt from the guard and keep the auto-discovery path, but
+        the exemption used to read ``handler.__module__`` — which is
+        ``src.mcp_handlers.decorators`` for EVERY router, a plugin's included.
+        So an entry-point plugin that registered a router without calling
+        ``register_extra_schemas()`` made ``get_tool_definitions()`` raise, and
+        the message told the operator to add the plugin's tool to governance's
+        own TOOL_ORDER. Provenance now comes from the declaring module.
+        """
+        import types
+
+        from src.mcp_handlers.decorators import _TOOL_DEFINITIONS, action_router
+
+        module = types.ModuleType("fake_governance_plugin.handlers")
+        module.__dict__["action_router"] = action_router
+        exec(
+            "async def _ping(arguments):\n"
+            "    return []\n"
+            "action_router('unordered_plugin_router', actions={'ping': _ping})\n",
+            module.__dict__,
+        )
+        try:
+            advertised = {t.name for t in get_tool_definitions()}
+            assert "unordered_plugin_router" in advertised
+        finally:
+            _TOOL_DEFINITIONS.pop("unordered_plugin_router", None)
+
     @pytest.mark.parametrize(
         ("tool_name", "default_action", "actions"),
         [

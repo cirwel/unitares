@@ -188,9 +188,19 @@ def _is_extra_schema_model(schema_model: type[BaseModel] | None) -> bool:
 
 
 def _is_core_handler(definition) -> bool:
-    """Whether a tool's handler ships in this repo rather than a plugin."""
-    module = getattr(getattr(definition, "handler", None), "__module__", "") or ""
-    return module == "src" or module.startswith("src.")
+    """Whether a tool's handler ships in this repo rather than a plugin.
+
+    Reads the declaring module the decorator recorded, NOT
+    ``handler.__module__``. Every ``action_router`` handler is defined inside
+    ``mcp_handlers/decorators.py``, so the latter reported "core" for a
+    plugin's router too — and a plugin router that had not called
+    ``register_extra_schemas()`` then hard-failed this check at startup with a
+    message telling the operator to edit governance's own TOOL_ORDER.
+    """
+    from src.mcp_handlers.decorators import _is_first_party_module
+
+    module = getattr(definition, "source_module", "") or ""
+    return _is_first_party_module(module)
 
 
 def _validate_consolidated_tool_order(

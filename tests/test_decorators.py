@@ -275,6 +275,66 @@ class TestListRegisteredTools:
         assert aaa_idx < zzz_idx
 
 
+class TestToolProvenance:
+    """``source_module`` separates this repo's tools from a plugin's.
+
+    An externally-installed ``governance_mcp.plugins`` package registers into
+    the same ``_TOOL_DEFINITIONS`` dict, so "registered" alone cannot answer
+    "does this repo ship it". Provenance is what the schema/TOOL_ORDER guard
+    and the surface-drift tests filter on.
+    """
+
+    @staticmethod
+    def _declare_in_module(module_name: str, source: str):
+        """Execute ``source`` as if it lived in ``module_name``."""
+        import types
+
+        from src.mcp_handlers.decorators import action_router
+
+        module = types.ModuleType(module_name)
+        module.__dict__.update(mcp_tool=mcp_tool, action_router=action_router)
+        exec(source, module.__dict__)
+        return module
+
+    def test_mcp_tool_records_the_defining_module(self):
+        @mcp_tool("test_provenance_first_party")
+        async def handle_first_party(arguments):
+            return []
+
+        source = _TOOL_DEFINITIONS["test_provenance_first_party"].source_module
+        assert source == handle_first_party.__module__
+
+    def test_action_router_records_the_declaring_module_not_decorators(self):
+        """A router's handler is built inside decorators.py, so attributing it
+        by ``handler.__module__`` would call every plugin router first-party."""
+        self._declare_in_module(
+            "fake_governance_plugin.handlers",
+            "async def _ping(arguments):\n"
+            "    return []\n"
+            "action_router('test_provenance_plugin_router', actions={'ping': _ping})\n",
+        )
+
+        definition = _TOOL_DEFINITIONS["test_provenance_plugin_router"]
+        assert definition.source_module == "fake_governance_plugin.handlers"
+        assert definition.handler.__module__ == "src.mcp_handlers.decorators"
+
+    def test_plugin_registrations_are_listed_and_shipped_ones_are_not(self):
+        from src.mcp_handlers.decorators import list_plugin_registered_tools
+
+        self._declare_in_module(
+            "fake_governance_plugin.handlers",
+            "@mcp_tool('test_provenance_plugin_tool')\n"
+            "async def handle_plugin_tool(arguments):\n"
+            "    return []\n",
+        )
+
+        foreign = list_plugin_registered_tools()
+        assert "test_provenance_plugin_tool" in foreign
+        # A tool this repo ships, registered by importing src.mcp_handlers.
+        assert "list_tools" in _TOOL_DEFINITIONS
+        assert "list_tools" not in foreign
+
+
 class TestDecoratorExecution:
 
     @pytest.mark.asyncio
