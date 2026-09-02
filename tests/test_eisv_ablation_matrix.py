@@ -914,8 +914,8 @@ def test_filter_rows_for_validation_honours_the_fixture_rule():
     scraped = _scraped_only_row(1)
     fixture = OutcomeRow(**{**_row(2, bad=True, risk=0.9).__dict__, "detail": {"synthetic_calibration_fixture": True}})
 
-    # The shared default is the registered rule; corrected is opt-in.
-    assert filter_rows_for_validation([live, scraped, fixture]) == [live]
+    # The shared default is the corrected rule; registered is explicit.
+    assert filter_rows_for_validation([live, scraped, fixture]) == [live, scraped]
     assert filter_rows_for_validation([live, scraped, fixture], fixture_rule="registered") == [live]
     assert filter_rows_for_validation([live, scraped, fixture], fixture_rule="corrected") == [live, scraped]
     with pytest.raises(ValueError):
@@ -925,7 +925,7 @@ def test_filter_rows_for_validation_honours_the_fixture_rule():
 def test_registered_reads_pin_the_registered_fixture_rule(tmp_path):
     base = [
         "--read-protocol", "registered",
-        "--read-id", "eisv-outcome-grounding-test",
+        "--read-id", "eisv-outcome-grounding-2026-12-01",
         "--not-before", "2026-01-01T00:00:00Z",
         "--as-of", "2026-06-01T00:00:00Z",
         "--read-ledger-dir", str(tmp_path),
@@ -944,9 +944,10 @@ def test_registered_reads_pin_the_registered_fixture_rule(tmp_path):
         matrix_module.validate_read_protocol(corrected, now=datetime(2026, 9, 1, tzinfo=timezone.utc))
 
 
-def test_other_protocols_default_to_registered_and_record_the_rule(tmp_path):
-    # The shared default is the registered rule for every protocol; the
-    # sensitivity cohort asks for `corrected` explicitly.
+def test_reproduction_defaults_to_registered_and_exploratory_to_corrected(tmp_path):
+    # A reproduction read defaults to the frozen artifact's registered rule;
+    # the sensitivity cohort asks for `corrected` explicitly; an exploratory
+    # read takes the shared default, corrected since 2026-09-02.
     reproduction = matrix_module.parse_args(
         ["--read-protocol", "reproduction", "--read-id", "repro-test", "--acknowledge-contamination",
          "--read-ledger-dir", str(tmp_path)]
@@ -961,7 +962,7 @@ def test_other_protocols_default_to_registered_and_record_the_rule(tmp_path):
         ["--read-protocol", "exploratory", "--read-id", "explore-test", "--acknowledge-contamination",
          "--read-ledger-dir", str(tmp_path)]
     )
-    assert matrix_module.effective_fixture_rule(exploratory) == "registered"
+    assert matrix_module.effective_fixture_rule(exploratory) == "corrected"
 
     receipt_path, _ = matrix_module.record_read_receipt(
         args, exclude_harness_lanes=("beam",), now=datetime(2026, 9, 1, tzinfo=timezone.utc)
@@ -991,7 +992,7 @@ def test_registered_read_receipt_records_the_registered_rule(tmp_path):
     args = matrix_module.parse_args(
         [
             "--read-protocol", "registered",
-            "--read-id", "eisv-outcome-grounding-receipt-test",
+            "--read-id", "eisv-outcome-grounding-2026-12-01",
             "--not-before", "2026-01-01T00:00:00Z",
             "--as-of", "2026-06-01T00:00:00Z",
             "--read-ledger-dir", str(tmp_path),
@@ -1008,9 +1009,9 @@ def test_registered_read_receipt_records_the_registered_rule(tmp_path):
 @pytest.mark.parametrize(
     "argv, expected",
     [
-        (["--read-protocol", "registered", "--read-id", "eisv-outcome-grounding-wiring-test",
+        (["--read-protocol", "registered", "--read-id", "eisv-outcome-grounding-2026-12-01",
           "--not-before", "2026-01-01T00:00:00Z", "--as-of", "2026-06-01T00:00:00Z"], "registered"),
-        (["--read-protocol", "reproduction", "--read-id", "eisv-outcome-grounding-wiring-sensitivity",
+        (["--read-protocol", "reproduction", "--read-id", "eisv-outcome-grounding-2026-12-01-wiring-sensitivity",
           "--acknowledge-contamination", "--fixture-rule", "corrected", "--as-of", "2026-06-01T00:00:00Z"], "corrected"),
     ],
 )
@@ -1039,3 +1040,121 @@ def test_cli_threads_one_fixture_rule_into_selection_receipt_and_report(monkeypa
     assert receipts, "no read receipt written"
     receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
     assert receipt["parameters"]["fixture_rule"] == expected
+
+
+# ---- the protocol manifest (decision session e4ebf589a1c79b9d, 2026-09-02) ----
+
+
+def _registered_args(read_id, *extra):
+    return matrix_module.parse_args(
+        [
+            "--read-protocol", "registered", "--read-id", read_id,
+            "--not-before", "2026-01-01T00:00:00Z", "--as-of", "2026-06-01T00:00:00Z",
+            *extra,
+        ]
+    )
+
+
+def test_manifest_fixes_the_rule_of_each_registered_protocol():
+    stop_rule = matrix_module.registered_read_protocol("eisv-outcome-grounding-2026-12-01")
+    assert stop_rule is not None and stop_rule.fixture_rule == "registered"
+    # The stop rule registered exactly one read id; suffixed ids are not it.
+    assert matrix_module.registered_read_protocol("eisv-outcome-grounding-2026-12-01-seed-1") is None
+    operator = matrix_module.registered_read_protocol("operator-acme-day58-seed-0")
+    assert operator is not None and operator.fixture_rule == "corrected"
+    assert matrix_module.registered_read_protocol("operator-acme-day58-seed-x") is None
+    assert matrix_module.registered_read_protocol("operator-acme-day58-seed-3") is None  # undeclared seed
+    # The pre-declared sensitivity cohort is a reproduction read, not a registered one.
+    assert matrix_module.registered_read_protocol("eisv-outcome-grounding-2026-12-01-sensitivity") is None
+    assert matrix_module.registered_read_protocol("some-other-read") is None
+    assert matrix_module.registered_read_protocol(None) is None
+    # The manifest, not the shared default, decides a registered read's rule.
+    assert matrix_module.effective_fixture_rule(_registered_args("eisv-outcome-grounding-2026-12-01")) == "registered"
+    assert matrix_module.effective_fixture_rule(_registered_args("operator-acme-day58-seed-2")) == "corrected"
+
+
+def test_registered_read_outside_the_manifest_is_rejected():
+    with pytest.raises(matrix_module.ReadProtocolError, match="REGISTERED_READ_MANIFEST"):
+        matrix_module.validate_read_protocol(
+            _registered_args("some-other-read"), now=datetime(2026, 9, 1, tzinfo=timezone.utc)
+        )
+
+
+@pytest.mark.parametrize(
+    "read_id, wrong_rule, right_rule",
+    [
+        ("eisv-outcome-grounding-2026-12-01", "corrected", "registered"),
+        ("operator-acme-day58-seed-0", "registered", "corrected"),
+    ],
+)
+def test_registered_read_rejects_a_rule_its_protocol_did_not_register(read_id, wrong_rule, right_rule):
+    now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    with pytest.raises(matrix_module.ReadProtocolError, match="their protocol registered"):
+        matrix_module.validate_read_protocol(_registered_args(read_id, "--fixture-rule", wrong_rule), now=now)
+    matrix_module.validate_read_protocol(_registered_args(read_id, "--fixture-rule", right_rule), now=now)
+    matrix_module.validate_read_protocol(_registered_args(read_id), now=now)
+
+
+def test_receipt_names_the_registered_protocol_and_its_rule(tmp_path):
+    args = matrix_module.parse_args(
+        [
+            "--read-protocol", "registered", "--read-id", "operator-acme-day58-seed-1",
+            "--uncertainty-seed", "1",
+            "--not-before", "2026-01-01T00:00:00Z", "--as-of", "2026-06-01T00:00:00Z",
+            "--read-ledger-dir", str(tmp_path),
+        ]
+    )
+    receipt_path, _ = matrix_module.record_read_receipt(
+        args, exclude_harness_lanes=("beam",), now=datetime(2026, 9, 1, tzinfo=timezone.utc)
+    )
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["registered_protocol"] == "independent-operator-cohort-v0.1"
+    assert receipt["parameters"]["fixture_rule"] == "corrected"
+
+
+def test_sensitivity_read_id_is_not_a_registered_protocol(tmp_path):
+    """The pre-declared sensitivity cohort is a reproduction read: registered rejects it,
+    and its reproduction receipt names no registered protocol."""
+    now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    with pytest.raises(matrix_module.ReadProtocolError, match="REGISTERED_READ_MANIFEST"):
+        matrix_module.validate_read_protocol(
+            _registered_args("eisv-outcome-grounding-2026-12-01-sensitivity"), now=now
+        )
+    args = matrix_module.parse_args(
+        [
+            "--read-protocol", "reproduction", "--read-id", "eisv-outcome-grounding-2026-12-01-sensitivity",
+            "--acknowledge-contamination", "--fixture-rule", "corrected", "--as-of", "2026-06-01T00:00:00Z",
+            "--read-ledger-dir", str(tmp_path),
+        ]
+    )
+    receipt_path, _ = matrix_module.record_read_receipt(args, exclude_harness_lanes=("beam",), now=now)
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["read_protocol"] == "reproduction"
+    assert receipt["registered_protocol"] is None
+    assert receipt["parameters"]["fixture_rule"] == "corrected"
+
+
+def test_manifest_admits_stop_rule_retries_and_binds_operator_seeds():
+    stop = matrix_module.registered_read_protocol("eisv-outcome-grounding-2026-12-01-retry-2")
+    assert stop is not None and stop.name == "eisv-outcome-grounding-stop-rule-v0"
+    assert matrix_module.registered_read_protocol("eisv-outcome-grounding-2026-12-01-attempt-2") is None
+    # A participant segment cannot smuggle a second day58 marker.
+    assert matrix_module.registered_read_protocol("operator-acme-day58-seed-0-day58-seed-1") is None
+    now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    # The seed the id names and --uncertainty-seed are one thing.
+    matrix_module.validate_read_protocol(_registered_args("operator-acme-day58-seed-2", "--uncertainty-seed", "2"), now=now)
+    with pytest.raises(matrix_module.ReadProtocolError, match="predeclares uncertainty seed 2"):
+        matrix_module.validate_read_protocol(_registered_args("operator-acme-day58-seed-2", "--uncertainty-seed", "1"), now=now)
+
+
+def test_manifest_ambiguity_and_unregistered_ids_fail_closed(monkeypatch):
+    dup = matrix_module.RegisteredReadProtocol(
+        name="duplicate", read_id_pattern=matrix_module.REGISTERED_READ_MANIFEST[0].read_id_pattern,
+        fixture_rule="corrected", registered_in="nowhere",
+    )
+    monkeypatch.setattr(matrix_module, "REGISTERED_READ_MANIFEST", (*matrix_module.REGISTERED_READ_MANIFEST, dup))
+    with pytest.raises(matrix_module.ReadProtocolError, match="more than one"):
+        matrix_module.registered_read_protocol("eisv-outcome-grounding-2026-12-01")
+    monkeypatch.undo()
+    with pytest.raises(matrix_module.ReadProtocolError, match="names no protocol"):
+        matrix_module.effective_fixture_rule(_registered_args("unregistered-read"))

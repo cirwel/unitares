@@ -377,7 +377,8 @@ def test_calibration_excluded_only_is_separable_from_real_fixtures():
 
     # The server stamps the flag together with the prediction_source it scraped from.
     scraped_only = {"calibration_excluded": True, "producer": "ci", "prediction_source": "prev_confidence_fallback"}
-    assert is_controlled_validation_fixture(scraped_only) is True
+    assert is_controlled_validation_fixture(scraped_only, rule="registered") is True
+    assert is_controlled_validation_fixture(scraped_only) is False  # corrected default keeps it
     assert _fixture_only_because_calibration_excluded(scraped_only) is True
 
     real_fixture = {
@@ -408,7 +409,7 @@ def test_corrected_rule_keeps_scraped_only_rows_and_registered_rule_drops_them()
     }
     assert is_controlled_validation_fixture(scraped, rule="registered") is True
     assert is_controlled_validation_fixture(scraped, rule="corrected") is False
-    assert is_controlled_validation_fixture(scraped) is True  # registered is the default
+    assert is_controlled_validation_fixture(scraped) is False  # corrected is the default
     assert _fixture_only_because_calibration_excluded(scraped) is True
     # Phase-5 shadow rows are excluded for a different reason and stay out of the bucket.
     shadow = {"calibration_excluded": True, "shadow_write": True, "prediction_source": "registry"}
@@ -432,9 +433,9 @@ def test_corrected_rule_keeps_scraped_only_rows_and_registered_rule_drops_them()
     assert _fixture_only_because_calibration_excluded(real_fixture) is False
 
 
-def test_parse_args_fixture_rule_defaults_to_registered():
-    assert inventory_module.parse_args([]).fixture_rule == "registered"
-    assert inventory_module.parse_args(["--fixture-rule", "corrected"]).fixture_rule == "corrected"
+def test_parse_args_fixture_rule_defaults_to_corrected():
+    assert inventory_module.parse_args([]).fixture_rule == "corrected"
+    assert inventory_module.parse_args(["--fixture-rule", "registered"]).fixture_rule == "registered"
 
 
 class _FakeAsyncpgModule:

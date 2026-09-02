@@ -173,10 +173,21 @@ operator-asserted `agent_uuid` has no work correlation, so a forwarded id could
 bind an unrelated open prediction); an agent with a registered prediction
 records its outcome through `record_result` on its own bound session. The server then scrapes a confidence and stamps the row
 `calibration_excluded` so calibration never trains on it, and records why
-(`calibration_exclusion_reasons`). Every validation instrument drops such rows under its default `registered`
-fixture rule (the pre-registered read's predicate, pinned for registered reads)
-and keeps them under `--fixture-rule corrected`, which is opt-in and named in
-the report it produces. Inventing a confidence
+(`calibration_exclusion_reasons`). Since 2026-09-02 the non-protocol instruments (inventory, skeptic report,
+telemetry-health summary, exploratory reads) keep such rows under their default
+`corrected` fixture rule and name it in every report; `--fixture-rule
+registered` reproduces the earlier counts. Protocol-bound reads never take the
+default: a registered read's rule is fixed by the ablation matrix's protocol
+manifest, and the coherence-shadow v0 contract stays on the registered rule.
+
+**Telemetry step change, 2026-09-02.** The counts those non-protocol
+instruments publish (`strict_outcomes`, `fixtures_excluded`, the inventory's
+strict totals, the skeptic report's cohort) stepped once when the default
+moved: rows whose only exclusion is a scraped confidence became evidence.
+Every payload and report
+carries `fixture_rule`, which is the marker for that step; compare figures
+across the date only with the rule held fixed, and never read the step as
+event accrual. Inventing a confidence
 to avoid the flag reproduces the scraped-confidence defect client-side (#1445).
 The response carries a `validation_visibility` note when the flag is stamped,
 and `outcome_inventory.py` reports the population as `calibration_excluded_only`

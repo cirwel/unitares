@@ -203,7 +203,8 @@ def test_http_endpoint_clamps_window_and_caches(client, monkeypatch):
 
 def test_scraped_only_rows_are_counted_and_kept_only_under_the_corrected_rule():
     """2026-09-02: a scraped confidence excludes a row from calibration; the
-    registered rule (default) also drops it from evidence, the corrected rule keeps it."""
+    registered rule also drops it from evidence, the corrected rule (the default
+    since 2026-09-02) keeps it."""
     rows = [
         _outcome(
             measurement="scraped",
@@ -221,16 +222,16 @@ def test_scraped_only_rows_are_counted_and_kept_only_under_the_corrected_rule():
         ),
     ]
 
-    registered = build_calibration_summary(rows, min_bin_clusters=1, min_cohort_clusters=10)
+    registered = build_calibration_summary(
+        rows, min_bin_clusters=1, min_cohort_clusters=10, fixture_rule="registered"
+    )
     assert registered["fixture_rule"] == "registered"
     assert registered["fixtures_excluded"] == 2
     assert registered["scraped_only_rows"] == 1
     assert registered["strict_outcomes"] == 0
 
-    corrected = build_calibration_summary(
-        rows, min_bin_clusters=1, min_cohort_clusters=10, fixture_rule="corrected"
-    )
-    assert corrected["fixture_rule"] == "corrected"
+    corrected = build_calibration_summary(rows, min_bin_clusters=1, min_cohort_clusters=10)
+    assert corrected["fixture_rule"] == "corrected"  # the default since 2026-09-02
     assert corrected["fixtures_excluded"] == 1
     assert corrected["scraped_only_rows"] == 1
     assert corrected["strict_outcomes"] == 1

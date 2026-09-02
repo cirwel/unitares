@@ -137,9 +137,10 @@ read-specific power analysis. It may not claim clean single-read blinding.
 The registered read runs with the fixture rule it was registered with: the
 `registered` rule, under which a server-stamped `calibration_excluded` classifies
 the row as fixture traffic whatever its cause. `eisv_ablation_matrix.py` pins
-that rule for `--read-protocol registered` and rejects any other value, the
-shared default is the same rule, and the registered command now names it
-explicitly so the contract depends on no code default.
+that rule for this read through `REGISTERED_READ_MANIFEST` and rejects any
+other value, and the registered command names it explicitly so the contract
+depends on no code default. (The shared default of the non-protocol
+instruments moved to `corrected` on 2026-09-02; it cannot reach this read.)
 
 Declared now, before the read: the December report will present, beside the
 registered result and **without authority**, the same command run a second time
@@ -235,12 +236,17 @@ python3 scripts/analysis/eisv_ablation_matrix.py \
 (`--fixture-rule registered` added 2026-09-02: it names the fixture predicate
 the read was registered with, which the CLI already pins for registered reads,
 so the execution contract does not depend on a code default. It changes no
-cohort.)
+cohort. Since 2026-09-02 the shared default of the non-protocol instruments is
+`corrected`; this read's rule comes from `REGISTERED_READ_MANIFEST` in
+`eisv_ablation_matrix.py`, which fixes `registered` for this read's id and its
+`-retry-<n>` forms, so the default cannot reach it.)
 
 The CLI validates this declaration and writes an atomic access receipt before
 the database query. It refuses an early read, a future `--as-of`, an undeclared
 read, or reuse of the same read ID. If an attempt fails after its receipt is
-written, any retry uses a new ID and the report discloses both attempts; deleting
+written, any retry uses a new ID of the form
+`eisv-outcome-grounding-2026-12-01-retry-<n>`, the only suffix the protocol
+manifest admits, and the report discloses both attempts; deleting
 the receipt to preserve a single-read story would itself be a protocol violation.
 The contamination acknowledgement records the already-known interim accesses;
 it does not turn the scheduled operational read into clean confirmatory evidence.
