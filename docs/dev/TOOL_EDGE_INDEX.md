@@ -57,18 +57,21 @@ removal authority.
 
 The wire schema is what FastMCP accepts. `describe-only` lists parameters
 that introspection advertises for the canonical implementation even though
-the alias wire rejects them.
+the alias wire rejects them. The hash is taken over the normalized schema
+(union members sorted, presentation-only `title` keys dropped) so it is the
+same on every supported interpreter; see the generator's *Reproducibility*
+note for why the raw rendering is not.
 
 | Public name | Canonical | Wire params | Describe-only | Wire schema hash |
 |---|---|---:|---|---|
-| `check_working_state` | `get_governance_metrics` | 4 | `agent_id` | `sha256:a8e33c1dd59c22f2a56c1226d49dc6bdc6690de25ada64fa9884759c9e384108` |
-| `record_result` | `outcome_event` | 14 | — | `sha256:d26fa896239cef0f04a3e3c7d9171685921970883b623cef0d806d68ec68f8ec` |
-| `request_review` | `dialectic` | 9 | — | `sha256:f809ccdbb6809046f7383b29801ebfed64fe707f932e609ab2376d661cf49ab7` |
-| `search_shared_memory` | `knowledge` | 36 | — | `sha256:5d7c9d3ae9b8215d4eaeb9fd9f9d8bb21e390d6dc92b4d11559c81f27d1124f2` |
-| `start_session` | `onboard` | 17 | — | `sha256:9c77a2475438ce95be2c104ddcc48df7314cfbe9a20caa8a4ba7215f6eb477e1` |
-| `store_finding` | `knowledge` | 13 | — | `sha256:88f13bbeed5d015e46b8fb362ae7a5656433926c7e5873b4fc7dd302fee57eaf` |
-| `sync_state` | `process_agent_update` | 23 | `agent_id`, `agent_name` | `sha256:357b4eb62f507c2581a4269fda6aca40036af21054c270bddee4f84cab0c30a9` |
-| `update_finding` | `knowledge` | 13 | — | `sha256:7dd261b60503ec631b43a071201424d2fe7f6dd7b1dccb1463852334985dfc90` |
+| `check_working_state` | `get_governance_metrics` | 4 | `agent_id` | `sha256:7e826191bd2e2c0217c985158acf5a515445a629de1e6e063f485d2e12b04958` |
+| `record_result` | `outcome_event` | 14 | — | `sha256:e3e7aa30a2349d0f6c5c95abc160b3f17f701d3a10d18018441e4de743769844` |
+| `request_review` | `dialectic` | 9 | — | `sha256:c37f5ecdb08b72bfae567569d5db49ac20b47bad8a3c369fe9397caeac99afce` |
+| `search_shared_memory` | `knowledge` | 36 | — | `sha256:075cdd41202249b1e1ab094ec6cf4dba0ecd83cdd9e87490f058c779a7581616` |
+| `start_session` | `onboard` | 17 | — | `sha256:87fbd17ac12beadc14d029c91d19dcb212a4dcab0b0c754e28c7a4f31ae3d9d1` |
+| `store_finding` | `knowledge` | 13 | — | `sha256:6ced8c4858936e1b3f8cbf55cd76f7dd617b1dd8c079b9ca780656597df8fa85` |
+| `sync_state` | `process_agent_update` | 23 | `agent_id`, `agent_name` | `sha256:ab94ee977175055f6990324276f5e1b709e21f8b29d2a7532e4f71d6fc837ad8` |
+| `update_finding` | `knowledge` | 13 | — | `sha256:efd1a4af3783e93f83a068e69944fe55ab323a256f2b99239a152d4bf1d7c5c5` |
 
 ## Deterministic findings
 
