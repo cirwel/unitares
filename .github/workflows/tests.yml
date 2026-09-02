@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 # Only the newest revision of a branch is actionable. Cancel superseded runs so
-# an active PR does not consume eight database-backed runners for stale commits.
+# an active PR does not consume sixteen database-backed runners for stale commits.
 concurrency:
   group: tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -148,14 +148,25 @@ jobs:
         python scripts/diagnostics/update_docs_tool_count.py --check --require-registry
 
   test_shard:
-    name: test shard (${{ matrix.shard }})
+    name: test shard (${{ matrix.python-version }}, ${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.12']
+        # 3.12 is the .python-version dev default and the requires-python
+        # floor. 3.14 is what production actually runs: the LaunchAgent
+        # interpreter, the Docker base image, and the `# production-python:`
+        # marker in constraints.txt, which check_ci_python_matrix_sync.py
+        # holds this list to. Until 2026-09-02 the suite ran on 3.12 alone
+        # while every deployment surface was on 3.14, so interpreter-shaped
+        # regressions (the TOOL_EDGE_INDEX --check drift behind PR #2059, a
+        # launchd automation dying on a missing module on 2026-08-04) were
+        # invisible here. Every leg feeds the required `test (3.12)` context
+        # below, so a 3.14 regression blocks merge rather than merely showing
+        # red after the fact.
+        python-version: ['3.12', '3.14']
         # Top-level tests are split by filename using recent Actions timing.
         # The eight groups target roughly 2-3 minutes of test execution each;
         # nested tests and agents keep a dedicated shard. Each job gets its own
@@ -222,7 +233,7 @@ jobs:
 
     - name: Run ${{ matrix.shard }} tests with coverage
       env:
-        COVERAGE_FILE: .coverage.${{ matrix.shard }}
+        COVERAGE_FILE: .coverage.${{ matrix.python-version }}.${{ matrix.shard }}
       run: |
         case "${{ matrix.shard }}" in
           tests-a-b)
@@ -263,8 +274,8 @@ jobs:
       if: always()
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
-        name: coverage-data-${{ matrix.shard }}
-        path: .coverage.${{ matrix.shard }}
+        name: coverage-data-${{ matrix.python-version }}-${{ matrix.shard }}
+        path: .coverage.${{ matrix.python-version }}.${{ matrix.shard }}
         include-hidden-files: true
         if-no-files-found: warn
         retention-days: 1
@@ -272,7 +283,10 @@ jobs:
   test:
     # Preserve the branch-protection context while the expensive work fans out
     # above. `always()` plus the explicit shard guard ensures a failed matrix
-    # leg cannot turn this required check into a harmless skip.
+    # leg cannot turn this required check into a harmless skip. The context
+    # name is fixed by branch protection; since 2026-09-02 it gates every
+    # interpreter leg of the matrix, not only 3.12 (renaming it means
+    # updating the protection rule in the same change).
     name: test (3.12)
     if: ${{ always() }}
     needs: test_shard

@@ -13,6 +13,16 @@
 # job tests the newest in-range resolution WITHOUT these constraints, so
 # coverage of upcoming versions is a deliberate lane, not an accident.
 #
+# production-python: 3.14
+#
+# The marker line above is machine-read by
+# scripts/diagnostics/check_ci_python_matrix_sync.py (the smoke job) and
+# tests/test_ci_python_matrix.py: the CI test matrix must include this
+# interpreter, so the suite is exercised on what production actually runs
+# (the LaunchAgent and the Docker base image), not only on the
+# .python-version dev default. Move it in the same PR that deploys an
+# interpreter bump -- the same rule as the pins below.
+#
 # How to apply this file, and the one way it silently does not work:
 #
 #   pip install -r requirements-full.txt -c constraints.txt
