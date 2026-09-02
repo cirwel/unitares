@@ -12,23 +12,33 @@ name: Elixir Tests
 # and branch protection treats a missing required context as pending forever.
 # So this workflow is NOT path-filtered at the trigger level. Instead:
 #
-#   changes      always runs; scripts/ci/elixir_paths_changed.py decides whether
-#                the change reaches any suite (an undeterminable change set
-#                counts as relevant, never as skippable).
-#   <app jobs>   run only when `changes` says relevant; otherwise they are
-#                skipped at zero cost.
-#   elixir-gate  always runs last (if: always()); scripts/ci/elixir_gate.py
-#                passes only when every app job succeeded, or was skipped
-#                because nothing relevant changed. THIS is the single context
-#                to require on master. Failure, cancellation, a skipped suite
-#                on a relevant change, or a failed detector all fail it.
+#   elixir-changes  always runs; scripts/ci/elixir_paths_changed.py decides
+#                   whether the change reaches any suite (an undeterminable
+#                   change set counts as relevant, never as skippable).
+#   <app jobs>      run when the detector says relevant, and also when the
+#                   detector job itself did not succeed -- a flaky detector
+#                   costs a full run, never a skipped suite. Otherwise they
+#                   are skipped at zero cost.
+#   elixir-gate     always runs last (if: always()); scripts/ci/elixir_gate.py
+#                   passes only when every app job succeeded, or was skipped
+#                   because a SUCCESSFUL detector said nothing relevant
+#                   changed. THIS is the single context to require on master.
+#                   Failure, cancellation, or a suite that did not run when it
+#                   had to all fail it.
 #
 # Relevant surfaces (kept in step with RELEVANT_PREFIXES / RELEVANT_FILES in
-# scripts/ci/elixir_paths_changed.py):
+# scripts/ci/elixir_paths_changed.py; tests/test_elixir_ci_gate.py pins the
+# list against this file's working-directory and docker compose usage):
 #   elixir/sentinel, elixir/lease_plane, elixir/unitares_sdk,
 #   elixir/agent_orchestrator, elixir/dialectic_live, elixir/wave3a_handlers,
-#   db/postgres, .github/workflows/elixir-tests.yml,
-#   scripts/ci/elixir_paths_changed.py, scripts/ci/elixir_gate.py
+#   db/postgres, docker-compose.yml, Dockerfile, .dockerignore,
+#   .github/workflows/elixir-tests.yml, scripts/ci/elixir_paths_changed.py,
+#   scripts/ci/elixir_gate.py
+#
+# Break-glass: master has enforce_admins on, so a required elixir-gate that is
+# red on every branch (the 2026-08-01 audit-partition shape) is cleared by a
+# fix whose suites pass, or by temporarily removing the context from the
+# required list -- the same escape every required context here has.
 #
 # Scope notes per job:
 # - `sentinel` is DB-free: its test_helper.exs auto-detects Postgres and
@@ -53,15 +63,23 @@ on:
   pull_request:
     branches: [ master, main ]
 
+# Superseded runs on the same ref are cancelled (same shape as tests.yml): this
+# workflow now fires on every push, and strict up-to-date auto-updates re-push
+# every armed PR after each merge.
+concurrency:
+  group: elixir-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 # Least-privilege: these jobs only read the repo and run tests.
 permissions:
   contents: read
 
 jobs:
   # Always runs. Decides whether the change reaches any Elixir suite; the app
-  # jobs below key off its `relevant` output. Undeterminable ⇒ relevant.
-  changes:
-    name: changes
+  # jobs below key off its `relevant` output. Undeterminable ⇒ relevant; a
+  # failed detector ⇒ the app jobs run anyway (see their `if:`).
+  elixir_changes:
+    name: elixir-changes
     runs-on: ubuntu-latest
     outputs:
       relevant: ${{ steps.detect.outputs.relevant }}
@@ -87,8 +105,10 @@ jobs:
   # support (Elixir 1.15) as well as current — a dep that silently requires a
   # newer Elixir than its mix.exs declares is a broken contract.
   unitares_sdk:
-    needs: changes
-    if: needs.changes.outputs.relevant == 'true'
+    needs: elixir_changes
+    # Runs when the detector says relevant, AND when the detector itself did
+    # not succeed (then nothing can vouch for a skip, so everything runs).
+    if: ${{ !cancelled() && (needs.elixir_changes.result != 'success' || needs.elixir_changes.outputs.relevant == 'true') }}
     runs-on: ubuntu-latest
 
     strategy:
@@ -133,8 +153,10 @@ jobs:
   # unseen. Its suite is self-contained (spawns /bin/echo-class processes,
   # no DB), so a plain mix test job closes the gap.
   agent_orchestrator:
-    needs: changes
-    if: needs.changes.outputs.relevant == 'true'
+    needs: elixir_changes
+    # Runs when the detector says relevant, AND when the detector itself did
+    # not succeed (then nothing can vouch for a skip, so everything runs).
+    if: ${{ !cancelled() && (needs.elixir_changes.result != 'success' || needs.elixir_changes.outputs.relevant == 'true') }}
     runs-on: ubuntu-latest
 
     defaults:
@@ -165,8 +187,10 @@ jobs:
   # shared envelope can blank this app's session pane, and the `changes`
   # detector treats SDK changes as relevant, so this job runs on them too.
   dialectic_live:
-    needs: changes
-    if: needs.changes.outputs.relevant == 'true'
+    needs: elixir_changes
+    # Runs when the detector says relevant, AND when the detector itself did
+    # not succeed (then nothing can vouch for a skip, so everything runs).
+    if: ${{ !cancelled() && (needs.elixir_changes.result != 'success' || needs.elixir_changes.outputs.relevant == 'true') }}
     runs-on: ubuntu-latest
 
     defaults:
@@ -204,8 +228,10 @@ jobs:
       run: mix test
 
   sentinel:
-    needs: changes
-    if: needs.changes.outputs.relevant == 'true'
+    needs: elixir_changes
+    # Runs when the detector says relevant, AND when the detector itself did
+    # not succeed (then nothing can vouch for a skip, so everything runs).
+    if: ${{ !cancelled() && (needs.elixir_changes.result != 'success' || needs.elixir_changes.outputs.relevant == 'true') }}
     runs-on: ubuntu-latest
 
     defaults:
@@ -249,8 +275,10 @@ jobs:
   # drives the router via Plug.Test without booting Bandit; `meck` stubs the
   # outbound probe client.
   wave3a_handlers:
-    needs: changes
-    if: needs.changes.outputs.relevant == 'true'
+    needs: elixir_changes
+    # Runs when the detector says relevant, AND when the detector itself did
+    # not succeed (then nothing can vouch for a skip, so everything runs).
+    if: ${{ !cancelled() && (needs.elixir_changes.result != 'success' || needs.elixir_changes.outputs.relevant == 'true') }}
     runs-on: ubuntu-latest
 
     defaults:
@@ -286,8 +314,10 @@ jobs:
       run: mix test
 
   lease_plane:
-    needs: changes
-    if: needs.changes.outputs.relevant == 'true'
+    needs: elixir_changes
+    # Runs when the detector says relevant, AND when the detector itself did
+    # not succeed (then nothing can vouch for a skip, so everything runs).
+    if: ${{ !cancelled() && (needs.elixir_changes.result != 'success' || needs.elixir_changes.outputs.relevant == 'true') }}
     runs-on: ubuntu-latest
 
     steps:
@@ -342,7 +372,7 @@ jobs:
   # were skipped or failed, so it always reports a status.
   elixir-gate:
     name: elixir-gate
-    needs: [changes, unitares_sdk, agent_orchestrator, dialectic_live, sentinel, wave3a_handlers, lease_plane]
+    needs: [elixir_changes, unitares_sdk, agent_orchestrator, dialectic_live, sentinel, wave3a_handlers, lease_plane]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:

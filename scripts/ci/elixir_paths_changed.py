@@ -12,7 +12,9 @@ The decision is fail-safe: whenever the change set cannot be determined (a
 force-push whose ``before`` is unreachable, a branch-creation push, a fetch
 that fails), the answer is ``relevant=true`` so the suites run rather than
 being skipped on a guess. An unnecessary run costs minutes; a skipped run on
-a real Elixir change is exactly the merge-unvalidated hole this closes.
+a real Elixir change is exactly the merge-unvalidated hole this closes. The
+workflow adds a second layer: if this job fails outright, the app jobs run
+anyway and the gate then demands that every one of them succeeded.
 
 Usage (from .github/workflows/elixir-tests.yml):
   python3 scripts/ci/elixir_paths_changed.py --event pull_request \\
@@ -30,8 +32,9 @@ import subprocess
 import sys
 from collections.abc import Iterable
 
-# Keep this list in step with the workflow header comment. A change under any
-# of these can break one of the suites, so all of them run (the suites share
+# Keep this list in step with the workflow header comment; the unit tests pin
+# it against the workflow's `working-directory:` lines. A change under any of
+# these can break one of the suites, so all of them run (the suites share
 # unitares_sdk by path: dep, and lease_plane runs against db/postgres).
 RELEVANT_PREFIXES: tuple[str, ...] = (
     "elixir/sentinel/",
@@ -43,9 +46,16 @@ RELEVANT_PREFIXES: tuple[str, ...] = (
     "db/postgres/",
 )
 
-# The gate's own machinery: a change here must exercise the suites, otherwise
-# a broken detector could silently skip everything and still pass the gate.
+# Single files the suites consume. The docker trio is what the lease_plane
+# job's `docker compose up postgres-age` actually builds and runs against
+# (service name, image, env defaults, initdb mount all live in
+# docker-compose.yml) -- the same set docker-quickstart.yml filters on. The
+# gate's own machinery is here so a broken detector cannot silently skip
+# everything and still pass.
 RELEVANT_FILES: tuple[str, ...] = (
+    "docker-compose.yml",
+    "Dockerfile",
+    ".dockerignore",
     ".github/workflows/elixir-tests.yml",
     "scripts/ci/elixir_paths_changed.py",
     "scripts/ci/elixir_gate.py",
@@ -55,7 +65,7 @@ ZERO_SHA_PREFIX = "0000000"
 
 
 def is_relevant(paths: Iterable[str]) -> bool:
-    """True when any path lies under a suite directory or is gate machinery."""
+    """True when any path lies under a suite directory or is a consumed file."""
     for path in paths:
         path = path.strip()
         if not path:
@@ -82,6 +92,9 @@ def changed_paths(base: str, head: str, cwd: str | None = None) -> list[str] | N
 
     Only the two commits are needed (tree-to-tree diff), so a depth-1 checkout
     plus a depth-1 fetch of the base is enough; no full history is required.
+    Rename detection is disabled on purpose: with it, a file moved OUT of a
+    suite directory is reported only at its destination and the suite's loss
+    would be invisible. Without it the move shows as a delete plus an add.
     """
     if not base or base.startswith(ZERO_SHA_PREFIX):
         return None
@@ -92,7 +105,7 @@ def changed_paths(base: str, head: str, cwd: str | None = None) -> list[str] | N
             return None
         if not _commit_present(base, cwd):
             return None
-    result = _git(["diff", "--name-only", base, head], cwd)
+    result = _git(["diff", "--name-only", "--no-renames", base, head], cwd)
     if result.returncode != 0:
         return None
     return [line for line in result.stdout.splitlines() if line.strip()]
@@ -104,7 +117,7 @@ def decide(event: str, base: str, head: str, cwd: str | None = None) -> tuple[bo
     if paths is None:
         return True, f"change set undeterminable for {event} (base={base or 'empty'}); running the suites"
     if is_relevant(paths):
-        return True, "a changed path lies under an Elixir suite, db/postgres, or the gate machinery"
+        return True, "a changed path lies under an Elixir suite, db/postgres, the docker files, or the gate machinery"
     return False, f"none of {len(paths)} changed path(s) reaches the Elixir suites"
 
 

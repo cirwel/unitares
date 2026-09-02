@@ -9,6 +9,8 @@ and pins the workflow wiring those scripts assume.
 from __future__ import annotations
 
 import importlib.util
+import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -31,6 +33,16 @@ def _load(name: str):
 paths_changed = _load("elixir_paths_changed")
 gate = _load("elixir_gate")
 
+DETECTOR = gate.DETECTOR_JOB
+SUITES = (
+    "unitares_sdk",
+    "agent_orchestrator",
+    "dialectic_live",
+    "sentinel",
+    "wave3a_handlers",
+    "lease_plane",
+)
+
 
 # --- elixir_paths_changed.is_relevant -------------------------------------
 
@@ -46,14 +58,20 @@ gate = _load("elixir_gate")
         (["elixir/dialectic_live/lib/x.ex"], True),
         (["elixir/wave3a_handlers/lib/router.ex"], True),
         (["db/postgres/migrations/099_x.sql"], True),
+        # What the lease_plane job's `docker compose up postgres-age` consumes.
+        (["docker-compose.yml"], True),
+        (["Dockerfile"], True),
+        ([".dockerignore"], True),
         ([".github/workflows/elixir-tests.yml"], True),
         (["scripts/ci/elixir_paths_changed.py"], True),
         (["scripts/ci/elixir_gate.py"], True),
-        # Prefix discipline: a sibling directory that merely shares a prefix
-        # string is not a suite.
+        # Prefix discipline: a sibling that merely shares a prefix string, or a
+        # same-named file elsewhere, is not a suite input.
         (["elixir/sentinel_docs/notes.md"], False),
         (["db/postgresql-notes.md"], False),
         (["docs/elixir/sentinel/overview.md"], False),
+        (["docs/docker-compose.yml"], False),
+        (["dashboard/Dockerfile"], False),
     ],
 )
 def test_is_relevant(paths, expected):
@@ -67,6 +85,25 @@ def test_relevant_lists_match_the_workflow_header():
         assert prefix.rstrip("/") in text, prefix
     for rel_file in paths_changed.RELEVANT_FILES:
         assert rel_file in text, rel_file
+
+
+def test_relevant_prefixes_cover_every_suite_directory_the_workflow_runs_in():
+    """Every `working-directory: elixir/<app>` the jobs use is a relevant prefix,
+    so a new app job cannot be added without the detector learning about it."""
+    text = WORKFLOW.read_text()
+    directories = set(re.findall(r"working-directory:\s*(elixir/[A-Za-z0-9_]+)", text))
+    assert directories, "expected working-directory lines for the Elixir apps"
+    for directory in sorted(directories):
+        assert f"{directory}/" in paths_changed.RELEVANT_PREFIXES, directory
+
+
+def test_docker_compose_usage_implies_docker_files_are_relevant():
+    """The lease_plane job builds and runs the compose service; the files that
+    define it must count as suite inputs or a compose-only break passes green."""
+    text = WORKFLOW.read_text()
+    assert "docker compose up" in text
+    for rel_file in ("docker-compose.yml", "Dockerfile", ".dockerignore"):
+        assert rel_file in paths_changed.RELEVANT_FILES, rel_file
 
 
 # --- elixir_paths_changed.changed_paths / decide against a real repo -------
@@ -87,7 +124,7 @@ def repo(tmp_path: Path) -> Path:
     (path / "README.md").write_text("base\n")
     (path / "elixir" / "sentinel").mkdir(parents=True)
     (path / "elixir" / "sentinel" / "a.ex").write_text("a\n")
-    _git(path, "add", "-A")
+    _git(path, "add", "README.md", "elixir/sentinel/a.ex")
     _git(path, "commit", "-q", "-m", "base")
     return path
 
@@ -113,6 +150,22 @@ def test_changed_paths_docs_only_is_not_relevant(repo: Path):
 def test_changed_paths_elixir_change_is_relevant(repo: Path):
     base = _git(repo, "rev-parse", "HEAD")
     head = _commit(repo, "elixir/sentinel/a.ex", "changed\n", "elixir")
+    relevant, _ = paths_changed.decide("pull_request", base, head, cwd=str(repo))
+    assert relevant is True
+
+
+def test_rename_out_of_a_suite_directory_is_relevant(repo: Path):
+    """With rename detection, git would report only the destination path and
+    the suite's lost module would be invisible; --no-renames shows the delete."""
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / "docs").mkdir()
+    _git(repo, "mv", "elixir/sentinel/a.ex", "docs/a.ex")
+    _git(repo, "commit", "-q", "-m", "move module out of the suite")
+    head = _git(repo, "rev-parse", "HEAD")
+    paths = paths_changed.changed_paths(base, head, cwd=str(repo))
+    assert paths is not None
+    assert "elixir/sentinel/a.ex" in paths
+    assert "docs/a.ex" in paths
     relevant, _ = paths_changed.decide("pull_request", base, head, cwd=str(repo))
     assert relevant is True
 
@@ -149,20 +202,11 @@ def test_main_writes_github_output(repo: Path, tmp_path: Path, monkeypatch):
 
 # --- elixir_gate.evaluate ---------------------------------------------------
 
-SUITES = (
-    "unitares_sdk",
-    "agent_orchestrator",
-    "dialectic_live",
-    "sentinel",
-    "wave3a_handlers",
-    "lease_plane",
-)
-
-
 def _needs(relevant: str, detector: str = "success", **results: str) -> dict:
-    needs = {"changes": {"result": detector, "outputs": {"relevant": relevant}}}
+    needs = {DETECTOR: {"result": detector, "outputs": {"relevant": relevant}}}
+    default = "success" if (relevant == "true" or detector != "success") else "skipped"
     for name in SUITES:
-        needs[name] = {"result": results.get(name, "success" if relevant == "true" else "skipped")}
+        needs[name] = {"result": results.get(name, default)}
     return needs
 
 
@@ -192,29 +236,44 @@ def test_gate_fails_when_relevant_but_a_suite_was_skipped():
     """A skipped suite on a relevant change is a wiring defect, not a pass."""
     ok, lines = gate.evaluate(_needs("true", wave3a_handlers="skipped"))
     assert not ok
-    assert any("skipped although relevant" in line for line in lines)
+    assert any("skipped although the suites had to run" in line for line in lines)
 
 
-def test_gate_fails_when_detector_did_not_succeed():
-    ok, lines = gate.evaluate(_needs("false", detector="failure"))
+def test_gate_passes_when_detector_failed_but_every_suite_ran_and_passed():
+    """The workflow runs every suite when the detector did not succeed; a full
+    green run is the strongest evidence there is, so a flaky detector costs a
+    run, not a red required check."""
+    ok, lines = gate.evaluate(_needs("", detector="failure"))
+    assert ok, lines
+    assert lines[0].startswith(f"note {DETECTOR}")
+
+
+def test_gate_fails_when_detector_failed_and_a_suite_was_skipped():
+    """Nothing can vouch for a skip when the detector did not succeed."""
+    ok, lines = gate.evaluate(_needs("", detector="failure", sentinel="skipped"))
     assert not ok
-    assert lines[0].startswith("FAIL changes")
+    assert any("FAIL sentinel: skipped" in line for line in lines)
+
+
+def test_gate_ignores_a_stale_relevant_false_from_a_failed_detector():
+    """`relevant=false` is only trusted when the detector job succeeded."""
+    ok, _ = gate.evaluate(_needs("false", detector="cancelled", lease_plane="skipped"))
+    assert not ok
 
 
 def test_gate_fails_when_detector_is_missing():
-    ok, _ = gate.evaluate({name: {"result": "success"} for name in SUITES})
+    ok, lines = gate.evaluate({name: {"result": "success"} for name in SUITES})
     assert not ok
+    assert any("miswired" in line for line in lines)
 
 
 def test_gate_fails_when_no_suites_are_wired():
-    ok, lines = gate.evaluate({"changes": {"result": "success", "outputs": {"relevant": "false"}}})
+    ok, lines = gate.evaluate({DETECTOR: {"result": "success", "outputs": {"relevant": "false"}}})
     assert not ok
     assert any("miswired" in line for line in lines)
 
 
 def test_gate_main_exit_codes(monkeypatch, capsys):
-    import json
-
     monkeypatch.setenv("NEEDS_JSON", json.dumps(_needs("false")))
     assert gate.main() == 0
     assert "elixir-gate: PASS" in capsys.readouterr().out
@@ -228,6 +287,12 @@ def test_gate_main_exit_codes(monkeypatch, capsys):
 
 # --- workflow wiring --------------------------------------------------------
 
+APP_JOB_IF = (
+    "${{ !cancelled() && ("
+    f"needs.{DETECTOR}.result != 'success' || needs.{DETECTOR}.outputs.relevant == 'true') }}}}"
+)
+
+
 def test_workflow_wires_detector_gate_and_every_suite():
     data = yaml.safe_load(WORKFLOW.read_text())
     # PyYAML parses the bare `on:` key as boolean True.
@@ -238,16 +303,21 @@ def test_workflow_wires_detector_gate_and_every_suite():
             "status and a required context then waits forever (#2040)"
         )
 
+    concurrency = data.get("concurrency") or {}
+    assert concurrency.get("cancel-in-progress") is True
+    assert "github.ref" in str(concurrency.get("group"))
+
     jobs = data["jobs"]
-    assert "changes" in jobs and "elixir-gate" in jobs
-    assert jobs["changes"]["outputs"]["relevant"]
+    assert DETECTOR in jobs and "elixir-gate" in jobs
+    assert set(jobs) == {DETECTOR, "elixir-gate", *SUITES}, sorted(jobs)
+    assert jobs[DETECTOR]["outputs"]["relevant"]
     for name in SUITES:
-        assert jobs[name]["needs"] == "changes", name
-        assert jobs[name]["if"] == "needs.changes.outputs.relevant == 'true'", name
+        assert jobs[name]["needs"] == DETECTOR, name
+        assert jobs[name]["if"] == APP_JOB_IF, (name, jobs[name]["if"])
 
     gate_job = jobs["elixir-gate"]
     assert gate_job["name"] == "elixir-gate"
-    assert set(gate_job["needs"]) == {"changes", *SUITES}
+    assert set(gate_job["needs"]) == {DETECTOR, *SUITES}
     assert str(gate_job["if"]).strip("${} ") == "always()"
     run_steps = [step for step in gate_job["steps"] if "run" in step]
     assert any("scripts/ci/elixir_gate.py" in step["run"] for step in run_steps)
