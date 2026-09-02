@@ -298,9 +298,10 @@ async def http_harness_outcome(request):
     Validation visibility (#1790): a producer with no prediction of its own,
     such as a test hook, sends no ``confidence``. The server then scrapes one
     and stamps the row ``calibration_excluded`` so calibration does not train
-    on it. The validation instruments drop such rows under their default
-    ``registered`` fixture rule and keep them under ``--fixture-rule
-    corrected``; the row is recorded either way, with its reason.
+    on it. Since 2026-09-02 the non-protocol validation instruments keep such
+    rows as evidence under their default ``corrected`` fixture rule; registered
+    reads run the rule their protocol fixed, and the stop rule's own read drops
+    them. The row is recorded either way, with its reason.
     Inventing a confidence to avoid the flag would be the scraped-confidence
     defect moved client-side. ``prediction_id`` is deliberately NOT accepted
     here: this endpoint takes an operator-asserted ``agent_uuid`` with no
@@ -432,8 +433,9 @@ async def http_harness_outcome(request):
                     "calibration_excluded: no caller-supplied confidence, so the "
                     f"server scraped one ({payload.get('prediction_source')}); "
                     "calibration will not train on this row. Validation instruments "
-                    "drop it under their default registered fixture rule and keep it "
-                    "under --fixture-rule corrected; the reason is recorded. Do not "
+                    "keep it as evidence under their default corrected fixture rule; "
+                    "registered reads run the rule their protocol fixed. The reason "
+                    "is recorded. Do not "
                     "invent a confidence to avoid this flag; an agent with a "
                     "registered prediction records through record_result instead."
                 )

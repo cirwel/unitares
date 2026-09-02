@@ -782,9 +782,20 @@ in the registered command); a corrected-rule sensitivity cohort is pre-declared
 beside it without authority. Engineering: the writer stamps
 `calibration_exclusion_reasons`, `calibration_excluded` stays the calibration gate
 for rows recorded through the outcome_event recorder (the Phase-5 writers that insert
-directly carry neither key and are outside E1), the instruments take `--fixture-rule` (default `registered`; `corrected` opt-in
-and named in every report), the frozen prospective-cohort contract pins the
+directly carry neither key and are outside E1), the instruments take `--fixture-rule` (default `registered` at that
+time, moved to `corrected` for the non-protocol instruments by the delegated decision below; named in every report), the frozen prospective-cohort contract pins the
 registered reading. A proposed default flip to `corrected` for non-protocol
 instruments was withdrawn on review (packet, *Selection*) and is left to the
 operator as a follow-up. Still the operator's: whether a corrected instrument is the
 reopening premise if condition 3 fails (stop rule, reopening clause).
+
+**Delegated follow-up decisions (2026-09-02, governed session `e4ebf589a1c79b9d`):**
+the operator delegated the three follow-ups outright; the reviewer ratified D1 (shared
+default `corrected` for the non-protocol instruments; protocol-bound reads pinned by
+code-enforced tests) and D2 (independent-operator protocol amended before any
+enrollment: lane-P read under `corrected`, plumbing check restated, rule fixed by an
+immutable protocol manifest in the ablation matrix) and corrected D3 (coherence-shadow
+contract v0 preserved with its zero; a distinct prospective shadow contract v0.1, not to be
+confused with the protocol amendment v0.1 above, with the corrected rule, a
+2026-09-03T00:00Z cutoff, pinned parameters and a one-shot receipt, registered beside it). Scope statement on the record: D1 and
+D2 within the delegation; D3 within it only in the prospective v0.1 form.

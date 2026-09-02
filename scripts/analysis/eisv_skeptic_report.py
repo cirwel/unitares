@@ -1748,9 +1748,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         choices=FIXTURE_RULES,
         default=DEFAULT_FIXTURE_RULE,
         help=(
-            "How the server-stamped calibration_excluded flag is read: 'registered' "
-            "(default) treats it as a fixture marker whatever its cause; 'corrected' "
-            "keeps rows whose only exclusion is a scraped confidence."
+            "How the server-stamped calibration_excluded flag is read: 'corrected' "
+            "(default since 2026-09-02) keeps rows whose only exclusion is a scraped "
+            "confidence; 'registered' treats it as a fixture marker whatever its cause."
         ),
     )
     parser.add_argument(

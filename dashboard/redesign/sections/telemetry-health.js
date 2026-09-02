@@ -263,7 +263,8 @@
     $("telemetry-health-enforcement-note").textContent = enforcement.note || "";
     $("telemetry-health-vocabularies").innerHTML = vocabularyHTML(MODEL.risk_vocabularies);
     $("telemetry-health-calibration-table").innerHTML = calibrationTable(calibration);
-    $("telemetry-health-calibration-note").textContent = `${calibration.note || ""} ${num(calibration.fixtures_excluded)} controlled fixture(s) excluded; ${num(calibration.with_envelope)} of ${num(calibration.strict_outcomes)} strict outcomes have a lead-separated envelope.`;
+    const fixtureRule = calibration.fixture_rule ? ` Fixture rule: ${calibration.fixture_rule}${calibration.fixture_rule === "corrected" ? " (default since 2026-09-02; rows whose only exclusion is a scraped confidence count as evidence)" : ""}.` : "";
+    $("telemetry-health-calibration-note").textContent = `${calibration.note || ""} ${num(calibration.fixtures_excluded)} controlled fixture(s) excluded; ${num(calibration.with_envelope)} of ${num(calibration.strict_outcomes)} strict outcomes have a lead-separated envelope.${fixtureRule}`;
     paintCharts(false);
   }
 

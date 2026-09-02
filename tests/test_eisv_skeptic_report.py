@@ -546,3 +546,10 @@ def test_cli_threads_one_fixture_rule_into_fetch_and_report(monkeypatch, tmp_pat
     assert rc == 0
     assert seen["fetch"]["fixture_rule"] == "corrected"
     assert seen["report"]["fixture_rule"] == "corrected"
+
+
+def test_parse_args_fixture_rule_defaults_to_corrected():
+    from scripts.analysis import eisv_skeptic_report as skeptic_module
+
+    assert skeptic_module.parse_args([]).fixture_rule == "corrected"
+    assert skeptic_module.parse_args(["--fixture-rule", "registered"]).fixture_rule == "registered"
