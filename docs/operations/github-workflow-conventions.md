@@ -257,3 +257,5 @@ this entirely).
 - **Claude (web/cloud harness):** the harness already enforces the convention
   (fixed `claude/...` branch + draft PR). Keep work on that branch; let the
   draft PR be the delivery artifact.
+
+<!-- probe: docs-only change used once to observe the elixir-gate skip-and-pass path (#2040); the PR carrying it is closed after observation. -->
