@@ -40,16 +40,49 @@ Exit codes:
     2 — handler package not importable (dependencies absent). Distinct from 1 so
         a caller can tell "cannot look" from "looked and found drift"; the
         doctor SKIPs on 2 rather than reporting a false failure.
+
+Reproducibility — why ``--check`` has to agree across interpreters:
+    The committed index must come out byte-identical from every supported
+    interpreter, or the freshness gate calls a fresh document stale. Three
+    environment factors were measured to move it (2026-09-02, regenerate-and-
+    diff on five interpreter/pydantic/mcp combinations); each is neutralised
+    here, in the generator, rather than by pinning the environment:
+
+    1. Entry-point plugins. A ``governance_mcp.plugins`` package installed on
+       the machine registers into the same ``_TOOL_DEFINITIONS`` the shipped
+       tools use, and this index describes the repo, not the machine. The
+       generator sets ``UNITARES_DISABLE_PLUGINS`` before the first handler
+       import and, as a second fence, drops any tool whose declaring module
+       lies outside this repo's packages (``list_plugin_registered_tools``).
+    2. Union member order on the wire. ``typing`` caches ``Optional[X]`` in a
+       128-slot LRU keyed on ``X``, and ``Union[bool, str]`` compares equal to
+       ``Union[str, bool]`` — so ``Optional[Union[bool, str]]`` returns
+       whichever spelling was evaluated most recently, and the ``anyOf`` order
+       FastMCP renders for every ``bool | str | None`` parameter depends on
+       cache eviction pressure, i.e. on the Python, pydantic and mcp versions
+       in play (measured: pydantic 2.13.5 + mcp 2.1.1 on 3.12 renders
+       string-first, every other tested combination boolean-first). The
+       schema hashes are therefore taken over ``normalize_schema(...)``, which
+       sorts union members and drops presentation-only ``title`` keys.
+    3. The mcp major. The index is generated under the mcp pinned in
+       ``constraints.txt``. A stale verdict prints the differing lines and the
+       running Python/mcp/pydantic versions next to that pin, so the next
+       reader sees the factor instead of a bare "stale".
 """
 
 from __future__ import annotations
 
 import argparse
+import difflib
 import hashlib
 import importlib
+import importlib.metadata
 import inspect
 import json
+import os
 import pkgutil
+import platform
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -157,6 +190,72 @@ def content_hash(value: Any) -> str:
     return f"sha256:{digest}"
 
 
+# JSON Schema keywords whose value is a set of alternative sub-schemas. Their
+# member order carries no validation meaning, and for the wire schemas indexed
+# here it is not even stable across interpreters — reproducibility factor 2 in
+# the module docstring.
+_UNORDERED_SCHEMA_KEYWORDS = frozenset({"anyOf", "oneOf", "allOf"})
+# Keywords whose values are maps keyed by caller-chosen names rather than by
+# schema keywords: a parameter that happens to be called ``title`` is content.
+_NAME_KEYED_SCHEMA_KEYWORDS = frozenset(
+    {"properties", "patternProperties", "$defs", "definitions", "dependentSchemas"}
+)
+# Keywords whose values are literal data, not schemas: left untouched.
+_LITERAL_SCHEMA_KEYWORDS = frozenset({"default", "const", "enum", "examples"})
+# Presentation only. pydantic derives ``title`` from the field or model name,
+# and exactly how is a pydantic-version detail, not part of the wire contract.
+_PRESENTATION_SCHEMA_KEYWORDS = frozenset({"title"})
+
+
+def normalize_schema(schema: Any) -> Any:
+    """Return the validation-relevant content of a JSON schema in canonical form.
+
+    Drops presentation-only keywords and sorts the members of ``anyOf`` /
+    ``oneOf`` / ``allOf`` by their canonical JSON, recursively, so two schemas
+    that accept exactly the same documents normalise identically whichever
+    interpreter rendered them. Key order is settled by ``_canonical_json`` at
+    hashing time, so this only has to fix content.
+    """
+    return _normalize_schema_node(_jsonable(schema), keys_are_names=False)
+
+
+def _normalize_schema_node(node: Any, *, keys_are_names: bool) -> Any:
+    if isinstance(node, dict):
+        normalized: dict[str, Any] = {}
+        for key, value in node.items():
+            if keys_are_names:
+                # Inside ``properties`` and friends: the key is a name, the
+                # value is a schema.
+                normalized[key] = _normalize_schema_node(value, keys_are_names=False)
+                continue
+            if key in _PRESENTATION_SCHEMA_KEYWORDS:
+                continue
+            if key in _LITERAL_SCHEMA_KEYWORDS:
+                normalized[key] = value
+                continue
+            child = _normalize_schema_node(
+                value, keys_are_names=key in _NAME_KEYED_SCHEMA_KEYWORDS
+            )
+            if key in _UNORDERED_SCHEMA_KEYWORDS and isinstance(child, list):
+                child = sorted(child, key=_canonical_json)
+            normalized[key] = child
+        return normalized
+    if isinstance(node, list):
+        return [_normalize_schema_node(item, keys_are_names=False) for item in node]
+    return node
+
+
+def schema_hash(schema: Any) -> str:
+    """Content address for a JSON schema, taken over ``normalize_schema``.
+
+    This is the hash the index prints for every wire and describe schema. It
+    is deliberately NOT ``content_hash(schema)``: that one moves with the
+    interpreter (module docstring, reproducibility factor 2) while the
+    accepted documents do not.
+    """
+    return content_hash(normalize_schema(schema))
+
+
 def _site(func) -> str:
     """`path/to/file.py:LINE funcname` for a function object, repo-relative."""
     target = inspect.unwrap(func)
@@ -198,6 +297,12 @@ def _load_registries() -> tuple[dict, dict, dict, list[str]]:
     failures are collected, never swallowed — a module this generator could not
     import is a hole in the index and is reported as one.
     """
+    # Entry-point plugins register into the same registries the shipped tools
+    # use, and this index describes the repo, not the machine. Refuse them at
+    # the loader before anything under src/ can import it (reproducibility
+    # factor 1 in the module docstring); the provenance filter below is the
+    # second fence, for a tool that reached the registry some other way.
+    os.environ["UNITARES_DISABLE_PLUGINS"] = "1"
     sys.path.insert(0, str(REPO))
     import src.mcp_handlers as handlers_pkg  # noqa: E402
 
@@ -210,11 +315,26 @@ def _load_registries() -> tuple[dict, dict, dict, list[str]]:
         except Exception as exc:  # noqa: BLE001 — reported, not suppressed
             failures.append(f"{info.name}: {type(exc).__name__}: {exc}")
 
-    from src.mcp_handlers.decorators import _TOOL_DEFINITIONS
+    from src.mcp_handlers.decorators import (
+        _TOOL_DEFINITIONS,
+        list_plugin_registered_tools,
+    )
     from src.mcp_handlers.tool_stability import _TOOL_ALIASES
     from src.tool_schemas import get_pydantic_schemas
 
-    return _TOOL_DEFINITIONS, get_pydantic_schemas(), _TOOL_ALIASES, failures
+    foreign = set(list_plugin_registered_tools())
+    if foreign:
+        print(
+            f"note: ignoring {len(foreign)} tool(s) registered outside this "
+            f"repo's packages: {', '.join(sorted(foreign))}",
+            file=sys.stderr,
+        )
+    definitions = {
+        name: definition
+        for name, definition in _TOOL_DEFINITIONS.items()
+        if name not in foreign
+    }
+    return definitions, get_pydantic_schemas(), _TOOL_ALIASES, failures
 
 
 def _router_declaration_sites() -> dict[str, str]:
@@ -481,14 +601,21 @@ def _collect_wire_catalog() -> tuple[dict[str, dict[str, Any]], list[str]]:
         if not isinstance(registered, dict):
             raise TypeError("FastMCP tool manager did not expose a tool dictionary")
 
+        # Same fence as _load_registries: the production registrar registers
+        # whatever is in the decorator registry, plugins included.
+        from src.mcp_handlers.decorators import list_plugin_registered_tools
+
+        foreign = set(list_plugin_registered_tools())
         catalog: dict[str, dict[str, Any]] = {}
         for name, exposed in sorted(registered.items()):
+            if name in foreign:
+                continue
             input_schema = _jsonable(getattr(exposed, "parameters", {}) or {})
             catalog[name] = {
                 "name": name,
                 "description": str(getattr(exposed, "description", "") or ""),
                 "input_schema": input_schema,
-                "input_schema_hash": content_hash(input_schema),
+                "input_schema_hash": schema_hash(input_schema),
             }
         return catalog, failures
     except Exception as exc:  # noqa: BLE001 — evidence, not silent fallback
@@ -574,7 +701,7 @@ def build_exposure_snapshot(
                 "wire_properties": wire_properties,
                 "wire_required": sorted(wire["input_schema"].get("required", [])),
                 "describe_input_schema": describe_schema,
-                "describe_input_schema_hash": content_hash(describe_schema),
+                "describe_input_schema_hash": schema_hash(describe_schema),
                 "describe_properties": describe_properties,
                 "describe_only_properties": sorted(
                     set(describe_properties) - set(wire_properties)
@@ -980,7 +1107,10 @@ def render(
         "",
         "The wire schema is what FastMCP accepts. `describe-only` lists parameters",
         "that introspection advertises for the canonical implementation even though",
-        "the alias wire rejects them.",
+        "the alias wire rejects them. The hash is taken over the normalized schema",
+        "(union members sorted, presentation-only `title` keys dropped) so it is the",
+        "same on every supported interpreter; see the generator's *Reproducibility*",
+        "note for why the raw rendering is not.",
         "",
         "| Public name | Canonical | Wire params | Describe-only | Wire schema hash |",
         "|---|---|---:|---|---|",
@@ -1097,6 +1227,89 @@ def render(
     return "\n".join(lines)
 
 
+def _distribution_version(name: str) -> str:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return "not installed"
+
+
+def pinned_mcp_version() -> str | None:
+    """The ``mcp==`` pin in constraints.txt — what the committed index is generated under."""
+    constraints = REPO / "constraints.txt"
+    if not constraints.is_file():
+        return None
+    for line in constraints.read_text(encoding="utf-8").splitlines():
+        match = re.match(r"^mcp==(\S+)", line.strip())
+        if match:
+            return match.group(1)
+    return None
+
+
+def environment_lines() -> list[str]:
+    """One line per environment factor known to move the rendered index."""
+    mcp_version = _distribution_version("mcp")
+    pinned = pinned_mcp_version()
+    mcp_line = f"mcp {mcp_version}"
+    if pinned and mcp_version != pinned:
+        mcp_line += (
+            f" — constraints.txt pins {pinned}; the committed index is generated "
+            "under the pin, and the mcp major changes what FastMCP advertises"
+        )
+    elif pinned:
+        mcp_line += " (matches the constraints.txt pin)"
+    return [
+        f"python {platform.python_version()} ({sys.executable})",
+        mcp_line,
+        f"pydantic {_distribution_version('pydantic')} / "
+        f"pydantic-core {_distribution_version('pydantic-core')}",
+        "entry-point plugins: disabled by this generator (UNITARES_DISABLE_PLUGINS=1)",
+    ]
+
+
+STALE_VERDICT = (
+    f"{OUT.relative_to(REPO).as_posix()} is stale — run: "
+    "python3 scripts/dev/tool_edge_index.py"
+)
+DIFF_LINE_LIMIT = 120
+
+
+def stale_report(current: str, generated: str, *, limit: int = DIFF_LINE_LIMIT) -> str:
+    """What ``--check`` prints on drift: WHICH lines differ, then the verdict.
+
+    The differing lines come first so a reader sees the factor (a schema hash
+    row, a mode table, a plugin tool) instead of a bare "stale", followed by
+    the interpreter that produced them. The verdict is deliberately the LAST
+    line: ``scripts/dev/unitares_doctor.py`` tells a verdict from a crash by
+    that line alone, so nothing may be printed after it.
+    """
+    rel = OUT.relative_to(REPO).as_posix()
+    diff = list(
+        difflib.unified_diff(
+            current.splitlines(),
+            generated.splitlines(),
+            fromfile=f"{rel} (committed)",
+            tofile=f"{rel} (generated by this interpreter)",
+            lineterm="",
+            n=1,
+        )
+    )
+    lines: list[str] = []
+    if len(diff) > limit:
+        lines += diff[:limit]
+        lines.append(
+            f"... {len(diff) - limit} more diff lines; run the generator and "
+            f"`git diff {rel}` for the rest"
+        )
+    else:
+        lines += diff
+    lines.append("")
+    lines.append("generated under:")
+    lines += [f"  {line}" for line in environment_lines()]
+    lines.append(STALE_VERDICT)
+    return "\n".join(lines)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true", help="exit 1 if the index is stale")
@@ -1147,11 +1360,7 @@ def main() -> int:
     if args.check:
         current = OUT.read_text(encoding="utf-8") if OUT.exists() else ""
         if current != content:
-            print(
-                f"{OUT.relative_to(REPO)} is stale — run: "
-                "python3 scripts/dev/tool_edge_index.py",
-                file=sys.stderr,
-            )
+            print(stale_report(current, content), file=sys.stderr)
             return 1
         print(f"{OUT.relative_to(REPO)} is up to date.")
         return 0

@@ -285,7 +285,10 @@
         "name": { "type": "string" },
         "description": { "type": "string" },
         "input_schema": { "type": "object" },
-        "input_schema_hash": { "$ref": "#/$defs/contentHash" },
+        "input_schema_hash": {
+          "$ref": "#/$defs/contentHash",
+          "description": "sha256 of tool_edge_index.normalize_schema(input_schema) — union members sorted, presentation-only title keys dropped — so it is identical across supported interpreters."
+        },
         "kind": {
           "enum": ["registered_tool", "workflow_alias"]
         },
@@ -294,7 +297,10 @@
         "wire_properties": { "$ref": "#/$defs/stringArray" },
         "wire_required": { "$ref": "#/$defs/stringArray" },
         "describe_input_schema": { "type": "object" },
-        "describe_input_schema_hash": { "$ref": "#/$defs/contentHash" },
+        "describe_input_schema_hash": {
+          "$ref": "#/$defs/contentHash",
+          "description": "sha256 of tool_edge_index.normalize_schema(describe_input_schema); same normalization as input_schema_hash."
+        },
         "describe_properties": { "$ref": "#/$defs/stringArray" },
         "describe_only_properties": { "$ref": "#/$defs/stringArray" },
         "wire_only_properties": { "$ref": "#/$defs/stringArray" }
