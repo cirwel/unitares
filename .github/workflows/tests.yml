@@ -330,11 +330,15 @@ jobs:
       # job is a matrix by design, so instead ask the Actions API for the
       # latest attempt of every job in this run and require all shard legs
       # present and successful. A missing leg is a failure, not a pass.
-      # Partial re-runs: `filter=latest` lists the jobs of the newest attempt.
-      # Legs that were not re-run either appear there with their earlier
-      # conclusion or are absent; absence fails the count check, so a
-      # partial re-run can only pass when every leg is present and green.
-      # When in doubt, re-run all jobs rather than a single failed leg.
+      # Partial re-runs: `filter=latest` returns each job's latest execution.
+      # A leg re-run alone contributes its new conclusion; legs not re-run
+      # keep their earlier one. The gate therefore aggregates the latest
+      # execution of every leg across attempts: it passes only when all
+      # sixteen are present and each one's latest execution succeeded, and
+      # it fails on any leg that is absent or whose latest execution is not
+      # a success. That is what closes the masking hazard: a leg whose most
+      # recent execution failed cannot be hidden behind a re-run of another.
+      # It does not require every leg to have run within one attempt.
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
