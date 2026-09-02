@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Dict, Any, Callable, Optional, Sequence
 from functools import wraps
 import asyncio
+import inspect
 import time
 from mcp.types import TextContent
 
@@ -67,8 +68,33 @@ class ToolDefinition:
     # never inject unbounded cardinality (or free text) into
     # ``audit.tool_usage.payload``. Not a gate — nothing refuses on it.
     known_actions: Optional[frozenset] = None
+    # Import path of the module that DECLARED this tool, e.g.
+    # ``src.mcp_handlers.consolidated`` or ``unitares_pi_plugin.handlers``.
+    # Populated automatically: ``func.__module__`` for ``@mcp_tool``, and the
+    # CALLING module for ``action_router`` — a router's generated handler is
+    # defined in this file, so ``handler.__module__`` names governance for
+    # every router, including a plugin's.
+    #
+    # This is the only reliable way to tell the shipped surface apart from an
+    # entry-point plugin's. Consumers: ``tool_schemas._is_core_handler`` (which
+    # tools must appear in TOOL_ORDER) and the test-suite fixture that asserts
+    # governance invariants against the first-party surface alone.
+    source_module: str = ""
 
 _TOOL_DEFINITIONS: Dict[str, ToolDefinition] = {}
+
+# Packages that ship in this repo. A tool declared anywhere else was registered
+# by an externally-installed plugin (or by a test) and is not part of the
+# governance surface this repo's contracts describe.
+_FIRST_PARTY_ROOTS = ("src", "governance_core")
+
+
+def _is_first_party_module(module: str) -> bool:
+    """Whether ``module`` is one of this repo's shipped packages."""
+    return any(
+        module == root or module.startswith(f"{root}.")
+        for root in _FIRST_PARTY_ROOTS
+    )
 
 
 def mcp_tool(
@@ -84,6 +110,7 @@ def mcp_tool(
     default_action: Optional[str] = None,
     requires_verdict: str = "baseline",
     known_actions: Optional[set] = None,
+    source_module: Optional[str] = None,
 ):
     """
     Decorator for MCP tool handlers with auto-registration and timeout protection.
@@ -114,6 +141,9 @@ def mcp_tool(
         hidden: If True, tool is not shown in list_tools (internal use only)
         superseded_by: Name of tool that replaces this one (for deprecation messages)
         register: If False, tool is NOT registered (for internal handlers called by consolidated tools)
+        source_module: Overrides the recorded declaring module. Only
+            ``action_router`` passes it, because the handler it decorates is
+            defined in this file rather than in the caller's module.
     """
     def decorator(func: Callable) -> Callable:
         tool_name = name or func.__name__.replace('handle_', '')
@@ -274,6 +304,7 @@ def mcp_tool(
                 default_action=_default_action,
                 requires_verdict=requires_verdict,
                 known_actions=_known_actions,
+                source_module=source_module or getattr(func, "__module__", "") or "",
             )
 
         return wrapper
@@ -473,6 +504,23 @@ def get_tool_definition(tool_name: str) -> Optional[ToolDefinition]:
     return _TOOL_DEFINITIONS.get(tool_name)
 
 
+def list_plugin_registered_tools() -> list[str]:
+    """Registered tools that were declared outside this repo's packages.
+
+    An entry-point plugin (``governance_mcp.plugins``) registers straight into
+    ``_TOOL_DEFINITIONS``, so the decorator registry describes "this process"
+    rather than "this repo". Callers that reason about the shipped governance
+    surface — the schema/TOOL_ORDER guard, the drift tests — need to subtract
+    these. Tools declared from a test module count as external too, which is
+    what a test that registers a probe tool wants.
+    """
+    return sorted(
+        name
+        for name, td in _TOOL_DEFINITIONS.items()
+        if not _is_first_party_module(td.source_module)
+    )
+
+
 def list_registered_tools(include_hidden: bool = False, include_deprecated: bool = True) -> list[str]:
     """List all registered tool names, optionally filtering hidden/deprecated."""
     tools = []
@@ -524,6 +572,14 @@ def action_router(
     Returns:
         The registered handler (same as @mcp_tool would return)
     """
+    # The router below is defined in THIS module, so its ``__module__`` would
+    # attribute every router — a plugin's included — to governance. Record the
+    # module that declared it instead; see ToolDefinition.source_module.
+    _caller_frame = inspect.currentframe()
+    _declared_in = ""
+    if _caller_frame is not None and _caller_frame.f_back is not None:
+        _declared_in = _caller_frame.f_back.f_globals.get("__name__", "") or ""
+
     valid_actions = sorted(actions.keys())
     _param_maps = param_maps or {}
     _examples = examples or [f"{name}(action='{valid_actions[0]}')"]
@@ -565,6 +621,7 @@ def action_router(
         # DERIVED from the routing map, never hand-listed. A newly wired
         # action is auditable the moment it can route.
         known_actions=frozenset(actions.keys()),
+        source_module=_declared_in,
     )
     async def router(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         # Support both 'action' and 'op' (op is alias for consistency with other tools)

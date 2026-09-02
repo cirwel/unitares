@@ -45,6 +45,13 @@ from src.tool_modes import (
     get_tools_for_mode,
 )
 
+# The mode sets, TOOL_ORDER and orientation code these tests compare are all
+# written against the tools this repo ships. A governance_mcp.plugins package
+# installed on the machine registers into the same decorator registry, so
+# without this the comparison silently depended on collection/import order —
+# see the fixture's docstring in conftest.py.
+pytestmark = pytest.mark.usefixtures("first_party_tool_surface")
+
 
 def _lite_wire_surface() -> set[str]:
     """Reproduce the set of tool names src/mcp_server.py advertises in lite mode.
