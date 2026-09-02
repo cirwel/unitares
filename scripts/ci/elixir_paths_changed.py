@@ -33,9 +33,10 @@ import sys
 from collections.abc import Iterable
 
 # Keep this list in step with the workflow header comment; the unit tests pin
-# it against the workflow's `working-directory:` lines. A change under any of
-# these can break one of the suites, so all of them run (the suites share
-# unitares_sdk by path: dep, and lease_plane runs against db/postgres).
+# it against the workflow's `working-directory:` lines and against the
+# fixture paths the Elixir tests reference. A change under any of these can
+# break one of the suites, so all of them run (the suites share unitares_sdk
+# by path: dep, and lease_plane runs against db/postgres).
 RELEVANT_PREFIXES: tuple[str, ...] = (
     "elixir/sentinel/",
     "elixir/lease_plane/",
@@ -44,6 +45,10 @@ RELEVANT_PREFIXES: tuple[str, ...] = (
     "elixir/dialectic_live/",
     "elixir/wave3a_handlers/",
     "db/postgres/",
+    # Cross-runtime contract fixtures the lease_plane suite reads through
+    # relative paths (tests/vectors/*.json, tests/vendored/*.schema.json).
+    "tests/vectors/",
+    "tests/vendored/",
 )
 
 # Single files the suites consume. The docker trio is what the lease_plane
@@ -77,10 +82,8 @@ def is_relevant(paths: Iterable[str]) -> bool:
     return False
 
 
-def _git(args: list[str], cwd: str | None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, check=False
-    )
+def _git(args: list[str], cwd: str | None) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, check=False)
 
 
 def _commit_present(sha: str, cwd: str | None) -> bool:
@@ -92,9 +95,13 @@ def changed_paths(base: str, head: str, cwd: str | None = None) -> list[str] | N
 
     Only the two commits are needed (tree-to-tree diff), so a depth-1 checkout
     plus a depth-1 fetch of the base is enough; no full history is required.
-    Rename detection is disabled on purpose: with it, a file moved OUT of a
-    suite directory is reported only at its destination and the suite's loss
-    would be invisible. Without it the move shows as a delete plus an add.
+
+    Two flags make the listing machine-safe. Rename detection is disabled: with
+    it, a file moved OUT of a suite directory is reported only at its
+    destination and the suite's loss would be invisible. And ``-z`` separates
+    entries with NUL and turns off git's C-style quoting, so a path with a
+    non-ASCII or control character is not wrapped in quotes that would defeat
+    the prefix match.
     """
     if not base or base.startswith(ZERO_SHA_PREFIX):
         return None
@@ -105,10 +112,14 @@ def changed_paths(base: str, head: str, cwd: str | None = None) -> list[str] | N
             return None
         if not _commit_present(base, cwd):
             return None
-    result = _git(["diff", "--name-only", "--no-renames", base, head], cwd)
+    result = _git(["diff", "--name-only", "--no-renames", "-z", base, head], cwd)
     if result.returncode != 0:
         return None
-    return [line for line in result.stdout.splitlines() if line.strip()]
+    return [
+        entry.decode("utf-8", "surrogateescape")
+        for entry in result.stdout.split(b"\0")
+        if entry
+    ]
 
 
 def decide(event: str, base: str, head: str, cwd: str | None = None) -> tuple[bool, str]:
@@ -117,7 +128,7 @@ def decide(event: str, base: str, head: str, cwd: str | None = None) -> tuple[bo
     if paths is None:
         return True, f"change set undeterminable for {event} (base={base or 'empty'}); running the suites"
     if is_relevant(paths):
-        return True, "a changed path lies under an Elixir suite, db/postgres, the docker files, or the gate machinery"
+        return True, "a changed path lies under an Elixir suite, db/postgres, the shared fixtures, the docker files, or the gate machinery"
     return False, f"none of {len(paths)} changed path(s) reaches the Elixir suites"
 
 

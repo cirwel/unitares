@@ -35,6 +35,7 @@ gate = _load("elixir_gate")
 
 DETECTOR = gate.DETECTOR_JOB
 SUITES = (
+    "unitares_sdk_floor",
     "unitares_sdk",
     "agent_orchestrator",
     "dialectic_live",
@@ -58,6 +59,9 @@ SUITES = (
         (["elixir/dialectic_live/lib/x.ex"], True),
         (["elixir/wave3a_handlers/lib/router.ex"], True),
         (["db/postgres/migrations/099_x.sql"], True),
+        # Cross-runtime fixtures the lease_plane suite reads by relative path.
+        (["tests/vectors/effect_payload_canonical.json"], True),
+        (["tests/vendored/fermata-governed-effect-ir-v0.schema.json"], True),
         # What the lease_plane job's `docker compose up postgres-age` consumes.
         (["docker-compose.yml"], True),
         (["Dockerfile"], True),
@@ -72,10 +76,23 @@ SUITES = (
         (["docs/elixir/sentinel/overview.md"], False),
         (["docs/docker-compose.yml"], False),
         (["dashboard/Dockerfile"], False),
+        (["tests/test_lease_plane_proxy.py"], False),
     ],
 )
 def test_is_relevant(paths, expected):
     assert paths_changed.is_relevant(paths) is expected
+
+
+def test_shared_fixture_prefixes_referenced_by_elixir_tests_are_relevant():
+    """Any `tests/<dir>/` the Elixir suites reach into by relative path must be
+    a relevant prefix, or a fixture edit passes the gate without running them."""
+    referenced: set[str] = set()
+    for exs in (REPO_ROOT / "elixir").glob("*/test/**/*.exs"):
+        for match in re.finditer(r"tests/(vectors|vendored)/", exs.read_text(errors="replace")):
+            referenced.add(match.group(0))
+    assert referenced, "expected the lease_plane suite to reference shared fixtures"
+    for prefix in sorted(referenced):
+        assert prefix in paths_changed.RELEVANT_PREFIXES, prefix
 
 
 def test_relevant_lists_match_the_workflow_header():
@@ -166,6 +183,18 @@ def test_rename_out_of_a_suite_directory_is_relevant(repo: Path):
     assert paths is not None
     assert "elixir/sentinel/a.ex" in paths
     assert "docs/a.ex" in paths
+    relevant, _ = paths_changed.decide("pull_request", base, head, cwd=str(repo))
+    assert relevant is True
+
+
+def test_unusual_filename_under_a_suite_is_relevant(repo: Path):
+    """Without -z, git C-quotes a non-ASCII path ("elixir/sentinel/na\\303\\257ve.ex")
+    and the leading quote would defeat the prefix match."""
+    _git(repo, "config", "core.quotepath", "true")
+    base = _git(repo, "rev-parse", "HEAD")
+    head = _commit(repo, "elixir/sentinel/lib/naïve.ex", "x\n", "unusual name")
+    paths = paths_changed.changed_paths(base, head, cwd=str(repo))
+    assert paths == ["elixir/sentinel/lib/naïve.ex"]
     relevant, _ = paths_changed.decide("pull_request", base, head, cwd=str(repo))
     assert relevant is True
 
@@ -314,6 +343,10 @@ def test_workflow_wires_detector_gate_and_every_suite():
     for name in SUITES:
         assert jobs[name]["needs"] == DETECTOR, name
         assert jobs[name]["if"] == APP_JOB_IF, (name, jobs[name]["if"])
+        # The gate reads one collapsed result per job; a selectively re-run
+        # matrix leg can report success for the whole job while another leg's
+        # earlier failure stands, so every suite is an explicit job.
+        assert "strategy" not in jobs[name], f"{name} must not be a matrix job"
 
     gate_job = jobs["elixir-gate"]
     assert gate_job["name"] == "elixir-gate"

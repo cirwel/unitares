@@ -31,7 +31,8 @@ name: Elixir Tests
 # list against this file's working-directory and docker compose usage):
 #   elixir/sentinel, elixir/lease_plane, elixir/unitares_sdk,
 #   elixir/agent_orchestrator, elixir/dialectic_live, elixir/wave3a_handlers,
-#   db/postgres, docker-compose.yml, Dockerfile, .dockerignore,
+#   db/postgres, tests/vectors, tests/vendored (cross-runtime fixtures the
+#   lease_plane suite reads), docker-compose.yml, Dockerfile, .dockerignore,
 #   .github/workflows/elixir-tests.yml, scripts/ci/elixir_paths_changed.py,
 #   scripts/ci/elixir_gate.py
 #
@@ -104,23 +105,18 @@ jobs:
   # this repo's CI cannot see, so it gates on the loosest floor it claims to
   # support (Elixir 1.15) as well as current — a dep that silently requires a
   # newer Elixir than its mix.exs declares is a broken contract.
-  unitares_sdk:
+  #
+  # Two explicit jobs rather than one matrix: the gate reads one collapsed
+  # `needs.<job>.result` per job, and a selectively re-run matrix leg can
+  # report success for the whole job while another leg's earlier failure
+  # still stands (github.com/orgs/community/discussions/26822). Distinct job
+  # ids give the gate one result per Elixir version.
+  unitares_sdk_floor:
     needs: elixir_changes
     # Runs when the detector says relevant, AND when the detector itself did
     # not succeed (then nothing can vouch for a skip, so everything runs).
     if: ${{ !cancelled() && (needs.elixir_changes.result != 'success' || needs.elixir_changes.outputs.relevant == 'true') }}
     runs-on: ubuntu-latest
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Declared floor. OTP 27 is the real floor: the SDK uses Erlang's
-          # :json rather than Elixir's, precisely so 1.15 consumers can adopt it.
-          - elixir: '1.15'
-            otp: '27'
-          - elixir: '1.19'
-            otp: '27'
 
     defaults:
       run:
@@ -132,19 +128,46 @@ jobs:
       with:
         persist-credentials: false
 
-    - name: Set up Elixir / OTP
+    - name: Set up Elixir / OTP (declared floor)
+      # OTP 27 is the real floor: the SDK uses Erlang's :json rather than
+      # Elixir's, precisely so 1.15 consumers can adopt it.
       uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
       with:
-        otp-version: ${{ matrix.otp }}
-        elixir-version: ${{ matrix.elixir }}
+        otp-version: '27'
+        elixir-version: '1.15'
 
     - name: Run tests
       # No deps.get: the SDK has zero third-party runtime dependencies, and a
       # deps step here would hide the day one of them appears.
       run: mix test
 
+  unitares_sdk:
+    needs: elixir_changes
+    # Runs when the detector says relevant, AND when the detector itself did
+    # not succeed (then nothing can vouch for a skip, so everything runs).
+    if: ${{ !cancelled() && (needs.elixir_changes.result != 'success' || needs.elixir_changes.outputs.relevant == 'true') }}
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: elixir/unitares_sdk
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
+
+    - name: Set up Elixir / OTP (current)
+      uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
+      with:
+        otp-version: '27'
+        elixir-version: '1.19'
+
+    - name: Run tests
+      run: mix test
+
     - name: Check formatting
-      if: matrix.elixir == '1.19'
       run: mix format --check-formatted
 
   # agent_orchestrator consumes unitares_sdk (LeasePlaneEnvelope only — its
@@ -372,7 +395,7 @@ jobs:
   # were skipped or failed, so it always reports a status.
   elixir-gate:
     name: elixir-gate
-    needs: [elixir_changes, unitares_sdk, agent_orchestrator, dialectic_live, sentinel, wave3a_handlers, lease_plane]
+    needs: [elixir_changes, unitares_sdk_floor, unitares_sdk, agent_orchestrator, dialectic_live, sentinel, wave3a_handlers, lease_plane]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
