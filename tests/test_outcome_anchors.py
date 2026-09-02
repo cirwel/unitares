@@ -172,3 +172,92 @@ def test_exogenous_predicate_excludes_soft_and_self_referential():
     assert tier_for_source("agent_reported_tool_result") is AnchorTier.SOFT_SELF_ATTESTED
     for excluded in ("server_observation", "made_up_source", None):
         assert tier_for_source(excluded) is AnchorTier.EXCLUDED
+
+
+# --- Fixture rules (2026-09-02) ---------------------------------------------
+# ``calibration_excluded`` is stamped for three causes; only two are fixture
+# traffic. The corrected rule keeps rows whose only exclusion is a scraped
+# confidence; the registered rule (the pre-registered read's predicate) drops
+# them. See docs/proposals/outcome-fixture-conflation-decision-packet-v0.md.
+
+
+def test_scraped_only_rows_are_fixtures_under_registered_but_not_corrected():
+    from src.grounding.outcome_anchors import is_scraped_only_exclusion
+
+    scraped = {
+        "calibration_excluded": True,
+        "prediction_source": "audit_trail_fallback",
+        "producer": "ci",
+    }
+    assert is_structurally_controlled_fixture(scraped, rule="registered") is True
+    assert is_structurally_controlled_fixture(scraped, rule="corrected") is False
+    assert is_structurally_controlled_fixture(scraped) is True  # registered is the default
+    assert is_scraped_only_exclusion(scraped) is True
+    # A row that was never excluded is not scraped-only, whatever its source.
+    assert is_scraped_only_exclusion({"calibration_excluded": False, "prediction_source": "audit_trail_fallback"}) is False
+
+
+def test_exclusion_reasons_decide_rows_that_carry_them():
+    scraped = {"calibration_excluded": True, "calibration_exclusion_reasons": ["scraped_confidence"]}
+    both = {
+        "calibration_excluded": True,
+        "calibration_exclusion_reasons": ["scraped_confidence", "shadow_write"],
+    }
+    fixture = {"calibration_excluded": True, "calibration_exclusion_reasons": ["controlled_fixture"]}
+    assert is_structurally_controlled_fixture(scraped, rule="corrected") is False
+    assert is_structurally_controlled_fixture(both, rule="corrected") is True
+    assert is_structurally_controlled_fixture(fixture, rule="corrected") is True
+    # A reasons list trumps a scraped prediction_source on the same row.
+    assert is_structurally_controlled_fixture(
+        {**fixture, "prediction_source": "audit_trail_fallback"}, rule="corrected"
+    ) is True
+
+
+def test_explicit_markers_and_shadow_write_win_over_a_scraped_source():
+    rows = [
+        {"synthetic_calibration_fixture": True, "prediction_source": "prev_confidence_fallback"},
+        {"calibration_excluded": True, "shadow_write": True, "prediction_source": "prev_confidence_fallback"},
+        {
+            "calibration_excluded": True,
+            "prediction_binding": "synthetic_negative_control",
+            "prediction_source": "audit_trail_fallback",
+        },
+        {"calibration_excluded": True, "test_name": "clean_control", "prediction_source": "audit_trail_fallback"},
+    ]
+    for row in rows:
+        assert is_structurally_controlled_fixture(row, rule="corrected") is True
+        assert is_structurally_controlled_fixture(row, rule="registered") is True
+
+
+def test_bare_flag_without_scraped_evidence_stays_a_fixture_under_both_rules():
+    from src.grounding.outcome_anchors import FIXTURE_RULES
+
+    for rule in FIXTURE_RULES:
+        assert is_structurally_controlled_fixture({"calibration_excluded": True}, rule=rule) is True
+
+
+def test_unknown_fixture_rule_fails_closed():
+    from src.grounding.outcome_anchors import normalize_fixture_rule
+
+    with pytest.raises(ValueError):
+        is_structurally_controlled_fixture({"calibration_excluded": True}, rule="lenient")
+    with pytest.raises(ValueError):
+        normalize_fixture_rule("")
+    assert normalize_fixture_rule(" Registered ") == "registered"
+
+
+def test_historical_bare_flag_plus_scraped_source_is_classified_as_evidence():
+    """The one ambiguous historical shape, stated rather than hidden.
+
+    Before reasons were stamped, a caller-supplied bare `calibration_excluded`
+    (a fixture whose only marker is the flag) that was ALSO scraped is
+    indistinguishable from a scraped-only row. The corrected rule reads it as
+    evidence; the registered rule drops it. Rows written after this change
+    carry `calibration_exclusion_reasons` and are not ambiguous. The live
+    count of this shape is reported in the PR that shipped the rule.
+    """
+    ambiguous = {"calibration_excluded": True, "prediction_source": "prev_confidence_fallback"}
+    assert is_structurally_controlled_fixture(ambiguous, rule="registered") is True
+    assert is_structurally_controlled_fixture(ambiguous, rule="corrected") is False
+    stamped = {**ambiguous, "calibration_exclusion_reasons": ["controlled_fixture", "scraped_confidence"]}
+    assert is_structurally_controlled_fixture(stamped, rule="corrected") is True

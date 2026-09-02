@@ -90,6 +90,17 @@ data exists:
 9. AUC non-inferiority margin `-0.05`, inherited from the standing bound on
    operationally relevant lift rather than chosen after seeing these data.
 
+**Note, 2026-09-02, no contract change.** Item 2 inherited the structural
+fixture predicate at registration, two days after `calibration_excluded`
+(which the writer also stamps for a scraped confidence) entered that
+predicate's fixture set, so under item 2 as registered every trusted row whose
+confidence the server had scraped is excluded; the read had joined 0 outcomes
+when this was found. Item 2 keeps its registered meaning: the read's
+`--fixture-rule` flag defaults to `registered`. Running it with `corrected`
+keeps rows whose only exclusion is a scraped confidence and is a deviation
+from this contract that the report names and that must be disclosed here if
+its result is ever cited. Record: `outcome-fixture-conflation-decision-packet-v0.md`.
+
 Confidence Brier scores are reported as a calibration diagnostic, but this
 contract deliberately does not invent a post-hoc Brier promotion margin. A
 confidence-formula change requires that margin to be registered before its first

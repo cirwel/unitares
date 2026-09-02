@@ -43,6 +43,8 @@ from scripts.analysis.outcome_inventory import (  # noqa: E402
 )
 from src.eisv_telemetry import EISV_SHADOW_ABLATIONS_SCHEMA  # noqa: E402
 from src.grounding.outcome_anchors import (  # noqa: E402
+    DEFAULT_FIXTURE_RULE,
+    FIXTURE_RULES,
     anchored_outcomes_predicate,
 )
 
@@ -436,6 +438,7 @@ def build_report(
     resamples: int = DEFAULT_RESAMPLES,
     seed: int = 0,
     as_of: datetime | None = None,
+    fixture_rule: str | None = None,
 ) -> str:
     instrumented = [
         row for row in rows if row.shadow_schema == EISV_SHADOW_ABLATIONS_SCHEMA
@@ -461,6 +464,19 @@ def build_report(
         "This is a safety read on a prospective measurement ablation, not an "
         "outcome-oracle claim and not an actuator.",
         "",
+        *(
+            [
+                f"Fixture rule: `{fixture_rule}`"
+                + (
+                    " (the contract's item 2 as registered)"
+                    if fixture_rule == "registered"
+                    else " (a disclosed deviation from the contract's item 2)"
+                ),
+                "",
+            ]
+            if fixture_rule
+            else []
+        ),
         "## Capture",
         "",
         f"- Trusted non-fixture outcomes fetched: {len(rows)}",
@@ -510,6 +526,7 @@ async def fetch_rows(
     lead_minutes: float,
     outcome_types: Sequence[str],
     as_of: datetime | None = None,
+    fixture_rule: str = DEFAULT_FIXTURE_RULE,
 ) -> list[ShadowOutcomeRow]:
     try:
         import asyncpg
@@ -535,7 +552,9 @@ async def fetch_rows(
     rows: list[ShadowOutcomeRow] = []
     for record in records:
         detail = _parse_detail(record.get("detail"))
-        if is_controlled_validation_fixture(detail, include_declared_purpose=False):
+        if is_controlled_validation_fixture(
+            detail, include_declared_purpose=False, rule=fixture_rule
+        ):
             continue
         rows.append(_row_from_record(record))
     return rows
@@ -546,6 +565,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--window-days", type=int, default=365)
     parser.add_argument("--lead-minutes", type=float, default=DEFAULT_LEAD_MINUTES)
     parser.add_argument("--scope", choices=("strict", "task"), default="task")
+    parser.add_argument(
+        "--fixture-rule",
+        choices=FIXTURE_RULES,
+        default=DEFAULT_FIXTURE_RULE,
+        help=(
+            "How the server-stamped calibration_excluded flag is read: 'registered' "
+            "(default, the contract's item 2 as registered) or 'corrected', which "
+            "keeps rows whose only exclusion is a scraped confidence and is a "
+            "disclosed deviation from the contract."
+        ),
+    )
     parser.add_argument("--min-bad-clusters", type=int, default=MIN_BAD_CLUSTERS)
     parser.add_argument("--resamples", type=int, default=DEFAULT_RESAMPLES)
     parser.add_argument("--seed", type=int, default=0)
@@ -570,6 +600,7 @@ async def main_async(args: argparse.Namespace) -> int:
     outcome_types = STRICT_OUTCOMES if args.scope == "strict" else TASK_OUTCOMES
     rows = await fetch_rows(
         args.db_url,
+        fixture_rule=args.fixture_rule,
         window_days=args.window_days,
         lead_minutes=args.lead_minutes,
         outcome_types=outcome_types,
@@ -582,6 +613,7 @@ async def main_async(args: argparse.Namespace) -> int:
         lead_minutes=args.lead_minutes,
         min_bad_clusters=args.min_bad_clusters,
         resamples=args.resamples,
+        fixture_rule=args.fixture_rule,
         seed=args.seed,
         as_of=args.as_of,
     )

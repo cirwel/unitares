@@ -166,13 +166,22 @@ by synthetic unit tests. The fixed 2026-12-01 decision command belongs only to
 the registered execution, with the interim-access disclosure in the stop rule.
 
 Wiring your own outcome producers (CI, test runners) through the
-operator-gated `/v1/harness/outcome` endpoint: supply `confidence` (or a
-registry-bound `prediction_id`) on every POST. Without it the server scrapes a
-confidence, stamps the row `calibration_excluded`, and the fixture filters
-drop it from every table above even though the write succeeds — the response
-carries a `validation_visibility` warning when this happens, and
-`outcome_inventory.py` reports the dropped count as `calibration_excluded_only`
-(#1790).
+operator-gated `/v1/harness/outcome` endpoint: send `confidence` only if the
+producer genuinely holds one; a producer without one, such as a test hook,
+sends none. The endpoint ignores `prediction_id` on purpose (an
+operator-asserted `agent_uuid` has no work correlation, so a forwarded id could
+bind an unrelated open prediction); an agent with a registered prediction
+records its outcome through `record_result` on its own bound session. The server then scrapes a confidence and stamps the row
+`calibration_excluded` so calibration never trains on it, and records why
+(`calibration_exclusion_reasons`). Every validation instrument drops such rows under its default `registered`
+fixture rule (the pre-registered read's predicate, pinned for registered reads)
+and keeps them under `--fixture-rule corrected`, which is opt-in and named in
+the report it produces. Inventing a confidence
+to avoid the flag reproduces the scraped-confidence defect client-side (#1445).
+The response carries a `validation_visibility` note when the flag is stamped,
+and `outcome_inventory.py` reports the population as `calibration_excluded_only`
+with `scraped_only_rows_kept` (#1790; decision packet
+[`proposals/outcome-fixture-conflation-decision-packet-v0.md`](proposals/outcome-fixture-conflation-decision-packet-v0.md)).
 
 Envelope telemetry is future-only: rows written before
 `eisv.telemetry.v1` appear as `legacy/no-envelope` and are never assigned an

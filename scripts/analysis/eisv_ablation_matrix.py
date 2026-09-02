@@ -67,7 +67,13 @@ from scripts.analysis.outcome_inventory import (
     harness_lane_from_detail,
     is_controlled_validation_fixture,
 )
-from src.grounding.outcome_anchors import anchored_outcomes_predicate
+from src.grounding.outcome_anchors import (
+    DEFAULT_FIXTURE_RULE,
+    FIXTURE_RULES,
+    REGISTERED_FIXTURE_RULE,
+    anchored_outcomes_predicate,
+    normalize_fixture_rule,
+)
 
 DEFAULT_EXCLUDED_HARNESS_LANES = ("beam",)
 READ_PROTOCOLS = ("registered", "exploratory", "reproduction")
@@ -546,6 +552,7 @@ def filter_rows_for_validation(
     rows: Sequence[OutcomeRow],
     *,
     exclude_harness_lanes: Sequence[str] = DEFAULT_EXCLUDED_HARNESS_LANES,
+    fixture_rule: str = DEFAULT_FIXTURE_RULE,
 ) -> list[OutcomeRow]:
     """Exclude runtime-harness telemetry from EISV predictive slices.
 
@@ -560,7 +567,7 @@ def filter_rows_for_validation(
         row
         for row in rows
         if not is_controlled_validation_fixture(
-            row.detail, include_declared_purpose=False
+            row.detail, include_declared_purpose=False, rule=fixture_rule
         )
     ]
     if not excluded:
@@ -691,6 +698,7 @@ def format_matrix_report(
     read_id: str | None = None,
     protocol_not_before: datetime | None = None,
     contamination_acknowledged: bool = False,
+    fixture_rule: str | None = None,
 ) -> str:
     """Render a compact markdown table for skeptical multi-slice reporting."""
     generated_at = generated_at or datetime.now(timezone.utc)
@@ -744,6 +752,20 @@ def format_matrix_report(
                     "snapshot-less rows; not the trusted-anchor population)"
                     if anchor_scope == "all"
                     else ""
+                ),
+                "",
+            ]
+        )
+    if fixture_rule:
+        lines.extend(
+            [
+                f"Fixture rule: `{fixture_rule}`"
+                + (
+                    "  (the pre-registered predicate: a scraped confidence classifies "
+                    "as fixture traffic)"
+                    if fixture_rule == REGISTERED_FIXTURE_RULE
+                    else "  (scraped-confidence rows are validation-visible; not the "
+                    "registered predicate)"
                 ),
                 "",
             ]
@@ -966,6 +988,12 @@ def validate_read_protocol(
             )
         if args.as_of is None:
             errors.append("registered reads require a frozen --as-of boundary")
+        if getattr(args, "fixture_rule", None) not in (None, REGISTERED_FIXTURE_RULE):
+            errors.append(
+                "registered reads run with the registered fixture rule; the "
+                "pre-declared sensitivity cohort is a separate "
+                "--read-protocol reproduction --fixture-rule corrected read"
+            )
     elif (
         args.read_protocol in CONTAMINATING_READ_PROTOCOLS
         and not args.acknowledge_contamination
@@ -975,6 +1003,21 @@ def validate_read_protocol(
     if errors:
         raise ReadProtocolError("; ".join(errors))
     return checked_at.astimezone(timezone.utc)
+
+
+def effective_fixture_rule(args: argparse.Namespace) -> str:
+    """The fixture rule a read runs under.
+
+    A registered read is pinned to the rule it was registered with and rejects
+    any other value, so no default change can alter its cohort. Every other
+    protocol takes the explicit ``--fixture-rule`` or the shared default, which
+    is also ``registered``; the pre-declared sensitivity cohort passes
+    ``--fixture-rule corrected`` explicitly.
+    """
+    if getattr(args, "read_protocol", None) == "registered":
+        return REGISTERED_FIXTURE_RULE
+    explicit = getattr(args, "fixture_rule", None)
+    return normalize_fixture_rule(explicit) if explicit else DEFAULT_FIXTURE_RULE
 
 
 def record_read_receipt(
@@ -1010,6 +1053,7 @@ def record_read_receipt(
             "windows": list(args.windows),
             "leads": list(args.leads),
             "train_fraction": args.train_fraction,
+            "fixture_rule": effective_fixture_rule(args),
             "min_feature_rows": args.min_feature_rows,
             "anchor_scope": args.anchor_scope,
             "exclude_harness_lanes": list(exclude_harness_lanes),
@@ -1071,7 +1115,9 @@ async def build_matrix_from_db(
     anchor_scope: str = "trusted",
     telemetry_strata: Sequence[str] = (),
     as_of: datetime | None = None,
+    fixture_rule: str = DEFAULT_FIXTURE_RULE,
 ) -> list[AblationMatrixRow]:
+    fixture_rule = normalize_fixture_rule(fixture_rule)
     matrix_rows: list[AblationMatrixRow] = []
     excluded = {str(lane) for lane in exclude_harness_lanes if str(lane)}
     anchor_predicate = (
@@ -1087,6 +1133,7 @@ async def build_matrix_from_db(
             for lead_minutes in leads:
                 fetched_rows = await fetch_rows(
                     db_url,
+                    fixture_rule=fixture_rule,
                     window_days=window_days,
                     lead_minutes=lead_minutes,
                     outcome_types=outcome_types,
@@ -1107,6 +1154,7 @@ async def build_matrix_from_db(
                         None: filter_rows_for_validation(
                             fetched_rows,
                             exclude_harness_lanes=exclude_harness_lanes,
+                            fixture_rule=fixture_rule,
                         )
                     }
                 for harness_lane, outcome_rows in lane_groups.items():
@@ -1181,6 +1229,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help=(
             "Directory for atomic read receipts (default: "
             "$UNITARES_OUTCOME_READ_LEDGER_DIR or local state)."
+        ),
+    )
+    parser.add_argument(
+        "--fixture-rule",
+        choices=FIXTURE_RULES,
+        default=None,
+        help=(
+            "How the server-stamped calibration_excluded flag is read. Registered "
+            "reads are pinned to 'registered' (the predicate they were registered "
+            "with) and reject anything else; every other protocol defaults to it "
+            "too. 'corrected' keeps rows whose only exclusion is a scraped "
+            "confidence and must be asked for explicitly. Recorded in the read "
+            "receipt and the report header."
         ),
     )
     parser.add_argument("--scopes", type=_parse_scope_list, default="strict,task")
@@ -1271,6 +1332,7 @@ async def main_async(args: argparse.Namespace) -> int:
         args,
         exclude_harness_lanes=exclude_harness_lanes,
     )
+    fixture_rule = effective_fixture_rule(args)
     print(f"read receipt: {receipt_path}", file=sys.stderr)
     rows = await build_matrix_from_db(
         args.db_url,
@@ -1287,6 +1349,7 @@ async def main_async(args: argparse.Namespace) -> int:
         anchor_scope=args.anchor_scope,
         telemetry_strata=args.telemetry_strata,
         as_of=args.as_of,
+        fixture_rule=fixture_rule,
     )
     report = _redact_sensitive_report_text(
         format_matrix_report(
@@ -1299,6 +1362,7 @@ async def main_async(args: argparse.Namespace) -> int:
             read_id=args.read_id,
             protocol_not_before=args.not_before,
             contamination_acknowledged=args.acknowledge_contamination,
+            fixture_rule=fixture_rule,
         )
     )
     payload = (report + "\n").encode("utf-8")

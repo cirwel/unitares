@@ -1,3 +1,5 @@
+import asyncio
+import pytest
 from scripts.analysis import outcome_inventory as inventory_module
 from scripts.analysis.outcome_inventory import (
     OutcomeInventoryRow,
@@ -386,3 +388,98 @@ def test_calibration_excluded_only_is_separable_from_real_fixtures():
 
     visible = {"producer": "ci", "calibration_excluded": False}
     assert is_controlled_validation_fixture(visible) is False
+
+
+def test_corrected_rule_keeps_scraped_only_rows_and_registered_rule_drops_them():
+    """2026-09-02: the #1790 population is validation-visible under the corrected rule."""
+    from scripts.analysis.outcome_inventory import (
+        _fixture_only_because_calibration_excluded,
+        is_controlled_validation_fixture,
+    )
+
+    scraped = {
+        "calibration_excluded": True,
+        "prediction_source": "audit_trail_fallback",
+        "producer": "ci",
+    }
+    assert is_controlled_validation_fixture(scraped, rule="registered") is True
+    assert is_controlled_validation_fixture(scraped, rule="corrected") is False
+    assert is_controlled_validation_fixture(scraped) is True  # registered is the default
+    assert _fixture_only_because_calibration_excluded(scraped) is True
+    # Phase-5 shadow rows are excluded for a different reason and stay out of the bucket.
+    shadow = {"calibration_excluded": True, "shadow_write": True, "prediction_source": "registry"}
+    assert _fixture_only_because_calibration_excluded(shadow) is False
+
+    real_fixture = {
+        "calibration_excluded": True,
+        "synthetic_calibration_fixture": True,
+        "prediction_source": "audit_trail_fallback",
+    }
+    assert is_controlled_validation_fixture(real_fixture, rule="corrected") is True
+    assert _fixture_only_because_calibration_excluded(real_fixture) is False
+
+
+def test_parse_args_fixture_rule_defaults_to_registered():
+    assert inventory_module.parse_args([]).fixture_rule == "registered"
+    assert inventory_module.parse_args(["--fixture-rule", "corrected"]).fixture_rule == "corrected"
+
+
+class _FakeAsyncpgModule:
+    """Minimal asyncpg stand-in so fetch_rows can be exercised without a database."""
+
+    def __init__(self, records):
+        self._records = records
+
+    async def connect(self, _dsn):
+        records = self._records
+
+        class _Conn:
+            async def fetch(self, *_args):
+                return records
+
+            async def close(self):
+                return None
+
+        return _Conn()
+
+
+def _inventory_record(detail):
+    return {
+        "outcome_type": "test_failed",
+        "is_bad": True,
+        "verification_source": "external_signal",
+        "detail": detail,
+        "identity_metadata": None,
+        "prior_state_lead_0": True,
+    }
+
+
+@pytest.mark.parametrize("rule, kept, scraped_kept", [("registered", 1, 0), ("corrected", 2, 1)])
+def test_fetch_rows_attrition_reports_both_rules(monkeypatch, rule, kept, scraped_kept):
+    """The attrition counters partition the same rows under either rule."""
+    import importlib
+
+    records = [
+        _inventory_record({"kind": "live"}),
+        _inventory_record({"calibration_excluded": True, "prediction_source": "audit_trail_fallback"}),
+        _inventory_record({"calibration_excluded": True, "synthetic_calibration_fixture": True}),
+        _inventory_record({"calibration_excluded": True, "shadow_write": True, "prediction_source": "registry"}),
+    ]
+    fake = _FakeAsyncpgModule(records)
+    real_import = importlib.import_module
+    monkeypatch.setattr(
+        inventory_module.importlib, "import_module",
+        lambda name, *a, **k: fake if name == "asyncpg" else real_import(name, *a, **k),
+    )
+    attrition: dict = {}
+    rows = asyncio.run(
+        inventory_module.fetch_rows(
+            "postgresql://unused", window_days=21, lead_minutes=(0.0,),
+            attrition=attrition, fixture_rule=rule,
+        )
+    )
+    assert len(rows) == kept
+    assert attrition["fixture_rule"] == rule
+    assert attrition["fixture_rows_excluded"] == 4 - kept
+    assert attrition["calibration_excluded_only"] == 1
+    assert attrition["scraped_only_rows_kept"] == scraped_kept

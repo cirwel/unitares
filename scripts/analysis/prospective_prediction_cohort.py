@@ -37,6 +37,7 @@ from scripts.analysis.outcome_inventory import (  # noqa: E402
 )
 from scripts.utils.date_utils import now_utc  # noqa: E402
 from src.grounding.outcome_anchors import is_anchorable  # noqa: E402
+from src.grounding.outcome_anchors import REGISTERED_FIXTURE_RULE  # noqa: E402
 
 
 CONTRACT_SCHEMA_VERSION = 1
@@ -232,6 +233,12 @@ def build_cohort_summary(
         if not is_controlled_validation_fixture(
             row.detail,
             include_declared_purpose=True,
+            # The cohort contract froze this predicate before fixture rules
+            # existed, when the flag was read as a fixture marker whatever its
+            # cause. Pin that reading so the shared default cannot change a
+            # frozen cohort's denominator; adopting the corrected rule here is
+            # a CONTRACT_VERSION bump, not a default drift.
+            rule=REGISTERED_FIXTURE_RULE,
         )
     ]
     trusted = [row for row in nonfixture if is_trusted_outcome(row)]
