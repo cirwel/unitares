@@ -23,6 +23,14 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.grounding.outcome_anchors import (  # noqa: E402
+    DEFAULT_FIXTURE_RULE,
+    FIXTURE_RULES,
+    REGISTERED_FIXTURE_RULE,
+    is_structurally_controlled_fixture,
+    normalize_fixture_rule,
+)
+
 DEFAULT_DB_URL = os.environ.get(
     "GOVERNANCE_DATABASE_URL",
     "postgresql://postgres:***@localhost:5432/governance",
@@ -170,6 +178,7 @@ def is_controlled_validation_fixture(
     detail: Mapping[str, Any] | str | None,
     *,
     include_declared_purpose: bool = True,
+    rule: str = DEFAULT_FIXTURE_RULE,
 ) -> bool:
     """Return whether an outcome detail belongs to a controlled validation fixture.
 
@@ -188,11 +197,14 @@ def is_controlled_validation_fixture(
     labels -- and reversed the sign of the measured lift. Structural markers
     (fixture flags, prediction bindings, known harness label prefixes) still
     apply either way.
+
+    ``rule`` selects how the server-stamped ``calibration_excluded`` flag is
+    read (``registered`` or ``corrected``; see ``src.grounding.outcome_anchors``).
+    It only reaches the structural clause: identity-metadata markers are
+    unaffected.
     """
     normalized = _normalized_detail(detail)
-    from src.grounding.outcome_anchors import is_structurally_controlled_fixture
-
-    if is_structurally_controlled_fixture(normalized):
+    if is_structurally_controlled_fixture(normalized, rule=rule):
         return True
 
     identity_metadata = _identity_metadata_from_detail(normalized)
@@ -668,8 +680,12 @@ def _fixture_only_because_calibration_excluded(detail: Mapping[str, Any]) -> boo
     population from genuinely marked fixtures so the attrition is reportable.
     """
     stripped = dict(_normalized_detail(detail))
+    if _truthy(stripped.get("shadow_write")):
+        # Phase-5 shadow rows carry the flag for a different reason and are
+        # not the scraped-confidence population.
+        return False
     stripped.pop("calibration_excluded", None)
-    return not is_controlled_validation_fixture(stripped)
+    return not is_controlled_validation_fixture(stripped, rule=REGISTERED_FIXTURE_RULE)
 
 
 async def fetch_rows(
@@ -678,14 +694,16 @@ async def fetch_rows(
     window_days: int,
     lead_minutes: Sequence[float],
     attrition: dict[str, int] | None = None,
+    fixture_rule: str = DEFAULT_FIXTURE_RULE,
 ) -> list[OutcomeInventoryRow]:
     """Fetch outcome inventory rows from PostgreSQL without mutating state.
 
     ``attrition``, when provided, is populated in place with counts of rows
-    the fixture filter removed: ``fixture_rows_excluded`` (all removed rows)
-    and ``calibration_excluded_only`` (the #1790 population — rows that would
-    have been visible but for the server-stamped ``calibration_excluded``
-    flag). Row selection itself is unchanged.
+    the fixture filter removed under ``fixture_rule``: ``fixture_rows_excluded``
+    (all removed rows), ``calibration_excluded_only`` (the #1790 population —
+    rows the ``registered`` rule drops solely for the server-stamped flag), and
+    ``scraped_only_rows_kept`` (how many of those the ``corrected`` rule kept).
+    ``fixture_rule`` is echoed so a reader knows which rule the counts are under.
     """
     try:
         asyncpg = importlib.import_module("asyncpg")
@@ -702,20 +720,32 @@ async def fetch_rows(
         records = await conn.fetch(_build_fetch_query(leads), window_days, *leads)
     finally:
         await conn.close()
+    fixture_rule = normalize_fixture_rule(fixture_rule)
     kept: list[OutcomeInventoryRow] = []
     excluded_total = 0
     excluded_calibration_only = 0
+    scraped_only_kept = 0
     for record in records:
         row = _row_from_record(record, leads)
-        if is_controlled_validation_fixture(row.detail):
+        registered_fixture = is_controlled_validation_fixture(
+            row.detail, rule=REGISTERED_FIXTURE_RULE
+        )
+        flag_only = registered_fixture and _fixture_only_because_calibration_excluded(
+            row.detail
+        )
+        if flag_only:
+            excluded_calibration_only += 1
+        if is_controlled_validation_fixture(row.detail, rule=fixture_rule):
             excluded_total += 1
-            if _fixture_only_because_calibration_excluded(row.detail):
-                excluded_calibration_only += 1
             continue
+        if flag_only:
+            scraped_only_kept += 1
         kept.append(row)
     if attrition is not None:
+        attrition["fixture_rule"] = fixture_rule
         attrition["fixture_rows_excluded"] = excluded_total
         attrition["calibration_excluded_only"] = excluded_calibration_only
+        attrition["scraped_only_rows_kept"] = scraped_only_kept
     return kept
 
 
@@ -726,6 +756,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--leads", type=parse_leads, default=(0.0, 5.0, 30.0))
     parser.add_argument("--db-url", default=DEFAULT_DB_URL)
     parser.add_argument("--output", help="Optional report output path")
+    parser.add_argument(
+        "--fixture-rule",
+        choices=FIXTURE_RULES,
+        default=DEFAULT_FIXTURE_RULE,
+        help=(
+            "How the server-stamped calibration_excluded flag is read: 'registered' "
+            "(default) treats it as a fixture marker whatever its cause, the "
+            "pre-registered read's predicate; 'corrected' keeps rows whose only "
+            "exclusion is a scraped confidence."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -737,6 +778,7 @@ async def main_async(args: argparse.Namespace) -> int:
         window_days=args.window_days,
         lead_minutes=args.leads,
         attrition=attrition,
+        fixture_rule=args.fixture_rule,
     )
     inventory = build_inventory(rows, lead_minutes=args.leads)
     report = format_inventory_report(
@@ -744,13 +786,16 @@ async def main_async(args: argparse.Namespace) -> int:
         window_days=args.window_days,
         lead_minutes=args.leads,
     )
-    if attrition.get("fixture_rows_excluded"):
+    if attrition.get("fixture_rows_excluded") or attrition.get("calibration_excluded_only"):
         report += (
-            f"\nfixture_rows_excluded: {attrition['fixture_rows_excluded']}"
-            f"\ncalibration_excluded_only: {attrition['calibration_excluded_only']}"
-            "\n  (calibration_excluded_only = rows invisible to validation solely"
-            " because the server scraped their confidence — see #1790; supply"
-            " `confidence` or a registry-bound prediction_id at the producer.)"
+            f"\nfixture_rule: {attrition.get('fixture_rule', args.fixture_rule)}"
+            f"\nfixture_rows_excluded: {attrition.get('fixture_rows_excluded', 0)}"
+            f"\ncalibration_excluded_only: {attrition.get('calibration_excluded_only', 0)}"
+            f"\nscraped_only_rows_kept: {attrition.get('scraped_only_rows_kept', 0)}"
+            "\n  (calibration_excluded_only = rows the registered rule drops solely"
+            " because the server scraped their confidence, #1790; Phase-5 shadow"
+            " rows are not in it. --fixture-rule corrected keeps them as validation"
+            " evidence while calibration still does not train on them.)"
         )
     if args.output:
         output_path = Path(args.output)

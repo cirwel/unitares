@@ -148,3 +148,12 @@ def test_report_names_non_actuation_and_recursive_replay_boundary():
     assert "not an actuator" in report
     assert "Behavioral E/I still require recursive history" in report
     assert "WAIT_SAMPLE_FLOOR" in report
+
+
+def test_report_header_names_the_fixture_rule_and_its_contract_standing():
+    from scripts.analysis.legacy_coherence_dependency_shadow import build_report
+
+    registered = build_report([], scope="task", window_days=21, lead_minutes=30.0, fixture_rule="registered")
+    assert "Fixture rule: `registered` (the contract's item 2 as registered)" in registered
+    corrected = build_report([], scope="task", window_days=21, lead_minutes=30.0, fixture_rule="corrected")
+    assert "Fixture rule: `corrected` (a disclosed deviation from the contract's item 2)" in corrected

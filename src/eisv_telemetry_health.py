@@ -16,6 +16,8 @@ from typing import Any
 
 from src.eisv_telemetry import EISV_TELEMETRY_SCHEMA
 from src.grounding.outcome_anchors import (
+    DEFAULT_FIXTURE_RULE,
+    is_scraped_only_exclusion,
     anchored_outcomes_predicate,
     is_structurally_controlled_fixture,
 )
@@ -614,9 +616,16 @@ def build_calibration_summary(
     *,
     min_bin_clusters: int = MIN_CALIBRATION_BIN_CLUSTERS,
     min_cohort_clusters: int = MIN_CALIBRATION_COHORT_CLUSTERS,
+    fixture_rule: str = DEFAULT_FIXTURE_RULE,
 ) -> dict[str, Any]:
-    """Aggregate strict outcome-linked risk into clustered descriptive bins."""
+    """Aggregate strict outcome-linked risk into clustered descriptive bins.
+
+    ``fixture_rule`` selects how a server-stamped ``calibration_excluded`` is
+    read; ``scraped_only_rows`` counts rows whose only exclusion is a scraped
+    confidence, which the registered rule drops and the corrected rule keeps.
+    """
     fixtures_excluded = 0
+    scraped_only_rows = 0
     strict_outcomes = 0
     with_prior_state = 0
     with_envelope = 0
@@ -640,7 +649,9 @@ def build_calibration_summary(
                 detail = json.loads(detail)
             except json.JSONDecodeError:
                 detail = {}
-        if is_structurally_controlled_fixture(detail):
+        if is_scraped_only_exclusion(detail):
+            scraped_only_rows += 1
+        if is_structurally_controlled_fixture(detail, rule=fixture_rule):
             fixtures_excluded += 1
             continue
 
@@ -705,6 +716,8 @@ def build_calibration_summary(
         "lead_minutes": CALIBRATION_LEAD_MINUTES,
         "strict_outcomes": strict_outcomes,
         "fixtures_excluded": fixtures_excluded,
+        "fixture_rule": fixture_rule,
+        "scraped_only_rows": scraped_only_rows,
         "with_prior_state": with_prior_state,
         "with_envelope": with_envelope,
         "envelope_coverage_rate": with_envelope / strict_outcomes if strict_outcomes else None,

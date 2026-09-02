@@ -1,7 +1,8 @@
 # Decision packet: what the registered 2026-12-01 read does with outcome rows the fixture predicate excludes for a scraped confidence
 
-**Status:** decision packet, raised 2026-09-02, **awaiting operator selection**. No
-code in this PR. Shape follows the contract in
+**Status:** decision packet, raised 2026-09-02; **selected R1 on 2026-09-02**
+under the operator's delegation (see *Selection*). No code in the packet PR;
+the implementation is a follow-up PR. Shape follows the contract in
 [`operator-decision-packet-v0.md`](operator-decision-packet-v0.md).
 **Class:** authority (what a pre-registered instrument counts as evidence).
 **Reversibility:** `one_way_door` for branches R2, R3 and R4 (a disclosed
@@ -24,6 +25,34 @@ full record is on the PR that carries this file.
 predicate. The inventory keeps reporting the excluded rows as attrition. No
 forecast about condition 3 is made here; the stop rule forbids refreshing that
 diagnostic with live data.
+
+## Selection, 2026-09-02
+
+The operator delegated the selection to the working agent with one criterion,
+"proceed on your own accord, best for federation" (2026-09-02). Under that
+criterion the selection is **R1**. E1 and E2 are implemented in the follow-up
+PR; the pre-declared sensitivity cohort is recorded in the stop-rule document.
+
+One refinement was proposed with it and withdrawn on review: flipping the
+shared default to the corrected rule for every instrument that is not a
+protocol-bound read, on the argument that an independent operator whose
+producers send no confidence would otherwise lose their outcome channel. The
+review found that this reversed E1 as this packet specifies it and the
+governed reviewer's condition, changed a value the coherence-shadow contract
+declares fixed after its zero had been inspected, and would have moved every
+instrument's output on a deploy with no version marker. The shipped shape
+therefore keeps `registered` as the shared default and makes `corrected`
+opt-in (`--fixture-rule corrected`, named in every report and receipt). The
+federation gain that survives is the mechanism itself: the switch, the
+writer's reasons, the attrition counters, and a registered read that cannot
+be moved by any default.
+
+Left for the operator, as a follow-up and not a blocker: whether
+non-protocol instruments should default to `corrected`, and whether the
+independent-operator cohort protocol's plumbing check (which requires
+`calibration_excluded` to be false on posted rows) should be restated in terms
+of validation visibility. Also still the operator's judgment: whether a
+corrected instrument counts as the reopening premise if condition 3 fails.
 
 ## The question, as a fork
 
@@ -81,11 +110,13 @@ stop rules by name. R2 to R4 remain available with their costs stated.
   calibration gate. Because the instruments run from `master` and the
   registered command has no frozen-predicate mode, the corrected
   classification ships behind a switch in the shared wrapper the instruments
-  call (for example `--fixture-rule registered|corrected`, default
-  `registered`): the default preserves the registered predicate unchanged,
-  R1's sensitivity cohort is the same command with the switch on, and R2's
-  prospective date is a parameter of the same switch. Without the switch, E1
-  would change the registered cohort silently, which is R3 without the
+  call (`--fixture-rule registered|corrected`, default `registered`). A
+  registered read rejects any other value, the frozen prospective-cohort
+  contract pins the registered reading at its call site, and `corrected` is
+  opt-in everywhere else (see *Selection*). R1's sensitivity cohort is the registered
+  command run again with the switch set to `corrected`, and R2's prospective
+  date would be a parameter of the same switch. Without the pin, E1 would
+  change the registered cohort silently, which is R3 without the
   decision. With the switch on, the fixture predicate keys on fixture causes only, so
   a scraped-only row is validation-visible while `shadow_write` rows (76 in the
   21-day window; the Phase-5 evidence quarantine) stay excluded. Rows already
@@ -118,10 +149,13 @@ stop rules by name. R2 to R4 remain available with their costs stated.
   behind `shadow_write` (`outcome_events.py:403-408`).
   So the producer-side change is not "bind": producers without a prediction
   keep sending none, and E1 makes their rows visible without making them
-  train calibration. Two small defects remain on the endpoint: it advertises
-  `prediction_id` in its warning text but does not forward it
-  (`substrate.py:365-377` forwards `confidence` only), and the warning is only
-  seen by a caller that reads the response. The producer surface is every
+  train calibration. The endpoint advertised `prediction_id` in its warning
+  text but never forwarded it (`substrate.py:365-377` forwards `confidence`
+  only); on review that was kept as the deliberate contract, because the
+  endpoint takes an operator-asserted `agent_uuid` with no work correlation
+  and a forwarded id could bind any open prediction of that agent to an
+  unrelated outcome. The text now says so. The warning is only seen by a
+  caller that reads the response. The producer surface is every
   caller that posts with neither a confidence nor a resolvable registered
   `prediction_id`: in the 21-day window, 845 stamped
   `external_signal` rows came through `/v1/harness/outcome` (the machine-local

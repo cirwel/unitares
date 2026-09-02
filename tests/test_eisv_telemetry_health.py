@@ -199,3 +199,47 @@ def test_http_endpoint_clamps_window_and_caches(client, monkeypatch):
     assert first.headers["cache-control"] == "private, max-age=30"
     query.assert_awaited_once()
     assert query.await_args.kwargs["window_days"] == 90
+
+
+def test_scraped_only_rows_are_counted_and_kept_only_under_the_corrected_rule():
+    """2026-09-02: a scraped confidence excludes a row from calibration; the
+    registered rule (default) also drops it from evidence, the corrected rule keeps it."""
+    rows = [
+        _outcome(
+            measurement="scraped",
+            risk=0.4,
+            bad=False,
+            agent="scraped",
+            detail={"calibration_excluded": True, "prediction_source": "audit_trail_fallback"},
+        ),
+        _outcome(
+            measurement="fixture",
+            risk=0.9,
+            bad=True,
+            agent="fixture",
+            detail={"synthetic_calibration_fixture": True},
+        ),
+    ]
+
+    registered = build_calibration_summary(rows, min_bin_clusters=1, min_cohort_clusters=10)
+    assert registered["fixture_rule"] == "registered"
+    assert registered["fixtures_excluded"] == 2
+    assert registered["scraped_only_rows"] == 1
+    assert registered["strict_outcomes"] == 0
+
+    corrected = build_calibration_summary(
+        rows, min_bin_clusters=1, min_cohort_clusters=10, fixture_rule="corrected"
+    )
+    assert corrected["fixture_rule"] == "corrected"
+    assert corrected["fixtures_excluded"] == 1
+    assert corrected["scraped_only_rows"] == 1
+    assert corrected["strict_outcomes"] == 1
+
+    # A row that was never excluded is not scraped-only, whatever its source.
+    never_excluded = [
+        _outcome(
+            measurement="live", risk=0.4, bad=False, agent="live",
+            detail={"calibration_excluded": False, "prediction_source": "audit_trail_fallback"},
+        )
+    ]
+    assert build_calibration_summary(never_excluded, min_bin_clusters=1, min_cohort_clusters=10)["scraped_only_rows"] == 0

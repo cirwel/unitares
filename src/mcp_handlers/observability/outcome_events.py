@@ -15,6 +15,13 @@ from ..decorators import mcp_tool
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from src.monitor_prediction import lookup_prediction, consume_prediction
+from src.grounding.outcome_anchors import (
+    EXCLUSION_REASON_FIXTURE,
+    EXCLUSION_REASON_SCRAPED,
+    EXCLUSION_REASON_SHADOW,
+    EXCLUSION_REASONS_KEY,
+    SCRAPED_PREDICTION_SOURCES,
+)
 from src.outcome_corroboration import (
     GRADE_WEIGHTS,
     TOOL_OBSERVED,
@@ -83,10 +90,9 @@ _CONTROLLED_FIXTURE_BINDINGS = frozenset({"synthetic_negative_control"})
 # per-agent defaults, so the resulting "calibration" curve measured which agent
 # emitted a row, not anyone's judgement. The apparent +0.405 overconfidence in
 # the top bin was 37 rows of scraped 1.0 from TWO agents. See #1321 / #1345.
-_SERVER_SCRAPED_PREDICTION_SOURCES = frozenset({
-    "prev_confidence_fallback",
-    "audit_trail_fallback",
-})
+# The canonical set lives beside the fixture rules in src.grounding.outcome_anchors
+# so the reader that classifies historical rows cannot drift from the writer.
+_SERVER_SCRAPED_PREDICTION_SOURCES = SCRAPED_PREDICTION_SOURCES
 
 _HARD_EXOGENOUS_TYPE_TO_CHANNEL = {
     "test_passed": "tests", "test_failed": "tests",
@@ -423,11 +429,19 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
             "UNITARES_CALIBRATION_ALLOW_SCRAPED_CONFIDENCE", ""
         ).strip().lower() not in {"1", "true", "yes", "on"}
     )
-    calibration_excluded = (
-        _is_controlled_validation_fixture(detail)
-        or bool(detail.get("shadow_write"))
-        or scraped_confidence
-    )
+    # Record WHY the row is excluded, under distinct keys, so readers can tell
+    # fixture traffic (which the validation instruments must drop) from a
+    # scraped confidence (which calibration must not train on but which is
+    # still live evidence). `calibration_excluded` stays the single calibration
+    # gate; the reasons are what the corrected fixture rule reads.
+    exclusion_reasons: list[str] = []
+    if _is_controlled_validation_fixture(detail):
+        exclusion_reasons.append(EXCLUSION_REASON_FIXTURE)
+    if bool(detail.get("shadow_write")):
+        exclusion_reasons.append(EXCLUSION_REASON_SHADOW)
+    if scraped_confidence:
+        exclusion_reasons.append(EXCLUSION_REASON_SCRAPED)
+    calibration_excluded = bool(exclusion_reasons)
     hard_exogenous_signal = _classify_hard_exogenous_signal(outcome_type, detail)
     if evidence_weight < _MIN_TACTICAL_EVIDENCE_WEIGHT or calibration_excluded:
         hard_exogenous_signal = None
@@ -439,6 +453,8 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
     detail["hard_exogenous"] = bool(hard_exogenous_signal)
     detail["eprocess_eligible"] = eprocess_eligible
     detail["calibration_excluded"] = calibration_excluded
+    detail[EXCLUSION_REASONS_KEY] = exclusion_reasons
+    detail["confidence_scraped"] = bool(scraped_confidence)
     detail["prediction_id"] = prediction_id
     detail["prediction_source"] = prediction_source
     detail["prediction_binding"] = prediction_binding
