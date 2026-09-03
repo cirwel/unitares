@@ -45,6 +45,15 @@ def isolated_silence_state(monkeypatch):
     monkeypatch.setattr(background_tasks, "_PERSISTENT_AGENT_INTERVALS",
                         {"Vigil": 1800, "Lumen": 300, "Sentinel": 600, "Watcher": 21600})
 
+    # Default the KG-finding write path (_log_resident_silence_finding) to a
+    # safe no-op mock so existing tests never touch a real DB. Tests that
+    # exercise the KG-write behavior itself override this via monkeypatch.
+    import src.knowledge_graph as kg_module
+    kg_default = AsyncMock()
+    kg_default.query = AsyncMock(return_value=[])
+    kg_default.add_discovery = AsyncMock()
+    monkeypatch.setattr(kg_module, "get_knowledge_graph", AsyncMock(return_value=kg_default))
+
     yield broadcaster, audit
 
     agent_metadata.clear()
@@ -349,3 +358,103 @@ async def test_duplicate_resident_malformed_update_count_does_not_break_pass(iso
 
 
 # test_proxy_alive_recovery_clears_alert removed — depended on eisv-sync-task proxy
+
+
+# ---------------------------------------------------------------------------
+# CRITICAL silence -> durable KG finding (_log_resident_silence_finding)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_critical_silence_files_kg_finding(isolated_silence_state, monkeypatch):
+    """A CRITICAL silence escalation must be filed as a durable, open KG finding."""
+    import src.knowledge_graph as kg_module
+
+    kg = AsyncMock()
+    kg.query = AsyncMock(return_value=[])
+    kg.add_discovery = AsyncMock()
+    monkeypatch.setattr(kg_module, "get_knowledge_graph", AsyncMock(return_value=kg))
+
+    stale = datetime.now(timezone.utc) - timedelta(hours=30)
+    agent_metadata["sentinel-uuid"] = _make_meta("sentinel-uuid", "Sentinel", stale.isoformat())
+
+    await background_tasks._silence_check_iteration()
+
+    kg.add_discovery.assert_awaited_once()
+    note = kg.add_discovery.await_args.args[0]
+    assert note.agent_id == "sentinel-uuid"
+    assert note.type == "bug_found"
+    assert note.severity == "critical"
+    assert note.status == "open"
+    assert "resident-silence" in note.tags
+    assert "sentinel" in note.tags  # lowercased label tag
+    assert "Sentinel" in note.summary
+
+
+@pytest.mark.asyncio
+async def test_critical_silence_kg_finding_deduped_when_already_open(
+    isolated_silence_state, monkeypatch
+):
+    """An already-open resident-silence finding for this agent must not be refiled.
+
+    This is what makes the write safe across a server restart mid-outage: the
+    in-memory ``_silence_critical_alerted`` set resets on restart, but the
+    DB-backed dedup check survives it.
+    """
+    import src.knowledge_graph as kg_module
+
+    existing_note = type("FakeDiscovery", (), {"tags": ["resident-silence", "auto-filed"]})()
+    kg = AsyncMock()
+    kg.query = AsyncMock(return_value=[existing_note])
+    kg.add_discovery = AsyncMock()
+    monkeypatch.setattr(kg_module, "get_knowledge_graph", AsyncMock(return_value=kg))
+
+    stale = datetime.now(timezone.utc) - timedelta(hours=30)
+    agent_metadata["sentinel-uuid"] = _make_meta("sentinel-uuid", "Sentinel", stale.isoformat())
+
+    await background_tasks._silence_check_iteration()
+
+    # CRITICAL still logs/broadcasts as before — only the KG write is deduped.
+    kg.add_discovery.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_critical_silence_kg_write_failure_does_not_break_iteration(
+    isolated_silence_state, monkeypatch
+):
+    """A broken KG/DB path must degrade silently, not take down silence detection."""
+    import src.knowledge_graph as kg_module
+
+    monkeypatch.setattr(
+        kg_module, "get_knowledge_graph", AsyncMock(side_effect=RuntimeError("db down"))
+    )
+    broadcaster, _ = isolated_silence_state
+
+    stale = datetime.now(timezone.utc) - timedelta(hours=30)
+    agent_metadata["sentinel-uuid"] = _make_meta("sentinel-uuid", "Sentinel", stale.isoformat())
+
+    await background_tasks._silence_check_iteration()
+
+    # The existing CRITICAL path (log + broadcast + alert-set bookkeeping)
+    # must still complete even though the KG write raised.
+    broadcaster.broadcast_event.assert_awaited_once()
+    assert "sentinel-uuid" in background_tasks._silence_critical_alerted
+
+
+@pytest.mark.asyncio
+async def test_non_critical_silence_does_not_file_kg_finding(isolated_silence_state, monkeypatch):
+    """The WARNING tier (2x-5x interval) must not file a KG finding — CRITICAL only."""
+    import src.knowledge_graph as kg_module
+
+    kg = AsyncMock()
+    kg.query = AsyncMock(return_value=[])
+    kg.add_discovery = AsyncMock()
+    monkeypatch.setattr(kg_module, "get_knowledge_graph", AsyncMock(return_value=kg))
+
+    # Sentinel interval is 600s; 2x-5x is the WARNING band, not CRITICAL.
+    stale = datetime.now(timezone.utc) - timedelta(seconds=600 * 3)
+    agent_metadata["sentinel-uuid"] = _make_meta("sentinel-uuid", "Sentinel", stale.isoformat())
+
+    await background_tasks._silence_check_iteration()
+
+    kg.add_discovery.assert_not_awaited()
