@@ -29,7 +29,7 @@ interface; REST, the public SDK, host adapters, and the dashboard expose the sam
 core. Plain-language definition:
 [What UNITARES is](docs/PRODUCT_DEFINITION.md).
 
-**Status:** v2.20.0. Running continuously since November 2025.
+**Status:** v2.21.0. Running continuously since November 2025.
 [Evidence and limits](#evidence-and-limits) gives every claim its evidence class,
 including the open ones.
 
@@ -51,7 +51,7 @@ including the open ones.
 ## Quickstart
 
 ```bash
-git clone --branch v2.20.0 --depth 1 https://github.com/cirwel/unitares.git
+git clone --branch v2.21.0 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
 make coordination-demo

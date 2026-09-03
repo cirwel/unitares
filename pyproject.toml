@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "governance-mcp"
-version = "2.20.0"
+version = "2.21.0"
 description = "UNITARES runtime telemetry and policy-feedback MCP server"
 readme = "README.md"
 license = "Apache-2.0"

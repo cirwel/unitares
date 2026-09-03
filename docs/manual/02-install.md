@@ -13,7 +13,7 @@ Choose one path:
 ## 2.1 Docker quickstart
 
 ```bash
-git clone --branch v2.20.0 --depth 1 https://github.com/cirwel/unitares.git
+git clone --branch v2.21.0 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
 make coordination-demo
