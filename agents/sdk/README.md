@@ -15,10 +15,10 @@ To install the SDK as it shipped with a specific server release, use the Git
 URL instead:
 
 ```bash
-pip install "unitares-sdk @ git+https://github.com/cirwel/unitares@v2.20.0#subdirectory=agents/sdk"
+pip install "unitares-sdk @ git+https://github.com/cirwel/unitares@v2.21.0#subdirectory=agents/sdk"
 ```
 
-Replace `@v2.20.0` with another server release tag only after checking the
+Replace `@v2.21.0` with another server release tag only after checking the
 [compatibility map](https://github.com/cirwel/unitares/blob/master/COMPATIBILITY.md).
 Pin a commit SHA when reproducing a specific development build.
 
