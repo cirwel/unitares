@@ -19,7 +19,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**161 flags.**
+**162 flags.**
 
 | Flag | Reader fallback(s) | Purpose | Read at |
 |---|---|---|---|
@@ -38,7 +38,7 @@ index; that one is the curated decision record.
 | `STRICT_IDENTITY_REQUIRED` | `''` | True iff STRICT_IDENTITY_REQUIRED env var is set to a truthy value | src/mcp_handlers/identity_bootstrap.py |
 | `UNITARES_ADJUDICATION_ABSTAIN_COOLDOWN_H` | `'168'` | — | src/http_routes/sentinel.py |
 | `UNITARES_AGENT_LOCK_BACKEND` | `'advisory'` | Execute the extracted process_agent_update workflow for a prepared UpdateContext. | src/services/update_workflow_service.py, src/state_locking.py |
-| `UNITARES_AIC_SIGNING_KEY` | `None (no reader fallback)` | Load the server signing key from a seed, or from the env var | src/identity/agent_identity_credential.py |
+| `UNITARES_AIC_SIGNING_KEY` | `None (no reader fallback)` | Load the server signing key (identity attestations and dialectic resolution receipts) from a seed, or from the env var | src/identity/agent_identity_credential.py |
 | `UNITARES_ANCHORS_DIR` | `None (no reader fallback)` | Return the anchors directory path | src/identity/substrate.py |
 | `UNITARES_API_TOKEN` | `None (no reader fallback)` | Return continuity token support details for diagnostics. | src/mcp_handlers/identity/session.py |
 | `UNITARES_AUDIT_WRITE_JSONL` | `'1'` | read by __init__() | src/audit_log.py |
@@ -78,6 +78,7 @@ index; that one is the curated decision record.
 | `UNITARES_DIALECTIC_GOVERNED_SPAWN` | `'0'` | Opt-in gate (default OFF) | src/mcp_handlers/dialectic/governed_spawn.py |
 | `UNITARES_DIALECTIC_ORCHESTRATED_REVIEW` | `'0'` | Opt-in gate for routing reviews through the orchestrator (default OFF) | src/mcp_handlers/dialectic/orchestrator_dispatch.py |
 | `UNITARES_DIALECTIC_RECUSAL` | `None (no reader fallback)` | ``enforce`` (default), ``flag``, or ``off`` | src/mcp_handlers/dialectic/recusal.py |
+| `UNITARES_DIALECTIC_RESOLUTION_RECEIPTS` | `None (no reader fallback)` | Mint dialectic resolution receipts (drr.v1) at the terminal resolved write; default off, and the AIC attestation key must be configured as w | src/dialectic_receipt.py |
 | `UNITARES_DIALECTIC_REVIEWER_HOST` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (agents/dialectic_reviewer/reviewer.py) | Route to the configured reviewer backend, falling back to the free local model | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_DIALECTIC_REVIEWER_TIMEOUT` | `None (no reader fallback)` | Timeout budget for a structured dialectic reviewer call | src/mcp_handlers/support/llm_delegation.py |
 | `UNITARES_DIALECTIC_REVIEW_BUDGET` | `None (no reader fallback)` | Wall-clock cap for the inline synthetic review (antithesis + synthesis) | src/mcp_handlers/dialectic/handlers.py |

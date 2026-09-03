@@ -176,6 +176,20 @@ their own trust boundary. A second principal is exactly the party who cannot be
 given the key, so a resolution record is not today independently verifiable by
 an operator who does not already trust its issuer.
 
+A deployment-countersigned receipt over the stored resolution record
+(`drr.v1`, [`src/dialectic_receipt.py`](../src/dialectic_receipt.py)) is
+wired at the terminal `resolved` write and dormant: it mints only when a
+dedicated issuance flag is on and the deployment holds an Ed25519 attestation
+key, and the only custody available here today is a same-UID plist secret,
+which the identity plan rules out for attestation. When enabled it lets a peer holding the pinned public key verify
+which key's holder persisted exactly that record, offline
+([`scripts/client/verify_resolution_receipt.py`](../scripts/client/verify_resolution_receipt.py));
+it leaves the symmetric agent-level scheme unchanged and claims nothing about
+party intent. It is the witness-receipt construction named below, made
+concrete as one option; what it needs before it can be enabled honestly, and
+why the choice of semantics stays with the operator, is in
+[`proposals/dialectic-resolution-receipt-v0.md`](proposals/dialectic-resolution-receipt-v0.md).
+
 This is a statement of the deployed boundary, not an argument that issuer
 non-repudiation is the only route across it. Constructions exist that supply
 useful exchange semantics without it: a transparency log can establish

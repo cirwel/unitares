@@ -191,14 +191,14 @@ runs (`from→to`, filled only when the destination is absent).
 
 | Action | Delegate | Remaps |
 |---|---|---|
-| `antithesis` | `src/mcp_handlers/dialectic/handlers.py:2653 handle_submit_antithesis` | — |
-| `get` | `src/mcp_handlers/dialectic/handlers.py:1669 handle_get_dialectic_session` | — |
-| `list` | `src/mcp_handlers/dialectic/handlers.py:1889 handle_list_dialectic_sessions` | — |
-| `quick` | `src/mcp_handlers/dialectic/handlers.py:386 handle_quick_dialectic` | — |
-| `reassign` | `src/mcp_handlers/dialectic/handlers.py:3445 handle_reassign_reviewer` | — |
-| `request` | `src/mcp_handlers/dialectic/handlers.py:1304 handle_request_dialectic_review` | — |
-| `synthesis` | `src/mcp_handlers/dialectic/handlers.py:2889 handle_submit_synthesis` | — |
-| `thesis` | `src/mcp_handlers/dialectic/handlers.py:2325 handle_submit_thesis` | — |
+| `antithesis` | `src/mcp_handlers/dialectic/handlers.py:2657 handle_submit_antithesis` | — |
+| `get` | `src/mcp_handlers/dialectic/handlers.py:1671 handle_get_dialectic_session` | — |
+| `list` | `src/mcp_handlers/dialectic/handlers.py:1891 handle_list_dialectic_sessions` | — |
+| `quick` | `src/mcp_handlers/dialectic/handlers.py:388 handle_quick_dialectic` | — |
+| `reassign` | `src/mcp_handlers/dialectic/handlers.py:3458 handle_reassign_reviewer` | — |
+| `request` | `src/mcp_handlers/dialectic/handlers.py:1306 handle_request_dialectic_review` | — |
+| `synthesis` | `src/mcp_handlers/dialectic/handlers.py:2893 handle_submit_synthesis` | — |
+| `thesis` | `src/mcp_handlers/dialectic/handlers.py:2329 handle_submit_thesis` | — |
 
 ### `export` · default `history`
 

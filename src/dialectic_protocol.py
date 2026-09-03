@@ -304,6 +304,13 @@ class Resolution:
             signed with each agent's api_key. v2 signatures verify via
             verify_signatures(); v1 cannot be verified because the source
             message was not preserved.
+        receipt: Deployment-signed receipt (``drr.v1``) over the stored record,
+            attached only at the terminal "resolved" write and only when the
+            deployment has an attestation key; a peer verifies it with the
+            pinned public key alone. Omitted from to_dict() when empty so a
+            deployment without a key stores and hashes exactly what it did
+            before. Issuer-level, not party-level, non-repudiation; see
+            ``src/dialectic_receipt.py``.
 
     The v2 attestation closes council 2026-05-06 NEW-2 — until then the
     bilateral cryptographic claim was effectively single-signer-with-two-
@@ -319,15 +326,22 @@ class Resolution:
     signature_b: str  # Agent B's signature
     timestamp: str
     signature_version: int = 1  # v2 = canonical-payload bilateral; default 1 for backward-compat decode of legacy on-disk rows
+    receipt: str = ""  # drr.v1 deployment-signed receipt, attached at the terminal write when an attestation key is configured; "" otherwise (src/dialectic_receipt.py)
 
     def to_dict(self) -> Dict:
         """
         Convert resolution to dictionary for serialization.
 
+        ``receipt`` is included only when non-empty, so a deployment with no
+        attestation key persists the exact shape it always did.
+
         Returns:
             Dictionary representation of the resolution
         """
-        return asdict(self)
+        data = asdict(self)
+        if not data.get("receipt"):
+            data.pop("receipt", None)
+        return data
 
     def hash(self) -> str:
         """
@@ -339,7 +353,9 @@ class Resolution:
         Returns:
             Hexadecimal hash string
         """
-        resolution_json = json.dumps(self.to_dict(), sort_keys=True)
+        data = self.to_dict()
+        data.pop("receipt", None)  # the receipt is over the record; it is not part of it
+        resolution_json = json.dumps(data, sort_keys=True)
         return hashlib.sha256(resolution_json.encode()).hexdigest()
 
     def canonical_payload(self) -> bytes:
@@ -396,7 +412,9 @@ class Resolution:
         public-key signature; do not treat this as non-repudiation. For
         non-repudiation we'd need DPoP / asymmetric keys (decided shelved
  2026-04-19; and project memory
-        identity-audit-2026-04-19).
+        identity-audit-2026-04-19). Issuer-level non-repudiation of the
+        stored record is a separate, opt-in construction: the deployment-
+        signed receipt in ``src/dialectic_receipt.py`` (Resolution.receipt).
         """
         if not api_key:
             return ""
