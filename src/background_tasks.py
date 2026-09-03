@@ -1251,6 +1251,62 @@ def _proxy_alive(label: str, now: datetime, threshold_seconds: float) -> bool:
     return False
 
 
+async def _log_resident_silence_finding(
+    agent_id: str, meta, silence_minutes: float, interval: int
+) -> None:
+    """Best-effort durable KG finding for an agent gone CRITICAL-silent (deduped, open-only).
+
+    The SILENCE probe already detects this correctly — the CRITICAL log line
+    and the ``lifecycle_silent_critical`` broadcast above are real — but
+    neither reaches anything a human or agent actually reads later; they are
+    a log line and a live-only event. This mirrors ``_log_stuck_intervention``
+    (``src/mcp_handlers/lifecycle/stuck.py``): the same "server observes an
+    agent and files a note about it" shape, deduped the same way (skip if an
+    open note with this tag already exists for this agent_id) so a server
+    restart mid-outage — which resets the in-memory ``_silence_critical_alerted``
+    set — cannot refile the same outage twice.
+
+    Not resident-specific: gated only on this agent having reached the
+    CRITICAL branch above (a real label + expected interval), never on a
+    resident name (see the fleet-neutrality contract in CLAUDE.md/AGENTS.md).
+    """
+    try:
+        from src.knowledge_graph import get_knowledge_graph, DiscoveryNode
+
+        graph = await get_knowledge_graph()
+        existing = await graph.query(status="open", agent_id=agent_id, limit=50)
+        if any("resident-silence" in (d.tags or []) for d in existing):
+            return  # already filed and still open
+
+        label = getattr(meta, "label", None) or agent_id[:12]
+        tags = ["resident-silence", "auto-filed"]
+        if getattr(meta, "label", None):
+            tags.append(meta.label.lower())
+
+        note = DiscoveryNode(
+            id=datetime.now(timezone.utc).isoformat(),
+            agent_id=agent_id,
+            type="bug_found",
+            summary=(
+                f"{label} silent for {silence_minutes:.0f}m "
+                f"(expected every {interval // 60}m) — resident-progress SILENCE probe"
+            ),
+            details=(
+                f"background_tasks._silence_check_iteration escalated {label} "
+                f"({agent_id}) to CRITICAL: no check-in for {silence_minutes:.0f} minutes "
+                f"against an expected {interval // 60}-minute cadence. Filed automatically; "
+                "close the loop once it reconnects: knowledge(action='update', "
+                "discovery_id=<this id>, status='resolved')."
+            ),
+            tags=tags,
+            severity="critical",
+            status="open",
+        )
+        await graph.add_discovery(note)
+    except Exception as e:
+        logger.debug(f"[SILENCE] KG finding write failed: {e}")
+
+
 async def _silence_check_iteration() -> None:
     """Single pass of silence detection. Extracted for testability."""
     global _silence_server_start
@@ -1341,6 +1397,7 @@ async def _silence_check_iteration() -> None:
                         "label": meta.label,
                     },
                 )
+                await _log_resident_silence_finding(agent_id, meta, silence_minutes, interval)
         elif silence_seconds >= interval * 2 and agent_id not in _silence_alerted:
             _silence_alerted.add(agent_id)
             logger.warning(
