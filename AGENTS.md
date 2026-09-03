@@ -124,51 +124,38 @@ criterion honoured 2026-07-30.
 
 **A resident name may be read from config and displayed. It may never be branched on.**
 
-UNITARES installs into deployments that run their own residents, or none.
-Which residents exist is deployment configuration (`UNITARES_RESIDENTS`, empty
-by default), and shipped source must read that roster rather than naming
-anybody. A name has exactly two legitimate jobs:
-
-1. **Display** — dashboard labels, and presentation order, which is the order
-   the roster declares.
-2. **N=1 calibration partitioning** — each named resident is its own class, so
-   the name is a partition key for a scale constant.
-
-Note that the second is a *statistical* key, not a dispatch key: the name
-selects a constant, never a code path. A name used as a third thing is the
-defect. The discriminator for behavior is always a capability — `embodied`,
-`persistent`, `protected`, `cadence.*`, physical-vs-behavioral sensor — never
-who the agent is.
+Which residents exist is deployment configuration (`UNITARES_RESIDENTS`, empty by
+default). Shipped source reads that roster; it never names anybody. A name has two
+legitimate jobs: **display** (labels, and presentation order as the roster declares
+it) and **N=1 calibration partitioning** (each named resident is its own class, so
+the name selects a scale constant). The second is a statistical key, never a
+dispatch key. Behavior is discriminated by capability — `embodied`, `persistent`,
+`protected`, `cadence.*`, physical-vs-behavioral sensor — never by who the agent is.
 
 **Rules:**
 
-- ⛔ **Never branch on a resident name.** No `if label == "Lumen"`, no dict
-  keyed by label, no list of names filtering a roster. Use the tag that
-  expresses the property you actually need, and add one if it does not exist.
+- ⛔ **Never branch on a resident name.** No `if label == ...`, no dict keyed by
+  label, no name list filtering a roster. Use the tag that expresses the property
+  you need, and add one if it does not exist.
 - ⛔ **Never hardcode a roster.** `scripts/dev/check_fleet_identity_leak.py`
-  (pre-commit + the `Repo Scope Guard` workflow) fails on a resident name
-  appearing as a string literal anywhere in the shipped artifact — `src/`,
-  `governance_core/`, `config/`, `agents/sdk/src/`. Its scope must track
+  (pre-commit + the `Repo Scope Guard` workflow) fails on a resident name as a
+  string literal anywhere in the shipped artifact — `src/`, `governance_core/`,
+  `config/`, `agents/sdk/src/`. Its scope must track
   `[tool.setuptools.packages.find]` in `pyproject.toml`.
-- **Provenance in a comment is fine and is deliberately not flagged.** A note
-  saying a threshold has its value because of what a resident did on a date is
-  the reason the constant is what it is; deleting it makes the code less
-  honest without making it more portable.
-- **Lead with the definition, keep the origin as a footnote.** A docstring that
-  explains a general mechanism by naming the agent it was derived from taxes
-  every future reader with a device they do not have. Say what the thing is,
-  then say where it came from.
+- **Provenance in a comment is fine and is deliberately not flagged.** A note that
+  a threshold has its value because of what a resident did on a date is the reason
+  the constant is what it is.
+- **Lead with the definition, keep the origin as a footnote.** Explain the general
+  mechanism first, then say where it came from.
 - **The residentless install is the default, so it is the case to test.**
-  `tests/conftest.py` declares a roster for the suite, which means nearly every
-  test runs in a fleet-present world. New behavior that depends on the roster
-  needs a companion assertion in `tests/test_residentless_install.py` for what
-  happens when it is empty. That path is what every adopter runs and it is the
-  one nothing else exercises.
+  `tests/conftest.py` declares a roster for the suite, so nearly every test runs
+  fleet-present. Roster-dependent behavior needs a companion assertion in
+  `tests/test_residentless_install.py` for the empty roster — the path every
+  adopter runs and the one nothing else exercises.
 
 `agents/` (the reference residents) and `scripts/ops/` (this operator's fleet
-control plane) are deliberately NOT agnostic and are outside the guard: a
-deploy script for a specific fleet is supposed to name it. The boundary is the
-shipped artifact, not the repo.
+control plane) are deliberately NOT agnostic and are outside the guard. The
+boundary is the shipped artifact, not the repo.
 
 ## Project
 
@@ -192,17 +179,17 @@ UNITARES governance MCP server. A behavioral governance framework for AI agents 
 
 ## Before Starting Work on a Single-Writer Surface
 
-A single-writer surface is one where only one branch can land at a time without conflict — slot collisions, semantic merge conflicts, or strategy-divergent fixes that obsolete each other. Parallel sessions converging on these produces collisions; the 2026-04-29 migration-drift incident (#236 + #237) is the canonical example.
+A single-writer surface is one where only one branch can land at a time without conflict — slot collisions, semantic merge conflicts, or strategy-divergent fixes that obsolete each other. Parallel sessions converging on one produce collisions; the 2026-04-29 migration-drift incident (#236 + #237) is the canonical example.
 
-Before touching one of these, run `gh pr list -R CIRWEL/unitares --search "in:title,body <surface-keyword>" --state open` and the same against `CIRWEL/unitares-governance-plugin` for cross-repo surfaces. If an in-flight PR exists, comment there or branch from its head — do not start a parallel attempt.
+Before touching one, run `gh pr list -R CIRWEL/unitares --search "in:title,body <surface-keyword>" --state open`, and the same against `CIRWEL/unitares-governance-plugin` for cross-repo surfaces. If an in-flight PR exists, comment there or branch from its head — do not start a parallel attempt.
 
 Surfaces:
 
-- **Migration slots and migration-drift fixes** — `db/postgres/migrations/`. Now CI-gated by `scripts/dev/unitares_doctor.py`; the doctor fails on slot/name drift, but session-level coordination still avoids wasted parallel work.
+- **Migration slots and migration-drift fixes** — `db/postgres/migrations/`. CI-gated by `scripts/dev/unitares_doctor.py`, which fails on slot/name drift; session-level coordination still avoids wasted parallel work.
 - **Identity / onboarding — docs AND implementing code are one coupled surface** — docs (`docs/ontology/identity.md`, `commands/governance-start.md`, `skills/governance-lifecycle/SKILL.md`, the `AGENTS.md`/`CLAUDE.md` shared contract including the `Strict Identity, Simple Contract` block below, the `force_new=true` / `parent_agent_id` posture) AND code (`src/mcp_handlers/identity/`, `src/mcp_handlers/middleware/identity_step.py`, `src/mcp_handlers/support/agent_auth.py`, `src/mcp_handlers/schemas/identity.py`). Treat as a single writer-locked region, not as separate doc/code workstreams. These also flow across two repos (unitares + gov-plugin); check both.
 - **`docs/ontology/plan.md`** — chronological state ledger; two sessions appending rows in the same window collide trivially. If a session is already editing it, branch from its head rather than starting parallel.
-- **Active proposal/RFC docs in hot phase** — the Plexus / lease-plane / BEAM thread (`docs/proposals/plexus-scope.md`, `surface-lease-plane-v0.md`, `surface-lease-plane-phase-a-plan.md`, `beam-footprint-roadmap-v0.md`, `beam-coordination-kernel.md`). Restructure-during-flight is normal here; same rule as plan.md: branch from another session's head if one is in flight.
-- **Large test-layout consolidation** — `tests/` directory. If you're about to delete more than ~200 lines of tests, surface intent in a draft PR or issue first; a stale −3496 diff (`feat/agentskills-compat`) was lost to drift this way.
+- **Active proposal/RFC docs in hot phase** — the Plexus / lease-plane / BEAM thread (`docs/proposals/plexus-scope.md`, `surface-lease-plane-v0.md`, `surface-lease-plane-phase-a-plan.md`, `beam-footprint-roadmap-v0.md`, `beam-coordination-kernel.md`). Restructure-during-flight is normal here; same rule as plan.md.
+- **Large test-layout consolidation** — `tests/`. Before deleting more than ~200 lines of tests, surface intent in a draft PR or issue first; a stale −3496 diff (`feat/agentskills-compat`) was lost to drift this way.
 
 This section protects against wasted parallel work across agents, not just mistakes within one session. The deeper fix is upstream of any single agent: do not run multiple agents on the same single-writer surface in the same window.
 
@@ -250,17 +237,13 @@ Codex and Claude share one delivery contract so concurrent sessions stay predict
 
 ## Substrate Tax: anyio-asyncio Coupling
 
-The MCP SDK runs handlers inside an anyio task group. asyncpg and Redis run on Python's asyncio. When a handler `await`s DB/Redis work, the two scheduler models can interact in ways that hold connections across unrelated awaits and amplify latency by orders of magnitude. Measured 2026-05-04 on the governance-MCP request path: KG calls that complete in 21–71ms standalone run at **~4,464ms in-handler** — a ~60× amplification, with the floor sub-100ms and the rest in scheduling / pool-acquisition / event-loop contention. The Sentinel-loop call site (`agents/sentinel/agent.py:416-459`) is mitigated to ">400 cycles, zero failures" via PR #290, but that fix is one workaround at one site, not closure of the bug class.
+The MCP SDK runs handlers inside an anyio task group; asyncpg and Redis run on asyncio. Awaiting either from a handler on the shared loop can hold connections across unrelated awaits and amplify latency by orders of magnitude (measured ~60× on the governance-MCP request path, 2026-05-04). The bug class is structural, three incidents deep, and still surfaces on new call sites. The full account — measurements, incident history, and the retired workaround patterns — lives in `docs/UNIFIED_ARCHITECTURE.md` under *asyncpg, Redis and the anyio scheduler*.
 
-**These are workarounds, not architecture.** The patterns below accreted from incidents — three over the last year, with new variants emerging on different surfaces (current example: the load_metadata_async N-await loop on observe handlers, see PR #348 follow-up). The bug class is structural to anyio + asyncio + asyncpg / Redis on a shared event loop and does not exist on substrates with per-process scheduling and protocol-level connection checkout (e.g., BEAM / db_connection).
+Rules for new code:
 
-**As of PR #218 (deployed 2026-04-27), `get_db()` returns an `ExecutorPool`-wrapped backend** (`src/db/executor_pool.py`). asyncpg operations run on a dedicated background thread with its own event loop, so the anyio task group never sees an asyncpg await. New handlers can use `async with db.acquire() as conn: await conn.fetchval(...)` directly — no wrapper needed for asyncpg DB work. **Redis async clients are not yet wrapped by ExecutorPool.** Existing Redis `asyncio.wait_for` timeouts in `identity_step.py`, `persistence.py`, and `session.py` remain as a precaution; do not add new ones for asyncpg but leave Redis guards in place.
-
-The three patterns below were the pre-ExecutorPool workarounds. They are **retired for new asyncpg handlers** but remain in the codebase as historical context and where they serve purposes beyond anyio isolation (Redis guards, sync blocking I/O, performance caches):
-
-1. **Read cached data** populated by a background task (e.g., `health_check` reads `deep_health_probe_task`'s snapshot; sticky identity reads a cache pre-warmed by `transport_binding_cache_warmup`).
-2. **`run_in_executor` with a sync client** — see `verify_agent_ownership` dispatch at `src/agent_loop_detection.py:403` (synchronous DB-touching function pushed to an executor thread so the anyio task group stays unblocked). The same pattern is used externally by `call_pi_tool` in the `unitares_pi_plugin` package.
-3. **`asyncio.wait_for` with a tight timeout** — degrade to a fallback on deadlock instead of hanging the pipeline. See `deep_health_probe_task` at `src/background_tasks.py:545` and `_load_binding_from_redis` at `src/mcp_handlers/middleware/identity_step.py` (500ms budget, returns `None` on timeout).
+- **asyncpg:** `get_db()` returns an `ExecutorPool`-wrapped backend (PR #218, `src/db/executor_pool.py`) whose operations run on a dedicated thread with its own event loop, so the anyio task group never sees an asyncpg await. Use `async with db.acquire() as conn: await conn.fetchval(...)` directly. Do not add `run_in_executor` or `asyncio.wait_for` wrappers for asyncpg work.
+- **Redis:** async Redis clients are **not** ExecutorPool-wrapped. Keep the existing `asyncio.wait_for` guards in `identity_step.py`, `persistence.py`, and `session.py`, and guard new Redis awaits the same way.
+- **Long-running loops that touch DB/Redis** (the Sentinel loop, PR #290, is the precedent): mitigate at the call site and record it. Each such fix is one workaround at one site, not closure of the class.
 
 ## Known Test Notes
 
