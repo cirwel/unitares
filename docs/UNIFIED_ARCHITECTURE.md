@@ -96,7 +96,7 @@ Two behaviors at the edges of the verdict path are deliberate and easy to miss w
 
 **Oscillation / churn near a threshold.** There is no deadband on the risk cut itself — a single check-in crossing a threshold can change the action. Stability instead comes from two layers: (1) the EISV inputs are EMA-smoothed before scoring (`src/behavioral_state.py`, per-dimension α ≈ 0.08–0.15), and (2) a dedicated always-on oscillation governor, **CIRS** (`src/cirs.py`, `src/monitor_decision.py`), watches the *decision* stream over a sliding window (default `window=8`, `flip_threshold=3`, `oi_threshold=3.0`). When decisions flip-flop, CIRS `soft_dampen` nudges `safe → caution`, and sustained resonance triggers a `hard_block` (`sub_action=cirs_block`, "governance is flip-flopping — wait for state to settle"). So churn is handled by *escalation to a settle-pause*, not by a hold-band — a deliberate trade (it prevents flip spam but biases conservative near the boundary; see the false-pause history behind the basin-health gate, issue #689).
 
-**Assessment failure is fail-open.** If the assessment pipeline itself errors (DB/Redis outage, internal bug — distinct from the BEAM proxy, which fails open to in-process Python), the check-in handler returns an error response with **no `verdict`/`action` field** — it does not synthesize a `pause`. The agent proceeds. This is intentional for an advisory, non-guardrail system: fail-*closed* would let a transient infra blip mass-pause the whole fleet, and the anyio/asyncpg/Redis latency class (see `CLAUDE.md`) makes that a live risk. The normal pause gates (CIRS / void / coherence / high-risk / low-basin) are unaffected; this covers only the case where no verdict could be computed at all. See the design comment at `src/mcp_handlers/core.py` (`process_agent_update` handler).
+**Assessment failure is fail-open.** If the assessment pipeline itself errors (DB/Redis outage, internal bug — distinct from the BEAM proxy, which fails open to in-process Python), the check-in handler returns an error response with **no `verdict`/`action` field** — it does not synthesize a `pause`. The agent proceeds. This is intentional for an advisory, non-guardrail system: fail-*closed* would let a transient infra blip mass-pause the whole fleet, and the anyio/asyncpg/Redis latency class (see *asyncpg, Redis and the anyio scheduler* under Database Architecture) makes that a live risk. The normal pause gates (CIRS / void / coherence / high-risk / low-basin) are unaffected; this covers only the case where no verdict could be computed at all. See the design comment at `src/mcp_handlers/core.py` (`process_agent_update` handler).
 
 ### 5. Calibration
 
@@ -153,6 +153,49 @@ Agents contribute discoveries to a shared store. **PostgreSQL FTS is the canonic
 ```
 
 **Ownership is simple:** PostgreSQL+AGE is the single source of truth for all governance data.
+
+### asyncpg, Redis and the anyio scheduler
+
+The MCP SDK runs handlers inside an anyio task group. asyncpg and Redis run on
+Python's asyncio. When a handler `await`s DB/Redis work, the two scheduler models
+can interact in ways that hold connections across unrelated awaits and amplify
+latency by orders of magnitude. Measured 2026-05-04 on the governance-MCP request
+path: KG calls that complete in 21–71ms standalone ran at ~4,464ms in-handler — a
+~60× amplification, with the floor sub-100ms and the rest in scheduling,
+pool-acquisition, and event-loop contention. The Sentinel-loop call site
+(`agents/sentinel/agent.py`) was mitigated to ">400 cycles, zero failures" via
+PR #290, but that fix is one workaround at one site, not closure of the bug class.
+
+The class is structural to anyio + asyncio + asyncpg / Redis on a shared event
+loop and does not exist on substrates with per-process scheduling and
+protocol-level connection checkout (BEAM / db_connection). Three incidents over
+the last year, with new variants emerging on different surfaces (most recently
+the `load_metadata_async` N-await loop on observe handlers, PR #348 follow-up).
+
+**Current posture (PR #218, deployed 2026-04-27).** `get_db()` returns an
+`ExecutorPool`-wrapped backend (`src/db/executor_pool.py`). asyncpg operations run
+on a dedicated background thread with its own event loop, so the anyio task group
+never sees an asyncpg await, and handlers use
+`async with db.acquire() as conn: await conn.fetchval(...)` directly. Redis async
+clients are not yet wrapped; the `asyncio.wait_for` timeouts in
+`identity_step.py`, `persistence.py`, and `session.py` remain as the guard.
+
+**Retired workaround patterns.** These predate ExecutorPool. They are retired for
+new asyncpg handlers but remain in the codebase where they serve a purpose beyond
+anyio isolation (Redis guards, sync blocking I/O, performance caches):
+
+1. **Read cached data** populated by a background task — `health_check` reads
+   `deep_health_probe_task`'s snapshot; sticky identity reads a cache pre-warmed by
+   `transport_binding_cache_warmup`.
+2. **`run_in_executor` with a sync client** — the `verify_agent_ownership` dispatch
+   in `src/agent_loop_detection.py` pushes a synchronous DB-touching function to an
+   executor thread so the anyio task group stays unblocked. The same pattern is used
+   externally by `call_pi_tool` in the `unitares_pi_plugin` package.
+3. **`asyncio.wait_for` with a tight timeout** — degrade to a fallback on deadlock
+   instead of hanging the pipeline: `deep_health_probe_task` in
+   `src/background_tasks.py`, and `_load_binding_from_redis` in
+   `src/mcp_handlers/middleware/identity_step.py` (500ms budget, returns `None` on
+   timeout).
 
 ## Key Files
 
