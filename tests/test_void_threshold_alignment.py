@@ -122,3 +122,54 @@ def test_published_threshold_and_reporter_agree_end_to_end():
                void_threshold=st.void_threshold_effective)
     assert not active
     assert r["details"]["void_margin"] >= 0
+
+
+# --- dialectic condition 4: a comfortable result must say what it covers ------
+
+def test_comfortable_is_qualified_when_an_edge_was_never_assessed():
+    """"comfortable" is a claim about the edges that could be MEASURED. Reported
+    bare it reads as "no limit is near", which is a stronger claim than the data
+    supports whenever an edge was excluded."""
+    r = margin(void_active=False, void_value=0.0)   # legacy coherence -> unmeasurable
+    assert r["margin"] == "comfortable"
+    assert r["unmeasurable_edges"] == ["coherence"]
+    assert r["margin_scope"] == "measured_edges_only"
+
+
+def test_scope_is_all_edges_when_nothing_was_excluded():
+    r = margin(void_active=False, void_value=0.0,
+               coherence_history=[HEALTHY_COH] * 12,
+               coherence_role=G.COHERENCE_INTERPRETABLE_ROLE,
+               coherence_history_role=G.COHERENCE_INTERPRETABLE_ROLE)
+    assert r["unmeasurable_edges"] == []
+    assert r["margin_scope"] == "all_edges"
+
+
+def test_qualification_reaches_the_agent_envelope():
+    """`details` is stripped before an agent sees it, so the qualification has to
+    ride on the lifted fields or it is not a report."""
+    from src.mcp_handlers.middleware import envelope_step
+    import inspect
+    src = inspect.getsource(envelope_step)
+    assert '"margin_scope"' in src and '"unmeasurable_edges"' in src, \
+        "margin_scope/unmeasurable_edges must be lifted alongside margin"
+
+
+def test_qualification_survives_the_real_decision_path_end_to_end():
+    """Regression for a gap the unit tests missed: monitor_decision delegates the
+    common safe/approve case to GovernanceConfig.make_decision, which builds its
+    OWN decision dicts. Patching only monitor_decision left a bare "comfortable"
+    reaching agents on the most-travelled path. Exercise the monitor, not the
+    margin function."""
+    from src.governance_monitor import UNITARESMonitor
+
+    m = UNITARESMonitor(agent_id="scope-e2e")
+    m.state.unitaires_state.V = 0.02
+    m.state.V_history = [0.02] * 20
+    m.state.coherence_history = [HEALTHY_COH] * 6   # legacy role -> unmeasurable
+    m.check_void_state()
+    d = m.make_decision(risk_score=0.0, unitares_verdict="safe")
+
+    assert d["margin"] == "comfortable"
+    assert d["margin_scope"] == "measured_edges_only"
+    assert d["unmeasurable_edges"] == ["coherence"]

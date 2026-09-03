@@ -688,6 +688,11 @@ class GovernanceConfig:
 
         return {
             'margin': margin_level,
+            # "comfortable" is a claim about the edges that could be MEASURED, not
+            # about all three. Reporting it bare would let an agent read "nothing
+            # is near" when one edge was never assessed. The enum stays stable for
+            # consumers; the qualification rides beside it.
+            'margin_scope': 'measured_edges_only' if unmeasurable else 'all_edges',
             'nearest_edge': nearest_edge if margin_level != 'comfortable' else None,
             'distance_to_edge': distance_to_edge,
             # Top level, not `details`: the envelope strips `details` before it
@@ -808,6 +813,8 @@ class GovernanceConfig:
                 'reason': f'Low risk ({risk_score:.1%}) - healthy operating range',
                 'guidance': f'{margin_to_pause:.0%} margin to PAUSE threshold ({effective_revise_threshold:.0%})',
                 'margin': margin_info['margin'],
+                'margin_scope': margin_info.get('margin_scope', 'all_edges'),
+                'unmeasurable_edges': margin_info.get('unmeasurable_edges', []),
                 'nearest_edge': margin_info['nearest_edge']
             }
 
@@ -828,6 +835,8 @@ class GovernanceConfig:
                 'reason': f'Moderate risk ({risk_score:.1%}) - PAUSE threshold: {effective_revise_threshold:.0%}',
                 'guidance': guidance,
                 'margin': margin_info['margin'],
+                'margin_scope': margin_info.get('margin_scope', 'all_edges'),
+                'unmeasurable_edges': margin_info.get('unmeasurable_edges', []),
                 'nearest_edge': margin_info['nearest_edge']
             }
 
@@ -842,6 +851,8 @@ class GovernanceConfig:
                 f'(compatibility floor: {effective_coherence_threshold:.2f}).'
             ),
             'margin': margin_info['margin'],
+            'margin_scope': margin_info.get('margin_scope', 'all_edges'),
+            'unmeasurable_edges': margin_info.get('unmeasurable_edges', []),
             'nearest_edge': margin_info['nearest_edge']
         }
     
