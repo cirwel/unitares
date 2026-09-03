@@ -4,10 +4,6 @@ Bootstrap for Claude Code sessions in this repo. Content below the `SHARED CONTR
 
 The installable Codex/Claude adapter bundle is canonical in the companion `unitares-governance-plugin` repo. This file only governs how Claude Code should behave while working directly inside the `unitares` server repo.
 
-## Execution-cost policy (read first)
-
-- **The core must run free / self-hosted — no *required* metered model-API dependency.** unitares is user/agent-agnostic, so a metered API (Anthropic / OpenAI / …) must never sit on the *required* default path: the server, CI, and residents must run with no paid key (local Ollama for Watcher, `GITHUB_TOKEN`-only CI, deterministic CLI tools — ruff, the doctor, the surfacing collectors). The guarantee is for *every* installer, not just a funded one: someone with no model budget can always run it. Metered models are **welcome as an opt-in, off-by-default backend** — config-gated (e.g. a `base_url` / key from env) so an operator with credits enables them and an operator without stays free. What's forbidden is *forcing* a paid API on everyone: a hardcoded metered endpoint, a metered CI action (`anthropics/claude-code-action`), or a hard SDK import with no local fallback. Add a metered path only as deferred / opt-in, and never build it inert "just in case." (`scripts/dev/check-repo-scope.sh` Rule 6 enforces this.)
-
 ## Claude-specific wiring
 
 Claude Code runs through a plugin-style harness. The hook lifecycle is owned by the **`unitares-governance-plugin`** repo (canonical for the adapter bundle); this repo vendors no hook chain of its own. When CLAUDE.md or AGENTS.md describes hook behavior, the plugin is the source of truth.
@@ -56,6 +52,10 @@ Agent teams (teammates with mailboxes and a shared task list) are experimental a
 - `.unitares/session.json` — that's the Codex continuity cache. Claude's continuity comes from the hook chain + `~/.claude/projects/.../memory/MEMORY.md`; subagent continuity comes from `.claude/agent-memory/<agent-name>/` (see above).
 
 <!-- BEGIN SHARED CONTRACT — keep byte-identical across AGENTS.md and CLAUDE.md; scripts/dev/check-shared-contract.sh enforces parity -->
+
+## Execution-cost policy (read first)
+
+- **The core must run free / self-hosted — no *required* metered model-API dependency.** unitares is user/agent-agnostic, so a metered API (Anthropic / OpenAI / …) must never sit on the *required* default path: the server, CI, and residents must run with no paid key (local Ollama for Watcher, `GITHUB_TOKEN`-only CI, deterministic CLI tools — ruff, the doctor, the surfacing collectors). The guarantee is for *every* installer, not just a funded one: someone with no model budget can always run it. Metered models are **welcome as an opt-in, off-by-default backend** — config-gated (e.g. a `base_url` / key from env) so an operator with credits enables them and an operator without stays free. What's forbidden is *forcing* a paid API on everyone: a hardcoded metered endpoint, a metered CI action (`anthropics/claude-code-action`), or a hard SDK import with no local fallback. Add a metered path only as deferred / opt-in, and never build it inert "just in case." (`scripts/dev/check-repo-scope.sh` Rule 6 enforces this.)
 
 ## Measurement authority — what a number may decide
 
