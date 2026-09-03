@@ -68,6 +68,16 @@ Reproducibility — why ``--check`` has to agree across interpreters:
        ``constraints.txt``. A stale verdict prints the differing lines and the
        running Python/mcp/pydantic versions next to that pin, so the next
        reader sees the factor instead of a bare "stale".
+
+Line numbers — why the committed document carries none:
+    A handler's ``file:line`` moves with every edit above its definition, so
+    one import added at the top of a handler module (2026-09-02,
+    ``dialectic/handlers.py``) rewrote sixteen rows and made ``--check`` call
+    the index stale although no edge had changed — the same per-edit churn
+    that keeps the whole-tree digests out of this file. The markdown therefore
+    locates code as ``file symbol`` (``doc_site``), which moves only when a
+    handler is renamed or moved, i.e. when the edge itself changed. ``--json``
+    keeps ``file:line``: it is regenerated on demand and never committed.
 """
 
 from __future__ import annotations
@@ -287,6 +297,23 @@ def _class_site(cls) -> str:
     except ValueError:
         rel = Path(src)
     return f"{rel}:{line} {cls.__name__}"
+
+
+def doc_site(site: str | None) -> str | None:
+    """``path:LINE symbol`` -> ``path symbol``: the location the markdown prints.
+
+    The line number is on-demand information (``--json`` keeps it). Committing
+    it made the index stale on edits that changed no edge — module docstring,
+    *Line numbers*. Do not re-inline it. Anything not of that shape (``?``, a
+    bare class name) is returned unchanged.
+    """
+    if not site:
+        return site
+    location, separator, symbol = site.partition(" ")
+    path, colon, line = location.rpartition(":")
+    if not colon or not line.isdigit():
+        return site
+    return f"{path}{separator}{symbol}"
 
 
 def _load_registries() -> tuple[dict, dict, dict, list[str]]:
@@ -1150,14 +1177,18 @@ def render(
         "",
         "`handler` is the function the dispatcher calls. For a consolidated tool that is",
         "the generated router — see [Action routing](#action-routing) for its delegates.",
+        "Locations are `file symbol`; the line number is left to `--json`, because a",
+        "line moves with every edit above the definition and made this file stale on",
+        "edits that changed no edge.",
         "",
         "| Tool | Handler | Params schema | Timeout | Notes |",
         "|---|---|---|---|---|",
     ]
     for tool in tools:
-        schema = f"`{tool.schema}`" if tool.schema else "—"
+        schema = f"`{doc_site(tool.schema)}`" if tool.schema else "—"
         lines.append(
-            f"| `{tool.name}` | `{tool.handler}` | {schema} | {tool.timeout:g}s | {_flags(tool)} |"
+            f"| `{tool.name}` | `{doc_site(tool.handler)}` | {schema} | "
+            f"{tool.timeout:g}s | {_flags(tool)} |"
         )
 
     lines += [
@@ -1184,7 +1215,7 @@ def render(
                 if edge.param_maps
                 else "—"
             )
-            lines.append(f"| `{edge.action}` | `{edge.target}` | {remaps} |")
+            lines.append(f"| `{edge.action}` | `{doc_site(edge.target)}` | {remaps} |")
         lines.append("")
 
     lines += [

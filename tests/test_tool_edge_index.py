@@ -19,6 +19,7 @@ import copy
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import types
@@ -415,3 +416,143 @@ def test_pinned_mcp_version_is_read_from_constraints():
     pinned = tei.pinned_mcp_version()
     assert pinned, "constraints.txt no longer pins mcp — update environment_lines()"
     assert any(line.startswith("mcp ") for line in tei.environment_lines())
+
+
+# ---------------------------------------------------------------------------
+# Line drift: the committed markdown must not move when only line numbers do.
+# One import added at the top of a handler module renumbers every definition
+# below it and changes no edge; the freshness gate has to stay green on that
+# and go red on a real change. The collected graph still carries ``file:line``
+# (``--json`` prints it), so the invariance is a property of the rendering,
+# and these tests exercise the rendering on the real graph.
+# ---------------------------------------------------------------------------
+
+_SITE_WITH_LINE = re.compile(r"^(?P<path>\S+\.py):(?P<line>\d+)(?P<rest>.*)$")
+
+
+def _shift_site(site, by):
+    """``path:LINE symbol`` -> ``path:LINE+by symbol``; any other shape unchanged."""
+    match = _SITE_WITH_LINE.match(site or "")
+    if not match:
+        return site
+    return f"{match['path']}:{int(match['line']) + by}{match['rest']}"
+
+
+def _shifted(collected, *, by, module=None):
+    """A deep copy of the collected graph with every location in ``module``
+    (every module when None) moved by ``by`` lines — exactly what inserting
+    ``by`` lines at the top of that file does to the generator's input.
+    Returns the copy and how many locations moved."""
+    tools, aliases, failures, unbound = copy.deepcopy(collected)
+    moved = 0
+
+    def shift(site):
+        nonlocal moved
+        if site and (module is None or site.startswith(f"{module}:")):
+            shifted = _shift_site(site, by)
+            moved += shifted != site
+            return shifted
+        return site
+
+    for tool in tools:
+        tool.handler = shift(tool.handler)
+        tool.schema = shift(tool.schema)
+        for edge in tool.actions:
+            edge.target = shift(edge.target)
+    for alias in aliases:
+        alias.param_normalizer = shift(alias.param_normalizer)
+    return (tools, aliases, failures, unbound), moved
+
+
+def test_render_ignores_a_pure_line_shift_in_a_handler_module(collected):
+    """Reproduced 2026-09-02: one line prepended to
+    src/mcp_handlers/dialectic/handlers.py rewrote sixteen rows of the index
+    and ``--check`` called it stale. The rendering must be byte-identical
+    under that shift — in one module, and in every module at once."""
+    module = "src/mcp_handlers/dialectic/handlers.py"
+    shifted, moved = _shifted(collected, by=1, module=module)
+    assert moved, f"no location in {module}; the fixture is inert"
+    assert tei.render(*shifted) == tei.render(*collected)
+
+    everywhere, moved = _shifted(collected, by=97)
+    tools = collected[0]
+    assert moved >= len(tools), "fewer locations moved than there are tools"
+    assert tei.render(*everywhere) == tei.render(*collected)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "delegate_renamed",
+        "delegate_moved",
+        "action_removed",
+        "handler_moved",
+        "schema_renamed",
+    ],
+)
+def test_render_moves_on_a_real_edge_change(collected, change):
+    """Dropping the line number must not drop the edge: a delegate renamed or
+    moved to another file, an action removed, a handler or schema class
+    relocated, each still changes the rendered document."""
+    tools, aliases, failures, unbound = copy.deepcopy(collected)
+    router = next(tool for tool in tools if tool.actions)
+    edge = router.actions[0]
+    if change == "delegate_renamed":
+        edge.target = f"{edge.target}_renamed"
+    elif change == "delegate_moved":
+        edge.target = edge.target.replace(".py:", "_moved.py:", 1)
+    elif change == "action_removed":
+        router.actions.pop(0)
+    elif change == "handler_moved":
+        plain = next(tool for tool in tools if not tool.actions)
+        plain.handler = plain.handler.replace(".py:", "_moved.py:", 1)
+    elif change == "schema_renamed":
+        with_schema = next(tool for tool in tools if tool.schema)
+        with_schema.schema = f"{with_schema.schema}V2"
+    assert tei.render(tools, aliases, failures, unbound) != tei.render(*collected)
+
+
+@pytest.mark.parametrize(
+    ("site", "expected"),
+    [
+        (
+            "src/mcp_handlers/core.py:223 handle_get_governance_metrics",
+            "src/mcp_handlers/core.py handle_get_governance_metrics",
+        ),
+        (
+            "src/mcp_handlers/consolidated.py:354 action_router",
+            "src/mcp_handlers/consolidated.py action_router",
+        ),
+        (
+            "src/mcp_handlers/schemas/admin.py:171 AdminParams",
+            "src/mcp_handlers/schemas/admin.py AdminParams",
+        ),
+        ("src/mcp_handlers/core.py:223", "src/mcp_handlers/core.py"),
+        ("AdminParams", "AdminParams"),  # _class_site fallback: no source file
+        (tei.UNKNOWN, tei.UNKNOWN),  # _site fallback
+        (None, None),
+        ("", ""),
+    ],
+)
+def test_doc_site_drops_the_line_number_and_nothing_else(site, expected):
+    assert tei.doc_site(site) == expected
+
+
+def test_committed_index_locates_code_by_file_and_symbol_only(audit_snapshot):
+    """Guards the split. The markdown carries no ``file:line`` — or line drift
+    is back and the gate fails on edits that change no edge. The on-demand
+    JSON keeps it — or a verifier loses the precise location. Do not re-inline
+    line numbers into the markdown."""
+    text = tei.OUT.read_text(encoding="utf-8")
+    with_line = re.findall(r"`[^`\n]*\.py:\d+[^`\n]*`", text)
+    assert not with_line, with_line[:5]
+    located = re.findall(r"`src/[^`\n]*\.py [A-Za-z_]\w*`", text)
+    assert located, "no `file symbol` location in the committed index"
+
+    dispatch = audit_snapshot["dispatch"]
+    assert all(re.search(r"\.py:\d+ ", tool["handler"]) for tool in dispatch["tools"])
+    assert all(
+        re.search(r"\.py:\d+ ", edge["target"])
+        for tool in dispatch["tools"]
+        for edge in tool["actions"]
+    )
