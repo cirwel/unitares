@@ -135,6 +135,53 @@ def _normalize_resolution_dict(value: Any) -> Any:
     return normalized
 
 
+def seal_resolution_for_persistence(session, resolution, *, status: str) -> Dict[str, Any]:
+    """The record the terminal write persists, receipted when the deployment can.
+
+    Unless receipt issuance is on AND an attestation key is configured, this is
+    exactly ``resolution.to_dict()`` and nothing is touched. Otherwise, for a
+    session being written as ``resolved``, the deployment receipt is minted
+    over the record exactly as it stands and attached to the object, so the
+    in-memory session and the stored row agree. The record itself is never
+    modified by sealing; the receipt's digest admits condition-whitespace
+    equivalence precisely so the served copy still verifies.
+
+    Never for a ``failed`` write, and never for a candidate that has not
+    reached the terminal write: a receipt means "this deployment persisted
+    this record as resolved", nothing earlier. Pair with
+    ``discard_receipt_unless_written`` once the write's outcome is known.
+    """
+    if status != "resolved" or resolution is None or getattr(resolution, "receipt", ""):
+        return resolution.to_dict() if resolution is not None else None
+    try:
+        from src.dialectic_receipt import attach_receipt_if_configured
+    except Exception as exc:  # pragma: no cover - import failure must not block the write
+        logger.warning(f"dialectic receipt: module unavailable ({exc}); persisting without receipt")
+        return resolution.to_dict()
+    attach_receipt_if_configured(
+        resolution,
+        session_id=session.session_id,
+        paused_agent_id=getattr(session, "paused_agent_id", None) or "",
+        reviewer_agent_id=getattr(session, "reviewer_agent_id", None),
+    )
+    return resolution.to_dict()
+
+
+def discard_receipt_unless_written(resolution, *, written: bool, had_receipt: bool) -> None:
+    """Drop a receipt minted for a terminal write that was not confirmed.
+
+    A receipt attests that the deployment persisted the record as resolved; a
+    write that raised, returned False (row missing or already terminal in
+    another state), or never reached a writer attests nothing, and the
+    in-memory object must not keep carrying it into a later JSON snapshot.
+    A receipt that was already on the record before this attempt is left alone.
+    """
+    if resolution is None or written or had_receipt:
+        return
+    if getattr(resolution, "receipt", ""):
+        resolution.receipt = ""
+
+
 def _reconstruct_session_from_dict(session_id: str, session_data: Dict) -> Optional[DialecticSession]:
     """Reconstruct DialecticSession from a dict (from JSON file or PostgreSQL)."""
     try:
@@ -177,6 +224,7 @@ def _reconstruct_session_from_dict(session_id: str, session_data: Dict) -> Optio
                 # to "legacy v1", so verify_signatures() returned False on
                 # genuine bilateral rows once the session left memory.
                 signature_version=_coerce_signature_version(res_dict.get("signature_version")),
+                receipt=res_dict.get("receipt") or "",
             )
 
         # Phase
@@ -267,6 +315,7 @@ async def save_session(session: DialecticSession, *, defer_terminal: bool = Fals
     ``handle_submit_synthesis``.
     """
     # Primary: update phase + resolution in PostgreSQL
+    terminal_minted = False
     try:
         from src.dialectic_db import update_session_phase_async as pg_update_phase
         from src.dialectic_db import resolve_session_async as pg_resolve_session
@@ -277,8 +326,19 @@ async def save_session(session: DialecticSession, *, defer_terminal: bool = Fals
             # here, and update_session_phase refuses terminal values).
             pass
         elif session.phase in (DialecticPhase.RESOLVED, DialecticPhase.FAILED):
-            resolution_dict = session.resolution.to_dict() if session.resolution else None
             status = session.phase.value if session.phase == DialecticPhase.RESOLVED else "failed"
+            had_receipt = bool(getattr(session.resolution, "receipt", "")) if session.resolution else False
+            resolution_dict = (
+                seal_resolution_for_persistence(session, session.resolution, status=status)
+                if session.resolution else None
+            )
+            # getattr: callers may pass duck-typed resolution objects that
+            # predate the receipt field.
+            terminal_minted = bool(
+                session.resolution is not None
+                and getattr(session.resolution, "receipt", "")
+                and not had_receipt
+            )
             # save_session is the catch-all flush that resolves the session in the
             # orchestrated-reviewer flow (verified 2026-06-28 by the pg_committed
             # saga it produces: it, not the explicit handle_submit_synthesis sites,
@@ -293,12 +353,14 @@ async def save_session(session: DialecticSession, *, defer_terminal: bool = Fals
                 resolution=resolution_dict or {},
                 status=status,
             )
+            written = beam_done is not None
             if beam_done is None:
-                await pg_resolve_session(
+                written = bool(await pg_resolve_session(
                     session_id=session.session_id,
                     resolution=resolution_dict,
                     status=status,
-                )
+                ))
+            discard_receipt_unless_written(session.resolution, written=written, had_receipt=had_receipt)
         else:
             round_ = getattr(session, "synthesis_round", None)
             beam_ph = await beam_update_phase(
@@ -308,6 +370,8 @@ async def save_session(session: DialecticSession, *, defer_terminal: bool = Fals
                 await pg_update_phase(session.session_id, session.phase.value, round_)
         logger.debug(f"Session {session.session_id} synced to PostgreSQL (phase={session.phase.value})")
     except Exception as e:
+        if terminal_minted and session.resolution is not None:
+            discard_receipt_unless_written(session.resolution, written=False, had_receipt=False)
         logger.error(f"PostgreSQL sync failed for session {session.session_id}: {e}")
 
     # Secondary: JSON snapshot (for offline access / debugging)
