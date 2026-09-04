@@ -145,6 +145,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **proposals:** publish a decision packet on the scraped-confidence/fixture-marker conflation in outcome rows — `calibration_excluded` doubles as both "must not train calibration" and "drop as fixture traffic" for the discrimination instruments, which zeroes out two pre-registered reads' visible evidence. States the fork (run the 2026-12-01 read as registered with a disclosed sensitivity cohort, vs. re-register) and recommends the former; implemented in #2062 and #2065. (#2061)
 - **agent contract:** compress the shared `AGENTS.md` / `CLAUDE.md` block to rules and pointers rather than restated prose, and move the displaced architectural detail into `docs/UNIFIED_ARCHITECTURE.md` where it is discoverable on its own. (#2069)
 - **agent contract:** state the execution-cost policy in the shared block, so the cost expectation an agent is held to is written where the contract is read. (#2072)
+- **ontology:** re-verify `harness-substrate-plurality.md` against the tree (every implementation claim it makes still resolves) and correct its header, which still announced itself as a draft awaiting review after `docs/ontology/plan.md` had recorded S22 as resolved on 2026-05-06. (#2074)
 
 <!-- changelog-coverage-exempt: #1911 no-user-effect -->
 <!-- changelog-coverage-exempt: #1913 no-user-effect -->
