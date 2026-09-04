@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.21.0] - 2026-09-02
+## [2.21.0] - 2026-09-04
+
+<!-- plugin-bundle-recut: v0.4.17 -->
 
 ### Added
 
@@ -45,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **grounding:** add `registered`/`corrected` fixture rules for scraped-confidence outcome rows behind an opt-in `--fixture-rule` switch (decision packet R1/E1/E2 from #2061). `registered` — the shared default — reproduces prior counts exactly; `corrected` treats a row excluded solely for a server-scraped confidence as validation evidence rather than fixture noise, while calibration continues training on exactly what it trained on before. `/v1/harness/outcome` now documents, rather than silently continues, ignoring `prediction_id` (accepting it would let an asserted `agent_uuid` bind any open prediction to an unrelated outcome). No cohort or statistic moves on this deploy under the default. (#2062)
 - **dialectic:** add a deployment-countersigned `drr.v1` resolution receipt, wired but dormant — gated by `UNITARES_DIALECTIC_RESOLUTION_RECEIPTS` plus an Ed25519 attestation key, neither of which is set in production, so this mints nothing yet. A peer holding the deployment's public key can verify a receipt offline via `scripts/client/verify_resolution_receipt.py`, with no server, database, or agent API key involved. Minting happens only at the terminal `resolved` write, never at `finalize_resolution` or on a `failed`/unconfirmed outcome. (#2064)
 - **grounding:** resolve the three follow-up decisions #2062 left open, via a governed dialectic session — the shared fixture-rule default becomes `corrected` for non-protocol instruments (calibration still never trains on scraped-only rows); an immutable `REGISTERED_READ_MANIFEST` pins each registered protocol's fixture rule so a `--read-protocol registered` read can't silently pick up the new default; and the coherence-shadow ablation gets a distinct, receipted `v0.1` prospective read over post-cutoff outcomes rather than retroactively converting the frozen `v0` zero-eligibility result. No registered read, frozen reproduction, or frozen contract moves. (#2065)
+- **governance:** the resident-progress SILENCE probe now files a durable, searchable knowledge-graph finding when an agent reaches the CRITICAL branch, instead of leaving the detection as a log line and a live-only broadcast. Deduped by open tag against the database, so a server restart mid-outage cannot refile the same outage twice; gated on the CRITICAL branch alone, never on a resident name. (#2068)
 
 ### Changed
 
@@ -140,6 +143,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **operations:** add a cloud-deploy runbook for running the governance stack on a cloud host when the primary physical machine is offline — host selection, hardening the Compose dev-default secrets, tunnel-only exposure, off-site backups, restore drills, and single-canonical-instance cutover discipline (concurrently-writing instances cannot later be merged: Postgres is reconcilable at cost, interleaved Redis identity/session state effectively is not). (#2054)
 - **constraints:** reconcile `constraints.txt`'s own checklist and prose with the `mcp` 2.1.1 pin that landed in #2050 — the production-interpreter line had stayed unticked and a trailing sentence still claimed the pin was 1.29.0. (#2058)
 - **proposals:** publish a decision packet on the scraped-confidence/fixture-marker conflation in outcome rows — `calibration_excluded` doubles as both "must not train calibration" and "drop as fixture traffic" for the discrimination instruments, which zeroes out two pre-registered reads' visible evidence. States the fork (run the 2026-12-01 read as registered with a disclosed sensitivity cohort, vs. re-register) and recommends the former; implemented in #2062 and #2065. (#2061)
+- **agent contract:** compress the shared `AGENTS.md` / `CLAUDE.md` block to rules and pointers rather than restated prose, and move the displaced architectural detail into `docs/UNIFIED_ARCHITECTURE.md` where it is discoverable on its own. (#2069)
+- **agent contract:** state the execution-cost policy in the shared block, so the cost expectation an agent is held to is written where the contract is read. (#2072)
+- **ontology:** re-verify `harness-substrate-plurality.md` against the tree (every implementation claim it makes still resolves) and correct its header, which still announced itself as a draft awaiting review after `docs/ontology/plan.md` had recorded S22 as resolved on 2026-05-06. (#2074)
 
 <!-- changelog-coverage-exempt: #1911 no-user-effect -->
 <!-- changelog-coverage-exempt: #1913 no-user-effect -->
@@ -149,6 +155,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- changelog-coverage-exempt: #1991 no-user-effect -->
 <!-- changelog-coverage-exempt: #2005 no-user-effect -->
 <!-- changelog-coverage-exempt: #2007 no-user-effect -->
+<!-- changelog-coverage-exempt: #2070 no-user-effect -->
+<!-- changelog-coverage-exempt: #2071 no-user-effect -->
 
 ---
 
