@@ -1,9 +1,23 @@
 # Harness Substrate Plurality — Ontology Plan
 
 **Created:** April 29, 2026  
-**Last Updated:** May 6, 2026
-**Status:** Draft for review  
+**Last Updated:** September 4, 2026
+**Status:** Accepted — R6 tracked in `docs/ontology/plan.md`; S22 resolved 2026-05-06  
 **Companion to:** `docs/ontology/identity.md`, `docs/ontology/plan.md`
+
+**Re-verified September 4, 2026 — no content drift found.** Every implementation
+claim below still resolves in the tree: `s22.identity_response.v1`
+(`src/services/identity_payloads.py`), `s22.write_context.v1`
+(`src/provenance_context.py`), the `episode_fork_kind` / `identity_lineage_fork`
+discriminators (`src/thread_identity.py`), the `agent_reported_tool_result` /
+`server_observation` / `external_signal` verification vocabulary,
+`require_strong_identity`, and all three operator diagnostics
+(`r6_dogfood.py`, `s22_h5_comparable_entries.py`,
+`s22_candidate_envelope_coverage.py`). The only correction this pass needed was
+the status line: `plan.md` has recorded S22 as resolved since 2026-05-06 and
+carries a 2026-05-23 promotion-scope refresh, while this document still called
+itself a draft awaiting review. `plan.md` remains the current record for
+promotion decisions; this document is the standing rationale behind them.
 
 ---
 
