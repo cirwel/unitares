@@ -685,7 +685,12 @@ class SentinelAgent(GovernanceAgent):
                 agent_id=self.agent_uuid or "sentinel",
                 agent_name="Sentinel",
                 fingerprint=alarm.fingerprint,
-                extra={"alarm_kind": alarm.kind, **alarm.extra},
+                extra={
+                    **alarm.extra,
+                    "alarm_kind": alarm.kind,
+                    "record_kind": alarm.record_kind,
+                    "requires_adjudication": alarm.requires_adjudication,
+                },
             )
             if alarm.kind == "conflict_batch":
                 kind = alarm.extra.get("surface_kind")
