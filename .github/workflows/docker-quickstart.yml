@@ -7,7 +7,17 @@ name: Docker Quickstart
 # model API — GITHUB_TOKEN only.
 #
 # Path-filtered: only runs when the build inputs change, so the common Python-only
-# PR doesn't pay the image-build cost.
+# PR doesn't pay the image-build cost. "Build inputs" means the dependency
+# resolution and the stack around it, NOT the application tree — `src/`,
+# `agents/`, `config/`, `dashboard/` and `skills/` are all COPYed into the image
+# but deliberately left unfiltered, because rebuilding on every Python PR is the
+# cost this filter exists to avoid.
+#
+# `constraints.txt` is listed because Dockerfile:34 installs with `-c constraints.txt`:
+# it co-determines the resolution with requirements-docker.txt on the same pip line,
+# so a pin moving there changes the image exactly as a requirements edit does. It was
+# missing until 2026-09-04; v2.21.0 escaped only because both in-range edits to it
+# (#2058, #2060) happened to be comments.
 
 on:
   push:
@@ -16,6 +26,7 @@ on:
       - 'db/postgres/**'
       - 'docker-compose.yml'
       - 'Dockerfile'
+      - 'constraints.txt'
       - 'elixir/lease_plane/**'
       - 'elixir/unitares_sdk/**'
       - 'requirements*.txt'
@@ -28,6 +39,7 @@ on:
       - 'db/postgres/**'
       - 'docker-compose.yml'
       - 'Dockerfile'
+      - 'constraints.txt'
       - 'elixir/lease_plane/**'
       - 'elixir/unitares_sdk/**'
       - 'requirements*.txt'
