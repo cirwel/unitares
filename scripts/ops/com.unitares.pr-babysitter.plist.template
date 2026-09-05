@@ -1,26 +1,50 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-    com.unitares.pr-babysitter - un-strand armed PRs every 5 minutes.
+    com.unitares.pr-babysitter - isolated LaunchDaemon for the serial autonomous
+    merge conductor, evaluated every 5 minutes. The historical same-user
+    LaunchAgent may remain report-only during shadow, but must be booted out
+    before this daemon is activated.
 
-    See scripts/ops/pr-babysitter.sh for what it does and, more importantly,
-    what it deliberately does not do (no readying drafts, no conflict
-    resolution, no arming). It only runs `gh pr update-branch` on PRs that a
-    session already armed and CI already likes.
+    Default posture is report-only. Set UNITARES_MERGE_CONDUCTOR_EXECUTE=1 only
+    after the App-bound agent-review required check is installed and the dry-run
+    soak is accepted. An older installed plist with neither conductor variable
+    receives the same safe default from the shell entrypoint. See
+    docs/operations/merge-automation-plan.md.
 
-    PATH must include the Homebrew bin dir: `gh` is /opt/homebrew/bin/gh and
-    launchd's minimal PATH omits it. gh auth comes from ~/.config/gh under
-    the user context launchd runs this in.
+    __SERVICE_USER__ must be a dedicated unprivileged conductor account that
+    authoring agents cannot assume. A second reviewer account, private provider
+    HOME, pinned CLI copies, conductor/reviewer Python paths, complete Python
+    import roots, author surface-claim registries, and narrow sudoers rule are
+    declared in the root-owned /etc/unitares/merge-service-boundary.json. The
+    deploy/import graph, worker, provider binaries, and provider runtime PATH
+    must be root-owned; the conductor UID may not replace code executed through
+    sudo. Execute starts Python with -I -S after an OS-Python tree preflight.
+    The review worker UID must be unable to read __SECRETS_ENV__ or the App key.
+    The source template remains execute=0; activation is a separate root
+    operation after both negative credential-boundary canaries.
 
-    Install (the doctor-findings pattern):
-      sed "s|__UNITARES_ROOT__|$HOME/projects/unitares-deploy|g" \
+    Render/install as root after creating the service account and isolated
+    deploy/home/log/secrets paths:
+      sed -e "s|__UNITARES_ROOT__|/opt/unitares-merge|g" \
+          -e "s|__PYTHON3__|/opt/unitares-merge-python/bin/python3|g" \
+          -e "s|__SERVICE_USER__|unitares-merge|g" \
+          -e "s|__SERVICE_GROUP__|unitares-merge|g" \
+          -e "s|__SERVICE_HOME__|/var/db/unitares-merge|g" \
+          -e "s|__SECRETS_ENV__|/var/db/unitares-merge-credentials/secrets.env|g" \
+          -e "s|__SERVICE_LOG_DIR__|/var/log/unitares-merge|g" \
         scripts/ops/com.unitares.pr-babysitter.plist.template \
-        > ~/Library/LaunchAgents/com.unitares.pr-babysitter.plist
-      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.unitares.pr-babysitter.plist
+        | sudo tee /Library/LaunchDaemons/com.unitares.pr-babysitter.plist >/dev/null
+      sudo chown root:wheel /Library/LaunchDaemons/com.unitares.pr-babysitter.plist
+      sudo chmod 0644 /Library/LaunchDaemons/com.unitares.pr-babysitter.plist
+      sudo launchctl bootstrap system /Library/LaunchDaemons/com.unitares.pr-babysitter.plist
 -->
 <plist version="1.0">
 <dict>
     <key>Label</key><string>com.unitares.pr-babysitter</string>
+    <key>UserName</key><string>__SERVICE_USER__</string>
+    <key>GroupName</key><string>__SERVICE_GROUP__</string>
+    <key>Umask</key><integer>63</integer>
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
@@ -29,10 +53,16 @@
     <key>WorkingDirectory</key><string>__UNITARES_ROOT__</string>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>PATH</key><string>/opt/unitares-merge-bin:/usr/bin:/bin</string>
+        <key>HOME</key><string>__SERVICE_HOME__</string>
+        <key>UNITARES_SECRETS_ENV</key><string>__SECRETS_ENV__</string>
+        <key>UNITARES_MERGE_PYTHON</key><string>__PYTHON3__</string>
+        <key>UNITARES_MERGE_CONDUCTOR_LOG</key><string>__SERVICE_HOME__/merge-conductor.jsonl</string>
+        <key>UNITARES_MERGE_CONDUCTOR_EXECUTE</key><string>0</string>
+        <key>UNITARES_MERGE_CONDUCTOR_REVIEW</key><string>0</string>
     </dict>
     <key>StartInterval</key><integer>300</integer>
-    <key>StandardOutPath</key><string>__UNITARES_ROOT__/data/logs/pr-babysitter.log</string>
-    <key>StandardErrorPath</key><string>__UNITARES_ROOT__/data/logs/pr-babysitter.err</string>
+    <key>StandardOutPath</key><string>__SERVICE_LOG_DIR__/pr-babysitter.log</string>
+    <key>StandardErrorPath</key><string>__SERVICE_LOG_DIR__/pr-babysitter.err</string>
 </dict>
 </plist>
