@@ -241,10 +241,16 @@ def test_registered_workflow_alias_notes_carry_eisv_contract():
 
 
 @pytest.mark.asyncio
-async def test_list_tools_lite_surfaces_workflow_aliases():
+async def test_list_tools_lite_surfaces_workflow_aliases(monkeypatch):
+    """Under GOVERNANCE_TOOL_MODE=lite the compact view names the workflow aliases.
+
+    The compact view follows the deployment's advertised surface, and the
+    process default is minimal (five tools), so the lite mode is pinned here.
+    """
     import json
     from src.mcp_handlers.introspection.tool_introspection import handle_list_tools
 
+    monkeypatch.setattr("src.tool_modes.TOOL_MODE", "lite")
     result = await handle_list_tools({"essential_only": True, "lite": True})
     data = json.loads(result[0].text)
     names = [tool["name"] for tool in data["tools"]]
@@ -273,11 +279,17 @@ async def test_list_tools_lite_surfaces_workflow_aliases():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("lite", [True, False])
-async def test_list_tools_filters_by_category(lite):
-    """A category request must not silently return unrelated tools."""
+async def test_list_tools_filters_by_category(lite, monkeypatch):
+    """A category request must not silently return unrelated tools.
+
+    The compact view follows the deployment's advertised surface, and the
+    process default (minimal) advertises no dialectic tool, so the lite mode is
+    pinned: the test is about category filtering, not the default surface.
+    """
     import json
     from src.mcp_handlers.introspection.tool_introspection import handle_list_tools
 
+    monkeypatch.setattr("src.tool_modes.TOOL_MODE", "lite")
     result = await handle_list_tools({"category": "  DiAlEcTiC  ", "lite": lite})
     data = json.loads(result[0].text)
 

@@ -56,8 +56,12 @@ its own identity, declare the dispatcher as parent with
 
 The primary tools return a compact agent-facing envelope. State-changing tools
 preserve the raw payload under `raw_governance`; read aliases omit that repeated
-payload by default and expose a full-mode escape hatch. Call `list_tools()` for
-the current full surface rather than relying on a copied catalog in prose.
+payload by default and expose a full-mode escape hatch. The default server
+surface is the five-tool loop (`start_session`, `identity`, `sync_state`,
+`record_result`, `check_working_state`); the other rows above are advertised
+under `GOVERNANCE_TOOL_MODE=lite` or `full`, where `list_tools()` gives the
+current surface rather than a copied catalog in prose. Names outside the
+running mode still dispatch by name.
 
 For `sync_state`, read `action_summary` first. It keeps the policy action,
 one-line reason, risk score, and verdict maturity together; a cold-start result

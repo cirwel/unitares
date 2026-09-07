@@ -122,6 +122,13 @@
         <string>postgres</string>
         <key>UNITARES_DIALECTIC_BACKEND</key>
         <string>postgres</string>
+        <!-- What tools/list advertises to MCP clients. Unset = minimal, the
+             five-tool checkpoint loop. lite adds shared memory, review,
+             advisory inference and the consolidated routers; full advertises
+             every registered tool. Only the listing is filtered: every
+             registered name stays callable on every transport. -->
+        <key>GOVERNANCE_TOOL_MODE</key>
+        <string>lite</string>
         <key>HOME</key>
         <string>/YOUR/HOME</string>
         <key>HF_HOME</key>

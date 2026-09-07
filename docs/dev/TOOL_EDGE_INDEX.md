@@ -47,10 +47,10 @@ removal authority.
 
 | Mode | Declared | Advertised | Declared only | Advertised only |
 |---|---:|---:|---|---|
-| `minimal` | 6 | 11 | — | `record_result`, `request_review`, `search_shared_memory`, `store_finding`, `update_finding` |
+| `minimal` | 5 | 5 | — | — |
 | `lite` | 29 | 29 | — | — |
-| `operator_readonly` | 12 | 20 | — | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
-| `operator_recovery` | 16 | 24 | — | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
+| `operator_readonly` | 12 | 12 | — | — |
+| `operator_recovery` | 16 | 16 | — | — |
 | `full` | 66 | 51 | `aggregate_metrics`, `archive_agent`, `backfill_calibration_from_dialectic`, `check_calibration`, `cleanup_knowledge_graph`, `compare_agents`, `compare_me_to_similar`, `delete_agent` … +15 | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
 
 ### Workflow alias views
@@ -75,7 +75,7 @@ note for why the raw rendering is not.
 
 ## Deterministic findings
 
-**0 errors · 7 warnings · 0 informational.** Findings make drift reviewable;
+**0 errors · 4 warnings · 0 informational.** Findings make drift reviewable;
 they are not self-issued approval or remediation instructions.
 
 | Severity | Code | Subject | Finding | Evidence |
@@ -84,9 +84,6 @@ they are not self-issued approval or remediation instructions.
 | warning | `DESCRIBE_SCHEMA_WIDER_THAN_WIRE` | `sync_state` | describe_tool advertises parameters the alias wire schema rejects. | {"properties": ["agent_id", "agent_name"]} |
 | warning | `MODE_DECLARED_UNADVERTISED` | `full` | The mode declares names the production registrar would not advertise. | {"names": ["aggregate_metrics", "archive_agent", "backfill_calibration_from_dialectic", "check_calibration", "cleanup_knowledge_graph", "compare_agents", "compare_me_to_similar", "delete_agent", "detect_anomalies", "export_to_file", "get_a… |
 | warning | `MODE_UNDECLARED_ADVERTISED` | `full` | The production registrar advertises names absent from the mode declaration. | {"names": ["check_working_state", "record_result", "request_review", "search_shared_memory", "start_session", "store_finding", "sync_state", "update_finding"]} |
-| warning | `MODE_UNDECLARED_ADVERTISED` | `minimal` | The production registrar advertises names absent from the mode declaration. | {"names": ["record_result", "request_review", "search_shared_memory", "store_finding", "update_finding"]} |
-| warning | `MODE_UNDECLARED_ADVERTISED` | `operator_readonly` | The production registrar advertises names absent from the mode declaration. | {"names": ["check_working_state", "record_result", "request_review", "search_shared_memory", "start_session", "store_finding", "sync_state", "update_finding"]} |
-| warning | `MODE_UNDECLARED_ADVERTISED` | `operator_recovery` | The production registrar advertises names absent from the mode declaration. | {"names": ["check_working_state", "record_result", "request_review", "search_shared_memory", "start_session", "store_finding", "sync_state", "update_finding"]} |
 
 ## Tools
 

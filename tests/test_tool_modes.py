@@ -36,19 +36,43 @@ from src.tool_modes import (
 class TestModeSets:
     """Tests for the mode tool sets."""
 
-    def test_minimal_mode_has_essentials(self):
-        assert "start_session" in MINIMAL_MODE_TOOLS
-        assert "sync_state" in MINIMAL_MODE_TOOLS
-        assert "check_working_state" in MINIMAL_MODE_TOOLS
-        assert "list_tools" in MINIMAL_MODE_TOOLS
+    def test_minimal_mode_is_the_five_tool_checkpoint_loop(self):
+        """Minimal is exactly the loop: bind, re-bind, check in, record, read.
+
+        Discovery tools are deliberately absent -- with five tools the MCP
+        client's native tools/list is the discovery surface -- and the raw
+        implementation names stay behind their task-verb aliases.
+        """
+        assert MINIMAL_MODE_TOOLS == {
+            "start_session",
+            "identity",
+            "sync_state",
+            "record_result",
+            "check_working_state",
+        }
+        assert "list_tools" not in MINIMAL_MODE_TOOLS
+        assert "describe_tool" not in MINIMAL_MODE_TOOLS
         assert "onboard" not in MINIMAL_MODE_TOOLS
         assert "process_agent_update" not in MINIMAL_MODE_TOOLS
         assert "get_governance_metrics" not in MINIMAL_MODE_TOOLS
+        assert "outcome_event" not in MINIMAL_MODE_TOOLS
 
-    def test_lite_mode_superset_of_minimal_essentials(self):
-        """Lite should include the primary workflow tools from minimal."""
-        for tool in ["start_session", "sync_state", "check_working_state"]:
-            assert tool in LITE_MODE_TOOLS, f"{tool} should be in lite mode"
+    def test_default_mode_is_minimal(self, monkeypatch):
+        """GOVERNANCE_TOOL_MODE unset means the five-tool surface."""
+        import importlib
+
+        import src.tool_modes as tool_modes
+
+        monkeypatch.delenv("GOVERNANCE_TOOL_MODE", raising=False)
+        reloaded = importlib.reload(tool_modes)
+        try:
+            assert reloaded.TOOL_MODE == "minimal"
+        finally:
+            importlib.reload(tool_modes)
+
+    def test_lite_mode_superset_of_minimal(self):
+        """Widening the mode never drops a tool from the checkpoint loop."""
+        assert MINIMAL_MODE_TOOLS <= LITE_MODE_TOOLS
 
     def test_lite_mode_has_consolidated_tools(self):
         """Lite mode should have Feb 2026 consolidated tools."""
@@ -127,14 +151,22 @@ class TestShouldIncludeTool:
     def test_tool_not_in_mode(self):
         assert should_include_tool("call_model", mode="minimal") is False
 
-    def test_list_tools_always_included(self):
-        """list_tools should be included in any mode."""
-        assert should_include_tool("list_tools", mode="minimal") is True
+    def test_discovery_tools_follow_the_mode_set(self):
+        """Nothing is force-included: list_tools/describe_tool are ordinary
+        members of lite and full, and absent from minimal by design."""
+        assert should_include_tool("list_tools", mode="minimal") is False
+        assert should_include_tool("describe_tool", mode="minimal") is False
         assert should_include_tool("list_tools", mode="lite") is True
+        assert should_include_tool("describe_tool", mode="lite") is True
+        assert should_include_tool("list_tools", mode="full") is True
 
-    def test_describe_tool_always_included(self):
-        """describe_tool should be included in any mode."""
-        assert should_include_tool("describe_tool", mode="minimal") is True
+    def test_minimal_advertises_only_the_five(self):
+        for name in ("start_session", "identity", "sync_state",
+                     "record_result", "check_working_state"):
+            assert should_include_tool(name, mode="minimal") is True
+        for name in ("onboard", "knowledge", "self_recovery", "health_check",
+                     "search_shared_memory", "request_review", "consult"):
+            assert should_include_tool(name, mode="minimal") is False
 
     def test_full_mode_includes_all(self):
         assert should_include_tool("process_agent_update", mode="full") is True
