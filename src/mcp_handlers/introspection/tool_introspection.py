@@ -100,13 +100,13 @@ def _format_lite_parameter(
 def _not_advertised_summary(tools_list, mode: str) -> dict:
     """Registered tools this deployment's mode keeps off the MCP wire.
 
-    Reported, never silently dropped. A name here is dispatchable by name
-    (TOOL_HANDLERS is not mode-filtered, so the REST transport and any caller
-    that already knows the name still reach it) but absent from tools/list, so
-    a schema-driven MCP client cannot discover or call it. That is a property
-    of the deployment's tool mode -- "never surfaced" and "not reachable from
-    this transport" -- and must not be read as evidence that a capability is
-    unused.
+    Reported, never silently dropped. A name here is dispatchable by name on
+    every transport (TOOL_HANDLERS is not mode-filtered, and since the 2026-09
+    surface cut the FastMCP /mcp/ mount registers the whole surface and filters
+    only its tools/list) but absent from tools/list, so a schema-driven MCP
+    client cannot discover it and will not call it unprompted. That is a
+    property of the deployment's tool mode -- "never surfaced" -- and must not
+    be read as evidence that a capability is unused.
     """
     names = sorted(t["name"] for t in tools_list if not t.get("advertised", True))
     return {
@@ -114,8 +114,8 @@ def _not_advertised_summary(tools_list, mode: str) -> dict:
         "tools": names,
         "mode": mode,
         "reason": (
-            f"registered and dispatchable by name, but GOVERNANCE_TOOL_MODE="
-            f"{mode} does not advertise them on the MCP wire"
+            f"registered and dispatchable by name on every transport, but "
+            f"GOVERNANCE_TOOL_MODE={mode} does not advertise them in tools/list"
         ),
         "note": (
             "Absence from the wire is a mode setting, not a signal about the "
@@ -193,9 +193,9 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     except Exception:
         advertised_names = None
     # `or None` above is deliberate: an EMPTY advertised set means the surface
-    # could not be determined, not that this deployment offers nothing. A real
-    # server always advertises at least list_tools/describe_tool
-    # (should_include_tool force-includes them in every mode). Treating empty as
+    # could not be determined, not that this deployment offers nothing. Every
+    # deployable mode set is non-empty (minimal is the five-tool checkpoint
+    # loop), so a real server always advertises something. Treating empty as
     # authoritative would return `shown: 0` and blank out orientation entirely,
     # which is a far worse failure than over-listing. Both this and the except
     # branch fall through to the pre-2026-08-29 behavior below.

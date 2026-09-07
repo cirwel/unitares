@@ -426,9 +426,12 @@ def auto_register_all_tools(mcp):
     """
     Auto-register tools from tool_schemas.py with typed signatures.
 
-    Only registers tools that are in the decorator registry (register=True)
-    AND in the active tool mode's allowed set (unless mode is "full").
-    Tools with register=False in @mcp_tool decorator are skipped.
+    Only registers tools that are in the decorator registry (register=True).
+    Tools with register=False in @mcp_tool decorator are skipped. The active
+    tool mode is deliberately NOT applied here: registration is what makes a
+    name dispatch on the /mcp/ mount, and GOVERNANCE_TOOL_MODE is an
+    advertising choice, enforced by the tools/list filter installed through
+    src/tool_mode_listing.py::mode_filtered_server_class.
 
     This generates wrappers with explicit parameter signatures from JSON schemas,
     allowing FastMCP to infer correct schemas without kwargs wrapping.
@@ -437,7 +440,8 @@ def auto_register_all_tools(mcp):
     - Claude.ai sends parameters directly (no kwargs wrapper needed)
     - CLI's kwargs wrapping still works (dispatch_tool unwraps)
     - Proper client autocomplete from typed signatures
-    - Mode filtering reduces tool count for Claude Code (no deferred tools)
+    - The mode-filtered tools/list keeps the advertised count small for
+      schema-driven clients without making the rest uncallable
 
     Just add the tool to:
     1. tool_schemas.py (definition)
@@ -451,18 +455,25 @@ def auto_register_all_tools(mcp):
         enable_extra_argument_passthrough,
     )
     from src.mcp_handlers.decorators import get_tool_registry
-    from src.tool_modes import TOOL_MODE, get_tools_for_mode
+    from src.tool_mode_listing import advertised_tool_names
+    from src.tool_modes import TOOL_MODE
 
     tools = get_tool_definitions()
     registered_count = 0
     skipped_count = 0
-    mode_filtered_count = 0
+    unadvertised_count = 0
 
     # Get tools that are registered (register=True in @mcp_tool decorator)
     registered_tools = get_tool_registry()
 
-    # Get allowed tools for current mode (skip filtering in full mode)
-    allowed_tools = get_tools_for_mode(TOOL_MODE) if TOOL_MODE != "full" else None
+    # The mode is NOT applied here. Every register=True handler is registered
+    # so it dispatches by name on /mcp/ exactly as it does on REST and stdio;
+    # GOVERNANCE_TOOL_MODE filters only tools/list (src/tool_mode_listing.py).
+    # The advertised set is computed once, for the log line only.
+    try:
+        advertised = advertised_tool_names(TOOL_MODE)
+    except Exception:  # pragma: no cover - logging aid only
+        advertised = None
 
     for tool in tools:
         tool_name = tool.name
@@ -472,10 +483,8 @@ def auto_register_all_tools(mcp):
             skipped_count += 1
             continue
 
-        # Skip tools not in the active mode's allowed set
-        if allowed_tools is not None and tool_name not in allowed_tools:
-            mode_filtered_count += 1
-            continue
+        if advertised is not None and tool_name not in advertised:
+            unadvertised_count += 1
 
         description = tool.description.split("\n")[0] if tool.description else f"Tool: {tool_name}"
         input_schema = get_tool_input_schema(tool, {}) or {}
@@ -520,8 +529,9 @@ def auto_register_all_tools(mcp):
 
     logger.info(
         f"[AUTO_REGISTER] Registered {registered_count} tools, "
-        f"skipped {skipped_count} (not in registry), "
-        f"filtered {mode_filtered_count} (mode={TOOL_MODE})"
+        f"skipped {skipped_count} (not in registry); "
+        f"{unadvertised_count} registered but not advertised in tools/list "
+        f"(mode={TOOL_MODE})"
     )
     return registered_count
 
@@ -548,7 +558,12 @@ def _register_common_aliases(mcp):
 
     from src.tool_modes import TOOL_MODE
 
-    common = workflow_alias_names_for_mode(TOOL_MODE)
+    # Every workflow alias is registered in every mode, for the same reason
+    # every handler is: the mode filters tools/list, not dispatch. A lite-only
+    # alias such as search_shared_memory therefore still resolves on a
+    # minimal-mode /mcp/ mount for a caller that knows the name.
+    common = workflow_alias_names_for_mode("full")
+    advertised_aliases = set(workflow_alias_names_for_mode(TOOL_MODE))
     count = 0
     for alias_name in common:
         actual, info = resolve_tool_alias(alias_name)
@@ -589,4 +604,7 @@ def _register_common_aliases(mcp):
             logger.debug(f"[ALIAS] Failed to register {alias_name}: {e}")
 
     if count:
-        logger.info(f"[AUTO_REGISTER] Registered {count} common aliases")
+        logger.info(
+            f"[AUTO_REGISTER] Registered {count} workflow aliases; "
+            f"{len(advertised_aliases)} advertised in tools/list (mode={TOOL_MODE})"
+        )

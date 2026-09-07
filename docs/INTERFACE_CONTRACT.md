@@ -48,10 +48,16 @@ Those are host-integration capabilities, documented separately in the
 
 ## Modes and compatibility
 
-`minimal`, `lite`, and `full` are server-selected discovery profiles. The
-checked-in artifact uses `lite`, the default agent-facing profile. Full mode
-adds administrative and specialist tools; minimal mode keeps only bootstrap
-and introspection capabilities.
+`minimal`, `lite`, and `full` are server-selected discovery profiles. They
+decide what `tools/list` advertises, not what dispatches: every registered
+name and every workflow alias is callable by name in every profile on every
+transport. `minimal` is the server default and advertises the five-tool
+checkpoint loop (`start_session`, `identity`, `sync_state`, `record_result`,
+`check_working_state`). The checked-in artifact uses `lite`, the wider
+agent-facing profile; full mode adds administrative and specialist tools. The
+live handshake (`list_tools(lite=true)`) reports the profile the server runs,
+so a `minimal` deployment answers with five capabilities and its own surface
+hash while still dispatching the lite names.
 
 Adding a compatible capability increments the contract version. Renaming,
 removing, or changing the meaning of an existing capability requires a new

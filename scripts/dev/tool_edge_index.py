@@ -672,12 +672,23 @@ def build_exposure_snapshot(
     workflow_aliases = set(AGENT_WORKFLOW_ALIASES) & wire_names
     canonical_wire_names = wire_names - workflow_aliases
 
+    from src.interface_contract import get_public_tool_definitions
+
     modes: dict[str, dict[str, Any]] = {}
     for mode in DEPLOYABLE_MODES:
         declared = set(get_tools_for_mode(mode))
-        # Mirrors src/mcp_server.py: canonical registrations are mode-filtered,
-        # then workflow aliases are registered unconditionally.
-        advertised = (canonical_wire_names & declared) | workflow_aliases
+        # Mirrors src/tool_mode_listing.py: every wire name (canonical tools and
+        # workflow aliases alike) is registered in every mode, and tools/list
+        # advertises the mode's public surface. `full` advertises the whole
+        # catalog; a filtered mode advertises the same names REST and stdio
+        # list for it. (Until the 2026-09 surface cut this mirrored a
+        # registration-time filter with aliases registered unconditionally.)
+        if mode == "full":
+            advertised = set(wire_names)
+        else:
+            advertised = {
+                tool.name for tool in get_public_tool_definitions(mode)
+            } & wire_names
         mode_payload = {
             "declared": sorted(declared),
             "advertised": sorted(advertised),
