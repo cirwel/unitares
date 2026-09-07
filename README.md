@@ -2,7 +2,7 @@
 
 <img alt="UNITARES: self-state telemetry for long-lived AI-agent fleets" src="docs/assets/hero-v3.png" width="100%">
 
-### Coordination and self-state telemetry for long-lived AI-agent fleets.
+### Runtime infrastructure for long-lived AI agents.
 
 </div>
 
@@ -18,11 +18,21 @@ question an operator running a fleet actually has:
 > **Is this the same agent as yesterday, and is it working the way it usually
 > works?**
 
+UNITARES provides continuity, accountability, and coordination for long-lived
+agents across process boundaries. It binds identity, longitudinal state, evidence,
+memory, and governance to an accountable record while processes restart and work
+moves between them.
+
 At each checkpoint UNITARES binds the write to a process identity, records what
 the agent claims alongside whatever evidence exists, updates a longitudinal state
-estimate, and returns a policy action with a named reason. The whole chain stays
-replayable, and two live processes can contend for the same governed surface
-without silently colliding.
+estimate, and returns a policy action with a named reason. The same identity and
+provenance layer extends into shared knowledge, structured review, leases,
+handoffs, consultation, and recovery. The chain stays replayable, and two live
+processes can contend for the same governed surface without silently colliding.
+
+UNITARES also uses these surfaces to build itself: agents search attributed
+memory, consult external models as advisory evidence, request review, and
+coordinate work without advice becoming authority.
 
 Self-hosted and single-operator by design. MCP is the primary agent-facing
 interface; REST, the public SDK, host adapters, and the dashboard expose the same
