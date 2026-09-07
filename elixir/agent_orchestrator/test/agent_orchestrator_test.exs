@@ -179,7 +179,10 @@ defmodule AgentOrchestratorTest do
       assert snap.exits[:none] == 1
       assert snap.duration_ms.count == 3
       assert snap.output_lines == 1
-      assert snap.running == 0
+      # Stop telemetry and GenServer.stop/2 do not wait for the Registry's
+      # asynchronous :DOWN cleanup. Re-read the live count until it catches up,
+      # using the same bounded wait as the other Registry lifecycle assertions.
+      assert eventually(fn -> Metrics.snapshot().running == 0 end)
     end
 
     test "the runtime logger attaches and detaches idempotently" do
