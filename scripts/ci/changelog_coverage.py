@@ -25,6 +25,13 @@ Exemptions are listed in the diff, in the file the release ships, next to the
 entry they justify -- which is the point. A silent allowance would reproduce
 the failure one layer up.
 
+Two subject shapes are excluded without a declaration, and both are counted
+and printed so the exclusion is visible: the release's own `chore(release)`
+bookkeeping, which cannot cite itself, and dependabot's `build(deps)` /
+`build(deps-dev)` bumps, which move a pin and nothing a reader of the entry
+can observe. Any other `build:` subject is an ordinary change and must be
+cited or declared.
+
 The denominator comes from `git log --first-parent`, matching either a squash
 subject's trailing `(#N)` or a merge commit's `Merge pull request #N`. The first
 version of this script used `git log --no-merges` and the trailing form only.
@@ -63,6 +70,15 @@ VERSION_FILE = REPO_ROOT / "VERSION"
 # A merge whose own subject is the release bookkeeping. It cannot appear in the
 # entry it creates, so requiring it would make every release permanently red.
 RELEASE_CHORE = re.compile(r"^(chore|docs)\(release\)")
+
+# A dependency bump lands under dependabot's subject convention. It moves a
+# lockfile pin or an action SHA and nothing an operator or agent can observe,
+# so it has no line in the entry and never will. It is excluded from the
+# citation requirement the way release chores are, but counted and printed:
+# three of them merged onto the 2.22.0 release tree between the release PR and
+# the tag and turned this gate red on master twice, each needing a hand-written
+# exemption that said nothing a reader did not already know.
+DEPENDENCY_BUMP = re.compile(r"^build\(deps(-dev)?\)")
 
 TRAILING_PR = re.compile(r"\(#(\d+)\)$")
 MERGE_PR = re.compile(r"^Merge pull request #(\d+)\b")
@@ -243,7 +259,11 @@ def main() -> int:
 
     merged, unattributed = merged_prs(previous)
 
-    considered = {n: subj for n, subj in merged.items() if not RELEASE_CHORE.match(subj)}
+    considered = {n: subj for n, subj in merged.items()
+                  if not RELEASE_CHORE.match(subj) and not DEPENDENCY_BUMP.match(subj)}
+    chores = sum(1 for s in merged.values() if RELEASE_CHORE.match(s))
+    bumps = sum(1 for s in merged.values()
+                if DEPENDENCY_BUMP.match(s) and not RELEASE_CHORE.match(s))
     cited = cited_prs(section)
     exempt, complaints = exempt_prs(section)
     missing = {n: subj for n, subj in considered.items()
@@ -258,7 +278,7 @@ def main() -> int:
           f"{len(merged) - by_merge} squash), {len(unattributed)} unattributed")
     print(f"[changelog-coverage] {len(considered) - len(missing)} of "
           f"{len(considered)} cited in the entry "
-          f"({len(merged) - len(considered)} release-chore excluded, "
+          f"({chores} release-chore excluded, {bumps} dependency bump(s) excluded, "
           f"{len(exempt)} declared exempt)")
 
     failed = False

@@ -241,6 +241,35 @@ def test_release_bookkeeping_never_has_to_cite_itself(repo: Repo):
     assert "1 of 1 cited" in result.stdout
 
 
+def test_a_dependency_bump_is_excluded_but_counted(repo: Repo):
+    """dependabot's `build(deps)` subjects move a pin; they never get a line."""
+    repo.commit("feat: alpha (#10)")
+    repo.commit("build(deps): bump actions/checkout from 4 to 5 (#12)")
+    repo.commit("build(deps-dev): bump vitest from 4.1.11 to 5.0.0 in /dashboard (#13)")
+    repo.commit("chore(release): 1.1.0 (#99)", {
+        "VERSION": "1.1.0\n",
+        "docs/CHANGELOG.md": _entry("1.1.0", "- **things:** alpha (#10)"),
+    })
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 0
+    assert "1 of 1 cited" in result.stdout
+    assert "2 dependency bump(s) excluded" in result.stdout
+
+
+def test_an_ordinary_build_change_still_needs_a_citation(repo: Repo):
+    """Only the dependabot shape is excluded; `build:` alone is a real change."""
+    repo.commit("feat: alpha (#10)")
+    repo.commit("build: switch the package backend to hatchling (#14)")
+    repo.commit("chore(release): 1.1.0 (#99)", {
+        "VERSION": "1.1.0\n",
+        "docs/CHANGELOG.md": _entry("1.1.0", "- **things:** alpha (#10)"),
+    })
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 1
+    assert "#14" in result.stdout
+    assert "0 dependency bump(s) excluded" in result.stdout
+
+
 def test_list_mode_reports_the_same_gaps_without_failing(repo: Repo):
     repo.commit("feat: alpha (#10)")
     repo.commit("fix: beta (#11)")

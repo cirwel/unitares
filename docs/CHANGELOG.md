@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **ci/release:** `changelog_coverage.py` no longer requires a citation or a hand-written exemption for dependabot's `build(deps)` / `build(deps-dev)` merges. They move a pin and nothing a reader of the entry can observe, and three of them landed on the 2.22.0 release tree between the release PR and the tag, turning the gate red on master twice. They are excluded the way `chore(release)` bookkeeping is, and counted in the provenance line so the exclusion stays visible; any other `build:` subject is still an ordinary change.
+
 ### Documentation
 
 - **skills:** the `governance-lifecycle` skill's MCP Tools Reference now says which of its names a tool mode advertises: the default `minimal` lists only the five-tool checkpoint loop, `lite` (29 tools) lists every name in the reference plus `list_tools` / `describe_tool`, and a mode filters only `tools/list`, so every registered tool still dispatches by name in every mode. The discovery line names the modes that carry the two introspection tools instead of implying they are always listed. Every other claim in the skill was re-verified against its cited sources; `last_verified` moves to 2026-09-07 and the source list gains `src/tool_modes.py` and `src/tool_mode_listing.py`. The plugin mirror lags until the next bundle re-cut, which the next release entry must declare with its `plugin-bundle-recut` marker. (#2095)

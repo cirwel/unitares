@@ -67,6 +67,11 @@ first-parent change carries neither rather than measuring the smaller set it can
 parse. It prints provenance rather than a ratio, because the previous version's
 ratio was copied verbatim onto an immutable release page and was wrong.
 
+Two subject shapes are excluded without a declaration and reported as counts:
+the release's own `chore(release)` bookkeeping, which cannot cite itself, and
+dependabot's `build(deps)` / `build(deps-dev)` bumps, which move a pin and
+nothing a reader of the entry can observe. Everything else is a change.
+
 Fold each listed change into the entry. If one genuinely does not belong, declare
 it inside the entry, one per line, with a reason from a closed set
 (`release-chore`, `superseded`, `no-user-effect`, `covered-elsewhere`):
