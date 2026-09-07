@@ -18,16 +18,21 @@ question an operator running a fleet actually has:
 > **Is this the same agent as yesterday, and is it working the way it usually
 > works?**
 
-UNITARES provides the runtime substrate around those processes: identity,
-longitudinal state, evidence, memory, coordination, and governance across
-agents that persist, restart, and hand work to one another.
+UNITARES provides continuity, accountability, and coordination for long-lived
+agents across process boundaries. It binds identity, longitudinal state, evidence,
+memory, and governance to an accountable record while processes restart and work
+moves between them.
 
 At each checkpoint UNITARES binds the write to a process identity, records what
 the agent claims alongside whatever evidence exists, updates a longitudinal state
 estimate, and returns a policy action with a named reason. The same identity and
 provenance layer extends into shared knowledge, structured review, leases,
-handoffs, and recovery. The chain stays replayable, and two live processes can
-contend for the same governed surface without silently colliding.
+handoffs, consultation, and recovery. The chain stays replayable, and two live
+processes can contend for the same governed surface without silently colliding.
+
+The maintainer deployment also uses these surfaces to build UNITARES itself:
+agents search attributed memory, consult external models as advisory evidence,
+request review, and coordinate work without consultation becoming decision authority.
 
 Self-hosted and single-operator by design. MCP is the primary agent-facing
 interface; REST, the public SDK, host adapters, and the dashboard expose the same
