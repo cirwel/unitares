@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **ci/release:** `changelog_coverage.py` no longer requires a citation or a hand-written exemption for dependabot's `build(deps)` / `build(deps-dev)` merges. They move a pin and nothing a reader of the entry can observe, and three of them landed on the 2.22.0 release tree between the release PR and the tag, turning the gate red on master twice. They are excluded the way `chore(release)` bookkeeping is, and counted in the provenance line so the exclusion stays visible; any other `build:` subject is still an ordinary change.
+- **ci/release:** `changelog_coverage.py` no longer requires a citation or a hand-written exemption for dependabot's `build(deps)` / `build(deps-dev)` merges. They move a pin and nothing a reader of the entry can observe, and three of them landed on the 2.22.0 release tree between the release PR and the tag, turning the gate red on master twice. They are excluded the way `chore(release)` bookkeeping is, and counted in the provenance line so the exclusion stays visible; any other `build:` subject is still an ordinary change. (#2096)
 
 ### Documentation
 
