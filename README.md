@@ -107,7 +107,8 @@ accepted response is the host's to honor, at surfaces UNITARES does not own.
 This release-tagged Docker Compose flow is the supported install path for a
 local, single-operator deployment. It brings up PostgreSQL/AGE/pgvector, Redis,
 the lease plane, and the server on loopback without manual database
-initialization.
+initialization. After cloning, the one-command install/start is
+`docker compose up -d --wait`.
 
 `make coordination-demo` gives the first observable result: two participants
 onboard through governance; governance exchanges their continuity credentials
