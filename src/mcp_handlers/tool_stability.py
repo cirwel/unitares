@@ -67,6 +67,17 @@ class ToolLifecycle:
 _CHECKIN_COMPLEXITY_NORMALIZER = normalize_unit_interval("complexity")
 _SEARCH_SHARED_MEMORY_NORMALIZER = normalize_compact_search_details
 
+# deprecated_since: when a consolidated or deprecated old name stopped being
+# canonical, read as the commit that added its alias (git log -S, 2026-09-07).
+# Intuitive aliases (start, status, the workflow names) carry no date: those
+# names were never canonical, so nothing was deprecated. The repository's
+# history opens with a full-state import on 2026-01-13, so that date is a
+# floor ("on or before"), not a day.
+_SINCE_HISTORY_FLOOR = datetime(2026, 1, 13)           # c7e0c800, full-state import
+_SINCE_FEB_2026_CONSOLIDATION = datetime(2026, 2, 4)   # fbe8014e, the action routers
+_SINCE_TOOL_MODE_ENFORCEMENT = datetime(2026, 4, 1)    # e688c2b4, reassign_reviewer
+_SINCE_ADMIN_ROUTER = datetime(2026, 6, 29)            # ebc30169, admin router (#1278)
+
 # ONE NAME, ONE HOME (2026-08-29)
 # ------------------------------------------------------------------
 # A name must be EITHER a key in this table OR a register=True dispatch tool,
@@ -172,42 +183,49 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
         old_name="authenticate",
         new_name="identity",
         reason="consolidated",
+        deprecated_since=_SINCE_HISTORY_FLOOR,
         migration_note="Use identity() - auto-creates on first call"
     ),
     "session": ToolAlias(
         old_name="session",
         new_name="identity",
         reason="consolidated",
+        deprecated_since=_SINCE_HISTORY_FLOOR,
         migration_note="Use identity() - auto-creates on first call"
     ),
     "quick_start": ToolAlias(
         old_name="quick_start",
         new_name="identity",
         reason="consolidated",
+        deprecated_since=_SINCE_HISTORY_FLOOR,
         migration_note="Use identity() - auto-creates on first call"
     ),
     "recall_identity": ToolAlias(
         old_name="recall_identity",
         new_name="identity",
         reason="consolidated",
+        deprecated_since=_SINCE_HISTORY_FLOOR,
         migration_note="Use identity() - shows bound identity"
     ),
     "bind_identity": ToolAlias(
         old_name="bind_identity",
         new_name="identity",
         reason="consolidated",
+        deprecated_since=_SINCE_HISTORY_FLOOR,
         migration_note="Use identity() - auto-creates on first call"
     ),
     "hello": ToolAlias(
         old_name="hello",
         new_name="identity",
         reason="consolidated",
+        deprecated_since=_SINCE_HISTORY_FLOOR,
         migration_note="Use identity() - auto-creates on first call"
     ),
     "get_agent_api_key": ToolAlias(
         old_name="get_agent_api_key",
         new_name="identity",
         reason="deprecated",
+        deprecated_since=_SINCE_HISTORY_FLOOR,
         migration_note="API keys deprecated - UUID is now auth. Use identity() to see your agent_uuid."
     ),
     # NOTE: who_am_i is NOT aliased - it has its own handler in admin.py
@@ -233,24 +251,30 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
         old_name="request_exploration_session",
         new_name="dialectic",
         reason="consolidated",
+        deprecated_since=_SINCE_HISTORY_FLOOR,
         migration_note="Use dialectic(action='get') to view sessions",
         inject_action="get"
     ),
     # Dialectic write tools → dialectic(action='...')  (Apr 2026 consolidation)
     "request_dialectic_review": ToolAlias(
         old_name="request_dialectic_review", new_name="dialectic", reason="consolidated",
+        deprecated_since=datetime(2026, 1, 29),  # matches DEPRECATION_REGISTRY
         migration_note="Use dialectic(action='request', issue_description='...')", inject_action="request"),
     "submit_thesis": ToolAlias(
         old_name="submit_thesis", new_name="dialectic", reason="consolidated",
+        deprecated_since=_SINCE_HISTORY_FLOOR,
         migration_note="Use dialectic(action='thesis', session_id='...', root_cause='...')", inject_action="thesis"),
     "submit_antithesis": ToolAlias(
         old_name="submit_antithesis", new_name="dialectic", reason="consolidated",
+        deprecated_since=_SINCE_HISTORY_FLOOR,
         migration_note="Use dialectic(action='antithesis', session_id='...')", inject_action="antithesis"),
     "submit_synthesis": ToolAlias(
         old_name="submit_synthesis", new_name="dialectic", reason="consolidated",
+        deprecated_since=_SINCE_HISTORY_FLOOR,
         migration_note="Use dialectic(action='synthesis', session_id='...')", inject_action="synthesis"),
     "reassign_reviewer": ToolAlias(
         old_name="reassign_reviewer", new_name="dialectic", reason="consolidated",
+        deprecated_since=_SINCE_TOOL_MODE_ENFORCEMENT,
         migration_note="Use dialectic(action='reassign', session_id='...')", inject_action="reassign"),
     
     # Knowledge graph tools
@@ -258,24 +282,28 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
         old_name="find_similar_discoveries_graph",
         new_name="search_knowledge_graph",
         reason="consolidated",
+        deprecated_since=_SINCE_HISTORY_FLOOR,
         migration_note=KNOWLEDGE_SEARCH_SIMILARITY_MIGRATION_NOTE
     ),
     "get_related_discoveries_graph": ToolAlias(
         old_name="get_related_discoveries_graph",
         new_name="knowledge",
         reason="consolidated",
+        deprecated_since=_SINCE_HISTORY_FLOOR,
         migration_note="Use knowledge(action='details') - includes related discoveries"
     ),
     "get_response_chain_graph": ToolAlias(
         old_name="get_response_chain_graph",
         new_name="knowledge",
         reason="consolidated",
+        deprecated_since=_SINCE_HISTORY_FLOOR,
         migration_note="Use knowledge(action='details') - includes response chain"
     ),
     "reply_to_question": ToolAlias(
         old_name="reply_to_question",
         new_name="knowledge",
         reason="consolidated",
+        deprecated_since=_SINCE_HISTORY_FLOOR,
         migration_note="Use knowledge(action='store', response_to=question_id) to reply"
     ),
 
@@ -288,20 +316,27 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
 
     # Observe tools → observe(action='...')
     "observe_agent": ToolAlias(old_name="observe_agent", new_name="observe", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note=f"Use observe(action='agent', agent_id='...'). {EISV_INLINE_SUMMARY}", inject_action="agent"),
     "compare_agents": ToolAlias(old_name="compare_agents", new_name="observe", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note=f"Use observe(action='compare', agent_ids=[...]). {EISV_INLINE_SUMMARY}", inject_action="compare"),
     "compare_me_to_similar": ToolAlias(old_name="compare_me_to_similar", new_name="observe", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note=f"Use observe(action='similar'). {EISV_INLINE_SUMMARY}", inject_action="similar"),
     "detect_anomalies": ToolAlias(old_name="detect_anomalies", new_name="observe", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note=f"Use observe(action='anomalies'). {EISV_INLINE_SUMMARY}", inject_action="anomalies"),
     "aggregate_metrics": ToolAlias(old_name="aggregate_metrics", new_name="observe", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use observe(action='aggregate')", inject_action="aggregate"),
 
     # Admin / diagnostics tools → admin(action='...')
     "get_server_info": ToolAlias(old_name="get_server_info", new_name="admin", reason="consolidated",
+        deprecated_since=_SINCE_ADMIN_ROUTER,
         migration_note="Use admin(action='server_info')", inject_action="server_info"),
     "get_connection_status": ToolAlias(old_name="get_connection_status", new_name="admin", reason="consolidated",
+        deprecated_since=_SINCE_ADMIN_ROUTER,
         migration_note="Use admin(action='connections')", inject_action="connections"),
     # get_workspace_health is deliberately NOT aliased to admin, and it is the
     # one member of the admin group that keeps register=True.
@@ -319,22 +354,30 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     # modes, not just a duplicate name -- so the alias goes instead and the
     # standalone tool stays. admin(action="workspace_health") is unaffected.
     "get_tool_usage_stats": ToolAlias(old_name="get_tool_usage_stats", new_name="admin", reason="consolidated",
+        deprecated_since=_SINCE_ADMIN_ROUTER,
         migration_note="Use admin(action='tool_usage')", inject_action="tool_usage"),
     "get_telemetry_metrics": ToolAlias(old_name="get_telemetry_metrics", new_name="admin", reason="consolidated",
+        deprecated_since=_SINCE_ADMIN_ROUTER,
         migration_note="Use admin(action='telemetry') or observe(action='telemetry')", inject_action="telemetry"),
     "debug_request_context": ToolAlias(old_name="debug_request_context", new_name="admin", reason="consolidated",
+        deprecated_since=_SINCE_ADMIN_ROUTER,
         migration_note="Use admin(action='debug_context')", inject_action="debug_context"),
     "validate_file_path": ToolAlias(old_name="validate_file_path", new_name="admin", reason="consolidated",
+        deprecated_since=_SINCE_ADMIN_ROUTER,
         migration_note="Use admin(action='validate_path', file_path='...')", inject_action="validate_path"),
     "reset_monitor": ToolAlias(old_name="reset_monitor", new_name="admin", reason="consolidated",
+        deprecated_since=_SINCE_ADMIN_ROUTER,
         migration_note="Use admin(action='reset_monitor')", inject_action="reset_monitor"),
     "cleanup_stale_locks": ToolAlias(old_name="cleanup_stale_locks", new_name="admin", reason="consolidated",
+        deprecated_since=_SINCE_ADMIN_ROUTER,
         migration_note="Use admin(action='cleanup_locks')", inject_action="cleanup_locks"),
 
     # Dialectic tools → dialectic(action='...')
     "get_dialectic_session": ToolAlias(old_name="get_dialectic_session", new_name="dialectic", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use dialectic(action='get', session_id='...')", inject_action="get"),
     "list_dialectic_sessions": ToolAlias(old_name="list_dialectic_sessions", new_name="dialectic", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use dialectic(action='list')", inject_action="list"),
 
     # Config tools - registered directly (not aliased to avoid action parameter issues)
@@ -342,46 +385,64 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
 
     # Export tools → export(action='...')
     "get_system_history": ToolAlias(old_name="get_system_history", new_name="export", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use export(action='history')", inject_action="history"),
     "export_to_file": ToolAlias(old_name="export_to_file", new_name="export", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use export(action='file')", inject_action="file"),
 
     # Agent lifecycle tools → agent(action='...')
     "list_agents": ToolAlias(old_name="list_agents", new_name="agent", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use agent(action='list')", inject_action="list"),
     "get_agent_metadata": ToolAlias(old_name="get_agent_metadata", new_name="agent", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use agent(action='get', agent_id='...')", inject_action="get"),
     "update_agent_metadata": ToolAlias(old_name="update_agent_metadata", new_name="agent", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use agent(action='update', ...)", inject_action="update"),
     "archive_agent": ToolAlias(old_name="archive_agent", new_name="agent", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use agent(action='archive', agent_id='...')", inject_action="archive"),
     "delete_agent": ToolAlias(old_name="delete_agent", new_name="agent", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use agent(action='delete', agent_id='...', confirm=true)", inject_action="delete"),
 
     # Calibration tools → calibration(action='...')
     "check_calibration": ToolAlias(old_name="check_calibration", new_name="calibration", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use calibration(action='check')", inject_action="check"),
     "update_calibration_ground_truth": ToolAlias(old_name="update_calibration_ground_truth", new_name="calibration", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use calibration(action='update', actual_correct=...)", inject_action="update"),
     "backfill_calibration_from_dialectic": ToolAlias(old_name="backfill_calibration_from_dialectic", new_name="calibration", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use calibration(action='backfill')", inject_action="backfill"),
     "rebuild_calibration": ToolAlias(old_name="rebuild_calibration", new_name="calibration", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use calibration(action='rebuild')", inject_action="rebuild"),
 
     # Knowledge graph tools → knowledge(action='...')
     "store_knowledge_graph": ToolAlias(old_name="store_knowledge_graph", new_name="knowledge", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use knowledge(action='store', summary='...')", inject_action="store"),
     "get_knowledge_graph": ToolAlias(old_name="get_knowledge_graph", new_name="knowledge", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use knowledge(action='get')", inject_action="get"),
     "list_knowledge_graph": ToolAlias(old_name="list_knowledge_graph", new_name="knowledge", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use knowledge(action='list')", inject_action="list"),
     "update_discovery_status_graph": ToolAlias(old_name="update_discovery_status_graph", new_name="knowledge", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use knowledge(action='update', discovery_id='...', status='...')", inject_action="update"),
     "get_discovery_details": ToolAlias(old_name="get_discovery_details", new_name="knowledge", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use knowledge(action='details', discovery_id='...')", inject_action="details"),
     "cleanup_knowledge_graph": ToolAlias(old_name="cleanup_knowledge_graph", new_name="knowledge", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use knowledge(action='cleanup')", inject_action="cleanup"),
     "get_lifecycle_stats": ToolAlias(old_name="get_lifecycle_stats", new_name="knowledge", reason="consolidated",
+        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use knowledge(action='stats')", inject_action="stats"),
 
     # ==========================================================================
