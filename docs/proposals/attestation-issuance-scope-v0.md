@@ -1,18 +1,19 @@
 # Attestation issuance scope — v0
 
-**Status: design-only. No code, no widening, no decision taken.** This is the
+**Status: design-only. No code or widening. The §4 mint-site model was
+ratified on 2026-08-29; implementation lands with its consumer.** This is the
 first design question named by
 [`beam-verbs-as-contract-capabilities-v0.md`](beam-verbs-as-contract-capabilities-v0.md)
 §9 for its steps 1 and 2, split out because it is a security question about the
 signer that stands on its own and is worth deciding before anything depends on
 the answer.
 
-**Review: none.** Written in one pass from a reading of the tree. Every claim
-below cites the call site it came from; re-derive before relying on it.
+**Review:** initial draft was unreviewed. The 2026-09-07 source review for
+#1998 preserves §4 and clarifies staged scope alongside the companion RFC.
 
-**It does not unblock those steps.** They additionally wait on §5's accounting
-choice, a server-enforced idempotency key, and §8's claim/ack semantics. This
-closes one prerequisite, not the set.
+**It does not unblock those steps by itself.** Accounting is settled. Send
+requires the companion RFC's bounded idempotency and dispatch contract; inbox
+additionally requires its declared consumer and cursor/recovery evidence.
 
 ---
 
@@ -96,9 +97,11 @@ single list the whole process shares.
 - **The attest route keeps `recertify_strong_tier`** and carries the scope it
   effectively serves today.
 - **A future `msg` capability mint is its own site**, strong-assurance-gated per
-  the RFC's §7 invariant, scoped to `{POST /v1/msg/send, POST /v1/msg/inbox}`
-  and nothing else. It cannot inherit the presence exemption because it is not
-  the presence site.
+  the RFC's §7 invariant. The first send consumer declares only
+  `{POST /v1/msg/send}`; add `POST /v1/msg/inbox` with its consumer and review.
+  Cursor mode uses that existing inbox path. If a future design adds an ack
+  endpoint, enumerate its exact method/path with that consumer, not in advance.
+  The msg site cannot inherit the presence exemption or a global prefix scope.
 
 The property this buys, stated so it can be tested: **no mint site can sign for
 a path outside its declared scope, and the site that skips the assurance gate

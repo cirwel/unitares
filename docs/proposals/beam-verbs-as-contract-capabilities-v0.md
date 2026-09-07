@@ -1,11 +1,16 @@
 # BEAM verbs as contract capabilities — v0
 
-**Status: draft, design-only. No code, no decision.** Nothing here authorizes a
-cutover, changes Wave 3's scope, or proposes retiring an HTTP route. It asks one
+**Status: draft, design-only. Accounting and mint-site scope are settled;
+delivery and provenance shapes below are proposed for implementation review.**
+Nothing here authorizes a cutover, changes Wave 3's scope, or proposes retiring an HTTP route. It asks one
 question and proposes an answer to be argued with.
 
-**Review: two adversarial passes (2026-08-28), no peer review.** The document
-was written in a single pass from a reading of the tree. The first source
+**Review history:** two adversarial passes (2026-08-28), followed by the
+2026-08-30 dialectic recorded in §8e and merged in PR #2032. The 2026-09-07
+source review for #1998 proposes the bounded shapes in §§6 and 8g; it does not
+certify their implementation.
+
+The document was written in a single pass from a reading of the tree. The first source
 re-derivation folded four blockers where they land: the mint-time assurance
 gate (§2, §7), `inbox` being a consuming mutation with an unresolved ack/retry
 gap (§8, §9, §11), the contract-representability gap (§4), and a corrected risk
@@ -18,9 +23,9 @@ route's permissive `:log` authorization (§7), `status` needs an agent-visible
 scope and redaction contract (§3, §7), timer separation belongs at the
 accountable dispatch boundary rather than in a duplicate SDK client (§5, §6),
 and retries need a stable logical operation with a fresh single-use attestation
-per attempt (§8). §5 remains an operator decision this document deliberately
-does not take. Claims outside the reviewed citations should still be treated as
-unverified until re-derived from the tree.
+per attempt (§8). §5 was subsequently settled by the operator on 2026-08-29.
+Claims outside the reviewed citations should still be treated as unverified until
+re-derived from the tree.
 
 One `consult(purpose="critique")` pass was run on 2026-08-28 (consultation
 `d1e98e34`, route `ollama` / `gemma4:latest`, `cost_class: local_free`,
@@ -160,7 +165,8 @@ control, which is why §11 flags it as the least certain row below.
 **Candidates for exposure** — agent decisions, subject to the blockers below:
 
 - `msg/send` — after idempotency and principal derivation are defined
-- `msg/inbox` — after claim/ack/redelivery and principal derivation are defined
+- `msg/inbox` — after the consumer, replay/progress contract and principal
+  derivation in §§8b and 8g are implemented and verified
 - `lease/status` — separately, after its agent-visible response is scoped and
   redacted
 - lease mutations — `acquire`, `release`, `handoff/offer`, `handoff/accept` —
@@ -266,8 +272,8 @@ agent tool calls, on that exact surface.
 What counts as a tool call once a lease acquisition is a capability is a
 deciding standard, and per the shared contract a deciding standard is stated as
 a choice *before* it is applied, by the operator — not chosen silently and
-reported afterwards as the method. This document therefore does **not** pick it.
-It names it as the blocking question and proposes three candidates:
+reported afterwards as the method. The original candidates were the following;
+the operator subsequently selected (c) in the decision block below:
 
 - **(a)** One explicit capability dispatch counts once; the outbox forwarder
   stops projecting lease-plane execution events into `audit.tool_usage`, so
@@ -307,27 +313,62 @@ a dashboard. `agent_presence_lease.py` keeps its heartbeat off the tool /
 check-in / activity path so it "cannot feed loop-detection or the auto-heartbeat
 activity tracker (the Dec `reply_to_question`/dialectic false-positive class)."
 
-A lease *heartbeat* is substrate, emitted on a timer, and must never look like
-agent action. A lease *acquire* is an agent decision and legitimately is one.
-**Any exposure must keep the heartbeat off the tool path even when `acquire`
-sits on it.** The separation belongs at the accountable entrypoint, not in a
-duplicate transport client: `LeasePlaneClient.acquire()` and `.heartbeat()` are
-already distinct methods that share only the low-level `_request_json` helper.
-Sharing that helper is safe; sending scheduled maintenance through the
-registered `lease` handler is not
-(`agents/sdk/src/unitares_sdk/lease_plane/client.py`).
+Origin is assigned at the accountable entrypoint, not inferred from the endpoint
+or holder class. `_refresh_presence` in
+`src/mcp_handlers/identity/agent_presence_lease.py` automatically acquires after
+a failed heartbeat, including on onboarding/check-in paths. An acquire therefore
+does not by itself establish agent dispatch. Sharing the SDK's low-level client
+is safe; routing maintenance through a registered capability handler is not.
 
-The implementation invariant, whichever §5 accounting candidate the operator
-chooses, is:
+**Proposed bounded context: `capability.execution_context.v1`.**
 
-- one explicit capability dispatch may write one tool-usage row;
-- an automatic acquire, renew, heartbeat, timeout, reaper, or poll writes zero
-  tool-usage rows and never feeds loop detection or activity tracking;
-- BEAM execution events remain plane telemetry and carry a bounded origin
-  discriminator plus a logical-operation correlation ID, rather than being
-  reinterpreted as agent intent from their endpoint name; and
-- a low-level client may be shared by both entrypoints, but the tool recorder
-  and governance-activity consumers may only observe the explicit one.
+| Field | Contract |
+| --- | --- |
+| `schema` | Fixed version above. |
+| `origin` | Closed enum `agent_dispatch`, `maintenance`, `unknown`; observed entry path, never motive. |
+| `operation_id` | Opaque UUID stable across retries of one logical operation. |
+| `caused_by_operation_id` | Optional one-hop causal UUID; not identity lineage's `parent_agent_id`. |
+| `actor_agent_uuid` | Derived acting principal where one exists; absent for machinery without an actor. Existing holder/subject stays separate. |
+| `request_digest` | Fixed-length hash of method, path and canonical material request, excluding proofs and this context; omitted for internal events without a request. |
+
+Governance persists the authoritative dispatch fact under a separate capability
+key (for example `capability.dispatch` in the existing forensic audit sink).
+BEAM persists execution context with the mutation event in its existing atomic
+transaction/outbox boundary. A dispatch is not proof of commit; a committed
+execution is not another agent decision. Reuse non-secret S22 harness/episode
+context where available, without copying identity ancestry or credential-valued
+session strings into each event (`src/provenance_context.py`).
+
+**Correlation is not authority.** Strip or ignore caller-authored origin/actor
+assertions at the accountable entrypoint. The legacy attest route signs a
+caller-provided body hash: a signed body alone cannot prove capability dispatch.
+Matching principal, operation ID, action and material digest correlates an
+execution with a known governance operation, but does not prove the entry path
+of an individual attempt. Without source-authenticated entry context, copied
+plane origin remains unverified; trusted origin stays in governance. Neither an
+arbitrary UUID nor S22 `governance_mode="explicit"` promotes it.
+
+The implementation invariants follow the settled §5(c) choice:
+
+- Each logical explicit dispatch contributes at most once to an enrolled
+  activity consumer and writes **zero ordinary tool-usage rows**. Dispatch
+  persistence and consumption need idempotency; an audit sink alone does not
+  supply exactly-once processing.
+- Automatic acquire, reacquire, renew, heartbeat, timeout, reaper and polling
+  remain maintenance, even when caused by an earlier dispatch. A new maintenance
+  operation gets a new ID and may retain one causal link. It must not inherit
+  agent origin through task-local context or an old lease's `audit_session`.
+- Retries and outbox replay create no additional logical agent activity. Activity
+  is not reconstructed from endpoint names or the plane outbox.
+- Every transport's recorder must keep capability calls out of ordinary tool
+  sinks, including behavioral JSONL and the applicable BEAM forwarder projection.
+  `audit_only=True` still writes `audit.tool_usage` and is insufficient. For new
+  provenance-aware execution and its maintenance, exclude the plane projection;
+  this does not authorize a global rewrite of unrelated raw-route accounting.
+- Mark historical/missing origin unknown and expose persistence errors. Missing
+  provenance is not inactivity; an unknown mutation result is not failure.
+  Maintenance stays structurally outside activity hooks even during telemetry
+  failure. These are acceptance obligations, not claims about today's forwarder.
 
 ## 7. Identity: what changes, what must not
 
@@ -430,83 +471,65 @@ stands. It still has to be settled before `msg/send` ships, because the
 capability's contract is what creates the expectation — but it is a decision to
 make, not a hazard already present.
 
-Candidates, named here and deliberately not chosen: a two-phase claim/ack
+Original candidates, before the proposed selection in §8g: **(a)** two-phase claim/ack
 (inbox returns rows under a delivery lease, a second call acknowledges, unacked
-rows redeliver after a timeout); and an idempotency key on `send`
+rows redeliver after a timeout); and **(b)** an idempotency key on `send`
 (caller-supplied, uniqueness enforced by the transport). "Refuse" only covers
 the case where the mutation is known not to have happened.
 
-### 8a. ⛔ Concurrency, not just retry — and why neither candidate above fixes it
+### 8a. Concurrency depends on the consumer contract
 
-Added 2026-08-29. An earlier draft framed this section entirely around *retry*.
-That framing is incomplete, and the gap it hides is worse than the one it names.
+`FOR UPDATE SKIP LOCKED` returns disjoint row sets (`Repo.inbox/2`). That is
+appropriate for competing workers; sharing a recipient principal does not itself
+make partition a defect. For one logical receiver, a lost response after a claim
+still hides that batch from subsequent inbox calls. Send idempotency cannot fix
+this read-path problem. Claim/ack can fix it only with stable claim-operation
+replay and an explicit active-batch/competing-consumer contract (§8f).
 
-`FOR UPDATE SKIP LOCKED` gives two callers **disjoint** row sets
-(`repo.ex:642,666`), and
-[`agent-message-transport-v0.md`](agent-message-transport-v0.md) states that
-property twice as a virtue — "two pollers can never take the same message"
-(line 63), "concurrent pollers get disjoint sets" (line 125). It *is* a virtue
-for two **distinct** pollers competing over a shared queue.
+A future adapter may introduce overlapping polls or retries. That is a conditional
+design concern, not observed behavior of a nonexistent msg adapter; the existing
+SDK retries only `held_by_other`, not ambiguous timeouts.
 
-It is a defect when the two in-flight calls belong to the **same recipient** —
-a retry that actually landed plus a fresh poll, or two subagents sharing one
-identity. The pending rows are then **split** between the two calls. That is
-partition, not duplication: each caller holds part of the inbox, neither knows
-its view is partial, and if either response is lost its share is gone. Delivery
-is marked before the response leaves, so nothing detects it.
+### 8b. Proposed first inbox: non-consuming cursor reads (c)
 
-**Neither candidate above addresses this.** A two-phase claim/ack still
-*claims*, so concurrent claims still split; an idempotency key is a write-path
-fix that never touches the read. A capability does not create the mechanism —
-a raw HTTP caller can trip it today — it makes the precondition ordinary,
-because adapters poll and retry on their own.
+The consumer is **one authenticated principal and one logical receiver**. Follow
+[identity ontology](../ontology/identity.md) and
+[harness substrate plurality](../ontology/harness-substrate-plurality.md): ordinary
+new processes receive fresh identities, and lineage inherits work, not mailbox
+authority. A common role, workspace or parent UUID cannot select another inbox.
+This contract does not redefine substrate-earned identity exceptions. Multiple
+legitimate sessions acting for a principal must coordinate its logical receiver;
+it is not an implicit competing-worker or fan-out service.
 
-### 8b. Third candidate: make the inbox a pure read
+Propose `delivery_mode: "cursor_v1"` on the existing strict inbox route. Omitted
+mode retains the raw v0 consuming contract. Cursor mode derives the recipient
+from proof and reads all retained, unexpired rows regardless of `delivery_state`,
+with an index matching that access pattern. The server returns rows and a proposed
+next cursor without advancing shared progress. The receiver serializes its
+checkpoint only after durable retention or disposition of the contiguous prefix,
+and deduplicates work by `message_id`.
 
-- **(c)** `inbox` writes nothing. Rows stay visible until TTL reaps them, and
-  the caller advances a per-recipient high-water cursor. Retry is then
-  idempotent by construction — advancing to sequence N twice equals advancing
-  once — and two concurrent reads return the same rows instead of splitting
-  them.
+Replay is guaranteed only within retention while the authorized receiver polls
+and preserves progress. TTL can expire unread mail. Cursor loss requires explicit
+rescan and deduplication, not an empty-inbox inference. Claiming a row provides
+at-most-one claim, not exactly-one actor or exactly-once external effects;
+cursor reads similarly do not grant work authority.
 
-This trades at-most-once for at-least-once, which is the right direction for
-this mailbox: a recipient can deduplicate on `message_id`, and cannot un-lose.
-It also removes `inbox` from the class of consuming mutations, which is what
-§11 files against it.
+**A deterministic total order is insufficient: publication must be safe.** A late
+commit must never appear below an already returned cursor. Timestamp/UUID order
+and bare `BIGSERIAL` fail this requirement: A allocates 101, B commits 102, a
+reader checkpoints 102, then A commits 101. This is a concurrency counterexample,
+not an observed incident; see [PostgreSQL sequence semantics](https://www.postgresql.org/docs/17/functions-sequence.html).
+A narrow implementation can serialize allocation and insertion with a
+per-recipient counter row lock held through commit. Every writer must participate,
+purge must not reset counters, and existing rows need a migration/cutover rule.
+An equivalent proven publication protocol is acceptable.
 
-**What it gives up, which an earlier draft of this subsection did not say.**
-The atomic claim was not only a defect — it *prevented duplicate responders*.
-Framing `SKIP LOCKED` purely as a partition bug (§8a) describes what it costs
-one recipient with two in-flight calls, and omits what it buys: exactly one
-consumer acts on a given row. (c) does not remove a hazard, it substitutes one
-for another — partition becomes duplication, and two concurrent readers can
-both act. Whether that is acceptable depends on a consumer model this RFC has
-not declared: a single logical consumer per recipient can deduplicate on
-`message_id`, competing consumers cannot. (c) also needs a **stable total
-order** for a high-water cursor to mean anything, and the current schema does
-not provide one.
-
-A cursor only closes the loss window if the *caller* holds it, or the server
-advances it after durable processing. A server-side cursor advanced during
-delivery recreates the original ambiguity exactly, and should be rejected
-outright or treated as an explicit cumulative ack — not adopted by default
-because it looks simpler.
-
-Its costs, to design against rather than discover: a recipient that never polls
-grows without bound and needs a per-recipient depth cap enforced at send. Note
-this is a **visibility and scan-pressure** cost, not a new retention cost — an
-earlier draft overstated it. Delivered rows are already retained until TTL
-today (`repo.ex:692-717`), so pure read does not lengthen how long rows live.
-And if (b)'s idempotency key is added, it should **be** or travel with
-`message_id`, so sender write-dedup and receiver read-dedup key off one token
-rather than two — minting two identifiers is the real coupling hazard between
-these candidates, not their ordering.
-
-Ordering, if more than one is taken: read path first. Loss is unrecoverable;
-a duplicate send is merely noisy.
-
-**Still not chosen.** (c) is recorded as a candidate on the same footing as (a)
-and (b), not as a decision — and its own §12 disconfirmer is below.
+Atomically enforce a per-recipient depth/byte admission bound and expose honest
+retention/gap information. TTL bounds age, not burst volume or reaper backlog;
+delivered rows already remain until TTL, so this is not a new retention duration.
+Do not prioritize read-first on the premise that duplicate sends are merely noisy:
+send and inbox have independent safety contracts (§9).
 
 ### 8c. What this section still does not cover
 
@@ -514,12 +537,13 @@ Named so the next reader does not mistake the list above for complete:
 
 - **No sender-side delivery visibility.** A sender cannot distinguish read from
   lost, so the documented "a later poll can reconstruct it" recovery has no
-  trigger. A sent-status query is cheaper than redelivery and would make that
-  path real.
+  trigger. A query of the current `delivered` marker cannot distinguish receipt
+  from a lost response, so sender status alone does not repair this gap.
 - **"Reconstructible by a later poll" is asserted, not enforced.** Nothing stops
   an agent putting the only copy of a decision in a 64 KB envelope. Requiring a
   `ref` to durable state, and stating the loss semantics in the tool
-  description, would enforce what the design currently assumes.
+  description, would help describe recovery, but a valid reference string does
+  not establish that its target persists or is discoverable.
 - **Recipient addressing.** If an address names a role rather than a process,
   restarts and rebinds silently change who consumes.
 
@@ -542,7 +566,9 @@ taken from the verdict.
   DO UPDATE`, a `spec_digest` compared against the stored one, and
   `RETURNING spec_digest, execution_id, state` so the caller learns whether it
   reserved or replayed. Preferably simplified into the message insert's own
-  transaction rather than run as a second round trip.
+  transaction rather than run as a second round trip. Do not copy its expired-key
+  re-reservation behavior without satisfying §8g: purging a receipt must not let
+  a stale retry silently become a new send.
 - **Do not reuse:** governed-effect dedup. Its own docstring
   (`governed_effect.ex`) states that dedup is *"best-effort at the shadow stage
   — `audit.events` has no unique constraint on the key, so a true concurrent
@@ -570,7 +596,8 @@ written into this document:
    load-bearing claim of the section and it was an assumption about adapters in
    general presented as a fact about this plane.
 2. **§8b and §9 contradicted each other** on whether (c) was adopted. Corrected
-   in §9 above. Neither (a) nor (c) has been chosen.
+   in §9 at that time; neither (a) nor (c) had then been chosen. §8g records
+   the subsequent proposed first-slice shape.
 3. **"Permanently consumes" overstated the failure.** Rows persist to TTL;
    the loss is of inbox visibility. Corrected in §8 above, and it slightly
    *favours* (c).
@@ -609,8 +636,8 @@ yet done, and the **test lists are part of the condition**, not commentary.
    forgotten — an idempotency layer that fails open silently is worse than none,
    because callers will have been told retries are safe.
 5. ⬜ **Choose the consumer and delivery contract before exposing `msg/inbox`.**
-   For (c): a stable total order and a caller-presented cursor; reads must not
-   advance it; any cumulative advance only after durable processing of a
+   For (c): a publication-safe total order (§8b) and a caller-presented cursor;
+   reads must not advance it; any cumulative advance only after durable processing of a
    contiguous prefix. Tests required: duplicate responders, same-cursor
    concurrency, lost responses, cursor loss, pagination, TTL expiry.
 6. ⬜ **If (a) is selected**, declare whether a recipient is a single logical
@@ -619,29 +646,68 @@ yet done, and the **test lists are part of the condition**, not commentary.
    either one active batch per recipient or an explicit disjoint-delivery
    contract.
 
+### 8g. Proposed implementation contract — source review, 2026-09-07
+
+For #1998, select sender-scoped idempotency plus (c) for the proposed first
+capability slices. This records a design recommendation for review, not deployed
+guarantees or authorization to expose leases. The §8f obligations remain binding.
+
+**Send:** retain an operation key before the first attempt. Enforce uniqueness
+on `(derived_sender, operation_key)` and atomically commit a versioned canonical
+material-request digest and original result receipt with insertion. The digest
+covers recipient, canonical topic, envelope, original parent reference, TTL policy
+and any operation deadline; exclude per-attempt proofs. Same key/digest returns
+the original `message_id`; changed material conflicts; concurrent identical
+attempts insert one row. Keep message ID separate: the receipt maps operation
+identity to delivery identity.
+
+Replay rechecks current authorization with a fresh single-use proof but does not
+extend TTL, advance reply depth, allocate a new sequence or revalidate a successful
+send's parent. That parent may have expired or been deleted, and its foreign key
+may now be NULL; retain the original digest. Persist receipts through a defined
+bounded retry horizon even if mail expires earlier. Before exposure, publish that
+horizon and a stale-operation refusal rule (for example an immutable operation
+deadline checked before insertion). Receipt purge must never silently turn an
+original retry into a new send. Storage unavailable means no insertion.
+
+An ambiguous timeout reports `outcome_unknown` with the retained operation handle.
+Do not claim failure, retry with a new key or fall back to a Python mutation. This
+contract supports caller recovery even if the adapter makes only one attempt.
+
+**Inbox:** use §8b's one-logical-receiver cursor mode. Claim/ack, exclusive workers
+and cross-principal delegation are separate designs. If claim/ack is later chosen,
+§8f(6) also requires replay of the same active batch, principal/batch/generation
+scoped receipts, idempotent ack replay, expired/superseded/wrong-principal ack
+refusal and crash/expiry redelivery tests. Receipt acknowledges durable disposition,
+not completion of external work.
+
+Additional acceptance evidence before implementation is admitted:
+
+| Boundary | Required cases, in addition to §8f |
+| --- | --- |
+| Send | Same key under different principals; message and parent expiry before replay; receipt purge/retry boundary; no TTL extension; fresh versus reused/expired proof. |
+| Cursor | Late lower-sequence commit; timestamp ties and pagination; all writers and old rows at cutover; concurrent quota admission; explicit cursor rescan/dedup; legacy consuming-mode compatibility. |
+| Provenance | Check-in-triggered maintenance and failed-heartbeat reacquire; inherited dispatch context; forged origin/correlation/S22 mode; transport retries and duplicate outbox delivery; missing legacy origin; sink separation on MCP/REST/stdio; persistence failure. |
+| Identity | Valid unexpired caller proof matching the derived principal; weak/server-inferred binding refusal; lineage/labels cannot select another inbox; exact method/path/body binding; presence mint cannot sign message paths. |
+
+The review re-derived these constraints from `Repo.send_message/1`, `Repo.inbox/2`,
+migration 069, the SDK client, `agent_presence_lease.py`, `provenance_context.py`,
+`src/services/tool_usage_recorder.py` and the BEAM forwarder, plus the ontology
+linked in §8b. It extends
+the corrections merged in [PR #2032](https://github.com/cirwel/unitares/pull/2032);
+that earlier merge is not evidence the remaining contracts are implemented.
+
 ## 9. Sequencing
 
-1. **`msg/send` first, and independently.** It is the smallest surface with
-   measured reachability pressure and already uses `authorize_strict`. It waits
-   on §5's accounting choice, derived sender identity, and §8's
-   fresh-proof/stable-operation retry rule — but **not** on choosing between
-   (a) and (c). Send and inbox are independent problems that an earlier draft
-   of §8 wrongly welded together. What `send` needs is its retry contract
-   settled: if ambiguous-result retries are supported, an operation key scoped
-   to the derived sender, a canonical request digest, and atomic uniqueness
-   coupled to the message insert — same key and digest returning the original
-   `message_id`, a different digest conflicting, concurrent identical sends
-   producing exactly one row.
-2. **`msg/inbox` second, and only after the delivery contract is chosen.** It
-   additionally waits on a recipient derived from the authenticated caller, and
-   on an explicit choice between the documented at-most-once pointer mailbox and
-   an at-least-once contract. **This step previously presupposed
-   claim/ack/redelivery — that is, candidate (a) — while §8b records (c) as
-   still unchosen. The two contradicted each other; neither has been decided.**
-   Whichever is taken carries its own obligations: (c) needs a stable total
-   order and a client-presented cursor with no server-side advance; (a) needs a
-   declared single-vs-competing consumer model, a stable claim operation ID,
-   fenced claim generation, and late-ack rejection.
+1. **`msg/send` first, and independently.** Accounting and mint-site scope are
+   settled. Implement actual caller-proven assurance, derived sender identity,
+   §8g's atomic idempotency and bounded retry contract, and §6's separate dispatch
+   recording. No inbox delivery implementation is prerequisite to send.
+2. **`msg/inbox` second.** The proposed first contract is §8b's cursor mode for
+   one logical receiver. It additionally requires publication-safe ordering,
+   compatibility, durable progress/recovery and retention/admission evidence.
+   Claim/ack is not an unconditional prerequisite; a future competing-worker
+   design carries §8f(6)'s separate obligations.
 3. **`lease/status` separately**, only after §7 defines its visibility and
    redacted response. Read-only does not make the raw route agent-safe.
 4. **Lease mutations later, or never.** `acquire`, `release`, and handoff wait
@@ -654,12 +720,12 @@ yet done, and the **test lists are part of the condition**, not commentary.
 The listed preconditions block each slice independently; landing one does not
 silently authorize the next.
 
-**Status after the 2026-08-29 operator decisions.** §5 is settled (see its
-decision block), so step 1's remaining blockers are §8's ack/retry rule, a
-server-enforced idempotency key, and derived sender identity — **§8 is now the
-single largest open item in front of step 1.** Step 2 additionally waits on
-claim/ack/redelivery. Steps 3 and 4 are deferred by the same decision, not
-cancelled.
+**Status after the 2026-09-07 source review.** §§6 and 8g record proposed
+bounded contracts; their acceptance evidence and concrete retry/admission bounds
+remain required before exposure. Steps 3 and 4 remain deferred, not cancelled.
+Solving provenance does not remove the operator's footprint objection, strict
+ownership blocker or status-visibility requirement. Documentation approval alone
+does not establish runtime readiness.
 
 **Steps 1 and 2 also have a concrete prerequisite this document originally
 missed.**
@@ -697,7 +763,8 @@ the wrong one.
   tool aggregate. See §5. No longer blocking.
 - **How §6's activity provenance is represented.** The invariant is settled:
   explicit dispatch is agent activity and timer maintenance is not. The bounded
-  origin/correlation shape and where it is persisted remain design work.
+  shape and persistence boundaries are proposed in §6; trusted entry-context
+  enforcement, consumer idempotency and acceptance evidence remain work.
 - **How strict lease capability authorization reaches BEAM** (§7). A new route,
   strict dispatch context, or equivalent atomic gate are implementation choices;
   inheriting `:log` or relying on a Python preflight are not.
@@ -721,7 +788,7 @@ the wrong one.
   mutation with a delivery-state transition behind it (§8) and belongs with the
   mutating verbs. §8b's candidate (c) would move it back by making it write
   nothing — which is an argument for (c), not a reason to reclassify it before
-  (c) is chosen.
+  (c) is implemented and verified.
   `msg send` has no state machine behind it, but §8's idempotency gap is its
   own version of the same cost.
 - **Whether `lease` is worth exposing at all.** §§6–7 and the state-machine
@@ -758,13 +825,15 @@ the wrong one.
   the caller itself carried a valid strong attestation.
 - If `lease/status` exposes the raw lease record without an explicit query scope
   and field-level contract, the read boundary failed.
-- If §8b's pure read (c) is taken and a recipient's inbox is ever observed
-  growing past its depth cap, or a caller is found re-reading from sequence
-  zero because it lost its cursor, then (c) moved the failure rather than
-  removing it and the claim-based candidates deserve another look.
-- If a partition is ever observed under (a) or (b) — one recipient, two
-  concurrent calls, each returning part of the mail — §8a was right and
-  whichever candidate was chosen did not address it.
+- If cursor mode silently skips a late commit, advances before durable receiver
+  progress, exceeds its admission bounds or masks expiry/cursor loss as emptiness,
+  §8b failed. Explicit rescan with deduplication is valid recovery, not failure.
+- If a retry of one claim operation gets a different active batch, or a single
+  logical receiver loses progress across concurrent calls, its delivery contract
+  failed. Disjoint batches under an explicitly competing-consumer contract are
+  expected; send idempotency (b) makes no inbox partition guarantee.
+- If forged provenance, inherited maintenance context, retries or outbox replay
+  become additional agent activity, §6 failed. Missing origin must remain unknown.
 
 ## 13. Objections already checked and refuted
 
