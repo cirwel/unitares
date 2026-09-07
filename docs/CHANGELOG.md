@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **tools:** `direct_resume_if_safe`, deprecated 2026-01-29 in favour of `self_recovery` and annotated "will be removed in v2.0", is removed. It was a `full`-mode-only tool with no caller in the SDK, the governance plugin, or the reference residents. No alias is left behind: an alias to `self_recovery(action="quick")` would answer the old name with narrower behavior (quick resumes only at risk < 0.40; the removed handler resumed without reflection up to 0.60), and retiring that band is the substance of the removal, as the deprecation's own migration said: quick below 0.40, `review` with a reflection above. A caller of the old name now gets `tool_not_found_error` with a suggestion. The catalog's three recovery entries that named `register=False` delegates as if they were callable tools (`quick_resume`, `self_recovery_review`, `check_recovery_options`) are folded into `self_recovery`'s entry as its actions. Registered tools: 43 to 42. (#2093)
 
+### Documentation
+
+- **skills:** the `governance-lifecycle` skill's MCP Tools Reference now says which of its names a tool mode advertises: the default `minimal` lists only the five-tool checkpoint loop, `lite` (29 tools) lists every name in the reference plus `list_tools` / `describe_tool`, and a mode filters only `tools/list`, so every registered tool still dispatches by name in every mode. The discovery line names the modes that carry the two introspection tools instead of implying they are always listed. Every other claim in the skill was re-verified against its cited sources; `last_verified` moves to 2026-09-07 and the source list gains `src/tool_modes.py` and `src/tool_mode_listing.py`. The plugin mirror lags until the next bundle re-cut, which the next release entry must declare with its `plugin-bundle-recut` marker. (#2095)
+
 ## [2.22.0] - 2026-09-07
 
 ### Changed
