@@ -155,3 +155,73 @@ def test_check_is_registered(doctor, tmp_path):
     names = [c.name for c in checks]
     assert "adjudication_feedstock" in names
     assert dict((c.name, c.mode) for c in checks)["adjudication_feedstock"] == "operator"
+
+
+# --- #2086: the per-family override must be MIRRORED *and* APPLIED ---
+
+def test_per_family_override_mirrors_the_queue_source(doctor):
+    """The global-severity mirror above was pinned; the per-family one was not,
+    so the queue could widen a family without the doctor noticing."""
+    source = (REPO_ROOT / "src" / "http_routes" / "sentinel.py").read_text()
+
+    marker = "_ADJUDICABLE_SEVERITIES_BY_EVENT_TYPE = {"
+    assert marker in source, "could not find _ADJUDICABLE_SEVERITIES_BY_EVENT_TYPE"
+    # Cut at the dict's own closing brace (column 0) — a non-greedy `.*?\}`
+    # stops inside `frozenset({...})` and silently yields an empty map.
+    block = source.split(marker, 1)[1].split("\n}", 1)[0]
+
+    source_map = {
+        k: set(re.findall(r'"([^"]+)"', v))
+        for k, v in re.findall(
+            r'"([^"]+)":\s*frozenset\(\{([^}]*)\}\)', block
+        )
+    }
+    assert source_map, f"parsed no entries from the queue's map: {block!r}"
+    mirror = {
+        k: set(v) for k, v in doctor.ADJUDICABLE_SEVERITIES_BY_EVENT_TYPE.items()
+    }
+    assert source_map == mirror, (
+        f"per-family queue severities changed in http_routes/sentinel.py "
+        f"({source_map}) but the doctor mirror still says {mirror}"
+    )
+
+
+def test_per_family_override_reaches_the_query(doctor):
+    """⛔The regression this file exists for after #2086.
+
+    The override was defined, documented and mirror-tested — and never used by
+    the query, which applied ADJUDICABLE_SEVERITIES globally. Every
+    doctor_check_finding (that family emits `warning` and nothing else) was
+    therefore counted ineligible, so the check reported the queue DRY at
+    `0 eligible` while the live server was admitting all of them. Asserting the
+    constant matches the source does NOT catch that; only asserting it reaches
+    the predicate does.
+    """
+    sql = doctor._adjudicable_predicate_sql()
+
+    assert "'doctor_check_finding'" in sql and "'warning'" in sql, (
+        "doctor_check_finding must be admitted at `warning` — it emits nothing "
+        f"else, so without this the family is silently inert. Got: {sql}"
+    )
+
+    # ...and the override must not leak to families the queue holds narrower.
+    sentinel_clause = next(
+        c for c in sql.split(" OR ") if "'sentinel_finding'" in c
+    )
+    assert "'warning'" not in sentinel_clause, (
+        f"sentinel_finding must stay at {doctor.ADJUDICABLE_SEVERITIES} — its "
+        f"`medium` alone is ~834 distinct fingerprints/30d. Got: {sentinel_clause}"
+    )
+
+    for event_type in doctor.ADJUDICABLE_EVENT_TYPES:
+        assert f"'{event_type}'" in sql, f"{event_type} missing from predicate"
+
+
+def test_rule_text_matches_the_predicate(doctor):
+    """The WARN detail told the operator the eligibility rule. When it printed
+    the global severities it was reporting a rule the query did not use — the
+    operator-facing half of the same bug."""
+    text = doctor._adjudicable_rule_text()
+    assert "doctor_check_finding" in text and "warning" in text
+    for event_type in doctor.ADJUDICABLE_EVENT_TYPES:
+        assert event_type in text

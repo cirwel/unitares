@@ -2540,6 +2540,40 @@ ADJUDICABLE_SEVERITIES = ("high", "critical")
 ADJUDICABLE_SEVERITIES_BY_EVENT_TYPE = {
     "doctor_check_finding": ("warning", "high", "critical"),
 }
+
+
+def _adjudicable_severities(event_type: str) -> tuple:
+    """Severities the queue admits for one family, honouring the override."""
+    return ADJUDICABLE_SEVERITIES_BY_EVENT_TYPE.get(
+        event_type, ADJUDICABLE_SEVERITIES)
+
+
+def _adjudicable_predicate_sql() -> str:
+    """SQL predicate for 'this row is queue-eligible', per family.
+
+    ⛔Build the predicate per event_type. A single global severity list is what
+    #2086 fixed: ``ADJUDICABLE_SEVERITIES_BY_EVENT_TYPE`` was defined, mirrored
+    from the server and asserted by tests, but never reached the query — so
+    every ``doctor_check_finding`` (the family emits ``warning`` and nothing
+    else) counted as ineligible. The check then reported the queue DRY at
+    ``0 eligible`` while the live server was admitting all of them, and invited
+    the operator to retire a lever that was working.
+    """
+    clauses = []
+    for event_type in ADJUDICABLE_EVENT_TYPES:
+        sevs = ", ".join(f"'{s}'" for s in _adjudicable_severities(event_type))
+        clauses.append(
+            f"(event_type = '{event_type}' "
+            f"AND payload->>'severity' IN ({sevs}))"
+        )
+    return "(" + " OR ".join(clauses) + ")"
+
+
+def _adjudicable_rule_text() -> str:
+    """Human-readable eligibility rule, per family — matches the predicate."""
+    return "; ".join(
+        f"{t} at {_adjudicable_severities(t)}" for t in ADJUDICABLE_EVENT_TYPES
+    )
 FEEDSTOCK_DRY_DAYS = 7       # queue-eligible findings absent this long
 FEEDSTOCK_ALIVE_MIN = 20     # ...while producers emitted at least this many
 
@@ -2640,14 +2674,12 @@ def check_adjudication_feedstock(db_url: str) -> CheckResult:
     """
     name, mode = "adjudication_feedstock", "operator"
 
-    types_sql = ", ".join(f"'{t}'" for t in ADJUDICABLE_EVENT_TYPES)
-    sevs_sql = ", ".join(f"'{s}'" for s in ADJUDICABLE_SEVERITIES)
+    eligible_sql = _adjudicable_predicate_sql()
 
     rows = _psql_rows(db_url, (
         "SELECT event_type, "
         "  count(*), "
-        f"  count(*) FILTER (WHERE payload->>'severity' IN ({sevs_sql}) "
-        f"                     AND event_type IN ({types_sql})), "
+        f"  count(*) FILTER (WHERE {eligible_sql}), "
         "  coalesce(round(extract(epoch FROM (now() - max(ts))) / 86400.0, 1), -1) "
         "FROM audit.events "
         "WHERE event_type LIKE '%\\_finding' "
@@ -2692,8 +2724,8 @@ def check_adjudication_feedstock(db_url: str) -> CheckResult:
         f"{FEEDSTOCK_DRY_DAYS}d from {len(rows)} producer(s), 0 eligible",
         detail=(
             f"per-producer eligible/total: {coverage}. "
-            f"Eligible = event_type in {ADJUDICABLE_EVENT_TYPES} at severity "
-            f"in {ADJUDICABLE_SEVERITIES}. Producers are alive; nothing they "
+            f"Eligible (per family) = {_adjudicable_rule_text()}. "
+            "Producers are alive; nothing they "
             "emit can be adjudicated while every liveness check stays green. "
             "⚠️Scope: a dry queue does NOT mean the falsifiability anchor is "
             "starved. The queue is fed only by forced-release findings, which "
@@ -2712,8 +2744,8 @@ def check_adjudication_feedstock(db_url: str) -> CheckResult:
             "resolved — adjudication now resolves the finding's own producer "
             "and returns 422 rather than booking against another resident. "
             "But that removes one blocker, not the gate. TWO independent gates "
-            f"remain, both necessary: ELIGIBILITY ({ADJUDICABLE_EVENT_TYPES} at "
-            f"{ADJUDICABLE_SEVERITIES} — what the coverage table above actually "
+            f"remain, both necessary: ELIGIBILITY ({_adjudicable_rule_text()} "
+            "— what the coverage table above actually "
             "measures) and ATTRIBUTION CONFORMANCE (a producer writing a bare "
             "slug has no identity, so it 422s). Closing conformance does NOT "
             "open the queue; a conformant producer emitting medium-severity "
