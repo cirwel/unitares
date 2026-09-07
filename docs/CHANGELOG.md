@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **observe / describe_tool:** four parameters two handlers read were not declared on their wire schemas, so FastMCP dropped them before dispatch and the call silently used the default over `/mcp/` (REST and in-process callers were unaffected, because the middleware merges undeclared keys back). `observe(action="telemetry")` now declares `window_hours` and `include_calibration`, with the handler's 24h default mirrored in the schema; `describe_tool` declares `include_schema` and `include_full_description`. Both are additive, so the negotiated interface release advances to 1.2.0 and the contract artifact is regenerated; a regression test checks each case on the registered FastMCP argument model. (#2100)
+
 ### Documentation
 
 - **skills:** the `governance-lifecycle` skill's MCP Tools Reference now says which of its names a tool mode advertises: the default `minimal` lists only the five-tool checkpoint loop, `lite` (29 tools) lists every name in the reference plus `list_tools` / `describe_tool`, and a mode filters only `tools/list`, so every registered tool still dispatches by name in every mode. The discovery line names the modes that carry the two introspection tools instead of implying they are always listed. Every other claim in the skill was re-verified against its cited sources; `last_verified` moves to 2026-09-07 and the source list gains `src/tool_modes.py` and `src/tool_mode_listing.py`. The plugin mirror lags until the next bundle re-cut, which the next release entry must declare with its `plugin-bundle-recut` marker. (#2095)

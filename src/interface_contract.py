@@ -24,7 +24,11 @@ from src.mcp_compat import get_tool_input_schema
 
 
 INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
-INTERFACE_CONTRACT_VERSION = "1.1.0"
+# 1.2.0 (2026-09-07): observe gained window_hours / include_calibration and
+# describe_tool gained include_schema / include_full_description, the
+# parameters their handlers already read; a compatible addition advances the
+# negotiated release (docs/INTERFACE_CONTRACT.md).
+INTERFACE_CONTRACT_VERSION = "1.2.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (
