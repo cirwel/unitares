@@ -1,11 +1,19 @@
 """
-Tool Modes - Define subsets of tools for different use cases
+Tool Modes - Define the ADVERTISED tool surface for different use cases
 
-Minimal mode: 4 essential tools - perfect for getting started (includes list_tools for discovery)
-Lite mode: Essential tools only (~10 tools) - optimized for local models
-Full mode: All tools (49 tools) - for cloud models with large context windows
-Note: Tool-mode filtering is applied by servers that choose to enforce it (e.g. stdio list_tools).
-      Full mode should always include *all* schema tools even if categories lag behind.
+Minimal mode (default): the five-tool checkpoint loop - identity binding,
+    re-binding, the check-in, outcome evidence, and a read of the verdict.
+Lite mode: the wider agent surface (shared memory, review, advisory inference,
+    consolidated routers) - opt in with GOVERNANCE_TOOL_MODE=lite.
+Full mode: every schema tool - for operators and cloud models with large context windows.
+
+A mode decides what tools/list ADVERTISES. It does not decide what dispatches:
+every register=True handler and every workflow alias stays callable by name on
+every transport (REST, stdio, and the FastMCP /mcp/ mount, which registers the
+whole surface and filters only its listing - see
+src/tool_registration.py::install_tool_mode_listing). Dropping a name from a
+mode set therefore hides it from schema-driven clients; it never deletes it.
+Full mode should always include *all* schema tools even if categories lag behind.
 
 Client-specific exclusions:
 - Claude Desktop: Excludes tools that cause hangs (web search, heavy operations)
@@ -14,18 +22,21 @@ Client-specific exclusions:
 from typing import Set
 import os
 
-# Read tool mode from environment (default: lite for reduced cognitive load)
-TOOL_MODE = os.getenv("GOVERNANCE_TOOL_MODE", "lite").lower()
+# Read tool mode from environment. Default: minimal - the five-tool checkpoint
+# loop is the whole default surface; lite/full are the opt-in wider surfaces.
+# (Was "lite", 29 tools, until the surface cut of 2026-09.)
+TOOL_MODE = os.getenv("GOVERNANCE_TOOL_MODE", "minimal").lower()
 
-# Minimal mode: Essential tools + list_tools for discovery
+# Minimal mode: the checkpoint loop and nothing else. Five names, all task
+# verbs. Discovery tools (list_tools / describe_tool) are deliberately absent:
+# with five tools, the MCP client's native tools/list is the discovery surface.
+# They remain advertised in lite/full and callable by name in every mode.
 MINIMAL_MODE_TOOLS: Set[str] = {
-    # Primary agent workflow tools (task verbs over raw implementation names)
-    "start_session",
-    "sync_state",
-    "check_working_state",
-    "identity",               # Check/set identity (auto-creates on first call)
-    "list_tools",             # Discover available tools (bootstrap)
-    "describe_tool",          # Pull full details for a specific tool (lazy schema)
+    "start_session",          # Identity binding: mint a process identity (onboard)
+    "identity",               # Re-bind a durable process to its existing anchor
+    "sync_state",             # The check-in (process_agent_update)
+    "record_result",          # Outcome evidence (outcome_event)
+    "check_working_state",    # Read the verdict without writing (get_governance_metrics)
 }
 
 # Core/essential tools for lite mode (optimized for local models)
@@ -501,12 +512,9 @@ def should_include_tool(tool_name: str, mode: str = "full", client_type: str = N
     Returns:
         True if tool should be included
     """
-    # Always include discovery tools so agents can recover from over-filtering.
-    # This matches the onboarding docs: list_tools should be available in any mode.
-    if tool_name in {"list_tools", "describe_tool"}:
-        return True
-
-    # Check mode filtering first
+    # No name is force-included: the mode set is the advertised surface, full
+    # stop. (list_tools / describe_tool were force-included in every mode until
+    # the 2026-09 surface cut; they are now ordinary members of lite/full.)
     allowed_tools = get_tools_for_mode(mode)
     if tool_name not in allowed_tools:
         return False

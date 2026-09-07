@@ -153,7 +153,12 @@ if server_supports_kwarg("host"):
     _server_kwargs["host"] = _LISTEN_HOST
 if server_supports_kwarg("transport_security"):
     _server_kwargs["transport_security"] = build_transport_security_settings()
-mcp = FastMCP(**_server_kwargs)
+# The mount registers the WHOLE tool surface and filters only tools/list by
+# GOVERNANCE_TOOL_MODE (src/tool_mode_listing.py): a mode hides names from
+# schema-driven clients; it never makes a registered name uncallable on /mcp/.
+from src.tool_mode_listing import mode_filtered_server_class
+
+mcp = mode_filtered_server_class(FastMCP)(**_server_kwargs)
 
 
 # Custom decorator that disables outputSchema to avoid schema validation errors

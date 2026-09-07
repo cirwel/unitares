@@ -114,9 +114,11 @@ real disinterest.
   moves to the next lever; it does not close the track.
 - **State a deciding standard as a choice before applying it, not afterwards as
   "the method."** If a threshold, control, or noise floor is what turns the data
-  into a verdict, it is a judgement call and belongs to the operator. Choosing
-  it silently and reporting only the conclusion imports an evaluative frame that
-  was never agreed.
+  into a verdict, it is a judgement call and is decided by the operator unless
+  explicitly delegated within a recorded scope. Choosing it silently and reporting
+  only the conclusion imports an evaluative frame that was never agreed.
+  Applying an agreed standard needs no renewed approval; authorship, identity,
+  or persistence alone does not authorize changing it.
 
 **Exempt: pre-registered scientific stop rules.** These constrain the *analyst*
 against selective re-runs, not the feature, and are the opposite of the failure

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **tool surface:** the default MCP surface is now `GOVERNANCE_TOOL_MODE=minimal` — the five-tool checkpoint loop (`start_session`, `identity`, `sync_state`, `record_result`, `check_working_state`). The previous default, `lite` (29 tools), and `full` remain one flag away. `minimal` no longer carries `list_tools` / `describe_tool`: with five tools the MCP client's native `tools/list` is the discovery surface, and the two introspection tools stay on `lite` and `full`. Nothing is force-included in any mode any more; the mode set is the advertised surface.
+- **mcp transport:** a tool mode now filters only `tools/list` on the FastMCP `/mcp/` mount. The registrars register every `register=True` handler and every workflow alias regardless of mode (`src/tool_mode_listing.py`), so a name outside the running mode dispatches on `/mcp/` exactly as it always did on REST and stdio. Until now the mount applied the mode at registration time and answered `Unknown tool` for unadvertised names (verified 2026-08-11), which is what made the surface cut unsafe for the SDK, the governance plugin, and the residents. The onboard `tool_mode` tip and the `list_tools` `not_advertised` block say so.
+
+### Fixed
+
+- **README:** the "What is built" table claimed 106 MCP tools. That figure was an AST count of `@mcp_tool` decorator sites (#1907), most of them `register=False` internal delegates that never reach any wire. The runtime registry has 43 registered tools (8 of them consolidated routers over 52 actions) plus 8 workflow aliases and a 70-entry legacy alias table; the row now states those numbers, in the form `update_docs_tool_count.py --check` binds to the live registry.
+
 ## [2.21.0] - 2026-09-04
 
 <!-- plugin-bundle-recut: v0.4.17 -->
