@@ -116,13 +116,26 @@ def test_warning_forbids_the_tempting_wrong_fix(doctor, monkeypatch):
 # --- must not cry wolf ---
 
 def test_passes_when_something_is_eligible(doctor, monkeypatch):
+    """⛔Fixture updated by #2086, and the change is deliberate — read before
+    'restoring' it. It used to pair an eligible sentinel_alarm_finding with
+    `doctor_check_finding 0/38`, which asserted the POOLED rule: one family
+    carrying the sum makes the whole check PASS. That rule is what made this
+    check self-masking once doctor findings became eligible, so the verdict is
+    now per-family and a 0/38 doctor family is a WARN, not background.
+
+    That shape is also unreachable in production: the doctor layer emits
+    `warning` and `critical` only, and the queue admits both — so a loud doctor
+    family cannot sit at 0 eligible. The realistic 'nothing to cry about' shape
+    is every loud family contributing something, which is what this now pins.
+    The uneven case has its own test below.
+    """
     _rows(doctor, monkeypatch, [
         ["sentinel_alarm_finding", "132", "4", "0.1"],
-        ["doctor_check_finding", "38", "0", "0.2"],
+        ["doctor_check_finding", "38", "38", "0.2"],
     ])
     r = doctor.check_adjudication_feedstock("postgresql://x/y")
     assert r.status is doctor.Status.PASS
-    assert "4/170" in r.message
+    assert "42/170" in r.message
 
 
 def test_quiet_fleet_is_not_a_dry_queue(doctor, monkeypatch):
@@ -225,3 +238,71 @@ def test_rule_text_matches_the_predicate(doctor):
     assert "doctor_check_finding" in text and "warning" in text
     for event_type in doctor.ADJUDICABLE_EVENT_TYPES:
         assert event_type in text
+
+
+# --- #2086: the fix must not make the check self-masking ---
+
+def test_healthy_doctor_family_does_not_mask_a_starved_sentinel(doctor, monkeypatch):
+    """⛔The regression the council caught in the #2086 fix itself.
+
+    Once doctor_check_finding is (correctly) eligible at `warning`, the doctor
+    feeds its OWN family: doctor_findings.py re-emits any operator-mode WARN —
+    including this check's — as a doctor_check_finding at `warning`. Pooling
+    `eligible` across families therefore lets one WARN clear itself on the next
+    tick, and routine doctor noise holds the pooled sum above zero forever.
+
+    This is the exact 2026-08-10 shape: Sentinel loud, every row below the
+    severity gate, not one adjudicable — while the doctor family looks fine.
+    Pooled logic reads PASS. It must WARN.
+    """
+    _rows(doctor, monkeypatch, [
+        ["doctor_check_finding", "66", "66", "0.1"],   # self-fed, healthy
+        ["sentinel_finding", "40", "0", "0.2"],        # loud, all `medium`
+    ])
+    r = doctor.check_adjudication_feedstock("postgresql://x")
+
+    assert r.status is doctor.Status.WARN, (
+        f"a starved sentinel_finding must WARN even while another family "
+        f"carries the pooled total; got {r.status} — {r.message}"
+    )
+    assert "sentinel_finding" in r.message, (
+        f"the WARN must name the starved family, not just report a total: {r.message}"
+    )
+
+
+def test_starved_family_below_the_volume_floor_is_not_called_starved(doctor, monkeypatch):
+    """A family with a handful of rows cannot be distinguished from a quiet
+    one. Only volume makes 'loud but unadjudicable' a claim worth making."""
+    _rows(doctor, monkeypatch, [
+        ["doctor_check_finding", "66", "66", "0.1"],
+        ["sentinel_alarm_finding", "3", "0", "0.2"],   # too few to call
+    ])
+    r = doctor.check_adjudication_feedstock("postgresql://x")
+    assert r.status is doctor.Status.PASS, (
+        f"3 findings is not evidence of starvation: {r.status} — {r.message}"
+    )
+
+
+def test_non_adjudicable_producers_are_not_called_starved(doctor, monkeypatch):
+    """lumen_checkin_finding and friends are not in ADJUDICABLE_EVENT_TYPES at
+    all — they are out of the queue BY DESIGN, not starved. Flagging them would
+    manufacture a permanent WARN nobody can act on."""
+    _rows(doctor, monkeypatch, [
+        ["doctor_check_finding", "66", "66", "0.1"],
+        ["lumen_checkin_finding", "25", "0", "0.2"],
+    ])
+    r = doctor.check_adjudication_feedstock("postgresql://x")
+    assert r.status is doctor.Status.PASS, (
+        f"a non-adjudicable producer is not a starved one: {r.status} — {r.message}"
+    )
+
+
+def test_all_families_starved_still_reports_the_dry_queue(doctor, monkeypatch):
+    """The original condition must survive the per-family rework."""
+    _rows(doctor, monkeypatch, [
+        ["sentinel_finding", "40", "0", "0.2"],
+        ["doctor_check_finding", "30", "0", "0.1"],
+    ])
+    r = doctor.check_adjudication_feedstock("postgresql://x")
+    assert r.status is doctor.Status.WARN
+    assert "DRY" in r.message, f"expected the dry-queue wording: {r.message}"
