@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **agent contract:** clarify delegated measurement authority in the shared `AGENTS.md` / `CLAUDE.md` block — a deciding standard (threshold, control, noise floor) is a choice stated before it is applied, decided by the operator unless explicitly delegated within a recorded scope; applying an agreed standard needs no renewed approval, and authorship, identity, or persistence alone does not authorize changing it. (#2080)
 - **interface contract, integration manual, tool registration:** state that a mode decides what `tools/list` advertises and never what dispatches, that `minimal` is the server default, and that the checked-in contract artifact remains the `lite` profile by declaration while the live handshake reports the running mode. (#2081)
 
+<!-- changelog-coverage-exempt: #2079 no-user-effect -->
+
 ## [2.21.0] - 2026-09-04
 
 <!-- plugin-bundle-recut: v0.4.17 -->
