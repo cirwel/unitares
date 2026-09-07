@@ -1,18 +1,19 @@
 defmodule UnitaresLeasePlane.EffectRecovery do
   @moduledoc """
-  Boot-time recovery for governed-effect EXECUTE (§5b). On startup, drains any
+  Boot-time recovery for governed-effect EXECUTE (§5b). On startup, scans any
   orphaned `effects.payloads` rows (pre-image captured, never committed) left by
   a node crash, reconciling each by content hash via `EffectReconcile`.
 
   Runs SYNCHRONOUSLY in `init/1` and is placed in the supervision tree BEFORE
-  the HTTP listener, so the plane never accepts a new effect while orphans from
-  a prior crash are unresolved. The in-process (`:transient` custodian restart)
-  recovery path is a separate slice; this covers the full-node-crash case.
+  the HTTP listener. This orders the scan before request handling; it is not a
+  boot gate requiring every orphan to be resolved. Periodic sweeps also cover
+  orphans left by a request-process crash without a full node restart.
 
   FAIL-SOFT: boot must never crash from recovery. A missing `effects.*` schema
   (the normal state until migration 052 is applied) or any query error is logged
-  and skipped — the scanner returns `{:ok, ...}` regardless. `repo` is injectable
-  for tests.
+  and skipped. Per-payload persistence failures or reconciliation exceptions
+  are counted as unresolved, never as acknowledged recovery or quarantine.
+  `repo` is injectable for tests.
   """
 
   use GenServer
@@ -60,8 +61,9 @@ defmodule UnitaresLeasePlane.EffectRecovery do
   defp schedule_sweep(_), do: :ok
 
   @doc """
-  Run the orphan scan once. Returns a summary map. Never raises — a missing
-  table or any DB error degrades to `%{scanned: 0, skipped: reason}`.
+  Run the orphan scan once. Returns a summary map. A missing table or a scan
+  read error yields `%{scanned: 0, skipped: reason}`. Per-payload errors are
+  counted under `outcomes.unresolved` alongside acknowledged dispositions.
   """
   @spec scan(module()) :: map()
   def scan(repo \\ EffectRepo) do
@@ -72,7 +74,11 @@ defmodule UnitaresLeasePlane.EffectRecovery do
       {:ok, orphans} ->
         outcomes = Enum.map(orphans, &reconcile_one(&1, repo))
         counts = Enum.frequencies_by(outcomes, &outcome_kind/1)
-        Logger.warning("effect_recovery: drained #{length(orphans)} orphan(s): #{inspect(counts)}")
+
+        Logger.warning(
+          "effect_recovery: scanned #{length(orphans)} orphan(s): #{inspect(counts)}"
+        )
+
         %{scanned: length(orphans), outcomes: counts}
 
       {:skip, reason} ->
@@ -95,12 +101,16 @@ defmodule UnitaresLeasePlane.EffectRecovery do
     EffectReconcile.reconcile_payload(payload, repo)
   rescue
     e ->
-      Logger.error("effect_recovery: reconcile crashed for #{inspect(Map.get(payload, :effect_id))}: #{Exception.message(e)}")
-      {:quarantined, :reconcile_crash}
+      Logger.error(
+        "effect_recovery: reconcile crashed for #{inspect(Map.get(payload, :effect_id))}: #{Exception.message(e)}"
+      )
+
+      {:unresolved, :reconcile_crash}
   end
 
   defp outcome_kind(:committed), do: :committed
   defp outcome_kind(:tombstoned), do: :tombstoned
   defp outcome_kind({:quarantined, _}), do: :quarantined
+  defp outcome_kind({:unresolved, _}), do: :unresolved
   defp outcome_kind(_), do: :unknown
 end
