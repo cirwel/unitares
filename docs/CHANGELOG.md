@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **interface contract, integration manual, tool registration:** state that a mode decides what `tools/list` advertises and never what dispatches, that `minimal` is the server default, and that the checked-in contract artifact remains the `lite` profile by declaration while the live handshake reports the running mode. (#2081)
 
 <!-- changelog-coverage-exempt: #2079 no-user-effect -->
+<!-- changelog-coverage-exempt: #2078 no-user-effect -->
 
 ## [2.21.0] - 2026-09-04
 
