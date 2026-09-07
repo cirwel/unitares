@@ -26,6 +26,19 @@ source_files:
   # live in these two files; the reference drifts silently when they move.
   - unitares/src/tool_modes.py
   - unitares/src/tool_mode_listing.py
+source_digests:
+  unitares/src/mcp_handlers/core.py: "5a6e81697f537ac2"
+  unitares/src/mcp_handlers/identity/handlers.py: "e9e3113c08ac2108"
+  unitares/src/mcp_handlers/admin/handlers.py: "d7dec13e6a422b43"
+  unitares/src/mcp_handlers/tool_stability.py: "d18efee294bf8a11"
+  unitares/src/mcp_handlers/middleware/envelope_step.py: "bcac7a83172032db"
+  unitares/src/mcp_handlers/updates/phases.py: "62168987a1a7fb79"
+  unitares/src/mcp_handlers/updates/enrichments.py: "f91c10502c48275b"
+  unitares/src/mcp_handlers/dialectic/handlers.py: "96ffbcfbbea5ff34"
+  unitares/src/mcp_handlers/lifecycle/self_recovery.py: "3fd24e37c57566a3"
+  unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
+  unitares/src/tool_modes.py: "508d6a5b29d19765"
+  unitares/src/tool_mode_listing.py: "a99a9e7f6e4a95c4"
 ---
 
 # Agent Lifecycle

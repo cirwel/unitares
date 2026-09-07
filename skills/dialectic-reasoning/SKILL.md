@@ -4,15 +4,32 @@ description: >
   Use when an agent is participating in a UNITARES dialectic session — paused and needs to
   submit a thesis, reviewing another agent's thesis, or synthesizing conditions for resolution.
   Covers structured argumentation and convergence.
-last_verified: "2026-08-28"
+last_verified: "2026-09-07"
 freshness_days: 28
 source_files:
+  - unitares/src/dialectic_protocol.py
   - unitares/src/mcp_handlers/dialectic/handlers.py
   - unitares/src/mcp_handlers/dialectic/session.py
   - unitares/src/mcp_handlers/dialectic/responses.py
   - unitares/src/mcp_handlers/dialectic/auto_resolve.py
+  - unitares/src/mcp_handlers/dialectic/reviewer.py
+  - unitares/src/mcp_handlers/dialectic/enforcement.py
   - unitares/src/mcp_handlers/schemas/dialectic.py
-  - unitares/config/governance_config.py
+  - unitares/src/mcp_handlers/tool_stability.py
+  - unitares/src/mcp_handlers/identity/operator.py
+  - unitares/src/mcp_handlers/lifecycle/query.py
+source_digests:
+  unitares/src/dialectic_protocol.py: "071d0adc326edfe9"
+  unitares/src/mcp_handlers/dialectic/handlers.py: "96ffbcfbbea5ff34"
+  unitares/src/mcp_handlers/dialectic/session.py: "6a0ed1ed453d9f76"
+  unitares/src/mcp_handlers/dialectic/responses.py: "87cd7dbc224dc325"
+  unitares/src/mcp_handlers/dialectic/auto_resolve.py: "68d95e6c1d757c33"
+  unitares/src/mcp_handlers/dialectic/reviewer.py: "d5e71f324195eb6c"
+  unitares/src/mcp_handlers/dialectic/enforcement.py: "135a7345ad47d5bf"
+  unitares/src/mcp_handlers/schemas/dialectic.py: "bede8f58f69946b8"
+  unitares/src/mcp_handlers/tool_stability.py: "d18efee294bf8a11"
+  unitares/src/mcp_handlers/identity/operator.py: "cc2698ddc37a4091"
+  unitares/src/mcp_handlers/lifecycle/query.py: "40460dab6d3a64c1"
 ---
 
 # Dialectic Reasoning
@@ -72,8 +89,9 @@ dialectic(
 )
 ```
 
-Recovery sessions still require at least one concrete `proposed_condition`;
-manual review sessions may let the reviewer propose conditions if needed.
+`root_cause` is always required. Recovery sessions additionally require at
+least one concrete `proposed_condition`; manual review sessions may let the
+reviewer propose conditions if needed.
 
 ### Writing a Good Thesis
 
@@ -112,6 +130,7 @@ opinion:
 dialectic(
   action: "antithesis",
   session_id: "<session-id>",
+  reasoning: "<the counter-perspective or observations; required>",
   concerns: ["<one per finding>"],
   observed_metrics: {},
   reviewer_provenance: {
@@ -131,8 +150,8 @@ which is the one misattribution this field exists to prevent. The agent-suppliab
 kinds are exactly `agent_submitted`, `external_consult`, and `orchestrated`
 (`in_process_synthetic` is the server's own stamp — do not send it).
 
-Recognised keys are dropped if unrecognised, and string values are truncated at
-200 characters. Useful ones beyond the example: `model_requested`,
+Unrecognised keys are dropped (the response lists them), and string values are
+truncated at 200 characters. Useful ones beyond the example: `model_requested`,
 `models_used`, `tokens_used`, `cost_usd`, `latency_ms`, `finish_reason`,
 `fallback_from`, `warnings`, `consulted_at`.
 
@@ -187,15 +206,18 @@ the phase field — on 2026-07-28 a live session awaiting the caller's own
 synthesis was read as "stalled" by two experienced operators. So status
 responses answer it directly from your seat:
 
-- **`whose_move`** — plain language: `"YOURS — your thesis is owed"`,
-  `"the reviewer's — their antithesis is owed"`, `"a reviewer's — the slot is
-  OPEN, you may claim it"`, or `"nobody — session is terminal"`.
+- **`whose_move`** — plain language, for example `"YOURS — your thesis is
+  owed; the saved brief can be reused"`, `"the reviewer's — their antithesis is
+  owed"`, `"a reviewer's — the slot is OPEN, you may claim it"`, `"YOURS —
+  respond once to the reviewer's standing rejection"`, or `"nobody — session is
+  terminal"`.
 - **`next_call`** — a ready-to-use call template, present only when the move is
   actually yours. If `next_call` is null, you are waiting on someone else.
 
 Read `whose_move` before concluding a session is hung. Use
 `dialectic(action="get", session_id="...", check_timeout=true)` when you need the
-latest timeout/facilitation state. An open reviewer slot in the antithesis phase
+latest timeout/facilitation state; note that `check_timeout` is a write (it can
+auto-reassign or flip the phase) and is silently ignored for an unbound caller. An open reviewer slot in the antithesis phase
 is an invitation, not a stall — an eligible agent other than the paused agent
 may claim it.
 
@@ -226,10 +248,13 @@ including one a timeout sweep already marked failed for lack of facilitation.
 
 | Outcome | Meaning |
 |---------|---------|
-| **resume** | Agent continues with agreed conditions |
-| **block** | Agent stays paused — conditions not met or agreement not reached |
-| **escalate** | Needs human/operator intervention |
-| **cooldown** | Temporary pause — retry after a delay |
+| **resume** | Converged; the agent continues with the agreed conditions |
+| **block** | The agreed resolution violated a hard safety limit; the session is marked `failed` |
+| **facilitation_required** / `awaiting_facilitation` | Standing reviewer rejection, self-review, or no eligible reviewer; an operator or replacement reviewer must act |
+
+`escalate` and `cooldown` exist in the `ResolutionAction` enum but no live path
+produces them; they survive only as recommendation labels in the model-assisted
+tool.
 
 ## How to Participate Well
 
@@ -239,9 +264,11 @@ including one a timeout sweep already marked failed for lack of facilitation.
 - **Acknowledge valid concerns.** If the antithesis raises a real issue, say so. Partial agreement strengthens your position.
 - **Look at attributed evidence, not feelings.** Call `check_working_state()`
   (`get_governance_metrics()` canonically) for the current values and inspect
-  `risk_score_source`, policy provenance, and enforcement evidence. EISV is
-  proprioceptive state estimation, not outcome truth; the ODE lens and legacy
-  `C(V)` do not independently validate a claim.
+  `risk_score_source` and `verdict_source` / `verdict_resolution_source`; the
+  `policy_evaluation` and `enforcement` blocks come back on your last
+  `sync_state()` check-in, not on the metrics call. EISV is proprioceptive
+  state estimation, not outcome truth; the ODE lens and legacy `C(V)` do not
+  independently validate a claim.
 
 ## Common Mistakes
 
