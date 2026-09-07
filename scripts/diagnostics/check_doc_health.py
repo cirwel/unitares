@@ -297,8 +297,12 @@ def check_index_orphans(md_files: list[Path]) -> list[str]:
 def _load_tool_names() -> set[str]:
     """Load canonical tool names from this repo's registry.
 
-    Discovers names from three sources:
-    - TOOL_ORDER in src/tool_schemas.py (canonical list)
+    Discovers names from these sources:
+    - The ToolMeta records in src/tool_meta.py (the roster: every registered
+      tool and workflow alias; the wire list in src/tool_schemas.py derives
+      from it since 2026-09-07, so the scan of that file below finds only
+      what its comments and helpers quote)
+    - Quoted names in src/tool_schemas.py
     - Aliases in src/mcp_handlers/tool_stability.py
     - @mcp_tool("name") decorator usages anywhere under src/ (catches tools
       that are registered via decorator but not yet hand-listed in TOOL_ORDER —
@@ -309,7 +313,15 @@ def _load_tool_names() -> set[str]:
     """
     names = set()
 
-    # TOOL_ORDER in src/tool_schemas.py
+    # One record per advertised name in src/tool_meta.py. The action routers
+    # (knowledge, observe, agent, ...) are declared through action_router(),
+    # not @mcp_tool("name"), so this is the scan that knows them.
+    meta = REPO_ROOT / "src" / "tool_meta.py"
+    if meta.exists():
+        for m in re.finditer(r'ToolMeta\(\s*"(\w+)"', meta.read_text()):
+            names.add(m.group(1))
+
+    # Quoted names in src/tool_schemas.py
     schemas = REPO_ROOT / "src" / "tool_schemas.py"
     if schemas.exists():
         for m in re.finditer(r'"(\w+)"', schemas.read_text()):

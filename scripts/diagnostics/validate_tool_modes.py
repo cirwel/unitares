@@ -4,8 +4,9 @@ Validate TOOL_MODE configuration against the advertised tool roster.
 
 The roster (``tool_modes.advertised_tool_names_full``) is every register=True
 dispatch tool plus the workflow aliases. It is what a full-mode server
-advertises; the schema-definition list is wider, because it also carries the
-register=False delegates that only validate router actions.
+advertises; the schema-definition list (``get_tool_definitions``) is its
+registered half, and the registrar adds the aliases. Both derive from the one
+record per tool in src/tool_meta.py.
 
 Checks:
 - TOOL_CATEGORIES partitions the roster exactly: every advertised name in one

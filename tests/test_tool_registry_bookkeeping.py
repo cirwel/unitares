@@ -170,3 +170,54 @@ def test_consolidated_and_deprecated_aliases_carry_the_date_the_old_name_stopped
         if alias is not None:
             assert alias.deprecated_since is not None, name
             assert alias.deprecated_since.date().isoformat() == entry["deprecated_since"], name
+
+
+def test_the_record_table_is_the_roster_and_the_wire_order(roster, registered):
+    """src/tool_meta.py has one record per advertised name and nothing else.
+
+    The registered records, in table order, are the wire order of tools/list;
+    the workflow-alias records are exactly AGENT_WORKFLOW_ALIASES.
+    """
+    from src import tool_meta
+    from src.tool_schemas import TOOL_ORDER, get_tool_definitions
+
+    names = [m.name for m in tool_meta.TOOL_META]
+    assert len(names) == len(set(names))
+    assert set(names) == roster
+    assert set(tool_meta.WORKFLOW_ALIAS_NAMES) == set(ts.AGENT_WORKFLOW_ALIASES)
+    assert set(tool_meta.WIRE_ORDER) == registered
+    assert list(tool_meta.WIRE_ORDER) == TOOL_ORDER
+    # get_tool_definitions() returns the registered tools in wire order, and
+    # only those: the 23 register=False delegates it carried until 2026-09-07
+    # were filtered out again by every consumer that reaches a wire.
+    assert [t.name for t in get_tool_definitions()] == TOOL_ORDER
+
+
+def test_the_five_maps_derive_from_the_record_table():
+    from src import tool_meta
+    from src.tool_modes import TOOL_CATEGORIES, TOOL_OPERATIONS, TOOL_TIERS
+
+    for m in tool_meta.TOOL_META:
+        assert m.name in TOOL_TIERS[m.tier]
+        assert m.name in TOOL_CATEGORIES[m.category]
+        assert TOOL_OPERATIONS[m.name] == m.operation
+        assert tc.TOOL_RELATIONSHIPS[m.name]["category"] == m.category
+        if m.workflow_alias:
+            assert m.name not in ts._TOOL_STABILITY
+            assert m.stability is None
+        else:
+            assert ts._TOOL_STABILITY[m.name] is m.stability
+    assert set(TOOL_OPERATIONS) == {m.name for m in tool_meta.TOOL_META}
+
+
+def test_a_legacy_alias_operation_is_only_declared_where_it_narrows_its_router():
+    from src.tool_modes import TOOL_OPERATIONS
+
+    for name, info in ts.list_all_aliases().items():
+        if info.operation is None:
+            continue
+        assert name not in TOOL_OPERATIONS, f"{name}: a roster name has its own class"
+        assert info.operation in {"read", "write", "admin"}, name
+        assert info.operation != TOOL_OPERATIONS[info.new_name], (
+            f"{name}: declares the same class as its router; drop the override"
+        )

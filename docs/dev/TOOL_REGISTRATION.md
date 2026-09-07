@@ -18,7 +18,13 @@ dynamically built — there are no hand-written schema literals in it. You add t
    `_load_pydantic_schemas()` (`src/tool_schemas.py`) — the tool name is derived
    from the class name by CamelCase → snake_case (`MyNewToolParams` → `my_new_tool`).
 2. The tool's description in `src/tool_descriptions.py`.
-3. The tool name in `TOOL_ORDER` in `src/tool_schemas.py` (controls listing order).
+3. One `ToolMeta` record in `src/tool_meta.py`: category, tier, operation
+   (read / write / admin), stability, and relationships. The record's position
+   among the registered tools is the `tools/list` order, and the five
+   bookkeeping maps (`TOOL_TIERS`, `TOOL_OPERATIONS`, `TOOL_CATEGORIES`,
+   `_TOOL_STABILITY`, `TOOL_RELATIONSHIPS`) derive from it; there is nothing
+   else to add. Server startup refuses a registered tool with no record and a
+   record with no registered tool.
 
 **Step 2: Implement the handler** in the matching subpackage under
 `src/mcp_handlers/` (`admin/`, `lifecycle/`, `knowledge/`, `observability/`,
@@ -40,10 +46,10 @@ TOOLS_NEEDING_SESSION_INJECTION = {
 }
 ```
 
-**Step 4: Add the tool to a tier** in `src/tool_modes.py` (`TOOL_TIERS`) and,
-if agents should see it without `GOVERNANCE_TOOL_MODE=full`, to the right mode
-set (`LITE_MODE_TOOLS`; `MINIMAL_MODE_TOOLS` is the five-tool checkpoint loop
-and does not grow). A tool outside the active mode set is still registered and
+**Step 4: Add the tool to a mode set** if agents should see it without
+`GOVERNANCE_TOOL_MODE=full` (`LITE_MODE_TOOLS` in `src/tool_modes.py`;
+`MINIMAL_MODE_TOOLS` is the five-tool checkpoint loop and does not grow). The
+tier and category come from the `ToolMeta` record of Step 1. A tool outside the active mode set is still registered and
 callable by name on every transport; it is absent from `tools/list` (see Common
 Mistakes #5).
 
@@ -292,8 +298,9 @@ Identity is primarily UUID-based (`agent_uuid` from `onboard()`). Session inject
 
 ## Tool Tiers (for list_tools filtering and tool modes)
 
-Tools are organized into tiers in `src/tool_modes.py` (`TOOL_TIERS` is the
-authoritative list; sizes drift, don't trust counts written into prose):
+Every advertised name has a tier on its `ToolMeta` record in
+`src/tool_meta.py`; `TOOL_TIERS` in `src/tool_modes.py` is derived from those
+records (sizes drift, don't trust counts written into prose):
 
 | Tier | Purpose | Example Tools |
 |------|---------|---------------|
@@ -301,8 +308,8 @@ authoritative list; sizes drift, don't trust counts written into prose):
 | `common` | Regular use | `onboard`, `process_agent_update`, `list_tools` |
 | `advanced` | Operator/rare use | `admin`, diagnostics tools |
 
-**When adding a new tool, add it to the appropriate tier**, and to a mode set
-if agents should be shown it below `full`. Mode membership decides what
+**When adding a new tool, give its record the appropriate tier**, and add the
+name to a mode set if agents should be shown it below `full`. Mode membership decides what
 `tools/list` advertises; registration (and therefore dispatch by name) is the
 same in every mode.
 
@@ -393,12 +400,12 @@ curl -s -X POST "http://localhost:8767/v1/tools/call" \
 
 | Task | Files to Edit |
 |------|---------------|
-| Add new standalone tool | `*Params` model + `tool_descriptions.py` + `TOOL_ORDER` + handler in `mcp_handlers/<subpackage>/` + tier in `tool_modes.py` |
+| Add new standalone tool | `*Params` model + `tool_descriptions.py` + `ToolMeta` record in `tool_meta.py` + handler in `mcp_handlers/<subpackage>/` |
 | Add to consolidated tool | `consolidated.py` (add to `action_router` actions dict; check `pre_onboard_actions`) + `register=False` on handler |
 | Add dispatch middleware step | `middleware/` package (add step module or function + wire into `PRE_DISPATCH_STEPS`, `POST_VALIDATION_STEPS`, or `POST_EXECUTION_STEPS`) |
 | Tool needs session | + `TOOLS_NEEDING_SESSION_INJECTION` in `tool_registration.py` |
 | Rename/deprecate tool | `tool_stability.py` (add alias) |
-| Categorize for list_tools / tool modes | `tool_modes.py` (add to tier) |
+| Categorize / tier / classify for list_tools and tool modes | `tool_meta.py` (the tool's record) |
 
 ---
 
