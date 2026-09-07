@@ -493,40 +493,64 @@ AGENT_WORKFLOW_ALIASES: tuple[str, ...] = (
 # Mark tools by stability tier to help users know what to expect
 
 _TOOL_STABILITY: Dict[str, ToolStability] = {
+    # Keyed by registered dispatch tools only, every one of them listed, so
+    # no tier is a silent default. Legacy and workflow alias names resolve to
+    # their canonical tool in get_tool_stability. Nothing in the runtime reads
+    # this map today (tests do); it is the declared promise, kept honest.
+    #
+    # Consolidated routers carry a tier forward only where every flat
+    # predecessor agreed: knowledge (store / search / get / list / details were
+    # all STABLE) and self_recovery (review / quick / check were all STABLE).
+    # Routers with mixed or undeclared predecessors are BETA, the same
+    # effective tier they had as unlisted names.
+
     # STABLE: Production-ready, won't change
     "identity": ToolStability.STABLE,  # Primary identity tool (renamed from status)
-    "who_am_i": ToolStability.STABLE,  # Quick identity check
     "process_agent_update": ToolStability.STABLE,
     "get_governance_metrics": ToolStability.STABLE,
-    "store_knowledge_graph": ToolStability.STABLE,
+    "knowledge": ToolStability.STABLE,
     "search_knowledge_graph": ToolStability.STABLE,
-    "get_knowledge_graph": ToolStability.STABLE,
-    "list_knowledge_graph": ToolStability.STABLE,
-    "get_discovery_details": ToolStability.STABLE,
-    "list_agents": ToolStability.STABLE,
+    "self_recovery": ToolStability.STABLE,
     "health_check": ToolStability.STABLE,
     "list_tools": ToolStability.STABLE,
     "describe_tool": ToolStability.STABLE,
-    "self_recovery_review": ToolStability.STABLE,  # Primary recovery path
-    "quick_resume": ToolStability.STABLE,  # Fast recovery path
-    "check_recovery_options": ToolStability.STABLE,  # Diagnostic tool
 
     # BETA: Mostly stable, minor changes possible
+    "admin": ToolStability.BETA,
+    "agent": ToolStability.BETA,  # list_agents was STABLE, archive_agent BETA
+    "archive_old_test_agents": ToolStability.BETA,
+    "archive_orphan_agents": ToolStability.BETA,
+    "bind_session": ToolStability.BETA,
+    "calibration": ToolStability.BETA,
+    "call_model": ToolStability.BETA,
+    "cirs_protocol": ToolStability.BETA,
+    "config": ToolStability.BETA,
+    "consult": ToolStability.BETA,
+    "dashboard": ToolStability.BETA,
+    "delegate_inference": ToolStability.BETA,
+    "describe_inference_host": ToolStability.BETA,
+    "detect_stuck_agents": ToolStability.BETA,
     "dialectic": ToolStability.BETA,  # Consolidated dialectic queries (get/list)
-    "observe_agent": ToolStability.BETA,
-    "compare_agents": ToolStability.BETA,
-    "archive_agent": ToolStability.BETA,
-    "update_discovery_status_graph": ToolStability.BETA,
+    "export": ToolStability.BETA,
+    "get_thresholds": ToolStability.BETA,
+    "get_trajectory_status": ToolStability.BETA,
+    "get_workspace_health": ToolStability.BETA,
     "leave_note": ToolStability.BETA,
+    "list_inference_hosts": ToolStability.BETA,
+    "list_process_bindings": ToolStability.BETA,
+    "mark_response_complete": ToolStability.BETA,
+    "observe": ToolStability.BETA,  # observe_agent / compare_agents BETA, anomalies / aggregate EXPERIMENTAL
+    "onboard": ToolStability.BETA,
     "operator_resume_agent": ToolStability.BETA,  # Operator tool
-    
-    "request_dialectic_review": ToolStability.BETA,  # Restored Feb 2026 - full protocol active
-
+    "outcome_correlation": ToolStability.BETA,
+    "outcome_event": ToolStability.BETA,
+    "record_progress_pulse": ToolStability.BETA,
+    "set_thresholds": ToolStability.BETA,
+    "skills": ToolStability.BETA,
+    "verify_trajectory_identity": ToolStability.BETA,
 
     # EXPERIMENTAL: WIP, may change/break
     "simulate_update": ToolStability.EXPERIMENTAL,
-    "detect_anomalies": ToolStability.EXPERIMENTAL,
-    "aggregate_metrics": ToolStability.EXPERIMENTAL,
 }
 
 # Default stability for unlisted tools
@@ -549,8 +573,9 @@ def resolve_tool_alias(tool_name: str) -> tuple[str, Optional[ToolAlias]]:
     return tool_name, None
 
 def get_tool_stability(tool_name: str) -> ToolStability:
-    """Get stability tier for a tool"""
-    return _TOOL_STABILITY.get(tool_name, _DEFAULT_STABILITY)
+    """Stability tier for a tool; an alias reports its canonical tool's tier."""
+    canonical, _ = resolve_tool_alias(tool_name)
+    return _TOOL_STABILITY.get(canonical, _DEFAULT_STABILITY)
 
 
 def is_experience_alias(tool_name: str) -> bool:
