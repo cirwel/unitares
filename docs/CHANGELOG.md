@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.22.0] - 2026-09-07
 
+<!-- changelog-coverage-exempt: #2079 no-user-effect -->
+
 ### Changed
 
 - **tool surface:** the default MCP surface is now `GOVERNANCE_TOOL_MODE=minimal` — the five-tool checkpoint loop (`start_session`, `identity`, `sync_state`, `record_result`, `check_working_state`). The previous default, `lite` (29 tools), and `full` remain one flag away. `minimal` no longer carries `list_tools` / `describe_tool`: with five tools the MCP client's native `tools/list` is the discovery surface, and the two introspection tools stay on `lite` and `full`. Nothing is force-included in any mode any more; the mode set is the advertised surface. Deployments that relied on the default and want the wider surface advertised to schema-driven clients (Claude Code, Codex) set `GOVERNANCE_TOOL_MODE=lite`; the operator LaunchAgent template and `.env.example` document the knob, and the template pins `lite`. (#2081)
