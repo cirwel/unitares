@@ -20,7 +20,7 @@ wired). See
 [`dormant-capability-registry.md`](../operations/dormant-capability-registry.md)
 for the false-positive history this avoids.
 
-**43 registered tools · 8 consolidated (52 actions) · 70 aliases.**
+**42 registered tools · 8 consolidated (52 actions) · 70 aliases.**
 
 ## Content-addressed snapshots
 
@@ -51,7 +51,7 @@ removal authority.
 | `lite` | 29 | 29 | — | — |
 | `operator_readonly` | 12 | 12 | — | — |
 | `operator_recovery` | 16 | 16 | — | — |
-| `full` | 66 | 51 | `aggregate_metrics`, `archive_agent`, `backfill_calibration_from_dialectic`, `check_calibration`, `cleanup_knowledge_graph`, `compare_agents`, `compare_me_to_similar`, `delete_agent` … +15 | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
+| `full` | 65 | 50 | `aggregate_metrics`, `archive_agent`, `backfill_calibration_from_dialectic`, `check_calibration`, `cleanup_knowledge_graph`, `compare_agents`, `compare_me_to_similar`, `delete_agent` … +15 | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
 
 ### Workflow alias views
 
@@ -111,7 +111,6 @@ edits that changed no edge.
 | `describe_tool` | `src/mcp_handlers/introspection/tool_introspection.py handle_describe_tool` | `src/mcp_handlers/schemas/admin.py DescribeToolParams` | 10s | identity=pre_onboard |
 | `detect_stuck_agents` | `src/mcp_handlers/lifecycle/stuck.py handle_detect_stuck_agents` | `src/mcp_handlers/schemas/lifecycle.py DetectStuckAgentsParams` | 15s | identity=pre_onboard |
 | `dialectic` | `src/mcp_handlers/consolidated.py action_router` | `src/mcp_handlers/schemas/dialectic.py DialecticParams` | 115s | — |
-| `direct_resume_if_safe` | `src/mcp_handlers/lifecycle/resume.py handle_direct_resume_if_safe` | `src/mcp_handlers/schemas/lifecycle.py DirectResumeIfSafeParams` | 10s | deprecated→`self_recovery` |
 | `export` | `src/mcp_handlers/consolidated.py action_router` | `src/mcp_handlers/schemas/export.py ExportParams` | 45s | — |
 | `get_governance_metrics` | `src/mcp_handlers/core.py handle_get_governance_metrics` | `src/mcp_handlers/schemas/core.py GetGovernanceMetricsParams` | 10s | identity=pre_onboard |
 | `get_thresholds` | `src/mcp_handlers/admin/config.py handle_get_thresholds` | `src/mcp_handlers/schemas/admin.py GetThresholdsParams` | 10s | — |

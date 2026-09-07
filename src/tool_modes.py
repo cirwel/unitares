@@ -215,7 +215,6 @@ TOOL_TIERS: dict[str, Set[str]] = {
         "export_to_file",
         "update_agent_metadata",
         "archive_old_test_agents",
-        "direct_resume_if_safe",
         "request_dialectic_review",
         "backfill_calibration_from_dialectic",
         "reset_monitor",
@@ -260,7 +259,6 @@ TOOL_OPERATIONS: dict[str, str] = {
     "delete_agent": "write",              # Delete agent
     "archive_old_test_agents": "write",   # Bulk archive
     "mark_response_complete": "write",    # Update agent status
-    "direct_resume_if_safe": "write",     # Resume agent
     "request_dialectic_review": "write",  # Start dialectic recovery
     "reset_monitor": "write",             # Reset agent state
 

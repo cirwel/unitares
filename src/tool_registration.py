@@ -354,7 +354,6 @@ TOOLS_NEEDING_SESSION_INJECTION = {
     "export_to_file",
     "mark_response_complete",
     "request_dialectic_review",
-    "direct_resume_if_safe",
     "update_discovery_status_graph",
     "get_discovery_details",
     "dialectic",

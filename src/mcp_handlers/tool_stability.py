@@ -79,7 +79,8 @@ _SEARCH_SHARED_MEMORY_NORMALIZER = normalize_compact_search_details
 # dead registration pointed at -- and their registrations are now register=False
 # (admin group in admin/handlers.py, dialectic group in dialectic/handlers.py).
 # The fifteenth, direct_resume_if_safe, was broken rather than redundant,
-# because its alias target was itself register=False; see the note below.
+# because its alias target was itself register=False; it was removed outright
+# on 2026-09-07 (see the recovery note below).
 #
 # Guarded by ALIAS_SHADOWS_REGISTERED_TOOL in scripts/dev/tool_edge_index.py and
 # by test_no_alias_name_is_also_a_registered_tool.
@@ -213,25 +214,19 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
 
     # Recovery tools - consolidated recovery hierarchy (Jan 2026)
     #
-    # direct_resume_if_safe is deliberately NOT aliased. It carried
-    # new_name="quick_resume" until 2026-08-29, and quick_resume is
-    # register=False (it is a self_recovery delegate, not a dispatch tool), so
-    # every call resolved to a name absent from TOOL_HANDLERS and died on
-    # tool_not_found_error -- the tool's own registered handler was shadowed by
-    # its alias and never ran. The repo's own audit reported this as
-    # ALIAS_TARGET_MISSING at error severity.
-    #
-    # Retargeting to self_recovery(action="quick") would have been the smaller
-    # diff and the wrong fix: quick_resume resumes only at risk < 0.40, while
-    # this handler resumes at risk < 0.60, so the 0.40-0.60 no-reflection band
-    # would have silently disappeared. Dropping the alias restores the declared
-    # behavior; deprecation is still declared on the @mcp_tool decorator
-    # (deprecated=True, superseded_by=...), which stamps the [DEPRECATED]
-    # description prefix and keeps the tool out of orientation in any mode that
-    # does not advertise it.
-    #
-    # Retiring the 0.40-0.60 band is a live option, but it is a behavior change
-    # and belongs to the operator, not to a bug fix.
+    # direct_resume_if_safe (deprecated 2026-01-29, superseded by self_recovery)
+    # was removed on 2026-09-07 at the operator's direction, and it is
+    # deliberately NOT aliased here. An alias to self_recovery(action="quick")
+    # would answer the old name with narrower behavior: quick resumes only at
+    # risk < 0.40, while the removed handler resumed without reflection up to
+    # risk < 0.60. Retiring that 0.40-0.60 no-reflection band is the substance
+    # of the removal (the deprecation's own migration: quick below 0.40, review
+    # with reflection above), so a caller of the old name gets
+    # tool_not_found_error and the difflib suggestion rather than a silently
+    # different resume. Until 2026-08-29 the name carried a dangling alias to
+    # the register=False delegate quick_resume, which shadowed its own handler
+    # (ALIAS_TARGET_MISSING at error severity); that history is why this note
+    # exists.
 
     # Dialectic tools - legacy creation remains archived (except request_dialectic_review restored)
     "request_exploration_session": ToolAlias(
@@ -527,8 +522,6 @@ _TOOL_STABILITY: Dict[str, ToolStability] = {
     
     "request_dialectic_review": ToolStability.BETA,  # Restored Feb 2026 - full protocol active
 
-    # DEPRECATED: Will be removed in v2.0
-    "direct_resume_if_safe": ToolStability.EXPERIMENTAL,  # Deprecated - use quick_resume or self_recovery_review
 
     # EXPERIMENTAL: WIP, may change/break
     "simulate_update": ToolStability.EXPERIMENTAL,

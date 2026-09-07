@@ -18,13 +18,15 @@ from src.governance_glossary import EISV_INLINE_SUMMARY
 # tool_not_found_error, with the deprecated tool's own working handler sitting
 # right there unused.
 #
-# Both entries below were in that state. `direct_resume_if_safe` pointed at
-# `quick_resume` and `request_dialectic_review` at `self_recovery_review`;
-# neither is registered -- both are internal delegates of `self_recovery`,
-# reachable only as `self_recovery(action="quick"|"review")`. Same defect class
-# as the dangling `direct_resume_if_safe -> quick_resume` alias removed in
-# #1994, one surface over: that fix repaired what the alias *dispatched* to and
-# left what the deprecation block *says* untouched.
+# Both entries of 2026-08-29 were in that state: `direct_resume_if_safe`
+# pointed at `quick_resume` and `request_dialectic_review` at
+# `self_recovery_review`; neither is registered -- both are internal delegates
+# of `self_recovery`, reachable only as `self_recovery(action="quick"|"review")`.
+# Same defect class as the dangling `direct_resume_if_safe -> quick_resume`
+# alias removed in #1994, one surface over: that fix repaired what the alias
+# *dispatched* to and left what the deprecation block *says* untouched.
+# `direct_resume_if_safe` itself was removed on 2026-09-07, seven months after
+# its deprecation; `request_dialectic_review` is the one entry left.
 #
 # Guarded by SUPERSEDED_BY_TARGET_MISSING / MIGRATION_TARGET_MISSING in
 # scripts/dev/tool_edge_index.py and by
@@ -41,16 +43,6 @@ DEPRECATION_REGISTRY: Dict[str, Dict[str, str]] = {
             "Use dialectic(action='request', issue_description='...') instead. "
             "For a solo recovery that needs no peer, self_recovery(action='review', "
             "reflection='...') is the lighter path."
-        ),
-    },
-    "direct_resume_if_safe": {
-        "deprecated_since": "2026-01-29",
-        "superseded_by": "self_recovery",
-        "migration": (
-            "Use self_recovery(action='quick') if risk < 0.40 and no void is "
-            "active; otherwise use self_recovery(action='review', "
-            "reflection='...'). self_recovery(action='check') reports which of "
-            "the two the current state qualifies for."
         ),
     },
 }
@@ -206,44 +198,6 @@ TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
         "depends_on": [],
         "related_to": ["process_agent_update", "get_agent_metadata"],
         "category": "lifecycle"
-    },
-    "direct_resume_if_safe": {
-        "deprecated": True,
-        "deprecated_since": "2026-01-29",
-        "superseded_by": "self_recovery",
-        "depends_on": [],
-        "related_to": ["self_recovery"],
-        "category": "lifecycle",
-        "migration": "Use self_recovery(action='quick') if risk < 0.40 and no void is active; otherwise use self_recovery(action='review', reflection='...')"
-    },
-    "self_recovery_review": {
-        "depends_on": ["get_governance_metrics"],
-        "related_to": ["quick_resume", "check_recovery_options"],
-        "replaces": ["direct_resume_if_safe", "request_dialectic_review"],
-        "category": "lifecycle",
-        "recovery_hierarchy": {
-            "fastest": "quick_resume",
-            "primary": "self_recovery_review",
-            "diagnostic": "check_recovery_options"
-        },
-        "description": "Primary recovery path - requires reflection but allows recovery at moderate thresholds"
-    },
-    "quick_resume": {
-        "depends_on": ["get_governance_metrics"],
-        "related_to": ["self_recovery_review", "check_recovery_options"],
-        "category": "lifecycle",
-        "recovery_hierarchy": {
-            "fastest": "quick_resume",
-            "primary": "self_recovery_review",
-            "diagnostic": "check_recovery_options"
-        },
-        "description": "Fastest recovery path - no reflection needed, but requires very safe state"
-    },
-    "check_recovery_options": {
-        "depends_on": ["get_governance_metrics"],
-        "related_to": ["self_recovery_review", "quick_resume"],
-        "category": "lifecycle",
-        "description": "Read-only diagnostic tool to check recovery eligibility"
     },
     "get_system_history": {
         "depends_on": ["list_agents"],
@@ -510,6 +464,20 @@ TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
         "depends_on": [],
         "related_to": ["request_review", "check_working_state"],
         "category": "core",
+        # The three recovery paths are actions of this one router, not tools:
+        # quick_resume / self_recovery_review / check_recovery_options are
+        # register=False delegates and were listed here as if callable until
+        # 2026-09-07.
+        "recovery_hierarchy": {
+            "fastest": "self_recovery(action='quick')",
+            "primary": "self_recovery(action='review', reflection='...')",
+            "diagnostic": "self_recovery(action='check')",
+        },
+        "description": (
+            "Self-recovery router: check (read-only eligibility), quick (clearly "
+            "safe states, no reflection), review (moderate states, genuine "
+            "reflection required)"
+        ),
     },
     "outcome_event": {
         "depends_on": [],

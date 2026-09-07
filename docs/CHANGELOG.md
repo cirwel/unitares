@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **tools:** `direct_resume_if_safe`, deprecated 2026-01-29 in favour of `self_recovery` and annotated "will be removed in v2.0", is removed. It was a `full`-mode-only tool with no caller in the SDK, the governance plugin, or the reference residents. No alias is left behind: an alias to `self_recovery(action="quick")` would answer the old name with narrower behavior (quick resumes only at risk < 0.40; the removed handler resumed without reflection up to 0.60), and retiring that band is the substance of the removal, as the deprecation's own migration said: quick below 0.40, `review` with a reflection above. A caller of the old name now gets `tool_not_found_error` with a suggestion. The catalog's three recovery entries that named `register=False` delegates as if they were callable tools (`quick_resume`, `self_recovery_review`, `check_recovery_options`) are folded into `self_recovery`'s entry as its actions. Registered tools: 43 to 42.
+
 ## [2.22.0] - 2026-09-07
 
 ### Changed

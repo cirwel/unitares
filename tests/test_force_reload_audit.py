@@ -124,7 +124,6 @@ def test_at_least_one_dropped_site_per_module():
         "src/mcp_handlers/dialectic/auto_resolve.py",
         "src/mcp_handlers/lifecycle/operations.py",
         "src/mcp_handlers/lifecycle/mutation.py",
-        "src/mcp_handlers/lifecycle/resume.py",
         "src/mcp_handlers/identity/handlers.py",
         "src/mcp_handlers/support/condition_parser.py",
         "src/agent_loop_detection.py",
