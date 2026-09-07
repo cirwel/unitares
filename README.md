@@ -30,9 +30,9 @@ provenance layer extends into shared knowledge, structured review, leases,
 handoffs, consultation, and recovery. The chain stays replayable, and two live
 processes can contend for the same governed surface without silently colliding.
 
-The maintainer deployment also uses these surfaces to build UNITARES itself:
-agents search attributed memory, consult external models as advisory evidence,
-request review, and coordinate work without consultation becoming decision authority.
+UNITARES also uses these surfaces to build itself: agents search attributed
+memory, consult external models as advisory evidence, request review, and
+coordinate work without advice becoming authority.
 
 Self-hosted and single-operator by design. MCP is the primary agent-facing
 interface; REST, the public SDK, host adapters, and the dashboard expose the same
