@@ -237,13 +237,21 @@ def test_health_reports_status_and_version(cli_env):
 def test_tools_lists_core_governance_tools(cli_env):
     result = _run(cli_env, "tools")
     assert "Tools:" in result.stdout
-    # The /v1/tools REST surface lists canonical handler names (not the workflow
-    # aliases). Assert core tools that are stably present; the duplicate raw twins
-    # (process_agent_update / get_governance_metrics) were dropped from the lite
-    # orientation surface, so don't assert on them here.
-    assert "onboard" in result.stdout
-    assert "health_check" in result.stdout
-    assert "list_tools" in result.stdout
+    # The /v1/tools REST surface lists what the running mode advertises. The
+    # sacrificial server inherits the process default, minimal: the five-tool
+    # checkpoint loop under its workflow names. The lite-only names (onboard,
+    # health_check, list_tools) are not listed but stay callable by name --
+    # the onboard test below goes through one -- so nothing is asserted about
+    # their absence: descriptions may mention them.
+    assert "(minimal mode)" in result.stdout
+    for name in (
+        "start_session",
+        "identity",
+        "sync_state",
+        "record_result",
+        "check_working_state",
+    ):
+        assert name in result.stdout, name
 
 
 def test_onboard_persists_session_and_continuity_token(cli_env, tmp_path):

@@ -1,15 +1,23 @@
 """
-CI drift guard: the MCP wire surface must match LITE_MODE_TOOLS.
+CI drift guard: the advertised MCP wire surface must match the mode sets.
 
-`GOVERNANCE_TOOL_MODE` defaults to "lite" (src/tool_modes.py), so the deployed
-server advertises exactly the tools in `LITE_MODE_TOOLS` over the MCP protocol.
-That wire surface is composed from two places in src/mcp_server.py:
+`GOVERNANCE_TOOL_MODE` defaults to "minimal" (src/tool_modes.py): the five-tool
+checkpoint loop. Under `GOVERNANCE_TOOL_MODE=lite` the server advertises exactly
+the tools in `LITE_MODE_TOOLS` over the MCP protocol. That advertised surface
+is composed from two places (src/tool_registration.py + src/tool_mode_listing.py):
 
-  1. `register_dynamic_tools()` advertises every `register=True` handler
-     (`get_tool_registry()`) that passes the active mode filter.
-  2. `_register_common_aliases()` advertises the workflow aliases allowed by
-     the active mode (start_session, sync_state, ...), which resolve at dispatch
-     time to canonical handlers (onboard, process_agent_update, ...).
+  1. `auto_register_all_tools()` registers every `register=True` handler
+     (`get_tool_registry()`); the tools/list filter advertises those the
+     active mode names.
+  2. `_register_common_aliases()` registers every workflow alias
+     (start_session, sync_state, ...), which resolve at dispatch time to
+     canonical handlers (onboard, process_agent_update, ...); the filter
+     advertises those the active mode names.
+
+Registration is mode-independent since the 2026-09 surface cut, so a name
+outside the mode still dispatches on /mcp/ (tests/test_tool_mode_listing.py);
+what these tests pin is the ADVERTISED set, which is all a schema-driven client
+can see.
 
 If someone adds a tool to `LITE_MODE_TOOLS` but forgets `register=True` (or an
 alias entry), it would be silently dropped from the wire — the client sees fewer
@@ -93,20 +101,19 @@ def test_lite_wire_surface_equals_lite_mode_tools():
 
 
 def test_recovery_hint_targets_are_advertised_in_lite():
-    """A tool named in another tool's recovery hints must be reachable in lite.
+    """A tool named in another tool's recovery hints must be advertised in lite.
 
-    On the live streamable-HTTP `/mcp/` transport a `register=True` handler that
-    is NOT in the advertised set comes back `Unknown tool` — verified 2026-08-11
-    against the deployed server on :8767 for both `get_workspace_health` and
-    `process_agent_update`, with no `audit.tool_usage` row, so the rejection
-    happens above the audited dispatch layer. "Unadvertised but still callable"
-    holds for the REST/gateway paths, NOT for a `/mcp/` client.
+    History: on the live streamable-HTTP `/mcp/` transport a `register=True`
+    handler that was NOT in the advertised set came back `Unknown tool` —
+    verified 2026-08-11 against the deployed server on :8767 for both
+    `get_workspace_health` and `process_agent_update`. The 2026-09 surface cut
+    removed that coupling: the mount now registers every handler and filters
+    only tools/list (src/tool_mode_listing.py), so an unadvertised name
+    dispatches on `/mcp/` as it always did on REST.
 
-    Consequence: pulling one of these from LITE_MODE_TOOLS to reduce orientation
-    noise would turn `call_model`'s own `related_tools` pointers into dead ends
-    for every MCP-native agent. That trade was considered and rejected; this test
-    is the guard, so a future trim has to confront the transport behavior rather
-    than rediscover it.
+    The guard stays because a schema-driven MCP client only calls names it was
+    shown: a `related_tools` hint that names an unadvertised tool is still a
+    dead end for that client, even though the server would dispatch it.
     """
     registry = set(get_tool_registry().keys())
 
@@ -118,6 +125,25 @@ def test_recovery_hint_targets_are_advertised_in_lite():
             "in lite mode — an MCP-native agent following that hint gets "
             "'Unknown tool'. Either re-advertise it or strip the hint."
         )
+
+
+def test_minimal_wire_surface_is_the_five_tool_loop():
+    """The default (minimal) advertised surface is exactly the checkpoint loop."""
+    allowed = get_tools_for_mode("minimal")
+    registry = set(get_tool_registry().keys())
+    surface = {name for name in registry if name in allowed}
+    for alias in workflow_alias_names_for_mode("minimal"):
+        _actual, info = resolve_tool_alias(alias)
+        if info is not None:
+            surface.add(alias)
+
+    assert surface == MINIMAL_MODE_TOOLS == {
+        "start_session",
+        "identity",
+        "sync_state",
+        "record_result",
+        "check_working_state",
+    }
 
 
 def test_every_lite_tool_is_backed_by_handler_or_alias():

@@ -86,9 +86,10 @@ jobs:
         bash scripts/client/check-skill-freshness.sh
 
     - name: Validate tool-mode / schema config
-      # DB-free: confirms TOOL_CATEGORIES matches the tool schema (alias-aware)
-      # and minimal/lite keep their discovery tools, so TOOL_MODE filtering stays
-      # consistent with the served surface.
+      # DB-free: confirms TOOL_CATEGORIES matches the tool schema (alias-aware),
+      # minimal is exactly the five-tool checkpoint loop, and lite keeps the
+      # loop plus the discovery tools, so TOOL_MODE filtering stays consistent
+      # with the served surface.
       run: |
         python scripts/diagnostics/validate_tool_modes.py
 

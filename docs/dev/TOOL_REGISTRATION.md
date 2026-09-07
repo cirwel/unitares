@@ -40,9 +40,12 @@ TOOLS_NEEDING_SESSION_INJECTION = {
 }
 ```
 
-**Step 4: Add the tool to a tier** in `src/tool_modes.py` (`TOOL_TIERS`) — if the
-server runs a restricted tool mode, tools outside the mode's tiers are filtered
-out of registration entirely (see Common Mistakes #5).
+**Step 4: Add the tool to a tier** in `src/tool_modes.py` (`TOOL_TIERS`) and,
+if agents should see it without `GOVERNANCE_TOOL_MODE=full`, to the right mode
+set (`LITE_MODE_TOOLS`; `MINIMAL_MODE_TOOLS` is the five-tool checkpoint loop
+and does not grow). A tool outside the active mode set is still registered and
+callable by name on every transport; it is absent from `tools/list` (see Common
+Mistakes #5).
 
 ---
 
@@ -72,7 +75,9 @@ out of registration entirely (see Common Mistakes #5).
 `auto_register_all_tools` in `src/tool_registration.py` (called from `mcp_server.py`):
 1. Reads all tool definitions from `tool_schemas.py`
 2. **Filters to only tools in `_TOOL_DEFINITIONS`** (tools with `register=True`)
-3. **Filters by the active tool mode** — `get_tools_for_mode(TOOL_MODE)` unless the mode is `full`
+3. **Does not apply the tool mode** — every registered tool is registered with
+   FastMCP whatever `GOVERNANCE_TOOL_MODE` says; the mode filters `tools/list`
+   only, through `src/tool_mode_listing.py::mode_filtered_server_class`
 4. Creates FastMCP wrappers for each tool
 5. Injects `client_session_id` for tools in `TOOLS_NEEDING_SESSION_INJECTION`
 6. Registers with `mcp.tool()` decorator
@@ -295,8 +300,10 @@ authoritative list; sizes drift, don't trust counts written into prose):
 | `common` | Regular use | `onboard`, `process_agent_update`, `list_tools` |
 | `advanced` | Operator/rare use | `admin`, diagnostics tools |
 
-**When adding a new tool, add it to the appropriate tier.** Tier membership is
-not just cosmetic: restricted tool modes register only their tiers' tools.
+**When adding a new tool, add it to the appropriate tier**, and to a mode set
+if agents should be shown it below `full`. Mode membership decides what
+`tools/list` advertises; registration (and therefore dispatch by name) is the
+same in every mode.
 
 ---
 
@@ -337,10 +344,12 @@ Aliases are resolved at dispatch time, so old tool names continue to work.
 **Cause:** Tool not in `TOOLS_NEEDING_SESSION_INJECTION`.
 **Fix:** Add tool name to the set in `src/tool_registration.py`.
 
-### 5. Tool registered but absent under a restricted tool mode
-**Cause:** Tool not in any tier the active `TOOL_MODE` includes — the
-registration pass filters through `get_tools_for_mode`.
-**Fix:** Add the tool to the right tier in `src/tool_modes.py`.
+### 5. Tool registered but absent from `tools/list` under a restricted tool mode
+**Cause:** Tool not in the active mode's set — `tools/list` is filtered through
+`get_public_tool_definitions(TOOL_MODE)`. The tool still dispatches by name
+(REST, stdio, and `/mcp/` alike); a schema-driven client just cannot see it.
+**Fix:** Add the tool to the right mode set in `src/tool_modes.py`, or run the
+server with a wider `GOVERNANCE_TOOL_MODE`.
 
 ### 6. Every action of a new consolidated tool refused for unbound callers
 **Cause:** `action_router` called without `pre_onboard_actions` — all actions

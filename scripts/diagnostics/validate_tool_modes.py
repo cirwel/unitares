@@ -6,7 +6,10 @@ Checks:
 - TOOL_CATEGORIES contains only tools that exist in the schema
 - Every schema tool is either categorized OR at least reachable via TOOL_MODE=full
 - Full mode includes all schema tools (source of truth)
-- Minimal/Lite contain required discovery tools (list_tools, describe_tool)
+- Minimal is exactly the five-tool checkpoint loop (no discovery tools: with
+  five tools the client's native tools/list is the discovery surface)
+- Lite is a superset of minimal and carries the discovery tools
+  (list_tools, describe_tool)
 
 Run:
   python3 scripts/diagnostics/validate_tool_modes.py
@@ -65,12 +68,24 @@ def main() -> int:
     full_missing = sorted(schema_set - full_mode_set)
     full_extra = sorted(full_mode_set - schema_set)
 
-    # Minimal/lite should include discovery tools
+    # Minimal is the five-tool checkpoint loop, exactly. Growing or shrinking
+    # it is a product decision (README "Five tools"), not a drift to absorb.
+    # Discovery tools are deliberately absent: with five tools the MCP client's
+    # native tools/list is the discovery surface, and list_tools/describe_tool
+    # live on lite/full (and stay callable by name in every mode).
+    checkpoint_loop = {
+        "start_session",
+        "identity",
+        "sync_state",
+        "record_result",
+        "check_working_state",
+    }
     required_discovery = {"list_tools", "describe_tool"}
     minimal_set = tool_modes.get_tools_for_mode("minimal")
     lite_set = tool_modes.get_tools_for_mode("lite")
-    minimal_missing = sorted(required_discovery - minimal_set)
-    lite_missing = sorted(required_discovery - lite_set)
+    minimal_missing = sorted(checkpoint_loop - minimal_set)
+    minimal_extra = sorted(minimal_set - checkpoint_loop)
+    lite_missing = sorted((required_discovery | checkpoint_loop) - lite_set)
 
     ok = True
 
@@ -106,15 +121,21 @@ def main() -> int:
             for n in full_extra:
                 print(f"    - {n}")
 
-    if minimal_missing:
+    if minimal_missing or minimal_extra:
         ok = False
-        print("FAIL: minimal mode missing discovery tools:")
-        for n in minimal_missing:
-            print(f"  - {n}")
+        print("FAIL: minimal mode is not the five-tool checkpoint loop.")
+        if minimal_missing:
+            print("  Missing from minimal:")
+            for n in minimal_missing:
+                print(f"    - {n}")
+        if minimal_extra:
+            print("  Extra in minimal (widen lite instead, or decide the loop grows):")
+            for n in minimal_extra:
+                print(f"    - {n}")
 
     if lite_missing:
         ok = False
-        print("FAIL: lite mode missing discovery tools:")
+        print("FAIL: lite mode missing the checkpoint loop or the discovery tools:")
         for n in lite_missing:
             print(f"  - {n}")
 

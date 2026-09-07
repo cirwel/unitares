@@ -141,7 +141,7 @@ checks:
 | `count_tools.py` | Canonical tool counter — counts from the runtime decorator registry (`--json`, `--by-module`). Without runtime deps it reports *unavailable* rather than a number (`available: false` in JSON, the `unavailable` sentinel on stdout); `--require-registry` makes that an exit-2 failure. |
 | `update_docs_tool_count.py` | Check (`--check`) or update (`--update`) tool-count references in docs, counting via `count_tools.py`. Without runtime deps `--check` skips and says so — it enforces nothing; `--require-registry` (used by the CI `smoke` gate) turns that skip into a failure. |
 | `check_ci_python_matrix_sync.py` | Interpreter contract: the tests.yml `test_shard` matrix (parsed, and its setup-python step must consume it) includes pyproject's `requires-python` floor and the `# production-python:` marker in `constraints.txt`, which must equal the Dockerfile base image and any framework interpreter hardcoded in `scripts/ops` templates. Unreadable input is a failure, not a pass. Wired into the CI `smoke` gate. |
-| `validate_tool_modes.py` | Asserts `TOOL_CATEGORIES` matches the tool schema (alias-aware) and that minimal/lite keep their discovery tools. DB-free; wired into the CI `smoke` gate. |
+| `validate_tool_modes.py` | Asserts `TOOL_CATEGORIES` matches the tool schema (alias-aware), that minimal is exactly the five-tool checkpoint loop, and that lite keeps the loop plus the discovery tools. DB-free; wired into the CI `smoke` gate. |
 
 ### `migration/`
 Database maintenance scripts (corpus re-embedding, ghost agent cleanup, knowledge graph maintenance).
