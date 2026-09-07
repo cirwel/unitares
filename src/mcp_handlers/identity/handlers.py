@@ -1878,7 +1878,13 @@ def _build_tool_mode_info(verbose: bool):
                 "visible_tools": len(mode_tools),
                 "total_tools": len(all_tools),
                 "available_modes": ["minimal", "lite", "full"],
-                "tip": f"You're seeing {len(mode_tools)}/{len(all_tools)} tools in '{TOOL_MODE}' mode. Use list_tools() for discovery, or ask for ?mode=full if you need more."
+                "tip": (
+                    f"You're seeing {len(mode_tools)}/{len(all_tools)} tools in "
+                    f"'{TOOL_MODE}' mode. The rest stay callable by name; to "
+                    "advertise them, run the server with "
+                    "GOVERNANCE_TOOL_MODE=lite or full (list_tools() and "
+                    "describe_tool() are on those surfaces)."
+                ),
             }
         except Exception as e:
             logger.debug(f"Could not add tool_mode info: {e}")

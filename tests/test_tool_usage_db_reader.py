@@ -172,6 +172,10 @@ def test_progressive_ordering_uses_total_calls(monkeypatch):
         return {"health_check": {"total_calls": 50}, "describe_tool": {"total_calls": 5}}
 
     monkeypatch.setattr(ti, "_usage_tools_for_ordering", fake_usage)
+    # The compact view follows the deployment's advertised surface; the process
+    # default (minimal) carries neither health_check nor describe_tool, so pin
+    # lite: this test is about ordering, not the default surface.
+    monkeypatch.setattr("src.tool_modes.TOOL_MODE", "lite")
     resp = json.loads(asyncio.run(handle_list_tools({"progressive": True}))[0].text)
     names = [t["name"] for t in resp["tools"]]
     # 50-call tool must sort ahead of the 5-call tool; both ahead of any 0-call tool.

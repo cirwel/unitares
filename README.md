@@ -48,14 +48,61 @@ including the open ones.
 
 ---
 
+## Five tools
+
+The default MCP surface is the checkpoint loop and nothing else:
+
+| Tool | Job |
+|---|---|
+| `start_session` | Identity binding. Mints a process identity and returns the `client_session_id` that later writes carry. |
+| `identity` | Re-binds a durable process to its existing anchor, so "is this the same agent as yesterday" can be asked at all. |
+| `sync_state` | The check-in. Records what the process claims it did and its stated confidence, and returns the state estimate, a policy action, and a named reason. |
+| `record_result` | Evidence. A test, task, or external outcome, graded against the check-in it belongs to. Without outcomes the state estimate is self-report scored by heuristics. |
+| `check_working_state` | Reads the current verdict without writing. |
+
+Everything else stays registered and callable by name, and is advertised only
+when the server runs a wider profile: `GOVERNANCE_TOOL_MODE=lite` adds shared
+memory, structured review, advisory inference, and the consolidated routers;
+`full` adds the operator and admin tools. See [Beyond the five](#beyond-the-five).
+Released builds through v2.21.0 default to `lite`; set
+`GOVERNANCE_TOOL_MODE=minimal` there to get this surface.
+
 ## Quickstart
 
 ```bash
 git clone --branch v2.21.0 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
-docker compose up -d --wait
-make coordination-demo
+docker compose up -d --wait   # PostgreSQL/AGE/pgvector, Redis, lease plane, server on loopback
 ```
+
+MCP clients connect to `http://localhost:8767/mcp/`; the dashboard is at
+`http://localhost:8767/dashboard`. The loop, from any client:
+
+```python
+session = start_session(force_new=True)
+sid = session["client_session_id"]
+
+result = sync_state(
+    response_text=output,
+    complexity=0.6,
+    confidence=0.8,
+    client_session_id=sid,
+)
+if result.get("success") is False:  # refused write, e.g. the agent is paused
+    return_to_operator(result.get("recovery"))
+elif result.get("state_summary", {}).get("action") == "pause":
+    return_to_operator(result.get("next_action"))  # application-defined boundary
+
+record_result(
+    outcome_type="test_passed" if tests_passed else "test_failed",
+    prediction_id=result.get("prediction_id"),  # grades this check-in's claim
+    client_session_id=sid,
+)
+state = check_working_state(client_session_id=sid)
+```
+
+`success=False` means the governed write was refused. A pause returned on an
+accepted response is the host's to honor, at surfaces UNITARES does not own.
 
 This release-tagged Docker Compose flow is the supported install path for a
 local, single-operator deployment. It brings up PostgreSQL/AGE/pgvector, Redis,
@@ -76,9 +123,7 @@ To exercise longitudinal state next, run `make demo`. It onboards a fresh
 process and sends six check-ins over the real API, printing the response shape,
 decision reason, state detail, and warmup position.
 
-The dashboard is at `http://localhost:8767/dashboard`; MCP clients connect to
-`http://localhost:8767/mcp/`; the lease plane listens on
-`http://127.0.0.1:8788` with bearer auth.
+The lease plane listens on `http://127.0.0.1:8788` with bearer auth.
 
 Evaluating rather than installing? Start with
 [Evidence and limits](#evidence-and-limits) and the
@@ -161,54 +206,34 @@ The lowercase residents under [`agents/`](agents/README.md) are reference
 clients and operational examples, not the Resident product and not a framework
 to subclass.
 
-## Integrate an MCP client
-
-`start_session` and `sync_state` are tools exposed by the connected UNITARES
-server. A fresh process creates its own identity, then includes the returned
-session binding on later writes:
-
-```python
-session = start_session(force_new=True)
-
-result = sync_state(
-    response_text=output,
-    complexity=0.6,
-    confidence=0.8,
-    client_session_id=session["client_session_id"],
-)
-
-if result.get("success") is False:  # refused write, e.g. the agent is paused
-    return_to_operator(result.get("recovery"))
-elif result.get("state_summary", {}).get("action") == "pause":
-    return_to_operator(result.get("next_action"))  # application-defined boundary
-```
-
-`success=False` means the governed write was refused. A pause returned on an
-accepted response is the host's to honor, at surfaces UNITARES does not own.
+## Beyond the five
 
 For a durable resident, preserve its identity anchor rather than minting a new
-identity on every run; the [SDK lifecycle example](agents/sdk/README.md) handles
-that continuity. Pair self-reported confidence with verifiable evidence wherever
-possible:
+identity on every run: `identity(agent_uuid=...)` re-binds it, and the
+[SDK lifecycle example](agents/sdk/README.md) handles that continuity. When
+recording an outcome for a specific check-in, pass the `prediction_id` from that
+check-in's response so the outcome grades that claim rather than an unrelated
+earlier one.
 
-| Need | Tool |
+The wider surfaces are one flag away. `GOVERNANCE_TOOL_MODE=lite` advertises
+the agent surface below in addition to the five; `full` advertises every
+registered tool. Pair self-reported confidence with verifiable evidence
+wherever possible:
+
+| Need | Tool (`lite` and `full`) |
 |---|---|
 | Search shared memory before writing | `search_shared_memory(query=...)` |
-| Record a test, task, or external outcome | `record_result(...)` |
+| Store or revise a durable finding | `store_finding(...)`, `update_finding(...)` |
 | Ask a model for advisory help | `consult(brief=..., purpose=...)` |
 | Request governed, on-record review | `request_review(issue_description=...)` |
-| Read state without writing | `check_working_state()` |
+| Enumerate and explain the live surface | `list_tools()`, `describe_tool(tool_name=...)` |
 
 See the [advisory consultation facade proposal](docs/proposals/consult-advisory-facade-v1.md)
 for the routing, privacy, and authority contract behind `consult`.
 
-When recording an outcome for a specific check-in, pass the `prediction_id` from
-that check-in's response so the outcome grades that claim rather than an
-unrelated earlier one.
-
-`list_tools()` enumerates the complete live surface and
-`describe_tool(tool_name=...)` explains any one tool. MCP, REST, the SDK, and host
-adapters all reach the same server.
+A mode decides what `tools/list` advertises, not what dispatches. A name outside
+the running mode still resolves for a caller that knows it, on MCP, REST, the
+SDK, and host adapters alike, because all of them reach the same server.
 
 ## How the runtime loop works
 
@@ -256,7 +281,7 @@ a prototype or a system?
 
 | | |
 |---|---|
-| **106 MCP tools** | identity, state, knowledge, review, coordination, inference routing, and admin surfaces, all discoverable through `list_tools()` |
+| **43 tools** on the wire | five advertised by default and the rest behind `GOVERNANCE_TOOL_MODE`; 8 of the 43 are consolidated routers over 52 actions, 8 workflow aliases carry the agent-facing names, and a 70-entry alias table resolves legacy names |
 | **12,619 test functions** | across 720 files, sharded in CI, with the fleet-neutrality and evidence contracts enforced as tests rather than as conventions |
 | **64 database migrations** | slot-and-name drift is gated by the repo doctor |
 | **509 Python modules** | `src/`, `governance_core/`, and the reference residents |

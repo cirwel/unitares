@@ -84,9 +84,16 @@ def test_declared_mcp_support_matches_install_dependency():
 
 
 @pytest.mark.asyncio
-async def test_list_tools_is_the_live_federation_handshake():
+async def test_list_tools_is_the_live_federation_handshake(monkeypatch):
+    """list_tools(lite=true) reports the contract of the mode the server runs.
+
+    The checked-in artifact is the lite profile, so pin lite here; the process
+    default is minimal, whose handshake carries five capabilities and its own
+    surface hash.
+    """
     from src.mcp_handlers.introspection.tool_introspection import handle_list_tools
 
+    monkeypatch.setattr("src.tool_modes.TOOL_MODE", "lite")
     result = await handle_list_tools({"lite": True})
     payload = json.loads(result[0].text)
 
@@ -148,6 +155,9 @@ async def test_rest_and_stdio_discovery_share_lite_names_and_schemas(
     monkeypatch.delenv("UNITARES_HTTP_API_TOKEN", raising=False)
     monkeypatch.setattr(stdio, "STDIO_PROXY_HTTP_URL", None)
     monkeypatch.setattr(stdio, "STDIO_PROXY_URL", None)
+    # The checked-in artifact is the lite profile; the process default is
+    # minimal, so pin the mode the stdio listing reads rather than the default.
+    monkeypatch.setattr("src.tool_modes.TOOL_MODE", "lite")
 
     request = SimpleNamespace(
         query_params={"mode": "lite"},
@@ -175,17 +185,38 @@ async def test_rest_and_stdio_discovery_share_lite_names_and_schemas(
     )
 
 
-def test_streamable_mcp_advertises_the_lite_contract():
+@pytest.mark.asyncio
+async def test_streamable_mcp_advertises_the_lite_contract(monkeypatch):
+    """Under GOVERNANCE_TOOL_MODE=lite, tools/list on /mcp/ is the lite contract.
+
+    The mount registers the whole surface and filters only its listing
+    (src/tool_mode_listing.py), so the contract is checked against what
+    list_tools() returns, not against the tool manager's registrations.
+    """
     from src import mcp_server
 
+    monkeypatch.setattr("src.tool_modes.TOOL_MODE", "lite")
     expected = _expected_lite()
-    manager = mcp_server.mcp._tool_manager
-    advertised = manager._tools
+    advertised = {tool.name: tool for tool in await mcp_server.mcp.list_tools()}
 
     assert set(advertised) == set(expected)
     for name, schema in expected.items():
         # FastMCP normalizes schemas while creating typed wrappers, but the
         # accepted top-level arguments must remain the contract arguments.
-        assert set(advertised[name].parameters.get("properties", {})) == set(
+        listed_schema = get_tool_input_schema(advertised[name], {}) or {}
+        assert set(listed_schema.get("properties", {})) == set(
             schema.get("properties", {})
         )
+
+
+def test_streamable_mcp_registers_the_lite_contract_in_every_mode():
+    """A lite-contract name dispatches on /mcp/ whatever mode the server runs.
+
+    Registration is mode-independent; only the listing is filtered. So the
+    contract's names are all present in the tool manager even though the
+    process default (minimal) advertises five of them.
+    """
+    from src import mcp_server
+
+    registered = set(mcp_server.mcp._tool_manager._tools)
+    assert set(_expected_lite()) <= registered
