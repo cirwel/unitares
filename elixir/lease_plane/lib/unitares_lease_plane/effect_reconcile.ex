@@ -6,7 +6,7 @@ defmodule UnitaresLeasePlane.EffectReconcile do
   content hash against the recorded hashes — and act ONLY by writing a DB mark.
 
   The corruption defense, by construction: this NEVER restores file bytes. The
-  three outcomes are commit-forward, tombstone, or quarantine — all DB-only — so
+  requested marks are commit-forward, tombstone, or quarantine — all DB-only — so
   a competing writer that acquired the surface after the crash can never be
   clobbered by recovery. (The council BLOCKER on the original "blindly restore
   the pre-image" design is structurally eliminated here.)
@@ -21,57 +21,89 @@ defmodule UnitaresLeasePlane.EffectReconcile do
         touch the file.
 
   `repo` is injectable (default `EffectRepo`) so the dispatch is unit-testable
-  with a fake repo and a real temp file.
+  with a fake repo and a real temp file. A disposition is reported as resolved
+  only after the store acknowledges its mark with `:ok`. Failed or unexpected
+  replies return `{:unresolved, ...}`; they never establish persisted recovery.
   """
 
   alias UnitaresLeasePlane.EffectRepo
 
   require Logger
 
-  @type outcome :: :committed | :tombstoned | {:quarantined, term()}
+  @type resolved_outcome :: :committed | :tombstoned | {:quarantined, term()}
+  @type outcome ::
+          resolved_outcome()
+          | {:unresolved, {:persistence_failed, resolved_outcome(), term()}}
 
   @doc "Reconcile one orphaned payload row. Returns the outcome (also logged)."
   @spec reconcile_payload(map(), module()) :: outcome()
   def reconcile_payload(payload, repo \\ EffectRepo) do
-    effect_id = payload.effect_id
+    intended_outcome =
+      case surface_path(payload) do
+        {:ok, path} ->
+          classify(payload, current_file_sha(path))
 
-    case surface_path(payload) do
-      {:ok, path} ->
-        dispatch(payload, current_file_sha(path), repo)
+        {:error, reason} ->
+          # We cannot locate the surface — request quarantine, not a success claim.
+          {:quarantined, {:surface, reason}}
+      end
 
-      {:error, reason} ->
-        # We cannot even locate the surface — cannot prove safety. Quarantine.
-        repo.quarantine(effect_id)
-        Logger.error("effect_reconcile: #{effect_id} unresolved surface (#{inspect(reason)}) — quarantined")
-        {:quarantined, {:surface, reason}}
-    end
+    persist_outcome(payload.effect_id, intended_outcome, repo)
   end
 
-  defp dispatch(payload, {:ok, current_sha}, repo) do
-    effect_id = payload.effect_id
-
+  defp classify(payload, {:ok, current_sha}) do
     cond do
       current_sha == payload.payload_sha256 ->
-        repo.mark_committed(effect_id)
-        Logger.warning("effect_reconcile: #{effect_id} write completed pre-crash — commit-forwarded")
         :committed
 
       at_pre_image?(payload, current_sha) ->
-        repo.tombstone(effect_id)
-        Logger.warning("effect_reconcile: #{effect_id} surface at pre-image — tombstoned (retry will re-execute)")
         :tombstoned
 
       true ->
-        repo.quarantine(effect_id)
-        Logger.error("effect_reconcile: #{effect_id} surface DIRTY (competing/partial write) — quarantined, NOT touched")
         {:quarantined, :dirty}
     end
   end
 
-  defp dispatch(payload, {:error, reason}, repo) do
-    repo.quarantine(payload.effect_id)
-    Logger.error("effect_reconcile: #{payload.effect_id} file read failed (#{inspect(reason)}) — quarantined")
+  defp classify(_payload, {:error, reason}) do
     {:quarantined, {:read_error, reason}}
+  end
+
+  defp persist_outcome(effect_id, outcome, repo) do
+    result =
+      case outcome do
+        :committed -> repo.mark_committed(effect_id)
+        :tombstoned -> repo.tombstone(effect_id)
+        {:quarantined, _} -> repo.quarantine(effect_id)
+      end
+
+    case result do
+      :ok ->
+        message =
+          "effect_reconcile: #{effect_id} persisted recovery outcome " <>
+            "#{inspect(outcome)}; file untouched"
+
+        case outcome do
+          {:quarantined, _} -> Logger.error(message)
+          _ -> Logger.warning(message)
+        end
+
+        outcome
+
+      {:error, reason} ->
+        unresolved(effect_id, outcome, reason)
+
+      other ->
+        unresolved(effect_id, outcome, {:unexpected_reply, other})
+    end
+  end
+
+  defp unresolved(effect_id, intended_outcome, reason) do
+    Logger.error(
+      "effect_reconcile: #{effect_id} recovery unresolved; persistence not acknowledged " <>
+        "for #{inspect(intended_outcome)} (#{inspect(reason)}); file untouched"
+    )
+
+    {:unresolved, {:persistence_failed, intended_outcome, reason}}
   end
 
   defp at_pre_image?(payload, current_sha) do
@@ -114,12 +146,14 @@ defmodule UnitaresLeasePlane.EffectReconcile do
   end
 
   defp decode_leases(list) when is_list(list), do: {:ok, list}
+
   defp decode_leases(bin) when is_binary(bin) do
     case Jason.decode(bin) do
       {:ok, list} when is_list(list) -> {:ok, list}
       _ -> {:error, :bad_leases}
     end
   end
+
   defp decode_leases(_), do: {:error, :bad_leases}
 
   defp strip_file_scheme("file://" <> rest), do: rest
