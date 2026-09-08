@@ -366,6 +366,9 @@ Half of that structural lever is now **applied**. The `title` half was
 measured first (`scripts/diagnostics/tool_surface_cost.py --boilerplate`) and
 then removed, because the two halves are not the same proposition:
 
+The columns are that change's own before and after; later changes move the
+absolute numbers without changing what the cut was worth.
+
 | Profile | Before | After | Saved |
 |---|---|---|---|
 | `minimal` | 19,112 B | 17,096 B | 2,016 (10.5%) |
@@ -401,14 +404,19 @@ not a trim, and it is a separate decision.
 `scripts/diagnostics/count_tools.py` answers "how many tools are there".
 `scripts/diagnostics/tool_surface_cost.py` answers what a context budget
 actually asks — how much advertising them costs, in the bytes a client receives
-before the agent has decided it wants any of them. Measured 2026-09-08:
+before the agent has decided it wants any of them. Snapshot, 2026-09-08:
 
 | Profile | Tools | Advertised | ~tokens | vs `minimal` |
 |---|---|---|---|---|
 | `minimal` | 5 | 17,096 B | ~4,274 | 1.0x |
 | `standard` (default) | 15 | 51,875 B | ~12,968 | 3.0x |
-| `lite` | 29 | 81,618 B | ~20,404 | 4.8x |
-| `full` | 50 | 115,115 B | ~28,778 | 6.7x |
+| `lite` | 29 | 81,607 B | ~20,401 | 4.8x |
+| `full` | 50 | 115,104 B | ~28,776 | 6.7x |
+
+These are a snapshot, not a constant: any change to a parameter moves them.
+`lite` and `full` each dropped 11 B the same day when #2116 stopped advertising
+an unused `limit` on `observe(action='anomalies')`. Re-run the script rather
+than trusting the table if the exact figure matters.
 
 Bytes are measured; tokens are an estimate at 4 B/token, not a tokenizer
 result. Two things this table settles:
