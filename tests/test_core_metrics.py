@@ -1566,14 +1566,15 @@ class TestGenerateContextualReflection:
         )
         assert "pause" in result
 
-    def test_basin_boundary_returns_reflection(self):
+    def test_interpretation_threshold_names_dimension_without_basin_claim(self):
         from src.services.runtime_queries import _generate_contextual_reflection
         result = _generate_contextual_reflection(
             {"initialized": True, "verdict": "proceed", "S": 0.1},
-            {"state": {"borderline": {"S": {"value": 0.28}}}}
+            {"state": {"borderline": {"S": {"value": 0.28, "threshold": 0.3}}}}
         )
         assert result is not None
-        assert "basin boundary" in result
+        assert "S near 0.3" in result
+        assert "basin" not in result
 
     def test_high_entropy_returns_reflection(self):
         from src.services.runtime_queries import _generate_contextual_reflection

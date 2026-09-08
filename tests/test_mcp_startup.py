@@ -63,8 +63,7 @@ def test_server_advertises_the_default_profile_and_still_dispatches_the_rest():
     registered = set(mcp_server.mcp._tool_manager._tools)
     assert STANDARD_MODE_TOOLS <= listed
     assert listed <= registered
-    for name in ("knowledge", "dialectic", "observe", "list_tools",
-                 "describe_tool", "onboard"):
+    for name in ("dialectic", "observe", "list_tools", "onboard"):
         assert name not in listed, f"{name} is not part of the default profile"
         assert name in registered, f"{name} must still dispatch by name"
     # self_recovery moved into the default profile: the server names it to
@@ -72,6 +71,8 @@ def test_server_advertises_the_default_profile_and_still_dispatches_the_rest():
     # so a schema-driven client has to be able to see it.
     assert "self_recovery" in listed
     assert "self_recovery" in registered
+    # Ordinary detail/diagnostic hints must be usable by schema-driven clients.
+    assert {"knowledge", "describe_tool", "health_check"} <= listed
 
 
 def test_server_carries_instructions_naming_the_unadvertised_surface():

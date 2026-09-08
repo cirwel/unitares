@@ -56,10 +56,11 @@ UNITARES_COORDINATION_DEMO_PORT=18788 make coordination-demo
 
 ### Choosing the advertised tool surface (v2.23.0 and later)
 
-The default is the eleven-tool `standard` profile: the five-name checkpoint
+The default is the fourteen-tool `standard` profile: the five-name checkpoint
 loop plus shared memory (`search_shared_memory`, `store_finding`,
 `update_finding`), structured review (`request_review`), advisory inference
-(`consult`), and recovery (`self_recovery`). To
+(`consult`), recovery (`self_recovery`), and inspection (`knowledge`,
+`describe_tool`, `health_check`). To
 choose a different profile, set `GOVERNANCE_TOOL_MODE` in the checkout's `.env`
 file before starting the server, then run:
 
@@ -70,8 +71,8 @@ docker compose up -d --build --wait --force-recreate governance-mcp
 | Profile | Advertises |
 |---|---|
 | `minimal` | the five checkpoint names alone |
-| `standard` (default) | those five plus shared memory, review, advisory inference, and recovery |
-| `lite` | the above plus the consolidated routers and `list_tools` / `describe_tool` |
+| `standard` (default) | those five plus shared memory, review, advisory inference, recovery, and inspection |
+| `lite` | the above plus the remaining consolidated routers and `list_tools` |
 | `full` | every registered tool |
 
 Reconnect the MCP client so it refreshes discovery. Compose explicitly passes

@@ -348,7 +348,10 @@ class TestHandleSelfRecovery:
 
 class TestCheckRecoveryOptions:
 
-    def _make_mock_server(self, coherence=0.8, risk=0.3, void_active=False, void_value=0.0):
+    def _make_mock_server(
+        self, coherence=0.8, risk=0.3, void_active=False, void_value=0.0,
+        status="paused", risk_source="resolved",
+    ):
         mock_server = MagicMock()
         mock_monitor = MagicMock()
         mock_monitor.state.coherence = coherence
@@ -356,10 +359,11 @@ class TestCheckRecoveryOptions:
         mock_monitor.state.V = void_value
         mock_monitor.get_metrics.return_value = {
             "risk_score": risk,
-            "risk_score_source": "resolved",
+            "risk_score_source": risk_source,
             "mean_risk": risk,
         }
         mock_server.get_or_create_monitor.return_value = mock_monitor
+        mock_server.agent_metadata = {"test-uuid": MagicMock(status=status)}
         return mock_server
 
     @pytest.mark.asyncio
@@ -435,6 +439,47 @@ class TestCheckRecoveryOptions:
             assert data["recovery_policy"]["diagnostic_inputs"]["coherence"][
                 "authoritative"
             ] is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "status,risk,source,needed,eligible,recovery_status,authority",
+        [
+            ("active", None, None, False, False, "not_needed", "unmeasured"),
+            ("active", 0.3, "resolved", False, False, "not_needed", "resolved"),
+            ("active", None, "phi_history", False, False, "not_needed", "lost"),
+            ("paused", None, None, True, True, "eligible", "unmeasured"),
+            ("waiting_input", 0.3, "resolved", True, True, "eligible", "resolved"),
+            ("paused", None, "phi_history", True, False, "blocked", "lost"),
+            (None, 0.3, "resolved", None, False, "unknown", "resolved"),
+        ],
+    )
+    async def test_recovery_need_is_separate_from_risk(
+        self, status, risk, source, needed, eligible, recovery_status, authority
+    ):
+        from src.mcp_handlers.lifecycle.self_recovery import handle_check_recovery_options
+        mock_server = self._make_mock_server(status=status, risk=risk, risk_source=source)
+        with patch(
+            "src.mcp_handlers.lifecycle.self_recovery.require_registered_agent",
+            return_value=("test-agent", None),
+        ), patch(
+            "src.mcp_handlers.lifecycle.self_recovery.mcp_server", mock_server,
+        ):
+            result = await handle_check_recovery_options({"_agent_uuid": "test-uuid"})
+        text = json.loads(result[0].text)
+        data = text.get("data", text)
+        assert data["recovery_needed"] is needed
+        assert data["eligible"] is eligible
+        assert data["recovery_status"] == recovery_status
+        assert data["risk_authority"] == authority
+        assert data["status"] == status
+        if needed is False:
+            assert "Recovery is not needed" in data["recommendations"][0]
+            assert not any("action='review'" in item for item in data["recommendations"])
+        if authority == "unmeasured" and needed is False:
+            assert "uninitialized" in data["recommendations"][1]
+            assert data["metrics"]["risk_score"] is None
+        if authority == "lost":
+            assert any(b["type"] == "no_risk_authority" for b in data["blockers"])
 
     @pytest.mark.asyncio
     async def test_unregistered_agent_error(self):

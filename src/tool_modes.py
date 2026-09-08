@@ -3,8 +3,8 @@ Tool Modes - Define the ADVERTISED tool surface for different use cases
 
 Standard mode (default): the checkpoint loop plus the four capabilities an
     agent cannot reach any other way - shared memory (search / store / revise),
-    structured review, advisory inference, and recovery from a pause. Eleven
-    names, all task verbs.
+    structured review, advisory inference, and recovery from a pause. Fourteen
+    names, including detail inspection and recovery diagnostics.
 Minimal mode: the five-tool checkpoint loop alone - identity binding,
     re-binding, the check-in, outcome evidence, and a read of the verdict.
     Opt in with GOVERNANCE_TOOL_MODE=minimal when context is scarce.
@@ -48,7 +48,7 @@ MINIMAL_MODE_TOOLS: Set[str] = {
 }
 
 # Standard mode: the default advertised surface. The checkpoint loop plus the
-# six names that carry a capability an agent cannot reach any other way.
+# names that carry capabilities and the inspection paths its responses name.
 #
 # WHY THESE AND NOT OTHERS. A mode filters tools/list, and a schema-driven
 # client (Claude Code, Codex, Cursor) offers the model only what tools/list
@@ -58,10 +58,10 @@ MINIMAL_MODE_TOOLS: Set[str] = {
 # review, and advisory inference were registered, reachable, and dormant.
 #
 # The line is drawn at capability, not at count, and not at tool SHAPE. Each
-# name below is the only advertised way to reach something the server does;
-# every name NOT here is either a router whose actions these already cover, a
-# discovery tool (list_tools / describe_tool), or an operator surface. Those
-# stay in lite/full, where an operator opts into a wider listing.
+# task verb below reaches a capability an agent needs;
+# knowledge, describe_tool, and health_check expose detail and diagnostic
+# paths named by ordinary responses. Other routers and operator surfaces stay
+# in lite/full, where an operator opts into a wider listing.
 #
 # self_recovery is a router (check / quick / review) and is here anyway, which
 # is not an exception to the rule above but an application of it: NO other
@@ -83,6 +83,9 @@ STANDARD_MODE_TOOLS: Set[str] = MINIMAL_MODE_TOOLS | {
     "request_review",         # Structured review (dialectic(action="request"))
     "consult",                # Advisory model help
     "self_recovery",          # Recover from a pause the server just imposed
+    "knowledge",              # Open individual search results by discovery_id
+    "describe_tool",          # Expand abridged parameter contracts
+    "health_check",           # Follow server-health recovery guidance
 }
 
 # Core/essential tools for lite mode (optimized for local models)
@@ -384,11 +387,16 @@ def build_server_instructions(mode: str = None) -> str:
             "update_finding), structured review (request_review), "
             "advisory inference (consult), and recovery (self_recovery)"
         )
-    if mode in ("minimal", "standard"):
+    if mode == "minimal":
         not_listed.append(
             "the consolidated routers (knowledge, agent, observe, dialectic, "
             "calibration, config, export) and the discovery tools "
             "(list_tools, describe_tool)"
+        )
+    if mode == "standard":
+        not_listed.append(
+            "the other consolidated routers (agent, observe, dialectic, "
+            "calibration, config, export) and list_tools"
         )
     if mode != "full" and not not_listed:
         not_listed.append("the operator and admin tools")
@@ -398,7 +406,7 @@ def build_server_instructions(mode: str = None) -> str:
             "Not listed here, but registered and callable by name on every "
             "transport: " + "; ".join(not_listed) + ". "
             f"Run the server with GOVERNANCE_TOOL_MODE={widen} to have them "
-            "advertised; list_tools() enumerates whatever the profile lists."
+            "advertised."
         )
     # The catalog is deliberately abridged, so say so once rather than let a
     # caller read a trimmed sentence as the whole contract. One line at
@@ -406,7 +414,8 @@ def build_server_instructions(mode: str = None) -> str:
     lines += [
         "",
         "Parameter descriptions in this catalog are abridged to their first "
-        "sentence. describe_tool(tool_name=..., action=...) returns the full "
+        "sentence. " + ("In lite/full, " if mode == "minimal" else "")
+        + "describe_tool(tool_name=..., action=...) returns the full "
         "text and, for a consolidated router, only the parameters one action "
         "takes.",
     ]

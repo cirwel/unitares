@@ -245,7 +245,7 @@ async def test_list_tools_lite_surfaces_workflow_aliases(monkeypatch):
     """Under GOVERNANCE_TOOL_MODE=lite the compact view names the workflow aliases.
 
     The compact view follows the deployment's advertised surface, and the
-    process default is standard (eleven tools), so the lite mode is
+    process default is standard (fourteen tools), so the lite mode is
     pinned here.
     """
     import json

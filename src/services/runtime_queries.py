@@ -198,7 +198,13 @@ def _generate_contextual_reflection(metrics: dict, interpreted: dict) -> str | N
     state = interpreted.get('state', {})
     borderline = state.get('borderline')
     if borderline:
-        return "You're near a basin boundary. Proceed carefully."
+        edges = []
+        for dimension, detail in borderline.items():
+            if isinstance(detail, dict) and detail.get("threshold") is not None:
+                edges.append(f"{dimension} near {detail['threshold']}")
+            else:
+                edges.append(str(dimension))
+        return "Near an interpretation threshold: " + ", ".join(edges) + "."
 
     S = metrics.get('S')
     if S is not None and S > 0.3:
@@ -433,7 +439,10 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
             "S": metrics.get("S"),
             "V": metrics.get("V"),
             "coherence": metrics.get("coherence"),
-            "verdict": explain_verdict(metrics.get("verdict", "uninitialized")),
+            "verdict": explain_verdict(
+                metrics.get("verdict", "uninitialized"),
+                evidence_source=standardized_metrics.get("primary_eisv_source"),
+            ),
             "risk_score": metrics.get("risk_score"),
             "primary_eisv_source": standardized_metrics.get("primary_eisv_source"),
             "primary_eisv_source_meta": explain_eisv_source(
@@ -498,8 +507,8 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
             else:
                 coherence_status = "⚪ unknown producer (not health-rated)"
             risk_status = (
-                "🟢 low" if risk_score is not None and risk_score < 0.5 else
-                "🟡 medium" if risk_score is not None and risk_score < 0.75 else
+                "🟢 low" if risk_score is not None and risk_score < GovernanceConfig.RISK_APPROVE_THRESHOLD else
+                "🟡 medium" if risk_score is not None and risk_score < GovernanceConfig.RISK_REVISE_THRESHOLD else
                 "🔴 high" if risk_score is not None else
                 "⚪ unknown"
             )
@@ -550,7 +559,11 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
                 "source": coherence_source or "unknown",
                 "role": coherence_role or "unknown",
             },
-            "risk_score": {"value": risk_score, "threshold": 0.5, "status": risk_status},
+            "risk_score": {
+                "value": risk_score,
+                "threshold": GovernanceConfig.RISK_APPROVE_THRESHOLD,
+                "status": risk_status,
+            },
         })
         if public_agent_id != agent_id:
             lite_metrics["agent_uuid"] = agent_id
@@ -566,6 +579,12 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         lite_metrics["primary_eisv_source_meta"] = explain_eisv_source(
             standardized_metrics.get("primary_eisv_source")
         )
+        # The default read must keep the resolved verdict; dropping it here
+        # leaves the friendly action_summary with risk but no action/verdict.
+        lite_metrics["verdict"] = explain_verdict(
+            metrics.get("verdict"),
+            evidence_source=standardized_metrics.get("primary_eisv_source"),
+        )
         # mode/basin are assessments — withheld for uninitialized agents
         # (the pending state dict carries no mode/basin keys).
         if "state" in standardized_metrics and not is_uninitialized:
@@ -576,7 +595,7 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
             lite_metrics["guidance"] = "Submit one check-in to activate governance."
             lite_metrics["next_action"] = {
                 "tool": "process_agent_update",
-                "example": "process_agent_update(response_text='Starting work', complexity=0.3, confidence=0.7)",
+                "example": "process_agent_update(response_text='Completed a meaningful step', complexity=0.3)",
                 "note": "get_governance_metrics is read-only; it does not initialize state.",
             }
             lite_metrics["related_tools"] = ["process_agent_update", "onboard", "identity"]
