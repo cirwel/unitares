@@ -545,6 +545,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> Sequence[Tex
 # the /mcp/ mount; stdio passed nothing, so a stdio client on a narrow profile
 # had no way to learn what the server still does.
 from src.tool_modes import build_server_instructions
+from src.versioning import load_version_from_file
 
 server = make_lowlevel_server(
     "governance-monitor-v1",
@@ -553,6 +554,7 @@ server = make_lowlevel_server(
     list_resources=list_resources,
     read_resource=read_resource,
     instructions=build_server_instructions(),
+    version=load_version_from_file(_PROJECT_ROOT),
 )
 
 
