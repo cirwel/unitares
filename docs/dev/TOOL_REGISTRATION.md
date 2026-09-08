@@ -336,8 +336,7 @@ The same three modes are available on `apply_field_description_mode` and on
 | `off` | no field descriptions at all (the old `UNITARES_TOOL_SCHEMA_STRIP_FIELD_DESCRIPTIONS=1`) |
 
 `UNITARES_TOOL_SCHEMA_BRIEF_BUDGET` moves the cap. `tool_schemas.advertised_input_schema`
-is the one place the modes are applied, so the wire catalog, `describe_tool` and
-the tool-surface audit cannot drift apart; workflow-alias property overrides in
+applies these modes to the source catalog and `describe_tool`; workflow-alias property overrides in
 `src/alias_schema.py` observe the same mode, which is why they carry a `brief`
 of their own.
 
@@ -349,153 +348,130 @@ sentence. `tests/test_schema_brief.py` holds the trim to being a trim: no
 parameter name, type, default or requiredness may move between `brief` and
 `full`.
 
-Two things this does **not** do, deliberately:
+The complete descriptions remain on the Pydantic models and are served by
+`describe_tool(tool_name=..., action=...)`. The transport may regenerate
+schemas from those definitions; source-catalog equality is not a wire check.
 
-- It does not remove anything from the system. Every word stays on the Pydantic
-  model and `describe_tool(tool_name=..., action=...)` still serves it. The MCP
-  `instructions` string says so once at initialize, rather than paying for a
-  pointer on every parameter.
-- It does not touch the structural half of the schema. Pydantic/FastMCP emit a
-  `title` for every property (a titleized copy of the key) and
-  `anyOf: [{type: X}, {type: "null"}]` for every optional — 663 and 396 chars
-  respectively on `sync_state` after the trim. That is a separate lever with a
-  separate risk profile (the advertised schema would stop matching what
-  FastMCP's argument model generates), and it is not attempted here.
+### Generated titles and validation
 
-Half of that structural lever is now **applied**. The `title` half was
-measured first (`scripts/diagnostics/tool_surface_cost.py --boilerplate`) and
-then removed, because the two halves are not the same proposition:
+`src/schema_brief.py::apply_property_title_mode` removes generated `title`
+annotations by default. Catalog construction applies it upstream, and
+`src/tool_mode_listing.py` applies it again **after FastMCP regenerates its
+schemas**. The latter copies the advertised Tool objects; it does not mutate
+argument models or dispatch validation. A parameter named `title`, or a
+`title` inside caller defaults/examples, remains intact.
 
-The columns are that change's own before and after; later changes move the
-absolute numbers without changing what the cut was worth.
+`UNITARES_TOOL_SCHEMA_PROPERTY_TITLES=keep` restores generated titles in the
+current listing. It does not restore a historical payload or fingerprint
+across unrelated changes. The final-listing tests check keep/strip/keep
+behavior independently of catalog policy. Dropping titles preserves
+validation but changes schema fingerprints.
 
-| Profile | Before | After | Saved |
-|---|---|---|---|
-| `minimal` | 19,112 B | 17,096 B | 2,016 (10.5%) |
-| `standard` | 52,612 B | 47,047 B | 5,565 (10.6%) |
-| `lite` | 91,390 B | 81,618 B | 9,772 (10.7%) |
-| `full` | 129,043 B | 115,115 B | 13,928 (10.8%) |
+With MCP 2.1.1, brief descriptions and the current search alias, measured
+2026-09-08 as compact UTF-8 JSON `ListToolsResult` objects:
 
-A `title` is not authored by anyone. Pydantic stamps the model's class name at
-the root (`OnboardParams`) and a titleized echo of the key on every field
-(`client_session_id` → "Client Session Id"). JSON Schema does not validate
-against it, so unlike a description there is no fuller form to fall back to and
-no surface on which keeping one explains anything — which is why
-`describe_tool` drops it too, rather than serving it the way it serves full
-descriptions. `src/schema_brief.py` owns the rule
-(`apply_property_title_mode`), `src/tool_schemas.py::advertised_input_schema`
-applies it to all three surfaces, and
-`UNITARES_TOOL_SCHEMA_PROPERTY_TITLES=keep` restores the pre-2026-09-08 surface
-byte-for-byte.
+| Profile | Titles kept | Titles stripped | Saved |
+|---|---:|---:|---:|
+| `minimal` | 16,679 B | 14,945 B | 1,734 B |
+| `standard` | 52,469 B | 46,829 B | 5,640 B |
+| `lite` | 84,734 B | 75,576 B | 9,158 B |
+| `full` | 120,437 B | 107,189 B | 13,248 B |
 
-The measured saving (10.8%) is larger than the 9% the `--boilerplate` estimate
-predicted, because that estimate counted only the per-property titles and not
-the root model-class title on each of the 50 schemas.
-
-The null-union half stays **measured but not applied**: flattening
-`anyOf: [{type: X}, {type: "null"}]` is a real narrowing — an explicit `null`
-stops validating — and it is worth 7% of a profile. That is a contract change,
-not a trim, and it is a separate decision.
-
----
+The earlier #2115 numbers measured the catalog and missed titles regenerated
+by FastMCP. Do not use them as measured MCP savings. `--boilerplate` now
+applies the same recursive title transform to the explicitly selected layer.
+The null-union experiment remains diagnostic only: removing the `null`
+alternative changes validation and is not applied to the server.
 
 ## What a Profile Costs
 
-`scripts/diagnostics/count_tools.py` answers "how many tools are there".
-`scripts/diagnostics/tool_surface_cost.py` answers what a context budget
-actually asks — how much advertising them costs, in the bytes a client receives
-before the agent has decided it wants any of them. Snapshot, 2026-09-08:
+`scripts/diagnostics/tool_surface_cost.py` defaults to the final local MCP
+listing, after registration and listing policy. `--surface catalog` explicitly
+selects source definitions instead. Bytes include compact UTF-8 result JSON,
+including SDK result metadata and separators. They exclude JSON-RPC IDs,
+transport framing, compression and context added by a client. The command
+constructs and lists the local server without starting its lifespan, calling
+a tool, or contacting a database; it is not a deployed-server probe.
 
-| Profile | Tools | Advertised | ~tokens | vs `minimal` |
-|---|---|---|---|---|
-| `minimal` | 5 | 17,096 B | ~4,274 | 1.0x |
-| `standard` (default) | 15 | 51,875 B | ~12,968 | 3.0x |
-| `lite` | 29 | 81,607 B | ~20,401 | 4.8x |
-| `full` | 50 | 115,104 B | ~28,776 | 6.7x |
+| Profile | Tools | MCP result | Estimated tokens at 4 B/token |
+|---|---:|---:|---:|
+| `minimal` | 5 | 14,945 B | 3,736 |
+| `standard` (default) | 15 | 46,829 B | 11,707 |
+| `lite` | 29 | 75,576 B | 18,894 |
+| `full` | 50 | 107,189 B | 26,797 |
 
-These are a snapshot, not a constant: any change to a parameter moves them.
-`lite` and `full` each dropped 11 B the same day when #2116 stopped advertising
-an unused `limit` on `observe(action='anomalies')`. Re-run the script rather
-than trusting the table if the exact figure matters.
+These are measurements under MCP 2.1.1 on 2026-09-08, with brief descriptions,
+stripped titles and first-party tools. SDK versions, settings and installed
+plugins can change the result. Tokens are estimates, not tokenizer counts.
+`--check-ladder` checks containment of the **measured names** and increasing
+bytes for `minimal < standard < lite < full`. A missing rung is unchecked and
+fails the guard. Unknown profile spellings are errors, not a fallback to full.
 
-Bytes are measured; tokens are an estimate at 4 B/token, not a tokenizer
-result. Two things this table settles:
+The search alias now advertises 22 parameters rather than 36. Its subtraction
+list drops 14 controls belonging to other actions (closure, synthesis, audit,
+lineage and details pagination). `discovery_type`, `severity` and
+`include_provenance` stay: the search parser reads all three even though the
+older `ACTION_FIELDS["search"]` omitted them. The field map now includes them.
+Keep-list or drop-list membership must be checked against the handler and its
+helpers, not inferred from a possibly stale discovery map. This is contract
+release 1.5.0; see `docs/INTERFACE_CONTRACT.md` for the exact removed names.
 
-- **`lite` is the second-widest profile, not a light one.** The ladder is
-  ordered `minimal < standard < lite < full` and `--check-ladder` confirms it
-  holds in both senses that matter — each rung advertises a superset of the one
-  below it, and each costs more. The structure is sound; only the *name* is
-  wrong for its position, and renaming it recovers no bytes.
-- **Cost tracks parameter breadth, not tool count.** In `standard` the
-  knowledge graph is 46% of the payload and is advertised twice: the
-  `knowledge` router (51 params, 1 required, 9,381 B) plus the aliases
-  `search_shared_memory` (36 params, 6,880 B), `store_finding` (2,673 B) and
-  `update_finding` (2,664 B). The last two are small because they use
-  keep-lists in `src/alias_schema.py` that advertise only the parameters their
-  pinned action reads; `search_shared_memory` uses a subtraction list and still
-  carries `closure_class`, `closure_evidence`, `use_llm`, `topic`,
-  `min_members` and other parameters belonging to *other* actions of the router.
-
-Use `--mode <profile> --params` for the per-parameter breakdown behind those
-numbers.
-
----
+Against #2119 at `872349b3`, the standard result falls from 55,386 B to
+46,829 B (8,557 B, 15.4%), retaining all 15 names. Use `--mode standard
+--params` to locate remaining cost before designing further schema changes.
+No usage count or byte budget authorizes retiring a capability.
 
 ## Hints That Name Unadvertised Tools
 
-A response saying "poll `dialectic(action='get', ...)`" is an instruction, and
-a schema-driven client can only call names `tools/list` returned. When the
-named tool is not advertised, the instruction is a dead end — the server told
-the agent to do something it has no way to do. `src/tool_modes.py` is right
-that an unadvertised name still *dispatches*; that is a property no
-schema-driven client can use.
+#2119 adds `dialectic` to `standard`, closing the concrete discovery gap where
+an agent could open a review with `request_review` and then was not offered
+its polling/progress actions. The router has **eight** advertised actions:
+`request`, `thesis`, `antithesis`, `synthesis`, `get`, `list`, `reassign`, and
+`quick`. This verifies advertised coverage; it does not prove a whole review
+will complete successfully under every identity/state condition.
 
-`scripts/diagnostics/hint_target_advertisement.py` derives the set by reading
-caller-facing response keys out of the handler tree. On `standard` it went
-from **10 tools across 53 sites** (2026-09-08, as first measured) to **3 tools
-across 4 sites**, all four understood and recorded. What closed the gap:
+`scripts/diagnostics/hint_target_advertisement.py` produces a **static candidate
+inventory**. Its `HINT_KEYS` list is a heuristic seed, not proof that a value is
+serialized to a caller. It scans literals under keys such as `hint`, `next_call`,
+`safe_options[*].call`, `message`, and `related_tools`; follows local bindings
+and return builders; and handles nested lists/dicts/f-strings. Structured
+`related_tools` values can name tools without parentheses. Prose requires an
+adjacent `tool(` call shape, excluding the English plural `session(s)`.
+Comments and docstrings are not seed values. Dynamic string construction and
+arbitrary data flow remain outside the guarantee. JSON discloses these limits.
 
-| | |
-|---|---|
-| Advertise `dialectic` | 3 sites. `request_review` pins `action="request"`, so six of the router's seven actions were unreachable — an agent could open a review and never read or advance it. |
-| Name the advertised alias in hints | 27 sites. `onboard` (23), `process_agent_update` (3), `get_governance_metrics` (1) were named where only `start_session` / `sync_state` / `check_working_state` are advertised. Costs nothing on the wire. |
-| Resolve each hint to its emitter | 18 sites. See below. |
-| Require an adjacent paren | 1 site. See below. |
+Emitter resolution follows bare calls, import aliases and attribute calls up
+to three hops. It conservatively joins same-named helpers, treats middleware
+as reachable on every profile, and keeps unresolved paths. This prevents a
+known operator caller from hiding a second agent caller written as
+`module.helper()`. It does not prove path conditions, auth state, actual
+serialization, or that an instruction is meant for this caller rather than an
+operator. Those are inputs to severity review, not facts the count establishes.
 
-### Two rules that decide what counts
+Coverage is per **name and action**. Search and store may be covered by two
+different aliases; an uncovered third action remains visible. JSON includes
+each site's action and candidate advertised alias. Even full name/action
+coverage does not establish argument or response compatibility:
+`get_governance_metrics(agent_id=...)` cannot simply become
+`check_working_state(agent_id=...)`, since that alias hides the field.
 
-**A call is `tool(`, adjacent.** Allowing whitespace makes ordinary English
-parse as an instruction: "this guard only blocks ACTING AS another agent
-(writes/mutations)" was reported as a hint naming `agent`. One false finding is
-one too many for an instrument whose job is to say which hints strand a caller.
+### Reviewed candidates and open work
 
-**A hint only strands a caller who can receive it.** Each site resolves to the
-`@mcp_tool` handler that emits it — through undecorated helpers, by following
-the call graph up to three hops — and is kept only when that handler is
-reachable on the profile being checked: the profile advertises it, advertises
-the router it dispatches through, or advertises another name resolving to the
-same `(router, action)` pair. Handlers under `middleware/` run on every
-dispatch and always count. Without this, `standard` was blamed for `observe`,
-`agent` and `operator_resume_agent`, whose hints are emitted only by operator
-tools that *are* advertised on the operator profiles. **Advertised where its
-callers are is not dormant.** An unresolvable emitter counts as reachable,
-because over-reporting a live hint is recoverable and missing one is not.
+The four reviewed entries from #2119 remain in `KNOWN_DEAD_ENDS`, with reasons
+and keys that include the action as well as the tool and source line. They
+are not a complete baseline for the expanded scan. Three describe benign
+context; the cross-agent metrics instruction remains an explicitly open
+question. An accepted entry for one action cannot hide another at the same
+line. Moved/deleted entries are reported stale.
 
-### The ledger
-
-What remains is `KNOWN_DEAD_ENDS` in that script: four entries, each with its
-reason. `--fail-on-finding` fails on anything *not* listed **and** on a listed
-entry that no longer matches, so it can only shrink — it is an accepted-findings
-ledger, not a mute button. Three entries are benign (a self-referential refusal;
-an operator remedy offered beside an advertised agent path). One is open:
-`core.py:218` suggests `get_governance_metrics(agent_id=...)`, and renaming it
-to `check_working_state(agent_id=...)` would name a parameter that alias
-*hides* on the wire — trading one dead end for another. Reading another agent's
-metrics is an observability operation and `standard` advertises no path to it.
-
-Run it before proposing that any capability be dropped from a profile on the
-grounds that it "stays callable by name": that argument has a measured failure
-rate.
+The expanded inventory finds additional candidates in structured names and
+previously unscanned fields. **`--fail-on-finding` currently exits 3 on
+`standard`** because these candidates have not been reviewed or fixed. A green
+test suite verifies scanner behavior; it does not certify that every agent
+workflow is closed. Do not blindly add those findings to the ledger or expose
+operator capabilities to make a count green. Assess the receiving profile and
+caller, then correct actionable hints or design a separately reviewed surface
+change. Other profiles do not inherit the standard ledger.
 
 ---
 
@@ -521,6 +497,7 @@ python3 scripts/diagnostics/tool_surface_cost.py
 python3 scripts/diagnostics/tool_surface_cost.py --check-ladder
 python3 scripts/diagnostics/tool_surface_cost.py --mode standard --params
 python3 scripts/diagnostics/tool_surface_cost.py --boilerplate
+python3 scripts/diagnostics/tool_surface_cost.py --surface catalog --mode standard
 
 # Hints that name a tool the profile does not advertise
 python3 scripts/diagnostics/hint_target_advertisement.py --classify
