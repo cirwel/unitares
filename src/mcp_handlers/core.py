@@ -136,15 +136,15 @@ def unbound_metrics_payload() -> dict:
         "verdict": explain_verdict("unbound"),
         "guidance": "Establish identity before reading agent metrics.",
         "next_action": {
-            "tool": "onboard",
-            "example": "onboard(force_new=true)",
+            "tool": "start_session",
+            "example": "start_session(force_new=true)",
             "note": (
                 "get_governance_metrics is read-only; it creates no "
                 "identity and no state for unbound callers. Mint a fresh "
-                "process identity with onboard(force_new=true); to continue "
+                "process identity with start_session(force_new=true); to continue "
                 "a finished predecessor's work add "
                 "parent_agent_id=<prior_uuid>, spawn_reason='new_session'. "
-                "Avoid bare identity()/onboard() — without force_new or a "
+                "Avoid bare identity()/start_session() — without force_new or a "
                 "proof (client_session_id / continuity_token) they can mint "
                 "an orphan identity."
             ),
