@@ -37,7 +37,7 @@ source_digests:
   unitares/src/mcp_handlers/identity/handlers.py: "f554fa8d18a0434d"
   unitares/src/mcp_handlers/admin/handlers.py: "d7dec13e6a422b43"
   unitares/src/mcp_handlers/tool_stability.py: "b81fb422cdec412c"
-  unitares/src/mcp_handlers/middleware/envelope_step.py: "9ccad2ee6b9f2484"
+  unitares/src/mcp_handlers/middleware/envelope_step.py: "a75b77f84ba24129"
   unitares/src/mcp_handlers/updates/phases.py: "0c28700d12434e77"
   unitares/src/governance_monitor.py: "2734fbbd1693549f"
   unitares/src/monitor_calibration.py: "c99375f368dd98aa"
@@ -156,7 +156,11 @@ policy, not a validated all-clear. The default state read preserves the verdict.
 If you supplied a genuine `confidence`, the response may mint a concrete
 `prediction_id`. Preserve that identifier and pass it to
 `record_result(..., prediction_id="...")` when the outcome lands; otherwise the
-outcome may grade an unrelated fallback prediction. When
+outcome may grade an unrelated fallback prediction. The `record_result`
+`state_summary` says which happened: `prediction_binding` and
+`prediction_source` name the prediction the outcome actually graded, and
+`calibration_excluded` is true when the confidence was scraped rather than
+bound, meaning the row does not train calibration. When
 `UNITARES_REVIEW_NUDGE` is enabled, a warmed session can also receive a
 once-per-session `review_suggested` nudge for low confidence, high complexity,
 or a guide verdict. It is optional guidance, not a forced review.
