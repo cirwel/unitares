@@ -1059,6 +1059,69 @@ class TestHandleDetectAnomalies:
         assert data["summary"]["by_severity"]["high"] == 1
         assert data["summary"]["by_severity"]["medium"] == 1
 
+    # --- anomalies are never withheld from the caller who asked for them
+    # (dogfood finding f4cee149705d3e93: `limit` was advertised for this action
+    # and ignored; the fix removed the claim rather than adding truncation) ---
+
+    _UNPAGED_ANOMALIES = [
+        {"type": "risk_spike", "severity": "low", "description": "low spike"},
+        {"type": "coherence_drop", "severity": "high", "description": "hard drop"},
+        {"type": "risk_spike", "severity": "medium", "description": "mid spike"},
+    ]
+
+    async def _detect(self, arguments):
+        id1 = "aaaaaaaa-bbbb-cccc-dddd-111111111111"
+        server = _build_mock_server(agent_ids=[id1])
+        with patch(_PATCH_SERVER, server), \
+             patch(_PATCH_CTX, return_value=None), \
+             patch(
+                 "src.pattern_analysis.analyze_agent_patterns",
+                 side_effect=lambda *a, **k: {
+                     "anomalies": [dict(x) for x in self._UNPAGED_ANOMALIES]
+                 },
+             ):
+            from src.mcp_handlers.observability.handlers import handle_detect_anomalies
+            result = await handle_detect_anomalies(arguments)
+        return parse_result(result)
+
+    @pytest.mark.asyncio
+    async def test_every_matching_anomaly_is_returned(self):
+        data = await self._detect({"min_severity": "low"})
+        assert data["success"] is True
+        assert len(data["anomalies"]) == 3
+        assert data["summary"]["total_anomalies"] == 3
+
+    @pytest.mark.asyncio
+    async def test_a_stray_limit_cannot_withhold_findings(self):
+        """No count silently drops a finding the caller asked to see.
+
+        A caller may still send `limit` — old clients exist and the flat
+        `observe` schema carries the field for other actions. It must be inert
+        here: the returned list is the whole list, not a page of it.
+        """
+        for stray in (1, 0, "1", None):
+            data = await self._detect({"min_severity": "low", "limit": stray})
+            assert len(data["anomalies"]) == 3, f"limit={stray!r} truncated the findings"
+            assert data["summary"]["total_anomalies"] == len(data["anomalies"]), (
+                "summary and returned list must describe the same set"
+            )
+
+    def test_the_schema_does_not_advertise_a_limit_for_anomalies(self):
+        """The two machine-readable statements of the contract must agree.
+
+        The original defect was one saying yes and the other saying nothing:
+        the `limit` description named `anomalies` while ACTION_FIELDS declared
+        no fields for it, and the handler read neither.
+        """
+        from src.mcp_handlers.schemas.observability import ObserveParams
+
+        assert ObserveParams.ACTION_FIELDS["anomalies"] == ()
+        description = ObserveParams.model_fields["limit"].description
+        applies_to = description.split(").", 1)[0]
+        assert "anomalies" not in applies_to, (
+            f"limit still advertises itself for anomalies: {applies_to!r}"
+        )
+
     @pytest.mark.asyncio
     async def test_audit_writes_per_agent_fanout(self):
         """Each detected anomaly writes its own audit entry with the affected

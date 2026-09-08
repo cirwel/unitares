@@ -737,6 +737,15 @@ async def handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCon
     agent_ids = arguments.get("agent_ids")
     anomaly_types = arguments.get("anomaly_types", ["risk_spike", "coherence_drop"])
     min_severity = arguments.get("min_severity", "medium")
+
+    # Deliberately no `limit` here, and the wire schema no longer advertises one
+    # for this action (ObserveParams.limit, 2026-09-08). A dogfood run reported
+    # observe(action='anomalies', limit=1) returning every anomaly and read it as
+    # a bug; the parameter was the bug. An anomaly is a finding this fleet is
+    # asking someone to look at, so paging the list would drop findings on the
+    # floor for whoever asked, exactly as a truncated audit fan-out would.
+    # Filter with anomaly_types / min_severity / agent_ids, which narrow by what
+    # the caller does not want to see rather than by an arbitrary count.
     
     severity_levels = {"low": 0, "medium": 1, "high": 2}
     min_severity_level = severity_levels.get(min_severity, 1)
