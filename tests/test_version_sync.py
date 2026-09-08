@@ -43,6 +43,7 @@ def test_preparing_release_keeps_install_pins_until_publication(tmp_path, monkey
     source = tmp_path / "VERSION"
     published = tmp_path / "PUBLISHED_VERSION"
     readme = tmp_path / "README.md"
+    compatibility = tmp_path / "COMPATIBILITY.md"
     source.write_text("2.21.0\n", encoding="utf-8")
     published.write_text("2.21.0\n", encoding="utf-8")
     readme.write_text(
@@ -50,6 +51,8 @@ def test_preparing_release_keeps_install_pins_until_publication(tmp_path, monkey
         "git clone --branch v2.21.0 --depth 1 https://github.com/cirwel/unitares.git\n",
         encoding="utf-8",
     )
+    historical = "Plugin bundle aligned with server `v2.21.0` at its tagged tree.\n"
+    compatibility.write_text("| UNITARES server | `v2.21.0` |\n" + historical)
     monkeypatch.setattr(manager, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(manager, "VERSION_FILE", source)
     monkeypatch.setattr(manager, "PUBLISHED_VERSION_FILE", published)
@@ -60,6 +63,8 @@ def test_preparing_release_keeps_install_pins_until_publication(tmp_path, monkey
     assert "**Status:** v2.22.0." in readme.read_text()
     assert "git clone --branch v2.21.0 " in readme.read_text()
     assert published.read_text() == "2.21.0\n"
+    assert historical in compatibility.read_text()
+    assert "| UNITARES server | `v2.22.0` |" in compatibility.read_text()
 
     # RELEASE_PROCESS step 8 records verified publication independently.
     published.write_text("2.22.0\n", encoding="utf-8")

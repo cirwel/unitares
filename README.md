@@ -99,7 +99,8 @@ Setting the flag on an older server does not reproduce this surface.
 To pick a profile explicitly, set `GOVERNANCE_TOOL_MODE` in the server
 environment. For Compose, put it in `.env`, then run
 `docker compose up -d --build --wait --force-recreate governance-mcp` and reconnect the
-MCP client. Named calls remain available, but schema-driven clients may only
+MCP client. On v2.22.0, use the explicit Compose override in the
+[release errata](docs/releases/2.22.0-errata.md). Named calls remain available, but schema-driven clients may only
 offer tools returned by discovery. See the [installation guide](docs/manual/02-install.md).
 
 ## Quickstart
