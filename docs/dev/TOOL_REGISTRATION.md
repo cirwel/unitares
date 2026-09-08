@@ -362,22 +362,37 @@ Two things this does **not** do, deliberately:
   separate risk profile (the advertised schema would stop matching what
   FastMCP's argument model generates), and it is not attempted here.
 
-That structural lever is now **measured**, though still not applied
-(`scripts/diagnostics/tool_surface_cost.py --boilerplate`, 2026-09-08):
+Half of that structural lever is now **applied**. The `title` half was
+measured first (`scripts/diagnostics/tool_surface_cost.py --boilerplate`) and
+then removed, because the two halves are not the same proposition:
 
-| Profile | Advertised | `title` | null-union | both |
-|---|---|---|---|---|
-| `minimal` | 19,112 B | 1,547 (8%) | 924 (4%) | 2,471 (12%) |
-| `standard` | 52,612 B | 4,856 (9%) | 3,612 (6%) | 8,468 (16%) |
-| `lite` | 91,390 B | 8,485 (9%) | 6,160 (6%) | 14,645 (16%) |
-| `full` | 129,043 B | 11,789 (9%) | 8,428 (6%) | 20,217 (15%) |
+| Profile | Before | After | Saved |
+|---|---|---|---|
+| `minimal` | 19,112 B | 17,096 B | 2,016 (10.5%) |
+| `standard` | 52,612 B | 47,047 B | 5,565 (10.6%) |
+| `lite` | 91,390 B | 81,618 B | 9,772 (10.7%) |
+| `full` | 129,043 B | 115,115 B | 13,928 (10.8%) |
 
-The two halves are not the same proposition and the script keeps them apart. A
-property `title` is a titleized echo of the key (`client_session_id` → "Client
-Session Id"); JSON Schema does not validate against it, so removing it loses no
-information and changes no contract — a flat 9% of every profile. Flattening
-the null unions is a real narrowing: an explicit `null` stops validating. It is
-measured for scale, not recommended.
+A `title` is not authored by anyone. Pydantic stamps the model's class name at
+the root (`OnboardParams`) and a titleized echo of the key on every field
+(`client_session_id` → "Client Session Id"). JSON Schema does not validate
+against it, so unlike a description there is no fuller form to fall back to and
+no surface on which keeping one explains anything — which is why
+`describe_tool` drops it too, rather than serving it the way it serves full
+descriptions. `src/schema_brief.py` owns the rule
+(`apply_property_title_mode`), `src/tool_schemas.py::advertised_input_schema`
+applies it to all three surfaces, and
+`UNITARES_TOOL_SCHEMA_PROPERTY_TITLES=keep` restores the pre-2026-09-08 surface
+byte-for-byte.
+
+The measured saving (10.8%) is larger than the 9% the `--boilerplate` estimate
+predicted, because that estimate counted only the per-property titles and not
+the root model-class title on each of the 50 schemas.
+
+The null-union half stays **measured but not applied**: flattening
+`anyOf: [{type: X}, {type: "null"}]` is a real narrowing — an explicit `null`
+stops validating — and it is worth 7% of a profile. That is a contract change,
+not a trim, and it is a separate decision.
 
 ---
 
@@ -390,10 +405,10 @@ before the agent has decided it wants any of them. Measured 2026-09-08:
 
 | Profile | Tools | Advertised | ~tokens | vs `minimal` |
 |---|---|---|---|---|
-| `minimal` | 5 | 19,112 B | ~4,778 | 1.0x |
-| `standard` (default) | 14 | 52,612 B | ~13,153 | 2.8x |
-| `lite` | 29 | 91,390 B | ~22,847 | 4.8x |
-| `full` | 50 | 129,043 B | ~32,260 | 6.8x |
+| `minimal` | 5 | 17,096 B | ~4,274 | 1.0x |
+| `standard` (default) | 14 | 47,047 B | ~11,761 | 2.8x |
+| `lite` | 29 | 81,618 B | ~20,404 | 4.8x |
+| `full` | 50 | 115,115 B | ~28,778 | 6.7x |
 
 Bytes are measured; tokens are an estimate at 4 B/token, not a tokenizer
 result. Two things this table settles:
@@ -405,9 +420,9 @@ result. Two things this table settles:
   wrong for its position, and renaming it recovers no bytes.
 - **Cost tracks parameter breadth, not tool count.** In `standard` the
   knowledge graph is 46% of the payload and is advertised twice: the
-  `knowledge` router (51 params, 1 required, 10,530 B) plus the aliases
-  `search_shared_memory` (36 params, 7,696 B), `store_finding` (2,980 B) and
-  `update_finding` (2,973 B). The last two are small because they use
+  `knowledge` router (51 params, 1 required, 9,381 B) plus the aliases
+  `search_shared_memory` (36 params, 6,880 B), `store_finding` (2,673 B) and
+  `update_finding` (2,664 B). The last two are small because they use
   keep-lists in `src/alias_schema.py` that advertise only the parameters their
   pinned action reads; `search_shared_memory` uses a subtraction list and still
   carries `closure_class`, `closure_evidence`, `use_llm`, `topic`,

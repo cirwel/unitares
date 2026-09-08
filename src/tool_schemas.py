@@ -17,8 +17,10 @@ from src.mcp_compat import get_tool_input_schema, set_tool_input_schema
 from src.schema_brief import (
     BRIEF_BUDGET,
     apply_field_description_mode,
+    apply_property_title_mode,
     resolve_brief_budget,
     resolve_field_description_mode,
+    resolve_property_title_mode,
 )
 
 
@@ -256,6 +258,7 @@ def advertised_input_schema(
     *,
     field_descriptions: str = "full",
     budget: int = BRIEF_BUDGET,
+    property_titles: str | None = None,
 ) -> Any:
     """The input schema a caller is told about, for a tool or its alias's canonical tool.
 
@@ -271,10 +274,21 @@ def advertised_input_schema(
     passes "brief" and describe_tool takes the "full" default. Either way the
     ``brief`` authoring key is removed, so no caller sees one parameter
     documented twice.
+
+    ``property_titles`` does NOT differ between surfaces, and deliberately so:
+    a Pydantic ``title`` is a titleized echo of the key (``client_session_id``
+    -> "Client Session Id") or the model's class name at the root
+    (``OnboardParams``). There is no surface on which repeating the key back to
+    the caller in title case explains anything, so describe_tool drops it on
+    the same rule the wire does. Defaults to
+    ``UNITARES_TOOL_SCHEMA_PROPERTY_TITLES`` (``strip``).
     """
     if tool_name in _HIDE_IDENTITY_PARAMS_TOOLS:
         schema = _hide_auto_injected_identity(schema)
-    return apply_field_description_mode(schema, field_descriptions, budget=budget)
+    schema = apply_field_description_mode(schema, field_descriptions, budget=budget)
+    return apply_property_title_mode(
+        schema, resolve_property_title_mode(property_titles)
+    )
 
 
 def get_tool_definitions(

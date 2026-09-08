@@ -8,6 +8,21 @@ decided it wants the tool at all. Measured 2026-09-08 on the FastMCP wire,
 A profile cut does not touch that: it removes names from the list, not words
 from the names that remain.
 
+The same argument applies to text nobody authored at all. Pydantic stamps a
+``title`` on every schema and every property — the model's class name at the
+root (``OnboardParams``), and a titleized echo of the key on each field
+(``client_session_id`` -> "Client Session Id"). Neither carries information the
+name does not already give, JSON Schema does not validate against ``title``,
+and together they were 10.8% of every advertised profile — 5,565 B of
+``standard`` (52,612 -> 47,047) and 13,928 B of ``full`` (129,043 -> 115,115),
+measured 2026-09-08. They are dropped by default, restorable with
+``UNITARES_TOOL_SCHEMA_PROPERTY_TITLES=keep``.
+
+``scripts/diagnostics/tool_surface_cost.py --boilerplate`` had predicted 9%,
+because it counted only the per-property titles and not the root model-class
+title on each of the fifty schemas. The applied cut is the larger figure; the
+estimate was a floor.
+
 So this module trims the *advertised* text and leaves the authored text where
 it already lives. ``describe_tool(tool_name=..., action=...)`` reads the
 Pydantic models directly and still returns every word, which is the whole
@@ -67,7 +82,14 @@ MIN_BRIEF = 24
 FIELD_DESCRIPTION_MODES = ("brief", "full", "off")
 DEFAULT_FIELD_DESCRIPTION_MODE = "brief"
 
+#: What the advertised schema does with Pydantic-generated ``title`` keywords.
+#:   strip — remove them (default); they echo the key and validate nothing
+#:   keep  — leave them, as before 2026-09-08
+PROPERTY_TITLE_MODES = ("strip", "keep")
+DEFAULT_PROPERTY_TITLE_MODE = "strip"
+
 _MODE_ENV = "UNITARES_TOOL_SCHEMA_FIELD_DESCRIPTIONS"
+_TITLE_ENV = "UNITARES_TOOL_SCHEMA_PROPERTY_TITLES"
 _LEGACY_STRIP_ENV = "UNITARES_TOOL_SCHEMA_STRIP_FIELD_DESCRIPTIONS"
 _BUDGET_ENV = "UNITARES_TOOL_SCHEMA_BRIEF_BUDGET"
 
@@ -113,6 +135,29 @@ def resolve_field_description_mode(mode: str | None = None) -> str:
             _MODE_ENV, mode, FIELD_DESCRIPTION_MODES, DEFAULT_FIELD_DESCRIPTION_MODE,
         )
         return DEFAULT_FIELD_DESCRIPTION_MODE
+    return mode
+
+
+def resolve_property_title_mode(mode: str | None = None) -> str:
+    """Resolve what the advertised schema does with ``title`` keywords.
+
+    An explicit argument wins, then ``UNITARES_TOOL_SCHEMA_PROPERTY_TITLES``.
+    An unrecognized value falls back to the default and says so, rather than
+    quietly serving a surface the operator did not ask for.
+    """
+    if mode is None:
+        mode = os.getenv(_TITLE_ENV, "").strip().lower()
+    else:
+        mode = str(mode).strip().lower()
+
+    if not mode:
+        return DEFAULT_PROPERTY_TITLE_MODE
+    if mode not in PROPERTY_TITLE_MODES:
+        logger.warning(
+            "%s=%r is not one of %s; serving %r",
+            _TITLE_ENV, mode, PROPERTY_TITLE_MODES, DEFAULT_PROPERTY_TITLE_MODE,
+        )
+        return DEFAULT_PROPERTY_TITLE_MODE
     return mode
 
 
@@ -231,6 +276,50 @@ def apply_field_description_mode(
         return out
     if isinstance(node, list):
         return [apply_field_description_mode(x, mode, budget=budget) for x in node]
+    return node
+
+
+def apply_property_title_mode(
+    node: Any,
+    mode: str = DEFAULT_PROPERTY_TITLE_MODE,
+) -> Any:
+    """Return a copy of a JSON Schema with ``title`` keywords in ``mode``.
+
+    Walks structurally on exactly the rule
+    :func:`apply_field_description_mode` uses, and for the same reason: under
+    ``properties`` (and the other subschema maps) the keys are caller-chosen
+    parameter names, so a parameter *named* ``title`` must survive while the
+    ``title`` KEYWORD on a schema node is dropped. No tool ships such a
+    parameter today; the walk is written so that adding one cannot silently
+    delete it.
+
+    ``mode="keep"`` returns ``node`` itself — not a copy — which is why the env
+    flag can restore the pre-2026-09-08 surface without a second code path. The
+    one production caller (``advertised_input_schema``) passes a schema that
+    ``apply_field_description_mode`` has already copied, so nothing is aliased
+    back to a Pydantic model; a new caller that means to mutate the result must
+    copy it first.
+    """
+    if mode == "keep":
+        return node
+    if isinstance(node, dict):
+        out: dict[str, Any] = {}
+        for key, value in node.items():
+            if key == "title" and isinstance(value, str):
+                continue
+            if key in _DATA_KEYWORDS:
+                out[key] = copy.deepcopy(value)
+                continue
+            if key in _SUBSCHEMA_MAPS and isinstance(value, dict):
+                out[key] = {
+                    name: apply_property_title_mode(sub, mode)
+                    for name, sub in value.items()
+                }
+                continue
+            out[key] = apply_property_title_mode(value, mode)
+        return out
+    if isinstance(node, list):
+        return [apply_property_title_mode(x, mode) for x in node]
     return node
 
 
