@@ -123,7 +123,7 @@ def _observe_operator_refusal(
                 "returning telemetry or audit evidence."
             ),
             next_step=(
-                "Call onboard(force_new=true), then retry observe(...) with "
+                "Call start_session(force_new=true), then retry observe(...) with "
                 "the returned client_session_id."
             ),
             safe_options=[

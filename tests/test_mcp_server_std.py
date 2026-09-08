@@ -2035,3 +2035,66 @@ class TestStdioServerInstructions:
             read_resource=_noop,
         )
         assert built is not None
+
+
+class TestServerInfoVersion:
+    """Every transport must say which build it is.
+
+    `serverInfo.version` defaults to "" on both mcp majors, so a server that
+    never passes one advertises no version at all. Both entrypoints hit that
+    default until #2117: verified 2026-09-08 against the live /mcp/ mount and a
+    container built from master, each returning
+    {"name": "governance-monitor-v1", "version": ""}. A directory crawler, or
+    anyone holding two builds, then has nothing to tell them apart.
+    """
+
+    def test_stdio_server_carries_the_version_file_value(self):
+        from src.mcp_server_std import server
+        from src.versioning import load_version_from_file
+
+        expected = load_version_from_file(project_root)
+        assert getattr(server, "version", "") == expected
+
+    def test_stdio_version_is_not_empty(self):
+        """The regression this guards is a silent fallback to "", not a mismatch."""
+        from src.mcp_server_std import server
+
+        assert getattr(server, "version", "")
+
+    def test_version_reaches_initialization_options(self):
+        """A client sees this at initialize, not by calling a tool."""
+        from src.mcp_server_std import server
+
+        options = server.create_initialization_options()
+        assert options.server_version == server.version
+        # Comparing the two alone passes while both are "" — the exact
+        # regression this class exists to catch. Pin the value as well.
+        assert options.server_version
+
+    def test_http_mount_advertises_the_same_version(self):
+        """stdio and /mcp/ must not disagree about which build is running."""
+        from src.mcp_compat import server_supports_kwarg
+
+        if not server_supports_kwarg("version"):  # pragma: no cover - major-dependent
+            pytest.skip("resolved server class takes no version kwarg")
+
+        import src.mcp_server as http_server
+
+        assert http_server._server_kwargs.get("version") == http_server.SERVER_VERSION
+        assert http_server.SERVER_VERSION
+
+    def test_make_lowlevel_server_tolerates_no_version(self):
+        """The kwarg is optional; omitting it must not raise on either major."""
+        from src.mcp_compat import make_lowlevel_server
+
+        async def _noop():  # pragma: no cover - never awaited here
+            return []
+
+        built = make_lowlevel_server(
+            "test-no-version",
+            list_tools=_noop,
+            call_tool=_noop,
+            list_resources=_noop,
+            read_resource=_noop,
+        )
+        assert built is not None

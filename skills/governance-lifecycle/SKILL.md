@@ -33,21 +33,21 @@ source_files:
   # lives. The trim rule is here; if it changes, that claim drifts silently.
   - unitares/src/schema_brief.py
 source_digests:
-  unitares/src/mcp_handlers/core.py: "5a6e81697f537ac2"
-  unitares/src/mcp_handlers/identity/handlers.py: "c840edc5049524ed"
+  unitares/src/mcp_handlers/core.py: "d7d09d260fedd7ec"
+  unitares/src/mcp_handlers/identity/handlers.py: "f554fa8d18a0434d"
   unitares/src/mcp_handlers/admin/handlers.py: "d7dec13e6a422b43"
   unitares/src/mcp_handlers/tool_stability.py: "b81fb422cdec412c"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "9ccad2ee6b9f2484"
-  unitares/src/mcp_handlers/updates/phases.py: "62168987a1a7fb79"
-  unitares/src/governance_monitor.py: "cecc4bde0de1c02b"
+  unitares/src/mcp_handlers/updates/phases.py: "0c28700d12434e77"
+  unitares/src/governance_monitor.py: "2734fbbd1693549f"
   unitares/src/monitor_calibration.py: "c99375f368dd98aa"
   unitares/src/mcp_handlers/updates/enrichments.py: "f91c10502c48275b"
-  unitares/src/mcp_handlers/dialectic/handlers.py: "96ffbcfbbea5ff34"
+  unitares/src/mcp_handlers/dialectic/handlers.py: "b6f921fb24a523ce"
   unitares/src/mcp_handlers/lifecycle/self_recovery.py: "9bfffd3b09f6cc0f"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/src/tool_modes.py: "1cff50c18e3cbcc9"
-  unitares/src/tool_mode_listing.py: "a99a9e7f6e4a95c4"
-  unitares/src/schema_brief.py: "3b23bc0b788daaa6"
+  unitares/src/tool_modes.py: "9c911b713b2296a4"
+  unitares/src/tool_mode_listing.py: "3dacb43ce2d0dd2c"
+  unitares/src/schema_brief.py: "6463bc8ed3919816"
 ---
 
 # Agent Lifecycle
@@ -241,17 +241,17 @@ before its first check-in; it does not need a recovery reflection. Inspect
 ## MCP Tools Reference
 
 Which of these names your client *lists* depends on the server's
-`GOVERNANCE_TOOL_MODE`. The default, `standard`, advertises fourteen names: the
+`GOVERNANCE_TOOL_MODE`. The default, `standard`, advertises fifteen names: the
 checkpoint loop (`start_session`, `identity`, `sync_state`, `record_result`,
 `check_working_state`) plus `search_shared_memory`, `store_finding`,
-`update_finding`, `request_review`, `consult`, `self_recovery`, `knowledge`,
-`describe_tool`, and `health_check`. `minimal`
+`update_finding`, `request_review`, `dialectic`, `consult`, `self_recovery`,
+`knowledge`, `describe_tool`, and `health_check`. `minimal`
 advertises the
 checkpoint loop alone. `lite` (29 tools) advertises every name in this
 reference plus `list_tools` / `describe_tool`; `full` advertises everything
 registered. A mode filters only `tools/list`: every registered tool dispatches
 by name in every mode, on `/mcp/`, REST `/v1/tools/call`, and stdio alike. So a
-harness that offers only listed tools shows fourteen under the default, and the
+harness that offers only listed tools shows fifteen under the default, and the
 rest are one server-side flag away (`GOVERNANCE_TOOL_MODE=lite`), not gone.
 `start_session(verbose=true)` reports the running mode under `tool_mode`.
 
@@ -281,7 +281,7 @@ description leaves you unsure what a parameter takes.
 - `knowledge()` — Full knowledge graph CRUD, search, synthesis, and audit router
 - `agent()` — Agent lifecycle router (list, get, update, archive, resume, delete)
 - `calibration()` — Check or update calibration data
-- `dialectic()` — Structured review router (`get`, `list`, `quick`, `request`, `thesis`, `antithesis`, `synthesis`, `reassign`)
+- `dialectic()` — Structured review router (`get`, `list`, `quick`, `request`, `thesis`, `antithesis`, `synthesis`, `reassign`). Advertised on the default `standard` since 2026-09-08: `request_review` pins `action="request"`, so without the router you could open a review and reach none of the actions that finish one
 - `export()` — Export session history
 
 ### Specialized
