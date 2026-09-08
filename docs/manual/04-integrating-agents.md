@@ -82,6 +82,21 @@ verdict provenance, EISV/risk, and only actionable policy/enforcement summaries.
 Both retain the normalized action and cold-start verdict caveat. Compatibility
 aliases are exact: `lite=compact`, `verbose=full`, and `interpreted=standard`.
 
+A consolidated router (`knowledge`, `dialectic`, `observe`, `agent`, and the
+rest) advertises one flat schema covering every action it routes, because the
+MCP wrapper builds a tool's argument model from top-level properties. That
+union is not what a single call takes: `knowledge` shows about fifty
+parameters whichever of its twelve actions you mean. Pass the action to
+`describe_tool` to see only that action's parameters:
+
+```
+describe_tool(tool_name="knowledge", action="search")
+```
+
+Without an action, the response lists the actions the tool routes. The
+narrowed schema describes one call; the wire is unchanged, so parameters
+belonging to other actions are still accepted and ignored.
+
 `search_shared_memory` defaults to a lean discovery digest. Its
 `memory_suggestions` retain ids, one-line summaries, lifecycle/type metadata,
 bounded tags, and one relevance score; detail previews and score maps are omitted.

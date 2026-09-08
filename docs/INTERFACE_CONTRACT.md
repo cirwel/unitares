@@ -69,10 +69,22 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.2.0` is the negotiated interface release. Compatible additions
+- `version: 1.3.0` is the negotiated interface release. Compatible additions
   advance it without forcing clients to learn a new schema family (1.2.0,
   2026-09-07: `observe` and `describe_tool` declare parameters their handlers
-  already read).
+  already read; 1.3.0, 2026-09-08: `describe_tool` takes `action` and answers
+  for one action of a consolidated router, and `dialectic` drops the `vote`
+  parameter, which named an action the router does not route and which no
+  handler read).
+
+A consolidated router advertises the union of every action's parameters,
+because the wire schema must be flat: the MCP wrapper builds a tool's argument
+model from top-level properties, so a per-action `oneOf` would not survive
+registration. That union is the contract. Which of those parameters each
+action uses is declared alongside them, as `ACTION_FIELDS` on the router's
+parameter model, and `describe_tool(tool_name=..., action=...)` serves it. The
+narrowed schema is a description of one call, not a second contract: the wire
+still accepts and ignores the parameters of other actions.
 
 Core currently supports `mcp>=1.26.0,<3.0.0`. Both admitted major versions are
 tested, and the newest in-range resolution is a blocking CI lane. A client
