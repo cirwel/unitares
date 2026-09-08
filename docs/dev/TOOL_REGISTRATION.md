@@ -406,7 +406,7 @@ before the agent has decided it wants any of them. Measured 2026-09-08:
 | Profile | Tools | Advertised | ~tokens | vs `minimal` |
 |---|---|---|---|---|
 | `minimal` | 5 | 17,096 B | ~4,274 | 1.0x |
-| `standard` (default) | 14 | 47,047 B | ~11,761 | 2.8x |
+| `standard` (default) | 15 | 51,875 B | ~12,968 | 3.0x |
 | `lite` | 29 | 81,618 B | ~20,404 | 4.8x |
 | `full` | 50 | 115,115 B | ~28,778 | 6.7x |
 
@@ -442,115 +442,52 @@ the agent to do something it has no way to do. `src/tool_modes.py` is right
 that an unadvertised name still *dispatches*; that is a property no
 schema-driven client can use.
 
-`tests/test_lite_wire_surface.py` holds this invariant against two hand-written
-lists. `scripts/diagnostics/hint_target_advertisement.py` derives the set
-instead, reading caller-facing response keys out of the handler tree. On
-`standard`, 2026-09-08: **10 tools named in caller-facing hints are not
-advertised, across 53 sites.** They split two ways, and `--classify` says which:
+`scripts/diagnostics/hint_target_advertisement.py` derives the set by reading
+caller-facing response keys out of the handler tree. On `standard` it went
+from **10 tools across 53 sites** (2026-09-08, as first measured) to **3 tools
+across 4 sites**, all four understood and recorded. What closed the gap:
 
-1. **The hint names the raw twin of an advertised alias** — `onboard` (24
-   sites) for `start_session`, `process_agent_update` (4) for `sync_state`,
-   `get_governance_metrics` (2) for `check_working_state`. The capability *is*
-   advertised; the hint just says a name the client was never shown. Fix the
-   hint text; costs nothing on the wire.
-2. **The hint names a capability the profile does not advertise** —
-   `dialectic` (8 sites, actions `get`/`reassign`/`request`/`thesis`),
-   `observe` (7), `agent`, `bind_session`, `cirs_protocol`,
-   `operator_resume_agent`, `verify_trajectory_identity`. Either advertise it,
-   or route the hint through something that is.
+| | |
+|---|---|
+| Advertise `dialectic` | 3 sites. `request_review` pins `action="request"`, so six of the router's seven actions were unreachable — an agent could open a review and never read or advance it. |
+| Name the advertised alias in hints | 27 sites. `onboard` (23), `process_agent_update` (3), `get_governance_metrics` (1) were named where only `start_session` / `sync_state` / `check_working_state` are advertised. Costs nothing on the wire. |
+| Resolve each hint to its emitter | 18 sites. See below. |
+| Require an adjacent paren | 1 site. See below. |
 
-An alias pins one action of its router, so alias coverage is checked per
-action: `request_review` covers `dialectic(action='request')` and nothing else
-on that router, which is why `dialectic` lands in class 2 despite having an
-advertised alias.
+### Two rules that decide what counts
 
-This was found the hard way. A Claude Code session on the default `standard`
-profile called `request_review`; the response told it to poll
-`dialectic(action='get', session_id=...)`, and the session could not — the name
-had never been advertised, so it was never offered to the model. Before
-proposing that any capability be dropped from a profile on the grounds that it
-"stays callable by name", run this script: that argument has a measured failure
+**A call is `tool(`, adjacent.** Allowing whitespace makes ordinary English
+parse as an instruction: "this guard only blocks ACTING AS another agent
+(writes/mutations)" was reported as a hint naming `agent`. One false finding is
+one too many for an instrument whose job is to say which hints strand a caller.
+
+**A hint only strands a caller who can receive it.** Each site resolves to the
+`@mcp_tool` handler that emits it — through undecorated helpers, by following
+the call graph up to three hops — and is kept only when that handler is
+reachable on the profile being checked: the profile advertises it, advertises
+the router it dispatches through, or advertises another name resolving to the
+same `(router, action)` pair. Handlers under `middleware/` run on every
+dispatch and always count. Without this, `standard` was blamed for `observe`,
+`agent` and `operator_resume_agent`, whose hints are emitted only by operator
+tools that *are* advertised on the operator profiles. **Advertised where its
+callers are is not dormant.** An unresolvable emitter counts as reachable,
+because over-reporting a live hint is recoverable and missing one is not.
+
+### The ledger
+
+What remains is `KNOWN_DEAD_ENDS` in that script: four entries, each with its
+reason. `--fail-on-finding` fails on anything *not* listed **and** on a listed
+entry that no longer matches, so it can only shrink — it is an accepted-findings
+ledger, not a mute button. Three entries are benign (a self-referential refusal;
+an operator remedy offered beside an advertised agent path). One is open:
+`core.py:218` suggests `get_governance_metrics(agent_id=...)`, and renaming it
+to `check_working_state(agent_id=...)` would name a parameter that alias
+*hides* on the wire — trading one dead end for another. Reading another agent's
+metrics is an observability operation and `standard` advertises no path to it.
+
+Run it before proposing that any capability be dropped from a profile on the
+grounds that it "stays callable by name": that argument has a measured failure
 rate.
-
----
-
-## Tool Tiers (for list_tools filtering and tool modes)
-
-Every advertised name has a tier on its `ToolMeta` record in
-`src/tool_meta.py`; `TOOL_TIERS` in `src/tool_modes.py` is derived from those
-records (sizes drift, don't trust counts written into prose):
-
-| Tier | Purpose | Example Tools |
-|------|---------|---------------|
-| `essential` | Core workflow | `identity`, `start_session`, `sync_state` |
-| `common` | Regular use | `onboard`, `process_agent_update`, `list_tools` |
-| `advanced` | Operator/rare use | `admin`, diagnostics tools |
-
-**When adding a new tool, give its record the appropriate tier**, and add the
-name to a mode set if agents should be shown it below `full`. Mode membership decides what
-`tools/list` advertises; registration (and therefore dispatch by name) is the
-same in every mode.
-
----
-
-## Tool Aliases (Backwards Compatibility)
-
-When renaming/consolidating tools, add aliases in `src/mcp_handlers/tool_stability.py`:
-
-```python
-_TOOL_ALIASES = {
-    "old_tool_name": ToolAlias(
-        old_name="old_tool_name",
-        new_name="new_tool_name",
-        reason="consolidated",  # or "renamed", "deprecated"
-        deprecated_since=datetime(2026, 9, 7),  # the day the old name stopped being canonical
-        migration_note="Use new_tool_name(action='...') instead"
-    ),
-}
-```
-
-Aliases are resolved at dispatch time, so old tool names continue to work.
-
-A consolidated, renamed, or deprecated alias carries `deprecated_since`: the
-date the old name stopped being canonical, which `describe_tool` reports in
-its `alias` block beside the migration note. An intuitive alias (`start`,
-`status`, the workflow names such as `sync_state`) carries none, because that
-name was never canonical and nothing was deprecated.
-`tests/test_tool_registry_bookkeeping.py` holds the table to the rule, and
-where `DEPRECATION_REGISTRY` in `introspection/tool_catalog.py` also names the
-tool, the two dates must agree.
-
----
-
-## Common Mistakes
-
-### 1. Tool not showing up in MCP clients
-**Cause:** Handler has `register=False` or missing `@mcp_tool`.
-**Fix:** Ensure handler has `@mcp_tool` with `register=True` (default).
-
-### 2. Consolidated tool's sub-handler not working
-**Cause:** Handler function not imported in `consolidated.py`.
-**Fix:** Add import and route in the consolidated handler's `actions={}` map.
-
-### 3. Old tool name not resolving
-**Cause:** Missing alias in `tool_stability.py`.
-**Fix:** Add alias mapping old name to new consolidated tool.
-
-### 4. Session identity not working
-**Cause:** Tool not in `TOOLS_NEEDING_SESSION_INJECTION`.
-**Fix:** Add tool name to the set in `src/tool_registration.py`.
-
-### 5. Tool registered but absent from `tools/list` under a restricted tool mode
-**Cause:** Tool not in the active mode's set — `tools/list` is filtered through
-`get_public_tool_definitions(TOOL_MODE)`. The tool still dispatches by name
-(REST, stdio, and `/mcp/` alike); a schema-driven client just cannot see it.
-**Fix:** Add the tool to the right mode set in `src/tool_modes.py`, or run the
-server with a wider `GOVERNANCE_TOOL_MODE`.
-
-### 6. Every action of a new consolidated tool refused for unbound callers
-**Cause:** `action_router` called without `pre_onboard_actions` — all actions
-default to identity-gated.
-**Fix:** Declare the read-only actions that should work pre-onboard.
 
 ---
 

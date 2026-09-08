@@ -319,15 +319,15 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
             "Identity not resolved for this check-in.",
             recovery={
                 "action": (
-                    "If you already called onboard(), retry with the "
-                    "client_session_id returned by that onboard() call. "
-                    "Otherwise call onboard(force_new=true) first."
+                    "If you already called start_session(), retry with the "
+                    "client_session_id returned by that start_session() call. "
+                    "Otherwise call start_session(force_new=true) first."
                 ),
                 "related_tools": ["onboard", "identity", "process_agent_update"],
                 "workflow": [
-                    "1. Call onboard(force_new=true) to mint this process-instance",
-                    "2. Save client_session_id from the onboard() response",
-                    "3. Pass that client_session_id to process_agent_update()",
+                    "1. Call start_session(force_new=true) to mint this process-instance",
+                    "2. Save client_session_id from the start_session() response",
+                    "3. Pass that client_session_id to sync_state()",
                 ],
             },
             error_code="SESSION_ERROR",
@@ -394,13 +394,13 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
                         "This write resolved your identity by transport fingerprint, "
                         "not by a proof you supplied — under strict identity, writes "
                         "require a caller-proven binding. Echo the continuity_token "
-                        "from your onboard() response as ownership proof; a "
+                        "from your start_session() response as ownership proof; a "
                         "session-maintaining client may instead pass an explicit "
                         "client_session_id."
                     ),
                     next_step=(
                         "Retry process_agent_update with the continuity_token from "
-                        "your onboard()/identity() response; use client_session_id "
+                        "your start_session()/identity() response; use client_session_id "
                         "only when this client maintains a proven session binding."
                     ),
                     safe_options=[
@@ -666,7 +666,7 @@ async def handle_onboarding_and_resume(ctx: UpdateContext) -> Optional[Sequence[
                 f"Agent '{agent_id}' is archived and cannot be updated.",
                 recovery={
                     "action": "Use self_recovery(action='quick') to restore yourself, "
-                              "or onboard(force_new=true) for a new identity",
+                              "or start_session(force_new=true) for a new identity",
                     "related_tools": ["self_recovery", "onboard"],
                 },
                 context={
@@ -1338,7 +1338,7 @@ async def execute_locked_update(ctx: UpdateContext) -> Optional[Sequence[TextCon
             return success_response(strict_identity_refusal_payload(
                 "process_agent_update",
                 hint=(
-                    "Agent is not registered. Call onboard() first to "
+                    "Agent is not registered. Call start_session() first to "
                     "mint identity, then retry the update."
                 ),
             ))
