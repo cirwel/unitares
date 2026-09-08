@@ -1966,14 +1966,19 @@ def test_model_call_uses_deterministic_temperature(watcher_module):
     )
 
 
-def test_model_call_max_tokens_is_not_wasteful(watcher_module):
-    """Regression for #5: max_tokens should be right-sized for Qwen3's
-    ~40-tokens-per-finding economy, not gemma4's 2048-era budget."""
-    import inspect
+def test_model_reply_budget_leaves_room_for_a_full_envelope(watcher_module):
+    """The reply budget must not be trimmed back to a per-finding economy.
 
-    src = inspect.getsource(watcher_module.call_ollama)
-    assert '"max_tokens": 2048' not in src, (
-        "call_ollama still has 2048 — trim to the Qwen3 economy"
+    This test used to assert the opposite — that the budget was "right-sized
+    for Qwen3's ~40-tokens-per-finding economy". That accounting counted the
+    findings and not the preamble a model emits before them, and 1024 was the
+    result: measured 2026-09-08 on a real scan, the model spent the budget on
+    prose and was cut off mid-object with finish_reason "length", so the
+    response could not be parsed and the scan reported zero findings.
+    """
+    assert watcher_module.MODEL_REPLY_TOKEN_BUDGET >= 2048, (
+        "reply budget trimmed below 2048 — a truncated reply is unparseable, "
+        "and an unparseable reply is indistinguishable from clean code"
     )
 
 
@@ -2108,13 +2113,19 @@ def test_call_model_delegates_to_call_ollama(watcher_module, monkeypatch):
 
 def test_call_ollama_posts_to_configured_url(watcher_module, monkeypatch):
     """call_ollama POSTs to module-level OLLAMA_URL (env-driven) with the
-    prompt, model, and timeout it was given."""
+    prompt, model, and timeout it was given.
+
+    Default URL is ollama's NATIVE /api/chat, so the native response shape is
+    the one that must round-trip.
+    """
 
     captured: dict[str, Any] = {}
     fake_payload = {
-        "choices": [{"message": {"content": "resp"}}],
+        "message": {"content": "resp"},
         "model": "stub-model",
-        "usage": {"total_tokens": 99},
+        "prompt_eval_count": 40,
+        "eval_count": 59,
+        "done_reason": "stop",
     }
 
     class _FakeResp:
@@ -2141,11 +2152,11 @@ def test_call_ollama_posts_to_configured_url(watcher_module, monkeypatch):
     result = watcher_module.call_ollama("prompt text", "m", timeout=11)
 
     assert result["text"] == "resp"
-    assert result["tokens_used"] == 99
+    assert result["tokens_used"] == 99  # prompt_eval_count + eval_count
     assert captured["url"] == watcher_module.OLLAMA_URL
     assert captured["timeout"] == 11
     assert captured["body"]["model"] == "m"
-    assert captured["body"]["temperature"] == 0.0
+    assert captured["body"]["options"]["temperature"] == 0.0
 
 
 def test_env_vars_override_defaults(monkeypatch, tmp_path):
@@ -3827,3 +3838,540 @@ class TestTokenDriftRevalidation:
 
         assert wf._sweep_token_drift_quiet() == 0
         assert self._records()["9999aaaa"]["status"] == "open"
+
+
+# ---------------------------------------------------------------------------
+# Silent-truncation / unusable-output regressions (2026-08-21 → 09-08 outage)
+# ---------------------------------------------------------------------------
+#
+# The detector reported "0 raw, 0 new" on 140 of 141 completed scans across
+# eighteen days while every liveness signal stayed green. Three independent
+# defects had to line up, and each of them is pinned below:
+#
+#   1. ollama silently truncated the prompt to its default ~8K context. The
+#      instructions and the pattern library sit at the FRONT, so the model was
+#      handed an unbriefed code dump. Measured: a 163,112-char prompt reported
+#      prompt_eval_count=8195; the same prompt with options.num_ctx set
+#      reported 55,710.
+#   2. A 200 carrying unusable content took the success path — prose, a bare
+#      list, invented pattern ids — logged a warning nobody reads, returned [],
+#      and CLEARED the detector-down counter.
+#   3. --self-test scanned a 7-line file, which fits in any context window, so
+#      the capability probe passed throughout.
+
+
+def _native_payload(content: str, prompt_eval: int = 10_000, **extra):
+    payload = {
+        "message": {"content": content},
+        "model": "stub-model",
+        "prompt_eval_count": prompt_eval,
+        "eval_count": 20,
+        "done_reason": "stop",
+    }
+    payload.update(extra)
+    return payload
+
+
+def _stub_urlopen(monkeypatch, watcher_module, payload, captured=None):
+    class _FakeResp:
+        def __init__(self, body):
+            self._body = json.dumps(body).encode()
+
+        def read(self):
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _fake(req, timeout=None):
+        if captured is not None:
+            captured["url"] = req.full_url
+            captured["body"] = json.loads(req.data.decode())
+        return _FakeResp(payload)
+
+    monkeypatch.setattr(watcher_module.urllib.request, "urlopen", _fake)
+
+
+
+
+
+
+def test_openai_compat_url_still_supported(watcher_module, monkeypatch):
+    """Back-compat: a WATCHER_OLLAMA_URL pointing at /v1/chat/completions keeps
+    working (it just cannot raise num_ctx — which is why it is not default)."""
+    captured: dict[str, Any] = {}
+    payload = {
+        "choices": [{"message": {"content": '{"findings": []}'}, "finish_reason": "stop"}],
+        "model": "stub-model",
+        "usage": {"prompt_tokens": 10_000, "total_tokens": 10_050},
+    }
+    _stub_urlopen(monkeypatch, watcher_module, payload, captured)
+    monkeypatch.setattr(
+        watcher_module, "OLLAMA_URL", "http://host:11434/v1/chat/completions"
+    )
+
+    result = watcher_module.call_ollama("prompt", "m", timeout=5)
+
+    assert result["text"] == '{"findings": []}'
+    assert "options" not in captured["body"]
+    assert captured["body"]["max_tokens"] == watcher_module.MODEL_REPLY_TOKEN_BUDGET
+
+
+# --- Defect 2: a 200 with unusable content is a capability failure ---------
+
+
+def test_prose_response_is_unusable_not_clean(watcher_module):
+    """The literal 2026-09-08 response. It used to log a warning and return
+    [], which reads identically to a clean scan."""
+    with pytest.raises(watcher_module.ModelOutputUnusable):
+        watcher_module.parse_findings(
+            "The user wants me to analyze the provided Python code snippet "
+            "(lines 2317-2844) and output a JSON object containing the findings.",
+            "/x.py",
+            "m",
+            1,
+        )
+
+
+def test_bare_list_envelope_is_unusable(watcher_module):
+    """Observed from an unbriefed model: a top-level list instead of
+    {"findings": [...]}. The old `if isinstance(data, dict)` guard dropped
+    every finding here without emitting a single log line."""
+    with pytest.raises(watcher_module.ModelOutputUnusable):
+        watcher_module.parse_findings(
+            '[{"pattern": "P001", "line": 3, "hint": "h"}]', "/x.py", "m", 1
+        )
+
+
+def test_non_list_findings_field_is_unusable(watcher_module):
+    with pytest.raises(watcher_module.ModelOutputUnusable):
+        watcher_module.parse_findings('{"findings": "none"}', "/x.py", "m", 1)
+
+
+def test_all_unknown_pattern_ids_is_unusable(watcher_module):
+    """Observed: pattern ids "BUG" and "P000". Dropping each one is correct;
+    a whole response of them means the model never saw the pattern library."""
+    with pytest.raises(watcher_module.ModelOutputUnusable):
+        watcher_module.parse_findings(
+            '{"findings": [{"pattern": "BUG", "line": 3, "hint": "h"},'
+            ' {"pattern": "P000", "line": 9, "hint": "h"}]}',
+            "/x.py",
+            "m",
+            1,
+        )
+
+
+def test_empty_findings_list_is_a_clean_scan_not_a_failure(watcher_module):
+    """The distinction the whole change exists to preserve: a well-formed
+    empty envelope is clean code and must NOT escalate."""
+    assert watcher_module.parse_findings('{"findings": []}', "/x.py", "m", 1) == []
+
+
+def test_new_failure_modes_are_classified(watcher_module):
+    """Both new modes need their own fingerprint so they dedup separately and
+    the escalated finding names the right fix."""
+    assert (
+        watcher_module._classify_model_failure(watcher_module.PromptTruncated("x"))
+        == "prompt_truncated"
+    )
+    assert (
+        watcher_module._classify_model_failure(watcher_module.ModelOutputUnusable("x"))
+        == "output_unusable"
+    )
+
+
+def test_scan_file_escalates_unusable_output_and_keeps_the_counter(
+    watcher_module, tmp_path, monkeypatch
+):
+    """Defect 2, end to end. scan_file cleared the detector-down counter as
+    soon as the HTTP call returned, before parsing. So eighteen days of
+    unparseable responses each reset the counter and it never reached the
+    escalation threshold."""
+    target = tmp_path / "sample.py"
+    target.write_text("import asyncio\n\n\ndef f():\n    return 1\n")
+
+    recorded: list[Exception] = []
+    cleared: list[bool] = []
+    monkeypatch.setattr(
+        watcher_module, "_record_model_failure", lambda e: recorded.append(e)
+    )
+    monkeypatch.setattr(
+        watcher_module, "_clear_model_failures", lambda: cleared.append(True)
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "call_model",
+        lambda *a, **k: {
+            "text": "Sure! Here is my analysis of the code you provided.",
+            "model_used": "m",
+            "tokens_used": 10,
+        },
+    )
+
+    assert watcher_module.scan_file(str(target), persist=False) == []
+    assert len(recorded) == 1
+    assert isinstance(recorded[0], watcher_module.ModelOutputUnusable)
+    assert cleared == [], (
+        "counter cleared on an unusable response — this is the exact bug that "
+        "kept the detector-down escalation from ever firing"
+    )
+
+
+# --- Defect 3: the capability probe must exercise the capability -----------
+
+
+def test_self_test_covers_a_realistic_prompt_size(watcher_module):
+    """A probe that fits in a context no real scan fits in does not probe the
+    capability. The at-size case plants its bug at the TOP, because a
+    front-truncating backend keeps the tail."""
+    at_size = watcher_module._self_test_at_size_code()
+
+    assert len(at_size.splitlines()) > 1000, (
+        "at-size self-test shrank back toward a toy file"
+    )
+    bug_line = next(
+        i
+        for i, line in enumerate(at_size.splitlines(), start=1)
+        if "asyncio.create_task(" in line
+    )
+    assert bug_line < 20, (
+        "planted bug moved out of the file head — under front-truncation a bug "
+        "in the tail is still visible, so the case would no longer discriminate"
+    )
+
+
+
+def test_scan_call_requests_the_scan_window(watcher_module, monkeypatch):
+    """Defect 1. The request must ASK for a context window.
+
+    DEFAULT_CONTEXT_LINES was raised to 10000 on the stated basis that the
+    detector model has a 256K context. That was true of the model and never of
+    the request: ollama serves whatever num_ctx it is told and defaults to ~8K,
+    and truncates from the front.
+    """
+    captured: dict[str, Any] = {}
+    _stub_urlopen(
+        monkeypatch, watcher_module, _native_payload('{"findings": []}', 4000), captured
+    )
+
+    watcher_module.call_ollama("x" * 40_000, "m", timeout=5)
+
+    options = captured["body"]["options"]
+    assert options["num_ctx"] == watcher_module.MODEL_SCAN_CONTEXT_TOKENS
+    assert options["num_predict"] == watcher_module.MODEL_REPLY_TOKEN_BUDGET
+
+
+def test_a_prompt_that_filled_the_window_is_treated_as_truncated(
+    watcher_module, monkeypatch
+):
+    """Defect 1, the guard — keyed on the backend's own accounting.
+
+    A prompt sized by _max_snippet_chars() lands well inside the window, so
+    one that reached the ceiling got there by being cut. This replaces an
+    estimator (len(prompt) // 6) that review showed was wrong in both
+    directions at once: loose enough to wave through a backend discarding half
+    the prompt, tight enough to fire on a legitimate comment-heavy file.
+    """
+    window = watcher_module.MODEL_SCAN_CONTEXT_TOKENS
+    _stub_urlopen(
+        monkeypatch, watcher_module, _native_payload("{}", prompt_eval=window)
+    )
+
+    with pytest.raises(watcher_module.PromptTruncated):
+        watcher_module.call_ollama("y" * 200_000, "m", timeout=5)
+
+
+def test_a_prompt_with_headroom_is_not_treated_as_truncated(
+    watcher_module, monkeypatch
+):
+    """The guard must not fire on a scan that fit — including a token-sparse
+    one. Under the replaced estimator a comment-heavy file could report fewer
+    real tokens than its own supposed floor and escalate as a dead detector."""
+    window = watcher_module.MODEL_SCAN_CONTEXT_TOKENS
+    _stub_urlopen(
+        monkeypatch,
+        watcher_module,
+        _native_payload('{"findings": []}', prompt_eval=window // 2),
+    )
+
+    result = watcher_module.call_ollama("y" * 200_000, "m", timeout=5)
+    assert result["prompt_tokens"] == window // 2
+
+
+# --- Coverage: chunk, do not trim -----------------------------------------
+
+
+def test_chunk_regions_cover_every_line_exactly_once(watcher_module, tmp_path):
+    """A file too big for one window is scanned in several, not cut down to
+    one. An earlier draft trimmed the tail instead — bounded and logged, and
+    still a hole where 31% of a large module would never be looked at."""
+    target = tmp_path / "big.py"
+    total = 12_000
+    target.write_text("\n".join(f"x{i} = {i}" for i in range(1, total + 1)))
+
+    regions = watcher_module.chunk_regions(str(target))
+
+    assert len(regions) > 1, "a 12k-line file must need more than one window"
+    covered: list[int] = []
+    for r in regions:
+        start, _, end = r.partition("-")
+        covered.extend(range(int(start.lstrip("L")), int(end.lstrip("L")) + 1))
+    assert covered == list(range(1, total + 1)), (
+        "regions must tile the file with no gap and no overlap"
+    )
+
+
+def test_every_chunk_fits_the_snippet_budget(watcher_module, tmp_path):
+    target = tmp_path / "big.py"
+    target.write_text("\n".join(f"value_{i} = compute({i})" for i in range(1, 9_000)))
+
+    budget = watcher_module._max_snippet_chars()
+    for r in watcher_module.chunk_regions(str(target)):
+        snippet, _, _ = watcher_module.read_file_region(str(target), r)
+        assert len(snippet) <= budget, f"region {r} exceeds the prompt budget"
+
+
+def test_snippet_budget_accounts_for_the_real_pattern_library(watcher_module):
+    """The budget is measured off the real prompt template, not a round number,
+    so growing patterns.md cannot quietly push scans past the window."""
+    overhead = len(
+        watcher_module.build_prompt(watcher_module.load_patterns(), "x" * 80, "")
+    )
+    budget_tokens = (
+        watcher_module.MODEL_SCAN_CONTEXT_TOKENS
+        - watcher_module.MODEL_REPLY_TOKEN_BUDGET
+    )
+    assert watcher_module._max_snippet_chars() + overhead <= budget_tokens * 2
+
+
+def test_scan_file_scans_a_large_file_in_several_passes(
+    watcher_module, tmp_path, monkeypatch
+):
+    """End to end: no explicit region means the whole file, however big."""
+    target = tmp_path / "big.py"
+    target.write_text("\n".join(f"y{i} = {i}" for i in range(1, 9_000)))
+
+    seen: list[str | None] = []
+    real_scan = watcher_module.scan_file
+
+    def _spy(path, region=None, persist=True):
+        if region is not None:
+            seen.append(region)
+            return []
+        return real_scan(path, region=region, persist=persist)
+
+    monkeypatch.setattr(watcher_module, "scan_file", _spy)
+    monkeypatch.setattr(watcher_module, "should_skip", lambda _p: (False, ""))
+
+    watcher_module.scan_file(str(target), persist=False)
+
+    assert len(seen) == len(watcher_module.chunk_regions(str(target))) > 1
+
+
+# --- The escalation actually has to reach a human --------------------------
+
+
+@pytest.mark.parametrize(
+    "failure_class",
+    ["model_not_found", "timeout", "unreachable", "prompt_truncated",
+     "output_unusable", "error", "some_future_class"],
+)
+def test_every_failure_class_actually_posts_a_finding(
+    watcher_module, monkeypatch, failure_class
+):
+    """Regression for the defect this change's own first draft shipped.
+
+    _escalate_model_failure looked its hint up with hints[failure_class]. Two
+    new classes were added without hints, so the KeyError was raised inside the
+    try and swallowed by the bare except — the escalation posted nothing, and
+    because it returned False the state never latched, so it re-failed forever.
+    The one channel that reaches a human, failing into the log that the same
+    function's comment calls insufficient.
+
+    Parameterised over an unknown class too: a hint must never be load-bearing
+    for delivery again.
+    """
+    posted: list[dict] = []
+    monkeypatch.setattr(
+        watcher_module, "get_watcher_identity", lambda: {"agent_uuid": "u-1"}
+    )
+    monkeypatch.setattr(
+        watcher_module, "post_finding", lambda **kw: posted.append(kw)
+    )
+
+    assert watcher_module._escalate_model_failure(failure_class, "boom", 3) is True
+    assert len(posted) == 1
+    assert posted[0]["fingerprint"].startswith(
+        f"watcher-capability:scan:{failure_class}:"
+    )
+    assert failure_class in posted[0]["message"]
+
+
+# --- A suppressor doing its job is not a dead detector ---------------------
+
+
+def test_experimental_pattern_id_is_not_a_dead_detector(watcher_module, tmp_path):
+    """patterns.md documents EXP-P007 and EXP-P008 under headings the severity
+    parser does not match, so the prompt offers ids this detector will not act
+    on. A model that dutifully returns one is USING the library. Keying the
+    "unusable" guard on acted-on findings instead of recognised ids made that
+    correct behaviour escalate as a detector that never saw the library."""
+    assert "EXP-P008" in watcher_module.load_pattern_ids()
+    assert "EXP-P008" not in watcher_module.load_pattern_severities()
+
+    target = tmp_path / "s.py"
+    target.write_text("import subprocess\nsubprocess.run(cmd, shell=True)\n")
+
+    out = watcher_module.parse_findings(
+        '{"findings": [{"pattern": "EXP-P008", "line": 2, "hint": "shell"}]}',
+        str(target),
+        "m",
+        1,
+    )
+    assert out == [], "an id with no authoritative severity is still not acted on"
+
+
+def test_a_dropped_finding_that_is_the_system_working_does_not_escalate(
+    watcher_module, tmp_path, monkeypatch
+):
+    """Generalises the above: every in-loop drop that is a deliberate filter
+    rather than an unrecognised id must leave the detector counted as alive."""
+    target = tmp_path / "s.py"
+    target.write_text("x = 1\n" * 40)
+    monkeypatch.setattr(watcher_module, "p008_actually_fires", lambda *a: False)
+    monkeypatch.setattr(
+        watcher_module, "load_pattern_ids", lambda: {"P008", "P001"}
+    )
+    monkeypatch.setattr(
+        watcher_module, "load_pattern_severities", lambda: {"P008": "high"}
+    )
+    monkeypatch.setattr(watcher_module, "load_pattern_violation_classes", lambda: {})
+
+    out = watcher_module.parse_findings(
+        '{"findings": [{"pattern": "P008", "line": 2, "hint": "shell injection"}]}',
+        str(target),
+        "m",
+        1,
+    )
+    assert out == [], "the suppressed finding must be dropped, without raising"
+
+
+# --- review_file shares the model, so it shares the failure modes ----------
+
+
+@pytest.mark.parametrize(
+    "payload", ['{}', '{"findings": null}', '{"findings": [7]}', '"a string"']
+)
+def test_review_mode_does_not_clear_the_counter_on_a_bad_envelope(
+    watcher_module, tmp_path, monkeypatch, payload
+):
+    """Review mode validated only isinstance(data, dict), so {} cleared the
+    counter by defaulting to [], and the other two cleared it before dying on
+    TypeError/AttributeError further down."""
+    target = tmp_path / "r.py"
+    target.write_text("x = 1\n")
+
+    recorded: list[Exception] = []
+    cleared: list[bool] = []
+    monkeypatch.setattr(watcher_module, "should_skip", lambda _p: (False, ""))
+    monkeypatch.setattr(
+        watcher_module,
+        "_record_model_failure",
+        lambda e, detector="scan": recorded.append((detector, e)),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "_clear_model_failures",
+        lambda detector="scan": cleared.append(detector),
+    )
+    monkeypatch.setattr(
+        watcher_module,
+        "call_model",
+        lambda *a, **k: {"text": payload, "model_used": "m", "tokens_used": 1},
+    )
+
+    assert watcher_module.review_file(str(target), persist=False) == []
+    assert len(recorded) == 1
+    detector, exc = recorded[0]
+    assert isinstance(exc, watcher_module.ModelOutputUnusable)
+    assert cleared == []
+    assert detector == "review", (
+        "review must not share scan's counter — under `--all` the scan leg "
+        "clears it immediately before the review leg increments it, so a "
+        "review detector failing on every edit never reaches the threshold"
+    )
+
+
+def test_scan_and_review_keep_separate_failure_counters(watcher_module):
+    """The `--all` interleaving turns one shared counter into a mask: whichever
+    detector succeeds resets the one the other was accumulating."""
+    assert (
+        watcher_module._model_failure_path("scan")
+        != watcher_module._model_failure_path("review")
+    )
+
+
+def test_review_failures_escalate_under_their_own_fingerprint(
+    watcher_module, monkeypatch
+):
+    posted: list[dict] = []
+    monkeypatch.setattr(
+        watcher_module, "get_watcher_identity", lambda: {"agent_uuid": "u-1"}
+    )
+    monkeypatch.setattr(watcher_module, "post_finding", lambda **kw: posted.append(kw))
+
+    watcher_module._escalate_model_failure("timeout", "boom", 3, "review")
+
+    assert posted[0]["fingerprint"].startswith("watcher-capability:review:timeout:")
+    assert posted[0]["extra"]["detector"] == "review"
+
+
+# --- Protocol selection ----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url,expected_compat",
+    [
+        ("http://localhost:11434/api/chat", False),
+        ("http://localhost:11434/v1/chat/completions", True),
+        # Review caught both of these: a query string hid the suffix, and a
+        # proxied native path matched a bare "/v1/" substring.
+        ("https://host/v1/chat/completions?api-version=2024", True),
+        ("https://host/v1/ollama/api/chat", False),
+    ],
+)
+def test_protocol_is_decided_on_the_path(watcher_module, url, expected_compat):
+    assert watcher_module._is_openai_compat_url(url) is expected_compat
+
+
+def test_protocol_can_be_set_explicitly(watcher_module, monkeypatch):
+    """A proxy can make the path unreadable, so the sniff must be overridable."""
+    monkeypatch.setenv("WATCHER_OLLAMA_PROTOCOL", "native")
+    assert watcher_module._is_openai_compat_url("https://p/v1/chat/completions") is False
+    monkeypatch.setenv("WATCHER_OLLAMA_PROTOCOL", "openai")
+    assert watcher_module._is_openai_compat_url("http://h/api/chat") is True
+
+
+def test_self_test_runs_the_at_size_case(watcher_module, monkeypatch):
+    """Pins self_test() itself, not just its fixture generator.
+
+    Review noted the first version of this test only inspected the filler
+    helper, so it would still have passed if self_test() reverted to scanning
+    the 7-line file alone — which is the whole defect.
+    """
+    scanned: list[int] = []
+    monkeypatch.setattr(
+        watcher_module,
+        "scan_file",
+        lambda path, persist=True: scanned.append(
+            len(Path(path).read_text().splitlines())
+        )
+        or [_make_fake_finding(watcher_module)],
+    )
+
+    assert watcher_module.self_test() == 0
+    assert len(scanned) == 2, "self-test must run both the toy and at-size cases"
+    assert max(scanned) > 1000, "at-size case is no longer at size"

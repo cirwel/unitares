@@ -53,6 +53,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 from contextlib import contextmanager
 from collections.abc import Callable
@@ -119,9 +120,33 @@ from agents.watcher.findings import (
 
 PATTERNS_FILE = Path(__file__).resolve().parent / "patterns.md"
 
-OLLAMA_URL = os.environ.get(
-    "WATCHER_OLLAMA_URL", "http://localhost:11434/v1/chat/completions"
-)
+OLLAMA_URL = os.environ.get("WATCHER_OLLAMA_URL", "http://localhost:11434/api/chat")
+
+# Reply budget. 1024 was sized for "the Qwen3 economy (~40 tokens per finding)",
+# which counted only the findings and not the preamble a model emits before
+# them: measured 2026-09-08 on a real scan, the reply hit the cap and returned
+# finish_reason "length" with the JSON cut off mid-object.
+MODEL_REPLY_TOKEN_BUDGET = int(os.environ.get("WATCHER_REPLY_TOKENS", "4096"))
+
+# Context window requested from ollama for every scan call. Fixed, not sized
+# per prompt, because the prompt is now sized to IT: a file too big for one
+# window is scanned in several (see chunk_regions), not crammed into a wider
+# one.
+#
+# Widening was the first thing tried and it was the wrong lever. Serving a
+# whole 2,800-line module in one call measured 183s and 255s on this reference
+# host against 30-50s truncated, and model_slot() serializes calls across
+# processes, so a hook firing on every edit backs up behind them. It also
+# priced out the deployed model: gemma4:latest is a 16K-context model, so
+# asking for 64K buys a clamp, not a wider window. 16K is what the small local
+# models this detector is required to run on actually have.
+# 32768 rather than 16384 because the prompt overhead — the rules block plus
+# the whole of patterns.md — measures ~27,600 chars on its own, so a 16K window
+# would leave almost no room for source and shatter every file into tiny
+# regions. Verified reachable on the reference host: gemma4:latest evaluated a
+# 55,710-token prompt on /api/chat and answered it correctly, so 32K is well
+# inside what the deployed small model handles.
+MODEL_SCAN_CONTEXT_TOKENS = int(os.environ.get("WATCHER_SCAN_CONTEXT_TOKENS", "32768"))
 # Default detector: qwen3-coder-next:latest (~51GB, 256K context) — the only tag
 # verified to pass `--self-test` on the reference host.
 #
@@ -136,7 +161,13 @@ OLLAMA_URL = os.environ.get(
 # `message.content` empty at scan size, so `--self-test` yields no findings. Any
 # future size-down must clear `--self-test`, not just return HTTP 200.
 DEFAULT_MODEL = os.environ.get("WATCHER_MODEL", "qwen3-coder-next:latest")
-DEFAULT_TIMEOUT = int(os.environ.get("WATCHER_TIMEOUT", "90"))
+# 90s was measured against scans the backend was truncating to ~8K tokens, so
+# it was really the cost of a short prompt. Serving the whole prompt costs what
+# the whole prompt costs: measured 2026-09-08 on this reference host, a full
+# ~55K-token scan took 183s and 255s on two real modules. The live LaunchAgent
+# hook had already raised this to 360 out of band; the default now matches, so
+# a fresh install does not systematically time out.
+DEFAULT_TIMEOUT = int(os.environ.get("WATCHER_TIMEOUT", "360"))
 
 WATCHER_FINDINGS_LEASE_MODE_ENV = "WATCHER_FINDINGS_LEASE_MODE"
 WATCHER_FINDINGS_LEASE_TTL_ENV = "WATCHER_FINDINGS_LEASE_TTL_S"
@@ -145,14 +176,43 @@ WATCHER_FINDINGS_LEASE_BLOCK_RC = 3
 _LEASE_ACQUIRED_OUTCOMES = {"acquired_new", "acquired_idempotent"}
 
 # How many lines of context to include when no explicit region is given.
-# The default detector (qwen3.6:27b-coding-nvfp4) has a 256K context window,
-# and should_skip() already caps at 256KB of file bytes (~6500 lines at
-# typical density), so DEFAULT_CONTEXT_LINES is effectively a last-resort
-# sanity cap rather than a real limit. The old 200-line value was a
-# gemma4-era relic that silently truncated scans to the file head and
-# missed every bug past line 200. Ogler's third-round self-review caught
-# it on 2026-04-11.
+# The old 200-line value was a relic that silently truncated scans to the file
+# head and missed every bug past line 200; Ogler's third-round self-review
+# caught it on 2026-04-11 and it was raised to 10000 on the basis that "the
+# default detector has a 256K context window".
+#
+# That basis was about the MODEL, and the request never asked for it. Ollama
+# serves whatever num_ctx it is told and defaults to ~8K, so raising this
+# constant did not widen the window — it just handed the backend more prompt
+# than it would keep, and the backend truncates from the FRONT, where the rules
+# and the pattern library live. call_ollama now asks for a fixed scan window
+# and raises PromptTruncated if the backend still had to cut, and
+# chunk_regions() splits a file across as many windows as it takes, so no scan
+# depends on this number any more. It survives only as the single-window bound
+# for an explicit --region.
 DEFAULT_CONTEXT_LINES = 10000
+
+# Characters of source we are willing to put in one prompt, derived from the
+# context ceiling so the two cannot drift apart. Reserves room for the reply
+# and for the ~8K tokens of rules + pattern library that precede the snippet,
+# and budgets the remainder at 2 chars/token — the densest ratio measured on
+# this detector's own prompts, so the estimate errs toward a smaller snippet.
+#
+# should_skip() lets files up to 256KB through, which is more than the window
+# holds. Trimming here rather than letting the backend do it is the entire
+# point: this trim is chosen, bounded to the file head, and logged.
+def _max_snippet_chars() -> int:
+    """Chars of source that fit one scan window, measured rather than assumed.
+
+    The overhead — the CRITICAL RULES block plus the whole of patterns.md — is
+    measured from the real prompt template, not guessed at a round number, so
+    that editing patterns.md cannot quietly push scans over the window.
+    Budgets tokens at 2 chars/token, the densest ratio measured on this
+    detector's own prompts, so the estimate errs toward a smaller snippet.
+    """
+    overhead_chars = len(build_prompt(load_patterns(), "x" * 80, ""))
+    budget_tokens = MODEL_SCAN_CONTEXT_TOKENS - MODEL_REPLY_TOKEN_BUDGET
+    return max(2000, budget_tokens * 2 - overhead_chars)
 
 # Cap on the source-line snapshot stored with each finding. Long enough to
 # carry the offending statement, short enough that findings.jsonl stays a
@@ -848,6 +908,43 @@ def read_file_region(
     return "\n".join(snippet_lines), start, end
 
 
+def chunk_regions(file_path: str, max_lines: int | None = None) -> list[str]:
+    """Split a file into "Lx-Ly" regions that each fit one scan window.
+
+    Every line of the file lands in exactly one region, so a big file is
+    scanned completely rather than partially. An earlier draft of this change
+    trimmed the tail instead, and review was right to call that the same sin it
+    was fixing: bounded, logged, and still a silent hole where 31% of this
+    module would never have been looked at again.
+
+    A single line longer than the whole budget still gets its own region. It
+    will overflow, and call_ollama will raise PromptTruncated for it — visibly,
+    on that one region, rather than by quietly deciding the file is clean.
+    """
+    lines = Path(file_path).read_text(errors="replace").splitlines()
+    # No line cap by default. DEFAULT_CONTEXT_LINES is a single-window
+    # last-resort bound; applying it here would put back exactly the hole
+    # chunking exists to close. The real bound on how much this ever reads is
+    # should_skip()'s 256KB file-size gate.
+    total = len(lines) if max_lines is None else min(len(lines), max_lines)
+    if total == 0:
+        return []
+
+    budget = _max_snippet_chars()
+    regions: list[str] = []
+    start = 1
+    running = 0
+    for i in range(1, total + 1):
+        rendered = len(f"{i:4d}: {lines[i - 1]}") + 1
+        if running and running + rendered > budget:
+            regions.append(f"L{start}-L{i - 1}")
+            start = i
+            running = 0
+        running += rendered
+    regions.append(f"L{start}-L{total}")
+    return regions
+
+
 # ---------------------------------------------------------------------------
 # Pattern library loading
 # ---------------------------------------------------------------------------
@@ -862,6 +959,20 @@ def load_patterns() -> str:
 # Map pattern id → authoritative severity. The model is allowed to flag
 # patterns but we override its severity field with the library's, since small
 # local models tend to downgrade severities to "medium" by default.
+def load_pattern_ids() -> set[str]:
+    """Every pattern id the PROMPT offers, including experimental ones.
+
+    Deliberately wider than load_pattern_severities(), which only returns ids
+    carrying an authoritative severity. patterns.md also documents EXP-P007 and
+    EXP-P008 under headings the severity parser does not match, so the model is
+    shown ids this detector will not act on. Review caught the consequence on
+    2026-09-08: returning one of those ids made the "is the model using the
+    library" guard conclude that it was not, and escalate a working detector as
+    a dead one.
+    """
+    return set(re.findall(r"^###\s+((?:EXP-)?P\d{3})\b", load_patterns(), re.MULTILINE))
+
+
 def load_pattern_severities() -> dict[str, str]:
     import re
 
@@ -958,39 +1069,168 @@ Remember: JSON only. No prose. No markdown fences around the JSON. Comments don'
 # ---------------------------------------------------------------------------
 
 
+class ModelOutputUnusable(RuntimeError):
+    """The call succeeded but produced nothing this detector can act on.
+
+    Indistinguishable, at the call site, from a clean scan of clean code —
+    which is exactly why it has to be raised rather than logged.
+    """
+
+
+class PromptTruncated(RuntimeError):
+    """The backend silently dropped part of the prompt.
+
+    A capability failure, not a clean scan: the instructions and the pattern
+    library sit at the FRONT of the prompt, so a front-truncating backend
+    leaves the model reviewing a bare code dump it was never briefed on.
+    Routed through _record_model_failure so it escalates like a 404 does.
+    """
+
+
+# How close to the requested window a prompt may come before we call it
+# truncated. A prompt sized by _max_snippet_chars() lands well under the
+# window, so anything within a hair of the ceiling got there by being cut.
+_TRUNCATION_HEADROOM_TOKENS = 64
+
+
+def _is_openai_compat_url(url: str) -> bool:
+    """Which wire protocol OLLAMA_URL speaks.
+
+    WATCHER_OLLAMA_PROTOCOL ("native" / "openai") settles it outright; the
+    sniff is only a default for the two URLs anyone actually configures.
+    Reviewed 2026-09-08 — the first version substring-matched the whole URL,
+    so a query string ("…/chat/completions?api-version=2024") hid the suffix
+    and a proxy path ("/v1/ollama/api/chat") matched "/v1/" and was called
+    OpenAI. Both would have sent the wrong body and read the wrong response
+    shape, so the protocol is now decided on the parsed path, and is
+    overridable when a proxy makes the path unreadable.
+    """
+    explicit = os.environ.get("WATCHER_OLLAMA_PROTOCOL", "").strip().lower()
+    if explicit in {"openai", "openai-compat", "compat"}:
+        return True
+    if explicit in {"native", "ollama"}:
+        return False
+
+    path = urllib.parse.urlparse(url).path.rstrip("/")
+    if path.endswith("/api/chat") or path.endswith("/api/generate"):
+        return False
+    return path.endswith("/completions")
+
+
 def call_ollama(prompt: str, model: str, timeout: int) -> dict[str, Any]:
-    """Call Ollama's OpenAI-compatible endpoint directly.
+    """Call Ollama and return the raw completion, or raise if it was truncated.
 
     Configuration via OLLAMA_URL / DEFAULT_MODEL / DEFAULT_TIMEOUT at module load
     (driven by WATCHER_OLLAMA_URL / WATCHER_MODEL / WATCHER_TIMEOUT env vars).
 
-    max_tokens=1024 matches the Qwen3 token economy (~40 tokens per finding);
-    temperature=0.0 keeps the detector output deterministic.
+    Talks to ollama's NATIVE /api/chat by default rather than the
+    OpenAI-compatible /v1/chat/completions, because the compat endpoint offers
+    no way to raise num_ctx: it clamps every request to the server default and
+    says nothing. Measured 2026-09-08 against a 206,902-char prompt, the compat
+    endpoint reported prompt_tokens=8195 with `options.num_ctx`, with a
+    top-level `num_ctx`, and with neither — identical, and finish_reason
+    "stop". The same prompt on /api/chat with options.num_ctx set evaluated
+    55,710 tokens.
+
+    That clamp is what emptied this detector. DEFAULT_CONTEXT_LINES was raised
+    to 10000 on 2026-04-11 on the stated basis that "the default detector has a
+    256K context window" -- true of the model, never true of the request. Every
+    scan of a file bigger than ~8K tokens has been served to the model with its
+    front (the CRITICAL RULES block and the whole pattern library) cut off,
+    leaving an unbriefed code dump. The model then answers in prose, or invents
+    pattern ids like "BUG", and parse_findings correctly discards all of it.
+
+    num_ctx is sized from the prompt instead of pinned high: the KV cache is
+    allocated for whatever we ask, so a fixed 64K ceiling would tax every small
+    scan for the worst case.
+
+    max_tokens/num_predict is the REPLY budget, and 1024 was too small: on a
+    real scan the model spent it on preamble and was cut off mid-object with
+    finish_reason "length" (measured, 2026-09-08). temperature=0.0 keeps the
+    detector deterministic.
     """
-    body = json.dumps(
-        {
+    native = not _is_openai_compat_url(OLLAMA_URL)
+
+    if native:
+        num_ctx = MODEL_SCAN_CONTEXT_TOKENS
+        payload = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 1024,
+            "stream": False,
+            "options": {
+                "temperature": 0.0,
+                "num_ctx": num_ctx,
+                "num_predict": MODEL_REPLY_TOKEN_BUDGET,
+            },
+        }
+    else:
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": MODEL_REPLY_TOKEN_BUDGET,
             "temperature": 0.0,
         }
-    ).encode()
+
     req = urllib.request.Request(
         OLLAMA_URL,
-        data=body,
+        data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         data = json.loads(resp.read().decode())
 
-    choice = data["choices"][0]["message"]
-    text = choice.get("content", "") or choice.get("reasoning", "") or ""
-    usage = data.get("usage", {})
+    if native:
+        message = data.get("message", {}) or {}
+        text = message.get("content", "") or message.get("thinking", "") or ""
+        model_used = data.get("model", model)
+        prompt_tokens = data.get("prompt_eval_count") or 0
+        reply_tokens = data.get("eval_count") or 0
+        tokens_used = prompt_tokens + reply_tokens
+        finish_reason = data.get("done_reason")
+    else:
+        choice = data["choices"][0]
+        message = choice.get("message", {}) or {}
+        text = message.get("content", "") or message.get("reasoning", "") or ""
+        model_used = data.get("model", model)
+        usage = data.get("usage", {})
+        prompt_tokens = usage.get("prompt_tokens") or 0
+        tokens_used = usage.get("total_tokens", 0)
+        finish_reason = choice.get("finish_reason")
+
+    # Truncation is detected from the backend's own accounting, not from a
+    # token estimate. A prompt that fits leaves headroom; one that filled the
+    # window to the brim was cut to fit it. Reviewed 2026-09-08: the estimator
+    # this replaces (len(prompt) // 6) was wrong in both directions at once —
+    # loose enough to wave through a backend that discarded half the prompt,
+    # and tight enough to fire on a legitimate comment-heavy file whose real
+    # token count sat below the supposed floor. The window we asked for is a
+    # number we know exactly, so nothing has to be estimated.
+    window = num_ctx if native else None
+    if window and prompt_tokens >= window - _TRUNCATION_HEADROOM_TOKENS:
+        raise PromptTruncated(
+            f"backend evaluated {prompt_tokens} prompt tokens against a "
+            f"{window}-token window — the prompt filled it, so its front (the "
+            f"rules and the pattern library) was cut off. The scan window "
+            f"should have been sized to fit: this means either "
+            f"WATCHER_SCAN_CONTEXT_TOKENS was lowered without the snippet "
+            f"budget following, or the model's own context is smaller than "
+            f"{window}."
+        )
+
+    if finish_reason == "length":
+        log(
+            f"model reply hit the {MODEL_REPLY_TOKEN_BUDGET}-token budget and was "
+            f"cut off — findings may be missing (raise WATCHER_REPLY_TOKENS)",
+            "warning",
+        )
+
     return {
         "text": text,
-        "model_used": data.get("model", model),
-        "tokens_used": usage.get("total_tokens", 0),
+        "model_used": model_used,
+        "tokens_used": tokens_used,
+        "prompt_tokens": prompt_tokens,
+        "finish_reason": finish_reason,
     }
 
 
@@ -1083,13 +1323,32 @@ def call_model(prompt: str, model: str = DEFAULT_MODEL, timeout: int = DEFAULT_T
 # threshold posts a finding, which is the one channel that reaches a human
 # (governance event stream -> #residents). Deduped server-side by fingerprint,
 # so a persistent misconfiguration announces itself once, not once per edit.
+#
+# 2026-08-21 -> 09-08 repeated the outage one layer up, because only a raised
+# EXCEPTION counted. A call that returns 200 with unusable content — prose
+# instead of an envelope, a bare list instead of {"findings": [...]}, an
+# invented pattern id — took the success path, logged a warning nobody reads,
+# and returned []. Eighteen days, 140 of 141 completed scans at "0 raw, 0 new",
+# every liveness indicator green. So a model whose OUTPUT cannot be used is now
+# a capability failure too, and escalates on the same counter.
 
 MODEL_FAILURE_ESCALATE_AFTER = int(os.environ.get("WATCHER_MODEL_FAILURE_ESCALATE_AFTER", "3"))
 _MODEL_FAILURE_STATE = "model_failures.json"
 
 
-def _model_failure_path() -> Path:
-    return watcher_state_dir() / _MODEL_FAILURE_STATE
+def _model_failure_path(detector: str = "scan") -> Path:
+    """Failure state, kept per detector.
+
+    scan and review share the model and the window, so they fail together —
+    but `--all` runs them back to back against ONE state file, and whichever
+    ran first cleared the counter the other was about to increment. Reviewed
+    2026-09-08: with a single file, a review detector failing on every edit
+    never got past count=1, because the scan leg reset it each time. That is
+    the 18-day outage's mechanism rebuilt out of two healthy-looking halves.
+    """
+    if detector == "scan":
+        return watcher_state_dir() / _MODEL_FAILURE_STATE
+    return watcher_state_dir() / f"model_failures_{detector}.json"
 
 
 def _classify_model_failure(exc: Exception) -> str:
@@ -1098,6 +1357,10 @@ def _classify_model_failure(exc: Exception) -> str:
     The two live modes are distinct problems with distinct fixes: a tag that is
     not pulled (404, instant) versus a model too slow for the timeout budget.
     """
+    if isinstance(exc, PromptTruncated):
+        return "prompt_truncated"
+    if isinstance(exc, ModelOutputUnusable):
+        return "output_unusable"
     text = str(exc).lower()
     if "404" in text or "not found" in text:
         return "model_not_found"
@@ -1108,14 +1371,14 @@ def _classify_model_failure(exc: Exception) -> str:
     return "error"
 
 
-def _record_model_failure(exc: Exception) -> None:
+def _record_model_failure(exc: Exception, detector: str = "scan") -> None:
     """Count consecutive model-call failures; escalate once at the threshold.
 
     Best-effort throughout — a detector that cannot report its own death must
     still not crash the scan that discovered it.
     """
     failure_class = _classify_model_failure(exc)
-    path = _model_failure_path()
+    path = _model_failure_path(detector)
     try:
         state = json.loads(path.read_text())
         if not isinstance(state, dict):
@@ -1129,7 +1392,9 @@ def _record_model_failure(exc: Exception) -> None:
     state["last_error"] = str(exc)[:300]
 
     if state["count"] >= MODEL_FAILURE_ESCALATE_AFTER and not state.get("escalated"):
-        state["escalated"] = _escalate_model_failure(failure_class, state["last_error"], state["count"])
+        state["escalated"] = _escalate_model_failure(
+            failure_class, state["last_error"], state["count"], detector
+        )
 
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1138,9 +1403,9 @@ def _record_model_failure(exc: Exception) -> None:
         log(f"could not persist model-failure state: {e}", "error")
 
 
-def _clear_model_failures() -> None:
-    """Reset the counter after a successful model call."""
-    path = _model_failure_path()
+def _clear_model_failures(detector: str = "scan") -> None:
+    """Reset the counter after a successful model call, for that detector only."""
+    path = _model_failure_path(detector)
     try:
         if path.exists():
             path.unlink()
@@ -1148,7 +1413,9 @@ def _clear_model_failures() -> None:
         pass
 
 
-def _escalate_model_failure(failure_class: str, last_error: str, count: int) -> bool:
+def _escalate_model_failure(
+    failure_class: str, last_error: str, count: int, detector: str = "scan"
+) -> bool:
     """Post a capability finding. Returns True if it was accepted (or deduped)."""
     hints = {
         "model_not_found": (
@@ -1162,8 +1429,33 @@ def _escalate_model_failure(failure_class: str, last_error: str, count: int) -> 
             "prompt does NOT mean the real prompt fits."
         ),
         "unreachable": "The ollama endpoint is not reachable — is the service running?",
+        "prompt_truncated": (
+            "The backend dropped part of the prompt. Truncation takes the FRONT, "
+            "which carries the rules and the pattern library, so the model is "
+            "reviewing an unbriefed code dump. Check that WATCHER_OLLAMA_URL "
+            f"({OLLAMA_URL}) is ollama's native /api/chat — the OpenAI-compatible "
+            "/v1 endpoint cannot raise num_ctx at all — and that "
+            f"WATCHER_MODEL={DEFAULT_MODEL} has a context window at least "
+            f"WATCHER_SCAN_CONTEXT_TOKENS={MODEL_SCAN_CONTEXT_TOKENS} wide."
+        ),
+        "output_unusable": (
+            f"{DEFAULT_MODEL} is answering, but not with findings this detector can "
+            "read — prose, a bare list, or invented pattern ids. Confirm with "
+            "`agent.py --self-test`, which now scans at real size; a model that "
+            "passes on a toy file can fail on every real one."
+        ),
         "error": "The detector's model call is failing; see ~/Library/Logs/unitares-watcher.log.",
     }
+    # A missing hint must not swallow the escalation: the whole point of this
+    # function is that it is the ONLY channel that reaches a human. Reviewed
+    # 2026-09-08, where two new failure classes were added without hints and
+    # the resulting KeyError was caught by the handler below — reproducing, in
+    # the very function that exists to prevent it, a detector that fails into a
+    # log nobody reads.
+    hint = hints.get(
+        failure_class,
+        "Unclassified detector failure; see ~/Library/Logs/unitares-watcher.log.",
+    )
     identity = get_watcher_identity()
     if not identity or not identity.get("agent_uuid"):
         log("detector down but no governance identity — cannot escalate", "error")
@@ -1173,13 +1465,14 @@ def _escalate_model_failure(failure_class: str, last_error: str, count: int) -> 
             event_type="watcher_capability_finding",
             severity="high",
             message=(
-                f"Watcher detector down ({failure_class}): {count} consecutive model-call "
-                f"failures. No scan since has produced findings. {hints[failure_class]}"
+                f"Watcher {detector} detector down ({failure_class}): {count} "
+                f"consecutive failed passes. {hint}"
             ),
             agent_id=identity["agent_uuid"],
             agent_name="Watcher",
-            fingerprint=f"watcher-capability:{failure_class}:{DEFAULT_MODEL}",
+            fingerprint=f"watcher-capability:{detector}:{failure_class}:{DEFAULT_MODEL}",
             extra={
+                "detector": detector,
                 "failure_class": failure_class,
                 "model": DEFAULT_MODEL,
                 "timeout_s": DEFAULT_TIMEOUT,
@@ -1291,6 +1584,10 @@ def parse_findings(
       - leading/trailing whitespace
       - markdown code fences (```json ... ```)
       - extra prose before the JSON block
+
+    Raises ModelOutputUnusable when the response cannot be read as this
+    detector's envelope at all. An empty ``findings`` list is NOT unusable —
+    that is the clean-code answer, and the whole point of the distinction.
     """
     cleaned = text.strip()
 
@@ -1314,22 +1611,51 @@ def parse_findings(
             cleaned = cleaned[start : end + 1]
 
     if not cleaned:
-        return []
+        raise ModelOutputUnusable(f"empty model response; raw={text[:300]!r}")
 
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError as e:
-        log(f"failed to parse model output as JSON: {e}; raw={text[:300]!r}", "warning")
-        return []
+        raise ModelOutputUnusable(
+            f"response is not JSON: {e}; raw={text[:300]!r}"
+        ) from e
 
-    raw_findings = data.get("findings", []) if isinstance(data, dict) else []
+    if not isinstance(data, dict):
+        # Observed from an unbriefed model: a bare top-level list of findings.
+        # The old `data.get(...) if isinstance(data, dict) else []` read this as
+        # a clean scan and dropped every finding without a single log line.
+        raise ModelOutputUnusable(
+            f"expected a {{\"findings\": [...]}} object, got "
+            f"{type(data).__name__}; raw={text[:300]!r}"
+        )
+
+    if "findings" not in data:
+        # Reached via the "first { to last }" salvage below a bare top-level
+        # list: the salvage lifts the first finding OBJECT out of the list, and
+        # that object has no "findings" key. Defaulting to [] here turned an
+        # unusable envelope into a clean scan.
+        raise ModelOutputUnusable(
+            f"response object has no \"findings\" key (keys: "
+            f"{sorted(data)[:8]}); raw={text[:300]!r}"
+        )
+
+    raw_findings = data["findings"]
     if not isinstance(raw_findings, list):
-        return []
+        raise ModelOutputUnusable(
+            f"\"findings\" is {type(raw_findings).__name__}, not a list; "
+            f"raw={text[:300]!r}"
+        )
 
     library_severities = load_pattern_severities()
     library_violation_classes = load_pattern_violation_classes()
+    library_pattern_ids = load_pattern_ids()
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     findings: list[tuple[Finding, str]] = []
+    # Findings whose pattern id the library knows, counted separately from the
+    # ones that survive. The loop below also drops entries for reasons that are
+    # the system working — chiefly the P008 AST post-filter — and those must
+    # not read as a dead detector.
+    recognized = 0
     for rf in raw_findings:
         if not isinstance(rf, dict):
             continue
@@ -1338,6 +1664,13 @@ def parse_findings(
             continue
         # Drop findings whose pattern id we don't recognize — the model is
         # only allowed to flag library patterns, not invent new ones.
+        if pattern in library_pattern_ids:
+            # The model is quoting the library, which is what `recognized`
+            # asks. Whether we ACT on the id is a separate question: patterns
+            # under an EXP- heading are offered in the prompt but carry no
+            # severity, so a model that dutifully returns EXP-P008 is working
+            # correctly and must not read as one that invented "BUG".
+            recognized += 1
         if pattern not in library_severities:
             log(f"dropping unknown pattern id from model: {pattern!r}", "warning")
             continue
@@ -1380,6 +1713,23 @@ def parse_findings(
                 evidence,
             )
         )
+
+    if raw_findings and not recognized:
+        # Every id the model returned was one the library does not have.
+        # Measured on an unbriefed model: "BUG" and "P000". Refusing each is
+        # correct; a whole response of them means the model never saw the
+        # pattern library at all, and returning [] would report that as clean.
+        #
+        # Keyed on `recognized`, not on `findings`. Reviewed 2026-09-08: keyed
+        # on `findings`, the P008 AST post-filter — which exists precisely to
+        # suppress a known, routine list-form-subprocess false positive — read
+        # as a dead detector, under a message blaming the pattern ids. A
+        # suppressor doing its job must never escalate as a capability failure.
+        raise ModelOutputUnusable(
+            f"model returned {len(raw_findings)} finding(s), none carrying a "
+            f"known pattern id — the model is not using the pattern library"
+        )
+
     return findings
 
 
@@ -2371,6 +2721,26 @@ def scan_file(
         log(f"skip {file_path}: {reason}")
         return []
 
+    # No explicit region means "the whole file", and a file bigger than one
+    # scan window is covered by several. Each pass re-enters with an explicit
+    # region and therefore takes the single-window path below.
+    if region is None:
+        try:
+            regions = chunk_regions(file_path)
+        except (OSError, UnicodeDecodeError):
+            # Planning the chunks is an optimisation, not the scan. Fall
+            # through to the single-window path, which reports a read failure
+            # against the file properly.
+            regions = []
+        if len(regions) > 1:
+            log(f"scan {file_path}: {len(regions)} regions to cover the whole file")
+            found: list[Finding] = []
+            for r in regions:
+                found.extend(scan_file(file_path, region=r, persist=persist))
+            return found
+        region = regions[0] if regions else None
+
+
     log(f"scan {file_path} region={region or 'head'}")
     try:
         code_snippet, region_start, region_end = read_file_region(file_path, region)
@@ -2403,11 +2773,23 @@ def scan_file(
         log(f"model call failed: {e}", "error")
         _record_model_failure(e)
         return []
-    _clear_model_failures()
 
-    parsed = parse_findings(
-        result["text"], file_path, result.get("model_used", DEFAULT_MODEL), region_start
-    )
+    try:
+        parsed = parse_findings(
+            result["text"],
+            file_path,
+            result.get("model_used", DEFAULT_MODEL),
+            region_start,
+        )
+    except ModelOutputUnusable as e:
+        # A usable-looking 200 that yields nothing actionable is a dead
+        # detector, not a clean file. Clearing the counter here — as this
+        # function did until 2026-09-08 — is what let 18 days of unparseable
+        # responses read as 18 days of clean scans.
+        log(f"model output unusable: {e}", "error")
+        _record_model_failure(e)
+        return []
+    _clear_model_failures()
     findings: list[Finding] = []
     for f, raw_evidence in parsed:
         if not _verify_finding_against_source(f, raw_evidence, snippet_lines_by_num):
@@ -2465,6 +2847,24 @@ def review_file(
         log(f"skip {file_path}: {reason}")
         return []
 
+    # Same window arithmetic as scan_file: review shares the model and the
+    # context budget, so it needs the same chunking. Reviewed 2026-09-08 —
+    # without this, review kept read_file_region's whole-file default and would
+    # have raised PromptTruncated on every file past a few hundred lines, i.e.
+    # on every real edit, returning zero R000 findings.
+    if region is None:
+        try:
+            regions = chunk_regions(file_path)
+        except (OSError, UnicodeDecodeError):
+            regions = []
+        if len(regions) > 1:
+            log(f"review {file_path}: {len(regions)} regions to cover the whole file")
+            found: list[Finding] = []
+            for r in regions:
+                found.extend(review_file(file_path, region=r, persist=persist))
+            return found
+        region = regions[0] if regions else None
+
     log(f"review {file_path} region={region or 'head'}")
     try:
         code_snippet, region_start, region_end = read_file_region(file_path, region)
@@ -2483,9 +2883,8 @@ def review_file(
         return []
     except Exception as e:
         log(f"model call failed: {e}", "error")
-        _record_model_failure(e)
+        _record_model_failure(e, "review")
         return []
-    _clear_model_failures()
 
     raw_text = result["text"]
     # Parse the JSON — review mode returns a simpler schema
@@ -2500,14 +2899,42 @@ def review_file(
             try:
                 data = json.loads(match.group())
             except json.JSONDecodeError:
-                log(f"review parse failed: could not extract JSON", "warning")
-                return []
+                data = None
         else:
-            log(f"review parse failed: no JSON found", "warning")
-            return []
+            data = None
+    # Validate the WHOLE envelope before clearing the counter. Reviewed
+    # 2026-09-08: an earlier draft here checked only `isinstance(data, dict)`,
+    # so {}, {"findings": null} and {"findings": [7]} each cleared the
+    # detector-down counter — the first by silently defaulting to [], the other
+    # two by clearing and then dying on TypeError/AttributeError further down.
+    # That is the same `.get(..., [])` defaulting parse_findings was changed to
+    # refuse, left standing in the sibling function.
+    problem: str | None = None
+    if not isinstance(data, dict):
+        problem = f"review response is not a JSON object; raw={raw_text[:300]!r}"
+    elif "findings" not in data:
+        problem = (
+            f"review response has no \"findings\" key (keys: "
+            f"{sorted(data)[:8]}); raw={raw_text[:300]!r}"
+        )
+    elif not isinstance(data["findings"], list):
+        problem = (
+            f"review \"findings\" is {type(data['findings']).__name__}, not a list"
+        )
+    elif not all(isinstance(item, dict) for item in data["findings"]):
+        problem = "review \"findings\" contains a non-object entry"
+
+    if problem:
+        # Same escalation as scan_file: review mode shares the model and the
+        # context window, so it fails the same way and must say so.
+        e = ModelOutputUnusable(problem)
+        log(f"model output unusable: {e}", "error")
+        _record_model_failure(e, "review")
+        return []
+    _clear_model_failures("review")
 
     findings = []
-    for item in data.get("findings", []):
+    for item in data["findings"]:
         line = item.get("line", 0)
         hint = str(item.get("hint", ""))[:80]
         f = Finding(
@@ -2557,15 +2984,35 @@ SELF_TEST_CODE = """async def stuck_agent_recovery_task(self):
 """
 
 
-def self_test() -> int:
-    """Run the watcher against a synthetic known-buggy file and verify that
-    at least one P001 (fire-and-forget) finding comes back."""
+# Lines of filler appended for the at-size self-test case. Chosen so the prompt
+# lands well past ollama's ~8K default context: at ~2-3 chars/token this is a
+# ~55K-token prompt, i.e. the size of a real scan of a real module.
+SELF_TEST_PAD_LINES = 1200
+
+
+def _self_test_at_size_code() -> str:
+    """The same planted P001, but at the TOP of a module-sized file.
+
+    The asymmetry is the whole point. A front-truncating backend keeps the
+    tail, so a bug at the top is unreachable when the context window is too
+    small, and reachable when it is not. The bug must be at the top or this
+    case cannot tell the two apart.
+    """
+    filler = "\n".join(
+        f"def _selftest_helper_{i}(value: int) -> int:\n    return value + {i}\n"
+        for i in range(1, SELF_TEST_PAD_LINES + 1)
+    )
+    return SELF_TEST_CODE + "\n\n" + filler
+
+
+def _run_self_test_case(label: str, code: str) -> int:
+    """Scan one synthetic file; return 0 pass, 1 no findings, 2 no P001."""
     import tempfile
 
     with tempfile.NamedTemporaryFile(
         mode="w", suffix="_selftest.py", delete=False
     ) as tf:
-        tf.write(SELF_TEST_CODE)
+        tf.write(code)
         tmp_path = tf.name
 
     try:
@@ -2579,23 +3026,55 @@ def self_test() -> int:
         except OSError:
             pass
 
+    lines = len(code.splitlines())
     if not findings:
-        print("SELF-TEST: FAIL — no findings produced")
+        print(f"  [{label}] FAIL — no findings produced ({lines} lines)")
         return 1
 
-    hit_p001 = any(f.pattern == "P001" for f in findings)
     for f in findings:
-        print(
-            f"  [{f.severity}] {f.pattern} {f.file}:{f.line} — {f.hint}"
-        )
-    if hit_p001:
-        print(f"SELF-TEST: PASS — got {len(findings)} finding(s), P001 detected")
+        print(f"    [{f.severity}] {f.pattern} {f.file}:{f.line} — {f.hint}")
+    if any(f.pattern == "P001" for f in findings):
+        print(f"  [{label}] PASS — {len(findings)} finding(s), P001 detected")
         return 0
     print(
-        f"SELF-TEST: PARTIAL — {len(findings)} finding(s) but no P001; "
+        f"  [{label}] PARTIAL — {len(findings)} finding(s) but no P001; "
         "pattern library may need a stronger hint"
     )
     return 2
+
+
+def self_test() -> int:
+    """Verify the detector against synthetic known-buggy files.
+
+    Two cases, because one was not enough. Until 2026-09-08 this probe scanned
+    a 7-line file and nothing else, so it passed on every model that could
+    answer a toy prompt — including, for eighteen days, one whose every real
+    scan came back empty because the backend was truncating the prompt to ~8K
+    tokens and cutting off the instructions. A capability probe that fits in a
+    context no real scan fits in does not probe the capability.
+
+    The at-size case is the load-bearing one. Keep it.
+    """
+    print("SELF-TEST: small file (7 lines)")
+    small_rc = _run_self_test_case("small", SELF_TEST_CODE)
+
+    print(f"SELF-TEST: at size (~{SELF_TEST_PAD_LINES * 3} lines, bug at the top)")
+    at_size_rc = _run_self_test_case("at-size", _self_test_at_size_code())
+
+    rc = max(small_rc, at_size_rc)
+    if rc == 0:
+        print("SELF-TEST: PASS — detector works at toy size and at real size")
+    elif at_size_rc and not small_rc:
+        print(
+            "SELF-TEST: FAIL — passes on a toy file and fails at real size. "
+            "That is the signature of a context window too small for the "
+            "prompt: raise WATCHER_SCAN_CONTEXT_TOKENS, or point "
+            "WATCHER_OLLAMA_URL at ollama's native /api/chat (the "
+            "OpenAI-compatible /v1 endpoint cannot raise num_ctx at all)."
+        )
+    else:
+        print("SELF-TEST: FAIL — detector did not produce the planted P001")
+    return rc
 
 
 def list_findings(only_open: bool = False) -> int:
