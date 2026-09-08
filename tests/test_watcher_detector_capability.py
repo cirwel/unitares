@@ -68,7 +68,13 @@ class TestEscalation:
         call = posted[0]
         assert call["event_type"] == "watcher_capability_finding"
         assert call["severity"] == "high"
-        assert call["fingerprint"].startswith("watcher-capability:model_not_found:")
+        # The detector name is part of the fingerprint: scan and review share
+        # the model and fail together, so without it a review outage dedups
+        # into a scan one and the operator cannot tell which went dark.
+        assert call["fingerprint"].startswith(
+            "watcher-capability:scan:model_not_found:"
+        )
+        assert call["extra"]["detector"] == "scan"
         assert call["extra"]["consecutive_failures"] == 3
 
     def test_a_different_failure_class_escalates_separately(self, posted):
