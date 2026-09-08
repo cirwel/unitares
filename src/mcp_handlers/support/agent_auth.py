@@ -209,7 +209,7 @@ def check_agent_can_operate(agent_uuid: str) -> Optional[TextContent]:
             details={"agent_id": agent_uuid[:12], "status": "archived"},
             recovery={"action": (
                 "Reclaim the SAME identity if this is the same live process: "
-                "onboard(resume=true) with your continuity_token or "
+                "start_session(resume=true) with your continuity_token or "
                 "client_session_id (auto-unarchives). Operator restore: "
                 "agent(action='update'). Otherwise onboard fresh."
             )}
@@ -537,10 +537,10 @@ def require_registered_agent(arguments: Dict[str, Any]) -> Tuple[str, Optional[T
                 f"Agent '{agent_id}' is not registered. Identity auto-creates on first tool call.",
                 recovery={
                     "error_type": "agent_not_registered",
-                    "action": "Call onboard() first to create your identity, or call process_agent_update() to auto-create",
+                    "action": "Call start_session() first to create your identity, or call sync_state() to auto-create",
                     "related_tools": ["onboard", "process_agent_update", "identity", "list_tools"],
                     "workflow": [
-                        "1. Call onboard(force_new=true) — a fresh session onboards fresh with no parent",
+                        "1. Call start_session(force_new=true) — a fresh session onboards fresh with no parent",
                         "   — per v2 ontology, fresh process-instances mint fresh identity; declare parent_agent_id only for a real spawn (spawn_reason='subagent') or a handoff from an exited session (spawn_reason='explicit'); declaring a live agent as parent is rejected",
                         "2. Save client_session_id from response",
                         "3. Call identity(name='your_name') to set a cosmetic label",
@@ -568,14 +568,14 @@ def require_registered_agent(arguments: Dict[str, Any]) -> Tuple[str, Optional[T
         return None, error_response(
             f"Could not verify agent registration: {str(e)}",
             recovery={
-                "action": "System error checking agent registration. Try onboard() or health_check() first.",
+                "action": "System error checking agent registration. Try start_session() or health_check() first.",
                 "related_tools": ["onboard", "health_check", "identity"],
                 "workflow": [
                     "1. Call health_check() to verify system is healthy",
-                    "2. Call onboard() to create your identity",
+                    "2. Call start_session() to create your identity",
                     "3. Save client_session_id and include it in future calls"
                 ],
-                "note": "Identity auto-creates on first tool call. Use onboard() for the best first-time experience."
+                "note": "Identity auto-creates on first tool call. Use start_session() for the best first-time experience."
             }
         )
 
