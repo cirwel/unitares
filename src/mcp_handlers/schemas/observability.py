@@ -1,4 +1,4 @@
-from typing import Optional, Union, Literal, Any, List
+from typing import Any, ClassVar, List, Literal, Mapping, Optional, Tuple, Union
 from pydantic import Field, model_validator
 from .mixins import AgentIdentityMixin
 
@@ -57,6 +57,39 @@ class AggregateMetricsParams(AgentIdentityMixin):
 
 class ObserveParams(AgentIdentityMixin):
     """Parameters for observe"""
+    # Which of these flat parameters each action uses. The wire schema stays
+    # flat (the MCP wrapper builds its argument model from top-level
+    # properties), so this is the only machine-readable statement of the
+    # per-action contract; describe_tool(action=...) serves it and
+    # tests/test_router_action_fields.py holds it to the routing table.
+    # Identity and session parameters are common to every action and are
+    # not repeated here (schemas/router_actions.COMMON_ROUTER_FIELDS).
+    ACTION_FIELDS: ClassVar[Mapping[str, Tuple[str, ...]]] = {
+        "agent": (
+                "target_agent_id", "include_history", "analyze_patterns",
+        ),
+        "compare": (
+                "agent_ids", "compare_metrics",
+        ),
+        "similar": (
+                "limit",
+        ),
+        "anomalies": (),
+        "aggregate": (),
+        "telemetry": (
+                "window_hours", "include_calibration",
+        ),
+        "audit_events": (
+                "event_type", "event_types", "since", "until", "include_events",
+                "include_test_fixtures",
+        ),
+        "outcome_evidence": (
+                "outcome_type", "corroboration_grade", "diagnostic",
+                "include_detail", "include_events", "low_weight_threshold",
+                "min_completions",
+        ),
+        "bridge": (),
+    }
     action: Literal["agent", "compare", "similar", "anomalies", "aggregate", "telemetry", "audit_events", "outcome_evidence", "bridge"] = Field(..., description="Operation to perform")
     target_agent_id: Optional[str] = Field(None, description="Agent to observe — UUID or label (for action=agent). Use list_agents to find.")
     agent_ids: Optional[List[Any]] = Field(None, description="Agent identifiers to compare (for action=compare, min 2)")

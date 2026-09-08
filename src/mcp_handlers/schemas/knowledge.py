@@ -1,4 +1,4 @@
-from typing import Optional, Union, Literal, List, Any, Dict, get_args
+from typing import Any, ClassVar, Dict, List, Literal, Mapping, Optional, Tuple, Union, get_args
 from pydantic import Field, model_validator
 from .mixins import AgentIdentityMixin
 
@@ -343,6 +343,61 @@ class CleanupKnowledgeGraphParams(AgentIdentityMixin):
 
 class KnowledgeParams(AgentIdentityMixin):
     """Parameters for knowledge"""
+    # Which of these flat parameters each action uses. The wire schema stays
+    # flat (the MCP wrapper builds its argument model from top-level
+    # properties), so this is the only machine-readable statement of the
+    # per-action contract; describe_tool(action=...) serves it and
+    # tests/test_router_action_fields.py holds it to the routing table.
+    # Identity and session parameters are common to every action and are
+    # not repeated here (schemas/router_actions.COMMON_ROUTER_FIELDS).
+    ACTION_FIELDS: ClassVar[Mapping[str, Tuple[str, ...]]] = {
+        "store": (
+                "summary", "details", "content", "discovery_type", "severity",
+                "tags", "related_files", "confidence", "auto_link_related",
+                "supersedes", "response_to", "task_label", "task_outcome",
+                "memory_context",
+        ),
+        "search": (
+                "query", "limit", "offset", "search_mode", "semantic",
+                "include_details", "include_archived", "include_cold",
+                "response_mode", "tags", "status", "scope", "epoch_scope",
+                "exclude_agent_labels", "min_similarity", "operator",
+        ),
+        "get": (
+                "discovery_id", "include_details", "include_provenance",
+                "include_response_chain", "response_mode",
+        ),
+        "list": (
+                "limit", "offset", "including_cold", "status", "response_mode",
+        ),
+        "update": (
+                "discovery_id", "status", "severity", "superseded_by",
+                "closure_class", "closure_evidence", "resolution_notes",
+                "details", "content",
+        ),
+        "details": (
+                "discovery_id", "length", "offset", "max_chain_depth",
+                "include_response_chain", "response_mode",
+        ),
+        "note": (
+                "summary", "content", "tags", "response_to", "memory_context",
+        ),
+        "cleanup": (
+                "dry_run",
+        ),
+        "synthesize": (
+                "topic", "min_members", "use_llm", "dry_run",
+        ),
+        "stats": (
+                "response_mode",
+        ),
+        "supersede": (
+                "discovery_id", "supersedes_id", "resolution_notes",
+        ),
+        "audit": (
+                "scope", "top_n", "use_model", "comparison_key",
+        ),
+    }
     action: Literal["store", "search", "get", "list", "update", "details", "note", "cleanup", "synthesize", "stats", "supersede", "audit"] = Field(..., description="Operation to perform")
     response_mode: Literal["full", "compact", "lean"] = Field(
         default="full",

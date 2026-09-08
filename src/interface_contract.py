@@ -28,7 +28,7 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # describe_tool gained include_schema / include_full_description, the
 # parameters their handlers already read; a compatible addition advances the
 # negotiated release (docs/INTERFACE_CONTRACT.md).
-INTERFACE_CONTRACT_VERSION = "1.2.0"
+INTERFACE_CONTRACT_VERSION = "1.3.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

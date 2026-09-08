@@ -1,4 +1,4 @@
-from typing import Optional, Union, Literal, Dict, Any
+from typing import Any, ClassVar, Dict, Literal, Mapping, Optional, Tuple, Union
 from pydantic import Field, model_validator
 from .mixins import AgentIdentityMixin
 
@@ -59,6 +59,16 @@ class DescribeToolParams(AgentIdentityMixin):
     include_full_description: Union[bool, str, None] = Field(
         default=True,
         description="Full mode only (lite=false): include the full description; false keeps the first line (default true).",
+    )
+    action: Optional[str] = Field(
+        default=None,
+        description=(
+            "For a consolidated router (knowledge, dialectic, observe, agent, "
+            "...): narrow the returned schema to the parameters this one "
+            "action uses. Without it the router answers with the union of "
+            "every action's parameters, which is what it must advertise on "
+            "the wire but not what any single call takes."
+        ),
     )
 
     @model_validator(mode='after')
@@ -165,6 +175,19 @@ class DebugRequestContextParams(AgentIdentityMixin):
 
 class ConfigParams(AgentIdentityMixin):
     """Unified threshold configuration operations."""
+    # Which of these flat parameters each action uses. The wire schema stays
+    # flat (the MCP wrapper builds its argument model from top-level
+    # properties), so this is the only machine-readable statement of the
+    # per-action contract; describe_tool(action=...) serves it and
+    # tests/test_router_action_fields.py holds it to the routing table.
+    # Identity and session parameters are common to every action and are
+    # not repeated here (schemas/router_actions.COMMON_ROUTER_FIELDS).
+    ACTION_FIELDS: ClassVar[Mapping[str, Tuple[str, ...]]] = {
+        "get": (),
+        "set": (
+                "thresholds", "validate",
+        ),
+    }
     action: Literal["get", "set"] = Field(
         "get",
         description="Operation to perform",
@@ -195,6 +218,34 @@ class AdminParams(AgentIdentityMixin):
     action router. The original single-purpose tools remain registered for
     backwards compatibility; this router is the discoverable surface.
     """
+    # Which of these flat parameters each action uses. The wire schema stays
+    # flat (the MCP wrapper builds its argument model from top-level
+    # properties), so this is the only machine-readable statement of the
+    # per-action contract; describe_tool(action=...) serves it and
+    # tests/test_router_action_fields.py holds it to the routing table.
+    # Identity and session parameters are common to every action and are
+    # not repeated here (schemas/router_actions.COMMON_ROUTER_FIELDS).
+    ACTION_FIELDS: ClassVar[Mapping[str, Tuple[str, ...]]] = {
+        "cleanup_locks": (
+                "dry_run", "max_age_seconds",
+        ),
+        "connections": (),
+        "debug_context": (),
+        "reset_monitor": (),
+        "server_info": (
+                "detail",
+        ),
+        "telemetry": (
+                "window_hours", "include_calibration",
+        ),
+        "tool_usage": (
+                "window_hours", "tool_name",
+        ),
+        "validate_path": (
+                "file_path",
+        ),
+        "workspace_health": (),
+    }
     action: Literal[
         "server_info",
         "connections",

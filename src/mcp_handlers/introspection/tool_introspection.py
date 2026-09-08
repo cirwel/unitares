@@ -865,6 +865,7 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                 },
             )]
 
+        requested_action = (arguments.get("action") or "").strip().lower() or None
         include_schema = arguments.get("include_schema", True)
         include_full_description = arguments.get("include_full_description", True)
         # LITE-FIRST: Simpler schemas by default for local models
@@ -950,6 +951,58 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                 or alias_info.migration_note
                 or description
             )
+
+        # A router advertises the union of every action's parameters, because
+        # the wire schema must be flat. That union is not what any single call
+        # takes: `knowledge` shows 50 parameters for each of its 12 actions.
+        # With action=..., answer for that one action instead.
+        action_view = None
+        if schema_model is not None and not alias_info:
+            from src.mcp_handlers.schemas.router_actions import (
+                declared_action_fields,
+                narrow_schema_to_action,
+            )
+
+            declared = declared_action_fields(schema_model)
+            if declared is not None:
+                if requested_action:
+                    narrowed = narrow_schema_to_action(
+                        tool_schema, schema_model, requested_action
+                    )
+                    if narrowed is None:
+                        return [error_response(
+                            f"Unknown action for {tool_name}: {requested_action}",
+                            recovery={
+                                "valid_actions": sorted(declared),
+                                "action": (
+                                    f"Call describe_tool(tool_name={tool_name!r}) "
+                                    "with no action for the full surface"
+                                ),
+                            },
+                            context={"tool_name": tool_name},
+                        )]
+                    full_count = len(tool_schema.get("properties") or {})
+                    tool_schema = narrowed
+                    action_view = {
+                        "action": requested_action,
+                        "parameters_shown": len(narrowed.get("properties") or {}),
+                        "parameters_on_the_wire": full_count,
+                        "note": (
+                            "Narrowed to this action. The wire schema stays "
+                            "flat, so the other parameters are still accepted "
+                            "and ignored."
+                        ),
+                    }
+                else:
+                    action_view = {
+                        "actions": sorted(declared),
+                        "note": (
+                            "This tool routes actions and advertises the union "
+                            "of their parameters. Call "
+                            f"describe_tool(tool_name={tool_name!r}, "
+                            "action=...) for one action's parameters."
+                        ),
+                    }
 
         if not include_full_description:
             description = (description or "").splitlines()[0].strip() if description else ""
@@ -1141,6 +1194,8 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
             }
         }
         full_response["tool"]["stability"] = stability
+        if action_view is not None:
+            full_response["actions"] = action_view
         if alias_info:
             full_response["tool"]["canonical_name"] = tool_name
             full_response["tool"]["implementation_name"] = tool_name

@@ -1,4 +1,4 @@
-from typing import Optional, Union, Literal, Any, List
+from typing import Any, ClassVar, List, Literal, Mapping, Optional, Tuple, Union
 from pydantic import Field, model_validator
 from .mixins import AgentIdentityMixin
 
@@ -307,6 +307,34 @@ class PingAgentParams(AgentIdentityMixin):
 
 class AgentParams(ListAgentOptionsMixin, AgentIdentityMixin):
     """Parameters for agent"""
+    # Which of these flat parameters each action uses. The wire schema stays
+    # flat (the MCP wrapper builds its argument model from top-level
+    # properties), so this is the only machine-readable statement of the
+    # per-action contract; describe_tool(action=...) serves it and
+    # tests/test_router_action_fields.py holds it to the routing table.
+    # Identity and session parameters are common to every action and are
+    # not repeated here (schemas/router_actions.COMMON_ROUTER_FIELDS).
+    ACTION_FIELDS: ClassVar[Mapping[str, Tuple[str, ...]]] = {
+        "list": (
+                "limit", "offset", "lite", "grouped", "summary_only",
+                "named_only", "status_filter", "recent_days", "min_updates",
+                "loaded_only", "include_metrics", "include_test_agents",
+                "standardized",
+        ),
+        "get": (
+                "lite",
+        ),
+        "update": (
+                "tags", "notes",
+        ),
+        "archive": (
+                "force",
+        ),
+        "resume": (),
+        "delete": (
+                "confirm",
+        ),
+    }
     action: Literal["list", "get", "update", "archive", "resume", "delete"] = Field(..., description="Operation to perform (alias: op)")
     op: Optional[Literal["list", "get", "update", "archive", "resume", "delete"]] = Field(None, description="Alias for action. Use action or op.")
     agent_id: Optional[str] = Field(None, description="Target agent ID (for get, update, archive, delete)")
@@ -318,6 +346,22 @@ class AgentParams(ListAgentOptionsMixin, AgentIdentityMixin):
 
 class SelfRecoveryParams(AgentIdentityMixin):
     """Parameters for self_recovery"""
+    # Which of these flat parameters each action uses. The wire schema stays
+    # flat (the MCP wrapper builds its argument model from top-level
+    # properties), so this is the only machine-readable statement of the
+    # per-action contract; describe_tool(action=...) serves it and
+    # tests/test_router_action_fields.py holds it to the routing table.
+    # Identity and session parameters are common to every action and are
+    # not repeated here (schemas/router_actions.COMMON_ROUTER_FIELDS).
+    ACTION_FIELDS: ClassVar[Mapping[str, Tuple[str, ...]]] = {
+        "check": (),
+        "quick": (
+                "reason",
+        ),
+        "review": (
+                "reflection", "conditions",
+        ),
+    }
     action: Literal["check", "quick", "review"] = Field("check", description="Recovery action: check (diagnose), quick (fast resume), review (with reflection)")
     reflection: Optional[str] = Field(None, description="What went wrong and what you'll change (required for action=review)")
     conditions: Optional[List[Any]] = Field(None, description="Recovery conditions (optional for action=review)")
