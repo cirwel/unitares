@@ -9,6 +9,35 @@ release page, and container were verified. Public install pins follow
 Merging a change under `docs/public-site/` does deploy GitHub Pages; it does
 not publish a server tag or container.
 
+## v2.22.1 maintenance candidate
+
+See the [candidate notes and publication checklist](../releases/2.22.1.md).
+
+This correction is prepared from tag `v2.22.0` (`b1360809`) on
+`release/2.22`, rather than from current master. It backports #2092 and the
+release-evidence corrections while preserving the published callable surface
+and skills. Master has removed `direct_resume_if_safe` and changed schemas and
+skills; those changes need their own release/version assessment.
+
+Merge the maintenance PR into `release/2.22` only after independent review and
+its Python, Docker, Elixir, documentation, scope and release-seam checks pass.
+Tag v2.22.1 at that reviewed merge commit; do not tag current master for this
+candidate. Apply the publication verification steps below to that exact tag.
+Do not retarget the maintenance PR to master. After tagging, integrate its
+history through a reviewed forward-merge PR, preserving master's newer code
+and assessing its source-version label separately. This makes the maintenance
+tag an ancestor of the next mainline release, as the release-range gate
+requires. The shared documentation correction has its own master PR.
+
+The existing v2.22.0 tag and release remain intact. Append
+[`../releases/2.22.0-errata.md`](../releases/2.22.0-errata.md) to the release
+body without overwriting its existing text.
+
+After v2.22.1's tag, release page, both container architectures, SBOM and
+provenance are verified, advance `PUBLISHED_VERSION` in a separate master PR.
+Keep the install pin at v2.21.0 during preparation. A merge into the maintenance
+branch does not deploy the master-only public Pages workflow.
+
 ## Server release
 
 1. Start from current `master` with a clean named branch and no active surface
