@@ -54,9 +54,11 @@ UNITARES_DEMO_PORT=18767 make demo
 UNITARES_COORDINATION_DEMO_PORT=18788 make coordination-demo
 ```
 
-### Choosing the advertised tool surface (v2.22.0 and later)
+### Choosing the advertised tool surface
 
-The default is the five-tool `minimal` profile. To keep the wider `lite`
+v2.22.0 introduced the five-tool `minimal` default. The `.env` forwarding
+below requires v2.22.1 or later; v2.22.0 needs the explicit override in the
+[release errata](../releases/2.22.0-errata.md). To keep the wider `lite`
 surface when upgrading, set `GOVERNANCE_TOOL_MODE=lite` in the checkout's
 `.env` file before starting the new version, then run:
 
