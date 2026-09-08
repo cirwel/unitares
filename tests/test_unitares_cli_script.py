@@ -238,18 +238,25 @@ def test_tools_lists_core_governance_tools(cli_env):
     result = _run(cli_env, "tools")
     assert "Tools:" in result.stdout
     # The /v1/tools REST surface lists what the running mode advertises. The
-    # sacrificial server inherits the process default, minimal: the five-tool
-    # checkpoint loop under its workflow names. The lite-only names (onboard,
-    # health_check, list_tools) are not listed but stay callable by name --
-    # the onboard test below goes through one -- so nothing is asserted about
-    # their absence: descriptions may mention them.
-    assert "(minimal mode)" in result.stdout
+    # sacrificial server inherits the process default, standard: the five-tool
+    # checkpoint loop plus the three capabilities with no other advertised
+    # route (shared memory, structured review, advisory inference), under
+    # their workflow names. The lite-only names (onboard, health_check,
+    # list_tools) are not listed but stay callable by name -- the onboard test
+    # below goes through one -- so nothing is asserted about their absence:
+    # descriptions may mention them.
+    assert "(standard mode)" in result.stdout
     for name in (
         "start_session",
         "identity",
         "sync_state",
         "record_result",
         "check_working_state",
+        "search_shared_memory",
+        "store_finding",
+        "update_finding",
+        "request_review",
+        "consult",
     ):
         assert name in result.stdout, name
 
