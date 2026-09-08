@@ -31,18 +31,18 @@ def _ci_shard(path: Path) -> str | None:
         return None
 
     first_letter = path.name.removeprefix("test_")[:1].lower()
-    if "a" <= first_letter <= "b":
-        return "tests-a-b"
-    if "c" <= first_letter <= "d":
-        return "tests-c-d"
-    if "e" <= first_letter <= "h":
-        return "tests-e-h"
-    if "i" <= first_letter <= "l":
-        return "tests-i-l"
-    if "m" <= first_letter <= "p":
-        return "tests-m-p"
-    if "q" <= first_letter <= "t":
-        return "tests-q-t"
+    if "a" <= first_letter <= "c":
+        return "tests-a-c"
+    if "d" <= first_letter <= "e":
+        return "tests-d-e"
+    if "f" <= first_letter <= "i":
+        return "tests-f-i"
+    if "j" <= first_letter <= "m":
+        return "tests-j-m"
+    if "n" <= first_letter <= "r":
+        return "tests-n-r"
+    if "s" <= first_letter <= "t":
+        return "tests-s-t"
     if "u" <= first_letter <= "z":
         return "tests-u-z"
     return None
@@ -57,15 +57,15 @@ def test_github_full_test_jobs_cover_every_test_file() -> None:
     assert "needs: smoke" not in shard_job
     assert "timeout-minutes: 20" in shard_job
     assert (
-        "shard: [tests-a-b, tests-c-d, tests-e-h, tests-i-l, tests-m-p, "
-        "tests-q-t, tests-u-z, agents-and-nested]" in shard_job
+        "shard: [tests-a-c, tests-d-e, tests-f-i, tests-j-m, tests-n-r, "
+        "tests-s-t, tests-u-z, agents-and-nested]" in shard_job
     )
-    assert "targets=(tests/test_[a-b]*.py)" in shard_job
-    assert "targets=(tests/test_[c-d]*.py)" in shard_job
-    assert "targets=(tests/test_[e-h]*.py)" in shard_job
-    assert "targets=(tests/test_[i-l]*.py)" in shard_job
-    assert "targets=(tests/test_[m-p]*.py)" in shard_job
-    assert "targets=(tests/test_[q-t]*.py)" in shard_job
+    assert "targets=(tests/test_[a-c]*.py)" in shard_job
+    assert "targets=(tests/test_[d-e]*.py)" in shard_job
+    assert "targets=(tests/test_[f-i]*.py)" in shard_job
+    assert "targets=(tests/test_[j-m]*.py)" in shard_job
+    assert "targets=(tests/test_[n-r]*.py)" in shard_job
+    assert "targets=(tests/test_[s-t]*.py)" in shard_job
     assert "targets=(tests/test_[u-z]*.py)" in shard_job
     assert "targets=(agents/ tests/*/ tests/smoke_test.py)" in shard_job
     assert '--health-cmd "pg_isready -U postgres"' in shard_job

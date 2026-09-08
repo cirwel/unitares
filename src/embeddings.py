@@ -168,9 +168,12 @@ class EmbeddingsService:
         return await loop.run_in_executor(None, _encode_batch)
 
     async def similarity(self, embedding1: List[float], embedding2: List[float]) -> float:
-        """Cosine similarity via dot product on normalized vectors."""
-        if not SENTENCE_TRANSFORMERS_AVAILABLE:
-            raise RuntimeError("numpy not available")
+        """Cosine similarity via dot product on normalized vectors.
+
+        Needs numpy and nothing else. numpy is a core dependency imported at the
+        top of this module, so there is no availability to check here: if it were
+        missing this module would not import at all.
+        """
         arr1 = np.array(embedding1)
         arr2 = np.array(embedding2)
         return float(np.dot(arr1, arr2))
@@ -181,12 +184,15 @@ class EmbeddingsService:
         candidate_embeddings: List[Tuple[str, List[float]]],
         top_k: int = 10
     ) -> List[Tuple[str, float]]:
-        """Rank candidates by similarity to query."""
+        """Rank candidates by similarity to query.
+
+        Like similarity(), this is numpy dot products over embeddings the caller
+        already holds, so it does not need the model runtime. Callers that must
+        first *produce* embeddings go through embed()/embed_batch(), which raise
+        via _ensure_model() when sentence-transformers is absent.
+        """
         if not candidate_embeddings:
             return []
-
-        if not SENTENCE_TRANSFORMERS_AVAILABLE:
-            raise RuntimeError("numpy not available")
 
         loop = asyncio.get_running_loop()
 
