@@ -74,6 +74,8 @@ class ObserveParams(AgentIdentityMixin):
         "similar": (
                 "limit",
         ),
+        # No paging parameter: anomalies returns every finding that passes the
+        # filters, so nothing a caller asked to see is withheld from them.
         "anomalies": (),
         "aggregate": (),
         "telemetry": (
@@ -103,7 +105,7 @@ class ObserveParams(AgentIdentityMixin):
             "similarity and outlier calculations even when requested."
         ),
     )
-    limit: Optional[int] = Field(None, description="Max results to return (for action=similar, anomalies, audit_events, outcome_evidence, bridge). For audit_events this bounds the returned events only — total_emits/by_agent_id/first_ts/last_ts always describe the whole window.")
+    limit: Optional[int] = Field(None, description="Max results to return (for action=similar, audit_events, outcome_evidence, bridge). For audit_events this bounds the returned events only — total_emits/by_agent_id/first_ts/last_ts always describe the whole window. Not accepted by action=anomalies, which returns every anomaly passing its filters and is narrowed with anomaly_types/min_severity/agent_ids instead.")
     event_type: Optional[str] = Field(None, description="Audit event type to filter on (for action=audit_events)")
     event_types: Optional[List[str]] = Field(None, description="IN-list of audit event types (for action=audit_events, alternative to event_type)")
     since: Optional[str] = Field(None, description="Window start: '14d'/'24h'/'30m' shorthand or ISO 8601 (for action=audit_events/outcome_evidence/bridge). Default 7d for audit evidence, 24h for bridge.")

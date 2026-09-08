@@ -1059,6 +1059,161 @@ class TestHandleDetectAnomalies:
         assert data["summary"]["by_severity"]["high"] == 1
         assert data["summary"]["by_severity"]["medium"] == 1
 
+    # --- anomalies are never withheld from the caller who asked for them
+    # (dogfood finding f4cee149705d3e93: `limit` was advertised for this action
+    # and ignored; the fix removed the claim rather than adding truncation) ---
+
+    _UNPAGED_ANOMALIES = [
+        {"type": "risk_spike", "severity": "low", "description": "low spike"},
+        {"type": "coherence_drop", "severity": "high", "description": "hard drop"},
+        {"type": "risk_spike", "severity": "medium", "description": "mid spike"},
+    ]
+
+    async def _detect(self, arguments):
+        id1 = "aaaaaaaa-bbbb-cccc-dddd-111111111111"
+        server = _build_mock_server(agent_ids=[id1])
+        with patch(_PATCH_SERVER, server), \
+             patch(_PATCH_CTX, return_value=None), \
+             patch(
+                 "src.pattern_analysis.analyze_agent_patterns",
+                 side_effect=lambda *a, **k: {
+                     "anomalies": [dict(x) for x in self._UNPAGED_ANOMALIES]
+                 },
+             ):
+            from src.mcp_handlers.observability.handlers import handle_detect_anomalies
+            result = await handle_detect_anomalies(arguments)
+        return parse_result(result)
+
+    @pytest.mark.asyncio
+    async def test_every_matching_anomaly_is_returned(self):
+        data = await self._detect({"min_severity": "low"})
+        assert data["success"] is True
+        assert len(data["anomalies"]) == 3
+        assert data["summary"]["total_anomalies"] == 3
+
+    @pytest.mark.asyncio
+    async def test_a_stray_limit_cannot_withhold_findings(self):
+        """No count silently drops a finding the caller asked to see.
+
+        A caller may still send `limit` — old clients exist and the flat
+        `observe` schema carries the field for other actions. It must be inert
+        here: the returned list is the whole list, not a page of it.
+        """
+        for stray in (1, 0, "1", None):
+            data = await self._detect({"min_severity": "low", "limit": stray})
+            assert len(data["anomalies"]) == 3, f"limit={stray!r} truncated the findings"
+            assert data["summary"]["total_anomalies"] == len(data["anomalies"]), (
+                "summary and returned list must describe the same set"
+            )
+
+    # --- the scan says what it looked at, so an empty list is never mistaken
+    # for an all-clear over a fleet the scan never reached ---
+
+    @pytest.mark.asyncio
+    async def test_a_truncated_fleet_scan_says_so(self):
+        from src.mcp_handlers.observability.handlers import DEFAULT_ANOMALY_SCAN_CAP
+
+        ids = [f"aaaaaaaa-bbbb-cccc-dddd-{i:012d}" for i in range(DEFAULT_ANOMALY_SCAN_CAP + 7)]
+        server = _build_mock_server(agent_ids=ids)
+        with patch(_PATCH_SERVER, server), \
+             patch(_PATCH_CTX, return_value=None), \
+             patch("src.pattern_analysis.analyze_agent_patterns",
+                   return_value={"anomalies": []}):
+            from src.mcp_handlers.observability.handlers import handle_detect_anomalies
+            result = await handle_detect_anomalies({})
+
+        scan = parse_result(result)["scan"]
+        assert scan["truncated"] is True
+        assert scan["agents_active"] == DEFAULT_ANOMALY_SCAN_CAP + 7
+        assert scan["agents_scanned"] == DEFAULT_ANOMALY_SCAN_CAP
+        assert "7 active agents were not analyzed" in scan["note"]
+
+    @pytest.mark.asyncio
+    async def test_a_complete_fleet_scan_is_marked_complete(self):
+        server = _build_mock_server(agent_ids=["aaaaaaaa-bbbb-cccc-dddd-111111111111"])
+        with patch(_PATCH_SERVER, server), \
+             patch(_PATCH_CTX, return_value=None), \
+             patch("src.pattern_analysis.analyze_agent_patterns",
+                   return_value={"anomalies": []}):
+            from src.mcp_handlers.observability.handlers import handle_detect_anomalies
+            result = await handle_detect_anomalies({})
+
+        scan = parse_result(result)["scan"]
+        assert scan["truncated"] is False
+        assert scan["agents_scanned"] == scan["agents_active"] == 1
+        assert "note" not in scan
+
+    @pytest.mark.asyncio
+    async def test_the_scan_reports_the_filters_that_excluded_findings(self):
+        """A default call hides low-severity anomalies; the response admits it."""
+        server = _build_mock_server(agent_ids=["aaaaaaaa-bbbb-cccc-dddd-111111111111"])
+        with patch(_PATCH_SERVER, server), \
+             patch(_PATCH_CTX, return_value=None), \
+             patch("src.pattern_analysis.analyze_agent_patterns",
+                   return_value={"anomalies": []}):
+            from src.mcp_handlers.observability.handlers import handle_detect_anomalies
+            result = await handle_detect_anomalies({})
+
+        assert parse_result(result)["scan"]["filters"] == {
+            "anomaly_types": ["risk_spike", "coherence_drop"],
+            "min_severity": "medium",
+        }
+
+    @pytest.mark.asyncio
+    async def test_caller_supplied_agent_ids_are_not_capped(self):
+        from src.mcp_handlers.observability.handlers import DEFAULT_ANOMALY_SCAN_CAP
+
+        ids = [f"aaaaaaaa-bbbb-cccc-dddd-{i:012d}" for i in range(DEFAULT_ANOMALY_SCAN_CAP + 3)]
+        server = _build_mock_server(agent_ids=ids)
+        with patch(_PATCH_SERVER, server), \
+             patch(_PATCH_CTX, return_value=None), \
+             patch("src.pattern_analysis.analyze_agent_patterns",
+                   return_value={"anomalies": []}):
+            from src.mcp_handlers.observability.handlers import handle_detect_anomalies
+            result = await handle_detect_anomalies({"agent_ids": ids})
+
+        scan = parse_result(result)["scan"]
+        assert scan["selection"] == "caller_supplied"
+        assert scan["agents_scanned"] == len(ids)
+        # The cap describes the default selection only, so it is not reported here.
+        assert "scan_cap" not in scan and "truncated" not in scan
+
+    @pytest.mark.asyncio
+    async def test_agents_skipped_for_no_activity_are_counted(self):
+        active = "aaaaaaaa-bbbb-cccc-dddd-111111111111"
+        idle = "aaaaaaaa-bbbb-cccc-dddd-222222222222"
+        metadata = {
+            active: _make_metadata(active, total_updates=5),
+            idle: _make_metadata(idle, total_updates=0),
+        }
+        server = _build_mock_server(agent_ids=[active, idle], metadata_dict=metadata)
+        with patch(_PATCH_SERVER, server), \
+             patch(_PATCH_CTX, return_value=None), \
+             patch("src.pattern_analysis.analyze_agent_patterns",
+                   return_value={"anomalies": []}):
+            from src.mcp_handlers.observability.handlers import handle_detect_anomalies
+            result = await handle_detect_anomalies({})
+
+        scan = parse_result(result)["scan"]
+        assert scan["agents_scanned"] == 2
+        assert scan["agents_skipped_no_activity"] == 1
+
+    def test_the_schema_does_not_advertise_a_limit_for_anomalies(self):
+        """The two machine-readable statements of the contract must agree.
+
+        The original defect was one saying yes and the other saying nothing:
+        the `limit` description named `anomalies` while ACTION_FIELDS declared
+        no fields for it, and the handler read neither.
+        """
+        from src.mcp_handlers.schemas.observability import ObserveParams
+
+        assert ObserveParams.ACTION_FIELDS["anomalies"] == ()
+        description = ObserveParams.model_fields["limit"].description
+        applies_to = description.split(").", 1)[0]
+        assert "anomalies" not in applies_to, (
+            f"limit still advertises itself for anomalies: {applies_to!r}"
+        )
+
     @pytest.mark.asyncio
     async def test_audit_writes_per_agent_fanout(self):
         """Each detected anomaly writes its own audit entry with the affected
