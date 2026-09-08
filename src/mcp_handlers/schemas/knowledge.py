@@ -380,6 +380,7 @@ class KnowledgeParams(AgentIdentityMixin):
                 "include_details", "include_archived", "include_cold",
                 "response_mode", "tags", "status", "scope", "epoch_scope",
                 "exclude_agent_labels", "min_similarity", "operator",
+                "discovery_type", "severity", "include_provenance",
         ),
         "get": (
                 "discovery_id", "include_details", "include_provenance",

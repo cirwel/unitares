@@ -6,12 +6,12 @@ a context budget actually asks: **how much does advertising them cost**, in the
 bytes a client receives from `tools/list` before the agent has decided it wants
 any of them.
 
-The two are not the same question, and the difference is where the surprises
-live. Measured 2026-09-08, the profile named `lite` costs 4.8x the profile
-named `minimal` and 1.7x the default `standard` -- the ladder is ordered
-minimal < standard < lite < full, so `lite` is a name for the second-widest
-surface. Nothing in the repo could see that before this script, because every
-existing instrument counted names.
+The default surface is the final local MCP tools/list definition set, after
+FastMCP regenerates its typed wrappers and applies listing policy. --surface
+catalog explicitly measures the upstream source definitions instead. They
+are not interchangeable. Serialization is compact UTF-8 JSON for the result
+object; JSON-RPC IDs, transport framing, compression and client-added context
+are excluded. This does not sample a deployed server or start its lifespan.
 
 Bytes are MEASURED. Tokens are ESTIMATED by dividing bytes by
 `--bytes-per-token` (default 4), which is a rough heuristic for JSON, not a
@@ -34,6 +34,7 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import sys
@@ -66,6 +67,56 @@ LADDER = ("minimal", "standard", "lite", "full")
 #: Profiles reported by default. The operator profiles are measured on request
 #: via --mode but do not clutter the ladder comparison.
 ALL_PROFILES = LADDER + ("operator_readonly", "operator_recovery")
+
+SURFACES = ("mcp", "catalog")
+
+
+def validate_mode(mode: str) -> None:
+    from src.tool_modes import TOOL_CATEGORIES
+
+    if mode not in ALL_PROFILES and mode not in TOOL_CATEGORIES:
+        raise ValueError(f"Unknown tool profile: {mode!r}")
+
+
+def _definitions(mode: str, surface: str) -> list:
+    """Read the final MCP listing, or explicitly request the source catalog.
+
+    This only constructs/list-tools on the local server object; it does not
+    start its lifespan, connect a client, dispatch a tool, or contact a DB.
+    FastMCP regenerates schemas from typed wrappers, so the catalog is not an
+    interchangeable byte measurement.
+    """
+    validate_mode(mode)
+    if surface == "catalog":
+        from src.interface_contract import get_public_tool_definitions
+
+        return list(get_public_tool_definitions(mode))
+    if surface != "mcp":
+        raise ValueError(f"Unknown surface: {surface!r}")
+    from src import mcp_server, tool_modes
+
+    previous = tool_modes.TOOL_MODE
+    try:
+        tool_modes.TOOL_MODE = mode
+        return list(asyncio.run(mcp_server.mcp.list_tools()))
+    finally:
+        tool_modes.TOOL_MODE = previous
+
+
+def _tool_payload(tool: Any) -> dict:
+    if hasattr(tool, "model_dump"):
+        return tool.model_dump(mode="json", by_alias=True, exclude_none=True)
+    return {"name": tool.name, "description": tool.description or "", "inputSchema": _input_schema(tool)}
+
+
+def _result_payload(definitions: list) -> dict:
+    from mcp.types import ListToolsResult
+
+    # MCP 2 adds cache/result metadata even for an ordinary complete listing.
+    # A hand-built {"tools": ...} envelope undercounts that result.
+    return ListToolsResult(tools=definitions).model_dump(
+        mode="json", by_alias=True, exclude_none=True,
+    )
 
 
 @dataclass(frozen=True)
@@ -111,7 +162,7 @@ def _wire_bytes(payload: Any) -> int:
     Separators are the compact form so the measurement reflects content, not a
     particular encoder's whitespace.
     """
-    return len(json.dumps(payload, separators=(",", ":"), default=str))
+    return len(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
 
 
 def _input_schema(tool: Any) -> dict:
@@ -134,25 +185,19 @@ def measure_tool(tool: Any) -> ToolCost:
     required = schema.get("required") if isinstance(schema, dict) else None
     return ToolCost(
         name=tool.name,
-        total_bytes=_wire_bytes(
-            {"name": tool.name, "description": description, "inputSchema": schema}
-        ),
-        description_bytes=len(description),
+        total_bytes=_wire_bytes(_tool_payload(tool)),
+        description_bytes=len(description.encode("utf-8")),
         schema_bytes=_wire_bytes(schema),
         param_count=len(properties) if isinstance(properties, dict) else 0,
         required=list(required) if isinstance(required, list) else [],
     )
 
 
-def measure_profile(mode: str) -> ProfileCost:
+def measure_profile(mode: str, surface: str = "mcp") -> ProfileCost:
     """Measure one profile, reporting unavailability as a state rather than a zero."""
+    validate_mode(mode)
     try:
-        from src.interface_contract import get_public_tool_definitions
-    except ModuleNotFoundError as exc:
-        return ProfileCost(mode=mode, available=False, reason=str(exc))
-
-    try:
-        definitions = get_public_tool_definitions(mode)
+        definitions = _definitions(mode, surface)
     except ModuleNotFoundError as exc:
         return ProfileCost(mode=mode, available=False, reason=str(exc))
 
@@ -164,28 +209,26 @@ def measure_profile(mode: str) -> ProfileCost:
     return ProfileCost(
         mode=mode,
         available=True,
-        total_bytes=sum(cost.total_bytes for cost in tools),
+        total_bytes=_wire_bytes(_result_payload(definitions)),
         tools=tools,
     )
 
 
-def measure_profiles(modes: tuple[str, ...] = ALL_PROFILES) -> Dict[str, ProfileCost]:
-    return {mode: measure_profile(mode) for mode in modes}
+def measure_profiles(modes: tuple[str, ...] = ALL_PROFILES, surface: str = "mcp") -> Dict[str, ProfileCost]:
+    return {mode: measure_profile(mode, surface) for mode in modes}
 
 
 def _without_property_titles(schema: dict) -> dict:
     """The schema with every property `title` removed.
 
     Pydantic emits a `title` for each property that is a titleized copy of the
-    key -- `client_session_id` -> "Client Session Id". It carries no
-    information the key does not, JSON Schema does not use it for validation,
-    and every client pays for it on every listing.
+    key -- `client_session_id` -> "Client Session Id". JSON Schema treats
+    titles as annotations, so removing them preserves validation. The schema
+    bytes and their fingerprints still change.
     """
-    out = copy.deepcopy(schema)
-    for body in (out.get("properties") or {}).values():
-        if isinstance(body, dict):
-            body.pop("title", None)
-    return out
+    from src.schema_brief import apply_property_title_mode
+
+    return apply_property_title_mode(schema, "strip")
 
 
 def _without_null_unions(schema: dict) -> dict:
@@ -205,13 +248,13 @@ def _without_null_unions(schema: dict) -> dict:
             for option in body["anyOf"]
             if isinstance(option, dict) and option.get("type") != "null"
         ]
-        if len(options) == 1 and set(options[0]) <= {"type"}:
+        if len(body["anyOf"]) == 2 and len(options) == 1 and set(options[0]) == {"type"}:
             body.pop("anyOf")
             body["type"] = options[0]["type"]
     return out
 
 
-def boilerplate_savings(mode: str) -> Optional[Dict[str, int]]:
+def boilerplate_savings(mode: str, surface: str = "mcp") -> Optional[Dict[str, int]]:
     """Bytes recoverable from the STRUCTURAL half of the advertised schemas.
 
     `src/schema_brief.py` trimmed the prose half (descriptions) in 2026-09.
@@ -219,31 +262,24 @@ def boilerplate_savings(mode: str) -> Optional[Dict[str, int]]:
     different propositions and the output keeps them apart:
 
     - `property_title` is a machine-generated echo of the property name. It is
-      removable with no information loss and no contract change.
+      validation-neutral to remove, but changes schema fingerprints.
     - `null_union` is a real narrowing of what validates. Measured, not
       recommended.
     """
     try:
-        from src.interface_contract import get_public_tool_definitions
-    except ModuleNotFoundError:
-        return None
-
-    try:
-        definitions = list(get_public_tool_definitions(mode))
+        definitions = _definitions(mode, surface)
     except ModuleNotFoundError:
         return None
 
     def total(transform) -> int:
-        return sum(
-            _wire_bytes(
-                {
-                    "name": tool.name,
-                    "description": tool.description or "",
-                    "inputSchema": transform(_input_schema(tool)),
-                }
-            )
-            for tool in definitions
-        )
+        payloads = []
+        for tool in definitions:
+            payload = _tool_payload(tool)
+            payload["inputSchema"] = transform(_input_schema(tool))
+            payloads.append(payload)
+        result = _result_payload(definitions)
+        result["tools"] = payloads
+        return _wire_bytes(result)
 
     baseline = total(lambda schema: schema)
     return {
@@ -267,18 +303,16 @@ def check_ladder(costs: Dict[str, ProfileCost]) -> List[str]:
       here means a profile's NAME misdescribes its position, which is what
       `lite` (wider and heavier than `standard`) does today.
 
-    A profile that could not be measured is skipped, never treated as zero.
+    An unavailable or missing rung makes the ladder unchecked, never passing.
     """
     violations: List[str] = []
-    try:
-        from src.tool_modes import get_tools_for_mode
-    except ModuleNotFoundError as exc:
-        return [f"ladder unchecked: {exc}"]
-
-    rungs = [mode for mode in LADDER if costs.get(mode) and costs[mode].available]
+    missing_rungs = [mode for mode in LADDER if not costs.get(mode) or not costs[mode].available]
+    if missing_rungs:
+        return [f"ladder unchecked: unavailable profiles {missing_rungs}"]
+    rungs = list(LADDER)
     for narrower, wider in zip(rungs, rungs[1:]):
-        narrow_names = get_tools_for_mode(narrower)
-        wide_names = get_tools_for_mode(wider)
+        narrow_names = {tool.name for tool in costs[narrower].tools}
+        wide_names = {tool.name for tool in costs[wider].tools}
         missing = narrow_names - wide_names
         if missing:
             violations.append(
@@ -328,7 +362,7 @@ def _render_summary(costs: Dict[str, ProfileCost], bytes_per_token: int) -> None
     )
 
 
-def _render_profile(cost: ProfileCost, bytes_per_token: int, show_params: bool) -> None:
+def _render_profile(cost: ProfileCost, bytes_per_token: int, show_params: bool, surface: str = "mcp") -> None:
     if not cost.available:
         print(f"{cost.mode}: {UNAVAILABLE_SENTINEL} ({cost.reason})")
         return
@@ -347,21 +381,19 @@ def _render_profile(cost: ProfileCost, bytes_per_token: int, show_params: bool) 
             f"{tool.param_count:>8}  {tool.name}"
         )
     if show_params:
-        _render_params(cost)
+        _render_params(cost, surface)
 
 
-def _render_params(cost: ProfileCost) -> None:
+def _render_params(cost: ProfileCost, surface: str = "mcp") -> None:
     """Per-parameter cost for each tool in the profile.
 
     Parameter breadth, not tool count, is what a wide schema actually charges
     for: a router with fifty optional parameters costs more than four task
     verbs with six each.
     """
-    from src.interface_contract import get_public_tool_definitions
-
     schemas = {
         tool.name: _input_schema(tool)
-        for tool in get_public_tool_definitions(cost.mode)
+        for tool in _definitions(cost.mode, surface)
     }
     for tool in cost.tools:
         properties = schemas.get(tool.name, {}).get("properties") or {}
@@ -377,11 +409,11 @@ def _render_params(cost: ProfileCost) -> None:
             print(f"  {size:>6} B  {name}")
 
 
-def _render_boilerplate(modes, bytes_per_token: int) -> None:
+def _render_boilerplate(modes, bytes_per_token: int, surface: str = "mcp") -> None:
     print(
         "Structural boilerplate in the advertised schemas. `title` is a "
-        "titleized copy of\nthe property key and carries no information; "
-        "dropping it changes no contract.\n`anyOf` null-union flattening is "
+        "generated annotation. Dropping it preserves validation, but changes "
+        "schema fingerprints.\n`anyOf` null-union flattening is "
         "measured for scale only -- it DOES change what\nvalidates, and is not "
         "a recommendation.\n"
     )
@@ -390,7 +422,7 @@ def _render_boilerplate(modes, bytes_per_token: int) -> None:
     )
     print("-" * 79)
     for mode in modes:
-        savings = boilerplate_savings(mode)
+        savings = boilerplate_savings(mode, surface)
         if savings is None:
             print(f"{mode:<20}{UNAVAILABLE_SENTINEL:>11}")
             continue
@@ -426,6 +458,8 @@ def main() -> int:
         help="With --mode, also break each tool down by parameter",
     )
     parser.add_argument("--json", action="store_true", help="Output as JSON")
+    parser.add_argument("--surface", choices=SURFACES, default="mcp",
+                        help="Measure final MCP definitions (default) or the source catalog")
     parser.add_argument(
         "--bytes-per-token",
         type=int,
@@ -459,8 +493,18 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.bytes_per_token <= 0:
+        parser.error("--bytes-per-token must be positive")
+    if args.mode:
+        try:
+            validate_mode(args.mode)
+        except ValueError as exc:
+            parser.error(str(exc))
+    if args.mode and args.check_ladder:
+        parser.error("--check-ladder requires all profiles; omit --mode")
+
     modes = (args.mode,) if args.mode else ALL_PROFILES
-    costs = measure_profiles(tuple(modes))
+    costs = measure_profiles(tuple(modes), args.surface)
     unavailable = [cost for cost in costs.values() if not cost.available]
 
     for cost in unavailable:
@@ -475,6 +519,8 @@ def main() -> int:
         print(
             json.dumps(
                 {
+                    "surface": args.surface,
+                    "serialization": "compact UTF-8 JSON tools/list result; excludes JSON-RPC and transport framing",
                     "bytes_per_token": args.bytes_per_token,
                     "tokens_are_estimates": True,
                     "profiles": {
@@ -501,16 +547,22 @@ def main() -> int:
                         for mode, cost in costs.items()
                     },
                     "ladder_violations": violations,
+                    "boilerplate_savings": {
+                        mode: boilerplate_savings(mode, args.surface) for mode in modes
+                    } if args.boilerplate else None,
                 },
                 indent=2,
             )
         )
     elif args.boilerplate:
-        _render_boilerplate(modes, args.bytes_per_token)
+        _render_boilerplate(modes, args.bytes_per_token, args.surface)
     elif args.mode:
-        _render_profile(costs[args.mode], args.bytes_per_token, args.params)
+        _render_profile(costs[args.mode], args.bytes_per_token, args.params, args.surface)
     else:
         _render_summary(costs, args.bytes_per_token)
+
+    if not args.json:
+        print(f"Surface: {args.surface}; compact UTF-8 tools/list JSON; excludes JSON-RPC/transport framing.")
 
     if violations and not args.json:
         print()

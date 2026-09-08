@@ -401,10 +401,10 @@ EXTRA_ARGUMENT_PASSTHROUGH_TOOLS = {
 # Membership rule: a parameter belongs here only if the action's code path never
 # reads it — verified against the handler source, and pinned by
 # tests/test_alias_schema_narrowing.py so the list cannot rot into a lie. Every
-# name below is write-side; no filter is removed. FastMCP validates alias
-# arguments before dispatch and these aliases have no extra-argument
-# passthrough, so a dropped name is rejected rather than silently ignored —
-# which is why the rule is "never read", not "rarely used".
+# name below belongs to another action; no filter is removed. FastMCP validates
+# alias arguments before dispatch. Without extra-argument passthrough its
+# argument model silently discards undeclared fields, so dropping a real filter
+# would silently remove its effect — hence "never read", not "rarely used".
 #
 # Keep-lists define friendly task verbs whose wire contract intentionally spans
 # fewer fields than their implementation router. ``request_review`` combines
