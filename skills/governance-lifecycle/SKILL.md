@@ -30,7 +30,7 @@ source_digests:
   unitares/src/mcp_handlers/core.py: "5a6e81697f537ac2"
   unitares/src/mcp_handlers/identity/handlers.py: "54451aa9ac842fb1"
   unitares/src/mcp_handlers/admin/handlers.py: "d7dec13e6a422b43"
-  unitares/src/mcp_handlers/tool_stability.py: "954a3527c3481315"
+  unitares/src/mcp_handlers/tool_stability.py: "9513b90cde7e6601"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "bcac7a83172032db"
   unitares/src/mcp_handlers/updates/phases.py: "62168987a1a7fb79"
   unitares/src/mcp_handlers/updates/enrichments.py: "f91c10502c48275b"

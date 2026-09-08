@@ -198,6 +198,7 @@ Add backward-compat aliases in `tool_stability.py`:
     old_name="individual_tool_1",
     new_name="my_group",
     reason="consolidated",
+    deprecated_since=datetime(2026, 9, 7),  # the day the old name stopped being canonical
     migration_note="Use my_group(action='action1')",
     inject_action="action1",  # Auto-inject action param for the alias
 ),
@@ -317,12 +318,22 @@ _TOOL_ALIASES = {
         old_name="old_tool_name",
         new_name="new_tool_name",
         reason="consolidated",  # or "renamed", "deprecated"
+        deprecated_since=datetime(2026, 9, 7),  # the day the old name stopped being canonical
         migration_note="Use new_tool_name(action='...') instead"
     ),
 }
 ```
 
 Aliases are resolved at dispatch time, so old tool names continue to work.
+
+A consolidated, renamed, or deprecated alias carries `deprecated_since`: the
+date the old name stopped being canonical, which `describe_tool` reports in
+its `alias` block beside the migration note. An intuitive alias (`start`,
+`status`, the workflow names such as `sync_state`) carries none, because that
+name was never canonical and nothing was deprecated.
+`tests/test_tool_registry_bookkeeping.py` holds the table to the rule, and
+where `DEPRECATION_REGISTRY` in `introspection/tool_catalog.py` also names the
+tool, the two dates must agree.
 
 ---
 
