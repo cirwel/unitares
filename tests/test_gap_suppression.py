@@ -5,10 +5,17 @@ verdicts on Lumen/Sentinel/Watcher 2026-05-08 to 2026-05-12. The first
 attestation after a wall-clock gap saturating DT_MAX runs on stale or
 discontinuous state; risk_score can jump ~+0.4 on near-identical inputs.
 
-The fix arms a recovery counter on DT_MAX saturation; while > 0, 'pause'
+The fix arms a recovery counter after a long gap; while > 0, 'pause'
 decisions are downgraded to 'proceed' and logged via the new
 `attest_gap_suppressed` audit event. Knowledge graph discovery
 2026-05-15T14:27:26.894282+00:00 captures the evidence.
+
+Arming originally tested `scaled_dt > DT_MAX` — an Euler stability bound reused
+as a proxy for absence, which fixed the enforcement threshold at 150s as a side
+effect. It now reads GAP_RECOVERY_ARM_SECONDS, whose default reproduces that
+exact boundary. TestArmingIsIndependentOfIntegrationDt pins both halves: the
+default is behavior-identical, and the threshold moves without dragging the
+integrator with it.
 """
 
 from unittest.mock import patch
@@ -207,8 +214,85 @@ class TestSuppressionDoesNotCorruptCalibration:
         # the helper unit tests cover the mutation-after-recording invariant.
 
 
+class TestArmingIsIndependentOfIntegrationDt:
+    """Arming reads GAP_RECOVERY_ARM_SECONDS, not the Euler stability cap.
+
+    Enforcement ("was this agent absent?") and integration ("is this step
+    numerically stable?") were one test. They are now two, so the operator-owned
+    threshold can move without rescaling the ODE's notion of time. See
+    docs/proposals/gap-recovery-arming-semantics-v0.md.
+    """
+
+    def test_default_reproduces_the_legacy_derived_boundary(self):
+        """The shipped default must be behavior-identical to `scaled_dt > DT_MAX`.
+
+        Swept rather than spot-checked because the two forms are different
+        floating-point expressions; the boundary at exactly 150.0s is the case
+        that would break if the derivation were rewritten as a literal.
+        """
+        cfg = GovernanceConfig
+        rate = cfg.DT / cfg.DT_EXPECTED_INTERVAL
+        samples = [i * 0.5 for i in range(0, 1200)]
+        samples += [149.999999, 150.0, 150.000001, 3600.0, 86400.0]
+        for elapsed in samples:
+            legacy = (elapsed * rate) > cfg.DT_MAX
+            current = elapsed > cfg.GAP_RECOVERY_ARM_SECONDS
+            assert legacy == current, (
+                f"arming diverged from the legacy boundary at elapsed={elapsed}s: "
+                f"legacy={legacy} current={current}"
+            )
+
+    def test_raising_the_threshold_stops_arming_on_a_dt_saturating_gap(self):
+        """A gap that still saturates dt no longer arms once the threshold is raised."""
+        from datetime import datetime, timedelta
+
+        from config.governance_config import config as live_config
+
+        monitor = _make_monitor("arm-threshold-raised")
+        monitor.last_update = datetime.now() - timedelta(seconds=1800)
+
+        # 1800s still saturates the integrator, so this is not a case of the
+        # gap becoming ordinary — only the enforcement question moved.
+        scaled_dt = 1800.0 * (GovernanceConfig.DT / GovernanceConfig.DT_EXPECTED_INTERVAL)
+        assert scaled_dt > GovernanceConfig.DT_MAX
+
+        with patch.object(live_config, 'GAP_RECOVERY_ARM_SECONDS', 3600.0):
+            monitor.process_update(
+                {'E': 0.6, 'I': 0.7, 'S': 0.2, 'V': 0.0, 'complexity': 0.3},
+                confidence=0.7,
+            )
+
+        assert monitor._gap_recovery_cycles_remaining == 0, (
+            "a 30-min gap must not arm when the threshold is 1h, even though dt saturates"
+        )
+
+    def test_lowering_the_threshold_arms_below_dt_saturation(self):
+        """Arming fires on a gap too short to saturate dt, proving the converse."""
+        from datetime import datetime, timedelta
+
+        from config.governance_config import config as live_config
+
+        monitor = _make_monitor("arm-threshold-lowered")
+        monitor.last_update = datetime.now() - timedelta(seconds=60)
+
+        scaled_dt = 60.0 * (GovernanceConfig.DT / GovernanceConfig.DT_EXPECTED_INTERVAL)
+        assert scaled_dt <= GovernanceConfig.DT_MAX, "60s must not saturate dt"
+
+        with patch.object(live_config, 'GAP_RECOVERY_ARM_SECONDS', 30.0):
+            monitor.process_update(
+                {'E': 0.6, 'I': 0.7, 'S': 0.2, 'V': 0.0, 'complexity': 0.3},
+                confidence=0.7,
+            )
+
+        # One decrement happens at the end of process_update.
+        assert monitor._gap_recovery_cycles_remaining == GovernanceConfig.GAP_RECOVERY_CYCLES - 1
+
+
 class TestConfig:
     """Sanity check on the config knob."""
 
     def test_gap_recovery_cycles_is_positive(self):
         assert GovernanceConfig.GAP_RECOVERY_CYCLES >= 1
+
+    def test_arm_seconds_is_positive(self):
+        assert GovernanceConfig.GAP_RECOVERY_ARM_SECONDS > 0
