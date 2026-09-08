@@ -17,7 +17,7 @@ The second run's head was `898d797`, but Actions checked out the synthetic
 merge `9c4da1b` into master `0697f14`. The
 [actual tree comparison](https://github.com/cirwel/unitares/compare/75c49c4a6c6db190f27f9aa37997aee9cef8d408...9c4da1bcdf74c1efe0e5bc425d4cd8fab6648d78)
 includes intervening source edits, including removal of
-`src/mcp_handlers/lifecycle/resume.py`. The 36-statement denominator change
+[the former lifecycle resume handler](https://github.com/cirwel/unitares/blob/75c49c4a6c6db190f27f9aa37997aee9cef8d408/src/mcp_handlers/lifecycle/resume.py). The 36-statement denominator change
 cannot be attributed just to imports or sharding.
 
 The first two runs recorded 228 -> 144 seconds for the slowest Python 3.12
