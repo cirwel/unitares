@@ -137,13 +137,14 @@ package — see the header of `constraints.txt`.
 
 **Expected:** all packages install cleanly. The EISV ODE engine (`governance_core/`) lives directly in this repo — no separate install step.
 
-**To skip the ODE entirely** (e.g., a CI runner without numpy build deps, or you only need the behavioral-EISV verdict path):
+The ODE engine and its numerical dependencies are required by the current runtime.
+There is no supported behavioral-only startup mode. The previously documented
+`UNITARES_DISABLE_ODE` variable is not read by the runtime and has no effect;
+setting it does not skip the engine or its dependencies.
 
-```bash
-export UNITARES_DISABLE_ODE=1
-```
-
-Verdicts then come from the behavioral EISV path alone; the dashboard shows a banner indicating reduced diagnostic detail.
+Behavioral assessment owns the post-warmup verdict, but ODE-derived inputs,
+warmup fallback, and structural pause gates remain part of the pipeline. See
+[How EISV is actually computed](../EISV_COMPUTATION.md) for the current coupling.
 
 ---
 
