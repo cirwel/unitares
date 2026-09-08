@@ -37,7 +37,7 @@ source_digests:
   unitares/src/mcp_handlers/dialectic/handlers.py: "96ffbcfbbea5ff34"
   unitares/src/mcp_handlers/lifecycle/self_recovery.py: "3fd24e37c57566a3"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/src/tool_modes.py: "95af4068c129a4c6"
+  unitares/src/tool_modes.py: "52c3a0b1c5cabb94"
   unitares/src/tool_mode_listing.py: "a99a9e7f6e4a95c4"
 ---
 
