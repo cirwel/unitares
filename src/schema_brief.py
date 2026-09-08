@@ -8,20 +8,14 @@ decided it wants the tool at all. Measured 2026-09-08 on the FastMCP wire,
 A profile cut does not touch that: it removes names from the list, not words
 from the names that remain.
 
-The same argument applies to text nobody authored at all. Pydantic stamps a
-``title`` on every schema and every property — the model's class name at the
-root (``OnboardParams``), and a titleized echo of the key on each field
-(``client_session_id`` -> "Client Session Id"). Neither carries information the
-name does not already give, JSON Schema does not validate against ``title``,
-and together they were 10.8% of every advertised profile — 5,565 B of
-``standard`` (52,612 -> 47,047) and 13,928 B of ``full`` (129,043 -> 115,115),
-measured 2026-09-08. They are dropped by default, restorable with
-``UNITARES_TOOL_SCHEMA_PROPERTY_TITLES=keep``.
-
-``scripts/diagnostics/tool_surface_cost.py --boilerplate`` had predicted 9%,
-because it counted only the per-property titles and not the root model-class
-title on each of the fifty schemas. The applied cut is the larger figure; the
-estimate was a floor.
+Pydantic also emits ``title`` annotations at schema nodes. They are stripped
+by default, restorable with ``UNITARES_TOOL_SCHEMA_PROPERTY_TITLES=keep``.
+The transformation preserves validation and caller data named ``title``, but
+changes schema fingerprints. Catalog trimming alone is insufficient: FastMCP
+regenerates titles while building its typed wrappers. ``tool_mode_listing``
+applies this same policy to the final MCP listing without mutating validation
+models. Measure that layer with ``tool_surface_cost.py --surface mcp``;
+``--surface catalog`` measures the upstream definitions separately.
 
 So this module trims the *advertised* text and leaves the authored text where
 it already lives. ``describe_tool(tool_name=..., action=...)`` reads the
