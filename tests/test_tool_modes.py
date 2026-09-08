@@ -65,9 +65,10 @@ class TestModeSets:
         A mode filters tools/list, and a schema-driven client offers the model
         only what tools/list returns -- so a capability that is never
         advertised cannot be reached by such a client at all. Standard
-        advertises shared memory, structured review, and advisory inference on
-        top of the checkpoint loop, and nothing else: no routers, no discovery
-        tools, no operator surface.
+        advertises shared memory, structured review, advisory inference and
+        recovery on top of the checkpoint loop, and nothing else: no discovery
+        tools, no operator surface, and no router whose actions the names below
+        already cover.
         """
         assert STANDARD_MODE_TOOLS == MINIMAL_MODE_TOOLS | {
             "search_shared_memory",
@@ -75,8 +76,9 @@ class TestModeSets:
             "update_finding",
             "request_review",
             "consult",
+            "self_recovery",
         }
-        assert len(STANDARD_MODE_TOOLS) == 10
+        assert len(STANDARD_MODE_TOOLS) == 11
         for router in ("knowledge", "agent", "observe", "dialectic", "config"):
             assert router not in STANDARD_MODE_TOOLS
         assert "list_tools" not in STANDARD_MODE_TOOLS
@@ -84,7 +86,7 @@ class TestModeSets:
         assert "admin" not in STANDARD_MODE_TOOLS
 
     def test_default_mode_is_standard(self, monkeypatch):
-        """GOVERNANCE_TOOL_MODE unset means the ten-tool surface."""
+        """GOVERNANCE_TOOL_MODE unset means the eleven-tool surface."""
         import importlib
 
         import src.tool_modes as tool_modes
@@ -433,7 +435,7 @@ class TestServerInstructions:
 
     def test_reports_the_advertised_count_of_the_profile(self):
         assert "advertises 5 tools" in build_server_instructions("minimal")
-        assert "advertises 10 tools" in build_server_instructions("standard")
+        assert "advertises 11 tools" in build_server_instructions("standard")
         assert (
             f"advertises {len(LITE_MODE_TOOLS)} tools"
             in build_server_instructions("lite")

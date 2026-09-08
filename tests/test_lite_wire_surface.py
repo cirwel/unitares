@@ -51,6 +51,7 @@ from src.tool_modes import (
     MINIMAL_MODE_TOOLS,
     OPERATOR_READONLY_MODE_TOOLS,
     OPERATOR_RECOVERY_MODE_TOOLS,
+    STANDARD_MODE_TOOLS,
     get_tools_for_mode,
 )
 
@@ -125,6 +126,43 @@ def test_recovery_hint_targets_are_advertised_in_lite():
             f"{name} is named in call_model's recovery hints but is not advertised "
             "in lite mode — an MCP-native agent following that hint gets "
             "'Unknown tool'. Either re-advertise it or strip the hint."
+        )
+
+
+def test_recovery_hint_targets_are_advertised_in_standard():
+    """The same invariant as the lite test above, on the DEFAULT profile.
+
+    The lite sibling has guarded this since the 2026-09 surface cut, but lite
+    is opt-in; `standard` is what an adopter gets, so it is the surface where a
+    dead-end hint actually reaches people. The pause path is the sharp case:
+    the server tells a paused agent, in prose, to call `self_recovery` --
+
+        src/mcp_handlers/updates/phases.py:469
+            "Use self_recovery(action='quick') for safe states, or
+             self_recovery(action='review', reflection='...') for full recovery"
+        src/mcp_handlers/support/agent_auth.py:199
+            the same instruction on an auth refusal
+        src/mcp_handlers/dialectic/responses.py:46,63
+            related_tools: [..., "self_recovery", ...]
+
+    -- and until 2026-09-08 `standard` did not advertise it. A schema-driven
+    client (Claude Code, Codex, Cursor) is offered only what tools/list returns,
+    so that instruction named a tool the model had never been shown, in the one
+    state where it can least improvise its way out.
+
+    If this fails, do NOT just delete the name from the set below: either
+    advertise the hinted tool in `standard`, or strip the hint from the handler
+    that emits it. A hint the caller cannot act on is worse than no hint.
+    """
+    registry = set(get_tool_registry().keys())
+
+    for name in ("self_recovery",):
+        assert name in registry, f"{name} lost register=True"
+        assert name in STANDARD_MODE_TOOLS, (
+            f"{name} is named in the pause/auth-refusal recovery hints but is "
+            "not advertised in the default `standard` profile — a schema-driven "
+            "agent following that instruction has no such tool. Either "
+            "re-advertise it or strip the hint."
         )
 
 

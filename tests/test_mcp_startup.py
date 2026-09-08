@@ -64,9 +64,14 @@ def test_server_advertises_the_default_profile_and_still_dispatches_the_rest():
     assert STANDARD_MODE_TOOLS <= listed
     assert listed <= registered
     for name in ("knowledge", "dialectic", "observe", "list_tools",
-                 "describe_tool", "onboard", "self_recovery"):
+                 "describe_tool", "onboard"):
         assert name not in listed, f"{name} is not part of the default profile"
         assert name in registered, f"{name} must still dispatch by name"
+    # self_recovery moved into the default profile: the server names it to
+    # paused agents (mcp_handlers/updates/phases.py, support/agent_auth.py),
+    # so a schema-driven client has to be able to see it.
+    assert "self_recovery" in listed
+    assert "self_recovery" in registered
 
 
 def test_server_carries_instructions_naming_the_unadvertised_surface():

@@ -124,7 +124,8 @@
         <string>postgres</string>
         <!-- What tools/list advertises to MCP clients. Unset = standard: the
              five-tool checkpoint loop plus shared memory, structured review,
-             and advisory inference. minimal is the checkpoint loop alone;
+             advisory inference, and recovery. minimal is the checkpoint loop
+             alone;
              lite adds the consolidated routers and the discovery tools; full
              advertises every registered tool. Only the listing is filtered:
              every registered name stays callable on every transport. Note

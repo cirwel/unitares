@@ -32,13 +32,13 @@ source_digests:
   unitares/src/mcp_handlers/tool_stability.py: "b81fb422cdec412c"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "bcac7a83172032db"
   unitares/src/monitor_metrics.py: "ea5e54b19fa1d903"
-  unitares/src/tool_modes.py: "52c3a0b1c5cabb94"
+  unitares/src/tool_modes.py: "e3a54d97b9e05afa"
   unitares/src/mcp_handlers/identity/session.py: "e24a8588ad4b8f47"
   unitares/src/mcp_handlers/schemas/identity.py: "aee8c8ad9cb30c7c"
   unitares/src/identity/lineage_semantics.py: "a6613f2493f6b97c"
   unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/skills/governance-lifecycle/SKILL.md: "99588de90272292e"
+  unitares/skills/governance-lifecycle/SKILL.md: "d8b344b82ea5bae9"
   unitares/skills/governance-fundamentals/SKILL.md: "0c90338a4c6185b1"
   unitares/skills/knowledge-graph/SKILL.md: "b64442aed6c88813"
   unitares/skills/dialectic-reasoning/SKILL.md: "f8c3b5e1b8e9aef6"
@@ -73,10 +73,11 @@ main check-in loop. A new user message is not a reason to call
 These are the primary workflow tools; raw implementation tools such as
 `onboard(...)` and
 `process_agent_update(...)` remain available for compatibility. On a stock
-server the default `GOVERNANCE_TOOL_MODE=standard` lists ten names: the five
-checkpoint tools (`start_session`, `identity`, `sync_state`, `record_result`,
-`check_working_state`) plus `search_shared_memory`, `store_finding`,
-`update_finding`, `request_review`, and `consult`. Every other name in this
+server the default `GOVERNANCE_TOOL_MODE=standard` lists eleven names: the
+five checkpoint tools (`start_session`, `identity`, `sync_state`,
+`record_result`, `check_working_state`) plus `search_shared_memory`,
+`store_finding`, `update_finding`, `request_review`, `consult`, and
+`self_recovery`. Every other name in this
 skill still dispatches by name, and `GOVERNANCE_TOOL_MODE=lite` advertises the
 rest (see governance-lifecycle, *MCP Tools Reference*). The full raw
 payload remains available under `raw_governance`; the read aliases

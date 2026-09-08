@@ -37,11 +37,11 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
 
 - v2.23.0 preserves registered callable names, input schemas, lifecycle
   envelopes, and every selectable profile; no database migration is
-  introduced. Its default discovery profile changes from five tools to ten:
+  introduced. Its default discovery profile changes from five tools to eleven:
   a new `standard` profile adds `search_shared_memory`, `store_finding`,
-  `update_finding`, `request_review`, and `consult` to the checkpoint loop.
-  A client that selected tools from discovery on v2.22.0 sees five additional
-  names and no removals. `GOVERNANCE_TOOL_MODE=minimal` keeps the v2.22.0
+  `update_finding`, `request_review`, `consult`, and `self_recovery` to the
+  checkpoint loop. A client that selected tools from discovery on v2.22.0 sees
+  six additional names and no removals. `GOVERNANCE_TOOL_MODE=minimal` keeps the v2.22.0
   default surface. The server now also returns an MCP `instructions` string
   describing its profile.
 - v2.22.0 preserves registered callable names, input schemas, lifecycle

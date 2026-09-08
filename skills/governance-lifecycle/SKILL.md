@@ -37,7 +37,7 @@ source_digests:
   unitares/src/mcp_handlers/dialectic/handlers.py: "96ffbcfbbea5ff34"
   unitares/src/mcp_handlers/lifecycle/self_recovery.py: "3fd24e37c57566a3"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/src/tool_modes.py: "52c3a0b1c5cabb94"
+  unitares/src/tool_modes.py: "e3a54d97b9e05afa"
   unitares/src/tool_mode_listing.py: "a99a9e7f6e4a95c4"
 ---
 
@@ -222,15 +222,16 @@ not force a resume.
 ## MCP Tools Reference
 
 Which of these names your client *lists* depends on the server's
-`GOVERNANCE_TOOL_MODE`. The default, `standard`, advertises ten names: the
+`GOVERNANCE_TOOL_MODE`. The default, `standard`, advertises eleven names: the
 checkpoint loop (`start_session`, `identity`, `sync_state`, `record_result`,
 `check_working_state`) plus `search_shared_memory`, `store_finding`,
-`update_finding`, `request_review`, and `consult`. `minimal` advertises the
+`update_finding`, `request_review`, `consult`, and `self_recovery`. `minimal`
+advertises the
 checkpoint loop alone. `lite` (29 tools) advertises every name in this
 reference plus `list_tools` / `describe_tool`; `full` advertises everything
 registered. A mode filters only `tools/list`: every registered tool dispatches
 by name in every mode, on `/mcp/`, REST `/v1/tools/call`, and stdio alike. So a
-harness that offers only listed tools shows ten under the default, and the
+harness that offers only listed tools shows eleven under the default, and the
 rest are one server-side flag away (`GOVERNANCE_TOOL_MODE=lite`), not gone.
 `start_session(verbose=true)` reports the running mode under `tool_mode`.
 
@@ -245,6 +246,7 @@ rest are one server-side flag away (`GOVERNANCE_TOOL_MODE=lite`), not gone.
 - `store_finding(...)` — Store a durable discovery, root cause, or correction
 - `update_finding(discovery_id=..., ...)` — Revise or close an existing finding
 - `knowledge(action="note", ...)` — Quick contribution to the knowledge graph
+- `self_recovery(action="check"|"quick"|"review")` — Get moving again after a pause. The pause and auth-refusal responses name this tool by hand, and it is advertised by default so a schema-driven client can actually call it.
 
 ### Common (use when needed)
 
@@ -252,7 +254,6 @@ rest are one server-side flag away (`GOVERNANCE_TOOL_MODE=lite`), not gone.
 - `agent()` — Agent lifecycle router (list, get, update, archive, resume, delete)
 - `calibration()` — Check or update calibration data
 - `dialectic()` — Structured review router (`get`, `list`, `quick`, `request`, `thesis`, `antithesis`, `synthesis`, `reassign`)
-- `self_recovery()` — Recovery router (`check`, `quick`, `review`)
 - `export()` — Export session history
 
 ### Specialized
