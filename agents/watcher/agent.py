@@ -1031,8 +1031,23 @@ Remember: JSON only. Empty findings list is correct if nothing is wrong. Quality
 """
 
 
+# A short token planted at the very START of the prompt and echoed back in the
+# envelope. It is a delivery receipt for the front of the prompt, which is the
+# part a truncating backend drops and the part that carries the rules and the
+# pattern library.
+#
+# Review, 2026-09-08, raised the case the window check alone cannot see: a
+# backend that clamps num_ctx BELOW what we asked for discards input while
+# reporting a token count comfortably under the alarm threshold. Counting
+# evaluated tokens can never answer "how much was thrown away" — but asking
+# for something only a reader of line 1 could know does, without estimating
+# anything.
+PROMPT_CANARY = "WATCHER-PROMPT-START-7F3A"
+
+
 def build_prompt(patterns_md: str, file_path: str, code_snippet: str) -> str:
-    return f"""You are Watcher — a bug-pattern matcher for this codebase. You do NOT need to decide if a bug is "real" or "standard practice". Your job is to flag every occurrence of a known-bad pattern from the library below, without second-guessing.
+    return f"""[{PROMPT_CANARY}]
+You are Watcher — a bug-pattern matcher for this codebase. You do NOT need to decide if a bug is "real" or "standard practice". Your job is to flag every occurrence of a known-bad pattern from the library below, without second-guessing.
 
 CRITICAL RULES — read carefully before scanning:
 
@@ -1044,8 +1059,9 @@ CRITICAL RULES — read carefully before scanning:
 
 4. **For every finding you emit, include a 1-sentence justification field `evidence` quoting the literal code (not a comment) that matches.** If you can't quote actual code, drop the finding.
 
-OUTPUT FORMAT — JSON only, no prose, no markdown fences:
-{{"findings":[{{"pattern":"P001","line":<int>,"hint":"<<=12 words>","evidence":"<literal code line>"}}]}}
+OUTPUT FORMAT — JSON only, no prose, no markdown fences. Copy the bracketed
+token from the FIRST line of this prompt into `saw_start`:
+{{"saw_start":"{PROMPT_CANARY}","findings":[{{"pattern":"P001","line":<int>,"hint":"<<=12 words>","evidence":"<literal code line>"}}]}}
 
 5. Empty findings list is valid and correct if nothing matches.
 6. Do NOT invent pattern IDs. Only use IDs present in the library.
@@ -1627,6 +1643,27 @@ def parse_findings(
         raise ModelOutputUnusable(
             f"expected a {{\"findings\": [...]}} object, got "
             f"{type(data).__name__}; raw={text[:300]!r}"
+        )
+
+    # Delivery receipt for the front of the prompt. A model that never saw
+    # line 1 cannot produce this token, and a backend that clamped the window
+    # below what we asked for drops line 1 while reporting a token count under
+    # the window check's threshold — so this catches the case that check
+    # structurally cannot. Absent-and-wrong is treated as truncation; absent
+    # entirely is only a warning, since a model may simply omit an extra field
+    # while answering the findings correctly.
+    saw = data.get("saw_start")
+    if saw is not None and str(saw).strip() != PROMPT_CANARY:
+        raise PromptTruncated(
+            f"model echoed saw_start={saw!r}, not {PROMPT_CANARY!r} — the "
+            f"first line of the prompt did not reach it, so neither did the "
+            f"rules or the pattern library"
+        )
+    if saw is None:
+        log(
+            "model omitted saw_start — cannot confirm the front of the prompt "
+            "arrived; treating the scan as usable but unverified",
+            "warning",
         )
 
     if "findings" not in data:
