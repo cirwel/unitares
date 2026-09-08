@@ -84,10 +84,13 @@ model only the tools discovery returned, so a name that is not advertised is
 one such a client cannot reach. The server states its own profile and what it
 is withholding in the MCP `instructions` string returned at connect.
 
-v2.22.0 defaults to the five-tool `minimal` profile and has no `standard`.
-v2.21.0 has an older six-tool `minimal` profile and registration-time filtering
-on the HTTP MCP mount. Selecting a profile on either does not reproduce this
-surface or its dispatch compatibility; upgrade the server for those changes.
+v2.22.0 defaults to the five-tool `minimal` profile and has no `standard`. Its
+published Compose file does not forward `GOVERNANCE_TOOL_MODE` either, so
+selecting a profile there needs the explicit override in the [release
+errata](../releases/2.22.0-errata.md). v2.21.0 has an older six-tool `minimal`
+profile and registration-time filtering on the HTTP MCP mount. Selecting a
+profile on either does not reproduce this surface or its dispatch
+compatibility; upgrade the server for those changes.
 
 ## 2.2 Bare-metal installation
 

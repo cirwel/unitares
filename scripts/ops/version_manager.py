@@ -81,10 +81,8 @@ VERSION_REFERENCES = [
     ("COMPATIBILITY.md", [
         (r'\| UNITARES server \| `v([\d.]+)`',
          r'| UNITARES server | `v{version}`'),
-        # A claim about the inspected source bundle, not artifact publication.
-        # Re-check the tagged plugin's skills before advancing this claim.
-        (r'aligned with server `v([\d.]+)`',
-         r'aligned with server `v{version}`'),
+        # Historical plugin bundle evidence is pinned to its inspected tag.
+        # A source bump must not rewrite that claim into a new verification.
     ]),
 ]
 
