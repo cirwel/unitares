@@ -117,7 +117,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       # .env configures Compose interpolation; explicitly pass the discovery
       # profile into the server so a chosen GOVERNANCE_TOOL_MODE survives
-      # upgrades. Default: standard (the eleven-tool agent surface).
+      # upgrades. Default: standard (the fifteen-tool agent surface).
       GOVERNANCE_TOOL_MODE: ${GOVERNANCE_TOOL_MODE:-standard}
       # PostgreSQL is the canonical KG store; AGE is an explicit graph-feature opt-in.
       UNITARES_KNOWLEDGE_BACKEND: postgres
