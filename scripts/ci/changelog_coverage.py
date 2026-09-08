@@ -25,11 +25,13 @@ Exemptions are listed in the diff, in the file the release ships, next to the
 entry they justify -- which is the point. A silent allowance would reproduce
 the failure one layer up.
 
-Two subject shapes are excluded without a declaration, and both are counted
-and printed so the exclusion is visible: the release's own `chore(release)`
-bookkeeping, which cannot cite itself, and dependabot's `build(deps)` /
-`build(deps-dev)` bumps, which move a pin and nothing a reader of the entry
-can observe. Any other `build:` subject is an ordinary change and must be
+Two shapes are excluded without a declaration, and both are counted and
+printed so the exclusion is visible: the release's own `chore(release)`
+bookkeeping, which cannot cite itself, and a dependabot `build(deps)` /
+`build(deps-dev)` bump that the merge itself proves inert (see
+DEPENDENCY_BUMP below: nothing but manifests, lockfiles, digests and action
+pins in the diff, and no major move of a runtime pin). A bump that fails that
+proof, and any other `build:` subject, is an ordinary change and must be
 cited or declared.
 
 The denominator comes from `git log --first-parent`, matching either a squash
@@ -71,14 +73,42 @@ VERSION_FILE = REPO_ROOT / "VERSION"
 # entry it creates, so requiring it would make every release permanently red.
 RELEASE_CHORE = re.compile(r"^(chore|docs)\(release\)")
 
-# A dependency bump lands under dependabot's subject convention. It moves a
-# lockfile pin or an action SHA and nothing an operator or agent can observe,
-# so it has no line in the entry and never will. It is excluded from the
-# citation requirement the way release chores are, but counted and printed:
-# three of them merged onto the 2.22.0 release tree between the release PR and
-# the tag and turned this gate red on master twice, each needing a hand-written
-# exemption that said nothing a reader did not already know.
+# A dependency bump lands under dependabot's subject convention. It is
+# excluded from the citation requirement only when the merge itself proves it
+# inert, on two tests read from the merge and never from the subject alone:
+#
+# 1. Files. The first-parent diff touches nothing but dependency manifests,
+#    lockfiles, image digests and workflow action pins. A bump that also
+#    touches first-party source, generated docs or anything else is an
+#    ordinary change, whatever its subject says.
+# 2. Version. A `build(deps)` bump that moves a runtime manifest
+#    (constraints.txt, requirements*.txt, pyproject.toml, package.json) must
+#    show a same-major move in its subject, `bump X from A.B.C to A.D.E`. A
+#    major move, or a group subject that names no versions, is held to a
+#    citation: `build(deps): bump mcp from 1.29.0 to 2.1.1 (#2050)` renamed
+#    Tool.inputSchema and changed transport yield arity, and it arrived under
+#    exactly this subject shape. `build(deps-dev)` moves development tooling
+#    and passes on the file test alone.
+#
+# Lockfiles, Dockerfile digests and action SHAs move nothing an operator or
+# agent can observe. Three such bumps merged onto the 2.22.0 release tree
+# between the release PR and the tag and turned this gate red on master twice,
+# each needing a hand-written exemption that said nothing a reader did not
+# already know. Every bump is counted and printed either way, held or not.
 DEPENDENCY_BUMP = re.compile(r"^build\(deps(-dev)?\)")
+DEV_BUMP = re.compile(r"^build\(deps-dev\)")
+BUMP_VERSIONS = re.compile(r"\bbump (\S+) from `?([^`\s]+)`? to `?([^`\s]+)`?")
+REQUIREMENT_MOVE = re.compile(r"\bupdate (\S+) requirement from (\S+) to (\S+)")
+
+# Paths a bump may touch and still be inert. Manifests carry the version test
+# above; the rest carry none.
+RUNTIME_MANIFEST = re.compile(
+    r"(^|/)(constraints\.txt|requirements[^/]*\.txt|pyproject\.toml|package\.json)$"
+)
+INERT_PIN = re.compile(
+    r"(^|/)(Dockerfile[^/]*|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|uv\.lock|poetry\.lock)$"
+    r"|^\.github/workflows/[^/]+\.ya?ml$"
+)
 
 TRAILING_PR = re.compile(r"\(#(\d+)\)$")
 MERGE_PR = re.compile(r"^Merge pull request #(\d+)\b")
@@ -105,6 +135,50 @@ def _git(*args: str) -> str:
     ).stdout.strip()
 
 
+def _major(version: str) -> int | None:
+    """Leading major of a version token; None for a digest, a SHA, or prose."""
+    match = re.match(r"v?(\d+)(?:[.\-+]|$)", version)
+    return int(match.group(1)) if match else None
+
+
+def _spec_major(spec: str) -> int | None:
+    """Largest major named in a requirement spec such as `>=1.26,<3`."""
+    majors = [int(m) for m in re.findall(r"(?:^|[^\w.])v?(\d+)(?:\.\d+)*", spec)]
+    return max(majors) if majors else None
+
+
+def same_major_move(subject: str) -> bool | None:
+    """True/False when the subject proves the move's major; None when it cannot."""
+    match = BUMP_VERSIONS.search(subject)
+    if match:
+        before, after = _major(match.group(2)), _major(match.group(3))
+        return None if before is None or after is None else before == after
+    match = REQUIREMENT_MOVE.search(subject)
+    if match:
+        before, after = _spec_major(match.group(2)), _spec_major(match.group(3))
+        return None if before is None or after is None else before == after
+    return None
+
+
+def bump_hold_reason(sha: str, subject: str) -> str | None:
+    """Why a dependabot bump must still be cited, or None when it is inert."""
+    files = _git("diff", "--name-only", f"{sha}^1", sha).splitlines()
+    for path in files:
+        if not (RUNTIME_MANIFEST.search(path) or INERT_PIN.search(path)):
+            return f"touches {path}, which is not a dependency pin"
+    if DEV_BUMP.match(subject):
+        return None
+    manifests = [path for path in files if RUNTIME_MANIFEST.search(path)]
+    if not manifests:
+        return None
+    proven = same_major_move(subject)
+    if proven is True:
+        return None
+    if proven is False:
+        return f"major move of a runtime pin ({manifests[0]})"
+    return f"moves a runtime pin ({manifests[0]}) and the subject does not show the versions"
+
+
 def current_version() -> str:
     return VERSION_FILE.read_text(encoding="utf-8").strip()
 
@@ -126,8 +200,8 @@ def entry_section(version: str) -> str | None:
     return text[start:] if nxt == -1 else text[start:nxt]
 
 
-def merged_prs(since_tag: str) -> tuple[dict[int, str], list[str]]:
-    """(PR number -> subject, unattributed subjects) over the first-parent walk.
+def merged_prs(since_tag: str) -> tuple[dict[int, tuple[str, str]], list[str]]:
+    """(PR number -> (subject, sha), unattributed subjects) over the first-parent walk.
 
     First-parent is the list of changes that landed on this branch, one entry per
     merge, whatever method was used. Two subject shapes carry a reference:
@@ -145,13 +219,13 @@ def merged_prs(since_tag: str) -> tuple[dict[int, str], list[str]]:
     # carry no reference and never will until this PR lands. Only a commit that
     # is ALREADY on the base branch without a reference indicates a real gap.
     base = _base_branch()
-    found: dict[int, str] = {}
+    found: dict[int, tuple[str, str]] = {}
     unattributed: list[str] = []
     for line in out.splitlines():
         sha, _, subject = line.partition("\t")
         match = MERGE_PR.match(subject) or TRAILING_PR.search(subject)
         if match:
-            found[int(match.group(1))] = subject
+            found[int(match.group(1))] = (subject, sha)
         elif RELEASE_CHORE.match(subject):
             continue
         elif base and not is_ancestor(sha, base):
@@ -257,13 +331,27 @@ def main() -> int:
               "range would be meaningless.", file=sys.stderr)
         return 0 if list_only else 1
 
-    merged, unattributed = merged_prs(previous)
+    merged_with_sha, unattributed = merged_prs(previous)
+    merged = {n: subj for n, (subj, _sha) in merged_with_sha.items()}
 
+    # A dependabot bump is excluded only when its own merge proves it inert;
+    # one that does not is held to a citation like any other change, and the
+    # reason it is held is printed beside it.
+    held: dict[int, str] = {}
+    excluded_bumps = 0
+    for n, (subj, sha) in merged_with_sha.items():
+        if RELEASE_CHORE.match(subj) or not DEPENDENCY_BUMP.match(subj):
+            continue
+        reason = bump_hold_reason(sha, subj)
+        if reason is None:
+            excluded_bumps += 1
+        else:
+            held[n] = reason
     considered = {n: subj for n, subj in merged.items()
-                  if not RELEASE_CHORE.match(subj) and not DEPENDENCY_BUMP.match(subj)}
+                  if not RELEASE_CHORE.match(subj)
+                  and (not DEPENDENCY_BUMP.match(subj) or n in held)}
     chores = sum(1 for s in merged.values() if RELEASE_CHORE.match(s))
-    bumps = sum(1 for s in merged.values()
-                if DEPENDENCY_BUMP.match(s) and not RELEASE_CHORE.match(s))
+    bumps = excluded_bumps
     cited = cited_prs(section)
     exempt, complaints = exempt_prs(section)
     missing = {n: subj for n, subj in considered.items()
@@ -279,6 +367,7 @@ def main() -> int:
     print(f"[changelog-coverage] {len(considered) - len(missing)} of "
           f"{len(considered)} cited in the entry "
           f"({chores} release-chore excluded, {bumps} dependency bump(s) excluded, "
+          f"{len(held)} dependency bump(s) held to a citation, "
           f"{len(exempt)} declared exempt)")
 
     failed = False
@@ -305,7 +394,8 @@ def main() -> int:
         print(f"[changelog-coverage] {len(missing)} merged change(s) are not "
               "named in the entry:")
         for num in sorted(missing):
-            print(f"  #{num}  {missing[num]}")
+            hold = f"  [held: {held[num]}]" if num in held else ""
+            print(f"  #{num}  {missing[num]}{hold}")
         print()
         print("Fold each into the entry. If one genuinely does not belong there,")
         print(f"declare it inside the `## [{version}]` section, one per line,")
