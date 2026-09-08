@@ -327,9 +327,16 @@ class TestGetGovernanceMetrics:
             assert data["verdict"]["value"] == "unbound"
             # The unbound next_action must steer to an explicit, proof-bearing
             # identity path. Bare identity() can mint an orphan, so the safe
-            # canonical hint is onboard(force_new=true).
-            assert data["next_action"]["tool"] == "onboard"
+            # canonical hint is force_new=true.
+            #
+            # The name is the ADVERTISED one. `onboard` is the implementation;
+            # `standard` advertises only `start_session`, so steering an
+            # unbound caller to "onboard" named a tool a schema-driven client
+            # was never shown -- in the one state where it has no identity to
+            # improvise with.
+            assert data["next_action"]["tool"] == "start_session"
             assert "force_new=true" in data["next_action"]["example"]
+            assert "onboard(" not in data["next_action"]["example"]
             mock_mcp_server.get_or_create_monitor.assert_not_called()
 
     @pytest.mark.asyncio

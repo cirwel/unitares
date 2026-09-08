@@ -191,8 +191,8 @@ async def resolve_dialectic_agent_id(
             recovery={
                 "error_type": "agent_ref_ambiguous",
                 "action": (
-                    "Pass your agent UUID (the `uuid` from onboard()/identity()) "
-                    "instead of the handle. Do NOT call onboard() — that mints a "
+                    "Pass your agent UUID (the `uuid` from start_session()/identity()) "
+                    "instead of the handle. Do NOT call start_session() — that mints a "
                     "NEW identity and will not help."
                 ),
                 "note": (
