@@ -66,9 +66,8 @@ class TestModeSets:
         only what tools/list returns -- so a capability that is never
         advertised cannot be reached by such a client at all. Standard
         advertises shared memory, structured review, advisory inference and
-        recovery on top of the checkpoint loop, and nothing else: no discovery
-        tools, no operator surface, and no router whose actions the names below
-        already cover.
+        recovery on top of the checkpoint loop, plus the detail inspection and
+        server-health diagnostics that ordinary responses recommend.
         """
         assert STANDARD_MODE_TOOLS == MINIMAL_MODE_TOOLS | {
             "search_shared_memory",
@@ -77,16 +76,19 @@ class TestModeSets:
             "request_review",
             "consult",
             "self_recovery",
+            "knowledge",
+            "describe_tool",
+            "health_check",
         }
-        assert len(STANDARD_MODE_TOOLS) == 11
-        for router in ("knowledge", "agent", "observe", "dialectic", "config"):
+        assert len(STANDARD_MODE_TOOLS) == 14
+        for router in ("agent", "observe", "dialectic", "config"):
             assert router not in STANDARD_MODE_TOOLS
         assert "list_tools" not in STANDARD_MODE_TOOLS
-        assert "describe_tool" not in STANDARD_MODE_TOOLS
+        assert "describe_tool" in STANDARD_MODE_TOOLS
         assert "admin" not in STANDARD_MODE_TOOLS
 
     def test_default_mode_is_standard(self, monkeypatch):
-        """GOVERNANCE_TOOL_MODE unset means the eleven-tool surface."""
+        """GOVERNANCE_TOOL_MODE unset means the fourteen-tool surface."""
         import importlib
 
         import src.tool_modes as tool_modes
@@ -431,11 +433,11 @@ class TestServerInstructions:
         standard = build_server_instructions("standard")
         # Standard advertises those five, so it points at the routers instead.
         assert "list_tools" in standard
-        assert "knowledge" in standard
+        assert "(knowledge, agent" not in standard
 
     def test_reports_the_advertised_count_of_the_profile(self):
         assert "advertises 5 tools" in build_server_instructions("minimal")
-        assert "advertises 11 tools" in build_server_instructions("standard")
+        assert "advertises 14 tools" in build_server_instructions("standard")
         assert (
             f"advertises {len(LITE_MODE_TOOLS)} tools"
             in build_server_instructions("lite")

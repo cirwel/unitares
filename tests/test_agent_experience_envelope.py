@@ -398,6 +398,7 @@ def test_sync_state_compact_envelope_lifts_provisional_evidence_and_legacy_diagn
     env = build_experience_envelope("sync_state", "process_agent_update", payload)
 
     assert env["action_summary"] == {
+        "headline": "Provisional: proceed; behavioral evidence is still forming.",
         "action": "proceed",
         "sub_action": "approve",
         "verdict": "safe",
@@ -1230,3 +1231,11 @@ def test_sync_state_envelope_prediction_id_composes_with_review_nudge():
     env = build_experience_envelope("sync_state", "process_agent_update", payload)
     assert "prediction_id='abc-123'" in env["next_action"]
     assert "request_review" in env["next_action"]
+
+
+@pytest.mark.parametrize("risk,band", [(0.44, "low"), (0.46, "elevated"), (0.71, "high")])
+def test_risk_summary_uses_policy_bands_not_recovery_ceiling(risk, band):
+    envelope = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", {"risk_score": risk}
+    )
+    assert envelope["risk_summary"] == f"risk {band} ({risk:.2f})"

@@ -256,7 +256,9 @@ async def handle_check_recovery_options(arguments: Dict[str, Any]) -> Sequence[T
     what's needed before attempting self_recovery_review.
     
     Returns:
-        - eligible: bool - whether self-recovery is currently possible
+        - eligible: bool - whether recovery is needed and passes the review gates
+        - recovery_needed: bool | None - whether status calls for recovery
+        - recovery_status: str - not_needed, eligible, blocked, or unknown
         - blockers: list - what's preventing recovery (if any)
         - metrics: dict - current governance metrics
         - recommendations: list - what to do next
@@ -306,10 +308,40 @@ async def handle_check_recovery_options(arguments: Dict[str, Any]) -> Sequence[T
             "resolution": "Wait for risk to decrease or request human review",
         })
     
-    eligible = len(blockers) == 0
-    
-    # Build recommendations
-    if eligible:
+    meta = mcp_server.agent_metadata.get(agent_uuid)
+    status = getattr(meta, "status", None)
+    recovery_needed = (
+        True if status in ("paused", "waiting_input", "moderate")
+        else False if status == "active"
+        else None
+    )
+    eligible = recovery_needed is True and len(blockers) == 0
+    recovery_status = (
+        "not_needed" if recovery_needed is False
+        else "unknown" if recovery_needed is None
+        else "eligible" if eligible
+        else "blocked"
+    )
+
+    # Eligibility is actionable only when the identity actually needs recovery.
+    # An absent first reading is uninitialized state, not a request to reflect.
+    if recovery_needed is False:
+        recommendations = [
+            "Recovery is not needed; this identity is active.",
+            (
+                "Governance state is uninitialized; submit sync_state when there is meaningful work to report."
+                if risk_authority.is_unmeasured
+                else "Risk authority is unavailable; inspect check_working_state before relying on a risk assessment."
+                if risk_authority.is_lost
+                else "Continue normal work; no recovery reflection is required."
+            ),
+        ]
+    elif recovery_needed is None:
+        recommendations = [
+            "Recovery need could not be determined from the current status.",
+            "Inspect check_working_state before attempting recovery.",
+        ]
+    elif eligible:
         recommendations = [
             "You're eligible for self-recovery",
             "Call self_recovery(action='review') with a genuine reflection",
@@ -330,13 +362,17 @@ async def handle_check_recovery_options(arguments: Dict[str, Any]) -> Sequence[T
     )
     policy = recovery_policy_context(
         coherence=coherence,
-        authoritative_inputs=("risk_score", "void_active"),
+        authoritative_inputs=("risk_score", "void_active", "status"),
         coherence_source=metrics.get("coherence_source"),
         coherence_role=metrics.get("coherence_role"),
     )
     
     return success_response({
         "eligible": eligible,
+        "status": status if isinstance(status, str) else None,
+        "recovery_needed": recovery_needed,
+        "recovery_status": recovery_status,
+        "risk_authority": risk_authority.state,
         "blockers": blockers,
         "metrics": {
             "coherence": coherence,

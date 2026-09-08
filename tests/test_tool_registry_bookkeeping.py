@@ -48,17 +48,29 @@ from src.tool_modes import (
 PLUGIN_PROVIDED_TOOLS = frozenset({"pi", "pi_restart_service"})
 
 
-@pytest.fixture(scope="module")
-def roster() -> set[str]:
+@pytest.fixture(autouse=True)
+def first_party_aliases(monkeypatch):
+    # Plugin register() also installs aliases, independently of its handler
+    # decorators. Isolate those alongside the first-party tool roster below;
+    # otherwise a full run tests foreign alias dates/stability against a
+    # deliberately first-party registry. Restore every alias after the test.
+    monkeypatch.setattr(ts, "_TOOL_ALIASES", {
+        name: alias for name, alias in ts.list_all_aliases().items()
+        if alias.new_name not in PLUGIN_PROVIDED_TOOLS
+    })
+
+
+@pytest.fixture
+def roster(first_party_tool_surface) -> set[str]:
     return advertised_tool_names_full()
 
 
-@pytest.fixture(scope="module")
-def registered() -> set[str]:
+@pytest.fixture
+def registered(first_party_tool_surface) -> set[str]:
     return set(get_tool_registry())
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def callable_names(roster) -> set[str]:
     """Every name a caller can dispatch: the roster plus resolvable aliases."""
     return roster | set(ts.list_all_aliases())
