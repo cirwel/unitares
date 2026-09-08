@@ -269,6 +269,10 @@ def _action_summary(
     verdict_confidence, evidence_basis = _verdict_assurance(payload)
 
     summary: Dict[str, Any] = {}
+    if verdict_confidence == "provisional" and inferred_action not in {None, "uninitialized"}:
+        summary["headline"] = (
+            f"Provisional: {inferred_action}; behavioral evidence is still forming."
+        )
     if inferred_action:
         summary["action"] = inferred_action
     if sub_action:
@@ -892,12 +896,8 @@ def build_experience_envelope(
         if summary:
             envelope["action_summary"] = summary
         legacy = _legacy_diagnostics(source_payload)
-        if legacy:
-            envelope["legacy_diagnostics"] = legacy
 
     options = _response_options(friendly_name, source_payload, arguments)
-    if options:
-        envelope["response_options"] = options
 
     next_action: Any = None
     state_summary: Optional[Dict[str, Any]] = None
@@ -1193,6 +1193,12 @@ def build_experience_envelope(
         summary = envelope.get("state_summary")
         if isinstance(summary, dict):
             summary["verdict_provisional"] = True
+
+    # Keep compatibility and verbosity metadata after the operational answer.
+    if canonical_name in {"process_agent_update", "get_governance_metrics"} and legacy:
+        envelope["legacy_diagnostics"] = legacy
+    if options:
+        envelope["response_options"] = options
 
     reflection = _reflection(source_payload)
     if reflection:

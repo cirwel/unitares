@@ -1940,3 +1940,36 @@ class TestTacticalPredictionRegistry:
         monitor._open_predictions[pid]["created_at"] = time.monotonic() - 7200.0
         monitor.expire_old_predictions(ttl_seconds=3600.0)
         assert monitor._last_prediction_id is None
+
+
+class TestCheckinConfidenceAttribution:
+    def test_omitted_report_keeps_internal_estimate_without_prediction(self, monitor):
+        result = monitor.process_update({"complexity": 0.3})
+        assert isinstance(monitor.current_confidence, float)
+        assert result["confidence_reliability"]["source"] != "agent_reported"
+        assert monitor._last_prediction_id is None
+        assert monitor._prev_confidence is None
+        assert monitor._open_predictions == {}
+
+    def test_omitted_report_does_not_reissue_previous_prediction(self, monitor):
+        monitor.process_update({"complexity": 0.3}, confidence=0.8)
+        prediction_id = monitor._last_prediction_id
+        assert monitor.lookup_prediction(prediction_id)["confidence"] == 0.8
+        monitor.process_update({"complexity": 0.3})
+        assert monitor._last_prediction_id is None
+        assert monitor._prev_confidence is None
+        # The original prediction remains available for an explicit outcome.
+        assert monitor.lookup_prediction(prediction_id)["confidence"] == 0.8
+        assert len(monitor._open_predictions) == 1
+
+
+    @pytest.mark.parametrize("simulated_confidence", [None, 0.4])
+    def test_simulation_preserves_real_predictions(self, monitor, simulated_confidence):
+        monitor.process_update({"complexity": 0.3}, confidence=0.8)
+        prediction_id = monitor._last_prediction_id
+        original_record = dict(monitor.lookup_prediction(prediction_id))
+        monitor.simulate_update({"complexity": 0.3}, confidence=simulated_confidence)
+        assert monitor._last_prediction_id == prediction_id
+        assert monitor._prev_confidence == 0.8
+        assert monitor.lookup_prediction(prediction_id) == original_record
+        assert list(monitor._open_predictions) == [prediction_id]

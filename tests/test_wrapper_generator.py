@@ -478,3 +478,22 @@ class TestExtraArgumentPassthrough:
         assert call_log
         for key, value in sent.items():
             assert call_log[0][key] == value
+
+
+@pytest.mark.parametrize("inject_session", [False, True])
+def test_optional_search_enum_survives_fastmcp_wire_schema(inject_session):
+    """The nullable Literal contract must remain discoverable on /mcp/."""
+    from src.mcp_handlers.schemas.knowledge import KnowledgeParams
+
+    schema = KnowledgeParams.model_json_schema()
+    wrapper = create_typed_wrapper(
+        "search_shared_memory", schema, lambda name: None,
+        inject_session=inject_session,
+    )
+    tool = Tool.from_function(wrapper, structured_output=False)
+    definition = tool.parameters["properties"]["search_mode"]
+    variants = definition["anyOf"]
+    assert next(v["enum"] for v in variants if "enum" in v) == [
+        "auto", "fts", "semantic", "hybrid",
+    ]
+    assert {"type": "null"} in variants

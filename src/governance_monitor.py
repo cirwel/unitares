@@ -1053,6 +1053,8 @@ class UNITARESMonitor:
         saved_prev_verdict = self._prev_verdict_action
         saved_prev_norm = self._prev_drift_norm
         saved_prev_conf = self._prev_confidence
+        saved_last_prediction_id = self._last_prediction_id
+        saved_open_predictions = copy.deepcopy(self._open_predictions)
         saved_process_local_updates = self._process_local_updates
         saved_cold_start_previous = self._cold_start_confirmation_previous
         saved_simulation_active = self._simulation_active
@@ -1120,6 +1122,8 @@ class UNITARESMonitor:
             self._prev_verdict_action = saved_prev_verdict
             self._prev_drift_norm = saved_prev_norm
             self._prev_confidence = saved_prev_conf
+            self._last_prediction_id = saved_last_prediction_id
+            self._open_predictions = saved_open_predictions
             self._process_local_updates = saved_process_local_updates
             self._cold_start_confirmation_previous = saved_cold_start_previous
             self._simulation_active = saved_simulation_active
@@ -1554,7 +1558,7 @@ class UNITARESMonitor:
         )
 
         trajectory_validation = self._run_calibration_recording(
-            confidence=confidence,
+            confidence=self_confidence,
             decision=decision,
             drift_vector=drift_vector,
         )

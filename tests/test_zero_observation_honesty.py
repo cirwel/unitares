@@ -67,6 +67,44 @@ def _fresh_monitor(agent_id="test-zeroobs-fresh"):
     return UNITARESMonitor(agent_id, load_state=False)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lite", [True, False])
+@pytest.mark.parametrize("verdict,action", [("safe", "proceed"), ("guide", "proceed"), ("high-risk", "pause")])
+async def test_initialized_read_preserves_resolved_verdict_in_friendly_envelope(lite, verdict, action):
+    """Exercise the real query projection, not an invented lite payload."""
+    from src.services.runtime_queries import get_governance_metrics_data
+    from src.mcp_handlers.middleware.envelope_step import build_experience_envelope
+
+    monitor = _fresh_monitor()
+    monitor.process_update({"response_text": "Reviewed one bounded change", "complexity": 0.3})
+    monitor._last_resolved_verdict = verdict
+    data = await get_governance_metrics_data(
+        "test-zeroobs-fresh", {"lite": lite}, server=_server_for(monitor)
+    )
+    envelope = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", data, {"lite": lite}
+    )
+    assert envelope["action_summary"]["verdict"] == verdict
+    assert envelope["action_summary"]["action"] == action
+    assert envelope["action_summary"]["verdict_confidence"] == "provisional"
+    assert envelope["action_summary"]["headline"].startswith(f"Provisional: {action};")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("risk,status", [(0.44, "🟢 low"), (0.46, "🟡 medium"), (0.71, "🔴 high")])
+async def test_lite_risk_badge_matches_published_policy_thresholds(risk, status):
+    from src.services.runtime_queries import get_governance_metrics_data
+
+    monitor = _fresh_monitor()
+    monitor.process_update({"response_text": "Reviewed one bounded change", "complexity": 0.3})
+    monitor._last_resolved_risk = risk
+    data = await get_governance_metrics_data(
+        "test-zeroobs-fresh", {"lite": True}, server=_server_for(monitor)
+    )
+    assert data["risk_score"]["status"] == status
+    assert data["risk_score"]["threshold"] == data["thresholds"]["risk_medium"]
+
+
 @pytest.fixture(autouse=True)
 def _no_db_hydration():
     with patch(

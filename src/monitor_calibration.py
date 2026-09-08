@@ -13,7 +13,7 @@ from src.logging_utils import get_logger
 logger = get_logger(__name__)
 
 
-def run_calibration_recording(monitor, confidence: float, decision: Dict, drift_vector) -> Optional[Dict]:
+def run_calibration_recording(monitor, confidence: Optional[float], decision: Dict, drift_vector) -> Optional[Dict]:
     """Retrospective trajectory validation + strategic/tactical calibration.
 
     Compares previous verdict to current drift norm to assess whether the
@@ -22,6 +22,9 @@ def run_calibration_recording(monitor, confidence: float, decision: Dict, drift_
 
     Mutates monitor._prev_verdict_action, monitor._prev_drift_norm,
     monitor._prev_confidence, monitor._prev_checkin_time.
+
+    confidence is the agent report, or None when omitted. Server-derived
+    estimates must not be registered or graded as agent predictions.
 
     Returns trajectory_validation dict or None.
     """
@@ -47,7 +50,8 @@ def run_calibration_recording(monitor, confidence: float, decision: Dict, drift_
         # Convert improvement to [0, 1] quality signal via sigmoid
         trajectory_quality = 1.0 / (1.0 + math.exp(-improvement * 10.0))
 
-        if (monitor._prev_verdict_action in ('proceed', 'pause')
+        if (monitor._prev_confidence is not None
+                and monitor._prev_verdict_action in ('proceed', 'pause')
                 and abs(improvement) > 0.03):
             # Self-relative signal (drift-norm improvement, not an outcome
             # grade) — route to its own channel and keep it OUT of the
@@ -79,8 +83,11 @@ def run_calibration_recording(monitor, confidence: float, decision: Dict, drift_
     monitor._prev_confidence = confidence
     monitor._prev_checkin_time = now_mono
 
-    # Mint a tactical prediction id
-    monitor.register_tactical_prediction(confidence, decision_action=decision.get('action'))
+    # Only an explicit report creates a prediction. Clear the response pointer
+    # on omission without invalidating earlier predictions awaiting outcomes.
+    monitor._last_prediction_id = None
+    if confidence is not None:
+        monitor.register_tactical_prediction(confidence, decision_action=decision.get('action'))
 
     # The former tool-usage feeder is deliberately gone (#1321). It graded
     # reported confidence against the agent's MCP tool-invocation success rate

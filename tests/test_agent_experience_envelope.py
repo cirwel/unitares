@@ -398,6 +398,7 @@ def test_sync_state_compact_envelope_lifts_provisional_evidence_and_legacy_diagn
     env = build_experience_envelope("sync_state", "process_agent_update", payload)
 
     assert env["action_summary"] == {
+        "headline": "Provisional: proceed; behavioral evidence is still forming.",
         "action": "proceed",
         "sub_action": "approve",
         "verdict": "safe",

@@ -123,7 +123,14 @@ def _resolve_param_type(param_def: dict) -> Any:
                 # handler's Pydantic schema performs the nested validation later.
                 types.append(dict)
             elif vtype:
-                types.append(_json_type_to_python(vtype))
+                variant_type = _json_type_to_python(vtype)
+                if variant.get("enum"):
+                    # Optional Literal schemas put enum inside anyOf. Keep it
+                    # on that branch, so null remains a valid separate option.
+                    variant_type = Annotated[
+                        variant_type, Field(json_schema_extra={"enum": variant["enum"]})
+                    ]
+                types.append(variant_type)
             elif variant.get("properties") is not None:
                 types.append(dict)
             elif "anyOf" in variant:

@@ -257,3 +257,45 @@ class TestStateMutation:
         monitor.register_tactical_prediction.assert_called_once_with(
             0.65, decision_action="proceed"
         )
+
+
+class TestReportedConfidenceOnly:
+    def test_omission_clears_prediction_pointer_and_previous_report(self):
+        monitor = _make_monitor(prev_confidence=0.8)
+        monitor._last_prediction_id = "earlier-prediction"
+        with patch("src.monitor_calibration.calibration_checker"):
+            run_calibration_recording(
+                monitor, confidence=None, decision={"action": "proceed"},
+                drift_vector=_drift(),
+            )
+        monitor.register_tactical_prediction.assert_not_called()
+        assert monitor._last_prediction_id is None
+        assert monitor._prev_confidence is None
+
+    def test_trajectory_observation_without_report_does_not_train(self):
+        monitor = _make_monitor(
+            prev_verdict="proceed", prev_drift_norm=0.5,
+            prev_confidence=None, prev_checkin_time=1.0,
+        )
+        with patch("src.monitor_calibration.calibration_checker") as checker, \
+             patch("src.monitor_calibration._time.monotonic", return_value=20.0):
+            result = run_calibration_recording(
+                monitor, confidence=0.7, decision={"action": "proceed"},
+                drift_vector=_drift(0.1),
+            )
+        assert result["improvement"] == pytest.approx(0.4)
+        checker.record_tactical_decision.assert_not_called()
+        monitor.register_tactical_prediction.assert_called_once_with(
+            0.7, decision_action="proceed"
+        )
+
+    def test_zero_confidence_is_an_explicit_report(self):
+        monitor = _make_monitor()
+        with patch("src.monitor_calibration.calibration_checker"):
+            run_calibration_recording(
+                monitor, confidence=0.0, decision={"action": "proceed"},
+                drift_vector=_drift(),
+            )
+        monitor.register_tactical_prediction.assert_called_once_with(
+            0.0, decision_action="proceed"
+        )
