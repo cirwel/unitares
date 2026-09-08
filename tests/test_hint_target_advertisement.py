@@ -1,18 +1,8 @@
-"""The dead-end-hint scanner, and the ledger the CI guard rests on.
+"""Static hint inventory: syntax, conservative reachability and action coverage.
 
-A response that says "poll `dialectic(action='get', ...)`" is an instruction,
-and a schema-driven MCP client can only call names `tools/list` returned. This
-scanner finds hints that name something the profile does not advertise.
-
-Its value depends entirely on being *right about which hints matter*, so these
-tests pin the three judgements that took it from 53 reported sites to 4:
-
-  1. A call is `tool(`, adjacent. Allowing whitespace made the English
-     parenthetical "another agent (writes/mutations)" parse as a call.
-  2. A hint only strands a caller who can receive it, so each site resolves to
-     the tool that emits it -- through undecorated helpers, via the call graph.
-  3. What remains is a shrink-only ledger, not a mute button: the guard fails
-     on anything unlisted AND on a listed entry that no longer matches.
+A green test suite verifies the instrument, not a clean default tool surface.
+The expanded field/name inventory intentionally leaves unreviewed candidates
+outside the four-entry ledger inherited from #2119.
 """
 
 import subprocess
@@ -53,6 +43,19 @@ class TestCallPattern:
         assert match.group(1) == "dialectic"
         assert match.group(2) == "thesis"
 
+    @pytest.mark.parametrize("text", [
+        'knowledge(query="action=\'store\'", action="search")',
+        'knowledge(query="a ) character", action="search")',
+        'knowledge(query=make_query("x"), action="search")',
+    ])
+    def test_action_parsing_respects_strings_and_nested_calls(self, text):
+        match = scanner.CALL_PATTERN.search(text)
+        assert scanner._hinted_action(text, match) == "search"
+
+    def test_does_not_borrow_an_action_from_the_next_instruction(self):
+        text = "knowledge(query='x'); dialectic(action='get')"
+        assert scanner._hinted_action(text, scanner.CALL_PATTERN.search(text)) is None
+
 
 class TestEmitterResolution:
     def test_middleware_hints_reach_every_profile(self):
@@ -90,34 +93,37 @@ class TestLedger:
         for key, reason in scanner.KNOWN_DEAD_ENDS.items():
             assert isinstance(reason, str) and len(reason) > 40, key
 
-    def test_entries_are_tool_and_site_pairs(self):
-        for tool, site in scanner.KNOWN_DEAD_ENDS:
+    def test_entries_are_tool_site_and_action_triples(self):
+        for tool, site, action in scanner.KNOWN_DEAD_ENDS:
             assert ":" in site and site.startswith("src/"), (tool, site)
+            assert action is None or isinstance(action, str)
 
-    def test_the_default_profile_guard_passes(self):
+    def test_broader_inventory_exposes_unreviewed_default_candidates(self):
         result = subprocess.run(
             [sys.executable, str(SCRIPT), "--fail-on-finding"],
             capture_output=True, text=True, cwd=project_root,
         )
-        assert result.returncode == 0, result.stderr
+        assert result.returncode == scanner.EXIT_DEAD_END_HINT, result.stderr
+        assert "UNREVIEWED hint candidate" in result.stderr
+        assert "STALE ledger" not in result.stderr
 
     def test_the_guard_fails_on_an_unlisted_finding(self, monkeypatch):
         # Emptying the ledger must make the known findings unlisted, not silent.
         monkeypatch.setattr(scanner, "KNOWN_DEAD_ENDS", {})
         findings = scanner.find_dead_end_hints("standard")
-        seen = {(f.tool, site) for f in findings for site in f.sites}
+        seen = scanner.finding_keys(findings)
         assert seen, "expected the known dead ends to still be reported"
         assert seen - set(scanner.KNOWN_DEAD_ENDS)
 
     def test_the_ledger_matches_what_is_reported(self):
         # A stale entry is a lie about outstanding work; the guard reports it.
         findings = scanner.find_dead_end_hints("standard")
-        seen = {(f.tool, site) for f in findings for site in f.sites}
-        assert set(scanner.KNOWN_DEAD_ENDS) == seen, (
-            "KNOWN_DEAD_ENDS has drifted from the scan. Unlisted: "
-            f"{sorted(seen - set(scanner.KNOWN_DEAD_ENDS))}; stale: "
+        seen = scanner.finding_keys(findings)
+        assert set(scanner.KNOWN_DEAD_ENDS) <= seen, (
+            "Stale reviewed candidates: "
             f"{sorted(set(scanner.KNOWN_DEAD_ENDS) - seen)}"
         )
+        assert seen - set(scanner.KNOWN_DEAD_ENDS), "new scope must not be silently accepted"
 
 
 class TestNoRegression:
@@ -125,9 +131,89 @@ class TestNoRegression:
         findings = scanner.find_dead_end_hints("standard")
         assert "dialectic" not in {f.tool for f in findings}
 
-    def test_the_raw_twins_are_no_longer_hinted_on_standard(self):
-        # onboard / process_agent_update were named in 27 caller-facing hints
-        # while only start_session / sync_state were advertised.
+    def test_raw_names_in_other_fields_remain_visible(self):
+        # #2119 fixed 27 call-shaped hints in selected fields. It did not fix
+        # raw names in structured lists, safe_options or message strings.
         findings = {f.tool for f in scanner.find_dead_end_hints("standard")}
-        assert "onboard" not in findings
-        assert "process_agent_update" not in findings
+        assert {"onboard", "process_agent_update"} <= findings
+
+
+@pytest.fixture
+def handler_tree(tmp_path, monkeypatch):
+    root = tmp_path / "src" / "mcp_handlers"
+    root.mkdir(parents=True)
+    monkeypatch.setattr(scanner, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(scanner, "HANDLER_ROOT", root)
+
+    def write(name, source):
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source)
+
+    return write
+
+
+def test_candidates_follow_nested_fields_bindings_builders_and_structured_names(handler_tree):
+    handler_tree("hints.py", '''
+def advice():
+    return "dialectic(session_id='x', action='get')"
+
+@mcp_tool("onboard")
+def onboard():
+    names = ["process_agent_update"]
+    next_call: str = advice()
+    response = {"next_call": next_call, "safe_options": [{"call": "bind_session()"}]}
+    response["related_tools"] = names
+    return response
+''')
+    sites = scanner.collect_hint_sites({"dialectic", "bind_session", "process_agent_update"})
+    assert set(sites) == {"dialectic", "bind_session", "process_agent_update"}
+    assert {action for _, action, _ in sites["dialectic"]} == {"get"}
+
+
+@pytest.mark.parametrize("caller", [
+    "import helper\n@mcp_tool('onboard')\ndef agent_entry():\n    return helper.shared()\n",
+    "from helper import shared as advice\n@mcp_tool('onboard')\ndef agent_entry():\n    return advice()\n",
+    "import helper\ndef dispatch_step():\n    return helper.shared()\n",
+])
+def test_agent_and_middleware_callers_cannot_be_hidden_by_operator_caller(handler_tree, caller):
+    handler_tree("helper.py", "def shared():\n    return {'hint': \"bind_session()\"}\n")
+    handler_tree("operator.py", "@mcp_tool('operator_resume_agent')\ndef operator_entry():\n    return shared()\n")
+    handler_tree("middleware/step.py" if "dispatch_step" in caller else "agent.py", caller)
+    assert "bind_session" in {f.tool for f in scanner.find_dead_end_hints("standard")}
+
+
+def test_english_plural_and_docstrings_are_not_hints(handler_tree):
+    handler_tree("english.py", '''
+def helper():
+    """hint: bind_session()"""
+    return {"message": "2 session(s); another agent (writes/mutations)"}
+''')
+    assert not scanner.collect_hint_sites({"session", "agent", "bind_session"})
+
+
+def test_different_aliases_cover_different_actions_and_partial_coverage_stays_visible(handler_tree, monkeypatch):
+    monkeypatch.setattr("src.tool_modes.get_tools_for_mode", lambda mode: {"search_shared_memory", "store_finding"})
+    handler_tree("actions.py", '''
+hint = "knowledge(action='search'); knowledge(summary='x', action='store')"
+''')
+    finding, = scanner.find_dead_end_hints("standard")
+    assert finding.kind == "names_unadvertised_twin"
+    assert finding.advertised_aliases == ["search_shared_memory", "store_finding"]
+    assert {(c["action"], c["advertised_alias"]) for c in finding.calls} == {
+        ("search", "search_shared_memory"), ("store", "store_finding"),
+    }
+    handler_tree("uncovered.py", "hint = \"knowledge(action='cleanup')\"\n")
+    finding, = scanner.find_dead_end_hints("standard")
+    assert finding.kind == "partially_covered_actions"
+    assert any(c["action"] == "cleanup" and c["advertised_alias"] is None for c in finding.calls)
+
+
+def test_invalid_profile_and_unreadable_tree_cannot_report_clean(handler_tree, monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["hint_target_advertisement", "--mode", "standrad"])
+    assert scanner.main() == scanner.EXIT_REGISTRY_UNAVAILABLE
+    assert "unknown" in capsys.readouterr().err
+    handler_tree("broken.py", "def broken(\n")
+    monkeypatch.setattr("sys.argv", ["hint_target_advertisement"])
+    assert scanner.main() == scanner.EXIT_REGISTRY_UNAVAILABLE
+    assert "unknown" in capsys.readouterr().err

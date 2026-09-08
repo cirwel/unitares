@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import inspect
 import json
-import re
 
 import pytest
 
@@ -186,20 +185,66 @@ def test_dropped_params_are_never_read_by_the_injected_action():
         "handler source before trusting the new entry"
     )
 
-    region = inspect.getsource(knowledge_handlers.handle_search_knowledge_graph)
-    for helper in ("_KnowledgeSearchState", "_validate_search_backend"):
-        obj = getattr(knowledge_handlers, helper, None)
-        if obj is not None:
-            region += inspect.getsource(obj)
+    # Follow local helper calls, including parser/mode/filter/serialization
+    # helpers. Looking only at the handler wrapper missed real field reads in
+    # _parse_knowledge_search_request after the search refactor.
+    import ast
 
-    read_anyway = [
-        p for p in sorted(ALIAS_SCHEMA_DROP["search_shared_memory"])
-        if re.search(rf"""["']{re.escape(p)}["']""", region)
-    ]
+    pending = [knowledge_handlers.handle_search_knowledge_graph]
+    visited = set()
+    reads = set()
+    while pending:
+        obj = pending.pop()
+        if obj in visited:
+            continue
+        visited.add(obj)
+        source = inspect.getsource(obj)
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                helper = getattr(knowledge_handlers, node.func.id, None)
+                if (inspect.isfunction(helper) or inspect.isclass(helper)) and (
+                    helper.__module__ == knowledge_handlers.__name__
+                ):
+                    pending.append(helper)
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in {"get", "pop", "setdefault"}
+                    and ast.unparse(node.func.value).split(".")[-1] == "arguments"
+                    and node.args and isinstance(node.args[0], ast.Constant)):
+                reads.add(node.args[0].value)
+            elif (isinstance(node, ast.Subscript)
+                  and ast.unparse(node.value).split(".")[-1] == "arguments"
+                  and isinstance(node.slice, ast.Constant)):
+                reads.add(node.slice.value)
+    assert "_parse_knowledge_search_request" in {obj.__name__ for obj in visited}
+    assert {"discovery_type", "severity", "include_provenance"} <= reads
+    read_anyway = sorted(ALIAS_SCHEMA_DROP["search_shared_memory"] & reads)
     assert not read_anyway, (
         f"the search path reads {read_anyway}, so dropping them from "
         "search_shared_memory's schema would make valid calls fail validation"
     )
+
+
+def test_search_action_discovery_includes_parser_filters_and_provenance():
+    from src.mcp_handlers.schemas.knowledge import KnowledgeParams
+
+    assert {"discovery_type", "severity", "include_provenance"} <= set(
+        KnowledgeParams.ACTION_FIELDS["search"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_final_search_alias_retains_filters_without_other_action_controls(monkeypatch):
+    from src import mcp_server
+    from src.mcp_compat import get_tool_input_schema
+
+    # Query the final registered Tool schema, not just the source keep/drop map.
+    monkeypatch.setattr("src.tool_modes.TOOL_MODE", "standard")
+    tools = await mcp_server.mcp.list_tools()
+    tool = next(tool for tool in tools if tool.name == "search_shared_memory")
+    properties = get_tool_input_schema(tool)["properties"]
+    assert {"discovery_type", "severity", "include_provenance", "include_cold",
+            "query", "response_mode"} <= properties.keys()
+    assert not ALIAS_SCHEMA_DROP["search_shared_memory"] & properties.keys()
 
 
 def test_search_alias_keeps_every_filter_the_action_uses():
@@ -216,7 +261,7 @@ def test_search_alias_keeps_every_filter_the_action_uses():
     for search_param in (
         "query", "tags", "status", "discovery_type", "severity",
         "limit", "search_mode", "include_archived", "include_cold",
-        "response_mode",
+        "response_mode", "include_provenance",
     ):
         assert search_param in kept, (
             f"{search_param} is a live search parameter but would no longer be "

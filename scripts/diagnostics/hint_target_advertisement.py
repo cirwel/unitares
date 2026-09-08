@@ -1,70 +1,44 @@
 #!/usr/bin/env python3
-"""Tools named in caller-facing hints that the active profile does not advertise.
+"""Static candidates for hints naming tools absent from a profile.
 
-A response that says "poll `dialectic(action='get', ...)`" is an instruction.
-A schema-driven MCP client (Claude Code, Codex, Cursor) can only call names
-`tools/list` returned, so when the named tool is not advertised the instruction
-is a dead end -- the server told the agent to do something the agent has no
-way to do. `src/tool_modes.py` is right that an unadvertised name still
-DISPATCHES; that is a property no schema-driven client can use.
+HINT_KEYS is a heuristic seed list, not proof that a value reaches a caller.
+The scan follows literals, nested containers, local value bindings and local
+return builders under those keys. Bare names count only in structured
+related_tools lists. Other prose needs an adjacent tool( call shape. Dynamic
+strings, arbitrary data flow, argument validation and path conditions are not
+proven. Comments and docstrings are not seed values.
 
-`tests/test_lite_wire_surface.py` already holds this invariant, but against two
-hand-written lists (`call_model`'s inference hints, and the pause/auth-refusal
-`self_recovery` hint). A hand-written list catches what somebody remembered.
-This script derives the set instead, by reading the handler tree.
+Emitter resolution conservatively follows plain, imported and attribute calls
+up to three hops. Same-name functions can be conflated; unresolved paths and
+middleware count as possibly reachable. A profile can suppress a site only
+when all resolved emitters are outside it. This is an advertisement inventory,
+not observed failure incidence, a severity score, or proof of runtime delivery.
+An operator remedy in an agent refusal is not necessarily the caller's action.
 
-VERIFIED THE HARD WAY, 2026-09-08: a Claude Code session on the default
-`standard` profile called `request_review`, and the response told it to poll
-`dialectic(action='get', session_id=...)`. `dialectic` is registered and
-callable on every transport, and the session could not call it -- the name was
-never advertised, so it was never offered to the model. This script exists
-because that is not a one-off.
+Alias coverage is per hinted name/action. Two actions can be covered by two
+aliases; one uncovered action must stay visible. Even complete name/action
+coverage does not justify a blind text replacement: alias schemas can hide
+parameters (check_working_state hides agent_id), and response contracts differ.
 
-WHAT COUNTS AS A HINT. Only string literals that reach a caller: values under
-the response keys in `HINT_KEYS`, whether written as dict entries, keyword
-arguments, or assignments. Docstrings, comments and the internal action tables
-in `consolidated.py` are deliberately NOT scanned -- an unfiltered scan reports
-19 unadvertised names in `standard` where the caller-facing count is 10, and a
-number that overstates the problem is not usable evidence.
-
-WHOSE PROBLEM IT IS. A hint only strands a caller who can receive it. Each site
-is resolved to the `@mcp_tool` handler that emits it, and kept only when that
-handler is reachable on the profile being checked -- the profile advertises it,
-advertises the router it dispatches through, or advertises some other name
-resolving to the same (router, action) pair. Handlers under `middleware/` run on
-every dispatch and so always count. Without this the `standard` run blamed it
-for `observe`, `agent` and `operator_resume_agent`, whose hints are emitted only
-by operator tools and which ARE advertised on the operator profiles: advertised
-where its callers are is not dormant. An unresolvable emitter counts as
-reachable, because over-reporting a live hint is recoverable and missing one is
-not.
-
-TWO CLASSES OF FINDING, and they need different fixes:
-
-  1. The hint names the RAW IMPLEMENTATION of an advertised alias --
-     `onboard` for `start_session`, `process_agent_update` for `sync_state`,
-     `get_governance_metrics` for `check_working_state`. The capability is
-     advertised; the hint just says a name the client was not shown. Fix the
-     hint text. Costs nothing on the wire.
-  2. The hint names a capability the profile genuinely does not advertise --
-     `dialectic`, `observe`, `agent`, `bind_session`. Either advertise it, or
-     route the hint through something that is advertised.
-
-`--classify` splits the output that way.
+The four reviewed candidates inherited from #2119 remain in KNOWN_DEAD_ENDS.
+The broader scan also reports previously unseen candidates. --fail-on-finding
+therefore currently exits 3 on standard: those sites have not been accepted or
+fixed. Do not broaden the surface or rubber-stamp a baseline to make it green.
 
 Usage:
-    python3 scripts/diagnostics/hint_target_advertisement.py
-    python3 scripts/diagnostics/hint_target_advertisement.py --mode lite
     python3 scripts/diagnostics/hint_target_advertisement.py --classify
-    python3 scripts/diagnostics/hint_target_advertisement.py --json
+    python3 scripts/diagnostics/hint_target_advertisement.py --mode lite --json
+    python3 scripts/diagnostics/hint_target_advertisement.py --fail-on-finding
 """
 
 from __future__ import annotations
 
 import ast
+import io
 import json
 import re
 import sys
+import tokenize
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Set
@@ -82,13 +56,16 @@ EXIT_DEAD_END_HINT = 3
 
 #: Response keys whose string values are serialized into an envelope the caller
 #: reads. Add a key here when a new response field starts carrying prose that
-#: names tools; leaving one out under-reports, which is the safer direction but
-#: still a gap.
+#: names tools; leaving one out under-reports. Inclusion is a candidate, not proof
+#: of serialization into a response.
 HINT_KEYS: Set[str] = {
     "action_required", "all_inline", "fix", "guidance", "hint", "hints",
     "how_to_strengthen", "next_action", "next_step", "next_steps", "open_one",
     "raw_governance_hint", "recovery", "recovery_hint", "related_tools",
     "remediation", "resolution", "suggestion", "suggestions", "whose_move",
+    "next_call", "recommended_action", "call", "safe_options", "note",
+    "recommendation", "tip", "what_you_can_do", "workflow", "message",
+    "error", "how_to", "instructions",
 }
 
 #: A hint reads as a call: the tool name immediately followed by an open paren.
@@ -99,25 +76,56 @@ HINT_KEYS: Set[str] = {
 #: 2026-09-08) makes an ordinary English parenthetical parse as a call: the
 #: sentence "this guard only blocks ACTING AS another agent (writes/mutations)"
 #: in src/mcp_handlers/middleware/params_step.py was reported as a dead-end
-#: hint naming `agent`. One false finding is one too many for an instrument
-#: whose whole job is to say which hints strand a caller.
+#: hint naming `agent`. The English plural session(s) is excluded too. These heuristics
+#: reduce noise; they do not certify all remaining matches as instructions.
 #:
 #: The optional second group is an explicit ``action='...'`` argument, which
 #: decides whether an advertised alias actually covers the hinted call: an
 #: alias pins ONE action of its router, so `request_review` (action='request')
 #: does not cover a hint that says `dialectic(action='get', ...)`.
 CALL_PATTERN = re.compile(
-    r"\b([a-z_][a-z0-9_]{2,})\(\s*(?:action\s*=\s*['\"]([a-z_]+)['\"])?"
+    r"\b([a-z_][a-z0-9_]{2,})\((?!s\))\s*(?:action\s*=\s*['\"]([a-z_]+)['\"])?"
 )
+
+
+def _hinted_action(text: str, match: re.Match) -> Optional[str]:
+    if match.group(2):
+        # This prefix stays readable even in a partial f-string literal.
+        return match.group(2)
+    # Keyword order is irrelevant, but quoted prose such as
+    # query="action='store'" is not an action argument. Parse just this call,
+    # respecting nesting and quoted parentheses. Pseudocode that cannot be
+    # parsed has unknown action, never a guessed covering alias.
+    tokens = []
+    depth = 0
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(text[match.start():]).readline):
+            tokens.append((token.type, token.string))
+            if token.type == tokenize.OP:
+                if token.string in "([{":
+                    depth += 1
+                elif token.string in ")]}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+        call = ast.parse(tokenize.untokenize(tokens), mode="eval").body
+    except (SyntaxError, tokenize.TokenError, ValueError):
+        return None
+    if isinstance(call, ast.Call):
+        for keyword in call.keywords:
+            if keyword.arg == "action" and isinstance(keyword.value, ast.Constant):
+                return keyword.value.value if isinstance(keyword.value.value, str) else None
+    return None
 
 #: Handlers under this package run on EVERY dispatch regardless of which tool
 #: was called, so a hint emitted there reaches a caller on any profile.
 MIDDLEWARE_MARKER = "/middleware/"
 
 #: Dead ends that are known, understood, and deliberately left. The guard
-#: (--fail-on-finding) fails on anything NOT listed here, so this can only
-#: shrink: it is a ledger of accepted findings, not a mute button. Each entry
-#: is (tool, "path:line") and must carry its reason.
+#: (--fail-on-finding) fails on anything NOT listed here, so newly discovered
+#: sites remain visible until separately reviewed. Do not auto-baseline them. Each entry
+#: is (tool, "path:line", action) and must carry its reason. An extra action at
+#: the same line is not covered by an accepted entry for a different action.
 #:
 #: An entry that stops matching is also reported, so a fixed site cannot sit
 #: here forever pretending to be outstanding.
@@ -126,20 +134,20 @@ MIDDLEWARE_MARKER = "/middleware/"
 #: that profile's own unlisted findings, which is intended: a wider profile has
 #: different reachability and its own ledger question, not this one's.
 KNOWN_DEAD_ENDS: Dict[tuple, str] = {
-    ("observe", "src/mcp_handlers/consolidated.py:121"):
+    ("observe", "src/mcp_handlers/consolidated.py:121", None):
         "observe's own identity refusal, naming observe. Only a caller who "
         "already invoked observe can receive it, so it strands nobody. The "
         "emitter is unresolvable here because consolidated.py builds its "
         "routers through a factory rather than @mcp_tool, so the call-graph "
         "hop bottoms out at a closure.",
-    ("observe", "src/mcp_handlers/consolidated.py:126"):
+    ("observe", "src/mcp_handlers/consolidated.py:126", None):
         "Same refusal payload as :121 (its next_step half).",
-    ("agent", "src/mcp_handlers/support/agent_auth.py:211"):
+    ("agent", "src/mcp_handlers/support/agent_auth.py:211", "update"):
         "The archived-identity refusal offers the agent path first "
         "(start_session(resume=true), advertised) and names "
         "agent(action='update') explicitly as 'Operator restore:'. Naming "
         "another party's remedy is not a dead end for the caller.",
-    ("get_governance_metrics", "src/mcp_handlers/core.py:218"):
+    ("get_governance_metrics", "src/mcp_handlers/core.py:218", None):
         "OPEN, needs a decision rather than a rename. The example is "
         "get_governance_metrics(agent_id='<uuid>'); rewriting it to "
         "check_working_state(agent_id=...) would name a parameter that alias "
@@ -155,7 +163,7 @@ MIDDLEWARE_SENTINEL = "*middleware*"
 
 @dataclass(frozen=True)
 class DeadEndHint:
-    """A tool named in a caller-facing hint but absent from the profile."""
+    """A static hint candidate naming a tool absent from the profile."""
 
     tool: str
     sites: List[str] = field(default_factory=list)
@@ -166,43 +174,82 @@ class DeadEndHint:
     #: action the hints ask for -- class 1 above, fixable by editing the hint
     #: text. None when no advertised alias covers the hinted call.
     advertised_alias: Optional[str] = None
+    advertised_aliases: List[str] = field(default_factory=list)
+    calls: List[dict] = field(default_factory=list)
 
     @property
     def kind(self) -> str:
-        return "names_unadvertised_twin" if self.advertised_alias else "unadvertised_capability"
+        if self.calls and all(call["advertised_alias"] for call in self.calls):
+            return "names_unadvertised_twin"
+        if self.advertised_aliases:
+            return "partially_covered_actions"
+        return "no_mapped_advertised_name"
 
 
-def _hint_value_nodes(tree: ast.AST) -> Iterator[ast.AST]:
+def _hint_value_nodes(tree: ast.AST, keys=HINT_KEYS) -> Iterator[ast.AST]:
     """Value nodes that land under a caller-facing response key."""
     for node in ast.walk(tree):
         if isinstance(node, ast.Dict):
             for key, value in zip(node.keys, node.values):
-                if isinstance(key, ast.Constant) and key.value in HINT_KEYS:
+                if isinstance(key, ast.Constant) and key.value in keys:
                     yield value
-        elif isinstance(node, ast.keyword) and node.arg in HINT_KEYS:
+        elif isinstance(node, ast.keyword) and node.arg in keys:
             yield node.value
-        elif isinstance(node, ast.Assign):
-            for target in node.targets:
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
                 name = getattr(target, "attr", None) or getattr(target, "id", None)
-                if name in HINT_KEYS:
+                if name in keys:
                     yield node.value
                 elif (
                     isinstance(target, ast.Subscript)
                     and isinstance(target.slice, ast.Constant)
-                    and target.slice.value in HINT_KEYS
+                    and target.slice.value in keys
                 ):
                     yield node.value
 
 
-def _string_constants(node: ast.AST) -> Iterator[ast.Constant]:
+def _string_constants(node: ast.AST, bindings=None, seen=None) -> Iterator[ast.Constant]:
     """Every string constant reachable from a value node.
 
     Walks into f-strings, lists and nested dicts, because hints are written all
     three ways.
     """
-    for sub in ast.walk(node):
-        if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
-            yield sub
+    seen = set() if seen is None else seen
+    if id(node) in seen:
+        return
+    seen.add(id(node))
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        yield node
+    if bindings:
+        name = node.id if isinstance(node, ast.Name) else (
+            node.func.id if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) else None
+        )
+        for value in bindings.get(name, ()):
+            yield from _string_constants(value, bindings, seen)
+    for child in ast.iter_child_nodes(node):
+        yield from _string_constants(child, bindings, seen)
+
+
+def _value_bindings(tree: ast.AST) -> Dict[str, List[ast.AST]]:
+    """Conservative file-local sources for named hint values and builders.
+
+    Multiple assignments are unioned, not treated as proof of a single live
+    path. Dynamic values and imports remain outside this static inventory.
+    """
+    bindings: Dict[str, List[ast.AST]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    bindings.setdefault(target.id, []).append(node.value)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            bindings.setdefault(node.name, []).extend(
+                sub.value for sub in ast.walk(node)
+                if isinstance(sub, ast.Return) and sub.value is not None
+            )
+    return bindings
 
 
 def _decorated_tool_ranges(tree: ast.AST) -> List[tuple]:
@@ -259,11 +306,16 @@ def _function_spans(tree: ast.AST) -> List[tuple]:
 def _called_names(tree: ast.AST) -> Dict[str, Set[str]]:
     """Map each function to the plain names it calls.
 
-    Attribute calls (``obj.method()``) are ignored: this only needs to chase
-    module-local helpers back to the handler that emits through them, and a
-    name is enough for that.
+    Include attribute calls and import aliases. Names may conservatively join
+    unrelated same-named helpers; this can over-report, but must not hide an
+    agent caller just because an operator uses a different spelling.
     """
     spans = _function_spans(tree)
+    imported = {
+        alias.asname or alias.name: alias.name
+        for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
 
     def enclosing(lineno: int) -> Optional[str]:
         best = None
@@ -276,12 +328,12 @@ def _called_names(tree: ast.AST) -> Dict[str, Set[str]]:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        callee = getattr(node.func, "id", None)
+        callee = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
         if not callee:
             continue
         caller = enclosing(node.lineno)
         if caller:
-            out.setdefault(caller, set()).add(callee)
+            out.setdefault(caller, set()).add(imported.get(callee, callee))
     return out
 
 
@@ -305,7 +357,6 @@ class _EmitterIndex:
     def add(self, relative: str, tree: ast.AST) -> None:
         if MIDDLEWARE_MARKER in f"/{relative}":
             self._middleware.add(relative)
-            return
         self._decorated[relative] = _decorated_tool_ranges(tree)
         self._spans[relative] = _function_spans(tree)
         for caller, callees in _called_names(tree).items():
@@ -322,6 +373,8 @@ class _EmitterIndex:
     def _tools_for_function(
         self, relative: str, func: Optional[str], depth: int, seen: Set[tuple]
     ) -> Optional[Set[str]]:
+        if relative in self._middleware:
+            return {MIDDLEWARE_SENTINEL}
         if func is None or depth > _EMITTER_MAX_DEPTH or (relative, func) in seen:
             return None
         seen.add((relative, func))
@@ -416,17 +469,17 @@ def collect_hint_sites(roster: Set[str]) -> Dict[str, Set[tuple]]:
     trees: Dict[str, ast.AST] = {}
     index = _EmitterIndex()
     for path in sorted(HANDLER_ROOT.rglob("*.py")):
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        except (SyntaxError, UnicodeDecodeError):
-            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         relative = path.relative_to(PROJECT_ROOT).as_posix()
         trees[relative] = tree
         index.add(relative, tree)
 
+    if not trees:
+        raise OSError(f"No handler source files found under {HANDLER_ROOT}")
     for relative, tree in trees.items():
+        bindings = _value_bindings(tree)
         for value in _hint_value_nodes(tree):
-            for constant in _string_constants(value):
+            for constant in _string_constants(value, bindings):
                 for match in CALL_PATTERN.finditer(constant.value):
                     name = match.group(1)
                     if name in roster:
@@ -434,10 +487,20 @@ def collect_hint_sites(roster: Set[str]) -> Dict[str, Set[tuple]]:
                         sites.setdefault(name, set()).add(
                             (
                                 f"{relative}:{constant.lineno}",
-                                match.group(2),
+                                _hinted_action(constant.value, match),
                                 frozenset(emitters) if emitters else None,
                             )
                         )
+        # Structured name lists are unambiguous; they do not need a call
+        # regex, and legacy aliases are part of the callable-name roster.
+        for value in _hint_value_nodes(tree, {"related_tools"}):
+            for constant in _string_constants(value, bindings):
+                if constant.value in roster:
+                    emitters = index.emitters(relative, constant.lineno)
+                    sites.setdefault(constant.value, set()).add((
+                        f"{relative}:{constant.lineno}", None,
+                        frozenset(emitters) if emitters else None,
+                    ))
     return sites
 
 
@@ -448,11 +511,14 @@ def find_dead_end_hints(mode: str) -> List[DeadEndHint]:
     from src.mcp_handlers.decorators import get_tool_registry
     from src.mcp_handlers.tool_stability import (
         AGENT_WORKFLOW_ALIASES,
+        list_all_aliases,
         resolve_tool_alias,
     )
     from src.tool_modes import get_tools_for_mode
+    from scripts.diagnostics.tool_surface_cost import validate_mode
 
-    roster = set(get_tool_registry()) | set(AGENT_WORKFLOW_ALIASES)
+    validate_mode(mode)
+    roster = set(get_tool_registry()) | set(list_all_aliases())
     advertised = get_tools_for_mode(mode)
 
     # Which advertised alias, if any, covers a call to (implementation, action).
@@ -474,7 +540,7 @@ def find_dead_end_hints(mode: str) -> List[DeadEndHint]:
     for tool, triples in collect_hint_sites(roster).items():
         if tool in advertised:
             continue
-        # Only sites a caller on THIS profile can actually receive. A hint
+        # Keep sites with potentially reachable or unresolved emitters. A hint
         # inside `handle_operator_resume_agent` is not `standard`'s problem:
         # an agent on `standard` cannot call that tool, so it never sees the
         # string. Judging every hint against one profile reported three
@@ -483,13 +549,20 @@ def find_dead_end_hints(mode: str) -> List[DeadEndHint]:
         pairs = [(site, action) for site, action, emitter in triples if reachable(emitter)]
         if not pairs:
             continue
-        sites = sorted(site for site, _ in pairs)
+        sites = sorted({site for site, _ in pairs})
         actions = sorted({action for _, action in pairs if action})
-        # Only a text fix when EVERY hinted call is covered by an advertised
-        # alias. One uncovered action makes the whole finding a real dead end.
-        covering = {
-            alias_for_call.get((tool, action)) for _, action in pairs
-        }
+        # Keep coverage for every action, including uncovered actions beside
+        # covered ones. Names/actions alone do not prove argument compatibility.
+        implementation, hinted_alias = resolve_tool_alias(tool)
+        calls = []
+        for site, action in sorted(set(pairs), key=lambda pair: (pair[0], pair[1] or "")):
+            effective_action = action or (hinted_alias.inject_action if hinted_alias else None)
+            covering_alias = (implementation if implementation in advertised else
+                              alias_for_call.get((implementation, effective_action)))
+            calls.append({"site": site, "action": effective_action,
+                          "advertised_alias": covering_alias})
+        covering = {call["advertised_alias"] for call in calls}
+        aliases = sorted(covering - {None})
         alias = (
             next(iter(covering))
             if len(covering) == 1 and None not in covering
@@ -497,7 +570,8 @@ def find_dead_end_hints(mode: str) -> List[DeadEndHint]:
         )
         findings.append(
             DeadEndHint(
-                tool=tool, sites=sites, actions=actions, advertised_alias=alias
+                tool=tool, sites=sites, actions=actions, advertised_alias=alias,
+                advertised_aliases=aliases, calls=calls,
             )
         )
     return sorted(findings, key=lambda f: (-len(f.sites), f.tool))
@@ -505,22 +579,24 @@ def find_dead_end_hints(mode: str) -> List[DeadEndHint]:
 
 def _render(findings: List[DeadEndHint], mode: str, classify: bool) -> None:
     if not findings:
-        print(f"{mode}: no caller-facing hint names an unadvertised tool.")
+        print(f"{mode}: no candidate advertisement mismatches in the scanned fields; dynamic hints are not covered.")
         return
 
     total_sites = sum(len(f.sites) for f in findings)
     print(
-        f"{mode}: {len(findings)} tools named in caller-facing hints are NOT "
-        f"advertised ({total_sites} sites)."
+        f"{mode}: {len(findings)} unadvertised names in static hint candidates "
+        f"({total_sites} sites; caller severity requires review)."
     )
     groups = (
         [
-            ("names the unadvertised raw twin of an advertised alias "
-             "(fix the hint text)",
-             [f for f in findings if f.advertised_alias]),
-            ("capability not advertised on this profile "
-             "(advertise it, or route the hint through one that is)",
-             [f for f in findings if not f.advertised_alias]),
+            ("advertised names cover every hinted name/action "
+             "(check arguments before rewriting)",
+             [f for f in findings if f.kind == "names_unadvertised_twin"]),
+            ("only some hinted actions have advertised names",
+             [f for f in findings if f.kind == "partially_covered_actions"]),
+            ("no advertised name resolved by the alias map "
+             "(inspect router paths and caller context)",
+             [f for f in findings if f.kind == "no_mapped_advertised_name"]),
         ]
         if classify
         else [("", findings)]
@@ -533,10 +609,12 @@ def _render(findings: List[DeadEndHint], mode: str, classify: bool) -> None:
             print(f"-- {heading}")
         for finding in group:
             suffix = (
-                f"  [advertised as {finding.advertised_alias}]"
-                if finding.advertised_alias
+                f"  [candidate aliases: {', '.join(finding.advertised_aliases)}]"
+                if finding.advertised_aliases
                 else ""
             )
+            if finding.kind == "partially_covered_actions":
+                suffix += " [partial action coverage]"
             actions = (
                 f"  actions: {', '.join(finding.actions)}"
                 if finding.actions
@@ -547,6 +625,11 @@ def _render(findings: List[DeadEndHint], mode: str, classify: bool) -> None:
                 print(f"      {site}")
             if len(finding.sites) > 3:
                 print(f"      ... +{len(finding.sites) - 3} more")
+
+
+def finding_keys(findings: List[DeadEndHint]) -> Set[tuple]:
+    return {(finding.tool, call["site"], call["action"])
+            for finding in findings for call in finding.calls}
 
 
 def main() -> int:
@@ -573,7 +656,7 @@ def main() -> int:
         "--fail-on-finding",
         action="store_true",
         help=(
-            "Exit non-zero on any dead-end hint not in KNOWN_DEAD_ENDS, or on "
+            "Exit non-zero on any candidate not in KNOWN_DEAD_ENDS, or on "
             "a ledger entry that no longer matches (for use as a CI guard)"
         ),
     )
@@ -581,10 +664,10 @@ def main() -> int:
 
     try:
         findings = find_dead_end_hints(args.mode)
-    except ModuleNotFoundError as exc:
+    except (ModuleNotFoundError, OSError, SyntaxError, UnicodeDecodeError, ValueError) as exc:
         print(
             f"WARNING: hint scan unavailable ({exc}); the handler tree could "
-            "not be imported, so this is 'unknown', not 'clean'",
+            "not be read/validated, so this is 'unknown', not 'clean'",
             file=sys.stderr,
         )
         return EXIT_REGISTRY_UNAVAILABLE
@@ -594,14 +677,19 @@ def main() -> int:
             json.dumps(
                 {
                     "mode": args.mode,
+                    "scope": "static candidate inventory; dynamic hints and path conditions are not proven",
+                    "severity": "unassessed",
+                    "alias_coverage_scope": "name and action only; arguments, authorization and response shapes require review",
                     "findings": [
                         {
                             "tool": f.tool,
                             "kind": f.kind,
                             "advertised_alias": f.advertised_alias,
+                            "advertised_aliases": f.advertised_aliases,
                             "actions": f.actions,
                             "site_count": len(f.sites),
                             "sites": f.sites,
+                            "calls": f.calls,
                         }
                         for f in findings
                     ],
@@ -613,19 +701,21 @@ def main() -> int:
         _render(findings, args.mode, args.classify)
 
     if args.fail_on_finding:
-        seen = {(f.tool, site) for f in findings for site in f.sites}
-        unlisted = sorted(seen - set(KNOWN_DEAD_ENDS))
-        stale = sorted(set(KNOWN_DEAD_ENDS) - seen)
-        for tool, site in unlisted:
+        seen = finding_keys(findings)
+        ledger = KNOWN_DEAD_ENDS if args.mode == "standard" else {}
+        order = lambda key: (key[0], key[1], key[2] or "")
+        unlisted = sorted(seen - set(ledger), key=order)
+        stale = sorted(set(ledger) - seen, key=order)
+        for tool, site, action in unlisted:
             print(
-                f"NEW dead-end hint: {site} names {tool!r}, which {args.mode} "
-                "does not advertise. Advertise it, route the hint through an "
-                "advertised name, or add it to KNOWN_DEAD_ENDS with a reason.",
+                f"UNREVIEWED hint candidate: {site} names {tool!r} action={action!r}, which {args.mode} "
+                "does not advertise. Check caller/profile, arguments and the "
+                "recovery path before changing the surface or accepting it.",
                 file=sys.stderr,
             )
-        for tool, site in stale:
+        for tool, site, action in stale:
             print(
-                f"STALE ledger entry: {site} / {tool!r} is listed in "
+                f"STALE ledger entry: {site} / {tool!r} action={action!r} is listed in "
                 "KNOWN_DEAD_ENDS but no longer reported. Remove the entry.",
                 file=sys.stderr,
             )

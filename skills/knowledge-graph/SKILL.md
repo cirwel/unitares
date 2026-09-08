@@ -9,6 +9,7 @@ source_files:
   - unitares/src/mcp_handlers/knowledge/handlers.py
   - unitares/src/mcp_handlers/knowledge/synthesis.py
   - unitares/src/mcp_handlers/schemas/knowledge.py
+  - unitares/src/alias_schema.py
   - unitares/src/mcp_handlers/consolidated.py
   - unitares/src/mcp_handlers/tool_stability.py
   - unitares/src/mcp_handlers/support/param_normalization.py
@@ -20,7 +21,8 @@ source_files:
 source_digests:
   unitares/src/mcp_handlers/knowledge/handlers.py: "9ddb3b9a52bfd79b"
   unitares/src/mcp_handlers/knowledge/synthesis.py: "f33e76c5d5364ce9"
-  unitares/src/mcp_handlers/schemas/knowledge.py: "f84b42fab2b0db2e"
+  unitares/src/mcp_handlers/schemas/knowledge.py: "d3a3a6b031026ba7"
+  unitares/src/alias_schema.py: "6cf38a6e81f09728"
   unitares/src/mcp_handlers/consolidated.py: "99210293967885fb"
   unitares/src/mcp_handlers/tool_stability.py: "b81fb422cdec412c"
   unitares/src/mcp_handlers/support/param_normalization.py: "6e16db988efa1d45"
@@ -57,9 +59,12 @@ router's inline-detail behaviour. Use either it or the unified router;
 duplicate entries fragment knowledge and make search less effective.
 
 You may omit `query` entirely when filtering by `tags`, `discovery_type`,
-`severity`, `status`, or `agent_id`. Date filters (`created_after` /
-`created_before`) appear in the schema but are not honoured by the search
-handler. A supplied-but-blank query is rejected so a caller mistake cannot turn
+`severity`, `status`, or `agent_id`. Search also supports `include_provenance`;
+request `response_mode="full"` when you need the full result fields. The search
+alias omits controls for other actions, such as closure evidence and synthesis;
+use `update_finding` or the corresponding `knowledge` action for those tasks.
+Date filters (`created_after` / `created_before`) are not supported by this
+search action. A supplied-but-blank query is rejected so a caller mistake cannot turn
 into an accidental broad scan. Omit `include_details` to let the server expand a
 small result set (up to 3 hits) automatically; pass `include_details=false` when
 summaries only are intentional.
