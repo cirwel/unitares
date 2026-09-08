@@ -147,6 +147,7 @@ def make_lowlevel_server(
     read_resource: Any,
     resource_mime_type: str = "text/markdown",
     instructions: str | None = None,
+    version: str | None = None,
 ) -> Any:
     """Build a low-level ``mcp.server.Server`` with request handlers, across 1.x/2.x.
 
@@ -168,14 +169,21 @@ def make_lowlevel_server(
     ``instructions`` reaches the client in the ``initialize`` response, once,
     at no per-call cost. It is forwarded on both majors when the resolved
     ``Server`` accepts it, and dropped otherwise rather than raising.
+
+    ``version`` rides the same response, in ``serverInfo.version``. Both
+    majors default it to the empty string, so a server that never passes one
+    advertises no version at all and no client can tell two builds apart.
+    Forwarded under the same accepts-it-or-drop-it rule as ``instructions``.
     """
     from mcp.server import Server
 
     extra: dict[str, Any] = {}
-    if instructions is not None:
+    for _kwarg, _value in (("instructions", instructions), ("version", version)):
+        if _value is None:
+            continue
         try:
-            if "instructions" in inspect.signature(Server.__init__).parameters:
-                extra["instructions"] = instructions
+            if _kwarg in inspect.signature(Server.__init__).parameters:
+                extra[_kwarg] = _value
         except (ValueError, TypeError):
             pass
 
