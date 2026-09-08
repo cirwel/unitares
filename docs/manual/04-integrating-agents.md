@@ -57,11 +57,11 @@ its own identity, declare the dispatcher as parent with
 The primary tools return a compact agent-facing envelope. State-changing tools
 preserve the raw payload under `raw_governance`; read aliases omit that repeated
 payload by default and expose a full-mode escape hatch. The default server
-surface is the fourteen-tool `standard` profile: the checkpoint loop
+surface is the fifteen-tool `standard` profile: the checkpoint loop
 (`start_session`, `identity`, `sync_state`, `record_result`,
 `check_working_state`) plus `search_shared_memory`, `store_finding`,
-`update_finding`, `request_review`, `consult`, `self_recovery`, `knowledge`,
-`describe_tool`, and `health_check`. The
+`update_finding`, `request_review`, `dialectic`, `consult`, `self_recovery`,
+`knowledge`, `describe_tool`, and `health_check`. The
 remaining rows above --
 the other consolidated routers and `list_tools` -- are advertised under
 `GOVERNANCE_TOOL_MODE=lite` or `full`, where `list_tools()` gives the current

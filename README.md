@@ -17,7 +17,7 @@ Neither answers the question you actually had:
 > **Is this the same agent as yesterday, and is it working the way it usually
 > works?**
 
-UNITARES answers that one. Your agents check in as they work; it keeps an
+UNITARES answers that one. Your agents check in as they work; the server keeps an
 accountable, replayable record of what each process claimed, what evidence
 backed the claim, and what it decided to do about it — on hardware you control,
 with no outbound vendor dependency.
@@ -39,30 +39,31 @@ with no outbound vendor dependency.
 
 ---
 
-## What you get
+## What it does
 
-**Nothing writes anonymously.** Every check-in, finding, and review is bound to a
-process identity. "Which agent said this, and is it the same one that ran
-yesterday?" gets an answer instead of a display name.
+| What you get | The mechanism |
+|---|---|
+| **Nothing writes anonymously.** "Which agent said this, and is it the same one that ran yesterday?" gets an answer instead of a display name. | `start_session` binds every later write to a process instance. Reads can stay open; writes are proof-carrying under `STRICT_IDENTITY_REQUIRED`. |
+| **A record you can replay** — the claim, the evidence behind it, the verdict, and the recovery. | `sync_state` records what the process says it did and how confident it is. `record_result` attaches tests, exit codes, and reviews to that claim, with provenance kept. |
+| **A verdict with a named cause**, not a score to interpret. | Each check-in returns `proceed`, `guide`, or `pause`, always with the reason and the next step. |
+| **A brake at the governed surface.** | A pause refuses that agent's further governed writes until it submits a reflection that passes a quality check — optionally routed to another agent, who can impose conditions on the resumed agent's next check-ins. Actions outside that surface remain yours to honor. |
+| **Memory that outlives the process.** Restarts don't reset what the fleet knows. | Findings land in a shared, attributed knowledge graph that the next agent searches before repeating the work. |
 
-**A record you can replay.** What the agent claimed, what evidence arrived
-alongside it, which policy action came back and why, and how it recovered — all
-retained in your own PostgreSQL, readable through MCP, HTTP, or the self-hosted
-dashboard.
+<div align="center">
+  <img src="docs/assets/flow.png" width="100%" alt="agent acts, checks in, receives state and policy, self-regulates, and leaves an audit trail">
+</div>
 
-**A brake at the governed surface.** When policy pauses an agent, its further
-governed writes are refused until it submits a reflection that passes a quality
-check — optionally routed to another agent for review, which can impose
-conditions on the resumed agent's next check-ins.
+All of it is retained in your own PostgreSQL and readable through MCP, HTTP, or
+the self-hosted dashboard. Identity, telemetry, evidence, and policy history
+never leave your machine.
 
-**Memory that outlives the process.** Findings land in a shared, attributed
-knowledge graph that the next agent searches before repeating the work. Restarts
-don't reset what the fleet knows.
+Clients can treat the policy action, reason, and next step as the stable
+contract; the enforcement record rides alongside it. Operators can additionally
+read four EISV coordinates — work progress, evidence alignment, behavioral
+drift, and their balance. Those are published heuristics, documented in the
+[computation reference](docs/EISV_COMPUTATION.md).
 
-**Your infrastructure, your data.** Self-hosted by design. Identity, telemetry,
-evidence, and policy history never leave your machine.
-
-### What you don't get
+## What it does not do
 
 UNITARES is a state instrument, not an outcome oracle. It
 does not decide whether an output is correct or ethical, and it
@@ -106,19 +107,24 @@ record_result(
 state = check_working_state(client_session_id=sid)
 ```
 
-Then see it work: `make demo` onboards a process and sends six check-ins over the
-real API. `make coordination-demo` shows the identity guarantees biting: two
-agents onboard, governance exchanges their continuity credentials for single-use,
-request-bound Ed25519 attestations, A's attestation is refused when it claims B's
-UUID, a captured attestation is refused on replay, and a governed `maintenance:/`
-surface moves through an identity-checked handoff before release.
+Two demos run this against the live server:
+
+- **`make demo`** onboards a process and sends six check-ins over the real API.
+- **`make coordination-demo`** shows the identity guarantees biting: two agents
+  onboard, governance exchanges their continuity credentials for single-use,
+  request-bound Ed25519 attestations, A's attestation is refused when it claims
+  B's UUID, a captured attestation is refused on replay, and a governed
+  `maintenance:/` surface moves through an identity-checked handoff before
+  release.
 
 This release-tagged Docker Compose flow is the supported install path for a
 local, single-operator deployment; after cloning, the one-command install/start
-is `docker compose up -d --wait`. It pins the latest verified public release,
-which may trail the source version in **Status** — newer releases are on the
-[releases page](https://github.com/cirwel/unitares/releases). Evaluating rather
-than installing? Start with [Evidence and limits](#evidence-and-limits) and the
+is `docker compose up -d --wait`. The tag is the latest verified public release
+and may trail the source version in **Status** — newer releases are on the
+[releases page](https://github.com/cirwel/unitares/releases).
+
+Evaluating rather than installing? Start with
+[Evidence and limits](#evidence-and-limits) and the
 [Reviewer Guide](docs/REVIEWER_GUIDE.md). Deploying? Use the
 [user manual](docs/manual/README.md).
 
@@ -142,42 +148,21 @@ Codex, custom runtimes, and resident agents stay different userlands while
 sharing one accountable record. Plain-language definition:
 [What UNITARES is](docs/PRODUCT_DEFINITION.md).
 
-## The loop
-
-<div align="center">
-  <img src="docs/assets/flow.png" width="100%" alt="agent acts, checks in, receives state and policy, self-regulates, and leaves an audit trail">
-</div>
-
-| Stage | What happens |
-|---|---|
-| **Identity** | `start_session` binds later writes to a process instance. Reads can stay open; writes are proof-carrying under `STRICT_IDENTITY_REQUIRED`. |
-| **Claim and evidence** | `sync_state` records what the process says it did and how confident it is. `record_result` attaches tests, exit codes, and reviews to that claim, with provenance kept. |
-| **State and policy** | The server updates a longitudinal state estimate and returns proceed, guide, or pause — always with a named reason and next step. |
-| **Enforcement and recovery** | A pause on a governed write surface refuses later check-ins until recovery succeeds. Actions outside that surface remain yours to honor. |
-| **Memory and review** | Findings, structured reviews, and resolutions are stored attributably and stay replayable. |
-
-Clients can treat the policy action, reason, and next step as the stable
-contract; the enforcement record rides alongside it. Operators can optionally
-read four EISV coordinates
-covering work progress, evidence alignment, behavioral drift, and their balance
-— published heuristics, documented in the
-[computation reference](docs/EISV_COMPUTATION.md).
-
 ## Tools
 
-Fourteen tools are advertised by default: the checkpoint loop (`start_session`,
+Fifteen tools are advertised by default: the checkpoint loop (`start_session`,
 `identity`, `sync_state`, `record_result`, `check_working_state`), shared memory
-(`search_shared_memory`, `store_finding`, `update_finding`, `knowledge`),
-`request_review`, `consult`, `self_recovery`, `describe_tool`, and
+(`search_shared_memory`, `store_finding`, `update_finding`, `knowledge`), review
+(`request_review`, `dialectic`), `consult`, `self_recovery`, `describe_tool`, and
 `health_check`.
 
-`GOVERNANCE_TOOL_MODE` picks a different profile: `minimal` advertises five,
-`lite` adds the consolidated routers and `list_tools`, and `full` advertises all
-**42 tools**. A profile decides what `tools/list` advertises, never what
-dispatches — but schema-driven clients (Claude Code, Codex, Cursor) only offer
-the model what discovery returns, so an unadvertised tool is unreachable from
-them in practice. Profiles vary by release; see the
-[installation guide](docs/manual/02-install.md).
+`GOVERNANCE_TOOL_MODE` picks a different profile: `minimal` advertises the five
+checkpoint names alone, `lite` advertises 29, and `full` advertises all **50**. A
+profile decides what `tools/list` advertises, never what dispatches — but
+schema-driven clients (Claude Code, Codex, Cursor) only offer the model what
+discovery returns, so an unadvertised tool is unreachable from them in practice.
+Profiles vary by release, including the tag the quickstart pins; the
+[installation guide](docs/manual/02-install.md) has the per-release detail.
 
 The public [`unitares-sdk`](agents/sdk/README.md) handles connection, identity,
 check-ins, heartbeats, and knowledge participation for resident agents. For a
@@ -197,21 +182,23 @@ agents, 15 recorded self-recovery events, and
 published as a dataset. Those numbers and the rest of the build record are in
 [Evidence and limits, in full](docs/EVIDENCE_AND_LIMITS.md).
 
-Every claim below carries an evidence class saying what it licenses. An evidence
-class says what a result supports; it is not a positive or negative judgement
-about the project. A registered operational `FAIL` can close a scheduled line of
-work without scientifically refuting the underlying capability. A claim earns
-`REFUTED` only when the target, counterfactual, independent unit, support and
-power, decision rule, and read protocol all support that conclusion — see the
+Every claim below carries an evidence class. A class says what a result
+supports; it is not a positive or negative judgement about the project. A
+registered operational `FAIL` can close a scheduled line of work without
+scientifically refuting the underlying capability. A claim earns `REFUTED` only
+when the target, counterfactual, independent unit, support and power, decision
+rule, and read protocol all support that conclusion — see the
 [inference-status contract](docs/ontology/falsification-inference-containment-2026-08-22.md).
 
 | Evidence class | What it licenses |
 |---|---|
 | **Operational observation** | A named mechanism ran in the stated deployment. Not benefit, correctness, or generality. |
+| **Exercised path** | A specific code path ran and left records that can be counted and replayed. Execution, not benefit. |
 | **Benchmark pass / fail** | An artifact met or missed a fixed criterion, for that benchmark and that decision. |
 | **Non-detection** | The test did not separate the candidate from its comparison. Without adequate power it establishes neither absence nor a useful ceiling. |
 | **Unidentified / inconclusive** | The design lacks the target match, counterfactual, independent unit, support, power, or protocol the named inference needs. |
 | **Mismatch / path bound** | Source, formula, provenance, documentation, or control-flow inspection established a concrete engineering fact. |
+| **Structural limit** | A boundary that follows from the design itself. More data does not move it. |
 | **Untested** | No suitable measurement has been made. |
 
 ### Current claim status
@@ -221,10 +208,10 @@ power, decision rule, and read protocol all support that conclusion — see the
 | Sustained operation | **Operational observation** | The maintainer deployment has run continuously under real load. The counts above are rows, events, and configured residents. |
 | Identity and audit trail | **Exercised path** | Process-bound writes, evidence records, policy responses, and replayable audit history are deployed. This establishes mechanism execution. |
 | Pause actuation and delivery | **Event reconciled; protection untested** | A governed pause landed on 2026-08-09. At the 2026-08-06 audit, a cadence window had downgraded 195 of 218 recorded pauses (89.4%) before delivery; the current rate has not been re-measured. See [ledger rows 24, 27, and 28](docs/ontology/eisv-proprioception-contract.md). |
-| Predictive lift | **Non-detection; inconclusive for weak effects** | In the frozen 2026-08-09 cohort, no slice cleared the selection-aware null (selective p = 0.070–0.567). The first power characterisation was withdrawn for corrupted synthetic pairing and uncontrolled class-balance drift, and the preserved record omits the total cluster geometry needed to reconstruct read-specific power. The corrected [power audit](docs/operations/falsifiability-power-audit-2026-08-23.md) therefore sets no standing AUC ceiling. |
+| Predictive lift | **Non-detection; inconclusive for weak effects** | In the frozen 2026-08-09 cohort, no slice cleared the selection-aware null (selective p = 0.070–0.567). The first power characterisation was withdrawn for corrupted synthetic pairing and uncontrolled class-balance drift, and the preserved record omits the cluster geometry needed to reconstruct read-specific power, so the corrected [power audit](docs/operations/falsifiability-power-audit-2026-08-23.md) sets no standing AUC ceiling. |
 | Incident prevention or benefit from pausing | **Untested** | No governed-versus-ungoverned comparison has shown an incident prevented or an outcome improved by pausing. |
 | Review binds on the reviewed agent | **Exercised path** | A paused agent cannot resolve its own session over a standing reviewer objection: the submission is recorded, the session is not resolved, and it waits for facilitation (`src/dialectic_protocol.py`). 33 non-canary sessions carry such a submission after a reviewer's rejection. Since the 2026-07-02 reviewer-label split, 81 non-canary verdicts are recorded and 77 carry the reviewer's conditions; 42 dissent, one of which is a parse failure recorded as disagreement rather than a reviewer's judgement. |
-| Benefit from review and coordination | **Untested** | These records cover dialectic-mediated review; review run through subagent councils or external models leaves no row unless filed through `reviewer_provenance`, a field no caller has yet populated, so the gap is in recording rather than occurrence. Benefit is separate and untested for a separate reason: every change went through the reviewed path, so there are zero untreated cases and no governed-versus-ungoverned comparison has been run. |
+| Benefit from review and coordination | **Untested** | Two separate gaps. These records cover dialectic-mediated review only: review run through subagent councils or external models leaves no row unless filed through `reviewer_provenance`, a field no caller has yet populated, so that gap is in recording rather than occurrence. Benefit is unmeasured because every change went through the reviewed path — zero untreated cases, no governed-versus-ungoverned comparison. |
 | Robustness to a motivated attacker | **Structural limit** | A capable process can optimize or conceal behavior outside the monitored proxy; independent evidence remains necessary. See the [scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md). |
 | Cross-operator generality | **Untested** | Every deployment number above comes from one operator's co-development fleet. |
 
