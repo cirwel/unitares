@@ -304,12 +304,14 @@ FastMCP wire, 2026-09-08, before the trim below:
 
 | Surface | Advertised cost |
 |---|---|
-| `sync_state` alone | 8,076 chars (~2,000 tokens) |
+| `sync_state` alone | 8,076 chars (~2,020 tokens) |
 | `minimal` profile (5 tools) | 21,884 chars (~5,470 tokens) |
-| `standard` profile (10 tools) | 42,103 chars (~10,520 tokens) |
+| `standard` profile (11 tools) | 43,801 chars (~10,950 tokens) |
 
 About half of that was parameter prose. A profile cut does not touch it: a
 profile removes names from the list, not words from the names that remain.
+After the trim: `sync_state` 6,283 chars (~1,570 tokens), `minimal` ~4,290,
+`standard` ~9,380, `lite` ~22,600 — the profile totals move -22% / -14% / -12%.
 
 So the advertised catalog serves an **abridged** description and
 `describe_tool` serves the authored one. `src/schema_brief.py` owns the rule:

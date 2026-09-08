@@ -1,9 +1,10 @@
 """
 Tool Modes - Define the ADVERTISED tool surface for different use cases
 
-Standard mode (default): the checkpoint loop plus the three capabilities an
+Standard mode (default): the checkpoint loop plus the four capabilities an
     agent cannot reach any other way - shared memory (search / store / revise),
-    structured review, and advisory inference. Ten names, all task verbs.
+    structured review, advisory inference, and recovery from a pause. Eleven
+    names, all task verbs.
 Minimal mode: the five-tool checkpoint loop alone - identity binding,
     re-binding, the check-in, outcome evidence, and a read of the verdict.
     Opt in with GOVERNANCE_TOOL_MODE=minimal when context is scarce.
@@ -15,7 +16,8 @@ A mode decides what tools/list ADVERTISES. It does not decide what dispatches:
 every register=True handler and every workflow alias stays callable by name on
 every transport (REST, stdio, and the FastMCP /mcp/ mount, which registers the
 whole surface and filters only its listing - see
-src/tool_registration.py::install_tool_mode_listing). Dropping a name from a
+src/tool_mode_listing.py::mode_filtered_server_class, applied in
+src/mcp_server.py). Dropping a name from a
 mode set therefore hides it from schema-driven clients; it never deletes it.
 Full mode should always include *all* schema tools even if categories lag behind.
 
@@ -46,26 +48,41 @@ MINIMAL_MODE_TOOLS: Set[str] = {
 }
 
 # Standard mode: the default advertised surface. The checkpoint loop plus the
-# five names that carry a capability an agent cannot reach any other way.
+# six names that carry a capability an agent cannot reach any other way.
 #
-# WHY THESE FIVE AND NOT OTHERS. A mode filters tools/list, and a schema-driven
+# WHY THESE AND NOT OTHERS. A mode filters tools/list, and a schema-driven
 # client (Claude Code, Codex, Cursor) offers the model only what tools/list
 # returns. "Still callable by name" is therefore a property no such client can
 # use: a capability that is never advertised is, for them, a capability that
 # does not exist. Under the five-tool default, shared memory, structured
 # review, and advisory inference were registered, reachable, and dormant.
 #
-# The line is drawn at capability, not at count. Each name below is the only
-# advertised way to reach something the server does; every name NOT here is
-# either a router over actions these five already cover, a discovery tool
-# (list_tools / describe_tool), or an operator surface. Those stay in
-# lite/full, where an operator opts into a wider listing.
+# The line is drawn at capability, not at count, and not at tool SHAPE. Each
+# name below is the only advertised way to reach something the server does;
+# every name NOT here is either a router whose actions these already cover, a
+# discovery tool (list_tools / describe_tool), or an operator surface. Those
+# stay in lite/full, where an operator opts into a wider listing.
+#
+# self_recovery is a router (check / quick / review) and is here anyway, which
+# is not an exception to the rule above but an application of it: NO other
+# advertised name reaches recovery, so "a router over actions these already
+# cover" does not describe it. It earns the slot the same way the other five
+# did -- the server itself tells a paused agent to call it
+# (src/mcp_handlers/updates/phases.py:469 and
+# src/mcp_handlers/support/agent_auth.py:199 both name it in the pause and
+# auth-refusal paths), and under the ten-name default a schema-driven client
+# was handed that instruction for a tool it had never been offered, in the one
+# state where it can least improvise. tests/test_lite_wire_surface.py already
+# encodes the invariant -- a tool named in another tool's recovery hints must
+# be advertised -- and only happened to scope it to lite; see the standard-mode
+# sibling in tests/test_tool_modes.py.
 STANDARD_MODE_TOOLS: Set[str] = MINIMAL_MODE_TOOLS | {
     "search_shared_memory",   # Read shared memory (knowledge(action="search"))
     "store_finding",          # Write a durable finding
     "update_finding",         # Revise a finding already stored
     "request_review",         # Structured review (dialectic(action="request"))
     "consult",                # Advisory model help
+    "self_recovery",          # Recover from a pause the server just imposed
 }
 
 # Core/essential tools for lite mode (optimized for local models)
@@ -299,7 +316,10 @@ def get_tools_for_mode(mode: str = "full") -> Set[str]:
 
 _MODE_SUMMARY = {
     "minimal": "the checkpoint loop only",
-    "standard": "the checkpoint loop, shared memory, review, and advisory inference",
+    "standard": (
+        "the checkpoint loop, shared memory, review, advisory inference, "
+        "and recovery"
+    ),
     "lite": "the agent surface, including the consolidated routers and discovery tools",
     "full": "every registered tool",
 }
@@ -337,7 +357,8 @@ def build_server_instructions(mode: str = None) -> str:
             "search_shared_memory reads the cross-agent knowledge graph and "
             "store_finding / update_finding write to it; search before you "
             "write. request_review opens a structured review. consult asks an "
-            "advisory model.",
+            "advisory model. self_recovery is how a paused agent gets moving "
+            "again.",
         ]
     summary = _MODE_SUMMARY.get(mode)
     advertised = known.get(mode)
@@ -360,8 +381,8 @@ def build_server_instructions(mode: str = None) -> str:
     if mode == "minimal":
         not_listed.append(
             "shared memory (search_shared_memory, store_finding, "
-            "update_finding), structured review (request_review), and "
-            "advisory inference (consult)"
+            "update_finding), structured review (request_review), "
+            "advisory inference (consult), and recovery (self_recovery)"
         )
     if mode in ("minimal", "standard"):
         not_listed.append(
@@ -395,48 +416,68 @@ def build_server_instructions(mode: str = None) -> str:
 def is_claude_desktop_client() -> bool:
     """
     Detect if MCP client is Claude Desktop (vs Cursor or other clients).
-    
+
     Claude Desktop is more sensitive to hangs, so we exclude problematic tools.
-    
+
     Returns:
         True if client appears to be Claude Desktop
     """
-    # Check parent process name (most reliable)
+    # psutil is an OPTIONAL dependency (pyproject.toml, [project.optional-
+    # dependencies].full), so a core install does not have it. Import it OUTSIDE
+    # the try whose except clause names psutil.NoSuchProcess: `import psutil`
+    # inside that try makes the name a function local, so on ImportError the
+    # except TUPLE ITSELF raises UnboundLocalError, which propagates out of
+    # should_include_tool and get_public_tool_definitions and takes tools/list
+    # down entirely instead of degrading to "not Claude Desktop".
     try:
         import psutil
-        current_process = psutil.Process()
-        parent = current_process.parent()
-        if parent:
-            parent_name = parent.name().lower()
-            if "claude" in parent_name:
-                return True
-            # Check up the process tree
-            for _ in range(3):
-                try:
-                    if parent:
-                        parent = parent.parent()
+    except ImportError:
+        psutil = None
+
+    # Check parent process name (most reliable)
+    if psutil is not None:
+        try:
+            current_process = psutil.Process()
+            parent = current_process.parent()
+            if parent:
+                parent_name = parent.name().lower()
+                if "claude" in parent_name:
+                    return True
+                # Check up the process tree
+                for _ in range(3):
+                    try:
                         if parent:
-                            parent_name = parent.name().lower()
-                            if "claude" in parent_name:
-                                return True
-                except (psutil.NoSuchProcess, AttributeError):
-                    break
-    except (ImportError, AttributeError, psutil.NoSuchProcess):
-        pass
-    
-    # Check environment variables
+                            parent = parent.parent()
+                            if parent:
+                                parent_name = parent.name().lower()
+                                if "claude" in parent_name:
+                                    return True
+                    except (psutil.NoSuchProcess, AttributeError):
+                        break
+        except (AttributeError, psutil.NoSuchProcess):
+            pass
+
+    # Check environment variables. Reached on a core install too: the process
+    # walk is best-effort, this is not.
     if os.getenv("CLAUDE_DESKTOP") or os.getenv("ANTHROPIC_CLAUDE"):
         return True
-    
+
     return False
 
 
 # Tools to exclude for Claude Desktop (causes hangs/freezes)
-CLAUDE_DESKTOP_EXCLUDED_TOOLS: Set[str] = {
-    # Add tools here that cause Claude Desktop to hang
-    # Example: "web_search", "heavy_operation", etc.
-    # Currently empty - add tools as issues are discovered
-}
+#
+# CAUTION before adding a name: is_claude_desktop_client() matches the substring
+# "claude" anywhere in the parent process tree, so it returns True under Claude
+# CODE as well as Claude Desktop (verified 2026-09-08 from a Claude Code
+# session). While this set is empty that mis-detection decides nothing; the
+# first name added here is excluded from BOTH clients, not just Desktop.
+#
+# `{}` here was an empty DICT annotated as Set[str] until 2026-09-08. Falsy and
+# `in`-compatible either way, so nothing behaved differently -- but the first
+# name added would have had to be added as a dict key.
+# Add names as hangs are discovered, e.g. {"web_search"}.
+CLAUDE_DESKTOP_EXCLUDED_TOOLS: Set[str] = set()
 
 
 def should_include_tool(tool_name: str, mode: str = "full", client_type: str = None) -> bool:
@@ -458,8 +499,16 @@ def should_include_tool(tool_name: str, mode: str = "full", client_type: str = N
     if tool_name not in allowed_tools:
         return False
     
-    # Check Claude Desktop exclusions
-    if client_type == "claude_desktop" or (client_type is None and is_claude_desktop_client()):
+    # Check Claude Desktop exclusions. The empty-set guard comes FIRST: this
+    # runs once per included tool per listing (42 calls for full), and
+    # is_claude_desktop_client() walks up to four psutil process hops with no
+    # caching. While CLAUDE_DESKTOP_EXCLUDED_TOOLS is empty the whole walk
+    # decides nothing, so skipping it is behavior-preserving. The mechanism
+    # stays wired: add a name to the set and detection resumes.
+    if CLAUDE_DESKTOP_EXCLUDED_TOOLS and (
+        client_type == "claude_desktop"
+        or (client_type is None and is_claude_desktop_client())
+    ):
         if tool_name in CLAUDE_DESKTOP_EXCLUDED_TOOLS:
             return False
     

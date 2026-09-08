@@ -1987,3 +1987,51 @@ class TestWriteStateFile:
         _write_state_file(state_file, {"version": 2})
         loaded = json.loads(state_file.read_text())
         assert loaded["version"] == 2
+
+
+class TestStdioServerInstructions:
+    """The stdio server must send the same orientation string as /mcp/.
+
+    `instructions` reaches a client in the initialize response, once, at no
+    per-call cost, and is the only in-band channel that can describe the
+    surface a narrow GOVERNANCE_TOOL_MODE does not list. src/mcp_server.py has
+    passed it on the streamable-HTTP mount since #2102; stdio passed nothing,
+    so a stdio client on a narrow profile could not learn what else the server
+    does (verified 2026-09-08: zero occurrences of the string in that module).
+    """
+
+    def test_server_carries_instructions(self):
+        from src.mcp_server_std import server
+
+        assert getattr(server, "instructions", None), (
+            "stdio server was built without instructions"
+        )
+
+    def test_instructions_match_the_static_builder(self):
+        from src.mcp_server_std import server
+        from src.tool_modes import build_server_instructions
+
+        assert server.instructions == build_server_instructions()
+
+    def test_instructions_reach_initialization_options(self):
+        """A client sees this at initialize, not by calling a tool."""
+        from src.mcp_server_std import server
+
+        options = server.create_initialization_options()
+        assert options.instructions == server.instructions
+
+    def test_make_lowlevel_server_tolerates_no_instructions(self):
+        """The kwarg is optional; omitting it must not raise on either major."""
+        from src.mcp_compat import make_lowlevel_server
+
+        async def _noop():  # pragma: no cover - never awaited here
+            return []
+
+        built = make_lowlevel_server(
+            "test-no-instructions",
+            list_tools=_noop,
+            call_tool=_noop,
+            list_resources=_noop,
+            read_resource=_noop,
+        )
+        assert built is not None

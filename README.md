@@ -60,9 +60,9 @@ including the open ones.
 
 ---
 
-## Ten tools
+## Eleven tools
 
-The default MCP surface is the checkpoint loop plus the three capabilities that
+The default MCP surface is the checkpoint loop plus the four capabilities that
 have no other advertised route:
 
 | Tool | Job |
@@ -77,6 +77,7 @@ have no other advertised route:
 | `update_finding` | Revises a finding already in shared memory. |
 | `request_review` | Opens a structured review on an open question. |
 | `consult` | Asks an advisory model, on the record. |
+| `self_recovery` | Gets a paused agent moving again. Advertised because the server names it to the agent it just paused, and a hint a client cannot act on is a dead end. |
 
 A profile decides what `tools/list` advertises, never what dispatches. That
 distinction has a sharp edge: a schema-driven client (Claude Code, Codex,
@@ -85,14 +86,14 @@ never advertised cannot be reached from such a client at all. The default is
 drawn at capability rather than at count for that reason. `GOVERNANCE_TOOL_MODE`
 picks a different profile: `minimal` advertises the first five names alone,
 `lite` adds the consolidated routers and the discovery tools, and `full`
-advertises every registered tool. See [Beyond the ten](#beyond-the-ten).
+advertises every registered tool. See [Beyond the eleven](#beyond-the-eleven).
 
 The server also states its surface in the MCP `instructions` string returned at
 connect, so a client on a narrow profile still learns what exists and how to
 have it listed.
 
-The ten-tool `standard` profile requires v2.23.0 or later. v2.22.0 defaults to
-the five-tool `minimal` profile and has no `standard`; v2.21.0 defaults to
+The eleven-tool `standard` profile requires v2.23.0 or later. v2.22.0 defaults
+to the five-tool `minimal` profile and has no `standard`; v2.21.0 defaults to
 `lite` and its `minimal` has six tools and different HTTP dispatch behavior.
 Setting the flag on an older server does not reproduce this surface.
 
@@ -242,7 +243,7 @@ The lowercase residents under [`agents/`](agents/README.md) are reference
 clients and operational examples, not the Resident product and not a framework
 to subclass.
 
-## Beyond the ten
+## Beyond the eleven
 
 For a durable resident, preserve its identity anchor rather than minting a new
 identity on every run: `identity(agent_uuid=...)` re-binds it, and the
@@ -252,7 +253,7 @@ check-in's response so the outcome grades that claim rather than an unrelated
 earlier one.
 
 The wider surfaces are one flag away. `GOVERNANCE_TOOL_MODE=lite` advertises
-the consolidated routers and the discovery tools in addition to the ten;
+the consolidated routers and the discovery tools in addition to the eleven;
 `full` advertises every registered tool. Pair self-reported confidence with
 verifiable evidence wherever possible:
 
@@ -262,6 +263,7 @@ verifiable evidence wherever possible:
 | Store or revise a durable finding | `store_finding(...)`, `update_finding(...)` | `standard`, `lite`, `full` |
 | Ask a model for advisory help | `consult(brief=..., purpose=...)` | `standard`, `lite`, `full` |
 | Request governed, on-record review | `request_review(issue_description=...)` | `standard`, `lite`, `full` |
+| Recover from a pause | `self_recovery(action=...)` | `standard`, `lite`, `full` |
 | Enumerate and explain the live surface | `list_tools()`, `describe_tool(tool_name=...)` | `lite`, `full` |
 | Reach an action the workflow names do not cover | the routers: `knowledge`, `dialectic`, `observe`, `agent`, ... | `lite`, `full` |
 
@@ -318,7 +320,7 @@ a prototype or a system?
 
 | | |
 |---|---|
-| **42 tools** on the wire | ten advertised by default and the rest behind `GOVERNANCE_TOOL_MODE`; 8 of the 42 are consolidated routers over 52 actions, 8 workflow aliases carry the agent-facing names, and a 70-entry alias table resolves legacy names |
+| **42 tools** on the wire | eleven advertised by default and the rest behind `GOVERNANCE_TOOL_MODE`; 8 of the 42 are consolidated routers over 52 actions, 8 workflow aliases carry the agent-facing names, and a 70-entry alias table resolves legacy names |
 | **12,619 test functions** | across 720 files, sharded in CI, with the fleet-neutrality and evidence contracts enforced as tests rather than as conventions |
 | **64 database migrations** | slot-and-name drift is gated by the repo doctor |
 | **509 Python modules** | `src/`, `governance_core/`, and the reference residents |
