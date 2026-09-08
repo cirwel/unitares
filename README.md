@@ -63,15 +63,13 @@ read four EISV coordinates — work progress, evidence alignment, behavioral
 drift, and their balance. Those are published heuristics, documented in the
 [computation reference](docs/EISV_COMPUTATION.md).
 
-## What it does not do
+## Scope
 
 UNITARES is a state instrument, not an outcome oracle. It
 does not decide whether an output is correct or ethical, and it
 cannot detect deliberate concealment without independent evidence.
-**No governed-versus-ungoverned comparison has yet shown an incident prevented
-or an outcome improved.** The circuit breaker demonstrably actuates; that it
-protects anything is untested. Full accounting in
-[Evidence and limits](#evidence-and-limits).
+Whether pausing an agent prevents anything is untested;
+[Evidence and limits](#evidence-and-limits) is the measured record.
 
 ## Quickstart
 
@@ -171,35 +169,38 @@ rather than minting a new one each run.
 
 ## Evidence and limits
 
-One operator, since 2025-11-20, single-deployment and co-development dogfood —
-most agents governed by the system are also building it. Read the
-[deployment data caveat](docs/operations/DEPLOYMENT_DATA_CAVEAT.md) before citing
-any fleet number. At the
-[2026-08-11 frozen snapshot](docs/PRODUCTION_SNAPSHOT.md): 4,573,890
+At the [2026-08-11 frozen snapshot](docs/PRODUCTION_SNAPSHOT.md): 4,573,890
 audit/telemetry events, 71,141 stored EISV state rows, 6 long-running resident
 agents, 15 recorded self-recovery events, and
 [32,181 labeled EISV windows](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories)
 published as a dataset. Those numbers and the rest of the build record are in
 [Evidence and limits, in full](docs/EVIDENCE_AND_LIMITS.md).
 
+They come from one operator, since 2025-11-20: a single deployment, and
+co-development dogfood, since most agents governed by the system are also
+building it. Read the
+[deployment data caveat](docs/operations/DEPLOYMENT_DATA_CAVEAT.md) before citing
+any fleet number.
+
 Every claim below carries an evidence class. A class says what a result
 supports; it is not a positive or negative judgement about the project. A
 registered operational `FAIL` can close a scheduled line of work without
-scientifically refuting the underlying capability. A claim earns `REFUTED` only
-when the target, counterfactual, independent unit, support and power, decision
-rule, and read protocol all support that conclusion — see the
+scientifically refuting the underlying capability, and a claim earns `REFUTED`
+only when target, counterfactual, independent unit, power, decision rule, and
+read protocol all support it — see the
 [inference-status contract](docs/ontology/falsification-inference-containment-2026-08-22.md).
 
 | Evidence class | What it licenses |
 |---|---|
 | **Operational observation** | A named mechanism ran in the stated deployment. Not benefit, correctness, or generality. |
-| **Exercised path** | A specific code path ran and left records that can be counted and replayed. Execution, not benefit. |
-| **Benchmark pass / fail** | An artifact met or missed a fixed criterion, for that benchmark and that decision. |
-| **Non-detection** | The test did not separate the candidate from its comparison. Without adequate power it establishes neither absence nor a useful ceiling. |
-| **Unidentified / inconclusive** | The design lacks the target match, counterfactual, independent unit, support, power, or protocol the named inference needs. |
-| **Mismatch / path bound** | Source, formula, provenance, documentation, or control-flow inspection established a concrete engineering fact. |
+| **Exercised path** | A code path ran and left countable, replayable records. Execution, not benefit. |
+| **Non-detection** | The test did not separate the candidate from its comparison. Without power, that is not absence. |
 | **Structural limit** | A boundary that follows from the design itself. More data does not move it. |
 | **Untested** | No suitable measurement has been made. |
+
+Three further classes — **Benchmark pass / fail**, **Unidentified /
+inconclusive**, and **Mismatch / path bound** — are available for result types
+this table does not currently hold.
 
 ### Current claim status
 
@@ -211,9 +212,8 @@ rule, and read protocol all support that conclusion — see the
 | Predictive lift | **Non-detection; inconclusive for weak effects** | In the frozen 2026-08-09 cohort, no slice cleared the selection-aware null (selective p = 0.070–0.567). The first power characterisation was withdrawn for corrupted synthetic pairing and uncontrolled class-balance drift, and the preserved record omits the cluster geometry needed to reconstruct read-specific power, so the corrected [power audit](docs/operations/falsifiability-power-audit-2026-08-23.md) sets no standing AUC ceiling. |
 | Incident prevention or benefit from pausing | **Untested** | No governed-versus-ungoverned comparison has shown an incident prevented or an outcome improved by pausing. |
 | Review binds on the reviewed agent | **Exercised path** | A paused agent cannot resolve its own session over a standing reviewer objection: the submission is recorded, the session is not resolved, and it waits for facilitation (`src/dialectic_protocol.py`). 33 non-canary sessions carry such a submission after a reviewer's rejection. Since the 2026-07-02 reviewer-label split, 81 non-canary verdicts are recorded and 77 carry the reviewer's conditions; 42 dissent, one of which is a parse failure recorded as disagreement rather than a reviewer's judgement. |
-| Benefit from review and coordination | **Untested** | Two separate gaps. These records cover dialectic-mediated review only: review run through subagent councils or external models leaves no row unless filed through `reviewer_provenance`, a field no caller has yet populated, so that gap is in recording rather than occurrence. Benefit is unmeasured because every change went through the reviewed path — zero untreated cases, no governed-versus-ungoverned comparison. |
+| Benefit from review and coordination | **Untested** | These records cover dialectic-mediated review only: review run through subagent councils or external models leaves no row unless filed through `reviewer_provenance`, a field no caller has yet populated, so that gap is in recording rather than occurrence. Benefit is separate and unmeasured — every change went through the reviewed path, leaving zero untreated cases to compare against. |
 | Robustness to a motivated attacker | **Structural limit** | A capable process can optimize or conceal behavior outside the monitored proxy; independent evidence remains necessary. See the [scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md). |
-| Cross-operator generality | **Untested** | Every deployment number above comes from one operator's co-development fleet. |
 
 The outcome read carries a protocol qualification. After the frozen cutoff,
 recurring automation exposed live discrimination output: the ablation watchdog
@@ -224,13 +224,11 @@ an operational decision rule, but it is not the only post-registration read and
 cannot be described as clean single-read blinding; its report must disclose the
 interim access and read-specific power.
 
-The instrument-frame validation the system does claim — reliability, faithfulness
-under intervention, and calibration — is scoped and partly built; the
+The validation the system does claim — reliability, faithfulness under
+intervention, and calibration — is scoped and partly built; the
 [roadmap](ROADMAP.md) tracks it. The DOI identifies a
 [public preprint](https://doi.org/10.5281/zenodo.19647159), not peer-reviewed
-validation. Federation is a research direction whose blocker is named rather than
-unknown: see [Evidence and limits, in
-full](docs/EVIDENCE_AND_LIMITS.md#local-control-and-future-federation).
+validation.
 
 ## Documentation
 
