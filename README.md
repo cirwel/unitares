@@ -92,8 +92,12 @@ result = sync_state(
     confidence=0.8,
     client_session_id=sid,
 )
-if result.get("success") is False:          # governed write refused, e.g. paused
-    return_to_operator(result.get("recovery"))
+refused = (
+    result.get("success") is False              # error-shaped refusal, e.g. paused
+    or result.get("tool_class") == "required"   # identity refusal: success-shaped
+)
+if refused:
+    return_to_operator(result.get("recovery") or result.get("next_step"))
 elif result.get("state_summary", {}).get("action") == "pause":
     return_to_operator(result.get("next_action"))   # your boundary to honor
 
