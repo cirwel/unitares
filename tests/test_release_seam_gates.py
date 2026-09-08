@@ -241,6 +241,99 @@ def test_release_bookkeeping_never_has_to_cite_itself(repo: Repo):
     assert "1 of 1 cited" in result.stdout
 
 
+def _release(repo: Repo, cited: str = "- **things:** alpha (#10)") -> None:
+    repo.commit("chore(release): 1.1.0 (#99)", {
+        "VERSION": "1.1.0\n",
+        "docs/CHANGELOG.md": _entry("1.1.0", cited),
+    })
+
+
+def test_an_inert_dependency_bump_is_excluded_but_counted(repo: Repo):
+    """An action pin, a digest and a dev-tooling manifest move nothing a reader
+    of the entry can observe; the merge proves it and no line is required."""
+    repo.commit("feat: alpha (#10)")
+    repo.commit("build(deps): bump actions/checkout from 4 to 5 (#12)",
+                {".github/workflows/ci.yml": "uses: actions/checkout@v5\n"})
+    repo.commit("build(deps-dev): bump vitest from 4.1.11 to 5.0.0 in /dashboard (#13)",
+                {"dashboard/package.json": '{"devDependencies": {"vitest": "5.0.0"}}\n',
+                 "dashboard/package-lock.json": "{}\n"})
+    repo.commit("build(deps): bump python from `cae66f2` to `cad9a2c` (#14)",
+                {"Dockerfile": "FROM python@sha256:cad9a2c\n"})
+    _release(repo)
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 0, result.stdout
+    assert "1 of 1 cited" in result.stdout
+    assert "3 dependency bump(s) excluded" in result.stdout
+    assert "0 dependency bump(s) held" in result.stdout
+
+
+def test_a_major_move_of_a_runtime_pin_is_held_to_a_citation(repo: Repo):
+    """`build(deps): bump mcp from 1.29.0 to 2.1.1 (#2050)` renamed
+    Tool.inputSchema under exactly this subject shape. A major move of a
+    runtime manifest is a change the entry must name."""
+    repo.commit("feat: alpha (#10)")
+    repo.commit("build(deps): bump mcp from 1.29.0 to 2.1.1 (#15)",
+                {"constraints.txt": "mcp==2.1.1\n"})
+    _release(repo)
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 1
+    assert "#15" in result.stdout
+    assert "held: major move of a runtime pin (constraints.txt)" in result.stdout
+    assert "1 dependency bump(s) held" in result.stdout
+    # Citing it clears the gate like any other change.
+    _release(repo, "- **things:** alpha (#10)\n- **deps:** mcp 2 (#15)")
+    assert _run(repo.path, COVERAGE).returncode == 0
+
+
+def test_a_same_major_move_of_a_runtime_pin_is_excluded(repo: Repo):
+    repo.commit("feat: alpha (#10)")
+    repo.commit("build(deps): bump mcp from 2.1.1 to 2.2.0 (#16)",
+                {"constraints.txt": "mcp==2.2.0\n"})
+    repo.commit("build(deps): update numpy requirement from <2,>=1.26 to >=1.26,<2.1 (#17)",
+                {"pyproject.toml": "numpy>=1.26,<2.1\n"})
+    _release(repo)
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 0, result.stdout
+    assert "2 dependency bump(s) excluded" in result.stdout
+
+
+def test_a_group_bump_of_runtime_pins_cannot_prove_itself(repo: Repo):
+    """A group subject names no versions, so a runtime manifest move under it
+    is held: the subject is the only version evidence the gate reads."""
+    repo.commit("feat: alpha (#10)")
+    repo.commit("build(deps): bump the pip group across 1 directory with 2 updates (#18)",
+                {"constraints.txt": "mcp==2.2.0\nnumpy==2.1.0\n"})
+    _release(repo)
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 1
+    assert "held: moves a runtime pin (constraints.txt) and the subject does not show the versions" in result.stdout
+
+
+def test_a_bump_that_touches_source_is_an_ordinary_change(repo: Repo):
+    """The subject shape buys nothing when the diff reaches past the pins."""
+    repo.commit("feat: alpha (#10)")
+    repo.commit("build(deps): bump mcp from 2.1.1 to 2.2.0 (#19)",
+                {"constraints.txt": "mcp==2.2.0\n", "src/tool_schemas.py": "# adapted\n"})
+    _release(repo)
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 1
+    assert "held: touches src/tool_schemas.py, which is not a dependency pin" in result.stdout
+
+
+def test_an_ordinary_build_change_still_needs_a_citation(repo: Repo):
+    """Only the dependabot shape is excluded; `build:` alone is a real change."""
+    repo.commit("feat: alpha (#10)")
+    repo.commit("build: switch the package backend to hatchling (#14)")
+    repo.commit("chore(release): 1.1.0 (#99)", {
+        "VERSION": "1.1.0\n",
+        "docs/CHANGELOG.md": _entry("1.1.0", "- **things:** alpha (#10)"),
+    })
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 1
+    assert "#14" in result.stdout
+    assert "0 dependency bump(s) excluded" in result.stdout
+
+
 def test_list_mode_reports_the_same_gaps_without_failing(repo: Repo):
     repo.commit("feat: alpha (#10)")
     repo.commit("fix: beta (#11)")
