@@ -178,11 +178,40 @@ jobs:
         # required `test (3.12)` context below, so a 3.14 regression blocks
         # merge.
         python-version: ['3.12', '3.14']
-        # Top-level tests are split by filename using recent Actions timing.
-        # The eight groups target roughly 2-3 minutes of test execution each;
-        # nested tests and agents keep a dedicated shard. Each job gets its own
-        # DB and filesystem, avoiding the shared-state hazards of pytest-xdist.
-        shard: [tests-a-b, tests-c-d, tests-e-h, tests-i-l, tests-m-p, tests-q-t, tests-u-z, agents-and-nested]
+        # Top-level tests are split by filename. Nested tests and agents keep a
+        # dedicated shard. Each job gets its own DB and filesystem, avoiding the
+        # shared-state hazards of pytest-xdist.
+        #
+        # The wall clock of this workflow is the SLOWEST shard, not the sum, so
+        # the boundaries are chosen to flatten the spread rather than to give
+        # each letter range a similar file count (file count predicts runtime
+        # poorly: the old tests-q-t held 129 files and ran 228s while tests-c-d
+        # held 138 and ran 171s).
+        #
+        # Boundaries re-cut 2026-09-08 against measured per-group runtimes under
+        # COVERAGE_CORE=sysmon (below) -- the old ones were cut before that, and
+        # the fast core does not shrink every group equally. Every group here was
+        # run and observed green; the numbers are one machine's seconds, so read
+        # them as a spread, not as CI times:
+        #
+        #     before (old boundaries)     after (these boundaries)
+        #     a-b   41.1s                 a-c   88.9s
+        #     c-d   91.2s                 d-e   79.3s
+        #     e-h   88.1s                 f-i   69.2s
+        #     i-l   86.9s                 j-m   87.2s
+        #     m-p   60.7s                 n-r   68.4s
+        #     q-t  108.1s  <- critical    s-t   76.5s
+        #     u-z   39.9s                 u-z   39.9s
+        #     agents-and-nested 23.3s     agents-and-nested 23.3s
+        #     critical shard 108.1s       critical shard 88.9s  (-18%)
+        #
+        # tests-a-c is now the binding constraint and cannot be split further
+        # without pushing another group above it, so 88.9s is the floor for
+        # seven contiguous letter groups. A ninth shard was measured too and
+        # bought nothing: it lands on the same 88.9s critical path for two more
+        # runners. Re-cut these boundaries from measurement, not from intuition,
+        # whenever the spread drifts again.
+        shard: [tests-a-c, tests-d-e, tests-f-i, tests-j-m, tests-n-r, tests-s-t, tests-u-z, agents-and-nested]
 
     # Without a database, 333 tests across 29 modules skip themselves — every
     # migration test among them. The suite went green while the riskiest surface
@@ -245,25 +274,48 @@ jobs:
     - name: Run ${{ matrix.shard }} tests with coverage
       env:
         COVERAGE_FILE: .coverage.${{ matrix.python-version }}.${{ matrix.shard }}
+        # Measure through CPython's sys.monitoring (PEP 669) instead of the
+        # C trace function. Both legs are >= 3.12, so the fast core is always
+        # available; coverage.py falls back to the trace core on its own if it
+        # ever is not, so this is safe to set unconditionally.
+        #
+        # Measured on tests/test_[q-t]*.py (the slowest shard), same machine,
+        # same interpreter: 184.8s -> 108.1s, a 41% cut. On tests/test_[u-z]*.py
+        # coverage overhead went from +32% over an uninstrumented run to ~0%.
+        # The suite is ~17k small tests, so it pays per-test dispatch overhead
+        # rather than a few hot spots -- exactly what sysmon removes.
+        #
+        # It does not measure less. On [u-z] both cores reported an identical
+        # 23.59% over identical statement counts. On [q-t] the two cores differ
+        # by 5 statements out of 51823 (0.01%), all of them inside the
+        # asyncio.wait_for Redis guards in identity/session.py and
+        # middleware/identity_step.py: the faster run completes those awaits
+        # before their sub-second timeouts, so it covers the success branch
+        # (identity_step.py:364) where the slower run covered the failure
+        # branch (:366). A blind spot can only lose lines, never trade one for
+        # another -- this is the documented timing sensitivity of those paths
+        # (see CLAUDE.md, "Substrate Tax"), not a measurement gap. sysmon
+        # itself is deterministic: three consecutive runs agreed exactly.
+        COVERAGE_CORE: sysmon
       run: |
         case "${{ matrix.shard }}" in
-          tests-a-b)
-            targets=(tests/test_[a-b]*.py)
+          tests-a-c)
+            targets=(tests/test_[a-c]*.py)
             ;;
-          tests-c-d)
-            targets=(tests/test_[c-d]*.py)
+          tests-d-e)
+            targets=(tests/test_[d-e]*.py)
             ;;
-          tests-e-h)
-            targets=(tests/test_[e-h]*.py)
+          tests-f-i)
+            targets=(tests/test_[f-i]*.py)
             ;;
-          tests-i-l)
-            targets=(tests/test_[i-l]*.py)
+          tests-j-m)
+            targets=(tests/test_[j-m]*.py)
             ;;
-          tests-m-p)
-            targets=(tests/test_[m-p]*.py)
+          tests-n-r)
+            targets=(tests/test_[n-r]*.py)
             ;;
-          tests-q-t)
-            targets=(tests/test_[q-t]*.py)
+          tests-s-t)
+            targets=(tests/test_[s-t]*.py)
             ;;
           tests-u-z)
             targets=(tests/test_[u-z]*.py)
