@@ -34,6 +34,9 @@ def load_tool_count():
 DOC_FILES = [
     "README.md",
     "docs/guides/START_HERE.md",
+    # The full claim ledger restates the on-the-wire count the README summarises;
+    # both move together or the two surfaces disagree.
+    "docs/EVIDENCE_AND_LIMITS.md",
 ]
 
 # Patterns to match and replace

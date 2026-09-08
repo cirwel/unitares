@@ -10,7 +10,7 @@ an analogy or proposal is not mistaken for a deployed contract.
 
 | You are… | Read in this order |
 |---|---|
-| **A reviewer / first-time visitor** | [repo README](../README.md) → [`PRODUCT_DEFINITION.md`](PRODUCT_DEFINITION.md) → [`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md) → [`EISV_COMPUTATION.md`](EISV_COMPUTATION.md) → [`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md) → [`PRODUCTION_SNAPSHOT.md`](PRODUCTION_SNAPSHOT.md) |
+| **A reviewer / first-time visitor** | [repo README](../README.md) → [`PRODUCT_DEFINITION.md`](PRODUCT_DEFINITION.md) → [`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md) → [`EISV_COMPUTATION.md`](EISV_COMPUTATION.md) → [`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md) → [`PRODUCTION_SNAPSHOT.md`](PRODUCTION_SNAPSHOT.md) → [`EVIDENCE_AND_LIMITS.md`](EVIDENCE_AND_LIMITS.md) |
 | **Integrating an agent client** | [`INTERFACE_CONTRACT.md`](INTERFACE_CONTRACT.md) → [`integration/CLIENT_CAPABILITY_MATRIX.md`](integration/CLIENT_CAPABILITY_MATRIX.md) → [`manual/04-integrating-agents.md`](manual/04-integrating-agents.md) → [`integration/MCP_CLIENTS.md`](integration/MCP_CLIENTS.md) → [`guides/TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) |
 | **Installing / deploying** | [`manual/02-install.md`](manual/02-install.md) → [`install/PLAYBOOK.md`](install/PLAYBOOK.md) → [`operations/OPERATOR_RUNBOOK.md`](operations/OPERATOR_RUNBOOK.md) |
 | **Contributing to the identity layer** | [`../AGENTS.md`](../AGENTS.md) → [`ontology/README.md`](ontology/README.md) → [`ontology/identity.md`](ontology/identity.md) → [`ontology/plan.md`](ontology/plan.md) |
@@ -38,6 +38,7 @@ A cohesive, multi-chapter front door for operators and integrators. Thin chapter
 - **[`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md)** — guided tour for reviewers evaluating the project.
 - **[`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md)** — who this is for, what anchors the signal, and what gaming or robustness remains unproven.
 - **[`PRODUCTION_SNAPSHOT.md`](PRODUCTION_SNAPSHOT.md)** — frozen live metrics and dashboard views.
+- **[`EVIDENCE_AND_LIMITS.md`](EVIDENCE_AND_LIMITS.md)** — the full public claim ledger: every claim with its evidence class, the deployment record behind the numbers, the protocol qualification on the outcome read, and the named federation blocker. The root README carries a compressed version.
 - **[`trust-contract.md`](trust-contract.md)** — what the system guarantees, what it does not, and what honest failure looks like.
 - **[`ontology/eisv-telemetry-envelope-v1.md`](ontology/eisv-telemetry-envelope-v1.md)** — versioned measurement → derivation → policy → enforcement provenance stored with each new state row.
 - **[`CHANGELOG.md`](CHANGELOG.md)** — release history.
