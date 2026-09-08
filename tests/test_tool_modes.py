@@ -216,15 +216,27 @@ class TestToolOperations:
     def test_read_operations(self):
         assert TOOL_OPERATIONS["get_governance_metrics"] == "read"
         assert TOOL_OPERATIONS["health_check"] == "read"
-        assert TOOL_OPERATIONS["list_agents"] == "read"
+        assert TOOL_OPERATIONS["observe"] == "read"
 
     def test_write_operations(self):
         assert TOOL_OPERATIONS["process_agent_update"] == "write"
-        assert TOOL_OPERATIONS["store_knowledge_graph"] == "write"
-        assert TOOL_OPERATIONS["archive_agent"] == "write"
+        assert TOOL_OPERATIONS["knowledge"] == "write"
+        assert TOOL_OPERATIONS["agent"] == "write"
 
     def test_admin_operations(self):
-        assert TOOL_OPERATIONS["cleanup_stale_locks"] == "admin"
+        assert TOOL_OPERATIONS["admin"] == "admin"
+        assert TOOL_OPERATIONS["operator_resume_agent"] == "admin"
+
+    def test_legacy_alias_narrower_than_its_router_declares_its_own_class(self):
+        """TOOL_OPERATIONS is keyed by the roster only (2026-09-07); a legacy
+        alias that pins a read action of a write router says so on its entry."""
+        from src.mcp_handlers.tool_stability import list_all_aliases
+
+        aliases = list_all_aliases()
+        assert "list_agents" not in TOOL_OPERATIONS
+        assert aliases["list_agents"].operation == "read"
+        assert TOOL_OPERATIONS[aliases["list_agents"].new_name] == "write"
+        assert aliases["cleanup_stale_locks"].operation is None  # same class as admin
 
     def test_all_ops_are_valid(self):
         valid_ops = {"read", "write", "admin"}

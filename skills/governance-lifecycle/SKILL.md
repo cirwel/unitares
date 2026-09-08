@@ -30,14 +30,14 @@ source_digests:
   unitares/src/mcp_handlers/core.py: "5a6e81697f537ac2"
   unitares/src/mcp_handlers/identity/handlers.py: "54451aa9ac842fb1"
   unitares/src/mcp_handlers/admin/handlers.py: "d7dec13e6a422b43"
-  unitares/src/mcp_handlers/tool_stability.py: "9513b90cde7e6601"
+  unitares/src/mcp_handlers/tool_stability.py: "b81fb422cdec412c"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "bcac7a83172032db"
   unitares/src/mcp_handlers/updates/phases.py: "62168987a1a7fb79"
   unitares/src/mcp_handlers/updates/enrichments.py: "f91c10502c48275b"
   unitares/src/mcp_handlers/dialectic/handlers.py: "96ffbcfbbea5ff34"
   unitares/src/mcp_handlers/lifecycle/self_recovery.py: "3fd24e37c57566a3"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/src/tool_modes.py: "fd9602609291ffad"
+  unitares/src/tool_modes.py: "0c3ffbb1363381b5"
   unitares/src/tool_mode_listing.py: "a99a9e7f6e4a95c4"
 ---
 

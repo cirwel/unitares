@@ -48,7 +48,7 @@ source_digests:
   unitares/src/eisv_telemetry.py: "706c833dfcebab8f"
   unitares/src/services/runtime_queries.py: "9284450ddb2a9207"
   unitares/src/mcp_handlers/response_formatter.py: "1dce49d5fa405c49"
-  unitares/src/mcp_handlers/tool_stability.py: "9513b90cde7e6601"
+  unitares/src/mcp_handlers/tool_stability.py: "b81fb422cdec412c"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
   unitares/src/mcp_handlers/dialectic/enforcement.py: "135a7345ad47d5bf"
   unitares/src/mcp_handlers/observability/outcome_events.py: "8bc5314d099e7b9b"

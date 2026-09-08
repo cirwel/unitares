@@ -551,3 +551,36 @@ async def test_alias_block_dates_a_consolidated_name_and_not_a_workflow_name():
     workflow = json.loads((await handle_describe_tool({"tool_name": "sync_state", "lite": False}))[0].text)
     assert workflow["alias"]["role"] == "primary_agent_workflow"
     assert workflow["alias"]["deprecated_since"] is None
+
+
+@pytest.mark.asyncio
+async def test_describe_and_list_report_the_declared_stability():
+    """The stability tier was recorded and never reported until 2026-09-07."""
+    import json
+    from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool, handle_list_tools
+
+    lite = json.loads((await handle_describe_tool({"tool_name": "sync_state", "lite": True}))[0].text)
+    assert lite["stability"] == "stable"  # process_agent_update's tier
+    assert lite["operation"] == "write"
+    full = json.loads((await handle_describe_tool({"tool_name": "simulate_update", "lite": False}))[0].text)
+    assert full["tool"]["stability"] == "experimental"
+
+    listed = json.loads((await handle_list_tools({"lite": False}))[0].text)
+    by_name = {t["name"]: t for t in listed["tools"]}
+    assert by_name["knowledge"]["stability"] == "stable"
+    assert by_name["admin"]["stability"] == "beta"
+    lite_listed = json.loads((await handle_list_tools({"lite": True}))[0].text)
+    assert all("stability" in t for t in lite_listed["tools"])
+
+
+@pytest.mark.asyncio
+async def test_describe_reports_a_legacy_alias_own_narrower_operation():
+    import json
+    from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
+
+    legacy = json.loads((await handle_describe_tool({"tool_name": "list_agents", "lite": True}))[0].text)
+    assert legacy["operation"] == "read"  # the agent router it dispatches through is write
+    router = json.loads((await handle_describe_tool({"tool_name": "agent", "lite": True}))[0].text)
+    assert router["operation"] == "write"
+    guess = json.loads((await handle_describe_tool({"tool_name": "checkin", "lite": True}))[0].text)
+    assert guess["operation"] == "write"  # no override: process_agent_update's class

@@ -10,7 +10,6 @@ Reduces friction from constant tool churn by:
 
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
-from enum import Enum
 from datetime import datetime
 from .support.tool_hints import KNOWLEDGE_SEARCH_SIMILARITY_MIGRATION_NOTE
 from .support.param_normalization import (
@@ -19,11 +18,12 @@ from .support.param_normalization import (
     normalize_unit_interval,
 )
 from src.governance_glossary import EISV_INLINE_SUMMARY
-class ToolStability(Enum):
-    """Tool stability tier - helps users know what to expect"""
-    STABLE = "stable"  # Production-ready, won't change
-    BETA = "beta"  # Mostly stable, minor changes possible
-    EXPERIMENTAL = "experimental"  # WIP, may change/break
+# The stability enum and the per-tool tier live with the one record per tool
+# in src/tool_meta.py (2026-09-07); both are re-exported here so
+# `from src.mcp_handlers.tool_stability import ToolStability, _TOOL_STABILITY`
+# keeps working.
+from src.tool_meta import TOOL_STABILITY as _TOOL_STABILITY  # noqa: F401
+from src.tool_meta import ToolStability
 
 @dataclass
 class ToolAlias:
@@ -35,6 +35,10 @@ class ToolAlias:
     migration_note: Optional[str] = None
     inject_action: Optional[str] = None  # For consolidated tools: auto-inject this action parameter
     inject_defaults: Optional[Dict[str, Any]] = None  # Friendly-surface defaults applied only when omitted
+    # read / write / admin when the alias pins an action narrower than its
+    # router's class (list_agents is a read; the agent router it rewrites to
+    # also archives and deletes). None: same class as the canonical tool.
+    operation: Optional[str] = None
     # Friendly aliases may absorb agent vocabulary or materialize advertised
     # workflow defaults before validation; canonical tools stay strict. Runs in
     # resolve_alias; caller-visible transforms are disclosed via
@@ -334,9 +338,11 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     # Admin / diagnostics tools → admin(action='...')
     "get_server_info": ToolAlias(old_name="get_server_info", new_name="admin", reason="consolidated",
         deprecated_since=_SINCE_ADMIN_ROUTER,
+        operation="read",
         migration_note="Use admin(action='server_info')", inject_action="server_info"),
     "get_connection_status": ToolAlias(old_name="get_connection_status", new_name="admin", reason="consolidated",
         deprecated_since=_SINCE_ADMIN_ROUTER,
+        operation="read",
         migration_note="Use admin(action='connections')", inject_action="connections"),
     # get_workspace_health is deliberately NOT aliased to admin, and it is the
     # one member of the admin group that keeps register=True.
@@ -355,18 +361,23 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     # standalone tool stays. admin(action="workspace_health") is unaffected.
     "get_tool_usage_stats": ToolAlias(old_name="get_tool_usage_stats", new_name="admin", reason="consolidated",
         deprecated_since=_SINCE_ADMIN_ROUTER,
+        operation="read",
         migration_note="Use admin(action='tool_usage')", inject_action="tool_usage"),
     "get_telemetry_metrics": ToolAlias(old_name="get_telemetry_metrics", new_name="admin", reason="consolidated",
         deprecated_since=_SINCE_ADMIN_ROUTER,
+        operation="read",
         migration_note="Use admin(action='telemetry') or observe(action='telemetry')", inject_action="telemetry"),
     "debug_request_context": ToolAlias(old_name="debug_request_context", new_name="admin", reason="consolidated",
         deprecated_since=_SINCE_ADMIN_ROUTER,
+        operation="read",
         migration_note="Use admin(action='debug_context')", inject_action="debug_context"),
     "validate_file_path": ToolAlias(old_name="validate_file_path", new_name="admin", reason="consolidated",
         deprecated_since=_SINCE_ADMIN_ROUTER,
+        operation="read",
         migration_note="Use admin(action='validate_path', file_path='...')", inject_action="validate_path"),
     "reset_monitor": ToolAlias(old_name="reset_monitor", new_name="admin", reason="consolidated",
         deprecated_since=_SINCE_ADMIN_ROUTER,
+        operation="write",
         migration_note="Use admin(action='reset_monitor')", inject_action="reset_monitor"),
     "cleanup_stale_locks": ToolAlias(old_name="cleanup_stale_locks", new_name="admin", reason="consolidated",
         deprecated_since=_SINCE_ADMIN_ROUTER,
@@ -386,6 +397,7 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     # Export tools → export(action='...')
     "get_system_history": ToolAlias(old_name="get_system_history", new_name="export", reason="consolidated",
         deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
+        operation="read",
         migration_note="Use export(action='history')", inject_action="history"),
     "export_to_file": ToolAlias(old_name="export_to_file", new_name="export", reason="consolidated",
         deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
@@ -394,9 +406,11 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     # Agent lifecycle tools → agent(action='...')
     "list_agents": ToolAlias(old_name="list_agents", new_name="agent", reason="consolidated",
         deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
+        operation="read",
         migration_note="Use agent(action='list')", inject_action="list"),
     "get_agent_metadata": ToolAlias(old_name="get_agent_metadata", new_name="agent", reason="consolidated",
         deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
+        operation="read",
         migration_note="Use agent(action='get', agent_id='...')", inject_action="get"),
     "update_agent_metadata": ToolAlias(old_name="update_agent_metadata", new_name="agent", reason="consolidated",
         deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
@@ -411,6 +425,7 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     # Calibration tools → calibration(action='...')
     "check_calibration": ToolAlias(old_name="check_calibration", new_name="calibration", reason="consolidated",
         deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
+        operation="read",
         migration_note="Use calibration(action='check')", inject_action="check"),
     "update_calibration_ground_truth": ToolAlias(old_name="update_calibration_ground_truth", new_name="calibration", reason="consolidated",
         deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
@@ -428,21 +443,25 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
         migration_note="Use knowledge(action='store', summary='...')", inject_action="store"),
     "get_knowledge_graph": ToolAlias(old_name="get_knowledge_graph", new_name="knowledge", reason="consolidated",
         deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
+        operation="read",
         migration_note="Use knowledge(action='get')", inject_action="get"),
     "list_knowledge_graph": ToolAlias(old_name="list_knowledge_graph", new_name="knowledge", reason="consolidated",
         deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
+        operation="read",
         migration_note="Use knowledge(action='list')", inject_action="list"),
     "update_discovery_status_graph": ToolAlias(old_name="update_discovery_status_graph", new_name="knowledge", reason="consolidated",
         deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use knowledge(action='update', discovery_id='...', status='...')", inject_action="update"),
     "get_discovery_details": ToolAlias(old_name="get_discovery_details", new_name="knowledge", reason="consolidated",
         deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
+        operation="read",
         migration_note="Use knowledge(action='details', discovery_id='...')", inject_action="details"),
     "cleanup_knowledge_graph": ToolAlias(old_name="cleanup_knowledge_graph", new_name="knowledge", reason="consolidated",
         deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note="Use knowledge(action='cleanup')", inject_action="cleanup"),
     "get_lifecycle_stats": ToolAlias(old_name="get_lifecycle_stats", new_name="knowledge", reason="consolidated",
         deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
+        operation="read",
         migration_note="Use knowledge(action='stats')", inject_action="stats"),
 
     # ==========================================================================
@@ -548,73 +567,8 @@ AGENT_WORKFLOW_ALIASES: tuple[str, ...] = (
     "request_review",
 )
 
-# ============================================================================
-# Tool Stability Registry
-# ============================================================================
-# Mark tools by stability tier to help users know what to expect
-
-_TOOL_STABILITY: Dict[str, ToolStability] = {
-    # Keyed by registered dispatch tools only, every one of them listed, so
-    # no tier is a silent default. Legacy and workflow alias names resolve to
-    # their canonical tool in get_tool_stability. Nothing in the runtime reads
-    # this map today (tests do); it is the declared promise, kept honest.
-    #
-    # Consolidated routers carry a tier forward only where every flat
-    # predecessor agreed: knowledge (store / search / get / list / details were
-    # all STABLE) and self_recovery (review / quick / check were all STABLE).
-    # Routers with mixed or undeclared predecessors are BETA, the same
-    # effective tier they had as unlisted names.
-
-    # STABLE: Production-ready, won't change
-    "identity": ToolStability.STABLE,  # Primary identity tool (renamed from status)
-    "process_agent_update": ToolStability.STABLE,
-    "get_governance_metrics": ToolStability.STABLE,
-    "knowledge": ToolStability.STABLE,
-    "search_knowledge_graph": ToolStability.STABLE,
-    "self_recovery": ToolStability.STABLE,
-    "health_check": ToolStability.STABLE,
-    "list_tools": ToolStability.STABLE,
-    "describe_tool": ToolStability.STABLE,
-
-    # BETA: Mostly stable, minor changes possible
-    "admin": ToolStability.BETA,
-    "agent": ToolStability.BETA,  # list_agents was STABLE, archive_agent BETA
-    "archive_old_test_agents": ToolStability.BETA,
-    "archive_orphan_agents": ToolStability.BETA,
-    "bind_session": ToolStability.BETA,
-    "calibration": ToolStability.BETA,
-    "call_model": ToolStability.BETA,
-    "cirs_protocol": ToolStability.BETA,
-    "config": ToolStability.BETA,
-    "consult": ToolStability.BETA,
-    "dashboard": ToolStability.BETA,
-    "delegate_inference": ToolStability.BETA,
-    "describe_inference_host": ToolStability.BETA,
-    "detect_stuck_agents": ToolStability.BETA,
-    "dialectic": ToolStability.BETA,  # Consolidated dialectic queries (get/list)
-    "export": ToolStability.BETA,
-    "get_thresholds": ToolStability.BETA,
-    "get_trajectory_status": ToolStability.BETA,
-    "get_workspace_health": ToolStability.BETA,
-    "leave_note": ToolStability.BETA,
-    "list_inference_hosts": ToolStability.BETA,
-    "list_process_bindings": ToolStability.BETA,
-    "mark_response_complete": ToolStability.BETA,
-    "observe": ToolStability.BETA,  # observe_agent / compare_agents BETA, anomalies / aggregate EXPERIMENTAL
-    "onboard": ToolStability.BETA,
-    "operator_resume_agent": ToolStability.BETA,  # Operator tool
-    "outcome_correlation": ToolStability.BETA,
-    "outcome_event": ToolStability.BETA,
-    "record_progress_pulse": ToolStability.BETA,
-    "set_thresholds": ToolStability.BETA,
-    "skills": ToolStability.BETA,
-    "verify_trajectory_identity": ToolStability.BETA,
-
-    # EXPERIMENTAL: WIP, may change/break
-    "simulate_update": ToolStability.EXPERIMENTAL,
-}
-
-# Default stability for unlisted tools
+# Default stability for a tool with no record (a plugin tool, or a name the
+# registry has not settled yet).
 _DEFAULT_STABILITY = ToolStability.BETA
 
 # ============================================================================
