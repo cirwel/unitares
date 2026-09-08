@@ -90,7 +90,13 @@ class SearchKnowledgeGraphParams(AgentIdentityMixin):
         description=(
             "Exact tag filter, applied in every search mode: a discovery matches "
             "when it carries any of the given tags (normalized the same way as on store)"
-        )
+        ),
+        json_schema_extra={
+            "brief": (
+                "Exact any-of tag filter, applied in every search mode "
+                "(normalized as on store)."
+            )
+        },
     )
     created_after: Optional[str] = Field(
         default=None,
@@ -148,6 +154,12 @@ class SearchKnowledgeGraphParams(AgentIdentityMixin):
             "fail honestly when the backend has no semantic_search — the "
             "router does not silently fall back to FTS."
         ),
+        json_schema_extra={
+            "brief": (
+                "Retrieval mode; 'auto' picks hybrid > semantic > fts > substring. "
+                "'semantic'/'hybrid' fail honestly rather than falling back."
+            )
+        },
     )
     operator: Optional[Literal["AND", "OR"]] = Field(
         default=None,
@@ -156,6 +168,12 @@ class SearchKnowledgeGraphParams(AgentIdentityMixin):
             "AND with automatic OR fallback when AND returns zero results. "
             "Pass 'OR' explicitly for broad recall (skips the AND-first step)."
         ),
+        json_schema_extra={
+            "brief": (
+                "FTS operator for multi-term queries. Default is AND with an OR "
+                "fallback; pass 'OR' for broad recall."
+            )
+        },
     )
 
     @model_validator(mode='after')
@@ -407,12 +425,27 @@ class KnowledgeParams(AgentIdentityMixin):
             "assurance while omitting repeated identity_context. The default "
             "is full; write actions always keep the full attribution envelope."
         ),
+        json_schema_extra={
+            "brief": (
+                "Read-envelope for search/get/details/stats; compact and lean "
+                "drop repeated identity_context. Default full."
+            )
+        },
     )
     query: Optional[str] = Field(None, description="Search query (for action=search)")
     content: Optional[str] = Field(None, description="Extended content/details (for action=store or action=note)")
     details: Optional[str] = Field(None, description="Extended details for discovery (for action=store). Alias: content")
     summary: Optional[str] = Field(None, description="Discovery summary (for action=store)")
-    discovery_type: Optional[str] = Field(None, description="Required for action=store. One of: " + ", ".join(get_args(DiscoveryType)) + ".")
+    discovery_type: Optional[str] = Field(
+        None,
+        description="Required for action=store. One of: " + ", ".join(get_args(DiscoveryType)) + ".",
+        # The list IS the description here, so the authored brief keeps it and
+        # spends its savings on the framing instead. An authored brief is a
+        # deliberate choice and is not held to BRIEF_BUDGET.
+        json_schema_extra={
+            "brief": "action=store; one of " + ", ".join(get_args(DiscoveryType)) + ".",
+        },
+    )
     response_to: Optional[dict] = Field(None, description="Typed response link {discovery_id, response_type} for threaded store/note writes")
     tags: Optional[List[str]] = Field(
         None,
@@ -420,6 +453,12 @@ class KnowledgeParams(AgentIdentityMixin):
             "Tags for the discovery (action=store, note). For action=search: an exact "
             "filter in every search mode, matching any of the given tags (normalized)"
         ),
+        json_schema_extra={
+            "brief": (
+                "Tags (action=store, note); for action=search an exact any-of "
+                "filter in every search mode."
+            )
+        },
     )
     severity: Optional[str] = Field(None, description="Severity: low, medium, high, critical (for action=store or action=update)")
     related_files: Optional[List[str]] = Field(None, description="File paths referenced by this discovery (for action=store)")
@@ -446,6 +485,13 @@ class KnowledgeParams(AgentIdentityMixin):
             "was positively observed — the old symptom merely being absent is "
             "'unobserved', not 'fix_verified'."
         ),
+        json_schema_extra={
+            "brief": (
+                "Closing standard for action=update: fix_verified | unobserved | "
+                "not_reproducible | obsolete | duplicate. 'fix_verified' needs a "
+                "deployed change whose effect was observed."
+            )
+        },
     )
     closure_evidence: Optional[Dict[str, Any]] = Field(
         None,

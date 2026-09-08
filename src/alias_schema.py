@@ -9,6 +9,12 @@ from __future__ import annotations
 
 import copy
 
+from src.schema_brief import (
+    BRIEF_BUDGET,
+    DEFAULT_FIELD_DESCRIPTION_MODE,
+    apply_field_description_mode,
+)
+
 
 # Subtraction is the compatibility-safe policy for established read aliases:
 # every listed field is write-side and is never read by the pinned action.
@@ -71,6 +77,9 @@ ALIAS_SCHEMA_KEEP = {
 }
 
 
+# Overrides carry the same authoring shape as a Pydantic Field: `description`
+# is the full text describe_tool serves, and an optional `brief` is the
+# authored short form the advertised wire serves instead (src/schema_brief.py).
 ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
     "search_shared_memory": {
         "response_mode": {
@@ -81,6 +90,10 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
                 "detail previews, or score maps. Compact retains more diagnostics; "
                 "full includes raw_governance with the complete result set."
             ),
+            "brief": (
+                "Read-envelope mode. Default lean: one-line digests; compact adds "
+                "diagnostics, full adds raw_governance."
+            ),
         },
         "include_details": {
             "description": (
@@ -88,6 +101,10 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
                 "Compact/lean search suppresses detail serialization upstream "
                 "and returns bounded previews; open one result with "
                 "knowledge(action='details', discovery_id='...')."
+            ),
+            "brief": (
+                "Expand results inline only with response_mode='full'; otherwise "
+                "open one with knowledge(action='details')."
             ),
         },
     },
@@ -101,8 +118,20 @@ _ALIAS_ALWAYS_KEEP = frozenset({
 })
 
 
-def apply_alias_schema_property_overrides(alias_name: str, schema: dict) -> None:
-    """Apply documented property overrides in place when a property exists."""
+def apply_alias_schema_property_overrides(
+    alias_name: str,
+    schema: dict,
+    *,
+    field_descriptions: str = DEFAULT_FIELD_DESCRIPTION_MODE,
+    budget: int = BRIEF_BUDGET,
+) -> None:
+    """Apply documented property overrides in place when a property exists.
+
+    These land on the already-registered wire schema, after the catalog's own
+    trim has run, so they must observe the same field-description mode — an
+    override is otherwise a hole in the contract that re-inflates exactly the
+    aliases agents use most.
+    """
     properties = schema.get("properties") if isinstance(schema, dict) else None
     if not isinstance(properties, dict):
         return
@@ -111,7 +140,11 @@ def apply_alias_schema_property_overrides(alias_name: str, schema: dict) -> None
     ).items():
         definition = properties.get(parameter)
         if isinstance(definition, dict):
-            definition.update(updates)
+            definition.update(
+                apply_field_description_mode(
+                    updates, field_descriptions, budget=budget
+                )
+            )
 
 
 def build_alias_input_schema(

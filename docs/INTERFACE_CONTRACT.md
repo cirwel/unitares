@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.2.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.4.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. For a selected tool mode, the server advertises the same
@@ -78,13 +78,22 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.3.0` is the negotiated interface release. Compatible additions
+- `version: 1.4.0` is the negotiated interface release. Compatible additions
   advance it without forcing clients to learn a new schema family (1.2.0,
   2026-09-07: `observe` and `describe_tool` declare parameters their handlers
   already read; 1.3.0, 2026-09-08: `describe_tool` takes `action` and answers
   for one action of a consolidated router, and `dialectic` drops the `vote`
   parameter, which named an action the router does not route and which no
-  handler read).
+  handler read; 1.4.0, 2026-09-08: parameter *descriptions* are advertised
+  abridged to their first sentence, with the full text served by
+  `describe_tool`).
+
+Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
+type, default or requiredness changing: descriptions live inside the hashed
+schema. A client that pins those digests should re-pin against 1.4.0 rather
+than read the change as a surface break. Setting
+`UNITARES_TOOL_SCHEMA_FIELD_DESCRIPTIONS=full` restores the pre-1.4.0 text
+exactly, digests included.
 
 A consolidated router advertises the union of every action's parameters,
 because the wire schema must be flat: the MCP wrapper builds a tool's argument

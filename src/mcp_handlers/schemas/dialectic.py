@@ -201,7 +201,16 @@ class DialecticParams(AgentIdentityMixin):
         ),
     )
     observed_metrics: Optional[dict] = Field(None, description="Observed metrics (for action=antithesis)")
-    reviewer_provenance: Optional[dict] = Field(None, description="Reviewer/model provenance for the verdict (for action=antithesis/synthesis); reviewer_kind='external_consult' files an outside-model consult as a governed record")
+    reviewer_provenance: Optional[dict] = Field(
+        None,
+        description="Reviewer/model provenance for the verdict (for action=antithesis/synthesis); reviewer_kind='external_consult' files an outside-model consult as a governed record",
+        json_schema_extra={
+            "brief": (
+                "Reviewer/model provenance (action=antithesis/synthesis); "
+                "reviewer_kind='external_consult' files an outside model."
+            )
+        },
+    )
     concerns: Optional[List[str]] = Field(None, description="Concerns (for action=antithesis)")
     take_over_if_requested: Optional[bool] = Field(None, description="Let a credentialed operator move reviewer ownership to the bound agent before antithesis")
     takeover_reason: Optional[str] = Field(None, description="Reason for reviewer takeover during antithesis")
