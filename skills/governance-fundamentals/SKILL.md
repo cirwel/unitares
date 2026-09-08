@@ -12,6 +12,7 @@ source_files:
   - unitares/governance_core/parameters.py
   - unitares/src/auto_ground_truth.py
   - unitares/src/governance_monitor.py
+  - unitares/src/monitor_calibration.py
   - unitares/src/governance_glossary.py
   - unitares/src/behavioral_state.py
   - unitares/src/behavioral_sensor.py
@@ -34,7 +35,8 @@ source_digests:
   unitares/governance_core/coherence.py: "ef819003ee72b388"
   unitares/governance_core/parameters.py: "84bf47ca540bbc49"
   unitares/src/auto_ground_truth.py: "c17109cf5c18f2a4"
-  unitares/src/governance_monitor.py: "8eae59483f4af562"
+  unitares/src/governance_monitor.py: "2734fbbd1693549f"
+  unitares/src/monitor_calibration.py: "c99375f368dd98aa"
   unitares/src/governance_glossary.py: "251e06209e038a13"
   unitares/src/behavioral_state.py: "e214a51c1d7763c7"
   unitares/src/behavioral_sensor.py: "9a4345371bf21b7f"
@@ -46,7 +48,7 @@ source_digests:
   unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
   unitares/src/confidence.py: "00cc04e1f54278b4"
   unitares/src/eisv_telemetry.py: "706c833dfcebab8f"
-  unitares/src/services/runtime_queries.py: "9284450ddb2a9207"
+  unitares/src/services/runtime_queries.py: "5e64973628fbcb7d"
   unitares/src/mcp_handlers/response_formatter.py: "1dce49d5fa405c49"
   unitares/src/mcp_handlers/tool_stability.py: "b81fb422cdec412c"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
@@ -212,6 +214,7 @@ The system tracks whether your stated confidence matches evidence. Over time thi
 - Grounding comes from objective signals: test pass/fail, command exit codes, lint results, file operations. These feed calibration automatically via `auto_ground_truth.py` and the `outcome_event` hook. Human validation is not required for deterministic evidence.
 - Overconfidence is tracked and can lower Integrity / raise uncertainty through the check-in pipeline
 - When an agent omits confidence, the deployed compatibility estimator still gives legacy `C(V_ODE)` 55% of its base weight. Responses expose this as `confidence_reliability.coherence_dependency=ode_control_feedback`; it is known causal debt, not independent confidence evidence. Do not reweight it without prospective outcome calibration because confidence history can feed later entropy penalties.
+- That derived estimate stays internal: omitted confidence does not mint an agent tactical prediction or become an agent-reported calibration observation. Earlier explicit predictions remain available for their eventual outcomes. Simulation restores prediction bookkeeping and does not write trajectory calibration observations.
 
 ## Diagnostics
 
