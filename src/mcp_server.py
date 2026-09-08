@@ -149,6 +149,16 @@ _server_kwargs = dict(
     auth_server_provider=_oauth_provider,
     auth=_auth_settings,
 )
+# `instructions` reaches every MCP client in the initialize response, once, at
+# no per-call cost. It is the only in-band place a narrow advertised surface
+# can say what the server still does and how to have the rest listed — a mode
+# filters tools/list, and a schema-driven client offers the model nothing else.
+# Built from the static mode sets only (src/tool_modes.build_server_instructions);
+# the tool registry is not populated yet at this point in module load.
+if server_supports_kwarg("instructions"):
+    from src.tool_modes import build_server_instructions
+
+    _server_kwargs["instructions"] = build_server_instructions()
 if server_supports_kwarg("host"):
     _server_kwargs["host"] = _LISTEN_HOST
 if server_supports_kwarg("transport_security"):

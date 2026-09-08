@@ -2,11 +2,14 @@
 """Check the running Compose server's discovery and named-call contract.
 
 Run inside the governance-mcp container, using its installed MCP dependency:
-    docker compose exec -T governance-mcp python - --mode minimal < scripts/ci/check_mcp_tool_surface.py
+    docker compose exec -T governance-mcp python - --mode standard < scripts/ci/check_mcp_tool_surface.py
 
 This checks the real HTTP mount, not only the in-process registration table.
 The only tool call is the read-only list_tools introspection handler, which
-must dispatch even when minimal mode does not advertise it.
+must dispatch even when the profile does not advertise it. The initialize
+result is checked too: a profile narrower than `full` withholds names from
+discovery, and the `instructions` string is the one in-band place a client
+learns what it was not told about.
 """
 
 import argparse
@@ -27,7 +30,17 @@ async def check(mode: str, url: str) -> None:
         async with mcp_httpx().AsyncClient(timeout=15, trust_env=False) as http_client:
             async with streamable_http_client(url, http_client=http_client) as streams:
                 async with ClientSession(streams[0], streams[1]) as session:
-                    await session.initialize()
+                    init = await session.initialize()
+                    instructions = getattr(init, "instructions", None)
+                    if not instructions:
+                        raise RuntimeError(
+                            f"{mode}: initialize returned no instructions string"
+                        )
+                    if mode != "full" and "callable by name" not in instructions:
+                        raise RuntimeError(
+                            f"{mode}: instructions do not disclose the "
+                            "unadvertised surface"
+                        )
                     listed = await session.list_tools()
                     names = {tool.name for tool in listed.tools}
                     if names != expected:
@@ -49,12 +62,17 @@ async def check(mode: str, url: str) -> None:
                     if shown != expected:
                         raise RuntimeError(f"{mode}: introspection disagrees with discovery")
 
-    print(f"PASS: {mode} advertises {len(names)} tools; list_tools dispatches by name")
+    print(
+        f"PASS: {mode} advertises {len(names)} tools; list_tools dispatches by "
+        "name; initialize carries the instructions string"
+    )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("minimal", "lite"), required=True)
+    parser.add_argument(
+        "--mode", choices=("minimal", "standard", "lite", "full"), required=True
+    )
     parser.add_argument("--url", default="http://127.0.0.1:8767/mcp/")
     args = parser.parse_args()
     anyio.run(check, args.mode, args.url)

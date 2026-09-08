@@ -17,6 +17,7 @@ sys.path.insert(0, str(project_root))
 from src.tool_modes import (
     TOOL_MODE,
     MINIMAL_MODE_TOOLS,
+    STANDARD_MODE_TOOLS,
     LITE_MODE_TOOLS,
     OPERATOR_READONLY_MODE_TOOLS,
     OPERATOR_RECOVERY_MODE_TOOLS,
@@ -27,6 +28,7 @@ from src.tool_modes import (
     get_tools_for_mode,
     should_include_tool,
     is_claude_desktop_client,
+    build_server_instructions,
 )
 
 
@@ -57,8 +59,32 @@ class TestModeSets:
         assert "get_governance_metrics" not in MINIMAL_MODE_TOOLS
         assert "outcome_event" not in MINIMAL_MODE_TOOLS
 
-    def test_default_mode_is_minimal(self, monkeypatch):
-        """GOVERNANCE_TOOL_MODE unset means the five-tool surface."""
+    def test_standard_mode_is_the_loop_plus_the_unreachable_capabilities(self):
+        """Standard adds exactly the names that carry an otherwise-dormant capability.
+
+        A mode filters tools/list, and a schema-driven client offers the model
+        only what tools/list returns -- so a capability that is never
+        advertised cannot be reached by such a client at all. Standard
+        advertises shared memory, structured review, and advisory inference on
+        top of the checkpoint loop, and nothing else: no routers, no discovery
+        tools, no operator surface.
+        """
+        assert STANDARD_MODE_TOOLS == MINIMAL_MODE_TOOLS | {
+            "search_shared_memory",
+            "store_finding",
+            "update_finding",
+            "request_review",
+            "consult",
+        }
+        assert len(STANDARD_MODE_TOOLS) == 10
+        for router in ("knowledge", "agent", "observe", "dialectic", "config"):
+            assert router not in STANDARD_MODE_TOOLS
+        assert "list_tools" not in STANDARD_MODE_TOOLS
+        assert "describe_tool" not in STANDARD_MODE_TOOLS
+        assert "admin" not in STANDARD_MODE_TOOLS
+
+    def test_default_mode_is_standard(self, monkeypatch):
+        """GOVERNANCE_TOOL_MODE unset means the ten-tool surface."""
         import importlib
 
         import src.tool_modes as tool_modes
@@ -66,9 +92,16 @@ class TestModeSets:
         monkeypatch.delenv("GOVERNANCE_TOOL_MODE", raising=False)
         reloaded = importlib.reload(tool_modes)
         try:
-            assert reloaded.TOOL_MODE == "minimal"
+            assert reloaded.TOOL_MODE == "standard"
+            assert reloaded.get_tools_for_mode(reloaded.TOOL_MODE) == (
+                reloaded.STANDARD_MODE_TOOLS
+            )
         finally:
             importlib.reload(tool_modes)
+
+    def test_modes_nest_from_minimal_through_lite(self):
+        """Widening never drops a name a narrower profile advertised."""
+        assert MINIMAL_MODE_TOOLS < STANDARD_MODE_TOOLS < LITE_MODE_TOOLS
 
     def test_lite_mode_superset_of_minimal(self):
         """Widening the mode never drops a tool from the checkpoint loop."""
@@ -91,7 +124,7 @@ class TestModeSets:
         assert "operator_resume_agent" in OPERATOR_RECOVERY_MODE_TOOLS
 
     def test_minimal_is_smallest(self):
-        assert len(MINIMAL_MODE_TOOLS) < len(LITE_MODE_TOOLS)
+        assert len(MINIMAL_MODE_TOOLS) < len(STANDARD_MODE_TOOLS) < len(LITE_MODE_TOOLS)
 
 
 # --- get_tools_for_mode Tests ---
@@ -103,6 +136,10 @@ class TestGetToolsForMode:
     def test_minimal_mode(self):
         tools = get_tools_for_mode("minimal")
         assert tools == MINIMAL_MODE_TOOLS
+
+    def test_standard_mode(self):
+        tools = get_tools_for_mode("standard")
+        assert tools == STANDARD_MODE_TOOLS
 
     def test_lite_mode(self):
         tools = get_tools_for_mode("lite")
@@ -282,3 +319,77 @@ class TestIsClaudeDesktopClient:
     @patch.dict("os.environ", {"ANTHROPIC_CLAUDE": "1"})
     def test_anthropic_env_var_detection(self):
         assert is_claude_desktop_client() is True
+
+
+# --- Server instructions Tests ---
+
+
+class TestServerInstructions:
+    """The MCP `instructions` string is the one in-band surface description.
+
+    A mode filters tools/list, so an unadvertised capability is unreachable for
+    a schema-driven client. `instructions` reaches every client in the
+    initialize response, before any tool call, and is where a narrow profile
+    says what else the server does.
+    """
+
+    def test_names_the_workflow_on_every_profile(self):
+        for mode in ("minimal", "standard", "lite", "full"):
+            text = build_server_instructions(mode)
+            for name in ("start_session", "sync_state", "record_result",
+                         "check_working_state"):
+                assert name in text, f"{name} missing from {mode} instructions"
+
+    def test_narrow_profiles_name_what_they_do_not_advertise(self):
+        minimal = build_server_instructions("minimal")
+        # The capabilities minimal hides are named, so an agent can ask for them.
+        for name in ("search_shared_memory", "store_finding", "update_finding",
+                     "request_review", "consult"):
+            assert name in minimal
+        assert "callable by name" in minimal
+        assert "GOVERNANCE_TOOL_MODE=lite or full" in minimal
+
+        standard = build_server_instructions("standard")
+        # Standard advertises those five, so it points at the routers instead.
+        assert "list_tools" in standard
+        assert "knowledge" in standard
+
+    def test_reports_the_advertised_count_of_the_profile(self):
+        assert "advertises 5 tools" in build_server_instructions("minimal")
+        assert "advertises 10 tools" in build_server_instructions("standard")
+        assert (
+            f"advertises {len(LITE_MODE_TOOLS)} tools"
+            in build_server_instructions("lite")
+        )
+
+    def test_full_claims_no_hidden_surface(self):
+        text = build_server_instructions("full")
+        assert "every registered tool" in text
+        assert "Not listed here" not in text
+
+    def test_no_empty_clause_on_any_known_mode(self):
+        """A profile with nothing to disclose must not emit a dangling list."""
+        for mode in ("minimal", "standard", "lite", "full",
+                     "operator_readonly", "operator_recovery"):
+            text = build_server_instructions(mode)
+            assert ": ." not in text, f"empty disclosure clause in {mode}"
+            for line in text.splitlines():
+                assert "  " not in line, f"double space in {mode}: {line!r}"
+                assert not line.endswith(" ")
+
+    def test_defaults_to_the_servers_own_mode(self):
+        assert build_server_instructions() == build_server_instructions(TOOL_MODE)
+
+    def test_is_registry_free(self, monkeypatch):
+        """It runs while the server object is built, before handlers import.
+
+        Touching the tool registry there would be a circular import, so the
+        string must come from the static mode sets alone.
+        """
+        import src.tool_modes as tool_modes
+
+        def _explode():  # pragma: no cover - only runs on regression
+            raise AssertionError("build_server_instructions touched the registry")
+
+        monkeypatch.setattr(tool_modes, "advertised_tool_names_full", _explode)
+        assert tool_modes.build_server_instructions("standard")

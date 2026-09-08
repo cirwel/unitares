@@ -48,16 +48,25 @@ Those are host-integration capabilities, documented separately in the
 
 ## Modes and compatibility
 
-`minimal`, `lite`, and `full` are server-selected discovery profiles. They
-decide what `tools/list` advertises, not what dispatches: every registered
-name and every workflow alias is callable by name in every profile on every
-transport. `minimal` is the server default and advertises the five-tool
-checkpoint loop (`start_session`, `identity`, `sync_state`, `record_result`,
-`check_working_state`). The checked-in artifact uses `lite`, the wider
-agent-facing profile; full mode adds administrative and specialist tools. The
-live handshake (`list_tools(lite=true)`) reports the profile the server runs,
-so a `minimal` deployment answers with five capabilities and its own surface
-hash while still dispatching the lite names.
+`minimal`, `standard`, `lite`, and `full` are server-selected discovery
+profiles. They decide what `tools/list` advertises, not what dispatches: every
+registered name and every workflow alias is callable by name in every profile
+on every transport. `standard` is the server default and advertises ten names:
+the checkpoint loop (`start_session`, `identity`, `sync_state`,
+`record_result`, `check_working_state`) plus `search_shared_memory`,
+`store_finding`, `update_finding`, `request_review`, and `consult`. `minimal`
+advertises the checkpoint loop alone. The checked-in artifact uses `lite`, the
+wider agent-facing profile; full mode adds administrative and specialist
+tools. The live handshake (`list_tools(lite=true)`) reports the profile the
+server runs, so a `minimal` deployment answers with five capabilities and its
+own surface hash while still dispatching the lite names.
+
+Because a schema-driven client offers the model only the names discovery
+returned, the profile is a capability boundary for such clients even though it
+is not one for dispatch. The server therefore states its profile, and what it
+is withholding, in the MCP `instructions` string returned at connect. That
+string is orientation, not contract: it is not part of the surface hash and
+may be reworded in any release.
 
 Adding a compatible capability increments the contract version. Renaming,
 removing, or changing the meaning of an existing capability requires a new

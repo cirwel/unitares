@@ -1,10 +1,14 @@
 """
 Tool Modes - Define the ADVERTISED tool surface for different use cases
 
-Minimal mode (default): the five-tool checkpoint loop - identity binding,
+Standard mode (default): the checkpoint loop plus the three capabilities an
+    agent cannot reach any other way - shared memory (search / store / revise),
+    structured review, and advisory inference. Ten names, all task verbs.
+Minimal mode: the five-tool checkpoint loop alone - identity binding,
     re-binding, the check-in, outcome evidence, and a read of the verdict.
-Lite mode: the wider agent surface (shared memory, review, advisory inference,
-    consolidated routers) - opt in with GOVERNANCE_TOOL_MODE=lite.
+    Opt in with GOVERNANCE_TOOL_MODE=minimal when context is scarce.
+Lite mode: the wider agent surface (the consolidated routers, discovery, and
+    inference-host tools on top of standard) - GOVERNANCE_TOOL_MODE=lite.
 Full mode: every schema tool - for operators and cloud models with large context windows.
 
 A mode decides what tools/list ADVERTISES. It does not decide what dispatches:
@@ -22,10 +26,12 @@ Client-specific exclusions:
 from typing import Set
 import os
 
-# Read tool mode from environment. Default: minimal - the five-tool checkpoint
-# loop is the whole default surface; lite/full are the opt-in wider surfaces.
-# (Was "lite", 29 tools, until the surface cut of 2026-09.)
-TOOL_MODE = os.getenv("GOVERNANCE_TOOL_MODE", "minimal").lower()
+# Read tool mode from environment. Default: standard - the checkpoint loop plus
+# the four capabilities that are unreachable when they are not advertised;
+# minimal/lite/full are the opt-in narrower and wider surfaces.
+# (Was "lite" (29) until the 2026-09 surface cut, then "minimal" (5) until the
+# dormant-capability fix below.)
+TOOL_MODE = os.getenv("GOVERNANCE_TOOL_MODE", "standard").lower()
 
 # Minimal mode: the checkpoint loop and nothing else. Five names, all task
 # verbs. Discovery tools (list_tools / describe_tool) are deliberately absent:
@@ -37,6 +43,29 @@ MINIMAL_MODE_TOOLS: Set[str] = {
     "sync_state",             # The check-in (process_agent_update)
     "record_result",          # Outcome evidence (outcome_event)
     "check_working_state",    # Read the verdict without writing (get_governance_metrics)
+}
+
+# Standard mode: the default advertised surface. The checkpoint loop plus the
+# five names that carry a capability an agent cannot reach any other way.
+#
+# WHY THESE FIVE AND NOT OTHERS. A mode filters tools/list, and a schema-driven
+# client (Claude Code, Codex, Cursor) offers the model only what tools/list
+# returns. "Still callable by name" is therefore a property no such client can
+# use: a capability that is never advertised is, for them, a capability that
+# does not exist. Under the five-tool default, shared memory, structured
+# review, and advisory inference were registered, reachable, and dormant.
+#
+# The line is drawn at capability, not at count. Each name below is the only
+# advertised way to reach something the server does; every name NOT here is
+# either a router over actions these five already cover, a discovery tool
+# (list_tools / describe_tool), or an operator surface. Those stay in
+# lite/full, where an operator opts into a wider listing.
+STANDARD_MODE_TOOLS: Set[str] = MINIMAL_MODE_TOOLS | {
+    "search_shared_memory",   # Read shared memory (knowledge(action="search"))
+    "store_finding",          # Write a durable finding
+    "update_finding",         # Revise a finding already stored
+    "request_review",         # Structured review (dialectic(action="request"))
+    "consult",                # Advisory model help
 }
 
 # Core/essential tools for lite mode (optimized for local models)
@@ -207,13 +236,17 @@ def get_tools_for_mode(mode: str = "full") -> Set[str]:
     Get tool set for specified mode
 
     Args:
-        mode: "minimal", "lite", "full", "operator_readonly", or category name (e.g., "core", "admin")
+        mode: "minimal", "standard", "lite", "full", "operator_readonly", or
+            category name (e.g., "core", "admin")
 
     Returns:
         Set of tool names to include
     """
     if mode == "minimal":
         return MINIMAL_MODE_TOOLS.copy()
+
+    if mode == "standard":
+        return STANDARD_MODE_TOOLS.copy()
     
     if mode == "lite":
         return LITE_MODE_TOOLS.copy()
@@ -249,6 +282,104 @@ def get_tools_for_mode(mode: str = "full") -> Set[str]:
     for tools in TOOL_CATEGORIES.values():
         all_tools.update(tools)
     return all_tools
+
+
+# ============================================================================
+# Server instructions — the one in-band description of the wider surface
+# ============================================================================
+# A mode filters tools/list, so a schema-driven client offers the model only
+# the advertised names. The MCP `instructions` string is the one channel that
+# reaches every client at initialize, before any tool call, and it costs
+# nothing per call. It is where a narrow advertised surface says what the
+# server can still do and how to have the rest listed.
+#
+# Deliberately registry-free: this runs while src/mcp_server.py is building the
+# server object, before the handler package is imported, so it must not touch
+# the tool registry. Every number below comes from a static set in this module.
+
+_MODE_SUMMARY = {
+    "minimal": "the checkpoint loop only",
+    "standard": "the checkpoint loop, shared memory, review, and advisory inference",
+    "lite": "the agent surface, including the consolidated routers and discovery tools",
+    "full": "every registered tool",
+}
+
+
+def build_server_instructions(mode: str = None) -> str:
+    """The MCP ``instructions`` string for a server running ``mode``.
+
+    Names the workflow, then says plainly which capabilities exist but are not
+    listed on this profile and how to list them. Without this, an agent on a
+    narrow profile has no way to learn that shared memory, review, or advisory
+    inference exist at all.
+    """
+    mode = (mode or TOOL_MODE or "standard").lower()
+    known = {
+        "minimal": MINIMAL_MODE_TOOLS,
+        "standard": STANDARD_MODE_TOOLS,
+        "lite": LITE_MODE_TOOLS,
+        "operator_readonly": OPERATOR_READONLY_MODE_TOOLS,
+        "operator_recovery": OPERATOR_RECOVERY_MODE_TOOLS,
+    }
+    lines = [
+        "UNITARES governance: behavioral state estimation for long-lived agents.",
+        "",
+        "Bind once with start_session(force_new=true) and keep the returned "
+        "client_session_id; pass it on every later call so writes are "
+        "attributable. sync_state is the check-in and returns the state "
+        "estimate, a policy action, and a named reason. record_result grades a "
+        "check-in against a real outcome — without outcomes the estimate is "
+        "self-report. check_working_state reads the verdict without writing.",
+    ]
+    if mode in ("standard", "lite", "full"):
+        lines += [
+            "",
+            "search_shared_memory reads the cross-agent knowledge graph and "
+            "store_finding / update_finding write to it; search before you "
+            "write. request_review opens a structured review. consult asks an "
+            "advisory model.",
+        ]
+    summary = _MODE_SUMMARY.get(mode)
+    advertised = known.get(mode)
+    lines.append("")
+    if advertised is not None:
+        lines.append(
+            f"This server advertises {len(advertised)} tools "
+            f"(GOVERNANCE_TOOL_MODE={mode}"
+            + (f": {summary}" if summary else "")
+            + ")."
+        )
+    elif mode == "full":
+        lines.append(
+            "This server advertises every registered tool "
+            "(GOVERNANCE_TOOL_MODE=full)."
+        )
+    else:
+        lines.append(f"This server runs GOVERNANCE_TOOL_MODE={mode}.")
+    not_listed = []
+    if mode == "minimal":
+        not_listed.append(
+            "shared memory (search_shared_memory, store_finding, "
+            "update_finding), structured review (request_review), and "
+            "advisory inference (consult)"
+        )
+    if mode in ("minimal", "standard"):
+        not_listed.append(
+            "the consolidated routers (knowledge, agent, observe, dialectic, "
+            "calibration, config, export) and the discovery tools "
+            "(list_tools, describe_tool)"
+        )
+    if mode != "full" and not not_listed:
+        not_listed.append("the operator and admin tools")
+    if not_listed:
+        widen = "full" if mode == "lite" else "lite or full"
+        lines.append(
+            "Not listed here, but registered and callable by name on every "
+            "transport: " + "; ".join(not_listed) + ". "
+            f"Run the server with GOVERNANCE_TOOL_MODE={widen} to have them "
+            "advertised; list_tools() enumerates whatever the profile lists."
+        )
+    return "\n".join(lines)
 
 
 def is_claude_desktop_client() -> bool:
@@ -304,7 +435,7 @@ def should_include_tool(tool_name: str, mode: str = "full", client_type: str = N
 
     Args:
         tool_name: Name of the tool
-        mode: "minimal", "lite", "full", or category name
+        mode: "minimal", "standard", "lite", "full", or category name
         client_type: Optional client type override ("claude_desktop" or None for auto-detect)
 
     Returns:
