@@ -1,0 +1,18 @@
+{
+  "baseImage": "debian:trixie-slim",
+  "pythonVersion": "3.14",
+  "nodeVersion": "24",
+  "buildSteps": [
+    "bash docker/glama/install.sh"
+  ],
+  "cmdArguments": [
+    "mcp-proxy",
+    "--",
+    "/usr/bin/tini",
+    "--",
+    "/opt/unitares/bin/python",
+    "/app/docker/glama/supervise.py"
+  ],
+  "placeholderArguments": {},
+  "pinnedCommit": null
+}

@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "properties": {
+    "GOVERNANCE_TOOL_MODE": {
+      "type": "string", "enum": ["standard", "minimal", "lite", "full"], "default": "standard"
+    },
+    "UNITARES_KNOWLEDGE_BACKEND": {
+      "type": "string", "enum": ["postgres", "age"], "default": "postgres",
+      "description": "PostgreSQL full-text search is the default. AGE enables graph-specific knowledge operations. Both use the private bundled PostgreSQL instance."
+    },
+    "UNITARES_BUNDLE_STARTUP_TIMEOUT": {
+      "type": "string", "default": "120",
+      "description": "Internal per-service readiness budget in seconds; cannot override Glama's own startup deadline."
+    }
+  },
+  "additionalProperties": false
+}
