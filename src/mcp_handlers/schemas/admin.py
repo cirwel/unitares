@@ -154,6 +154,13 @@ class SetThresholdsParams(AgentIdentityMixin):
             "coherence_critical_threshold is a legacy controller-policy compatibility "
             "surface, not a health threshold; do not recalibrate it from variance."
         ),
+        json_schema_extra={
+            "brief": (
+                "threshold_name -> value. Keys: risk_approve_threshold, "
+                "risk_revise_threshold, coherence_critical_threshold, "
+                "void_threshold_initial."
+            )
+        },
     )
     validate_params: bool = Field(True, alias="validate", description="Validate values are in reasonable ranges")
 
@@ -201,6 +208,13 @@ class ConfigParams(AgentIdentityMixin):
             "coherence_critical_threshold is a legacy controller-policy "
             "compatibility surface, not a health threshold."
         ),
+        json_schema_extra={
+            "brief": (
+                "action=set name-to-value map. Keys: risk_approve_threshold, "
+                "risk_revise_threshold, coherence_critical_threshold, "
+                "void_threshold_initial."
+            )
+        },
     )
     validate_params: bool = Field(
         True,

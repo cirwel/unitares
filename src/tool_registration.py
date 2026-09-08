@@ -555,7 +555,14 @@ def _register_common_aliases(mcp):
         enable_extra_argument_passthrough,
     )
 
+    from src.schema_brief import resolve_brief_budget, resolve_field_description_mode
     from src.tool_modes import TOOL_MODE
+
+    # The overrides below run after get_tool_definitions has already trimmed
+    # the catalog, so they read the same knobs rather than reintroducing the
+    # full text on the aliases agents call most.
+    field_description_mode = resolve_field_description_mode()
+    brief_budget = resolve_brief_budget()
 
     # Every workflow alias is registered in every mode, for the same reason
     # every handler is: the mode filters tools/list, not dispatch. A lite-only
@@ -594,6 +601,8 @@ def _register_common_aliases(mcp):
                 _apply_alias_schema_property_overrides(
                     alias_name,
                     getattr(registered_tool, "parameters", {}),
+                    field_descriptions=field_description_mode,
+                    budget=brief_budget,
                 )
             if actual in EXTRA_ARGUMENT_PASSTHROUGH_TOOLS:
                 if registered_tool is not None:

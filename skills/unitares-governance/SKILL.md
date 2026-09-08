@@ -20,6 +20,9 @@ source_files:
   - unitares/src/identity/lineage_semantics.py
   - unitares/src/coherence_provenance.py
   - unitares/src/mcp_handlers/lifecycle/recovery_policy.py
+  # Added 2026-09-08: this skill now states that advertised parameter
+  # descriptions are abridged and that describe_tool returns the full text.
+  - unitares/src/schema_brief.py
   - unitares/skills/governance-lifecycle/SKILL.md
   - unitares/skills/governance-fundamentals/SKILL.md
   - unitares/skills/knowledge-graph/SKILL.md
@@ -32,16 +35,17 @@ source_digests:
   unitares/src/mcp_handlers/tool_stability.py: "b81fb422cdec412c"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "bcac7a83172032db"
   unitares/src/monitor_metrics.py: "ea5e54b19fa1d903"
-  unitares/src/tool_modes.py: "e3a54d97b9e05afa"
+  unitares/src/tool_modes.py: "d21e376d782c0d31"
   unitares/src/mcp_handlers/identity/session.py: "e24a8588ad4b8f47"
-  unitares/src/mcp_handlers/schemas/identity.py: "aee8c8ad9cb30c7c"
+  unitares/src/mcp_handlers/schemas/identity.py: "6a02e1c69d225e98"
   unitares/src/identity/lineage_semantics.py: "a6613f2493f6b97c"
   unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/skills/governance-lifecycle/SKILL.md: "d8b344b82ea5bae9"
+  unitares/src/schema_brief.py: "7410c20f9b0374e3"
+  unitares/skills/governance-lifecycle/SKILL.md: "4545f6ef065b51c5"
   unitares/skills/governance-fundamentals/SKILL.md: "0c90338a4c6185b1"
-  unitares/skills/knowledge-graph/SKILL.md: "b64442aed6c88813"
-  unitares/skills/dialectic-reasoning/SKILL.md: "f8c3b5e1b8e9aef6"
+  unitares/skills/knowledge-graph/SKILL.md: "cfa2c6164cfb26f5"
+  unitares/skills/dialectic-reasoning/SKILL.md: "58858e33cf4d2cb1"
   unitares/skills/discord-bridge/SKILL.md: "3ca60ac744a6223e"
   unitares/skills/unitares-dashboard/SKILL.md: "6dcf8d96223bf965"
 ---
@@ -79,7 +83,9 @@ five checkpoint tools (`start_session`, `identity`, `sync_state`,
 `store_finding`, `update_finding`, `request_review`, `consult`, and
 `self_recovery`. Every other name in this
 skill still dispatches by name, and `GOVERNANCE_TOOL_MODE=lite` advertises the
-rest (see governance-lifecycle, *MCP Tools Reference*). The full raw
+rest (see governance-lifecycle, *MCP Tools Reference*). Parameter descriptions
+in whatever your client lists are abridged to their first sentence;
+`describe_tool(tool_name=..., action=...)` returns the full text. The full raw
 payload remains available under `raw_governance`; the read aliases
 `check_working_state` and `search_shared_memory` default compact and require
 their documented full-mode option to include it.

@@ -14,6 +14,12 @@ from mcp.types import Tool
 from pydantic import BaseModel
 
 from src.mcp_compat import get_tool_input_schema, set_tool_input_schema
+from src.schema_brief import (
+    BRIEF_BUDGET,
+    apply_field_description_mode,
+    resolve_brief_budget,
+    resolve_field_description_mode,
+)
 
 
 _EXTRA_SCHEMA_MODULES: list[str] = []
@@ -190,15 +196,6 @@ def _first_line(s: str | None) -> str:
     return ""
 
 
-def _strip_schema_descriptions(node: Any) -> Any:
-    """Recursively strip 'description' keys from a JSON Schema dict."""
-    if isinstance(node, dict):
-        return {k: _strip_schema_descriptions(v) for k, v in node.items() if k != "description"}
-    if isinstance(node, list):
-        return [_strip_schema_descriptions(x) for x in node]
-    return node
-
-
 # Identity params hidden from the *advertised* check-in schema. They stay on the
 # Pydantic model — the handler still accepts them as a same-process escape hatch
 # (EXTRA_ARGUMENT_PASSTHROUGH + extra="allow") — but a check-in reads as an
@@ -253,7 +250,13 @@ def _hide_auto_injected_identity(schema: Any) -> Any:
     return schema
 
 
-def advertised_input_schema(tool_name: str, schema: Any) -> Any:
+def advertised_input_schema(
+    tool_name: str,
+    schema: Any,
+    *,
+    field_descriptions: str = "full",
+    budget: int = BRIEF_BUDGET,
+) -> Any:
     """The input schema a caller is told about, for a tool or its alias's canonical tool.
 
     One definition for the three surfaces that describe a tool's parameters:
@@ -263,21 +266,34 @@ def advertised_input_schema(tool_name: str, schema: Any) -> Any:
     ``process_agent_update`` / ``get_governance_metrics`` and their workflow
     aliases while the registered schema carried neither
     (DESCRIBE_SCHEMA_WIDER_THAN_WIRE in scripts/dev/tool_edge_index.py).
+
+    ``field_descriptions`` is where the surfaces legitimately differ: the wire
+    passes "brief" and describe_tool takes the "full" default. Either way the
+    ``brief`` authoring key is removed, so no caller sees one parameter
+    documented twice.
     """
     if tool_name in _HIDE_IDENTITY_PARAMS_TOOLS:
-        return _hide_auto_injected_identity(schema)
-    return schema
+        schema = _hide_auto_injected_identity(schema)
+    return apply_field_description_mode(schema, field_descriptions, budget=budget)
 
 
-def get_tool_definitions(verbosity: str | None = None) -> list[Tool]:
-    """Build the list of MCP Tool objects from Pydantic schemas + descriptions."""
+def get_tool_definitions(
+    verbosity: str | None = None,
+    field_descriptions: str | None = None,
+) -> list[Tool]:
+    """Build the list of MCP Tool objects from Pydantic schemas + descriptions.
+
+    ``verbosity`` governs the tool's own description; ``field_descriptions``
+    governs its parameters' (see src/schema_brief.py). Both default to the
+    compact form, and both leave the authored text reachable through
+    ``describe_tool``, which reads the Pydantic models rather than this
+    catalog.
+    """
     if verbosity is None:
         verbosity = os.getenv("UNITARES_TOOL_SCHEMA_VERBOSITY", "short").strip().lower()
 
-    strip_field_descriptions = (
-        os.getenv("UNITARES_TOOL_SCHEMA_STRIP_FIELD_DESCRIPTIONS", "0").strip().lower()
-        in ("1", "true", "yes")
-    )
+    field_description_mode = resolve_field_description_mode(field_descriptions)
+    brief_budget = resolve_brief_budget()
 
     from src.tool_descriptions import TOOL_DESCRIPTIONS
 
@@ -346,13 +362,20 @@ def get_tool_definitions(verbosity: str | None = None) -> list[Tool]:
     except ImportError:
         pass
 
-    # Apply verbosity and field description stripping
+    # Apply verbosity and the advertised field-description mode. Both run for
+    # every tool: advertised_input_schema is the one definition of "what a
+    # caller is told", and it is what strips the `brief` authoring key.
     for t in all_tools:
-        if t.name in _HIDE_IDENTITY_PARAMS_TOOLS:
-            set_tool_input_schema(t, advertised_input_schema(t.name, get_tool_input_schema(t)))
+        set_tool_input_schema(
+            t,
+            advertised_input_schema(
+                t.name,
+                get_tool_input_schema(t),
+                field_descriptions=field_description_mode,
+                budget=brief_budget,
+            ),
+        )
         if verbosity == "short":
             t.description = _first_line(t.description)
-        if strip_field_descriptions:
-            set_tool_input_schema(t, _strip_schema_descriptions(get_tool_input_schema(t)))
 
     return all_tools
