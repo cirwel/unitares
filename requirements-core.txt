@@ -24,5 +24,4 @@ PyYAML>=6.0.0,<7.0.0
 # governance_core (EISV ODE engine) lives at top-level governance_core/
 # in this repo — no separate install. Was previously a private compiled wheel
 # (CIRWEL/unitares-core); folded back 2026-04-24.
-# To skip the ODE entirely (behavioral-only mode):
-#   export UNITARES_DISABLE_ODE=1
+# The runtime imports and steps this engine; there is no supported ODE opt-out.

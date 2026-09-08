@@ -1,22 +1,19 @@
 """
-UNITARES Governance Core — EISV ODE dynamics (secondary / diagnostic path)
+UNITARES Governance Core — EISV ODE dynamics
 
-Despite the name, this is **not the primary verdict-driving path** in the
-runtime pipeline. It implements the coupled-ODE evolution of the four EISV
-variables (E, I, S, V) with contraction-style stability analysis, running
-in parallel for analysis and as a warmup-phase fallback.
+This module implements the coupled-ODE evolution of E, I, S, and V with
+contraction-style stability analysis. The runtime imports and steps this
+engine; there is no supported ODE opt-out.
 
-Primary verdict-driving path: Behavioral EISV in `src/behavioral_state.py`
-and `src/behavioral_assessment.py` — EMA-smoothed observations with
-per-agent Welford baselines; no ODE, no universal attractor.
+Behavioral assessment in `src/behavioral_assessment.py` owns the post-warmup
+verdict, using EMA-smoothed state from `src/behavioral_state.py` and per-agent
+Welford baselines. That path is not causally independent of the ODE:
+ODE-derived coherence, regime, and history inputs still feed the behavioral
+sensor, and ODE state remains involved in warmup fallback and structural
+pause gates.
 
-Governance verdicts normally follow behavioral EISV once per-agent
-confidence is established. This ODE is the fallback when behavioral
-confidence is still insufficient (early check-ins) or is explicitly
-disabled via ``UNITARES_DISABLE_ODE=1``.
-
-See README §"How state works (EISV)" and docs/UNIFIED_ARCHITECTURE.md for
-the full pipeline (drift → entropy, calibration, circuit breaker, dialectic).
+See docs/EISV_COMPUTATION.md for the current formulas and coupling, and
+docs/UNIFIED_ARCHITECTURE.md for the full pipeline.
 
 Authoritative version is ``__version__`` at the end of this module.
 """

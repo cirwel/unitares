@@ -107,7 +107,6 @@ curl -i https://gov.example.org/mcp/ -H 'Accept: text/event-stream'
 | `DB_BACKEND` / `DB_POSTGRES_URL` | Database backend and DSN |
 | `DB_AGE_GRAPH` | AGE graph name (e.g. `governance_graph`) |
 | `UNITARES_KNOWLEDGE_BACKEND` | `postgres` (default, FTS) or `age` (cypher-style traversal) |
-| `UNITARES_DISABLE_ODE=1` | Behavioral-EISV verdict path only; skip the ODE math model |
 | `UNITARES_BIND_ALL_INTERFACES` / `UNITARES_MCP_HOST` | Bind beyond loopback |
 | `UNITARES_MCP_ALLOWED_HOSTS` / `UNITARES_MCP_ALLOWED_ORIGINS` | Host/Origin allowlists |
 | `UNITARES_MCP_BEARER_TOKENS` | Bearer auth (comma-separated, hot-rotatable) |
