@@ -689,14 +689,29 @@ class GovernanceClient:
         return NoteResult.model_validate(raw)
 
     async def audit_knowledge(
-        self, scope: str = "open", top_n: int = 10, **kwargs: Any
+        self, scope: str = "open", top_n: int = 10, use_model: bool = False,
+        **kwargs: Any
     ) -> AuditResult:
-        """Audit knowledge graph. Maps to server tool: knowledge(action=audit)."""
+        """Audit knowledge graph. Maps to server tool: knowledge(action=audit).
+
+        ``use_model`` routes the audit through the local LLM to write a prose
+        assessment of the stale entries. It is OFF by default because it costs
+        a model round-trip and nothing in this tree reads the field it
+        produces: ``model_assessment`` is written by
+        ``knowledge_graph_lifecycle.py`` and consumed by no caller.
+
+        Measured 2026-09-08 against the live server, scope=open over 477
+        entries: 0.1s without it, 11.6s with it. It was hardcoded true here, so
+        every caller paid that, and Vigil's three audit call sites each wrapped
+        the result in a 15s timeout — an 11.6s floor under a 15s ceiling on a
+        model slot shared with the Watcher, which is why the auto-archive
+        cycle logged `audit timed out after 15s` on every run.
+        """
         args: dict[str, Any] = {
             "action": "audit",
             "scope": scope,
             "top_n": str(top_n),
-            "use_model": "true",
+            "use_model": "true" if use_model else "false",
         }
         args.update(kwargs)
         raw = await self.call_tool("knowledge", args)

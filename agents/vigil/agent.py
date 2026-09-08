@@ -501,6 +501,7 @@ class VigilAgent(GovernanceAgent):
         summary: Dict[str, Any] = {
             "audit_run": False,
             "stale_found": 0,
+            "archive_candidates": 0,
             "archived": 0,
             "errors": [],
         }
@@ -517,6 +518,17 @@ class VigilAgent(GovernanceAgent):
                 summary["stale_found"] = (
                     buckets.get("stale", 0) + buckets.get("candidate_for_archive", 0)
                 )
+                # Reported separately because the two numbers in the summary
+                # line come from different populations and the pairing invited
+                # the wrong reading. `stale_found` counts `stale` PLUS
+                # `candidate_for_archive`, but auto-archive only ever acts on
+                # the latter, and cleanup_knowledge walks the lifecycle ladder
+                # rather than either bucket. Measured 2026-09-08: 90 stale, 2
+                # candidates. "92 stale, 0 archived" therefore reads as a
+                # backlog of 92 that nothing is draining, when the archiver's
+                # actual queue was 2, both younger than the 90-day threshold —
+                # i.e. working exactly as designed.
+                summary["archive_candidates"] = buckets.get("candidate_for_archive", 0)
 
                 if summary["stale_found"] > 0:
                     cleanup_result = await client.cleanup_knowledge(dry_run=False)
@@ -537,7 +549,8 @@ class VigilAgent(GovernanceAgent):
 
         if summary["audit_run"]:
             note_text = (
-                f"Groundskeeper: {summary['stale_found']} stale, "
+                f"Groundskeeper: {summary['stale_found']} stale "
+                f"({summary['archive_candidates']} archivable), "
                 f"{summary['archived']} archived"
             )
             prev = prev_state or {}
@@ -930,7 +943,8 @@ class VigilAgent(GovernanceAgent):
             groundskeeper_summary = await self._run_groundskeeper(client, prev_state)
             if groundskeeper_summary.get("stale_found", 0) > 0:
                 findings.append(
-                    f"KG: {groundskeeper_summary['stale_found']} stale, "
+                    f"KG: {groundskeeper_summary['stale_found']} stale "
+                    f"({groundskeeper_summary.get('archive_candidates', 0)} archivable), "
                     f"{groundskeeper_summary['archived']} archived"
                 )
             if sentinel_force_audit and not self.with_audit:
@@ -1044,7 +1058,8 @@ class VigilAgent(GovernanceAgent):
         gk_info = ""
         if groundskeeper_summary.get("audit_run"):
             gk_info = (
-                f" Groundskeeper: {groundskeeper_summary['stale_found']} stale, "
+                f" Groundskeeper: {groundskeeper_summary['stale_found']} stale "
+                f"({groundskeeper_summary.get('archive_candidates', 0)} archivable), "
                 f"{groundskeeper_summary['archived']} archived."
             )
         checkin_text = f"Heartbeat cycle: {summary}.{test_info}{gk_info} Issues: {issues}"
