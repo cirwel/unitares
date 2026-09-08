@@ -23,8 +23,11 @@ Merge the maintenance PR into `release/2.22` only after independent review and
 its Python, Docker, Elixir, documentation, scope and release-seam checks pass.
 Tag v2.22.1 at that reviewed merge commit; do not tag current master for this
 candidate. Apply the publication verification steps below to that exact tag.
-Do not merge the whole maintenance branch back into master: #2092 is already
-there and the shared documentation correction has its own master PR.
+Do not retarget the maintenance PR to master. After tagging, integrate its
+history through a reviewed forward-merge PR, preserving master's newer code
+and assessing its source-version label separately. This makes the maintenance
+tag an ancestor of the next mainline release, as the release-range gate
+requires. The shared documentation correction has its own master PR.
 
 The existing v2.22.0 tag and release remain intact. Append
 [`../releases/2.22.0-errata.md`](../releases/2.22.0-errata.md) to the release
