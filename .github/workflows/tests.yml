@@ -74,14 +74,14 @@ jobs:
       run: |
         python scripts/dev/skills_manifest.py --check
 
-    - name: Validate skill freshness (last_verified within freshness_days)
-      # Date-age check only (SKILL_FRESHNESS_AGE_ONLY=1): a skill whose
-      # last_verified is older than its freshness_days window blocks the PR.
-      # The richer source-file-mtime check stays LOCAL (ship.sh / pre-commit) —
-      # it reads filesystem mtime, which a fresh CI checkout rewrites to "now",
-      # so in CI it would false-flag every skill not verified on the run date.
-      env:
-        SKILL_FRESHNESS_AGE_ONLY: "1"
+    - name: Validate skill freshness (cited sources unchanged since last_verified)
+      # Two checks. STALE: a source the skill cites no longer matches the
+      # content digest recorded when the skill was last verified (frontmatter
+      # `source_digests`; re-check the skill's claims, then `--stamp` it).
+      # AGING: the last_verified date is older than freshness_days. Until
+      # 2026-09-07 CI ran the age check only, because the source check read
+      # filesystem mtime, which a checkout rewrites; five skills sat stale
+      # behind a green gate. SKILL_FRESHNESS_AGE_ONLY=1 restores that gate.
       run: |
         bash scripts/client/check-skill-freshness.sh
 
