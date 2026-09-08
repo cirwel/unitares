@@ -4375,3 +4375,47 @@ def test_self_test_runs_the_at_size_case(watcher_module, monkeypatch):
     assert watcher_module.self_test() == 0
     assert len(scanned) == 2, "self-test must run both the toy and at-size cases"
     assert max(scanned) > 1000, "at-size case is no longer at size"
+
+
+def test_wrong_canary_is_treated_as_truncation(watcher_module):
+    """The window check counts tokens the backend EVALUATED, which can never
+    answer how much it discarded. A backend that clamps num_ctx below what we
+    asked for drops the front while reporting a count comfortably under the
+    threshold. The canary asks for something only a reader of line 1 knows."""
+    with pytest.raises(watcher_module.PromptTruncated):
+        watcher_module.parse_findings(
+            '{"saw_start": "NOPE", "findings": []}', "/x.py", "m", 1
+        )
+
+
+def test_correct_canary_passes(watcher_module):
+    assert (
+        watcher_module.parse_findings(
+            '{"saw_start": "%s", "findings": []}' % watcher_module.PROMPT_CANARY,
+            "/x.py",
+            "m",
+            1,
+        )
+        == []
+    )
+
+
+def test_missing_canary_is_a_warning_not_a_failure(watcher_module, monkeypatch):
+    """A model may answer the findings correctly and omit an extra field.
+    Absent is unverified, not proof of truncation — only a WRONG value is."""
+    logged: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        watcher_module, "log", lambda m, level="info": logged.append((level, m))
+    )
+    assert watcher_module.parse_findings('{"findings": []}', "/x.py", "m", 1) == []
+    assert any("saw_start" in m for _, m in logged)
+
+
+def test_the_prompt_actually_carries_the_canary_first(watcher_module):
+    """It has to be the FIRST thing in the prompt, or a partial truncation
+    could leave it intact while still cutting the rules block."""
+    prompt = watcher_module.build_prompt("PATTERNS", "/x.py", "1: x = 1")
+    assert prompt.lstrip().startswith(f"[{watcher_module.PROMPT_CANARY}]")
+    assert prompt.count(watcher_module.PROMPT_CANARY) >= 2, (
+        "the prompt must both plant the token and ask for it back"
+    )
