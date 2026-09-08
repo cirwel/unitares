@@ -2860,7 +2860,7 @@ class TestHandleOnboardV2:
 
         with patch("src.tool_modes.TOOL_MODE", "lite"), \
              patch("src.tool_modes.get_tools_for_mode", return_value=["t1", "t2", "t3"]), \
-             patch("src.tool_schemas.get_tool_definitions", return_value={"t1": {}, "t2": {}, "t3": {}, "t4": {}, "t5": {}}):
+             patch("src.tool_modes.advertised_tool_names_full", return_value={"t1", "t2", "t3", "t4", "t5"}):
             result = await handle_onboard_v2({"client_session_id": "tool-mode-test", "resume": True, "verbose": True})
         data = parse_result(result)
 

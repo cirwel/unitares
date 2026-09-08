@@ -3,6 +3,7 @@
 from typing import Any, Dict, List, Optional
 
 from src.governance_glossary import EISV_INLINE_SUMMARY
+from src.tool_meta import tool_relationships
 
 
 # Deprecation registry surfaced by both list_tools (via TOOL_RELATIONSHIPS)
@@ -18,13 +19,15 @@ from src.governance_glossary import EISV_INLINE_SUMMARY
 # tool_not_found_error, with the deprecated tool's own working handler sitting
 # right there unused.
 #
-# Both entries below were in that state. `direct_resume_if_safe` pointed at
-# `quick_resume` and `request_dialectic_review` at `self_recovery_review`;
-# neither is registered -- both are internal delegates of `self_recovery`,
-# reachable only as `self_recovery(action="quick"|"review")`. Same defect class
-# as the dangling `direct_resume_if_safe -> quick_resume` alias removed in
-# #1994, one surface over: that fix repaired what the alias *dispatched* to and
-# left what the deprecation block *says* untouched.
+# Both entries of 2026-08-29 were in that state: `direct_resume_if_safe`
+# pointed at `quick_resume` and `request_dialectic_review` at
+# `self_recovery_review`; neither is registered -- both are internal delegates
+# of `self_recovery`, reachable only as `self_recovery(action="quick"|"review")`.
+# Same defect class as the dangling `direct_resume_if_safe -> quick_resume`
+# alias removed in #1994, one surface over: that fix repaired what the alias
+# *dispatched* to and left what the deprecation block *says* untouched.
+# `direct_resume_if_safe` itself was removed on 2026-09-07, seven months after
+# its deprecation; `request_dialectic_review` is the one entry left.
 #
 # Guarded by SUPERSEDED_BY_TARGET_MISSING / MIGRATION_TARGET_MISSING in
 # scripts/dev/tool_edge_index.py and by
@@ -41,16 +44,6 @@ DEPRECATION_REGISTRY: Dict[str, Dict[str, str]] = {
             "Use dialectic(action='request', issue_description='...') instead. "
             "For a solo recovery that needs no peer, self_recovery(action='review', "
             "reflection='...') is the lighter path."
-        ),
-    },
-    "direct_resume_if_safe": {
-        "deprecated_since": "2026-01-29",
-        "superseded_by": "self_recovery",
-        "migration": (
-            "Use self_recovery(action='quick') if risk < 0.40 and no void is "
-            "active; otherwise use self_recovery(action='review', "
-            "reflection='...'). self_recovery(action='check') reports which of "
-            "the two the current state qualifies for."
         ),
     },
 }
@@ -95,500 +88,18 @@ LITE_PARAMETER_PRIORITIES: Dict[str, List[str]] = {
 LITE_IDENTITY_FIELDS = {"continuity_token", "client_session_id", "agent_id"}
 
 
-TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
-    "start_session": {
-        "depends_on": [],
-        "related_to": ["onboard", "identity"],
-        "category": "identity",
-    },
-    "sync_state": {
-        "depends_on": [],
-        "related_to": ["process_agent_update", "check_working_state"],
-        "category": "core",
-    },
-    "check_working_state": {
-        "depends_on": [],
-        "related_to": ["get_governance_metrics", "sync_state"],
-        "category": "core",
-    },
-    "search_shared_memory": {
-        "depends_on": [],
-        "related_to": ["knowledge", "leave_note"],
-        "category": "knowledge",
-    },
-    "record_result": {
-        "depends_on": ["sync_state"],
-        "related_to": ["outcome_event", "process_agent_update"],
-        "category": "core",
-    },
-    "request_review": {
-        "depends_on": ["sync_state"],
-        "related_to": ["dialectic", "self_recovery", "consult"],
-        "category": "dialectic",
-    },
-    "process_agent_update": {
-        "depends_on": [],  # No deps - identity auto-creates
-        "related_to": ["simulate_update", "get_governance_metrics", "get_system_history"],
-        "category": "core"
-    },
-    "get_governance_metrics": {
-        "depends_on": [],
-        "related_to": ["process_agent_update", "observe_agent", "get_system_history"],
-        "category": "core"
-    },
-    "simulate_update": {
-        "depends_on": [],
-        "related_to": ["process_agent_update", "get_governance_metrics"],
-        "category": "core"
-    },
-    "get_thresholds": {
-        "depends_on": [],
-        "related_to": ["set_thresholds", "process_agent_update"],
-        "category": "config"
-    },
-    "set_thresholds": {
-        "depends_on": ["get_thresholds"],
-        "related_to": ["get_thresholds", "process_agent_update"],
-        "category": "config"
-    },
-    "observe_agent": {
-        "depends_on": ["list_agents"],
-        "related_to": ["get_governance_metrics", "compare_agents", "detect_anomalies"],
-        "category": "observability"
-    },
-    "compare_agents": {
-        "depends_on": ["list_agents"],
-        "related_to": ["observe_agent", "aggregate_metrics", "detect_anomalies"],
-        "category": "observability"
-    },
-    "detect_anomalies": {
-        "depends_on": ["list_agents"],
-        "related_to": ["observe_agent", "compare_agents", "aggregate_metrics"],
-        "category": "observability"
-    },
-    "aggregate_metrics": {
-        "depends_on": [],
-        "related_to": ["observe_agent", "compare_agents", "detect_anomalies"],
-        "category": "observability"
-    },
-    "list_agents": {
-        "depends_on": [],
-        "related_to": ["get_agent_metadata", "identity"],
-        "category": "lifecycle"
-    },
-    "get_agent_metadata": {
-        "depends_on": ["list_agents"],
-        "related_to": ["list_agents", "update_agent_metadata"],
-        "category": "lifecycle"
-    },
-    "update_agent_metadata": {
-        "depends_on": ["list_agents"],
-        "related_to": ["get_agent_metadata", "list_agents"],
-        "category": "lifecycle"
-    },
-    "archive_agent": {
-        "depends_on": ["list_agents"],
-        "related_to": ["list_agents", "delete_agent"],
-        "category": "lifecycle"
-    },
-    "delete_agent": {
-        "depends_on": ["list_agents"],
-        "related_to": ["archive_agent", "list_agents"],
-        "category": "lifecycle"
-    },
-    "archive_old_test_agents": {
-        "depends_on": [],
-        "related_to": ["archive_agent", "list_agents"],
-        "category": "lifecycle"
-    },
-    # get_agent_api_key REMOVED - aliased to identity()
-    "mark_response_complete": {
-        "depends_on": [],
-        "related_to": ["process_agent_update", "get_agent_metadata"],
-        "category": "lifecycle"
-    },
-    "direct_resume_if_safe": {
-        "deprecated": True,
-        "deprecated_since": "2026-01-29",
-        "superseded_by": "self_recovery",
-        "depends_on": [],
-        "related_to": ["self_recovery"],
-        "category": "lifecycle",
-        "migration": "Use self_recovery(action='quick') if risk < 0.40 and no void is active; otherwise use self_recovery(action='review', reflection='...')"
-    },
-    "self_recovery_review": {
-        "depends_on": ["get_governance_metrics"],
-        "related_to": ["quick_resume", "check_recovery_options"],
-        "replaces": ["direct_resume_if_safe", "request_dialectic_review"],
-        "category": "lifecycle",
-        "recovery_hierarchy": {
-            "fastest": "quick_resume",
-            "primary": "self_recovery_review",
-            "diagnostic": "check_recovery_options"
-        },
-        "description": "Primary recovery path - requires reflection but allows recovery at moderate thresholds"
-    },
-    "quick_resume": {
-        "depends_on": ["get_governance_metrics"],
-        "related_to": ["self_recovery_review", "check_recovery_options"],
-        "category": "lifecycle",
-        "recovery_hierarchy": {
-            "fastest": "quick_resume",
-            "primary": "self_recovery_review",
-            "diagnostic": "check_recovery_options"
-        },
-        "description": "Fastest recovery path - no reflection needed, but requires very safe state"
-    },
-    "check_recovery_options": {
-        "depends_on": ["get_governance_metrics"],
-        "related_to": ["self_recovery_review", "quick_resume"],
-        "category": "lifecycle",
-        "description": "Read-only diagnostic tool to check recovery eligibility"
-    },
-    "get_system_history": {
-        "depends_on": ["list_agents"],
-        "related_to": ["export_to_file", "get_governance_metrics", "observe_agent"],
-        "category": "export"
-    },
-    "export_to_file": {
-        "depends_on": ["get_system_history"],
-        "related_to": ["get_system_history"],
-        "category": "export"
-    },
-    "reset_monitor": {
-        "depends_on": ["list_agents"],
-        "related_to": ["process_agent_update"],
-        "category": "admin"
-    },
-    "get_server_info": {
-        "depends_on": [],
-        "related_to": ["health_check", "cleanup_stale_locks"],
-        "category": "admin"
-    },
-    "get_connection_status": {
-        "depends_on": [],
-        "related_to": ["health_check", "get_server_info", "debug_request_context"],
-        "category": "admin"
-    },
-    "health_check": {
-        "depends_on": [],
-        "related_to": ["get_server_info", "get_telemetry_metrics"],
-        "category": "admin"
-    },
-    "check_calibration": {
-        "depends_on": ["update_calibration_ground_truth"],
-        "related_to": ["update_calibration_ground_truth"],
-        "category": "admin"
-    },
-    "update_calibration_ground_truth": {
-        "depends_on": [],
-        "related_to": ["check_calibration"],
-        "category": "admin"
-    },
-    "get_telemetry_metrics": {
-        "depends_on": [],
-        "related_to": ["health_check", "aggregate_metrics"],
-        "category": "admin"
-    },
-    "get_tool_usage_stats": {
-        "depends_on": [],
-        "related_to": ["get_telemetry_metrics", "list_tools"],
-        "category": "admin"
-    },
-    "get_workspace_health": {
-        "depends_on": [],
-        "related_to": ["health_check", "get_server_info"],
-        "category": "workspace"
-    },
-    # Dialectic tools - full protocol restored (Feb 2026)
-    "request_dialectic_review": {
-        "depends_on": [],
-        "related_to": ["submit_thesis", "dialectic"],
-        "category": "dialectic"
-    },
-    "submit_thesis": {
-        "depends_on": ["request_dialectic_review"],
-        "related_to": ["submit_antithesis", "submit_synthesis"],
-        "category": "dialectic"
-    },
-    "submit_antithesis": {
-        "depends_on": ["submit_thesis"],
-        "related_to": ["submit_synthesis"],
-        "category": "dialectic"
-    },
-    "submit_synthesis": {
-        "depends_on": ["submit_antithesis"],
-        "related_to": ["dialectic"],
-        "category": "dialectic"
-    },
-    "dialectic": {
-        "depends_on": [],
-        "related_to": ["request_dialectic_review", "submit_thesis"],
-        "category": "dialectic"
-    },
-    "cleanup_stale_locks": {
-        "depends_on": [],
-        "related_to": ["get_server_info"],
-        "category": "admin"
-    },
-    "list_tools": {
-        "depends_on": [],
-        "related_to": ["describe_tool"],
-        "category": "admin"
-    },
-    "describe_tool": {
-        "depends_on": [],
-        "related_to": ["list_tools"],
-        "category": "admin"
-    },
-    # nudge_dialectic_session REMOVED - dialectic simplified
-    # Knowledge Graph Tools
-    "store_knowledge_graph": {
-        "depends_on": [],  # No deps - identity auto-binds
-        "related_to": ["search_knowledge_graph", "get_knowledge_graph", "list_knowledge_graph"],
-        "category": "knowledge"
-    },
-    "search_knowledge_graph": {
-        "depends_on": [],
-        "related_to": ["store_knowledge_graph", "get_discovery_details"],
-        "category": "knowledge"
-    },
-    "get_knowledge_graph": {
-        "depends_on": ["list_agents"],
-        "related_to": ["search_knowledge_graph", "list_knowledge_graph", "get_discovery_details"],
-        "category": "knowledge"
-    },
-    "list_knowledge_graph": {
-        "depends_on": [],
-        "related_to": ["get_knowledge_graph", "search_knowledge_graph"],
-        "category": "knowledge"
-    },
-    # find_similar_discoveries_graph, get_related_discoveries_graph,
-    # get_response_chain_graph, reply_to_question REMOVED - aliased
-    "get_discovery_details": {
-        "depends_on": ["search_knowledge_graph"],
-        "related_to": ["search_knowledge_graph", "update_discovery_status_graph"],
-        "category": "knowledge"
-    },
-    "leave_note": {
-        # Not deprecated (operator decision, 2026-08-29) — see DEPRECATION_REGISTRY.
-        "depends_on": [],  # No deps - identity auto-binds
-        "related_to": ["knowledge", "store_knowledge_graph"],
-        "category": "knowledge",
-    },
-    "update_discovery_status_graph": {
-        "depends_on": ["get_discovery_details"],
-        "related_to": ["get_discovery_details", "search_knowledge_graph"],
-        "category": "knowledge"
-    },
-    # Intuitive aliases for knowledge (tool_stability); without entries here
-    # list_tools renders them with hint "Tool: <name>" and category null.
-    "store_finding": {
-        "depends_on": [],
-        "related_to": ["knowledge"],
-        "category": "knowledge",
-    },
-    "update_finding": {
-        "depends_on": ["store_finding"],
-        "related_to": ["knowledge"],
-        "category": "knowledge",
-    },
-    # Identity Tools - Dec 2025: onboard() is portal, identity() is primary
-    "onboard": {
-        "depends_on": [],
-        "related_to": ["identity", "process_agent_update"],
-        "category": "identity"
-    },
-    "identity": {
-        "depends_on": [],
-        "related_to": ["onboard", "process_agent_update", "list_agents"],
-        "category": "identity"
-    },
-    # Admin Tools
-    "backfill_calibration_from_dialectic": {
-        "depends_on": ["check_calibration"],
-        "related_to": ["check_calibration", "update_calibration_ground_truth"],
-        "category": "admin"
-    },
-    "validate_file_path": {
-        "depends_on": [],
-        "related_to": ["get_workspace_health"],
-        "category": "admin"
-    },
-    "debug_request_context": {
-        "depends_on": [],
-        "related_to": ["get_server_info", "identity"],
-        "category": "admin"
-    },
-    # Observability Tools
-    "compare_me_to_similar": {
-        "depends_on": ["get_governance_metrics"],
-        "related_to": ["compare_agents", "observe_agent"],
-        "category": "observability"
-    },
-    # Dialectic Tools - Feb 2026: Consolidated into dialectic(action=get/list)
-    "dialectic": {
-        "depends_on": [],
-        "related_to": ["request_dialectic_review", "process_agent_update"],
-        "category": "dialectic"
-    },
-    # Consolidated tools (common tier) - Feb 2026 dogfood fix
-    "agent": {
-        "depends_on": [],
-        "related_to": ["onboard", "identity", "observe"],
-        "category": "lifecycle"
-    },
-    "calibration": {
-        "depends_on": ["process_agent_update"],
-        "related_to": ["process_agent_update", "observe"],
-        "category": "core"
-    },
-    "list_inference_hosts": {
-        "depends_on": [],
-        "related_to": ["describe_inference_host", "consult", "call_model", "delegate_inference"],
-        "category": "inference",
-    },
-    "describe_inference_host": {
-        "depends_on": ["list_inference_hosts"],
-        "related_to": ["consult", "call_model", "delegate_inference"],
-        "category": "inference",
-    },
-    "consult": {
-        "depends_on": [],
-        "related_to": ["call_model", "delegate_inference", "request_review"],
-        "category": "inference",
-    },
-    "call_model": {
-        "depends_on": [],
-        "related_to": [
-            "consult",
-            "list_inference_hosts",
-            "describe_inference_host",
-            "knowledge",
-            "dialectic",
-        ],
-        "category": "inference"
-    },
-    "delegate_inference": {
-        "depends_on": ["list_inference_hosts"],
-        "related_to": ["consult", "describe_inference_host", "dialectic"],
-        "category": "inference",
-    },
-    "config": {
-        "depends_on": [],
-        "related_to": ["get_thresholds", "set_thresholds"],
-        "category": "config"
-    },
-    "export": {
-        "depends_on": [],
-        "related_to": ["get_system_history", "observe"],
-        "category": "export"
-    },
-    "knowledge": {
-        "depends_on": [],
-        "related_to": ["search_knowledge_graph", "leave_note"],
-        "category": "knowledge"
-    },
-    "observe": {
-        "depends_on": [],
-        "related_to": ["agent", "process_agent_update"],
-        "category": "observability"
-    },
-    # Registered tools that previously had no catalog entry → surfaced under a
-    # "null" category in list_tools (Mistral dogfood UX finding 2026-06-30).
-    "admin": {
-        "depends_on": [],
-        "related_to": ["health_check", "observe", "config"],
-        "category": "admin",
-    },
-    "bind_session": {
-        "depends_on": [],
-        "related_to": ["onboard", "identity", "start_session"],
-        "category": "identity",
-    },
-    "self_recovery": {
-        "depends_on": [],
-        "related_to": ["request_review", "check_working_state"],
-        "category": "core",
-    },
-    "outcome_event": {
-        "depends_on": [],
-        "related_to": ["record_result", "process_agent_update"],
-        "category": "core",
-    },
-    "archive_orphan_agents": {
-        "depends_on": [],
-        "related_to": ["agent", "list_agents"],
-        "category": "lifecycle",
-    },
-    "operator_resume_agent": {
-        "depends_on": [],
-        "related_to": ["agent", "self_recovery"],
-        "category": "lifecycle",
-    },
-    "detect_stuck_agents": {
-        "depends_on": [],
-        "related_to": ["observe", "agent"],
-        "category": "observability",
-    },
-    "cleanup_knowledge_graph": {
-        "depends_on": [],
-        "related_to": ["knowledge", "get_lifecycle_stats"],
-        "category": "knowledge",
-    },
-    "get_lifecycle_stats": {
-        "depends_on": [],
-        "related_to": ["knowledge", "cleanup_knowledge_graph"],
-        "category": "knowledge",
-    },
-    "cirs_protocol": {
-        "depends_on": [],
-        "related_to": ["dialectic", "self_recovery"],
-        "category": "core",
-    },
-    "reassign_reviewer": {
-        "depends_on": [],
-        "related_to": ["dialectic", "request_review"],
-        "category": "dialectic",
-    },
-    "get_trajectory_status": {
-        "depends_on": [],
-        "related_to": ["verify_trajectory_identity", "identity"],
-        "category": "identity",
-    },
-    "verify_trajectory_identity": {
-        "depends_on": [],
-        "related_to": ["get_trajectory_status", "identity"],
-        "category": "identity",
-    },
-    "list_process_bindings": {
-        "depends_on": [],
-        "related_to": ["identity", "agent"],
-        "category": "identity",
-    },
-    "outcome_correlation": {
-        "depends_on": [],
-        "related_to": ["observe", "outcome_event"],
-        "category": "observability",
-    },
-    "record_progress_pulse": {
-        "depends_on": [],
-        "related_to": ["process_agent_update", "sync_state"],
-        "category": "core",
-    },
-    "skills": {
-        "depends_on": [],
-        "related_to": ["list_tools", "describe_tool"],
-        "category": "admin",
-    },
-    "dashboard": {
-        "depends_on": [],
-        "related_to": ["observe", "health_check"],
-        "category": "observability",
-    },
-    # Pi tools are registered by unitares-pi-plugin when installed. These
-    # relationships do not register them; they only prevent loaded plugin tools
-    # from falling into the null category in list_tools.
+# One relationship record per advertised name, derived from the one record
+# per tool in src/tool_meta.py (2026-09-07). list_tools(category=...) filters
+# on the `category` here, which is by construction the category
+# tool_modes.TOOL_CATEGORIES puts the name in. The literal this replaces
+# carried 87 entries: the roster, 35 legacy alias names that no surface ever
+# read (list_tools lists registered tools and workflow aliases only), and the
+# key "dialectic" twice, with the second entry silently winning.
+#
+# Plugin tools are registered by their plugin when installed. These records
+# do not register them; they only keep a loaded plugin tool out of the null
+# category in list_tools.
+PLUGIN_TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
     "pi": {
         "depends_on": [],
         "related_to": ["admin", "observe"],
@@ -599,6 +110,11 @@ TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
         "related_to": ["admin"],
         "category": "admin",
     },
+}
+
+TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
+    **tool_relationships(),
+    **PLUGIN_TOOL_RELATIONSHIPS,
 }
 
 

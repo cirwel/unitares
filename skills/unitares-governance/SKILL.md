@@ -4,7 +4,7 @@ description: >
   Compatibility umbrella skill for the UNITARES governance framework. Use this
   as the entrypoint when you need the overall model and route into the split
   governance skills.
-last_verified: "2026-08-17"
+last_verified: "2026-09-08"
 freshness_days: 35
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -12,11 +12,38 @@ source_files:
   - unitares/src/mcp_handlers/tool_stability.py
   - unitares/src/mcp_handlers/middleware/envelope_step.py
   - unitares/src/monitor_metrics.py
+  # Added 2026-09-07 on re-verification: the claims about the default surface,
+  # the token TTL, lineage reasons, and coherence provenance live here.
+  - unitares/src/tool_modes.py
+  - unitares/src/mcp_handlers/identity/session.py
+  - unitares/src/mcp_handlers/schemas/identity.py
+  - unitares/src/identity/lineage_semantics.py
+  - unitares/src/coherence_provenance.py
+  - unitares/src/mcp_handlers/lifecycle/recovery_policy.py
   - unitares/skills/governance-lifecycle/SKILL.md
   - unitares/skills/governance-fundamentals/SKILL.md
   - unitares/skills/knowledge-graph/SKILL.md
   - unitares/skills/dialectic-reasoning/SKILL.md
   - unitares/skills/discord-bridge/SKILL.md
+  - unitares/skills/unitares-dashboard/SKILL.md
+source_digests:
+  unitares/src/mcp_handlers/core.py: "5a6e81697f537ac2"
+  unitares/src/mcp_handlers/identity/handlers.py: "54451aa9ac842fb1"
+  unitares/src/mcp_handlers/tool_stability.py: "b81fb422cdec412c"
+  unitares/src/mcp_handlers/middleware/envelope_step.py: "bcac7a83172032db"
+  unitares/src/monitor_metrics.py: "ea5e54b19fa1d903"
+  unitares/src/tool_modes.py: "0c3ffbb1363381b5"
+  unitares/src/mcp_handlers/identity/session.py: "e24a8588ad4b8f47"
+  unitares/src/mcp_handlers/schemas/identity.py: "aee8c8ad9cb30c7c"
+  unitares/src/identity/lineage_semantics.py: "a6613f2493f6b97c"
+  unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
+  unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
+  unitares/skills/governance-lifecycle/SKILL.md: "5c7e0aed9b31c14b"
+  unitares/skills/governance-fundamentals/SKILL.md: "0c90338a4c6185b1"
+  unitares/skills/knowledge-graph/SKILL.md: "35b94c6eb567716d"
+  unitares/skills/dialectic-reasoning/SKILL.md: "50ed666d975d85c0"
+  unitares/skills/discord-bridge/SKILL.md: "3ca60ac744a6223e"
+  unitares/skills/unitares-dashboard/SKILL.md: "6dcf8d96223bf965"
 ---
 
 # UNITARES Governance
@@ -45,7 +72,12 @@ main check-in loop. A new user message is not a reason to call
 `start_session(force_new=true)` again; that mints another process identity.
 These are the primary workflow tools; raw implementation tools such as
 `onboard(...)` and
-`process_agent_update(...)` remain available for compatibility. The full raw
+`process_agent_update(...)` remain available for compatibility. On a stock
+server the default `GOVERNANCE_TOOL_MODE=minimal` lists only the five
+checkpoint tools (`start_session`, `identity`, `sync_state`, `record_result`,
+`check_working_state`); every other name in this skill still dispatches by
+name, and `GOVERNANCE_TOOL_MODE=lite` advertises the rest (see
+governance-lifecycle, *MCP Tools Reference*). The full raw
 payload remains available under `raw_governance`; the read aliases
 `check_working_state` and `search_shared_memory` default compact and require
 their documented full-mode option to include it.
@@ -61,9 +93,12 @@ Use raw `onboard(...)` instead for older servers or raw response shape.
 Use `identity(agent_uuid=..., continuity_token=..., resume=true)` only when
 rebinding the same live owner to an existing UUID. The `continuity_token` is
 short-lived ownership proof for anti-hijack gates, not indefinite
-cross-process continuity. A bare `onboard()` or bare
-`identity(agent_uuid=..., resume=true)` can rely on weak evidence or an
-unsigned UUID claim; do not teach those as normal flow.
+cross-process continuity. A bare `identity(agent_uuid=..., resume=true)` is an
+unsigned UUID claim (hijack-shaped, rejected under strict identity mode). An
+argument-less `onboard()` from a fresh process now mints fresh, but an
+`onboard()` that presents only weak signals, a cosmetic `name` or the
+transport session / IP:UA fingerprint on the resume path, can still pin-resume
+on weak evidence; do not teach those as normal flow.
 
 In-process tool calls thread the response's `client_session_id` through
 subsequent invocations to maintain transport continuity within a single
@@ -73,7 +108,8 @@ identity proof on its own. Do not pass `continuity_token` on every call; reserve
 it for explicit same-live-owner `identity(..., resume=true)` rebinds.
 
 Use `sync_state()` after meaningful work to record progress and complexity, then
-read `next_action`, `memory_suggestions`, and `recovery_hint` when present. Pass
+read `next_action`, `recovery_hint`, and, when you asked for them with
+`include_memory_suggestions=true`, `memory_suggestions`. Pass
 `confidence` only when it is a real forecast; if the response returns a
 `prediction_id`, thread that exact ID into `record_result(...)` when the outcome
 lands. Use raw `process_agent_update()` when you need the unwrapped handler

@@ -37,6 +37,12 @@ not publish a server tag or container.
    fixes, create a signed annotated tag when signing is available:
    `git tag -s vX.Y.Z -m "UNITARES vX.Y.Z"`. Do not replace an
    existing public tag merely to add a signature.
+   Tag **immediately** after the release PR merges, and arm no other
+   auto-merge until the tag exists. v2.22.0's coverage gate went red on master
+   because three dependabot merges were armed alongside the release cut, the
+   merge order became a race, and they landed inside the untagged range;
+   tagging at the release commit cleared the gate for the whole range and made
+   the per-PR exemptions unnecessary. Arming the cut alone closes the window.
 6. Push the tag and create the GitHub release with user impact, compatibility,
    migrations, evidence changes, known limits, and rollback notes.
 7. The `Publish Container` workflow publishes `linux/amd64` and `linux/arm64`
@@ -82,6 +88,19 @@ It reads the first-parent walk and accepts both a squash subject's trailing
 first-parent change carries neither rather than measuring the smaller set it can
 parse. It prints provenance rather than a ratio, because the previous version's
 ratio was copied verbatim onto an immutable release page and was wrong.
+
+Two shapes are excluded without a declaration and reported as counts: the
+release's own `chore(release)` bookkeeping, which cannot cite itself, and a
+dependabot `build(deps)` / `build(deps-dev)` bump that its own merge proves
+inert. The proof is read from the merge, never from the subject alone: the
+diff touches nothing but dependency manifests, lockfiles, image digests and
+workflow action pins, and a `build(deps)` bump that moves a runtime manifest
+(`constraints.txt`, `requirements*.txt`, `pyproject.toml`, `package.json`)
+shows a same-major move in its subject. A major move of a runtime pin, a group
+subject that names no versions over a runtime manifest, or a bump whose diff
+reaches into source is **held to a citation** and printed with the reason,
+because `build(deps): bump mcp from 1.29.0 to 2.1.1` renamed `Tool.inputSchema`
+under exactly that subject shape. Everything else is a change.
 
 Fold each listed change into the entry. If one genuinely does not belong, declare
 it inside the entry, one per line, with a reason from a closed set

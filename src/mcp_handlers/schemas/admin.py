@@ -48,11 +48,29 @@ class DescribeToolParams(AgentIdentityMixin):
         default=False,
         description="If true, return simplified schema with examples."
     )
+    # The handler read both of these since the tool existed; neither was
+    # declared here until 2026-09-07, so over the MCP wire FastMCP dropped them
+    # before dispatch and describe_tool(include_schema=false) still returned
+    # the schema.
+    include_schema: Union[bool, str, None] = Field(
+        default=True,
+        description="Full mode only (lite=false): include the tool's inputSchema (default true).",
+    )
+    include_full_description: Union[bool, str, None] = Field(
+        default=True,
+        description="Full mode only (lite=false): include the full description; false keeps the first line (default true).",
+    )
 
     @model_validator(mode='after')
     def coerce_booleans(self):
         if isinstance(self.lite, str):
             self.lite = self.lite.lower() in ('true', '1', 'yes')
+        for name in ("include_schema", "include_full_description"):
+            value = getattr(self, name)
+            if isinstance(value, str):
+                setattr(self, name, value.lower() in ('true', '1', 'yes'))
+            elif value is None:
+                setattr(self, name, True)
         return self
 
 class UpdateConfigParams(AgentIdentityMixin):

@@ -83,97 +83,17 @@ def get_pydantic_schemas():
         _PYDANTIC_SCHEMAS_CACHE = _load_pydantic_schemas()
     return _PYDANTIC_SCHEMAS_CACHE
 
-# Ordered list of tools to register.
-# Only tools in this list are exposed via MCP. Pydantic schemas for
-# sub-actions (e.g., store_knowledge_graph) exist but are dispatched
-# internally by consolidated tools (e.g., knowledge).
-# Names retired from this list on 2026-08-29 because they are tool_stability
-# aliases that rewrite to a router (admin / dialectic) before handler lookup:
-# cleanup_stale_locks, debug_request_context, get_connection_status,
-# get_server_info, get_telemetry_metrics, get_tool_usage_stats, reset_monitor,
-# validate_file_path, request_dialectic_review, submit_thesis,
-# submit_antithesis, submit_synthesis. Their handlers are unchanged and still
-# reached through the router; only the duplicate wire name is gone.
-# (reassign_reviewer belongs to the same group and also went register=False,
-# but it was never in this list -- it was reaching the wire through the
-# auto-discovery branch with a stub schema.)
-# get_workspace_health is deliberately NOT in that set -- see the note in
-# tool_stability.py.
-TOOL_ORDER = [
-    "check_calibration",
-    "update_calibration_ground_truth",
-    "backfill_calibration_from_dialectic",
-    "rebuild_calibration",
-    "health_check",
-    "get_workspace_health",
-    "process_agent_update",
-    "get_governance_metrics",
-    "get_system_history",
-    "export_to_file",
-    "list_agents",
-    "delete_agent",
-    "get_agent_metadata",
-    "mark_response_complete",
-    "detect_stuck_agents",
-    "archive_agent",
-    "update_agent_metadata",
-    "archive_old_test_agents",
-    "archive_orphan_agents",
-    "simulate_update",
-    "get_thresholds",
-    "set_thresholds",
-    "aggregate_metrics",
-    "observe_agent",
-    "compare_agents",
-    "compare_me_to_similar",
-    "outcome_event",
-    "detect_anomalies",
-    "list_tools",
-    "describe_tool",
-    "skills",
-    "store_knowledge_graph",
-    "search_knowledge_graph",
-    "get_knowledge_graph",
-    "list_knowledge_graph",
-    "update_discovery_status_graph",
-    "get_discovery_details",
-    "leave_note",
-    "cleanup_knowledge_graph",
-    "get_lifecycle_stats",
-    "list_inference_hosts",
-    "describe_inference_host",
-    "consult",
-    "call_model",
-    "delegate_inference",
-    "onboard",
-    "identity",
-    "bind_session",
-    "knowledge",
-    "agent",
-    "calibration",
-    "config",
-    "export",
-    "cirs_protocol",
-    "self_recovery",
-    "operator_resume_agent",
-    # pi_* tools and the consolidated "pi" router live in unitares-pi-plugin.
-    "observe",
-    "dialectic",
-    "dashboard",
-    "admin",
-    # Added 2026-08-29. These were registered dispatch tools absent from this
-    # list, so get_tool_definitions fell through to the auto-discovery branch
-    # and advertised {"properties": {}, "additionalProperties": true} -- while
-    # validate_params still enforced the real *Params model by tool name. The
-    # wire said "any parameters accepted" and the server then rejected the call.
-    # _validate_advertised_schema_coverage below now refuses to let this recur.
-    "direct_resume_if_safe",
-    "get_trajectory_status",
-    "verify_trajectory_identity",
-    "list_process_bindings",
-    "outcome_correlation",
-    "record_progress_pulse",
-]
+# Wire order of tools/list: the registered tools of src/tool_meta.py, in the
+# order their records appear there. Until 2026-09-07 this was a hand-written
+# list of 65 names, 23 of them register=False delegates that only exist to
+# validate router actions and were filtered out again by every consumer that
+# reaches a wire (the registrar, the interface contract); the advertised
+# surface is the 42 registered tools plus the workflow aliases the registrar
+# adds. The order is load-bearing: the interface contract's surface hash is
+# computed over the capabilities in this order.
+from src.tool_meta import WIRE_ORDER
+
+TOOL_ORDER = list(WIRE_ORDER)
 
 
 def _is_extra_schema_model(schema_model: type[BaseModel] | None) -> bool:
@@ -209,7 +129,7 @@ def _validate_consolidated_tool_order(
     """Fail when a core tool would be advertised with a stub schema.
 
     ``get_tool_definitions`` auto-discovers any registered tool missing from
-    ``TOOL_ORDER`` and serves it ``{"properties": {}, "additionalProperties":
+    ``TOOL_ORDER`` (the registered records of src/tool_meta.py) and serves it ``{"properties": {}, "additionalProperties":
     true}``. That is a silent contract break rather than a graceful fallback:
     ``validate_params`` resolves the real ``*Params`` model by tool name
     regardless of ``TOOL_ORDER``, so the wire advertises "any parameters
@@ -225,7 +145,7 @@ def _validate_consolidated_tool_order(
     wants a real advertised schema calls ``register_extra_schemas()``, and one
     that does not should not be able to hard-fail server startup.
     """
-    from src.mcp_handlers.decorators import _TOOL_DEFINITIONS
+    from src.mcp_handlers.decorators import _TOOL_DEFINITIONS, get_tool_registry
 
     ordered = set(TOOL_ORDER)
     missing = sorted(
@@ -240,10 +160,24 @@ def _validate_consolidated_tool_order(
         raise RuntimeError(
             "Registered core tools are missing from TOOL_ORDER and would be "
             f"advertised with empty stub schemas: {missing}. Add each to "
-            "TOOL_ORDER with a matching *Params model (or set register=False "
+            "src/tool_meta.py with a matching *Params model (or set register=False "
             "if the tool is only reached through a router); plugins must call "
             "register_extra_schemas()."
         )
+
+    # The reverse: a record for a name that is not a registered dispatch tool
+    # would put a wire schema on a name nothing dispatches (the 23 delegates
+    # sat in that state until 2026-09-07). Checked only once the registry has
+    # been populated; before the handler package is imported it is empty.
+    registry = get_tool_registry()
+    if registry:
+        stale = sorted(name for name in TOOL_ORDER if name not in registry)
+        if stale:
+            raise RuntimeError(
+                "src/tool_meta.py has records for names that are not registered "
+                f"dispatch tools: {stale}. A register=False delegate has no wire "
+                "schema of its own; remove the record or register the tool."
+            )
 
 
 def _first_line(s: str | None) -> str:
@@ -316,6 +250,22 @@ def _hide_auto_injected_identity(schema: Any) -> Any:
     req = schema.get("required")
     if isinstance(req, list):
         schema["required"] = [r for r in req if r not in _AUTO_INJECTED_IDENTITY_PARAMS]
+    return schema
+
+
+def advertised_input_schema(tool_name: str, schema: Any) -> Any:
+    """The input schema a caller is told about, for a tool or its alias's canonical tool.
+
+    One definition for the three surfaces that describe a tool's parameters:
+    the wire catalog (``get_tool_definitions``), ``describe_tool``, and the
+    tool-surface audit. Until 2026-09-07 only the wire applied the identity
+    hiding, so ``describe_tool`` advertised ``agent_id`` / ``agent_name`` for
+    ``process_agent_update`` / ``get_governance_metrics`` and their workflow
+    aliases while the registered schema carried neither
+    (DESCRIBE_SCHEMA_WIDER_THAN_WIRE in scripts/dev/tool_edge_index.py).
+    """
+    if tool_name in _HIDE_IDENTITY_PARAMS_TOOLS:
+        return _hide_auto_injected_identity(schema)
     return schema
 
 
@@ -399,7 +349,7 @@ def get_tool_definitions(verbosity: str | None = None) -> list[Tool]:
     # Apply verbosity and field description stripping
     for t in all_tools:
         if t.name in _HIDE_IDENTITY_PARAMS_TOOLS:
-            set_tool_input_schema(t, _hide_auto_injected_identity(get_tool_input_schema(t)))
+            set_tool_input_schema(t, advertised_input_schema(t.name, get_tool_input_schema(t)))
         if verbosity == "short":
             t.description = _first_line(t.description)
         if strip_field_descriptions:

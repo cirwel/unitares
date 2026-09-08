@@ -51,6 +51,48 @@ def _describe_tool_deprecation_block(tool_name: str) -> Dict[str, Any] | None:
     return tool_catalog.describe_tool_deprecation_block(tool_name)
 
 
+def _describe_operation(requested_tool_name: str, tool_name: str, alias_info: Any) -> str:
+    """read / write / admin for the name the caller asked about.
+
+    A roster name (registered tool or workflow alias) has its own class. A
+    legacy alias reports the class of the action it pins when that is narrower
+    than its router's (list_agents reads; the agent router also deletes), else
+    the canonical tool's.
+    """
+    from src.tool_modes import TOOL_OPERATIONS
+
+    if requested_tool_name in TOOL_OPERATIONS:
+        return TOOL_OPERATIONS[requested_tool_name]
+    if alias_info is not None and alias_info.operation:
+        return alias_info.operation
+    return TOOL_OPERATIONS.get(tool_name, "read")
+
+
+def _alias_role(alias_info: Any) -> str:
+    """A workflow name is the primary surface; every other alias is compatibility."""
+    return "primary_agent_workflow" if alias_info.experience else "compatibility_alias"
+
+
+def _alias_block(requested_tool_name: str, alias_info: Any) -> Dict[str, Any]:
+    """The ``alias`` block of a describe_tool response; one shape for every response mode.
+
+    ``deprecated_since`` is the date the old name stopped being canonical
+    (``ToolAlias.deprecated_since``); a workflow or intuitive alias carries
+    none, because that name was never canonical.
+    """
+    since = alias_info.deprecated_since
+    return {
+        "reason": alias_info.reason,
+        "role": _alias_role(alias_info),
+        "primary_tool": requested_tool_name,
+        "implementation_tool": alias_info.new_name,
+        "canonical_tool": alias_info.new_name,
+        "injected_action": alias_info.inject_action,
+        "deprecated_since": since.date().isoformat() if since else None,
+        "note": alias_info.migration_note,
+    }
+
+
 def _resolve_json_schema_type(field_info: Dict[str, Any]) -> str:
     """Render a Pydantic/JSON Schema field's type for lite-mode param lists.
 
@@ -315,6 +357,11 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         # Add operation type (read/write/admin) from tool_modes
         from src.tool_modes import TOOL_OPERATIONS
         tool_info["op"] = TOOL_OPERATIONS.get(tool_name, "read")  # Default to read
+        # Declared stability tier (src/tool_meta.py); an alias reports its
+        # implementation tool's. Surfaced since 2026-09-07; until then the
+        # tier was recorded and never reported anywhere.
+        from ..tool_stability import get_tool_stability
+        tool_info["stability"] = get_tool_stability(tool_name).value
         # Add timeout metadata if available from decorator
         timeout = get_tool_timeout(tool_name)
         if timeout:
@@ -386,6 +433,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 "hint": t["description"][:100] + ("..." if len(t["description"]) > 100 else ""),
                 "tier": t.get("tier", "common"),  # essential/common/advanced
                 "op": t.get("op", "read"),  # read/write/admin
+                "stability": t.get("stability"),  # stable/beta/experimental
                 "category": t.get("category"),
                 "category_icon": t.get("category_icon"),
                 "category_name": t.get("category_name"),
@@ -822,16 +870,20 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
         # LITE-FIRST: Simpler schemas by default for local models
         lite = arguments.get("lite", True)
 
-        from ..tool_stability import resolve_tool_alias
+        from ..tool_stability import get_tool_stability, resolve_tool_alias
         tool_name, alias_info = resolve_tool_alias(requested_tool_name)
+        stability = get_tool_stability(tool_name).value
 
         from src.tool_descriptions import TOOL_DESCRIPTIONS
-        from src.tool_schemas import get_pydantic_schemas
+        from src.tool_schemas import advertised_input_schema, get_pydantic_schemas
 
         schema_model = get_pydantic_schemas().get(tool_name)
         tool_schema = None
         if schema_model is not None:
-            tool_schema = schema_model.model_json_schema()
+            # The same hiding the wire applies (session-injected identity
+            # params), so describe_tool never advertises what the registered
+            # schema does not carry.
+            tool_schema = advertised_input_schema(tool_name, schema_model.model_json_schema())
             description = TOOL_DESCRIPTIONS.get(tool_name) or schema_model.__doc__ or f"Tool: {tool_name}"
         else:
             # Fallback for decorator-defined/plugin tools that are not backed
@@ -980,7 +1032,7 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                 tool_aliases = PARAM_ALIASES.get(tool_name, {})
 
                 # UX FIX (Feb 2026): Add tier information to help agents understand tool complexity
-                from src.tool_modes import TOOL_TIERS, TOOL_OPERATIONS
+                from src.tool_modes import TOOL_TIERS
                 tool_tier = "common"  # Default
                 tier_lookup_name = requested_tool_name if alias_info else tool_name
                 if tier_lookup_name in TOOL_TIERS["essential"] or tool_name in TOOL_TIERS["essential"]:
@@ -999,7 +1051,8 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                     "description": (description or "").splitlines()[0].strip(),
                     "tier": tool_tier,
                     "tier_note": tier_guidance.get(tool_tier, ""),
-                    "operation": TOOL_OPERATIONS.get(tier_lookup_name, TOOL_OPERATIONS.get(tool_name, "read")),  # read/write/admin
+                    "operation": _describe_operation(requested_tool_name, tool_name, alias_info),  # read/write/admin
+                    "stability": stability,  # stable/beta/experimental
                     "parameters": params_simple,
                     "note": "Lite mode - use describe_tool(tool_name=..., lite=false) for full schema"
                 }
@@ -1007,15 +1060,7 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                     response_data["primary_tool"] = requested_tool_name
                     response_data["implementation_tool"] = tool_name
                     response_data["canonical_tool"] = tool_name
-                    response_data["alias"] = {
-                        "reason": alias_info.reason,
-                        "role": "primary_agent_workflow",
-                        "primary_tool": requested_tool_name,
-                        "implementation_tool": alias_info.new_name,
-                        "canonical_tool": alias_info.new_name,
-                        "injected_action": alias_info.inject_action,
-                        "note": alias_info.migration_note,
-                    }
+                    response_data["alias"] = _alias_block(requested_tool_name, alias_info)
 
                 deprecation = tool_catalog.describe_tool_deprecation_block(tool_name)
                 if deprecation is not None:
@@ -1072,15 +1117,7 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                     response_data["primary_tool"] = requested_tool_name
                     response_data["implementation_tool"] = tool_name
                     response_data["canonical_tool"] = tool_name
-                    response_data["alias"] = {
-                        "reason": alias_info.reason,
-                        "role": "primary_agent_workflow",
-                        "primary_tool": requested_tool_name,
-                        "implementation_tool": alias_info.new_name,
-                        "canonical_tool": alias_info.new_name,
-                        "injected_action": alias_info.inject_action,
-                        "note": alias_info.migration_note,
-                    }
+                    response_data["alias"] = _alias_block(requested_tool_name, alias_info)
 
                 deprecation = tool_catalog.describe_tool_deprecation_block(tool_name)
                 if deprecation is not None:
@@ -1103,19 +1140,12 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                 "inputSchema": tool_schema if include_schema else None,
             }
         }
+        full_response["tool"]["stability"] = stability
         if alias_info:
             full_response["tool"]["canonical_name"] = tool_name
             full_response["tool"]["implementation_name"] = tool_name
-            full_response["tool"]["role"] = "primary_agent_workflow"
-            full_response["alias"] = {
-                "reason": alias_info.reason,
-                "role": "primary_agent_workflow",
-                "primary_tool": requested_tool_name,
-                "implementation_tool": alias_info.new_name,
-                "canonical_tool": alias_info.new_name,
-                "injected_action": alias_info.inject_action,
-                "note": alias_info.migration_note,
-            }
+            full_response["tool"]["role"] = _alias_role(alias_info)
+            full_response["alias"] = _alias_block(requested_tool_name, alias_info)
         deprecation = tool_catalog.describe_tool_deprecation_block(tool_name)
         if deprecation is not None:
             full_response["deprecation"] = deprecation

@@ -492,3 +492,95 @@ def test_no_new_describe_cross_refs_to_unreachable_tools():
         f"the cross-reference, or add it to known_unreachable_refs with a "
         f"comment tying it to #429."
     )
+
+
+def _leading_name(param_line: str) -> str:
+    import re
+
+    match = re.match(r"^\W*([A-Za-z_][A-Za-z0-9_]*)", param_line)
+    return match.group(1) if match else ""
+
+
+def _schema_property_names(payload) -> set[str]:
+    """Every property name under any inputSchema in a describe_tool response."""
+    found: set[str] = set()
+    if isinstance(payload, dict):
+        schema = payload.get("inputSchema")
+        if isinstance(schema, dict) and isinstance(schema.get("properties"), dict):
+            found |= set(schema["properties"])
+        for value in payload.values():
+            found |= _schema_property_names(value)
+    elif isinstance(payload, list):
+        for value in payload:
+            found |= _schema_property_names(value)
+    return found
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_name",
+    ["sync_state", "process_agent_update", "check_working_state", "get_governance_metrics"],
+)
+async def test_describe_hides_the_identity_params_the_wire_hides(tool_name):
+    """The registered schema strips agent_id / agent_name for session-injected
+    tools; describe_tool advertised them back until 2026-09-07
+    (DESCRIBE_SCHEMA_WIDER_THAN_WIRE)."""
+    import json
+    from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
+
+    lite = json.loads((await handle_describe_tool({"tool_name": tool_name, "lite": True}))[0].text)
+    assert "response_text" in "\n".join(lite["parameters"]) or tool_name.endswith(("metrics", "state"))
+    assert not {_leading_name(p) for p in lite["parameters"]} & {"agent_id", "agent_name"}
+
+    full = json.loads((await handle_describe_tool({"tool_name": tool_name, "lite": False}))[0].text)
+    names = _schema_property_names(full)
+    assert names, "full describe must carry an inputSchema"
+    assert not names & {"agent_id", "agent_name"}
+
+
+@pytest.mark.asyncio
+async def test_alias_block_dates_a_consolidated_name_and_not_a_workflow_name():
+    import json
+    from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
+
+    legacy = json.loads((await handle_describe_tool({"tool_name": "list_agents", "lite": True}))[0].text)
+    assert legacy["alias"]["role"] == "compatibility_alias"
+    assert legacy["alias"]["deprecated_since"] == "2026-02-04"
+    assert legacy["alias"]["canonical_tool"] == "agent"
+
+    workflow = json.loads((await handle_describe_tool({"tool_name": "sync_state", "lite": False}))[0].text)
+    assert workflow["alias"]["role"] == "primary_agent_workflow"
+    assert workflow["alias"]["deprecated_since"] is None
+
+
+@pytest.mark.asyncio
+async def test_describe_and_list_report_the_declared_stability():
+    """The stability tier was recorded and never reported until 2026-09-07."""
+    import json
+    from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool, handle_list_tools
+
+    lite = json.loads((await handle_describe_tool({"tool_name": "sync_state", "lite": True}))[0].text)
+    assert lite["stability"] == "stable"  # process_agent_update's tier
+    assert lite["operation"] == "write"
+    full = json.loads((await handle_describe_tool({"tool_name": "simulate_update", "lite": False}))[0].text)
+    assert full["tool"]["stability"] == "experimental"
+
+    listed = json.loads((await handle_list_tools({"lite": False}))[0].text)
+    by_name = {t["name"]: t for t in listed["tools"]}
+    assert by_name["knowledge"]["stability"] == "stable"
+    assert by_name["admin"]["stability"] == "beta"
+    lite_listed = json.loads((await handle_list_tools({"lite": True}))[0].text)
+    assert all("stability" in t for t in lite_listed["tools"])
+
+
+@pytest.mark.asyncio
+async def test_describe_reports_a_legacy_alias_own_narrower_operation():
+    import json
+    from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
+
+    legacy = json.loads((await handle_describe_tool({"tool_name": "list_agents", "lite": True}))[0].text)
+    assert legacy["operation"] == "read"  # the agent router it dispatches through is write
+    router = json.loads((await handle_describe_tool({"tool_name": "agent", "lite": True}))[0].text)
+    assert router["operation"] == "write"
+    guess = json.loads((await handle_describe_tool({"tool_name": "checkin", "lite": True}))[0].text)
+    assert guess["operation"] == "write"  # no override: process_agent_update's class

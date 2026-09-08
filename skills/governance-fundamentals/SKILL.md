@@ -4,21 +4,54 @@ description: >
   Use when an agent needs to understand UNITARES governance concepts — EISV state vectors,
   basins, policy actions, coherence, calibration. Reference material for interpreting
   governance metrics as proprioceptive state estimation, not outcome judgment.
-last_verified: "2026-08-21"
+last_verified: "2026-09-08"
 freshness_days: 21
 source_files:
   - unitares/config/governance_config.py
+  - unitares/governance_core/coherence.py
+  - unitares/governance_core/parameters.py
   - unitares/src/auto_ground_truth.py
   - unitares/src/governance_monitor.py
+  - unitares/src/governance_glossary.py
   - unitares/src/behavioral_state.py
   - unitares/src/behavioral_sensor.py
   - unitares/src/behavioral_assessment.py
+  - unitares/src/cold_start_risk_confirmation.py
   - unitares/src/monitor_decision.py
   - unitares/src/monitor_metrics.py
+  - unitares/src/monitor_result.py
   - unitares/src/coherence_provenance.py
   - unitares/src/confidence.py
+  - unitares/src/eisv_telemetry.py
+  - unitares/src/services/runtime_queries.py
+  - unitares/src/mcp_handlers/response_formatter.py
+  - unitares/src/mcp_handlers/tool_stability.py
   - unitares/src/mcp_handlers/lifecycle/recovery_policy.py
-  - unitares/src/mcp_handlers/core.py
+  - unitares/src/mcp_handlers/dialectic/enforcement.py
+  - unitares/src/mcp_handlers/observability/outcome_events.py
+source_digests:
+  unitares/config/governance_config.py: "ce37a0b334646291"
+  unitares/governance_core/coherence.py: "ef819003ee72b388"
+  unitares/governance_core/parameters.py: "84bf47ca540bbc49"
+  unitares/src/auto_ground_truth.py: "c17109cf5c18f2a4"
+  unitares/src/governance_monitor.py: "8eae59483f4af562"
+  unitares/src/governance_glossary.py: "251e06209e038a13"
+  unitares/src/behavioral_state.py: "e214a51c1d7763c7"
+  unitares/src/behavioral_sensor.py: "9a4345371bf21b7f"
+  unitares/src/behavioral_assessment.py: "2cbeea287b81399e"
+  unitares/src/cold_start_risk_confirmation.py: "fccd80e216d63b6e"
+  unitares/src/monitor_decision.py: "c80f4e13511fe8ba"
+  unitares/src/monitor_metrics.py: "ea5e54b19fa1d903"
+  unitares/src/monitor_result.py: "9179435b91634583"
+  unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
+  unitares/src/confidence.py: "00cc04e1f54278b4"
+  unitares/src/eisv_telemetry.py: "706c833dfcebab8f"
+  unitares/src/services/runtime_queries.py: "9284450ddb2a9207"
+  unitares/src/mcp_handlers/response_formatter.py: "1dce49d5fa405c49"
+  unitares/src/mcp_handlers/tool_stability.py: "b81fb422cdec412c"
+  unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
+  unitares/src/mcp_handlers/dialectic/enforcement.py: "135a7345ad47d5bf"
+  unitares/src/mcp_handlers/observability/outcome_events.py: "8bc5314d099e7b9b"
 ---
 
 # Governance Fundamentals
@@ -49,8 +82,11 @@ The headline math is proprioceptive residuals. The live authority stages are
 explicit: check-ins 1–2 use the mostly server-derived Φ cold-start prior;
 check-ins 3–24 use the behavioral assessment against fixed universal
 thresholds; check-in 25 enables self-relative z-score deviation against the
-agent's Welford baseline. Absolute safety floors and basin-health gates remain
-in force throughout.
+agent's Welford baseline (the stage boundaries derive from
+`BEHAVIORAL_AUTHORITY_THRESHOLD = 0.3` over `BOOTSTRAP_UPDATES = 10`, and
+`is_baselined` at `baseline_confidence >= 0.8` with the confidence ramp
+`(update_count - 5) / 25`). Absolute safety floors and basin-health gates
+remain in force throughout.
 
 Roadmap target semantics for richer cold-start grounding are:
 
@@ -86,11 +122,12 @@ When a response includes `policy_evaluation.inputs.basin`, read it as the
 decision-time policy basin. Agent-facing state fields can be sourced from the
 primary EISV path for that response, so newer responses also include
 `policy_basin`, `policy_basin_source`, and `primary_eisv_source` to make that
-measurement distinction explicit.
+measurement distinction explicit (the compact formatter keeps `basin`,
+`policy_basin`, and `primary_eisv_source` and drops `policy_basin_source`).
 
 ## Verdicts
 
-Governance issues a decision after each check-in. The response's `verdict` field wraps the decision **action**, which is binary — `proceed` or `pause` — qualified by a `sub_action`:
+Governance issues a decision after each check-in. The decision **action** is binary — `proceed` or `pause` — returned as the top-level `action` field and qualified by a top-level `sub_action`. The separate `verdict` field is a glossary wrapper (`{value, meaning, next_action, …}`), not the action: in `compact` / `minimal` / `standard` modes its `value` is `metrics.verdict` (`safe` / `caution` / `high-risk`); in `mirror` mode its `value` is an agent-facing vocabulary (`pause` / `reject`, `caution` / `high-risk`, `guide`, or a steady `safe` / `proceed`). Never read `verdict.value` as the action.
 
 | Action | Sub-action | Meaning | What to do |
 |--------|-----------|---------|------------|
@@ -120,27 +157,28 @@ telemetry and can legitimately disagree with the headline.
 
 | `margin` | Meaning | What to do |
 |----------|---------|------------|
-| `settling` | Warmup — fewer than 3 check-ins, so there is not enough history to judge headroom yet | Keep checking in; a real margin appears after 3+ check-ins |
+| `settling` | Warmup — fewer than 3 check-ins, so there is not enough history to judge headroom yet (a crossed edge still reports `warning` / `critical` during warmup) | Keep checking in; a real margin appears after 3+ check-ins |
 | `comfortable` | Clear of every edge that could be measured, by a healthy distance. Read `margin_scope` before treating it as "nothing is near" | Proceed normally |
 | `tight` | Within the band around the nearest decision threshold | Be more careful with next steps; avoid increasing complexity |
 | `warning` | An edge has just been crossed (less than 0.1 past the threshold) | Stop increasing complexity; reflect before the next step |
 | `critical` | An edge is crossed deeply (0.1 or more past the threshold) | Halt the current approach; recover or escalate |
 
-The actionable levels are `tight`, `warning`, and `critical` — each carries a companion `nearest_edge` field naming which boundary you are closest to (`risk`, `coherence`, or `void`). On `comfortable` and `settling`, `nearest_edge` is `null`.
+The actionable levels are `tight`, `warning`, and `critical` — each carries a companion `nearest_edge` field naming which boundary you are closest to: `risk`, `coherence`, or `void` from the margin computation, or `oscillation` when a CIRS `cirs_block` pause was driven by resonance. On `comfortable` and `settling`, `nearest_edge` is `null`.
 
 `margin` is distance to a **decision threshold**, not a basin position. Two fields ride beside it and qualify what a `comfortable` reading actually covers:
 
 | Field | Values | Meaning |
 |---|---|---|
-| `margin_scope` | `all_edges`, `measured_edges_only` | Whether every edge was judged, or only some of them |
+| `margin_scope` | `all_edges`, `measured_edges_only` | Whether every edge was judged, or only some of them (emitted on `comfortable` and `tight`; absent on `settling`, `warning`, `critical`) |
 | `unmeasurable_edges` | list of edge names | The edges that had no band to judge against, so they were not assessed at all |
 
-An edge is unmeasurable when it has no threshold band for this agent — coherence is the usual case, since its band is baseline-relative and needs history. `comfortable` with `margin_scope: measured_edges_only` means "clear of the edges we could judge", not "nothing is near": read `unmeasurable_edges` for what was never assessed. Prefer the live values over assuming a fixed enum across runtime versions — `check_working_state()` is the source of truth.
+An edge is unmeasurable when it has no threshold band for this agent. Coherence is the usual case, and the gate is provenance, not history: the coherence edge is judged only when `coherence_role` is `behavioral_update_consistency` (`GovernanceConfig.COHERENCE_INTERPRETABLE_ROLE`), the history window carries that same role, and at least 10 samples exist. With the deployed `legacy_tanh_v` / `ode_control_feedback` producer the edge stays unmeasurable no matter how much history accumulates, so `comfortable` normally arrives as `margin_scope: measured_edges_only` with `unmeasurable_edges: ["coherence"]`. `comfortable` with `margin_scope: measured_edges_only` means "clear of the edges we could judge", not "nothing is near": read `unmeasurable_edges` for what was never assessed. Prefer the live values over assuming a fixed enum across runtime versions — `check_working_state()` is the source of truth.
 
 Do not transfer this check-in margin into recovery eligibility. Recovery emits a
 separate `recovery.margin.v2` view whose authoritative inputs are risk and
 `void_active`; legacy coherence is explicitly listed as excluded diagnostic
-context.
+context. Its enum is its own (`unknown` / `critical` / `tight` / `comfortable`,
+with `nearest_edge` ∈ `void_active` / `risk_score` / `no_risk_authority`).
 
 The plain-English `mirror` array in your check-in response already summarizes anything actionable (including a tight/warning/critical margin) — read that first. In `mirror` mode `margin`/`nearest_edge` are surfaced **only** when actionable; a `comfortable`/`settling` margin is steady-state and stays out of the response (the mirror's "No actionable signals — steady state" line covers it).
 
@@ -154,6 +192,7 @@ Interpret it only with the accompanying `coherence_source` and `coherence_role`:
 | `legacy_tanh_v` | `ode_control_feedback` | Directional ODE controller activation. It is monotone in signed V, equals 0.5 at balance, and is **not** a symmetric health/balance score. |
 | `manifold` | `eis_structural_measurement` | Grounded distance over E/I/S. It has a different distribution; legacy thresholds do not transfer. |
 | `behavioral_assessment` | `behavioral_update_consistency` | HCK/update consistency carried in the behavioral assessment, distinct from the canonical compatibility scalar. |
+| `grounded` | `eis_structural_measurement` | Same role as `manifold`; a grounded structural reading. |
 
 - Full range is [0, 1], but range alone does not establish semantics.
 - Untagged historical rows are `unknown_legacy` unless their producer can be reconstructed deterministically.

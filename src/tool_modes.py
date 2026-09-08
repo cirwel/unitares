@@ -153,257 +153,53 @@ OPERATOR_RECOVERY_MODE_TOOLS: Set[str] = OPERATOR_READONLY_MODE_TOOLS | {
 }
 
 # ============================================================================
-# TOOL_TIERS - Single source of truth for tier-based tool filtering
-# admin.py imports this directly to avoid duplication
+# ONE ROSTER (2026-09-07)
+# ----------------------------------------------------------------------------
+# TOOL_TIERS, TOOL_CATEGORIES, and the `full` mode are keyed by the ADVERTISED
+# roster: every register=True dispatch tool plus the workflow aliases
+# (tool_stability.AGENT_WORKFLOW_ALIASES) -- see advertised_tool_names_full().
+# Legacy alias names and the register=False delegates that only carry a schema
+# for router-action validation are not tools and do not appear in those maps.
+# TOOL_OPERATIONS is the one deliberate exception: describe_tool answers a
+# legacy name with that name's own read/write class when one is listed, which
+# is narrower and more useful than its router's. Until this date the maps had
+# drifted three ways -- 23 advertised tools in no category or tier, 26
+# pre-consolidation names still listed, and `full` reporting 66 schema
+# definitions against 51 advertised names.
+# tests/test_tool_registry_bookkeeping.py holds every map to this rule.
 # ============================================================================
-TOOL_TIERS: dict[str, Set[str]] = {
-    "essential": {  # Tier 1: Core workflow tools (~10 tools)
-        "start_session",          # Start or declare lineage
-        "sync_state",             # Log agent work
-        "check_working_state",    # Check state without updating
-        "search_shared_memory",   # Search shared memory
-        "record_result",          # Record outcomes
-        "request_review",         # Ask for structured review
-        "consult",                # Primary advisory model help
-        "identity",               # Primary identity tool (auto-creates on first call)
-        "list_tools",             # Discover available tools
-        "describe_tool",          # Get full tool details
-        "list_agents",            # View all agents
-        "health_check",           # System status
-        "store_knowledge_graph",  # Record discoveries
-        "leave_note",             # Quick notes
-    },
-    "common": {  # Tier 2: Regularly used tools
-        "onboard",                         # Raw implementation for start_session
-        "process_agent_update",            # Raw implementation for sync_state
-        "get_governance_metrics",          # Raw implementation for check_working_state
-        "outcome_event",                   # Raw implementation for record_result
-        "update_discovery_status_graph",
-        "observe_agent",
-        "get_agent_metadata",
-        "get_server_info",
-        "list_knowledge_graph",
-        "get_discovery_details",
-        "get_telemetry_metrics",
-        "check_calibration",
-        "update_calibration_ground_truth",
-        "get_tool_usage_stats",
-        "detect_anomalies",
-        "aggregate_metrics",
-        "delete_agent",
-        "dialectic",  # Consolidated: get/list dialectic sessions
-        "submit_thesis",
-        "submit_antithesis",
-        "submit_synthesis",
-        "mark_response_complete",
-        "compare_agents",
-        "get_workspace_health",
-        "archive_agent",
-        "get_system_history",
-        "get_thresholds",
-        "debug_request_context",
-        "get_connection_status",         # Verify MCP connection and tool availability
-        "get_lifecycle_stats",           # KG lifecycle stats (Dec 2025)
-        "list_inference_hosts",
-        "describe_inference_host",
-        "call_model",
-        "delegate_inference",
-    },
-    "advanced": {  # Tier 3: Rarely used tools
-        "cleanup_stale_locks",
-        "simulate_update",
-        "export_to_file",
-        "update_agent_metadata",
-        "archive_old_test_agents",
-        "direct_resume_if_safe",
-        "request_dialectic_review",
-        "backfill_calibration_from_dialectic",
-        "reset_monitor",
-        "set_thresholds",
-        "validate_file_path",
-        "compare_me_to_similar",
-        "get_knowledge_graph",
-        "cleanup_knowledge_graph",       # KG lifecycle cleanup (Dec 2025)
-        "admin",                         # Consolidated diagnostics/maintenance (Jun 2026)
-    }
-}
 
-# ============================================================================
-# TOOL_OPERATIONS - Read vs Write classification for agent clarity
-# read: Retrieves data without modifying state
-# write: Creates, updates, or deletes data
-# admin: System administration (may read or write internal state)
-# ============================================================================
-TOOL_OPERATIONS: dict[str, str] = {
-    # Primary agent workflow tools
-    "start_session": "read",
-    "sync_state": "write",
-    "check_working_state": "read",
-    "search_shared_memory": "read",
-    "record_result": "write",
-    "request_review": "write",
-
-    # Identity & Onboarding
-    "onboard": "read",                    # Returns identity + templates (creates if new)
-    "identity": "read",                   # Returns identity (creates if new)
-
-    # Core Governance
-    "process_agent_update": "write",      # Updates agent state
-    "get_governance_metrics": "read",     # Returns metrics without updating
-    "simulate_update": "read",            # Dry-run, no state change
-
-    # Agent Lifecycle
-    "list_agents": "read",                # List all agents
-    "get_agent_metadata": "read",         # Get agent details
-    "update_agent_metadata": "write",     # Update tags/notes
-    "archive_agent": "write",             # Archive agent
-    "delete_agent": "write",              # Delete agent
-    "archive_old_test_agents": "write",   # Bulk archive
-    "mark_response_complete": "write",    # Update agent status
-    "direct_resume_if_safe": "write",     # Resume agent
-    "request_dialectic_review": "write",  # Start dialectic recovery
-    "reset_monitor": "write",             # Reset agent state
-
-    # Configuration
-    "get_thresholds": "read",             # Get current thresholds
-    "set_thresholds": "write",            # Set threshold overrides
-
-    # Consolidated diagnostics/maintenance
-    "admin": "admin",                     # Mixed read/maintenance (action-routed)
-
-    # Knowledge Graph
-    "store_knowledge_graph": "write",     # Store discovery
-    "search_knowledge_graph": "read",     # Search discoveries
-    "get_knowledge_graph": "read",        # Get agent's knowledge
-    "list_knowledge_graph": "read",       # List statistics
-    "get_discovery_details": "read",      # Get discovery details
-    "update_discovery_status_graph": "write",  # Update discovery status
-    "leave_note": "write",                # Store quick note
-    "cleanup_knowledge_graph": "write",   # Run lifecycle cleanup
-    "get_lifecycle_stats": "read",        # Get lifecycle statistics
-
-    # Observability
-    "observe_agent": "read",              # View agent state
-    "compare_agents": "read",             # Compare agents
-    "compare_me_to_similar": "read",      # Compare self to similar
-    "detect_anomalies": "read",           # Scan for anomalies
-    "aggregate_metrics": "read",          # Fleet overview
-
-    # Export
-    "get_system_history": "read",         # Get history inline
-    "export_to_file": "write",            # Write file to disk
-
-    # Calibration
-    "check_calibration": "read",          # Check calibration
-    "update_calibration_ground_truth": "write",  # Update calibration
-    "backfill_calibration_from_dialectic": "write",  # Backfill calibration
-
-    # Admin & Diagnostics
-    "health_check": "read",               # System status
-    "get_server_info": "read",            # Server info
-    "get_telemetry_metrics": "read",      # Telemetry data
-    "get_tool_usage_stats": "read",       # Tool usage stats
-    "get_workspace_health": "read",       # Workspace health
-    "list_tools": "read",                 # List available tools
-    "describe_tool": "read",              # Describe single tool
-    "cleanup_stale_locks": "admin",       # Clean up locks
-    "validate_file_path": "read",         # Validate path
-    "debug_request_context": "read",      # Debug context
-    "get_connection_status": "read",      # Verify MCP connection and tool availability
-    "list_inference_hosts": "read",       # Discover inference hosts
-    "describe_inference_host": "read",    # Inspect one inference host
-    "consult": "read",                    # Canonical advisory inference facade
-    "call_model": "read",                 # Advisory inference; returns evidence artifact
-    "delegate_inference": "read",         # Strong advisory inference; returns evidence artifact
-
-    # Dialectic
-    "request_dialectic_review": "write",  # Create dialectic session
-    "submit_thesis": "write",             # Submit thesis phase
-    "submit_antithesis": "write",         # Submit antithesis phase
-    "submit_synthesis": "write",          # Submit synthesis phase
-    "dialectic": "read",                  # Consolidated: get/list sessions
-
-    # SSE-only
-    "get_connected_clients": "read",      # List connected clients
-    "get_connection_diagnostics": "read", # Connection diagnostics
-}
+# TOOL_TIERS, TOOL_OPERATIONS and TOOL_CATEGORIES are derived from the one
+# record per tool in src/tool_meta.py and re-exported here under their
+# historical names: every reader imports them from this module, and the
+# admin-handler tests patch `src.tool_modes.TOOL_TIERS` and friends. They were
+# hand-maintained literals here until 2026-09-07.
+#
+# TOOL_TIERS:      essential / common / advanced, a partition of the roster.
+# TOOL_OPERATIONS: read / write / admin per advertised name; a router carries
+#                  the most privileged class among its actions. A legacy alias
+#                  that pins a narrower action declares its own class on its
+#                  ToolAlias entry (tool_stability.py), not here.
+# TOOL_CATEGORIES: one category per advertised name, the same category the
+#                  introspection catalog reports and list_tools(category=...)
+#                  filters on. A category name is also accepted as a
+#                  GOVERNANCE_TOOL_MODE value.
+from src.tool_meta import TOOL_CATEGORIES, TOOL_OPERATIONS, TOOL_TIERS  # noqa: E402,F401
 
 
-# Tool categories for selective loading (excludes deprecated tools)
-TOOL_CATEGORIES = {
-    "core": {
-        "sync_state",
-        "check_working_state",
-        "record_result",
-        "simulate_update",
-        "process_agent_update",     # raw implementation
-        "get_governance_metrics",   # raw implementation
-        "outcome_event",            # raw implementation
-    },
-    "identity": {
-        "start_session",
-        "onboard",                # raw implementation
-        "identity",               # Dec 2025: Primary identity tool (auto-creates on first call)
-        "list_agents",
-        "get_agent_metadata",
-    },
-    "admin": {
-        "health_check",
-        "get_server_info",
-        "get_connection_status",
-        "list_tools",
-        "describe_tool",
-        "get_tool_usage_stats",
-        "cleanup_stale_locks",
-        "get_workspace_health",
-        "check_calibration",
-        "get_telemetry_metrics",
-        "update_calibration_ground_truth",
-    },
-    "export": {
-        "get_system_history",
-        "export_to_file",
-    },
-    "config": {
-        "get_thresholds",
-        "set_thresholds",
-    },
-    "lifecycle": {
-        "archive_agent",
-        "update_agent_metadata",
-        "archive_old_test_agents",
-    },
-    "observability": {
-        "observe_agent",
-        "compare_agents",
-        "detect_anomalies",
-        "aggregate_metrics",
-    },
-    "knowledge": {
-        "search_shared_memory",
-        "store_knowledge_graph",   # Primary: add knowledge (handles responses via response_to)
-        "get_discovery_details",   # Drill into discovery (includes related/chain)
-        "leave_note",
-        "update_discovery_status_graph",
-        "cleanup_knowledge_graph",   # Lifecycle cleanup (Dec 2025)
-        "get_lifecycle_stats",       # Lifecycle statistics (Dec 2025)
-    },
-    "inference": {
-        "list_inference_hosts",
-        "describe_inference_host",
-        "consult",
-        "call_model",
-        "delegate_inference",
-    },
-    "dialectic": {
-        "request_review",
-        "request_dialectic_review",      # Create dialectic session
-        "submit_thesis",                 # Paused agent explains reasoning
-        "submit_antithesis",             # Reviewer raises concerns
-        "submit_synthesis",              # Negotiate resolution
-        "dialectic",                     # Consolidated: get/list sessions
-    },
-}
+def advertised_tool_names_full() -> Set[str]:
+    """Every name a full-mode server advertises.
+
+    Registered dispatch tools plus the workflow aliases; not the schema
+    definitions, 23 of which are register=False delegates that only validate
+    router actions and never reach a wire. Imported lazily because the handler
+    package imports this module while it loads.
+    """
+    import src.mcp_handlers  # noqa: F401  -- settles every @mcp_tool decorator
+    from src.mcp_handlers.decorators import get_tool_registry
+    from src.mcp_handlers.tool_stability import AGENT_WORKFLOW_ALIASES
+
+    return set(get_tool_registry()) | set(AGENT_WORKFLOW_ALIASES)
 
 
 def get_tools_for_mode(mode: str = "full") -> Set[str]:
@@ -429,12 +225,14 @@ def get_tools_for_mode(mode: str = "full") -> Set[str]:
         return OPERATOR_RECOVERY_MODE_TOOLS.copy()
 
     if mode == "full":
-        # IMPORTANT: Full mode must include *all* tools defined in the schema, not just
-        # what happens to be listed in TOOL_CATEGORIES. This prevents accidental
-        # omissions when new tools are added but categories aren't updated yet.
+        # Full is the advertised roster (advertised_tool_names_full): every
+        # registered dispatch tool plus the workflow aliases, read from the
+        # registry so a new @mcp_tool is in full before anyone categorizes it.
+        # It was the schema-definition list until 2026-09-07, which also
+        # counted the register=False delegates and put `full` 15 names wider
+        # than anything the registrar could advertise.
         try:
-            from src.tool_schemas import get_tool_definitions
-            return {t.name for t in get_tool_definitions()}
+            return advertised_tool_names_full()
         except Exception:
             # Fallback (best-effort): union of categories
             all_tools = set()

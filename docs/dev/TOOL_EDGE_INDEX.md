@@ -20,7 +20,7 @@ wired). See
 [`dormant-capability-registry.md`](../operations/dormant-capability-registry.md)
 for the false-positive history this avoids.
 
-**43 registered tools · 8 consolidated (52 actions) · 70 aliases.**
+**42 registered tools · 8 consolidated (52 actions) · 70 aliases.**
 
 ## Content-addressed snapshots
 
@@ -51,7 +51,7 @@ removal authority.
 | `lite` | 29 | 29 | — | — |
 | `operator_readonly` | 12 | 12 | — | — |
 | `operator_recovery` | 16 | 16 | — | — |
-| `full` | 66 | 51 | `aggregate_metrics`, `archive_agent`, `backfill_calibration_from_dialectic`, `check_calibration`, `cleanup_knowledge_graph`, `compare_agents`, `compare_me_to_similar`, `delete_agent` … +15 | `check_working_state`, `record_result`, `request_review`, `search_shared_memory`, `start_session`, `store_finding`, `sync_state`, `update_finding` |
+| `full` | 50 | 50 | — | — |
 
 ### Workflow alias views
 
@@ -64,26 +64,23 @@ note for why the raw rendering is not.
 
 | Public name | Canonical | Wire params | Describe-only | Wire schema hash |
 |---|---|---:|---|---|
-| `check_working_state` | `get_governance_metrics` | 4 | `agent_id` | `sha256:7e826191bd2e2c0217c985158acf5a515445a629de1e6e063f485d2e12b04958` |
+| `check_working_state` | `get_governance_metrics` | 4 | — | `sha256:7e826191bd2e2c0217c985158acf5a515445a629de1e6e063f485d2e12b04958` |
 | `record_result` | `outcome_event` | 14 | — | `sha256:e3e7aa30a2349d0f6c5c95abc160b3f17f701d3a10d18018441e4de743769844` |
 | `request_review` | `dialectic` | 9 | — | `sha256:c37f5ecdb08b72bfae567569d5db49ac20b47bad8a3c369fe9397caeac99afce` |
 | `search_shared_memory` | `knowledge` | 36 | — | `sha256:075cdd41202249b1e1ab094ec6cf4dba0ecd83cdd9e87490f058c779a7581616` |
 | `start_session` | `onboard` | 17 | — | `sha256:87fbd17ac12beadc14d029c91d19dcb212a4dcab0b0c754e28c7a4f31ae3d9d1` |
 | `store_finding` | `knowledge` | 13 | — | `sha256:6ced8c4858936e1b3f8cbf55cd76f7dd617b1dd8c079b9ca780656597df8fa85` |
-| `sync_state` | `process_agent_update` | 23 | `agent_id`, `agent_name` | `sha256:ab94ee977175055f6990324276f5e1b709e21f8b29d2a7532e4f71d6fc837ad8` |
+| `sync_state` | `process_agent_update` | 23 | — | `sha256:ab94ee977175055f6990324276f5e1b709e21f8b29d2a7532e4f71d6fc837ad8` |
 | `update_finding` | `knowledge` | 13 | — | `sha256:efd1a4af3783e93f83a068e69944fe55ab323a256f2b99239a152d4bf1d7c5c5` |
 
 ## Deterministic findings
 
-**0 errors · 4 warnings · 0 informational.** Findings make drift reviewable;
+**0 errors · 0 warnings · 0 informational.** Findings make drift reviewable;
 they are not self-issued approval or remediation instructions.
 
 | Severity | Code | Subject | Finding | Evidence |
 |---|---|---|---|---|
-| warning | `DESCRIBE_SCHEMA_WIDER_THAN_WIRE` | `check_working_state` | describe_tool advertises parameters the alias wire schema rejects. | {"properties": ["agent_id"]} |
-| warning | `DESCRIBE_SCHEMA_WIDER_THAN_WIRE` | `sync_state` | describe_tool advertises parameters the alias wire schema rejects. | {"properties": ["agent_id", "agent_name"]} |
-| warning | `MODE_DECLARED_UNADVERTISED` | `full` | The mode declares names the production registrar would not advertise. | {"names": ["aggregate_metrics", "archive_agent", "backfill_calibration_from_dialectic", "check_calibration", "cleanup_knowledge_graph", "compare_agents", "compare_me_to_similar", "delete_agent", "detect_anomalies", "export_to_file", "get_a… |
-| warning | `MODE_UNDECLARED_ADVERTISED` | `full` | The production registrar advertises names absent from the mode declaration. | {"names": ["check_working_state", "record_result", "request_review", "search_shared_memory", "start_session", "store_finding", "sync_state", "update_finding"]} |
+| — | — | — | No structural findings. | — |
 
 ## Tools
 
@@ -111,7 +108,6 @@ edits that changed no edge.
 | `describe_tool` | `src/mcp_handlers/introspection/tool_introspection.py handle_describe_tool` | `src/mcp_handlers/schemas/admin.py DescribeToolParams` | 10s | identity=pre_onboard |
 | `detect_stuck_agents` | `src/mcp_handlers/lifecycle/stuck.py handle_detect_stuck_agents` | `src/mcp_handlers/schemas/lifecycle.py DetectStuckAgentsParams` | 15s | identity=pre_onboard |
 | `dialectic` | `src/mcp_handlers/consolidated.py action_router` | `src/mcp_handlers/schemas/dialectic.py DialecticParams` | 115s | — |
-| `direct_resume_if_safe` | `src/mcp_handlers/lifecycle/resume.py handle_direct_resume_if_safe` | `src/mcp_handlers/schemas/lifecycle.py DirectResumeIfSafeParams` | 10s | deprecated→`self_recovery` |
 | `export` | `src/mcp_handlers/consolidated.py action_router` | `src/mcp_handlers/schemas/export.py ExportParams` | 45s | — |
 | `get_governance_metrics` | `src/mcp_handlers/core.py handle_get_governance_metrics` | `src/mcp_handlers/schemas/core.py GetGovernanceMetricsParams` | 10s | identity=pre_onboard |
 | `get_thresholds` | `src/mcp_handlers/admin/config.py handle_get_thresholds` | `src/mcp_handlers/schemas/admin.py GetThresholdsParams` | 10s | — |

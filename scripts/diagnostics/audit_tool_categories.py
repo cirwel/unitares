@@ -12,14 +12,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.tool_schemas import get_tool_definitions
-from src.tool_modes import TOOL_CATEGORIES
+from src.tool_modes import TOOL_CATEGORIES, advertised_tool_names_full
 
 def audit_tool_categories():
     """Find uncategorized tools"""
-    
-    # Get all tools from schema
+
+    # The roster is what a full-mode server advertises: registered dispatch
+    # tools plus the workflow aliases. The schema list is only consulted for
+    # descriptions; it also carries register=False delegates that are not
+    # tools and must not read as "uncategorized".
     all_tools = get_tool_definitions()
-    all_tool_names = {tool.name for tool in all_tools}
+    all_tool_names = advertised_tool_names_full()
     
     # Get all categorized tools
     categorized_tools = set()
@@ -36,7 +39,7 @@ def audit_tool_categories():
     print("TOOL CATEGORIZATION AUDIT")
     print("=" * 80)
     print()
-    print(f"Total tools in schema: {len(all_tool_names)}")
+    print(f"Advertised tools (registered + workflow aliases): {len(all_tool_names)}")
     print(f"Tools in categories: {len(categorized_tools)}")
     print(f"Uncategorized tools: {len(uncategorized)}")
     print(f"Non-existent tools in categories: {len(non_existent)}")
