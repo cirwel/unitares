@@ -13,7 +13,7 @@ def test_build_separates_product_landing_from_glossary(tmp_path):
 
     landing = (tmp_path / "index.html").read_text(encoding="utf-8")
     glossary = (tmp_path / "glossary.html").read_text(encoding="utf-8")
-    server_version = (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    server_version = (PROJECT_ROOT / "PUBLISHED_VERSION").read_text(encoding="utf-8").strip()
     landing_text = " ".join(landing.split())
 
     assert "Runtime governance for long-lived AI agents" in landing_text

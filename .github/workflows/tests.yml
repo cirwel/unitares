@@ -3,9 +3,9 @@ name: Tests
 on:
   merge_group:
   push:
-    branches: [ master, main, develop ]
+    branches: [ master, main, develop, release/2.22 ]
   pull_request:
-    branches: [ master, main ]
+    branches: [ master, main, release/2.22 ]
 
 # Least-privilege default for GITHUB_TOKEN: every job here only reads the repo
 # and runs tests (checkout, pip/npm install, pytest/vitest, artifact upload) —

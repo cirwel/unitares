@@ -12,8 +12,11 @@ Choose one path:
 
 ## 2.1 Docker quickstart
 
+The clone pin below names the latest verified public release, which can lag
+the source version while a release is being prepared.
+
 ```bash
-git clone --branch v2.22.0 --depth 1 https://github.com/cirwel/unitares.git
+git clone --branch v2.21.0 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
 make coordination-demo
@@ -50,6 +53,28 @@ POSTGRES_HOST_PORT=15432 REDIS_HOST_PORT=16379 GOVERNANCE_HOST_PORT=18767 \
 UNITARES_DEMO_PORT=18767 make demo
 UNITARES_COORDINATION_DEMO_PORT=18788 make coordination-demo
 ```
+
+### Choosing the advertised tool surface
+
+v2.22.0 introduced the five-tool `minimal` default. The `.env` forwarding
+below requires v2.22.1 or later; v2.22.0 needs the explicit override in the
+[release errata](../releases/2.22.0-errata.md). To keep the wider `lite`
+surface when upgrading, set `GOVERNANCE_TOOL_MODE=lite` in the checkout's
+`.env` file before starting the new version, then run:
+
+```bash
+docker compose up -d --build --wait --force-recreate governance-mcp
+```
+
+Reconnect the MCP client so it refreshes discovery. Compose explicitly passes
+this variable into the server; changing the host environment without
+recreating the container does not update a running service. `full` advertises
+the complete registered surface. Profiles affect discovery, not authorization
+or dispatch: registered names remain callable, subject to their normal gates.
+
+v2.21.0 has an older six-tool `minimal` profile and registration-time filtering
+on the HTTP MCP mount. Selecting that profile does not reproduce the five-tool
+surface or its dispatch compatibility; upgrade the server for those changes.
 
 ## 2.2 Bare-metal installation
 

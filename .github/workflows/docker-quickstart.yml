@@ -21,7 +21,7 @@ name: Docker Quickstart
 
 on:
   push:
-    branches: [ master, main ]
+    branches: [ master, main, release/2.22 ]
     paths:
       - 'db/postgres/**'
       - 'docker-compose.yml'
@@ -32,9 +32,10 @@ on:
       - 'requirements*.txt'
       - 'scripts/demo/coordination_demo.py'
       - 'scripts/demo/quick_demo.py'
+      - 'scripts/ci/check_mcp_tool_surface.py'
       - '.github/workflows/docker-quickstart.yml'
   pull_request:
-    branches: [ master, main ]
+    branches: [ master, main, release/2.22 ]
     paths:
       - 'db/postgres/**'
       - 'docker-compose.yml'
@@ -45,6 +46,7 @@ on:
       - 'requirements*.txt'
       - 'scripts/demo/coordination_demo.py'
       - 'scripts/demo/quick_demo.py'
+      - 'scripts/ci/check_mcp_tool_surface.py'
       - '.github/workflows/docker-quickstart.yml'
 
 permissions:
@@ -76,6 +78,15 @@ jobs:
 
       - name: Run the two-agent coordination proof
         run: make coordination-demo
+
+      - name: Verify default MCP discovery and unadvertised named calls
+        run: docker compose exec -T governance-mcp python - --mode minimal < scripts/ci/check_mcp_tool_surface.py
+
+      - name: Verify the documented lite upgrade override from .env
+        run: |
+          printf 'GOVERNANCE_TOOL_MODE=lite\n' > .env
+          docker compose up -d --build --wait --force-recreate governance-mcp
+          docker compose exec -T governance-mcp python - --mode lite < scripts/ci/check_mcp_tool_surface.py
 
       - name: Dump container logs on failure
         if: failure()

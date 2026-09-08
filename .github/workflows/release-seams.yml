@@ -22,9 +22,9 @@ name: Release Seams
 on:
   merge_group:
   push:
-    branches: [ master, main ]
+    branches: [ master, main, release/2.22 ]
   pull_request:
-    branches: [ master, main ]
+    branches: [ master, main, release/2.22 ]
 
 permissions:
   contents: read

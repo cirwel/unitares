@@ -9,7 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.22.1] - 2026-09-08
+
+This is a maintenance release candidate based on the immutable v2.22.0 tag.
+It backports the release corrections without importing subsequent master
+changes. The five-tool default, 29-tool `lite` surface, registered callable
+names, input schemas, lifecycle envelopes, SDK version, and skills bundle are
+unchanged from v2.22.0. No database migration is introduced.
+
+### Fixed
+
+- **Compose upgrade:** pass `GOVERNANCE_TOOL_MODE` from Compose interpolation into the server environment, so setting `lite` in `.env`, rebuilding/recreating the service, and reconnecting the MCP client restores wider discovery. v2.22.0 needs the explicit override documented in its errata. Backports the fix merged after v2.22.0 was tagged. (#2092)
+- **release metadata:** keep published installation pins separate from the source version, bind plugin parity to the inspected v2.22.0 tag, and prevent source-version updates from rewriting historical bundle evidence. Restore the v2.22.0 changelog to its actual tagged contents and record the post-publication correction separately. (#2092)
+
+### Validation
+
+- **Docker MCP:** exercise minimal discovery and an unadvertised named call, then the 29-tool `.env` lite override on the real Compose stack. The candidate must pass these checks before tagging; the successful #2092 run is prior evidence, not a substitute for candidate validation. (#2092)
+- **maintenance CI:** run the Python, Docker, Elixir, documentation, scope, and release-seam workflows on `release/2.22`, with their existing checks intact.
+
 ## [2.22.0] - 2026-09-07
+
+Published contents are recorded below. See [post-publication errata](releases/2.22.0-errata.md) for the Compose upgrade correction.
 
 ### Changed
 
