@@ -317,6 +317,16 @@
           calibrationStatus: calR && typeof calR.calibration_status === "string" ? calR.calibration_status : null,
           calibrationSignal: calR && typeof calR.tactical_signal_status === "string" ? calR.tactical_signal_status : null,
           anomalies: anomR && anomR.summary ? anomR.summary.total_anomalies : null,
+          // Scope, for the same reason the Calibration card above carries its
+          // verdict and not just a number: the server scans at most
+          // scan.scan_cap active agents, so a count of 0 can mean "nothing
+          // wrong" OR "nothing wrong among the agents we looked at". Without
+          // these the card says "clear" in green for a fleet it never
+          // examined. Absent on an older server -> null -> the card renders
+          // exactly as before.
+          anomaliesTruncated: anomR && anomR.scan && typeof anomR.scan.truncated === "boolean" ? anomR.scan.truncated : null,
+          anomaliesScanned: anomR && anomR.scan && typeof anomR.scan.agents_scanned === "number" ? anomR.scan.agents_scanned : null,
+          anomaliesActive: anomR && anomR.scan && typeof anomR.scan.agents_active === "number" ? anomR.scan.agents_active : null,
           systemHealth: healthR ? (healthR.status === "healthy" ? "OK" : healthR.status) : null,
           systemHealthDetail: hb ? `${hb.healthy || 0} ok · ${hb.warning || 0} warn${hb.error ? " · " + hb.error + " err" : ""}` : null,
           degraded: [agentsR, kgR, dlcR, stuckR, calR, anomR, healthR, tierR].filter((x) => !x).length,

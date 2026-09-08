@@ -1,6 +1,6 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "lite",
   "transports": [
@@ -8,7 +8,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "c02837f859dada33cf05ecaa4bac82294da14f6f6d8e91422ba7d7eb8dcbbaa8",
+  "surface_sha256": "9258b7eee51471d69d68440025a7d9a1b4505500d6b9f961dc4bbb8af267b206",
   "capabilities": [
     {
       "name": "start_session",
@@ -47,7 +47,7 @@
       "name": "search_shared_memory",
       "implementation": "knowledge",
       "kind": "workflow_alias",
-      "input_schema_sha256": "649fd31e06af9a51a92107d1a298b26283785c204418d56deebce7a187e80daa",
+      "input_schema_sha256": "f66d5550b1d6379ef003c96041ce68504e786177cd475e59b506d0a869f151e7",
       "transport_names": {
         "mcp_streamable_http": "search_shared_memory",
         "rest_v1_tools": "search_shared_memory",

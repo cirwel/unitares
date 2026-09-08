@@ -16,6 +16,7 @@ import pytest
 
 import src.mcp_handlers  # noqa: F401  (settles the decorator registry)
 from src.tool_mode_listing import (
+    apply_listed_schema_policy,
     advertised_tool_names,
     filter_listed_tools,
     mode_filtered_server_class,
@@ -119,3 +120,40 @@ async def test_live_mount_lists_by_mode_and_registers_everything(monkeypatch):
                  "search_shared_memory", "request_review", "store_finding",
                  "list_tools", "describe_tool", "onboard", "bind_session"):
         assert name in registered, f"{name} must dispatch on /mcp/ in every mode"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["minimal", "standard", "lite", "full"])
+async def test_actual_listing_title_savings_preserve_validation_and_restore(monkeypatch, mode):
+    """Test the final MCP definitions, after typed-wrapper regeneration."""
+    import json
+    from src import mcp_server
+    from src.mcp_compat import get_tool_input_schema
+    from src.schema_brief import apply_property_title_mode
+
+    monkeypatch.setattr("src.tool_modes.TOOL_MODE", mode)
+    monkeypatch.setenv("UNITARES_TOOL_SCHEMA_PROPERTY_TITLES", "keep")
+    before = {t.name: get_tool_input_schema(t) for t in await mcp_server.mcp.list_tools()}
+    monkeypatch.setenv("UNITARES_TOOL_SCHEMA_PROPERTY_TITLES", "strip")
+    after = {t.name: get_tool_input_schema(t) for t in await mcp_server.mcp.list_tools()}
+    assert after == {name: apply_property_title_mode(schema, "strip") for name, schema in before.items()}
+    assert len(json.dumps(after)) < len(json.dumps(before))
+    monkeypatch.setenv("UNITARES_TOOL_SCHEMA_PROPERTY_TITLES", "keep")
+    restored = {t.name: get_tool_input_schema(t) for t in await mcp_server.mcp.list_tools()}
+    assert restored == before, "listing must not mutate registration/validation schemas"
+
+
+def test_listing_preserves_a_parameter_named_title_and_title_in_caller_data(monkeypatch):
+    from mcp.types import Tool
+    from src.mcp_compat import get_tool_input_schema
+
+    schema = {"title": "Arguments", "type": "object", "properties": {
+        "title": {"title": "Title", "type": "string", "default": "hello"},
+        "data": {"type": "object", "default": {"title": "caller data"}},
+    }}
+    tool = Tool(name="example", inputSchema=schema)
+    monkeypatch.setenv("UNITARES_TOOL_SCHEMA_PROPERTY_TITLES", "strip")
+    listed = apply_listed_schema_policy([tool])[0]
+    assert get_tool_input_schema(listed)["properties"]["title"]["default"] == "hello"
+    assert get_tool_input_schema(listed)["properties"]["data"]["default"] == {"title": "caller data"}
+    assert get_tool_input_schema(tool) == schema
