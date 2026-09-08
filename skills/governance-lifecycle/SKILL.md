@@ -39,7 +39,7 @@ source_digests:
   unitares/src/mcp_handlers/tool_stability.py: "b81fb422cdec412c"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "9ccad2ee6b9f2484"
   unitares/src/mcp_handlers/updates/phases.py: "62168987a1a7fb79"
-  unitares/src/governance_monitor.py: "2734fbbd1693549f"
+  unitares/src/governance_monitor.py: "cecc4bde0de1c02b"
   unitares/src/monitor_calibration.py: "c99375f368dd98aa"
   unitares/src/mcp_handlers/updates/enrichments.py: "f91c10502c48275b"
   unitares/src/mcp_handlers/dialectic/handlers.py: "96ffbcfbbea5ff34"
