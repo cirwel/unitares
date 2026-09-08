@@ -77,12 +77,38 @@ branch does not deploy the master-only public Pages workflow.
 7. The `Publish Container` workflow publishes `linux/amd64` and `linux/arm64`
    images to GHCR with an SBOM and build-provenance attestation. For a release
    created before that workflow existed, dispatch it manually with the existing
-   release tag. Leave `publish_latest` off when backfilling an older release.
+   release tag. Both paths publish only the version tag; neither changes
+   `latest`. The former `publish_latest` input is removed.
 8. Verify the release page, both container architectures, digest, SBOM, and
-   attestation. Then set `PUBLISHED_VERSION` to the verified version, run
+   attestation. After verification, promote the inspected manifest digest as
+   described below; then set `PUBLISHED_VERSION` to the verified version, run
    `python scripts/ops/version_manager.py --update`, and deliver the public-pin
    update in a follow-up PR. Until that merges, public installation examples
    continue to name the previous verified release. Finish with clean closeout.
+
+## Promoting a verified container
+
+Publication creates the versioned artifact. Promotion moves `latest` to an
+already verified artifact without rebuilding it. Docker documents this
+single-index operation as a [carbon copy](https://docs.docker.com/reference/cli/docker/buildx/imagetools/create/). Until promotion succeeds,
+`latest` continues to resolve to the previous image (or remains absent).
+
+Record the release tag, source commit, multi-architecture **index digest**, both
+platforms, SBOM and provenance verification in the release evidence. Confirm
+this is the intended current release, not an older release being backfilled.
+With registry write access, substitute that recorded digest below:
+
+```bash
+docker buildx imagetools create --prefer-index=false --tag ghcr.io/cirwel/unitares:latest ghcr.io/cirwel/unitares@sha256:<verified-index-digest>
+docker buildx imagetools inspect ghcr.io/cirwel/unitares:latest
+```
+
+Require the resulting `latest` digest to equal the recorded index digest before
+advancing installation pins. Do not rebuild to promote: that would create a new,
+unverified artifact. The publish workflow intentionally has no promotion switch;
+rerunning publication or backfilling a release cannot implicitly move `latest`.
+The verification and promotion remain explicit release operations, not an
+automated end-to-end verification claim.
 
 ## Correcting a published release
 

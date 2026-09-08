@@ -329,7 +329,13 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
             "(checkin/log/update/sync_state) also accept named levels "
             "('trivial'|'low'|'medium'|'high'|'very_high') and explicit "
             "scale objects like {'value': 5, 'scale': 10}."
-        )
+        ),
+        json_schema_extra={
+            "brief": (
+                "Task complexity, strictly 0-1. Check-in aliases also accept "
+                "'trivial'|'low'|'medium'|'high'|'very_high'."
+            )
+        },
     )
     confidence: Union[float, str, None] = Field(
         default=None,
@@ -346,6 +352,13 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
             "and prediction for explicit forward claims. Server-authored "
             "bootstrap rows are labeled synthetic internally."
         ),
+        json_schema_extra={
+            "brief": (
+                "Storage label for this row: agent_report (default), "
+                "substrate_observation (measured), substrate_interpretation "
+                "(derived), prediction (forward claim)."
+            )
+        },
     )
     response_mode: Literal[
         "auto",
@@ -368,7 +381,14 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
             "agent consumption. Compatibility aliases: 'lite' -> compact, "
             "'verbose' -> full, 'interpreted' -> standard. 'minimal' remains "
             "the legacy bare action/EISV shape."
-        )
+        ),
+        json_schema_extra={
+            "brief": (
+                "Response shape. 'auto' (default) or 'compact' for routine "
+                "check-ins; 'mirror' for actionable signals; 'full' for "
+                "everything."
+            )
+        },
     )
     lite: Union[bool, str, None] = Field(
         default=None,
@@ -392,7 +412,13 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
     )
     task_type: TaskType = Field(
         default="mixed",
-        description="Task type context. Core types: convergent | divergent | mixed. Use 'introspection' for epistemic self-examination where low confidence is appropriate."
+        description="Task type context. Core types: convergent | divergent | mixed. Use 'introspection' for epistemic self-examination where low confidence is appropriate.",
+        json_schema_extra={
+            "brief": (
+                "Task type. Core types: convergent | divergent | mixed; "
+                "'introspection' for self-examination."
+            )
+        },
     )
     trajectory_signature: Optional[dict] = Field(
         default=None,
@@ -406,6 +432,13 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
             "dimensions such as presence. Raw afferents are recorded as "
             "measurement-only telemetry and never become verdict inputs."
         ),
+        json_schema_extra={
+            "brief": (
+                "Caller-published sensor measurements: `eisv` for a physical "
+                "E/I/S/V reading, `afferents` for raw dimensions. Telemetry "
+                "only, never a verdict input."
+            )
+        },
     )
     agent_name: Optional[str] = Field(
         default=None,
@@ -431,6 +464,13 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
             "harness type/version, and adapter version. Descriptive only: never "
             "identity proof, verdict authority, or a policy dispatch key."
         ),
+        json_schema_extra={
+            "brief": (
+                "Situating metadata: harness_type, model_provider, model, "
+                "transport, tool_surface, governance_mode, verification_source, "
+                "locus. Descriptive only."
+            )
+        },
     )
     # S22 provenance — compact top-level subset retained for older callers and
     # H5 comparison keys. Richer situating metadata should use
@@ -452,6 +492,12 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
             "a compact top-k per token, e.g. [[lp, lp, ...], ...] or "
             "[{\"top_logprobs\": [{\"logprob\": lp}, ...]}, ...]."
         ),
+        json_schema_extra={
+            "brief": (
+                "Per-token top-k output logprobs, e.g. [[lp, lp, ...], ...]. "
+                "Grounds S at tier-1 instead of the heuristic; absent for Claude."
+            )
+        },
     )
 
     @model_validator(mode='before')

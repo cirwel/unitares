@@ -400,6 +400,16 @@ def build_server_instructions(mode: str = None) -> str:
             f"Run the server with GOVERNANCE_TOOL_MODE={widen} to have them "
             "advertised; list_tools() enumerates whatever the profile lists."
         )
+    # The catalog is deliberately abridged, so say so once rather than let a
+    # caller read a trimmed sentence as the whole contract. One line at
+    # initialize costs less than a suffix on every parameter of every tool.
+    lines += [
+        "",
+        "Parameter descriptions in this catalog are abridged to their first "
+        "sentence. describe_tool(tool_name=..., action=...) returns the full "
+        "text and, for a consolidated router, only the parameters one action "
+        "takes.",
+    ]
     return "\n".join(lines)
 
 

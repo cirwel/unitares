@@ -28,7 +28,11 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # describe_tool gained include_schema / include_full_description, the
 # parameters their handlers already read; a compatible addition advances the
 # negotiated release (docs/INTERFACE_CONTRACT.md).
-INTERFACE_CONTRACT_VERSION = "1.3.0"
+# 1.4.0 (2026-09-08): parameter descriptions are advertised abridged
+# (src/schema_brief.py). No capability, parameter name, type, default or
+# requiredness changed — but the descriptions are inside the hashed schema, so
+# every input_schema_sha256 moves and a client pinning them needs to know why.
+INTERFACE_CONTRACT_VERSION = "1.4.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

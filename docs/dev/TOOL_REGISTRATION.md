@@ -296,6 +296,74 @@ Identity is primarily UUID-based (`agent_uuid` from `onboard()`). Session inject
 
 ---
 
+## What a Parameter Description Costs
+
+A parameter description is paid for on every `tools/list`, in every session, by
+every client — before the agent has decided it wants the tool. Measured on the
+FastMCP wire, 2026-09-08, before the trim below:
+
+| Surface | Advertised cost |
+|---|---|
+| `sync_state` alone | 8,076 chars (~2,020 tokens) |
+| `minimal` profile (5 tools) | 21,884 chars (~5,470 tokens) |
+| `standard` profile (11 tools) | 43,801 chars (~10,950 tokens) |
+
+About half of that was parameter prose. A profile cut does not touch it: a
+profile removes names from the list, not words from the names that remain.
+After the trim: `sync_state` 6,283 chars (~1,570 tokens), `minimal` ~4,290,
+`standard` ~9,380, `lite` ~22,600 — the profile totals move -22% / -14% / -12%.
+
+So the advertised catalog serves an **abridged** description and
+`describe_tool` serves the authored one. `src/schema_brief.py` owns the rule:
+
+- A field may carry an authored short form —
+  `Field(description=..., json_schema_extra={"brief": "..."})`. It always wins,
+  is not held to the budget (some parameters *are* their enum list), and the
+  `brief` key never reaches a caller on any surface.
+- Otherwise the description is returned whole when it already fits
+  `BRIEF_BUDGET` (140 chars), and trimmed to its first sentence when it does
+  not. Abbreviations ("e.g.") and single-letter initials are not sentence ends.
+- A first sentence still over budget is cut on a word boundary and marked with
+  an ellipsis, so a truncated description looks truncated.
+
+The same three modes are available on `apply_field_description_mode` and on
+`UNITARES_TOOL_SCHEMA_FIELD_DESCRIPTIONS`:
+
+| Mode | Advertised |
+|---|---|
+| `brief` (default) | authored short form, else the first sentence |
+| `full` | the complete authored text — the pre-2026-09-08 surface, byte for byte |
+| `off` | no field descriptions at all (the old `UNITARES_TOOL_SCHEMA_STRIP_FIELD_DESCRIPTIONS=1`) |
+
+`UNITARES_TOOL_SCHEMA_BRIEF_BUDGET` moves the cap. `tool_schemas.advertised_input_schema`
+is the one place the modes are applied, so the wire catalog, `describe_tool` and
+the tool-surface audit cannot drift apart; workflow-alias property overrides in
+`src/alias_schema.py` observe the same mode, which is why they carry a `brief`
+of their own.
+
+**When you write a parameter description**, put the sentence a caller needs to
+make the call first, and the caveats after. If the first sentence alone would
+make the parameter unusable — it names an action but not the enum, or a shape
+but not its required keys — author a `brief` rather than lengthening the
+sentence. `tests/test_schema_brief.py` holds the trim to being a trim: no
+parameter name, type, default or requiredness may move between `brief` and
+`full`.
+
+Two things this does **not** do, deliberately:
+
+- It does not remove anything from the system. Every word stays on the Pydantic
+  model and `describe_tool(tool_name=..., action=...)` still serves it. The MCP
+  `instructions` string says so once at initialize, rather than paying for a
+  pointer on every parameter.
+- It does not touch the structural half of the schema. Pydantic/FastMCP emit a
+  `title` for every property (a titleized copy of the key) and
+  `anyOf: [{type: X}, {type: "null"}]` for every optional — 663 and 396 chars
+  respectively on `sync_state` after the trim. That is a separate lever with a
+  separate risk profile (the advertised schema would stop matching what
+  FastMCP's argument model generates), and it is not attempted here.
+
+---
+
 ## Tool Tiers (for list_tools filtering and tool modes)
 
 Every advertised name has a tier on its `ToolMeta` record in

@@ -37,8 +37,24 @@ def test_search_shared_memory_advertises_lean_default():
     response_mode = tool.parameters["properties"]["response_mode"]
     include_details = tool.parameters["properties"]["include_details"]
     assert response_mode["default"] == "lean"
-    assert "Defaults to lean" in response_mode["description"]
-    assert "suppresses detail serialization upstream" in include_details["description"]
+    # Wording is abridged on the wire (src/schema_brief.py), so assert what the
+    # caller must be able to learn, not the sentence that carried it: which
+    # mode is the default, and that details are not expanded by default.
+    assert "lean" in response_mode["description"].lower()
+    assert "default" in response_mode["description"].lower()
+    assert "response_mode='full'" in include_details["description"]
+
+
+def test_search_shared_memory_override_keeps_its_authored_text():
+    """The abridged wire is a view; the authored override is still the source."""
+    from src.alias_schema import ALIAS_SCHEMA_PROPERTY_OVERRIDES
+
+    overrides = ALIAS_SCHEMA_PROPERTY_OVERRIDES["search_shared_memory"]
+    assert "Defaults to lean" in overrides["response_mode"]["description"]
+    assert (
+        "suppresses detail serialization upstream"
+        in overrides["include_details"]["description"]
+    )
 
 
 @pytest.mark.asyncio
