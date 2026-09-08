@@ -155,10 +155,12 @@ Fifteen tools are advertised by default: the checkpoint loop (`start_session`,
 `health_check`.
 
 `GOVERNANCE_TOOL_MODE` picks a different profile: `minimal` advertises the five
-checkpoint names alone, `lite` advertises 29, and `full` advertises all **50**. A
-profile decides what `tools/list` advertises, never what dispatches — but
-schema-driven clients (Claude Code, Codex, Cursor) only offer the model what
-discovery returns, so an unadvertised tool is unreachable from them in practice.
+checkpoint names alone, `lite` advertises 29, and `full` advertises every name
+the server can dispatch — the **42 tools** in the runtime registry plus the 8
+workflow aliases that carry the agent-facing names, 50 in all. A profile decides
+what `tools/list` advertises, never what dispatches — but schema-driven clients
+(Claude Code, Codex, Cursor) only offer the model what discovery returns, so an
+unadvertised tool is unreachable from them in practice.
 Profiles vary by release, including the tag the quickstart pins; the
 [installation guide](docs/manual/02-install.md) has the per-release detail.
 
