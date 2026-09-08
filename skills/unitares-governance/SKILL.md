@@ -29,7 +29,7 @@ source_files:
 source_digests:
   unitares/src/mcp_handlers/core.py: "5a6e81697f537ac2"
   unitares/src/mcp_handlers/identity/handlers.py: "54451aa9ac842fb1"
-  unitares/src/mcp_handlers/tool_stability.py: "954a3527c3481315"
+  unitares/src/mcp_handlers/tool_stability.py: "9513b90cde7e6601"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "bcac7a83172032db"
   unitares/src/monitor_metrics.py: "ea5e54b19fa1d903"
   unitares/src/tool_modes.py: "fd9602609291ffad"
@@ -38,10 +38,10 @@ source_digests:
   unitares/src/identity/lineage_semantics.py: "a6613f2493f6b97c"
   unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/skills/governance-lifecycle/SKILL.md: "9b0339c205954741"
-  unitares/skills/governance-fundamentals/SKILL.md: "35826b4fed4f5bd7"
-  unitares/skills/knowledge-graph/SKILL.md: "3c68fe0c9feb127a"
-  unitares/skills/dialectic-reasoning/SKILL.md: "ba1a8d1f4b9408d5"
+  unitares/skills/governance-lifecycle/SKILL.md: "68d6904d114d42dc"
+  unitares/skills/governance-fundamentals/SKILL.md: "e827c96547a08b8e"
+  unitares/skills/knowledge-graph/SKILL.md: "e70949f568ed456c"
+  unitares/skills/dialectic-reasoning/SKILL.md: "f6d02649df776956"
   unitares/skills/discord-bridge/SKILL.md: "3ca60ac744a6223e"
   unitares/skills/unitares-dashboard/SKILL.md: "6dcf8d96223bf965"
 ---
