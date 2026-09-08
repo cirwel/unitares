@@ -28,7 +28,7 @@ source_files:
   - unitares/src/tool_mode_listing.py
 source_digests:
   unitares/src/mcp_handlers/core.py: "5a6e81697f537ac2"
-  unitares/src/mcp_handlers/identity/handlers.py: "54451aa9ac842fb1"
+  unitares/src/mcp_handlers/identity/handlers.py: "c840edc5049524ed"
   unitares/src/mcp_handlers/admin/handlers.py: "d7dec13e6a422b43"
   unitares/src/mcp_handlers/tool_stability.py: "b81fb422cdec412c"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "bcac7a83172032db"
@@ -37,7 +37,7 @@ source_digests:
   unitares/src/mcp_handlers/dialectic/handlers.py: "96ffbcfbbea5ff34"
   unitares/src/mcp_handlers/lifecycle/self_recovery.py: "3fd24e37c57566a3"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/src/tool_modes.py: "0c3ffbb1363381b5"
+  unitares/src/tool_modes.py: "95af4068c129a4c6"
   unitares/src/tool_mode_listing.py: "a99a9e7f6e4a95c4"
 ---
 
@@ -222,13 +222,15 @@ not force a resume.
 ## MCP Tools Reference
 
 Which of these names your client *lists* depends on the server's
-`GOVERNANCE_TOOL_MODE`. The default, `minimal`, advertises only the five-tool
-checkpoint loop: `start_session`, `identity`, `sync_state`, `record_result`,
-`check_working_state`. `lite` (29 tools) advertises every name in this
+`GOVERNANCE_TOOL_MODE`. The default, `standard`, advertises ten names: the
+checkpoint loop (`start_session`, `identity`, `sync_state`, `record_result`,
+`check_working_state`) plus `search_shared_memory`, `store_finding`,
+`update_finding`, `request_review`, and `consult`. `minimal` advertises the
+checkpoint loop alone. `lite` (29 tools) advertises every name in this
 reference plus `list_tools` / `describe_tool`; `full` advertises everything
 registered. A mode filters only `tools/list`: every registered tool dispatches
 by name in every mode, on `/mcp/`, REST `/v1/tools/call`, and stdio alike. So a
-harness that offers only listed tools shows five under the default, and the
+harness that offers only listed tools shows ten under the default, and the
 rest are one server-side flag away (`GOVERNANCE_TOOL_MODE=lite`), not gone.
 `start_session(verbose=true)` reports the running mode under `tool_mode`.
 
@@ -258,4 +260,4 @@ rest are one server-side flag away (`GOVERNANCE_TOOL_MODE=lite`), not gone.
 - `call_model()` — Delegate to a configured secondary model for analysis
 - `observe()` — Read governance observations and fleet diagnostics
 - `config()` — Read or change runtime thresholds; writes are privileged
-- `list_tools()` / `describe_tool()` — Inspect the deployed surface instead of guessing an old tool name. Advertised on `lite` and `full`, not on the default `minimal`, where the MCP client's own `tools/list` is the discovery surface; both still answer when called by name
+- `list_tools()` / `describe_tool()` — Inspect the deployed surface instead of guessing an old tool name. Advertised on `lite` and `full`, not on the default `standard` or on `minimal`, where the MCP client's own `tools/list` is the discovery surface; both still answer when called by name

@@ -47,5 +47,39 @@ def test_server_registers_list_tools():
     assert hasattr(server, "list_tools") or "tools/list" in getattr(server, "_request_handlers", {})
 
 
+def test_server_advertises_the_default_profile_and_still_dispatches_the_rest():
+    """The default listing is the standard profile; registration is unfiltered.
+
+    A mode filters tools/list only. If these two ever converge, an unadvertised
+    capability has become an uncallable one.
+    """
+    import asyncio
+
+    from src import mcp_server
+    from src.tool_modes import STANDARD_MODE_TOOLS, TOOL_MODE
+
+    assert TOOL_MODE == "standard"
+    listed = {tool.name for tool in asyncio.run(mcp_server.mcp.list_tools())}
+    registered = set(mcp_server.mcp._tool_manager._tools)
+    assert STANDARD_MODE_TOOLS <= listed
+    assert listed <= registered
+    for name in ("knowledge", "dialectic", "observe", "list_tools",
+                 "describe_tool", "onboard", "self_recovery"):
+        assert name not in listed, f"{name} is not part of the default profile"
+        assert name in registered, f"{name} must still dispatch by name"
+
+
+def test_server_carries_instructions_naming_the_unadvertised_surface():
+    """Clients get the orientation in the initialize response, not per call."""
+    from src import mcp_server
+    from src.tool_modes import build_server_instructions
+
+    instructions = getattr(mcp_server.mcp, "instructions", None)
+    assert instructions, "the server must ship an instructions string"
+    assert instructions == build_server_instructions()
+    assert "start_session" in instructions
+    assert "callable by name" in instructions
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__]))

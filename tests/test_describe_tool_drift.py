@@ -245,7 +245,8 @@ async def test_list_tools_lite_surfaces_workflow_aliases(monkeypatch):
     """Under GOVERNANCE_TOOL_MODE=lite the compact view names the workflow aliases.
 
     The compact view follows the deployment's advertised surface, and the
-    process default is minimal (five tools), so the lite mode is pinned here.
+    process default is standard (ten tools, no routers), so the lite mode is
+    pinned here.
     """
     import json
     from src.mcp_handlers.introspection.tool_introspection import handle_list_tools
@@ -283,8 +284,8 @@ async def test_list_tools_filters_by_category(lite, monkeypatch):
     """A category request must not silently return unrelated tools.
 
     The compact view follows the deployment's advertised surface, and the
-    process default (minimal) advertises no dialectic tool, so the lite mode is
-    pinned: the test is about category filtering, not the default surface.
+    process default (standard) advertises no dialectic tool, so the lite mode
+    is pinned: the test is about category filtering, not the default surface.
     """
     import json
     from src.mcp_handlers.introspection.tool_introspection import handle_list_tools

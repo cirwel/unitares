@@ -107,7 +107,7 @@ async def test_live_mount_lists_by_mode_and_registers_everything(monkeypatch):
     # that is neither a first-party handler nor an alias is foreign here.
     foreign = registered - set(get_tool_registry()) - set(list_all_aliases())
 
-    for mode in ("minimal", "lite", "full"):
+    for mode in ("minimal", "standard", "lite", "full"):
         monkeypatch.setattr("src.tool_modes.TOOL_MODE", mode)
         listed = {tool.name for tool in await mcp_server.mcp.list_tools()}
         expected = {tool.name for tool in get_public_tool_definitions(mode)}
