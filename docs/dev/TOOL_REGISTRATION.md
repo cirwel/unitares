@@ -374,8 +374,8 @@ With MCP 2.1.1, brief descriptions and the current search alias, measured
 |---|---:|---:|---:|
 | `minimal` | 16,679 B | 14,945 B | 1,734 B |
 | `standard` | 52,469 B | 46,829 B | 5,640 B |
-| `lite` | 84,745 B | 75,587 B | 9,158 B |
-| `full` | 120,448 B | 107,200 B | 13,248 B |
+| `lite` | 84,734 B | 75,576 B | 9,158 B |
+| `full` | 120,437 B | 107,189 B | 13,248 B |
 
 The earlier #2115 numbers measured the catalog and missed titles regenerated
 by FastMCP. Do not use them as measured MCP savings. `--boilerplate` now
@@ -397,8 +397,8 @@ a tool, or contacting a database; it is not a deployed-server probe.
 |---|---:|---:|---:|
 | `minimal` | 5 | 14,945 B | 3,736 |
 | `standard` (default) | 15 | 46,829 B | 11,707 |
-| `lite` | 29 | 75,587 B | 18,896 |
-| `full` | 50 | 107,200 B | 26,800 |
+| `lite` | 29 | 75,576 B | 18,894 |
+| `full` | 50 | 107,189 B | 26,797 |
 
 These are measurements under MCP 2.1.1 on 2026-09-08, with brief descriptions,
 stripped titles and first-party tools. SDK versions, settings and installed
