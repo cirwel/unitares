@@ -8,7 +8,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "38b5e20ffa167daa9fc14e62cf552386a1207b873f729322bc43dfbbba48624d",
+  "surface_sha256": "c02837f859dada33cf05ecaa4bac82294da14f6f6d8e91422ba7d7eb8dcbbaa8",
   "capabilities": [
     {
       "name": "start_session",
@@ -311,7 +311,7 @@
       "name": "observe",
       "implementation": "observe",
       "kind": "canonical_tool",
-      "input_schema_sha256": "46a8b221a7ff36e714d25843d4eebfc9c1a3a24be9f268c1196cda2348f97c0f",
+      "input_schema_sha256": "c5651bac6f202e115f905b48cbbe489eb0483f07207508bb75bd3728695591cb",
       "transport_names": {
         "mcp_streamable_http": "observe",
         "rest_v1_tools": "observe",
