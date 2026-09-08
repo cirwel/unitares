@@ -51,6 +51,31 @@ def _describe_tool_deprecation_block(tool_name: str) -> Dict[str, Any] | None:
     return tool_catalog.describe_tool_deprecation_block(tool_name)
 
 
+def _alias_role(alias_info: Any) -> str:
+    """A workflow name is the primary surface; every other alias is compatibility."""
+    return "primary_agent_workflow" if alias_info.experience else "compatibility_alias"
+
+
+def _alias_block(requested_tool_name: str, alias_info: Any) -> Dict[str, Any]:
+    """The ``alias`` block of a describe_tool response; one shape for every response mode.
+
+    ``deprecated_since`` is the date the old name stopped being canonical
+    (``ToolAlias.deprecated_since``); a workflow or intuitive alias carries
+    none, because that name was never canonical.
+    """
+    since = alias_info.deprecated_since
+    return {
+        "reason": alias_info.reason,
+        "role": _alias_role(alias_info),
+        "primary_tool": requested_tool_name,
+        "implementation_tool": alias_info.new_name,
+        "canonical_tool": alias_info.new_name,
+        "injected_action": alias_info.inject_action,
+        "deprecated_since": since.date().isoformat() if since else None,
+        "note": alias_info.migration_note,
+    }
+
+
 def _resolve_json_schema_type(field_info: Dict[str, Any]) -> str:
     """Render a Pydantic/JSON Schema field's type for lite-mode param lists.
 
@@ -826,12 +851,15 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
         tool_name, alias_info = resolve_tool_alias(requested_tool_name)
 
         from src.tool_descriptions import TOOL_DESCRIPTIONS
-        from src.tool_schemas import get_pydantic_schemas
+        from src.tool_schemas import advertised_input_schema, get_pydantic_schemas
 
         schema_model = get_pydantic_schemas().get(tool_name)
         tool_schema = None
         if schema_model is not None:
-            tool_schema = schema_model.model_json_schema()
+            # The same hiding the wire applies (session-injected identity
+            # params), so describe_tool never advertises what the registered
+            # schema does not carry.
+            tool_schema = advertised_input_schema(tool_name, schema_model.model_json_schema())
             description = TOOL_DESCRIPTIONS.get(tool_name) or schema_model.__doc__ or f"Tool: {tool_name}"
         else:
             # Fallback for decorator-defined/plugin tools that are not backed
@@ -1007,15 +1035,7 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                     response_data["primary_tool"] = requested_tool_name
                     response_data["implementation_tool"] = tool_name
                     response_data["canonical_tool"] = tool_name
-                    response_data["alias"] = {
-                        "reason": alias_info.reason,
-                        "role": "primary_agent_workflow",
-                        "primary_tool": requested_tool_name,
-                        "implementation_tool": alias_info.new_name,
-                        "canonical_tool": alias_info.new_name,
-                        "injected_action": alias_info.inject_action,
-                        "note": alias_info.migration_note,
-                    }
+                    response_data["alias"] = _alias_block(requested_tool_name, alias_info)
 
                 deprecation = tool_catalog.describe_tool_deprecation_block(tool_name)
                 if deprecation is not None:
@@ -1072,15 +1092,7 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                     response_data["primary_tool"] = requested_tool_name
                     response_data["implementation_tool"] = tool_name
                     response_data["canonical_tool"] = tool_name
-                    response_data["alias"] = {
-                        "reason": alias_info.reason,
-                        "role": "primary_agent_workflow",
-                        "primary_tool": requested_tool_name,
-                        "implementation_tool": alias_info.new_name,
-                        "canonical_tool": alias_info.new_name,
-                        "injected_action": alias_info.inject_action,
-                        "note": alias_info.migration_note,
-                    }
+                    response_data["alias"] = _alias_block(requested_tool_name, alias_info)
 
                 deprecation = tool_catalog.describe_tool_deprecation_block(tool_name)
                 if deprecation is not None:
@@ -1106,16 +1118,8 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
         if alias_info:
             full_response["tool"]["canonical_name"] = tool_name
             full_response["tool"]["implementation_name"] = tool_name
-            full_response["tool"]["role"] = "primary_agent_workflow"
-            full_response["alias"] = {
-                "reason": alias_info.reason,
-                "role": "primary_agent_workflow",
-                "primary_tool": requested_tool_name,
-                "implementation_tool": alias_info.new_name,
-                "canonical_tool": alias_info.new_name,
-                "injected_action": alias_info.inject_action,
-                "note": alias_info.migration_note,
-            }
+            full_response["tool"]["role"] = _alias_role(alias_info)
+            full_response["alias"] = _alias_block(requested_tool_name, alias_info)
         deprecation = tool_catalog.describe_tool_deprecation_block(tool_name)
         if deprecation is not None:
             full_response["deprecation"] = deprecation

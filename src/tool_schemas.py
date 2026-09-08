@@ -318,6 +318,22 @@ def _hide_auto_injected_identity(schema: Any) -> Any:
     return schema
 
 
+def advertised_input_schema(tool_name: str, schema: Any) -> Any:
+    """The input schema a caller is told about, for a tool or its alias's canonical tool.
+
+    One definition for the three surfaces that describe a tool's parameters:
+    the wire catalog (``get_tool_definitions``), ``describe_tool``, and the
+    tool-surface audit. Until 2026-09-07 only the wire applied the identity
+    hiding, so ``describe_tool`` advertised ``agent_id`` / ``agent_name`` for
+    ``process_agent_update`` / ``get_governance_metrics`` and their workflow
+    aliases while the registered schema carried neither
+    (DESCRIBE_SCHEMA_WIDER_THAN_WIRE in scripts/dev/tool_edge_index.py).
+    """
+    if tool_name in _HIDE_IDENTITY_PARAMS_TOOLS:
+        return _hide_auto_injected_identity(schema)
+    return schema
+
+
 def get_tool_definitions(verbosity: str | None = None) -> list[Tool]:
     """Build the list of MCP Tool objects from Pydantic schemas + descriptions."""
     if verbosity is None:
@@ -398,7 +414,7 @@ def get_tool_definitions(verbosity: str | None = None) -> list[Tool]:
     # Apply verbosity and field description stripping
     for t in all_tools:
         if t.name in _HIDE_IDENTITY_PARAMS_TOOLS:
-            set_tool_input_schema(t, _hide_auto_injected_identity(get_tool_input_schema(t)))
+            set_tool_input_schema(t, advertised_input_schema(t.name, get_tool_input_schema(t)))
         if verbosity == "short":
             t.description = _first_line(t.description)
         if strip_field_descriptions:

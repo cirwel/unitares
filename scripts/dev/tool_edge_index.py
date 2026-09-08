@@ -664,6 +664,7 @@ def build_exposure_snapshot(
         list_all_aliases,
     )
     from src.alias_schema import build_alias_input_schema
+    from src.tool_schemas import advertised_input_schema
     from src.tool_modes import LITE_MODE_TOOLS, get_tools_for_mode
     from src.tool_schemas import get_pydantic_schemas
 
@@ -717,8 +718,10 @@ def build_exposure_snapshot(
         alias = aliases_by_name.get(name) if name in workflow_aliases else None
         canonical_name = alias.new_name if alias else name
         model = schemas.get(canonical_name)
+        # Mirrors describe_tool: the pydantic schema with the same identity
+        # hiding the wire applies (src.tool_schemas.advertised_input_schema).
         describe_schema = (
-            _jsonable(model.model_json_schema())
+            _jsonable(advertised_input_schema(canonical_name, model.model_json_schema()))
             if model is not None
             else wire["input_schema"]
         )
@@ -923,6 +926,17 @@ def lint_snapshots(
             )
 
     for view in exposure["tools"]:
+        # Checked for every wire name since 2026-09-07 (was: workflow aliases
+        # only). The two registered tools behind the flagged aliases had the
+        # same divergence and sat outside the rule.
+        if view["describe_only_properties"]:
+            add(
+                "warning",
+                "DESCRIBE_SCHEMA_WIDER_THAN_WIRE",
+                view["name"],
+                "describe_tool advertises parameters the wire schema does not carry.",
+                properties=view["describe_only_properties"],
+            )
         if view["kind"] != "workflow_alias":
             continue
         if view["inject_action"] and "action" in view["wire_properties"]:
@@ -933,15 +947,6 @@ def lint_snapshots(
                 "Action-injecting alias still asks the caller for action.",
                 inject_action=view["inject_action"],
             )
-        if view["describe_only_properties"]:
-            add(
-                "warning",
-                "DESCRIBE_SCHEMA_WIDER_THAN_WIRE",
-                view["name"],
-                "describe_tool advertises parameters the alias wire schema rejects.",
-                properties=view["describe_only_properties"],
-            )
-
     for name in exposure["orientation"]["full_orientation_only"]:
         add(
             "warning",

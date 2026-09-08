@@ -64,24 +64,23 @@ note for why the raw rendering is not.
 
 | Public name | Canonical | Wire params | Describe-only | Wire schema hash |
 |---|---|---:|---|---|
-| `check_working_state` | `get_governance_metrics` | 4 | `agent_id` | `sha256:7e826191bd2e2c0217c985158acf5a515445a629de1e6e063f485d2e12b04958` |
+| `check_working_state` | `get_governance_metrics` | 4 | — | `sha256:7e826191bd2e2c0217c985158acf5a515445a629de1e6e063f485d2e12b04958` |
 | `record_result` | `outcome_event` | 14 | — | `sha256:e3e7aa30a2349d0f6c5c95abc160b3f17f701d3a10d18018441e4de743769844` |
 | `request_review` | `dialectic` | 9 | — | `sha256:c37f5ecdb08b72bfae567569d5db49ac20b47bad8a3c369fe9397caeac99afce` |
 | `search_shared_memory` | `knowledge` | 36 | — | `sha256:075cdd41202249b1e1ab094ec6cf4dba0ecd83cdd9e87490f058c779a7581616` |
 | `start_session` | `onboard` | 17 | — | `sha256:87fbd17ac12beadc14d029c91d19dcb212a4dcab0b0c754e28c7a4f31ae3d9d1` |
 | `store_finding` | `knowledge` | 13 | — | `sha256:6ced8c4858936e1b3f8cbf55cd76f7dd617b1dd8c079b9ca780656597df8fa85` |
-| `sync_state` | `process_agent_update` | 23 | `agent_id`, `agent_name` | `sha256:ab94ee977175055f6990324276f5e1b709e21f8b29d2a7532e4f71d6fc837ad8` |
+| `sync_state` | `process_agent_update` | 23 | — | `sha256:ab94ee977175055f6990324276f5e1b709e21f8b29d2a7532e4f71d6fc837ad8` |
 | `update_finding` | `knowledge` | 13 | — | `sha256:efd1a4af3783e93f83a068e69944fe55ab323a256f2b99239a152d4bf1d7c5c5` |
 
 ## Deterministic findings
 
-**0 errors · 2 warnings · 0 informational.** Findings make drift reviewable;
+**0 errors · 0 warnings · 0 informational.** Findings make drift reviewable;
 they are not self-issued approval or remediation instructions.
 
 | Severity | Code | Subject | Finding | Evidence |
 |---|---|---|---|---|
-| warning | `DESCRIBE_SCHEMA_WIDER_THAN_WIRE` | `check_working_state` | describe_tool advertises parameters the alias wire schema rejects. | {"properties": ["agent_id"]} |
-| warning | `DESCRIBE_SCHEMA_WIDER_THAN_WIRE` | `sync_state` | describe_tool advertises parameters the alias wire schema rejects. | {"properties": ["agent_id", "agent_name"]} |
+| — | — | — | No structural findings. | — |
 
 ## Tools
 

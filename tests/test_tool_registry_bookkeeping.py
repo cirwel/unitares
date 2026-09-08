@@ -147,3 +147,26 @@ def test_deprecation_registry_names_only_callable_tools(callable_names):
     for name, entry in tc.DEPRECATION_REGISTRY.items():
         assert name in callable_names, name
         assert entry["superseded_by"] in callable_names, name
+
+
+def test_consolidated_and_deprecated_aliases_carry_the_date_the_old_name_stopped_being_canonical():
+    """deprecated_since is the retirement ledger: a superseded name has one, a friendly guess has none.
+
+    Until 2026-09-07 no entry carried a date, so the field the wave-3a probe
+    and describe_tool report was always null and nothing could say how long an
+    old name had been a compatibility shim.
+    """
+    from datetime import datetime
+
+    for name, info in ts.list_all_aliases().items():
+        if info.reason == "intuitive_alias":
+            assert info.deprecated_since is None, f"{name}: an intuitive alias was never canonical"
+        else:
+            assert isinstance(info.deprecated_since, datetime), f"{name}: {info.reason} alias needs deprecated_since"
+            assert info.deprecated_since <= datetime.now(), name
+    # Where the introspection registry also names the tool, the two ledgers agree.
+    for name, entry in tc.DEPRECATION_REGISTRY.items():
+        alias = ts.list_all_aliases().get(name)
+        if alias is not None:
+            assert alias.deprecated_since is not None, name
+            assert alias.deprecated_since.date().isoformat() == entry["deprecated_since"], name
