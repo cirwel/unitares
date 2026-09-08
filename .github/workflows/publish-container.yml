@@ -9,11 +9,6 @@ on:
         description: Existing server release tag to publish (for example v2.17.0)
         required: true
         type: string
-      publish_latest:
-        description: Also move the latest tag (only for the current release)
-        required: false
-        default: false
-        type: boolean
 
 concurrency:
   group: publish-container-${{ github.event.release.tag_name || inputs.ref }}
@@ -71,10 +66,9 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: latest=false
           tags: |
             type=raw,value=${{ steps.release.outputs.tag }}
-            type=raw,value=latest,enable=${{ (github.event_name == 'release' && !github.event.release.prerelease) || inputs.publish_latest }}
-            type=sha
 
       - name: Build and push multi-architecture image
         id: push
