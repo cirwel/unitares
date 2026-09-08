@@ -2,7 +2,7 @@
 
 <img alt="UNITARES: self-state telemetry for long-lived AI-agent fleets" src="docs/assets/hero-v3.png" width="100%">
 
-### Coordination and self-state telemetry for long-lived AI-agent fleets.
+### Runtime infrastructure for long-lived AI agents.
 
 </div>
 
@@ -18,11 +18,21 @@ question an operator running a fleet actually has:
 > **Is this the same agent as yesterday, and is it working the way it usually
 > works?**
 
+UNITARES provides continuity, accountability, and coordination for long-lived
+agents across process boundaries. It binds identity, longitudinal state, evidence,
+memory, and governance to an accountable record while processes restart and work
+moves between them.
+
 At each checkpoint UNITARES binds the write to a process identity, records what
 the agent claims alongside whatever evidence exists, updates a longitudinal state
-estimate, and returns a policy action with a named reason. The whole chain stays
-replayable, and two live processes can contend for the same governed surface
-without silently colliding.
+estimate, and returns a policy action with a named reason. The same identity and
+provenance layer extends into shared knowledge, structured review, leases,
+handoffs, consultation, and recovery. The chain stays replayable, and two live
+processes can contend for the same governed surface without silently colliding.
+
+UNITARES also uses these surfaces to build itself: agents search attributed
+memory, consult external models as advisory evidence, request review, and
+coordinate work without advice becoming authority.
 
 Self-hosted and single-operator by design. MCP is the primary agent-facing
 interface; REST, the public SDK, host adapters, and the dashboard expose the same
@@ -30,6 +40,8 @@ core. Plain-language definition:
 [What UNITARES is](docs/PRODUCT_DEFINITION.md).
 
 **Status:** v2.22.0. Running continuously since November 2025.
+This is the source version; the quickstart below pins the latest verified
+public release. Source delivery and artifact publication are separate steps.
 [Evidence and limits](#evidence-and-limits) gives every claim its evidence class,
 including the open ones.
 
@@ -64,13 +76,21 @@ Everything else stays registered and callable by name, and is advertised only
 when the server runs a wider profile: `GOVERNANCE_TOOL_MODE=lite` adds shared
 memory, structured review, advisory inference, and the consolidated routers;
 `full` adds the operator and admin tools. See [Beyond the five](#beyond-the-five).
-Released builds through v2.21.0 default to `lite`; set
-`GOVERNANCE_TOOL_MODE=minimal` there to get this surface.
+The five-tool minimal surface requires v2.22.0 or later. v2.21.0 defaults to
+`lite`; its older `minimal` profile has six tools and different HTTP dispatch
+behavior, so changing that flag does not reproduce this surface.
+
+When upgrading to v2.22.0 or later, clients that need the wider advertised
+surface should set `GOVERNANCE_TOOL_MODE=lite` in the server environment. For
+Compose, put it in `.env`, then run
+`docker compose up -d --build --wait --force-recreate governance-mcp` and reconnect the
+MCP client. Named calls remain available, but schema-driven clients may only
+offer tools returned by discovery. See the [installation guide](docs/manual/02-install.md).
 
 ## Quickstart
 
 ```bash
-git clone --branch v2.22.0 --depth 1 https://github.com/cirwel/unitares.git
+git clone --branch v2.21.0 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait   # PostgreSQL/AGE/pgvector, Redis, lease plane, server on loopback
 ```
