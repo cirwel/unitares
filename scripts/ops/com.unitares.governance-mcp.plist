@@ -127,9 +127,10 @@
              and advisory inference. minimal is the checkpoint loop alone;
              lite adds the consolidated routers and the discovery tools; full
              advertises every registered tool. Only the listing is filtered:
-             every registered name stays callable on every transport -- but a
-             schema-driven client offers the model only what it was told
-             about, so narrowing this hides capability from such clients. -->
+             every registered name stays callable on every transport. Note
+             that a schema-driven client offers the model only what it was
+             told about, so narrowing this hides capability from such
+             clients even though dispatch is unchanged. -->
         <key>GOVERNANCE_TOOL_MODE</key>
         <string>lite</string>
         <key>HOME</key>

@@ -238,6 +238,35 @@ def test_is_available():
 
 
 @pytest.mark.asyncio
+async def test_vector_math_works_without_sentence_transformers():
+    """similarity()/rank_by_similarity() need numpy, not the model runtime.
+
+    Both used to be gated on SENTENCE_TRANSFORMERS_AVAILABLE and raised
+    RuntimeError("numpy not available") -- naming a core dependency that is
+    always present, on an install this module otherwise supports (it warns
+    about the missing extra rather than failing). Cosine similarity over
+    embeddings the caller already holds, e.g. read back from pgvector, was
+    unreachable on every install without the optional ML extra.
+    """
+    from src.embeddings import EmbeddingsService
+
+    service = EmbeddingsService()
+    vec = np.random.randn(384).astype(np.float32)
+    vec = vec / np.linalg.norm(vec)
+    vec_list = vec.tolist()
+
+    with patch("src.embeddings.SENTENCE_TRANSFORMERS_AVAILABLE", False):
+        score = await service.similarity(vec_list, vec_list)
+        assert abs(score - 1.0) < 0.01
+
+        ranked = await service.rank_by_similarity(
+            query_embedding=vec_list,
+            candidate_embeddings=[("same", vec_list), ("negated", (-vec).tolist())],
+        )
+        assert [doc_id for doc_id, _score in ranked] == ["same", "negated"]
+
+
+@pytest.mark.asyncio
 async def test_ensure_model_raises_without_sentence_transformers():
     """_ensure_model() should raise RuntimeError if sentence-transformers unavailable."""
     from src.embeddings import EmbeddingsService
