@@ -191,24 +191,30 @@ jobs:
         # Boundaries re-cut 2026-09-08 against measured per-group runtimes under
         # COVERAGE_CORE=sysmon (below) -- the old ones were cut before that, and
         # the fast core does not shrink every group equally. Every group here was
-        # run and observed green; the numbers are one machine's seconds, so read
-        # them as a spread, not as CI times:
+        # run and observed green. The numbers are one machine's seconds, so read
+        # them as a spread, not as CI times; the "after" column gives both runs
+        # where they were measured twice, because run-to-run variance on a shared
+        # machine is ~10% and quoting the friendlier run would overstate this:
         #
         #     before (old boundaries)     after (these boundaries)
-        #     a-b   41.1s                 a-c   88.9s
-        #     c-d   91.2s                 d-e   79.3s
-        #     e-h   88.1s                 f-i   69.2s
-        #     i-l   86.9s                 j-m   87.2s
-        #     m-p   60.7s                 n-r   68.4s
-        #     q-t  108.1s  <- critical    s-t   76.5s
-        #     u-z   39.9s                 u-z   39.9s
-        #     agents-and-nested 23.3s     agents-and-nested 23.3s
-        #     critical shard 108.1s       critical shard 88.9s  (-18%)
+        #     a-b   41.1s                 a-c   88.9 / 90.9s
+        #     c-d   91.2s                 d-e   79.3 / 80.8s
+        #     e-h   88.1s                 f-i   69.2 / 68.0s
+        #     i-l   86.9s                 j-m   87.2 / 96.0s
+        #     m-p   60.7s                 n-r   68.4 / 74.6s
+        #     q-t  108.1s  <- critical    s-t   76.5 / 76.4s
+        #     u-z   39.9s                 u-z   39.9 / 39.4s
+        #     agents-and-nested 23.3s     agents-and-nested 23.3 / 22.3s
+        #     critical shard 108.1s       critical shard 88.9-96.0s (-11 to -18%)
         #
-        # tests-a-c is now the binding constraint and cannot be split further
-        # without pushing another group above it, so 88.9s is the floor for
+        # The "before" column is a single run per group, so the honest reading is
+        # that the spread tightened from 23-108s to 22-96s, not that the critical
+        # shard landed on one exact number.
+        #
+        # tests-a-c and tests-j-m are the binding constraints and neither can be
+        # split without pushing another group above it, so this is the floor for
         # seven contiguous letter groups. A ninth shard was measured too and
-        # bought nothing: it lands on the same 88.9s critical path for two more
+        # bought nothing: it lands on the same critical path for two more
         # runners. Re-cut these boundaries from measurement, not from intuition,
         # whenever the spread drifts again.
         shard: [tests-a-c, tests-d-e, tests-f-i, tests-j-m, tests-n-r, tests-s-t, tests-u-z, agents-and-nested]

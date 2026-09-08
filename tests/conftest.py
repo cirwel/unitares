@@ -503,6 +503,39 @@ def _safe_background_task_spawns(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_knowledge_graph_singleton():
+    """
+    Drop the cached knowledge-graph singleton between tests.
+
+    src/knowledge_graph.py caches the backend in a module global
+    (_graph_instance). A test that patches src.db.get_db and then, directly or
+    through a handler, causes get_knowledge_graph() to build the backend leaves
+    that mock DB inside the singleton -- the patch unwinds, the cached graph
+    does not, and every later test in the process gets a graph whose db is a
+    MagicMock.
+
+    Observed: `pytest tests/test_update_workflow_service.py tests/smoke_test.py`
+    failed test_knowledge_layer with "object MagicMock can't be used in 'await'
+    expression" (src/storage/knowledge_graph_postgres.py:305). Neither file is
+    at fault on its own; both pass alone. CI only stayed green because the two
+    never landed in the same shard, so a routine change to the shard boundaries
+    could surface it -- which makes it a latent trap rather than a known quirk.
+
+    _graph_lock goes with it: it is created lazily precisely so it binds to the
+    running event loop, and a lock retained from a finished test's loop is the
+    same class of leak.
+
+    Reset via sys.modules rather than an import, so this does not drag the
+    knowledge-graph module into tests that never touch it.
+    """
+    yield
+    module = sys.modules.get("src.knowledge_graph")
+    if module is not None:
+        module._graph_instance = None
+        module._graph_lock = None
+
+
+@pytest.fixture(autouse=True)
 def _isolate_identity_state():
     """
     Reset all in-memory identity and session state between tests.
