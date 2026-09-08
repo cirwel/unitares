@@ -1,6 +1,6 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "lite",
   "transports": [
@@ -8,7 +8,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "5074da3de8f0c6653f634fd40b51fd1bbedc06e5febf732c35149fe5e9b23680",
+  "surface_sha256": "d3171d7e4166594c84df28608c465fb1878507c7b44c073dd79f6543129e1a9e",
   "capabilities": [
     {
       "name": "start_session",
@@ -135,7 +135,7 @@
       "name": "describe_tool",
       "implementation": "describe_tool",
       "kind": "canonical_tool",
-      "input_schema_sha256": "b921fbdfbd223d3e22ee5a28764cbb4ab62c203572b83808dd1e7f6108e5ac57",
+      "input_schema_sha256": "b8dcdae89a3faee62916f22625b96401665d445f04e8e7a8e2cc6f4d05271a88",
       "transport_names": {
         "mcp_streamable_http": "describe_tool",
         "rest_v1_tools": "describe_tool",
@@ -311,7 +311,7 @@
       "name": "observe",
       "implementation": "observe",
       "kind": "canonical_tool",
-      "input_schema_sha256": "240e22867855aa307f9e15d0bdf7a5296e1bbdcb4d6618b9d650a6379c9a6eb5",
+      "input_schema_sha256": "654e6860664edf72b2c56ace9b48d269d53c4db995bcafe1a2339821c2c4a89d",
       "transport_names": {
         "mcp_streamable_http": "observe",
         "rest_v1_tools": "observe",
