@@ -51,11 +51,11 @@ Those are host-integration capabilities, documented separately in the
 `minimal`, `standard`, `lite`, and `full` are server-selected discovery
 profiles. They decide what `tools/list` advertises, not what dispatches: every
 registered name and every workflow alias is callable by name in every profile
-on every transport. `standard` is the server default and advertises eleven names:
+on every transport. `standard` is the server default and advertises fourteen names:
 the checkpoint loop (`start_session`, `identity`, `sync_state`,
 `record_result`, `check_working_state`) plus `search_shared_memory`,
 `store_finding`, `update_finding`, `request_review`, `consult`, and
-`self_recovery`. `minimal`
+`self_recovery`, `knowledge`, `describe_tool`, and `health_check`. `minimal`
 advertises the checkpoint loop alone. The checked-in artifact uses `lite`, the
 wider agent-facing profile; full mode adds administrative and specialist
 tools. The live handshake (`list_tools(lite=true)`) reports the profile the

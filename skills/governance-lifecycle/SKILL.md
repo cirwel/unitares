@@ -17,6 +17,8 @@ source_files:
   # `confidence` guidance survived several freshness cycles — the field it was
   # wrong about lives in phases.py, which nobody was checking.
   - unitares/src/mcp_handlers/updates/phases.py
+  - unitares/src/governance_monitor.py
+  - unitares/src/monitor_calibration.py
   - unitares/src/mcp_handlers/updates/enrichments.py
   - unitares/src/mcp_handlers/dialectic/handlers.py
   - unitares/src/mcp_handlers/lifecycle/self_recovery.py
@@ -35,20 +37,22 @@ source_digests:
   unitares/src/mcp_handlers/identity/handlers.py: "c840edc5049524ed"
   unitares/src/mcp_handlers/admin/handlers.py: "d7dec13e6a422b43"
   unitares/src/mcp_handlers/tool_stability.py: "b81fb422cdec412c"
-  unitares/src/mcp_handlers/middleware/envelope_step.py: "bcac7a83172032db"
+  unitares/src/mcp_handlers/middleware/envelope_step.py: "9ccad2ee6b9f2484"
   unitares/src/mcp_handlers/updates/phases.py: "62168987a1a7fb79"
+  unitares/src/governance_monitor.py: "2734fbbd1693549f"
+  unitares/src/monitor_calibration.py: "c99375f368dd98aa"
   unitares/src/mcp_handlers/updates/enrichments.py: "f91c10502c48275b"
   unitares/src/mcp_handlers/dialectic/handlers.py: "96ffbcfbbea5ff34"
-  unitares/src/mcp_handlers/lifecycle/self_recovery.py: "3fd24e37c57566a3"
+  unitares/src/mcp_handlers/lifecycle/self_recovery.py: "9bfffd3b09f6cc0f"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/src/tool_modes.py: "d21e376d782c0d31"
+  unitares/src/tool_modes.py: "1cff50c18e3cbcc9"
   unitares/src/tool_mode_listing.py: "a99a9e7f6e4a95c4"
   unitares/src/schema_brief.py: "7410c20f9b0374e3"
 ---
 
 # Agent Lifecycle
 
-**Last Updated:** 2026-09-07
+**Last Updated:** 2026-09-08
 
 ## Primary Workflow Names
 
@@ -138,11 +142,16 @@ primary workflow responses preserve it under `raw_governance`.
 
 ### What You Get Back
 
-The friendly tools return a normalized envelope. Read `next_action` first, then
+The friendly tools return a normalized envelope. Read `action_summary` when
+present for the action, verdict, and evidence maturity, then `next_action`,
 `state_summary`, `risk_summary`, `memory_suggestions`, and `recovery_hint` when
 present. `check_working_state()` and `search_shared_memory()` omit the repeated
 canonical payload by default; use `lite=false` or `response_mode="full"`,
 respectively, when you need it under `raw_governance`.
+
+Cold-start action summaries carry a provisional headline. A `proceed` action
+before the behavioral baseline forms is permission to continue under the current
+policy, not a validated all-clear. The default state read preserves the verdict.
 
 If you supplied a genuine `confidence`, the response may mint a concrete
 `prediction_id`. Preserve that identifier and pass it to
@@ -224,19 +233,25 @@ ownership, and (for review recovery) reflection/persistence evidence. Legacy
 recovery. If the authoritative inputs are genuinely degraded, self-recovery will
 not force a resume.
 
+The read-only check separates `recovery_needed` from `eligible`. An active
+identity reports `recovery_needed=false` and `recovery_status=not_needed`, even
+before its first check-in; it does not need a recovery reflection. Inspect
+`risk_authority` to distinguish an unmeasured first state from lost risk evidence.
+
 ## MCP Tools Reference
 
 Which of these names your client *lists* depends on the server's
-`GOVERNANCE_TOOL_MODE`. The default, `standard`, advertises eleven names: the
+`GOVERNANCE_TOOL_MODE`. The default, `standard`, advertises fourteen names: the
 checkpoint loop (`start_session`, `identity`, `sync_state`, `record_result`,
 `check_working_state`) plus `search_shared_memory`, `store_finding`,
-`update_finding`, `request_review`, `consult`, and `self_recovery`. `minimal`
+`update_finding`, `request_review`, `consult`, `self_recovery`, `knowledge`,
+`describe_tool`, and `health_check`. `minimal`
 advertises the
 checkpoint loop alone. `lite` (29 tools) advertises every name in this
 reference plus `list_tools` / `describe_tool`; `full` advertises everything
 registered. A mode filters only `tools/list`: every registered tool dispatches
 by name in every mode, on `/mcp/`, REST `/v1/tools/call`, and stdio alike. So a
-harness that offers only listed tools shows eleven under the default, and the
+harness that offers only listed tools shows fourteen under the default, and the
 rest are one server-side flag away (`GOVERNANCE_TOOL_MODE=lite`), not gone.
 `start_session(verbose=true)` reports the running mode under `tool_mode`.
 

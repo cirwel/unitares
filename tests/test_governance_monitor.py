@@ -1940,3 +1940,51 @@ class TestTacticalPredictionRegistry:
         monitor._open_predictions[pid]["created_at"] = time.monotonic() - 7200.0
         monitor.expire_old_predictions(ttl_seconds=3600.0)
         assert monitor._last_prediction_id is None
+
+
+class TestCheckinConfidenceAttribution:
+    def test_omitted_report_keeps_internal_estimate_without_prediction(self, monitor):
+        result = monitor.process_update({"complexity": 0.3})
+        assert isinstance(monitor.current_confidence, float)
+        assert result["confidence_reliability"]["source"] != "agent_reported"
+        assert monitor._last_prediction_id is None
+        assert monitor._prev_confidence is None
+        assert monitor._open_predictions == {}
+
+    def test_omitted_report_does_not_reissue_previous_prediction(self, monitor):
+        monitor.process_update({"complexity": 0.3}, confidence=0.8)
+        prediction_id = monitor._last_prediction_id
+        assert monitor.lookup_prediction(prediction_id)["confidence"] == 0.8
+        monitor.process_update({"complexity": 0.3})
+        assert monitor._last_prediction_id is None
+        assert monitor._prev_confidence is None
+        # The original prediction remains available for an explicit outcome.
+        assert monitor.lookup_prediction(prediction_id)["confidence"] == 0.8
+        assert len(monitor._open_predictions) == 1
+
+
+    @pytest.mark.parametrize("simulated_confidence", [None, 0.4])
+    def test_simulation_preserves_real_predictions(self, monitor, simulated_confidence):
+        monitor.process_update({"complexity": 0.3}, confidence=0.8)
+        prediction_id = monitor._last_prediction_id
+        original_record = dict(monitor.lookup_prediction(prediction_id))
+        monitor.simulate_update({"complexity": 0.3}, confidence=simulated_confidence)
+        assert monitor._last_prediction_id == prediction_id
+        assert monitor._prev_confidence == 0.8
+        assert monitor.lookup_prediction(prediction_id) == original_record
+        assert list(monitor._open_predictions) == [prediction_id]
+
+
+    def test_simulated_trajectory_does_not_write_calibration(self, monitor):
+        monitor.process_update({"complexity": 0.3}, confidence=0.8)
+        monitor._prev_verdict_action = "proceed"
+        monitor._prev_drift_norm = 1.0
+        monitor._prev_checkin_time = 1.0
+        with patch("src.monitor_calibration.calibration_checker") as checker, \
+             patch("src.monitor_calibration._time.monotonic", return_value=20.0):
+            monitor.simulate_update({"complexity": 0.3}, confidence=0.6)
+            checker.record_tactical_decision.assert_not_called()
+            assert monitor._prev_checkin_time == 1.0
+            # The same elapsed interval and trajectory train on a real check-in.
+            monitor.process_update({"complexity": 0.3}, confidence=0.6)
+            checker.record_tactical_decision.assert_called_once()

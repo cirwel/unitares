@@ -374,7 +374,7 @@ def getting_started_path() -> List[Dict[str, Any]]:
         {
             "step": 2,
             "tool": "sync_state",
-            "call": "sync_state(response_text='what changed', complexity=0.5, confidence=0.7)",
+            "call": "sync_state(response_text='what changed', complexity=0.5)",
             "canonical_tool": "process_agent_update",
             "implementation_tool": "process_agent_update",
             "why": "Record meaningful work and receive a governance verdict.",
