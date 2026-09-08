@@ -352,6 +352,13 @@ if [[ "$QUICK" == true ]]; then
     PYTEST_CMD=("$PYTHON" -m pytest tests/ agents/ -q --tb=short -x \
         ${PYTEST_EXTRA[@]+"${PYTEST_EXTRA[@]}"})
 else
+    # Measure coverage through sys.monitoring (PEP 669) rather than the C trace
+    # function. Measured on tests/test_[q-t]*.py: 184.8s -> 108.1s. Same reports
+    # -- see the COVERAGE_CORE comment in .github/workflows/tests.yml for the
+    # equivalence evidence. An operator export wins; coverage.py falls back to
+    # the trace core by itself (with a warning) if sys.monitoring is missing, so
+    # this cannot break an older interpreter.
+    export COVERAGE_CORE="${COVERAGE_CORE:-sysmon}"
     PYTEST_CMD=("$PYTHON" -m pytest tests/ agents/ -q --tb=short -x \
         --cov=src --cov=agents/sdk/src/unitares_sdk --cov=agents \
         --cov-report=term-missing --cov-fail-under=75 \
