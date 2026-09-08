@@ -311,11 +311,14 @@ def _called_names(tree: ast.AST) -> Dict[str, Set[str]]:
     agent caller just because an operator uses a different spelling.
     """
     spans = _function_spans(tree)
-    imported = {
-        alias.asname or alias.name: alias.name
-        for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
-        for alias in node.names
-    }
+    # Imports in different scopes can bind the same spelling differently.
+    # This file-wide inventory must retain every possible target rather than
+    # let whichever import is visited last erase a reachable caller.
+    imported: Dict[str, Set[str]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                imported.setdefault(alias.asname or alias.name, set()).add(alias.name)
 
     def enclosing(lineno: int) -> Optional[str]:
         best = None
@@ -333,7 +336,12 @@ def _called_names(tree: ast.AST) -> Dict[str, Set[str]]:
             continue
         caller = enclosing(node.lineno)
         if caller:
-            out.setdefault(caller, set()).add(imported.get(callee, callee))
+            names = out.setdefault(caller, set())
+            names.add(callee)
+            # A bare import alias does not rename module.helper(). Preserve
+            # the original spelling too: another scope may bind it locally.
+            if isinstance(node.func, ast.Name):
+                names.update(imported.get(callee, ()))
     return out
 
 

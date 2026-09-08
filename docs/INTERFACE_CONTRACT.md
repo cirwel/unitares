@@ -114,6 +114,12 @@ search alias. The router retains them. Search's `discovery_type`, `severity`,
 and `include_provenance` are deliberately retained after checking the parser,
 not inferred absent from the older `ACTION_FIELDS` map.
 
+The MCP argument model silently discards undeclared fields on this alias;
+removal does not promise a validation error. Removing a field that search
+actually reads would therefore silently change results. Tests cover both
+retained filters and discarded controls. Clients generating bindings from
+the advertised schema should regenerate them for this release.
+
 A consolidated router advertises the union of every action's parameters,
 because the wire schema must be flat: the MCP wrapper builds a tool's argument
 model from top-level properties, so a per-action `oneOf` would not survive

@@ -24,8 +24,9 @@ Two failure directions to guard, and they pull against each other:
   - dropping a parameter the action DOES read breaks callers (the overcorrection)
 
 The second is the dangerous one. FastMCP validates alias arguments before
-dispatch and these aliases carry no extra-argument passthrough, so a wrongly
-dropped name is REJECTED, not ignored.
+dispatch and these aliases carry no extra-argument passthrough. Its argument
+model silently discards undeclared fields, so a wrongly dropped filter loses
+its effect before dispatch.
 """
 
 from __future__ import annotations
@@ -175,7 +176,7 @@ def test_dropped_params_are_never_read_by_the_injected_action():
     """The membership rule, enforced against handler source.
 
     This is the overcorrection guard: if someone adds a parameter here that the
-    action's code path actually reads, callers passing it start getting rejected.
+    action's code path actually reads, callers silently lose its effect.
     """
     from src.mcp_handlers.knowledge import handlers as knowledge_handlers
 
@@ -220,7 +221,7 @@ def test_dropped_params_are_never_read_by_the_injected_action():
     read_anyway = sorted(ALIAS_SCHEMA_DROP["search_shared_memory"] & reads)
     assert not read_anyway, (
         f"the search path reads {read_anyway}, so dropping them from "
-        "search_shared_memory's schema would make valid calls fail validation"
+        "search_shared_memory's schema would silently discard real filters"
     )
 
 
@@ -267,6 +268,21 @@ def test_search_alias_keeps_every_filter_the_action_uses():
             f"{search_param} is a live search parameter but would no longer be "
             "advertised on search_shared_memory"
         )
+
+
+def test_search_argument_model_discards_removed_controls_and_keeps_filters():
+    from src import mcp_server
+
+    tool = mcp_server.mcp._tool_manager.get_tool("search_shared_memory")
+    arguments = tool.fn_metadata.arg_model.model_validate({
+        "query": "probe", "topic": "legacy", "dry_run": True,
+        "discovery_type": "note", "severity": "low", "include_provenance": True,
+    }).model_dump_one_level()
+    assert "topic" not in arguments and "dry_run" not in arguments
+    assert arguments["query"] == "probe"
+    assert arguments["discovery_type"] == "note"
+    assert arguments["severity"] == "low"
+    assert arguments["include_provenance"] is True
 
 
 def test_discovery_reads_disclose_the_call_gate():

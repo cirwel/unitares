@@ -192,6 +192,45 @@ def helper():
     assert not scanner.collect_hint_sites({"session", "agent", "bind_session"})
 
 
+@pytest.mark.parametrize("agent_source", [
+    # A bare import cannot rename an attribute on an unrelated module.
+    '''from unrelated import different as shared
+import helper
+@mcp_tool("onboard")
+def agent_entry():
+    return helper.shared()
+''',
+    # File-wide import discovery must retain both function-local bindings.
+    '''@mcp_tool("onboard")
+def agent_entry():
+    from helper import shared as advice
+    return advice()
+def other():
+    from unrelated import different as advice
+    return advice()
+''',
+    # An import in another scope must not erase a directly called local name.
+    '''from helper import shared
+@mcp_tool("onboard")
+def agent_entry():
+    return shared()
+def other():
+    from unrelated import different as shared
+    return shared()
+''',
+])
+def test_import_name_collisions_cannot_suppress_an_agent_hint(handler_tree, agent_source):
+    handler_tree("helper.py", "def shared():\n    return {'hint': 'bind_session()'}\n")
+    handler_tree("operator.py", '''from helper import shared
+@mcp_tool("operator_resume_agent")
+def operator_entry():
+    return shared()
+''')
+    handler_tree("agent.py", agent_source)
+    findings = scanner.find_dead_end_hints("standard")
+    assert "bind_session" in {finding.tool for finding in findings}
+
+
 def test_different_aliases_cover_different_actions_and_partial_coverage_stays_visible(handler_tree, monkeypatch):
     monkeypatch.setattr("src.tool_modes.get_tools_for_mode", lambda mode: {"search_shared_memory", "store_finding"})
     handler_tree("actions.py", '''
