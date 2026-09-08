@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.1.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.2.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. For a selected tool mode, the server advertises the same
@@ -69,8 +69,10 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.1.0` is the negotiated interface release. Compatible additions
-  advance it without forcing clients to learn a new schema family.
+- `version: 1.2.0` is the negotiated interface release. Compatible additions
+  advance it without forcing clients to learn a new schema family (1.2.0,
+  2026-09-07: `observe` and `describe_tool` declare parameters their handlers
+  already read).
 
 Core currently supports `mcp>=1.26.0,<3.0.0`. Both admitted major versions are
 tested, and the newest in-range resolution is a blocking CI lane. A client

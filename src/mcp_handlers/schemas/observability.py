@@ -83,6 +83,22 @@ class ObserveParams(AgentIdentityMixin):
     min_completions: Optional[int] = Field(None, description="Minimum task_completed rows before low-corroboration agent flagging.")
     low_weight_threshold: Optional[float] = Field(None, description="Average evidence_weight threshold for low-corroboration agent flagging.")
     include_detail: bool = Field(False, description="Include full outcome_event detail JSON in outcome_evidence events.")
+    # action=telemetry delegates to handle_get_telemetry_metrics, which reads
+    # these two. Until 2026-09-07 neither was declared here, so over the MCP
+    # wire FastMCP dropped them before dispatch and observe(action='telemetry',
+    # window_hours=48) silently used the 24h default; admin(action='telemetry')
+    # declares both (AdminParams) and always honoured them.
+    window_hours: Optional[float] = Field(None, description="Time window in hours for telemetry metrics (for action=telemetry; default 24).")
+    include_calibration: bool = Field(False, description="Include full calibration metrics (for action=telemetry; default false, the data is system-wide and large).")
+
+    @model_validator(mode='after')
+    def default_telemetry_window(self):
+        # Mirror the handler's default so omitting the parameter and passing
+        # it explicitly agree (the validated dict carries every declared
+        # field, None included, so the handler's own .get default never fires).
+        if self.action == "telemetry" and self.window_hours is None:
+            self.window_hours = 24.0
+        return self
 
 class OutcomeCorrelationParams(AgentIdentityMixin):
     """Run outcome correlation study: does EISV instability predict bad outcomes?"""
