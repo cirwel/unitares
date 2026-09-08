@@ -717,6 +717,12 @@ def anomaly_change_token(anomaly: Dict[str, Any]) -> str:
     )
     return hashlib.sha256(basis.encode()).hexdigest()[:16]
 
+# Ceiling on the default fleet scan. Not a bound on what a caller may see: it
+# selects how many active agents one call analyzes, and every anomaly found in
+# them is returned. A scan that hits it says so in the response's `scan` block,
+# and agent_ids bypasses it entirely.
+DEFAULT_ANOMALY_SCAN_CAP = 50
+
 @mcp_tool("detect_anomalies", timeout=15.0, register=False)
 async def handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Detect anomalies across agents"""
@@ -735,19 +741,35 @@ async def handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCon
     await mcp_server.load_metadata_async()
     
     agent_ids = arguments.get("agent_ids")
+    requested_agent_ids = agent_ids
     anomaly_types = arguments.get("anomaly_types", ["risk_spike", "coherence_drop"])
     min_severity = arguments.get("min_severity", "medium")
+
+    # Deliberately no `limit` here, and the wire schema no longer advertises one
+    # for this action (ObserveParams.limit, 2026-09-08). A dogfood run reported
+    # observe(action='anomalies', limit=1) returning every anomaly and read it as
+    # a bug; the parameter was the bug. An anomaly is a finding this fleet is
+    # asking someone to look at, so paging the list would drop findings on the
+    # floor for whoever asked, exactly as a truncated audit fan-out would.
+    # Filter with anomaly_types / min_severity / agent_ids, which narrow by what
+    # the caller does not want to see rather than by an arbitrary count.
     
     severity_levels = {"low": 0, "medium": 1, "high": 2}
     min_severity_level = severity_levels.get(min_severity, 1)
     
     # Get agent list
+    active_agent_ids = None
     if not agent_ids:
         # Scan all agents (limit to active ones for performance)
-        agent_ids = [aid for aid, meta in mcp_server.agent_metadata.items() 
-                     if meta.status == "active"][:50]  # Limit to 50 agents max
+        active_agent_ids = [aid for aid, meta in mcp_server.agent_metadata.items()
+                            if meta.status == "active"]
+        agent_ids = active_agent_ids[:DEFAULT_ANOMALY_SCAN_CAP]
     
     all_anomalies = []
+    # Agents the scan declined to analyze, reported in `scan` below. Appended to
+    # from process_agent(); a plain list is safe because the tasks share one
+    # event loop and never await between the check and the append.
+    skipped_no_activity: list[str] = []
     loop = asyncio.get_running_loop()  # Use get_running_loop() instead of deprecated get_event_loop()
     
     # Process agents in batches to prevent blocking
@@ -758,6 +780,7 @@ async def handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCon
         # disk read.
         meta = mcp_server.agent_metadata.get(agent_id)
         if not meta or int(getattr(meta, "total_updates", 0) or 0) == 0:
+            skipped_no_activity.append(agent_id)
             return
 
         monitor = await loop.run_in_executor(None, mcp_server.get_or_create_monitor, agent_id)
@@ -867,9 +890,40 @@ async def handle_detect_anomalies(arguments: Dict[str, Any]) -> Sequence[TextCon
         if anomaly.get("stale") is True:
             stale_count += 1
 
+    # What this call actually looked at. Without it a caller cannot tell a quiet
+    # fleet from a partial scan: the default selection stops at
+    # DEFAULT_ANOMALY_SCAN_CAP active agents, so on a larger fleet
+    # `total_anomalies` describes the agents examined, not the fleet. Reported
+    # rather than removed here — raising the cap changes per-call cost on a
+    # handler with a history of blocking the shared loop, so it needs its own
+    # measurement — but never left silent.
+    scan = {
+        "selection": "caller_supplied" if requested_agent_ids else "active_agents",
+        "agents_scanned": len(agent_ids),
+        "agents_skipped_no_activity": len(skipped_no_activity),
+        # Defaults exclude low-severity findings; say so rather than let the
+        # caller read an empty list as an all-clear.
+        "filters": {
+            "anomaly_types": list(anomaly_types),
+            "min_severity": min_severity,
+        },
+    }
+    if active_agent_ids is not None:
+        unscanned = len(active_agent_ids) - len(agent_ids)
+        scan["agents_active"] = len(active_agent_ids)
+        scan["scan_cap"] = DEFAULT_ANOMALY_SCAN_CAP
+        scan["truncated"] = unscanned > 0
+        if unscanned > 0:
+            scan["note"] = (
+                f"{unscanned} active agents were not analyzed: the default scan "
+                f"stops at {DEFAULT_ANOMALY_SCAN_CAP}. Pass agent_ids to cover "
+                "them; the counts below describe the agents scanned, not the fleet."
+            )
+
     # Add EISV labels for API documentation
     return success_response({
         "anomalies": all_anomalies,
+        "scan": scan,
         "eisv_labels": get_eisv_glossary(),
         "anomaly_policy": {
             "schema": "observability.anomaly.authority.v2",

@@ -47,7 +47,7 @@ source_digests:
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
   unitares/src/tool_modes.py: "1cff50c18e3cbcc9"
   unitares/src/tool_mode_listing.py: "a99a9e7f6e4a95c4"
-  unitares/src/schema_brief.py: "7410c20f9b0374e3"
+  unitares/src/schema_brief.py: "3b23bc0b788daaa6"
 ---
 
 # Agent Lifecycle
