@@ -329,6 +329,3 @@ class OperatorResumeAgentParams(AgentIdentityMixin):
     target_agent_id: str = Field(..., description="UUID of the agent to resume (target, not caller)")
     reason: str = Field(..., description="Operator's reason for override")
 
-
-class DirectResumeIfSafeParams(AgentIdentityMixin):
-    """Parameters for direct_resume_if_safe"""

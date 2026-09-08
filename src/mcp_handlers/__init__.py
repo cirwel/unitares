@@ -35,7 +35,6 @@ from .lifecycle.handlers import (
     handle_archive_old_test_agents,
     # handle_get_agent_api_key REMOVED Dec 2025 - aliased to identity()
     handle_mark_response_complete,
-    handle_direct_resume_if_safe,
     handle_self_recovery_review,  # Added per SELF_RECOVERY_SPEC.md
     handle_detect_stuck_agents,
     handle_ping_agent,
