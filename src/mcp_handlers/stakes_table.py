@@ -92,7 +92,6 @@ _HIGH: frozenset[tuple[str, Optional[str]]] = frozenset({
     ("archive_orphan_agents", None),
     ("cirs_protocol", None),
     ("cleanup_stale_locks", None),
-    ("direct_resume_if_safe", None),
     ("operator_resume_agent", None),
     ("reset_monitor", None),
     ("set_thresholds", None),

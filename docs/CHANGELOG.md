@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **tool registry:** the five hand-maintained bookkeeping maps now describe the advertised roster, exactly. The roster is every `register=True` dispatch tool plus the eight workflow aliases (`tool_modes.advertised_tool_names_full()`), and `GOVERNANCE_TOOL_MODE=full` now returns it instead of the schema-definition list, which also counted the 23 `register=False` delegates that only validate router actions and put `full` fifteen names wider than anything the registrar advertises (the two standing edge-index warnings on `full` clear). `TOOL_CATEGORIES` and `TOOL_TIERS` partition the roster, one bucket per advertised name: 23 registered tools had no category or tier before (every action router among them) and 26 pre-consolidation names were still listed; categories agree with the introspection catalog that `list_tools(category=...)` filters on, which gains a `workspace` category the catalog already had. `TOOL_OPERATIONS` covers every advertised name (22 were missing and defaulted to `read` in `list_tools` / `describe_tool` output, `knowledge` and `agent` included), and `dialectic` is classified `write` (request / thesis / antithesis / synthesis / reassign mutate). The stability map is keyed by every registered tool with no silent defaults, drops four names that no longer exist (`who_am_i`, `quick_resume`, `self_recovery_review`, `check_recovery_options`), and an alias reports its canonical tool's tier; `knowledge` and `self_recovery` carry the STABLE tier their flat predecessors all declared, every other router stays BETA. The onboard `tool_mode` block counts the roster. `validate_tool_modes.py` fails on an uncategorized advertised tool (it warned) and on a category entry off the roster; `tests/test_tool_registry_bookkeeping.py` holds every map to the rule. (#2093)
+
+### Removed
+
+- **tools:** `direct_resume_if_safe`, deprecated 2026-01-29 in favour of `self_recovery` and annotated "will be removed in v2.0", is removed. It was a `full`-mode-only tool with no caller in the SDK, the governance plugin, or the reference residents. No alias is left behind: an alias to `self_recovery(action="quick")` would answer the old name with narrower behavior (quick resumes only at risk < 0.40; the removed handler resumed without reflection up to 0.60), and retiring that band is the substance of the removal, as the deprecation's own migration said: quick below 0.40, `review` with a reflection above. A caller of the old name now gets `tool_not_found_error` with a suggestion. The catalog's three recovery entries that named `register=False` delegates as if they were callable tools (`quick_resume`, `self_recovery_review`, `check_recovery_options`) are folded into `self_recovery`'s entry as its actions. Registered tools: 43 to 42. (#2093)
+
 ### Documentation
 
 - **skills:** the `governance-lifecycle` skill's MCP Tools Reference now says which of its names a tool mode advertises: the default `minimal` lists only the five-tool checkpoint loop, `lite` (29 tools) lists every name in the reference plus `list_tools` / `describe_tool`, and a mode filters only `tools/list`, so every registered tool still dispatches by name in every mode. The discovery line names the modes that carry the two introspection tools instead of implying they are always listed. Every other claim in the skill was re-verified against its cited sources; `last_verified` moves to 2026-09-07 and the source list gains `src/tool_modes.py` and `src/tool_mode_listing.py`. The plugin mirror lags until the next bundle re-cut, which the next release entry must declare with its `plugin-bundle-recut` marker. (#2095)
@@ -48,6 +56,9 @@ time. Selecting that older profile does not reproduce this release's behavior.
 
 - **agent contract:** clarify delegated measurement authority in the shared `AGENTS.md` / `CLAUDE.md` block — a deciding standard (threshold, control, noise floor) is a choice stated before it is applied, decided by the operator unless explicitly delegated within a recorded scope; applying an agreed standard needs no renewed approval, and authorship, identity, or persistence alone does not authorize changing it. (#2080)
 - **interface contract, integration manual, tool registration:** state that a mode decides what `tools/list` advertises and never what dispatches, that `minimal` is the server default, and that the checked-in contract artifact remains the `lite` profile by declaration while the live handshake reports the running mode. (#2081)
+
+<!-- changelog-coverage-exempt: #2079 no-user-effect -->
+<!-- changelog-coverage-exempt: #2078 no-user-effect -->
 
 ## [2.21.0] - 2026-09-04
 

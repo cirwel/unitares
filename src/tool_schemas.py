@@ -167,7 +167,6 @@ TOOL_ORDER = [
     # validate_params still enforced the real *Params model by tool name. The
     # wire said "any parameters accepted" and the server then rejected the call.
     # _validate_advertised_schema_coverage below now refuses to let this recur.
-    "direct_resume_if_safe",
     "get_trajectory_status",
     "verify_trajectory_identity",
     "list_process_bindings",

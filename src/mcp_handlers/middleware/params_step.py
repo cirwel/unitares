@@ -219,7 +219,7 @@ async def inject_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                 operator_tools = {
                     "agent", "observe_agent", "detect_stuck_agents",
                     "archive_agent", "archive_old_test_agents",
-                    "direct_resume_if_safe", "operator_resume_agent",
+                    "operator_resume_agent",
                     "ping_agent",
                     "dashboard",
                 }

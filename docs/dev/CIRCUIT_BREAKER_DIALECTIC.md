@@ -115,8 +115,6 @@ For simple stuck scenarios (timeouts, trivial stalls) when the state is safe:
   cases above the quick threshold; its own ceiling is
   `MAX_RISK_FOR_SELF_RECOVERY = 0.65`.
 
-> **Note:** `direct_resume_if_safe` is deprecated. Use `self_recovery` instead.
-
 Recommended conditions:
 - short monitoring window
 - reduced complexity for a few updates
@@ -161,7 +159,7 @@ This provides durability and auditability, enabling post‑hoc review and calibr
 - `dialectic(action='quick')` — lightweight structured check without a full session
 
 **Recovery tools:**
-- `self_recovery(action="quick")` — fast path resume when safe (supersedes deprecated `direct_resume_if_safe`)
+- `self_recovery(action="quick")` — fast path resume when safe
 - `self_recovery(action="review", reflection="...")` — reflective recovery for complex cases
 - `mark_response_complete` — use if the agent is simply waiting for input
 

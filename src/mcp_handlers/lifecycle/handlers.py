@@ -8,7 +8,6 @@ Handler implementations are split into focused modules:
                      handle_self_recovery_review, handle_ping_agent,
                      handle_archive_old_test_agents, handle_archive_orphan_agents
   - stuck.py      — handle_detect_stuck_agents, _detect_stuck_agents
-  - resume.py     — handle_direct_resume_if_safe
 
 This file re-exports all public names so that existing consumers
 (tests, __init__.py, consolidated.py, background_tasks.py) continue to
@@ -40,7 +39,6 @@ from .operations import (
 
 # --- Re-export: extracted handlers (pre-existing splits) ---
 from .stuck import handle_detect_stuck_agents, _detect_stuck_agents
-from .resume import handle_direct_resume_if_safe
 
 # Keep module-level imports that existing patch targets depend on.
 # Tests patch e.g. "src.mcp_handlers.lifecycle.handlers.mcp_server"
