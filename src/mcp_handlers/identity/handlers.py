@@ -203,7 +203,7 @@ def _continuity_token_resume_rejected(
         recovery={
             "reason": "continuity_token_resume_retired",
             "action": (
-                "Call onboard(force_new=true, parent_agent_id=<prior UUID>, "
+                "Call start_session(force_new=true, parent_agent_id=<prior UUID>, "
                 "spawn_reason='new_session') instead of resuming by token."
             ),
             "preserved_path": (
@@ -1023,7 +1023,7 @@ async def _try_resume_by_session_key(
                 recovery={
                     "reason": "resume_failed",
                     "token_agent_uuid": existing_identity.get("token_agent_uuid"),
-                    "hint": "Call onboard(force_new=true) to create a new identity.",
+                    "hint": "Call start_session(force_new=true) to create a new identity.",
                 },
             ),
             existing_identity,
@@ -1053,7 +1053,7 @@ async def _try_resume_by_session_key(
             "archived": True,
             "resumed": False,
             "message": f"Session maps to archived agent '{label or agent_id}'. Use onboard() to reactivate or force_new=true for a fresh identity.",
-            "hint": "onboard() will auto-reactivate this agent. force_new=true creates a new one.",
+            "hint": "start_session() will auto-reactivate this agent. force_new=true creates a new one.",
             "options": {
                 "reactivate": "Call onboard() to resume this archived agent",
                 "fresh": "Call identity(force_new=true) or onboard(force_new=true) for a new identity"
@@ -1526,7 +1526,7 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
             recovery={
                 "action": "Pass resume=true when intentionally restoring a prior identity.",
                 "example": "bind_session(client_session_id='agent-xxxx', resume=true)",
-                "alternative": "Use onboard() for fresh/new identity bootstrap.",
+                "alternative": "Use start_session() for fresh/new identity bootstrap.",
             }
         )
 
@@ -1785,7 +1785,7 @@ def _s13_freshness_gate(arguments: Dict[str, Any]):
                 "onboard",
                 status="lineage_declaration_required",
                 hint=(
-                    "Bare onboard() is ambiguous — pass "
+                    "Bare start_session() is ambiguous — pass "
                     "parent_agent_id=<prior UUID> to continue prior work, "
                     "OR force_new=true to confirm a fresh process-instance "
                     "with no lineage."
@@ -2234,7 +2234,7 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                         "onboard",
                         status="lineage_declaration_required",
                         hint=(
-                            "Bare onboard() is ambiguous — pass "
+                            "Bare start_session() is ambiguous — pass "
                             "parent_agent_id=<prior UUID> to continue prior "
                             "work, OR force_new=true to confirm a fresh "
                             "process-instance with no lineage."
@@ -2265,7 +2265,7 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                     recovery={
                         "reason": "resume_failed",
                         "token_agent_uuid": existing_identity.get("token_agent_uuid"),
-                        "hint": "Call onboard(force_new=true) to create a new identity.",
+                        "hint": "Call start_session(force_new=true) to create a new identity.",
                     }
                 )
         if existing_identity and not existing_identity.get("created"):

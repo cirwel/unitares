@@ -49,7 +49,7 @@ async def handle_get_system_history(arguments: Dict[str, Any]) -> Sequence[TextC
             "eisv_labels": get_eisv_glossary(),
             "empty": True,
             "message": "No history available yet for this agent",
-            "next_step": "Call process_agent_update() to generate history",
+            "next_step": "Call sync_state() to generate history",
         })
     
     history_data = monitor.export_history(format=format_type)

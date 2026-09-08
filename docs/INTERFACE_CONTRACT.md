@@ -1,10 +1,10 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.4.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.5.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. For a selected tool mode, the server advertises the same
-callable names and input schemas through:
+callable names and source input schemas through:
 
 - Streamable HTTP MCP at `/mcp/`
 - REST discovery at `GET /v1/tools`
@@ -15,8 +15,11 @@ machine-readable `lite` contract. A live client negotiates the same contract by
 calling `list_tools(lite=true)` and reading `interface_contract`; no repository
 tag lookup or private server import is required. Its `surface_sha256` changes
 whenever the ordered capability records change. CI compares that artifact with
-the live registries, so transport drift or an unversioned surface change fails
-visibly.
+the live catalog. These hashes do not certify byte-identical MCP schemas:
+FastMCP regenerates schemas from typed wrappers, including defaults and schema
+structure. Use `scripts/diagnostics/tool_surface_cost.py --surface mcp` for the
+final local MCP definitions; `--surface catalog` explicitly measures this
+source layer. Neither command is a probe of a deployed peer.
 
 ## What v1 guarantees
 
@@ -51,11 +54,11 @@ Those are host-integration capabilities, documented separately in the
 `minimal`, `standard`, `lite`, and `full` are server-selected discovery
 profiles. They decide what `tools/list` advertises, not what dispatches: every
 registered name and every workflow alias is callable by name in every profile
-on every transport. `standard` is the server default and advertises fourteen names:
+on every transport. `standard` is the server default and advertises fifteen names:
 the checkpoint loop (`start_session`, `identity`, `sync_state`,
 `record_result`, `check_working_state`) plus `search_shared_memory`,
 `store_finding`, `update_finding`, `request_review`, `consult`, and
-`self_recovery`, `knowledge`, `describe_tool`, and `health_check`. `minimal`
+`self_recovery`, `knowledge`, `dialectic`, `describe_tool`, and `health_check`. `minimal`
 advertises the checkpoint loop alone. The checked-in artifact uses `lite`, the
 wider agent-facing profile; full mode adds administrative and specialist
 tools. The live handshake (`list_tools(lite=true)`) reports the profile the
@@ -79,7 +82,7 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.4.0` is the negotiated interface release. Compatible additions
+- `version: 1.5.0` is the negotiated interface release. Compatible additions
   advance it without forcing clients to learn a new schema family (1.2.0,
   2026-09-07: `observe` and `describe_tool` declare parameters their handlers
   already read; 1.3.0, 2026-09-08: `describe_tool` takes `action` and answers
@@ -87,14 +90,35 @@ The two identifiers serve different jobs:
   parameter, which named an action the router does not route and which no
   handler read; 1.4.0, 2026-09-08: parameter *descriptions* are advertised
   abridged to their first sentence, with the full text served by
-  `describe_tool`).
+  `describe_tool`; 1.5.0: `search_shared_memory` drops 14 unused parameters
+  belonging to other actions, while search's type, severity and provenance
+  options remain and appear in action-specific discovery).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed
-schema. A client that pins those digests should re-pin against 1.4.0 rather
-than read the change as a surface break. Setting
-`UNITARES_TOOL_SCHEMA_FIELD_DESCRIPTIONS=full` restores the pre-1.4.0 text
-exactly, digests included.
+schema. In 1.5.0, clients pinning hashes should re-pin against the current
+catalog. `UNITARES_TOOL_SCHEMA_FIELD_DESCRIPTIONS=full` restores authored
+descriptions; `UNITARES_TOOL_SCHEMA_PROPERTY_TITLES=keep` restores generated
+titles. Neither switch restores parameters removed in later releases or
+guarantees an older digest. The default title policy now applies after MCP
+schema regeneration as well as to the catalog. Titles are annotations, so
+that part preserves validation; schema fingerprints still change.
+
+The 14 fields removed from `search_shared_memory` are `closure_class`,
+`closure_evidence`, `confidence`, `dry_run`, `include_response_chain`,
+`including_cold`, `length`, `max_chain_depth`, `memory_context`, `min_members`,
+`top_n`, `topic`, `use_llm`, and `use_model`. They belong to other knowledge
+actions and had no effect on search. Calls using those fields should use the
+corresponding action of `knowledge`; clients should stop sending them on the
+search alias. The router retains them. Search's `discovery_type`, `severity`,
+and `include_provenance` are deliberately retained after checking the parser,
+not inferred absent from the older `ACTION_FIELDS` map.
+
+The MCP argument model silently discards undeclared fields on this alias;
+removal does not promise a validation error. Removing a field that search
+actually reads would therefore silently change results. Tests cover both
+retained filters and discarded controls. Clients generating bindings from
+the advertised schema should regenerate them for this release.
 
 A consolidated router advertises the union of every action's parameters,
 because the wire schema must be flat: the MCP wrapper builds a tool's argument
