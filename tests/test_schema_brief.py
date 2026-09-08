@@ -14,6 +14,14 @@ What these tests hold:
      moves, and ``describe_tool`` still serves every word).
   3. The escape hatch is exact (``full`` reproduces the pre-trim surface
      byte-for-byte).
+
+The same three hold for the other half of the advertised schema: the
+Pydantic ``title`` keywords, dropped since 2026-09-08. Nobody authored those —
+they are the model's class name at the root (``OnboardParams``) and a
+titleized echo of the key on each field (``client_session_id`` -> "Client
+Session Id") — so unlike a description there is no surface on which keeping
+one explains anything, and ``describe_tool`` drops them too. Worth 10.8% of
+every profile.
 """
 
 import json
@@ -31,10 +39,13 @@ from src.schema_brief import (
     BRIEF_BUDGET,
     BRIEF_KEY,
     DEFAULT_FIELD_DESCRIPTION_MODE,
+    DEFAULT_PROPERTY_TITLE_MODE,
     apply_field_description_mode,
+    apply_property_title_mode,
     brief_text,
     resolve_brief_budget,
     resolve_field_description_mode,
+    resolve_property_title_mode,
 )
 from src.mcp_compat import get_tool_input_schema
 from src.tool_schemas import advertised_input_schema, get_pydantic_schemas, get_tool_definitions
@@ -259,3 +270,134 @@ class TestAdvertisedSurface:
             instructions = build_server_instructions(mode)
             assert "abridged" in instructions
             assert "describe_tool" in instructions
+
+
+def _title_nodes(node, path="$"):
+    """Every (path, title) pair a caller would receive."""
+    found = []
+    if isinstance(node, dict):
+        if isinstance(node.get("title"), str):
+            found.append((path, node["title"]))
+        for key, value in node.items():
+            if key in ("default", "const", "enum", "examples", "example"):
+                continue
+            if key in ("properties", "$defs", "definitions", "patternProperties",
+                       "dependentSchemas") and isinstance(value, dict):
+                for name, sub in value.items():
+                    found += _title_nodes(sub, f"{path}.{key}.{name}")
+                continue
+            found += _title_nodes(value, f"{path}.{key}")
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            found += _title_nodes(item, f"{path}[{index}]")
+    return found
+
+
+class TestPropertyTitles:
+    """A Pydantic ``title`` is a titleized echo of the key. It is not content.
+
+    Measured 2026-09-08 across the whole advertised roster: dropping the
+    property titles and the root model-class titles takes 10.8% off every
+    profile (`standard` 52,612 -> 47,047 B), which is more than any profile cut
+    achieved without also removing a capability.
+    """
+
+    def test_no_advertised_schema_carries_a_title(self):
+        for tool_name, schema in _schemas("brief").items():
+            titles = _title_nodes(schema)
+            assert not titles, f"{tool_name} still advertises titles: {titles[:3]}"
+
+    def test_describe_tool_drops_them_too(self):
+        # Unlike a description, a title has no fuller authored form to serve:
+        # "Client Session Id" IS the key. There is no surface on which
+        # repeating it back explains anything.
+        model = get_pydantic_schemas()["process_agent_update"]
+        described = advertised_input_schema(
+            "process_agent_update", model.model_json_schema()
+        )
+        assert not _title_nodes(described)
+
+    def test_keep_reproduces_the_pre_strip_surface_exactly(self, monkeypatch):
+        monkeypatch.setenv("UNITARES_TOOL_SCHEMA_PROPERTY_TITLES", "keep")
+        kept = _schemas("brief")
+        monkeypatch.setenv("UNITARES_TOOL_SCHEMA_PROPERTY_TITLES", "strip")
+        stripped = _schemas("brief")
+
+        assert any(_title_nodes(schema) for schema in kept.values())
+        assert json.dumps(kept, sort_keys=True) != json.dumps(stripped, sort_keys=True)
+        for name, schema in kept.items():
+            assert apply_property_title_mode(schema, "strip") == stripped[name], name
+
+    def test_stripping_moves_no_parameter_name_type_default_or_requiredness(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("UNITARES_TOOL_SCHEMA_PROPERTY_TITLES", "keep")
+        kept = _schemas("brief")
+        monkeypatch.setenv("UNITARES_TOOL_SCHEMA_PROPERTY_TITLES", "strip")
+        stripped = _schemas("brief")
+
+        assert set(kept) == set(stripped)
+        for name in kept:
+            before = apply_property_title_mode(_shape(kept[name]), "strip")
+            assert before == apply_property_title_mode(_shape(stripped[name]), "strip"), name
+            assert kept[name].get("required") == stripped[name].get("required"), name
+
+    def test_a_parameter_named_title_survives(self):
+        """The trap the structural walk is written against.
+
+        Under ``properties`` the keys are caller-chosen parameter names, so a
+        tool that ships a parameter called ``title`` must keep it while the
+        ``title`` KEYWORD on the schema node goes. No tool ships one today,
+        which is exactly why this is asserted rather than assumed — the
+        equivalent bug for ``brief`` reached the surface once already
+        (see _SUBSCHEMA_MAPS in src/schema_brief.py).
+        """
+        schema = {
+            "title": "SomeParams",
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "title": "Title", "description": "A real parameter."},
+                "body": {"type": "string", "title": "Body"},
+            },
+            "required": ["title"],
+        }
+        out = apply_property_title_mode(schema, "strip")
+
+        assert "title" in out["properties"], "the PARAMETER named title was deleted"
+        assert out["required"] == ["title"]
+        assert "title" not in out, "the root title KEYWORD survived"
+        assert "title" not in out["properties"]["title"], "the parameter's own title keyword survived"
+        assert out["properties"]["title"]["description"] == "A real parameter."
+
+    def test_a_default_that_contains_a_title_is_caller_data_and_survives(self):
+        # `default` is a value, not documentation: a tool whose parameter
+        # defaults to {"title": "..."} must receive it back intact.
+        schema = {
+            "type": "object",
+            "properties": {
+                "payload": {"type": "object", "title": "Payload",
+                            "default": {"title": "keep me"}},
+            },
+        }
+        out = apply_property_title_mode(schema, "strip")
+        assert out["properties"]["payload"]["default"] == {"title": "keep me"}
+        assert "title" not in out["properties"]["payload"]
+
+    def test_the_default_is_strip(self, monkeypatch):
+        monkeypatch.delenv("UNITARES_TOOL_SCHEMA_PROPERTY_TITLES", raising=False)
+        assert resolve_property_title_mode() == "strip"
+        assert DEFAULT_PROPERTY_TITLE_MODE == "strip"
+
+    def test_an_unknown_mode_falls_back_to_the_default(self, monkeypatch, caplog):
+        monkeypatch.setenv("UNITARES_TOOL_SCHEMA_PROPERTY_TITLES", "terse")
+        assert resolve_property_title_mode() == "strip"
+        assert "terse" in caplog.text
+
+    def test_the_advertised_surface_actually_got_smaller(self, monkeypatch):
+        monkeypatch.setenv("UNITARES_TOOL_SCHEMA_PROPERTY_TITLES", "keep")
+        kept = len(json.dumps(_schemas("brief"), sort_keys=True))
+        monkeypatch.setenv("UNITARES_TOOL_SCHEMA_PROPERTY_TITLES", "strip")
+        stripped = len(json.dumps(_schemas("brief"), sort_keys=True))
+        # Measured 10.8% on 2026-09-08; assert a floor well under it so the
+        # test fails on a regression, not on ordinary schema churn.
+        assert stripped < kept * 0.95

@@ -19,7 +19,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**164 flags.**
+**165 flags.**
 
 | Flag | Reader fallback(s) | Purpose | Read at |
 |---|---|---|---|
@@ -180,6 +180,7 @@ index; that one is the curated decision record.
 | `UNITARES_S_SETPOINT` | `'1'` | Whether the per-class S setpoint is active (UNITARES_S_SETPOINT) | config/governance_config.py |
 | `UNITARES_TOOL_SCHEMA_BRIEF_BUDGET` | `''` | Resolve the per-description character budget. | src/schema_brief.py |
 | `UNITARES_TOOL_SCHEMA_FIELD_DESCRIPTIONS` | `''` | Resolve the advertised field-description mode | src/schema_brief.py |
+| `UNITARES_TOOL_SCHEMA_PROPERTY_TITLES` | `''` | Resolve what the advertised schema does with ``title`` keywords | src/schema_brief.py |
 | `UNITARES_TOOL_SCHEMA_STRIP_FIELD_DESCRIPTIONS` | `'0'` | Resolve the advertised field-description mode | src/schema_brief.py |
 | `UNITARES_TOOL_SCHEMA_VERBOSITY` | `'short'` | Build the list of MCP Tool objects from Pydantic schemas + descriptions | src/tool_schemas.py |
 | `UNITARES_TOOL_USAGE_LOG` | `None (no reader fallback)` | read by __init__() | src/tool_usage_tracker.py |
