@@ -162,10 +162,12 @@ import sys
 packages = [
     "pytest",
     "pytest-cov",
+    "coverage",
     "pytest-asyncio",
     "hypothesis",
 ]
 env_names = [
+    "COVERAGE_CORE",
     "PYTEST_ADDOPTS",
     "STRICT_IDENTITY_REQUIRED",
     "UNITARES_KNOWLEDGE_BACKEND",
@@ -211,6 +213,13 @@ _print_staged_dirty_inputs() {
     git diff --name-only -- "${TRACKED_HASH_PATHS[@]}"
     git ls-files --others --exclude-standard -- "${UNTRACKED_HASH_PATHS[@]}"
 }
+
+# Resolve the coverage default before hashing or accepting a cached result.
+# Unset/empty and explicit sysmon select the same run; selecting ctrace must
+# run that core rather than replaying a cached sysmon success (#2101 review).
+if [[ "$QUICK" == false ]]; then
+    export COVERAGE_CORE="${COVERAGE_CORE:-sysmon}"
+fi
 
 PYTHON="${UNITARES_PYTHON:-python3}"
 RUNTIME_HASH=$(_hash_runtime)
@@ -352,13 +361,9 @@ if [[ "$QUICK" == true ]]; then
     PYTEST_CMD=("$PYTHON" -m pytest tests/ agents/ -q --tb=short -x \
         ${PYTEST_EXTRA[@]+"${PYTEST_EXTRA[@]}"})
 else
-    # Measure coverage through sys.monitoring (PEP 669) rather than the C trace
-    # function. Measured on tests/test_[q-t]*.py: 184.8s -> 108.1s. Same reports
-    # -- see the COVERAGE_CORE comment in .github/workflows/tests.yml for the
-    # equivalence evidence. An operator export wins; coverage.py falls back to
-    # the trace core by itself (with a warning) if sys.monitoring is missing, so
-    # this cannot break an older interpreter.
-    export COVERAGE_CORE="${COVERAGE_CORE:-sysmon}"
+    # The selected core and coverage.py version are part of the runtime hash.
+    # See docs/operations/ci-coverage-validation.md for the measured speedup
+    # and the limits of the coverage comparison. An operator export wins.
     PYTEST_CMD=("$PYTHON" -m pytest tests/ agents/ -q --tb=short -x \
         --cov=src --cov=agents/sdk/src/unitares_sdk --cov=agents \
         --cov-report=term-missing --cov-fail-under=75 \

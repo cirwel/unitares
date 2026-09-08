@@ -281,9 +281,10 @@ jobs:
       env:
         COVERAGE_FILE: .coverage.${{ matrix.python-version }}.${{ matrix.shard }}
         # Measure through CPython's sys.monitoring (PEP 669) instead of the
-        # C trace function. Both legs are >= 3.12, so the fast core is always
-        # available; coverage.py falls back to the trace core on its own if it
-        # ever is not, so this is safe to set unconditionally.
+        # C trace function for this line-only coverage configuration. Both
+        # interpreters support sys.monitoring; only the 3.12 leg measures
+        # coverage. The tested coverage.py 7.16.0 falls back for unsupported
+        # configurations. Branch/context equivalence is not claimed here.
         #
         # Measured on tests/test_[q-t]*.py (the slowest shard), same machine,
         # same interpreter: 184.8s -> 108.1s, a 41% cut. On tests/test_[u-z]*.py
@@ -291,17 +292,12 @@ jobs:
         # The suite is ~17k small tests, so it pays per-test dispatch overhead
         # rather than a few hot spots -- exactly what sysmon removes.
         #
-        # It does not measure less. On [u-z] both cores reported an identical
-        # 23.59% over identical statement counts. On [q-t] the two cores differ
-        # by 5 statements out of 51823 (0.01%), all of them inside the
-        # asyncio.wait_for Redis guards in identity/session.py and
-        # middleware/identity_step.py: the faster run completes those awaits
-        # before their sub-second timeouts, so it covers the success branch
-        # (identity_step.py:364) where the slower run covered the failure
-        # branch (:366). A blind spot can only lose lines, never trade one for
-        # another -- this is the documented timing sensitivity of those paths
-        # (see CLAUDE.md, "Substrate Tax"), not a measurement gap. sysmon
-        # itself is deterministic: three consecutive runs agreed exactly.
+        # Aggregate line coverage stayed similar in CI (83.88% vs 83.87%),
+        # but those runs checked out different source trees as well as using
+        # different shards. This supports the existing floor; it does not
+        # establish full-suite tracer equivalence. Compare executed-line sets
+        # on the same tree, dependencies and shard layout to establish that.
+        # Evidence and replay procedure: docs/operations/ci-coverage-validation.md.
         COVERAGE_CORE: sysmon
       run: |
         case "${{ matrix.shard }}" in
